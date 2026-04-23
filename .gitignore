@@ -1,25 +1,17 @@
-# Node
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
-# Build output
-dist/
-build/
-*.tsbuildinfo
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
 
 # Environment
 .env
 .env.local
 .env.*.local
 
-# Editor / OS
-.DS_Store
-.vscode/
-.idea/
-*.swp
+# Generic build output
+dist/
+build/
 
 # Generated harness artefacts (will live here once Phase 3+ ships)
 .harness/

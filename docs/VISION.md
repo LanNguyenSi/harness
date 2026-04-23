@@ -70,7 +70,7 @@ The control plane's job on this pillar is to produce a single authoritative answ
 
 ### Memory
 
-Memory as it exists today — file-based markdown with frontmatter, routed on `UserPromptSubmit` by [`memory-router`](https://github.com/LanNguyenSi/agent-memory/tree/master/packages/memory-router), with `codebase-oracle` as a semantic extension — works well for what it does. The router matches prompts against topics and surfaces relevant memories. Writing a memory is low-ceremony.
+Memory as it exists today — file-based markdown with frontmatter, routed on `UserPromptSubmit` by `memory-router` (inside the `agent-memory` monorepo), with `codebase-oracle` as a semantic extension over code — works well for what it does. The router matches prompts against topics and surfaces relevant memories. Writing a memory is low-ceremony.
 
 The gaps are lifecycle and provenance. There is no retention: a memory from six months ago still matches today, even if the code it references has been refactored away. There is no cross-linking: one memory referencing another is done by prose, not by structure, so the graph of memories is invisible. There is no scope: memories live per-project, but some lessons should be user-wide, team-wide, or even public. There is no validation: nothing tells you that your Memory mentions a function that no longer exists.
 
@@ -86,7 +86,7 @@ The control plane treats hooks as the machinery by which the pillars interact wi
 
 Given the three pillars plus hooks, what does a control plane add that is greater than the sum?
 
-**Introspection.** The single most valuable capability is answering "what is this harness configured to do, right now, comprehensively" — across pillars, without the agent or the human having to walk four surfaces by hand. This alone would have caught the 16-commit drift that originated this project.
+**Introspection.** The single most valuable capability is answering "what is this harness configured to do, right now, comprehensively" — across pillars, without the agent or the human having to walk four surfaces by hand. This alone would have *surfaced* the 16-commit drift that originated this project; deterministically *catching* it requires the policy layer on top, but surfacing-on-demand is already a large step from where we are.
 
 **Validation.** Once configuration has a single schema, it can be linted. Stale memory references, dead MCP servers, hook scripts without `+x`, skills with invalid frontmatter, policies referencing tool names that no longer exist — all surfaceable deterministically.
 
