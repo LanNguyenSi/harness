@@ -74,7 +74,7 @@ tools:
       enabled: true
 
     - name: agent-tasks
-      command: [node, ~/git/pandora/agent-tasks/mcp/dist/server.js]
+      command: [node, ~/git/pandora/agent-tasks/mcp-server/dist/server.js]
       env:
         AGENT_TASKS_URL: https://agent-tasks.opentriologue.ai
       health:
@@ -142,11 +142,16 @@ Per-type schemas:
 | Field | Type | Notes |
 |---|---|---|
 | `enabled` | `string[]` | list of skill names currently wired |
+| `required` | `string[]` | subset of `enabled`; `validate` fails (exit 1) if any are missing on disk. Unlike `tools.cli.required`, this applies per-name rather than per-entry because skills are identified only by name. |
 | `source_dirs` | `string[]` | where to scan for SKILL.md — first match wins |
 
 ### `tools.builtin`
 
 Inventory only — listed so `harness describe` reports which built-ins the manifest recognises. No `enabled:` flag (built-ins can't be disabled by harness today); the field exists to make drift against runtime-available built-ins detectable.
+
+`validate` compares `builtin.known` against the runtime's currently-advertised built-in tool list (queried via the Claude Code protocol where possible) and warns when they diverge. The warning is one-sided — a built-in listed in the manifest but not in the runtime is noise, but a runtime built-in missing from the manifest means the user hasn't acknowledged a new tool and downstream policies may not cover it.
+
+The four tool sub-blocks (`mcp`, `cli`, `skills`, `builtin`) deliberately do not share a parent schema. Their health-check semantics, lifecycle, and registration surfaces differ enough that forcing a common shape would be abstraction for its own sake.
 
 ## 4. `memory:` section
 
@@ -184,14 +189,14 @@ Each hook is a shell command bound to a runtime event, with optional match patte
 ```yaml
 hooks:
   - name: git-preflight
-    event: session_start
+    event: SessionStart
     command: ~/.claude/hooks/git-preflight.sh
     blocking: false
     budget_ms: 30000
     description: "Fetch watchlist repos and surface drift on session start."
 
   - name: require-review-evidence
-    event: pre_tool_use
+    event: PreToolUse
     match: "mcp__agent-tasks__pull_requests_merge"
     command: ~/.claude/hooks/require-review-evidence.sh
     blocking: hard
@@ -199,7 +204,7 @@ hooks:
     description: "Block PR merges without a ledger review entry."
 
   - name: entrypoint-pattern-lint
-    event: pre_tool_use
+    event: PreToolUse
     match: "Write|Edit"
     path_match: "**/entrypoint.sh"
     command: ~/.claude/hooks/entrypoint-pattern-lint.sh
@@ -214,17 +219,20 @@ Schema per entry:
 | `name` | string | yes | unique within `hooks` |
 | `event` | enum | yes | one of `session_start` / `user_prompt_submit` / `pre_tool_use` / `post_tool_use` / `stop` / `subagent_stop` / `pre_compact` |
 | `command` | string | yes | shell command; executable path or script with args |
-| `match` | regex | no | runtime-event-scoped filter (e.g. tool name for `pre_tool_use`) |
-| `path_match` | glob | no | additional filter for file-path-bearing events |
+| `match` | regex (JS flavour) | no | runtime-event-scoped filter; for `PreToolUse` / `PostToolUse` this matches the tool name (e.g. `"Write\|Edit"` or `"mcp__agent-tasks__.*"`) |
+| `path_match` | glob (minimatch) | no | additional filter for events that carry a file path (e.g. `Write`, `Edit`): only fire when the path matches |
+| `bash_match` | regex (JS flavour) | no | additional filter when the matched tool is `Bash`: fires only when the command string matches |
 | `blocking` | enum | yes | `false` / `soft` / `hard` |
 | `budget_ms` | integer | no (default 30000) | timeout before hook is killed |
 | `description` | string | no | surfaced by `harness describe` |
 
-Blocking semantics match VISION §2 Enforcement-Härtegrade:
+Blocking semantics, three levels:
 
-- **`false`** (non-blocking): hook may `additionalContext` via stdout-JSON but the tool call always proceeds.
-- **`soft`**: hook may warn; agent sees the warning but tool call still proceeds. For patterns like "you probably shouldn't `rm -rf` here" that have legitimate exceptions.
-- **`hard`**: hook's non-zero exit or explicit `decision: deny` aborts the tool call. Reserved for cases where false positives are tolerable (review-evidence, dogfood-trace).
+- **`false`** (non-blocking): hook may inject `additionalContext` via stdout-JSON but the tool call always proceeds. Default choice when the hook's job is to inform.
+- **`soft`**: hook may warn; agent sees the warning but the tool call still proceeds. For patterns like "you probably shouldn't `rm -rf` here" that have legitimate exceptions.
+- **`hard`**: hook's non-zero exit or explicit `decision: deny` aborts the tool call. Reserved for cases where false positives are tolerable — e.g. review-evidence-gate, dogfood-trace-gate.
+
+Pick the softest level that solves the problem. Hard-blocking is a commitment that false positives will not happen under reasonable inputs; if you're not sure, start at `soft` and promote.
 
 ## 6. `policies:` section
 
@@ -235,7 +243,7 @@ policies:
   - name: review-before-merge
     description: Block PR merges unless a ledger entry tagged review:<pr-number> exists for this session.
     trigger:
-      event: pre_tool_use
+      event: PreToolUse
       match: "mcp__agent-tasks__pull_requests_merge"
     requires:
       ledger_tag: "review:${PR_NUMBER}"
@@ -245,7 +253,7 @@ policies:
   - name: dogfood-before-release
     description: Block `npm publish` or `git tag v*` without a dogfood ledger entry.
     trigger:
-      event: pre_tool_use
+      event: PreToolUse
       match: "Bash"
       bash_match: "^(npm publish|git tag v.*)"
     requires:
@@ -267,21 +275,35 @@ Schema:
 
 The `requires` field is intentionally minimal for Phase 1 (just `ledger_tag`). Future extensions (confidence floor, multi-tag, recency-window) land as schema additions at `version: 2`.
 
-**Template variables** in `requires.ledger_tag`:
+### Policy ↔ hook binding
 
-- `${PR_NUMBER}` — the PR number being merged (extracted from tool args)
-- `${SESSION_ID}` — the current grounding session id
-- `${REPO}` — the cwd's git repo name
-- `${BRANCH}` — the current git branch
+- **Dangling `policy.hook` reference** (names a non-existent hook): `harness validate` fails with exit 1.
+- **Hooks without a referencing policy**: still fire on their event. They are the plain hook path — not every hook needs a policy, but every policy needs a hook. This lets a user keep simple informational hooks (e.g. `git-preflight`) as plain hooks without inventing a policy wrapper.
 
-More may be added as needed; each one documented.
+### Template variables
+
+Variables appear in `requires.ledger_tag` and are substituted at policy-evaluation time. Phase 1 ships four; the others are declared here for design coherence and will land in later phases.
+
+| Variable | Ships in | Source |
+|---|---|---|
+| `${SESSION_ID}` | Phase 1 | current grounding session id |
+| `${REPO}` | Phase 1 | basename of `git rev-parse --show-toplevel`, or `""` if not in a git repo |
+| `${BRANCH}` | Phase 1 | `git rev-parse --abbrev-ref HEAD` |
+| `${PR_NUMBER}` | Phase 1 | parsed from the matched tool's args; for `mcp__agent-tasks__pull_requests_merge` this is `toolArgs.prNumber`. For other tool matchers, `validate` rejects the policy unless the hook explicitly declares how to extract this (future `trigger.pr_number_from:` field). |
+| `${TOOL_NAME}` | Phase 2 | the matched tool's canonical name |
+| `${CWD}` | Phase 2 | current working directory (absolute) |
+| `${PROJECT}` | Phase 2 | the harness project scope in effect |
+| `${USER}` | Phase 2 | `process.env.USER` |
+| `${NOW}` | Phase 3 | ISO-8601 UTC timestamp at evaluation |
+
+**Quoting / safety.** Template substitution happens on the `ledger_tag` *string field*, not on any shell command. The substituted value is passed to the evidence-ledger query as a data argument, never as shell text. If a future template variable lands in a shell-invoked field (e.g. a hook's `command`), the implementation MUST shell-quote via the platform stdlib and `validate` MUST reject raw string interpolation. This is load-bearing against inputs like a branch named `foo$(whoami)` or `a"; rm -rf ~`.
 
 ## 7. File layout
 
 ```
 ~/.claude/
 ├── harness.yaml                          ← user-level manifest; hand-edited
-├── harness.lock                          ← locked resolutions (SHAs, paths) — generated, committed optional
+├── harness.lock                          ← (Phase 3) locked resolutions (SHAs, paths); does not exist in Phase 1–2
 ├── harness.d/                            ← imported fragments
 │   ├── policies/
 │   │   └── claim-gate.yaml
@@ -305,7 +327,7 @@ More may be added as needed; each one documented.
 Rules:
 
 - **`harness.yaml` is the source of truth.** If `harness.generated/settings.json` differs from what the manifest would produce, `harness apply` regenerates it. `describe` detects drift.
-- **`harness.lock`** is optional in Phase 1, required for Phase 3. It pins the resolved paths/SHAs of hook scripts, MCP commands, etc. so drift is deterministic.
+- **`harness.lock`** is a Phase-3 artefact. It pins resolved paths/SHAs of hook scripts, MCP commands, etc. so drift between "what the manifest referenced" and "what was actually applied" is deterministic. The exact schema (fields per category, hash algorithm, version pinning rules) is decided when Phase 3 starts, not here. Phase 1–2 implementations do not produce or consume it.
 - **`harness.d/`** is for fragments imported into the main manifest. Used by `claim-gate.yaml` per §2 `policies_source`, and optionally by `hooks:` / `policies:` extension files. Imports are explicit (`policies_source: …`, not auto-scanned).
 - **`harness.generated/`** is treated as a build artefact. It is `.gitignore`d and regenerated; hand-edits are overwritten on next `apply`.
 - **`projects/<proj>/harness.overrides.yaml`** is optional. Present only when a project needs to deviate from user-level defaults.
@@ -346,6 +368,17 @@ tools:
 
 Effective manifest for that project has `codebase-oracle` with `enabled: false` and `agent-tasks` unchanged.
 
+### Edge cases
+
+| Case | Behaviour |
+|---|---|
+| **`null` value in project override** | Removes the key from the effective manifest (tombstone). `memory.router: null` unwires the router entirely, not "inherit". |
+| **Empty list `[]`** | Clears the list in the effective manifest. `tools.mcp: []` disables all MCP servers; same for any other list-valued key. This is the explicit way to say "no entries here". |
+| **New name-keyed entry not in user** | Appended, in project-declaration order, after user entries. Two projects adding the same `name` to their overrides is a no-op conflict (each project overrides only its own effective manifest). |
+| **Mixed-shape list (some entries with `name`, some without)** | `validate` error. A list is either name-keyed or not; mixing is not supported. |
+| **Removing a user entry** | Use `_delete: true` on a name-keyed entry (e.g. `- name: codebase-oracle\n  _delete: true`) to drop that entry from the effective manifest. This is the only supported removal syntax — omitting an entry does *not* remove it; it inherits unchanged. |
+| **Project override sets key that user omitted entirely** | Added. Inheriting a "nothing" from user and introducing a "something" in project is fine. |
+
 **Override files must have `version:` matching the user-level manifest.** `harness validate` flags mismatched versions.
 
 ## 9. CLI surface
@@ -370,6 +403,18 @@ harness doctor [--project <name>]
 harness diff [--since <ref>] [--since-apply]
   Show changes to the effective manifest. --since <ref> diffs against a git ref
   in the harness.yaml dir; --since-apply diffs against harness.generated/.last-apply.
+
+harness list <skills|memories|tools|hooks|policies> [--filter <substr>] [--json]
+  Flat listing of one category, filter-friendly. `describe --pillar` prints the
+  full nested tree; `list` prints a single denormalised table suited for piping
+  to grep / awk.
+
+harness explain <policy-name> [--trace]
+  Why did this policy behave as it did on its last evaluation? Shows the
+  trigger match result, the requires evaluation (ledger query + result), and
+  the final enforcement decision. --trace extends the output with the full
+  variable-substitution trail. Essential for diagnosing "why did my merge get
+  blocked" without reading the ledger by hand.
 ```
 
 ### Write-side (Phase 2+)
@@ -390,7 +435,13 @@ harness remove <type> <name>
 
 harness apply [--dry-run]
   Regenerate harness.generated/ outputs from the manifest. --dry-run prints the
-  would-be diff without writing.
+  would-be diff without writing. Does NOT restart MCP servers or reload Claude
+  Code — emit a message telling the user which restart actions are needed
+  (e.g. "MCP servers changed; /mcp reconnect required"). Phase 3.
+
+harness export [--sanitize] [-o <file>]
+  Emit the effective manifest as a single self-contained YAML. --sanitize
+  strips absolute home paths and env secrets so the output is shareable.
 ```
 
 ### Phase 3+
@@ -416,15 +467,18 @@ harness audit [--since <when>]
 
 ### Exit codes
 
-| Code | Meaning |
-|---|---|
-| 0 | success |
-| 1 | validation/lint error, or user-visible assertion failure |
-| 2 | configuration not found or unreadable |
-| 3 | external tool/process failure (MCP unreachable, CLI missing, git command failed) |
-| 64 | bad CLI arguments |
+Follows BSD `sysexits.h` where applicable, extended only where a generic code (`1`) is clearer than a specific BSD code:
 
-Codes above 64 follow BSD `sysexits.h` conventions where applicable (`64 EX_USAGE`).
+| Code | Symbol | Meaning |
+|---|---|---|
+| 0 | — | success |
+| 1 | — | validation / lint error; a user-facing assertion failed |
+| 64 | `EX_USAGE` | bad CLI arguments |
+| 66 | `EX_NOINPUT` | configuration file not found or unreadable |
+| 69 | `EX_UNAVAILABLE` | an external tool/process failed (MCP unreachable, required CLI missing, git call failed) |
+| 70 | `EX_SOFTWARE` | internal error in `harness` itself |
+
+`1` is retained for the common "your config is wrong, here is how" failure because it's what every shell user expects from a linter. All other failures map to a specific sysexits code so scripts can branch on them.
 
 ## 10. Implementation stack
 
@@ -468,8 +522,11 @@ Rules:
 - **`version: 1`** is the shape defined in this document. `harness` CLI 0.x targets manifest `version: 1`.
 - **Adding new optional fields** is backwards-compatible — does not bump `version`.
 - **Adding new sub-blocks under an existing pillar** (e.g. `tools.containers`) is backwards-compatible — does not bump `version`.
-- **Removing a field, changing a default semantically, or changing merge rules** is a breaking change — bumps `version` to `2`, and `harness validate` on `version: 1` manifests still works (read-compatible) for at least one major CLI version.
+- **Adding a new enum value** (e.g. a new `blocking` level, a new `event` type) is backwards-compatible — does not bump `version`.
+- **Removing a field, removing an enum value, changing a default semantically, or changing merge rules** is a breaking change — bumps `version` to `2`. `harness validate` on `version: 1` manifests still works (read-compatible) for at least one major CLI version.
 - **`harness apply` on a `version: 1` manifest after CLI upgrade** migrates in-place if possible; otherwise fails with a specific migration guide.
+- **Unknown keys inside a known version**: `harness validate` rejects them with exit 1 in Phase 1. This is the strict default — typos should surface loud, not silently ignore. Once the manifest schema is stable (post Phase 3), a `--lenient` mode may accept and warn instead.
+- **Unknown `version:` value** (e.g. the CLI is `version: 1`-only but the manifest declares `version: 2`): `harness validate` exits 66 (`EX_NOINPUT`) with a message pointing at the CLI upgrade. No partial parsing is attempted — forward-compatibility in the other direction is not a promise.
 
 The intent is that a user's `harness.yaml` written against `version: 1` keeps working for as long as practical without editing. That promise is load-bearing because this file is the human-facing surface of the whole project.
 
@@ -513,7 +570,7 @@ tools:
         timeout_ms: 5000
       enabled: true
     - name: agent-tasks
-      command: [node, ~/git/pandora/agent-tasks/mcp/dist/server.js]
+      command: [node, ~/git/pandora/agent-tasks/mcp-server/dist/server.js]
       env:
         AGENT_TASKS_URL: https://agent-tasks.opentriologue.ai
       health:
@@ -561,21 +618,21 @@ memory:
 
 hooks:
   - name: git-preflight
-    event: session_start
+    event: SessionStart
     command: ~/.claude/hooks/git-preflight.sh
     blocking: false
     budget_ms: 30000
     description: "Fetch watchlist repos and surface drift on session start."
 
   - name: require-review-evidence
-    event: pre_tool_use
+    event: PreToolUse
     match: "mcp__agent-tasks__pull_requests_merge"
     command: ~/.claude/hooks/require-review-evidence.sh
     blocking: hard
     budget_ms: 2000
 
   - name: require-dogfood-evidence
-    event: pre_tool_use
+    event: PreToolUse
     match: "Bash"
     command: ~/.claude/hooks/require-dogfood-evidence.sh
     blocking: hard
@@ -585,7 +642,7 @@ policies:
   - name: review-before-merge
     description: Block PR merges unless a ledger entry tagged review:<pr-number> exists for this session.
     trigger:
-      event: pre_tool_use
+      event: PreToolUse
       match: "mcp__agent-tasks__pull_requests_merge"
     requires:
       ledger_tag: "review:${PR_NUMBER}"
@@ -595,7 +652,7 @@ policies:
   - name: dogfood-before-release
     description: Block npm publish / git tag v* without a dogfood ledger entry.
     trigger:
-      event: pre_tool_use
+      event: PreToolUse
       match: "Bash"
       bash_match: "^(npm publish|git tag v.*)"
     requires:
