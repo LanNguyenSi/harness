@@ -122,6 +122,8 @@ The following deliberately do not appear here. They belong in later documents an
 
 `ARCHITECTURE.md` will address the first four. `ROADMAP.md` will address the last.
 
+§8 below defends the *sequencing choice* (introspection before enforcement) at the level of design-intent rather than prescribing what each phase contains. The actual phase contents stay in ROADMAP.
+
 ## 7. What readers should take away
 
 If you read only this document, you should believe three things:

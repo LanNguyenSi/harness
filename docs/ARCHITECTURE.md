@@ -572,6 +572,13 @@ harness add hook <name> --event <e> --command <c> [--match <r>] [--blocking <m>]
 harness remove <type> <name>
   Removes by name. Prompts if referenced elsewhere (e.g. policy referencing a hook).
 
+harness adopt <file>
+  Read a hand-edited generated file (today: ~/.claude/settings.json), diff against
+  manifest-expected, and propose a manifest patch that captures the difference.
+  The user reviews and accepts/rejects. The supported path from "I hand-edited
+  to test something" back to "the manifest reflects reality"; complement to the
+  drift-detection in §7. Phase 2.
+
 harness apply [--dry-run]
   Regenerate harness.generated/ outputs from the manifest. --dry-run prints the
   would-be diff without writing. Does NOT restart MCP servers or reload Claude
