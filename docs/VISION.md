@@ -92,13 +92,15 @@ Given the three pillars plus hooks, what does a control plane add that is greate
 
 **Diff-over-time.** Knowing what changed between last session and this one is currently impossible. With a canonical representation of "the harness as configured", diffing is a file diff.
 
+The honest scope of this capability is layered. Phase 1 ships *manifest* diffs: what's declared in `harness.yaml` today vs. yesterday. *Asset* diffs (the contents of a hook script the manifest references; the SHA of an MCP entrypoint) are a Phase 3 concern that requires the lock file (`harness.lock`). A reader who interprets "diff-over-time" as "I'll know if `git-preflight.sh` changed under me" should know up front that this requires Phase 3, not Phase 1. Without that nuance, Phase 1's promise of a single source of truth is half-true: the manifest is canonical, the assets it references are not yet pinned. ARCHITECTURE §7 makes this layering explicit.
+
 **Dry-run.** Before applying a change, simulating what it would do is straightforward if the effect of a configuration is computable. This is the hardest capability to build well, and the most valuable one long-term: it's the difference between "edit and pray" and "edit, preview, commit".
 
 **Policies as data.** The rules we write in memory notes — "always review before merge", "always fetch before starting work in a repo", "never ship without dogfood" — become machine-readable YAML entries that bind to hook triggers, rather than prose the agent might or might not act on. This is where the "system enforcement" theme joins the "control plane" theme.
 
 ## 5. Positioning — what `harness` is and isn't
 
-`harness` is **additive**, not replacing. It does not delete `settings.json`, `CLAUDE.md`, memory files, or MCP registrations. It reads them, represents them in its own manifest, and — in later phases — generates them from the manifest. Existing tools keep working unmodified.
+`harness` is **additive at the manifest layer; generative at the runtime layer for surfaces it explicitly owns**. It does not delete `settings.json`, `CLAUDE.md`, memory files, or MCP registrations as side effects of being installed; those files keep their existing semantics. From Phase 3 onward, however, `harness apply` *does* regenerate the runtime files it lists as outputs (today: `~/.claude/settings.json`, the `MEMORY.md` index). Hand-edits to those files outside the manifest are detected as drift and surfaced before being overwritten — see ARCHITECTURE §7's "drift handling" subsection. The slogan "additive, not replacing" was the right shape but too imprecise; the precise version is: harness adds a new authoritative layer on top of existing files, and once you opt in to generation, that layer wins. Existing tools keep working unmodified; their hand-edits do not.
 
 `harness` is **per-installation**, not per-runtime. A user has one harness configuration; it can have per-project overrides, but the scope is "this human's setup of their tools". It is not a cloud service and does not pretend to be.
 
@@ -129,3 +131,17 @@ If you read only this document, you should believe three things:
 3. That layer is a declarative control plane with a single source of truth, read-first capabilities (describe, validate, diff), write-later capabilities (apply, generate), and a policy layer on top. It is additive to existing tools and deliberately limited in scope.
 
 Everything that follows in `ARCHITECTURE.md` and the phased roadmap is downstream of those three beliefs. If one of them is wrong, the downstream design is wrong — which is why it is worth putting this vision on paper before writing code.
+
+## 8. Why introspection comes before enforcement
+
+A natural critique of the phase ordering is: the founding incident on 2026-04-23 was an **enforcement** failure (no preflight fired before stale-conclusions were drawn), but Phase 1 ships **introspection** (`describe`, `validate`, `doctor`). The thing harness was born to fix lands in Phase 4. Why not invert the order?
+
+Three reasons make introspection-first the right sequencing.
+
+**You cannot enforce policies on a configuration surface you cannot read.** A policy that says "block PR merges without a review-evidence ledger entry" depends on knowing reliably what the configuration *is* — which manifest is in effect, which hooks are wired, which tools are healthy, which session is current. If `harness validate` cannot catch a malformed manifest or a dead hook script reference, the enforcement layer fires garbage and the failure modes are worse than no enforcement at all. Phase 1 builds the floor. Phase 4 builds the wall on top of the floor.
+
+**The 2026-04-23 incident itself was visible to introspection** the moment introspection existed. The drift was detectable by `git status`; the reason it wasn't caught is that nothing made the human or the agent run `git status` deterministically at the right moment. That is two problems: (a) "make the check exist" — which is *the* deterministic-trigger problem of Phase 4 — and (b) "make the check legible to humans on demand" — which is `harness doctor` in Phase 1. Both matter. Doing (b) first means that when (a) lands, its diagnostics are already understandable; doing (a) first means policies fire against a system whose configuration is not yet legible, and every false positive becomes its own debugging incident.
+
+**Phase 1 has its own user-visible value, even without enforcement.** A worked example: today, an agent investigating a tasks's claims will discover a dead MCP server only by trying it; if `codebase-oracle` is broken the agent burns context on grep before noticing. With Phase 1's `harness doctor`, a single command surfaces "MCP `codebase-oracle` health verb timed out at 2026-04-27T17:42Z; expected `oracle_list_repos` to respond in 5000ms." That is real value, deliverable in Phase 1, independent of any policy enforcement. ARCHITECTURE Appendix D walks through what that output actually looks like.
+
+So: introspection first is a deliberate sequencing choice, not an evasion. The killer-test challenge ("can harness solve a real problem in 20 lines?") is answered in Phase 1 by `harness doctor` plus `validate`, not by a policy block. The policy layer is what makes the floor *deterministic* — but the floor itself is the legible-configuration capability, and that is what Phase 1 ships.
