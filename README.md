@@ -31,14 +31,14 @@ Our entry point into this problem: on 2026-04-23, an `agent-grounding` checkout 
 
 See [`docs/VISION.md`](docs/VISION.md) for the "why" in long form — three pillars (grounding, tools, memory), what already exists across the ecosystem, and where the gaps are.
 
-`ARCHITECTURE.md` (concrete YAML shape, CLI surface, file layout) and `ROADMAP.md` (phase-by-phase acceptance criteria) follow in the next commits.
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) describes the concrete YAML shape, CLI surface, drift handling, per-machine override layer, and the v1 `requires` schema. [`docs/ROADMAP.md`](docs/ROADMAP.md) turns the four phases into testable acceptance criteria with explicit exit gates per phase.
 
 ## Status
 
 - [x] Repo bootstrap (LICENSE, .gitignore)
 - [x] README + VISION — repo legible
-- [ ] ARCHITECTURE — YAML shape + CLI surface agreed
-- [ ] ROADMAP — phases 1–4 with acceptance criteria
+- [x] ARCHITECTURE — YAML shape + CLI surface agreed
+- [x] ROADMAP — phases 1–4 with acceptance criteria
 - [ ] Phase 1 — read-only inventory (`describe`, `validate`, `doctor`)
 - [ ] Phase 2 — managed edits
 - [ ] Phase 3 — declarative truth (YAML → settings.json)
