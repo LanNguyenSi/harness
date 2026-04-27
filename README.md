@@ -38,7 +38,7 @@ See [`docs/VISION.md`](docs/VISION.md) for the "why" in long form — three pill
 - [x] Repo bootstrap (LICENSE, .gitignore)
 - [x] README + VISION — repo legible
 - [x] ARCHITECTURE — YAML shape + CLI surface agreed
-- [ ] ROADMAP — phases 1–4 with acceptance criteria
+- [x] ROADMAP — phases 1–4 with acceptance criteria
 - [ ] Phase 1 — read-only inventory (`describe`, `validate`, `doctor`)
 - [ ] Phase 2 — managed edits
 - [ ] Phase 3 — declarative truth (YAML → settings.json)

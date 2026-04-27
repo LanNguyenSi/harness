@@ -543,10 +543,13 @@ harness diff [--since <ref>] [--since-apply]
   Show changes to the effective manifest. --since <ref> diffs against a git ref
   in the harness.yaml dir; --since-apply diffs against harness.generated/.last-apply.
 
-harness list <skills|memories|tools|hooks|policies> [--filter <substr>] [--json]
+harness list <mcp|cli|skills|memories|hooks|policies> [--filter <substr>] [--json]
   Flat listing of one category, filter-friendly. `describe --pillar` prints the
   full nested tree; `list` prints a single denormalised table suited for piping
-  to grep / awk.
+  to grep / awk. Categories map directly to the manifest sub-blocks: `mcp` /
+  `cli` / `skills` are the three `tools:` sub-types; `memories` lists files
+  surfaced by the memory router; `hooks` and `policies` list those top-level
+  sections.
 
 harness explain <policy-name> [--trace]
   Why did this policy behave as it did on its last evaluation? Shows the
