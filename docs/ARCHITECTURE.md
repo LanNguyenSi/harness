@@ -664,7 +664,7 @@ Dependencies (pinned in Phase 1):
 | `commander` | CLI parsing |
 | `execa` | Process execution (MCP health checks, CLI version checks) |
 | `chalk` | Terminal colouring (matches existing CLI style) |
-| `better-sqlite3` | Optional, only if reading evidence-ledger directly (vs. shelling out to `ledger`) |
+| `better-sqlite3` | **Reserved / unused in v1.** Earlier drafts kept direct evidence-ledger reads as a fallback; the Phase 4 evaluator now goes through `grounding-mcp` (per ROADMAP Phase 4 §Library-side) so harness does not re-open the SQLite ledger directly. Row kept here so a future v2 reader sees the option was considered and rejected. |
 
 Language-service dependencies:
 
@@ -742,6 +742,23 @@ tools:
         AGENT_TASKS_URL: https://agent-tasks.opentriologue.ai
       health:
         verb: projects_list
+        timeout_ms: 5000
+      enabled: true
+    - name: grounding-mcp
+      # The MCP wrapper around agent-grounding's evidence-ledger + claim-gate +
+      # session primitives. Phase 4's `requires` evaluator queries the ledger
+      # through this server's `ledger_summary` / `claim_evaluate_from_session`
+      # verbs, which is why grounding-mcp is the load-bearing MCP for the
+      # policy story even though Phase 1 only inventories it.
+      command: [node, ~/git/pandora/agent-grounding/packages/grounding-mcp/dist/server.js]
+      env:
+        EVIDENCE_LEDGER_DB: ~/.evidence-ledger/ledger.db
+      health:
+        # `ledger_status` is the no-arg liveness verb. Pending in agent-grounding
+        # (filed as task 453d86f4); until merged, `harness doctor` reports this
+        # MCP as unhealthy with a JSON-RPC validation error from one of the
+        # session-scoped verbs. Swap to `ledger_status` once shipped upstream.
+        verb: ledger_status
         timeout_ms: 5000
       enabled: true
 
@@ -912,7 +929,7 @@ This appendix answers the killer-test challenge: *can `harness` solve a real pro
 
 ### Scenario
 
-The user has a `~/.claude/harness.yaml` declaring three MCP servers, two CLIs, four enabled skills, two memory directories, four hooks, and four policies (matching Appendix A). Yesterday everything was healthy. Overnight someone (or the user, last week, then forgot) edited `git-preflight.sh` and the `codebase-oracle` MCP server crashed. The user starts a fresh session.
+The user has a `~/.claude/harness.yaml` declaring three MCP servers (`agent-tasks`, `codebase-oracle`, `grounding-mcp`), two CLIs, four enabled skills, two memory directories, four hooks, and four policies (matching Appendix A). Yesterday everything was healthy. Overnight someone (or the user, last week, then forgot) edited `git-preflight.sh` and the `codebase-oracle` MCP server crashed. The user starts a fresh session.
 
 ### Without harness — today
 

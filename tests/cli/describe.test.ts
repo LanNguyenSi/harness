@@ -82,7 +82,7 @@ describeBlock("describe — --json", () => {
     });
     const parsed = JSON.parse(result.output);
     expect(parsed.version).toBe(1);
-    expect(parsed.tools.mcp).toHaveLength(2);
+    expect(parsed.tools.mcp).toHaveLength(3);
     expect(parsed.policies).toHaveLength(4);
   });
 

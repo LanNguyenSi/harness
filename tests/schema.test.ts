@@ -27,8 +27,9 @@ describe("parseManifest — happy path", () => {
     const raw = loadYaml(path.join(EXAMPLES_DIR, "full-manifest.yaml"));
     const manifest = parseManifest(raw);
     expect(manifest.version).toBe(1);
-    expect(manifest.tools.mcp).toHaveLength(2);
+    expect(manifest.tools.mcp).toHaveLength(3);
     expect(manifest.tools.mcp[0]?.name).toBe("codebase-oracle");
+    expect(manifest.tools.mcp[2]?.name).toBe("grounding-mcp");
     expect(manifest.hooks).toHaveLength(4);
     expect(manifest.policies).toHaveLength(4);
     const reviewPolicy = manifest.policies.find((p) => p.name === "review-before-merge");
