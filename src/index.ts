@@ -7,6 +7,7 @@ export { validate, formatReport, runAssetChecks, fmtDiagnostic, type Diagnostic 
 export { doctor, type DoctorOptions } from "./cli/doctor/index.js";
 export { list, isListCategory, type ListCategory, type ListOptions, type ListResult } from "./cli/list.js";
 export { explain, type ExplainOptions, type ExplainResult } from "./cli/explain.js";
+export { diff, diffManifests, formatDiff, type Change, type ChangeKind, type DiffOptions, type DiffResult } from "./cli/diff/index.js";
 export { format as formatDoctor } from "./cli/doctor/format.js";
 export { RealMcpProbe, type McpProbe, type McpProbeResult } from "./probes/mcp.js";
 export { inspectMemory, type MemoryReport, type StaleMemory } from "./probes/memory.js";
