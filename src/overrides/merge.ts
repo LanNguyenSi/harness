@@ -44,6 +44,17 @@ function classifyList(
   return named > 0 ? "named" : "plain";
 }
 
+function deepClone(value: unknown): unknown {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(deepClone);
+  if (isPlainObject(value)) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) out[k] = deepClone(v);
+    return out;
+  }
+  return value;
+}
+
 function mergeNamedList(
   base: unknown[],
   override: unknown[],
@@ -61,7 +72,7 @@ function mergeNamedList(
 
   if (overrideShape !== "named") {
     if (overrideShape === "empty") return [];
-    return [...override];
+    return override.map(deepClone);
   }
 
   const result: unknown[] = [];
@@ -73,7 +84,7 @@ function mergeNamedList(
         (o) => o.name === baseEntry.name,
       );
       if (!matching) {
-        result.push(baseEntry);
+        result.push(deepClone(baseEntry));
         seenNames.add(baseEntry.name);
         continue;
       }
@@ -134,7 +145,8 @@ function mergeValue(base: unknown, override: unknown, path: string[]): unknown |
       const cleaned = stripTombstones(override, path);
       return cleaned === TOMBSTONE ? TOMBSTONE : cleaned;
     }
-    const out: Record<string, unknown> = { ...base };
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(base)) out[k] = deepClone(v);
     for (const [key, overrideChild] of Object.entries(override)) {
       if (key === "_delete") continue;
       const baseChild = out[key];

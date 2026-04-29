@@ -147,6 +147,28 @@ describe("override merge — §8 rules", () => {
   });
 });
 
+describe("override merge — ownership / aliasing", () => {
+  it("does not alias base subtrees into the merged result", () => {
+    const base = {
+      tools: {
+        mcp: [
+          { name: "a", env: { TIER: "user" }, command: ["x"] },
+          { name: "b", env: { TIER: "user" }, command: ["y"] },
+        ],
+      },
+    };
+    const merged = mergeManifest(base, { tools: { mcp: [{ name: "a", enabled: false }] } }) as {
+      tools: { mcp: Array<{ name: string; env: Record<string, string>; command: string[] }> };
+    };
+
+    merged.tools.mcp[1]!.env.TIER = "mutated";
+    merged.tools.mcp[0]!.command.push("extra");
+
+    expect(base.tools.mcp[1]!.env.TIER).toBe("user");
+    expect(base.tools.mcp[0]!.command).toEqual(["x"]);
+  });
+});
+
 describe("applyLayers — multi-layer merge", () => {
   it("applies layers left-to-right with later layers winning", () => {
     const result = applyLayers(
