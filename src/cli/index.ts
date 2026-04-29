@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { add } from "./add/index.js";
 import type { AddEntry } from "./add/mutate.js";
+import { adopt } from "./adopt/index.js";
 import { isRemoveType, KNOWN_REMOVE_TYPES, remove } from "./remove/index.js";
 import { describe, isPillar, type Pillar } from "./describe.js";
 import { diff as diffRun } from "./diff/index.js";
@@ -357,6 +358,32 @@ export function buildProgram(opts: RunOptions = {}): Command {
       await runAdd({ type: "hook", entry }, { config: options.config, dryRun: options.dryRun });
     },
   );
+
+  program
+    .command("adopt <file>")
+    .description(
+      "Capture hand-edits from a runtime file (today: ~/.claude/settings.json) " +
+        "into the manifest. Diffs against the manifest's current declarations and " +
+        "prompts y/N before writing.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--yes", "skip the confirmation prompt (for non-interactive use)")
+    .action(async (file: string, options: { config?: string; yes?: boolean }) => {
+      const result = await adopt(file, { configPath: options.config, yes: options.yes });
+      if (result.outcome === "no-drift") {
+        stdout(`nothing to adopt (no drift between ${file} and ${result.manifestPath})\n`);
+        return;
+      }
+      if (result.outcome === "declined") {
+        stdout(`adoption declined; ${result.manifestPath} unchanged\n`);
+        return;
+      }
+      stdout(
+        `adopted ${result.driftCount} hook${result.driftCount === 1 ? "" : "s"} ` +
+          `from ${result.settingsPath} into ${result.manifestPath} ` +
+          `(names: ${result.adoptedNames.join(", ")})\n`,
+      );
+    });
 
   program
     .command("remove <type> <name>")
