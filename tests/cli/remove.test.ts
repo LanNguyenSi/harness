@@ -3,7 +3,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
-import { add } from "../../src/cli/add/index.js";
 import { init } from "../../src/cli/init/index.js";
 import { remove } from "../../src/cli/remove/index.js";
 import { applyRemove, planRemove } from "../../src/cli/remove/mutate.js";
@@ -22,8 +21,14 @@ beforeEach(async () => {
   // so post-remove asset checks (run via add() in setup) and validate stays
   // honest. Keeping the manifest in the tmpdir entirely avoids touching the
   // user's real ~/.claude.
+  // Rewrite hook paths into the tmp hooks dir, drop `required:true` from the
+  // full template's CLI entries (CI doesn't have git-batch on PATH so the
+  // post-mutate asset check would otherwise trip in any test that goes through
+  // a verb like add() during setup), and chmod the hook scripts so the asset
+  // check would pass if anyone reruns it on this fixture.
   const yaml = fs.readFileSync(manifestPath, "utf8")
-    .replace(/~\/\.claude\/hooks\//g, `${hooksDir}/`);
+    .replace(/~\/\.claude\/hooks\//g, `${hooksDir}/`)
+    .replace(/required: true\n/g, "required: false\n");
   fs.writeFileSync(manifestPath, yaml);
   for (const name of ["git-preflight.sh", "require-review-evidence.sh", "require-dogfood-evidence.sh", "require-preflight-evidence.sh"]) {
     const p = path.join(hooksDir, name);
@@ -73,18 +78,19 @@ describe("remove hook — reference check", () => {
   });
 
   it("removes a hook with --force when no policy references it (no schema fallout)", async () => {
-    // Add a sacrificial hook that has no policy referencing it, then remove with --force.
-    // The reference check finds zero policies, no warning, schema passes.
+    // Insert the sacrificial hook via the same Document AST applyAdd uses,
+    // bypassing asset checks (host-dependent: git-batch on PATH, etc.) since
+    // this test is about the reference-check semantics, not asset validation.
     const sacrificial = path.join(hooksDir, "sacrificial.sh");
     fs.writeFileSync(sacrificial, "#!/bin/sh\nexit 0\n");
     fs.chmodSync(sacrificial, 0o755);
-    await add(
-      {
-        type: "hook",
-        entry: { name: "sacrificial", event: "SessionStart", command: sacrificial, blocking: false },
-      },
-      { configPath: manifestPath, homeDir: tmpHome },
-    );
+    const { applyAdd } = await import("../../src/cli/add/mutate.js");
+    const yaml = fs.readFileSync(manifestPath, "utf8");
+    const next = applyAdd(yaml, {
+      type: "hook",
+      entry: { name: "sacrificial", event: "SessionStart", command: sacrificial, blocking: false },
+    });
+    fs.writeFileSync(manifestPath, next);
     const r = await remove("hook", "sacrificial", {
       configPath: manifestPath,
       homeDir: tmpHome,
