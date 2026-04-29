@@ -2,10 +2,12 @@ import type { DoctorReport, McpProbeResult } from "./types.js";
 
 const VERSION = "0.1.0-pre.1";
 
-function mcpLine(r: McpProbeResult): string {
+function mcpLine(r: McpProbeResult, shallow: boolean): string {
   switch (r.outcome.kind) {
     case "healthy":
-      return `    ✓ ${r.name}  healthy in ${r.outcome.latencyMs}ms`;
+      return shallow
+        ? `    ~ ${r.name}  manifest-only (probe skipped)`
+        : `    ✓ ${r.name}  healthy in ${r.outcome.latencyMs}ms`;
     case "error":
       return `    ✗ ${r.name}  FAILED: ${r.outcome.message}`;
     case "missing-verb":
@@ -41,7 +43,7 @@ function formatManifestSection(report: DoctorReport): string[] {
 function formatToolsSection(report: DoctorReport): string[] {
   const out: string[] = ["", "Tools"];
   out.push(`  MCP servers (${report.tools.mcp.length} declared)`);
-  for (const m of report.tools.mcp) out.push(mcpLine(m));
+  for (const m of report.tools.mcp) out.push(mcpLine(m, report.shallow));
 
   const cliCount = report.tools.cli.length;
   out.push(`  CLI tools (${cliCount} declared)`);

@@ -85,7 +85,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .description("Health summary across all pillars")
     .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides for this project name")
-    .option("--shallow", "skip MCP probes; report manifest-reference state only")
+    .option("--shallow", "skip MCP probes (CLI --version probes still run); report manifest-reference state only")
     .action(async (options: { config?: string; project?: string; shallow?: boolean }) => {
       const report = await doctor({
         configPath: options.config,

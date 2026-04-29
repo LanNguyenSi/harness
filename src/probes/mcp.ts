@@ -136,8 +136,20 @@ async function runRealProbe(
     });
   }
 
+  const timers = new Set<NodeJS.Timeout>();
   function timeoutPromise(): Promise<"timeout"> {
-    return new Promise((resolve) => setTimeout(() => resolve("timeout"), timeoutMs));
+    return new Promise((resolve) => {
+      const t = setTimeout(() => {
+        timers.delete(t);
+        resolve("timeout");
+      }, timeoutMs);
+      t.unref();
+      timers.add(t);
+    });
+  }
+  function clearTimers(): void {
+    for (const t of timers) clearTimeout(t);
+    timers.clear();
   }
 
   try {
@@ -230,6 +242,7 @@ async function runRealProbe(
       outcome: { kind: "healthy", latencyMs: Date.now() - start },
     };
   } finally {
+    clearTimers();
     if (!processExited) child.kill("SIGTERM");
   }
 }

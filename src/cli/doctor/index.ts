@@ -207,19 +207,15 @@ function buildPolicies(manifest: Manifest): PolicyEntryReport[] {
 }
 
 function manifestSection(manifest: Manifest): ManifestSection {
-  const required = ["version"];
-  const present = required.every((k) => k in (manifest as Record<string, unknown>));
-  const warnings: string[] = [];
-  manifest.hooks.forEach((h, i) => {
-    if (h.budget_ms === 30000) {
-      warnings.push(`hooks[${i}].budget_ms unset, defaulting to 30000`);
-    }
-  });
+  const topLevelKeys = ["grounding", "tools", "memory", "hooks", "policies"];
+  const present = topLevelKeys.filter(
+    (k) => (manifest as Record<string, unknown>)[k] !== undefined,
+  ).length;
   return {
     syntaxValid: true,
-    schemaValid: present,
-    topLevelKeysPresent: 5,
-    warnings,
+    schemaValid: true,
+    topLevelKeysPresent: present,
+    warnings: [],
   };
 }
 
@@ -237,12 +233,13 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
     if (c.status === "error") errorCount++;
     else if (c.status === "warn") warningCount++;
   }
-  if (report.tools.skillsRequiredMissing.length > 0) errorCount++;
+  errorCount += report.tools.skillsRequiredMissing.length;
   for (const h of report.hooks) {
     if (h.status === "error") errorCount++;
     else if (h.status === "warn") warningCount++;
   }
   if (report.memory.routerExecutable && !report.memory.routerExecutable.exists) errorCount++;
+  if (!report.memory.routerExecutable) warningCount++;
   for (const d of report.memory.directories) {
     if (!d.exists) warningCount++;
   }
