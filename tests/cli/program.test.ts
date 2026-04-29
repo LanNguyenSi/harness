@@ -67,6 +67,42 @@ tools:
   });
 });
 
+describe("CLI program — list + explain commands", () => {
+  it("list mcp emits a name-keyed table on stdout", async () => {
+    const r = await exec(["list", "mcp", "--config", FULL_MANIFEST]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/codebase-oracle/);
+    expect(r.stdout).toMatch(/agent-tasks/);
+  });
+
+  it("list policies --json emits a parseable JSON array", async () => {
+    const r = await exec(["list", "policies", "--config", FULL_MANIFEST, "--json"]);
+    expect(r.code).toBe(0);
+    const parsed = JSON.parse(r.stdout);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed[0].name).toBe("review-before-merge");
+  });
+
+  it("list with an unknown category exits 64", async () => {
+    const r = await exec(["list", "bogus", "--config", FULL_MANIFEST]);
+    expect(r.code).toBe(64);
+    expect(r.stderr).toMatch(/unknown list category/i);
+  });
+
+  it("explain on a known policy exits 0 with structured YAML", async () => {
+    const r = await exec(["explain", "review-before-merge", "--config", FULL_MANIFEST]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/^name: review-before-merge/);
+  });
+
+  it("explain on an unknown policy exits 64 and lists available", async () => {
+    const r = await exec(["explain", "nope", "--config", FULL_MANIFEST]);
+    expect(r.code).toBe(64);
+    expect(r.stderr).toMatch(/not found/);
+    expect(r.stderr).toMatch(/review-before-merge/);
+  });
+});
+
 describe("CLI program — doctor command", () => {
   it("prints the Appendix D structure on stdout and returns 0 in --shallow mode", async () => {
     const fs = await import("node:fs");
