@@ -1,4 +1,6 @@
 import { Command } from "commander";
+import { add } from "./add/index.js";
+import type { AddEntry } from "./add/mutate.js";
 import { describe, isPillar, type Pillar } from "./describe.js";
 import { diff as diffRun } from "./diff/index.js";
 import { doctor } from "./doctor/index.js";
@@ -179,6 +181,181 @@ export function buildProgram(opts: RunOptions = {}): Command {
       if (result.stderr) stderr(result.stderr);
       stdout(result.stdout);
     });
+
+  const addCmd = program
+    .command("add")
+    .description("Insert a new entry into harness.yaml (managed mutation)");
+
+  function addCommonOptions(c: Command): Command {
+    return c
+      .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+      .option("--dry-run", "print the unified diff and exit without writing");
+  }
+
+  function parseBlocking(s: string): boolean | "soft" | "hard" {
+    if (s === "false") return false;
+    if (s === "soft" || s === "hard") return s;
+    throw new HarnessExitError(
+      `invalid --blocking value "${s}"; expected one of false, soft, hard`,
+      EX_USAGE,
+    );
+  }
+
+  function parseIntFlag(s: string, label: string): number {
+    const n = Number.parseInt(s, 10);
+    if (!Number.isFinite(n) || String(n) !== s.trim()) {
+      throw new HarnessExitError(`invalid ${label} value "${s}"; expected an integer`, EX_USAGE);
+    }
+    return n;
+  }
+
+  async function runAdd(action: AddEntry, opts: { config?: string; dryRun?: boolean }): Promise<void> {
+    const result = await add(action, { configPath: opts.config, dryRun: opts.dryRun });
+    if (opts.dryRun) {
+      stdout(result.diff);
+      return;
+    }
+    stdout(`added ${result.type} ${JSON.stringify(result.name)} to ${result.path}\n`);
+  }
+
+  addCommonOptions(
+    addCmd
+      .command("mcp <name>")
+      .description("Add an MCP server entry under tools.mcp[]")
+      .option("--command <cmd>", "argv-style command; comma-separated for multi-token")
+      .option("--health-verb <v>", "MCP verb to invoke for liveness")
+      .option("--health-timeout-ms <n>", "verb timeout in ms (default 5000 when --health-verb is set)")
+      .option("--enabled <bool>", "true|false (default true)"),
+  ).action(
+    async (
+      name: string,
+      options: {
+        command?: string;
+        healthVerb?: string;
+        healthTimeoutMs?: string;
+        enabled?: string;
+        config?: string;
+        dryRun?: boolean;
+      },
+    ) => {
+      const command = options.command
+        ? options.command.includes(",")
+          ? options.command.split(",").map((s) => s.trim())
+          : options.command
+        : "";
+      if (!command) {
+        throw new HarnessExitError(
+          "harness add mcp: --command is required",
+          EX_USAGE,
+        );
+      }
+      const entry: AddEntry["entry"] & object = {
+        name,
+        command,
+      };
+      if (options.healthVerb !== undefined) {
+        const timeoutMs = options.healthTimeoutMs
+          ? parseIntFlag(options.healthTimeoutMs, "--health-timeout-ms")
+          : 5000;
+        (entry as { health?: { verb: string; timeout_ms: number } }).health = {
+          verb: options.healthVerb,
+          timeout_ms: timeoutMs,
+        };
+      }
+      if (options.enabled !== undefined) {
+        if (options.enabled !== "true" && options.enabled !== "false") {
+          throw new HarnessExitError(
+            `invalid --enabled value "${options.enabled}"; expected true or false`,
+            EX_USAGE,
+          );
+        }
+        (entry as { enabled?: boolean }).enabled = options.enabled === "true";
+      }
+      await runAdd(
+        { type: "mcp", entry: entry as { name: string; command: string | string[] } },
+        { config: options.config, dryRun: options.dryRun },
+      );
+    },
+  );
+
+  addCommonOptions(
+    addCmd
+      .command("cli <name>")
+      .description("Add a CLI tool entry under tools.cli[]")
+      .requiredOption("--binary <b>", "binary name on PATH or absolute path")
+      .option("--required", "validate fails if the binary is missing")
+      .option("--min-version <v>", "minimum semver"),
+  ).action(
+    async (
+      name: string,
+      options: {
+        binary: string;
+        required?: boolean;
+        minVersion?: string;
+        config?: string;
+        dryRun?: boolean;
+      },
+    ) => {
+      const entry: { name: string; binary: string; required?: boolean; min_version?: string } = {
+        name,
+        binary: options.binary,
+      };
+      if (options.required) entry.required = true;
+      if (options.minVersion !== undefined) entry.min_version = options.minVersion;
+      await runAdd({ type: "cli", entry }, { config: options.config, dryRun: options.dryRun });
+    },
+  );
+
+  addCommonOptions(
+    addCmd
+      .command("skill <name>")
+      .description("Enable a skill by name under tools.skills.enabled[]"),
+  ).action(async (name: string, options: { config?: string; dryRun?: boolean }) => {
+    await runAdd({ type: "skill", entry: name }, { config: options.config, dryRun: options.dryRun });
+  });
+
+  addCommonOptions(
+    addCmd
+      .command("hook <name>")
+      .description("Add a hook entry under hooks[]")
+      .requiredOption("--event <e>", "runtime event (e.g. SessionStart, PreToolUse)")
+      .requiredOption("--command <c>", "shell command (executable path or script with args)")
+      .option("--match <r>", "tool-name regex filter (PreToolUse / PostToolUse only)")
+      .option("--blocking <m>", "false | soft | hard (default false)")
+      .option("--budget-ms <n>", "timeout in ms (default 30000)"),
+  ).action(
+    async (
+      name: string,
+      options: {
+        event: string;
+        command: string;
+        match?: string;
+        blocking?: string;
+        budgetMs?: string;
+        config?: string;
+        dryRun?: boolean;
+      },
+    ) => {
+      const entry: {
+        name: string;
+        event: string;
+        command: string;
+        match?: string;
+        blocking: boolean | "soft" | "hard";
+        budget_ms?: number;
+      } = {
+        name,
+        event: options.event,
+        command: options.command,
+        blocking: options.blocking !== undefined ? parseBlocking(options.blocking) : false,
+      };
+      if (options.match !== undefined) entry.match = options.match;
+      if (options.budgetMs !== undefined) {
+        entry.budget_ms = parseIntFlag(options.budgetMs, "--budget-ms");
+      }
+      await runAdd({ type: "hook", entry }, { config: options.config, dryRun: options.dryRun });
+    },
+  );
 
   program
     .command("explain <policy>")
