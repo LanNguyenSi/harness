@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { describe, isPillar, type Pillar } from "./describe.js";
-import { EX_USAGE, HarnessExitError } from "./exit-codes.js";
+import { EX_FAIL, EX_USAGE, HarnessExitError } from "./exit-codes.js";
+import { formatReport, validate } from "./validate/index.js";
 
 export interface RunOptions {
   argv?: string[];
@@ -57,6 +58,26 @@ export function buildProgram(opts: RunOptions = {}): Command {
       if (!result.output.endsWith("\n")) stdout("\n");
     });
 
+  program
+    .command("validate")
+    .description("Lint the manifest + referenced assets")
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides for this project name")
+    .option("--strict", "promote warnings to errors")
+    .action((options: { config?: string; project?: string; strict?: boolean }) => {
+      const result = validate({
+        configPath: options.config,
+        project: options.project,
+        strict: options.strict,
+      });
+      const report = formatReport(result);
+      if (result.diagnostics.length > 0) stderr(report);
+      else stdout(report);
+      if (result.errorCount > 0) {
+        throw new HarnessExitError("", EX_FAIL);
+      }
+    });
+
   return program;
 }
 
@@ -69,7 +90,7 @@ export async function run(opts: RunOptions = {}): Promise<number> {
     return 0;
   } catch (err) {
     if (err instanceof HarnessExitError) {
-      if (err.exitCode !== 0) stderr(`${err.message}\n`);
+      if (err.exitCode !== 0 && err.message) stderr(`${err.message}\n`);
       return err.exitCode;
     }
     stderr(`${(err as Error).message ?? err}\n`);

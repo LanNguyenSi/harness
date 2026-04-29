@@ -28,6 +28,45 @@ async function exec(argv: string[]): Promise<Captured> {
   return { stdout, stderr, code };
 }
 
+describe("CLI program — validate command", () => {
+  it("returns 0 with success message on the reference manifest happy path", async () => {
+    const path = await import("node:path");
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-program-validate-"));
+    try {
+      fs.writeFileSync(
+        path.join(home, "harness.yaml"),
+        `version: 1
+hooks: []
+policies: []
+tools:
+  builtin:
+    known: [Read, Edit, Write, Bash, Agent, Skill, TaskCreate, Glob, Grep]
+`,
+        "utf8",
+      );
+      const r = await exec(["validate", "--config", path.join(home, "harness.yaml")]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toMatch(/no validation findings/);
+      expect(r.stderr).toBe("");
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("returns 1 and prints diagnostics to stderr when an invalid fixture is supplied", async () => {
+    const r = await exec([
+      "validate",
+      "--config",
+      path.resolve(REPO_ROOT, "docs/examples/invalid/03-policy-undeclared-variable.yaml"),
+    ]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/PR_NUMBER/);
+    expect(r.stdout).toBe("");
+  });
+});
+
 describe("CLI program — describe command", () => {
   it("returns 0 and writes YAML on success", async () => {
     const r = await exec(["describe", "--config", FULL_MANIFEST]);

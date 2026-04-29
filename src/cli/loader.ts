@@ -29,6 +29,11 @@ export interface LoadedManifest {
   resolved: ResolvedPaths;
 }
 
+export interface LoadedRaw {
+  mergedRaw: unknown;
+  resolved: ResolvedPaths;
+}
+
 const DEFAULT_BASENAME = "harness.yaml";
 
 function defaultHome(opts: LoaderOptions): string {
@@ -89,7 +94,7 @@ function readYamlFile(filePath: string, label: string): unknown {
   }
 }
 
-export function loadManifest(opts: LoaderOptions = {}): LoadedManifest {
+export function loadMergedRaw(opts: LoaderOptions = {}): LoadedRaw {
   const resolved = resolvePaths(opts);
 
   const baseRaw = readYamlFile(resolved.base, "manifest");
@@ -100,11 +105,15 @@ export function loadManifest(opts: LoaderOptions = {}): LoadedManifest {
     ? readYamlFile(resolved.projectLayer, "project override layer")
     : undefined;
 
-  const merged = applyLayers(baseRaw, ...machineLayers, projectLayer);
+  const mergedRaw = applyLayers(baseRaw, ...machineLayers, projectLayer);
+  return { mergedRaw, resolved };
+}
 
+export function loadManifest(opts: LoaderOptions = {}): LoadedManifest {
+  const { mergedRaw, resolved } = loadMergedRaw(opts);
   let manifest: Manifest;
   try {
-    manifest = parseManifest(merged);
+    manifest = parseManifest(mergedRaw);
   } catch (err) {
     if (err instanceof ManifestParseError) {
       throw new HarnessExitError(err.message, EX_NOINPUT);
