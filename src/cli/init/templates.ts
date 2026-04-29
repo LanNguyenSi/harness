@@ -1,0 +1,178 @@
+export const MINIMAL_TEMPLATE = `# ~/.claude/harness.yaml
+#
+# Bootstrapped by \`harness init --template minimal\`.
+#
+# This is the empty-but-valid manifest. Run \`harness validate\` to confirm it
+# parses, then add entries under the five top-level keys:
+#
+#   grounding:  evidence-ledger + claim-gate config (see docs/ARCHITECTURE.md §2)
+#   tools:      mcp / cli / skills / builtin inventory   (§3)
+#   memory:     directories, retention, scopes           (§4)
+#   hooks:      event-bound shell commands               (§5)
+#   policies:   named rules that bind hooks to triggers  (§6)
+#
+# Phase 2 verbs to add entries safely: \`harness add mcp <name> ...\`,
+# \`harness add cli\`, \`harness add hook\`, \`harness add skill\`.
+# Per-machine overrides live at ~/.claude/machines/<discriminator>.harness.overrides.yaml
+# (ARCHITECTURE.md §8) for paths that vary per host.
+#
+# Docs: https://github.com/LanNguyenSi/harness
+
+version: 1
+`;
+
+export const FULL_TEMPLATE = `# ~/.claude/harness.yaml
+#
+# Bootstrapped by \`harness init --template full\`. Mirrors the example manifest
+# from docs/ARCHITECTURE.md Appendix A. Paths under \`command:\` reference the
+# developer machine that authored Appendix A — adapt them to your host (or
+# move host-specific paths to ~/.claude/machines/<hostname>.harness.overrides.yaml
+# per ARCHITECTURE.md §8) before running \`harness validate\`.
+
+version: 1
+
+grounding:
+  session:
+    auto_start: true
+    id_format: "gs-{repo}-{rand:8}"
+  evidence_ledger:
+    path: ~/.evidence-ledger/ledger.db
+    retention_days: 90
+  policies_source: ~/.claude/harness.d/policies/claim-gate.yaml
+
+tools:
+  mcp:
+    - name: codebase-oracle
+      command: [npx, tsx, ~/git/pandora/codebase-oracle/src/mcp-server.ts]
+      health:
+        verb: oracle_list_repos
+        timeout_ms: 5000
+      enabled: true
+    - name: agent-tasks
+      command: [node, ~/git/pandora/agent-tasks/mcp-server/dist/server.js]
+      env:
+        AGENT_TASKS_URL: https://agent-tasks.opentriologue.ai
+      health:
+        verb: projects_list
+        timeout_ms: 5000
+      enabled: true
+    - name: grounding-mcp
+      command: [node, ~/git/pandora/agent-grounding/packages/grounding-mcp/dist/server.js]
+      env:
+        EVIDENCE_LEDGER_DB: ~/.evidence-ledger/ledger.db
+      health:
+        verb: ledger_status
+        timeout_ms: 5000
+      enabled: true
+
+  cli:
+    - name: git-batch
+      binary: git-batch
+      min_version: "0.2.0"
+      required: true
+    - name: gh
+      binary: gh
+      required: true
+    - name: ledger
+      binary: ledger
+      required: false
+
+  skills:
+    enabled:
+      - simplify
+      - init
+      - review
+      - security-review
+    source_dirs:
+      - ~/.claude/skills
+
+  builtin:
+    known: [Read, Edit, Write, Bash, Agent, Skill, TaskCreate]
+
+memory:
+  directories:
+    - path: ~/.claude/projects/{project}/memory
+      scope: project
+  router:
+    command: [node, ~/git/pandora/agent-memory/packages/memory-router/dist/hooks/user-prompt-submit.js]
+    enabled: true
+  retention:
+    staleness_days: 180
+    broken_refs: warn
+  scopes:
+    default: project
+    allowed: [project, user]
+
+hooks:
+  - name: git-preflight
+    event: SessionStart
+    command: ~/.claude/hooks/git-preflight.sh
+    blocking: false
+    budget_ms: 30000
+    description: "Run agent-preflight on session start; record ready + confidence into the ledger as preflight:\${REPO}."
+
+  - name: require-review-evidence
+    event: PreToolUse
+    match: "mcp__agent-tasks__pull_requests_merge"
+    command: ~/.claude/hooks/require-review-evidence.sh
+    blocking: hard
+    budget_ms: 2000
+
+  - name: require-dogfood-evidence
+    event: PreToolUse
+    match: "Bash"
+    command: ~/.claude/hooks/require-dogfood-evidence.sh
+    blocking: hard
+    budget_ms: 2000
+
+  - name: require-preflight-evidence
+    event: PreToolUse
+    match: "Bash"
+    bash_match: "^git (status|log|diff|branch)"
+    command: ~/.claude/hooks/require-preflight-evidence.sh
+    blocking: hard
+    budget_ms: 1000
+
+policies:
+  - name: review-before-merge
+    description: Block PR merges unless a ledger entry tagged review:<pr-number> exists for this session.
+    trigger:
+      event: PreToolUse
+      match: "mcp__agent-tasks__pull_requests_merge"
+      extract:
+        PR_NUMBER: "toolArgs.prNumber"
+    requires:
+      ledger_tag: "review:\${PR_NUMBER}"
+    hook: require-review-evidence
+    enforcement: block
+
+  - name: dogfood-before-release
+    description: Block npm publish / git tag v* without a recent dogfood ledger entry.
+    trigger:
+      event: PreToolUse
+      match: "Bash"
+      bash_match: "^(npm publish|git tag v.*)"
+    requires:
+      ledger_tag: "dogfood:\${SESSION_ID}"
+      within: 24h
+    hook: require-dogfood-evidence
+    enforcement: block
+
+  - name: preflight-before-investigation
+    description: Block investigative git reads (status/log/diff/branch) when agent-preflight has not run recently with ready:true for the current repo.
+    trigger:
+      event: PreToolUse
+      match: "Bash"
+      bash_match: "^git (status|log|diff|branch)"
+    requires:
+      ledger_tag: "preflight:\${REPO}"
+      within: 1h
+    hook: require-preflight-evidence
+    enforcement: block
+`;
+
+export type TemplateName = "minimal" | "full";
+
+export function getTemplate(name: TemplateName): string {
+  return name === "full" ? FULL_TEMPLATE : MINIMAL_TEMPLATE;
+}

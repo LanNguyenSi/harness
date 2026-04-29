@@ -5,6 +5,7 @@ import { doctor } from "./doctor/index.js";
 import { format as formatDoctor } from "./doctor/format.js";
 import { EX_FAIL, EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { explain } from "./explain.js";
+import { init, isTemplate, KNOWN_TEMPLATES } from "./init/index.js";
 import { isListCategory, list, type ListCategory } from "./list.js";
 import { formatReport, validate } from "./validate/index.js";
 
@@ -149,6 +150,34 @@ export function buildProgram(opts: RunOptions = {}): Command {
         since: options.since,
       });
       stdout(result.output);
+    });
+
+  program
+    .command("init")
+    .description("Bootstrap a starter harness.yaml from a template")
+    .option(
+      "--template <name>",
+      `template to instantiate: ${KNOWN_TEMPLATES.join(" | ")} (default: minimal)`,
+    )
+    .option("--force", "overwrite an existing manifest")
+    .option(
+      "--config <path>",
+      "manifest path to write (default: ~/.claude/harness.yaml)",
+    )
+    .action(async (options: { template?: string; force?: boolean; config?: string }) => {
+      if (options.template !== undefined && !isTemplate(options.template)) {
+        throw new HarnessExitError(
+          `unknown template "${options.template}"; expected one of ${KNOWN_TEMPLATES.join(", ")}`,
+          EX_USAGE,
+        );
+      }
+      const result = await init({
+        template: options.template,
+        force: options.force,
+        configPath: options.config,
+      });
+      if (result.stderr) stderr(result.stderr);
+      stdout(result.stdout);
     });
 
   program
