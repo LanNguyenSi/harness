@@ -67,6 +67,27 @@ tools:
   });
 });
 
+describe("CLI program — --version + --help", () => {
+  it("--version writes 0.1.0 to stdout and returns 0 with no stderr noise", async () => {
+    const r = await exec(["--version"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim()).toBe("0.1.0");
+    expect(r.stderr).toBe("");
+  });
+
+  it("--help writes the help banner to stdout and returns 0 with no stderr noise", async () => {
+    const r = await exec(["--help"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/Usage:/);
+    expect(r.stderr).toBe("");
+  });
+
+  it("an unknown top-level option exits 64 (EX_USAGE) with no duplicated message", async () => {
+    const r = await exec(["--bogus-flag"]);
+    expect(r.code).toBe(64);
+  });
+});
+
 describe("CLI program — list + explain commands", () => {
   it("list mcp emits a name-keyed table on stdout", async () => {
     const r = await exec(["list", "mcp", "--config", FULL_MANIFEST]);

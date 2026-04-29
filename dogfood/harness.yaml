@@ -1,0 +1,121 @@
+# Phase 1 #7 dogfood manifest. Stays in-repo (not under ~/.claude/) so the
+# exit-gate smoke test is reproducible and doesn't depend on a developer's
+# personal home-directory state.
+#
+# Threshold from ROADMAP §1 exit gate: >= 3 MCP / 2 CLI / 4 skills / 2 hooks / 2 policies.
+# This file declares 3 MCP / 3 CLI / 4 skills / 2 hooks / 2 policies.
+#
+# Paths use the in-repo dogfood/ tree. The broken-mcp entry is intentionally
+# wired so `harness doctor` surfaces the "✗ FAILED: ..." case from Appendix D.
+
+version: 1
+
+grounding:
+  session:
+    auto_start: true
+    id_format: "gs-{repo}-{rand:8}"
+  evidence_ledger:
+    path: ~/.evidence-ledger/ledger.db
+    retention_days: 90
+
+tools:
+  mcp:
+    - name: agent-tasks
+      command: [node, /home/lan/git/pandora/agent-tasks/mcp-server/dist/server.js]
+      health:
+        verb: projects_list
+        timeout_ms: 5000
+      enabled: true
+
+    - name: codebase-oracle
+      command: [node, /home/lan/git/pandora/codebase-oracle/dist/mcp-server.js]
+      health:
+        verb: oracle_list_repos
+        timeout_ms: 5000
+      enabled: true
+
+    - name: broken-mcp
+      command: [/home/lan/git/pandora/harness/dogfood/broken-mcp.sh]
+      health:
+        verb: ping
+        timeout_ms: 1000
+      enabled: true
+
+  cli:
+    - name: gh
+      binary: gh
+      required: true
+    - name: git
+      binary: git
+      required: true
+    - name: ledger
+      binary: ledger
+      required: false
+
+  skills:
+    enabled:
+      - simplify
+      - init
+      - review
+      - security-review
+    required:
+      - simplify
+      - init
+      - review
+      - security-review
+    source_dirs:
+      - /home/lan/git/pandora/harness/dogfood/skills
+
+  builtin:
+    known: [Read, Edit, Write, Bash, Agent, Skill, TaskCreate, Glob, Grep]
+
+memory:
+  directories:
+    - path: ~/.claude/projects/{project}/memory
+      scope: project
+  retention:
+    staleness_days: 180
+    broken_refs: warn
+  scopes:
+    default: project
+    allowed: [project, user]
+
+hooks:
+  - name: git-preflight
+    event: SessionStart
+    command: /home/lan/git/pandora/harness/dogfood/hooks/git-preflight.sh
+    blocking: false
+    budget_ms: 30000
+    description: "Surface drift on session start."
+
+  - name: require-review-evidence
+    event: PreToolUse
+    match: "mcp__agent-tasks__pull_requests_merge"
+    command: /home/lan/git/pandora/harness/dogfood/hooks/require-review-evidence.sh
+    blocking: hard
+    budget_ms: 2000
+
+policies:
+  - name: review-before-merge
+    description: Block PR merges unless a ledger entry tagged review:<pr-number> exists for this session.
+    trigger:
+      event: PreToolUse
+      match: "mcp__agent-tasks__pull_requests_merge"
+      extract:
+        PR_NUMBER: "toolArgs.prNumber"
+    requires:
+      ledger_tag: "review:${PR_NUMBER}"
+    hook: require-review-evidence
+    enforcement: block
+
+  - name: dogfood-recency
+    description: At least one recent dogfood ledger entry must exist within the last 24h.
+    trigger:
+      event: PreToolUse
+      match: "Bash"
+      bash_match: "^(npm publish|git tag v.*)"
+    requires:
+      ledger_tag: "dogfood:${SESSION_ID}"
+      within: 24h
+    hook: require-review-evidence
+    enforcement: warn

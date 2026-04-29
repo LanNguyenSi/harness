@@ -22,13 +22,23 @@ export function buildProgram(opts: RunOptions = {}): Command {
   program
     .name("harness")
     .description("Declarative control plane for agent harnesses")
-    .version("0.1.0-pre.1")
+    .version("0.1.0")
     .configureOutput({
       writeOut: stdout,
       writeErr: stderr,
     })
     .exitOverride((err) => {
-      throw new HarnessExitError(err.message, err.exitCode || EX_USAGE);
+      // Commander exits with code 0 + writes the help/version text itself for
+      // --help and --version. Suppress our re-throw on those so we don't get
+      // a duplicate stderr line + a non-zero exit on a successful display.
+      if (err.exitCode === 0) {
+        throw new HarnessExitError("", 0);
+      }
+      // unknownOption / unknownCommand / missingArgument exit 1 by default.
+      // Map them to EX_USAGE per ARCHITECTURE §9 sysexits, and pass empty
+      // message because Commander already wrote the human-readable text.
+      const code = err.exitCode === 1 ? EX_USAGE : (err.exitCode ?? EX_USAGE);
+      throw new HarnessExitError("", code);
     });
 
   program
