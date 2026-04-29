@@ -13,6 +13,11 @@
 dist/
 build/
 
+# Node
+node_modules/
+coverage/
+*.log
+
 # Generated harness artefacts (will live here once Phase 3+ ships)
 .harness/
 harness.generated/

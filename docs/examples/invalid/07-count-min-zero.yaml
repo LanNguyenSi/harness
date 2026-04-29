@@ -1,0 +1,18 @@
+# requires.count.min must be a positive integer (zero is a no-op shape and rejected at validate time).
+version: 1
+hooks:
+  - name: h
+    event: PreToolUse
+    command: /bin/true
+    blocking: false
+policies:
+  - name: bad-count
+    description: Count zero is rejected.
+    trigger:
+      event: PreToolUse
+    requires:
+      ledger_tag: "x:${SESSION_ID}"
+      count:
+        min: 0
+    hook: h
+    enforcement: block

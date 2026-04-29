@@ -1,0 +1,17 @@
+# requires.within accepts shorthand ("24h") or ISO-8601 ("PT1H"); "yesterday" is not a duration.
+version: 1
+hooks:
+  - name: h
+    event: PreToolUse
+    command: /bin/true
+    blocking: false
+policies:
+  - name: dogfood-before-release
+    description: Bad within value.
+    trigger:
+      event: PreToolUse
+    requires:
+      ledger_tag: "dogfood:${SESSION_ID}"
+      within: yesterday
+    hook: h
+    enforcement: block

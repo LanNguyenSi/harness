@@ -1,0 +1,17 @@
+# requires.ledger_tag references ${PR_NUMBER} but no trigger.extract entry declares it.
+version: 1
+hooks:
+  - name: require-review-evidence
+    event: PreToolUse
+    command: ~/.claude/hooks/require-review-evidence.sh
+    blocking: hard
+policies:
+  - name: review-before-merge
+    description: Should fail — PR_NUMBER has no extract source.
+    trigger:
+      event: PreToolUse
+      match: "mcp__agent-tasks__pull_requests_merge"
+    requires:
+      ledger_tag: "review:${PR_NUMBER}"
+    hook: require-review-evidence
+    enforcement: block

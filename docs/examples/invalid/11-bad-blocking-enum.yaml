@@ -1,0 +1,7 @@
+# hook.blocking must be one of false / "soft" / "hard"; "yes" is not a valid blocking level.
+version: 1
+hooks:
+  - name: bad
+    event: PreToolUse
+    command: /bin/true
+    blocking: yes

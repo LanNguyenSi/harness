@@ -1,0 +1,6 @@
+# tools.skills.required must be a subset of tools.skills.enabled.
+version: 1
+tools:
+  skills:
+    enabled: [simplify]
+    required: [simplify, review]
