@@ -1,0 +1,136 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { parse as parseYaml } from "yaml";
+import { init } from "../../src/cli/init/index.js";
+import { HarnessExitError } from "../../src/cli/exit-codes.js";
+import { validateBeforeWrite } from "../../src/io/validate-before-write.js";
+import { validate } from "../../src/cli/validate/index.js";
+
+let tmpHome: string;
+let manifestPath: string;
+
+beforeEach(() => {
+  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-init-"));
+  manifestPath = path.join(tmpHome, "harness.yaml");
+});
+
+afterEach(() => {
+  fs.rmSync(tmpHome, { recursive: true, force: true });
+});
+
+describe("init — minimal template", () => {
+  it("writes a manifest at <homeDir>/harness.yaml when configPath is omitted", async () => {
+    const r = await init({ homeDir: tmpHome });
+    expect(r.path).toBe(manifestPath);
+    expect(r.template).toBe("minimal");
+    expect(r.overwrote).toBe(false);
+    expect(fs.existsSync(manifestPath)).toBe(true);
+  });
+
+  it("the minimal manifest passes harness validate immediately", async () => {
+    await init({ homeDir: tmpHome });
+    const result = validate({ configPath: manifestPath });
+    expect(result.errorCount).toBe(0);
+  });
+
+  it("contains the version: 1 header and an explanatory comment block", async () => {
+    await init({ homeDir: tmpHome });
+    const yaml = fs.readFileSync(manifestPath, "utf8");
+    expect(yaml).toMatch(/^version: 1$/m);
+    expect(yaml).toContain("# Bootstrapped by `harness init --template minimal`");
+  });
+
+  it("defaults to the minimal template when no flag is passed", async () => {
+    const r = await init({ homeDir: tmpHome });
+    expect(r.template).toBe("minimal");
+  });
+});
+
+describe("init — full template", () => {
+  it("writes a manifest pre-populated with Appendix A example values", async () => {
+    const r = await init({ homeDir: tmpHome, template: "full" });
+    expect(r.template).toBe("full");
+    const yaml = fs.readFileSync(manifestPath, "utf8");
+    // 3 MCP servers per Appendix A
+    expect(yaml).toContain("codebase-oracle");
+    expect(yaml).toContain("agent-tasks");
+    expect(yaml).toContain("grounding-mcp");
+    // 4 hooks per Appendix A (require-preflight-evidence is the founding-incident hook)
+    expect(yaml).toContain("git-preflight");
+    expect(yaml).toContain("require-review-evidence");
+    expect(yaml).toContain("require-dogfood-evidence");
+    expect(yaml).toContain("require-preflight-evidence");
+    // 3 policies per Appendix A
+    expect(yaml).toContain("review-before-merge");
+    expect(yaml).toContain("dogfood-before-release");
+    expect(yaml).toContain("preflight-before-investigation");
+  });
+
+  it("the full template parses as a schema-valid manifest", async () => {
+    await init({ homeDir: tmpHome, template: "full" });
+    // Schema-level only: full-template paths reference the developer machine
+    // that authored Appendix A, so file-existence checks may warn/error on
+    // a fresh install. The manifest itself must parse cleanly.
+    const yaml = fs.readFileSync(manifestPath, "utf8");
+    const r = validateBeforeWrite(parseYaml(yaml));
+    expect(r.ok).toBe(true);
+  });
+});
+
+describe("init — refuse on existing without --force", () => {
+  it("throws HarnessExitError naming the existing path", async () => {
+    fs.writeFileSync(manifestPath, "version: 1\n");
+    await expect(init({ homeDir: tmpHome })).rejects.toMatchObject({
+      name: "HarnessExitError",
+      exitCode: 1,
+      message: expect.stringContaining(manifestPath),
+    });
+  });
+
+  it("does not overwrite the existing file", async () => {
+    fs.writeFileSync(manifestPath, "intact: true\n");
+    try {
+      await init({ homeDir: tmpHome });
+    } catch (e) {
+      // expected
+      if (!(e instanceof HarnessExitError)) throw e;
+    }
+    expect(fs.readFileSync(manifestPath, "utf8")).toBe("intact: true\n");
+  });
+});
+
+describe("init — --force overwrites", () => {
+  it("overwrites and emits an `(overwriting ...)` message on stderr", async () => {
+    fs.writeFileSync(manifestPath, "old: yes\n");
+    const r = await init({ homeDir: tmpHome, force: true });
+    expect(r.overwrote).toBe(true);
+    expect(r.stderr).toContain(`overwriting existing manifest at ${manifestPath}`);
+    expect(fs.readFileSync(manifestPath, "utf8")).toContain("version: 1");
+  });
+});
+
+describe("init — next-steps hint", () => {
+  it("prints validate / describe / doctor invocations on stdout", async () => {
+    const r = await init({ homeDir: tmpHome });
+    expect(r.stdout).toContain("Next steps:");
+    expect(r.stdout).toContain("harness validate");
+    expect(r.stdout).toContain("harness describe");
+    expect(r.stdout).toContain("harness doctor");
+  });
+
+  it("includes the resolved target path in each next-steps invocation", async () => {
+    const r = await init({ homeDir: tmpHome });
+    expect(r.stdout).toContain(`--config ${manifestPath}`);
+  });
+});
+
+describe("init — explicit configPath", () => {
+  it("writes to the given configPath when provided", async () => {
+    const target = path.join(tmpHome, "subdir/harness.yaml");
+    const r = await init({ configPath: target });
+    expect(r.path).toBe(target);
+    expect(fs.existsSync(target)).toBe(true);
+  });
+});
