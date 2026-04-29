@@ -157,7 +157,7 @@ async function runRealProbe(
       send(1, "initialize", {
         protocolVersion: "2024-11-05",
         capabilities: {},
-        clientInfo: { name: "harness-doctor", version: "0.1.0" },
+        clientInfo: { name: "harness-doctor", version: "0.2.0" },
       }),
       waitForExit(),
       timeoutPromise(),

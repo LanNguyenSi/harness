@@ -2,7 +2,7 @@
 
 > Declarative control plane for agent harnesses — one YAML for grounding, tools, memory, and hooks. Describe, validate, diff, apply.
 
-**Status: Phase 1 shipped (`v0.1.0`).** Read-only inventory: six CLI verbs answering "what is this harness configured to do, right now, comprehensively?" against a single zod-validated YAML manifest. No write-side verbs yet — see [`CHANGELOG.md`](CHANGELOG.md) for what shipped and what is still deferred.
+**Status: Phase 2 shipped (`v0.2.0`).** Read-only inventory plus managed edits: eleven CLI verbs (`describe`, `validate`, `doctor`, `list`, `explain`, `diff`, `init`, `add`, `remove`, `adopt`, `export`) backed by a single zod-validated YAML manifest with file-locked + comment-preserving mutations. See [`CHANGELOG.md`](CHANGELOG.md) for what shipped and what is still deferred.
 
 ## What
 
@@ -38,13 +38,23 @@ See [`docs/VISION.md`](docs/VISION.md) for the "why" in long form — three pill
 ```bash
 git clone https://github.com/LanNguyenSi/harness && cd harness
 npm install && npm run build
-node dist/cli/main.js describe --config docs/examples/full-manifest.yaml --pillar tools
+HC=/tmp/harness-demo
+node dist/cli/main.js init --template full --config "$HC/harness.yaml"
+node dist/cli/main.js describe --config "$HC/harness.yaml" --pillar tools
+node dist/cli/main.js add cli git-batch --binary git-batch --config "$HC/harness.yaml"
+node dist/cli/main.js add mcp my-server --command "node,/tmp/server.js" \
+  --health-verb status --config "$HC/harness.yaml"
+node dist/cli/main.js remove cli git-batch --config "$HC/harness.yaml" --dry-run
+node dist/cli/main.js export --config "$HC/harness.yaml" --sanitize -o "$HC/share.yaml"
+```
+
+Read-only inspection still works against the reference manifest at `docs/examples/full-manifest.yaml` (covers every field in `ARCHITECTURE.md` Appendix A):
+
+```bash
 node dist/cli/main.js doctor   --config docs/examples/full-manifest.yaml --shallow
 node dist/cli/main.js validate --config docs/examples/full-manifest.yaml
 node dist/cli/main.js list policies --config docs/examples/full-manifest.yaml --json | jq
 ```
-
-The reference manifest at `docs/examples/full-manifest.yaml` covers every field in `ARCHITECTURE.md` Appendix A. A bootstrap manifest at `~/.claude/harness.yaml` will land with Phase 2's `harness init`; for now, point `--config` at any YAML matching the schema.
 
 ## Status
 
@@ -53,7 +63,7 @@ The reference manifest at `docs/examples/full-manifest.yaml` covers every field 
 - [x] ARCHITECTURE — YAML shape + CLI surface agreed
 - [x] ROADMAP — phases 1–4 with acceptance criteria
 - [x] Phase 1 — read-only inventory (`describe`, `validate`, `doctor`, `list`, `explain`, `diff`) — released as [`v0.1.0`](CHANGELOG.md#010---2026-04-29)
-- [ ] Phase 2 — managed edits
+- [x] Phase 2 — managed edits (`init`, `add`, `remove`, `adopt`, `export`) — released as [`v0.2.0`](CHANGELOG.md#020---2026-04-29)
 - [ ] Phase 3 — declarative truth (YAML → settings.json)
 - [ ] Phase 4 — policy layer (grounding wiring)
 

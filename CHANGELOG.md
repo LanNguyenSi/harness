@@ -5,6 +5,114 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-04-29
+
+**Phase 2: managed edits.** Five write verbs (`init`, `add`, `remove`,
+`adopt`, `export`) plus the foundation library (file lock, atomic write,
+schema-validate-before-write, unified-diff emitter). The exit-gate from
+`docs/ROADMAP.md` is met: a fresh tmpdir round-trip of init → add (mcp /
+cli / hook / skill) → adopt → export → remove → validate runs clean,
+with comments preserved across every mutation.
+
+### Added
+
+- `harness init [--template minimal|full] [--force] [--config <path>]` —
+  bootstrap a starter manifest. `minimal` is the empty-but-valid header
+  + comment block (`harness validate` passes immediately). `full` is
+  pre-populated from ARCHITECTURE.md Appendix A (3 MCPs, 3 CLIs, 4
+  skills, 4 hooks, 3 policies). Refuses to overwrite without `--force`;
+  `--force` emits an `(overwriting ...)` line on stderr.
+
+- `harness add <type> <name> ...` — managed insert. Four sub-commands:
+  `add mcp <name> --command <cmd> [--health-verb <v>] [--health-timeout-ms <n>] [--enabled <bool>]`,
+  `add cli <name> --binary <b> [--required] [--min-version <v>]`,
+  `add skill <name>` (managed enable in `tools.skills.enabled[]`),
+  `add hook <name> --event <e> --command <c> [--match <r>] [--blocking false|soft|hard] [--budget-ms <n>]`.
+  Common flags `--config <path>`, `--dry-run`. Two-stage gate before
+  writing: schema (catches duplicate names, dangling references) +
+  asset (catches non-+x hook scripts, missing required CLIs). Dry-run
+  emits the unified diff and exits 0 without writing.
+
+- `harness remove <type> <name>` — drop entries by name with hook-aware
+  reference check. Refuses to remove a hook still referenced by a
+  policy unless `--force`; with `--force`, the schema gate (dangling
+  `policy.hook`) is the safety net so a broken manifest never lands.
+  `<unknown>` exits 1 with the available-name list. `--dry-run` shows
+  the patch with `-` lines.
+
+- `harness adopt <file> [--yes]` — capture hand-edits from
+  `~/.claude/settings.json` back into the manifest. Computes drift
+  (settings hooks not declared in the manifest), synthesises names
+  from command basenames with `-2/-3/...` disambiguation, prints the
+  unified diff, prompts `Apply (y/N)?` per the write-and-confirm
+  decision. `--yes` skips the prompt. Adopted hooks default to
+  `blocking: false` so capture never starts gating tool calls
+  unintentionally. Idempotent on re-run.
+
+- `harness export [--sanitize] [--json] [-o <file>]` — emit the
+  effective merged manifest as a single self-contained YAML or JSON.
+  `--sanitize` rewrites `/home/<user>/...` → `~/...` (with a trailing-
+  separator anchor so `/home/lan` does not match inside
+  `/home/landscape`) and redacts env values whose key matches
+  `/(_|^)(KEY|TOKEN|SECRET|PASSWORD|API_KEY)$/i` to `<REDACTED>`.
+  Footer comment names what is and is not covered. `-o <file>` writes
+  atomically via the foundation's tmp+fsync+rename.
+
+- `src/io/` foundation library: `withFileLock(lockPath, fn)` (via
+  `proper-lockfile`, lock-then-mutate-then-release), `atomicWriteFile`
+  (tmp+fsync+rename), `withDocument` (CST round-trip preserving user
+  comments and long flow sequences), `validateBeforeWrite`
+  (parseManifest gate returning structured errors), `unifiedDiff`
+  (compatible with `patch -p0`).
+
+- Example manifest + Appendix A: `grounding-mcp` MCP entry with
+  `EVIDENCE_LEDGER_DB` env, the `require-preflight-evidence` hook,
+  and the `preflight-before-investigation` policy that gates
+  investigative `git status|log|diff|branch` on a fresh
+  `agent-preflight` ledger entry. Wires the founding-incident
+  block-policy concretely.
+
+- Phase 4 ROADMAP acceptance bullet: `validate` warns when `policies[]`
+  is non-empty but no `tools.mcp[]` entry named `grounding-mcp` is
+  wired (prevents silent degraded-mode failure).
+
+### Changed
+
+- `agent-preflight` repositioned in README §Related and across
+  VISION / ARCHITECTURE / ROADMAP as the **canonical implementation**
+  of preflight hook content, not a sibling tool. The hook script
+  `~/.claude/hooks/git-preflight.sh` is canonically a thin wrapper
+  around `preflight run --json` + a `ledger record preflight:${REPO}`
+  call. ARCHITECTURE §5 acknowledges this pattern: hook commands are
+  routinely thin wrappers around named tools, not bespoke shell.
+
+- `withDocument` now passes `lineWidth: 0` to the YAML stringifier so
+  long flow sequences are not silently rewritten to block style on
+  round-trip.
+
+### Decided here
+
+- **`harness adopt` UX: write-and-confirm.** Reads the file, computes
+  the patch, prints a unified diff, prompts `Apply (y/N)?`. No editor
+  mode, no patch-to-stdout shape. `--yes` is the non-interactive
+  escape hatch. Per ROADMAP "Open decisions resolved here #2".
+
+- **`harness add policy` is intentionally absent in Phase 2.** Policy
+  evaluation lands in Phase 4; shipping `add policy` here would create
+  the schema-without-behaviour failure mode.
+
+### Known limitations carried from Phase 1
+
+- No `harness apply` (Phase 3): adopt captures from settings.json into
+  the manifest, but the inverse — generating settings.json *from* the
+  manifest — is Phase 3.
+- No policy evaluation (Phase 4): the schema parses `requires` /
+  `trigger.extract` and `validate` lints them, but no policy fires
+  against the ledger yet.
+- No `harness.lock` (Phase 3): asset-content drift (a hook script
+  edited under your feet) is not yet detectable; manifest-layer
+  drift is.
+
 ## [0.1.0] - 2026-04-29
 
 **Phase 1: read-only inventory.** First releasable cut. Six CLI verbs

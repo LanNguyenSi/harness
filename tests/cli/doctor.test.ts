@@ -284,7 +284,7 @@ policies: []
       pathEnv: "",
     });
     const text = format(report);
-    expect(text).toMatch(/^harness 0\.1\.0/);
+    expect(text).toMatch(/^harness 0\.2\.0/);
     expect(text).toContain(`(version 1) [shallow]`);
   });
 });
