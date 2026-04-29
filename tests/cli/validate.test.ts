@@ -330,6 +330,63 @@ policies: []
 });
 
 describe("validate — extra coverage for asset checks", () => {
+  it("emits a probe-failed warning when versionProbe returns null", () => {
+    const home = writeFixture({});
+    const binPath = path.join(home, "bin", "fake");
+    fs.mkdirSync(path.dirname(binPath), { recursive: true });
+    fs.writeFileSync(binPath, "#!/bin/sh\n", "utf8");
+    fs.chmodSync(binPath, 0o755);
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      `version: 1
+tools:
+  cli:
+    - name: fake
+      binary: ${binPath}
+      min_version: "1.0.0"
+      required: true
+hooks: []
+policies: []
+`,
+      "utf8",
+    );
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      versionProbe: () => null,
+      builtinRuntimeProbe: () => [],
+    });
+    const hit = result.diagnostics.find((d) => d.path === "tools.cli[fake].min_version");
+    expect(hit?.severity).toBe("warning");
+    expect(hit?.message).toMatch(/version probe failed/);
+  });
+
+  it("home-expands tilde-rooted source_dirs when locating SKILL.md", () => {
+    const home = writeFixture({
+      "skills/simplify/SKILL.md": "# simplify\n",
+    });
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      `version: 1
+tools:
+  skills:
+    enabled: [simplify]
+    required: [simplify]
+    source_dirs:
+      - ~/skills
+hooks: []
+policies: []
+`,
+      "utf8",
+    );
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(result.errorCount).toBe(0);
+  });
+
   it("emits a parse warning when version_command output has no version-shaped substring", () => {
     const home = writeFixture({});
     const binPath = path.join(home, "bin", "fake");
