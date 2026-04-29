@@ -67,6 +67,44 @@ tools:
   });
 });
 
+describe("CLI program — doctor command", () => {
+  it("prints the Appendix D structure on stdout and returns 0 in --shallow mode", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-program-doctor-"));
+    try {
+      fs.writeFileSync(
+        path.join(home, "harness.yaml"),
+        `version: 1
+hooks: []
+policies: []
+tools:
+  builtin:
+    known: [Read]
+`,
+        "utf8",
+      );
+      const r = await exec([
+        "doctor",
+        "--config",
+        path.join(home, "harness.yaml"),
+        "--shallow",
+      ]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toMatch(/^harness 0\.1\.0/);
+      expect(r.stdout).toContain("Manifest");
+      expect(r.stdout).toContain("Tools");
+      expect(r.stdout).toContain("Memory");
+      expect(r.stdout).toContain("Hooks");
+      expect(r.stdout).toContain("Policies");
+      expect(r.stdout).toContain("Summary");
+      expect(r.stdout).toContain("[shallow]");
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("CLI program — describe command", () => {
   it("returns 0 and writes YAML on success", async () => {
     const r = await exec(["describe", "--config", FULL_MANIFEST]);
