@@ -3,6 +3,8 @@ import { describe, isPillar, type Pillar } from "./describe.js";
 import { doctor } from "./doctor/index.js";
 import { format as formatDoctor } from "./doctor/format.js";
 import { EX_FAIL, EX_USAGE, HarnessExitError } from "./exit-codes.js";
+import { explain } from "./explain.js";
+import { isListCategory, list, type ListCategory } from "./list.js";
 import { formatReport, validate } from "./validate/index.js";
 
 export interface RunOptions {
@@ -94,6 +96,54 @@ export function buildProgram(opts: RunOptions = {}): Command {
       });
       stdout(formatDoctor(report));
     });
+
+  program
+    .command("list <category>")
+    .description("Flat denormalised listing per category: mcp / cli / skills / memories / hooks / policies")
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option("--filter <substr>", "case-insensitive substring filter on name (or path for memories)")
+    .option("--json", "emit JSON array instead of an aligned text table")
+    .action(
+      (
+        category: string,
+        options: { config?: string; project?: string; filter?: string; json?: boolean },
+      ) => {
+        if (!isListCategory(category)) {
+          throw new HarnessExitError(
+            `unknown list category "${category}"; expected one of mcp, cli, skills, memories, hooks, policies`,
+            EX_USAGE,
+          );
+        }
+        const result = list(category as ListCategory, {
+          configPath: options.config,
+          project: options.project,
+          filter: options.filter,
+          json: options.json,
+        });
+        stdout(result.output);
+      },
+    );
+
+  program
+    .command("explain <policy>")
+    .description("Print a single policy's schema-level definition (Phase 1: no --trace)")
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option("--json", "emit JSON instead of YAML")
+    .action(
+      (
+        policyName: string,
+        options: { config?: string; project?: string; json?: boolean },
+      ) => {
+        const result = explain(policyName, {
+          configPath: options.config,
+          project: options.project,
+          json: options.json,
+        });
+        stdout(result.output);
+      },
+    );
 
   return program;
 }
