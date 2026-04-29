@@ -1,0 +1,116 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { parse as parseYaml } from "yaml";
+import { applyLayers } from "../overrides/merge.js";
+import {
+  machineOverrideCandidates,
+  resolveMachineDiscriminators,
+  type DiscriminatorOptions,
+} from "../overrides/machines.js";
+import { ManifestParseError, parseManifest, type Manifest } from "../schema/index.js";
+import { EX_NOINPUT, HarnessExitError } from "./exit-codes.js";
+
+export interface LoaderOptions {
+  configPath?: string;
+  project?: string;
+  homeDir?: string;
+  discriminator?: DiscriminatorOptions;
+}
+
+export interface ResolvedPaths {
+  base: string;
+  machineLayers: string[];
+  projectLayer: string | null;
+}
+
+export interface LoadedManifest {
+  manifest: Manifest;
+  resolved: ResolvedPaths;
+}
+
+const DEFAULT_BASENAME = "harness.yaml";
+
+function defaultHome(opts: LoaderOptions): string {
+  return opts.homeDir ?? path.join(os.homedir(), ".claude");
+}
+
+export function resolvePaths(opts: LoaderOptions = {}): ResolvedPaths {
+  const home = defaultHome(opts);
+  const base = opts.configPath ?? path.join(home, DEFAULT_BASENAME);
+  const machinesDir = path.join(home, "machines");
+
+  const candidates = machineOverrideCandidates(
+    resolveMachineDiscriminators(opts.discriminator ?? {}),
+  );
+  const machineLayers: string[] = [];
+  for (const c of candidates) {
+    const candidatePath = path.join(machinesDir, `${c}.harness.overrides.yaml`);
+    if (fs.existsSync(candidatePath)) machineLayers.push(candidatePath);
+  }
+
+  let projectLayer: string | null = null;
+  if (opts.project) {
+    const projectPath = path.join(
+      home,
+      "projects",
+      opts.project,
+      "harness.overrides.yaml",
+    );
+    if (fs.existsSync(projectPath)) projectLayer = projectPath;
+  }
+
+  return { base, machineLayers, projectLayer };
+}
+
+function readYamlFile(filePath: string, label: string): unknown {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new HarnessExitError(
+        `${label} not found: ${filePath}`,
+        EX_NOINPUT,
+      );
+    }
+    throw new HarnessExitError(
+      `${label} could not be read: ${(err as Error).message}`,
+      EX_NOINPUT,
+    );
+  }
+  try {
+    return parseYaml(raw);
+  } catch (err) {
+    throw new HarnessExitError(
+      `${label} is not valid YAML (${filePath}): ${(err as Error).message}`,
+      EX_NOINPUT,
+    );
+  }
+}
+
+export function loadManifest(opts: LoaderOptions = {}): LoadedManifest {
+  const resolved = resolvePaths(opts);
+
+  const baseRaw = readYamlFile(resolved.base, "manifest");
+  const machineLayers = resolved.machineLayers.map((p, i) =>
+    readYamlFile(p, `machine override layer ${i + 1}`),
+  );
+  const projectLayer = resolved.projectLayer
+    ? readYamlFile(resolved.projectLayer, "project override layer")
+    : undefined;
+
+  const merged = applyLayers(baseRaw, ...machineLayers, projectLayer);
+
+  let manifest: Manifest;
+  try {
+    manifest = parseManifest(merged);
+  } catch (err) {
+    if (err instanceof ManifestParseError) {
+      throw new HarnessExitError(err.message, EX_NOINPUT);
+    }
+    throw err;
+  }
+
+  return { manifest, resolved };
+}

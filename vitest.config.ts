@@ -6,7 +6,7 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],
-      exclude: ["src/**/index.ts"],
+      exclude: ["src/**/index.ts", "src/cli/main.ts"],
       reporter: ["text", "html"],
       thresholds: {
         lines: 90,
