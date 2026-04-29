@@ -35,6 +35,7 @@ describe("list — categories", () => {
       "git-preflight",
       "require-review-evidence",
       "require-dogfood-evidence",
+      "require-preflight-evidence",
     ]);
     const head = r.rows[0]!;
     expect(head.event).toBe("SessionStart");
@@ -47,6 +48,7 @@ describe("list — categories", () => {
       "review-before-merge",
       "dogfood-before-release",
       "two-reviewers-required",
+      "preflight-before-investigation",
     ]);
     expect(r.rows[0]!.enforcement).toBe("block");
   });

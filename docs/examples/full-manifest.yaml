@@ -72,7 +72,7 @@ hooks:
     command: ~/.claude/hooks/git-preflight.sh
     blocking: false
     budget_ms: 30000
-    description: "Fetch watchlist repos and surface drift on session start."
+    description: "Run agent-preflight on session start; record ready + confidence into the ledger as preflight:${REPO}."
 
   - name: require-review-evidence
     event: PreToolUse
@@ -87,6 +87,14 @@ hooks:
     command: ~/.claude/hooks/require-dogfood-evidence.sh
     blocking: hard
     budget_ms: 2000
+
+  - name: require-preflight-evidence
+    event: PreToolUse
+    match: "Bash"
+    bash_match: "^git (status|log|diff|branch)"
+    command: ~/.claude/hooks/require-preflight-evidence.sh
+    blocking: hard
+    budget_ms: 1000
 
 policies:
   - name: review-before-merge
@@ -126,3 +134,15 @@ policies:
         min: 2
     hook: require-review-evidence
     enforcement: warn
+
+  - name: preflight-before-investigation
+    description: Block investigative git reads when agent-preflight has not run recently with ready:true for the current repo (founding-incident policy).
+    trigger:
+      event: PreToolUse
+      match: "Bash"
+      bash_match: "^git (status|log|diff|branch)"
+    requires:
+      ledger_tag: "preflight:${REPO}"
+      within: 1h
+    hook: require-preflight-evidence
+    enforcement: block
