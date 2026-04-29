@@ -195,6 +195,45 @@ tools:
   });
 });
 
+describeBlock("describe — hostname discriminator beats os layer", () => {
+  it("hostname-named machine override wins over the os-named one", () => {
+    const home = makeHome({
+      base: `version: 1
+hooks: []
+policies: []
+tools:
+  mcp:
+    - name: codebase-oracle
+      command: ["base"]
+      enabled: true
+`,
+    });
+    const machinesDir = path.join(home, "machines");
+    fs.mkdirSync(machinesDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(machinesDir, "linux.harness.overrides.yaml"),
+      `version: 1
+tools: { mcp: [{ name: codebase-oracle, command: ["from-os"] }] }
+`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(machinesDir, "vps-01.harness.overrides.yaml"),
+      `version: 1
+tools: { mcp: [{ name: codebase-oracle, command: ["from-host"] }] }
+`,
+      "utf8",
+    );
+
+    const result = describe({
+      homeDir: home,
+      pillar: "tools",
+      discriminator: { hostname: "vps-01", platform: "linux", procVersionPath: "/nonexistent" },
+    });
+    expect(result.manifest.tools.mcp[0]?.command).toEqual(["from-host"]);
+  });
+});
+
 describeBlock("describe — error handling", () => {
   it("throws HarnessExitError with EX_NOINPUT when the manifest is missing", () => {
     const home = makeHome({});
