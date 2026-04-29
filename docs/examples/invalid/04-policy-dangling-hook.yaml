@@ -1,0 +1,12 @@
+# policies[0].hook references a hook name that does not appear in hooks[].
+version: 1
+hooks: []
+policies:
+  - name: review-before-merge
+    description: Hook reference is dangling.
+    trigger:
+      event: PreToolUse
+    requires:
+      ledger_tag: "review:${SESSION_ID}"
+    hook: nonexistent-hook
+    enforcement: block

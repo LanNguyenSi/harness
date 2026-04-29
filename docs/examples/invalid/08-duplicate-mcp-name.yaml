@@ -1,0 +1,8 @@
+# tools.mcp[] entries must have unique names; this fixture has two `codebase-oracle` entries.
+version: 1
+tools:
+  mcp:
+    - name: codebase-oracle
+      command: [npx, tsx, /tmp/a.ts]
+    - name: codebase-oracle
+      command: [npx, tsx, /tmp/b.ts]

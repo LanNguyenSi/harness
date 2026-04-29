@@ -1,0 +1,18 @@
+# trigger.extract value uses an unrecognised root accessor (must be one of toolArgs / event / session / git).
+version: 1
+hooks:
+  - name: h
+    event: PreToolUse
+    command: /bin/true
+    blocking: false
+policies:
+  - name: bad-extract
+    description: Extract roots are restricted.
+    trigger:
+      event: PreToolUse
+      extract:
+        FOO: "process.env.FOO"
+    requires:
+      ledger_tag: "x:${FOO}"
+    hook: h
+    enforcement: block

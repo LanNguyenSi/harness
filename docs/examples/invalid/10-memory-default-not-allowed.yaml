@@ -1,0 +1,6 @@
+# memory.scopes.default must appear in memory.scopes.allowed.
+version: 1
+memory:
+  scopes:
+    default: user
+    allowed: [project]
