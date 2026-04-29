@@ -75,3 +75,6 @@ export const ToolsSchema = z
   });
 
 export type Tools = z.infer<typeof ToolsSchema>;
+export type McpServer = z.infer<typeof McpServerSchema>;
+export type CliTool = z.infer<typeof CliToolSchema>;
+export type Skills = z.infer<typeof SkillsSchema>;

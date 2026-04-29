@@ -1,5 +1,7 @@
 import { Command } from "commander";
 import { describe, isPillar, type Pillar } from "./describe.js";
+import { doctor } from "./doctor/index.js";
+import { format as formatDoctor } from "./doctor/format.js";
 import { EX_FAIL, EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { formatReport, validate } from "./validate/index.js";
 
@@ -76,6 +78,21 @@ export function buildProgram(opts: RunOptions = {}): Command {
       if (result.errorCount > 0) {
         throw new HarnessExitError("", EX_FAIL);
       }
+    });
+
+  program
+    .command("doctor")
+    .description("Health summary across all pillars")
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides for this project name")
+    .option("--shallow", "skip MCP probes; report manifest-reference state only")
+    .action(async (options: { config?: string; project?: string; shallow?: boolean }) => {
+      const report = await doctor({
+        configPath: options.config,
+        project: options.project,
+        shallow: options.shallow,
+      });
+      stdout(formatDoctor(report));
     });
 
   return program;
