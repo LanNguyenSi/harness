@@ -10,7 +10,11 @@ const FULL_MANIFEST = path.join(REPO_ROOT, "docs", "examples", "full-manifest.ya
 describe("list — categories", () => {
   it("lists mcp servers from the reference manifest", () => {
     const r = list("mcp", { configPath: FULL_MANIFEST });
-    expect(r.rows.map((row) => row.name)).toEqual(["codebase-oracle", "agent-tasks"]);
+    expect(r.rows.map((row) => row.name)).toEqual([
+      "codebase-oracle",
+      "agent-tasks",
+      "grounding-mcp",
+    ]);
     expect(r.output).toMatch(/^name/);
   });
 

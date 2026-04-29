@@ -172,7 +172,7 @@ Library-side:
 
 ### Scope
 
-Make policies *fire*. The `requires` schema (`ledger_tag`, `+ within`, `+ count` from `ARCHITECTURE.md` §6) becomes evaluatable at the actual hook event. `PreToolUse mcp__agent-tasks__pull_requests_merge` triggers `review-before-merge`, which queries the evidence ledger via `${PR_NUMBER}` extracted through `trigger.extract:`, and blocks the tool call if the evidence is missing. The killer-test from the founding incident is fully answered by the `preflight-before-investigation` policy in `ARCHITECTURE.md` Appendix A: a `SessionStart` hook runs `preflight run --json` (from [`agent-preflight`](https://github.com/LanNguyenSi/agent-preflight)) and writes a `preflight:${REPO}` ledger entry with `ready` + confidence; the policy gates `PreToolUse Bash` matching `^git (status|log|diff|branch)` on `requires: { ledger_tag: "preflight:${REPO}", within: 1h }`. The agent that tried to call `agent-grounding` tasks "stale" against a 16-commit-behind checkout would be blocked by that policy until `preflight run` had executed cleanly against the repo within the last hour — concretely wired via agent-preflight, not "or similar".
+Make policies *fire*. The `requires` schema (`ledger_tag`, `+ within`, `+ count` from `ARCHITECTURE.md` §6) becomes evaluatable at the actual hook event. `PreToolUse mcp__agent-tasks__pull_requests_merge` triggers `review-before-merge`, which queries the evidence ledger via `${PR_NUMBER}` extracted through `trigger.extract:`, and blocks the tool call if the evidence is missing. The killer-test from the founding incident is fully answered by the `preflight-before-investigation` policy in `ARCHITECTURE.md` Appendix A: a `SessionStart` hook runs `preflight run --json` (from [`agent-preflight`](https://github.com/LanNguyenSi/agent-preflight)) and writes a `preflight:${REPO}` ledger entry with `ready` + confidence; the policy gates `PreToolUse Bash` matching `^git (status|log|diff|branch)` on `requires: { ledger_tag: "preflight:${REPO}", within: 1h }`. The agent that tried to call `agent-grounding` tasks "stale" against a 16-commit-behind checkout would be blocked by that policy until `preflight run` had executed cleanly against the repo within the last hour — concretely wired via agent-preflight on the write side and [`grounding-mcp`](https://github.com/LanNguyenSi/agent-grounding/tree/master/packages/grounding-mcp) on the read side (the requires-evaluator queries the ledger through grounding-mcp's `ledger_summary` verb), not "or similar".
 
 ### Deliverables
 
@@ -184,7 +184,7 @@ CLI verbs:
 
 Library-side:
 
-- `requires` evaluator covering all three v1 shapes:
+- `requires` evaluator covering all three v1 shapes. The evaluator queries the evidence ledger through [`grounding-mcp`](https://github.com/LanNguyenSi/agent-grounding/tree/master/packages/grounding-mcp) — specifically `ledger_summary` (for tag presence + count) and `claim_evaluate_from_session` (for richer policy contexts). The MCP wrapper is the canonical client surface; harness does not re-open the SQLite ledger directly. grounding-mcp must be registered under `tools.mcp[]` for `requires` evaluation to work; `validate` warns when policies are declared but no grounding-mcp entry is wired.
   - `ledger_tag: "review:${PR_NUMBER}"` — substring/regex match against ledger entries' content/source columns.
   - `+ within: 24h` — time-window filter on `created_at`.
   - `+ count: { min: 2 }` — minimum count of matching entries.
@@ -205,6 +205,7 @@ Library-side:
 - [ ] `validate` rejects a manifest with a policy `requires.within` value that is not a valid duration (e.g. `within: yesterday` fails; `within: 24h`, `within: PT1H`, `within: 86400s` all pass).
 - [ ] `requires.count.min` of 0 is rejected at `validate` time as a no-op shape (the user should remove the field or use a different policy).
 - [ ] When the evidence ledger is unreachable (e.g. database file missing), policy evaluation defaults to `enforcement: warn`-equivalent behaviour: the policy is logged as un-evaluated but does not block the tool call. This degraded-mode contract is documented and tested.
+- [ ] `harness validate` warns (not errors) when `policies[]` is non-empty but no `tools.mcp[]` entry with `name: grounding-mcp` is wired. The warning text names the missing MCP and links to the §6 policy/grounding-mcp docs. Reason: the requires-evaluator queries the ledger through grounding-mcp; without it, every policy fires in degraded warn-mode. Surfacing this at lint time prevents the silent-degradation failure mode.
 - [ ] Vitest covers each shape, `extract` evaluation, ledger-query construction, and the unreachable-ledger fallback.
 - [ ] End-to-end: a freshly-cloned harness on a clean machine successfully blocks a self-merge attempt and logs the decision, all without manual intervention beyond `harness apply`.
 

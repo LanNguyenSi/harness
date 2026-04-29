@@ -28,6 +28,16 @@ tools:
         verb: projects_list
         timeout_ms: 5000
       enabled: true
+    - name: grounding-mcp
+      command:
+        - node
+        - ~/git/pandora/agent-grounding/packages/grounding-mcp/dist/server.js
+      env:
+        EVIDENCE_LEDGER_DB: ~/.evidence-ledger/ledger.db
+      health:
+        verb: ledger_status
+        timeout_ms: 5000
+      enabled: true
   cli:
     - name: git-batch
       binary: git-batch
