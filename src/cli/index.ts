@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { describe, isPillar, type Pillar } from "./describe.js";
+import { diff as diffRun } from "./diff/index.js";
 import { doctor } from "./doctor/index.js";
 import { format as formatDoctor } from "./doctor/format.js";
 import { EX_FAIL, EX_USAGE, HarnessExitError } from "./exit-codes.js";
@@ -124,6 +125,21 @@ export function buildProgram(opts: RunOptions = {}): Command {
         stdout(result.output);
       },
     );
+
+  program
+    .command("diff")
+    .description("Diff the current manifest against a git ref (--since-apply lands in Phase 3)")
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option("--since <ref>", "git ref to diff against")
+    .action((options: { config?: string; project?: string; since?: string }) => {
+      const result = diffRun({
+        configPath: options.config,
+        project: options.project,
+        since: options.since,
+      });
+      stdout(result.output);
+    });
 
   program
     .command("explain <policy>")
