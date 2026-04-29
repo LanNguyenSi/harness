@@ -240,6 +240,24 @@ Hooks are referenced by `command:` and execute as opaque shell. `harness validat
 
 The trade-off this makes explicit: VISION §4's "diff-over-time" capability tells you "this hook is wired to a different event than yesterday" or "this hook now has `blocking: hard` where it had `soft`", but it does not tell you "this hook now `rm -rf`s your home directory where yesterday it ran `git status`". That latter question is a code-review question against the script's git history, not a manifest-diff question. Trying to re-invent shell as a YAML DSL is its own swamp; we don't.
 
+In practice, "hook content is shell" does not mean "hook content is a bespoke script written from scratch every time". The realistic shape of `~/.claude/hooks/git-preflight.sh` is a thin wrapper around an existing tool — typically [`agent-preflight`](https://github.com/LanNguyenSi/agent-preflight), which already runs the check the founding-incident needed:
+
+```bash
+#!/usr/bin/env bash
+# ~/.claude/hooks/git-preflight.sh
+set -euo pipefail
+result=$(preflight run "${PWD}" --json)
+ready=$(echo "$result" | jq -r '.ready')
+confidence=$(echo "$result" | jq -r '.confidence')
+# write a ledger entry the Phase 4 policy gates on
+ledger record "preflight:${REPO:-$(basename "$PWD")}" \
+  --ready "$ready" --confidence "$confidence" \
+  --payload "$result"
+[ "$ready" = "true" ]
+```
+
+That's the canonical shape: harness wires the hook, the hook calls a named tool (`preflight`, `ledger`, `gh`, `git-batch`), the tool does the work. Bespoke shell logic shows up only when no existing tool fits. The hook-opacity trade-off above is unchanged; what's sharpened is the expectation that hook scripts should *look thin* — if a script grows substantial logic, that logic belongs in a named tool with its own repo and tests, not buried in `~/.claude/hooks/`.
+
 A v2 schema may add a higher-level `command_pattern:` field for the most common shapes ("script-exit-zero", "command-on-PATH", "file-exists") that compiles down to shell. v1 keeps the surface small: write the shell script, reference it by path, version it in git like everything else.
 
 ## 6. `policies:` section
@@ -768,10 +786,12 @@ memory:
 hooks:
   - name: git-preflight
     event: SessionStart
+    # Thin wrapper: `exec preflight run "$PWD" --json` + `ledger record preflight:${REPO}`.
+    # See §5 "Hook content is shell, by design" for the canonical script shape.
     command: ~/.claude/hooks/git-preflight.sh
     blocking: false
     budget_ms: 30000
-    description: "Fetch watchlist repos and surface drift on session start."
+    description: "Run agent-preflight on session start; record `ready` + confidence into the ledger."
 
   - name: require-review-evidence
     event: PreToolUse
@@ -786,6 +806,16 @@ hooks:
     command: ~/.claude/hooks/require-dogfood-evidence.sh
     blocking: hard
     budget_ms: 2000
+
+  - name: require-preflight-evidence
+    event: PreToolUse
+    match: "Bash"
+    bash_match: "^git (status|log|diff|branch)"
+    # Shell wrapper that reads ${REPO} from the latest preflight ledger entry
+    # and exits non-zero if it's missing, stale, or `ready: false`.
+    command: ~/.claude/hooks/require-preflight-evidence.sh
+    blocking: hard
+    budget_ms: 1000
 
 policies:
   - name: review-before-merge
@@ -810,6 +840,23 @@ policies:
       ledger_tag: "dogfood:${SESSION_ID}"
       within: 24h
     hook: require-dogfood-evidence
+    enforcement: block
+
+  - name: preflight-before-investigation
+    # Founding-incident policy. The `git-preflight` hook above writes
+    # `preflight:${REPO}` to the ledger on SessionStart with the agent-preflight
+    # ready/confidence payload; this policy gates investigative `git` reads on
+    # a fresh, ready entry. Without it, the 2026-04-23 stale-checkout failure
+    # mode reproduces.
+    description: Block investigative git reads (status/log/diff/branch) when agent-preflight has not run recently with ready:true for the current repo.
+    trigger:
+      event: PreToolUse
+      match: "Bash"
+      bash_match: "^git (status|log|diff|branch)"
+    requires:
+      ledger_tag: "preflight:${REPO}"
+      within: 1h
+    hook: require-preflight-evidence
     enforcement: block
 ```
 
@@ -865,7 +912,7 @@ This appendix answers the killer-test challenge: *can `harness` solve a real pro
 
 ### Scenario
 
-The user has a `~/.claude/harness.yaml` declaring three MCP servers, two CLIs, four enabled skills, two memory directories, three hooks, and two policies. Yesterday everything was healthy. Overnight someone (or the user, last week, then forgot) edited `git-preflight.sh` and the `codebase-oracle` MCP server crashed. The user starts a fresh session.
+The user has a `~/.claude/harness.yaml` declaring three MCP servers, two CLIs, four enabled skills, two memory directories, four hooks, and four policies (matching Appendix A). Yesterday everything was healthy. Overnight someone (or the user, last week, then forgot) edited `git-preflight.sh` and the `codebase-oracle` MCP server crashed. The user starts a fresh session.
 
 ### Without harness — today
 
@@ -901,13 +948,16 @@ Memory
     ~/.claude/projects/pandora/memory/feedback_dropped_pattern.md (last touched 2025-07-04)
 
 Hooks
-  ✓ git-preflight             SessionStart, blocking: false
-  ✓ require-review-evidence   PreToolUse mcp__agent-tasks__pull_requests_merge, blocking: hard
-  ✓ require-dogfood-evidence  PreToolUse Bash, blocking: hard
+  ✓ git-preflight                SessionStart, blocking: false
+  ✓ require-review-evidence      PreToolUse mcp__agent-tasks__pull_requests_merge, blocking: hard
+  ✓ require-dogfood-evidence     PreToolUse Bash, blocking: hard
+  ✓ require-preflight-evidence   PreToolUse Bash ^git (status|log|diff|branch), blocking: hard
 
 Policies
-  ✓ review-before-merge       last evaluated 2026-04-26T18:14Z (allowed)
-  ✓ dogfood-before-release    last evaluated 2026-04-25T22:08Z (blocked, then released)
+  ✓ review-before-merge             last evaluated 2026-04-26T18:14Z (allowed)
+  ✓ dogfood-before-release          last evaluated 2026-04-25T22:08Z (blocked, then released)
+  ✓ two-reviewers-required          last evaluated 2026-04-26T18:14Z (warned, 1 of 2 entries)
+  ✓ preflight-before-investigation  last evaluated 2026-04-29T07:02Z (allowed; preflight:pandora ledger entry 14m old, ready=true, confidence=0.91)
 
 Summary
   1 error  (codebase-oracle MCP unhealthy — agent calls to it will fail)

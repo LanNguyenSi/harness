@@ -29,8 +29,8 @@ describe("parseManifest — happy path", () => {
     expect(manifest.version).toBe(1);
     expect(manifest.tools.mcp).toHaveLength(2);
     expect(manifest.tools.mcp[0]?.name).toBe("codebase-oracle");
-    expect(manifest.hooks).toHaveLength(3);
-    expect(manifest.policies).toHaveLength(3);
+    expect(manifest.hooks).toHaveLength(4);
+    expect(manifest.policies).toHaveLength(4);
     const reviewPolicy = manifest.policies.find((p) => p.name === "review-before-merge");
     expect(reviewPolicy?.requires.ledger_tag).toBe("review:${PR_NUMBER}");
     expect(reviewPolicy?.trigger.extract?.PR_NUMBER).toBe("toolArgs.prNumber");
