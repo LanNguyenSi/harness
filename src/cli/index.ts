@@ -22,7 +22,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
   program
     .name("harness")
     .description("Declarative control plane for agent harnesses")
-    .version("0.1.0-pre.1")
+    .version("0.1.0")
     .configureOutput({
       writeOut: stdout,
       writeErr: stderr,

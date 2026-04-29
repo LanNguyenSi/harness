@@ -2,7 +2,7 @@
 
 > Declarative control plane for agent harnesses — one YAML for grounding, tools, memory, and hooks. Describe, validate, diff, apply.
 
-**Status: Phase 0 — design. No code yet.**
+**Status: Phase 1 shipped (`v0.1.0`).** Read-only inventory: six CLI verbs answering "what is this harness configured to do, right now, comprehensively?" against a single zod-validated YAML manifest. No write-side verbs yet — see [`CHANGELOG.md`](CHANGELOG.md) for what shipped and what is still deferred.
 
 ## What
 
@@ -33,13 +33,26 @@ See [`docs/VISION.md`](docs/VISION.md) for the "why" in long form — three pill
 
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) describes the concrete YAML shape, CLI surface, drift handling, per-machine override layer, and the v1 `requires` schema. [`docs/ROADMAP.md`](docs/ROADMAP.md) turns the four phases into testable acceptance criteria with explicit exit gates per phase.
 
+## Try it
+
+```bash
+git clone https://github.com/LanNguyenSi/harness && cd harness
+npm install && npm run build
+node dist/cli/main.js describe --config docs/examples/full-manifest.yaml --pillar tools
+node dist/cli/main.js doctor   --config docs/examples/full-manifest.yaml --shallow
+node dist/cli/main.js validate --config docs/examples/full-manifest.yaml
+node dist/cli/main.js list policies --config docs/examples/full-manifest.yaml --json | jq
+```
+
+The reference manifest at `docs/examples/full-manifest.yaml` covers every field in `ARCHITECTURE.md` Appendix A. A bootstrap manifest at `~/.claude/harness.yaml` will land with Phase 2's `harness init`; for now, point `--config` at any YAML matching the schema.
+
 ## Status
 
 - [x] Repo bootstrap (LICENSE, .gitignore)
 - [x] README + VISION — repo legible
 - [x] ARCHITECTURE — YAML shape + CLI surface agreed
 - [x] ROADMAP — phases 1–4 with acceptance criteria
-- [ ] Phase 1 — read-only inventory (`describe`, `validate`, `doctor`)
+- [x] Phase 1 — read-only inventory (`describe`, `validate`, `doctor`, `list`, `explain`, `diff`) — released as [`v0.1.0`](CHANGELOG.md#010---2026-04-29)
 - [ ] Phase 2 — managed edits
 - [ ] Phase 3 — declarative truth (YAML → settings.json)
 - [ ] Phase 4 — policy layer (grounding wiring)
