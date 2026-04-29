@@ -1,6 +1,8 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { explain } from "../../src/cli/explain.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
 
@@ -45,18 +47,33 @@ describe("explain — error handling", () => {
   });
 
   it("reports `(none)` when a manifest has no policies declared", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-explain-empty-"));
+    cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      `version: 1\nhooks: []\npolicies: []\n`,
+      "utf8",
+    );
     let caught: unknown;
     try {
-      // The empty manifest has no policies — explain on any name should fail.
-      explain("x", { configPath: undefined as unknown as string });
+      explain("any-name", {
+        homeDir: home,
+        configPath: path.join(home, "harness.yaml"),
+        discriminator: { hostname: "h", platform: "linux", procVersionPath: "/nonexistent" },
+      });
     } catch (e) {
       caught = e;
     }
-    // We expect a load failure here (manifest path is undefined → defaults), so
-    // skip the assertion if we got a different error class. The intent is to
-    // exercise the empty-policies path without depending on the user's HOME.
-    if (caught instanceof HarnessExitError && caught.exitCode === 64) {
-      expect(caught.message).toMatch(/available:/);
-    }
+    expect(caught).toBeInstanceOf(HarnessExitError);
+    const err = caught as HarnessExitError;
+    expect(err.exitCode).toBe(64);
+    expect(err.message).toMatch(/any-name/);
+    expect(err.message).toMatch(/available: \(none\)/);
   });
+});
+
+let cleanups: Array<() => void> = [];
+afterEach(() => {
+  for (const c of cleanups) c();
+  cleanups = [];
 });
