@@ -115,6 +115,18 @@ Per `docs/ROADMAP.md` "Open decisions resolved here":
   `name`; lists without `name` (`memory.directories`) replace
   wholesale. Mixed-shape lists are rejected at merge time.
 
+- **`harness adopt` UX (Phase 2 deferred).** Per ROADMAP, write-and-confirm
+  is the chosen pattern: `harness adopt <file>` will read the on-disk
+  file, compute the manifest patch, print a unified diff, and prompt
+  `Apply (y/N)?`. This release does not ship `adopt`; the decision is
+  recorded so Phase 2 picks up where the design left off.
+
+- **Policy storage location (Phase 4 deferred).** Inline `policies:` in
+  the main manifest is the runtime-firing surface; library-style
+  imported policies (e.g. claim-gate via `grounding.policies_source`)
+  stay in their own DSL files. Phase 1 only validates the inline shape;
+  Phase 4 wires the evaluator.
+
 ### Known limitations (deferred to later phases)
 
 - **No `harness apply`.** Source-of-truth applies at the *manifest*
@@ -130,6 +142,6 @@ Per `docs/ROADMAP.md` "Open decisions resolved here":
 
 ### Tests
 
-143 vitest cases across 13 files. Line coverage: 93.75% on `src/`.
+147 vitest cases across 12 files. Line coverage: 93.75% on `src/`.
 
 [0.1.0]: https://github.com/LanNguyenSi/harness/releases/tag/v0.1.0
