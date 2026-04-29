@@ -5,6 +5,7 @@ import { adopt } from "./adopt/index.js";
 import { isRemoveType, KNOWN_REMOVE_TYPES, remove } from "./remove/index.js";
 import { describe, isPillar, type Pillar } from "./describe.js";
 import { diff as diffRun } from "./diff/index.js";
+import { exportManifest } from "./export.js";
 import { doctor } from "./doctor/index.js";
 import { format as formatDoctor } from "./doctor/format.js";
 import { EX_FAIL, EX_USAGE, HarnessExitError } from "./exit-codes.js";
@@ -358,6 +359,42 @@ export function buildProgram(opts: RunOptions = {}): Command {
       await runAdd({ type: "hook", entry }, { config: options.config, dryRun: options.dryRun });
     },
   );
+
+  program
+    .command("export")
+    .description(
+      "Emit the effective merged manifest as a single self-contained YAML " +
+        "(or JSON). --sanitize redacts /home/<user>/ paths and env values whose " +
+        "key looks credential-shaped.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides for this project name")
+    .option("--sanitize", "redact /home/<user>/ paths and credential-shaped env values")
+    .option("--json", "emit JSON instead of YAML")
+    .option("-o, --output <file>", "write to <file> atomically instead of stdout")
+    .action(
+      (options: {
+        config?: string;
+        project?: string;
+        sanitize?: boolean;
+        json?: boolean;
+        output?: string;
+      }) => {
+        const result = exportManifest({
+          configPath: options.config,
+          project: options.project,
+          sanitize: options.sanitize,
+          json: options.json,
+          outputPath: options.output,
+        });
+        if (result.wroteTo === null) {
+          stdout(result.output);
+          if (!result.output.endsWith("\n")) stdout("\n");
+        } else {
+          stderr(`wrote ${result.wroteTo}\n`);
+        }
+      },
+    );
 
   program
     .command("adopt <file>")
