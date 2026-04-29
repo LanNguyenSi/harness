@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { add } from "./add/index.js";
 import type { AddEntry } from "./add/mutate.js";
+import { isRemoveType, KNOWN_REMOVE_TYPES, remove } from "./remove/index.js";
 import { describe, isPillar, type Pillar } from "./describe.js";
 import { diff as diffRun } from "./diff/index.js";
 import { doctor } from "./doctor/index.js";
@@ -356,6 +357,48 @@ export function buildProgram(opts: RunOptions = {}): Command {
       await runAdd({ type: "hook", entry }, { config: options.config, dryRun: options.dryRun });
     },
   );
+
+  program
+    .command("remove <type> <name>")
+    .description(
+      `Remove an entry by name. <type> is one of ${KNOWN_REMOVE_TYPES.join(" | ")}. ` +
+        "Refuses to remove a hook still referenced by a policy unless --force.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--dry-run", "print the unified diff and exit without writing")
+    .option(
+      "--force",
+      "remove even if a policy references this entry (dangling policy.hook is then caught by schema)",
+    )
+    .action(
+      async (
+        type: string,
+        name: string,
+        options: { config?: string; dryRun?: boolean; force?: boolean },
+      ) => {
+        if (!isRemoveType(type)) {
+          throw new HarnessExitError(
+            `unknown remove type "${type}"; expected one of ${KNOWN_REMOVE_TYPES.join(", ")}`,
+            EX_USAGE,
+          );
+        }
+        const result = await remove(type, name, {
+          configPath: options.config,
+          dryRun: options.dryRun,
+          force: options.force,
+        });
+        if (result.forcedReferences.length > 0) {
+          stderr(
+            `(forced removal — referenced by: ${result.forcedReferences.join(", ")})\n`,
+          );
+        }
+        if (options.dryRun) {
+          stdout(result.diff);
+          return;
+        }
+        stdout(`removed ${result.type} ${JSON.stringify(result.name)} from ${result.path}\n`);
+      },
+    );
 
   program
     .command("explain <policy>")
