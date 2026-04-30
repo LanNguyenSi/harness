@@ -591,20 +591,30 @@ export function buildProgram(opts: RunOptions = {}): Command {
 
   program
     .command("explain <policy>")
-    .description("Print a single policy's schema-level definition (Phase 1: no --trace)")
+    .description("Print a policy's definition; --trace reads the last recorded evaluation")
     .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option("--json", "emit JSON instead of YAML")
+    .option("--trace", "include the full decision trail from the most recent evaluation")
+    .option("--session <id>", "grounding session whose audit log to read (default: 'default')")
     .action(
-      (
+      async (
         policyName: string,
-        options: { config?: string; project?: string; json?: boolean },
+        options: {
+          config?: string;
+          project?: string;
+          json?: boolean;
+          trace?: boolean;
+          session?: string;
+        },
       ) => {
-        const result = explain(policyName, {
-          configPath: options.config,
-          project: options.project,
-          json: options.json,
-        });
+        const explainOpts: Parameters<typeof explain>[1] = {};
+        if (options.config) explainOpts.configPath = options.config;
+        if (options.project) explainOpts.project = options.project;
+        if (options.json) explainOpts.json = options.json;
+        if (options.trace) explainOpts.trace = options.trace;
+        if (options.session) explainOpts.sessionId = options.session;
+        const result = await explain(policyName, explainOpts);
         stdout(result.output);
       },
     );
