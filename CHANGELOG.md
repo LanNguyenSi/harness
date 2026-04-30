@@ -5,6 +5,108 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-04-30
+
+**Phase 4: policy layer.** Policies *fire*. The `requires` schema
+(`ledger_tag`, `+ within`, `+ count` from `docs/ARCHITECTURE.md` §6) is
+now evaluatable at the actual hook event. `harness policy intercept`
+runs as a `PreToolUse` hook: it reads the tool-event JSON from stdin,
+runs every matching policy through extract-substitution + ledger-query
++ requires-evaluation, and emits Claude Code's `{"decision":"deny",...}`
+JSON when blocking. Each fire writes one `policy_decision` entry to the
+evidence ledger via grounding-mcp `ledger_add` so `harness explain
+--trace` and `harness audit` can replay decisions. The killer-test from
+the founding incident is answered end-to-end: `mcp__agent-tasks__pull_requests_merge`
+against a session without a `review:${PR_NUMBER}` ledger entry refuses;
+the same call after `ledger record review:42 …` is allowed.
+
+The exit-gate from `docs/ROADMAP.md` is met against a fresh tmpdir
+install: deny without ledger entry / silent allow with one / silent
+allow on unreachable ledger / `explain --trace` shows the full decision
+trail / `audit --since 1h` lists both deny+allow fires sorted ascending
+/ `dry-run "merge PR 42"` statically reports `[review-before-merge]` /
+validate enhancements reject `within: yesterday`, `count.min: 0`, and
+warn when policies are declared without `grounding-mcp` wired.
+
+### Added
+
+- **`evaluateRequires` library** (`src/policies/requires.ts`) — pure
+  evaluator over the three v1 `requires` shapes returning
+  `{ allowed, reason, matchedCount, traceData }`. Reason strings match
+  the spec verbatim (`no matching ledger entry for tag \`<tag>\``,
+  `no matching entry within <duration>`, `<n> of required <bound>
+  entries found`). Rejects `within: <bad-duration>` and `count.min: 0`
+  at evaluation time as well as validate time.
+- **`evaluateExtract` evaluator + `validateExtractGrammar` parser**
+  (`src/policies/extract.ts`) — JSONPath-restricted DSL: dotted
+  accessors rooted at `toolArgs / event / session / git`, with
+  bracket-quoted keys for non-identifier names. Function calls,
+  numeric/slice indices, unknown namespaces all rejected with the
+  spec-mandated literal phrases. Built-in vars (`SESSION_ID, REPO,
+  BRANCH, TOOL_NAME, CWD`) auto-resolve; extracts override on
+  collision with one trace row per variable. `substituteTemplate`
+  completes the Appendix-A `review:${REPO}:${PR_NUMBER}` end-to-end.
+- **`queryLedgerByTag` adapter** (`src/policies/ledger-client.ts`) —
+  spawns the configured grounding-mcp, performs the
+  init/notifications/initialized/`tools/call` handshake, parses
+  `ledger_summary`, and returns
+  `{ kind: "ok", entries } | { kind: "degraded", reason }`. Every
+  spec-named failure mode (spawn ENOENT, JSON-RPC error, stdout
+  closes, timeout, payload-shape drift) maps to `degraded`. Empty
+  ledger ≠ degraded.
+- **Validate enhancements** — schema delegates `within` to the runtime
+  duration parser, rejects `count.min: 0` with the literal "no-op"
+  message, validates `trigger.extract` grammar via
+  `validateExtractGrammar`, and the CLI layer warns when
+  `policies[]` is non-empty but no `tools.mcp[name: grounding-mcp]`
+  is wired (links to `docs/ARCHITECTURE.md` §6).
+- **Runtime hook interceptor** (`src/runtime/intercept.ts` +
+  `src/cli/policy/intercept.ts`) — wired as `harness policy intercept`.
+  Reads tool-event JSON from stdin; runs every matching policy;
+  evaluates ALL, denies if any block-enforcement policy denies;
+  warn-enforcement deny does NOT block. Unresolved extract →
+  `warn-degraded`. Audit-write failure does NOT crash. Multiple
+  matching policies on the same event all fire; one ledger entry
+  per fire.
+- **`harness explain <policy> --trace`** — replaces the Phase 1 stub.
+  Reads the most-recent `policy_decision` entry for the named policy
+  and renders the full decision trail (decision, reason,
+  triggerMatched, extract substitutions, requiresEval, ledgerQuery).
+  Cross-policy entries skipped; latest by `createdAt` wins; malformed
+  content silently skipped. Exit codes: 64 missing policy / 1 missing
+  evaluation / 1 degraded ledger.
+- **`harness audit [--since <duration>] [--policy <name>] [--outcome
+  <allow|deny|warn-degraded>] [--session <id>] [--json]`** — replays
+  the evidence ledger for a window; default 24h. Sorted ascending.
+  Empty window → documented literal, exit 0. Degraded ledger →
+  `ledger unreachable: <reason>`, exit 69 (EX_UNAVAILABLE). Bad input
+  → exit 64.
+- **`harness dry-run "<prompt>" [--tool <name>] [--tool-args <json>]
+  [--json]`** — static prediction (no LLM, no ledger I/O). With
+  `--tool`, simulates a `PreToolUse` event and reports
+  `ledgerQuery=<substituted tag>` for each matching policy.
+  PreToolUse policies bucket as "could match" without `--tool`.
+- **`policy_decision` audit-log encoding**
+  (`src/runtime/ledger-record.ts`) — canonical
+  `policy_decision:<name>:<outcome> <json-blob>` format with
+  encode/decode round-trip helpers the audit/explain verbs consume.
+
+### Changed
+
+- `harness explain` is now async; the CLI awaits the result. Default
+  output gains a `--trace` hint replacing the "ships in Phase 4"
+  placeholder.
+- Schema modules (`src/schema/extract.ts`, `src/schema/requires.ts`)
+  delegate to the runtime grammar/duration helpers. No cycle:
+  `policies/duration.ts` and `policies/extract.ts` are leaves.
+
+### Notes
+
+- Real Claude Code dogfood (vs. a fake stdio script) is captured in
+  the v0.4.0 release PR description; tests use the fake-stdio pattern
+  from `tests/probes/mcp.test.ts`.
+- Test count: 519/519 green (pre-release; up from 417 at v0.3.0).
+
 ## [0.3.0] - 2026-04-30
 
 **Phase 3: declarative truth.** `harness apply` regenerates

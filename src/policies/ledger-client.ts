@@ -325,7 +325,7 @@ export async function queryLedgerByTag(
     const initResult = await ctl.call(1, "initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
-      clientInfo: { name: "harness-policies", version: "0.3.0" },
+      clientInfo: { name: "harness-policies", version: "0.4.0" },
     });
     if (initResult === "exit") {
       return {

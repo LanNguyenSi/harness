@@ -2,7 +2,7 @@
 
 > Declarative control plane for agent harnesses — one YAML for grounding, tools, memory, and hooks. Describe, validate, diff, apply.
 
-**Status: Phase 3 shipped (`v0.3.0`).** Read-only inventory + managed edits + declarative truth: twelve CLI verbs (`describe`, `validate`, `doctor`, `list`, `explain`, `diff`, `init`, `add`, `remove`, `adopt`, `export`, `apply`) backed by a single zod-validated YAML manifest. `apply` regenerates `harness.generated/settings.json` + `MEMORY.md` with three-state drift detection; `harness.lock` pins SHA-256 of every referenced asset; `diff --since-apply [--memory-detail]` reports drift across generated files, locked assets, and memory directories. See [`CHANGELOG.md`](CHANGELOG.md) for what shipped and what is still deferred.
+**Status: Phase 4 shipped (`v0.4.0`).** Read-only inventory + managed edits + declarative truth + **policy layer**: fifteen CLI verbs (`describe`, `validate`, `doctor`, `list`, `explain --trace`, `diff`, `init`, `add`, `remove`, `adopt`, `export`, `apply`, `audit`, `dry-run`, `policy intercept`) backed by a single zod-validated YAML manifest. Policies fire end-to-end: `harness policy intercept` runs as a `PreToolUse` hook and emits `{"decision":"deny", ...}` when a `requires.ledger_tag` query against grounding-mcp returns no matching evidence; each fire writes a `policy_decision` entry to the evidence ledger that `harness explain --trace` and `harness audit` replay. The founding-incident killer-test is wired: `mcp__agent-tasks__pull_requests_merge` against a session without a `review:${PR_NUMBER}` ledger entry refuses; the same call after recording the entry is allowed. See [`CHANGELOG.md`](CHANGELOG.md) for what shipped and what is still deferred.
 
 ## What
 
@@ -67,7 +67,7 @@ node dist/cli/main.js list policies --config docs/examples/full-manifest.yaml --
 - [x] Phase 1 — read-only inventory (`describe`, `validate`, `doctor`, `list`, `explain`, `diff`) — released as [`v0.1.0`](CHANGELOG.md#010---2026-04-29)
 - [x] Phase 2 — managed edits (`init`, `add`, `remove`, `adopt`, `export`) — released as [`v0.2.0`](CHANGELOG.md#020---2026-04-29)
 - [x] Phase 3 — declarative truth (`apply`, `diff --since-apply`, `harness.lock`) — released as [`v0.3.0`](CHANGELOG.md#030---2026-04-30)
-- [ ] Phase 4 — policy layer (grounding wiring)
+- [x] Phase 4 — policy layer (`policy intercept`, `explain --trace`, `audit`, `dry-run`, requires-evaluator + extract DSL + grounding-mcp adapter) — released as [`v0.4.0`](CHANGELOG.md#040---2026-04-30)
 
 ## Related
 
