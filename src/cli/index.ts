@@ -10,6 +10,7 @@ import {
 import { isRemoveType, KNOWN_REMOVE_TYPES, remove } from "./remove/index.js";
 import { describe, isPillar, type Pillar } from "./describe.js";
 import { diff as diffRun } from "./diff/index.js";
+import { diffSinceApply } from "./diff/since-apply.js";
 import { exportManifest } from "./export.js";
 import { doctor } from "./doctor/index.js";
 import { format as formatDoctor } from "./doctor/format.js";
@@ -149,18 +150,55 @@ export function buildProgram(opts: RunOptions = {}): Command {
 
   program
     .command("diff")
-    .description("Diff the current manifest against a git ref (--since-apply lands in Phase 3)")
+    .description(
+      "Diff the manifest against a git ref (--since <ref>) or against the last " +
+        "applied state (--since-apply). --memory-detail expands per-memory-dir " +
+        "Merkle drift back to per-file changes.",
+    )
     .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option("--since <ref>", "git ref to diff against")
-    .action((options: { config?: string; project?: string; since?: string }) => {
-      const result = diffRun({
-        configPath: options.config,
-        project: options.project,
-        since: options.since,
-      });
-      stdout(result.output);
-    });
+    .option("--since-apply", "diff against harness.generated/.last-apply")
+    .option("--memory-detail", "expand per-memory-dir drift to per-file changes")
+    .option("--json", "emit structured JSON output")
+    .action(
+      (options: {
+        config?: string;
+        project?: string;
+        since?: string;
+        sinceApply?: boolean;
+        memoryDetail?: boolean;
+        json?: boolean;
+      }) => {
+        if (options.since && options.sinceApply) {
+          throw new HarnessExitError(
+            "--since <ref> and --since-apply are mutually exclusive",
+            EX_USAGE,
+          );
+        }
+        if (options.sinceApply) {
+          const r = diffSinceApply({
+            ...(options.config !== undefined ? { configPath: options.config } : {}),
+            ...(options.memoryDetail ? { memoryDetail: true } : {}),
+          });
+          if (options.json) {
+            stdout(`${JSON.stringify(r.json, null, 2)}\n`);
+          } else if (!r.hasDrift) {
+            stdout("no drift since last apply\n");
+          } else {
+            stdout(r.output);
+          }
+          if (r.hasDrift) throw new HarnessExitError("", EX_FAIL);
+          return;
+        }
+        const result = diffRun({
+          configPath: options.config,
+          project: options.project,
+          since: options.since,
+        });
+        stdout(result.output);
+      },
+    );
 
   program
     .command("init")

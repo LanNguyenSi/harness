@@ -19,6 +19,7 @@
 //      snapshot for the next apply's restart-hint comparison), write
 //      `harness.lock` next to `harness.yaml`, emit restart hints.
 
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -323,6 +324,15 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   });
   writeLock(lockPath, lockEntries);
 
+  // Per-memory-dir per-file snapshot for `harness diff --since-apply
+  // --memory-detail` (Phase 3 #5). We compute this from the lock entries
+  // (already-walked memory dirs) so we don't double-walk on apply.
+  const memoryDirSnapshots = collectMemoryDirSnapshots(lockEntries);
+  if (Object.keys(memoryDirSnapshots).length > 0) {
+    newRecord.memoryDirs = memoryDirSnapshots;
+    writeLastApply(generatedDir, newRecord);
+  }
+
   return {
     manifestPath,
     generatedDir,
@@ -334,6 +344,32 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     dryRun: false,
     lockPath,
   };
+}
+
+function sha256OfFile(filePath: string): string {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function collectMemoryDirSnapshots(
+  lockEntries: ReturnType<typeof buildLockEntries>,
+): Record<string, { sha256: string; fileHashes: Record<string, string> }> {
+  const out: Record<string, { sha256: string; fileHashes: Record<string, string> }> = {};
+  for (const e of lockEntries) {
+    if (e.kind !== "memory-dir") continue;
+    const fileHashes: Record<string, string> = {};
+    let dirents: fs.Dirent[];
+    try {
+      dirents = fs.readdirSync(e.path, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const d of dirents) {
+      if (!d.isFile() || !d.name.endsWith(".md")) continue;
+      fileHashes[d.name] = sha256OfFile(path.join(e.path, d.name));
+    }
+    out[e.path] = { sha256: e.sha256, fileHashes };
+  }
+  return out;
 }
 
 export { DRIFT_HINT_MESSAGE };
