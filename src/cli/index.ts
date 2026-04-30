@@ -18,6 +18,7 @@ import { EX_FAIL, EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { explain } from "./explain.js";
 import { init, isTemplate, KNOWN_TEMPLATES } from "./init/index.js";
 import { isListCategory, list, type ListCategory } from "./list.js";
+import { audit, type AuditOutcome } from "./audit.js";
 import { runInterceptCli } from "./policy/intercept.js";
 import { formatReport, validate } from "./validate/index.js";
 
@@ -618,6 +619,42 @@ export function buildProgram(opts: RunOptions = {}): Command {
         stdout(result.output);
       },
     );
+
+  program
+    .command("audit")
+    .description(
+      "Replay policy decisions from the evidence ledger for a time window",
+    )
+    .option("--since <duration>", "time window (default: 24h)")
+    .option("--policy <name>", "filter to a single policy by name")
+    .option(
+      "--outcome <outcome>",
+      "filter by decision outcome (allow / deny / warn-degraded)",
+    )
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option("--session <id>", "grounding session whose audit log to read (default: 'default')")
+    .option("--json", "emit JSON instead of a table")
+    .action(async (options: {
+      since?: string;
+      policy?: string;
+      outcome?: string;
+      config?: string;
+      project?: string;
+      session?: string;
+      json?: boolean;
+    }) => {
+      const auditOpts: Parameters<typeof audit>[0] = {};
+      if (options.since) auditOpts.since = options.since;
+      if (options.policy) auditOpts.policy = options.policy;
+      if (options.outcome) auditOpts.outcome = options.outcome as AuditOutcome;
+      if (options.config) auditOpts.configPath = options.config;
+      if (options.project) auditOpts.project = options.project;
+      if (options.session) auditOpts.sessionId = options.session;
+      if (options.json) auditOpts.json = options.json;
+      const result = await audit(auditOpts);
+      stdout(result.output);
+    });
 
   const policy = program.command("policy").description("Policy runtime verbs");
   policy
