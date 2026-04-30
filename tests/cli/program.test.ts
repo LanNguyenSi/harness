@@ -119,7 +119,7 @@ describe("CLI program — list + explain commands", () => {
   it("explain on an unknown policy exits 64 and lists available", async () => {
     const r = await exec(["explain", "nope", "--config", FULL_MANIFEST]);
     expect(r.code).toBe(64);
-    expect(r.stderr).toMatch(/not found/);
+    expect(r.stderr).toMatch(/no policy named "nope"/);
     expect(r.stderr).toMatch(/review-before-merge/);
   });
 });
