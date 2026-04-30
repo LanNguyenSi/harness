@@ -10,7 +10,14 @@ import {
   apply,
 } from "../../../src/cli/apply/index.js";
 import { HarnessExitError } from "../../../src/cli/exit-codes.js";
-import { LOCK_BASENAME, parseLock } from "../../../src/io/harness-lock.js";
+import {
+  LOCK_BASENAME,
+  buildLockEntries,
+  parseLock,
+} from "../../../src/io/harness-lock.js";
+import { parseManifest } from "../../../src/schema/index.js";
+import { generateSettings } from "../../../src/cli/apply/generate-settings.js";
+import { parse as parseYaml } from "yaml";
 import {
   LAST_APPLY_BASENAME,
   readLastApply,
@@ -116,6 +123,47 @@ describe("apply — fresh install", () => {
     expect(r2.written).toBe(false);
     expect(fs.readFileSync(settingsPath(), "utf8")).toBe(settingsBefore);
     expect(fs.readFileSync(memoryPath(), "utf8")).toBe(memoryBefore);
+  });
+
+  it("when --config is passed without homeDir, generated/ lands next to the manifest (no ~/.claude pollution)", async () => {
+    // Spec: passing --config to a manifest in /repo/path should not write
+    // generated artefacts into the user's global ~/.claude. Smoke-tested
+    // empirically; this is the regression test.
+    const altRoot = fs.mkdtempSync(path.join(os.tmpdir(), "harness-altcfg-"));
+    try {
+      const altManifest = path.join(altRoot, "harness.yaml");
+      fs.writeFileSync(altManifest, yamlStringify({
+        version: 1,
+        tools: { mcp: [], cli: [], skills: { enabled: [], source_dirs: [] }, builtin: { known: [] } },
+        memory: { directories: [] },
+        hooks: [{ name: "h", event: "SessionStart", command: "/h.sh", blocking: false, budget_ms: 30000 }],
+        policies: [],
+      }));
+      // Note: no homeDir override — just configPath.
+      const r = await apply({ configPath: altManifest });
+      expect(r.generatedDir).toBe(path.join(altRoot, GENERATED_DIRNAME));
+      expect(fs.existsSync(path.join(altRoot, GENERATED_DIRNAME, SETTINGS_BASENAME))).toBe(true);
+    } finally {
+      fs.rmSync(altRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("settings.json content is exactly generateSettings(manifest) output (locked contract)", async () => {
+    const manifestPath = writeManifest({
+      hooks: [
+        {
+          name: "h",
+          event: "SessionStart",
+          command: "/h.sh",
+          blocking: false,
+          budget_ms: 30000,
+        },
+      ],
+    });
+    await apply({ homeDir: tmpHome });
+    const onDisk = JSON.parse(fs.readFileSync(settingsPath(), "utf8"));
+    const manifest = parseManifest(parseYaml(fs.readFileSync(manifestPath, "utf8")));
+    expect(onDisk).toEqual(generateSettings(manifest));
   });
 
   it("settings.json is JSON.parse-able and contains the expected hooks event keys", async () => {
@@ -248,6 +296,48 @@ describe("apply — drift detection", () => {
     expect(r.outcome).toBe("applied");
     expect(r.written).toBe(true);
     expect(fs.readFileSync(settingsPath(), "utf8")).not.toContain("hand_edited");
+  });
+
+  it("--overwrite-drift confirmed in upper case (`YES`) overwrites (case-insensitive)", async () => {
+    writeManifest({
+      hooks: [
+        {
+          name: "h",
+          event: "SessionStart",
+          command: "/h.sh",
+          blocking: false,
+          budget_ms: 30000,
+        },
+      ],
+    });
+    await apply({ homeDir: tmpHome });
+    fs.writeFileSync(settingsPath(), '{"hand_edited": true}\n');
+
+    const upperPrompt = async (): Promise<string> => "YES";
+    const r = await apply({ homeDir: tmpHome, overwriteDrift: true, prompt: upperPrompt });
+    expect(r.outcome).toBe("applied");
+  });
+
+  it("--overwrite-drift on a fresh install (no drift to discard) writes without prompting", async () => {
+    writeManifest({
+      hooks: [
+        {
+          name: "h",
+          event: "SessionStart",
+          command: "/h.sh",
+          blocking: false,
+          budget_ms: 30000,
+        },
+      ],
+    });
+    let prompted = false;
+    const failingPrompt = async (): Promise<string> => {
+      prompted = true;
+      return "yes";
+    };
+    const r = await apply({ homeDir: tmpHome, overwriteDrift: true, prompt: failingPrompt });
+    expect(r.outcome).toBe("applied");
+    expect(prompted).toBe(false);
   });
 
   it("--overwrite-drift requires literal 'yes' (rejects 'y')", async () => {
@@ -399,7 +489,7 @@ describe("apply — harness.lock", () => {
   it("writes harness.lock next to harness.yaml with the expected asset entries", async () => {
     const hookFile = path.join(tmpHome, "git-preflight.sh");
     fs.writeFileSync(hookFile, "#!/bin/sh\necho preflight\n");
-    writeManifest({
+    const manifestPath = writeManifest({
       hooks: [
         {
           name: "git-preflight",
@@ -414,6 +504,40 @@ describe("apply — harness.lock", () => {
     expect(fs.existsSync(lockPath())).toBe(true);
     const entries = parseLock(fs.readFileSync(lockPath(), "utf8"));
     expect(entries.find((e) => e.path === hookFile)).toBeDefined();
+
+    // Lock content matches buildLockEntries exactly. Locks the contract
+    // for Phase 3 #6 (asset drift detection) which will diff this output.
+    const manifest = parseManifest(parseYaml(fs.readFileSync(manifestPath, "utf8")));
+    const expected = buildLockEntries(manifest, { homeDir: tmpHome });
+    expect(entries).toEqual(expected);
+  });
+
+  it("excludes mcp[].command paths whose entry is enabled: false", async () => {
+    const enabledScript = path.join(tmpHome, "enabled-mcp.js");
+    const disabledScript = path.join(tmpHome, "disabled-mcp.js");
+    fs.writeFileSync(enabledScript, "// on\n");
+    fs.writeFileSync(disabledScript, "// off\n");
+    writeManifest({
+      mcp: [
+        { name: "on", command: ["node", enabledScript], enabled: true },
+        { name: "off", command: ["node", disabledScript], enabled: false },
+      ],
+    });
+    await apply({ homeDir: tmpHome });
+    const entries = parseLock(fs.readFileSync(lockPath(), "utf8"));
+    expect(entries.find((e) => e.path === enabledScript)).toBeDefined();
+    expect(entries.find((e) => e.path === disabledScript)).toBeUndefined();
+  });
+
+  it("skips memory.router when memory.router.enabled is false", async () => {
+    const routerScript = path.join(tmpHome, "router-hook.js");
+    fs.writeFileSync(routerScript, "// router\n");
+    writeManifest({
+      router: { command: ["node", routerScript], enabled: false },
+    });
+    await apply({ homeDir: tmpHome });
+    const entries = parseLock(fs.readFileSync(lockPath(), "utf8"));
+    expect(entries.find((e) => e.path === routerScript)).toBeUndefined();
   });
 });
 
@@ -452,8 +576,54 @@ describe("apply — last-apply record", () => {
   });
 
   it("the manifest snapshot drives restart-hint comparison; without it, hints are empty on a fresh prior apply", async () => {
-    // Simulate a Phase 3 #1 baseline .last-apply (no manifest field) by
-    // writing the directory layout directly.
+    // Simulate a Phase 3 #1 baseline .last-apply: file entries present,
+    // but no `manifest` snapshot field. This is the realistic baseline
+    // shape (a record produced before the schema extension), not a
+    // synthetic empty record.
+    writeManifest({
+      mcp: [{ name: "oracle", command: ["node", "/x/oracle.js"] }],
+      hooks: [
+        {
+          name: "h",
+          event: "SessionStart",
+          command: "/h.sh",
+          blocking: false,
+          budget_ms: 30000,
+        },
+      ],
+    });
+    // Build a baseline record by running apply once, then strip the
+    // manifest field as if it had been written by Phase 3 #1.
+    await apply({ homeDir: tmpHome });
+    const lastApplyPath = path.join(tmpHome, GENERATED_DIRNAME, LAST_APPLY_BASENAME);
+    const recordRaw = JSON.parse(fs.readFileSync(lastApplyPath, "utf8")) as {
+      files: unknown;
+      manifest?: unknown;
+    };
+    delete recordRaw.manifest;
+    fs.writeFileSync(lastApplyPath, `${JSON.stringify(recordRaw, null, 2)}\n`);
+
+    // Now mutate the manifest in a way that WOULD emit hints if a snapshot
+    // existed (different hook event → settings.json changes too).
+    writeManifest({
+      mcp: [{ name: "oracle", command: ["node", "/x/oracle-v2.js"] }],
+      hooks: [
+        {
+          name: "h",
+          event: "Stop",
+          command: "/h.sh",
+          blocking: false,
+          budget_ms: 30000,
+        },
+      ],
+    });
+    const r = await apply({ homeDir: tmpHome });
+    // No prior manifest snapshot → no hints, regardless of what changed.
+    expect(r.restartHints).toEqual([]);
+    expect(r.outcome).toBe("applied");
+  });
+
+  it("rejects a tampered manifest snapshot (sha mismatch) and emits no hints", async () => {
     writeManifest({
       hooks: [
         {
@@ -465,15 +635,29 @@ describe("apply — last-apply record", () => {
         },
       ],
     });
-    const generated = path.join(tmpHome, GENERATED_DIRNAME);
-    fs.mkdirSync(generated);
-    fs.writeFileSync(
-      path.join(generated, LAST_APPLY_BASENAME),
-      JSON.stringify({ files: {} }, null, 2),
-    );
+    await apply({ homeDir: tmpHome });
+    // Tamper the snapshot content while leaving the sha unchanged: the
+    // recorded sha now disagrees with content. Apply must NOT use it.
+    const lastApplyPath = path.join(tmpHome, GENERATED_DIRNAME, LAST_APPLY_BASENAME);
+    const record = JSON.parse(fs.readFileSync(lastApplyPath, "utf8")) as {
+      manifest: { sha256: string; content: string };
+    };
+    record.manifest.content = '{"version": 1, "tampered": true}';
+    fs.writeFileSync(lastApplyPath, `${JSON.stringify(record, null, 2)}\n`);
+
+    writeManifest({
+      hooks: [
+        {
+          name: "h",
+          event: "Stop", // would trigger hooks-hint if snapshot were trusted
+          command: "/h.sh",
+          blocking: false,
+          budget_ms: 30000,
+        },
+      ],
+    });
     const r = await apply({ homeDir: tmpHome });
-    // No prior manifest snapshot → no hints, regardless of what changed.
-    expect(r.restartHints).toEqual([]);
+    expect(r.restartHints).toEqual([]); // tampered snapshot rejected silently
     expect(r.outcome).toBe("applied");
   });
 });

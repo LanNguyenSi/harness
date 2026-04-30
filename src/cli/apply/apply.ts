@@ -29,6 +29,7 @@ import {
   buildLastApply,
   readLastApply,
   sha256Hex,
+  verifyLastApplyIntegrity,
   writeLastApply,
   type LastApplyRecord,
 } from "../../io/last-apply.js";
@@ -89,15 +90,24 @@ export interface ApplyResult {
 const DRIFT_HINT_MESSAGE =
   'run "harness adopt <file>" to capture changes, or re-run with --overwrite-drift to discard them';
 
-function defaultHome(opts: ApplyOptions): string {
-  return opts.homeDir ?? path.join(os.homedir(), ".claude");
-}
-
 function resolveManifestPath(opts: ApplyOptions): string {
   if (opts.configPath) return path.resolve(opts.configPath);
-  return path.join(defaultHome(opts), MANIFEST_BASENAME);
+  return path.join(opts.homeDir ?? path.join(os.homedir(), ".claude"), MANIFEST_BASENAME);
 }
 
+// `harness.generated/` lives next to whichever manifest is in use. If the
+// user passed `--config /repo/path/harness.yaml`, generated artefacts go to
+// `/repo/path/harness.generated/` (NOT `~/.claude/harness.generated/`). This
+// avoids the footgun of `harness apply --config <some-other-tree>` writing
+// state into the user's global runtime directory.
+function resolveGeneratedDir(opts: ApplyOptions, manifestPath: string): string {
+  if (opts.homeDir !== undefined) return path.join(opts.homeDir, GENERATED_DIRNAME);
+  return path.join(path.dirname(manifestPath), GENERATED_DIRNAME);
+}
+
+// Prompts must survive `harness apply | tee log` (the user still needs to
+// see the question even when stdout is piped), so we write to stderr and
+// read from stdin. Don't "fix" this back to stdout.
 async function readlinePrompt(message: string): Promise<string> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
   try {
@@ -140,6 +150,14 @@ function readOnDisk(filePath: string): string | null {
 
 function buildPrevManifestForHints(record: LastApplyRecord | null): Manifest | null {
   if (!record?.manifest) return null;
+  // Reject a snapshot whose stored sha256 disagrees with the recorded
+  // content. Treats integrity failure as "no prev manifest" (silent: same
+  // surface as a baseline record without a manifest field), so a corrupted
+  // .last-apply does not produce confidently-wrong restart hints.
+  const integrity = verifyLastApplyIntegrity({
+    files: { manifest: record.manifest },
+  });
+  if (integrity.length > 0) return null;
   let parsed: unknown;
   try {
     parsed = JSON.parse(record.manifest.content);
@@ -162,7 +180,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     );
   }
 
-  const generatedDir = path.join(defaultHome(opts), GENERATED_DIRNAME);
+  const generatedDir = resolveGeneratedDir(opts, manifestPath);
   const lockPath = path.join(path.dirname(manifestPath), LOCK_BASENAME);
 
   const loaderOpts: Parameters<typeof loadManifest>[0] = {
@@ -227,7 +245,9 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     const answer = await promptFn(
       "Type 'yes' to discard on-disk hand-edits and overwrite with manifest-expected content: ",
     );
-    if (answer.trim() !== "yes") {
+    // Case-insensitive comparison: a user typing `YES` or `Yes` is clearly
+    // confirming. We still reject `y` per spec ("literal yes, not y").
+    if (answer.trim().toLowerCase() !== "yes") {
       return {
         manifestPath,
         generatedDir,
@@ -240,9 +260,9 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
         lockPath,
       };
     }
-    // Confirmed: promote drift-refuse outcomes to safe-overwrite for the
-    // write phase. We keep the original verdict on the result for callers
-    // that want to know what fired.
+    // Confirmed: continue to the write phase. The per-file `verdict` field
+    // remains `drift-refuse` so callers can still see which files would
+    // have been refused; the wrapper outcome is `applied` post-write.
   }
 
   // Restart hints: compare the previous-apply's manifest snapshot to the
@@ -266,6 +286,8 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
 
   if (!anyChanged && lastApply !== null) {
     // Idempotent no-op: nothing to write, .last-apply already current.
+    // Phase 3 #6 will refresh harness.lock here when on-disk hook scripts
+    // change without manifest change (asset-content drift).
     return {
       manifestPath,
       generatedDir,
