@@ -1,14 +1,24 @@
 import { z } from "zod";
+import {
+  ExtractGrammarError,
+  validateExtractGrammar,
+} from "../policies/extract.js";
 
-const EXTRACT_ROOT_RE = /^(toolArgs|event|session|git)(\.[A-Za-z_][A-Za-z0-9_]*)+$/;
-
-export const ExtractExpressionSchema = z
-  .string()
-  .min(1)
-  .refine((v) => EXTRACT_ROOT_RE.test(v), {
-    message:
-      "extract expression must be a dotted accessor rooted at one of toolArgs / event / session / git, e.g. \"toolArgs.prNumber\"",
-  });
+export const ExtractExpressionSchema = z.string().min(1).superRefine((v, ctx) => {
+  try {
+    validateExtractGrammar(v);
+  } catch (err) {
+    if (err instanceof ExtractGrammarError) {
+      // Strip the leading `extract expression "<expr>": ` prefix so the
+      // message reads naturally next to the zod path. The path already
+      // points at the offending field.
+      const msg = err.message.replace(/^extract expression "[^"]*": /, "");
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: msg });
+      return;
+    }
+    throw err;
+  }
+});
 
 export type ExtractExpression = z.infer<typeof ExtractExpressionSchema>;
 

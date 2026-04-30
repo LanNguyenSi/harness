@@ -474,6 +474,170 @@ policies: []
   });
 });
 
+describe("validate — Phase 4 policy lints", () => {
+  function manifestWithPolicy(opts: {
+    within?: string;
+    countMin?: number;
+    extract?: Record<string, string>;
+    ledgerTag?: string;
+    withGroundingMcp?: boolean;
+  }): string {
+    const home = writeFixture({
+      "harness.yaml": ``,
+      "hooks/h.sh": "#!/bin/sh\nexit 0\n",
+    });
+    fs.chmodSync(path.join(home, "hooks", "h.sh"), 0o755);
+    const extractBlock = opts.extract
+      ? `      extract:\n${Object.entries(opts.extract)
+          .map(([k, v]) => `        ${k}: ${JSON.stringify(v)}`)
+          .join("\n")}\n`
+      : "";
+    const withinBlock = opts.within !== undefined ? `      within: ${opts.within}\n` : "";
+    const countBlock =
+      opts.countMin !== undefined
+        ? `      count:\n        min: ${opts.countMin}\n`
+        : "";
+    const ledgerTag = opts.ledgerTag ?? "review:${SESSION_ID}";
+    const mcpBlock = opts.withGroundingMcp
+      ? `tools:\n  mcp:\n    - name: grounding-mcp\n      command: ["/usr/bin/true"]\n`
+      : "";
+    const yaml = `version: 1
+${mcpBlock}hooks:
+  - name: h
+    event: PreToolUse
+    command: ${path.join(home, "hooks", "h.sh")}
+    blocking: false
+policies:
+  - name: p
+    description: test
+    trigger:
+      event: PreToolUse
+${extractBlock}    requires:
+      ledger_tag: "${ledgerTag}"
+${withinBlock}${countBlock}    hook: h
+    enforcement: block
+`;
+    fs.writeFileSync(path.join(home, "harness.yaml"), yaml, "utf8");
+    return home;
+  }
+
+  it("rejects within: yesterday with the invalid-duration message", () => {
+    const home = manifestWithPolicy({ within: "yesterday" });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(result.errorCount).toBeGreaterThan(0);
+    expect(
+      result.diagnostics.some((d) =>
+        /invalid duration "yesterday"/.test(`${d.path}: ${d.message}`),
+      ),
+    ).toBe(true);
+  });
+
+  it.each(["24h", "PT1H", "86400s"])("accepts within: %s", (val) => {
+    const home = manifestWithPolicy({ within: val, withGroundingMcp: true });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(result.errorCount).toBe(0);
+  });
+
+  it("rejects count.min: 0 with the no-op message", () => {
+    const home = manifestWithPolicy({ countMin: 0 });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(result.errorCount).toBeGreaterThan(0);
+    expect(
+      result.diagnostics.some((d) =>
+        /count\.min: 0 is a no-op/.test(d.message),
+      ),
+    ).toBe(true);
+  });
+
+  it("warns (does not error) when policies declared but grounding-mcp is missing", () => {
+    const home = manifestWithPolicy({ withGroundingMcp: false });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(result.errorCount).toBe(0);
+    const hit = result.diagnostics.find(
+      (d) =>
+        d.severity === "warning" &&
+        /grounding-mcp not wired/.test(d.message),
+    );
+    expect(hit).toBeDefined();
+    expect(hit?.path).toBe("policies");
+  });
+
+  it("does not warn when grounding-mcp is wired", () => {
+    const home = manifestWithPolicy({ withGroundingMcp: true });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(
+      result.diagnostics.some((d) => /grounding-mcp not wired/.test(d.message)),
+    ).toBe(false);
+  });
+
+  it("rejects an extract expression that uses a function call", () => {
+    const home = manifestWithPolicy({
+      extract: { FOO: "toolArgs.foo()" },
+      ledgerTag: "x:${FOO}",
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(result.errorCount).toBeGreaterThan(0);
+    expect(
+      result.diagnostics.some((d) => /function calls not allowed/.test(d.message)),
+    ).toBe(true);
+  });
+
+  it("rejects ${UNDECLARED} variable references in ledger_tag", () => {
+    const home = manifestWithPolicy({
+      ledgerTag: "review:${PR_NUMBER}",
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(result.errorCount).toBeGreaterThan(0);
+    expect(
+      result.diagnostics.some((d) =>
+        /no matching trigger\.extract entry was declared/.test(d.message),
+      ),
+    ).toBe(true);
+  });
+
+  it("accepts a manifest with policies + grounding-mcp + a valid extract", () => {
+    const home = manifestWithPolicy({
+      withGroundingMcp: true,
+      extract: { PR_NUMBER: "toolArgs.prNumber" },
+      ledgerTag: "review:${PR_NUMBER}",
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(result.errorCount).toBe(0);
+  });
+});
+
 describe("validate — internal helpers", () => {
   it("compareVersions handles dotted numeric versions", () => {
     expect(__testables.compareVersions("1.2.3", "1.2.0")).toBe(1);

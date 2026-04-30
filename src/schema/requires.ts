@@ -1,19 +1,24 @@
 import { z } from "zod";
+import {
+  InvalidDurationError,
+  parseDurationSeconds,
+} from "../policies/duration.js";
 
-const SHORTHAND_DURATION_RE = /^[0-9]+(?:s|m|h|d)$/;
-const ISO_DURATION_RE = /^P(?!$)(?:\d+Y)?(?:\d+M)?(?:\d+W)?(?:\d+D)?(?:T(?:\d+H)?(?:\d+M)?(?:\d+S)?)?$/;
-
-export const DurationSchema = z
-  .string()
-  .min(1)
-  .refine((v) => SHORTHAND_DURATION_RE.test(v) || ISO_DURATION_RE.test(v), {
-    message:
-      "duration must be a shorthand like \"24h\" / \"30m\" / \"7d\" / \"60s\" or an ISO-8601 duration like \"PT1H\" / \"P1D\"",
-  });
+export const DurationSchema = z.string().min(1).superRefine((v, ctx) => {
+  try {
+    parseDurationSeconds(v);
+  } catch (err) {
+    if (err instanceof InvalidDurationError) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: err.message });
+      return;
+    }
+    throw err;
+  }
+});
 
 export const CountSchema = z
   .object({
-    min: z.number().int().positive().optional(),
+    min: z.number().int().nonnegative().optional(),
     max: z.number().int().positive().optional(),
     exact: z.number().int().positive().optional(),
   })
@@ -28,7 +33,11 @@ export const CountSchema = z
   .refine(
     (c) => c.min === undefined || c.max === undefined || c.min <= c.max,
     { message: "count.min must be <= count.max" },
-  );
+  )
+  .refine((c) => c.min !== 0, {
+    message: "count.min: 0 is a no-op; remove the field or use a different policy",
+    path: ["min"],
+  });
 
 export const RequiresSchema = z
   .object({
