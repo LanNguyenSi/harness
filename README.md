@@ -1,62 +1,122 @@
 # harness
 
-> Declarative control plane for agent harnesses — one YAML for grounding, tools, memory, and hooks. Describe, validate, diff, apply.
+**Declarative control plane for agent harnesses.**
 
-**Status: Phase 4 shipped (`v0.4.0`).** Read-only inventory + managed edits + declarative truth + **policy layer**: fifteen CLI verbs (`describe`, `validate`, `doctor`, `list`, `explain --trace`, `diff`, `init`, `add`, `remove`, `adopt`, `export`, `apply`, `audit`, `dry-run`, `policy intercept`) backed by a single zod-validated YAML manifest. Policies fire end-to-end: `harness policy intercept` runs as a `PreToolUse` hook and emits `{"decision":"deny", ...}` when a `requires.ledger_tag` query against grounding-mcp returns no matching evidence; each fire writes a `policy_decision` entry to the evidence ledger that `harness explain --trace` and `harness audit` replay. The founding-incident killer-test is wired: `mcp__agent-tasks__pull_requests_merge` against a session without a `review:${PR_NUMBER}` ledger entry refuses; the same call after recording the entry is allowed. See [`CHANGELOG.md`](CHANGELOG.md) for what shipped and what is still deferred.
+One zod-validated YAML manifest for grounding, tools, memory, hooks, and policies — plus a CLI that describes, validates, diffs, applies, audits, and *enforces*.
 
-## What
+> Most config tools tell you what an agent is configured to use. `harness` tells you what an agent is *allowed to do*, under this exact context, and why.
 
-`harness` is a control plane that unifies how an agent harness (today: [Claude Code](https://docs.claude.com/en/docs/claude-code); in principle any comparable runtime) is configured. Instead of scattering decisions across `settings.json`, `CLAUDE.md`, memory markdown files, MCP registrations, per-project overrides and hook scripts, `harness` collapses them into a single human-editable YAML manifest. The manifest is read, validated, diffed, and applied by a small CLI.
+`harness` collapses the six-to-eight surfaces a working agent harness leaks across (`settings.json`, `CLAUDE.md`, memory frontmatter, MCP registrations, per-project overrides, hook scripts) into a single source of truth. Today (`v0.4.0`) policies fire end-to-end: a `mcp__agent-tasks__pull_requests_merge` call against a session without a `review:${PR_NUMBER}` ledger entry refuses; `harness explain review-before-merge --trace` shows exactly why. Phase 6 adds an *Understanding Gate* (agents confirm task interpretation before editing); Phase 7 adds a *Risk Gate* that blocks `DROP TABLE` against a prod target — even when the model would happily run it.
 
-The point is not to replace those surfaces — it is to **make them coherent**. The existing files stay where they are; `harness` becomes the single source of truth that generates them.
-
-## Why
-
-A working agent harness today has six to eight configuration surfaces, each with its own schema and lifecycle:
-
-- `~/.claude/settings.json` — hooks, permissions, env
-- `CLAUDE.md` (per repo + root) — prose instructions
-- `~/.claude/projects/*/memory/*.md` — memories with frontmatter
-- `~/.claude/keybindings.json` — key bindings
-- MCP server registrations in `~/.claude.json`
-- Skill directories
-- Per-project overrides that shadow user settings
-- External tool CLIs that behave differently per project
-
-There is no single place that answers *"what can this agent do right now, and why is that configured that way?"*. Drift between sessions is invisible until it breaks something. Humans editing one surface don't know which other surfaces they need to touch. A fresh agent instance has no way to audit its own setup.
-
-Our entry point into this problem: on 2026-04-23, an `agent-grounding` checkout that was 16 commits behind origin led two tasks to be incorrectly called "stale". The check that would have caught it already exists — [`agent-preflight`](https://github.com/LanNguyenSi/agent-preflight) runs `git fetch` + `git status` (alongside lint, typecheck, test, audit) and emits a structured `ready` + confidence-score result. The missing piece wasn't the check itself, it was the deterministic *trigger*: a `SessionStart` hook that invokes `preflight run` and a policy that gates further work on the result. Building that wiring needs an agreed-upon place for harness config to live first. That conversation is the origin of this repo. The long-form writeup lives in the internal `lava-ice-logs` logbook at `docs/system-enforcement-analysis-2026-04-23.md`.
-
-## Scope
-
-See [`docs/VISION.md`](docs/VISION.md) for the "why" in long form — three pillars (grounding, tools, memory), what already exists across the ecosystem, and where the gaps are.
-
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) describes the concrete YAML shape, CLI surface, drift handling, per-machine override layer, and the v1 `requires` schema. [`docs/ROADMAP.md`](docs/ROADMAP.md) turns the four phases into testable acceptance criteria with explicit exit gates per phase.
-
-## Try it
+## Try it in 60 seconds
 
 ```bash
 git clone https://github.com/LanNguyenSi/harness && cd harness
 npm install && npm run build
-HC=/tmp/harness-demo
-node dist/cli/main.js init --template full --config "$HC/harness.yaml"
-node dist/cli/main.js describe --config "$HC/harness.yaml" --pillar tools
-node dist/cli/main.js add cli git-batch --binary git-batch --config "$HC/harness.yaml"
-node dist/cli/main.js add mcp my-server --command "node,/tmp/server.js" \
-  --health-verb status --config "$HC/harness.yaml"
-node dist/cli/main.js remove cli git-batch --config "$HC/harness.yaml" --dry-run
-node dist/cli/main.js export --config "$HC/harness.yaml" --sanitize -o "$HC/share.yaml"
-node dist/cli/main.js apply --config "$HC/harness.yaml"   # regenerate settings.json + MEMORY.md, write harness.lock
-node dist/cli/main.js diff --since-apply --config "$HC/harness.yaml"
+
+# Statically predict which policies fire for a tool call (no ledger, no LLM)
+node dist/cli/main.js dry-run "merge PR 42" \
+  --tool mcp__agent-tasks__pull_requests_merge \
+  --tool-args '{"prNumber":42}' \
+  --config docs/examples/full-manifest.yaml
 ```
 
-Read-only inspection still works against the reference manifest at `docs/examples/full-manifest.yaml` (covers every field in `ARCHITECTURE.md` Appendix A):
+`dry-run` reads the reference manifest (`docs/examples/full-manifest.yaml`), runs the trigger matcher, substitutes `${PR_NUMBER}=42` through the JSONPath-restricted extract DSL, and tells you exactly which hooks would fire and which policies would match — before any ledger I/O.
+
+## What a run looks like
+
+```yaml
+prompt: merge PR 42
+tool: mcp__agent-tasks__pull_requests_merge
+toolArgs:
+  prNumber: 42
+Hooks that would fire:
+  - event: SessionStart
+    name: git-preflight
+  - event: PreToolUse
+    name: require-review-evidence
+  - event: PreToolUse
+    name: require-dogfood-evidence
+  - event: PreToolUse
+    name: require-preflight-evidence
+Policies that match:
+  - name: review-before-merge
+    ledgerQuery: review:42
+    requires:
+      ledger_tag: review:${PR_NUMBER}
+    enforcement: block
+    triggerEvent: PreToolUse
+  - name: two-reviewers-required
+    ledgerQuery: review:42
+    requires:
+      ledger_tag: review:${PR_NUMBER}
+      count:
+        min: 2
+    enforcement: warn
+    triggerEvent: PreToolUse
+Policies that COULD match (need --tool):
+  - name: dogfood-before-release
+    triggerEvent: PreToolUse
+    reason: --tool "mcp__agent-tasks__pull_requests_merge" does not contain trigger.match "Bash"
+  - name: preflight-before-investigation
+    triggerEvent: PreToolUse
+    reason: --tool "mcp__agent-tasks__pull_requests_merge" does not contain trigger.match "Bash"
+Memories that would route:
+  - path: ~/.claude/projects/{project}/memory
+    scope: project
+```
+
+When the matching policy actually fires (via `harness policy intercept`, wired by `harness apply` into `settings.json` as a `PreToolUse` hook), and the evidence ledger has no `review:42` entry, the runtime emits Claude Code's deny shape on stdout:
+
+```json
+{"decision":"deny","reason":"review-before-merge: no matching ledger entry for tag `review:42`"}
+```
+
+After the entry is recorded, the same call is silently allowed. Every fire writes a `policy_decision` row that `harness audit` and `harness explain --trace` replay:
+
+```
+$ node dist/cli/main.js audit --since 1h --policy review-before-merge --session sess-1 --config docs/examples/full-manifest.yaml
+
+timestamp                 policy               outcome  reason
+------------------------  -------------------  -------  ---------------------------------------------
+2026-04-30T18:30:00.000Z  review-before-merge  deny     no matching ledger entry for tag `review:42`
+2026-04-30T18:31:00.000Z  review-before-merge  allow    1 matching ledger entries for tag `review:42`
+```
+
+## Next steps
+
+| If you want to... | Read |
+|------|------|
+| Understand the YAML shape, CLI surface, drift handling, `requires` schema | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
+| See phase-by-phase scope, deliverables, acceptance criteria, exit gates | [`docs/ROADMAP.md`](docs/ROADMAP.md) |
+| Read the long-form positioning (three pillars, ecosystem map, gaps) | [`docs/VISION.md`](docs/VISION.md) |
+| Browse a manifest covering every field | [`docs/examples/full-manifest.yaml`](docs/examples/full-manifest.yaml) |
+| Track what's shipping and what's deferred | [`CHANGELOG.md`](CHANGELOG.md) |
+
+## Common commands
 
 ```bash
-node dist/cli/main.js doctor   --config docs/examples/full-manifest.yaml --shallow
-node dist/cli/main.js validate --config docs/examples/full-manifest.yaml
-node dist/cli/main.js list policies --config docs/examples/full-manifest.yaml --json | jq
+node dist/cli/main.js init --template full --config /tmp/harness-demo/harness.yaml
+node dist/cli/main.js describe   --config /tmp/harness-demo/harness.yaml --pillar tools
+node dist/cli/main.js doctor     --config /tmp/harness-demo/harness.yaml --shallow
+node dist/cli/main.js validate   --config /tmp/harness-demo/harness.yaml
+node dist/cli/main.js apply      --config /tmp/harness-demo/harness.yaml   # regenerate settings.json + MEMORY.md, write harness.lock
+node dist/cli/main.js diff --since-apply --config /tmp/harness-demo/harness.yaml
+node dist/cli/main.js explain review-before-merge --trace --config docs/examples/full-manifest.yaml
+node dist/cli/main.js audit --since 24h --config docs/examples/full-manifest.yaml
 ```
+
+## What's next
+
+Two structurally larger themes are queued after Phase 5's polish:
+
+**Phase 6 — Understanding Gate.** Before an agent edits files, runs shell, commits, or opens a PR, it must produce an *Understanding Report* (its interpretation of the task: derived todos, acceptance criteria, assumptions, out-of-scope, risks). The user confirms, corrects, or "grills me until precise enough". Only after explicit approval is recorded in the evidence ledger may write-capable tools fire. Ships as the first `harness` *Policy Pack* — a reusable bundle of instruction template + hooks + policies + permission profiles. Long-form design lives in the internal `lava-ice-logs` logbook (2026-04-30).
+
+**Phase 7 — Risk Gate.** Today's policy model evaluates a rule per matching trigger and returns a binary block/allow. Phase 7 makes harness reason about *the action itself*: an Action Envelope (tool + raw input + session + runtime context) is enriched by a Context Resolver (production / staging / dev / unknown), classified by a Risk Classifier (severity + categories + reversibility), then matched against policies whose `when:` clauses can reference `risk.severity_at_least`, `environment.name`, and similar. The decision space extends to `allow / warn / require_approval / deny`. Motivating use case: prevent `DROP TABLE users`, `kubectl delete namespace prod`, `terraform destroy` against an unverified production target before they reach the runtime — even if the model would have happily run them. Long-form design lives in the internal `lava-ice-logs` logbook (2026-04-30).
+
+Both build on Phase 4's `policy intercept` runtime backbone; neither replaces it.
+
+> Bring your favorite agent harness. Add governance.
 
 ## Status
 
@@ -68,15 +128,26 @@ node dist/cli/main.js list policies --config docs/examples/full-manifest.yaml --
 - [x] Phase 2 — managed edits (`init`, `add`, `remove`, `adopt`, `export`) — released as [`v0.2.0`](CHANGELOG.md#020---2026-04-29)
 - [x] Phase 3 — declarative truth (`apply`, `diff --since-apply`, `harness.lock`) — released as [`v0.3.0`](CHANGELOG.md#030---2026-04-30)
 - [x] Phase 4 — policy layer (`policy intercept`, `explain --trace`, `audit`, `dry-run`, requires-evaluator + extract DSL + grounding-mcp adapter) — released as [`v0.4.0`](CHANGELOG.md#040---2026-04-30)
+- [ ] Phase 5 — polish + dogfood lessons (`apply --strict-lock`, `validate --check-lock`, sessionId default, `--verbose` deny diagnostics, sysexits normalisation, real-Claude-Code dogfood)
+- [ ] Phase 6 — Understanding Gate Policy Pack (agents must expose and confirm task understanding before write-capable tools fire)
+- [ ] Phase 7 — Risk Gate (Action Envelope + Risk Classifier + `allow / warn / require_approval / deny` for destructive-action prevention)
+
+## Why this exists
+
+A working agent harness today has six to eight configuration surfaces, each with its own schema and lifecycle: `~/.claude/settings.json`, `CLAUDE.md` (per repo + root), `~/.claude/projects/*/memory/*.md` with frontmatter, `~/.claude/keybindings.json`, MCP server registrations in `~/.claude.json`, skill directories, per-project overrides, and external CLIs that behave differently per project.
+
+There is no single place that answers *"what can this agent do right now, and why is that configured that way?"*. Drift between sessions is invisible until it breaks something. Humans editing one surface don't know which other surfaces they need to touch. A fresh agent instance has no way to audit its own setup.
+
+Our entry point into this problem: on 2026-04-23, an `agent-grounding` checkout that was 16 commits behind origin led two tasks to be incorrectly called "stale". The check that would have caught it already exists — [`agent-preflight`](https://github.com/LanNguyenSi/agent-preflight) runs `git fetch` + `git status` (alongside lint, typecheck, test, audit) and emits a structured `ready` + confidence-score result. The missing piece wasn't the check itself, it was the deterministic *trigger*: a `SessionStart` hook that invokes `preflight run` and a policy that gates further work on the result. Building that wiring needs an agreed-upon place for harness config to live first. That conversation is the origin of this repo.
 
 ## Related
 
-- [`agent-grounding`](https://github.com/LanNguyenSi/agent-grounding) — grounding primitives (evidence-ledger, claim-gate, review-claim-gate) this project will expose through the YAML layer
-- [`agent-memory`](https://github.com/LanNguyenSi/agent-memory) — memory surfaces the control plane inventories
-- [`agent-tasks`](https://github.com/LanNguyenSi/agent-tasks) — the MCP-registered task platform whose registration + health will appear in `harness describe`
-- [`agent-preflight`](https://github.com/LanNguyenSi/agent-preflight) — local preflight validator (lint, typecheck, test, audit, secret-scan, optional `act`-driven CI sim) that returns a `ready` flag plus confidence score. The canonical implementation of preflight hook content harness wires — see `docs/ARCHITECTURE.md` §5 for the canonical hook-script shape and §6 for the Phase 4 policy that gates further work on a `preflight:${REPO}` ledger entry. Not a sibling tool, *the* hook content for the founding-incident's missing check.
-- [`codebase-oracle`](https://github.com/LanNguyenSi/codebase-oracle) — one of the MCP surfaces being registered
-- [`dev-tools`](https://github.com/LanNguyenSi/dev-tools) — `git-batch-cli`, a day-to-day tool whose inventory should appear in `harness describe`
+- [`agent-grounding`](https://github.com/LanNguyenSi/agent-grounding) — grounding primitives (evidence-ledger, claim-gate, review-claim-gate); `grounding-mcp` is the canonical client surface harness queries through `queryLedgerByTag` (Phase 4 #3).
+- [`agent-memory`](https://github.com/LanNguyenSi/agent-memory) — memory surfaces the control plane inventories.
+- [`agent-tasks`](https://github.com/LanNguyenSi/agent-tasks) — the MCP-registered task platform whose registration + health appear in `harness describe`.
+- [`agent-preflight`](https://github.com/LanNguyenSi/agent-preflight) — local preflight validator; the canonical implementation of preflight-hook content harness wires (see `docs/ARCHITECTURE.md` §5 for the canonical hook-script shape and §6 for the Phase 4 policy that gates further work on a `preflight:${REPO}` ledger entry).
+- [`codebase-oracle`](https://github.com/LanNguyenSi/codebase-oracle) — one of the MCP surfaces being registered.
+- [`dev-tools`](https://github.com/LanNguyenSi/dev-tools) — `git-batch-cli`, a day-to-day tool whose inventory appears in `harness describe`.
 
 ## License
 
