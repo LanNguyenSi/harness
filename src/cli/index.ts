@@ -19,6 +19,7 @@ import { explain } from "./explain.js";
 import { init, isTemplate, KNOWN_TEMPLATES } from "./init/index.js";
 import { isListCategory, list, type ListCategory } from "./list.js";
 import { audit, type AuditOutcome } from "./audit.js";
+import { dryRun } from "./dry-run.js";
 import { runInterceptCli } from "./policy/intercept.js";
 import { formatReport, validate } from "./validate/index.js";
 
@@ -653,6 +654,33 @@ export function buildProgram(opts: RunOptions = {}): Command {
       if (options.session) auditOpts.sessionId = options.session;
       if (options.json) auditOpts.json = options.json;
       const result = await audit(auditOpts);
+      stdout(result.output);
+    });
+
+  program
+    .command("dry-run <prompt>")
+    .description(
+      "Statically predict which hooks fire / policies match / memories route for a prompt",
+    )
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option("--tool <name>", "simulate a PreToolUse event for this tool name")
+    .option("--tool-args <json>", "JSON for tool_input (default: {})")
+    .option("--json", "emit JSON instead of YAML")
+    .action((prompt: string, options: {
+      config?: string;
+      project?: string;
+      tool?: string;
+      toolArgs?: string;
+      json?: boolean;
+    }) => {
+      const dryRunOpts: Parameters<typeof dryRun>[1] = {};
+      if (options.config) dryRunOpts.configPath = options.config;
+      if (options.project) dryRunOpts.project = options.project;
+      if (options.tool) dryRunOpts.tool = options.tool;
+      if (options.toolArgs) dryRunOpts.toolArgs = options.toolArgs;
+      if (options.json) dryRunOpts.json = options.json;
+      const result = dryRun(prompt, dryRunOpts);
       stdout(result.output);
     });
 
