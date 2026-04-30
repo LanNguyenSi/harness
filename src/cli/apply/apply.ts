@@ -6,18 +6,24 @@
 //      MEMORY.md index (Phase 3 #3).
 //   3. Read `harness.generated/.last-apply` (Phase 3 #1) if present.
 //   4. Read on-disk `harness.generated/<file>` if present.
-//   5. Three-state-compare per file (Phase 3 #1):
+//   5. If `harness.lock` exists, hash every locked asset / memory-dir
+//      Merkle and surface mismatches as `lockDrift` (Phase 3 #6,
+//      warn-only). Drift is reported on every code path including
+//      --dry-run so users can preview without writing.
+//   6. Three-state-compare per file (Phase 3 #1):
 //        no-drift       → write expected (overwrite is safe)
 //        safe-overwrite → write expected (no on-disk file existed)
 //        drift-refuse   → refuse with diff + adopt-or-overwrite hint
-//   6. `--overwrite-drift` requires literal `yes` confirmation before
+//   7. `--overwrite-drift` requires literal `yes` confirmation before
 //      discarding on-disk changes; on confirm, treat refusals as
 //      safe-overwrite.
-//   7. `--dry-run` prints the would-be diff + would-emit hints, exits 0
+//   8. `--dry-run` prints the would-be diff + would-emit hints, exits 0
 //      without writing.
-//   8. After successful write: refresh `.last-apply` (with a manifest
+//   9. After successful write: refresh `.last-apply` (with a manifest
 //      snapshot for the next apply's restart-hint comparison), write
-//      `harness.lock` next to `harness.yaml`, emit restart hints.
+//      `harness.lock` next to `harness.yaml`, emit restart hints. The
+//      idempotent no-op path also refreshes the lock when asset drift
+//      was detected so the drift report is not "sticky".
 
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
@@ -25,7 +31,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline/promises";
 import { atomicWriteFile } from "../../io/atomic-write.js";
-import { LOCK_BASENAME, buildLockEntries, writeLock } from "../../io/harness-lock.js";
+import {
+  LOCK_BASENAME,
+  buildLockEntries,
+  computeDrift,
+  readLock,
+  writeLock,
+  type DriftedAsset,
+} from "../../io/harness-lock.js";
 import {
   buildLastApply,
   readLastApply,
@@ -81,6 +94,15 @@ export interface ApplyResult {
   files: FileApplyOutcome[];
   warnings: string[];
   restartHints: string[];
+  /**
+   * Locked assets whose on-disk SHA-256 has drifted since the lock was last
+   * written. Computed on every apply (when a lock exists), reported but
+   * not enforced: apply proceeds, the drift is surfaced as warning-style
+   * output, and the lock is rewritten with current SHAs at the end of the
+   * run. Wrap apply in a script that greps for `asset drift detected:` to
+   * upgrade to enforcement.
+   */
+  lockDrift: DriftedAsset[];
   outcome: ApplyOutcome;
   written: boolean;
   dryRun: boolean;
@@ -194,6 +216,20 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   const { files: expected, warnings } = buildExpectedFiles(manifest, opts);
   const lastApply = readLastApply(generatedDir);
 
+  // Asset-content drift detection (Phase 3 #6): if a previous apply wrote
+  // harness.lock, re-hash every locked asset / memory-dir Merkle and report
+  // mismatches. Warn-only: apply still proceeds and the lock is rewritten
+  // at the end of the run. Users wanting enforcement wrap apply in a script
+  // that greps for `asset drift detected:`.
+  //
+  // We compute against the *previous* lock (read here, before the manifest
+  // is consulted to build the new lock). An asset removed from the manifest
+  // in this same apply still surfaces if it drifted — the reportable event
+  // is "the file on disk diverged from what was last-known", regardless of
+  // whether the manifest still references it.
+  const previousLock = readLock(lockPath);
+  const lockDrift: DriftedAsset[] = previousLock !== null ? computeDrift(previousLock) : [];
+
   const fileOutcomes: FileApplyOutcome[] = [];
   let anyDriftRefuse = false;
   let anyChanged = false;
@@ -235,6 +271,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
       warnings,
       restartHints: [],
       outcome: "drift-refuse",
+      lockDrift,
       written: false,
       dryRun: opts.dryRun ?? false,
       lockPath,
@@ -256,6 +293,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
         warnings,
         restartHints: [],
         outcome: "drift-discarded",
+        lockDrift,
         written: false,
         dryRun: opts.dryRun ?? false,
         lockPath,
@@ -279,6 +317,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
       warnings,
       restartHints,
       outcome: anyChanged ? "would-apply" : "no-changes",
+      lockDrift,
       written: false,
       dryRun: true,
       lockPath,
@@ -286,9 +325,19 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   }
 
   if (!anyChanged && lastApply !== null) {
-    // Idempotent no-op: nothing to write, .last-apply already current.
-    // Phase 3 #6 will refresh harness.lock here when on-disk hook scripts
-    // change without manifest change (asset-content drift).
+    // Idempotent no-op for generated files. If asset-content drift was
+    // detected against harness.lock, rewrite the lock now with current
+    // SHAs so the drift is not "sticky": the user sees the drift line
+    // once, the next apply is clean. Without this, every subsequent
+    // apply re-reports the same drift forever until something else in
+    // the manifest changes.
+    if (lockDrift.length > 0) {
+      const refreshed = buildLockEntries(manifest, {
+        ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
+        ...(opts.project !== undefined ? { projectName: opts.project } : {}),
+      });
+      writeLock(lockPath, refreshed);
+    }
     return {
       manifestPath,
       generatedDir,
@@ -296,6 +345,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
       warnings,
       restartHints,
       outcome: "no-changes",
+      lockDrift,
       written: false,
       dryRun: false,
       lockPath,
@@ -342,6 +392,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     warnings,
     restartHints,
     outcome: "applied",
+    lockDrift,
     written: true,
     dryRun: false,
     lockPath,
