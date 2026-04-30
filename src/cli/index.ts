@@ -188,6 +188,9 @@ export function buildProgram(opts: RunOptions = {}): Command {
           } else {
             stdout(r.output);
           }
+          for (const w of r.warnings) {
+            stderr(`warning: ${w}\n`);
+          }
           if (r.hasDrift) throw new HarnessExitError("", EX_FAIL);
           return;
         }

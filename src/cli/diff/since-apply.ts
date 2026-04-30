@@ -76,6 +76,8 @@ export interface SinceApplyResult {
   files: FileDriftEntry[];
   assets: AssetDriftEntry[];
   memories: MemoryDirDriftEntry[];
+  /** Diagnostic warnings (non-fatal); surfaced to stderr by the CLI. */
+  warnings: string[];
   /** Human-readable formatted report. */
   output: string;
   /** Structured payload (also serialised when --json is set). */
@@ -164,6 +166,7 @@ function diffMemoryDirs(
   lockEntries: LockEntry[],
   lastApply: LastApplyRecord | null,
   memoryDetail: boolean,
+  warnings: string[],
 ): MemoryDirDriftEntry[] {
   const out: MemoryDirDriftEntry[] = [];
   for (const e of lockEntries) {
@@ -179,12 +182,30 @@ function diffMemoryDirs(
       out.push({ path: e.path, reason: "missing" });
       continue;
     }
-    const current = computeMemoryDirEntry(e.path);
+    let current: ReturnType<typeof computeMemoryDirEntry>;
+    try {
+      current = computeMemoryDirEntry(e.path);
+    } catch {
+      // Treat read failure as missing rather than crashing the whole
+      // diff. Matches the stat-failure branch above (TOCTOU-safe).
+      out.push({ path: e.path, reason: "missing" });
+      continue;
+    }
     if (current.sha256 === e.sha256) continue;
     const entry: MemoryDirDriftEntry = { path: e.path, reason: "modified" };
     if (memoryDetail) {
       const snapshot = lastApply?.memoryDirs?.[e.path];
-      entry.files = expandMemoryDetail(e.path, snapshot);
+      if (snapshot === undefined) {
+        // .last-apply was written before Phase 3 #5's schema extension.
+        // Without a per-file index, --memory-detail can't say what changed
+        // without reporting every file as "added". Skip the per-file
+        // expansion and tell the user how to enable it.
+        warnings.push(
+          `${e.path}: no per-file index recorded (pre-Phase-3-#5 .last-apply); re-run \`harness apply\` to enable --memory-detail`,
+        );
+      } else {
+        entry.files = expandMemoryDetail(e.path, snapshot);
+      }
     }
     out.push(entry);
   }
@@ -293,12 +314,22 @@ export function diffSinceApply(opts: SinceApplyOptions = {}): SinceApplyResult {
 
   const lockEntries = readLock(lockPath) ?? [];
 
+  const warnings: string[] = [];
   const files = diffGeneratedFiles(lastApply, generatedDir);
   const assets = diffAssets(lockEntries);
-  const memories = diffMemoryDirs(lockEntries, lastApply, opts.memoryDetail ?? false);
+  const memories = diffMemoryDirs(
+    lockEntries,
+    lastApply,
+    opts.memoryDetail ?? false,
+    warnings,
+  );
 
   const summary = { files, assets, memories };
   const hasDrift = files.length > 0 || assets.length > 0 || memories.length > 0;
   const output = formatReport(summary);
-  return { ...summary, hasDrift, output, json: summary };
+  return { ...summary, warnings, hasDrift, output, json: summary };
 }
+
+// Re-exported so Phase 3 #6 (asset-drift detection inside `apply`) can
+// reuse the pure projection without depending on the CLI side.
+export { diffAssets };

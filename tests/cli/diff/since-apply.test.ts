@@ -225,6 +225,54 @@ describe("diff --since-apply", () => {
     expect(r.output).toContain("# Memory directories");
   });
 
+  it("reports memory dir as `missing` when it has been replaced by a regular file", async () => {
+    const memDir = path.join(tmpHome, "memory");
+    fs.mkdirSync(memDir);
+    fs.writeFileSync(
+      path.join(memDir, "a.md"),
+      "---\nname: A\ndescription: a\ntype: user\n---\nv1\n",
+    );
+    writeManifest({
+      memoryDirs: [{ path: "~/memory", scope: "user" }],
+    });
+    await apply({ homeDir: tmpHome });
+    fs.rmSync(memDir, { recursive: true });
+    fs.writeFileSync(memDir, "now a regular file\n");
+    const r = diffSinceApply({ homeDir: tmpHome });
+    expect(r.memories).toHaveLength(1);
+    expect(r.memories[0]?.reason).toBe("missing");
+  });
+
+  it("--memory-detail with a baseline .last-apply (no memoryDirs field) emits a warning and skips per-file expansion", async () => {
+    const memDir = path.join(tmpHome, "memory");
+    fs.mkdirSync(memDir);
+    fs.writeFileSync(
+      path.join(memDir, "a.md"),
+      "---\nname: A\ndescription: a\ntype: user\n---\nv1\n",
+    );
+    writeManifest({
+      memoryDirs: [{ path: "~/memory", scope: "user" }],
+    });
+    await apply({ homeDir: tmpHome });
+    // Strip the memoryDirs field as if .last-apply were written by Phase 3 #4
+    // (before the schema extension).
+    const lastApplyPath = path.join(tmpHome, GENERATED_DIRNAME, ".last-apply");
+    const record = JSON.parse(fs.readFileSync(lastApplyPath, "utf8")) as {
+      memoryDirs?: unknown;
+    };
+    delete record.memoryDirs;
+    fs.writeFileSync(lastApplyPath, `${JSON.stringify(record, null, 2)}\n`);
+
+    fs.writeFileSync(
+      path.join(memDir, "a.md"),
+      "---\nname: A\ndescription: a\ntype: user\n---\nv2\n",
+    );
+    const r = diffSinceApply({ homeDir: tmpHome, memoryDetail: true });
+    expect(r.memories).toHaveLength(1);
+    expect(r.memories[0]?.files).toBeUndefined();
+    expect(r.warnings.some((w) => w.includes("no per-file index"))).toBe(true);
+  });
+
   it("structured json payload contains the three sections", async () => {
     writeManifest({
       hooks: [
