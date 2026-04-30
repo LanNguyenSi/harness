@@ -228,6 +228,20 @@ function checkBuiltinDrift(manifest: Manifest, opts: CheckOptions): Diagnostic[]
   return diags;
 }
 
+function checkPolicyGroundingMcp(manifest: Manifest): Diagnostic[] {
+  if (manifest.policies.length === 0) return [];
+  const wired = manifest.tools.mcp.some((m) => m.name === "grounding-mcp");
+  if (wired) return [];
+  return [
+    {
+      severity: "warning",
+      path: "policies",
+      message:
+        "policies declared but grounding-mcp not wired: every policy will fire in degraded warn-mode at runtime; see docs/ARCHITECTURE.md §6",
+    },
+  ];
+}
+
 export function runAssetChecks(
   manifest: Manifest,
   opts: CheckOptions = {},
@@ -239,6 +253,7 @@ export function runAssetChecks(
     ...checkSkills(manifest, home),
     ...checkHooks(manifest, home),
     ...checkBuiltinDrift(manifest, opts),
+    ...checkPolicyGroundingMcp(manifest),
   ];
 }
 

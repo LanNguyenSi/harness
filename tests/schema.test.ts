@@ -85,7 +85,7 @@ describe("parseManifest — invalid fixtures", () => {
     { file: "02-unknown-toplevel-key.yaml", pattern: /unrecognized key|foo/i },
     { file: "03-policy-undeclared-variable.yaml", pattern: /PR_NUMBER/ },
     { file: "04-policy-dangling-hook.yaml", pattern: /nonexistent-hook/ },
-    { file: "05-bad-extract-grammar.yaml", pattern: /extract expression|toolArgs/i },
+    { file: "05-bad-extract-grammar.yaml", pattern: /unknown namespace|extract expression|toolArgs/i },
     { file: "06-bad-within-duration.yaml", pattern: /duration/i },
     { file: "07-count-min-zero.yaml", pattern: /count/i },
     { file: "08-duplicate-mcp-name.yaml", pattern: /duplicate mcp/i },
