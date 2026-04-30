@@ -1,0 +1,273 @@
+import { describe, expect, it } from "vitest";
+import {
+  evaluateRequires,
+  RequiresEvaluationError,
+  type LedgerEntry,
+} from "../../src/policies/index.js";
+
+const NOW = new Date("2026-04-30T12:00:00.000Z");
+
+function entry(partial: Partial<LedgerEntry> & { id: string; content: string }): LedgerEntry {
+  return {
+    createdAt: NOW,
+    ...partial,
+  };
+}
+
+describe("evaluateRequires — ledger_tag (substring match)", () => {
+  it("matches when an entry's content contains the tag as a substring", () => {
+    const result = evaluateRequires(
+      { ledger_tag: "review:42" },
+      [entry({ id: "e1", content: "review:42:approved" })],
+      { now: NOW },
+    );
+    expect(result.allowed).toBe(true);
+    expect(result.matchedCount).toBe(1);
+    expect(result.traceData.matchedEntryIds).toEqual(["e1"]);
+    expect(result.traceData.windowSeconds).toBeNull();
+    expect(result.traceData.countBound).toBeNull();
+  });
+
+  it("matches against the source column too", () => {
+    const result = evaluateRequires(
+      { ledger_tag: "preflight:harness" },
+      [entry({ id: "e1", content: "ready", source: "preflight:harness" })],
+      { now: NOW },
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it("fails with the documented reason when nothing matches", () => {
+    const result = evaluateRequires(
+      { ledger_tag: "review:42" },
+      [entry({ id: "e1", content: "review:99:approved" })],
+      { now: NOW },
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("no matching ledger entry for tag `review:42`");
+    expect(result.matchedCount).toBe(0);
+  });
+
+  it("fails on an empty ledger", () => {
+    const result = evaluateRequires({ ledger_tag: "x" }, [], { now: NOW });
+    expect(result.allowed).toBe(false);
+    expect(result.matchedCount).toBe(0);
+    expect(result.traceData.totalEntries).toBe(0);
+  });
+});
+
+describe("evaluateRequires — within (recency window)", () => {
+  it("matches an entry within the window", () => {
+    const ts23h = new Date(NOW.getTime() - 23 * 60 * 60 * 1000);
+    const result = evaluateRequires(
+      { ledger_tag: "dogfood:foo", within: "24h" },
+      [entry({ id: "e1", content: "dogfood:foo:ok", createdAt: ts23h })],
+      { now: NOW },
+    );
+    expect(result.allowed).toBe(true);
+    expect(result.traceData.windowSeconds).toBe(24 * 60 * 60);
+  });
+
+  it("excludes an entry older than the window with the documented reason", () => {
+    const ts25h = new Date(NOW.getTime() - 25 * 60 * 60 * 1000);
+    const result = evaluateRequires(
+      { ledger_tag: "dogfood:foo", within: "24h" },
+      [entry({ id: "e1", content: "dogfood:foo:ok", createdAt: ts25h })],
+      { now: NOW },
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("no matching entry within 24h");
+    expect(result.matchedCount).toBe(0);
+  });
+
+  it("falls back to the no-tag reason when nothing matches the tag at all", () => {
+    const result = evaluateRequires(
+      { ledger_tag: "dogfood:foo", within: "24h" },
+      [entry({ id: "e1", content: "unrelated", createdAt: NOW })],
+      { now: NOW },
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("no matching ledger entry for tag `dogfood:foo`");
+  });
+
+  it("accepts ISO-8601 durations", () => {
+    const tsP1H = new Date(NOW.getTime() - 30 * 60 * 1000);
+    const result = evaluateRequires(
+      { ledger_tag: "x", within: "PT1H" },
+      [entry({ id: "e1", content: "x", createdAt: tsP1H })],
+      { now: NOW },
+    );
+    expect(result.allowed).toBe(true);
+    expect(result.traceData.windowSeconds).toBe(60 * 60);
+  });
+
+  it("rejects an invalid duration at evaluation time", () => {
+    expect(() =>
+      evaluateRequires(
+        { ledger_tag: "x", within: "yesterday" },
+        [entry({ id: "e1", content: "x" })],
+        { now: NOW },
+      ),
+    ).toThrow(RequiresEvaluationError);
+  });
+
+  it("accepts ISO timestamps as createdAt strings", () => {
+    const result = evaluateRequires(
+      { ledger_tag: "x", within: "1h" },
+      [entry({ id: "e1", content: "x", createdAt: NOW.toISOString() })],
+      { now: NOW },
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it("throws on an unparseable createdAt when a window is in play", () => {
+    expect(() =>
+      evaluateRequires(
+        { ledger_tag: "x", within: "24h" },
+        [entry({ id: "bad", content: "x", createdAt: "not-a-date" })],
+        { now: NOW },
+      ),
+    ).toThrow(/unparseable createdAt/);
+  });
+});
+
+describe("evaluateRequires — count", () => {
+  const tag = "x";
+
+  it("passes when min is met", () => {
+    const result = evaluateRequires(
+      { ledger_tag: tag, count: { min: 2 } },
+      [
+        entry({ id: "a", content: tag }),
+        entry({ id: "b", content: tag }),
+      ],
+      { now: NOW },
+    );
+    expect(result.allowed).toBe(true);
+    expect(result.matchedCount).toBe(2);
+    expect(result.traceData.countBound).toEqual({ min: 2 });
+  });
+
+  it("fails with `n of required N entries found` when min is not met", () => {
+    const result = evaluateRequires(
+      { ledger_tag: tag, count: { min: 2 } },
+      [entry({ id: "a", content: tag })],
+      { now: NOW },
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("1 of required 2 entries found");
+  });
+
+  it("fails when max is exceeded", () => {
+    const result = evaluateRequires(
+      { ledger_tag: tag, count: { max: 1 } },
+      [
+        entry({ id: "a", content: tag }),
+        entry({ id: "b", content: tag }),
+      ],
+      { now: NOW },
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("2 matching entries exceeds count.max 1");
+  });
+
+  it("describes a min..max range bound on success", () => {
+    const result = evaluateRequires(
+      { ledger_tag: tag, count: { min: 1, max: 3 } },
+      [entry({ id: "a", content: tag }), entry({ id: "b", content: tag })],
+      { now: NOW },
+    );
+    expect(result.allowed).toBe(true);
+    expect(result.reason).toContain("count bound: 1..3");
+    expect(result.traceData.countBound).toEqual({ min: 1, max: 3 });
+  });
+
+  it("describes a max-only bound on success", () => {
+    const result = evaluateRequires(
+      { ledger_tag: tag, count: { max: 5 } },
+      [entry({ id: "a", content: tag })],
+      { now: NOW },
+    );
+    expect(result.allowed).toBe(true);
+    expect(result.reason).toContain("count bound: ≤5");
+  });
+
+  it("supports exact count", () => {
+    const pass = evaluateRequires(
+      { ledger_tag: tag, count: { exact: 2 } },
+      [
+        entry({ id: "a", content: tag }),
+        entry({ id: "b", content: tag }),
+      ],
+      { now: NOW },
+    );
+    expect(pass.allowed).toBe(true);
+
+    const fail = evaluateRequires(
+      { ledger_tag: tag, count: { exact: 2 } },
+      [entry({ id: "a", content: tag })],
+      { now: NOW },
+    );
+    expect(fail.allowed).toBe(false);
+    expect(fail.reason).toBe("1 of required 2 entries found");
+  });
+
+  it("rejects count.min:0 at evaluation time", () => {
+    expect(() =>
+      evaluateRequires(
+        { ledger_tag: tag, count: { min: 0 as unknown as number } },
+        [],
+        { now: NOW },
+      ),
+    ).toThrow(/count\.min must be > 0/);
+  });
+});
+
+describe("evaluateRequires — composition (within + count)", () => {
+  const tag = "x";
+  it("filters by window before counting", () => {
+    const fresh = new Date(NOW.getTime() - 30 * 60 * 1000);
+    const stale = new Date(NOW.getTime() - 25 * 60 * 60 * 1000);
+    const result = evaluateRequires(
+      { ledger_tag: tag, within: "24h", count: { min: 2 } },
+      [
+        entry({ id: "fresh", content: tag, createdAt: fresh }),
+        entry({ id: "stale", content: tag, createdAt: stale }),
+      ],
+      { now: NOW },
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("1 of required 2 entries found");
+    expect(result.traceData.matchedEntryIds).toEqual(["fresh"]);
+  });
+
+  it("with a `count` bound and zero tag matches, the count message wins (the within message is suppressed)", () => {
+    // Pinned behavior: when count is declared, count failure dominates so the
+    // user sees the same shape regardless of why matching is empty.
+    const result = evaluateRequires(
+      { ledger_tag: tag, within: "24h", count: { min: 1 } },
+      [entry({ id: "unrelated", content: "other" })],
+      { now: NOW },
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("0 of required 1 entries found");
+  });
+});
+
+describe("evaluateRequires — traceData", () => {
+  it("captures all trace fields", () => {
+    const result = evaluateRequires(
+      { ledger_tag: "review:42", within: "24h", count: { min: 1 } },
+      [entry({ id: "e1", content: "review:42:ok" })],
+      { now: NOW },
+    );
+    expect(result.traceData).toEqual({
+      ledgerTag: "review:42",
+      windowSeconds: 24 * 60 * 60,
+      totalEntries: 1,
+      matchedEntryIds: ["e1"],
+      countBound: { min: 1 },
+      evaluatedAt: NOW.toISOString(),
+    });
+  });
+});

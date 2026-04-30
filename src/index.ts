@@ -11,3 +11,13 @@ export { diff, diffManifests, formatDiff, type Change, type ChangeKind, type Dif
 export { format as formatDoctor } from "./cli/doctor/format.js";
 export { RealMcpProbe, type McpProbe, type McpProbeResult } from "./probes/mcp.js";
 export { inspectMemory, type MemoryReport, type StaleMemory } from "./probes/memory.js";
+export {
+  evaluateRequires,
+  RequiresEvaluationError,
+  parseDurationSeconds,
+  InvalidDurationError,
+  type EvaluateRequiresOptions,
+  type LedgerEntry,
+  type RequiresEvaluation,
+  type RequiresTrace,
+} from "./policies/index.js";
