@@ -124,6 +124,20 @@ describe("CLI program — list + explain commands", () => {
   });
 });
 
+describe("CLI program — audit command", () => {
+  it("rejects an invalid --since duration with EX_USAGE", async () => {
+    const r = await exec([
+      "audit",
+      "--since",
+      "yesterday",
+      "--config",
+      FULL_MANIFEST,
+    ]);
+    expect(r.code).toBe(64);
+    expect(r.stderr).toMatch(/--since/);
+  });
+});
+
 describe("CLI program — doctor command", () => {
   it("prints the Appendix D structure on stdout and returns 0 in --shallow mode", async () => {
     const fs = await import("node:fs");
