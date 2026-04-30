@@ -122,6 +122,28 @@ describe("computeMemoryDirEntry", () => {
     expect(after.file_count).toBe(2);
   });
 
+  it("skips symlinked .md files (so a symlink to /etc/passwd cannot leak content into the lock)", () => {
+    const dir = path.join(tmpHome, "memdir");
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, "real.md"), "real\n");
+    const target = path.join(tmpHome, "outside.md");
+    fs.writeFileSync(target, "outside\n");
+    fs.symlinkSync(target, path.join(dir, "linked.md"));
+    const entry = computeMemoryDirEntry(dir);
+    expect(entry.file_count).toBe(1);
+    const expected = sha(`real.md:${sha("real\n")}`);
+    expect(entry.sha256).toBe(expected);
+  });
+
+  it("ignores subdirectories (top-level .md only)", () => {
+    const dir = path.join(tmpHome, "memdir");
+    fs.mkdirSync(path.join(dir, "nested"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "top.md"), "T\n");
+    fs.writeFileSync(path.join(dir, "nested", "deep.md"), "D\n");
+    const entry = computeMemoryDirEntry(dir);
+    expect(entry.file_count).toBe(1);
+  });
+
   it("returns file_count: 0 for an empty directory", () => {
     const dir = path.join(tmpHome, "empty");
     fs.mkdirSync(dir);
@@ -177,6 +199,22 @@ describe("serializeLock / parseLock", () => {
   it("parseLock throws on a memory-dir entry missing file_count", () => {
     const content = `${JSON.stringify({ kind: "memory-dir", path: "/a", sha256: "x" })}\n`;
     expect(() => parseLock(content)).toThrow(/malformed/);
+  });
+
+  it("parseLock throws on a non-JSON line with the canonical malformed message", () => {
+    expect(() => parseLock("not-json\n")).toThrow(/malformed harness\.lock entry: not-json/);
+  });
+
+  it("serialize uses byte order, not locale order, for cross-machine portability", () => {
+    // Under de_DE locale, localeCompare may sort `ä` before `b`. Byte order
+    // (UTF-8) puts `b` (0x62) before `ä` (0xC3 0xA4) deterministically.
+    const entries: LockEntry[] = [
+      { kind: "asset", path: "/ä.sh", sha256: "1" },
+      { kind: "asset", path: "/b.sh", sha256: "2" },
+    ];
+    const lines = serializeLock(entries).trim().split("\n");
+    expect(JSON.parse(lines[0]!).path).toBe("/b.sh");
+    expect(JSON.parse(lines[1]!).path).toBe("/ä.sh");
   });
 });
 
@@ -354,6 +392,67 @@ describe("collectManifestAssetPaths", () => {
       },
     });
     expect(collectManifestAssetPaths(m, { homeDir: tmpHome })).toEqual([]);
+  });
+
+  it("skips mcp[] entries with enabled: false (matches §3 disabled-removes-from-runtime)", () => {
+    const m = parseManifest({
+      version: 1,
+      tools: {
+        mcp: [
+          { name: "off", command: ["node", "~/disabled/server.js"], enabled: false },
+          { name: "on", command: ["node", "~/enabled/server.js"], enabled: true },
+        ],
+        cli: [],
+        skills: { enabled: [], source_dirs: [] },
+        builtin: { known: [] },
+      },
+      memory: { directories: [] },
+      hooks: [],
+      policies: [],
+    });
+    fixtureFile("disabled/server.js", "// off\n");
+    fixtureFile("enabled/server.js", "// on\n");
+    expect(collectManifestAssetPaths(m, { homeDir: tmpHome })).toEqual([
+      path.join(tmpHome, "enabled/server.js"),
+    ]);
+  });
+
+  it("skips memory.router when enabled: false", () => {
+    const m = parseManifest({
+      version: 1,
+      tools: { mcp: [], cli: [], skills: { enabled: [], source_dirs: [] }, builtin: { known: [] } },
+      memory: {
+        directories: [],
+        router: { command: ["node", "~/router/hook.js"], enabled: false },
+      },
+      hooks: [],
+      policies: [],
+    });
+    fixtureFile("router/hook.js", "// r\n");
+    expect(collectManifestAssetPaths(m, { homeDir: tmpHome })).toEqual([]);
+  });
+
+  it("skips known interpreter binaries even when an absolute path is given", () => {
+    // Pretend `/usr/bin/node` exists by writing a stand-in file. The collector
+    // must not lock this — interpreters are environmental, not harness-managed.
+    const fakeNode = path.join(tmpHome, "bin/node");
+    fs.mkdirSync(path.dirname(fakeNode), { recursive: true });
+    fs.writeFileSync(fakeNode, "#!/bin/sh\n");
+    const realScript = fixtureFile("oracle/server.js", "// real\n");
+
+    const m = parseManifest({
+      version: 1,
+      tools: {
+        mcp: [{ name: "x", command: [fakeNode, realScript] }],
+        cli: [],
+        skills: { enabled: [], source_dirs: [] },
+        builtin: { known: [] },
+      },
+      memory: { directories: [] },
+      hooks: [],
+      policies: [],
+    });
+    expect(collectManifestAssetPaths(m, { homeDir: tmpHome })).toEqual([realScript]);
   });
 
   it("supports string-form mcp.command (whitespace-split)", () => {

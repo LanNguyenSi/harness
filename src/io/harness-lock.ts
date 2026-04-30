@@ -8,9 +8,22 @@
 // Tool-asset files (hook scripts, MCP entrypoints, skill SKILL.md, memory
 // router binary) get one entry per file. Memory directories under
 // memory.directories[] are aggregated Merkle-style: the directory's hash is
-// sha256 of newline-joined `<basename>:<sha256(content)>` lines, sorted by
-// basename. A new memory file or a content change produces exactly one diff
-// line per affected directory.
+//   sha256(L), where L = `<basename>:<hex-sha256-of-content>` joined with a
+//   single `\n` between entries, sorted ascending by basename, no trailing
+//   newline. Empty directories hash to sha256("").
+// A new memory file or a content change produces exactly one diff line per
+// affected directory.
+//
+// Stat errors during asset/memory-dir collection are treated as "not present"
+// and silently omitted from the lock. This means a permission-denied path
+// (EACCES) will not appear in the lock; that is intentional today (most stat
+// failures are ENOENT in practice), but a future revision may choose to
+// surface EACCES as a diagnostic.
+//
+// `mcp[]` and `memory.router` entries with `enabled: false` are skipped: per
+// ARCHITECTURE §3, disabled MCP entries are removed from the generated
+// runtime config, so locking their assets would tie apply-time drift checks
+// to assets the user has explicitly opted out of.
 
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
@@ -53,9 +66,13 @@ export function computeAssetEntry(absolutePath: string): AssetEntry {
 }
 
 export function computeMemoryDirEntry(absoluteDirPath: string): MemoryDirEntry {
-  const files = fs
-    .readdirSync(absoluteDirPath)
-    .filter((f) => f.endsWith(".md"))
+  // Top-level .md files only; non-recursive. Symlinks are skipped via
+  // withFileTypes.isFile() (which lstats), so a symlink-to-passwd named
+  // *.md cannot leak external content into the lock.
+  const dirents = fs.readdirSync(absoluteDirPath, { withFileTypes: true });
+  const files = dirents
+    .filter((d) => d.isFile() && d.name.endsWith(".md"))
+    .map((d) => d.name)
     .sort();
   const lines = files.map((f) => {
     const buf = fs.readFileSync(path.join(absoluteDirPath, f));
@@ -73,8 +90,16 @@ function sortKey(e: LockEntry): string {
   return `${e.kind}\0${e.path}`;
 }
 
+function byteCompare(a: string, b: string): number {
+  // Locale-independent byte order. localeCompare would give different
+  // results across locales (e.g. de_DE may collate ä before/after b
+  // depending on the strength), which would make harness.lock non-portable
+  // across machines once a hook script with a non-ASCII basename appears.
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 export function serializeLock(entries: LockEntry[]): string {
-  const sorted = [...entries].sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
+  const sorted = [...entries].sort((a, b) => byteCompare(sortKey(a), sortKey(b)));
   if (sorted.length === 0) return "";
   return `${sorted.map((e) => JSON.stringify(e)).join("\n")}\n`;
 }
@@ -84,7 +109,12 @@ export function parseLock(content: string): LockEntry[] {
   for (const rawLine of content.split("\n")) {
     const line = rawLine.trim();
     if (!line) continue;
-    const parsed = JSON.parse(line) as unknown;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      throw new Error(`malformed ${LOCK_BASENAME} entry: ${line}`);
+    }
     if (!isLockEntry(parsed)) {
       throw new Error(`malformed ${LOCK_BASENAME} entry: ${line}`);
     }
@@ -164,6 +194,26 @@ export interface BuildLockOptions {
   projectName?: string;
 }
 
+// Interpreter binaries that often appear as the first argv of an MCP or
+// router command. They are environmental concerns (the user's runtime), not
+// harness-managed assets. Locking the system Node binary would cause spurious
+// drift on every Node minor-version bump.
+const KNOWN_INTERPRETERS = new Set([
+  "node",
+  "npx",
+  "python",
+  "python3",
+  "bash",
+  "sh",
+  "tsx",
+  "deno",
+  "bun",
+]);
+
+function isInterpreter(token: string): boolean {
+  return KNOWN_INTERPRETERS.has(path.basename(token));
+}
+
 export function collectManifestAssetPaths(
   manifest: Manifest,
   opts: BuildLockOptions = {},
@@ -171,8 +221,10 @@ export function collectManifestAssetPaths(
   const seen = new Set<string>();
   const out: string[] = [];
   const consider = (p: string) => {
+    if (isInterpreter(p)) return;
     const expanded = expandHome(p, opts.homeDir);
     if (!path.isAbsolute(expanded)) return;
+    if (isInterpreter(expanded)) return;
     let isFile = false;
     try {
       isFile = fs.statSync(expanded).isFile();
@@ -191,11 +243,12 @@ export function collectManifestAssetPaths(
   }
 
   for (const m of manifest.tools.mcp) {
+    if (m.enabled === false) continue;
     const args = Array.isArray(m.command) ? m.command : m.command.split(/\s+/);
     for (const a of args) consider(a);
   }
 
-  if (manifest.memory.router) {
+  if (manifest.memory.router && manifest.memory.router.enabled !== false) {
     for (const a of manifest.memory.router.command) consider(a);
   }
 

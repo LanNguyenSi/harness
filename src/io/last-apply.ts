@@ -61,6 +61,20 @@ export function readLastApply(generatedDir: string): LastApplyRecord | null {
   return parsed;
 }
 
+// Recomputes content sha256 for each file in a record, returning the list of
+// relPaths whose stored sha disagrees. An empty list means the record is
+// internally consistent. Used by callers that want to defend against on-disk
+// corruption of the .last-apply file before treating it as authoritative.
+export function verifyLastApplyIntegrity(record: LastApplyRecord): string[] {
+  const mismatched: string[] = [];
+  for (const [relPath, entry] of Object.entries(record.files)) {
+    if (sha256Hex(entry.content) !== entry.sha256) {
+      mismatched.push(relPath);
+    }
+  }
+  return mismatched;
+}
+
 function isLastApplyRecord(x: unknown): x is LastApplyRecord {
   if (!x || typeof x !== "object") return false;
   const files = (x as { files?: unknown }).files;

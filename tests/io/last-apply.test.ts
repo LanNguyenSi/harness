@@ -9,6 +9,7 @@ import {
   lastApplyPath,
   readLastApply,
   sha256Hex,
+  verifyLastApplyIntegrity,
   writeLastApply,
 } from "../../src/io/last-apply.js";
 
@@ -85,6 +86,20 @@ describe("last-apply", () => {
   it("readLastApply throws on top-level non-object payload", () => {
     fs.writeFileSync(lastApplyPath(tmpDir), JSON.stringify(["array"]));
     expect(() => readLastApply(tmpDir)).toThrow(/malformed/);
+  });
+
+  it("verifyLastApplyIntegrity returns [] when every stored sha matches its content", () => {
+    const record = buildLastApply({
+      "a.json": "a\n",
+      "b.json": "b\n",
+    });
+    expect(verifyLastApplyIntegrity(record)).toEqual([]);
+  });
+
+  it("verifyLastApplyIntegrity returns the relPath when a stored sha was tampered with", () => {
+    const record = buildLastApply({ "settings.json": "{}\n" });
+    record.files["settings.json"]!.sha256 = "0".repeat(64);
+    expect(verifyLastApplyIntegrity(record)).toEqual(["settings.json"]);
   });
 
   it("re-stored sha matches recomputed sha (sha integrity guarantee)", () => {

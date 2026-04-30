@@ -150,6 +150,49 @@ describe("emitRestartHints", () => {
     expect(hints).toHaveLength(3);
   });
 
+  it("returns empty list when only a policy description changed", () => {
+    const base = {
+      version: 1,
+      tools: {
+        mcp: [{ name: "oracle", command: ["node", "/x/oracle.js"] }],
+        cli: [],
+        skills: { enabled: [], source_dirs: [] },
+        builtin: { known: [] },
+      },
+      memory: { directories: [] },
+      hooks: [
+        {
+          name: "review",
+          event: "PreToolUse",
+          match: "mcp__agent-tasks__pull_requests_merge",
+          command: "/hooks/review.sh",
+          blocking: "hard",
+          budget_ms: 2000,
+        },
+      ],
+      policies: [
+        {
+          name: "review-before-merge",
+          description: "v1 description",
+          trigger: {
+            event: "PreToolUse",
+            match: "mcp__agent-tasks__pull_requests_merge",
+            extract: { PR_NUMBER: "toolArgs.prNumber" },
+          },
+          requires: { ledger_tag: "review:${PR_NUMBER}" },
+          hook: "review",
+          enforcement: "block",
+        },
+      ],
+    };
+    const prev = parseManifest(base);
+    const next = parseManifest({
+      ...base,
+      policies: [{ ...base.policies[0]!, description: "v2 rewritten description" }],
+    });
+    expect(emitRestartHints(prev, next)).toEqual([]);
+  });
+
   it("returns empty list when manifests are deep-equal", () => {
     expect(emitRestartHints(manifest(), manifest())).toEqual([]);
   });
