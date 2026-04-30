@@ -5,6 +5,124 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-04-30
+
+**Phase 3: declarative truth.** `harness apply` regenerates
+`harness.generated/settings.json` and `harness.generated/MEMORY.md` from
+the manifest, with the three-state drift detection from
+`docs/ARCHITECTURE.md` §7 protecting hand-edits. `harness.lock` pins
+SHA-256 of every referenced asset (hook scripts, MCP entrypoints, skill
+SKILL.md, memory-router binary) plus per-directory Merkle aggregates for
+memory dirs. `harness diff --since-apply` reports drift across three
+sections (generated files, asset SHAs, memory dirs); `--memory-detail`
+expands per-directory Merkle entries to per-file changes. Asset-content
+drift is reported on every apply against the lock with the canonical
+message format: `asset drift detected: <path> changed since last apply`.
+
+The exit-gate from `docs/ROADMAP.md` is met: against a fresh tmpdir
+install of `init --template full`, `apply` writes both generated files
+and the lock; re-`apply` is `no changes`; hand-edited
+`harness.generated/settings.json` refuses with the documented diff +
+hint and `--overwrite-drift yes` restores it; an externally-edited hook
+script surfaces `asset drift detected:` on stderr; a memory-file edit
+under a tracked memory directory surfaces a single Merkle drift line
+which `diff --since-apply --memory-detail` expands to the changed
+filename.
+
+### Added
+
+- `harness apply [--config <path>] [--project <name>] [--dry-run] [--overwrite-drift]`
+  — regenerate runtime files from the manifest. Three-state comparator
+  (manifest-expected / last-applied / on-disk-current) decides per file:
+  `safe-overwrite` (write fresh), `no-drift` (overwrite is safe), or
+  `drift-refuse` (refuse with diff + adopt-or-overwrite hint). Drift
+  refusal exits 1; `--overwrite-drift` requires literal `yes` (case-
+  insensitive, rejects `y`) before discarding hand-edits. `--dry-run`
+  prints the would-be diff and restart hints, exits 0 without writing.
+
+- `harness diff --since-apply [--memory-detail] [--json]` — diff against
+  the last applied state. Three sections: `# Generated files` (unified
+  diff per file), `# Asset drift` (lock SHA mismatches), `# Memory
+  directories` (Merkle drift; `--memory-detail` expands to per-file
+  added / removed / modified). Exit 0 on no drift; exit 1 on any
+  drift. Mutually exclusive with `--since <ref>` (EX_USAGE).
+
+- Asset-content drift detection on every apply: re-hashes every locked
+  asset / memory-dir Merkle, surfaces mismatches as warning-style
+  stderr lines. Warn-only by default; the lock is rewritten with current
+  SHAs at the end of the run, so drift is reported once and the next
+  apply is clean. Users wanting enforcement wrap apply in a script that
+  greps for `asset drift detected:`.
+
+- Restart-hint emitter: comparing the prior-apply manifest snapshot with
+  the current effective manifest, apply prints `mcp servers changed; …`
+  on `tools.mcp[]` change, `memory router command changed; …` on
+  `memory.router.command` change, `hooks changed; …` on hook /
+  policy structure change. Description-only edits emit no hints.
+
+- Library modules (no CLI verbs of their own):
+  - `src/io/three-state.ts` — `compare()` returning `safe-overwrite` /
+    `no-drift` / `drift-refuse` per the §7 decision table.
+  - `src/io/last-apply.ts` — read/write `harness.generated/.last-apply`
+    with file SHA + content + optional manifest snapshot + optional
+    per-memory-dir per-file index. Atomic-write contract from Phase 2.
+    `verifyLastApplyIntegrity()` defends against on-disk corruption.
+  - `src/io/harness-lock.ts` — NDJSON `harness.lock` writer/reader.
+    Asset entries (hook scripts, MCP entrypoints, skill SKILL.md,
+    memory-router binary) plus Merkle-style memory-dir aggregates.
+    `enabled: false` mcp[] / `memory.router` and known interpreter
+    binaries (`node`, `npx`, `python`, `bash`, `sh`, `tsx`, `deno`,
+    `bun`) are excluded. Locale-independent byte-order sort.
+    `computeDrift()` returns missing/modified per locked asset.
+  - `src/io/restart-hints.ts` — pure manifest-delta to hint list.
+  - `src/cli/apply/generate-settings.ts` — manifest hooks projection
+    into Claude Code's nested `settings.json` shape.
+  - `src/cli/apply/generate-memory-index.ts` — walks
+    `memory.directories[]`, parses frontmatter, emits the markdown
+    index. CRLF-tolerant; matches the canonical loader's strict
+    `name` + `type` requirement; warns + skips on basename collision
+    across memory directories.
+
+### Decided here
+
+- **Lock granularity.** Every referenced path gets one entry, except
+  memory directories which collapse to a Merkle aggregate per directory
+  (so a 1000-memory install does not produce a 1000-line lock). Per-
+  file detail is recoverable on demand via
+  `harness diff --since-apply --memory-detail`. Per-file index lives
+  in `.last-apply` (next to the directory hash); the lock stays small.
+
+- **Asset drift is warn-only at apply time.** Enforcement is one shell
+  script wrapper away (`grep "asset drift detected:"`); coupling
+  enforcement into the verb itself would be the wrong default for the
+  founding-incident use case (where one edit upstream of harness
+  shouldn't block the user from re-applying).
+
+- **`apply` writes to `harness.generated/`.** When `--config` is passed
+  without an explicit home, generated artefacts live next to the
+  configured manifest, not in `~/.claude/harness.generated/`. This
+  closes a smoke-test footgun where running with `--config /repo/...`
+  silently scribbled into the user's global runtime directory.
+
+- **Manifest snapshot integrity.** The optional manifest snapshot in
+  `.last-apply` is sha-checked before being used for restart-hint
+  comparison; on mismatch, hints fall back to "no prev manifest" so a
+  corrupted record does not produce confidently-wrong restart hints.
+
+- **`path_match` and `bash_match` do NOT survive the settings.json
+  projection.** Per ARCHITECTURE Appendix A canonical pattern, these
+  filters are enforced inside the referenced hook script. The manifest
+  fields exist for `validate` / `doctor` inventory.
+
+### Carried into Phase 4
+
+- **No policy enforcement.** Policies are still schema-only;
+  `requires.ledger_tag` / `+ within` / `+ count` evaluation against the
+  evidence ledger lands in Phase 4.
+- **No `validate --check-lock`.** Lock-drift is surfaced by `apply`
+  and `diff --since-apply` in Phase 3; folding it into `validate`
+  is a deferred follow-up.
+
 ## [0.2.0] - 2026-04-29
 
 **Phase 2: managed edits.** Five write verbs (`init`, `add`, `remove`,

@@ -2,7 +2,7 @@
 
 > Declarative control plane for agent harnesses — one YAML for grounding, tools, memory, and hooks. Describe, validate, diff, apply.
 
-**Status: Phase 2 shipped (`v0.2.0`).** Read-only inventory plus managed edits: eleven CLI verbs (`describe`, `validate`, `doctor`, `list`, `explain`, `diff`, `init`, `add`, `remove`, `adopt`, `export`) backed by a single zod-validated YAML manifest with file-locked + comment-preserving mutations. See [`CHANGELOG.md`](CHANGELOG.md) for what shipped and what is still deferred.
+**Status: Phase 3 shipped (`v0.3.0`).** Read-only inventory + managed edits + declarative truth: twelve CLI verbs (`describe`, `validate`, `doctor`, `list`, `explain`, `diff`, `init`, `add`, `remove`, `adopt`, `export`, `apply`) backed by a single zod-validated YAML manifest. `apply` regenerates `harness.generated/settings.json` + `MEMORY.md` with three-state drift detection; `harness.lock` pins SHA-256 of every referenced asset; `diff --since-apply [--memory-detail]` reports drift across generated files, locked assets, and memory directories. See [`CHANGELOG.md`](CHANGELOG.md) for what shipped and what is still deferred.
 
 ## What
 
@@ -46,6 +46,8 @@ node dist/cli/main.js add mcp my-server --command "node,/tmp/server.js" \
   --health-verb status --config "$HC/harness.yaml"
 node dist/cli/main.js remove cli git-batch --config "$HC/harness.yaml" --dry-run
 node dist/cli/main.js export --config "$HC/harness.yaml" --sanitize -o "$HC/share.yaml"
+node dist/cli/main.js apply --config "$HC/harness.yaml"   # regenerate settings.json + MEMORY.md, write harness.lock
+node dist/cli/main.js diff --since-apply --config "$HC/harness.yaml"
 ```
 
 Read-only inspection still works against the reference manifest at `docs/examples/full-manifest.yaml` (covers every field in `ARCHITECTURE.md` Appendix A):
@@ -64,7 +66,7 @@ node dist/cli/main.js list policies --config docs/examples/full-manifest.yaml --
 - [x] ROADMAP — phases 1–4 with acceptance criteria
 - [x] Phase 1 — read-only inventory (`describe`, `validate`, `doctor`, `list`, `explain`, `diff`) — released as [`v0.1.0`](CHANGELOG.md#010---2026-04-29)
 - [x] Phase 2 — managed edits (`init`, `add`, `remove`, `adopt`, `export`) — released as [`v0.2.0`](CHANGELOG.md#020---2026-04-29)
-- [ ] Phase 3 — declarative truth (YAML → settings.json)
+- [x] Phase 3 — declarative truth (`apply`, `diff --since-apply`, `harness.lock`) — released as [`v0.3.0`](CHANGELOG.md#030---2026-04-30)
 - [ ] Phase 4 — policy layer (grounding wiring)
 
 ## Related

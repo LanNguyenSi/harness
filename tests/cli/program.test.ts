@@ -68,10 +68,10 @@ tools:
 });
 
 describe("CLI program — --version + --help", () => {
-  it("--version writes 0.2.0 to stdout and returns 0 with no stderr noise", async () => {
+  it("--version writes 0.3.0 to stdout and returns 0 with no stderr noise", async () => {
     const r = await exec(["--version"]);
     expect(r.code).toBe(0);
-    expect(r.stdout.trim()).toBe("0.2.0");
+    expect(r.stdout.trim()).toBe("0.3.0");
     expect(r.stderr).toBe("");
   });
 
@@ -148,7 +148,7 @@ tools:
         "--shallow",
       ]);
       expect(r.code).toBe(0);
-      expect(r.stdout).toMatch(/^harness 0\.2\.0/);
+      expect(r.stdout).toMatch(/^harness 0\.3\.0/);
       expect(r.stdout).toContain("Manifest");
       expect(r.stdout).toContain("Tools");
       expect(r.stdout).toContain("Memory");
