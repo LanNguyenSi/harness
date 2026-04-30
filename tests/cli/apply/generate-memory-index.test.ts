@@ -157,15 +157,87 @@ describe("generateMemoryIndex", () => {
     expect(result.entries.map((e) => e.name).sort()).toEqual(["Project-A", "User-A"]);
   });
 
-  it("excludes a top-level MEMORY.md file from the index (avoids self-reference)", () => {
+  it("excludes a top-level MEMORY.md file from the index (avoids self-reference, no spurious warning)", () => {
     const dir = path.join(tmpHome, "memory");
     fs.mkdirSync(dir, { recursive: true });
-    writeMemory(dir, "MEMORY.md", "Index", "the index itself");
+    // Curated MEMORY.md has no frontmatter in the canonical layout. The
+    // generator must skip it BEFORE attempting frontmatter parsing so no
+    // "no frontmatter" warning fires on it.
+    fs.writeFileSync(path.join(dir, "MEMORY.md"), "- [Foo](foo.md)\n");
     writeMemory(dir, "real.md", "Real", "a real memory");
 
     const m = manifestWithDir("~/memory");
     const result = generateMemoryIndex(m, { homeDir: tmpHome });
     expect(result.entries.map((e) => e.basename)).toEqual(["real.md"]);
+    expect(result.warnings.find((w) => w.includes("MEMORY.md"))).toBeUndefined();
+  });
+
+  it("rejects frontmatter missing the `type` field (matches canonical loader's strict requirement)", () => {
+    const dir = path.join(tmpHome, "memory");
+    fs.mkdirSync(dir, { recursive: true });
+    // Hand-rolled: name present, type absent.
+    fs.writeFileSync(
+      path.join(dir, "no-type.md"),
+      "---\nname: NoType\ndescription: missing type\n---\nbody\n",
+    );
+    writeMemory(dir, "ok.md", "OK", "fine");
+
+    const m = manifestWithDir("~/memory");
+    const result = generateMemoryIndex(m, { homeDir: tmpHome });
+    expect(result.entries.map((e) => e.name)).toEqual(["OK"]);
+    expect(result.warnings.find((w) => w.includes("no-type.md"))).toMatch(/missing required `type`/);
+  });
+
+  it("parses CRLF-encoded frontmatter (Windows / editor-normalised files)", () => {
+    const dir = path.join(tmpHome, "memory");
+    fs.mkdirSync(dir, { recursive: true });
+    // Explicit CRLF line endings inside and around the frontmatter delimiter.
+    fs.writeFileSync(
+      path.join(dir, "crlf.md"),
+      "---\r\nname: CRLF\r\ndescription: works\r\ntype: user\r\n---\r\nbody\r\n",
+    );
+
+    const m = manifestWithDir("~/memory");
+    const result = generateMemoryIndex(m, { homeDir: tmpHome });
+    expect(result.entries.map((e) => e.name)).toEqual(["CRLF"]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("rejects an explicit empty `name: \"\"` string with the same warning as missing name", () => {
+    const dir = path.join(tmpHome, "memory");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "empty-name.md"),
+      "---\nname: \"\"\ndescription: explicit empty\ntype: user\n---\nbody\n",
+    );
+    const m = manifestWithDir("~/memory");
+    const result = generateMemoryIndex(m, { homeDir: tmpHome });
+    expect(result.entries).toEqual([]);
+    expect(result.warnings[0]).toMatch(/missing required `name`/);
+  });
+
+  it("warns on basename collision across memory directories", () => {
+    const d1 = path.join(tmpHome, "user-mem");
+    const d2 = path.join(tmpHome, "proj-mem");
+    fs.mkdirSync(d1, { recursive: true });
+    fs.mkdirSync(d2, { recursive: true });
+    writeMemory(d1, "notes.md", "User-notes", "u");
+    writeMemory(d2, "notes.md", "Project-notes", "p");
+    const m = parseManifest({
+      version: 1,
+      tools: { mcp: [], cli: [], skills: { enabled: [], source_dirs: [] }, builtin: { known: [] } },
+      memory: {
+        directories: [
+          { path: "~/user-mem", scope: "user" },
+          { path: "~/proj-mem", scope: "project" },
+        ],
+      },
+      hooks: [],
+      policies: [],
+    });
+    const result = generateMemoryIndex(m, { homeDir: tmpHome });
+    expect(result.entries).toHaveLength(2);
+    expect(result.warnings.some((w) => /basename collision.*notes\.md/.test(w))).toBe(true);
   });
 
   it("skips files with malformed YAML frontmatter (warning, not throw)", () => {

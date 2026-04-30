@@ -13,9 +13,18 @@
 // without aborting.
 //
 // Frontmatter shape mirrors agent-memory's `MemoryFrontmatter`: `name` and
-// `type` are required; `description` is recommended (its absence is a
-// warning but not a hard skip). `topics` and other fields are not surfaced
-// in the index.
+// `type` are required (matches the canonical loader at
+// `agent-memory/packages/memory-router/src/memory/loader.ts`, which rejects
+// on `!fm.name || !fm.type`). `description` is recommended (its absence is
+// a warning but not a hard skip). `topics` and other fields are not
+// surfaced in the index.
+//
+// `name` and `description` are passed through verbatim into the markdown
+// output. The user authors their own frontmatter, so we trust it; no
+// escaping is performed for `[`, `]`, `(`, `)`, or backticks. A maliciously
+// crafted `name` would produce broken markdown but not security issues
+// (the index is read by humans and by tools that already accept arbitrary
+// markdown).
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -41,7 +50,9 @@ export interface GenerateMemoryIndexOptions {
   projectName?: string;
 }
 
-const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---\n?/;
+// Mirror the canonical loader's regex (CRLF-tolerant) so files saved on
+// Windows or by editors that normalise to CRLF parse identically here.
+const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
 function expandHome(p: string, homeDir?: string): string {
   const home = homeDir ?? os.homedir();
@@ -108,9 +119,13 @@ function readEntry(
     warnings.push(`${fullPath}: frontmatter missing required \`name\` field`);
     return null;
   }
-  // MEMORY.md is itself a curated index file in the user's existing layout;
-  // it should not appear as an entry inside the generated index.
-  if (basename === "MEMORY.md") return null;
+  if (typeof fm.type !== "string" || fm.type.length === 0) {
+    // Matches the canonical loader's strict requirement; a memory missing
+    // `type` is rejected by the router at runtime and would advertise a
+    // memory the index promises but the router won't surface.
+    warnings.push(`${fullPath}: frontmatter missing required \`type\` field`);
+    return null;
+  }
 
   const description =
     typeof fm.description === "string" ? fm.description : "";
@@ -130,7 +145,16 @@ function listMarkdownFiles(directory: string, warnings: string[]): string[] {
     return [];
   }
   return dirents
-    .filter((d) => d.isFile() && d.name.endsWith(".md"))
+    .filter(
+      (d) =>
+        d.isFile() &&
+        d.name.endsWith(".md") &&
+        // Skip the curated MEMORY.md itself: in the canonical layout it has
+        // no frontmatter and exists as a hand-written sibling to the entries.
+        // Excluding it here avoids a spurious "no frontmatter" warning and
+        // self-reference in multi-dir aggregation.
+        d.name !== "MEMORY.md",
+    )
     .map((d) => d.name)
     .sort();
 }
@@ -149,6 +173,22 @@ export function generateMemoryIndex(
     for (const file of files) {
       const entry = readEntry(resolved, file, warnings);
       if (entry !== null) entries.push(entry);
+    }
+  }
+
+  // Surface basename collisions across directories: the index uses
+  // basename as the link target, so two entries with the same basename
+  // resolve to the same path and one becomes unclickable. This is a
+  // documentation gap, not a hard error — the entries are still kept.
+  const basenameCounts = new Map<string, number>();
+  for (const e of entries) {
+    basenameCounts.set(e.basename, (basenameCounts.get(e.basename) ?? 0) + 1);
+  }
+  for (const [base, count] of basenameCounts) {
+    if (count > 1) {
+      warnings.push(
+        `basename collision across memory directories: \`${base}\` appears ${count} times — only one link target resolves`,
+      );
     }
   }
 
