@@ -647,6 +647,76 @@ describe("apply — asset-content drift detection (Phase 3 #6)", () => {
     expect(r.lockDrift[0]?.reason).toBe("missing");
   });
 
+  it("emits the canonical ROADMAP-spec stderr line on the CLI rendering path", async () => {
+    const hookFile = path.join(tmpHome, "git-preflight.sh");
+    fs.writeFileSync(hookFile, "v1\n");
+    writeManifest({
+      hooks: [
+        {
+          name: "git-preflight",
+          event: "SessionStart",
+          command: hookFile,
+          blocking: false,
+          budget_ms: 30000,
+        },
+      ],
+    });
+    await apply({ homeDir: tmpHome });
+    fs.writeFileSync(hookFile, "v2\n");
+
+    const { run } = await import("../../../src/cli/index.js");
+    let stderrBuf = "";
+    const code = await run({
+      argv: ["apply", "--config", path.join(tmpHome, "harness.yaml")],
+      stderr: (s) => {
+        stderrBuf += s;
+      },
+      stdout: () => {
+        /* swallow */
+      },
+    });
+    expect(code).toBe(0);
+    expect(stderrBuf).toContain(`asset drift detected: ${hookFile} changed since last apply`);
+  });
+
+  it("rewrites the lock on the no-changes path when drift is reported, so drift is not sticky", async () => {
+    const hookFile = path.join(tmpHome, "h.sh");
+    fs.writeFileSync(hookFile, "v1\n");
+    writeManifest({
+      hooks: [
+        {
+          name: "h",
+          event: "SessionStart",
+          command: hookFile,
+          blocking: false,
+          budget_ms: 30000,
+        },
+      ],
+    });
+    await apply({ homeDir: tmpHome });
+    fs.writeFileSync(hookFile, "v2\n");
+
+    const r1 = await apply({ homeDir: tmpHome });
+    expect(r1.outcome).toBe("no-changes");
+    expect(r1.lockDrift).toHaveLength(1);
+
+    // Without a sticky-fix, the next apply would re-report the same
+    // drift forever. With it, the lock has been refreshed.
+    const r2 = await apply({ homeDir: tmpHome });
+    expect(r2.outcome).toBe("no-changes");
+    expect(r2.lockDrift).toEqual([]);
+  });
+
+  it("an empty harness.lock (zero entries) reports no drift", async () => {
+    // Manifest with no hooks/mcp/skills/memory → buildLockEntries emits []
+    // → harness.lock gets written as an empty file. Subsequent apply
+    // reads it, computeDrift on [] is [], lockDrift is empty.
+    writeManifest({});
+    await apply({ homeDir: tmpHome });
+    const r = await apply({ homeDir: tmpHome });
+    expect(r.lockDrift).toEqual([]);
+  });
+
   it("apply still proceeds with drift detected (warn-only); lock is rewritten with current SHAs", async () => {
     const hookFile = path.join(tmpHome, "h.sh");
     fs.writeFileSync(hookFile, "v1\n");
