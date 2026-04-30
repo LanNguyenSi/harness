@@ -18,6 +18,7 @@ import { EX_FAIL, EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { explain } from "./explain.js";
 import { init, isTemplate, KNOWN_TEMPLATES } from "./init/index.js";
 import { isListCategory, list, type ListCategory } from "./list.js";
+import { runInterceptCli } from "./policy/intercept.js";
 import { formatReport, validate } from "./validate/index.js";
 
 export interface RunOptions {
@@ -607,6 +608,30 @@ export function buildProgram(opts: RunOptions = {}): Command {
         stdout(result.output);
       },
     );
+
+  const policy = program.command("policy").description("Policy runtime verbs");
+  policy
+    .command("intercept")
+    .description(
+      "PreToolUse hook entrypoint: read tool-event JSON from stdin, evaluate matching policies, emit Claude Code deny JSON on block",
+    )
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
+    .action(async (options: {
+      config?: string;
+      project?: string;
+      ledgerTimeout?: string;
+    }) => {
+      const cliOpts: Parameters<typeof runInterceptCli>[0] = {};
+      if (options.config) cliOpts.configPath = options.config;
+      if (options.project) cliOpts.project = options.project;
+      if (options.ledgerTimeout) {
+        const n = Number.parseInt(options.ledgerTimeout, 10);
+        if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
+      }
+      await runInterceptCli(cliOpts);
+    });
 
   return program;
 }
