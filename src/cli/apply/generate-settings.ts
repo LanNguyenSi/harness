@@ -11,16 +11,30 @@
 //     missing `type` (it defaults to "command") but explicit is friendlier
 //     to humans diffing the file.
 //   - `matcher` is omitted when the manifest hook has no `match`. Hooks with
-//     a match string emit a `matcher` field with that exact string.
-//   - `timeout` is emitted ONLY when `budget_ms` differs from the schema
-//     default (30_000). The schema-default case is the runtime's natural
-//     default, so omitting it keeps generated settings.json minimal and
-//     avoids churn for users who never set an explicit budget.
+//     a match string emit a `matcher` field with that exact string. Regex
+//     metacharacters are passed through unchanged.
+//   - `timeout` is always emitted (the manifest's `budget_ms` is always set
+//     after schema-defaulting). Always-emit is the conservative choice
+//     against an unknown runtime default; an explicit value is consumed
+//     identically whether or not the runtime would have defaulted to it.
+//   - `path_match` and `bash_match` are NOT projected. Claude Code's
+//     settings.json `matcher` filters only on the tool name, so there is
+//     no native settings.json field for "additional filter when this hook
+//     fires". Per the canonical example in ARCHITECTURE.md Appendix A
+//     (e.g. `require-preflight-evidence` with `bash_match: "^git ..."`),
+//     these filters are enforced inside the referenced hook script, not by
+//     harness's wiring. The manifest fields are documentation: they tell
+//     `harness validate`/`doctor` what the script claims to filter on, so
+//     the script's behaviour can be cross-checked, but `harness apply`
+//     does not synthesise wrapper shell to enforce them. Wrapping was
+//     considered and rejected: it (a) doubles the surface for hook bugs,
+//     (b) hard-codes shell semantics into the manifest projection, and
+//     (c) the canonical hook scripts already enforce these filters.
 //   - `blocking` is harness-internal: it tells `validate`/`doctor` how to
 //     classify a hook for soft/hard-failure reporting. Claude Code's
-//     settings.json has no equivalent field, so it does NOT survive the
-//     projection. Adding a runtime equivalent is a future Claude Code
-//     concern, not a harness one.
+//     settings.json has no documented equivalent (verified against the
+//     ecosystem as of 2026-04 — revisit if a runtime field appears), so
+//     it does NOT survive the projection.
 //
 // Stable-output rules (load-bearing for byte-equivalent regeneration on a
 // no-op apply):
@@ -95,9 +109,5 @@ function buildGroups(hooks: Hook[]): SettingsHookGroup[] {
 }
 
 function toSettingsCommand(h: Hook): SettingsHookCommand {
-  const out: SettingsHookCommand = { type: "command", command: h.command };
-  if (h.budget_ms !== DEFAULT_BUDGET_MS) {
-    out.timeout = h.budget_ms;
-  }
-  return out;
+  return { type: "command", command: h.command, timeout: h.budget_ms };
 }

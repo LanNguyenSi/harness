@@ -22,6 +22,120 @@ describe("generateSettings", () => {
     expect(out).toEqual({ hooks: {} });
   });
 
+  it("intentionally drops path_match and bash_match (hook-script enforced, not wiring)", () => {
+    // ARCHITECTURE Appendix A canonical pattern (e.g. require-preflight-evidence
+    // with bash_match) shows these filters are enforced inside the referenced
+    // hook script, not by settings.json. We assert current behaviour so a
+    // future contributor sees a failing test if they add wrapping logic.
+    const m = manifestOf([
+      {
+        name: "h",
+        event: "PreToolUse",
+        match: "Bash",
+        bash_match: "^git (status|log|diff|branch)",
+        path_match: "**/*.ts",
+        command: "/hooks/preflight.sh",
+        blocking: "hard",
+        budget_ms: 1000,
+      },
+    ]);
+    const out = generateSettings(m);
+    const inner = out.hooks.PreToolUse?.[0]?.hooks[0];
+    expect(inner).toBeDefined();
+    expect(inner).not.toHaveProperty("path_match");
+    expect(inner).not.toHaveProperty("bash_match");
+    expect(out.hooks.PreToolUse?.[0]).not.toHaveProperty("path_match");
+    expect(out.hooks.PreToolUse?.[0]).not.toHaveProperty("bash_match");
+    // The hook still appears in settings.json (matcher = "Bash") so Claude
+    // Code fires the script; the script filters internally.
+    expect(out.hooks.PreToolUse?.[0]?.matcher).toBe("Bash");
+    expect(inner?.command).toBe("/hooks/preflight.sh");
+  });
+
+  it("preserves regex metacharacters in `match` unchanged (no escaping/normalisation)", () => {
+    const m = manifestOf([
+      {
+        name: "h",
+        event: "PreToolUse",
+        match: "mcp__agent-tasks__.*|Bash",
+        command: "/h.sh",
+        blocking: false,
+        budget_ms: 30000,
+      },
+    ]);
+    const out = generateSettings(m);
+    expect(out.hooks.PreToolUse?.[0]?.matcher).toBe("mcp__agent-tasks__.*|Bash");
+  });
+
+  it("preserves backslashes in `match` (regex escapes survive JSON serialisation)", () => {
+    const m = manifestOf([
+      {
+        name: "h",
+        event: "PreToolUse",
+        match: "Bash\\b|Edit\\b",
+        command: "/h.sh",
+        blocking: false,
+        budget_ms: 30000,
+      },
+    ]);
+    const out = generateSettings(m);
+    const matcher = out.hooks.PreToolUse?.[0]?.matcher;
+    expect(matcher).toBe("Bash\\b|Edit\\b");
+    // Round-trip through JSON to confirm escapes survive serialisation.
+    expect(JSON.parse(JSON.stringify(out)).hooks.PreToolUse[0].matcher).toBe("Bash\\b|Edit\\b");
+  });
+
+  it("multiple events × multiple matchers produce sorted, group-stable output", () => {
+    const m = manifestOf([
+      {
+        name: "z",
+        event: "Stop",
+        command: "/z.sh",
+        blocking: false,
+        budget_ms: 30000,
+      },
+      {
+        name: "pa",
+        event: "PreToolUse",
+        match: "Edit",
+        command: "/pa.sh",
+        blocking: false,
+        budget_ms: 30000,
+      },
+      {
+        name: "pb",
+        event: "PreToolUse",
+        match: "Bash",
+        command: "/pb.sh",
+        blocking: false,
+        budget_ms: 30000,
+      },
+      {
+        name: "pc",
+        event: "PreToolUse",
+        match: "Bash",
+        command: "/pa.sh",
+        blocking: false,
+        budget_ms: 30000,
+      },
+      {
+        name: "s",
+        event: "SessionStart",
+        command: "/s.sh",
+        blocking: false,
+        budget_ms: 30000,
+      },
+    ]);
+    const out = generateSettings(m);
+    expect(Object.keys(out.hooks)).toEqual(["PreToolUse", "SessionStart", "Stop"]);
+    // PreToolUse: matcher "Bash" sorts before "Edit"; within "Bash", commands
+    // "/pa.sh" sorts before "/pb.sh".
+    const preToolUse = out.hooks.PreToolUse ?? [];
+    expect(preToolUse[0]?.matcher).toBe("Bash");
+    expect(preToolUse[0]?.hooks.map((h) => h.command)).toEqual(["/pa.sh", "/pb.sh"]);
+    expect(preToolUse[1]?.matcher).toBe("Edit");
+  });
+
   it("emits one event key per distinct event with the right matcher/command tuples", () => {
     const m = manifestOf([
       {
@@ -52,7 +166,7 @@ describe("generateSettings", () => {
     expect(Object.keys(out.hooks)).toEqual(["PreToolUse", "SessionStart"]);
 
     expect(out.hooks.SessionStart).toEqual([
-      { hooks: [{ type: "command", command: "/hooks/git-preflight.sh" }] },
+      { hooks: [{ type: "command", command: "/hooks/git-preflight.sh", timeout: 30000 }] },
     ]);
 
     // PreToolUse has 2 matchers, sorted ascending: "Bash" before "mcp__..."
@@ -92,8 +206,8 @@ describe("generateSettings", () => {
       {
         matcher: "Bash",
         hooks: [
-          { type: "command", command: "/cmd-a.sh" },
-          { type: "command", command: "/cmd-b.sh" },
+          { type: "command", command: "/cmd-a.sh", timeout: 30000 },
+          { type: "command", command: "/cmd-b.sh", timeout: 30000 },
         ],
       },
     ]);
@@ -111,12 +225,12 @@ describe("generateSettings", () => {
     ]);
     const out = generateSettings(m);
     expect(out.hooks.SessionStart).toEqual([
-      { hooks: [{ type: "command", command: "/s.sh" }] },
+      { hooks: [{ type: "command", command: "/s.sh", timeout: 30000 }] },
     ]);
-    expect(out.hooks.SessionStart[0]).not.toHaveProperty("matcher");
+    expect(out.hooks.SessionStart?.[0]).not.toHaveProperty("matcher");
   });
 
-  it("emits `timeout` only when budget_ms differs from the schema default", () => {
+  it("always emits `timeout` (the manifest budget_ms is the source of truth, no implicit-default optimisation)", () => {
     const m = manifestOf([
       {
         name: "default-budget",
@@ -134,8 +248,12 @@ describe("generateSettings", () => {
       },
     ]);
     const out = generateSettings(m);
-    expect(out.hooks.SessionStart[0]?.hooks[0]).not.toHaveProperty("timeout");
-    expect(out.hooks.Stop[0]?.hooks[0]).toEqual({
+    expect(out.hooks.SessionStart?.[0]?.hooks[0]).toEqual({
+      type: "command",
+      command: "/d.sh",
+      timeout: DEFAULT_BUDGET_MS,
+    });
+    expect(out.hooks.Stop?.[0]?.hooks[0]).toEqual({
       type: "command",
       command: "/c.sh",
       timeout: 5000,
