@@ -18,6 +18,12 @@ export interface LastApplyFileEntry {
 
 export interface LastApplyRecord {
   files: Record<string, LastApplyFileEntry>;
+  // Optional snapshot of the effective manifest used at the previous apply.
+  // Used by `harness apply` to compute restart hints against the current
+  // manifest. Stored as JSON-serialised text so restart-hint comparison can
+  // re-parse without YAML-roundtrip noise. Older records (Phase 3 #1
+  // baseline) may omit this field; readers MUST tolerate the omission.
+  manifest?: LastApplyFileEntry;
 }
 
 export const LAST_APPLY_BASENAME = ".last-apply";
@@ -47,6 +53,7 @@ export function writeLastApply(generatedDir: string, record: LastApplyRecord): v
     const entry = record.files[key];
     if (entry !== undefined) sorted.files[key] = entry;
   }
+  if (record.manifest !== undefined) sorted.manifest = record.manifest;
   atomicWriteFile(target, `${JSON.stringify(sorted, null, 2)}\n`);
 }
 
@@ -75,14 +82,20 @@ export function verifyLastApplyIntegrity(record: LastApplyRecord): string[] {
   return mismatched;
 }
 
+function isFileEntry(v: unknown): v is LastApplyFileEntry {
+  if (!v || typeof v !== "object") return false;
+  const e = v as { sha256?: unknown; content?: unknown };
+  return typeof e.sha256 === "string" && typeof e.content === "string";
+}
+
 function isLastApplyRecord(x: unknown): x is LastApplyRecord {
   if (!x || typeof x !== "object") return false;
-  const files = (x as { files?: unknown }).files;
-  if (!files || typeof files !== "object") return false;
-  for (const v of Object.values(files as Record<string, unknown>)) {
-    if (!v || typeof v !== "object") return false;
-    const e = v as { sha256?: unknown; content?: unknown };
-    if (typeof e.sha256 !== "string" || typeof e.content !== "string") return false;
+  const obj = x as { files?: unknown; manifest?: unknown };
+  if (!obj.files || typeof obj.files !== "object") return false;
+  for (const v of Object.values(obj.files as Record<string, unknown>)) {
+    if (!isFileEntry(v)) return false;
   }
+  // Optional manifest snapshot: tolerate omission; reject malformed shape.
+  if (obj.manifest !== undefined && !isFileEntry(obj.manifest)) return false;
   return true;
 }

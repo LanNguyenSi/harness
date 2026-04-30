@@ -2,6 +2,11 @@ import { Command } from "commander";
 import { add } from "./add/index.js";
 import type { AddEntry } from "./add/mutate.js";
 import { adopt } from "./adopt/index.js";
+import {
+  apply,
+  DRIFT_HINT_MESSAGE,
+  type FileApplyOutcome,
+} from "./apply/index.js";
 import { isRemoveType, KNOWN_REMOVE_TYPES, remove } from "./remove/index.js";
 import { describe, isPillar, type Pillar } from "./describe.js";
 import { diff as diffRun } from "./diff/index.js";
@@ -421,6 +426,77 @@ export function buildProgram(opts: RunOptions = {}): Command {
           `(names: ${result.adoptedNames.join(", ")})\n`,
       );
     });
+
+  program
+    .command("apply")
+    .description(
+      "Regenerate harness.generated/ outputs (settings.json + MEMORY.md index) " +
+        "from the manifest. Refuses to overwrite hand-edits without --overwrite-drift; " +
+        "use `harness adopt <file>` to capture them back into the manifest instead.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides for this project name")
+    .option("--dry-run", "print the would-be diff + restart hints; do not write")
+    .option(
+      "--overwrite-drift",
+      "discard any on-disk hand-edits to harness.generated/ files (prompts for `yes`)",
+    )
+    .action(
+      async (options: {
+        config?: string;
+        project?: string;
+        dryRun?: boolean;
+        overwriteDrift?: boolean;
+      }) => {
+        const result = await apply({
+          ...(options.config !== undefined ? { configPath: options.config } : {}),
+          ...(options.project !== undefined ? { project: options.project } : {}),
+          ...(options.dryRun ? { dryRun: true } : {}),
+          ...(options.overwriteDrift ? { overwriteDrift: true } : {}),
+        });
+
+        if (result.outcome === "drift-refuse") {
+          for (const f of result.files) {
+            if (f.diff) {
+              stderr(`drift detected in ${f.path}:\n`);
+              stderr(f.diff);
+              if (!f.diff.endsWith("\n")) stderr("\n");
+            }
+          }
+          stderr(`${DRIFT_HINT_MESSAGE}\n`);
+          throw new HarnessExitError("", EX_FAIL);
+        }
+
+        if (result.outcome === "drift-discarded") {
+          stdout("overwrite-drift declined; nothing written\n");
+          return;
+        }
+
+        const changedFiles = result.files.filter((f: FileApplyOutcome) => f.changed);
+
+        if (result.outcome === "no-changes") {
+          stdout("no changes\n");
+        } else if (result.outcome === "would-apply") {
+          stdout(`would apply ${changedFiles.length} file(s):\n`);
+          for (const f of changedFiles) {
+            stdout(`  ${f.path}\n`);
+          }
+        } else {
+          stdout(`applied ${changedFiles.length} file(s):\n`);
+          for (const f of changedFiles) {
+            stdout(`  ${f.path}\n`);
+          }
+          stdout(`harness.lock written to ${result.lockPath}\n`);
+        }
+
+        for (const w of result.warnings) {
+          stderr(`warning: ${w}\n`);
+        }
+        for (const h of result.restartHints) {
+          stderr(`restart hint: ${h}\n`);
+        }
+      },
+    );
 
   program
     .command("remove <type> <name>")
