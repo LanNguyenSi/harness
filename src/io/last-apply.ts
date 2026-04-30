@@ -16,6 +16,16 @@ export interface LastApplyFileEntry {
   content: string;
 }
 
+// Per-memory-directory snapshot. Stores the directory's Merkle hash plus
+// the per-file hashes that produced it, so `harness diff --since-apply
+// --memory-detail` (Phase 3 #5) can attribute drift to specific files
+// without re-walking the lock. Kept on `.last-apply` and not on
+// `harness.lock` to keep the lock small + signal-rich.
+export interface MemoryDirSnapshot {
+  sha256: string;
+  fileHashes: Record<string, string>;
+}
+
 export interface LastApplyRecord {
   files: Record<string, LastApplyFileEntry>;
   // Optional snapshot of the effective manifest used at the previous apply.
@@ -24,6 +34,9 @@ export interface LastApplyRecord {
   // re-parse without YAML-roundtrip noise. Older records (Phase 3 #1
   // baseline) may omit this field; readers MUST tolerate the omission.
   manifest?: LastApplyFileEntry;
+  // Optional per-memory-dir per-file snapshot. Phase 3 #5 reads it for
+  // `--memory-detail`. Older records may omit; readers MUST tolerate.
+  memoryDirs?: Record<string, MemoryDirSnapshot>;
 }
 
 export const LAST_APPLY_BASENAME = ".last-apply";
@@ -54,6 +67,20 @@ export function writeLastApply(generatedDir: string, record: LastApplyRecord): v
     if (entry !== undefined) sorted.files[key] = entry;
   }
   if (record.manifest !== undefined) sorted.manifest = record.manifest;
+  if (record.memoryDirs !== undefined) {
+    const sortedDirs: Record<string, MemoryDirSnapshot> = {};
+    for (const dirKey of Object.keys(record.memoryDirs).sort()) {
+      const snap = record.memoryDirs[dirKey];
+      if (snap === undefined) continue;
+      const sortedHashes: Record<string, string> = {};
+      for (const fileKey of Object.keys(snap.fileHashes).sort()) {
+        const h = snap.fileHashes[fileKey];
+        if (h !== undefined) sortedHashes[fileKey] = h;
+      }
+      sortedDirs[dirKey] = { sha256: snap.sha256, fileHashes: sortedHashes };
+    }
+    sorted.memoryDirs = sortedDirs;
+  }
   atomicWriteFile(target, `${JSON.stringify(sorted, null, 2)}\n`);
 }
 
@@ -88,14 +115,31 @@ function isFileEntry(v: unknown): v is LastApplyFileEntry {
   return typeof e.sha256 === "string" && typeof e.content === "string";
 }
 
+function isMemoryDirSnapshot(v: unknown): v is MemoryDirSnapshot {
+  if (!v || typeof v !== "object") return false;
+  const s = v as { sha256?: unknown; fileHashes?: unknown };
+  if (typeof s.sha256 !== "string") return false;
+  if (!s.fileHashes || typeof s.fileHashes !== "object") return false;
+  for (const h of Object.values(s.fileHashes as Record<string, unknown>)) {
+    if (typeof h !== "string") return false;
+  }
+  return true;
+}
+
 function isLastApplyRecord(x: unknown): x is LastApplyRecord {
   if (!x || typeof x !== "object") return false;
-  const obj = x as { files?: unknown; manifest?: unknown };
+  const obj = x as { files?: unknown; manifest?: unknown; memoryDirs?: unknown };
   if (!obj.files || typeof obj.files !== "object") return false;
   for (const v of Object.values(obj.files as Record<string, unknown>)) {
     if (!isFileEntry(v)) return false;
   }
   // Optional manifest snapshot: tolerate omission; reject malformed shape.
   if (obj.manifest !== undefined && !isFileEntry(obj.manifest)) return false;
+  if (obj.memoryDirs !== undefined) {
+    if (typeof obj.memoryDirs !== "object" || obj.memoryDirs === null) return false;
+    for (const v of Object.values(obj.memoryDirs as Record<string, unknown>)) {
+      if (!isMemoryDirSnapshot(v)) return false;
+    }
+  }
   return true;
 }

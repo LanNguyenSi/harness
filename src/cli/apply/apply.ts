@@ -19,6 +19,7 @@
 //      snapshot for the next apply's restart-hint comparison), write
 //      `harness.lock` next to `harness.yaml`, emit restart hints.
 
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -307,6 +308,17 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     atomicWriteFile(target, f.content);
   }
 
+  // Compute lock + memory-dir snapshot BEFORE writing .last-apply so the
+  // record is built once and persisted atomically. A previous version of
+  // this code wrote .last-apply twice (once without memoryDirs, then again
+  // with it), which produced a half-state if the process died between
+  // writes: the next `--memory-detail` diff would have seen every on-disk
+  // .md as "added" against an empty index. Single write closes that gap.
+  const lockEntries = buildLockEntries(manifest, {
+    ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
+    ...(opts.project !== undefined ? { projectName: opts.project } : {}),
+  });
+
   const newRecord: LastApplyRecord = buildLastApply(
     Object.fromEntries(expected.map((f) => [f.basename, f.content])),
   );
@@ -315,12 +327,12 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     sha256: sha256Hex(manifestSnapshotJson),
     content: manifestSnapshotJson,
   };
-  writeLastApply(generatedDir, newRecord);
+  const memoryDirSnapshots = collectMemoryDirSnapshots(lockEntries);
+  if (Object.keys(memoryDirSnapshots).length > 0) {
+    newRecord.memoryDirs = memoryDirSnapshots;
+  }
 
-  const lockEntries = buildLockEntries(manifest, {
-    ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
-    ...(opts.project !== undefined ? { projectName: opts.project } : {}),
-  });
+  writeLastApply(generatedDir, newRecord);
   writeLock(lockPath, lockEntries);
 
   return {
@@ -334,6 +346,32 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     dryRun: false,
     lockPath,
   };
+}
+
+function sha256OfFile(filePath: string): string {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function collectMemoryDirSnapshots(
+  lockEntries: ReturnType<typeof buildLockEntries>,
+): Record<string, { sha256: string; fileHashes: Record<string, string> }> {
+  const out: Record<string, { sha256: string; fileHashes: Record<string, string> }> = {};
+  for (const e of lockEntries) {
+    if (e.kind !== "memory-dir") continue;
+    const fileHashes: Record<string, string> = {};
+    let dirents: fs.Dirent[];
+    try {
+      dirents = fs.readdirSync(e.path, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const d of dirents) {
+      if (!d.isFile() || !d.name.endsWith(".md")) continue;
+      fileHashes[d.name] = sha256OfFile(path.join(e.path, d.name));
+    }
+    out[e.path] = { sha256: e.sha256, fileHashes };
+  }
+  return out;
 }
 
 export { DRIFT_HINT_MESSAGE };
