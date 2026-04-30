@@ -530,6 +530,13 @@ export function buildProgram(opts: RunOptions = {}): Command {
           stdout(`harness.lock written to ${result.lockPath}\n`);
         }
 
+        for (const d of result.lockDrift) {
+          if (d.reason === "missing") {
+            stderr(`asset drift detected: ${d.entry.path} missing since last apply\n`);
+          } else {
+            stderr(`asset drift detected: ${d.entry.path} changed since last apply\n`);
+          }
+        }
         for (const w of result.warnings) {
           stderr(`warning: ${w}\n`);
         }

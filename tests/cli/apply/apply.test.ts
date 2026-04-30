@@ -541,6 +541,158 @@ describe("apply — harness.lock", () => {
   });
 });
 
+describe("apply — asset-content drift detection (Phase 3 #6)", () => {
+  it("emits drift entry for an externally-edited locked hook script", async () => {
+    const hookFile = path.join(tmpHome, "git-preflight.sh");
+    fs.writeFileSync(hookFile, "v1\n");
+    writeManifest({
+      hooks: [
+        {
+          name: "git-preflight",
+          event: "SessionStart",
+          command: hookFile,
+          blocking: false,
+          budget_ms: 30000,
+        },
+      ],
+    });
+    await apply({ homeDir: tmpHome });
+    fs.writeFileSync(hookFile, "v2-edited\n");
+
+    const r = await apply({ homeDir: tmpHome });
+    expect(r.lockDrift).toHaveLength(1);
+    expect(r.lockDrift[0]?.entry.path).toBe(hookFile);
+    expect(r.lockDrift[0]?.reason).toBe("modified");
+  });
+
+  it("emits exactly one drift entry per memory directory whose content changed (not per file)", async () => {
+    const memDir = path.join(tmpHome, "memory");
+    fs.mkdirSync(memDir);
+    fs.writeFileSync(
+      path.join(memDir, "a.md"),
+      "---\nname: A\ndescription: a\ntype: user\n---\nv1\n",
+    );
+    fs.writeFileSync(
+      path.join(memDir, "b.md"),
+      "---\nname: B\ndescription: b\ntype: user\n---\nv1\n",
+    );
+    writeManifest({
+      memoryDirs: [{ path: "~/memory", scope: "user" }],
+    });
+    await apply({ homeDir: tmpHome });
+
+    fs.writeFileSync(
+      path.join(memDir, "a.md"),
+      "---\nname: A\ndescription: a\ntype: user\n---\nv2\n",
+    );
+
+    const r = await apply({ homeDir: tmpHome });
+    expect(r.lockDrift).toHaveLength(1);
+    expect(r.lockDrift[0]?.entry.path).toBe(memDir);
+  });
+
+  it("emits no drift when nothing changed since the lock was written", async () => {
+    const hookFile = path.join(tmpHome, "h.sh");
+    fs.writeFileSync(hookFile, "stable\n");
+    writeManifest({
+      hooks: [
+        {
+          name: "h",
+          event: "SessionStart",
+          command: hookFile,
+          blocking: false,
+          budget_ms: 30000,
+        },
+      ],
+    });
+    await apply({ homeDir: tmpHome });
+    const r = await apply({ homeDir: tmpHome });
+    expect(r.lockDrift).toEqual([]);
+  });
+
+  it("on a fresh first apply (no harness.lock present), reports no drift", async () => {
+    writeManifest({
+      hooks: [
+        {
+          name: "h",
+          event: "SessionStart",
+          command: "/h.sh",
+          blocking: false,
+          budget_ms: 30000,
+        },
+      ],
+    });
+    const r = await apply({ homeDir: tmpHome });
+    expect(r.lockDrift).toEqual([]);
+  });
+
+  it("flags a missing locked asset (deleted between applies)", async () => {
+    const hookFile = path.join(tmpHome, "h.sh");
+    fs.writeFileSync(hookFile, "v1\n");
+    writeManifest({
+      hooks: [
+        {
+          name: "h",
+          event: "SessionStart",
+          command: hookFile,
+          blocking: false,
+          budget_ms: 30000,
+        },
+      ],
+    });
+    await apply({ homeDir: tmpHome });
+    fs.rmSync(hookFile);
+    const r = await apply({ homeDir: tmpHome });
+    expect(r.lockDrift).toHaveLength(1);
+    expect(r.lockDrift[0]?.reason).toBe("missing");
+  });
+
+  it("apply still proceeds with drift detected (warn-only); lock is rewritten with current SHAs", async () => {
+    const hookFile = path.join(tmpHome, "h.sh");
+    fs.writeFileSync(hookFile, "v1\n");
+    writeManifest({
+      hooks: [
+        {
+          name: "h",
+          event: "SessionStart",
+          command: hookFile,
+          blocking: false,
+          budget_ms: 30000,
+        },
+      ],
+    });
+    await apply({ homeDir: tmpHome });
+
+    // Simulate an unrelated manifest change so apply is not a no-op.
+    writeManifest({
+      hooks: [
+        {
+          name: "h",
+          event: "SessionStart",
+          command: hookFile,
+          blocking: false,
+          budget_ms: 30000,
+        },
+        {
+          name: "h2",
+          event: "Stop",
+          command: "/h2.sh",
+          blocking: false,
+          budget_ms: 30000,
+        },
+      ],
+    });
+    fs.writeFileSync(hookFile, "v2\n");
+
+    const r = await apply({ homeDir: tmpHome });
+    expect(r.outcome).toBe("applied");
+    expect(r.lockDrift).toHaveLength(1);
+    // The lock was rewritten: a third apply with no further edits is clean.
+    const r3 = await apply({ homeDir: tmpHome });
+    expect(r3.lockDrift).toEqual([]);
+  });
+});
+
 describe("apply — manifest missing", () => {
   it("throws EX_NOINPUT with init hint when harness.yaml does not exist", async () => {
     await expect(apply({ homeDir: tmpHome })).rejects.toBeInstanceOf(HarnessExitError);
