@@ -8,6 +8,12 @@ export {
 } from "./requires.js";
 export { parseDurationSeconds, InvalidDurationError } from "./duration.js";
 export {
+  queryLedgerByTag,
+  type LedgerClientOptions,
+  type LedgerQueryResult,
+  type QueryLedgerOptions,
+} from "./ledger-client.js";
+export {
   validateExtractGrammar,
   parseExtractExpression,
   evaluateExtract,
