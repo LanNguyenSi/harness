@@ -1,22 +1,22 @@
 name: review-before-merge
-decision: deny
+decision: allow
 enforcement: block
-reason: no matching ledger entry for tag `review:42`
+reason: 2 matching ledger entries for tag `review:42`
 ledgerTag: review:42
-evaluatedAt: 2026-05-01T08:33:23.780Z
+evaluatedAt: 2026-05-01T08:46:12.269Z
 triggerMatched:
   event: PreToolUse
   match: mcp__agent-tasks__pull_requests_merge
 extract:
-  SESSION_ID: phase5-dogfood-1777624403-35133
+  SESSION_ID: phase5-dogfood-1777625171-42788
   REPO: ""
   BRANCH: ""
   TOOL_NAME: mcp__agent-tasks__pull_requests_merge
   CWD: /home/lan/git/pandora/harness
   PR_NUMBER: "42"
 requiresEval:
-  matchedCount: 0
-  reason: no matching ledger entry for tag `review:42`
+  matchedCount: 2
+  reason: 2 matching ledger entries for tag `review:42`
 ledgerQuery:
   verb: ledger_summary
-  sessionId: phase5-dogfood-1777624403-35133
+  sessionId: phase5-dogfood-1777625171-42788

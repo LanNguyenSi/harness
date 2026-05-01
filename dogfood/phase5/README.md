@@ -29,22 +29,34 @@ npm run build                         # rebuild dist/
 ./dogfood/phase5/run-smoke.sh
 ```
 
+`run-smoke.sh` renders a per-run manifest (`transcript/effective-manifest.yaml`)
+from `harness.yaml`, substituting `HARNESS_DIR` / `GROUNDING_DIR`. Defaults match
+the canonical `~/git/pandora/{harness,agent-grounding}` layout; override either
+variable to run against a different checkout.
+
 Every run uses a fresh, timestamped `sessionId` (`phase5-dogfood-<unix>-<pid>`)
-so it does not collide with prior runs or pollute existing sessions.
-Each run writes to `dogfood/phase5/transcript/` (gitignored). The
-first-run evidence is preserved in
-`dogfood/phase5/transcript-baseline-2026-05-01/` so PR reviewers can read
-the exact output cited below.
+scoped inside `~/.evidence-ledger/ledger.db`. **The smoke does NOT isolate the
+ledger file** — it writes real rows to your live ledger. To clean up:
+
+```sh
+sqlite3 ~/.evidence-ledger/ledger.db \
+  "DELETE FROM evidence_ledger WHERE session LIKE 'phase5-dogfood-%';"
+```
+
+Each run writes to `dogfood/phase5/transcript/` (gitignored). The first-run
+evidence is preserved in `dogfood/phase5/transcript-baseline-2026-05-01/` so
+PR reviewers can read the exact output cited below.
 
 ## Acceptance evidence
 
-| Step | Artifact | Expectation |
-| ---- | -------- | ----------- |
-| 1 | `01-deny.stdout` | `{"decision":"deny","reason":"review-before-merge: no matching ledger entry for tag \`review:42\`"}` |
-| 2 | `02-ledger-add.stdout` | grounding-mcp returns a ledger entry id (id 41 in the captured run) |
-| 3 | `03-allow.stdout` | empty (silent allow) |
-| 4 | `04-audit.stdout` (run with `--since 24h`) | both fires visible — see Bug A in Findings below |
-| 5 | `05-explain.stdout` | YAML trace including `decision`, `extract`, `requiresEval`, `ledgerQuery.sessionId` |
+| Step | Artifact | What it shows |
+| ---- | -------- | ------------- |
+| 1 | `01-deny.stdout` | `{"decision":"deny","reason":"review-before-merge: no matching ledger entry for tag \`review:42\`"}`. Asserted non-empty by the smoke driver. |
+| 2 | `02-ledger-add.stdout` | grounding-mcp returns the new ledger entry id. Asserted by the driver via `grep '"id":2'`. |
+| 3 | `03-allow.stdout` | empty file. Asserted by the driver via `[ -s "$ALLOW_STDOUT" ]`. |
+| 4a | `04a-audit-5m.stdout` | empty result — **regression witness for Phase 5 #8**. The 5-minute window silently excludes fresh entries on any non-UTC host. |
+| 4b | `04b-audit-24h.stdout` | both fires visible — the 24h window masks the TZ bug. The driver asserts ≥1 deny row and ≥1 allow row before passing. |
+| 5  | `05-explain.stdout` | YAML trace against the live ledger; the driver asserts `name: review-before-merge`, `ledgerTag: review:42`, and `sessionId: $SESSION` are all present. The selected `decision` field is timing-dependent: when the deny and the post-`ledger_add` allow happen to land in the same SQL second, Phase 5 #9 picks the deny; otherwise the allow. The committed baseline shows the allow path; an independent run that happened to collide showed the deny — see Phase 5 #9 task body for that capture. The smoke driver intentionally does NOT gate on which decision is picked; the trace's *liveness* against the smoke session is the acceptance. |
 
 Settings.json wiring is regenerated (not hand-written) by:
 

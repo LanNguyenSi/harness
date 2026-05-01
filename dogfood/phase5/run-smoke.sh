@@ -20,21 +20,39 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-HARNESS_BIN="node /home/lan/git/pandora/harness/dist/cli/main.js"
-GROUNDING_MCP="node /home/lan/git/pandora/agent-grounding/packages/grounding-mcp/dist/server.js"
-MANIFEST="$ROOT/harness.yaml"
+# HARNESS_DIR / GROUNDING_DIR can be overridden so the smoke is portable across
+# checkouts. Defaults match the canonical pandora layout.
+HARNESS_DIR="${HARNESS_DIR:-$(cd "$ROOT/../.." && pwd)}"
+GROUNDING_DIR="${GROUNDING_DIR:-$(cd "$HARNESS_DIR/../agent-grounding" && pwd)}"
+HARNESS_BIN="node $HARNESS_DIR/dist/cli/main.js"
+GROUNDING_MCP="node $GROUNDING_DIR/packages/grounding-mcp/dist/server.js"
 TRANSCRIPT_DIR="$ROOT/transcript"
 SESSION="phase5-dogfood-$(date +%s)-$$"
 
 mkdir -p "$TRANSCRIPT_DIR"
+# Render a per-run manifest with HARNESS_DIR / GROUNDING_DIR substituted.
+# The canonical committed `harness.yaml` next to this script carries Lan's
+# absolute paths for human reading + `harness apply` demos; the smoke uses
+# this rendered copy so it runs out-of-the-box on any checkout layout.
+MANIFEST="$TRANSCRIPT_DIR/effective-manifest.yaml"
+sed \
+  -e "s|/home/lan/git/pandora/harness|$HARNESS_DIR|g" \
+  -e "s|/home/lan/git/pandora/agent-grounding|$GROUNDING_DIR|g" \
+  "$ROOT/harness.yaml" >"$MANIFEST"
 exec > >(tee "$TRANSCRIPT_DIR/run.log") 2>&1
 
 echo "=========================================="
 echo "Phase 5 #1 dogfood — real Claude Code hook"
 echo "=========================================="
-echo "session = $SESSION"
-echo "manifest = $MANIFEST"
-echo "ledger db = ${EVIDENCE_LEDGER_DB:-$HOME/.evidence-ledger/ledger.db}"
+echo "session       = $SESSION"
+echo "manifest      = $MANIFEST"
+echo "harness dir   = $HARNESS_DIR"
+echo "grounding dir = $GROUNDING_DIR"
+echo "ledger db     = $HOME/.evidence-ledger/ledger.db (manifest-declared)"
+echo
+echo "NOTE: the smoke writes ledger entries scoped to sessionId=$SESSION."
+echo "      To clean up after a run, drop rows where session = '$SESSION'"
+echo "      from \`evidence_ledger\` in the sqlite db."
 echo
 
 # ------------------------------------------------------------------
@@ -136,21 +154,59 @@ echo "PASS: silent allow"
 echo
 
 # ------------------------------------------------------------------
-# Step 5: audit shows both fires.
+# Step 5a: audit at --since 5m. Demonstrates Phase 5 #8 (audit window
+# parses UTC-stored timestamps as local, so on any +N timezone the
+# 5-minute window silently excludes fresh entries). Captured as a
+# regression witness, NOT as an acceptance pass.
 # ------------------------------------------------------------------
-echo "=== STEP 4: harness audit --since 5m --session $SESSION ==="
-AUDIT_OUT="$TRANSCRIPT_DIR/04-audit.stdout"
+echo "=== STEP 4a: harness audit --since 5m --session $SESSION (Bug #8 witness) ==="
+AUDIT5_OUT="$TRANSCRIPT_DIR/04a-audit-5m.stdout"
 set +e
 $HARNESS_BIN audit --config "$MANIFEST" --since 5m --session "$SESSION" \
-  >"$AUDIT_OUT" 2>"$TRANSCRIPT_DIR/04-audit.stderr"
-AUDIT_EXIT=$?
+  >"$AUDIT5_OUT" 2>"$TRANSCRIPT_DIR/04a-audit-5m.stderr"
+AUDIT5_EXIT=$?
 set -e
-echo "exit = $AUDIT_EXIT"
-cat "$AUDIT_OUT"
+echo "exit = $AUDIT5_EXIT"
+cat "$AUDIT5_OUT"
+if grep -q "no policy decisions in the last 5m" "$AUDIT5_OUT"; then
+  echo "(empty 5m result is the documented Bug #8 footprint on a non-UTC host)"
+fi
 echo
 
 # ------------------------------------------------------------------
-# Step 6: explain --trace renders the live trace.
+# Step 5b: audit at --since 24h. This is the acceptance gate: at a
+# wide-enough window the TZ bug is masked, and the table MUST contain
+# both fires.
+# ------------------------------------------------------------------
+echo "=== STEP 4b: harness audit --since 24h --session $SESSION (acceptance) ==="
+AUDIT24_OUT="$TRANSCRIPT_DIR/04b-audit-24h.stdout"
+set +e
+$HARNESS_BIN audit --config "$MANIFEST" --since 24h --session "$SESSION" \
+  >"$AUDIT24_OUT" 2>"$TRANSCRIPT_DIR/04b-audit-24h.stderr"
+AUDIT24_EXIT=$?
+set -e
+echo "exit = $AUDIT24_EXIT"
+cat "$AUDIT24_OUT"
+echo
+if [ "$AUDIT24_EXIT" -ne 0 ]; then
+  echo "FAIL: harness audit --since 24h exited $AUDIT24_EXIT"
+  exit 1
+fi
+DENY_ROWS=$(grep -c -E "review-before-merge[[:space:]]+deny" "$AUDIT24_OUT" || true)
+ALLOW_ROWS=$(grep -c -E "review-before-merge[[:space:]]+allow" "$AUDIT24_OUT" || true)
+if [ "$DENY_ROWS" -lt 1 ] || [ "$ALLOW_ROWS" -lt 1 ]; then
+  echo "FAIL: 24h audit must show at least one deny ($DENY_ROWS) and one allow ($ALLOW_ROWS) row"
+  exit 1
+fi
+echo "PASS: 24h audit shows deny + allow rows"
+echo
+
+# ------------------------------------------------------------------
+# Step 6: explain --trace renders the live trace. Phase 5 #9 means the
+# returned decision is the *first* fire (deny) when both fires share an
+# SQL second; the gate below asserts only that the trace renders against
+# the live ledger and quotes the smoke session, NOT that the latest
+# decision is the allow. Once #9 lands the assertion can tighten.
 # ------------------------------------------------------------------
 echo "=== STEP 5: harness explain review-before-merge --trace --session $SESSION ==="
 EXPLAIN_OUT="$TRANSCRIPT_DIR/05-explain.stdout"
@@ -162,6 +218,24 @@ EXPLAIN_EXIT=$?
 set -e
 echo "exit = $EXPLAIN_EXIT"
 cat "$EXPLAIN_OUT"
+echo
+if [ "$EXPLAIN_EXIT" -ne 0 ]; then
+  echo "FAIL: harness explain exited $EXPLAIN_EXIT"
+  exit 1
+fi
+if ! grep -q "name: review-before-merge" "$EXPLAIN_OUT"; then
+  echo "FAIL: explain output is missing the policy name field"
+  exit 1
+fi
+if ! grep -q "ledgerTag: review:42" "$EXPLAIN_OUT"; then
+  echo "FAIL: explain output is missing the substituted ledger tag"
+  exit 1
+fi
+if ! grep -q "sessionId: $SESSION" "$EXPLAIN_OUT"; then
+  echo "FAIL: explain output is missing the smoke session id (live-ledger proof)"
+  exit 1
+fi
+echo "PASS: explain --trace renders the live trace for the smoke session"
 echo
 
 echo "=========================================="

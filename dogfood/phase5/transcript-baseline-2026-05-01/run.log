@@ -1,9 +1,15 @@
 ==========================================
 Phase 5 #1 dogfood — real Claude Code hook
 ==========================================
-session = phase5-dogfood-1777624403-35133
-manifest = /home/lan/git/pandora/harness/dogfood/phase5/harness.yaml
-ledger db = /home/lan/.evidence-ledger/ledger.db
+session       = phase5-dogfood-1777625171-42788
+manifest      = /home/lan/git/pandora/harness/dogfood/phase5/transcript/effective-manifest.yaml
+harness dir   = /home/lan/git/pandora/harness
+grounding dir = /home/lan/git/pandora/agent-grounding
+ledger db     = /home/lan/.evidence-ledger/ledger.db (manifest-declared)
+
+NOTE: the smoke writes ledger entries scoped to sessionId=phase5-dogfood-1777625171-42788.
+      To clean up after a run, drop rows where session = 'phase5-dogfood-1777625171-42788'
+      from `evidence_ledger` in the sqlite db.
 
 --- event payload ---
 {
@@ -15,7 +21,7 @@ ledger db = /home/lan/.evidence-ledger/ledger.db
     "repo": "harness",
     "taskId": "phase5-smoke"
   },
-  "session_id": "phase5-dogfood-1777624403-35133",
+  "session_id": "phase5-dogfood-1777625171-42788",
   "cwd": "/home/lan/git/pandora/harness"
 }
 
@@ -30,7 +36,7 @@ PASS: deny JSON observed
 === STEP 2: ledger_add review:42 ===
 ledger_add raw responses:
 {"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"grounding-mcp","version":"0.1.0"}},"jsonrpc":"2.0","id":1}
-{"result":{"content":[{"type":"text","text":"{\n  \"id\": 41,\n  \"type\": \"fact\",\n  \"content\": \"review:42 approved by phase5-smoke\",\n  \"source\": \"phase5-dogfood\",\n  \"confidence\": \"medium\",\n  \"session\": \"phase5-dogfood-1777624403-35133\",\n  \"createdAt\": \"2026-05-01 08:33:24\",\n  \"updatedAt\": \"2026-05-01 08:33:24\"\n}"}]},"jsonrpc":"2.0","id":2}
+{"result":{"content":[{"type":"text","text":"{\n  \"id\": 44,\n  \"type\": \"fact\",\n  \"content\": \"review:42 approved by phase5-smoke\",\n  \"source\": \"phase5-dogfood\",\n  \"confidence\": \"medium\",\n  \"session\": \"phase5-dogfood-1777625171-42788\",\n  \"createdAt\": \"2026-05-01 08:46:11\",\n  \"updatedAt\": \"2026-05-01 08:46:11\"\n}"}]},"jsonrpc":"2.0","id":2}
 
 PASS: ledger_add accepted
 
@@ -41,36 +47,48 @@ stderr:
 
 PASS: silent allow
 
-=== STEP 4: harness audit --since 5m --session phase5-dogfood-1777624403-35133 ===
+=== STEP 4a: harness audit --since 5m --session phase5-dogfood-1777625171-42788 (Bug #8 witness) ===
 exit = 0
 no policy decisions in the last 5m
+(empty 5m result is the documented Bug #8 footprint on a non-UTC host)
 
-=== STEP 5: harness explain review-before-merge --trace --session phase5-dogfood-1777624403-35133 ===
+=== STEP 4b: harness audit --since 24h --session phase5-dogfood-1777625171-42788 (acceptance) ===
+exit = 0
+timestamp            policy               outcome  reason
+-------------------  -------------------  -------  ---------------------------------------------
+2026-05-01 08:46:11  review-before-merge  deny     no matching ledger entry for tag `review:42`
+2026-05-01 08:46:12  review-before-merge  allow    2 matching ledger entries for tag `review:42`
+
+PASS: 24h audit shows deny + allow rows
+
+=== STEP 5: harness explain review-before-merge --trace --session phase5-dogfood-1777625171-42788 ===
 exit = 0
 name: review-before-merge
-decision: deny
+decision: allow
 enforcement: block
-reason: no matching ledger entry for tag `review:42`
+reason: 2 matching ledger entries for tag `review:42`
 ledgerTag: review:42
-evaluatedAt: 2026-05-01T08:33:23.780Z
+evaluatedAt: 2026-05-01T08:46:12.269Z
 triggerMatched:
   event: PreToolUse
   match: mcp__agent-tasks__pull_requests_merge
 extract:
-  SESSION_ID: phase5-dogfood-1777624403-35133
+  SESSION_ID: phase5-dogfood-1777625171-42788
   REPO: ""
   BRANCH: ""
   TOOL_NAME: mcp__agent-tasks__pull_requests_merge
   CWD: /home/lan/git/pandora/harness
   PR_NUMBER: "42"
 requiresEval:
-  matchedCount: 0
-  reason: no matching ledger entry for tag `review:42`
+  matchedCount: 2
+  reason: 2 matching ledger entries for tag `review:42`
 ledgerQuery:
   verb: ledger_summary
-  sessionId: phase5-dogfood-1777624403-35133
+  sessionId: phase5-dogfood-1777625171-42788
+
+PASS: explain --trace renders the live trace for the smoke session
 
 ==========================================
-SMOKE COMPLETE — session = phase5-dogfood-1777624403-35133
+SMOKE COMPLETE — session = phase5-dogfood-1777625171-42788
 transcripts at /home/lan/git/pandora/harness/dogfood/phase5/transcript/
 ==========================================
