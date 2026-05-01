@@ -261,6 +261,60 @@ describe("explain --trace", () => {
     expect(parsed.reason).toBe("newer");
   });
 
+  it("Phase 5 #2: --trace uses $CLAUDE_SESSION_ID when --session is not given", async () => {
+    const saved = process.env.CLAUDE_SESSION_ID;
+    process.env.CLAUDE_SESSION_ID = "env-session-22";
+    try {
+      let observedSessionId: string | undefined;
+      const result = await explain("review-before-merge", {
+        configPath: FULL_MANIFEST,
+        trace: true,
+        json: true,
+        fetchLedger: async (sid) => {
+          observedSessionId = sid;
+          return {
+            kind: "ok",
+            entries: [
+              decisionEntry({ policyName: "review-before-merge" }, "2026-04-30T10:00:00.000Z"),
+            ],
+          };
+        },
+      });
+      expect(observedSessionId).toBe("env-session-22");
+      const parsed = JSON.parse(result.output);
+      expect(parsed.ledgerQuery.sessionId).toBe("env-session-22");
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_SESSION_ID;
+      else process.env.CLAUDE_SESSION_ID = saved;
+    }
+  });
+
+  it("Phase 5 #2: explicit --session beats $CLAUDE_SESSION_ID for --trace", async () => {
+    const saved = process.env.CLAUDE_SESSION_ID;
+    process.env.CLAUDE_SESSION_ID = "env-session-22";
+    try {
+      let observedSessionId: string | undefined;
+      await explain("review-before-merge", {
+        configPath: FULL_MANIFEST,
+        trace: true,
+        sessionId: "flag-session-44",
+        fetchLedger: async (sid) => {
+          observedSessionId = sid;
+          return {
+            kind: "ok",
+            entries: [
+              decisionEntry({ policyName: "review-before-merge" }, "2026-04-30T10:00:00.000Z"),
+            ],
+          };
+        },
+      });
+      expect(observedSessionId).toBe("flag-session-44");
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_SESSION_ID;
+      else process.env.CLAUDE_SESSION_ID = saved;
+    }
+  });
+
   it("exits 1 with the documented message when no recorded evaluations exist", async () => {
     let caught: unknown;
     try {

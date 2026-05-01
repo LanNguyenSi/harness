@@ -9,6 +9,7 @@ import {
   decodeLedgerContent,
   type PolicyDecisionPayload,
 } from "../runtime/ledger-record.js";
+import { resolveSessionId } from "../runtime/session-id.js";
 import { EX_FAIL, EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { loadManifest, type LoaderOptions } from "./loader.js";
 
@@ -104,7 +105,7 @@ export async function explain(
     return { output };
   }
 
-  const sessionId = opts.sessionId ?? "default";
+  const sessionId = resolveSessionId(opts.sessionId);
   const fetch = opts.fetchLedger ?? defaultFetcher(opts);
   const result = await fetch(sessionId);
   if (result.kind === "degraded") {
@@ -137,8 +138,7 @@ export async function explain(
     },
     extract: latest.payload.extractValues,
     ...(latest.payload.requiresEval && { requiresEval: latest.payload.requiresEval }),
-    // sessionId default mirrors recordPolicyDecision's caller fallback in
-    // src/cli/policy/intercept.ts (uses event.session_id ?? "default").
+    // sessionId is resolved via runtime/session-id.ts: explicit > env > "default".
     ledgerQuery: { verb: "ledger_summary", sessionId },
   };
 

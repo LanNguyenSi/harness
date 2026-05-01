@@ -128,8 +128,17 @@ export async function runInterceptCli(
       : degradedLedgerClient("grounding-mcp not declared in manifest");
   }
 
+  // For the SESSION_ID builtin we keep the empty-string fallback rather
+  // than routing through resolveSessionId (which lands on "default"):
+  // an unbound ${SESSION_ID} should fail substitution loudly via
+  // substituteTemplate's "missing" path, not silently bake the literal
+  // string "default" into a ledger_tag. The env fallback is still
+  // applied so a Claude-Code-driven hook with a stripped event can pick
+  // up the active session.
+  const eventSessionId = typeof event.session_id === "string" ? event.session_id : undefined;
+  const builtinSessionId = eventSessionId ?? process.env.CLAUDE_SESSION_ID ?? "";
   const builtins = {
-    SESSION_ID: typeof event.session_id === "string" ? event.session_id : "",
+    SESSION_ID: builtinSessionId,
     REPO: process.env.HARNESS_REPO ?? "",
     BRANCH: process.env.HARNESS_BRANCH ?? "",
     TOOL_NAME: typeof event.tool_name === "string" ? event.tool_name : "",
