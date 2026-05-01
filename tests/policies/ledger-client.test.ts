@@ -97,6 +97,7 @@ describe("queryLedgerByTag", () => {
         id: "42",
         content: "review:42:approved",
         source: "review-bot",
+        type: "fact",
         createdAt: "2026-04-30T12:00:00.000Z",
       });
     }
@@ -210,6 +211,83 @@ describe("queryLedgerByTag", () => {
       expect(result.reason).toContain("ledger db missing");
       expect(result.reason).toMatch(/exit 2/);
     }
+  });
+
+  describe("Phase 5 #4: policy_decision bucket flattening", () => {
+    it("flattens the policyDecisions bucket and tags entries with type='policy_decision'", async () => {
+      const script = makeScript(
+        happyServer({
+          sessionId: "sess-1",
+          counts: { facts: 1, hypotheses: 0, rejected: 0, unknowns: 0, policyDecisions: 1 },
+          entries: {
+            facts: [
+              {
+                id: 1,
+                content: "review:42 approved",
+                createdAt: "2026-05-01T08:00:00.000Z",
+                source: "agent",
+              },
+            ],
+            hypotheses: [],
+            rejected: [],
+            unknowns: [],
+            policyDecisions: [
+              {
+                id: 2,
+                content: 'policy_decision:review-before-merge:deny {"ledgerTag":"review:42"}',
+                createdAt: "2026-05-01T08:01:00.000Z",
+                source: "harness-policy-intercept",
+              },
+            ],
+          },
+        }),
+      );
+      const result = await queryLedgerByTag({
+        mcpCommand: [script],
+        sessionId: "sess-1",
+        timeoutMs: 4000,
+      });
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.entries).toHaveLength(2);
+        const fact = result.entries.find((e) => e.id === "1");
+        const policy = result.entries.find((e) => e.id === "2");
+        expect(fact?.type).toBe("fact");
+        expect(policy?.type).toBe("policy_decision");
+      }
+    });
+
+    it("legacy ledgers without a policyDecisions bucket continue to work", async () => {
+      const script = makeScript(
+        happyServer({
+          sessionId: "sess-1",
+          counts: { facts: 1, hypotheses: 0, rejected: 0, unknowns: 0 },
+          entries: {
+            facts: [
+              {
+                id: 1,
+                content: "agent fact",
+                createdAt: "2026-05-01T08:00:00.000Z",
+              },
+            ],
+            hypotheses: [],
+            rejected: [],
+            unknowns: [],
+            // no policyDecisions key — old grounding-mcp
+          },
+        }),
+      );
+      const result = await queryLedgerByTag({
+        mcpCommand: [script],
+        sessionId: "sess-1",
+        timeoutMs: 4000,
+      });
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.entries).toHaveLength(1);
+        expect(result.entries[0]?.type).toBe("fact");
+      }
+    });
   });
 
   describe("Phase 5 #5: server-side filter pushdown", () => {

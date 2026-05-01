@@ -7,6 +7,17 @@ export interface LedgerEntry {
   content: string;
   source?: string;
   createdAt: string | Date;
+  /**
+   * Phase 5 #4 — the wire bucket the entry came from. `flattenSummary`
+   * populates this from the `entries.<bucket>` key in the ledger_summary
+   * payload, mapping bucket names back to evidence-ledger types
+   * (`facts` → `fact`, `policyDecisions` → `policy_decision`, etc.).
+   *
+   * The requires evaluator uses this to skip `policy_decision` rows so
+   * past audit-log entries don't substring-match the tag they're about
+   * (the substring-pollution bug from PR #39's dogfood).
+   */
+  type?: string;
 }
 
 export interface RequiresEvaluation {
@@ -41,6 +52,19 @@ export class RequiresEvaluationError extends Error {
 // ("substring/regex match against ledger entries' content/source columns").
 // v1 is substring-only; regex is a v2 deferral.
 function entryMatches(entry: LedgerEntry, tag: string): boolean {
+  // Phase 5 #4 — `policy_decision` rows are audit records, not
+  // evidence. Their serialised payload incidentally contains the tag
+  // they're about ("ledgerTag":"review:42"), which under the old
+  // substring filter inflated matchedCount on the same tag the
+  // decision was about. Skip them at the matcher.
+  if (entry.type === "policy_decision") return false;
+  // Legacy backstop: pre-Phase-5-#4 audit rows were written with
+  // type='fact' + a `policy_decision:` content prefix. They land in
+  // the `facts` bucket and would otherwise sneak past the type guard.
+  // The content-prefix check is exact and cheap, so a user upgrading
+  // harness without flushing their dev ledger doesn't keep paying the
+  // pollution tax until the rows age out.
+  if (entry.content.startsWith("policy_decision:")) return false;
   if (entry.content.includes(tag)) return true;
   if (entry.source && entry.source.includes(tag)) return true;
   return false;

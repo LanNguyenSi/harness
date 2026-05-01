@@ -136,6 +136,52 @@ export async function recordPolicyDecision(
     let stdoutBuf = "";
     let stderrBuf = "";
     let recordSent = false;
+    let fallbackSent = false;
+
+    /**
+     * Phase 5 #4 — write attempt with type='policy_decision'. When
+     * the connected grounding-mcp pre-dates that change, the call
+     * returns a zod / CHECK constraint error; we then retry with the
+     * legacy type='fact' + prefix-encoded content path.
+     */
+    const sendInitialAdd = (): void => {
+      child.stdin.write(
+        `${JSON.stringify({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: {
+            name: "ledger_add",
+            arguments: {
+              sessionId,
+              type: "policy_decision",
+              content,
+              source: SOURCE,
+            },
+          },
+        })}\n`,
+      );
+    };
+
+    const sendFallbackAdd = (): void => {
+      fallbackSent = true;
+      child.stdin.write(
+        `${JSON.stringify({
+          jsonrpc: "2.0",
+          id: 3,
+          method: "tools/call",
+          params: {
+            name: "ledger_add",
+            arguments: {
+              sessionId,
+              type: "fact",
+              content,
+              source: SOURCE,
+            },
+          },
+        })}\n`,
+      );
+    };
 
     child.stdout.on("data", (chunk: Buffer) => {
       stdoutBuf += chunk.toString("utf8");
@@ -156,24 +202,26 @@ export async function recordPolicyDecision(
                   method: "notifications/initialized",
                 })}\n`,
               );
-              child.stdin.write(
-                `${JSON.stringify({
-                  jsonrpc: "2.0",
-                  id: 2,
-                  method: "tools/call",
-                  params: {
-                    name: "ledger_add",
-                    arguments: {
-                      sessionId,
-                      type: "fact",
-                      content,
-                      source: SOURCE,
-                    },
-                  },
-                })}\n`,
-              );
+              sendInitialAdd();
               recordSent = true;
             } else if (msg.id === 2) {
+              if (msg.error) {
+                // Likely an old grounding-mcp without the
+                // policy_decision enum value — retry once with the
+                // legacy fact-with-prefix encoding.
+                if (!fallbackSent) {
+                  sendFallbackAdd();
+                  return;
+                }
+                settle({
+                  ok: false,
+                  reason: `ledger_add error: ${msg.error.message ?? "unknown"}`,
+                });
+                return;
+              }
+              settle({ ok: true });
+              return;
+            } else if (msg.id === 3) {
               if (msg.error) {
                 settle({
                   ok: false,
