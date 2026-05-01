@@ -1,11 +1,11 @@
 import { stringify as stringifyYaml } from "yaml";
 import {
-  parseLedgerTimestamp,
   queryLedgerByTag,
   type LedgerEntry,
   type LedgerQueryResult,
 } from "../policies/index.js";
 import {
+  decisionSortKey,
   decodeLedgerContent,
   type PolicyDecisionPayload,
 } from "../runtime/ledger-record.js";
@@ -70,11 +70,7 @@ function selectLatestForPolicy(
     })
     .filter((x): x is { entry: LedgerEntry; payload: PolicyDecisionPayload } => x !== null);
   if (matches.length === 0) return null;
-  matches.sort((a, b) => {
-    const at = parseLedgerTimestamp(a.entry.createdAt as string);
-    const bt = parseLedgerTimestamp(b.entry.createdAt as string);
-    return bt - at;
-  });
+  matches.sort((a, b) => decisionSortKey(b.entry, b.payload) - decisionSortKey(a.entry, a.payload));
   return matches[0]!;
 }
 

@@ -6,6 +6,7 @@ import {
   type LedgerQueryResult,
 } from "../policies/index.js";
 import {
+  decisionSortKey,
   decodeLedgerContent,
   type PolicyDecisionPayload,
 } from "../runtime/ledger-record.js";
@@ -69,25 +70,31 @@ function defaultFetcher(opts: AuditOptions) {
 }
 
 function rowsFromEntries(entries: LedgerEntry[]): AuditDecisionRow[] {
-  const rows: AuditDecisionRow[] = [];
+  // Decode + retain the entry/payload pair so we can sort by Phase 5 #9's
+  // ms-precision `evaluatedAt` before flattening to the display row. The
+  // displayed `timestamp` field stays the ledger's `createdAt` (which is
+  // what users see in the table); only the sort key changes.
+  const decoded: { entry: LedgerEntry; payload: PolicyDecisionPayload }[] = [];
   for (const entry of entries) {
     const payload = decodeLedgerContent(entry.content);
     if (!payload) continue;
-    rows.push({
-      timestamp:
-        typeof entry.createdAt === "string"
-          ? entry.createdAt
-          : entry.createdAt.toISOString(),
-      name: payload.name,
-      outcome: payload.outcome,
-      enforcement: payload.enforcement,
-      reason: payload.reason,
-      ledgerTag: payload.ledgerTag,
-      extractValues: payload.extractValues,
-    });
+    decoded.push({ entry, payload });
   }
-  rows.sort((a, b) => parseLedgerTimestamp(a.timestamp) - parseLedgerTimestamp(b.timestamp));
-  return rows;
+  decoded.sort(
+    (a, b) => decisionSortKey(a.entry, a.payload) - decisionSortKey(b.entry, b.payload),
+  );
+  return decoded.map(({ entry, payload }) => ({
+    timestamp:
+      typeof entry.createdAt === "string"
+        ? entry.createdAt
+        : entry.createdAt.toISOString(),
+    name: payload.name,
+    outcome: payload.outcome,
+    enforcement: payload.enforcement,
+    reason: payload.reason,
+    ledgerTag: payload.ledgerTag,
+    extractValues: payload.extractValues,
+  }));
 }
 
 function formatTable(rows: AuditDecisionRow[]): string {
