@@ -129,12 +129,20 @@ export async function runInterceptCli(
   }
 
   // For the SESSION_ID builtin we keep the empty-string fallback rather
-  // than routing through resolveSessionId (which lands on "default"):
-  // an unbound ${SESSION_ID} should fail substitution loudly via
-  // substituteTemplate's "missing" path, not silently bake the literal
-  // string "default" into a ledger_tag. The env fallback is still
-  // applied so a Claude-Code-driven hook with a stripped event can pick
-  // up the active session.
+  // than routing through resolveSessionId (which lands on "default").
+  // Routing through "default" would silently bake the literal string
+  // into ledger_tag templates like `dogfood:${SESSION_ID}` →
+  // `dogfood:default`, which would substring-match anything in the
+  // shared "default" session — a worse failure mode than the current
+  // empty substitution. The empty path produces tags like `dogfood:`
+  // (substituteTemplate treats the registered "" value as a successful
+  // substitution since the key is hasOwnProperty-present, so this is
+  // NOT marked warn-degraded by the requires evaluator); the ledger
+  // query for that fire also lands on the resolveSessionId-derived
+  // session, so the asymmetry is acceptable in practice. Do NOT
+  // "simplify" by routing this through resolveSessionId.
+  // The env fallback is still applied so a Claude-Code-driven hook with
+  // a stripped event can pick up the active session.
   const eventSessionId = typeof event.session_id === "string" ? event.session_id : undefined;
   const builtinSessionId = eventSessionId ?? process.env.CLAUDE_SESSION_ID ?? "";
   const builtins = {
