@@ -168,7 +168,7 @@ Our entry point into this problem: on 2026-04-23, an `agent-grounding` checkout 
 - [`agent-tasks`](https://github.com/LanNguyenSi/agent-tasks) — the MCP-registered task platform whose registration + health appear in `harness describe`.
 - [`agent-preflight`](https://github.com/LanNguyenSi/agent-preflight) — local preflight validator; the canonical implementation of preflight-hook content harness wires (see `docs/ARCHITECTURE.md` §5 for the canonical hook-script shape and §6 for the Phase 4 policy that gates further work on a `preflight:${REPO}` ledger entry).
 - [`codebase-oracle`](https://github.com/LanNguyenSi/codebase-oracle) — one of the MCP surfaces being registered.
-- [`dev-tools`](https://github.com/LanNguyenSi/dev-tools) — `git-batch-cli`, a day-to-day tool whose inventory appears in `harness describe`.
+- [`agent-dx`](https://github.com/LanNguyenSi/agent-dx) — ships `git-batch-cli` (under `packages/git-batch-cli`), a day-to-day tool whose inventory appears in `harness describe`.
 
 ## License
 
