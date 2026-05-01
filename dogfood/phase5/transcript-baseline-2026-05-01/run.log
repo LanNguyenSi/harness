@@ -1,0 +1,76 @@
+==========================================
+Phase 5 #1 dogfood — real Claude Code hook
+==========================================
+session = phase5-dogfood-1777624403-35133
+manifest = /home/lan/git/pandora/harness/dogfood/phase5/harness.yaml
+ledger db = /home/lan/.evidence-ledger/ledger.db
+
+--- event payload ---
+{
+  "hook_event_name": "PreToolUse",
+  "tool_name": "mcp__agent-tasks__pull_requests_merge",
+  "tool_input": {
+    "prNumber": 42,
+    "owner": "LanNguyenSi",
+    "repo": "harness",
+    "taskId": "phase5-smoke"
+  },
+  "session_id": "phase5-dogfood-1777624403-35133",
+  "cwd": "/home/lan/git/pandora/harness"
+}
+
+=== STEP 1: first merge attempt (expect DENY) ===
+exit = 0
+stdout:
+{"decision":"deny","reason":"review-before-merge: no matching ledger entry for tag `review:42`"}
+stderr:
+
+PASS: deny JSON observed
+
+=== STEP 2: ledger_add review:42 ===
+ledger_add raw responses:
+{"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"grounding-mcp","version":"0.1.0"}},"jsonrpc":"2.0","id":1}
+{"result":{"content":[{"type":"text","text":"{\n  \"id\": 41,\n  \"type\": \"fact\",\n  \"content\": \"review:42 approved by phase5-smoke\",\n  \"source\": \"phase5-dogfood\",\n  \"confidence\": \"medium\",\n  \"session\": \"phase5-dogfood-1777624403-35133\",\n  \"createdAt\": \"2026-05-01 08:33:24\",\n  \"updatedAt\": \"2026-05-01 08:33:24\"\n}"}]},"jsonrpc":"2.0","id":2}
+
+PASS: ledger_add accepted
+
+=== STEP 3: second merge attempt (expect ALLOW / empty stdout) ===
+exit = 0
+stdout (expect empty):
+stderr:
+
+PASS: silent allow
+
+=== STEP 4: harness audit --since 5m --session phase5-dogfood-1777624403-35133 ===
+exit = 0
+no policy decisions in the last 5m
+
+=== STEP 5: harness explain review-before-merge --trace --session phase5-dogfood-1777624403-35133 ===
+exit = 0
+name: review-before-merge
+decision: deny
+enforcement: block
+reason: no matching ledger entry for tag `review:42`
+ledgerTag: review:42
+evaluatedAt: 2026-05-01T08:33:23.780Z
+triggerMatched:
+  event: PreToolUse
+  match: mcp__agent-tasks__pull_requests_merge
+extract:
+  SESSION_ID: phase5-dogfood-1777624403-35133
+  REPO: ""
+  BRANCH: ""
+  TOOL_NAME: mcp__agent-tasks__pull_requests_merge
+  CWD: /home/lan/git/pandora/harness
+  PR_NUMBER: "42"
+requiresEval:
+  matchedCount: 0
+  reason: no matching ledger entry for tag `review:42`
+ledgerQuery:
+  verb: ledger_summary
+  sessionId: phase5-dogfood-1777624403-35133
+
+==========================================
+SMOKE COMPLETE — session = phase5-dogfood-1777624403-35133
+transcripts at /home/lan/git/pandora/harness/dogfood/phase5/transcript/
+==========================================
