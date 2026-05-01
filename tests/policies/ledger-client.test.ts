@@ -212,6 +212,144 @@ describe("queryLedgerByTag", () => {
     }
   });
 
+  describe("Phase 5 #5: server-side filter pushdown", () => {
+    /**
+     * Capability-aware fake: implements tools/list with a configurable
+     * inputSchema for ledger_summary. tools/call records the args it
+     * received so the test can assert what got pushed server-side.
+     */
+    const captureServer = (
+      payload: object,
+      supportedArgs: string[] = ["sessionId"],
+    ): string => `#!/usr/bin/env node
+const fs = require("fs");
+const captureFile = process.env.CAPTURE_FILE;
+let buf = "";
+process.stdin.on("data", (d) => {
+  buf += d.toString();
+  let nl = buf.indexOf("\\n");
+  while (nl !== -1) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    if (!line.trim()) { nl = buf.indexOf("\\n"); continue; }
+    let msg;
+    try { msg = JSON.parse(line); } catch { nl = buf.indexOf("\\n"); continue; }
+    if (msg.method === "initialize") {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\\n");
+    } else if (msg.method === "tools/list") {
+      const props = {};
+      for (const k of ${JSON.stringify(supportedArgs)}) props[k] = { type: "string" };
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { tools: [{ name: "ledger_summary", inputSchema: { type: "object", properties: props } }] } }) + "\\n");
+    } else if (msg.method === "tools/call" && msg.params && msg.params.name === "ledger_summary") {
+      if (captureFile) fs.writeFileSync(captureFile, JSON.stringify(msg.params.arguments));
+      const payload = ${JSON.stringify(payload)};
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: JSON.stringify(payload) }] } }) + "\\n");
+    }
+    nl = buf.indexOf("\\n");
+  }
+});
+`;
+
+    it("pushes sinceIso + contentPrefix server-side when advertised by tools/list", async () => {
+      const captureFile = path.join(
+        fs.mkdtempSync(path.join(os.tmpdir(), "harness-capture-")),
+        "args.json",
+      );
+      cleanups.push(() => fs.rmSync(path.dirname(captureFile), { recursive: true, force: true }));
+      const script = makeScript(
+        captureServer(
+          { sessionId: "sess-1", counts: {}, entries: { facts: [], hypotheses: [], rejected: [], unknowns: [] } },
+          ["sessionId", "sinceIso", "contentPrefix"],
+        ),
+      );
+      const result = await queryLedgerByTag({
+        mcpCommand: [script],
+        mcpEnv: { CAPTURE_FILE: captureFile },
+        sessionId: "sess-1",
+        sinceIso: "2026-05-01T08:00:00Z",
+        contentPrefix: "policy_decision:",
+        timeoutMs: 4000,
+      });
+      expect(result.kind).toBe("ok");
+      const captured = JSON.parse(fs.readFileSync(captureFile, "utf8"));
+      expect(captured.sinceIso).toBe("2026-05-01T08:00:00Z");
+      expect(captured.contentPrefix).toBe("policy_decision:");
+    });
+
+    it("falls back to client-side filtering when tools/list does not advertise the new args", async () => {
+      const captureFile = path.join(
+        fs.mkdtempSync(path.join(os.tmpdir(), "harness-capture-")),
+        "args.json",
+      );
+      cleanups.push(() => fs.rmSync(path.dirname(captureFile), { recursive: true, force: true }));
+      const script = makeScript(
+        captureServer(
+          { sessionId: "sess-1", counts: {}, entries: { facts: [], hypotheses: [], rejected: [], unknowns: [] } },
+          ["sessionId"], // old server, no new args
+        ),
+      );
+      const result = await queryLedgerByTag({
+        mcpCommand: [script],
+        mcpEnv: { CAPTURE_FILE: captureFile },
+        sessionId: "sess-1",
+        sinceIso: "2026-05-01T08:00:00Z",
+        contentPrefix: "policy_decision:",
+        timeoutMs: 4000,
+      });
+      expect(result.kind).toBe("ok");
+      const captured = JSON.parse(fs.readFileSync(captureFile, "utf8"));
+      // The unsupported args must NOT be sent — old server would zod-reject them.
+      expect(captured.sinceIso).toBeUndefined();
+      expect(captured.contentPrefix).toBeUndefined();
+      expect(captured.sessionId).toBe("sess-1");
+    });
+
+    it("skips tools/list entirely when no filter is requested (back-compat hot path)", async () => {
+      const captureFile = path.join(
+        fs.mkdtempSync(path.join(os.tmpdir(), "harness-capture-")),
+        "args.json",
+      );
+      cleanups.push(() => fs.rmSync(path.dirname(captureFile), { recursive: true, force: true }));
+      // Server intentionally does NOT respond to tools/list. If the
+      // capability detector ran, this test would hang to the timeout.
+      const script = makeScript(`#!/usr/bin/env node
+const fs = require("fs");
+let buf = "";
+process.stdin.on("data", (d) => {
+  buf += d.toString();
+  let nl = buf.indexOf("\\n");
+  while (nl !== -1) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    if (!line.trim()) { nl = buf.indexOf("\\n"); continue; }
+    let msg;
+    try { msg = JSON.parse(line); } catch { nl = buf.indexOf("\\n"); continue; }
+    if (msg.method === "initialize") {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\\n");
+    } else if (msg.method === "tools/call" && msg.params && msg.params.name === "ledger_summary") {
+      fs.writeFileSync(process.env.CAPTURE_FILE, JSON.stringify(msg.params.arguments));
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: JSON.stringify({ sessionId: "sess-1", counts: {}, entries: { facts: [], hypotheses: [], rejected: [], unknowns: [] } }) }] } }) + "\\n");
+    }
+    // Note: no tools/list handler.
+    nl = buf.indexOf("\\n");
+  }
+});
+`);
+      const start = Date.now();
+      const result = await queryLedgerByTag({
+        mcpCommand: [script],
+        mcpEnv: { CAPTURE_FILE: captureFile },
+        sessionId: "sess-1",
+        timeoutMs: 4000,
+      });
+      const elapsed = Date.now() - start;
+      expect(result.kind).toBe("ok");
+      expect(elapsed).toBeLessThan(2000); // would be ~4s if tools/list ran and timed out
+      const captured = JSON.parse(fs.readFileSync(captureFile, "utf8"));
+      expect(captured).toEqual({ sessionId: "sess-1" });
+    });
+  });
+
   it("degrades when an empty command is given", async () => {
     const result = await queryLedgerByTag({
       mcpCommand: [],
