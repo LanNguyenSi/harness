@@ -5,6 +5,83 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-05-01
+
+**Phase 5: dogfood + polish.** Phase 4 shipped policies that fire; Phase 5
+ran them end-to-end against real grounding-mcp + the live SQLite ledger,
+caught the bugs that surfaced, and turned the whole feedback loop into a
+quality-of-life pass over `audit`/`explain`/`policy intercept`. The
+package is now also distributed under `@lannguyensi/harness` on npm
+(install with `npm i -g @lannguyensi/harness` and use `harness ...` from
+the command line).
+
+The killer-test from the founding incident still works exactly the same
+way; this release is about it staying that way under realistic
+operational pressure.
+
+### Added
+
+- **`harness policy intercept --verbose`** (Phase 5 #3, PR #44) — opt-in
+  stderr diagnostics for non-allow decisions: policy name, ledger_tag,
+  matched count, reason, and sorted extract values. Default off; v0.4.0
+  byte-equivalent. Also enabled via `HARNESS_POLICY_VERBOSE=1`
+  (case-insensitive disable: `0`/`false`/`no`/`off`).
+- **`$CLAUDE_SESSION_ID` env fallback** (Phase 5 #2, PR #43) for
+  `audit`/`explain --trace`/`policy intercept` when `--session` is
+  omitted. Real Claude Code sessions arrive via `event.session_id`, so
+  reads under the literal `"default"` were silently invisible. New
+  precedence: explicit > env > `"default"`.
+- **`policy_decision` first-class entry type** (Phase 5 #4, PR #47) via
+  the matching `@lannguyensi/evidence-ledger@0.2.0` change. Writer
+  tries `type='policy_decision'` and falls back to legacy `type='fact'`
+  on an old server. Reader tags rows with their bucket-derived type so
+  the requires evaluator can drop policy-decision rows without the
+  substring-pollution that inflated `matchedCount` in PR #39's dogfood.
+  Legacy `policy_decision:`-prefixed `fact` rows are also dropped via a
+  content-prefix backstop so upgraded users don't keep paying the
+  pollution tax until their dev ledger ages out.
+- **Server-side `audit` filter pushdown** (Phase 5 #5, PR #46) via the
+  matching evidence-ledger 0.2.0 change. `audit` now passes
+  `sinceIso` (derived from its `--since` cutoff) and
+  `contentPrefix: "policy_decision:"` to `ledger_summary`. Capability
+  detection via `tools/list` keeps it back-compatible with old servers
+  (filter args are dropped silently when not advertised). Hot path
+  (no filter requested) skips `tools/list` entirely.
+- **`dogfood/phase5/`** — reproducible smoke driver against real
+  grounding-mcp + live SQLite ledger (Phase 5 #1, PR #39). All five
+  gates (deny / ledger_add / silent allow / 5m audit / 24h audit /
+  explain --trace) exit non-zero on regression.
+- **`tests/_helpers/manifest.ts` + `tests/_helpers/decision.ts`** (Phase 5
+  #6, PR #45) — shared `makeManifest`, `makePolicy`, `makeDecision`,
+  `makeDecisionEntry` builders. Pure refactor; existing test count
+  unchanged.
+
+### Fixed
+
+- **`audit --since` window now parses UTC ledger timestamps correctly**
+  (Phase 5 #8, PR #40). evidence-ledger stores `created_at` as SQLite
+  `datetime('now')` (UTC, space-separated). V8's `Date.parse` parses
+  the space form as local time; on any non-UTC host a `--since` window
+  narrower than the host TZ offset silently filtered out fresh
+  entries. New `parseLedgerTimestamp` coerces the SQL form to ISO-with-
+  Z before delegating to `Date.parse`. Applied at all four call sites
+  (audit row sort + cutoff filter, explain `selectLatestForPolicy`,
+  `requires.entryTime`).
+- **`explain --trace` picks the latest decision by `evaluatedAt`**
+  (Phase 5 #9, PR #41). Sub-second collisions used to tie at
+  `bt - at = 0` because the sort keyed on ledger `createdAt`
+  (1-second precision), and V8's stable sort returned the earliest
+  fire. New `decisionSortKey` prefers the decoded payload's
+  `evaluatedAt` (ms precision), fallback to `createdAt`. Same fix in
+  `audit` row order.
+
+### Distribution
+
+- Package renamed from `harness` (the unscoped name was already taken on
+  npm) to `@lannguyensi/harness`. The CLI binary is still `harness`.
+- New `publish-npm.yml` workflow tags `v*` → publishes to npm with
+  provenance. Single package; no monorepo workspace.
+
 ## [0.4.0] - 2026-04-30
 
 **Phase 4: policy layer.** Policies *fire*. The `requires` schema
