@@ -3,12 +3,12 @@ decision: allow
 enforcement: block
 reason: 2 matching ledger entries for tag `review:42`
 ledgerTag: review:42
-evaluatedAt: 2026-05-01T08:46:12.269Z
+evaluatedAt: 2026-05-01T09:45:01.620Z
 triggerMatched:
   event: PreToolUse
   match: mcp__agent-tasks__pull_requests_merge
 extract:
-  SESSION_ID: phase5-dogfood-1777625171-42788
+  SESSION_ID: phase5-dogfood-1777628700-59020
   REPO: ""
   BRANCH: ""
   TOOL_NAME: mcp__agent-tasks__pull_requests_merge
@@ -19,4 +19,4 @@ requiresEval:
   reason: 2 matching ledger entries for tag `review:42`
 ledgerQuery:
   verb: ledger_summary
-  sessionId: phase5-dogfood-1777625171-42788
+  sessionId: phase5-dogfood-1777628700-59020

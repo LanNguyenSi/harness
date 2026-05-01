@@ -120,6 +120,32 @@ describe("evaluateRequires — within (recency window)", () => {
     expect(result.allowed).toBe(true);
   });
 
+  it("Phase 5 #8: accepts SQL DATETIME createdAt as UTC for within evaluation", () => {
+    // Pins the per-call-site contract that `entryTime` routes SQL
+    // DATETIME strings through `parseLedgerTimestamp`. Without the
+    // fix, `Date.parse("2026-04-30 11:59:30")` on a non-UTC host
+    // would land outside a 60s window relative to NOW.
+    const sqlDatetime = "2026-04-30 11:59:30"; // 30s before NOW (UTC)
+    const result = evaluateRequires(
+      { ledger_tag: "x", within: "60s" },
+      [entry({ id: "e1", content: "x", createdAt: sqlDatetime })],
+      { now: NOW },
+    );
+    expect(result.allowed).toBe(true);
+    expect(result.matchedCount).toBe(1);
+  });
+
+  it("Phase 5 #8: a SQL DATETIME entry just outside the window is excluded", () => {
+    const sqlDatetimeOld = "2026-04-30 11:58:00"; // 120s before NOW
+    const result = evaluateRequires(
+      { ledger_tag: "x", within: "60s" },
+      [entry({ id: "e1", content: "x", createdAt: sqlDatetimeOld })],
+      { now: NOW },
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.matchedCount).toBe(0);
+  });
+
   it("throws on an unparseable createdAt when a window is in play", () => {
     expect(() =>
       evaluateRequires(
