@@ -181,6 +181,27 @@ describe("evaluateRequires — Phase 5 #4: policy_decision rows are not evidence
     expect(result.matchedCount).toBe(0);
   });
 
+  it("legacy backstop: drops rows with policy_decision: prefix even when type='fact'", () => {
+    // Pre-Phase-5-#4 audit entries were written as type='fact' with the
+    // content prefix. The bucket-derived type for them is 'fact', so the
+    // type guard alone wouldn't catch them. The content-prefix backstop
+    // ensures upgrading users don't keep paying the pollution tax until
+    // their dev ledger ages out.
+    const result = evaluateRequires(
+      { ledger_tag: "review:42" },
+      [
+        entry({
+          id: "legacy-deny",
+          content: 'policy_decision:review-before-merge:deny {"ledgerTag":"review:42"}',
+          type: "fact",
+        }),
+      ],
+      { now: NOW },
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.matchedCount).toBe(0);
+  });
+
   it("counts genuine evidence entries while ignoring colocated policy_decisions", () => {
     const result = evaluateRequires(
       { ledger_tag: "review:42" },
