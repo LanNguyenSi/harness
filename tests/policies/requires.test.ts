@@ -157,6 +157,52 @@ describe("evaluateRequires — within (recency window)", () => {
   });
 });
 
+describe("evaluateRequires — Phase 5 #4: policy_decision rows are not evidence", () => {
+  it("ignores policy_decision-typed entries even when their content matches the tag", () => {
+    // The Phase 5 #1 dogfood symptom: a past deny's serialised payload
+    // contains "ledgerTag":"review:42", which under the old substring
+    // filter inflated matchedCount when the policy fired again with
+    // the same tag. Post-Phase-5-#4, those rows carry type='policy_decision'
+    // and are skipped at entryMatches.
+    const policyDecisionContent =
+      'policy_decision:review-before-merge:deny {"ledgerTag":"review:42","matched":0}';
+    const result = evaluateRequires(
+      { ledger_tag: "review:42" },
+      [
+        entry({
+          id: "audit-1",
+          content: policyDecisionContent,
+          type: "policy_decision",
+        }),
+      ],
+      { now: NOW },
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.matchedCount).toBe(0);
+  });
+
+  it("counts genuine evidence entries while ignoring colocated policy_decisions", () => {
+    const result = evaluateRequires(
+      { ledger_tag: "review:42" },
+      [
+        entry({
+          id: "audit-1",
+          content: 'policy_decision:review-before-merge:deny {"ledgerTag":"review:42"}',
+          type: "policy_decision",
+        }),
+        entry({
+          id: "fact-1",
+          content: "review:42 approved by phase5-smoke",
+          type: "fact",
+        }),
+      ],
+      { now: NOW },
+    );
+    expect(result.allowed).toBe(true);
+    expect(result.matchedCount).toBe(1);
+  });
+});
+
 describe("evaluateRequires — count", () => {
   const tag = "x";
 

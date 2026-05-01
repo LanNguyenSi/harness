@@ -221,8 +221,16 @@ function filterEntriesByTag(entries: LedgerEntry[], tag: string): LedgerEntry[] 
   // whose content/source matches the substituted tag. evaluateRequires also
   // does a substring match, but pre-filtering here keeps the trace quieter
   // and avoids the requires evaluator iterating unrelated session entries.
+  //
+  // Phase 5 #4 — also drop `policy_decision` rows so a past audit
+  // payload doesn't incidentally match the same tag the decision was
+  // about (the substring-pollution bug from PR #39's dogfood). The
+  // requires evaluator's entryMatches has the same guard, but
+  // pre-filtering keeps matchedCount honest in the trace data.
   return entries.filter(
-    (e) => e.content.includes(tag) || (e.source !== undefined && e.source.includes(tag)),
+    (e) =>
+      e.type !== "policy_decision" &&
+      (e.content.includes(tag) || (e.source !== undefined && e.source.includes(tag))),
   );
 }
 

@@ -76,7 +76,10 @@ interface RawLedgerEntry {
   type?: unknown;
 }
 
-function normaliseEntry(raw: RawLedgerEntry): LedgerEntry | null {
+function normaliseEntry(
+  raw: RawLedgerEntry,
+  bucketType?: string,
+): LedgerEntry | null {
   if (raw.id === undefined || raw.id === null) return null;
   if (typeof raw.content !== "string") return null;
   const createdAt =
@@ -86,24 +89,41 @@ function normaliseEntry(raw: RawLedgerEntry): LedgerEntry | null {
         ? raw.created_at
         : undefined;
   if (createdAt === undefined) return null;
+  // Prefer the bucket-derived type (Phase 5 #4 — bucket name is the
+  // canonical type signal); fall back to the row's own `type` field
+  // if the wire payload happens to carry it.
+  const type =
+    bucketType ?? (typeof raw.type === "string" ? raw.type : undefined);
   return {
     id: String(raw.id),
     content: raw.content,
     source: typeof raw.source === "string" ? raw.source : undefined,
     createdAt,
+    ...(type !== undefined && { type }),
   };
 }
 
 /**
- * Flatten the four bucketed arrays returned by `ledger_summary` into one list.
+ * Flatten the bucketed arrays returned by `ledger_summary` into one list.
  * Tolerates both snake_case (`created_at`) and camelCase (`createdAt`) since
  * the MCP wire format is JSON.stringify of whatever the underlying lib emits.
  *
+ * Phase 5 #4 — surfaces the wire bucket as `LedgerEntry.type`
+ * (`facts` → `fact`, `policyDecisions` → `policy_decision`, etc.) so
+ * downstream filters can distinguish evidence from audit records.
+ * `flattenSummary` returns ALL buckets; consumers filter by type.
+ *
  * Returns `null` when the payload doesn't carry an `entries` object — the
- * caller treats that as a contract-drift degraded path. The bucket order
- * (facts, hypotheses, rejected, unknowns) is irrelevant to downstream
- * consumers; evaluateRequires re-filters by `createdAt`.
+ * caller treats that as a contract-drift degraded path.
  */
+const BUCKET_TO_TYPE: Record<string, string> = {
+  facts: "fact",
+  hypotheses: "hypothesis",
+  rejected: "rejected",
+  unknowns: "unknown",
+  policyDecisions: "policy_decision",
+};
+
 function flattenSummary(payload: unknown): LedgerEntry[] | null {
   if (!payload || typeof payload !== "object") return null;
   const root = payload as { entries?: unknown };
@@ -113,11 +133,11 @@ function flattenSummary(payload: unknown): LedgerEntry[] | null {
   }
   const buckets = entries as Record<string, unknown>;
   const out: LedgerEntry[] = [];
-  for (const k of ["facts", "hypotheses", "rejected", "unknowns"]) {
-    const arr = buckets[k];
+  for (const [bucketKey, type] of Object.entries(BUCKET_TO_TYPE)) {
+    const arr = buckets[bucketKey];
     if (!Array.isArray(arr)) continue;
     for (const raw of arr) {
-      const norm = normaliseEntry(raw as RawLedgerEntry);
+      const norm = normaliseEntry(raw as RawLedgerEntry, type);
       if (norm) out.push(norm);
     }
   }
