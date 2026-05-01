@@ -7,6 +7,7 @@
 // `harness explain --trace` (Phase 4 #6/#7) grep for.
 
 import { spawn } from "node:child_process";
+import { parseLedgerTimestamp, type LedgerEntry } from "../policies/index.js";
 import type { PolicyDecision } from "./intercept.js";
 
 export interface LedgerRecordOptions {
@@ -54,6 +55,30 @@ export function payloadFromDecision(
 
 export function encodeLedgerContent(payload: PolicyDecisionPayload): string {
   return `${PREFIX}:${payload.name}:${payload.outcome} ${JSON.stringify(payload)}`;
+}
+
+/**
+ * Phase 5 #9 — preferred sort key for policy_decision rows.
+ *
+ * `evidence-ledger` stores `createdAt` at 1-second precision (SQLite
+ * `datetime('now')`), so two decisions evaluated within the same wall-
+ * clock second tie at `bt - at === 0`, and a stable sort returns the
+ * earliest entry as "latest". The decoded payload's `evaluatedAt` is
+ * `Date.toISOString()` (millisecond precision), which actually
+ * distinguishes back-to-back fires. Use it as the primary key, with a
+ * `createdAt` fallback for any future encoding that lacks `evaluatedAt`.
+ *
+ * Returns `NaN` only when both fields are unparseable; callers should
+ * tolerate ties by treating equal results as preserve-order.
+ */
+export function decisionSortKey(
+  entry: LedgerEntry,
+  payload: PolicyDecisionPayload,
+): number {
+  const evaluatedMs = parseLedgerTimestamp(payload.evaluatedAt);
+  if (!Number.isNaN(evaluatedMs)) return evaluatedMs;
+  if (entry.createdAt instanceof Date) return entry.createdAt.getTime();
+  return parseLedgerTimestamp(entry.createdAt);
 }
 
 export function decodeLedgerContent(content: string): PolicyDecisionPayload | null {

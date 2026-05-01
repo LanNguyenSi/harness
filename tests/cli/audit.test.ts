@@ -195,6 +195,49 @@ describe("audit — Phase 5 #8: SQL DATETIME timestamp filtering", () => {
   });
 });
 
+describe("audit — Phase 5 #9: order by ms-precision evaluatedAt", () => {
+  // Pre-fix the audit table sorted by ledger createdAt (1-second
+  // precision), so two decisions evaluated within the same SQL second
+  // appeared in stable insertion order rather than chronological order.
+  // The fix uses the decoded payload's evaluatedAt (ms precision) as
+  // the sort key while keeping createdAt as the displayed timestamp.
+  const NOW_TIE = new Date("2026-05-01T08:34:00.000Z");
+
+  it("orders sub-second-collision entries by evaluatedAt, not by ledger createdAt", async () => {
+    const sameSecond = "2026-05-01 08:33:24";
+    // Insertion order: allow (later evaluatedAt) before deny (earlier).
+    // A sort by createdAt would tie-break to insertion order and
+    // mis-display the allow as the earlier row.
+    const entries = [
+      decisionEntry(
+        {
+          policyName: "review-before-merge",
+          outcome: "allow",
+          reason: "second fire",
+          evaluatedAt: "2026-05-01T08:33:24.668Z",
+        },
+        sameSecond,
+      ),
+      decisionEntry(
+        {
+          policyName: "review-before-merge",
+          outcome: "deny",
+          reason: "first fire",
+          evaluatedAt: "2026-05-01T08:33:23.780Z",
+        },
+        sameSecond,
+      ),
+    ];
+    const result = await audit({
+      configPath: MANIFEST_PATH,
+      now: NOW_TIE,
+      fetchLedger: async () => ({ kind: "ok", entries }),
+    });
+    expect(result.decisions).toHaveLength(2);
+    expect(result.decisions.map((d) => d.outcome)).toEqual(["deny", "allow"]);
+  });
+});
+
 describe("audit — empty window", () => {
   it("prints the documented empty-window message and exits 0", async () => {
     const result = await audit({

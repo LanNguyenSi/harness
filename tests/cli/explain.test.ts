@@ -184,6 +184,83 @@ describe("explain --trace", () => {
     expect(parsed.decision).toBe("deny");
   });
 
+  it("Phase 5 #9: picks the latest decision by evaluatedAt when multiple fires share an SQL second", async () => {
+    // Both entries collide at the SQL DATETIME's 1-second precision, but
+    // the decoded payload's evaluatedAt distinguishes them in ms.
+    // Pre-fix this test would fail because selectLatestForPolicy sorted on
+    // createdAt — the two ties stable-sorted to the first (deny).
+    const createdAt = "2026-05-01 08:33:24";
+    const result = await explain("review-before-merge", {
+      configPath: FULL_MANIFEST,
+      trace: true,
+      sessionId: "sess-1",
+      fetchLedger: async () => ({
+        kind: "ok",
+        entries: [
+          decisionEntry(
+            {
+              policyName: "review-before-merge",
+              outcome: "deny",
+              reason: "first fire",
+              evaluatedAt: "2026-05-01T08:33:23.780Z",
+            },
+            createdAt,
+          ),
+          decisionEntry(
+            {
+              policyName: "review-before-merge",
+              outcome: "allow",
+              reason: "second fire",
+              evaluatedAt: "2026-05-01T08:33:24.668Z",
+            },
+            createdAt,
+          ),
+        ],
+      }),
+    });
+    expect(result.output).toContain("decision: allow");
+    expect(result.output).toContain("evaluatedAt: 2026-05-01T08:33:24.668Z");
+    expect(result.output).toContain("second fire");
+    expect(result.output).not.toContain("first fire");
+  });
+
+  it("Phase 5 #9: falls back to createdAt when evaluatedAt is missing or unparseable", async () => {
+    const result = await explain("review-before-merge", {
+      configPath: FULL_MANIFEST,
+      trace: true,
+      json: true,
+      sessionId: "sess-1",
+      fetchLedger: async () => ({
+        kind: "ok",
+        entries: [
+          // Older decision but un-parseable evaluatedAt — sort key
+          // should fall back to createdAt and order it first (oldest).
+          decisionEntry(
+            {
+              policyName: "review-before-merge",
+              outcome: "deny",
+              reason: "older",
+              evaluatedAt: "not-a-real-iso",
+            },
+            "2026-05-01T08:00:00.000Z",
+          ),
+          decisionEntry(
+            {
+              policyName: "review-before-merge",
+              outcome: "allow",
+              reason: "newer",
+              evaluatedAt: "2026-05-01T09:00:00.000Z",
+            },
+            "2026-05-01T09:00:00.000Z",
+          ),
+        ],
+      }),
+    });
+    const parsed = JSON.parse(result.output);
+    expect(parsed.decision).toBe("allow");
+    expect(parsed.reason).toBe("newer");
+  });
+
   it("exits 1 with the documented message when no recorded evaluations exist", async () => {
     let caught: unknown;
     try {
