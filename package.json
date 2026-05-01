@@ -1,18 +1,43 @@
 {
-  "name": "harness",
-  "version": "0.4.0",
+  "name": "@lannguyensi/harness",
+  "version": "0.5.0",
   "description": "Declarative control plane for agent harnesses — one YAML for grounding, tools, memory, and hooks.",
   "license": "MIT",
+  "homepage": "https://github.com/LanNguyenSi/harness",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LanNguyenSi/harness.git"
+  },
+  "bugs": {
+    "url": "https://github.com/LanNguyenSi/harness/issues"
+  },
+  "keywords": [
+    "claude-code",
+    "agent",
+    "harness",
+    "policy",
+    "evidence-ledger",
+    "mcp"
+  ],
   "type": "module",
   "bin": {
     "harness": "./dist/cli/main.js"
   },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:cov": "vitest run --coverage",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "chalk": "^5.3.0",
