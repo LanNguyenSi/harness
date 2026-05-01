@@ -221,6 +221,109 @@ Library-side:
 
 A self-merge attempt is blocked end-to-end on my real harness installation: `mcp__agent-tasks__pull_requests_merge` against a PR without a `review:${PR_NUMBER}` ledger entry refuses, `harness explain review-before-merge --trace` shows the full decision trail, and the same invocation succeeds after `ledger record review:42 ...`. Tag `v0.4.0`.
 
+## Phase 5 — Polish + dogfood lessons
+
+### Scope
+
+Phase 4 shipped policies that *fire*. Phase 5 ran them end-to-end against the real grounding-mcp + the live SQLite ledger, captured the bugs that surfaced on the way, and turned the whole feedback loop into a quality-of-life pass on `audit` / `explain --trace` / `policy intercept`. No new YAML keys, no new structural surfaces. The package is now also distributed on npm as `@lannguyensi/harness`.
+
+### Deliverables
+
+CLI ergonomics:
+
+- **`harness policy intercept --verbose`** — opt-in stderr diagnostics for non-allow decisions (policy name, ledger_tag, matched count, reason, sorted extract values). Default off; v0.4.0 byte-equivalent. Also enabled via `HARNESS_POLICY_VERBOSE=1` (case-insensitive disable: `0` / `false` / `no` / `off`).
+- **`$CLAUDE_SESSION_ID` env fallback** — `audit` / `explain --trace` / `policy intercept` resolve `--session` via the chain `explicit > $CLAUDE_SESSION_ID > "default"` so reads inside a real Claude Code session find what writes landed under the actual UUID.
+
+Correctness fixes (live evidence in PR #39 dogfood):
+
+- **`audit --since` UTC parse** — SQLite `datetime('now')` writes UTC `YYYY-MM-DD HH:MM:SS`; `Date.parse` of the space form is local, so non-UTC hosts silently filtered out fresh entries. New `parseLedgerTimestamp` coerces to ISO-with-Z. Applied at all four call sites (audit row sort + cutoff filter, explain `selectLatestForPolicy`, `requires.entryTime`).
+- **`explain --trace` ms-precision sort** — sub-second collisions used to tie at `bt - at = 0` because the sort keyed on ledger `createdAt` (1-second precision) and V8's stable sort returned the earliest fire. New `decisionSortKey` prefers the decoded payload's `evaluatedAt` (ms precision); fallback to `createdAt`. Same fix in `audit` row order.
+- **`policy_decision` first-class entry type** — was encoded as `type: "fact"` with a `policy_decision:` content prefix, so past audit payloads' serialised `"ledgerTag":"review:42"` substring-matched the same tag the decision was about and inflated `matchedCount`. Promoted to a first-class `EntryType` in `@lannguyensi/evidence-ledger@0.2.0`; harness writes with the new type and a retry-fallback to legacy `fact` for old servers; reader tags rows with the bucket-derived type so the requires evaluator can drop them. Legacy `policy_decision:`-prefixed `fact` rows are also dropped via a content-prefix backstop.
+- **Server-side `audit` filter pushdown** — `audit` derives `sinceIso` from the existing `--since` cutoff and unconditionally requests `contentPrefix: "policy_decision:"` on `ledger_summary`. Capability detection via `tools/list` keeps it back-compatible with old servers (filter args are dropped silently when not advertised). Hot path (no filter requested) skips `tools/list` entirely.
+
+Distribution:
+
+- `@lannguyensi/harness` published to npm with `--access public --provenance`. CLI binary stays `harness`. Tag-driven workflow modeled after the agent-grounding pattern.
+
+Test + reproducibility:
+
+- `dogfood/phase5/run-smoke.sh` — reproducible end-to-end smoke against real grounding-mcp + live SQLite ledger, with five fail-closed gates (deny, ledger_add, silent allow, 5m audit, 24h audit, explain --trace). First-run baseline transcripts committed for review of the live wiring.
+- Shared `tests/_helpers/` builders (`makeManifest`, `makePolicy`, `makeDecision`, `makeDecisionEntry`) collapsed ~80 lines of duplicated test boilerplate.
+
+### Acceptance criteria
+
+- [x] `harness policy intercept --verbose` writes a stderr diagnostic block per non-allow decision; default off keeps v0.4.0 byte-equivalent.
+- [x] `audit` / `explain --trace` resolve sessionId via `explicit > $CLAUDE_SESSION_ID > "default"`; live regression test against a real ledger passes.
+- [x] `audit --since 5m` returns rows seconds after a policy fires on a non-UTC host (CEST verification on a fresh dogfood run).
+- [x] `explain --trace` returns the latest decision by `evaluatedAt` even when two fires share an SQL second.
+- [x] `policy_decision` rows live in their own `policyDecisions` bucket on `ledger_summary`; the requires evaluator sees zero matchedCount inflation from past audit payloads.
+- [x] `audit` pushes its filters server-side when the connected grounding-mcp advertises support, falls back transparently otherwise.
+- [x] `dogfood/phase5/run-smoke.sh` exits 0 with all five fail-closed gates passing against the production binary.
+- [x] `@lannguyensi/harness@0.5.0` is installable via `npm i -g @lannguyensi/harness` and the `harness` binary is on `$PATH`.
+
+### Non-goals
+
+- **No new YAML manifest keys.** Phase 5 stays on the `version: 1` schema.
+- **No new policy `requires` shapes.** v2 shapes (`confidence_floor`, `not_present`, `tag_filter`, `aggregate`) are still deferred per ARCHITECTURE.md §6.
+- **No backfill of pre-Phase-5 `policy_decision:`-prefixed `fact` rows in user ledgers.** They stay readable via the content-prefix backstop until they age out; explicit migration is a separate task if anyone asks for it.
+- **No headless `claude -p` dogfood as part of CI.** The synthetic-stdin smoke covers the same wire contract; the headless variant is filed as a follow-up (`67517c67`).
+
+### Exit gate
+
+`@lannguyensi/harness@0.5.0` published to npm; `dogfood/phase5/run-smoke.sh` re-runs end-to-end with all five gates green; `audit --since 5m` returns rows on a non-UTC host within seconds of a policy fire; `matchedCount` no longer inflates after a same-session deny followed by allow. Tag `v0.5.0`.
+
+## Phase 6 — Understanding Gate Policy Pack
+
+### Scope
+
+Before an agent edits files, runs shell, commits, or opens a PR, it must produce an *Understanding Report* (interpretation of the task: derived todos, acceptance criteria, assumptions, out-of-scope, risks). The user confirms, corrects, or "grills me until precise enough". Only after explicit approval is recorded in the evidence ledger may write-capable tools fire.
+
+Phase 6 introduces the *Policy Pack* concept as a first-class harness unit: a reusable bundle of instruction template + hooks + policies + permission profiles that ships under one name and is referenced from `harness.yaml` with one key. The Understanding Gate is the first showcase pack and the canonical reference implementation. Long-form design and rationale live in `lava-ice-logs/2026-04-30/harness-pre-execution-understanding-integration.md`.
+
+### Deliverables (sketch)
+
+- New manifest key (working name: `policy_packs:`) referencing imported pack bundles.
+- Pack format: a directory containing `pack.yaml` (metadata + manifest fragment), `instructions.md` (template inserted into `CLAUDE.md`/system prompts), and any associated hook scripts. Apply-time resolution merges the fragment into the effective manifest.
+- `understanding-before-execution` pack: writes an `understanding:${TASK_ID}` ledger entry on user approval; gates `Edit` / `Write` / `Bash` / `mcp__agent-tasks__pull_requests_create` etc. on its presence.
+- `harness pack add <name>` / `harness pack remove <name>` CLI surface.
+- Integration with `harness apply` so the pack's instruction template is applied to the per-project agent prompt without manual copy-paste.
+
+### Non-goals
+
+- A registry / marketplace for community-authored packs.
+- Cross-runtime packs beyond Claude Code.
+- Automatic UI for the user-confirms step (still text-mode).
+
+### Exit gate
+
+A fresh agent on a clean repo refuses to call write-capable tools until an Understanding Report has been produced and explicitly approved. The pack ships as `understanding-before-execution`, is `harness pack add`-able, and reproducible from one canonical command. Tag `v0.6.0`.
+
+## Phase 7 — Risk Gate
+
+### Scope
+
+Today's policy model evaluates a rule per matching trigger and returns a binary block/allow. Phase 7 makes harness reason about *the action itself*: an Action Envelope (tool + raw input + session + runtime context) is enriched by a Context Resolver (production / staging / dev / unknown), classified by a Risk Classifier (severity + categories + reversibility), then matched against policies whose `when:` clauses can reference `risk.severity_at_least`, `environment.name`, and similar. Decision space extends to `allow / warn / require_approval / deny`.
+
+Motivating use case: prevent `DROP TABLE users`, `kubectl delete namespace prod`, `terraform destroy` against an unverified production target before the runtime even fires the tool, even when the model would happily run them. Long-form design lives in `lava-ice-logs/2026-04-30/harness-risk-gate-extension.md`.
+
+### Deliverables (sketch)
+
+- New top-level YAML keys: `risk.classifiers:` (rule sets that map Action Envelope → severity + category + reversibility) and `environments.resolvers:` (rules that map Action Envelope → environment name).
+- New `policy.when:` clauses (`risk.severity_at_least`, `risk.category_in`, `environment.name`, `action.reversible`) that compose with the existing `requires:` shape.
+- New decision outcomes (`require_approval`) plumbed through `policy intercept`; runtime semantics defined.
+- `harness explain` extended: trace shows classifier match, resolved environment, requires evaluation.
+- A built-in `dangerous-shell` classifier covering destructive shell + cloud-CLI patterns, paired with a policy gating them on `environment.name != "production"` or `require_approval`.
+
+### Non-goals
+
+- Full risk modeling at the LLM level (this is rule-based classification, not learned).
+- Cross-session approval continuity (each `require_approval` is local to the request).
+- Auto-recovery / undo for actions classified post-hoc.
+
+### Exit gate
+
+`harness policy intercept` blocks a `kubectl delete namespace prod` invocation against a manifest that ships the built-in `dangerous-shell` classifier + `gate-prod-destructive` policy, and only allows it after a `require_approval` round-trip. Tag `v0.7.0`.
+
 ## Open decisions resolved here
 
 The four design questions flagged in this task's brief, each with a defended position and rationale.
@@ -270,4 +373,4 @@ For one final pass of expectation-setting:
 - **Cloud sync.** No team-shared manifests, no upstream policy bundles, no remote ledger.
 - **Auto-restart of Claude Code or MCP servers.** `apply` and `add` print restart hints; the user (or agent) does the actual restart.
 
-If a future capability does not fit one of the four phases above, that is the signal for either an explicit Phase 5 design doc or a separate sibling project — not a quiet expansion of this roadmap.
+If a future capability does not fit one of the seven phases above, that is the signal for either an explicit follow-up design doc (Phase 8+) or a separate sibling project — not a quiet expansion of this roadmap.
