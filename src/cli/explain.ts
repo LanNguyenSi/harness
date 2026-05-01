@@ -1,5 +1,6 @@
 import { stringify as stringifyYaml } from "yaml";
 import {
+  parseLedgerTimestamp,
   queryLedgerByTag,
   type LedgerEntry,
   type LedgerQueryResult,
@@ -70,8 +71,8 @@ function selectLatestForPolicy(
     .filter((x): x is { entry: LedgerEntry; payload: PolicyDecisionPayload } => x !== null);
   if (matches.length === 0) return null;
   matches.sort((a, b) => {
-    const at = Date.parse(a.entry.createdAt as string);
-    const bt = Date.parse(b.entry.createdAt as string);
+    const at = parseLedgerTimestamp(a.entry.createdAt as string);
+    const bt = parseLedgerTimestamp(b.entry.createdAt as string);
     return bt - at;
   });
   return matches[0]!;

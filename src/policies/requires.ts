@@ -1,5 +1,6 @@
 import type { Requires } from "../schema/requires.js";
 import { InvalidDurationError, parseDurationSeconds } from "./duration.js";
+import { parseLedgerTimestamp } from "./timestamp.js";
 
 export interface LedgerEntry {
   id: string;
@@ -47,7 +48,7 @@ function entryMatches(entry: LedgerEntry, tag: string): boolean {
 
 function entryTime(entry: LedgerEntry): number {
   const v = entry.createdAt;
-  const ms = v instanceof Date ? v.getTime() : Date.parse(v);
+  const ms = v instanceof Date ? v.getTime() : parseLedgerTimestamp(v);
   if (Number.isNaN(ms)) {
     throw new RequiresEvaluationError(
       `ledger entry ${entry.id} has unparseable createdAt: ${String(v)}`,

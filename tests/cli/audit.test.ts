@@ -129,6 +129,72 @@ describe("audit — filters", () => {
   });
 });
 
+describe("audit — Phase 5 #8: SQL DATETIME timestamp filtering", () => {
+  // Regression for the bug surfaced by `dogfood/phase5/run-smoke.sh`:
+  // SQLite's `datetime('now')` writes UTC text in `YYYY-MM-DD HH:MM:SS`
+  // form (no `T`, no `Z`). Pre-fix `Date.parse` interpreted that as
+  // local time, so on any non-UTC host a `--since` window narrower than
+  // the local TZ offset silently filtered out fresh entries. The
+  // production fix (parseLedgerTimestamp) treats the space-separated
+  // form as UTC; this test pins that contract.
+  const NOW_SQL = new Date("2026-05-01T08:34:00.000Z");
+
+  it("--since 5m includes entries written ~10s before now in SQL DATETIME form", async () => {
+    const sqlDatetime = "2026-05-01 08:33:50"; // 10s before NOW_SQL, UTC
+    const entries = [
+      decisionEntry(
+        { policyName: "review-before-merge", outcome: "deny", reason: "no matching" },
+        sqlDatetime,
+      ),
+    ];
+    const result = await audit({
+      configPath: MANIFEST_PATH,
+      since: "5m",
+      now: NOW_SQL,
+      fetchLedger: async () => ({ kind: "ok", entries }),
+    });
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.timestamp).toBe(sqlDatetime);
+  });
+
+  it("--since 60s drops a SQL DATETIME entry that is older than 60s", async () => {
+    const sqlDatetimeOld = "2026-05-01 08:32:30"; // 90s before NOW_SQL
+    const entries = [
+      decisionEntry(
+        { policyName: "review-before-merge", outcome: "allow", reason: "ok" },
+        sqlDatetimeOld,
+      ),
+    ];
+    const result = await audit({
+      configPath: MANIFEST_PATH,
+      since: "60s",
+      now: NOW_SQL,
+      fetchLedger: async () => ({ kind: "ok", entries }),
+    });
+    expect(result.decisions).toHaveLength(0);
+  });
+
+  it("sorts SQL DATETIME and ISO-with-Z entries onto the same axis", async () => {
+    const entries = [
+      decisionEntry(
+        { policyName: "review-before-merge", outcome: "allow", reason: "second" },
+        "2026-05-01T08:33:55.000Z",
+      ),
+      decisionEntry(
+        { policyName: "review-before-merge", outcome: "deny", reason: "first" },
+        "2026-05-01 08:33:50",
+      ),
+    ];
+    const result = await audit({
+      configPath: MANIFEST_PATH,
+      since: "5m",
+      now: NOW_SQL,
+      fetchLedger: async () => ({ kind: "ok", entries }),
+    });
+    expect(result.decisions.map((d) => d.outcome)).toEqual(["deny", "allow"]);
+  });
+});
+
 describe("audit — empty window", () => {
   it("prints the documented empty-window message and exits 0", async () => {
     const result = await audit({
