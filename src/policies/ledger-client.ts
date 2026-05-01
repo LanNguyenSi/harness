@@ -28,6 +28,22 @@ export interface LedgerClientOptions {
 export interface QueryLedgerOptions extends LedgerClientOptions {
   /** Required: grounding session whose entries should be returned. */
   sessionId: string;
+  /**
+   * Phase 5 #5 — optional ISO-8601 UTC cutoff. When the connected
+   * grounding-mcp advertises support for `sinceIso` on `ledger_summary`
+   * (detected via tools/list), the filter is pushed server-side and
+   * the wire payload is narrowed to rows newer than the cutoff. Old
+   * servers silently ignore the option and the full session is
+   * returned, so consumers must continue to apply their own client-
+   * side window filter (this only ever reduces wire bytes).
+   */
+  sinceIso?: string;
+  /**
+   * Phase 5 #5 — optional content-prefix filter. Same shape as
+   * `sinceIso`: server-side narrowing only when supported, no
+   * contract change for client-side post-filtering.
+   */
+  contentPrefix?: string;
 }
 
 export type LedgerQueryResult =
@@ -282,6 +298,39 @@ function startSubprocess(
   };
 }
 
+/**
+ * Phase 5 #5 — read the inputSchema for `ledger_summary` from a
+ * `tools/list` response and project the set of advertised property
+ * names (which are the args harness can send without tripping a zod
+ * rejection on an older server).
+ *
+ * Defensive: any unexpected shape (timeout, exit, non-array, missing
+ * inputSchema) returns the conservative `{ "sessionId" }` set so the
+ * caller falls back to client-side filtering instead of speculatively
+ * including args that an old server would reject.
+ */
+async function detectLedgerSummaryArgs(
+  ctl: CallResult,
+  _timeoutMs: number,
+): Promise<Set<string>> {
+  const fallback = new Set(["sessionId"]);
+  const result = await ctl.call(2, "tools/list", {});
+  if (result === "exit" || result === "timeout") return fallback;
+  if (result.error) return fallback;
+  const r = result.result as { tools?: unknown } | undefined;
+  if (!r || !Array.isArray(r.tools)) return fallback;
+  for (const tool of r.tools) {
+    const t = tool as { name?: unknown; inputSchema?: unknown };
+    if (t.name !== "ledger_summary") continue;
+    const schema = t.inputSchema as { properties?: unknown } | undefined;
+    if (!schema || !schema.properties || typeof schema.properties !== "object") {
+      return fallback;
+    }
+    return new Set(Object.keys(schema.properties as Record<string, unknown>));
+  }
+  return fallback;
+}
+
 function exitDiagnostic(ctl: CallResult): string {
   const err = ctl.spawnError();
   if (err) return `spawn failed: ${err.message}`;
@@ -350,9 +399,28 @@ export async function queryLedgerByTag(
 
     ctl.notify("notifications/initialized");
 
-    const callResult = await ctl.call(2, "tools/call", {
+    // Phase 5 #5 — capability detection only when we actually want to
+    // push a filter server-side. Older grounding-mcp builds accept only
+    // `sessionId` on `ledger_summary`; harness spawns a binary path
+    // chosen by the operator, so we cannot assume a version. Skipping
+    // tools/list when no filter is requested keeps the unfiltered hot
+    // path one round-trip fewer.
+    const wantsFilter =
+      opts.sinceIso !== undefined || opts.contentPrefix !== undefined;
+    const supportedArgs = wantsFilter
+      ? await detectLedgerSummaryArgs(ctl, timeoutMs)
+      : new Set(["sessionId"]);
+    const callArgs: Record<string, unknown> = { sessionId: opts.sessionId };
+    if (opts.sinceIso !== undefined && supportedArgs.has("sinceIso")) {
+      callArgs.sinceIso = opts.sinceIso;
+    }
+    if (opts.contentPrefix !== undefined && supportedArgs.has("contentPrefix")) {
+      callArgs.contentPrefix = opts.contentPrefix;
+    }
+
+    const callResult = await ctl.call(3, "tools/call", {
       name: "ledger_summary",
-      arguments: { sessionId: opts.sessionId },
+      arguments: callArgs,
     });
     if (callResult === "exit") {
       return {

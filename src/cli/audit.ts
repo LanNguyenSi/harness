@@ -24,8 +24,15 @@ export interface AuditOptions extends LoaderOptions {
   policy?: string;
   outcome?: AuditOutcome;
   sessionId?: string;
-  /** Override the ledger fetcher (tests). */
-  fetchLedger?: (sessionId: string) => Promise<LedgerQueryResult>;
+  /**
+   * Override the ledger fetcher (tests). The optional `filters` arg
+   * carries the Phase 5 #5 server-side narrowing hints (sinceIso,
+   * contentPrefix); test fakes can ignore it without consequence.
+   */
+  fetchLedger?: (
+    sessionId: string,
+    filters?: { sinceIso?: string; contentPrefix?: string },
+  ) => Promise<LedgerQueryResult>;
   /** Override "now" (tests). */
   now?: Date;
 }
@@ -52,7 +59,10 @@ function isValidOutcome(v: string): v is AuditOutcome {
 }
 
 function defaultFetcher(opts: AuditOptions) {
-  return async (sessionId: string): Promise<LedgerQueryResult> => {
+  return async (
+    sessionId: string,
+    filters?: { sinceIso?: string; contentPrefix?: string },
+  ): Promise<LedgerQueryResult> => {
     const { manifest } = loadManifest(opts);
     const server = manifest.tools.mcp.find((m) => m.name === "grounding-mcp");
     if (!server) {
@@ -66,6 +76,8 @@ function defaultFetcher(opts: AuditOptions) {
       ...(server.env && { mcpEnv: server.env }),
       sessionId,
       timeoutMs: server.health?.timeout_ms ?? 5_000,
+      ...(filters?.sinceIso !== undefined && { sinceIso: filters.sinceIso }),
+      ...(filters?.contentPrefix !== undefined && { contentPrefix: filters.contentPrefix }),
     });
   };
 }
@@ -137,16 +149,24 @@ export async function audit(opts: AuditOptions = {}): Promise<AuditResult> {
 
   const sessionId = resolveSessionId(opts.sessionId);
   const fetch = opts.fetchLedger ?? defaultFetcher(opts);
-  const result = await fetch(sessionId);
+  // Phase 5 #5 — push filters server-side when the connected
+  // grounding-mcp supports them (capability-detected by
+  // queryLedgerByTag via tools/list). The audit's own client-side
+  // filter math at line ~165 is preserved verbatim, so an old server
+  // ignoring these args still produces the correct table.
+  const now = opts.now ?? new Date();
+  const cutoffMs = now.getTime() - windowSeconds * 1000;
+  const sinceIso = new Date(cutoffMs).toISOString();
+  const result = await fetch(sessionId, {
+    sinceIso,
+    contentPrefix: "policy_decision:",
+  });
   if (result.kind === "degraded") {
     throw new HarnessExitError(
       `ledger unreachable: ${result.reason}`,
       EX_UNAVAILABLE,
     );
   }
-
-  const now = opts.now ?? new Date();
-  const cutoffMs = now.getTime() - windowSeconds * 1000;
 
   const all = rowsFromEntries(result.entries);
   let filtered = all.filter((r) => parseLedgerTimestamp(r.timestamp) >= cutoffMs);
