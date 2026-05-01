@@ -54,9 +54,9 @@ PR reviewers can read the exact output cited below.
 | 1 | `01-deny.stdout` | `{"decision":"deny","reason":"review-before-merge: no matching ledger entry for tag \`review:42\`"}`. Asserted non-empty by the smoke driver. |
 | 2 | `02-ledger-add.stdout` | grounding-mcp returns the new ledger entry id. Asserted by the driver via `grep '"id":2'`. |
 | 3 | `03-allow.stdout` | empty file. Asserted by the driver via `[ -s "$ALLOW_STDOUT" ]`. |
-| 4a | `04a-audit-5m.stdout` | empty result — **regression witness for Phase 5 #8**. The 5-minute window silently excludes fresh entries on any non-UTC host. |
-| 4b | `04b-audit-24h.stdout` | both fires visible — the 24h window masks the TZ bug. The driver asserts ≥1 deny row and ≥1 allow row before passing. |
-| 5  | `05-explain.stdout` | YAML trace against the live ledger; the driver asserts `name: review-before-merge`, `ledgerTag: review:42`, and `sessionId: $SESSION` are all present. The selected `decision` field is timing-dependent: when the deny and the post-`ledger_add` allow happen to land in the same SQL second, Phase 5 #9 picks the deny; otherwise the allow. The committed baseline shows the allow path; an independent run that happened to collide showed the deny — see Phase 5 #9 task body for that capture. The smoke driver intentionally does NOT gate on which decision is picked; the trace's *liveness* against the smoke session is the acceptance. |
+| 4a | `04a-audit-5m.stdout` | both fires visible — Phase 5 #8 is fixed (the 5m window correctly returns fresh entries on non-UTC hosts). The driver asserts ≥1 deny row and ≥1 allow row before passing; an empty 5m result here is now a regression. |
+| 4b | `04b-audit-24h.stdout` | both fires visible — the 24h window kept as a belt-and-braces gate. Same ≥1 deny / ≥1 allow assertion. |
+| 5  | `05-explain.stdout` | YAML trace against the live ledger; the driver asserts `name: review-before-merge`, `ledgerTag: review:42`, and `sessionId: $SESSION` are all present. With Phase 5 #9 fixed, the selected `decision` is the latest by `evaluatedAt` (ms-precision) regardless of whether the two fires share an SQL second — so the allow consistently wins. |
 
 Settings.json wiring is regenerated (not hand-written) by:
 
@@ -75,14 +75,16 @@ The dogfood surfaced two new bugs and one concrete instance of an
 already-filed concern. Per Phase 5 #1 acceptance, these were filed
 before any silent fix:
 
-- **Phase 5 #8** — `audit --since` parses UTC ledger timestamps as local
-  time, so windows narrower than the host TZ offset return empty.
-  Reproduced by `--since 5m` showing no rows seconds after the fires;
-  `--since 24h` showing both.
-- **Phase 5 #9** — `explain --trace` picks the wrong decision when two
-  fires share an SQL second, because `selectLatestForPolicy` sorts on
-  ledger `createdAt` (1-second precision) instead of payload
-  `evaluatedAt` (ms precision).
+- **Phase 5 #8** (FIXED, PR #40) — `audit --since` was parsing UTC
+  ledger timestamps as local time, so windows narrower than the host
+  TZ offset returned empty. Originally reproduced by `--since 5m`
+  showing no rows seconds after the fires; the smoke now asserts the
+  5m window contains both fires.
+- **Phase 5 #9** (FIXED, PR #41) — `explain --trace` was picking the
+  wrong decision when two fires shared an SQL second, because
+  `selectLatestForPolicy` sorted on ledger `createdAt` (1-second
+  precision) instead of the decoded payload's `evaluatedAt` (ms
+  precision). Same fix applied to `audit` row order.
 - **Phase 5 #4** (existing) — added a comment with concrete evidence:
   `policy_decision` entries are reachable by `ledger_summary` and
   trip `filterEntriesByTag`'s `.includes(tag)` substring check, so a

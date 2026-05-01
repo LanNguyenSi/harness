@@ -1,1 +1,4 @@
-no policy decisions in the last 5m
+timestamp            policy               outcome  reason
+-------------------  -------------------  -------  ---------------------------------------------
+2026-05-01 09:45:01  review-before-merge  deny     no matching ledger entry for tag `review:42`
+2026-05-01 09:45:01  review-before-merge  allow    2 matching ledger entries for tag `review:42`

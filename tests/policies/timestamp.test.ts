@@ -43,9 +43,12 @@ describe("parseLedgerTimestamp", () => {
   });
 
   it("survives a non-UTC test TZ when one is forced", () => {
-    // Forcing TZ at run-time only affects new Date() formatting, not
-    // the parser semantics — but documenting the expectation here
-    // pins the contract: the same input always returns the same epoch.
+    // On Linux/glibc, mid-run `process.env.TZ` mutation flips
+    // `Date.parse`'s interpretation of naive timestamps via tzset(),
+    // so without `parseLedgerTimestamp`'s normalisation a UTC-only CI
+    // would still let the bug survive an ill-considered code change.
+    // This test exercises that path and is the actual backstop for
+    // Phase 5 #8 on UTC CI hosts — do NOT delete as a no-op.
     const before = parseLedgerTimestamp("2026-05-01 08:33:24");
     const previousTz = process.env.TZ;
     try {

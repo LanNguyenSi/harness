@@ -154,12 +154,12 @@ echo "PASS: silent allow"
 echo
 
 # ------------------------------------------------------------------
-# Step 5a: audit at --since 5m. Demonstrates Phase 5 #8 (audit window
-# parses UTC-stored timestamps as local, so on any +N timezone the
-# 5-minute window silently excludes fresh entries). Captured as a
-# regression witness, NOT as an acceptance pass.
+# Step 4a: audit at --since 5m. Originally a Phase 5 #8 regression
+# witness (pre-fix the TZ-shifted window silently filtered fresh
+# entries on any non-UTC host). Now that #8 has shipped, this is a
+# real acceptance gate: the window MUST contain both fires.
 # ------------------------------------------------------------------
-echo "=== STEP 4a: harness audit --since 5m --session $SESSION (Bug #8 witness) ==="
+echo "=== STEP 4a: harness audit --since 5m --session $SESSION (acceptance, post-#8) ==="
 AUDIT5_OUT="$TRANSCRIPT_DIR/04a-audit-5m.stdout"
 set +e
 $HARNESS_BIN audit --config "$MANIFEST" --since 5m --session "$SESSION" \
@@ -168,15 +168,25 @@ AUDIT5_EXIT=$?
 set -e
 echo "exit = $AUDIT5_EXIT"
 cat "$AUDIT5_OUT"
-if grep -q "no policy decisions in the last 5m" "$AUDIT5_OUT"; then
-  echo "(empty 5m result is the documented Bug #8 footprint on a non-UTC host)"
+echo
+if [ "$AUDIT5_EXIT" -ne 0 ]; then
+  echo "FAIL: harness audit --since 5m exited $AUDIT5_EXIT"
+  exit 1
 fi
+DENY_5M=$(grep -c -E "review-before-merge[[:space:]]+deny" "$AUDIT5_OUT" || true)
+ALLOW_5M=$(grep -c -E "review-before-merge[[:space:]]+allow" "$AUDIT5_OUT" || true)
+if [ "$DENY_5M" -lt 1 ] || [ "$ALLOW_5M" -lt 1 ]; then
+  echo "FAIL: 5m audit must show at least one deny ($DENY_5M) and one allow ($ALLOW_5M) row"
+  echo "      (regression of Phase 5 #8 — TZ-shifted window filtering)"
+  exit 1
+fi
+echo "PASS: 5m audit shows deny + allow rows"
 echo
 
 # ------------------------------------------------------------------
-# Step 5b: audit at --since 24h. This is the acceptance gate: at a
-# wide-enough window the TZ bug is masked, and the table MUST contain
-# both fires.
+# Step 4b: audit at --since 24h. Wider acceptance gate kept as belt-and-
+# braces against the narrow window: a regression that breaks 5m but
+# leaves 24h working would still be caught here.
 # ------------------------------------------------------------------
 echo "=== STEP 4b: harness audit --since 24h --session $SESSION (acceptance) ==="
 AUDIT24_OUT="$TRANSCRIPT_DIR/04b-audit-24h.stdout"
