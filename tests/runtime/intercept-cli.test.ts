@@ -2,7 +2,8 @@ import { Readable, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runInterceptCli } from "../../src/cli/policy/intercept.js";
 import type { LedgerClient } from "../../src/runtime/intercept.js";
-import type { Manifest, Policy } from "../../src/schema/index.js";
+import type { Policy } from "../../src/schema/index.js";
+import { makeManifest } from "../_helpers/manifest.js";
 
 function streamFrom(s: string): NodeJS.ReadableStream {
   return Readable.from([s]);
@@ -34,23 +35,7 @@ const REVIEW_POLICY: Policy = {
   enforcement: "block",
 } as Policy;
 
-function fakeManifest(policies: Policy[]): Manifest {
-  return {
-    version: 1,
-    grounding: {} as Manifest["grounding"],
-    tools: { mcp: [], cli: [], builtin: { known: [] } } as unknown as Manifest["tools"],
-    memory: {} as Manifest["memory"],
-    hooks: [
-      {
-        name: "h",
-        event: "PreToolUse",
-        command: "/bin/true",
-        blocking: false,
-      } as Manifest["hooks"][number],
-    ],
-    policies,
-  } as Manifest;
-}
+const fakeManifest = (policies: Policy[]) => makeManifest({ policies });
 
 describe("runInterceptCli", () => {
   it("writes deny JSON when a matching policy denies", async () => {
