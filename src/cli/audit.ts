@@ -1,5 +1,6 @@
 import {
   parseDurationSeconds,
+  parseLedgerTimestamp,
   queryLedgerByTag,
   type LedgerEntry,
   type LedgerQueryResult,
@@ -85,7 +86,7 @@ function rowsFromEntries(entries: LedgerEntry[]): AuditDecisionRow[] {
       extractValues: payload.extractValues,
     });
   }
-  rows.sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+  rows.sort((a, b) => parseLedgerTimestamp(a.timestamp) - parseLedgerTimestamp(b.timestamp));
   return rows;
 }
 
@@ -140,7 +141,7 @@ export async function audit(opts: AuditOptions = {}): Promise<AuditResult> {
   const cutoffMs = now.getTime() - windowSeconds * 1000;
 
   const all = rowsFromEntries(result.entries);
-  let filtered = all.filter((r) => Date.parse(r.timestamp) >= cutoffMs);
+  let filtered = all.filter((r) => parseLedgerTimestamp(r.timestamp) >= cutoffMs);
   if (opts.policy) {
     filtered = filtered.filter((r) => r.name === opts.policy);
   }

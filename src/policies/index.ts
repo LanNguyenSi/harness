@@ -7,6 +7,7 @@ export {
   type RequiresTrace,
 } from "./requires.js";
 export { parseDurationSeconds, InvalidDurationError } from "./duration.js";
+export { parseLedgerTimestamp } from "./timestamp.js";
 export {
   queryLedgerByTag,
   type LedgerClientOptions,
