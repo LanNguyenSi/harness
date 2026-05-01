@@ -5,11 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { explain } from "../../src/cli/explain.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
-import {
-  encodeLedgerContent,
-  payloadFromDecision,
-} from "../../src/runtime/ledger-record.js";
-import type { PolicyDecision } from "../../src/runtime/intercept.js";
+import { makeDecisionEntry } from "../_helpers/decision.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..", "..");
@@ -85,27 +81,22 @@ describe("explain — error handling", () => {
 });
 
 describe("explain --trace", () => {
-  function decisionEntry(
-    overrides: Partial<PolicyDecision> & Pick<PolicyDecision, "policyName">,
-    createdAt: string,
-  ) {
-    const decision: PolicyDecision = {
-      enforcement: "block",
-      outcome: "deny",
-      reason: "no matching ledger entry for tag `review:42`",
-      extractValues: { PR_NUMBER: "42", SESSION_ID: "sess-1" },
-      ledgerTag: "review:42",
-      requiresEval: { matchedCount: 0, reason: "no matching ledger entry for tag `review:42`" },
-      evaluatedAt: createdAt,
-      ...overrides,
-    };
-    return {
-      id: createdAt,
-      content: encodeLedgerContent(payloadFromDecision(decision)),
-      source: "harness-policy-intercept",
+  // Local thin wrapper: explain tests pin SESSION_ID into extractValues
+  // by default (the "renders the most recent decision trail" test
+  // matches `PR_NUMBER` in the trace yaml). Pass through to the shared
+  // helper, layering the extra extract value.
+  const decisionEntry: typeof makeDecisionEntry = (overrides, createdAt) =>
+    makeDecisionEntry(
+      {
+        ...overrides,
+        extractValues: {
+          PR_NUMBER: "42",
+          SESSION_ID: "sess-1",
+          ...overrides.extractValues,
+        },
+      },
       createdAt,
-    };
-  }
+    );
 
   it("renders the most recent decision trail", async () => {
     const result = await explain("review-before-merge", {

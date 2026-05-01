@@ -1,35 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { audit } from "../../src/cli/audit.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
-import {
-  encodeLedgerContent,
-  payloadFromDecision,
-} from "../../src/runtime/ledger-record.js";
-import type { PolicyDecision } from "../../src/runtime/intercept.js";
+import { makeDecisionEntry as decisionEntry } from "../_helpers/decision.js";
 
 const NOW = new Date("2026-04-30T12:00:00.000Z");
-
-function decisionEntry(
-  overrides: Partial<PolicyDecision> & Pick<PolicyDecision, "policyName">,
-  createdAt: string,
-) {
-  const decision: PolicyDecision = {
-    enforcement: "block",
-    outcome: "deny",
-    reason: "no matching ledger entry for tag `review:42`",
-    extractValues: { PR_NUMBER: "42" },
-    ledgerTag: "review:42",
-    requiresEval: { matchedCount: 0, reason: "no matching ledger entry for tag `review:42`" },
-    evaluatedAt: createdAt,
-    ...overrides,
-  };
-  return {
-    id: createdAt,
-    content: encodeLedgerContent(payloadFromDecision(decision)),
-    source: "harness-policy-intercept",
-    createdAt,
-  };
-}
 
 const FIXTURE = [
   decisionEntry({ policyName: "review-before-merge", outcome: "deny", reason: "missing review" }, "2026-04-30T08:00:00.000Z"),

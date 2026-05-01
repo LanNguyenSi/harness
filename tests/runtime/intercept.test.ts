@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { intercept, type LedgerClient, type ToolEvent } from "../../src/runtime/index.js";
-import type { Manifest, Policy } from "../../src/schema/index.js";
 import type { ExtractBuiltins, LedgerEntry, LedgerQueryResult } from "../../src/policies/index.js";
+import type { Policy } from "../../src/schema/index.js";
+import { makeManifest, makePolicy as policy } from "../_helpers/manifest.js";
 
 const NOW = new Date("2026-04-30T12:00:00.000Z");
 
@@ -13,31 +14,7 @@ const BUILTINS: ExtractBuiltins = {
   CWD: "/home/lan/git/pandora/harness",
 };
 
-function policy(overrides: Partial<Policy> & Pick<Policy, "name" | "trigger" | "requires" | "hook">): Policy {
-  return {
-    description: "test",
-    enforcement: "block",
-    ...overrides,
-  } as Policy;
-}
-
-function manifest(policies: Policy[]): Manifest {
-  return {
-    version: 1,
-    grounding: {} as Manifest["grounding"],
-    tools: { mcp: [], cli: [], builtin: { known: [] } } as unknown as Manifest["tools"],
-    memory: {} as Manifest["memory"],
-    hooks: [
-      {
-        name: "h",
-        event: "PreToolUse",
-        command: "/bin/true",
-        blocking: false,
-      } as Manifest["hooks"][number],
-    ],
-    policies,
-  } as Manifest;
-}
+const manifest = (policies: Policy[]) => makeManifest({ policies });
 
 function makeLedger(
   result: LedgerQueryResult,
