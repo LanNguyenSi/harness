@@ -208,7 +208,7 @@ describe("runInterceptCli — Phase 5 #3: --verbose stderr diagnostics", () => {
     const stdoutLine = outOutput().trim();
     expect(JSON.parse(stdoutLine).decision).toBe("deny");
     const errText = errOutput();
-    expect(errText).toContain("harness policy intercept: review-before-merge — deny");
+    expect(errText).toContain("harness policy intercept: review-before-merge: deny");
     expect(errText).toContain("ledger_tag: review:42");
     expect(errText).toContain("matched: 0");
     expect(errText).toContain("reason: no matching ledger entry for tag `review:42`");
@@ -257,7 +257,7 @@ describe("runInterceptCli — Phase 5 #3: --verbose stderr diagnostics", () => {
       manifest: fakeManifest([REVIEW_POLICY]),
       ledger: denyLedger,
     });
-    expect(errOutput()).toContain("harness policy intercept: review-before-merge — deny");
+    expect(errOutput()).toContain("harness policy intercept: review-before-merge: deny");
   });
 
   it("HARNESS_POLICY_VERBOSE=0 stays silent (env disable)", async () => {
@@ -273,6 +273,23 @@ describe("runInterceptCli — Phase 5 #3: --verbose stderr diagnostics", () => {
     });
     expect(errOutput()).toBe("");
   });
+
+  it.each(["false", "FALSE", "no", "NO", "off", "Off", "0"])(
+    "HARNESS_POLICY_VERBOSE=%s stays silent (env disable variants)",
+    async (envValue) => {
+      process.env.HARNESS_POLICY_VERBOSE = envValue;
+      const { stream: out } = captureStream();
+      const { stream: err, output: errOutput } = captureStream();
+      await runInterceptCli({
+        stdin: streamFrom(denyEvent),
+        stdout: out,
+        stderr: err,
+        manifest: fakeManifest([REVIEW_POLICY]),
+        ledger: denyLedger,
+      });
+      expect(errOutput()).toBe("");
+    },
+  );
 
   it("explicit verbose=false beats HARNESS_POLICY_VERBOSE=1", async () => {
     process.env.HARNESS_POLICY_VERBOSE = "1";

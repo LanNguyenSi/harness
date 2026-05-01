@@ -71,7 +71,7 @@ function findGroundingMcp(manifest: Manifest): McpServer | null {
  * policy name so concurrent fires (rare but possible) stay readable.
  */
 function formatDecisionDiagnostic(decision: PolicyDecision): string {
-  const header = `harness policy intercept: ${decision.policyName} — ${decision.outcome}${
+  const header = `harness policy intercept: ${decision.policyName}: ${decision.outcome}${
     decision.outcome === "warn-degraded" ? " (ledger unreachable)" : ""
   }`;
   const lines: string[] = [header];
@@ -96,8 +96,8 @@ function isVerboseEnabled(opts: InterceptCliOptions): boolean {
   const env = process.env.HARNESS_POLICY_VERBOSE;
   if (typeof env !== "string") return false;
   if (env.length === 0) return false;
-  // Accept anything truthy except literal "0"/"false" (case-insensitive).
-  return !/^(0|false)$/i.test(env.trim());
+  // Accept anything truthy except literal disable-words (case-insensitive).
+  return !/^(0|false|no|off)$/i.test(env.trim());
 }
 
 function realLedgerClient(server: McpServer, opts: InterceptCliOptions): LedgerClient {
