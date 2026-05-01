@@ -6,22 +6,39 @@ One zod-validated YAML manifest for grounding, tools, memory, hooks, and policie
 
 > Most config tools tell you what an agent is configured to use. `harness` tells you what an agent is *allowed to do*, under this exact context, and why.
 
-`harness` collapses the six-to-eight surfaces a working agent harness leaks across (`settings.json`, `CLAUDE.md`, memory frontmatter, MCP registrations, per-project overrides, hook scripts) into a single source of truth. Today (`v0.4.0`) policies fire end-to-end: a `mcp__agent-tasks__pull_requests_merge` call against a session without a `review:${PR_NUMBER}` ledger entry refuses; `harness explain review-before-merge --trace` shows exactly why. Phase 6 adds an *Understanding Gate* (agents confirm task interpretation before editing); Phase 7 adds a *Risk Gate* that blocks `DROP TABLE` against a prod target — even when the model would happily run it.
+`harness` collapses the six-to-eight surfaces a working agent harness leaks across (`settings.json`, `CLAUDE.md`, memory frontmatter, MCP registrations, per-project overrides, hook scripts) into a single source of truth. Today (`v0.5.0`) policies fire end-to-end: a `mcp__agent-tasks__pull_requests_merge` call against a session without a `review:${PR_NUMBER}` ledger entry refuses; `harness explain review-before-merge --trace` shows exactly why. Phase 6 adds an *Understanding Gate* (agents confirm task interpretation before editing); Phase 7 adds a *Risk Gate* that blocks `DROP TABLE` against a prod target, even when the model would happily run it.
+
+## Install
+
+```bash
+npm i -g @lannguyensi/harness
+```
+
+The CLI binary is `harness`. Node ≥ 20 required.
 
 ## Try it in 60 seconds
 
 ```bash
+# Statically predict which policies fire for a tool call (no ledger, no LLM).
+# Uses the bundled reference manifest from the npm package.
+harness dry-run "merge PR 42" \
+  --tool mcp__agent-tasks__pull_requests_merge \
+  --tool-args '{"prNumber":42}' \
+  --config "$(npm root -g)/@lannguyensi/harness/dist/../docs/examples/full-manifest.yaml"
+```
+
+Or from a checkout:
+
+```bash
 git clone https://github.com/LanNguyenSi/harness && cd harness
 npm install && npm run build
-
-# Statically predict which policies fire for a tool call (no ledger, no LLM)
 node dist/cli/main.js dry-run "merge PR 42" \
   --tool mcp__agent-tasks__pull_requests_merge \
   --tool-args '{"prNumber":42}' \
   --config docs/examples/full-manifest.yaml
 ```
 
-`dry-run` reads the reference manifest (`docs/examples/full-manifest.yaml`), runs the trigger matcher, substitutes `${PR_NUMBER}=42` through the JSONPath-restricted extract DSL, and tells you exactly which hooks would fire and which policies would match — before any ledger I/O.
+`dry-run` reads the reference manifest, runs the trigger matcher, substitutes `${PR_NUMBER}=42` through the JSONPath-restricted extract DSL, and tells you exactly which hooks would fire and which policies would match — before any ledger I/O.
 
 ## What a run looks like
 
@@ -72,16 +89,20 @@ When the matching policy actually fires (via `harness policy intercept`, wired b
 {"decision":"deny","reason":"review-before-merge: no matching ledger entry for tag `review:42`"}
 ```
 
+With `--verbose` (or `HARNESS_POLICY_VERBOSE=1`), stderr also carries a structured diagnostic block — policy name, ledger_tag, matched count, reason, sorted extract values — so the user sees *why* without a follow-up `explain --trace`.
+
 After the entry is recorded, the same call is silently allowed. Every fire writes a `policy_decision` row that `harness audit` and `harness explain --trace` replay:
 
 ```
-$ node dist/cli/main.js audit --since 1h --policy review-before-merge --session sess-1 --config docs/examples/full-manifest.yaml
+$ harness audit --since 1h --policy review-before-merge
 
 timestamp                 policy               outcome  reason
 ------------------------  -------------------  -------  ---------------------------------------------
 2026-04-30T18:30:00.000Z  review-before-merge  deny     no matching ledger entry for tag `review:42`
 2026-04-30T18:31:00.000Z  review-before-merge  allow    1 matching ledger entries for tag `review:42`
 ```
+
+Inside a Claude Code session, `--session` defaults to `$CLAUDE_SESSION_ID`, so the read path automatically lines up with what the runtime hook wrote.
 
 ## Next steps
 
@@ -96,14 +117,14 @@ timestamp                 policy               outcome  reason
 ## Common commands
 
 ```bash
-node dist/cli/main.js init --template full --config /tmp/harness-demo/harness.yaml
-node dist/cli/main.js describe   --config /tmp/harness-demo/harness.yaml --pillar tools
-node dist/cli/main.js doctor     --config /tmp/harness-demo/harness.yaml --shallow
-node dist/cli/main.js validate   --config /tmp/harness-demo/harness.yaml
-node dist/cli/main.js apply      --config /tmp/harness-demo/harness.yaml   # regenerate settings.json + MEMORY.md, write harness.lock
-node dist/cli/main.js diff --since-apply --config /tmp/harness-demo/harness.yaml
-node dist/cli/main.js explain review-before-merge --trace --config docs/examples/full-manifest.yaml
-node dist/cli/main.js audit --since 24h --config docs/examples/full-manifest.yaml
+harness init --template full --config /tmp/harness-demo/harness.yaml
+harness describe        --config /tmp/harness-demo/harness.yaml --pillar tools
+harness doctor          --config /tmp/harness-demo/harness.yaml --shallow
+harness validate        --config /tmp/harness-demo/harness.yaml
+harness apply           --config /tmp/harness-demo/harness.yaml   # regenerate settings.json + MEMORY.md, write harness.lock
+harness diff --since-apply --config /tmp/harness-demo/harness.yaml
+harness explain review-before-merge --trace
+harness audit --since 24h
 ```
 
 ## What's next
@@ -123,12 +144,12 @@ Both build on Phase 4's `policy intercept` runtime backbone; neither replaces it
 - [x] Repo bootstrap (LICENSE, .gitignore)
 - [x] README + VISION — repo legible
 - [x] ARCHITECTURE — YAML shape + CLI surface agreed
-- [x] ROADMAP — phases 1–4 with acceptance criteria
+- [x] ROADMAP — phases 1–7 with acceptance criteria
 - [x] Phase 1 — read-only inventory (`describe`, `validate`, `doctor`, `list`, `explain`, `diff`) — released as [`v0.1.0`](CHANGELOG.md#010---2026-04-29)
 - [x] Phase 2 — managed edits (`init`, `add`, `remove`, `adopt`, `export`) — released as [`v0.2.0`](CHANGELOG.md#020---2026-04-29)
 - [x] Phase 3 — declarative truth (`apply`, `diff --since-apply`, `harness.lock`) — released as [`v0.3.0`](CHANGELOG.md#030---2026-04-30)
 - [x] Phase 4 — policy layer (`policy intercept`, `explain --trace`, `audit`, `dry-run`, requires-evaluator + extract DSL + grounding-mcp adapter) — released as [`v0.4.0`](CHANGELOG.md#040---2026-04-30)
-- [ ] Phase 5 — polish + dogfood lessons (`apply --strict-lock`, `validate --check-lock`, sessionId default, `--verbose` deny diagnostics, sysexits normalisation, real-Claude-Code dogfood)
+- [x] Phase 5 — polish + dogfood lessons (`--verbose` policy diagnostics, `$CLAUDE_SESSION_ID` env fallback, server-side `audit` filter pushdown, `policy_decision` first-class entry type, audit `--since` UTC parse fix, `explain --trace` ms-precision sort, npm distribution as `@lannguyensi/harness`) — released as [`v0.5.0`](CHANGELOG.md#050---2026-05-01)
 - [ ] Phase 6 — Understanding Gate Policy Pack (agents must expose and confirm task understanding before write-capable tools fire)
 - [ ] Phase 7 — Risk Gate (Action Envelope + Risk Classifier + `allow / warn / require_approval / deny` for destructive-action prevention)
 
