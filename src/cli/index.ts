@@ -693,10 +693,15 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
+    .option(
+      "--verbose",
+      "emit a stderr diagnostic block for each non-allow decision (also enabled by HARNESS_POLICY_VERBOSE=1)",
+    )
     .action(async (options: {
       config?: string;
       project?: string;
       ledgerTimeout?: string;
+      verbose?: boolean;
     }) => {
       const cliOpts: Parameters<typeof runInterceptCli>[0] = {};
       if (options.config) cliOpts.configPath = options.config;
@@ -705,6 +710,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         const n = Number.parseInt(options.ledgerTimeout, 10);
         if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
       }
+      if (options.verbose) cliOpts.verbose = options.verbose;
       await runInterceptCli(cliOpts);
     });
 

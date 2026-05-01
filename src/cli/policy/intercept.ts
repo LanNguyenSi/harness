@@ -24,6 +24,8 @@ export interface InterceptCliOptions extends LoaderOptions {
   stdin?: NodeJS.ReadableStream;
   /** Defaults to process.stdout. */
   stdout?: NodeJS.WritableStream;
+  /** Defaults to process.stderr. */
+  stderr?: NodeJS.WritableStream;
   /** Override timeout per ledger call. */
   ledgerTimeoutMs?: number;
   /** Override "now" for deterministic tests. */
@@ -32,6 +34,13 @@ export interface InterceptCliOptions extends LoaderOptions {
   ledger?: LedgerClient;
   /** Inject the resolved manifest (tests). */
   manifest?: Manifest;
+  /**
+   * When true (or `HARNESS_POLICY_VERBOSE` env is truthy), emit a
+   * human-readable diagnostic block to stderr for each non-allow
+   * decision. stdout is unaffected, so Claude Code's deny JSON contract
+   * is preserved. Phase 5 #3 — opt-in only.
+   */
+  verbose?: boolean;
 }
 
 export interface InterceptCliResult {
@@ -54,6 +63,41 @@ async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
 
 function findGroundingMcp(manifest: Manifest): McpServer | null {
   return manifest.tools.mcp.find((m) => m.name === "grounding-mcp") ?? null;
+}
+
+/**
+ * Phase 5 #3 — render a deny / warn-degraded decision as a stderr
+ * diagnostic block. Multiline, indented; each block is bounded by the
+ * policy name so concurrent fires (rare but possible) stay readable.
+ */
+function formatDecisionDiagnostic(decision: PolicyDecision): string {
+  const header = `harness policy intercept: ${decision.policyName} — ${decision.outcome}${
+    decision.outcome === "warn-degraded" ? " (ledger unreachable)" : ""
+  }`;
+  const lines: string[] = [header];
+  lines.push(`  ledger_tag: ${decision.ledgerTag}`);
+  if (decision.requiresEval !== undefined) {
+    lines.push(`  matched: ${decision.requiresEval.matchedCount}`);
+  }
+  lines.push(`  reason: ${decision.reason}`);
+  const extractKeys = Object.keys(decision.extractValues);
+  if (extractKeys.length > 0) {
+    lines.push("  extract:");
+    for (const k of extractKeys.sort()) {
+      lines.push(`    ${k}=${decision.extractValues[k]}`);
+    }
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function isVerboseEnabled(opts: InterceptCliOptions): boolean {
+  if (opts.verbose === true) return true;
+  if (opts.verbose === false) return false;
+  const env = process.env.HARNESS_POLICY_VERBOSE;
+  if (typeof env !== "string") return false;
+  if (env.length === 0) return false;
+  // Accept anything truthy except literal "0"/"false" (case-insensitive).
+  return !/^(0|false)$/i.test(env.trim());
 }
 
 function realLedgerClient(server: McpServer, opts: InterceptCliOptions): LedgerClient {
@@ -97,6 +141,8 @@ export async function runInterceptCli(
 ): Promise<InterceptCliResult> {
   const stdin = opts.stdin ?? process.stdin;
   const stdout = opts.stdout ?? process.stdout;
+  const stderr = opts.stderr ?? process.stderr;
+  const verbose = isVerboseEnabled(opts);
   const raw = await readStdin(stdin);
   let event: ToolEvent;
   try {
@@ -164,6 +210,13 @@ export async function runInterceptCli(
 
   if (result.blockJson) {
     stdout.write(`${JSON.stringify(result.blockJson)}\n`);
+  }
+
+  if (verbose) {
+    for (const decision of result.decisions) {
+      if (decision.outcome === "allow") continue;
+      stderr.write(formatDecisionDiagnostic(decision));
+    }
   }
 
   return {
