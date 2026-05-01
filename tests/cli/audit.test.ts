@@ -238,6 +238,68 @@ describe("audit — Phase 5 #9: order by ms-precision evaluatedAt", () => {
   });
 });
 
+describe("audit — Phase 5 #2: sessionId env fallback", () => {
+  it("uses $CLAUDE_SESSION_ID when --session is not given", async () => {
+    const saved = process.env.CLAUDE_SESSION_ID;
+    process.env.CLAUDE_SESSION_ID = "env-session-77";
+    try {
+      let observedSessionId: string | undefined;
+      await audit({
+        configPath: MANIFEST_PATH,
+        now: NOW,
+        fetchLedger: async (sid) => {
+          observedSessionId = sid;
+          return { kind: "ok", entries: [] };
+        },
+      });
+      expect(observedSessionId).toBe("env-session-77");
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_SESSION_ID;
+      else process.env.CLAUDE_SESSION_ID = saved;
+    }
+  });
+
+  it("explicit --session beats $CLAUDE_SESSION_ID", async () => {
+    const saved = process.env.CLAUDE_SESSION_ID;
+    process.env.CLAUDE_SESSION_ID = "env-session-77";
+    try {
+      let observedSessionId: string | undefined;
+      await audit({
+        configPath: MANIFEST_PATH,
+        now: NOW,
+        sessionId: "flag-session-99",
+        fetchLedger: async (sid) => {
+          observedSessionId = sid;
+          return { kind: "ok", entries: [] };
+        },
+      });
+      expect(observedSessionId).toBe("flag-session-99");
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_SESSION_ID;
+      else process.env.CLAUDE_SESSION_ID = saved;
+    }
+  });
+
+  it("falls back to 'default' when neither env nor flag is set", async () => {
+    const saved = process.env.CLAUDE_SESSION_ID;
+    delete process.env.CLAUDE_SESSION_ID;
+    try {
+      let observedSessionId: string | undefined;
+      await audit({
+        configPath: MANIFEST_PATH,
+        now: NOW,
+        fetchLedger: async (sid) => {
+          observedSessionId = sid;
+          return { kind: "ok", entries: [] };
+        },
+      });
+      expect(observedSessionId).toBe("default");
+    } finally {
+      if (saved !== undefined) process.env.CLAUDE_SESSION_ID = saved;
+    }
+  });
+});
+
 describe("audit — empty window", () => {
   it("prints the documented empty-window message and exits 0", async () => {
     const result = await audit({

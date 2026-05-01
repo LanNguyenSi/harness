@@ -598,7 +598,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .option("--project <name>", "apply per-project overrides")
     .option("--json", "emit JSON instead of YAML")
     .option("--trace", "include the full decision trail from the most recent evaluation")
-    .option("--session <id>", "grounding session whose audit log to read (default: 'default')")
+    .option("--session <id>", "grounding session whose audit log to read (default: $CLAUDE_SESSION_ID, then 'default')")
     .action(
       async (
         policyName: string,
@@ -634,7 +634,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     )
     .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
-    .option("--session <id>", "grounding session whose audit log to read (default: 'default')")
+    .option("--session <id>", "grounding session whose audit log to read (default: $CLAUDE_SESSION_ID, then 'default')")
     .option("--json", "emit JSON instead of a table")
     .action(async (options: {
       since?: string;

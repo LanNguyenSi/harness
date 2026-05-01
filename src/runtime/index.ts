@@ -13,6 +13,8 @@ export {
   payloadFromDecision,
   encodeLedgerContent,
   decodeLedgerContent,
+  decisionSortKey,
   type LedgerRecordOptions,
   type PolicyDecisionPayload,
 } from "./ledger-record.js";
+export { resolveSessionId } from "./session-id.js";

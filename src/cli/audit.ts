@@ -10,6 +10,7 @@ import {
   decodeLedgerContent,
   type PolicyDecisionPayload,
 } from "../runtime/ledger-record.js";
+import { resolveSessionId } from "../runtime/session-id.js";
 import { EX_UNAVAILABLE, EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { loadManifest, type LoaderOptions } from "./loader.js";
 
@@ -134,7 +135,7 @@ export async function audit(opts: AuditOptions = {}): Promise<AuditResult> {
     );
   }
 
-  const sessionId = opts.sessionId ?? "default";
+  const sessionId = resolveSessionId(opts.sessionId);
   const fetch = opts.fetchLedger ?? defaultFetcher(opts);
   const result = await fetch(sessionId);
   if (result.kind === "degraded") {

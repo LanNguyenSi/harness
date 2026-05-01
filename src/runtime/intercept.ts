@@ -19,6 +19,7 @@ import {
   type RequiresEvaluation,
 } from "../policies/index.js";
 import type { Manifest, Policy } from "../schema/index.js";
+import { resolveSessionId } from "./session-id.js";
 
 export interface ToolEvent {
   hook_event_name?: string;
@@ -133,7 +134,7 @@ async function evaluateOnePolicy(
     };
   }
 
-  const sessionId = options.event.session_id ?? "default";
+  const sessionId = resolveSessionId(options.event.session_id);
   let queryResult: LedgerQueryResult;
   try {
     queryResult = await options.ledger.query(
@@ -236,7 +237,7 @@ export async function intercept(
     const decision = await evaluateOnePolicy(policy, options);
     decisions.push(decision);
     try {
-      await options.ledger.record(decision, options.event.session_id ?? "default");
+      await options.ledger.record(decision, resolveSessionId(options.event.session_id));
     } catch {
       /* audit-write failure must not block; the decision is still applied. */
     }
