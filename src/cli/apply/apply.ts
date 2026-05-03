@@ -38,7 +38,9 @@ import {
   readLock,
   writeLock,
   type DriftedAsset,
+  type LockEntry,
 } from "../../io/harness-lock.js";
+import { mergeSettings, summarizeMerge } from "../../io/merge-settings.js";
 import {
   buildLastApply,
   readLastApply,
@@ -78,6 +80,25 @@ export interface ApplyOptions {
    * and exits 0, leaving the existing dry-run scope intact.
    */
   strictLock?: boolean;
+  /**
+   * `--target <path>`: also write the generated settings.json to <path>
+   * (in addition to harness.generated/). Resolved relative to cwd if not
+   * absolute; `~` is expanded. Pairs with `--merge` (3-way merge into an
+   * existing target file) or `--force` (overwrite existing target).
+   */
+  target?: string;
+  /**
+   * `--merge`: when --target points at a file that already exists, do a
+   * 3-way merge: replace the keys harness owns (whichever appear in the
+   * generated output, today: `hooks`); preserve every other top-level
+   * key in the existing file verbatim.
+   */
+  merge?: boolean;
+  /**
+   * `--force`: overwrite an existing target file with the generated
+   * settings as-is. Mutually exclusive with --merge.
+   */
+  force?: boolean;
   /** Test-injectable confirmation prompt; defaults to a stdin readline. */
   prompt?: (message: string) => Promise<string>;
 }
@@ -88,7 +109,8 @@ export type ApplyOutcome =
   | "drift-refuse"
   | "drift-discarded"
   | "would-apply"
-  | "lock-drift-refuse";
+  | "lock-drift-refuse"
+  | "target-exists-refuse";
 
 export interface FileApplyOutcome {
   basename: string;
@@ -120,6 +142,20 @@ export interface ApplyResult {
   dryRun: boolean;
   /** Path of the harness.lock that was (or would be) written. */
   lockPath: string;
+  /**
+   * Set when --target was passed: the absolute resolved target path.
+   * Present on every outcome (including target-exists-refuse and dry-run)
+   * so the CLI layer can include it in user-facing messages.
+   */
+  targetPath?: string;
+  /** Whether the target file was written this run. */
+  targetWritten?: boolean;
+  /**
+   * Human-readable one-liner describing the merge outcome, e.g.
+   * `merged into /path: replaced 1 owned key (hooks), preserved 4 other keys`.
+   * Present when --merge succeeded against an existing target.
+   */
+  targetMergeSummary?: string;
 }
 
 const DRIFT_HINT_MESSAGE =
@@ -128,6 +164,44 @@ const DRIFT_HINT_MESSAGE =
 function resolveManifestPath(opts: ApplyOptions): string {
   if (opts.configPath) return path.resolve(opts.configPath);
   return path.join(opts.homeDir ?? path.join(os.homedir(), ".claude"), MANIFEST_BASENAME);
+}
+
+function resolveTargetPath(target: string, homeDir?: string): string {
+  let p = target;
+  if (p === "~") p = homeDir ?? os.homedir();
+  else if (p.startsWith("~/")) p = path.join(homeDir ?? os.homedir(), p.slice(2));
+  return path.resolve(p);
+}
+
+function readTargetJson(targetPath: string): {
+  parsed: Record<string, unknown> | null;
+  parseError: string | null;
+} {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(targetPath, "utf8");
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === "EISDIR") {
+      return { parsed: null, parseError: "target path is a directory, not a file" };
+    }
+    return { parsed: null, parseError: null };
+  }
+  if (raw.trim() === "") return { parsed: {}, parseError: null };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    return { parsed: null, parseError: (e as Error).message };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { parsed: null, parseError: "target file is not a JSON object" };
+  }
+  return { parsed: parsed as Record<string, unknown>, parseError: null };
+}
+
+function serializeJson(obj: Record<string, unknown>): string {
+  return `${JSON.stringify(obj, null, 2)}\n`;
 }
 
 // `harness.generated/` lives next to whichever manifest is in use. If the
@@ -266,6 +340,87 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     };
   }
 
+  // --target precondition: validate up front so we don't half-apply (write
+  // harness.generated/, then refuse on the target). The settings.json
+  // expected content is the manifest's projection — so the merge inputs
+  // are already known here.
+  const targetPath = opts.target ? resolveTargetPath(opts.target, opts.homeDir) : undefined;
+  if (!targetPath && (opts.merge || opts.force)) {
+    throw new HarnessExitError(
+      `--${opts.merge ? "merge" : "force"} requires --target`,
+      EX_NOINPUT,
+    );
+  }
+  let targetContent: string | undefined;
+  let targetMergeSummary: string | undefined;
+  let targetChanged = false;
+  if (targetPath) {
+    if (opts.merge && opts.force) {
+      throw new HarnessExitError(
+        "--merge and --force are mutually exclusive",
+        EX_NOINPUT,
+      );
+    }
+    const settingsExpected = expected.find((f) => f.basename === SETTINGS_BASENAME);
+    if (!settingsExpected) {
+      throw new HarnessExitError(
+        "internal: settings.json missing from expected files",
+        EX_NOINPUT,
+      );
+    }
+    const generatedSettings = JSON.parse(settingsExpected.content) as Record<string, unknown>;
+    let targetStat: fs.Stats | null = null;
+    try {
+      targetStat = fs.statSync(targetPath);
+    } catch {
+      targetStat = null;
+    }
+    if (targetStat !== null && !targetStat.isFile()) {
+      throw new HarnessExitError(
+        `target ${targetPath} exists but is not a regular file (e.g. directory or device)`,
+        EX_NOINPUT,
+      );
+    }
+    const targetExists = targetStat !== null;
+    if (targetExists) {
+      const { parsed, parseError } = readTargetJson(targetPath);
+      if (opts.merge) {
+        if (parseError !== null) {
+          throw new HarnessExitError(
+            `cannot --merge into ${targetPath}: ${parseError}`,
+            EX_NOINPUT,
+          );
+        }
+        const mergeResult = mergeSettings(parsed, generatedSettings);
+        targetContent = serializeJson(mergeResult.merged);
+        targetMergeSummary = summarizeMerge(targetPath, mergeResult);
+      } else if (opts.force) {
+        targetContent = settingsExpected.content;
+      } else {
+        return {
+          manifestPath,
+          generatedDir,
+          files: [],
+          warnings,
+          restartHints: [],
+          outcome: "target-exists-refuse",
+          lockDrift,
+          written: false,
+          dryRun: opts.dryRun ?? false,
+          lockPath,
+          targetPath,
+          targetWritten: false,
+        };
+      }
+    } else {
+      targetContent = settingsExpected.content;
+    }
+    if (targetContent !== undefined) {
+      const currentTargetContent = readOnDisk(targetPath);
+      targetChanged = currentTargetContent !== targetContent;
+    }
+  }
+
   const fileOutcomes: FileApplyOutcome[] = [];
   let anyDriftRefuse = false;
   let anyChanged = false;
@@ -346,21 +501,27 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   const restartHints = prevManifest ? emitRestartHints(prevManifest, manifest) : [];
 
   if (opts.dryRun) {
-    return {
+    const result: ApplyResult = {
       manifestPath,
       generatedDir,
       files: fileOutcomes,
       warnings,
       restartHints,
-      outcome: anyChanged ? "would-apply" : "no-changes",
+      outcome: anyChanged || targetChanged ? "would-apply" : "no-changes",
       lockDrift,
       written: false,
       dryRun: true,
       lockPath,
     };
+    if (targetPath) {
+      result.targetPath = targetPath;
+      result.targetWritten = false;
+      if (targetMergeSummary !== undefined) result.targetMergeSummary = targetMergeSummary;
+    }
+    return result;
   }
 
-  if (!anyChanged && lastApply !== null) {
+  if (!anyChanged && !targetChanged && lastApply !== null) {
     // Idempotent no-op for generated files. If asset-content drift was
     // detected against harness.lock, rewrite the lock now with current
     // SHAs so the drift is not "sticky": the user sees the drift line
@@ -372,9 +533,15 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
         ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
         ...(opts.project !== undefined ? { projectName: opts.project } : {}),
       });
-      writeLock(lockPath, refreshed);
+      const refreshedWithTarget = appendTargetEntry(
+        refreshed,
+        targetPath,
+        targetContent,
+        previousLock,
+      );
+      writeLock(lockPath, refreshedWithTarget);
     }
-    return {
+    const result: ApplyResult = {
       manifestPath,
       generatedDir,
       files: fileOutcomes,
@@ -386,12 +553,25 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
       dryRun: false,
       lockPath,
     };
+    if (targetPath) {
+      result.targetPath = targetPath;
+      result.targetWritten = false;
+    }
+    return result;
   }
 
-  fs.mkdirSync(generatedDir, { recursive: true });
-  for (const f of expected) {
-    const target = path.join(generatedDir, f.basename);
-    atomicWriteFile(target, f.content);
+  // Only write generated files if anything in harness.generated/ actually
+  // changed. When the user passed --target on an otherwise-clean tree,
+  // anyChanged may be false but targetChanged true: we still want to write
+  // the target without re-touching harness.generated/ files (and without
+  // re-stamping .last-apply, which would invalidate the no-changes
+  // shortcut on the very next apply).
+  if (anyChanged) {
+    fs.mkdirSync(generatedDir, { recursive: true });
+    for (const f of expected) {
+      const target = path.join(generatedDir, f.basename);
+      atomicWriteFile(target, f.content);
+    }
   }
 
   // Compute lock + memory-dir snapshot BEFORE writing .last-apply so the
@@ -405,23 +585,42 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     ...(opts.project !== undefined ? { projectName: opts.project } : {}),
   });
 
-  const newRecord: LastApplyRecord = buildLastApply(
-    Object.fromEntries(expected.map((f) => [f.basename, f.content])),
-  );
-  const manifestSnapshotJson = JSON.stringify(manifest);
-  newRecord.manifest = {
-    sha256: sha256Hex(manifestSnapshotJson),
-    content: manifestSnapshotJson,
-  };
-  const memoryDirSnapshots = collectMemoryDirSnapshots(lockEntries);
-  if (Object.keys(memoryDirSnapshots).length > 0) {
-    newRecord.memoryDirs = memoryDirSnapshots;
+  // Target write happens BEFORE the lock + .last-apply records so the
+  // recorded sha matches what's actually on disk (and so a crash between
+  // target-write and lock-write produces a re-applyable state, not a
+  // permanently-drifted lock).
+  let targetWritten = false;
+  if (targetPath && targetContent !== undefined && targetChanged) {
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    atomicWriteFile(targetPath, targetContent);
+    targetWritten = true;
   }
 
-  writeLastApply(generatedDir, newRecord);
-  writeLock(lockPath, lockEntries);
+  const lockEntriesWithTarget = appendTargetEntry(
+    lockEntries,
+    targetPath,
+    targetContent,
+    previousLock,
+  );
 
-  return {
+  if (anyChanged) {
+    const newRecord: LastApplyRecord = buildLastApply(
+      Object.fromEntries(expected.map((f) => [f.basename, f.content])),
+    );
+    const manifestSnapshotJson = JSON.stringify(manifest);
+    newRecord.manifest = {
+      sha256: sha256Hex(manifestSnapshotJson),
+      content: manifestSnapshotJson,
+    };
+    const memoryDirSnapshots = collectMemoryDirSnapshots(lockEntries);
+    if (Object.keys(memoryDirSnapshots).length > 0) {
+      newRecord.memoryDirs = memoryDirSnapshots;
+    }
+    writeLastApply(generatedDir, newRecord);
+  }
+  writeLock(lockPath, lockEntriesWithTarget);
+
+  const result: ApplyResult = {
     manifestPath,
     generatedDir,
     files: fileOutcomes,
@@ -429,10 +628,59 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     restartHints,
     outcome: "applied",
     lockDrift,
-    written: true,
+    written: anyChanged,
     dryRun: false,
     lockPath,
   };
+  if (targetPath) {
+    result.targetPath = targetPath;
+    result.targetWritten = targetWritten;
+    if (targetMergeSummary !== undefined) result.targetMergeSummary = targetMergeSummary;
+  }
+  return result;
+}
+
+function appendTargetEntry(
+  entries: LockEntry[],
+  targetPath: string | undefined,
+  targetContent: string | undefined,
+  previousLock: LockEntry[] | null,
+): LockEntry[] {
+  // Current invocation passed --target: emit an entry hashing the content
+  // we're writing this run.
+  if (targetPath && targetContent !== undefined) {
+    return [
+      ...entries,
+      {
+        kind: "target",
+        path: targetPath,
+        sha256: crypto.createHash("sha256").update(targetContent).digest("hex"),
+      },
+    ];
+  }
+  // No --target this run, but a prior apply set one up: carry every prior
+  // target entry forward, re-hashing the on-disk content so the lock
+  // remains an accurate drift baseline. A target file deleted out-of-band
+  // is dropped from the lock here (the next `validate --check-lock` would
+  // otherwise report it as missing forever); this matches the existing
+  // asset-handling at the same layer.
+  if (!previousLock) return entries;
+  const carried: LockEntry[] = [];
+  for (const e of previousLock) {
+    if (e.kind !== "target") continue;
+    let content: Buffer;
+    try {
+      content = fs.readFileSync(e.path);
+    } catch {
+      continue;
+    }
+    carried.push({
+      kind: "target",
+      path: e.path,
+      sha256: crypto.createHash("sha256").update(content).digest("hex"),
+    });
+  }
+  return [...entries, ...carried];
 }
 
 function sha256OfFile(filePath: string): string {

@@ -104,6 +104,25 @@ timestamp                 policy               outcome  reason
 
 Inside a Claude Code session, `--session` defaults to `$CLAUDE_SESSION_ID`, so the read path automatically lines up with what the runtime hook wrote.
 
+## Wire into Claude Code
+
+By default, `harness apply` writes the rendered settings to `harness.generated/settings.json` next to your manifest. To make Claude Code actually use it, point `apply` at a settings discovery path with `--target`:
+
+```bash
+# Project scope: write straight to .claude/settings.local.json (created if missing).
+harness apply --target .claude/settings.local.json
+
+# User scope: merge harness-owned keys into your existing ~/.claude/settings.json,
+# preserving env, permissions, enabledPlugins, and any other top-level keys.
+harness apply --target ~/.claude/settings.json --merge
+```
+
+`--merge` does a 3-way merge: harness-owned top-level keys (today: `hooks`) get replaced wholesale; everything else in the existing target file is preserved verbatim. Re-applying is idempotent: running twice produces the same target, and the second run reports `no changes`.
+
+If the target exists and you pass neither `--merge` nor `--force`, apply refuses with a clear hint instead of clobbering. `--force` overwrites with the generated content as-is (no merge).
+
+`harness.lock` records the target path + a sha256 of the merged output, so `harness validate --check-lock` flags out-of-band edits.
+
 ## Next steps
 
 | If you want to... | Read |

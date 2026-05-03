@@ -13,6 +13,7 @@ import { HarnessExitError } from "../../../src/cli/exit-codes.js";
 import {
   LOCK_BASENAME,
   buildLockEntries,
+  computeDrift,
   parseLock,
 } from "../../../src/io/harness-lock.js";
 import { parseManifest } from "../../../src/schema/index.js";
@@ -959,6 +960,244 @@ describe("apply: --strict-lock", () => {
     await apply({ homeDir: tmpHome, strictLock: true });
     const lockAfter = fs.readFileSync(lockPath(), "utf8");
     expect(lockAfter).toBe(lockBefore);
+  });
+});
+
+describe("apply --target / --merge", () => {
+  function basicHook(): unknown {
+    return {
+      name: "h",
+      event: "SessionStart",
+      command: "/h.sh",
+      blocking: false,
+      budget_ms: 30000,
+    };
+  }
+
+  it("--target with non-existent path writes generated settings as-is", async () => {
+    writeManifest({ hooks: [basicHook()] });
+    const target = path.join(tmpHome, "subdir", "settings.local.json");
+    const r = await apply({ homeDir: tmpHome, target });
+    expect(r.outcome).toBe("applied");
+    expect(r.targetWritten).toBe(true);
+    expect(r.targetPath).toBe(target);
+    expect(fs.existsSync(target)).toBe(true);
+    const onTarget = JSON.parse(fs.readFileSync(target, "utf8"));
+    const onGenerated = JSON.parse(fs.readFileSync(settingsPath(), "utf8"));
+    expect(onTarget).toEqual(onGenerated);
+  });
+
+  it("--target on existing file without --merge or --force refuses", async () => {
+    writeManifest({ hooks: [basicHook()] });
+    const target = path.join(tmpHome, "settings.local.json");
+    fs.writeFileSync(target, JSON.stringify({ env: { FOO: "1" } }, null, 2));
+    const r = await apply({ homeDir: tmpHome, target });
+    expect(r.outcome).toBe("target-exists-refuse");
+    expect(r.targetWritten).toBe(false);
+    // Target untouched.
+    expect(JSON.parse(fs.readFileSync(target, "utf8"))).toEqual({ env: { FOO: "1" } });
+  });
+
+  it("--target --merge replaces owned keys and preserves the rest", async () => {
+    writeManifest({ hooks: [basicHook()] });
+    const target = path.join(tmpHome, "settings.local.json");
+    fs.writeFileSync(
+      target,
+      JSON.stringify(
+        {
+          env: { FOO: "1" },
+          permissions: { allow: ["Bash(ls:*)"] },
+          hooks: { SessionStart: [{ hooks: [{ type: "command", command: "/old.sh" }] }] },
+          enabledPlugins: { foo: true },
+        },
+        null,
+        2,
+      ),
+    );
+    const r = await apply({ homeDir: tmpHome, target, merge: true });
+    expect(r.outcome).toBe("applied");
+    expect(r.targetWritten).toBe(true);
+    expect(r.targetMergeSummary).toBeDefined();
+    const merged = JSON.parse(fs.readFileSync(target, "utf8"));
+    // Owned: replaced.
+    expect(merged.hooks.SessionStart[0].hooks[0].command).toBe("/h.sh");
+    // Non-owned: preserved.
+    expect(merged.env).toEqual({ FOO: "1" });
+    expect(merged.permissions).toEqual({ allow: ["Bash(ls:*)"] });
+    expect(merged.enabledPlugins).toEqual({ foo: true });
+  });
+
+  it("--target --merge when target lacks owned keys creates them", async () => {
+    writeManifest({ hooks: [basicHook()] });
+    const target = path.join(tmpHome, "settings.local.json");
+    fs.writeFileSync(target, JSON.stringify({ env: { FOO: "1" } }, null, 2));
+    const r = await apply({ homeDir: tmpHome, target, merge: true });
+    expect(r.outcome).toBe("applied");
+    expect(r.targetWritten).toBe(true);
+    const merged = JSON.parse(fs.readFileSync(target, "utf8"));
+    expect(merged.env).toEqual({ FOO: "1" });
+    expect(merged.hooks).toBeDefined();
+    expect(merged.hooks.SessionStart).toBeDefined();
+  });
+
+  it("--target --force overwrites an existing target with generated content", async () => {
+    writeManifest({ hooks: [basicHook()] });
+    const target = path.join(tmpHome, "settings.local.json");
+    fs.writeFileSync(target, JSON.stringify({ env: { FOO: "1" } }, null, 2));
+    const r = await apply({ homeDir: tmpHome, target, force: true });
+    expect(r.outcome).toBe("applied");
+    expect(r.targetWritten).toBe(true);
+    const onTarget = JSON.parse(fs.readFileSync(target, "utf8"));
+    expect(onTarget.env).toBeUndefined();
+    expect(onTarget.hooks).toBeDefined();
+  });
+
+  it("--merge and --force together raises a usage error", async () => {
+    writeManifest({ hooks: [basicHook()] });
+    const target = path.join(tmpHome, "settings.local.json");
+    fs.writeFileSync(target, "{}");
+    await expect(
+      apply({ homeDir: tmpHome, target, merge: true, force: true }),
+    ).rejects.toBeInstanceOf(HarnessExitError);
+  });
+
+  it("re-applying with --target --merge is idempotent", async () => {
+    writeManifest({ hooks: [basicHook()] });
+    const target = path.join(tmpHome, "settings.local.json");
+    fs.writeFileSync(target, JSON.stringify({ env: { FOO: "1" } }, null, 2));
+    await apply({ homeDir: tmpHome, target, merge: true });
+    const after1 = fs.readFileSync(target, "utf8");
+    const r2 = await apply({ homeDir: tmpHome, target, merge: true });
+    expect(r2.outcome).toBe("no-changes");
+    expect(r2.targetWritten).toBe(false);
+    expect(fs.readFileSync(target, "utf8")).toBe(after1);
+  });
+
+  it("malformed JSON in target with --merge fails clearly", async () => {
+    writeManifest({ hooks: [basicHook()] });
+    const target = path.join(tmpHome, "settings.local.json");
+    fs.writeFileSync(target, "{ this is not json ");
+    await expect(
+      apply({ homeDir: tmpHome, target, merge: true }),
+    ).rejects.toBeInstanceOf(HarnessExitError);
+  });
+
+  it("harness.lock records the target path + sha; validate --check-lock detects out-of-band edits", async () => {
+    writeManifest({ hooks: [basicHook()] });
+    const target = path.join(tmpHome, "settings.local.json");
+    fs.writeFileSync(target, JSON.stringify({ env: { FOO: "1" } }, null, 2));
+    await apply({ homeDir: tmpHome, target, merge: true });
+
+    const entries = parseLock(fs.readFileSync(lockPath(), "utf8"));
+    const targetEntry = entries.find((e) => e.kind === "target");
+    expect(targetEntry).toBeDefined();
+    expect(targetEntry?.path).toBe(target);
+
+    // Hand-edit the target after the lock was written.
+    fs.writeFileSync(target, JSON.stringify({ env: { FOO: "tampered" } }, null, 2));
+
+    // computeDrift treats target like asset.
+    const drift = computeDrift(entries);
+    expect(drift.length).toBeGreaterThan(0);
+    expect(drift.some((d) => d.entry.kind === "target" && d.entry.path === target)).toBe(true);
+  });
+
+  it("plain apply after a --target apply preserves the target lock entry", async () => {
+    // Regression for the realistic workflow: user wires --target once, then
+    // re-applies without --target after editing the manifest. The target
+    // entry must persist in harness.lock so validate --check-lock keeps
+    // working.
+    writeManifest({ hooks: [basicHook()] });
+    const target = path.join(tmpHome, "settings.local.json");
+    fs.writeFileSync(target, JSON.stringify({ env: { FOO: "1" } }, null, 2));
+    await apply({ homeDir: tmpHome, target, merge: true });
+
+    // Edit manifest to force a non-target apply that has work to do.
+    writeManifest({
+      hooks: [
+        basicHook(),
+        {
+          name: "h2",
+          event: "PreToolUse",
+          command: "/h2.sh",
+          blocking: false,
+          budget_ms: 30000,
+        },
+      ],
+    });
+    const r = await apply({ homeDir: tmpHome });
+    expect(r.outcome).toBe("applied");
+
+    const entries = parseLock(fs.readFileSync(lockPath(), "utf8"));
+    const targetEntry = entries.find((e) => e.kind === "target");
+    expect(targetEntry).toBeDefined();
+    expect(targetEntry?.path).toBe(target);
+  });
+
+  it("validate --check-lock surfaces target drift after an out-of-band edit", async () => {
+    writeManifest({ hooks: [basicHook()] });
+    const target = path.join(tmpHome, "settings.local.json");
+    fs.writeFileSync(target, JSON.stringify({ env: { FOO: "1" } }, null, 2));
+    await apply({ homeDir: tmpHome, target, merge: true });
+    fs.writeFileSync(target, JSON.stringify({ env: { FOO: "tampered" } }, null, 2));
+
+    const { validate } = await import("../../../src/cli/validate/index.js");
+    const r = validate({ configPath: path.join(tmpHome, "harness.yaml"), checkLock: true });
+    expect(r.diagnostics.some((d) => d.path === target)).toBe(true);
+  });
+
+  it("--merge without --target raises a usage error", async () => {
+    writeManifest({ hooks: [basicHook()] });
+    await expect(
+      apply({ homeDir: tmpHome, merge: true }),
+    ).rejects.toBeInstanceOf(HarnessExitError);
+  });
+
+  it("--force without --target raises a usage error", async () => {
+    writeManifest({ hooks: [basicHook()] });
+    await expect(
+      apply({ homeDir: tmpHome, force: true }),
+    ).rejects.toBeInstanceOf(HarnessExitError);
+  });
+
+  it("--target pointing at an existing directory raises a clear error", async () => {
+    writeManifest({ hooks: [basicHook()] });
+    const target = path.join(tmpHome, "iam-a-dir");
+    fs.mkdirSync(target);
+    await expect(
+      apply({ homeDir: tmpHome, target }),
+    ).rejects.toThrow(/not a regular file/);
+  });
+
+  it("--target --merge --dry-run: reports would-apply, target file untouched", async () => {
+    writeManifest({ hooks: [basicHook()] });
+    const target = path.join(tmpHome, "settings.local.json");
+    const before = JSON.stringify({ env: { FOO: "1" } }, null, 2);
+    fs.writeFileSync(target, before);
+    const r = await apply({ homeDir: tmpHome, target, merge: true, dryRun: true });
+    expect(r.outcome).toBe("would-apply");
+    expect(r.targetWritten).toBe(false);
+    expect(fs.readFileSync(target, "utf8")).toBe(before);
+  });
+
+  it("--target on an unchanged generated tree still writes the target if it diverges", async () => {
+    writeManifest({ hooks: [basicHook()] });
+    // First apply, no --target: populates harness.generated/.
+    await apply({ homeDir: tmpHome });
+    // Second apply WITH --target on a fresh path.
+    const target = path.join(tmpHome, "settings.local.json");
+    const r = await apply({ homeDir: tmpHome, target });
+    expect(r.outcome).toBe("applied");
+    expect(r.targetWritten).toBe(true);
+    expect(fs.existsSync(target)).toBe(true);
+  });
+
+  it("expands ~ in --target relative to homeDir", async () => {
+    writeManifest({ hooks: [basicHook()] });
+    const r = await apply({ homeDir: tmpHome, target: "~/settings.local.json" });
+    expect(r.outcome).toBe("applied");
+    expect(r.targetPath).toBe(path.join(tmpHome, "settings.local.json"));
+    expect(fs.existsSync(r.targetPath ?? "")).toBe(true);
   });
 });
 
