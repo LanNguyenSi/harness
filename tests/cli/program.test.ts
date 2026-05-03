@@ -231,3 +231,139 @@ describe("CLI program — describe command", () => {
     expect(r.stdout).not.toMatch(/\ntools:\n/);
   });
 });
+
+describe("CLI program — apply --quiet / --json", () => {
+  async function withTmpManifest(
+    fn: (homeDir: string) => Promise<void>,
+  ): Promise<void> {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-apply-cli-"));
+    try {
+      fs.writeFileSync(
+        path.join(home, "harness.yaml"),
+        `version: 1
+hooks:
+  - { name: h, event: SessionStart, command: /h.sh, blocking: false, budget_ms: 30000 }
+policies: []
+tools:
+  builtin: { known: [] }
+memory:
+  directories: []
+`,
+      );
+      await fn(home);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }
+
+  it("default apply prints the Next-steps hint", async () => {
+    await withTmpManifest(async (home) => {
+      const r = await exec([
+        "apply",
+        "--config",
+        `${home}/harness.yaml`,
+      ]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("applied 2 file(s)");
+      expect(r.stdout).toContain("Next steps to wire into Claude Code:");
+      // Regression for the 2026-05-03 hallucination incident: an agent
+      // suggested `claude -p ... --output-dir`, a flag that does not exist.
+      // The hint must not contain it.
+      expect(r.stdout).not.toContain("--output-dir");
+    });
+  });
+
+  it("--quiet suppresses the Next-steps hint but keeps the summary", async () => {
+    await withTmpManifest(async (home) => {
+      const r = await exec([
+        "apply",
+        "--config",
+        `${home}/harness.yaml`,
+        "--quiet",
+      ]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("applied 2 file(s)");
+      expect(r.stdout).not.toContain("Next steps to wire into Claude Code:");
+    });
+  });
+
+  it("--json emits machine-readable JSON with no prose tail", async () => {
+    await withTmpManifest(async (home) => {
+      const r = await exec([
+        "apply",
+        "--config",
+        `${home}/harness.yaml`,
+        "--json",
+      ]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).not.toContain("Next steps to wire into Claude Code:");
+      expect(r.stdout).not.toContain("applied 2 file(s)");
+      const parsed = JSON.parse(r.stdout);
+      expect(parsed.outcome).toBe("applied");
+      expect(parsed.files).toBeDefined();
+      expect(parsed.lockPath).toBeDefined();
+    });
+  });
+
+  it("--json on target-exists-refuse exits non-zero with JSON outcome", async () => {
+    await withTmpManifest(async (home) => {
+      const fs = await import("node:fs");
+      const target = `${home}/settings.local.json`;
+      fs.writeFileSync(target, "{}");
+      const r = await exec([
+        "apply",
+        "--config",
+        `${home}/harness.yaml`,
+        "--target",
+        target,
+        "--json",
+      ]);
+      expect(r.code).not.toBe(0);
+      const parsed = JSON.parse(r.stdout);
+      expect(parsed.outcome).toBe("target-exists-refuse");
+    });
+  });
+
+  it("with --target the Next-steps hint collapses to a verify line that includes --settings", async () => {
+    await withTmpManifest(async (home) => {
+      const target = `${home}/settings.local.json`;
+      const r = await exec([
+        "apply",
+        "--config",
+        `${home}/harness.yaml`,
+        "--target",
+        target,
+      ]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain(`wired into ${target}`);
+      // Regression: a non-canonical target (e.g. /tmp/...) is not picked up
+      // by Claude Code's settings discovery, so the verify hint must
+      // include `--settings <target>` explicitly.
+      expect(r.stdout).toContain(`--settings ${target}`);
+      expect(r.stdout).not.toContain("Next steps to wire into Claude Code:");
+    });
+  });
+
+  it("--target --json: JSON includes targetWritten:true and stdout has no prose", async () => {
+    await withTmpManifest(async (home) => {
+      const target = `${home}/settings.local.json`;
+      const r = await exec([
+        "apply",
+        "--config",
+        `${home}/harness.yaml`,
+        "--target",
+        target,
+        "--json",
+      ]);
+      expect(r.code).toBe(0);
+      const parsed = JSON.parse(r.stdout);
+      expect(parsed.outcome).toBe("applied");
+      expect(parsed.targetWritten).toBe(true);
+      expect(parsed.targetPath).toBe(target);
+      expect(r.stdout).not.toContain("wired into");
+    });
+  });
+});
