@@ -69,10 +69,10 @@ export interface ApplyOptions {
   overwriteDrift?: boolean;
   /**
    * Phase 3 follow-up: when set, any non-empty `lockDrift` causes apply
-   * to refuse with the `lock-drift-refuse` outcome BEFORE writing
-   * anything (no files regenerated, lock unchanged). The user must
-   * either re-run without `--strict-lock` to acknowledge and refresh
-   * the lock, or revert the upstream asset edit.
+   * to refuse with the `lock-drift-refuse` outcome before writing,
+   * prompting, or regenerating the lock (no on-disk side effects). The
+   * user must either re-run without `--strict-lock` to acknowledge and
+   * refresh the lock, or revert the upstream asset edit.
    *
    * Dry-run wins: `--strict-lock --dry-run` reports the would-be drift
    * and exits 0, leaving the existing dry-run scope intact.
@@ -243,11 +243,14 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   const lockDrift: DriftedAsset[] = previousLock !== null ? computeDrift(previousLock) : [];
 
   // Phase 3 follow-up (strict-lock): when --strict-lock is set and any
-  // locked asset has drifted, refuse with a distinct outcome BEFORE we
-  // build the expected files, write anything, or regenerate the lock.
-  // Dry-run wins per the task spec: `--strict-lock --dry-run` falls
-  // through to the regular dry-run path so the user can preview the
-  // would-be drift without exiting non-zero.
+  // locked asset has drifted, refuse with a distinct outcome before we
+  // write anything, prompt, or regenerate the lock. (buildExpectedFiles
+  // ran above; that is pure computation against the in-memory manifest
+  // and produces no on-disk side effects, so running it pre-gate is
+  // harmless and keeps the order independent of strict-lock.) Dry-run
+  // wins per the task spec: `--strict-lock --dry-run` falls through to
+  // the regular dry-run path so the user can preview the would-be
+  // drift without exiting non-zero.
   if (opts.strictLock && lockDrift.length > 0 && !opts.dryRun) {
     return {
       manifestPath,
