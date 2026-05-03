@@ -62,6 +62,25 @@ describe("RealMcpProbe", () => {
     }
   });
 
+  it("returns no-response (not error) when the server exits cleanly without responding", async () => {
+    // Surfaced during v0.1.0 dogfood: agent-tasks exits 0 from the doctor
+    // probe because it is launched without a token and shuts down quietly.
+    // Reporting that as "FAILED" misleads; surface it as a distinct outcome.
+    const script = makeScript("#!/bin/sh\nexit 0\n");
+    const probe = new RealMcpProbe();
+    const server: McpServer = {
+      name: "agent-tasks",
+      command: [script],
+      health: { verb: "ping", timeout_ms: 2000 },
+      enabled: true,
+    };
+    const result = await probe.call(server);
+    expect(result.outcome.kind).toBe("no-response");
+    if (result.outcome.kind === "no-response") {
+      expect(result.outcome.phase).toBe("initialize");
+    }
+  });
+
   it("returns error with timeout message when the server hangs and never responds", async () => {
     const script = makeScript("#!/bin/sh\nsleep 10\n");
     const probe = new RealMcpProbe();
