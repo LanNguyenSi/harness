@@ -4,6 +4,14 @@ import type { McpServer } from "../schema/index.js";
 export type McpProbeOutcome =
   | { kind: "healthy"; latencyMs: number }
   | { kind: "error"; latencyMs: number; message: string }
+  /**
+   * Server exited with code 0 BEFORE the doctor received a JSON-RPC
+   * response. Distinct from `error` because the process did not crash;
+   * the most likely cause is a config issue (missing env var, wrong
+   * stdio mode) rather than a broken server. Format renders this
+   * without the "FAILED:" prefix that `error` carries.
+   */
+  | { kind: "no-response"; latencyMs: number; phase: "initialize" | "verb"; verb?: string }
   | { kind: "missing-verb" }
   | { kind: "disabled" };
 
@@ -163,6 +171,17 @@ async function runRealProbe(
       timeoutPromise(),
     ]);
     if (initResult === "exit") {
+      const latencyMs = Date.now() - start;
+      // Clean exit (code 0) before responding looks like a config issue
+      // (missing env var, wrong CLI mode, etc.), not a real failure.
+      // Render as a distinct outcome so the doctor line drops the
+      // "FAILED:" prefix.
+      if (exitCode === 0) {
+        return {
+          name: server.name,
+          outcome: { kind: "no-response", latencyMs, phase: "initialize" },
+        };
+      }
       const trimmed = stderrBuf.trim().split("\n").pop()?.trim() || "(no stderr)";
       const status =
         exitCode !== null ? `exit ${exitCode}` : exitSignal ? `signal ${exitSignal}` : "exited";
@@ -170,7 +189,7 @@ async function runRealProbe(
         name: server.name,
         outcome: {
           kind: "error",
-          latencyMs: Date.now() - start,
+          latencyMs,
           message: `process ${status}: ${trimmed}`,
         },
       };
@@ -205,12 +224,24 @@ async function runRealProbe(
       timeoutPromise(),
     ]);
     if (verbResult === "exit") {
+      const latencyMs = Date.now() - start;
+      if (exitCode === 0) {
+        return {
+          name: server.name,
+          outcome: {
+            kind: "no-response",
+            latencyMs,
+            phase: "verb",
+            verb: server.health.verb,
+          },
+        };
+      }
       const trimmed = stderrBuf.trim().split("\n").pop()?.trim() || "(no stderr)";
       return {
         name: server.name,
         outcome: {
           kind: "error",
-          latencyMs: Date.now() - start,
+          latencyMs,
           message: `process exited during ${server.health.verb}: ${trimmed}`,
         },
       };

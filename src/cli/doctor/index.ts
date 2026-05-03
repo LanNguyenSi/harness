@@ -228,6 +228,10 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   warningCount += report.manifest.warnings.length;
   for (const m of report.tools.mcp) {
     if (m.outcome.kind === "error") errorCount++;
+    // Clean-exit-without-response: doctor still cannot probe the server,
+    // so it counts toward the error tally even though the rendered line
+    // does not say "FAILED". Keeps the summary number truthful.
+    else if (m.outcome.kind === "no-response") errorCount++;
   }
   for (const c of report.tools.cli) {
     if (c.status === "error") errorCount++;

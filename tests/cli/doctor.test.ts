@@ -124,6 +124,35 @@ tools:
     expect(format(report)).toContain("unknown — no health verb declared");
   });
 
+  it("renders no-response distinct from FAILED and counts it as an error", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+tools:
+  mcp:
+    - name: agent-tasks
+      command: [/usr/bin/true]
+      health:
+        verb: ping
+      enabled: true
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({
+        "agent-tasks": { kind: "no-response", latencyMs: 12, phase: "initialize" },
+      }),
+      pathEnv: "",
+    });
+    expect(report.tools.mcp[0]?.outcome.kind).toBe("no-response");
+    expect(report.errorCount).toBe(1);
+    const text = format(report);
+    expect(text).toContain("✗ agent-tasks  no JSON-RPC response (process exited cleanly during initialize)");
+    expect(text).not.toContain("FAILED:");
+  });
+
   it("emits a healthy line with the probe latency", async () => {
     const home = makeFixture({
       "harness.yaml": `version: 1

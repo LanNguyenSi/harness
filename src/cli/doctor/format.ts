@@ -10,6 +10,16 @@ function mcpLine(r: McpProbeResult, shallow: boolean): string {
         : `    ✓ ${r.name}  healthy in ${r.outcome.latencyMs}ms`;
     case "error":
       return `    ✗ ${r.name}  FAILED: ${r.outcome.message}`;
+    case "no-response": {
+      // Render distinct from `error` so a clean exit-0 ("config issue")
+      // is not framed as a process crash. The visual marker stays ✗
+      // because the server still failed to answer the doctor.
+      const phase =
+        r.outcome.phase === "initialize"
+          ? "initialize"
+          : `${r.outcome.verb ?? "verb"} call`;
+      return `    ✗ ${r.name}  no JSON-RPC response (process exited cleanly during ${phase})`;
+    }
     case "missing-verb":
       return `    ? ${r.name}  unknown — no health verb declared`;
     case "disabled":
