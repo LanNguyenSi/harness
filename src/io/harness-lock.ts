@@ -45,7 +45,19 @@ export interface MemoryDirEntry {
   file_count: number;
 }
 
-export type LockEntry = AssetEntry | MemoryDirEntry;
+// `target` records the on-disk file `harness apply --target <path>` last
+// wrote (raw or merged). Drift-checked the same way as `asset` entries:
+// sha256 of the bytes vs the recorded sha. Lives separately from `asset`
+// so `validate --check-lock` and the diff/since-apply machinery can
+// distinguish "user-managed settings.json that harness wired into" from
+// "manifest-referenced hook script".
+export interface TargetEntry {
+  kind: "target";
+  path: string;
+  sha256: string;
+}
+
+export type LockEntry = AssetEntry | MemoryDirEntry | TargetEntry;
 
 export const LOCK_BASENAME = "harness.lock";
 
@@ -126,7 +138,7 @@ export function parseLock(content: string): LockEntry[] {
 function isLockEntry(x: unknown): x is LockEntry {
   if (!x || typeof x !== "object") return false;
   const e = x as Record<string, unknown>;
-  if (e.kind === "asset") {
+  if (e.kind === "asset" || e.kind === "target") {
     return typeof e.path === "string" && typeof e.sha256 === "string";
   }
   if (e.kind === "memory-dir") {
@@ -166,7 +178,7 @@ export function computeDrift(entries: LockEntry[]): DriftedAsset[] {
       drifted.push({ entry: e, reason: "missing" });
       continue;
     }
-    if (e.kind === "asset") {
+    if (e.kind === "asset" || e.kind === "target") {
       if (!stat.isFile()) {
         drifted.push({ entry: e, reason: "missing" });
         continue;

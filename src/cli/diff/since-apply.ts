@@ -141,7 +141,7 @@ function diffGeneratedFiles(
 function diffAssets(lockEntries: LockEntry[]): AssetDriftEntry[] {
   const out: AssetDriftEntry[] = [];
   for (const e of lockEntries) {
-    if (e.kind !== "asset") continue;
+    if (e.kind !== "asset" && e.kind !== "target") continue;
     let buf: Buffer;
     try {
       buf = fs.readFileSync(e.path);

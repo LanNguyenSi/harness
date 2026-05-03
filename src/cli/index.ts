@@ -491,6 +491,15 @@ export function buildProgram(opts: RunOptions = {}): Command {
       "--strict-lock",
       "refuse with exit 1 (no write) when harness.lock asset drift is detected; dry-run wins",
     )
+    .option(
+      "--target <path>",
+      "additionally write the generated settings.json to <path> (e.g. .claude/settings.local.json)",
+    )
+    .option(
+      "--merge",
+      "with --target, 3-way merge into an existing target file (replace owned keys, preserve others)",
+    )
+    .option("--force", "with --target, overwrite an existing target file (no merge)")
     .action(
       async (options: {
         config?: string;
@@ -498,6 +507,9 @@ export function buildProgram(opts: RunOptions = {}): Command {
         dryRun?: boolean;
         overwriteDrift?: boolean;
         strictLock?: boolean;
+        target?: string;
+        merge?: boolean;
+        force?: boolean;
       }) => {
         const result = await apply({
           ...(options.config !== undefined ? { configPath: options.config } : {}),
@@ -505,7 +517,17 @@ export function buildProgram(opts: RunOptions = {}): Command {
           ...(options.dryRun ? { dryRun: true } : {}),
           ...(options.overwriteDrift ? { overwriteDrift: true } : {}),
           ...(options.strictLock ? { strictLock: true } : {}),
+          ...(options.target !== undefined ? { target: options.target } : {}),
+          ...(options.merge ? { merge: true } : {}),
+          ...(options.force ? { force: true } : {}),
         });
+
+        if (result.outcome === "target-exists-refuse") {
+          stderr(
+            `target ${result.targetPath} exists; pass --merge to merge into it, or --force to overwrite\n`,
+          );
+          throw new HarnessExitError("", EX_FAIL);
+        }
 
         if (result.outcome === "lock-drift-refuse") {
           for (const d of result.lockDrift) {
@@ -551,6 +573,13 @@ export function buildProgram(opts: RunOptions = {}): Command {
           stdout(`applied ${changedFiles.length} file(s):\n`);
           for (const f of changedFiles) {
             stdout(`  ${f.path}\n`);
+          }
+          if (result.targetWritten && result.targetPath) {
+            if (result.targetMergeSummary) {
+              stdout(`${result.targetMergeSummary}\n`);
+            } else {
+              stdout(`wrote target: ${result.targetPath}\n`);
+            }
           }
           stdout(`harness.lock written to ${result.lockPath}\n`);
         }
