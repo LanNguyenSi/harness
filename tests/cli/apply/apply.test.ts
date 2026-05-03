@@ -884,6 +884,84 @@ describe("apply — last-apply record", () => {
   });
 });
 
+describe("apply: --strict-lock", () => {
+  function setupHookWithLock(): { hookFile: string; lockBefore: string } {
+    const hookFile = path.join(tmpHome, "git-preflight.sh");
+    fs.writeFileSync(hookFile, "v1\n");
+    writeManifest({
+      hooks: [
+        {
+          name: "git-preflight",
+          event: "SessionStart",
+          command: hookFile,
+          blocking: false,
+          budget_ms: 30000,
+        },
+      ],
+    });
+    return { hookFile, lockBefore: "" };
+  }
+
+  it("on a clean apply (no drift), --strict-lock proceeds normally", async () => {
+    setupHookWithLock();
+    await apply({ homeDir: tmpHome });
+    // No external edit between applies; second apply with strict-lock
+    // sees zero drift and falls through to the regular write path.
+    const r = await apply({ homeDir: tmpHome, strictLock: true });
+    expect(r.outcome === "applied" || r.outcome === "no-changes").toBe(true);
+    expect(r.lockDrift).toEqual([]);
+  });
+
+  it("after an external hook edit, --strict-lock refuses with outcome=lock-drift-refuse", async () => {
+    const { hookFile } = setupHookWithLock();
+    await apply({ homeDir: tmpHome });
+    fs.writeFileSync(hookFile, "v2-tampered\n");
+    const r = await apply({ homeDir: tmpHome, strictLock: true });
+    expect(r.outcome).toBe("lock-drift-refuse");
+    expect(r.written).toBe(false);
+    expect(r.lockDrift).toHaveLength(1);
+    expect(r.lockDrift[0]?.entry.path).toBe(hookFile);
+    expect(r.lockDrift[0]?.reason).toBe("modified");
+  });
+
+  it("after an external hook edit, plain apply (no flag) proceeds and rewrites the lock", async () => {
+    const { hookFile } = setupHookWithLock();
+    await apply({ homeDir: tmpHome });
+    const lockSha1Before = fs.readFileSync(lockPath(), "utf8");
+    fs.writeFileSync(hookFile, "v2-tampered\n");
+    const r = await apply({ homeDir: tmpHome });
+    // Default warn-only path: drift surfaced in lockDrift but apply
+    // still proceeds; the lock is rewritten with the current SHAs.
+    expect(r.outcome === "applied" || r.outcome === "no-changes").toBe(true);
+    const lockAfter = fs.readFileSync(lockPath(), "utf8");
+    expect(lockAfter).not.toBe(lockSha1Before);
+    expect(r.lockDrift).toHaveLength(1);
+  });
+
+  it("--strict-lock --dry-run reports drift but exits 0 (dry-run wins)", async () => {
+    const { hookFile } = setupHookWithLock();
+    await apply({ homeDir: tmpHome });
+    fs.writeFileSync(hookFile, "v2-tampered\n");
+    const r = await apply({ homeDir: tmpHome, strictLock: true, dryRun: true });
+    // Dry-run path takes precedence; outcome should be the regular
+    // dry-run verdict (would-apply / no-changes), not lock-drift-refuse.
+    expect(r.outcome === "would-apply" || r.outcome === "no-changes").toBe(true);
+    expect(r.dryRun).toBe(true);
+    expect(r.written).toBe(false);
+    expect(r.lockDrift).toHaveLength(1);
+  });
+
+  it("--strict-lock leaves the lock file unchanged when refusing", async () => {
+    const { hookFile } = setupHookWithLock();
+    await apply({ homeDir: tmpHome });
+    const lockBefore = fs.readFileSync(lockPath(), "utf8");
+    fs.writeFileSync(hookFile, "v2-tampered\n");
+    await apply({ homeDir: tmpHome, strictLock: true });
+    const lockAfter = fs.readFileSync(lockPath(), "utf8");
+    expect(lockAfter).toBe(lockBefore);
+  });
+});
+
 describe("apply — memory directory aggregation", () => {
   it("writes the MEMORY.md index from a single configured directory", async () => {
     const memDir = path.join(tmpHome, "memory");
