@@ -271,7 +271,7 @@ export async function recordPolicyDecision(
           params: {
             protocolVersion: "2024-11-05",
             capabilities: {},
-            clientInfo: { name: "harness-policy-intercept", version: "0.4.0" },
+            clientInfo: { name: "harness-policy-intercept", version: "0.6.0" },
           },
         })}\n`,
       );
