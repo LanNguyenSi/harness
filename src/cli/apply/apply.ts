@@ -56,7 +56,7 @@ import { parseManifest, type Manifest } from "../../schema/index.js";
 import { EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
 import { loadManifest } from "../loader.js";
 import { generateMemoryIndex } from "./generate-memory-index.js";
-import { generateSettings } from "./generate-settings.js";
+import { generateSettingsWithWarnings } from "./generate-settings.js";
 
 export const GENERATED_DIRNAME = "harness.generated";
 export const SETTINGS_BASENAME = "settings.json";
@@ -235,7 +235,8 @@ function buildExpectedFiles(
   manifest: Manifest,
   opts: ApplyOptions,
 ): { files: ExpectedFile[]; warnings: string[] } {
-  const settings = `${JSON.stringify(generateSettings(manifest), null, 2)}\n`;
+  const settingsResult = generateSettingsWithWarnings(manifest);
+  const settings = `${JSON.stringify(settingsResult.root, null, 2)}\n`;
   const indexResult = generateMemoryIndex(manifest, {
     ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
     ...(opts.project !== undefined ? { projectName: opts.project } : {}),
@@ -245,7 +246,7 @@ function buildExpectedFiles(
       { basename: SETTINGS_BASENAME, content: settings },
       { basename: MEMORY_BASENAME, content: indexResult.content },
     ],
-    warnings: indexResult.warnings,
+    warnings: [...settingsResult.warnings, ...indexResult.warnings],
   };
 }
 
