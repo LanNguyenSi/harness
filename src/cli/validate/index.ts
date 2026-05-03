@@ -70,10 +70,12 @@ export function validate(opts: ValidateOptions = {}): ValidateResult {
 
 /**
  * Phase 3 follow-up: read the sibling `harness.lock` and surface every
- * drifted-asset entry as a warning. The same `diffAssets` helper used by
- * `harness diff --since-apply` and `harness apply` (Phase 3 #6 warn-only)
- * drives the comparison; this CLI just rewords it as a Diagnostic so it
- * shows up next to schema/asset findings in the validate report.
+ * drifted-asset entry as a warning. Uses `diffAssets` (re-exported from
+ * `harness diff --since-apply`); the comparison is `sha256(read(path))`
+ * vs the recorded `sha256` per asset, bit-identical to the `computeDrift`
+ * call apply performs at the same gate. This CLI just rewords each
+ * drift entry as a Diagnostic so it shows up next to schema/asset
+ * findings in the validate report.
  */
 function checkLockDrift(manifestPath: string): Diagnostic[] {
   const lockPath = path.join(path.dirname(manifestPath), LOCK_BASENAME);
