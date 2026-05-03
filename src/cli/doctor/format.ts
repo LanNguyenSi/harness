@@ -40,7 +40,7 @@ function formatHeader(report: DoctorReport): string {
 
 function formatManifestSection(report: DoctorReport): string[] {
   // The previous "✓ syntax valid" and "✓ schema valid" lines were
-  // tautological: loadManifest exits EX_DATAERR (66) on parse / schema
+  // tautological: loadManifest exits EX_NOINPUT (66) on parse / schema
   // failures before doctor() ever runs, so both rendered ✓ in every
   // observable doctor invocation. The structural signal is now the
   // load-time exit code; the section just reports the topLevelKeysPresent

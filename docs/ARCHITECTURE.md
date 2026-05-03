@@ -942,8 +942,7 @@ $ harness doctor
 harness 0.1.0 — checking ~/.claude/harness.yaml (version 1, project: pandora)
 
 Manifest
-  ✓ syntax valid
-  ✓ schema valid (5 top-level keys, all required present)
+  ✓ 5 top-level keys present, all required present
   ⚠ 1 warning: hooks[2].budget_ms unset, defaulting to 30000
 
 Tools

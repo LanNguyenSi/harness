@@ -42,7 +42,7 @@ function manifestFor(opts: {
   } as unknown as Manifest;
 }
 
-describe("inspectMemory — directory + router resolution", () => {
+describe("inspectMemory: directory + router resolution", () => {
   it("substitutes {project} into directory paths when opts.project is set", () => {
     const home = makeTmpHome();
     const projectDir = path.join(home, "claude", "myproj", "memory");
@@ -114,7 +114,7 @@ describe("inspectMemory — directory + router resolution", () => {
   });
 });
 
-describe("inspectMemory — staleness + recursion-error catch", () => {
+describe("inspectMemory: staleness + recursion-error catch", () => {
   it("collects markdown files older than retention.staleness_days as stale", () => {
     const home = makeTmpHome();
     const memDir = path.join(home, "memory");
