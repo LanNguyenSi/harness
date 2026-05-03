@@ -10,3 +10,4 @@ export {
   type ApplyResult,
   type FileApplyOutcome,
 } from "./apply.js";
+export { formatNextSteps, type NextStepsContext } from "./next-steps.js";

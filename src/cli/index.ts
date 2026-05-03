@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { Command } from "commander";
 import { add } from "./add/index.js";
 import type { AddEntry } from "./add/mutate.js";
@@ -5,6 +6,8 @@ import { adopt } from "./adopt/index.js";
 import {
   apply,
   DRIFT_HINT_MESSAGE,
+  formatNextSteps,
+  SETTINGS_BASENAME,
   type FileApplyOutcome,
 } from "./apply/index.js";
 import { isRemoveType, KNOWN_REMOVE_TYPES, remove } from "./remove/index.js";
@@ -500,6 +503,8 @@ export function buildProgram(opts: RunOptions = {}): Command {
       "with --target, 3-way merge into an existing target file (replace owned keys, preserve others)",
     )
     .option("--force", "with --target, overwrite an existing target file (no merge)")
+    .option("--quiet", "suppress the post-apply Next-steps hint")
+    .option("--json", "emit a structured JSON summary instead of prose (implies --quiet)")
     .action(
       async (options: {
         config?: string;
@@ -510,7 +515,14 @@ export function buildProgram(opts: RunOptions = {}): Command {
         target?: string;
         merge?: boolean;
         force?: boolean;
+        quiet?: boolean;
+        json?: boolean;
       }) => {
+        // --json is documented as implying --quiet. Normalize early so any
+        // future fall-through path (or new prose branch) honors it without
+        // depending on the JSON early-return below as the only chokepoint.
+        if (options.json) options.quiet = true;
+
         const result = await apply({
           ...(options.config !== undefined ? { configPath: options.config } : {}),
           ...(options.project !== undefined ? { project: options.project } : {}),
@@ -521,6 +533,21 @@ export function buildProgram(opts: RunOptions = {}): Command {
           ...(options.merge ? { merge: true } : {}),
           ...(options.force ? { force: true } : {}),
         });
+
+        if (options.json) {
+          // Machine-readable: one JSON object on stdout regardless of
+          // outcome. Refusals still set the non-zero exit below; consumers
+          // should check both `outcome` in the JSON and the process exit.
+          stdout(`${JSON.stringify(result, null, 2)}\n`);
+          if (
+            result.outcome === "target-exists-refuse" ||
+            result.outcome === "lock-drift-refuse" ||
+            result.outcome === "drift-refuse"
+          ) {
+            throw new HarnessExitError("", EX_FAIL);
+          }
+          return;
+        }
 
         if (result.outcome === "target-exists-refuse") {
           stderr(
@@ -582,6 +609,23 @@ export function buildProgram(opts: RunOptions = {}): Command {
             }
           }
           stdout(`harness.lock written to ${result.lockPath}\n`);
+
+          if (!options.quiet) {
+            // The hint passes `targetPath` only when the target was
+            // actually written this run. On a re-apply where the target
+            // is already in sync (`targetWritten: false`), fall back to
+            // the three-option block so the user sees a real next step
+            // instead of an ambiguous "wired into ..." for a no-op.
+            const generatedSettingsPath = path.join(result.generatedDir, SETTINGS_BASENAME);
+            stdout(
+              formatNextSteps({
+                generatedSettingsPath,
+                ...(result.targetWritten && result.targetPath
+                  ? { targetPath: result.targetPath }
+                  : {}),
+              }),
+            );
+          }
         }
 
         for (const d of result.lockDrift) {
