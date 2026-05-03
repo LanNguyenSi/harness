@@ -65,7 +65,7 @@ function entryMatches(entry: LedgerEntry, tag: string): boolean {
   // The content-prefix check is exact and cheap, so a user upgrading
   // harness without flushing their dev ledger doesn't keep paying the
   // pollution tax until the rows age out.
-  if (entry.content.startsWith("policy_decision:")) return false;
+  if (entry.content.startsWith(`${POLICY_DECISION_TYPE}:`)) return false;
   if (entry.content.includes(tag)) return true;
   if (entry.source && entry.source.includes(tag)) return true;
   return false;

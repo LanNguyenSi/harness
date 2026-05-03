@@ -28,7 +28,7 @@ afterEach(() => {
 });
 
 /**
- * Phase 5 #4 — script-fake server that mirrors the
+ * Phase 5 #4 script-fake server that mirrors the
  * `tests/policies/ledger-client.test.ts` capture-pattern. The server logs
  * every inbound JSON-RPC line to `logPath` so the test can later inspect
  * exactly which `ledger_add` calls landed (and in which order).

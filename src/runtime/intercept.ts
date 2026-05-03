@@ -19,6 +19,7 @@ import {
   type RequiresEvaluation,
 } from "../policies/index.js";
 import type { Manifest, Policy } from "../schema/index.js";
+import { POLICY_DECISION_TYPE } from "./ledger-record.js";
 import { resolveSessionId } from "./session-id.js";
 
 export interface ToolEvent {
@@ -229,13 +230,13 @@ function filterEntriesByTag(entries: LedgerEntry[], tag: string): LedgerEntry[] 
   // pre-filtering keeps matchedCount honest in the trace data.
   return entries.filter(
     (e) =>
-      e.type !== "policy_decision" &&
+      e.type !== POLICY_DECISION_TYPE &&
       // Legacy backstop for pre-Phase-5-#4 rows: they were stored as
       // type='fact' but carry the `policy_decision:` content prefix.
       // Drop them at the same gate so a user upgrading harness without
       // flushing their dev ledger doesn't keep paying the pollution
       // tax. New rows are caught by the type check above.
-      !e.content.startsWith("policy_decision:") &&
+      !e.content.startsWith(`${POLICY_DECISION_TYPE}:`) &&
       (e.content.includes(tag) || (e.source !== undefined && e.source.includes(tag))),
   );
 }
