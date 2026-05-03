@@ -128,4 +128,153 @@ process.stdin.on("data", (d) => {
     const result = await probe.call(server);
     expect(result.outcome.kind).toBe("healthy");
   });
+
+  /**
+   * Verb-phase coverage block: server passes initialize but the verb
+   * call goes wrong in three different ways. These exercise probe code
+   * paths that PR #11 (v0.1.0) shipped but did not have direct
+   * test coverage for.
+   */
+
+  it("surfaces a verb-call timeout (server hangs after initialize)", async () => {
+    const script = makeScript(`#!/usr/bin/env node
+let buf = "";
+process.stdin.on("data", (d) => {
+  buf += d.toString();
+  let nl = buf.indexOf("\\n");
+  while (nl !== -1) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    try {
+      const msg = JSON.parse(line);
+      if (msg.method === "initialize") {
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\\n");
+      }
+      // tools/call: deliberately do not respond; probe must time out.
+    } catch {}
+    nl = buf.indexOf("\\n");
+  }
+});
+`);
+    const probe = new RealMcpProbe();
+    const server: McpServer = {
+      name: "lazy-mcp",
+      command: ["node", script],
+      health: { verb: "ping", timeout_ms: 250 },
+      enabled: true,
+    };
+    const result = await probe.call(server);
+    expect(result.outcome.kind).toBe("error");
+    if (result.outcome.kind === "error") {
+      expect(result.outcome.message).toMatch(/ping timed out after 250ms/);
+    }
+  });
+
+  it("surfaces a verb-call JSON-RPC error response distinct from a process exit", async () => {
+    const script = makeScript(`#!/usr/bin/env node
+let buf = "";
+process.stdin.on("data", (d) => {
+  buf += d.toString();
+  let nl = buf.indexOf("\\n");
+  while (nl !== -1) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    try {
+      const msg = JSON.parse(line);
+      if (msg.method === "initialize") {
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\\n");
+      } else if (msg.method === "tools/call") {
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "Method not found" } }) + "\\n");
+      }
+    } catch {}
+    nl = buf.indexOf("\\n");
+  }
+});
+`);
+    const probe = new RealMcpProbe();
+    const server: McpServer = {
+      name: "verb-error",
+      command: ["node", script],
+      health: { verb: "ping", timeout_ms: 2000 },
+      enabled: true,
+    };
+    const result = await probe.call(server);
+    expect(result.outcome.kind).toBe("error");
+    if (result.outcome.kind === "error") {
+      expect(result.outcome.message).toBe("Method not found");
+    }
+  });
+
+  it("renders a non-zero verb-phase exit as error with the stderr tail", async () => {
+    const script = makeScript(`#!/usr/bin/env node
+let buf = "";
+process.stdin.on("data", (d) => {
+  buf += d.toString();
+  let nl = buf.indexOf("\\n");
+  while (nl !== -1) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    try {
+      const msg = JSON.parse(line);
+      if (msg.method === "initialize") {
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\\n");
+      } else if (msg.method === "tools/call") {
+        process.stderr.write("backend down\\n");
+        process.exit(2);
+      }
+    } catch {}
+    nl = buf.indexOf("\\n");
+  }
+});
+`);
+    const probe = new RealMcpProbe();
+    const server: McpServer = {
+      name: "verb-crash",
+      command: ["node", script],
+      health: { verb: "ping", timeout_ms: 2000 },
+      enabled: true,
+    };
+    const result = await probe.call(server);
+    expect(result.outcome.kind).toBe("error");
+    if (result.outcome.kind === "error") {
+      expect(result.outcome.message).toMatch(/process exited during ping/);
+      expect(result.outcome.message).toContain("backend down");
+    }
+  });
+
+  it("renders a clean verb-phase exit as no-response with phase=verb and the verb name", async () => {
+    const script = makeScript(`#!/usr/bin/env node
+let buf = "";
+process.stdin.on("data", (d) => {
+  buf += d.toString();
+  let nl = buf.indexOf("\\n");
+  while (nl !== -1) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    try {
+      const msg = JSON.parse(line);
+      if (msg.method === "initialize") {
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\\n");
+      } else if (msg.method === "tools/call") {
+        process.exit(0);
+      }
+    } catch {}
+    nl = buf.indexOf("\\n");
+  }
+});
+`);
+    const probe = new RealMcpProbe();
+    const server: McpServer = {
+      name: "verb-clean-exit",
+      command: ["node", script],
+      health: { verb: "ping", timeout_ms: 2000 },
+      enabled: true,
+    };
+    const result = await probe.call(server);
+    expect(result.outcome.kind).toBe("no-response");
+    if (result.outcome.kind === "no-response") {
+      expect(result.outcome.phase).toBe("verb");
+      expect(result.outcome.verb).toBe("ping");
+    }
+  });
 });

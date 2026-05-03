@@ -211,9 +211,11 @@ function manifestSection(manifest: Manifest): ManifestSection {
   const present = topLevelKeys.filter(
     (k) => (manifest as Record<string, unknown>)[k] !== undefined,
   ).length;
+  // Note: a corrupt manifest never reaches this point; loadManifest exits
+  // EX_NOINPUT (66) before doctor() returns. The previous syntaxValid /
+  // schemaValid flags were therefore tautologically true and have been
+  // dropped. The exit-66-on-load path is the canonical signal.
   return {
-    syntaxValid: true,
-    schemaValid: true,
     topLevelKeysPresent: present,
     warnings: [],
   };

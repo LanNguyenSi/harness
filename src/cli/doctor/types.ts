@@ -3,8 +3,6 @@ import type { MemoryReport, StaleMemory } from "../../probes/memory.js";
 import type { Manifest } from "../../schema/index.js";
 
 export interface ManifestSection {
-  syntaxValid: boolean;
-  schemaValid: boolean;
   topLevelKeysPresent: number;
   warnings: string[];
 }
