@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-03
+
+**Headline: the Phase-5 adoption-blocker cycle closes end-to-end.**
+`harness apply` now writes directly into a Claude Code settings
+discovery path (`--target` + `--merge`), translates the manifest's
+`tools.mcp[]` into the settings.json `mcpServers` block (so a real
+`claude -p --settings <apply'd>` session actually loads them), prints
+a Next-steps hint that names the real wire-up commands instead of
+leaving adopters to guess, and `harness adopt` round-trips hand-edits
+to `mcpServers` back into the manifest. The full
+`apply → hand-edit → adopt → apply` cycle is byte-identical on the
+settings.json bytes.
+
+Operator note: no schema changes; `harness.lock` gains an optional
+`target` entry kind (additive). Existing `harness.lock` files without
+target entries continue to parse. The new flags on `apply` are all
+opt-in; the default invocation still writes to `harness.generated/`.
+Per-package version bumped from 0.5.0 to 0.6.0; this is the first
+minor release on the `@lannguyensi/harness` npm distribution. No
+operator action required beyond `npm i -g @lannguyensi/harness@0.6.0`
+on machines running the published binary.
+
 ### Added
 
 - **`harness apply --target / --merge / --force`** (task `d38f6f91`, PR #58):
@@ -18,21 +40,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   --check-lock` flags out-of-band edits. Closes the adoption blocker that
   forced every adopter into a hand `cp` or per-invocation `--settings`.
 - **`apply` translates `tools.mcp[]` into the settings.json `mcpServers`
-  block** (task `62380337`). The Phase 5 #1a caveat is closed:
+  block** (task `62380337`, PR #59). The Phase 5 #1a caveat is closed:
   `init.mcp_servers` in a `claude -p --settings <apply'd>` session now
   contains the manifest's MCP entries. Disabled servers (`enabled: false`)
   are omitted; warnings (not errors) cover entries that survive schema
   but produce no runnable command. String-form commands with embedded
   whitespace in paths must be expressed as the array form to preserve
   token boundaries.
+- **`apply` prints a Next-steps hint after a successful run** (task
+  `517aa919`, PR #60). After the summary line, the CLI prints concrete,
+  copy-pasteable next actions: one-shot `claude -p --settings ...`,
+  project-scope `harness apply --target .claude/settings.local.json`,
+  and user-global `harness apply --target ~/.claude/settings.json --merge`.
+  When `--target` was actually written, the hint collapses to a single
+  verify line with `--settings <targetPath>` included (so non-canonical
+  target paths still resolve through `claude -p`). Two new flags pair
+  with this: `--quiet` suppresses the hint while keeping the summary,
+  and `--json` emits a machine-readable JSON summary instead of prose
+  (implies `--quiet`; refusal outcomes still set non-zero exit).
+  Motivated by a 2026-05-03 hallucination incident where an agent
+  fabricated a non-existent `claude -p --output-dir` flag because
+  nothing in the apply output guided the wire-up step; both unit and
+  CLI integration tests assert the hint never contains `--output-dir`.
 - **`adopt` reverse-projection for `mcpServers` into `tools.mcp[]`**
-  (task `7059d92b`). Closes the round-trip gap: hand-edits to
+  (task `7059d92b`, PR #61). Closes the round-trip gap: hand-edits to
   settings.json's `mcpServers` block can now be captured back into the
   manifest. New entries are appended; same-name entries with different
   command/env are replaced (preserving manifest-only fields like `health`
-  and `enabled: false`). The `harness apply --target ... --merge` →
-  hand-edit → `harness adopt` → `harness apply` cycle is byte-identical
-  on the settings.json bytes.
+  and `enabled: false`, so adopting a hand-edit does not silently wipe
+  doctor/probe/policy metadata). The full
+  `harness apply --target ... --merge → hand-edit → harness adopt → harness apply`
+  cycle is byte-identical on the settings.json bytes.
 
 ### Notes for upgraders
 

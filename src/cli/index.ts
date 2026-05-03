@@ -40,7 +40,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
   program
     .name("harness")
     .description("Declarative control plane for agent harnesses")
-    .version("0.4.0")
+    .version("0.6.0")
     .configureOutput({
       writeOut: stdout,
       writeErr: stderr,

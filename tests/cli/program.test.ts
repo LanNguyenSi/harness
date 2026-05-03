@@ -68,10 +68,10 @@ tools:
 });
 
 describe("CLI program — --version + --help", () => {
-  it("--version writes 0.4.0 to stdout and returns 0 with no stderr noise", async () => {
+  it("--version writes 0.6.0 to stdout and returns 0 with no stderr noise", async () => {
     const r = await exec(["--version"]);
     expect(r.code).toBe(0);
-    expect(r.stdout.trim()).toBe("0.4.0");
+    expect(r.stdout.trim()).toBe("0.6.0");
     expect(r.stderr).toBe("");
   });
 
