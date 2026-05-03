@@ -67,6 +67,17 @@ export interface ApplyOptions {
   project?: string;
   dryRun?: boolean;
   overwriteDrift?: boolean;
+  /**
+   * Phase 3 follow-up: when set, any non-empty `lockDrift` causes apply
+   * to refuse with the `lock-drift-refuse` outcome before writing,
+   * prompting, or regenerating the lock (no on-disk side effects). The
+   * user must either re-run without `--strict-lock` to acknowledge and
+   * refresh the lock, or revert the upstream asset edit.
+   *
+   * Dry-run wins: `--strict-lock --dry-run` reports the would-be drift
+   * and exits 0, leaving the existing dry-run scope intact.
+   */
+  strictLock?: boolean;
   /** Test-injectable confirmation prompt; defaults to a stdin readline. */
   prompt?: (message: string) => Promise<string>;
 }
@@ -76,7 +87,8 @@ export type ApplyOutcome =
   | "applied"
   | "drift-refuse"
   | "drift-discarded"
-  | "would-apply";
+  | "would-apply"
+  | "lock-drift-refuse";
 
 export interface FileApplyOutcome {
   basename: string;
@@ -229,6 +241,30 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   // whether the manifest still references it.
   const previousLock = readLock(lockPath);
   const lockDrift: DriftedAsset[] = previousLock !== null ? computeDrift(previousLock) : [];
+
+  // Phase 3 follow-up (strict-lock): when --strict-lock is set and any
+  // locked asset has drifted, refuse with a distinct outcome before we
+  // write anything, prompt, or regenerate the lock. (buildExpectedFiles
+  // ran above; that is pure computation against the in-memory manifest
+  // and produces no on-disk side effects, so running it pre-gate is
+  // harmless and keeps the order independent of strict-lock.) Dry-run
+  // wins per the task spec: `--strict-lock --dry-run` falls through to
+  // the regular dry-run path so the user can preview the would-be
+  // drift without exiting non-zero.
+  if (opts.strictLock && lockDrift.length > 0 && !opts.dryRun) {
+    return {
+      manifestPath,
+      generatedDir,
+      files: [],
+      warnings,
+      restartHints: [],
+      outcome: "lock-drift-refuse",
+      lockDrift,
+      written: false,
+      dryRun: false,
+      lockPath,
+    };
+  }
 
   const fileOutcomes: FileApplyOutcome[] = [];
   let anyDriftRefuse = false;

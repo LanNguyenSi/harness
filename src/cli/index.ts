@@ -487,19 +487,39 @@ export function buildProgram(opts: RunOptions = {}): Command {
       "--overwrite-drift",
       "discard any on-disk hand-edits to harness.generated/ files (prompts for `yes`)",
     )
+    .option(
+      "--strict-lock",
+      "refuse with exit 1 (no write) when harness.lock asset drift is detected; dry-run wins",
+    )
     .action(
       async (options: {
         config?: string;
         project?: string;
         dryRun?: boolean;
         overwriteDrift?: boolean;
+        strictLock?: boolean;
       }) => {
         const result = await apply({
           ...(options.config !== undefined ? { configPath: options.config } : {}),
           ...(options.project !== undefined ? { project: options.project } : {}),
           ...(options.dryRun ? { dryRun: true } : {}),
           ...(options.overwriteDrift ? { overwriteDrift: true } : {}),
+          ...(options.strictLock ? { strictLock: true } : {}),
         });
+
+        if (result.outcome === "lock-drift-refuse") {
+          for (const d of result.lockDrift) {
+            if (d.reason === "missing") {
+              stderr(`asset drift detected: ${d.entry.path} missing since last apply\n`);
+            } else {
+              stderr(`asset drift detected: ${d.entry.path} changed since last apply\n`);
+            }
+          }
+          stderr(
+            "--strict-lock: refusing to overwrite the lock; re-run without --strict-lock to acknowledge, or revert the upstream asset edit\n",
+          );
+          throw new HarnessExitError("", EX_FAIL);
+        }
 
         if (result.outcome === "drift-refuse") {
           for (const f of result.files) {
