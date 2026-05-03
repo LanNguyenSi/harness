@@ -11,6 +11,7 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { LedgerEntry } from "./requires.js";
+import { POLICY_DECISION_TYPE } from "../runtime/ledger-record.js";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
@@ -121,7 +122,7 @@ const BUCKET_TO_TYPE: Record<string, string> = {
   hypotheses: "hypothesis",
   rejected: "rejected",
   unknowns: "unknown",
-  policyDecisions: "policy_decision",
+  policyDecisions: POLICY_DECISION_TYPE,
 };
 
 function flattenSummary(payload: unknown): LedgerEntry[] | null {
