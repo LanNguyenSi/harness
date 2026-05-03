@@ -85,6 +85,21 @@ describe("CLI program — --version + --help", () => {
   it("an unknown top-level option exits 64 (EX_USAGE) with no duplicated message", async () => {
     const r = await exec(["--bogus-flag"]);
     expect(r.code).toBe(64);
+    // Commander writes the human-readable error itself; our exitOverride
+    // throws HarnessExitError("", EX_USAGE) so run()'s catch does NOT
+    // re-print on top. Asserts a single non-blank stderr line that came
+    // from Commander, not from us.
+    const lines = r.stderr.split("\n").filter((l) => l.trim().length > 0);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/unknown option/i);
+  });
+
+  it("an unknown subcommand exits 64 with a single Commander-sourced stderr line", async () => {
+    const r = await exec(["unknown-cmd"]);
+    expect(r.code).toBe(64);
+    const lines = r.stderr.split("\n").filter((l) => l.trim().length > 0);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/unknown command/i);
   });
 });
 
