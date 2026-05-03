@@ -19,7 +19,16 @@ export interface LedgerRecordOptions {
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 const SOURCE = "harness-policy-intercept";
-const PREFIX = "policy_decision";
+
+/**
+ * Canonical ledger-entry `type` for harness-emitted policy decisions.
+ * Owned here because this module also owns the encode/decode prefix.
+ * Every site that filters or writes policy-decision rows MUST go through
+ * this constant, so a typo at any one site does not silently disable the
+ * substring-pollution guard. See PR #47 review for the failure mode.
+ */
+export const POLICY_DECISION_TYPE = "policy_decision";
+const PREFIX = POLICY_DECISION_TYPE;
 
 function expandHomePath(p: string): string {
   if (p === "~") return process.env.HOME ?? "";
@@ -154,7 +163,7 @@ export async function recordPolicyDecision(
             name: "ledger_add",
             arguments: {
               sessionId,
-              type: "policy_decision",
+              type: POLICY_DECISION_TYPE,
               content,
               source: SOURCE,
             },

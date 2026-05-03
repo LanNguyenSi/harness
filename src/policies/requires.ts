@@ -1,4 +1,5 @@
 import type { Requires } from "../schema/requires.js";
+import { POLICY_DECISION_TYPE } from "../runtime/ledger-record.js";
 import { InvalidDurationError, parseDurationSeconds } from "./duration.js";
 import { parseLedgerTimestamp } from "./timestamp.js";
 
@@ -57,14 +58,14 @@ function entryMatches(entry: LedgerEntry, tag: string): boolean {
   // they're about ("ledgerTag":"review:42"), which under the old
   // substring filter inflated matchedCount on the same tag the
   // decision was about. Skip them at the matcher.
-  if (entry.type === "policy_decision") return false;
+  if (entry.type === POLICY_DECISION_TYPE) return false;
   // Legacy backstop: pre-Phase-5-#4 audit rows were written with
   // type='fact' + a `policy_decision:` content prefix. They land in
   // the `facts` bucket and would otherwise sneak past the type guard.
   // The content-prefix check is exact and cheap, so a user upgrading
   // harness without flushing their dev ledger doesn't keep paying the
   // pollution tax until the rows age out.
-  if (entry.content.startsWith("policy_decision:")) return false;
+  if (entry.content.startsWith(`${POLICY_DECISION_TYPE}:`)) return false;
   if (entry.content.includes(tag)) return true;
   if (entry.source && entry.source.includes(tag)) return true;
   return false;

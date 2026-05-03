@@ -10,6 +10,7 @@ import {
   decodeLedgerContent,
   type PolicyDecisionPayload,
 } from "../runtime/ledger-record.js";
+import { POLICY_DECISION_TYPE } from "../runtime/ledger-record.js";
 import { resolveSessionId } from "../runtime/session-id.js";
 import { EX_UNAVAILABLE, EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { loadManifest, type LoaderOptions } from "./loader.js";
@@ -159,7 +160,7 @@ export async function audit(opts: AuditOptions = {}): Promise<AuditResult> {
   const sinceIso = new Date(cutoffMs).toISOString();
   const result = await fetch(sessionId, {
     sinceIso,
-    contentPrefix: "policy_decision:",
+    contentPrefix: `${POLICY_DECISION_TYPE}:`,
   });
   if (result.kind === "degraded") {
     throw new HarnessExitError(
