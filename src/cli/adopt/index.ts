@@ -10,15 +10,19 @@ import {
   formatValidationErrors,
   validateBeforeWrite,
 } from "../../io/validate-before-write.js";
-import { parseManifest } from "../../schema/index.js";
+import { parseManifest, type McpServer } from "../../schema/index.js";
 import { applyAdd } from "../add/mutate.js";
 import { EX_FAIL, EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
 import {
   computeDrift,
+  computeMcpDrift,
+  manifestMcpProjection,
   manifestProjection,
   parseSettingsHooks,
+  parseSettingsMcpServers,
   synthesizeName,
   type DerivedHook,
+  type DerivedMcp,
 } from "./derive.js";
 
 export interface AdoptOptions {
@@ -33,11 +37,19 @@ export interface AdoptResult {
   manifestPath: string;
   settingsPath: string;
   driftCount: number;
+  /** Hook entries adopted (subset of driftCount). */
+  hookDriftCount: number;
+  /** MCP entries adopted (subset of driftCount). */
+  mcpDriftCount: number;
   /** The unified diff of the proposed change. Empty when nothing to adopt. */
   diff: string;
   applied: boolean;
-  /** Names synthesised for the new manifest entries. */
+  /** Names synthesised for the new hook entries. */
   adoptedNames: string[];
+  /** Names of MCP entries adopted (new) or replaced (modified). */
+  adoptedMcpNames: string[];
+  /** Names of MCP entries replaced (existed in manifest, content differed). */
+  replacedMcpNames: string[];
   /** Human-readable status: "no-drift" | "declined" | "applied". */
   outcome: "no-drift" | "declined" | "applied";
 }
@@ -94,14 +106,22 @@ export async function adopt(
   const settingsHooks = parseSettingsHooks(settingsRaw);
   const drift = computeDrift(settingsHooks, projection);
 
-  if (drift.length === 0) {
+  const settingsMcp = parseSettingsMcpServers(settingsRaw);
+  const mcpProjection = manifestMcpProjection(manifest);
+  const mcpDrift = computeMcpDrift(settingsMcp, mcpProjection);
+
+  if (drift.length === 0 && mcpDrift.length === 0) {
     return {
       manifestPath,
       settingsPath,
       driftCount: 0,
+      hookDriftCount: 0,
+      mcpDriftCount: 0,
       diff: "",
       applied: false,
       adoptedNames: [],
+      adoptedMcpNames: [],
+      replacedMcpNames: [],
       outcome: "no-drift",
     };
   }
@@ -116,6 +136,25 @@ export async function adopt(
     proposedYaml = applyAdd(proposedYaml, {
       type: "hook",
       entry: buildHookEntry(name, d),
+    });
+  }
+
+  const adoptedMcpNames: string[] = [];
+  const replacedMcpNames: string[] = [];
+  // Preserve manifest-only fields (`health`, `enabled: false`) when
+  // replacing an existing entry. The settings.json projection only
+  // carries `command` + `env`; without this merge, hand-edits to those
+  // fields would silently wipe `health` (load-bearing for the audit /
+  // doctor / probe paths) and `enabled: false` (which would re-enable a
+  // server the user explicitly turned off).
+  const manifestByName = new Map(manifest.tools.mcp.map((m) => [m.name, m]));
+  for (const m of mcpDrift) {
+    if (m.reason === "modified") replacedMcpNames.push(m.entry.name);
+    adoptedMcpNames.push(m.entry.name);
+    proposedYaml = applyAdd(proposedYaml, {
+      type: "mcp_replace",
+      name: m.entry.name,
+      entry: buildMcpEntry(m.entry, manifestByName.get(m.entry.name)),
     });
   }
 
@@ -147,10 +186,14 @@ export async function adopt(
       return {
         manifestPath,
         settingsPath,
-        driftCount: drift.length,
+        driftCount: drift.length + mcpDrift.length,
+        hookDriftCount: drift.length,
+        mcpDriftCount: mcpDrift.length,
         diff,
         applied: false,
         adoptedNames,
+        adoptedMcpNames,
+        replacedMcpNames,
         outcome: "declined",
       };
     }
@@ -177,6 +220,19 @@ export async function adopt(
       next = applyAdd(next, { type: "hook", entry: buildHookEntry(name, d) });
       lockTaken.add(name);
     }
+    // MCP entries adopt as replace-or-append (keyed by name), so re-applying
+    // the same drift under the lock is naturally idempotent: the same name
+    // gets the same replacement. Use the freshly-read manifest's entries
+    // for the field-preservation merge, in case a concurrent adopt added
+    // health/enabled to the same name in between.
+    const lockedMcpByName = new Map(currentManifest.tools.mcp.map((m) => [m.name, m]));
+    for (const m of mcpDrift) {
+      next = applyAdd(next, {
+        type: "mcp_replace",
+        name: m.entry.name,
+        entry: buildMcpEntry(m.entry, lockedMcpByName.get(m.entry.name)),
+      });
+    }
     const recheck = validateBeforeWrite(parseYaml(next));
     if (!recheck.ok) {
       throw new HarnessExitError(
@@ -190,12 +246,50 @@ export async function adopt(
   return {
     manifestPath,
     settingsPath,
-    driftCount: drift.length,
+    driftCount: drift.length + mcpDrift.length,
+    hookDriftCount: drift.length,
+    mcpDriftCount: mcpDrift.length,
     diff,
     applied: true,
     adoptedNames,
+    adoptedMcpNames,
+    replacedMcpNames,
     outcome: "applied",
   };
+}
+
+function buildMcpEntry(
+  d: DerivedMcp,
+  existing: McpServer | undefined,
+): {
+  name: string;
+  command: string[];
+  env?: Record<string, string>;
+  health?: { verb: string; timeout_ms?: number };
+  enabled?: boolean;
+} {
+  const entry: {
+    name: string;
+    command: string[];
+    env?: Record<string, string>;
+    health?: { verb: string; timeout_ms?: number };
+    enabled?: boolean;
+  } = {
+    name: d.name,
+    command: [...d.command],
+  };
+  if (d.env && Object.keys(d.env).length > 0) entry.env = { ...d.env };
+  // Carry forward manifest-only fields. settings.json's mcpServers shape
+  // has no projection for `health` (used by doctor / probe / policy paths)
+  // or `enabled: false` (explicit opt-out the user chose to keep), so a
+  // pure replace from the projected drift would silently wipe them.
+  // `enabled: true` is the schema default and is omitted to keep the
+  // re-emitted YAML clean.
+  if (existing) {
+    if (existing.health) entry.health = { ...existing.health };
+    if (existing.enabled === false) entry.enabled = false;
+  }
+  return entry;
 }
 
 function buildHookEntry(

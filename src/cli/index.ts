@@ -469,10 +469,24 @@ export function buildProgram(opts: RunOptions = {}): Command {
         stdout(`adoption declined; ${result.manifestPath} unchanged\n`);
         return;
       }
+      const parts: string[] = [];
+      if (result.hookDriftCount > 0) {
+        parts.push(
+          `${result.hookDriftCount} hook${result.hookDriftCount === 1 ? "" : "s"}` +
+            ` (${result.adoptedNames.join(", ")})`,
+        );
+      }
+      if (result.mcpDriftCount > 0) {
+        const mcpFrag = `${result.mcpDriftCount} MCP server${result.mcpDriftCount === 1 ? "" : "s"}` +
+          ` (${result.adoptedMcpNames.join(", ")})`;
+        parts.push(
+          result.replacedMcpNames.length > 0
+            ? `${mcpFrag}; replaced existing manifest entry for: ${result.replacedMcpNames.join(", ")}`
+            : mcpFrag,
+        );
+      }
       stdout(
-        `adopted ${result.driftCount} hook${result.driftCount === 1 ? "" : "s"} ` +
-          `from ${result.settingsPath} into ${result.manifestPath} ` +
-          `(names: ${result.adoptedNames.join(", ")})\n`,
+        `adopted ${parts.join(" + ")} from ${result.settingsPath} into ${result.manifestPath}\n`,
       );
     });
 

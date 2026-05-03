@@ -1,4 +1,4 @@
-import type { Manifest } from "../../schema/index.js";
+import type { Manifest, McpServer } from "../../schema/index.js";
 
 const KNOWN_EVENTS = new Set([
   "SessionStart",
@@ -109,4 +109,116 @@ export function synthesizeName(
 
 function isRecord(x: unknown): x is Record<string, unknown> {
   return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+
+// ---------------------------------------------------------------------------
+// MCP servers — reverse projection of `buildMcpServers` in
+// src/cli/apply/generate-settings.ts. settings.json's `mcpServers` map is
+// flattened into a list of `{ name, command: string[], env? }`, which is the
+// canonical shape used by `tools.mcp[]` (we always emit array-form on adopt;
+// the apply side accepts both string and array forms).
+// ---------------------------------------------------------------------------
+
+export interface DerivedMcp {
+  name: string;
+  command: string[];
+  env?: Record<string, string>;
+}
+
+export interface SettingsMcpSpec {
+  command?: unknown;
+  args?: unknown;
+  env?: unknown;
+}
+
+export interface SettingsRootWithMcp extends SettingsRoot {
+  mcpServers?: Record<string, SettingsMcpSpec>;
+}
+
+export function parseSettingsMcpServers(raw: unknown): DerivedMcp[] {
+  if (!isRecord(raw)) return [];
+  const root = raw as SettingsRootWithMcp;
+  if (!isRecord(root.mcpServers)) return [];
+  const out: DerivedMcp[] = [];
+  for (const [name, specRaw] of Object.entries(root.mcpServers)) {
+    if (!isRecord(specRaw)) continue;
+    const spec = specRaw as SettingsMcpSpec;
+    if (typeof spec.command !== "string" || spec.command.length === 0) continue;
+    const args = Array.isArray(spec.args)
+      ? spec.args.filter((a): a is string => typeof a === "string")
+      : [];
+    const command = [spec.command, ...args];
+    const entry: DerivedMcp = { name, command };
+    if (isRecord(spec.env)) {
+      const env: Record<string, string> = {};
+      for (const [k, v] of Object.entries(spec.env)) {
+        if (typeof v === "string") env[k] = v;
+      }
+      if (Object.keys(env).length > 0) entry.env = env;
+    }
+    out.push(entry);
+  }
+  return out;
+}
+
+export function manifestMcpProjection(manifest: Manifest): DerivedMcp[] {
+  return manifest.tools.mcp.map(toDerivedMcp);
+}
+
+function toDerivedMcp(m: McpServer): DerivedMcp {
+  const command = Array.isArray(m.command)
+    ? [...m.command]
+    : m.command
+        .trim()
+        .split(/\s+/)
+        .filter((t) => t.length > 0);
+  const out: DerivedMcp = { name: m.name, command };
+  if (m.env && Object.keys(m.env).length > 0) out.env = { ...m.env };
+  return out;
+}
+
+export type McpDriftReason = "new" | "modified";
+
+export interface McpDriftEntry {
+  entry: DerivedMcp;
+  reason: McpDriftReason;
+}
+
+export function computeMcpDrift(
+  settingsMcp: DerivedMcp[],
+  manifestMcp: DerivedMcp[],
+): McpDriftEntry[] {
+  const byName = new Map(manifestMcp.map((m) => [m.name, m]));
+  const out: McpDriftEntry[] = [];
+  for (const s of settingsMcp) {
+    const existing = byName.get(s.name);
+    if (!existing) {
+      out.push({ entry: s, reason: "new" });
+      continue;
+    }
+    if (mcpEqual(existing, s)) continue;
+    out.push({ entry: s, reason: "modified" });
+  }
+  return out;
+}
+
+export { mcpEqual };
+
+function mcpEqual(a: DerivedMcp, b: DerivedMcp): boolean {
+  if (a.command.length !== b.command.length) return false;
+  for (let i = 0; i < a.command.length; i++) {
+    if (a.command[i] !== b.command[i]) return false;
+  }
+  const aEnv = a.env ?? {};
+  const bEnv = b.env ?? {};
+  const ak = Object.keys(aEnv).sort();
+  const bk = Object.keys(bEnv).sort();
+  if (ak.length !== bk.length) return false;
+  for (let i = 0; i < ak.length; i++) {
+    const ka = ak[i]!;
+    const kb = bk[i]!;
+    if (ka !== kb) return false;
+    if (aEnv[ka] !== bEnv[kb]) return false;
+  }
+  return true;
 }
