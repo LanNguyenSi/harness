@@ -94,11 +94,15 @@ before any silent fix:
 
 ## Out of scope
 
-`run-smoke.sh` is **not** a substitute for a proper Claude Code session
-spawning the hook. The smoke directly invokes the same binary with the
-same stdin shape that Claude Code's hook protocol provides; what it does
-not exercise is Claude Code's own hook driver. A manual confirmation
-remains useful — copy `dogfood/phase5/harness.yaml` to `~/.claude/`,
-`harness apply`, then in a fresh Claude Code session attempt
-`mcp__agent-tasks__pull_requests_merge` against PR 42 in a sandbox repo.
-The expectation matches Step 1 above.
+`run-smoke.sh` directly invokes the same binary with the same stdin
+shape that Claude Code's hook protocol provides; the complementary
+headless `claude -p` smoke (`transcript-claude-p-2026-05-03/`) covers
+Claude Code's own hook driver. Together they cover the runtime and
+the harness side of the contract.
+
+What remains optional is a fully-interactive Claude Code session
+attempting `mcp__agent-tasks__pull_requests_merge` against PR 42 in a
+sandbox repo (copy `dogfood/phase5/harness.yaml` to `~/.claude/`,
+`harness apply`, then make the call by hand). The expectation matches
+Step 1 above. The two automated smokes should catch any regression
+before that manual run is needed.

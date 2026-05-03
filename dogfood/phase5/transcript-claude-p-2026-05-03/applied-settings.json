@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__agent-tasks__pull_requests_merge",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /home/lan/git/pandora/harness/dist/cli/main.js policy intercept --config /home/lan/git/pandora/harness/dogfood/phase5/harness.yaml",
+            "timeout": 10000
+          }
+        ]
+      }
+    ]
+  }
+}
