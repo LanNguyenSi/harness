@@ -240,6 +240,380 @@ describe("adopt — invalid JSON", () => {
   });
 });
 
+describe("derive — MCP servers", () => {
+  it("parseSettingsMcpServers translates the mcpServers map into a flat list", async () => {
+    const { parseSettingsMcpServers } = await import("../../src/cli/adopt/derive.js");
+    const flat = parseSettingsMcpServers({
+      mcpServers: {
+        "grounding-mcp": { command: "node", args: ["/opt/server.js"] },
+        "no-args": { command: "/usr/bin/lone" },
+        "with-env": {
+          command: "python",
+          args: ["-m", "x"],
+          env: { TOKEN: "abc" },
+        },
+      },
+    });
+    expect(flat).toEqual([
+      { name: "grounding-mcp", command: ["node", "/opt/server.js"] },
+      { name: "no-args", command: ["/usr/bin/lone"] },
+      { name: "with-env", command: ["python", "-m", "x"], env: { TOKEN: "abc" } },
+    ]);
+  });
+
+  it("parseSettingsMcpServers ignores entries without a command", async () => {
+    const { parseSettingsMcpServers } = await import("../../src/cli/adopt/derive.js");
+    const flat = parseSettingsMcpServers({
+      mcpServers: {
+        ok: { command: "node", args: ["x"] },
+        broken: { args: ["x"] }, // no command
+        empty: { command: "" },
+        notobj: "string",
+      },
+    });
+    expect(flat).toEqual([{ name: "ok", command: ["node", "x"] }]);
+  });
+
+  it("manifestMcpProjection normalises string commands to arrays", async () => {
+    const { manifestMcpProjection } = await import("../../src/cli/adopt/derive.js");
+    const m = parseManifest({
+      version: 1,
+      tools: {
+        mcp: [
+          { name: "a", command: "node /opt/a.js" },
+          { name: "b", command: ["python", "-m", "b"], env: { K: "v" } },
+        ],
+        cli: [],
+        skills: { enabled: [], source_dirs: [] },
+        builtin: { known: [] },
+      },
+      hooks: [],
+      policies: [],
+    });
+    expect(manifestMcpProjection(m)).toEqual([
+      { name: "a", command: ["node", "/opt/a.js"] },
+      { name: "b", command: ["python", "-m", "b"], env: { K: "v" } },
+    ]);
+  });
+
+  it("computeMcpDrift returns 'new' for entries missing in the manifest", async () => {
+    const { computeMcpDrift } = await import("../../src/cli/adopt/derive.js");
+    const drift = computeMcpDrift(
+      [
+        { name: "a", command: ["node", "x"] },
+        { name: "b", command: ["python", "y"] },
+      ],
+      [{ name: "a", command: ["node", "x"] }],
+    );
+    expect(drift).toEqual([{ entry: { name: "b", command: ["python", "y"] }, reason: "new" }]);
+  });
+
+  it("computeMcpDrift returns 'modified' for same-name entries with different command/env", async () => {
+    const { computeMcpDrift } = await import("../../src/cli/adopt/derive.js");
+    const drift = computeMcpDrift(
+      [{ name: "a", command: ["node", "/new.js"] }],
+      [{ name: "a", command: ["node", "/old.js"] }],
+    );
+    expect(drift).toEqual([
+      { entry: { name: "a", command: ["node", "/new.js"] }, reason: "modified" },
+    ]);
+  });
+
+  it("computeMcpDrift returns no drift for identical entries (env-equal too)", async () => {
+    const { computeMcpDrift } = await import("../../src/cli/adopt/derive.js");
+    const drift = computeMcpDrift(
+      [{ name: "a", command: ["node", "x"], env: { A: "1", B: "2" } }],
+      [{ name: "a", command: ["node", "x"], env: { B: "2", A: "1" } }],
+    );
+    expect(drift).toEqual([]);
+  });
+
+  it("mcpEqual rejects entries with different command lengths", async () => {
+    const { mcpEqual } = await import("../../src/cli/adopt/derive.js");
+    expect(mcpEqual({ name: "a", command: ["node"] }, { name: "a", command: ["node", "x"] })).toBe(false);
+  });
+
+  it("mcpEqual rejects entries with mismatched env keys or values", async () => {
+    const { mcpEqual } = await import("../../src/cli/adopt/derive.js");
+    expect(
+      mcpEqual(
+        { name: "a", command: ["x"], env: { A: "1" } },
+        { name: "a", command: ["x"], env: { B: "1" } },
+      ),
+    ).toBe(false);
+    expect(
+      mcpEqual(
+        { name: "a", command: ["x"], env: { A: "1" } },
+        { name: "a", command: ["x"], env: { A: "2" } },
+      ),
+    ).toBe(false);
+  });
+
+  it("parseSettingsMcpServers silently filters non-string args (locked-in behavior)", async () => {
+    // Documents current behavior: non-string args entries are dropped from
+    // the array without warning. If we later decide to surface a warning
+    // channel, this test will break and force the contract to be revisited.
+    const { parseSettingsMcpServers } = await import("../../src/cli/adopt/derive.js");
+    const flat = parseSettingsMcpServers({
+      mcpServers: {
+        a: { command: "node", args: ["/x", 42, "--port", true, "/y"] },
+      },
+    });
+    expect(flat).toEqual([{ name: "a", command: ["node", "/x", "--port", "/y"] }]);
+  });
+});
+
+describe("adopt — MCP server adoption", () => {
+  it("captures a new mcpServers entry into tools.mcp[]", async () => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        hooks: {},
+        mcpServers: {
+          "grounding-mcp": { command: "node", args: ["/opt/server.js"] },
+        },
+      }),
+    );
+    const r = await adopt(settingsPath, { configPath: manifestPath, yes: true });
+    expect(r.outcome).toBe("applied");
+    expect(r.driftCount).toBe(1);
+    expect(r.hookDriftCount).toBe(0);
+    expect(r.mcpDriftCount).toBe(1);
+    expect(r.adoptedMcpNames).toEqual(["grounding-mcp"]);
+    expect(r.replacedMcpNames).toEqual([]);
+    const m = readManifest() as {
+      tools: { mcp: { name: string; command: unknown }[] };
+    };
+    expect(m.tools.mcp).toContainEqual({
+      name: "grounding-mcp",
+      command: ["node", "/opt/server.js"],
+    });
+  });
+
+  it("replaces an existing tools.mcp entry when settings.json content differs", async () => {
+    // Hand-write a manifest with one MCP entry; we'll then have settings.json
+    // describe the same name with different command tokens.
+    fs.writeFileSync(
+      manifestPath,
+      `version: 1
+tools:
+  mcp:
+    - name: grounding-mcp
+      command: ["node", "/opt/old.js"]
+  cli: []
+  skills: { enabled: [], source_dirs: [] }
+  builtin: { known: [] }
+memory: { directories: [] }
+hooks: []
+policies: []
+`,
+    );
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        hooks: {},
+        mcpServers: {
+          "grounding-mcp": { command: "node", args: ["/opt/new.js"] },
+        },
+      }),
+    );
+    const r = await adopt(settingsPath, { configPath: manifestPath, yes: true });
+    expect(r.outcome).toBe("applied");
+    expect(r.mcpDriftCount).toBe(1);
+    expect(r.replacedMcpNames).toEqual(["grounding-mcp"]);
+    const m = readManifest() as {
+      tools: { mcp: { name: string; command: unknown }[] };
+    };
+    const entry = m.tools.mcp.find((e) => e.name === "grounding-mcp");
+    expect(entry?.command).toEqual(["node", "/opt/new.js"]);
+    expect(m.tools.mcp.filter((e) => e.name === "grounding-mcp")).toHaveLength(1);
+  });
+
+  it("preserves env across adopt", async () => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        hooks: {},
+        mcpServers: {
+          a: { command: "node", args: ["/x.js"], env: { TOK: "xyz" } },
+        },
+      }),
+    );
+    const r = await adopt(settingsPath, { configPath: manifestPath, yes: true });
+    expect(r.outcome).toBe("applied");
+    const m = readManifest() as {
+      tools: { mcp: { name: string; env?: Record<string, string> }[] };
+    };
+    expect(m.tools.mcp.find((e) => e.name === "a")?.env).toEqual({ TOK: "xyz" });
+  });
+
+  it("re-adopting after no further hand-edits is a no-op (idempotent)", async () => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        hooks: {},
+        mcpServers: { a: { command: "node", args: ["/x.js"] } },
+      }),
+    );
+    await adopt(settingsPath, { configPath: manifestPath, yes: true });
+    const r2 = await adopt(settingsPath, { configPath: manifestPath, yes: true });
+    expect(r2.outcome).toBe("no-drift");
+    expect(r2.mcpDriftCount).toBe(0);
+  });
+
+  it("round-trip: full apply → hand-edit → adopt → apply produces byte-identical settings.json", async () => {
+    // Seed a manifest with one MCP entry.
+    fs.writeFileSync(
+      manifestPath,
+      `version: 1
+tools:
+  mcp:
+    - name: a
+      command: ["node", "/orig.js"]
+  cli: []
+  skills: { enabled: [], source_dirs: [] }
+  builtin: { known: [] }
+memory: { directories: [] }
+hooks: []
+policies: []
+`,
+    );
+    const { apply } = await import("../../src/cli/apply/index.js");
+    // First apply seeds the canonical settings.json bytes.
+    await apply({ homeDir: tmpHome });
+    const generatedPath = path.join(tmpHome, "harness.generated", "settings.json");
+
+    // Hand-edit settings.json: change the command path.
+    const handEdited = {
+      hooks: {},
+      mcpServers: { a: { command: "node", args: ["/edited.js"] } },
+    };
+    const handEditedBytes = `${JSON.stringify(handEdited, null, 2)}\n`;
+    fs.writeFileSync(generatedPath, handEditedBytes);
+
+    // Adopt the hand-edit back into the manifest.
+    const r = await adopt(generatedPath, { configPath: manifestPath, yes: true });
+    expect(r.outcome).toBe("applied");
+    expect(r.replacedMcpNames).toEqual(["a"]);
+
+    // Re-apply (using --overwrite-drift since the on-disk settings.json
+    // is the user's hand-edit which apply would refuse to touch by default).
+    await apply({ homeDir: tmpHome, overwriteDrift: true, prompt: async () => "yes" });
+
+    // Bytes must match the hand-edited input verbatim (the canonical AC).
+    expect(fs.readFileSync(generatedPath, "utf8")).toBe(handEditedBytes);
+  });
+
+  it("preserves manifest-only `health` field on replace-modified", async () => {
+    fs.writeFileSync(
+      manifestPath,
+      `version: 1
+tools:
+  mcp:
+    - name: a
+      command: ["node", "/old.js"]
+      health: { verb: "ping" }
+  cli: []
+  skills: { enabled: [], source_dirs: [] }
+  builtin: { known: [] }
+memory: { directories: [] }
+hooks: []
+policies: []
+`,
+    );
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        hooks: {},
+        mcpServers: { a: { command: "node", args: ["/new.js"] } },
+      }),
+    );
+    const r = await adopt(settingsPath, { configPath: manifestPath, yes: true });
+    expect(r.outcome).toBe("applied");
+    const m = readManifest() as {
+      tools: { mcp: { name: string; health?: { verb: string } }[] };
+    };
+    const entry = m.tools.mcp.find((e) => e.name === "a");
+    expect(entry?.health?.verb).toBe("ping");
+  });
+
+  it("preserves explicit `enabled: false` on replace-modified", async () => {
+    fs.writeFileSync(
+      manifestPath,
+      `version: 1
+tools:
+  mcp:
+    - name: a
+      command: ["node", "/old.js"]
+      enabled: false
+  cli: []
+  skills: { enabled: [], source_dirs: [] }
+  builtin: { known: [] }
+memory: { directories: [] }
+hooks: []
+policies: []
+`,
+    );
+    // Note: settings.json wouldn't normally contain a disabled server (apply
+    // skips them), but the user could re-add one by hand. The replace path
+    // must keep the user's prior `enabled: false` intent rather than silently
+    // re-enabling it.
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        hooks: {},
+        mcpServers: { a: { command: "node", args: ["/new.js"] } },
+      }),
+    );
+    const r = await adopt(settingsPath, { configPath: manifestPath, yes: true });
+    expect(r.outcome).toBe("applied");
+    const m = readManifest() as {
+      tools: { mcp: { name: string; enabled?: boolean }[] };
+    };
+    expect(m.tools.mcp.find((e) => e.name === "a")?.enabled).toBe(false);
+  });
+
+  it("hooks + mcp drift in the same run both adopted", async () => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        hooks: {
+          SessionStart: [
+            { matcher: "", hooks: [{ type: "command", command: "/h.sh" }] },
+          ],
+        },
+        mcpServers: { a: { command: "node", args: ["/x.js"] } },
+      }),
+    );
+    const r = await adopt(settingsPath, { configPath: manifestPath, yes: true });
+    expect(r.outcome).toBe("applied");
+    expect(r.hookDriftCount).toBe(1);
+    expect(r.mcpDriftCount).toBe(1);
+    expect(r.driftCount).toBe(2);
+  });
+
+  it("declined: nothing written even when both hook + mcp drift", async () => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        hooks: {
+          SessionStart: [
+            { matcher: "", hooks: [{ type: "command", command: "/h.sh" }] },
+          ],
+        },
+        mcpServers: { a: { command: "node", args: ["/x.js"] } },
+      }),
+    );
+    const before = fs.readFileSync(manifestPath, "utf8");
+    const r = await adopt(settingsPath, {
+      configPath: manifestPath,
+      prompt: async () => "N",
+    });
+    expect(r.outcome).toBe("declined");
+    expect(fs.readFileSync(manifestPath, "utf8")).toBe(before);
+  });
+});
+
 describe("adopt — multi-hook drift", () => {
   it("captures multiple drifted hooks in one run with disambiguated names", async () => {
     writeSettings({

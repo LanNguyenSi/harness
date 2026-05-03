@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   but produce no runnable command. String-form commands with embedded
   whitespace in paths must be expressed as the array form to preserve
   token boundaries.
+- **`adopt` reverse-projection for `mcpServers` into `tools.mcp[]`**
+  (task `7059d92b`). Closes the round-trip gap: hand-edits to
+  settings.json's `mcpServers` block can now be captured back into the
+  manifest. New entries are appended; same-name entries with different
+  command/env are replaced (preserving manifest-only fields like `health`
+  and `enabled: false`). The `harness apply --target ... --merge` →
+  hand-edit → `harness adopt` → `harness apply` cycle is byte-identical
+  on the settings.json bytes.
 
 ### Notes for upgraders
 

@@ -1,4 +1,4 @@
-import { isSeq, parseDocument, type Document } from "yaml";
+import { isMap, isSeq, parseDocument, type Document } from "yaml";
 
 export type AddType = "mcp" | "cli" | "skill" | "hook";
 
@@ -28,6 +28,7 @@ export interface HookEntry {
 
 export type AddEntry =
   | { type: "mcp"; entry: McpEntry }
+  | { type: "mcp_replace"; name: string; entry: McpEntry }
   | { type: "cli"; entry: CliEntry }
   | { type: "skill"; entry: string }
   | { type: "hook"; entry: HookEntry };
@@ -37,6 +38,9 @@ export function applyAdd(yamlText: string, action: AddEntry): string {
   switch (action.type) {
     case "mcp":
       addToSequence(doc, ["tools", "mcp"], action.entry);
+      break;
+    case "mcp_replace":
+      replaceOrAppendByName(doc, ["tools", "mcp"], action.name, action.entry);
       break;
     case "cli":
       addToSequence(doc, ["tools", "cli"], action.entry);
@@ -72,4 +76,37 @@ function addToSequence(
   throw new Error(
     `expected a YAML sequence at ${pathSegments.join(".")}, got ${typeof node}`,
   );
+}
+
+// Find the first item in the sequence whose `name:` matches; replace it. If
+// no match is found, append (so the call site doesn't need to branch on
+// "exists vs new"). Comments and other YAML niceties on the original node are
+// dropped on replace; that is acceptable for the adopt round-trip use case
+// (the replacement is the user's hand-edit becoming the new source of truth).
+function replaceOrAppendByName(
+  doc: Document.Parsed,
+  pathSegments: string[],
+  name: string,
+  entry: unknown,
+): void {
+  const node = doc.getIn(pathSegments);
+  if (node === undefined || node === null) {
+    doc.setIn(pathSegments, [entry]);
+    return;
+  }
+  if (!isSeq(node)) {
+    throw new Error(
+      `expected a YAML sequence at ${pathSegments.join(".")}, got ${typeof node}`,
+    );
+  }
+  for (let i = 0; i < node.items.length; i++) {
+    const item = node.items[i];
+    if (!isMap(item)) continue;
+    const itemName = item.get("name");
+    if (typeof itemName === "string" && itemName === name) {
+      node.set(i, entry);
+      return;
+    }
+  }
+  node.add(entry);
 }
