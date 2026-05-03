@@ -44,7 +44,7 @@
 //   - Within a group, the inner hooks[] preserves matcher-grouping order
 //     and is sorted by command for the same reason.
 
-import type { Hook, Manifest } from "../../schema/index.js";
+import type { Hook, Manifest, McpServer } from "../../schema/index.js";
 
 export const DEFAULT_BUDGET_MS = 30_000;
 
@@ -59,11 +59,32 @@ export interface SettingsHookGroup {
   hooks: SettingsHookCommand[];
 }
 
+// Claude Code's settings.json `mcpServers` shape: command + args + env.
+// The manifest's `tools.mcp[].command` is either a single shell string or
+// a pre-split string[]; either way Claude Code wants `command` as the
+// first token (the executable) and `args` as the rest.
+export interface SettingsMcpServer {
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
+
 export interface SettingsRoot {
   hooks: Record<string, SettingsHookGroup[]>;
+  mcpServers?: Record<string, SettingsMcpServer>;
+}
+
+export interface GenerateSettingsResult {
+  root: SettingsRoot;
+  warnings: string[];
 }
 
 export function generateSettings(manifest: Manifest): SettingsRoot {
+  return generateSettingsWithWarnings(manifest).root;
+}
+
+export function generateSettingsWithWarnings(manifest: Manifest): GenerateSettingsResult {
+  const warnings: string[] = [];
   const byEvent = new Map<string, Hook[]>();
   for (const h of manifest.hooks) {
     const list = byEvent.get(h.event) ?? [];
@@ -79,6 +100,51 @@ export function generateSettings(manifest: Manifest): SettingsRoot {
     out.hooks[event] = buildGroups(hooks);
   }
 
+  const mcp = buildMcpServers(manifest.tools.mcp, warnings);
+  if (Object.keys(mcp).length > 0) out.mcpServers = mcp;
+
+  return { root: out, warnings };
+}
+
+// Translate manifest `tools.mcp[]` into Claude Code's `mcpServers` map.
+// - `enabled: false` entries are dropped (matches ARCHITECTURE §3 and the
+//   asset-locking surface in harness-lock.ts: disabled MCPs are removed
+//   from runtime config).
+// - String `command` is split on whitespace, informed by the splitting at
+//   harness-lock.ts:259. Caveat: a string command with embedded spaces in
+//   a path (e.g. `"node /opt/path with spaces.js"`) is mis-split into
+//   individual tokens. The schema accepts both string and array forms;
+//   users with embedded whitespace MUST use the array form to preserve
+//   token boundaries.
+// - Empty `args` and `env` are omitted to keep the JSON tight.
+// - Server names are emitted in stable lexical order so two applies of
+//   the same manifest produce byte-identical settings.json.
+// - Warnings (not errors) for entries that survive schema but produce no
+//   runnable command (defensive: schema's `min(1)` makes this nearly
+//   impossible to hit, but a string of pure whitespace would).
+export function buildMcpServers(
+  entries: McpServer[],
+  warnings: string[],
+): Record<string, SettingsMcpServer> {
+  const out: Record<string, SettingsMcpServer> = {};
+  const enabled = entries.filter((e) => e.enabled !== false);
+  const sorted = [...enabled].sort((a, b) =>
+    a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+  );
+  for (const e of sorted) {
+    const tokens = Array.isArray(e.command)
+      ? e.command.filter((t) => t.length > 0)
+      : e.command.trim().split(/\s+/).filter((t) => t.length > 0);
+    if (tokens.length === 0) {
+      warnings.push(`tools.mcp.${e.name}: empty command, skipping`);
+      continue;
+    }
+    // tokens[0]! is safe — guarded by the length check above.
+    const spec: SettingsMcpServer = { command: tokens[0]! };
+    if (tokens.length > 1) spec.args = tokens.slice(1);
+    if (e.env && Object.keys(e.env).length > 0) spec.env = { ...e.env };
+    out[e.name] = spec;
+  }
   return out;
 }
 

@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`harness apply --target / --merge / --force`** (task `d38f6f91`, PR #58):
+  write the rendered settings.json directly into a Claude Code settings
+  discovery path (e.g. `.claude/settings.local.json` or
+  `~/.claude/settings.json`). `--merge` does a 3-way merge that replaces
+  harness-owned top-level keys (today: `hooks`, `mcpServers`) and preserves
+  everything else. `harness.lock` records the target sha so `validate
+  --check-lock` flags out-of-band edits. Closes the adoption blocker that
+  forced every adopter into a hand `cp` or per-invocation `--settings`.
+- **`apply` translates `tools.mcp[]` into the settings.json `mcpServers`
+  block** (task `62380337`). The Phase 5 #1a caveat is closed:
+  `init.mcp_servers` in a `claude -p --settings <apply'd>` session now
+  contains the manifest's MCP entries. Disabled servers (`enabled: false`)
+  are omitted; warnings (not errors) cover entries that survive schema
+  but produce no runnable command. String-form commands with embedded
+  whitespace in paths must be expressed as the array form to preserve
+  token boundaries.
+
+### Notes for upgraders
+
+- The settings.json output now includes a `mcpServers` key when your
+  manifest declares enabled MCP servers. On the first apply after
+  upgrade, the file grows by that block. The three-state compare handles
+  this safely (no spurious drift-refuse on the generated file), but if
+  you have hand-edited a `mcpServers` block into a previously apply'd
+  settings.json, the next apply will refuse (`drift-refuse`) until you
+  reconcile via `harness adopt` or `--overwrite-drift`.
+
 ## [0.5.0] - 2026-05-01
 
 **Phase 5: dogfood + polish.** Phase 4 shipped policies that fire; Phase 5

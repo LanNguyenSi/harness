@@ -1,15 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_BUDGET_MS,
+  buildMcpServers,
   generateSettings,
+  generateSettingsWithWarnings,
 } from "../../../src/cli/apply/generate-settings.js";
 import { manifestProjection, parseSettingsHooks } from "../../../src/cli/adopt/derive.js";
-import { parseManifest, type Manifest } from "../../../src/schema/index.js";
+import { parseManifest, type Manifest, type McpServer } from "../../../src/schema/index.js";
 
-function manifestOf(hooks: unknown[]): Manifest {
+function manifestOf(hooks: unknown[], mcp: unknown[] = []): Manifest {
   return parseManifest({
     version: 1,
-    tools: { mcp: [], cli: [], skills: { enabled: [], source_dirs: [] }, builtin: { known: [] } },
+    tools: { mcp, cli: [], skills: { enabled: [], source_dirs: [] }, builtin: { known: [] } },
     memory: { directories: [] },
     hooks,
     policies: [],
@@ -409,5 +411,131 @@ describe("generateSettings", () => {
     ]);
     const out = generateSettings(m);
     expect(out.hooks.SessionStart[0]).not.toHaveProperty("matcher");
+  });
+});
+
+describe("buildMcpServers", () => {
+  function mcp(...entries: Partial<McpServer>[]): McpServer[] {
+    return entries.map((e) => ({ enabled: true, ...e }) as McpServer);
+  }
+
+  it("translates a string-command entry into command + args", () => {
+    const w: string[] = [];
+    const out = buildMcpServers(
+      mcp({ name: "g", command: "node /opt/server.js --port 3000" }),
+      w,
+    );
+    expect(out).toEqual({
+      g: { command: "node", args: ["/opt/server.js", "--port", "3000"] },
+    });
+    expect(w).toEqual([]);
+  });
+
+  it("translates an array-command entry preserving token boundaries", () => {
+    const w: string[] = [];
+    const out = buildMcpServers(
+      mcp({ name: "g", command: ["node", "/opt/path with space.js"] }),
+      w,
+    );
+    expect(out).toEqual({
+      g: { command: "node", args: ["/opt/path with space.js"] },
+    });
+  });
+
+  it("preserves env when present, omits when empty/undefined", () => {
+    const w: string[] = [];
+    const out = buildMcpServers(
+      mcp(
+        { name: "withenv", command: "node a.js", env: { TOKEN: "x" } },
+        { name: "noenv", command: "node b.js" },
+      ),
+      w,
+    );
+    expect(out.withenv.env).toEqual({ TOKEN: "x" });
+    expect(out.noenv).not.toHaveProperty("env");
+  });
+
+  it("omits args when command has only a single token", () => {
+    const w: string[] = [];
+    const out = buildMcpServers(mcp({ name: "single", command: "lone-binary" }), w);
+    expect(out.single).toEqual({ command: "lone-binary" });
+    expect(out.single).not.toHaveProperty("args");
+  });
+
+  it("drops disabled entries", () => {
+    const w: string[] = [];
+    const out = buildMcpServers(
+      mcp(
+        { name: "on", command: "node a.js" },
+        { name: "off", command: "node b.js", enabled: false },
+      ),
+      w,
+    );
+    expect(Object.keys(out)).toEqual(["on"]);
+  });
+
+  it("emits server names in stable lexical order", () => {
+    const w: string[] = [];
+    const out = buildMcpServers(
+      mcp(
+        { name: "zulu", command: "z" },
+        { name: "alpha", command: "a" },
+        { name: "mike", command: "m" },
+      ),
+      w,
+    );
+    expect(Object.keys(out)).toEqual(["alpha", "mike", "zulu"]);
+  });
+
+  it("warns and skips entries whose command splits to nothing", () => {
+    // The schema rejects min(1) strings, but " " (whitespace-only) survives
+    // .min(1) and would trim to nothing. Defensive surface for that case.
+    const entries = [
+      { name: "ghost", command: "   ", enabled: true },
+    ] as McpServer[];
+    const w: string[] = [];
+    const out = buildMcpServers(entries, w);
+    expect(out).toEqual({});
+    expect(w).toContain("tools.mcp.ghost: empty command, skipping");
+  });
+});
+
+describe("generateSettings + mcpServers integration", () => {
+  it("emits mcpServers alongside hooks when manifest has enabled MCPs", () => {
+    const m = manifestOf(
+      [
+        { name: "h", event: "SessionStart", command: "/h.sh", blocking: false, budget_ms: 30000 },
+      ],
+      [
+        { name: "grounding-mcp", command: "node /opt/grounding/server.js" },
+        { name: "search-mcp", command: ["python", "-m", "search.server"], enabled: false },
+      ],
+    );
+    const out = generateSettings(m);
+    expect(out.mcpServers).toBeDefined();
+    expect(out.mcpServers?.["grounding-mcp"]).toEqual({
+      command: "node",
+      args: ["/opt/grounding/server.js"],
+    });
+    expect(out.mcpServers?.["search-mcp"]).toBeUndefined();
+  });
+
+  it("omits the mcpServers key entirely when no enabled MCPs are configured", () => {
+    const m = manifestOf(
+      [{ name: "h", event: "SessionStart", command: "/h.sh", blocking: false, budget_ms: 30000 }],
+      [{ name: "off", command: "node x.js", enabled: false }],
+    );
+    const out = generateSettings(m);
+    expect(out).not.toHaveProperty("mcpServers");
+  });
+
+  it("generateSettingsWithWarnings surfaces buildMcpServers warnings", () => {
+    const m = manifestOf(
+      [{ name: "h", event: "SessionStart", command: "/h.sh", blocking: false, budget_ms: 30000 }],
+      [{ name: "ghost", command: "   ", enabled: true }],
+    );
+    const r = generateSettingsWithWarnings(m);
+    expect(r.warnings).toContain("tools.mcp.ghost: empty command, skipping");
+    expect(r.root).not.toHaveProperty("mcpServers");
   });
 });
