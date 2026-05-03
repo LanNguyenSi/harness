@@ -71,8 +71,10 @@ baseline already covers:
    baseline's job.
 2. **`grounding-mcp` is not in `init.mcp_servers`.** `harness apply`
    today writes only the `hooks` block to settings.json (see
-   `src/cli/apply/apply.ts`); the manifest's `tools.mcp` block is not
-   translated into a Claude Code `mcpServers` section. So loading the
+   `SettingsRoot` and `generateSettings` in
+   `src/cli/apply/generate-settings.ts:62-83`); the manifest's
+   `tools.mcp` block is not translated into a Claude Code `mcpServers`
+   section. So loading the
    apply'd settings into a Claude Code session does not by itself
    register the manifest's MCP servers. The synthetic-stdin smoke
    spawns `grounding-mcp` directly from the runtime under test, which
@@ -112,4 +114,4 @@ pipeline.
 - Parent task: `67517c67-0a13-4c88-a2e3-c1eea3416b34`
 - Synthetic-stdin baseline: `../transcript-baseline-2026-05-01/`
 - Claude Code version observed: `2.1.126`
-- Apply target source-of-truth: `src/cli/apply/apply.ts:133-135`
+- Apply target source-of-truth: `src/cli/apply/generate-settings.ts:62-83`
