@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { validate } from "../../src/cli/validate/index.js";
 import { __testables } from "../../src/cli/validate/checks.js";
+import { writeLock, type LockEntry } from "../../src/io/harness-lock.js";
+import * as crypto from "node:crypto";
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..", "..");
@@ -635,6 +637,114 @@ ${withinBlock}${countBlock}    hook: h
       ...NOOP_PROBES,
     });
     expect(result.errorCount).toBe(0);
+  });
+});
+
+describe("validate: --check-lock", () => {
+  // Helper builds a minimal valid manifest + a single locked hook script,
+  // then writes harness.lock with the script's actual sha256. The caller
+  // can then mutate the file or skip the lock entirely to drive each branch.
+  function buildLockedFixture(): { home: string; hookPath: string; lockPath: string } {
+    const home = writeFixture({
+      "harness.yaml": `version: 1
+hooks:
+  - name: locked
+    event: SessionStart
+    command: ${path.join("{{HOME}}", "hooks", "locked.sh")}
+    blocking: false
+policies: []
+tools:
+  builtin:
+    known: [Read]
+`.replace("{{HOME}}", "${HOME_TOKEN}"),
+      "hooks/locked.sh": "#!/bin/sh\necho locked\n",
+    });
+    fs.chmodSync(path.join(home, "hooks", "locked.sh"), 0o755);
+    const manifestPath = path.join(home, "harness.yaml");
+    fs.writeFileSync(
+      manifestPath,
+      fs.readFileSync(manifestPath, "utf8").replace("${HOME_TOKEN}", home),
+      "utf8",
+    );
+    const hookPath = path.join(home, "hooks", "locked.sh");
+    return { home, hookPath, lockPath: path.join(home, "harness.lock") };
+  }
+
+  function writeLockFor(lockPath: string, hookPath: string, sha: string): void {
+    const entries: LockEntry[] = [{ kind: "asset", path: hookPath, sha256: sha }];
+    writeLock(lockPath, entries);
+  }
+
+  function sha256OfFile(p: string): string {
+    return crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex");
+  }
+
+  it("emits an info-warning when the lock file is absent", () => {
+    const { home } = buildLockedFixture();
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      checkLock: true,
+      ...NOOP_PROBES,
+    });
+    expect(result.warningCount).toBe(1);
+    expect(result.diagnostics.some((d) => /no lock file/i.test(d.message))).toBe(true);
+  });
+
+  it("emits zero diagnostics when the lock matches the on-disk content", () => {
+    const { home, hookPath, lockPath } = buildLockedFixture();
+    writeLockFor(lockPath, hookPath, sha256OfFile(hookPath));
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      checkLock: true,
+      ...NOOP_PROBES,
+    });
+    expect(result.errorCount).toBe(0);
+    expect(result.warningCount).toBe(0);
+  });
+
+  it("warns when a locked file's content has drifted on disk", () => {
+    const { home, hookPath, lockPath } = buildLockedFixture();
+    const originalSha = sha256OfFile(hookPath);
+    writeLockFor(lockPath, hookPath, originalSha);
+    fs.writeFileSync(hookPath, "#!/bin/sh\necho TAMPERED\n", "utf8");
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      checkLock: true,
+      ...NOOP_PROBES,
+    });
+    expect(result.errorCount).toBe(0);
+    expect(result.warningCount).toBe(1);
+    expect(result.diagnostics.some((d) => /asset modified/i.test(d.message))).toBe(true);
+  });
+
+  it("with --strict --check-lock, drift is promoted to an error", () => {
+    const { home, hookPath, lockPath } = buildLockedFixture();
+    writeLockFor(lockPath, hookPath, sha256OfFile(hookPath));
+    fs.writeFileSync(hookPath, "#!/bin/sh\necho changed\n", "utf8");
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      checkLock: true,
+      strict: true,
+      ...NOOP_PROBES,
+    });
+    expect(result.errorCount).toBeGreaterThanOrEqual(1);
+    expect(result.diagnostics.some((d) => /asset modified/i.test(d.message))).toBe(true);
+  });
+
+  it("without --check-lock, validate ignores the lock file entirely", () => {
+    const { home, hookPath, lockPath } = buildLockedFixture();
+    writeLockFor(lockPath, hookPath, sha256OfFile(hookPath));
+    fs.writeFileSync(hookPath, "#!/bin/sh\necho TAMPERED\n", "utf8");
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(result.warningCount).toBe(0);
   });
 });
 

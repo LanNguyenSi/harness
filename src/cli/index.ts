@@ -94,11 +94,13 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides for this project name")
     .option("--strict", "promote warnings to errors")
-    .action((options: { config?: string; project?: string; strict?: boolean }) => {
+    .option("--check-lock", "surface harness.lock asset-content drift as warnings (or errors with --strict)")
+    .action((options: { config?: string; project?: string; strict?: boolean; checkLock?: boolean }) => {
       const result = validate({
         configPath: options.config,
         project: options.project,
         strict: options.strict,
+        checkLock: options.checkLock,
       });
       const report = formatReport(result);
       if (result.diagnostics.length > 0) stderr(report);
