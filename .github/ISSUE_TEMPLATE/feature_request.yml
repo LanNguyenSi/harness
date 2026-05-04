@@ -1,0 +1,20 @@
+name: Feature request
+description: Propose a new schema field, hook, or capability
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: usecase
+    attributes:
+      label: Use case
+      description: What problem does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Sketch the YAML field, hook contract, or workflow.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
