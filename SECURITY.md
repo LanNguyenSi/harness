@@ -1,0 +1,19 @@
+# Security Policy
+
+## Supported Versions
+
+Active development is on `master`. Only the latest published release on npm is supported.
+
+harness gates agent tool calls. Vulnerabilities (gate bypass, unintended ledger acceptance, schema-injection in YAML config) are treated as serious.
+
+## Reporting a Vulnerability
+
+Please **do not** open a public GitHub issue for security reports.
+
+Email **contact@lan-nguyen-si.de** with:
+
+- Affected version
+- Reproduction steps or proof-of-concept
+- Impact assessment (gate bypass, policy escape, etc.)
+
+You will get an acknowledgement within 72 hours and an initial assessment within 7 days. A fix timeline depends on severity and complexity, communicated in the assessment.
