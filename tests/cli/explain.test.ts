@@ -343,3 +343,176 @@ describe("explain --trace", () => {
     expect(err.message).toMatch(/cannot read audit log: grounding-mcp not reachable/);
   });
 });
+
+describe("explain --last", () => {
+  const decisionEntry: typeof makeDecisionEntry = (overrides, createdAt) =>
+    makeDecisionEntry(
+      {
+        ...overrides,
+        extractValues: {
+          PR_NUMBER: "42",
+          SESSION_ID: "sess-1",
+          ...overrides.extractValues,
+        },
+      },
+      createdAt,
+    );
+
+  it("traces the most recent decision regardless of policy name", async () => {
+    const result = await explain(undefined, {
+      configPath: FULL_MANIFEST,
+      last: true,
+      sessionId: "sess-1",
+      json: true,
+      fetchLedger: async () => ({
+        kind: "ok",
+        entries: [
+          decisionEntry({ policyName: "review-before-merge" }, "2026-04-30T10:00:00.000Z"),
+          decisionEntry(
+            { policyName: "dogfood-before-release", outcome: "allow", reason: "fresh dogfood" },
+            "2026-04-30T13:00:00.000Z",
+          ),
+          decisionEntry(
+            { policyName: "review-before-merge", outcome: "deny", reason: "older" },
+            "2026-04-30T11:00:00.000Z",
+          ),
+        ],
+      }),
+    });
+    const parsed = JSON.parse(result.output);
+    expect(parsed.name).toBe("dogfood-before-release");
+    expect(parsed.decision).toBe("allow");
+    expect(parsed.reason).toBe("fresh dogfood");
+    expect(parsed.evaluatedAt).toBe("2026-04-30T13:00:00.000Z");
+    expect(parsed.triggerMatched.event).toBe("PreToolUse");
+  });
+
+  it("with --decision deny returns the most recent deny even when an allow is more recent", async () => {
+    const result = await explain(undefined, {
+      configPath: FULL_MANIFEST,
+      last: true,
+      decisionFilter: "deny",
+      sessionId: "sess-1",
+      json: true,
+      fetchLedger: async () => ({
+        kind: "ok",
+        entries: [
+          decisionEntry(
+            { policyName: "review-before-merge", outcome: "deny", reason: "earlier deny" },
+            "2026-04-30T10:00:00.000Z",
+          ),
+          decisionEntry(
+            { policyName: "review-before-merge", outcome: "deny", reason: "later deny" },
+            "2026-04-30T11:00:00.000Z",
+          ),
+          decisionEntry(
+            { policyName: "review-before-merge", outcome: "allow", reason: "intervening allow" },
+            "2026-04-30T12:00:00.000Z",
+          ),
+        ],
+      }),
+    });
+    const parsed = JSON.parse(result.output);
+    expect(parsed.decision).toBe("deny");
+    expect(parsed.reason).toBe("later deny");
+    expect(parsed.evaluatedAt).toBe("2026-04-30T11:00:00.000Z");
+  });
+
+  it("exits 1 with a friendly message when the ledger has no decisions", async () => {
+    let caught: unknown;
+    try {
+      await explain(undefined, {
+        configPath: FULL_MANIFEST,
+        last: true,
+        sessionId: "sess-empty",
+        fetchLedger: async () => ({ kind: "ok", entries: [] }),
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(HarnessExitError);
+    const err = caught as HarnessExitError;
+    expect(err.exitCode).toBe(1);
+    expect(err.message).toMatch(/no recorded policy decisions for session `sess-empty`/);
+  });
+
+  it("exits 1 with a filter-aware message when --decision matches nothing", async () => {
+    let caught: unknown;
+    try {
+      await explain(undefined, {
+        configPath: FULL_MANIFEST,
+        last: true,
+        decisionFilter: "deny",
+        sessionId: "sess-1",
+        fetchLedger: async () => ({
+          kind: "ok",
+          entries: [
+            decisionEntry(
+              { policyName: "review-before-merge", outcome: "allow", reason: "all allows here" },
+              "2026-04-30T10:00:00.000Z",
+            ),
+          ],
+        }),
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(HarnessExitError);
+    const err = caught as HarnessExitError;
+    expect(err.exitCode).toBe(1);
+    expect(err.message).toMatch(/no recorded policy decisions with outcome `deny`/);
+  });
+
+  it("exits 1 when the audit log is unreachable", async () => {
+    let caught: unknown;
+    try {
+      await explain(undefined, {
+        configPath: FULL_MANIFEST,
+        last: true,
+        fetchLedger: async () => ({ kind: "degraded", reason: "no mcp" }),
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(HarnessExitError);
+    const err = caught as HarnessExitError;
+    expect(err.exitCode).toBe(1);
+    expect(err.message).toMatch(/cannot read audit log: no mcp/);
+  });
+
+  it("renders an unknown-trigger placeholder when the policy is no longer declared", async () => {
+    const result = await explain(undefined, {
+      configPath: FULL_MANIFEST,
+      last: true,
+      sessionId: "sess-1",
+      json: true,
+      fetchLedger: async () => ({
+        kind: "ok",
+        entries: [
+          decisionEntry(
+            { policyName: "removed-policy", outcome: "deny", reason: "stale ledger row" },
+            "2026-04-30T13:00:00.000Z",
+          ),
+        ],
+      }),
+    });
+    const parsed = JSON.parse(result.output);
+    expect(parsed.name).toBe("removed-policy");
+    expect(parsed.triggerMatched.event).toMatch(/policy not declared/);
+  });
+});
+
+describe("explain — argument validation (without --last)", () => {
+  it("throws EX_USAGE when neither <policy> nor --last is given", async () => {
+    let caught: unknown;
+    try {
+      await explain(undefined, { configPath: FULL_MANIFEST });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(HarnessExitError);
+    const err = caught as HarnessExitError;
+    expect(err.exitCode).toBe(64);
+    expect(err.message).toMatch(/policy name is required/);
+  });
+});
