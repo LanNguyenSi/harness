@@ -9,6 +9,7 @@
 import { spawn } from "node:child_process";
 import { parseLedgerTimestamp, type LedgerEntry } from "../policies/index.js";
 import type { PolicyDecision } from "./intercept.js";
+import { VERSION } from "../version.js";
 
 export interface LedgerRecordOptions {
   mcpCommand: string[];
@@ -271,7 +272,7 @@ export async function recordPolicyDecision(
           params: {
             protocolVersion: "2024-11-05",
             capabilities: {},
-            clientInfo: { name: "harness-policy-intercept", version: "0.6.0" },
+            clientInfo: { name: "harness-policy-intercept", version: VERSION },
           },
         })}\n`,
       );

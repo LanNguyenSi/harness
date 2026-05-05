@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { run } from "../../src/cli/index.js";
+import { VERSION } from "../../src/version.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..", "..");
@@ -68,10 +69,10 @@ tools:
 });
 
 describe("CLI program — --version + --help", () => {
-  it("--version writes 0.6.0 to stdout and returns 0 with no stderr noise", async () => {
+  it("--version writes the package.json version to stdout and returns 0 with no stderr noise", async () => {
     const r = await exec(["--version"]);
     expect(r.code).toBe(0);
-    expect(r.stdout.trim()).toBe("0.6.0");
+    expect(r.stdout.trim()).toBe(VERSION);
     expect(r.stderr).toBe("");
   });
 
