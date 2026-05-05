@@ -25,6 +25,7 @@ import { audit, type AuditOutcome } from "./audit.js";
 import { dryRun } from "./dry-run.js";
 import { runInterceptCli } from "./policy/intercept.js";
 import { formatReport, validate } from "./validate/index.js";
+import { VERSION } from "../version.js";
 
 export interface RunOptions {
   argv?: string[];
@@ -40,7 +41,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
   program
     .name("harness")
     .description("Declarative control plane for agent harnesses")
-    .version("0.6.0")
+    .version(VERSION)
     .configureOutput({
       writeOut: stdout,
       writeErr: stderr,

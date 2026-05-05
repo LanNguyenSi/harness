@@ -1,6 +1,5 @@
 import type { DoctorReport, McpProbeResult } from "./types.js";
-
-const VERSION = "0.6.0";
+import { VERSION } from "../../version.js";
 
 function mcpLine(r: McpProbeResult, shallow: boolean): string {
   switch (r.outcome.kind) {

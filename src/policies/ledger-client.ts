@@ -12,6 +12,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { LedgerEntry } from "./requires.js";
 import { POLICY_DECISION_TYPE } from "../runtime/ledger-record.js";
+import { VERSION } from "../version.js";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
@@ -395,7 +396,7 @@ export async function queryLedgerByTag(
     const initResult = await ctl.call(1, "initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
-      clientInfo: { name: "harness-policies", version: "0.6.0" },
+      clientInfo: { name: "harness-policies", version: VERSION },
     });
     if (initResult === "exit") {
       return {

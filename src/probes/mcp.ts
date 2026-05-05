@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { McpServer } from "../schema/index.js";
+import { VERSION } from "../version.js";
 
 export type McpProbeOutcome =
   | { kind: "healthy"; latencyMs: number }
@@ -165,7 +166,7 @@ async function runRealProbe(
       send(1, "initialize", {
         protocolVersion: "2024-11-05",
         capabilities: {},
-        clientInfo: { name: "harness-doctor", version: "0.6.0" },
+        clientInfo: { name: "harness-doctor", version: VERSION },
       }),
       waitForExit(),
       timeoutPromise(),
