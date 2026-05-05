@@ -138,6 +138,24 @@ describe("CLI program — list + explain commands", () => {
     expect(r.stderr).toMatch(/no policy named "nope"/);
     expect(r.stderr).toMatch(/review-before-merge/);
   });
+
+  it("explain rejects <policy> together with --last as EX_USAGE", async () => {
+    const r = await exec(["explain", "review-before-merge", "--last", "--config", FULL_MANIFEST]);
+    expect(r.code).toBe(64);
+    expect(r.stderr).toMatch(/<policy> and --last are mutually exclusive/);
+  });
+
+  it("explain --decision without --last is rejected as EX_USAGE", async () => {
+    const r = await exec(["explain", "--decision", "deny", "--config", FULL_MANIFEST]);
+    expect(r.code).toBe(64);
+    expect(r.stderr).toMatch(/--decision requires --last/);
+  });
+
+  it("explain --last --decision with an invalid outcome is rejected as EX_USAGE", async () => {
+    const r = await exec(["explain", "--last", "--decision", "bogus", "--config", FULL_MANIFEST]);
+    expect(r.code).toBe(64);
+    expect(r.stderr).toMatch(/--decision must be one of allow, deny, warn-degraded/);
+  });
 });
 
 describe("CLI program — audit command", () => {

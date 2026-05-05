@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- `harness explain --last` traces the most recent policy decision in the
+  evidence ledger without needing the policy name, closing the common
+  "I just got a deny, what fired?" loop in one command instead of three.
+  Pair with `--decision allow|deny|warn-degraded` to skip past intervening
+  outcomes. `<policy>` and `--last` are mutually exclusive.
+
 ## [0.6.0] - 2026-05-03
 
 **Headline: the Phase-5 adoption-blocker cycle closes end-to-end.**
