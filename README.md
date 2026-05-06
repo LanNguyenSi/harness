@@ -13,7 +13,7 @@ applies, audits, and *enforces*.
 `harness` collapses the six-to-eight surfaces a working agent harness
 leaks across (`settings.json`, `CLAUDE.md`, memory frontmatter, MCP
 registrations, per-project overrides, hook scripts) into a single
-source of truth. Today (`v0.6.0`) policies fire end-to-end: a
+source of truth. Today (`v0.7.0`) policies fire end-to-end: a
 `mcp__agent-tasks__pull_requests_merge` call against a session
 without a `review:${PR_NUMBER}` ledger entry refuses; `harness
 explain review-before-merge --trace` shows exactly why.
@@ -101,6 +101,11 @@ would match, before any ledger I/O.
 - [x] Apply-into-settings cycle, `harness adopt`, `apply --target /
       --merge`, `harness.lock` target tracking, released as
       [`v0.6.0`](CHANGELOG.md#060---2026-05-03).
+- [x] Workflows-as-data + full-session audit forensics: additive
+      `workflows:` / `review_templates:` / `audit.redact[]` manifest
+      blocks, `harness session-export`, `explain --last`, audience-
+      specific docs surfaces, released as
+      [`v0.7.0`](CHANGELOG.md#070---2026-05-06).
 - [ ] Phase 6, Understanding Gate Policy Pack: agents must expose and
       confirm task understanding before write-capable tools fire.
 - [ ] Phase 7, Risk Gate: Action Envelope + Risk Classifier +
