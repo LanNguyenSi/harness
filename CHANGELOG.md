@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- Docs split into two audience-specific surfaces:
+  `docs/for-humans.md` (operator guide: install, mental model, first
+  hour, diagnostics cheat sheet) and `docs/for-agents.md` (workflow
+  lifecycle, policy/ledger sequence, CLI cheat sheet by side-effect
+  class, audit triumvirate). README shrunk to a landing page that
+  picks audience, with the `Try it in 60 seconds` block, status
+  checklist, and `Why this exists` preserved. Three mermaid diagrams
+  added: a system flowchart in `for-humans.md`, a workflow
+  stateDiagram and a policy/ledger sequenceDiagram in
+  `for-agents.md`. Docs-only, no source changes.
+
 ### Added
 - `harness explain --last` traces the most recent policy decision in the
   evidence ledger without needing the policy name, closing the common
