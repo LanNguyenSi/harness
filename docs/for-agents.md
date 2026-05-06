@@ -63,7 +63,7 @@ A `PreToolUse` policy gate looks like this end to end:
 ```mermaid
 sequenceDiagram
     participant CC as Claude Code
-    participant Hook as harness intercept
+    participant Hook as harness policy intercept
     participant Manifest as harness.yaml
     participant Ledger as evidence-ledger
     participant Audit as audit / explain / session-export
@@ -82,9 +82,10 @@ sequenceDiagram
     Note over Audit,Ledger: read-side surfaces replay these rows
 ```
 
-The runtime path is `intercept`. The read-side surfaces (`audit`,
-`explain --trace`, `session-export`) never write; they replay
-`policy_decision` rows the runtime already recorded.
+The runtime path is `harness policy intercept` (a subcommand under
+`policy`). The read-side surfaces (`audit`, `explain --trace`,
+`session-export`) never write; they replay `policy_decision` rows
+the runtime already recorded.
 
 ## CLI cheat sheet
 
