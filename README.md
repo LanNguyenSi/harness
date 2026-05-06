@@ -104,6 +104,8 @@ timestamp                 policy               outcome  reason
 
 Inside a Claude Code session, `--session` defaults to `$CLAUDE_SESSION_ID`, so the read path automatically lines up with what the runtime hook wrote.
 
+For post-hoc audits across an entire Claude Code session, `harness session-export <sessionId>` joins the on-disk transcript JSONL (prompts, tool calls, tool results, assistant text) with the evidence-ledger rows for that session and emits a single chronologically-ordered artifact (`--format json` or `--format jsonl`). Default-on regex redaction catches the obvious key/token patterns; `audit.redact[]` in the manifest extends the denylist with custom regexes or `env_var:` entries that auto-resolve at export time.
+
 ## Wire into Claude Code
 
 By default, `harness apply` writes the rendered settings to `harness.generated/settings.json` next to your manifest. To make Claude Code actually use it, point `apply` at a settings discovery path with `--target`:

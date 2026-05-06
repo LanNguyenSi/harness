@@ -203,3 +203,10 @@ review_templates:
   docs-only: |
     Read the new prose. Flag em-dashes, hedging openers, factual
     inaccuracies, broken cross-references. Code untouched.
+
+audit:
+  redact:
+    - regex: "Bearer\\s+[A-Za-z0-9._-]+"
+      replacement: "Bearer <REDACTED>"
+    - env_var: AGENT_TASKS_TOKEN
+    - env_var: OPENAI_API_KEY

@@ -1,0 +1,8 @@
+{"type":"permission-mode","permissionMode":"default","sessionId":"test-session"}
+{"type":"user","timestamp":"2026-05-06T08:00:00.000Z","uuid":"u1","cwd":"/repo","message":{"role":"user","content":"hello, please run ls"}}
+{"type":"assistant","timestamp":"2026-05-06T08:00:01.000Z","uuid":"a1","parentUuid":"u1","cwd":"/repo","message":{"role":"assistant","content":[{"type":"thinking","thinking":"plan: run ls then summarize"}]}}
+{"type":"assistant","timestamp":"2026-05-06T08:00:02.000Z","uuid":"a2","parentUuid":"u1","cwd":"/repo","message":{"role":"assistant","content":[{"type":"text","text":"Let me run ls."},{"type":"tool_use","id":"tu1","name":"Bash","input":{"command":"ls","token":"sk-leak-1234"}}]}}
+{"type":"user","timestamp":"2026-05-06T08:00:03.000Z","uuid":"u2","parentUuid":"a2","cwd":"/repo","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","is_error":false,"content":"file1\nfile2"}]}}
+{"type":"assistant","timestamp":"2026-05-06T08:00:04.000Z","uuid":"a3","parentUuid":"u2","cwd":"/repo","message":{"role":"assistant","content":[{"type":"text","text":"Two files. Done."}]}}
+{"type":"file-history-snapshot","messageId":"a3","isSnapshotUpdate":false,"snapshot":{"files":[]}}
+{"type":"attachment","timestamp":"2026-05-06T08:00:05.000Z","attachment":{"path":"x.png"}}
