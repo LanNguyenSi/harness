@@ -34,6 +34,21 @@ export interface PolicyEntryReport {
   caveat: string;
 }
 
+export interface WorkflowEntryReport {
+  name: string;
+  steps: number;
+  reviewSpawn: "required" | "optional" | "skip" | null;
+  reviewTemplate: string | null;
+  mergeGate: "solo" | "agent_tasks_label" | "none" | null;
+  taskLabels: string[];
+}
+
+export interface WorkflowsSectionReport {
+  declared: number;
+  templates: number;
+  entries: WorkflowEntryReport[];
+}
+
 export interface DoctorReport {
   manifestPath: string;
   manifestVersion: number;
@@ -44,6 +59,7 @@ export interface DoctorReport {
   memory: MemoryReport;
   hooks: HookEntryReport[];
   policies: PolicyEntryReport[];
+  workflows: WorkflowsSectionReport;
   errorCount: number;
   warningCount: number;
 }

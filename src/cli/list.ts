@@ -2,7 +2,14 @@ import { inspectMemory } from "../probes/memory.js";
 import type { Manifest } from "../schema/index.js";
 import { loadManifest, type LoaderOptions } from "./loader.js";
 
-export type ListCategory = "mcp" | "cli" | "skills" | "memories" | "hooks" | "policies";
+export type ListCategory =
+  | "mcp"
+  | "cli"
+  | "skills"
+  | "memories"
+  | "hooks"
+  | "policies"
+  | "workflows";
 
 const CATEGORIES: readonly ListCategory[] = [
   "mcp",
@@ -11,6 +18,7 @@ const CATEGORIES: readonly ListCategory[] = [
   "memories",
   "hooks",
   "policies",
+  "workflows",
 ];
 
 export function isListCategory(s: string): s is ListCategory {
@@ -103,6 +111,21 @@ function buildPolicyRows(manifest: Manifest): Record<string, unknown>[] {
   }));
 }
 
+function buildWorkflowRows(manifest: Manifest): Record<string, unknown>[] {
+  return manifest.workflows.map((wf) => {
+    const review = wf.steps.find((s) => s.kind === "review_subagent");
+    const merge = wf.steps.find((s) => s.kind === "merge");
+    return {
+      name: wf.name,
+      steps: wf.steps.length,
+      review_spawn: review?.kind === "review_subagent" ? review.spawn : "",
+      review_template: review?.kind === "review_subagent" ? (review.template ?? "") : "",
+      merge_gate: merge?.kind === "merge" ? merge.gate : "",
+      task_label: wf.when.task_label?.join(",") ?? "",
+    };
+  });
+}
+
 function buildRows(category: ListCategory, manifest: Manifest, opts: ListOptions) {
   switch (category) {
     case "mcp":
@@ -117,6 +140,8 @@ function buildRows(category: ListCategory, manifest: Manifest, opts: ListOptions
       return buildHookRows(manifest);
     case "policies":
       return buildPolicyRows(manifest);
+    case "workflows":
+      return buildWorkflowRows(manifest);
   }
 }
 

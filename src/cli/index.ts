@@ -67,7 +67,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .option("--project <name>", "apply per-project overrides for this project name")
     .option(
       "--pillar <pillar>",
-      "filter output to one section: grounding | tools | memory | hooks | policies",
+      "filter output to one section: grounding | tools | memory | hooks | policies | workflows | review_templates",
     )
     .option("--json", "emit JSON instead of YAML")
     .action((options: { config?: string; project?: string; pillar?: string; json?: boolean }) => {
@@ -75,7 +75,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
       if (options.pillar !== undefined) {
         if (!isPillar(options.pillar)) {
           throw new HarnessExitError(
-            `unknown pillar "${options.pillar}"; expected one of grounding, tools, memory, hooks, policies`,
+            `unknown pillar "${options.pillar}"; expected one of grounding, tools, memory, hooks, policies, workflows, review_templates`,
             EX_USAGE,
           );
         }
@@ -131,7 +131,9 @@ export function buildProgram(opts: RunOptions = {}): Command {
 
   program
     .command("list <category>")
-    .description("Flat denormalised listing per category: mcp / cli / skills / memories / hooks / policies")
+    .description(
+      "Flat denormalised listing per category: mcp / cli / skills / memories / hooks / policies / workflows",
+    )
     .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option("--filter <substr>", "case-insensitive substring filter on name (or path for memories)")
@@ -143,7 +145,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
       ) => {
         if (!isListCategory(category)) {
           throw new HarnessExitError(
-            `unknown list category "${category}"; expected one of mcp, cli, skills, memories, hooks, policies`,
+            `unknown list category "${category}"; expected one of mcp, cli, skills, memories, hooks, policies, workflows`,
             EX_USAGE,
           );
         }

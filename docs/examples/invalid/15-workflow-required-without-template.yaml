@@ -1,0 +1,8 @@
+# spawn: required but no template name set; WorkflowSchema rejects it.
+version: 1
+workflows:
+  - name: feature-pr
+    steps:
+      - kind: review_subagent
+        spawn: required
+        rigor: rigorous

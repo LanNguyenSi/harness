@@ -1,0 +1,13 @@
+# Two workflows share the same name; WorkflowsSchema rejects duplicates.
+version: 1
+workflows:
+  - name: feature-pr
+    steps:
+      - kind: branch
+        from: master
+        per_task: true
+  - name: feature-pr
+    steps:
+      - kind: merge
+        method: squash
+        gate: solo
