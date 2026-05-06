@@ -27,34 +27,50 @@ handling), see [`for-humans.md`](for-humans.md).
 ## Workflow lifecycle
 
 When the manifest declares a `workflows:` block (PR #66), the
-expected lifecycle for any task you pick up is:
+expected lifecycle for any unit of work you pick up walks the four
+step kinds the schema defines: `branch`, `review_subagent`,
+`ci_gate`, `merge`.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> open
-    open --> in_progress: task_start
-    in_progress --> branch: cut feat/<task> from master
-    branch --> review_subagent: spawn rigorous review
-    review_subagent --> changes_requested: findings
-    changes_requested --> review_subagent: fix and re-review
-    review_subagent --> pr_open: create PR
-    pr_open --> ci_gate: wait for CI
-    ci_gate --> pr_merged: squash merge
-    pr_merged --> done
-    done --> [*]
+    [*] --> claimed: claim work
+    claimed --> branch: workflow.steps[branch]
+    branch --> review_subagent: workflow.steps[review_subagent]
+    review_subagent --> branch: findings (on_findings: fix_then_remerge)
+    review_subagent --> pr_open: open PR
+    pr_open --> ci_gate: workflow.steps[ci_gate]
+    ci_gate --> merge: workflow.steps[merge]
+    merge --> [*]: workflow complete
 ```
 
-Each transition is named in the manifest. `branch` codifies the
-one-branch-per-task rule. `review_subagent` with `spawn: required`
-forces a checklist-driven review before the PR opens. `merge.gate:
-solo` (in soloMode projects) or `agent_tasks_label` (in dual-review
-projects) decides who is allowed to press the green button.
+Each named state corresponds to a step kind in the manifest.
+`branch` codifies the one-branch-per-task rule. `review_subagent`
+with `spawn: required` forces a checklist-driven review before the
+PR opens; if findings come back, the on_findings policy
+(`fix_then_remerge` by default) sends you back to the branch step
+to fix and re-review. `merge.gate: solo` (in soloMode projects) or
+`agent_tasks_label` (in dual-review projects) decides who is
+allowed to press the green button.
 
 If you skip the `review_subagent` step you are violating the
 workflow contract. The schema cannot enforce that today (runtime
 enforcement is a follow-up to PR #66), but the `review_templates:`
 block tells you exactly what checklist the reviewer is supposed to
 work through. Use it.
+
+### If you use agent-tasks MCP
+
+harness does not depend on agent-tasks. The lifecycle above is
+generic; bind it to whatever task system you actually use. As one
+concrete example, an agent with `mcp__agent-tasks__*` connected
+maps the harness states to MCP verbs roughly like this: `claim
+work` is `task_start` (transitions the task to `in_progress`);
+`open PR` is `pull_requests_create`; `workflow complete` is
+`pull_requests_merge` (which today lands the task on `done` via
+the REST endpoint regardless of project mode). Other task systems
+(linear, jira, github projects) fit the same lifecycle by binding
+their own claim / open-PR / close-task verbs to the same harness
+steps.
 
 ## Policy / ledger sequence
 

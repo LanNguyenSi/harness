@@ -18,6 +18,32 @@ source of truth. Today (`v0.6.0`) policies fire end-to-end: a
 without a `review:${PR_NUMBER}` ledger entry refuses; `harness
 explain review-before-merge --trace` shows exactly why.
 
+## What harness does
+
+```mermaid
+flowchart LR
+    declare["1. Declare<br/><code>harness.yaml</code>"]
+    apply["2. Apply<br/><code>harness apply</code>"]
+    enforce["3. Enforce<br/>hooks + policies<br/>at runtime"]
+    record[("4. Record<br/>evidence ledger")]
+    observe["5. Observe<br/><code>audit</code> / <code>explain</code> /<br/><code>session-export</code>"]
+
+    declare --> apply
+    apply --> enforce
+    enforce --> record
+    record --> observe
+    observe -. refine .-> declare
+```
+
+One manifest declares grounding, tools, memory, hooks, policies, and
+workflows. `apply` materialises that into the files Claude Code
+actually reads. At runtime, hooks and policies enforce the contract
+and write decision rows to the evidence ledger. The read-side
+surfaces (`audit`, `explain --trace`, `session-export`) replay those
+rows so you can see what fired, why, and across which session.
+Whatever you learn from observing flows back into the manifest. That
+loop is the whole product.
+
 ## Pick your audience
 
 - **Operator?** Read [`docs/for-humans.md`](docs/for-humans.md). It

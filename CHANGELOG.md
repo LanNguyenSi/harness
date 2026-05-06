@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- `docs/for-agents.md` workflow lifecycle stateDiagram is now anchored
+  on the four step kinds the `workflows:` schema actually defines
+  (`branch`, `review_subagent`, `ci_gate`, `merge`) instead of
+  agent-tasks-MCP-specific verbs (`task_start`, `open` / `in_progress` /
+  `done`). A new "If you use agent-tasks MCP" footnote below the
+  diagram maps the lifecycle markers to the concrete MCP verbs as one
+  example integration; other task systems fit the same lifecycle.
+  Spotted right after the audience split landed.
+- Root `README.md` gains a control-loop flowchart ("What harness does":
+  declare → apply → enforce → record → observe → refine) that both
+  audiences read identically. No audience-specific verbs.
 - Docs split into two audience-specific surfaces:
   `docs/for-humans.md` (operator guide: install, mental model, first
   hour, diagnostics cheat sheet) and `docs/for-agents.md` (workflow
