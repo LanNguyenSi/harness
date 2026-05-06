@@ -13,6 +13,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   "I just got a deny, what fired?" loop in one command instead of three.
   Pair with `--decision allow|deny|warn-degraded` to skip past intervening
   outcomes. `<policy>` and `--last` are mutually exclusive.
+- `harness session-export <sessionId>` joins the on-disk Claude Code
+  transcript JSONL (`~/.claude/projects/<projectDir>/<sessionId>.jsonl`)
+  with evidence-ledger rows for the same session and emits a single
+  chronologically-ordered audit artifact. `--format json` (default) and
+  `--format jsonl` ship in v1; `-o <file>` writes to disk. Each event
+  carries an explicit `source: "transcript" | "ledger"` marker so the
+  export is traceable back to its inputs.
+- New optional `audit.redact[]` block in the manifest. Each entry is
+  either `{ regex, replacement? }` or `{ env_var, replacement? }`;
+  `env_var:` resolves to the actual value at export time and
+  string-replaces it. A default denylist (token / secret / password /
+  api_key) ships even when the manifest declares no `audit:` block, so
+  redaction is on by default. Manifests without `audit:` parse
+  unchanged.
 - Additive `workflows:` and `review_templates:` top-level blocks in the
   manifest (still `version: 1`). Lets adopters declare review-subagent
   gating, branch policy, CI gate, and merge method as data instead of

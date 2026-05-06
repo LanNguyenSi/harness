@@ -4,6 +4,7 @@ import { HooksSchema } from "./hooks.js";
 import { MemorySchema } from "./memory.js";
 import { PoliciesSchema } from "./policies.js";
 import { ToolsSchema } from "./tools.js";
+import { AuditSchema } from "./audit.js";
 import { ReviewTemplatesSchema, WorkflowsSchema } from "./workflows.js";
 
 export const SUPPORTED_MANIFEST_VERSION = 1;
@@ -18,6 +19,7 @@ export const ManifestSchema = z
     policies: PoliciesSchema.default([]),
     workflows: WorkflowsSchema.default([]),
     review_templates: ReviewTemplatesSchema.default({}),
+    audit: AuditSchema.default({}),
   })
   .strict()
   .superRefine((manifest, ctx) => {
@@ -79,5 +81,6 @@ export * from "./memory.js";
 export * from "./hooks.js";
 export * from "./policies.js";
 export * from "./workflows.js";
+export * from "./audit.js";
 export * from "./extract.js";
 export * from "./requires.js";
