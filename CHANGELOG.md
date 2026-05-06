@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-06
+
+**Headline: workflows-as-data and full-session audit forensics.** The
+`workflows:` block (PR #66) lets adopters declare branch policy,
+review-subagent gating, and merge method as schema-validated data
+instead of prose in memory files. `harness session-export <sessionId>`
+(PR #67) joins the on-disk Claude Code transcript JSONL with the
+evidence ledger for the same session and emits a single chronologically
+ordered audit artifact, with default-on regex redaction extended by a
+new optional `audit.redact[]` manifest block. The README is split into
+audience-specific guides (`docs/for-humans.md`, `docs/for-agents.md`)
+and gains a control-loop flowchart that both audiences read
+identically. `harness explain --last` closes the "what just denied me?"
+loop without needing the policy name. No runtime enforcement of
+`workflows:` yet; that ships as a follow-up.
+
+Operator note: no schema bump (still `version: 1`). All new manifest
+fields are optional and additive; manifests written for `0.6.0` parse
+under `0.7.0` byte-identically. The new `audit.redact[]` defaults to a
+denylist that catches the four obvious key/secret patterns even when
+the operator declares no `audit:` block, so existing operators get
+redaction-on-by-default for `session-export` for free.
+
 ### Changed
 - `docs/for-agents.md` workflow lifecycle stateDiagram is now anchored
   on the four step kinds the `workflows:` schema actually defines
@@ -15,10 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `done`). A new "If you use agent-tasks MCP" footnote below the
   diagram maps the lifecycle markers to the concrete MCP verbs as one
   example integration; other task systems fit the same lifecycle.
-  Spotted right after the audience split landed.
+  Spotted right after the audience split landed (PR #69).
 - Root `README.md` gains a control-loop flowchart ("What harness does":
-  declare → apply → enforce → record → observe → refine) that both
-  audiences read identically. No audience-specific verbs.
+  declare, apply, enforce, record, observe, refine) that both
+  audiences read identically. No audience-specific verbs (PR #69).
 - Docs split into two audience-specific surfaces:
   `docs/for-humans.md` (operator guide: install, mental model, first
   hour, diagnostics cheat sheet) and `docs/for-agents.md` (workflow
@@ -28,28 +51,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   checklist, and `Why this exists` preserved. Three mermaid diagrams
   added: a system flowchart in `for-humans.md`, a workflow
   stateDiagram and a policy/ledger sequenceDiagram in
-  `for-agents.md`. Docs-only, no source changes.
+  `for-agents.md`. Docs-only, no source changes (PR #68).
 
 ### Added
 - `harness explain --last` traces the most recent policy decision in the
   evidence ledger without needing the policy name, closing the common
   "I just got a deny, what fired?" loop in one command instead of three.
   Pair with `--decision allow|deny|warn-degraded` to skip past intervening
-  outcomes. `<policy>` and `--last` are mutually exclusive.
+  outcomes. `<policy>` and `--last` are mutually exclusive (PR #65).
 - `harness session-export <sessionId>` joins the on-disk Claude Code
   transcript JSONL (`~/.claude/projects/<projectDir>/<sessionId>.jsonl`)
   with evidence-ledger rows for the same session and emits a single
   chronologically-ordered audit artifact. `--format json` (default) and
   `--format jsonl` ship in v1; `-o <file>` writes to disk. Each event
   carries an explicit `source: "transcript" | "ledger"` marker so the
-  export is traceable back to its inputs.
+  export is traceable back to its inputs (PR #67).
 - New optional `audit.redact[]` block in the manifest. Each entry is
   either `{ regex, replacement? }` or `{ env_var, replacement? }`;
   `env_var:` resolves to the actual value at export time and
   string-replaces it. A default denylist (token / secret / password /
   api_key) ships even when the manifest declares no `audit:` block, so
   redaction is on by default. Manifests without `audit:` parse
-  unchanged.
+  unchanged (PR #67).
 - Additive `workflows:` and `review_templates:` top-level blocks in the
   manifest (still `version: 1`). Lets adopters declare review-subagent
   gating, branch policy, CI gate, and merge method as data instead of
@@ -59,7 +82,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   via `harness describe --pillar workflows`, `harness list workflows`,
   and a new `Workflows` section in `harness doctor`. No runtime
   enforcement yet, that ships as a follow-up. Manifests without
-  `workflows:` parse identically to before.
+  `workflows:` parse identically to before (PR #66).
 
 ## [0.6.0] - 2026-05-03
 

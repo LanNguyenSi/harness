@@ -313,7 +313,7 @@ policies: []
       pathEnv: "",
     });
     const text = format(report);
-    expect(text).toMatch(/^harness 0\.6\.0/);
+    expect(text).toMatch(/^harness 0\.7\.0/);
     expect(text).toContain(`(version 1) [shallow]`);
   });
 });
