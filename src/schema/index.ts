@@ -4,6 +4,7 @@ import { HooksSchema } from "./hooks.js";
 import { MemorySchema } from "./memory.js";
 import { PoliciesSchema } from "./policies.js";
 import { ToolsSchema } from "./tools.js";
+import { ReviewTemplatesSchema, WorkflowsSchema } from "./workflows.js";
 
 export const SUPPORTED_MANIFEST_VERSION = 1;
 
@@ -15,6 +16,8 @@ export const ManifestSchema = z
     memory: MemorySchema.default({}),
     hooks: HooksSchema.default([]),
     policies: PoliciesSchema.default([]),
+    workflows: WorkflowsSchema.default([]),
+    review_templates: ReviewTemplatesSchema.default({}),
   })
   .strict()
   .superRefine((manifest, ctx) => {
@@ -27,6 +30,20 @@ export const ManifestSchema = z
           message: `policy "${p.name}" references hook "${p.hook}" which is not declared in hooks[]`,
         });
       }
+    });
+    const templateNames = new Set(Object.keys(manifest.review_templates));
+    manifest.workflows.forEach((wf, wi) => {
+      wf.steps.forEach((step, si) => {
+        if (step.kind === "review_subagent" && step.template !== undefined) {
+          if (!templateNames.has(step.template)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["workflows", wi, "steps", si, "template"],
+              message: `review_subagent.template "${step.template}" is not defined in review_templates`,
+            });
+          }
+        }
+      });
     });
   });
 
@@ -61,5 +78,6 @@ export * from "./tools.js";
 export * from "./memory.js";
 export * from "./hooks.js";
 export * from "./policies.js";
+export * from "./workflows.js";
 export * from "./extract.js";
 export * from "./requires.js";

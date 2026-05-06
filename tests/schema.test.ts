@@ -93,6 +93,16 @@ describe("parseManifest — invalid fixtures", () => {
     { file: "10-memory-default-not-allowed.yaml", pattern: /default.*allowed/i },
     { file: "11-bad-blocking-enum.yaml", pattern: /blocking|invalid/i },
     { file: "12-missing-version.yaml", pattern: /version/i },
+    { file: "13-workflow-duplicate-name.yaml", pattern: /duplicate workflow name/i },
+    {
+      file: "14-workflow-template-not-defined.yaml",
+      pattern: /ghost-template.*not defined in review_templates/i,
+    },
+    {
+      file: "15-workflow-required-without-template.yaml",
+      pattern: /spawn:\s*"required".*template/i,
+    },
+    { file: "16-workflow-unknown-step-kind.yaml", pattern: /invalid_union_discriminator|kind/i },
   ];
 
   for (const c of cases) {
@@ -237,5 +247,148 @@ describe("parseManifest — uniqueness checks", () => {
         },
       }),
     ).toThrow(/duplicate cli/i);
+  });
+});
+
+describe("parseManifest — workflows", () => {
+  it("defaults workflows and review_templates to empty when absent", () => {
+    const m = parseManifest({ version: 1 });
+    expect(m.workflows).toEqual([]);
+    expect(m.review_templates).toEqual({});
+  });
+
+  it("parses a minimal workflow with default step values", () => {
+    const m = parseManifest({
+      version: 1,
+      workflows: [
+        {
+          name: "feature-pr",
+          steps: [
+            { kind: "branch" },
+            { kind: "merge" },
+          ],
+        },
+      ],
+    });
+    const wf = m.workflows[0]!;
+    expect(wf.name).toBe("feature-pr");
+    const branch = wf.steps[0];
+    if (branch?.kind !== "branch") throw new Error("expected branch step");
+    expect(branch.from).toBe("master");
+    expect(branch.per_task).toBe(true);
+    const merge = wf.steps[1];
+    if (merge?.kind !== "merge") throw new Error("expected merge step");
+    expect(merge.method).toBe("squash");
+    expect(merge.gate).toBe("solo");
+  });
+
+  it("parses a full workflow with review_subagent referencing a defined template", () => {
+    const m = parseManifest({
+      version: 1,
+      workflows: [
+        {
+          name: "feature-pr",
+          when: { task_label: ["feat", "fix"], project: "harness" },
+          steps: [
+            { kind: "branch", from: "master", per_task: true },
+            {
+              kind: "review_subagent",
+              spawn: "required",
+              agent_type: "Explore",
+              rigor: "rigorous",
+              template: "rigorous",
+              on_findings: "fix_then_remerge",
+            },
+            { kind: "ci_gate", wait_for: "completed/success" },
+            { kind: "merge", method: "squash", gate: "solo" },
+          ],
+        },
+      ],
+      review_templates: {
+        rigorous: "Rigorous checklist...\n",
+      },
+    });
+    expect(m.workflows[0]?.steps).toHaveLength(4);
+    const review = m.workflows[0]?.steps[1];
+    if (review?.kind !== "review_subagent") throw new Error("expected review step");
+    expect(review.template).toBe("rigorous");
+  });
+
+  it("accepts spawn: optional without a template", () => {
+    expect(() =>
+      parseManifest({
+        version: 1,
+        workflows: [
+          {
+            name: "docs-pr",
+            steps: [{ kind: "review_subagent", spawn: "optional" }],
+          },
+        ],
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects spawn: required without a template", () => {
+    expect(() =>
+      parseManifest({
+        version: 1,
+        workflows: [
+          {
+            name: "feature-pr",
+            steps: [{ kind: "review_subagent", spawn: "required" }],
+          },
+        ],
+      }),
+    ).toThrow(/spawn:\s*"required".*template/i);
+  });
+
+  it("rejects review_subagent.template referencing a non-existent template", () => {
+    expect(() =>
+      parseManifest({
+        version: 1,
+        workflows: [
+          {
+            name: "feature-pr",
+            steps: [{ kind: "review_subagent", spawn: "required", template: "ghost" }],
+          },
+        ],
+        review_templates: { rigorous: "..." },
+      }),
+    ).toThrow(/ghost.*not defined in review_templates/i);
+  });
+
+  it("rejects duplicate workflow names", () => {
+    expect(() =>
+      parseManifest({
+        version: 1,
+        workflows: [
+          { name: "feature-pr", steps: [{ kind: "branch" }] },
+          { name: "feature-pr", steps: [{ kind: "merge" }] },
+        ],
+      }),
+    ).toThrow(/duplicate workflow name/i);
+  });
+
+  it("rejects unknown step.kind values", () => {
+    expect(() =>
+      parseManifest({
+        version: 1,
+        workflows: [
+          {
+            name: "feature-pr",
+            steps: [{ kind: "deploy" } as unknown],
+          },
+        ],
+      }),
+    ).toThrow();
+  });
+
+  it("rejects empty steps array", () => {
+    expect(() =>
+      parseManifest({
+        version: 1,
+        workflows: [{ name: "wf", steps: [] }],
+      }),
+    ).toThrow();
   });
 });

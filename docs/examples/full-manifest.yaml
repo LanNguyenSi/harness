@@ -154,3 +154,52 @@ policies:
       within: 1h
     hook: require-preflight-evidence
     enforcement: block
+
+workflows:
+  - name: feature-pr
+    when:
+      task_label: ["feat", "fix", "refactor"]
+      project: harness
+    steps:
+      - kind: branch
+        from: master
+        per_task: true
+      - kind: review_subagent
+        spawn: required
+        agent_type: Explore
+        rigor: rigorous
+        template: rigorous
+        on_findings: fix_then_remerge
+      - kind: ci_gate
+        wait_for: completed/success
+      - kind: merge
+        method: squash
+        gate: agent_tasks_label
+  - name: docs-pr
+    when:
+      task_label: ["docs"]
+    steps:
+      - kind: review_subagent
+        spawn: optional
+        rigor: docs-only
+        template: docs-only
+      - kind: merge
+        method: squash
+        gate: solo
+
+review_templates:
+  rigorous: |
+    You MUST work through this checklist explicitly. Report findings under
+    each heading. Do not skip:
+    1. Correctness
+    2. Scope / minimality
+    3. Tests
+    4. CLI surface / UX
+    5. Open questions / risks
+  quick: |
+    Sanity-check this diff for obvious correctness, scope creep, and test
+    coverage. Three to five sentences total. Flag anything that surprises
+    you.
+  docs-only: |
+    Read the new prose. Flag em-dashes, hedging openers, factual
+    inaccuracies, broken cross-references. Code untouched.

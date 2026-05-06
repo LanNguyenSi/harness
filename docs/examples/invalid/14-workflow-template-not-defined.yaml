@@ -1,0 +1,12 @@
+# review_subagent.template references a name that has no entry in
+# review_templates; cross-refinement in ManifestSchema rejects it.
+version: 1
+workflows:
+  - name: feature-pr
+    steps:
+      - kind: review_subagent
+        spawn: required
+        template: ghost-template
+review_templates:
+  rigorous: |
+    Review checklist goes here.

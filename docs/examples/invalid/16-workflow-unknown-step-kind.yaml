@@ -1,0 +1,7 @@
+# Unknown step.kind value; discriminated union rejects.
+version: 1
+workflows:
+  - name: feature-pr
+    steps:
+      - kind: deploy
+        target: production

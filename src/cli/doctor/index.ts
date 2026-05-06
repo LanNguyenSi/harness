@@ -206,8 +206,37 @@ function buildPolicies(manifest: Manifest): PolicyEntryReport[] {
   }));
 }
 
+function buildWorkflows(manifest: Manifest): import("./types.js").WorkflowsSectionReport {
+  const entries = manifest.workflows.map((wf) => {
+    const review = wf.steps.find((s) => s.kind === "review_subagent");
+    const merge = wf.steps.find((s) => s.kind === "merge");
+    return {
+      name: wf.name,
+      steps: wf.steps.length,
+      reviewSpawn: review?.kind === "review_subagent" ? review.spawn : null,
+      reviewTemplate:
+        review?.kind === "review_subagent" ? (review.template ?? null) : null,
+      mergeGate: merge?.kind === "merge" ? merge.gate : null,
+      taskLabels: wf.when.task_label ?? [],
+    };
+  });
+  return {
+    declared: manifest.workflows.length,
+    templates: Object.keys(manifest.review_templates).length,
+    entries,
+  };
+}
+
 function manifestSection(manifest: Manifest): ManifestSection {
-  const topLevelKeys = ["grounding", "tools", "memory", "hooks", "policies"];
+  const topLevelKeys = [
+    "grounding",
+    "tools",
+    "memory",
+    "hooks",
+    "policies",
+    "workflows",
+    "review_templates",
+  ];
   const present = topLevelKeys.filter(
     (k) => (manifest as Record<string, unknown>)[k] !== undefined,
   ).length;
@@ -299,6 +328,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
 
   const hooks = checkHooks(manifest, home);
   const policies = buildPolicies(manifest);
+  const workflows = buildWorkflows(manifest);
   const manifestSec = manifestSection(manifest);
 
   const partial: Omit<DoctorReport, "errorCount" | "warningCount"> = {
@@ -311,6 +341,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     memory,
     hooks,
     policies,
+    workflows,
   };
   const counts = countDiagnostics(partial);
   return { ...partial, ...counts };

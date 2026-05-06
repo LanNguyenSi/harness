@@ -13,6 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   "I just got a deny, what fired?" loop in one command instead of three.
   Pair with `--decision allow|deny|warn-degraded` to skip past intervening
   outcomes. `<policy>` and `--last` are mutually exclusive.
+- Additive `workflows:` and `review_templates:` top-level blocks in the
+  manifest (still `version: 1`). Lets adopters declare review-subagent
+  gating, branch policy, CI gate, and merge method as data instead of
+  prose in memory files. The schema rejects duplicate workflow names,
+  unknown step `kind` values, `spawn: required` without a `template`,
+  and `template:` references not defined in `review_templates`. Surfaces
+  via `harness describe --pillar workflows`, `harness list workflows`,
+  and a new `Workflows` section in `harness doctor`. No runtime
+  enforcement yet, that ships as a follow-up. Manifests without
+  `workflows:` parse identically to before.
 
 ## [0.6.0] - 2026-05-03
 

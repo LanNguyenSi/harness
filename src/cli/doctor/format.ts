@@ -133,6 +133,24 @@ function formatPoliciesSection(report: DoctorReport): string[] {
   return out;
 }
 
+function formatWorkflowsSection(report: DoctorReport): string[] {
+  const w = report.workflows;
+  if (w.declared === 0 && w.templates === 0) return [];
+  const out: string[] = ["", "Workflows"];
+  out.push(
+    `  ${w.declared} declared, ${w.templates} review template${w.templates === 1 ? "" : "s"}`,
+  );
+  for (const e of w.entries) {
+    const review = e.reviewSpawn
+      ? `review: ${e.reviewSpawn}${e.reviewTemplate ? ` (${e.reviewTemplate})` : ""}`
+      : "no review_subagent step";
+    const merge = e.mergeGate ? `, merge.gate: ${e.mergeGate}` : "";
+    const labels = e.taskLabels.length > 0 ? `, labels: ${e.taskLabels.join(",")}` : "";
+    out.push(`  ✓ ${e.name}  ${e.steps} steps, ${review}${merge}${labels}`);
+  }
+  return out;
+}
+
 function formatSummary(report: DoctorReport): string[] {
   const out: string[] = ["", "Summary"];
   const errLabel = report.errorCount === 1 ? "error" : "errors";
@@ -149,6 +167,7 @@ export function format(report: DoctorReport): string {
   lines.push(...formatMemorySection(report));
   lines.push(...formatHooksSection(report));
   lines.push(...formatPoliciesSection(report));
+  lines.push(...formatWorkflowsSection(report));
   lines.push(...formatSummary(report));
   lines.push("");
   return lines.join("\n");

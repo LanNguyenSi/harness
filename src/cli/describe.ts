@@ -2,7 +2,14 @@ import { stringify as stringifyYaml } from "yaml";
 import type { Manifest } from "../schema/index.js";
 import { loadManifest, type LoaderOptions } from "./loader.js";
 
-export type Pillar = "grounding" | "tools" | "memory" | "hooks" | "policies";
+export type Pillar =
+  | "grounding"
+  | "tools"
+  | "memory"
+  | "hooks"
+  | "policies"
+  | "workflows"
+  | "review_templates";
 
 const PILLARS: readonly Pillar[] = [
   "grounding",
@@ -10,6 +17,8 @@ const PILLARS: readonly Pillar[] = [
   "memory",
   "hooks",
   "policies",
+  "workflows",
+  "review_templates",
 ];
 
 export function isPillar(value: string): value is Pillar {
