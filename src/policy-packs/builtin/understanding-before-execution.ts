@@ -26,15 +26,20 @@ const HOOK_NAME_PREFIX = `policy-pack:${PACK_NAME}`;
 
 const PRE_TOOL_USE_MATCH = "Edit|Write|Bash";
 
-// Bin names exposed by `@lannguyensi/understanding-gate` (npm package).
-// These are bare names because the package is meant to be `npm i -g`'d:
-// the binaries land on $PATH and Claude Code resolves them as commands.
-// `harness validate`'s checkHooks skips PATH lookup for non-rooted
-// commands (by design, so npm bins don't false-positive). `harness doctor`
-// (Phase 6 #4) will do the actual presence check.
+// UserPromptSubmit + Stop hooks point at `@lannguyensi/understanding-gate`
+// bare bin names (npm i -g). The harness validator's checkHooks skips
+// PATH lookup for non-rooted commands by design, so missing-bin shows
+// up at runtime, not at lint. `harness doctor` (Phase 6 #4 follow-up)
+// will add the presence check.
 const BIN_USER_PROMPT_SUBMIT = "understanding-gate-claude-hook";
 const BIN_STOP = "understanding-gate-claude-stop";
-const BIN_PRE_TOOL_USE = "understanding-gate-claude-pre-tool-use";
+// PreToolUse blocker is the harness CLI itself (Phase 6 #4): it consults
+// BOTH the evidence-ledger tag (canonical for harnessed sessions) AND
+// the persisted JSON report under `.understanding-gate/reports/`
+// (fallback for sessions without grounding-mcp wired). The npm package's
+// own bin remains available for solo users; the harness blocker is
+// strictly more powerful.
+const PRE_TOOL_USE_COMMAND = "harness pack hook pre-tool-use";
 
 export function isMode(value: unknown): value is Mode {
   return typeof value === "string" && (MODES as readonly string[]).includes(value);
@@ -78,11 +83,11 @@ function buildHooks(): Hook[] {
       name: `${HOOK_NAME_PREFIX}:pre-tool-use`,
       event: "PreToolUse",
       match: PRE_TOOL_USE_MATCH,
-      command: BIN_PRE_TOOL_USE,
+      command: PRE_TOOL_USE_COMMAND,
       blocking: "hard",
-      budget_ms: 2000,
+      budget_ms: 5000,
       description:
-        "Block Edit/Write/Bash until an approved Understanding Report exists for the session. Source: @lannguyensi/understanding-gate (Phase 2 standalone blocker).",
+        "Block Edit/Write/Bash until an approved Understanding Report exists for the session. Consults both the evidence-ledger tag (understanding-approved:${SESSION_ID}) and the persisted JSON report.",
     },
   ];
 }
@@ -124,9 +129,13 @@ While this pack is enabled, three hooks are wired into the harness-managed
 2. \`Stop\` capture (\`${BIN_STOP}\`): persists the emitted Understanding
    Report under \`.understanding-gate/reports/\` for audit and downstream
    approval consumption.
-3. \`PreToolUse\` blocker (\`${BIN_PRE_TOOL_USE}\`, blocking: hard) on
-   \`Edit|Write|Bash\`: refuses the tool call until an approved report
-   exists for the session.
+3. \`PreToolUse\` blocker (\`${PRE_TOOL_USE_COMMAND}\`, blocking: hard)
+   on \`Edit|Write|Bash\`: refuses the tool call until an approved
+   report exists for the session. Consults BOTH the evidence-ledger
+   tag (\`understanding-approved:\${SESSION_ID}\`, canonical for
+   harnessed sessions) AND the persisted JSON report under
+   \`.understanding-gate/reports/\` (fallback for sessions without
+   grounding-mcp wired). Either source approves.
 
 ## Approval
 

@@ -1,0 +1,176 @@
+// Phase 6 #4 — runtime helpers for the understanding-before-execution pack.
+//
+// Two-source approval check that the harness-side PreToolUse blocker
+// consults:
+//
+//   1. Evidence ledger via `grounding-mcp` (canonical for harnessed
+//      sessions). Tags shaped like `understanding-approved:${SESSION_ID}`.
+//   2. Persisted JSON report under `.understanding-gate/reports/`
+//      (canonical for solo `@lannguyensi/understanding-gate` users).
+//      The package writes one file per session; the latest with
+//      `approvalStatus: "approved"` matching the session_id wins.
+//
+// Either source approves. The persisted-report fallback is what makes a
+// solo user without grounding-mcp wired still able to approve via the
+// package's CLI; the ledger path is what makes a harnessed session see
+// the approval immediately on the next tool call.
+
+import * as fs from "node:fs";
+import * as path from "node:path";
+
+export const APPROVED_LEDGER_TAG_PREFIX = "understanding-approved:";
+
+export type ApprovalSource = "ledger" | "persisted-report" | "none";
+
+export interface ApprovalCheckResult {
+  approved: boolean;
+  source: ApprovalSource;
+  detail: string;
+}
+
+export interface PersistedReport {
+  filePath: string;
+  sessionId: string | null;
+  approvalStatus: string | null;
+  approvedAt: string | null;
+}
+
+const DEFAULT_REPORTS_DIRNAME = ".understanding-gate";
+const REPORTS_SUBDIR = "reports";
+
+export function defaultReportsDir(cwd: string = process.cwd()): string {
+  return path.join(cwd, DEFAULT_REPORTS_DIRNAME, REPORTS_SUBDIR);
+}
+
+/** Build the per-session ledger tag the pack searches for. */
+export function approvedLedgerTagFor(sessionId: string): string {
+  return `${APPROVED_LEDGER_TAG_PREFIX}${sessionId}`;
+}
+
+function safeJsonParse(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function readPersistedReport(filePath: string): PersistedReport | null {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
+  const parsed = safeJsonParse(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const obj = parsed as Record<string, unknown>;
+  return {
+    filePath,
+    sessionId: typeof obj["sessionId"] === "string" ? (obj["sessionId"] as string) : null,
+    approvalStatus:
+      typeof obj["approvalStatus"] === "string" ? (obj["approvalStatus"] as string) : null,
+    approvedAt: typeof obj["approvedAt"] === "string" ? (obj["approvedAt"] as string) : null,
+  };
+}
+
+/**
+ * List persisted reports under `dir`, newest-first by mtime. Missing
+ * directory returns []. Any I/O error on a single file is silently
+ * skipped; the caller falls through to the ledger result. The package
+ * writes filenames as `<iso>-<slug>-<hash>.json` so the alphabetical
+ * sort would also work for ISO prefixes, but mtime is robust against
+ * the package changing its naming convention later.
+ */
+export function listPersistedReports(dir: string): PersistedReport[] {
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const reports: Array<{ report: PersistedReport; mtimeMs: number }> = [];
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue;
+    const full = path.join(dir, name);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(full);
+    } catch {
+      continue;
+    }
+    if (!stat.isFile()) continue;
+    const report = readPersistedReport(full);
+    if (!report) continue;
+    reports.push({ report, mtimeMs: stat.mtimeMs });
+  }
+  reports.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return reports.map((r) => r.report);
+}
+
+/**
+ * Return the freshest report for a given session_id, or the freshest
+ * report overall when the persisted file lacks a sessionId field
+ * (older package versions). null when nothing matches.
+ */
+export function findLatestReportForSession(
+  reports: PersistedReport[],
+  sessionId: string,
+): PersistedReport | null {
+  // Strict match first.
+  for (const r of reports) {
+    if (r.sessionId === sessionId) return r;
+  }
+  // Tolerant fallback: a report without sessionId is treated as
+  // applicable to whichever session is asking. Only kicks in when no
+  // sessionId-tagged report exists, so harnessed sessions with proper
+  // tagging never hit this path.
+  for (const r of reports) {
+    if (r.sessionId === null) return r;
+  }
+  return null;
+}
+
+export interface PersistedReportApprovalCheck {
+  approved: boolean;
+  detail: string;
+  report: PersistedReport | null;
+}
+
+export function checkPersistedReport(
+  reportsDir: string,
+  sessionId: string,
+): PersistedReportApprovalCheck {
+  const reports = listPersistedReports(reportsDir);
+  if (reports.length === 0) {
+    return {
+      approved: false,
+      detail: `no reports found at ${reportsDir}`,
+      report: null,
+    };
+  }
+  const latest = findLatestReportForSession(reports, sessionId);
+  if (!latest) {
+    return {
+      approved: false,
+      detail: `no report matched session_id=${sessionId} (${reports.length} report(s) for other sessions)`,
+      report: null,
+    };
+  }
+  if (latest.approvalStatus !== "approved") {
+    return {
+      approved: false,
+      detail: `latest report ${path.basename(latest.filePath)} has approvalStatus=${
+        latest.approvalStatus ?? "<missing>"
+      }`,
+      report: latest,
+    };
+  }
+  return {
+    approved: true,
+    detail: `approved via persisted report ${path.basename(latest.filePath)}${
+      latest.approvedAt ? ` (approved at ${latest.approvedAt})` : ""
+    }`,
+    report: latest,
+  };
+}

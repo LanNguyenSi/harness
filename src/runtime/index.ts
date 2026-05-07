@@ -18,3 +18,8 @@ export {
   type PolicyDecisionPayload,
 } from "./ledger-record.js";
 export { resolveSessionId } from "./session-id.js";
+export {
+  addLedgerFact,
+  type AddLedgerFactOptions,
+  type AddLedgerFactResult,
+} from "./ledger-add.js";

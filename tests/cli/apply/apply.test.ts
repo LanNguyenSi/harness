@@ -1258,7 +1258,10 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
     }
     expect(allCommands).toContain("understanding-gate-claude-hook");
     expect(allCommands).toContain("understanding-gate-claude-stop");
-    expect(allCommands).toContain("understanding-gate-claude-pre-tool-use");
+    // Phase 6 #4: harness owns the PreToolUse blocker (consults BOTH
+    // ledger + persisted report). The package's own bin still works for
+    // solo users but the pack now wires harness's stronger blocker.
+    expect(allCommands).toContain("harness pack hook pre-tool-use");
     expect(Object.keys(settings.hooks).sort()).toEqual(["PreToolUse", "Stop", "UserPromptSubmit"]);
 
     const preToolUseGroup = settings.hooks["PreToolUse"]?.[0];

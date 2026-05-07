@@ -12,6 +12,8 @@ import {
 } from "./apply/index.js";
 import { isRemoveType, KNOWN_REMOVE_TYPES, remove } from "./remove/index.js";
 import { packAdd, packList, packRemove } from "./pack/index.js";
+import { runPackHookPreToolUseCli } from "./pack/hook-pre-tool-use.js";
+import { approveUnderstanding } from "./approve/understanding.js";
 import { describe, isPillar, type Pillar } from "./describe.js";
 import { diff as diffRun } from "./diff/index.js";
 import { diffSinceApply } from "./diff/since-apply.js";
@@ -785,6 +787,45 @@ export function buildProgram(opts: RunOptions = {}): Command {
       },
     );
 
+  // `harness pack hook` runtime sub-tree (Phase 6 #4): wired by the
+  // pack's PreToolUse hook contribution; reads PreToolUse JSON from
+  // stdin, consults ledger + persisted-report, emits Claude Code deny
+  // JSON on block.
+  const packHookCmd = packCmd
+    .command("hook")
+    .description("Pack runtime hook entrypoints (called by Claude Code via settings.json)");
+
+  packHookCmd
+    .command("pre-tool-use")
+    .description(
+      "PreToolUse blocker: read tool-event JSON from stdin, consult ledger + persisted report, emit deny JSON on block",
+    )
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option("--pack <name>", "pack name to evaluate (default: understanding-before-execution)")
+    .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
+    .option("--reports-dir <path>", "override the persisted-report directory (default: ./.understanding-gate/reports)")
+    .action(
+      async (options: {
+        config?: string;
+        project?: string;
+        pack?: string;
+        ledgerTimeout?: string;
+        reportsDir?: string;
+      }) => {
+        const cliOpts: Parameters<typeof runPackHookPreToolUseCli>[0] = {};
+        if (options.config) cliOpts.configPath = options.config;
+        if (options.project) cliOpts.project = options.project;
+        if (options.pack) cliOpts.pack = options.pack;
+        if (options.reportsDir) cliOpts.reportsDir = options.reportsDir;
+        if (options.ledgerTimeout) {
+          const n = Number.parseInt(options.ledgerTimeout, 10);
+          if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
+        }
+        await runPackHookPreToolUseCli(cliOpts);
+      },
+    );
+
   packCmd
     .command("list")
     .description("Print policy_packs entries as a flat table or JSON.")
@@ -806,6 +847,62 @@ export function buildProgram(opts: RunOptions = {}): Command {
           ...(options.json === true ? { json: true } : {}),
         });
         stdout(result.output);
+      },
+    );
+
+  // `harness approve` (Phase 6 #4): operator-driven approval verbs.
+  // Today only `understanding` is implemented; other packs can plug in
+  // sister sub-commands (e.g. `harness approve preflight`) without
+  // restructuring this surface.
+  const approveCmd = program
+    .command("approve")
+    .description("Operator-driven approval verbs (writes evidence-ledger tags + flips persisted artefacts)");
+
+  approveCmd
+    .command("understanding")
+    .description(
+      "Mark the latest Understanding Report as approved AND write the evidence-ledger tag. " +
+        "Round-trips both sources so harnessed and solo (@lannguyensi/understanding-gate) stacks stay in sync.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option(
+      "--session <id>",
+      "explicit session id (default: $CLAUDE_SESSION_ID)",
+    )
+    .option("--reports-dir <path>", "override the persisted-report directory (default: ./.understanding-gate/reports)")
+    .option("--approved-by <actor>", "actor to record on the persisted report (default: harness-approve-cli)")
+    .action(
+      async (options: {
+        config?: string;
+        project?: string;
+        session?: string;
+        reportsDir?: string;
+        approvedBy?: string;
+      }) => {
+        const cliOpts: Parameters<typeof approveUnderstanding>[0] = {};
+        if (options.config) cliOpts.configPath = options.config;
+        if (options.project) cliOpts.project = options.project;
+        if (options.session) cliOpts.session = options.session;
+        if (options.reportsDir) cliOpts.reportsDir = options.reportsDir;
+        if (options.approvedBy) cliOpts.approvedBy = options.approvedBy;
+        const result = await approveUnderstanding(cliOpts);
+        const lines: string[] = [];
+        lines.push(`session: ${result.sessionId}`);
+        if (result.ledger.ok) {
+          lines.push(`ledger:  ✓ wrote ${result.ledger.tag}`);
+        } else {
+          lines.push(`ledger:  ⚠ skipped (${result.ledger.reason ?? "unknown"})`);
+        }
+        if (result.persistedReport.ok) {
+          const prev = result.persistedReport.previousStatus ?? "<missing>";
+          lines.push(
+            `report:  ✓ ${result.persistedReport.filePath} (approvalStatus: ${prev} → approved)`,
+          );
+        } else {
+          lines.push(`report:  ⚠ skipped (${result.persistedReport.reason})`);
+        }
+        stdout(`${lines.join("\n")}\n`);
       },
     );
 
