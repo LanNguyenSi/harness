@@ -57,8 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Phase 6 #4: harness-side PreToolUse blocker + approve flow. The
   `understanding-before-execution` pack now ships its `PreToolUse` hook
   pointing at the new `harness pack hook pre-tool-use` runtime verb
-  (was: the npm package's standalone bin). The harness blocker is
-  strictly more powerful: it consults BOTH the evidence-ledger tag
+  (was: the npm package's standalone bin). The harness blocker is the
+  superset: it consults BOTH the evidence-ledger tag
   `understanding-approved:${SESSION_ID}` (via grounding-mcp's
   `ledger_summary`, canonical for harnessed sessions) AND the
   persisted JSON report under `.understanding-gate/reports/` (fallback
@@ -67,7 +67,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   containing the actionable next step (`run \`harness approve
   understanding\``). Failure modes (manifest unreadable, pack disabled,
   no session id) resolve to allow with a stderr diagnostic, so the
-  Understanding Gate never bricks a session.
+  Understanding Gate never bricks a session. Ledger matching filters
+  out `policy_decision` audit rows (typed and legacy-prefix backstop)
+  so a policy decision whose serialised reason field happens to
+  contain the approval substring cannot falsely approve.
+
+  **Breaking change for users with `understanding-before-execution`
+  enabled**: the regenerated `settings.json` calls `harness pack hook
+  pre-tool-use` instead of the npm bin. Run `harness apply` after
+  upgrading, and ensure `harness` is on `$PATH` (e.g.
+  `npm i -g @lannguyensi/harness`) before the next session starts.
 - New `harness approve understanding [--session <id>] [--reports-dir
   <path>] [--approved-by <actor>]` CLI verb that round-trips both
   approval sources: writes the `understanding-approved:${SESSION_ID}`

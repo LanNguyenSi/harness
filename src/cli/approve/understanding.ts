@@ -107,8 +107,7 @@ function rewriteReportApproved(
 export async function approveUnderstanding(
   opts: ApproveUnderstandingOptions = {},
 ): Promise<ApproveUnderstandingResult> {
-  const sessionId =
-    opts.session ?? process.env.CLAUDE_SESSION_ID ?? process.env.HARNESS_SESSION_ID ?? "";
+  const sessionId = opts.session ?? process.env.CLAUDE_SESSION_ID ?? "";
   if (sessionId === "") {
     throw new HarnessExitError(
       "no session id available. Pass --session <id> or set $CLAUDE_SESSION_ID.",

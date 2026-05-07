@@ -868,7 +868,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .option("--project <name>", "apply per-project overrides")
     .option(
       "--session <id>",
-      "explicit session id (default: $CLAUDE_SESSION_ID then $HARNESS_SESSION_ID)",
+      "explicit session id (default: $CLAUDE_SESSION_ID)",
     )
     .option("--reports-dir <path>", "override the persisted-report directory (default: ./.understanding-gate/reports)")
     .option("--approved-by <actor>", "actor to record on the persisted report (default: harness-approve-cli)")

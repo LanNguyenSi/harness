@@ -98,6 +98,60 @@ describe("pack hook pre-tool-use blocker", () => {
     expect(stdout.read()).toBe("");
   });
 
+  it("does NOT match a tag for a different session id", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event()), // session_id: sess-1
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [
+        {
+          id: "1",
+          content: "understanding-approved:other-session",
+          createdAt: "2026-05-07T08:00:00Z",
+        },
+      ],
+    });
+    expect(result.blocked).toBe(true);
+    expect(stderr.read()).toMatch(/no ledger entry matched understanding-approved:sess-1/);
+  });
+
+  it("ignores policy_decision rows that happen to contain the approval substring", async () => {
+    // Substring-pollution defence: a policy_decision payload with the
+    // approval tag embedded in its reason field must NOT match.
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event()),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [
+        {
+          id: "1",
+          type: "policy_decision",
+          content:
+            'policy_decision:something:deny {"reason":"User cited understanding-approved:sess-1 but no actual approval row"}',
+          createdAt: "2026-05-07T08:00:00Z",
+        },
+        // Same payload without the typed flag, to exercise the
+        // legacy-prefix backstop.
+        {
+          id: "2",
+          content:
+            'policy_decision:legacy {"reason":"understanding-approved:sess-1 just text"}',
+          createdAt: "2026-05-07T08:00:01Z",
+        },
+      ],
+    });
+    expect(result.blocked).toBe(true);
+    expect(stderr.read()).toMatch(/scanned 0 non-policy_decision row/);
+  });
+
   it("blocks when neither source approves", async () => {
     const stdout = bufferStream();
     const stderr = bufferStream();
