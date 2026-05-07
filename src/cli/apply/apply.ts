@@ -246,7 +246,9 @@ function buildExpectedFiles(
     packExpansion.hooks.length === 0
       ? manifest
       : { ...manifest, hooks: [...manifest.hooks, ...packExpansion.hooks] };
-  const settingsResult = generateSettingsWithWarnings(augmentedManifest);
+  const settingsResult = generateSettingsWithWarnings(augmentedManifest, {
+    ...(packExpansion.permissions && { packPermissions: packExpansion.permissions }),
+  });
   const settings = `${JSON.stringify(settingsResult.root, null, 2)}\n`;
   const indexResult = generateMemoryIndex(manifest, {
     ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),

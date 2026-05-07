@@ -70,44 +70,75 @@ The mode lives under `config:` rather than at the top level because it is pack-s
 
 ## Suggested permission profiles (Phase 6 #5)
 
-The pack will ship three reference permission profiles. The shape and key names are still tentative; the table records the **intent**.
+Three reference profiles ship as Phase 6 #5 builtins. Select one via the pack's `config.permission_profile`:
 
 ```yaml
-# safe-start: pre-approval default for any harnessed agent.
+policy_packs:
+  - name: understanding-before-execution
+    config:
+      mode: grill_me
+      permission_profile: safe-start    # or implementation-after-approval / high-risk-grill-me
+```
+
+`harness apply` translates the active profile into Claude Code's `permissions: { allow, ask, deny }` block in the generated `settings.json`. Action keys map to tool patterns at translate time:
+
+| Action | Patterns emitted into settings.json |
+|---|---|
+| `read` | `Read`, `Glob`, `Grep` |
+| `edit` | `Edit`, `Write`, `MultiEdit` |
+| `bash` | `Bash` |
+| `commit` | `Bash(git commit*)` |
+| `push` | `Bash(git push*)` |
+| `pr` | `mcp__agent-tasks__pull_requests_create`, `Bash(gh pr create*)` |
+| `deploy` | `Bash(kubectl*)`, `Bash(terraform destroy*)`, `Bash(npm publish*)` |
+
+`allow:` enum:
+
+- `true` and `false` map to `permissions.allow` and `permissions.deny`.
+- `ask` maps to `permissions.ask`.
+- `limited` and `ask_or_deny` collapse to `ask` for v1; finer-grained shaping is a Phase 6 #5 follow-up.
+
+### The three v1 profiles
+
+`safe-start` (pre-approval default):
+
+```yaml
 read:   { allow: true }
-edit:   { allow: false, mode: ask_or_deny }
-bash:   { allow: limited, mode: ask }
+edit:   { allow: ask }
+bash:   { allow: ask }
 commit: { allow: false }
 push:   { allow: false }
 pr:     { allow: false }
+deploy: { allow: false }
 ```
 
+`implementation-after-approval` (post-approval working profile; activate by re-running `harness apply` after `harness approve understanding`):
+
 ```yaml
-# implementation-after-approval: unlocks once the ledger tag is present.
-requires:
-  ledger_tag: "understanding-approved:${SESSION_ID}"
 read:   { allow: true }
 edit:   { allow: true }
 bash:   { allow: ask }
 commit: { allow: ask }
 push:   { allow: ask }
 pr:     { allow: ask }
-```
-
-```yaml
-# high-risk-grill-me: never allows commit/deploy automatically; ask-everything.
-requires:
-  - understanding_report.status == approved
-  - verification_plan.present == true
-  - out_of_scope.present == true
-  - human_approval.explicit == true
-edit:   { allow: ask }
-bash:   { allow: ask }
-commit: { allow: false }
 deploy: { allow: false }
 ```
 
-These profiles are documentation-only until Phase 6 #5 lands the runtime semantics.
+`high-risk-grill-me` (high-friction profile for security/infra surfaces; asks per-Edit and per-Bash even after approval):
+
+```yaml
+read:   { allow: true }
+edit:   { allow: ask }
+bash:   { allow: ask }
+commit: { allow: false }
+push:   { allow: false }
+pr:     { allow: ask }
+deploy: { allow: false }
+```
+
+Profile composition with the harness PreToolUse blocker (Phase 6 #4): the static `permissions` block sets the always-applies floor; the blocker handles the conditional approval gate on top. A request denied by `permissions.deny` is refused before the blocker runs; a request matched by `permissions.ask` still goes through the blocker, which can additionally refuse based on approval state.
+
+Phase 6 #5 follow-ups still queued: an inline `requires:` shape on profile actions (the schema parses it today; runtime evaluation lands later); `permissions.allow` overrides for finer-grained `limited` semantics; per-pack profile overrides via `harness pack profile activate <name>` so the user does not need a manual re-apply.
 
 ## Approval state
 

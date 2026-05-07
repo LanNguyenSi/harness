@@ -12,7 +12,17 @@
 // `understanding-gate init` reinstall).
 
 import type { Hook, PolicyPack } from "../../schema/index.js";
-import type { PackContribution, PackContributionFile } from "../types.js";
+import { profileToSettingsPermissions } from "../permission-translator.js";
+import type {
+  PackContribution,
+  PackContributionFile,
+  PackPermissionsContribution,
+} from "../types.js";
+import {
+  isKnownProfileName,
+  resolveProfile,
+  KNOWN_PROFILE_NAMES,
+} from "./permission-profiles.js";
 
 export const PACK_NAME = "understanding-before-execution";
 
@@ -159,6 +169,30 @@ ${description ? `\n> ${description.replace(/\n/g, "\n> ")}\n` : ""}
 `;
 }
 
+function resolvePermissionProfile(
+  pack: PolicyPack,
+): { permissions: PackPermissionsContribution | null; warning: string | null } {
+  const raw = pack.config["permission_profile"];
+  if (raw === undefined) return { permissions: null, warning: null };
+  if (typeof raw !== "string") {
+    return {
+      permissions: null,
+      warning: `policy_packs[${pack.name}].config.permission_profile: expected a string, got ${typeof raw}; skipping permission contribution.`,
+    };
+  }
+  if (!isKnownProfileName(raw)) {
+    return {
+      permissions: null,
+      warning: `policy_packs[${pack.name}].config.permission_profile: unrecognised profile ${JSON.stringify(
+        raw,
+      )}. Allowed: ${KNOWN_PROFILE_NAMES.join(", ")}. Skipping permission contribution.`,
+    };
+  }
+  const profile = resolveProfile(raw);
+  if (!profile) return { permissions: null, warning: null };
+  return { permissions: profileToSettingsPermissions(profile), warning: null };
+}
+
 export function resolve(pack: PolicyPack): { contribution: PackContribution; warnings: string[] } {
   const { mode, warning } = resolveMode(pack);
   const hooks = buildHooks();
@@ -171,5 +205,11 @@ export function resolve(pack: PolicyPack): { contribution: PackContribution; war
   ];
   const warnings: string[] = [];
   if (warning) warnings.push(warning);
-  return { contribution: { hooks, files }, warnings };
+
+  const profileResult = resolvePermissionProfile(pack);
+  if (profileResult.warning) warnings.push(profileResult.warning);
+  const contribution: PackContribution = { hooks, files };
+  if (profileResult.permissions) contribution.permissions = profileResult.permissions;
+
+  return { contribution, warnings };
 }

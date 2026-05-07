@@ -69,9 +69,16 @@ export interface SettingsMcpServer {
   env?: Record<string, string>;
 }
 
+export interface SettingsPermissions {
+  allow?: string[];
+  ask?: string[];
+  deny?: string[];
+}
+
 export interface SettingsRoot {
   hooks: Record<string, SettingsHookGroup[]>;
   mcpServers?: Record<string, SettingsMcpServer>;
+  permissions?: SettingsPermissions;
 }
 
 export interface GenerateSettingsResult {
@@ -79,11 +86,23 @@ export interface GenerateSettingsResult {
   warnings: string[];
 }
 
+export interface GenerateSettingsExtras {
+  /**
+   * Phase 6 #5 — pack-contributed permissions emitted into the
+   * settings.json `permissions` block. Empty buckets are dropped from
+   * the output so a no-op contribution doesn't pollute the JSON.
+   */
+  packPermissions?: SettingsPermissions;
+}
+
 export function generateSettings(manifest: Manifest): SettingsRoot {
   return generateSettingsWithWarnings(manifest).root;
 }
 
-export function generateSettingsWithWarnings(manifest: Manifest): GenerateSettingsResult {
+export function generateSettingsWithWarnings(
+  manifest: Manifest,
+  extras: GenerateSettingsExtras = {},
+): GenerateSettingsResult {
   const warnings: string[] = [];
   const byEvent = new Map<string, Hook[]>();
   for (const h of manifest.hooks) {
@@ -103,7 +122,19 @@ export function generateSettingsWithWarnings(manifest: Manifest): GenerateSettin
   const mcp = buildMcpServers(manifest.tools.mcp, warnings);
   if (Object.keys(mcp).length > 0) out.mcpServers = mcp;
 
+  const permissions = compactPermissions(extras.packPermissions);
+  if (permissions) out.permissions = permissions;
+
   return { root: out, warnings };
+}
+
+function compactPermissions(p: SettingsPermissions | undefined): SettingsPermissions | null {
+  if (!p) return null;
+  const out: SettingsPermissions = {};
+  if (p.allow && p.allow.length > 0) out.allow = [...p.allow].sort();
+  if (p.ask && p.ask.length > 0) out.ask = [...p.ask].sort();
+  if (p.deny && p.deny.length > 0) out.deny = [...p.deny].sort();
+  return Object.keys(out).length > 0 ? out : null;
 }
 
 // Translate manifest `tools.mcp[]` into Claude Code's `mcpServers` map.

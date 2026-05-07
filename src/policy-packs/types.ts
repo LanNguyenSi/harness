@@ -16,11 +16,24 @@ export interface PackContributionFile {
   content: string;
 }
 
+/**
+ * Phase 6 #5 — permissions contributed by a pack's selected
+ * permission profile. Translated downstream into the Claude Code
+ * settings.json `permissions` block.
+ */
+export interface PackPermissionsContribution {
+  allow: string[];
+  ask: string[];
+  deny: string[];
+}
+
 export interface PackContribution {
   /** Hooks to merge into the manifest before settings.json generation. */
   hooks: Hook[];
   /** Files to write under `harness.generated/`. */
   files: PackContributionFile[];
+  /** Optional permission contribution (Phase 6 #5). */
+  permissions?: PackPermissionsContribution;
 }
 
 export interface PackExpansionResult {
@@ -28,6 +41,13 @@ export interface PackExpansionResult {
   hooks: Hook[];
   /** Combined files contributed by every enabled, resolvable pack. */
   files: PackContributionFile[];
+  /**
+   * Combined permissions contributed by every enabled, resolvable
+   * pack (set-union per bucket; later contributions cannot relax a
+   * deny from an earlier pack). undefined when no pack contributed
+   * any permission entries.
+   */
+  permissions?: PackPermissionsContribution;
   /** Non-fatal expansion warnings (e.g. unknown source, unknown name on a non-strict path). */
   warnings: string[];
   /** Names of packs that were skipped because `enabled: false`. */
