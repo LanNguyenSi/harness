@@ -3,6 +3,7 @@ import { GroundingSchema } from "./grounding.js";
 import { HooksSchema } from "./hooks.js";
 import { MemorySchema } from "./memory.js";
 import { PoliciesSchema } from "./policies.js";
+import { PolicyPacksSchema } from "./policy-packs.js";
 import { ToolsSchema } from "./tools.js";
 import { AuditSchema } from "./audit.js";
 import { ReviewTemplatesSchema, WorkflowsSchema } from "./workflows.js";
@@ -17,6 +18,7 @@ export const ManifestSchema = z
     memory: MemorySchema.default({}),
     hooks: HooksSchema.default([]),
     policies: PoliciesSchema.default([]),
+    policy_packs: PolicyPacksSchema.default([]),
     workflows: WorkflowsSchema.default([]),
     review_templates: ReviewTemplatesSchema.default({}),
     audit: AuditSchema.default({}),
@@ -80,6 +82,7 @@ export * from "./tools.js";
 export * from "./memory.js";
 export * from "./hooks.js";
 export * from "./policies.js";
+export * from "./policy-packs.js";
 export * from "./workflows.js";
 export * from "./audit.js";
 export * from "./extract.js";

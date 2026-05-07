@@ -35,6 +35,11 @@ describe("parseManifest — happy path", () => {
     const reviewPolicy = manifest.policies.find((p) => p.name === "review-before-merge");
     expect(reviewPolicy?.requires.ledger_tag).toBe("review:${PR_NUMBER}");
     expect(reviewPolicy?.trigger.extract?.PR_NUMBER).toBe("toolArgs.prNumber");
+    expect(manifest.policy_packs).toHaveLength(1);
+    expect(manifest.policy_packs[0]?.name).toBe("understanding-before-execution");
+    expect(manifest.policy_packs[0]?.source).toBe("builtin");
+    expect(manifest.policy_packs[0]?.enabled).toBe(true);
+    expect(manifest.policy_packs[0]?.config).toEqual({ mode: "grill_me" });
   });
 
   it("applies defaults when optional sections are omitted", () => {
@@ -48,6 +53,7 @@ describe("parseManifest — happy path", () => {
     expect(m.memory.scopes.default).toBe("project");
     expect(m.hooks).toEqual([]);
     expect(m.policies).toEqual([]);
+    expect(m.policy_packs).toEqual([]);
   });
 
   it("accepts a string command for tools.mcp[].command", () => {
@@ -103,6 +109,11 @@ describe("parseManifest — invalid fixtures", () => {
       pattern: /spawn:\s*"required".*template/i,
     },
     { file: "16-workflow-unknown-step-kind.yaml", pattern: /invalid_union_discriminator|kind/i },
+    {
+      file: "17-policy-pack-duplicate-name.yaml",
+      pattern: /duplicate policy_pack name/i,
+    },
+    { file: "18-policy-pack-unknown-key.yaml", pattern: /unrecognized key|bogus_field/i },
   ];
 
   for (const c of cases) {
@@ -390,5 +401,65 @@ describe("parseManifest — workflows", () => {
         workflows: [{ name: "wf", steps: [] }],
       }),
     ).toThrow();
+  });
+});
+
+describe("parseManifest — policy_packs", () => {
+  it("defaults policy_packs to an empty array when absent", () => {
+    const m = parseManifest({ version: 1 });
+    expect(m.policy_packs).toEqual([]);
+  });
+
+  it("parses a minimal pack with only a name; source defaults to 'builtin'", () => {
+    const m = parseManifest({
+      version: 1,
+      policy_packs: [{ name: "understanding-before-execution" }],
+    });
+    expect(m.policy_packs[0]).toEqual({
+      name: "understanding-before-execution",
+      source: "builtin",
+      enabled: true,
+      config: {},
+    });
+  });
+
+  it("preserves an opaque config payload on the pack entry", () => {
+    const m = parseManifest({
+      version: 1,
+      policy_packs: [
+        {
+          name: "understanding-before-execution",
+          config: { mode: "grill_me", custom_extra: { nested: 42 } },
+        },
+      ],
+    });
+    expect(m.policy_packs[0]?.config).toEqual({
+      mode: "grill_me",
+      custom_extra: { nested: 42 },
+    });
+  });
+
+  it("rejects an empty name", () => {
+    expect(() =>
+      parseManifest({ version: 1, policy_packs: [{ name: "" }] }),
+    ).toThrow();
+  });
+
+  it("rejects unknown keys on a pack entry (.strict())", () => {
+    expect(() =>
+      parseManifest({
+        version: 1,
+        policy_packs: [{ name: "x", source: "builtin", surprise: true }],
+      }),
+    ).toThrow(/unrecognized key|surprise/i);
+  });
+
+  it("rejects duplicate pack names", () => {
+    expect(() =>
+      parseManifest({
+        version: 1,
+        policy_packs: [{ name: "p" }, { name: "p" }],
+      }),
+    ).toThrow(/duplicate policy_pack name/i);
   });
 });

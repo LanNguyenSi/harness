@@ -1,0 +1,7 @@
+# Two policy_packs share the same name; PoliciesPacksSchema's superRefine should reject.
+version: 1
+policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+  - name: understanding-before-execution
+    source: builtin

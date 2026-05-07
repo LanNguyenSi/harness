@@ -1,0 +1,6 @@
+# Unknown key inside a policy_pack entry; .strict() should reject.
+version: 1
+policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+    bogus_field: yes

@@ -280,23 +280,61 @@ Before an agent edits files, runs shell, commits, or opens a PR, it must produce
 
 Phase 6 introduces the *Policy Pack* concept as a first-class harness unit: a reusable bundle of instruction template + hooks + policies + permission profiles that ships under one name and is referenced from `harness.yaml` with one key. The Understanding Gate is the first showcase pack and the canonical reference implementation. Long-form design and rationale live in `lava-ice-logs/2026-04-30/harness-pre-execution-understanding-integration.md`.
 
-### Deliverables (sketch)
+### Sub-task decomposition
 
-- New manifest key (working name: `policy_packs:`) referencing imported pack bundles.
-- Pack format: a directory containing `pack.yaml` (metadata + manifest fragment), `instructions.md` (template inserted into `CLAUDE.md`/system prompts), and any associated hook scripts. Apply-time resolution merges the fragment into the effective manifest.
-- `understanding-before-execution` pack: writes an `understanding:${TASK_ID}` ledger entry on user approval; gates `Edit` / `Write` / `Bash` / `mcp__agent-tasks__pull_requests_create` etc. on its presence.
-- `harness pack add <name>` / `harness pack remove <name>` CLI surface.
-- Integration with `harness apply` so the pack's instruction template is applied to the per-project agent prompt without manual copy-paste.
+Phase 6 ships as six sequential sub-tasks. Each is a separate PR with its own dogfood gate. Cross-references to `lava-ice-logs/2026-04-30/harness-pre-execution-understanding-integration.md` are noted inline.
+
+#### Phase 6 #1, Anchor: Policy Pack vocabulary + canonical doc *(this PR)*
+
+- New manifest key `policy_packs:` (additive, version 1, no runtime behaviour). Schema: `name` (required), `source` (default `builtin`), `enabled` (default `true`), `description` (optional), `config` (free-form record, validated by the pack itself at resolve time).
+- `docs/policy-packs/understanding-before-execution.md`: canonical pack documentation including target architecture, manifest reference, mode semantics, permission-profile sketches, adapter notes, approval state model.
+- Schema-only validation: duplicate-name rejection, `.strict()` on entry shape, integration with `parseManifest` defaults.
+- Two new invalid fixtures (`17-policy-pack-duplicate-name.yaml`, `18-policy-pack-unknown-key.yaml`).
+- `docs/examples/full-manifest.yaml` carries the canonical pack as a worked example; the byte-for-byte `describe` golden test covers the resulting output.
+
+**Out of scope here:** any code that reads `policy_packs:` at runtime, any new CLI verb, any `harness apply` integration, any hook installation. Those land in #2 through #6.
+
+#### Phase 6 #2, Apply-time pack expansion
+
+- `harness apply` resolves each enabled pack to its bundled instruction template + hook stanzas + permission-profile defaults; merges them into the generated `~/.claude/settings.json` and the per-project `CLAUDE.md` block.
+- Three-state drift detection extends to instruction-text content (per `ARCHITECTURE.md` §7).
+- `.harness/policy-packs/<name>/` per-project state directory; tracked by `harness.lock`.
+- `harness diff --since-apply` surfaces pack-instruction drift.
+
+#### Phase 6 #3, `harness pack` CLI surface
+
+- `harness pack add <name> [--mode fast_confirm|grill_me|strict]`: managed insert into `policy_packs:`.
+- `harness pack remove <name>`: reference-checked remove (refuses if hooks/policies still reference the pack's contributions).
+- `harness pack list [--enabled-only]`: flat listing with resolved source + mode.
+- Wires `harness validate` to fail when an `enabled: true` pack's `source` cannot be resolved.
+
+#### Phase 6 #4, PreToolUse blocker + `harness approve understanding`
+
+- Harness-side PreToolUse blocker that consults BOTH the `understanding-approved:${SESSION_ID}` evidence-ledger tag (canonical for harnessed sessions) AND the `@lannguyensi/understanding-gate` persisted JSON report (fallback). The package's standalone blocker stays available for solo users.
+- `harness approve understanding [--session <id>]` round-trips both: writes the ledger tag via `grounding-mcp` AND flips `approvalStatus: "approved"` on the most recent persisted report.
+- `harness doctor` validates: package binaries on `$PATH`, hooks registered in `settings.json`, instruction templates installed, ledger reachable.
+
+#### Phase 6 #5, Permission profiles
+
+- Three reference profiles (`safe-start`, `implementation-after-approval`, `high-risk-grill-me`) shipped with the canonical pack; documented as a new schema block (working name `permission_profiles:` or expressed inline in the pack's `config:`).
+- Runtime semantics for `mode: ask | ask_or_deny | limited` defined and tested.
+- Validated against the existing `policies:` evaluator so pack-driven permission requirements compose with manifest-level `requires:` shapes.
+
+#### Phase 6 #6, Codex adapter
+
+- Codex hook adapter for UserPromptSubmit (instruction injection) and PreToolUse (`apply_patch` + `Bash` matching). Mirrors the Claude Code shape; reuses the same persisted-report format.
+- Smoke test: Codex configured against the canonical pack refuses an `apply_patch` invocation until the report is approved.
 
 ### Non-goals
 
-- A registry / marketplace for community-authored packs.
-- Cross-runtime packs beyond Claude Code.
-- Automatic UI for the user-confirms step (still text-mode).
+- A registry / marketplace for community-authored packs (deferred to a future phase).
+- Cross-runtime packs beyond Claude Code, OpenCode, Codex.
+- Automatic UI for the user-confirms step (still text-mode across all sub-tasks).
+- Re-implementing templates / parser / persistence inside harness; those stay in `@lannguyensi/understanding-gate`.
 
 ### Exit gate
 
-A fresh agent on a clean repo refuses to call write-capable tools until an Understanding Report has been produced and explicitly approved. The pack ships as `understanding-before-execution`, is `harness pack add`-able, and reproducible from one canonical command. Tag `v0.6.0`.
+A fresh agent on a clean repo refuses to call write-capable tools until an Understanding Report has been produced and explicitly approved. The `understanding-before-execution` pack is declarable via `harness pack add`, applies cleanly via `harness apply`, and `harness doctor` reports the wiring as healthy. The PR-level cut tags `v0.8.0` after #6 lands; intermediate sub-tasks ship as patch releases.
 
 ## Phase 7 — Risk Gate
 
