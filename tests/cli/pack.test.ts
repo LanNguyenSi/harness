@@ -215,6 +215,33 @@ describe("pack remove", () => {
     expect(r3.outcome).toBe("no-changes");
   });
 
+  it("schema rejects a manifest with a path-traversal pack name (defense in depth)", async () => {
+    // Manually write a manifest that side-steps `pack add` and tries to
+    // smuggle a path-traversal name into policy_packs[]. The schema
+    // regex rejects it at load time, so neither `apply` nor `pack
+    // remove` can act on it.
+    fs.writeFileSync(
+      manifestPath,
+      "version: 1\npolicy_packs:\n  - name: ../../../etc/escape\n",
+      "utf8",
+    );
+    let caught: unknown;
+    try {
+      await packRemove("../../../etc/escape", {
+        configPath: manifestPath,
+        force: true,
+      });
+    } catch (e) {
+      caught = e;
+    }
+    // The schema rejects the manifest first (read by planPackRemove via
+    // parse-then-find or by validateBeforeWrite at write time). Either
+    // way, we never reach the fs.rmSync call site with an unsafe name.
+    expect(caught).toBeDefined();
+    // The escape target must not exist on disk after the failed call.
+    expect(fs.existsSync(path.join(tmpHome, "../../../etc/escape"))).toBe(false);
+  });
+
   it("dry-run --force surfaces the would-clean file list without writing", async () => {
     await packAdd({ name: "understanding-before-execution" }, { configPath: manifestPath });
     await apply({ homeDir: tmpHome });

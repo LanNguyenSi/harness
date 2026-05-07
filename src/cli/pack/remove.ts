@@ -84,6 +84,13 @@ function formatNameList(names: string[]): string {
   return names.map((n) => `  - ${n}`).join("\n");
 }
 
+// Belt-and-braces defense against a path-traversal `name` reaching the
+// filesystem cleanup. The schema regex on PolicyPackSchema.name catches
+// this at parseManifest time, but planPackRemove reads the YAML
+// directly (not via the schema), so a malformed manifest could still
+// surface a bad name here. Refuse rather than rmSync into the void.
+const SAFE_PACK_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
+
 export async function packRemove(
   name: string,
   opts: PackRemoveOptions = {},
@@ -93,6 +100,15 @@ export async function packRemove(
     throw new HarnessExitError(
       `harness manifest not found at ${target}; run \`harness init\` first`,
       EX_NOINPUT,
+    );
+  }
+
+  if (!SAFE_PACK_NAME_RE.test(name)) {
+    throw new HarnessExitError(
+      `policy_pack name ${JSON.stringify(
+        name,
+      )} contains path separators or other unsafe characters; refusing to operate on it. Allowed: [A-Za-z0-9._-], leading char alphanumeric.`,
+      EX_FAIL,
     );
   }
 
