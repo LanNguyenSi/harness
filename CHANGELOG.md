@@ -54,6 +54,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   corresponding `.last-apply` entries so a follow-up `harness apply`
   reconverges in one step. `harness pack list [--enabled-only] [--json]`
   prints a flat table or pipeable JSON.
+- Phase 6 #4: harness-side PreToolUse blocker + approve flow. The
+  `understanding-before-execution` pack now ships its `PreToolUse` hook
+  pointing at the new `harness pack hook pre-tool-use` runtime verb
+  (was: the npm package's standalone bin). The harness blocker is
+  strictly more powerful: it consults BOTH the evidence-ledger tag
+  `understanding-approved:${SESSION_ID}` (via grounding-mcp's
+  `ledger_summary`, canonical for harnessed sessions) AND the
+  persisted JSON report under `.understanding-gate/reports/` (fallback
+  for sessions without grounding-mcp wired). Either source approves;
+  neither blocks the tool call with a Claude-Code-shaped deny JSON
+  containing the actionable next step (`run \`harness approve
+  understanding\``). Failure modes (manifest unreadable, pack disabled,
+  no session id) resolve to allow with a stderr diagnostic, so the
+  Understanding Gate never bricks a session.
+- New `harness approve understanding [--session <id>] [--reports-dir
+  <path>] [--approved-by <actor>]` CLI verb that round-trips both
+  approval sources: writes the `understanding-approved:${SESSION_ID}`
+  ledger tag via `grounding-mcp`'s `ledger_add` AND flips
+  `approvalStatus: "approved"` on the latest matching persisted JSON
+  report (atomic rewrite). A degraded ledger surfaces as a one-line
+  warning, not a hard failure, so a solo
+  `@lannguyensi/understanding-gate` user without `grounding-mcp` wired
+  still benefits from the persisted-report path.
+- New generic `runtime/ledger-add.ts` writer mirroring the structural
+  shape of `recordPolicyDecision` but exposed for non-policy-decision
+  fact rows. Used by `harness approve understanding`; available to any
+  future pack that wants to emit a session-tagged ledger entry without
+  encoding a policy-decision payload.
 
 ## [0.7.0] - 2026-05-06
 

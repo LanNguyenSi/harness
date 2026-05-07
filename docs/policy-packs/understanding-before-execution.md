@@ -138,10 +138,27 @@ Not yet covered by `@lannguyensi/understanding-gate`. Harness will ship a Codex 
 
 `harness apply` against a manifest with this pack enabled writes:
 
-- Three hooks in the harness-managed `settings.json`: a `UserPromptSubmit` injector, a `Stop` capture, and a `PreToolUse` blocker on `Edit|Write|Bash`. Hook commands are bare bin names (`understanding-gate-claude-hook`, `understanding-gate-claude-stop`, `understanding-gate-claude-pre-tool-use`) provided by the `@lannguyensi/understanding-gate` package, so the user must `npm i -g` the package for them to resolve. Hook names are namespaced (`policy-pack:understanding-before-execution:<role>`) to avoid collisions with operator-authored hooks.
+- Three hooks in the harness-managed `settings.json`:
+  - `UserPromptSubmit` injector: bare bin `understanding-gate-claude-hook` (from the npm package; user must `npm i -g`).
+  - `Stop` capture: bare bin `understanding-gate-claude-stop` (same).
+  - `PreToolUse` blocker on `Edit|Write|Bash`: `harness pack hook pre-tool-use` (Phase 6 #4). The harness-side blocker consults BOTH the evidence-ledger tag `understanding-approved:${SESSION_ID}` (via `grounding-mcp`'s `ledger_summary`, canonical for harnessed sessions) AND the persisted JSON report under `.understanding-gate/reports/` (fallback for sessions without `grounding-mcp` wired). Either source approves. The npm package's standalone `understanding-gate-claude-pre-tool-use` blocker remains available for solo users; the harness blocker is the superset (it covers the persisted-report case too, plus the ledger).
+  - Hook names are namespaced (`policy-pack:understanding-before-execution:<role>`) to avoid collisions with operator-authored hooks.
 - An operator audit copy at `harness.generated/policy-packs/understanding-before-execution/instructions.md`. This file documents what the pack is doing in the operator's voice (mode, hook list, approval flow); the agent-facing prompt is injected at runtime by the `UserPromptSubmit` hook and lives in the npm package, not here. Drift on the audit copy means an operator edited something they shouldn't have, and `harness diff --since-apply` flags it.
 
-Phase 6 #4 will add a harness-side `PreToolUse` blocker that consults the evidence-ledger tag (canonical for harnessed sessions) in addition to the package's persisted-report check, plus a `harness approve understanding` CLI verb. Phase 6 #2 follow-ups still queued: an automatically-injected stanza into the per-project `CLAUDE.md` for human discoverability, and a `harness doctor` wiring check that validates the package binaries are on `$PATH`.
+## Approving an Understanding Report
+
+```sh
+harness approve understanding [--session <id>] [--reports-dir <path>]
+```
+
+Round-trips both approval sources:
+
+- Writes the `understanding-approved:${SESSION_ID}` tag via `grounding-mcp`'s `ledger_add` (canonical for harnessed sessions).
+- Flips `approvalStatus: "approved"` on the latest matching persisted JSON report (canonical for solo users without `grounding-mcp`).
+
+A degraded ledger surfaces as a warning, not a hard failure, so the persisted-report path keeps working independently. The blocker on the next tool call sees the new approval from whichever source landed.
+
+Phase 6 #2 follow-ups still queued: an automatically-injected stanza into the per-project `CLAUDE.md` for human discoverability, and a `harness doctor` wiring check that validates the package binaries are on `$PATH`.
 
 ## See also
 
