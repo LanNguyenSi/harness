@@ -445,6 +445,22 @@ describe("parseManifest — policy_packs", () => {
     ).toThrow();
   });
 
+  it("rejects names containing path separators or parent-dir refs", () => {
+    for (const bad of ["../etc", "foo/bar", "..", "/abs", "name with space", "-leading-dash"]) {
+      expect(() =>
+        parseManifest({ version: 1, policy_packs: [{ name: bad }] }),
+      ).toThrow(/path separators are rejected|alphanumeric/i);
+    }
+  });
+
+  it("accepts conservative name shapes (alphanumeric + dash + dot + underscore)", () => {
+    for (const ok of ["pack", "pack_v2", "pack-name", "pack.v1", "Pack123"]) {
+      expect(() =>
+        parseManifest({ version: 1, policy_packs: [{ name: ok }] }),
+      ).not.toThrow();
+    }
+  });
+
   it("rejects unknown keys on a pack entry (.strict())", () => {
     expect(() =>
       parseManifest({

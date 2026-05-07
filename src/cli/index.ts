@@ -11,6 +11,7 @@ import {
   type FileApplyOutcome,
 } from "./apply/index.js";
 import { isRemoveType, KNOWN_REMOVE_TYPES, remove } from "./remove/index.js";
+import { packAdd, packList, packRemove } from "./pack/index.js";
 import { describe, isPillar, type Pillar } from "./describe.js";
 import { diff as diffRun } from "./diff/index.js";
 import { diffSinceApply } from "./diff/since-apply.js";
@@ -701,6 +702,110 @@ export function buildProgram(opts: RunOptions = {}): Command {
           return;
         }
         stdout(`removed ${result.type} ${JSON.stringify(result.name)} from ${result.path}\n`);
+      },
+    );
+
+  // `harness pack` subtree (Phase 6 #3): managed CRUD over policy_packs[].
+  const packCmd = program
+    .command("pack")
+    .description("Manage policy_packs[] entries (add / remove / list)");
+
+  packCmd
+    .command("add <name>")
+    .description(
+      "Insert a new policy_packs entry. <name> must be a known builtin (see docs/policy-packs/).",
+    )
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--mode <mode>", "pack-specific config.mode value (e.g. fast_confirm | grill_me | strict)")
+    .option("--source <src>", "pack source (default: builtin)")
+    .option("--description <text>", "operator-facing description")
+    .option("--disabled", "register as enabled: false")
+    .option("--dry-run", "print the unified diff and exit without writing")
+    .action(
+      async (
+        name: string,
+        options: {
+          config?: string;
+          mode?: string;
+          source?: string;
+          description?: string;
+          disabled?: boolean;
+          dryRun?: boolean;
+        },
+      ) => {
+        const entry: Parameters<typeof packAdd>[0] = { name };
+        if (options.source !== undefined) entry.source = options.source;
+        if (options.disabled === true) entry.enabled = false;
+        if (options.description !== undefined) entry.description = options.description;
+        if (options.mode !== undefined) entry.config = { mode: options.mode };
+        const result = await packAdd(entry, {
+          configPath: options.config,
+          dryRun: options.dryRun,
+        });
+        if (options.dryRun) {
+          stdout(result.diff);
+          return;
+        }
+        stdout(`added policy_packs entry ${JSON.stringify(result.name)} to ${result.path}\n`);
+      },
+    );
+
+  packCmd
+    .command("remove <name>")
+    .description(
+      "Remove a policy_packs entry. Refuses without --force when applied state " +
+        "is recorded in .last-apply.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--dry-run", "print the unified diff and exit without writing")
+    .option(
+      "--force",
+      "remove the manifest entry AND clean up the on-disk pack files + .last-apply state",
+    )
+    .action(
+      async (
+        name: string,
+        options: { config?: string; dryRun?: boolean; force?: boolean },
+      ) => {
+        const result = await packRemove(name, {
+          configPath: options.config,
+          dryRun: options.dryRun,
+          force: options.force,
+        });
+        if (result.cleanedFiles.length > 0) {
+          stderr(
+            `(forced cleanup — removed ${result.cleanedFiles.length} pack file(s) and pruned .last-apply)\n`,
+          );
+        }
+        if (options.dryRun) {
+          stdout(result.diff);
+          return;
+        }
+        stdout(`removed policy_packs entry ${JSON.stringify(result.name)} from ${result.path}\n`);
+      },
+    );
+
+  packCmd
+    .command("list")
+    .description("Print policy_packs entries as a flat table or JSON.")
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option("--enabled-only", "skip entries with enabled: false")
+    .option("--json", "emit JSON array instead of an aligned text table")
+    .action(
+      (options: {
+        config?: string;
+        project?: string;
+        enabledOnly?: boolean;
+        json?: boolean;
+      }) => {
+        const result = packList({
+          ...(options.config !== undefined ? { configPath: options.config } : {}),
+          ...(options.project !== undefined ? { project: options.project } : {}),
+          ...(options.enabledOnly === true ? { enabledOnly: true } : {}),
+          ...(options.json === true ? { json: true } : {}),
+        });
+        stdout(result.output);
       },
     );
 

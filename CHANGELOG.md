@@ -43,6 +43,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   builtin name. Phase 6 #4 will add the harness-side ledger-aware
   PreToolUse blocker; the standalone blocker shipped in
   `@lannguyensi/understanding-gate@>=0.2.0` is already wired today.
+- Phase 6 #3: new `harness pack` CLI subtree for managing `policy_packs[]`
+  declaratively. `harness pack add <name>` performs a schema-validated
+  insert (rejects unknown source/name pre-flight, then the schema
+  superRefine catches duplicates). `harness pack remove <name>` is
+  reference-checked against `.last-apply`: it refuses without `--force`
+  when applied state is present, and `--force` removes the manifest
+  entry, deletes the on-disk pack files under
+  `harness.generated/policy-packs/<name>/`, and prunes the
+  corresponding `.last-apply` entries so a follow-up `harness apply`
+  reconverges in one step. `harness pack list [--enabled-only] [--json]`
+  prints a flat table or pipeable JSON.
 
 ## [0.7.0] - 2026-05-06
 
