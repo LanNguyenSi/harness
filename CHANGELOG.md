@@ -104,10 +104,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (`Edit`/`Write`/`MultiEdit` for `edit`, `Bash(git commit*)` for
   `commit`, etc.). `limited` and `ask_or_deny` collapse onto `ask`
   for v1 (Claude Code does not natively distinguish them); finer-
-  grained shaping is a Phase 6 #5 follow-up. Profiles compose with
-  the Phase 6 #4 PreToolUse blocker: the static permissions block is
-  the always-applies floor, the blocker handles the conditional
-  approval gate on top.
+  grained shaping is a Phase 6 #5 follow-up. When multiple packs
+  contribute permissions, the merge follows
+  deny-wins-over-ask-wins-over-allow precedence: a stricter intent
+  from any pack is not silently relaxed by a more permissive
+  sibling. Profiles compose with the Phase 6 #4 PreToolUse blocker:
+  the static permissions block is the always-applies floor, the
+  blocker handles the conditional approval gate on top.
 
 ## [0.7.0] - 2026-05-06
 
