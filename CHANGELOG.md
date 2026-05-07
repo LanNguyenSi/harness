@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Phase 6 anchor: additive `policy_packs:` manifest block (schema-only;
+  no runtime behaviour yet). Each entry has `name`, `source`
+  (default `builtin`), `enabled`, optional `description`, and an
+  opaque `config:` record validated by the pack itself at resolve
+  time. Duplicate names rejected at parse time; `.strict()` rejects
+  unknown keys per entry. The block defaults to `[]` so manifests
+  written for `0.7.0` parse byte-identically.
+- `docs/policy-packs/understanding-before-execution.md`: canonical
+  documentation for the first Policy Pack, covering target
+  architecture, manifest reference, mode semantics, permission-profile
+  sketches, adapter notes for Claude Code / OpenCode / Codex, and the
+  two-source approval-state model (evidence-ledger tag for harnessed
+  sessions; persisted JSON report for solo `@lannguyensi/understanding-gate`
+  users). Phase 6 #2 through #6 will wire the surfaces this doc
+  describes; see `docs/ROADMAP.md` for the sub-task decomposition.
+- `docs/examples/full-manifest.yaml` carries the canonical
+  `understanding-before-execution` pack as a worked example; the
+  byte-for-byte `harness describe` golden test covers the resulting
+  output.
+
 ## [0.7.0] - 2026-05-06
 
 **Headline: workflows-as-data and full-session audit forensics.** The
