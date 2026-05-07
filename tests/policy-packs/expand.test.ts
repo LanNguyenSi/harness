@@ -117,6 +117,45 @@ describe("expandPolicyPacks", () => {
     expect(r.warnings.some((w) => w.includes("not a known builtin pack"))).toBe(true);
   });
 
+  it("contributes permissions when config.permission_profile names a builtin", () => {
+    const m = buildManifest([
+      { name: "understanding-before-execution", config: { permission_profile: "safe-start" } },
+    ]);
+    const r = expandPolicyPacks(m);
+    expect(r.permissions).toBeDefined();
+    expect(r.permissions?.allow).toContain("Read");
+    expect(r.permissions?.ask).toContain("Edit");
+    expect(r.permissions?.deny).toContain("Bash(git commit*)");
+  });
+
+  it("contributes no permissions when permission_profile is omitted", () => {
+    const m = buildManifest([{ name: "understanding-before-execution" }]);
+    const r = expandPolicyPacks(m);
+    expect(r.permissions).toBeUndefined();
+  });
+
+  it("warns and skips permissions when permission_profile is unrecognised", () => {
+    const m = buildManifest([
+      { name: "understanding-before-execution", config: { permission_profile: "ghost" } },
+    ]);
+    const r = expandPolicyPacks(m);
+    expect(r.permissions).toBeUndefined();
+    expect(r.warnings.some((w) => w.includes("unrecognised profile"))).toBe(true);
+  });
+
+  it("threads implementation-after-approval permissions through", () => {
+    const m = buildManifest([
+      {
+        name: "understanding-before-execution",
+        config: { permission_profile: "implementation-after-approval" },
+      },
+    ]);
+    const r = expandPolicyPacks(m);
+    expect(r.permissions?.allow).toContain("Edit");
+    expect(r.permissions?.allow).toContain("Write");
+    expect(r.permissions?.ask).toContain("Bash");
+  });
+
   it("drops a pack hook whose name collides with a manifest hooks[] entry", () => {
     const m = buildManifest(
       [{ name: "understanding-before-execution" }],

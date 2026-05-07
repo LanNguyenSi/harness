@@ -479,3 +479,74 @@ describe("parseManifest — policy_packs", () => {
     ).toThrow(/duplicate policy_pack name/i);
   });
 });
+
+describe("parseManifest — permission_profiles (Phase 6 #5)", () => {
+  it("defaults permission_profiles to {} when absent", () => {
+    const m = parseManifest({ version: 1 });
+    expect(m.permission_profiles).toEqual({});
+  });
+
+  it("parses a profile with all 7 action keys + accepts boolean shorthand", () => {
+    const m = parseManifest({
+      version: 1,
+      permission_profiles: {
+        custom: {
+          description: "test",
+          actions: {
+            read: { allow: true },
+            edit: { allow: false },
+            bash: { allow: "ask" },
+            commit: { allow: "false" },
+            push: { allow: "true" },
+            pr: { allow: "limited" },
+            deploy: { allow: "ask_or_deny" },
+          },
+        },
+      },
+    });
+    expect(m.permission_profiles.custom?.actions.read?.allow).toBe("true");
+    expect(m.permission_profiles.custom?.actions.edit?.allow).toBe("false");
+    expect(m.permission_profiles.custom?.actions.deploy?.allow).toBe("ask_or_deny");
+  });
+
+  it("rejects unknown action keys via .strict()", () => {
+    expect(() =>
+      parseManifest({
+        version: 1,
+        permission_profiles: {
+          bad: { actions: { unknown_action: { allow: "true" } } },
+        },
+      }),
+    ).toThrow(/unrecognized key|unknown_action/i);
+  });
+
+  it("rejects unknown allow values", () => {
+    expect(() =>
+      parseManifest({
+        version: 1,
+        permission_profiles: {
+          bad: { actions: { read: { allow: "maybe" } } },
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("permits an inline `requires:` shape on a profile action", () => {
+    const m = parseManifest({
+      version: 1,
+      permission_profiles: {
+        gated: {
+          actions: {
+            edit: {
+              allow: "true",
+              requires: { ledger_tag: "understanding-approved:${SESSION_ID}" },
+            },
+          },
+        },
+      },
+    });
+    expect(m.permission_profiles.gated?.actions.edit?.requires?.ledger_tag).toBe(
+      "understanding-approved:${SESSION_ID}",
+    );
+  });
+});

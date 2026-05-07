@@ -163,6 +163,7 @@ policy_packs:
     description: Force agents to expose their task interpretation and wait for explicit human approval before any write-capable tool fires.
     config:
       mode: grill_me
+permission_profiles: {}
 workflows:
   - name: feature-pr
     when:

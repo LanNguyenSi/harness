@@ -91,6 +91,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   fact rows. Used by `harness approve understanding`; available to any
   future pack that wants to emit a session-tagged ledger entry without
   encoding a policy-decision payload.
+- Phase 6 #5: permission profiles. New top-level `permission_profiles:`
+  manifest block (additive, defaults to `{}`), with three v1 builtins
+  bundled with the `understanding-before-execution` pack: `safe-start`
+  (pre-approval default), `implementation-after-approval` (post-
+  approval working profile), and `high-risk-grill-me` (high-friction
+  for security / infra surfaces). Selection via the pack's
+  `config.permission_profile`. Profile actions (`read` / `edit` /
+  `bash` / `commit` / `push` / `pr` / `deploy`) translate to Claude
+  Code's `permissions: { allow, ask, deny }` block at apply time;
+  the new translator emits canonical tool patterns
+  (`Edit`/`Write`/`MultiEdit` for `edit`, `Bash(git commit*)` for
+  `commit`, etc.). `limited` and `ask_or_deny` collapse onto `ask`
+  for v1 (Claude Code does not natively distinguish them); finer-
+  grained shaping is a Phase 6 #5 follow-up. Profiles compose with
+  the Phase 6 #4 PreToolUse blocker: the static permissions block is
+  the always-applies floor, the blocker handles the conditional
+  approval gate on top.
 
 ## [0.7.0] - 2026-05-06
 

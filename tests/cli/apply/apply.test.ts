@@ -1326,6 +1326,32 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
     expect(r.warnings.some((w) => w.includes("not recognised"))).toBe(true);
   });
 
+  it("emits a permissions block when config.permission_profile is set", async () => {
+    writePolicyPackManifest([
+      {
+        name: "understanding-before-execution",
+        config: { permission_profile: "safe-start" },
+      },
+    ]);
+    await apply({ homeDir: tmpHome });
+    const settings = JSON.parse(fs.readFileSync(settingsPath(), "utf8")) as {
+      permissions?: { allow?: string[]; ask?: string[]; deny?: string[] };
+    };
+    expect(settings.permissions).toBeDefined();
+    expect(settings.permissions?.allow).toEqual(["Glob", "Grep", "Read"]);
+    expect(settings.permissions?.ask).toContain("Edit");
+    expect(settings.permissions?.deny).toContain("Bash(git commit*)");
+  });
+
+  it("omits the permissions block when no profile is selected", async () => {
+    writePolicyPackManifest([{ name: "understanding-before-execution" }]);
+    await apply({ homeDir: tmpHome });
+    const settings = JSON.parse(fs.readFileSync(settingsPath(), "utf8")) as {
+      permissions?: unknown;
+    };
+    expect(settings.permissions).toBeUndefined();
+  });
+
   it("re-enabling a previously-disabled pack triggers a fresh apply", async () => {
     writePolicyPackManifest([{ name: "understanding-before-execution", enabled: false }]);
     await apply({ homeDir: tmpHome });
