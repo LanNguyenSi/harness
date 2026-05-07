@@ -748,6 +748,67 @@ tools:
   });
 });
 
+describe("validate — policy_packs (Phase 6 #2)", () => {
+  function fixtureWithPacks(packs: unknown): string {
+    const yaml = `version: 1\npolicy_packs: ${JSON.stringify(packs)}\n`;
+    return writeFixture({ "harness.yaml": yaml });
+  }
+
+  it("clean fixture: a known-builtin enabled pack produces no policy_packs diagnostics", () => {
+    const home = fixtureWithPacks([{ name: "understanding-before-execution" }]);
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const packDiags = result.diagnostics.filter((d) => d.path.startsWith("policy_packs["));
+    expect(packDiags).toEqual([]);
+  });
+
+  it("rejects an enabled pack with an unknown source", () => {
+    const home = fixtureWithPacks([
+      { name: "understanding-before-execution", source: "path:./somewhere" },
+    ]);
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const sourceError = result.diagnostics.find(
+      (d) => d.path === "policy_packs[0].source" && d.severity === "error",
+    );
+    expect(sourceError).toBeDefined();
+    expect(sourceError?.message).toMatch(/only "builtin" resolves/);
+  });
+
+  it("rejects an enabled pack with an unknown builtin name", () => {
+    const home = fixtureWithPacks([{ name: "no-such-pack" }]);
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const nameError = result.diagnostics.find(
+      (d) => d.path === "policy_packs[0].name" && d.severity === "error",
+    );
+    expect(nameError).toBeDefined();
+    expect(nameError?.message).toMatch(/not a known builtin pack/);
+  });
+
+  it("does not flag an enabled:false pack with a bogus source or name", () => {
+    const home = fixtureWithPacks([
+      { name: "no-such-pack", source: "git:https://x.git", enabled: false },
+    ]);
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const packDiags = result.diagnostics.filter((d) => d.path.startsWith("policy_packs["));
+    expect(packDiags).toEqual([]);
+  });
+});
+
 describe("validate — internal helpers", () => {
   it("compareVersions handles dotted numeric versions", () => {
     expect(__testables.compareVersions("1.2.3", "1.2.0")).toBe(1);

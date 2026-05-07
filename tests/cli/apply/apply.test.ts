@@ -1217,3 +1217,120 @@ describe("apply — memory directory aggregation", () => {
     expect(index).toBe("- [User profile](user.md) — about\n");
   });
 });
+
+describe("apply — policy_packs expansion (Phase 6 #2)", () => {
+  function writePolicyPackManifest(packs: unknown[]): string {
+    const manifest = {
+      version: 1,
+      tools: { mcp: [], cli: [], skills: { enabled: [], source_dirs: [] }, builtin: { known: [] } },
+      memory: { directories: [] },
+      hooks: [],
+      policies: [],
+      policy_packs: packs,
+    };
+    const target = path.join(tmpHome, "harness.yaml");
+    fs.writeFileSync(target, yamlStringify(manifest));
+    return target;
+  }
+
+  function instructionsPath(packName: string): string {
+    return path.join(
+      tmpHome,
+      GENERATED_DIRNAME,
+      "policy-packs",
+      packName,
+      "instructions.md",
+    );
+  }
+
+  it("writes pack instructions and merges pack hooks into settings.json", async () => {
+    writePolicyPackManifest([{ name: "understanding-before-execution" }]);
+    const r = await apply({ homeDir: tmpHome });
+    expect(r.outcome).toBe("applied");
+    expect(fs.existsSync(instructionsPath("understanding-before-execution"))).toBe(true);
+
+    const settings = JSON.parse(fs.readFileSync(settingsPath(), "utf8")) as {
+      hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>;
+    };
+    const allCommands: string[] = [];
+    for (const groups of Object.values(settings.hooks)) {
+      for (const g of groups) for (const h of g.hooks) allCommands.push(h.command);
+    }
+    expect(allCommands).toContain("understanding-gate-claude-hook");
+    expect(allCommands).toContain("understanding-gate-claude-stop");
+    expect(allCommands).toContain("understanding-gate-claude-pre-tool-use");
+    expect(Object.keys(settings.hooks).sort()).toEqual(["PreToolUse", "Stop", "UserPromptSubmit"]);
+
+    const preToolUseGroup = settings.hooks["PreToolUse"]?.[0];
+    expect(preToolUseGroup?.matcher).toBe("Edit|Write|Bash");
+  });
+
+  it("threads explicit mode into the operator audit copy", async () => {
+    writePolicyPackManifest([
+      { name: "understanding-before-execution", config: { mode: "strict" } },
+    ]);
+    await apply({ homeDir: tmpHome });
+    const md = fs.readFileSync(instructionsPath("understanding-before-execution"), "utf8");
+    expect(md).toMatch(/## Mode\s*\n\s*strict/);
+  });
+
+  it("is idempotent: a second apply returns no-changes and keeps the file byte-stable", async () => {
+    writePolicyPackManifest([{ name: "understanding-before-execution" }]);
+    await apply({ homeDir: tmpHome });
+    const before = fs.readFileSync(instructionsPath("understanding-before-execution"), "utf8");
+    const r2 = await apply({ homeDir: tmpHome });
+    expect(r2.outcome).toBe("no-changes");
+    expect(r2.written).toBe(false);
+    const after = fs.readFileSync(instructionsPath("understanding-before-execution"), "utf8");
+    expect(after).toBe(before);
+  });
+
+  it("detects drift on the pack instructions file via three-state compare", async () => {
+    writePolicyPackManifest([{ name: "understanding-before-execution" }]);
+    await apply({ homeDir: tmpHome });
+    fs.writeFileSync(
+      instructionsPath("understanding-before-execution"),
+      "manually edited\n",
+      "utf8",
+    );
+    const r = await apply({ homeDir: tmpHome });
+    expect(r.outcome).toBe("drift-refuse");
+    const driftFile = r.files.find(
+      (f) => f.basename === "policy-packs/understanding-before-execution/instructions.md",
+    );
+    expect(driftFile?.verdict).toBe("drift-refuse");
+    expect(driftFile?.diff).toContain("manually edited");
+  });
+
+  it("skips an enabled:false pack: no instructions file, no pack hooks", async () => {
+    writePolicyPackManifest([{ name: "understanding-before-execution", enabled: false }]);
+    const r = await apply({ homeDir: tmpHome });
+    expect(r.outcome).toBe("applied");
+    expect(fs.existsSync(instructionsPath("understanding-before-execution"))).toBe(false);
+    const settings = JSON.parse(fs.readFileSync(settingsPath(), "utf8")) as {
+      hooks: Record<string, unknown[]>;
+    };
+    expect(Object.keys(settings.hooks)).toEqual([]);
+  });
+
+  it("a pack with an unknown source skips with a warning, not an apply failure", async () => {
+    writePolicyPackManifest([
+      { name: "understanding-before-execution", source: "path:./somewhere" },
+    ]);
+    const r = await apply({ homeDir: tmpHome });
+    expect(r.outcome).toBe("applied");
+    expect(fs.existsSync(instructionsPath("understanding-before-execution"))).toBe(false);
+    expect(r.warnings.some((w) => w.includes("not recognised"))).toBe(true);
+  });
+
+  it("re-enabling a previously-disabled pack triggers a fresh apply", async () => {
+    writePolicyPackManifest([{ name: "understanding-before-execution", enabled: false }]);
+    await apply({ homeDir: tmpHome });
+    expect(fs.existsSync(instructionsPath("understanding-before-execution"))).toBe(false);
+
+    writePolicyPackManifest([{ name: "understanding-before-execution", enabled: true }]);
+    const r = await apply({ homeDir: tmpHome });
+    expect(r.outcome).toBe("applied");
+    expect(fs.existsSync(instructionsPath("understanding-before-execution"))).toBe(true);
+  });
+});

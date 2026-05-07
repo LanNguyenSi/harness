@@ -52,6 +52,7 @@ import {
 import { unifiedDiff } from "../../io/patch.js";
 import { emitRestartHints } from "../../io/restart-hints.js";
 import { compare, type ThreeStateVerdict } from "../../io/three-state.js";
+import { expandPolicyPacks } from "../../policy-packs/index.js";
 import { parseManifest, type Manifest } from "../../schema/index.js";
 import { EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
 import { loadManifest } from "../loader.js";
@@ -235,18 +236,34 @@ function buildExpectedFiles(
   manifest: Manifest,
   opts: ApplyOptions,
 ): { files: ExpectedFile[]; warnings: string[] } {
-  const settingsResult = generateSettingsWithWarnings(manifest);
+  // Phase 6 #2: expand policy_packs[] into hook contributions + extra
+  // generated files BEFORE settings projection. Pack hooks flow through
+  // generate-settings unchanged (they're just additional Hook entries
+  // in the in-memory manifest), and pack files flow through the same
+  // three-state-compare + lock pipeline as settings.json / MEMORY.md.
+  const packExpansion = expandPolicyPacks(manifest);
+  const augmentedManifest: Manifest =
+    packExpansion.hooks.length === 0
+      ? manifest
+      : { ...manifest, hooks: [...manifest.hooks, ...packExpansion.hooks] };
+  const settingsResult = generateSettingsWithWarnings(augmentedManifest);
   const settings = `${JSON.stringify(settingsResult.root, null, 2)}\n`;
   const indexResult = generateMemoryIndex(manifest, {
     ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
     ...(opts.project !== undefined ? { projectName: opts.project } : {}),
   });
+  // Pack files emit in stable order (sorted by relativePath) so two
+  // applies of the same manifest write byte-identical .last-apply.
+  const packFiles: ExpectedFile[] = [...packExpansion.files]
+    .sort((a, b) => (a.relativePath < b.relativePath ? -1 : a.relativePath > b.relativePath ? 1 : 0))
+    .map((f) => ({ basename: f.relativePath, content: f.content }));
   return {
     files: [
       { basename: SETTINGS_BASENAME, content: settings },
       { basename: MEMORY_BASENAME, content: indexResult.content },
+      ...packFiles,
     ],
-    warnings: [...settingsResult.warnings, ...indexResult.warnings],
+    warnings: [...settingsResult.warnings, ...indexResult.warnings, ...packExpansion.warnings],
   };
 }
 

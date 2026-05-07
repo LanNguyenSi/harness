@@ -27,6 +27,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `understanding-before-execution` pack as a worked example; the
   byte-for-byte `harness describe` golden test covers the resulting
   output.
+- Phase 6 #2: `harness apply` now expands enabled `policy_packs[]`
+  entries into hook contributions and an operator audit copy. For the
+  builtin `understanding-before-execution` pack this writes three
+  namespaced hooks into the generated `settings.json`
+  (`UserPromptSubmit` injector, `Stop` capture, `PreToolUse` blocker
+  matching `Edit|Write|Bash`, all pointing at the
+  `@lannguyensi/understanding-gate` bins) and an audit copy at
+  `harness.generated/policy-packs/<name>/instructions.md`. Pack files
+  flow through the existing three-state-compare + lock pipeline, so
+  drift on the audit copy is caught by `harness apply` and surfaced in
+  `harness diff --since-apply`. `enabled: false` skips the pack
+  entirely. `harness validate` rejects an enabled pack with an
+  unrecognised source (only `builtin` resolves in v1) or an unknown
+  builtin name. Phase 6 #4 will add the harness-side ledger-aware
+  PreToolUse blocker; the standalone blocker shipped in
+  `@lannguyensi/understanding-gate@>=0.2.0` is already wired today.
 
 ## [0.7.0] - 2026-05-06
 

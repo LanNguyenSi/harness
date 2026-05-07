@@ -134,16 +134,14 @@ The package ships an OpenCode plugin (`message.updated` for the auto-capture pat
 
 Not yet covered by `@lannguyensi/understanding-gate`. Harness will ship a Codex adapter as Phase 6 #6. The hook contract used by Codex (UserPromptSubmit + PreToolUse with `apply_patch`/`Bash` matching) maps cleanly onto the same `policy_packs:` config; the deltas are in adapter scripts, not in the pack's manifest shape.
 
-## What the pack ships at apply time (Phase 6 #2)
+## What the pack ships at apply time
 
-Once `harness apply` integrates pack expansion, declaring this pack will install:
+`harness apply` against a manifest with this pack enabled writes:
 
-- `~/.claude/CLAUDE.md` instruction stanza explaining the gate (driven by the `mode:` setting; sourced from the package's `src/prompts/{full,fast-confirm,grill-me}.ts`).
-- Three hooks in `~/.claude/settings.json`: UserPromptSubmit (instruction injection), Stop (report capture), PreToolUse (blocker).
-- A `.harness/policy-packs/understanding-before-execution/` directory under the project containing the resolved instruction text and a copy of the pack metadata for drift detection.
-- Drift detection: `harness diff --since-apply` flags edits to any of the above; `harness doctor` warns when hooks are not registered or templates have drifted.
+- Three hooks in the harness-managed `settings.json`: a `UserPromptSubmit` injector, a `Stop` capture, and a `PreToolUse` blocker on `Edit|Write|Bash`. Hook commands are bare bin names (`understanding-gate-claude-hook`, `understanding-gate-claude-stop`, `understanding-gate-claude-pre-tool-use`) provided by the `@lannguyensi/understanding-gate` package, so the user must `npm i -g` the package for them to resolve. Hook names are namespaced (`policy-pack:understanding-before-execution:<role>`) to avoid collisions with operator-authored hooks.
+- An operator audit copy at `harness.generated/policy-packs/understanding-before-execution/instructions.md`. This file documents what the pack is doing in the operator's voice (mode, hook list, approval flow); the agent-facing prompt is injected at runtime by the `UserPromptSubmit` hook and lives in the npm package, not here. Drift on the audit copy means an operator edited something they shouldn't have, and `harness diff --since-apply` flags it.
 
-None of this happens today; this section describes the shape Phase 6 #2 will deliver.
+Phase 6 #4 will add a harness-side `PreToolUse` blocker that consults the evidence-ledger tag (canonical for harnessed sessions) in addition to the package's persisted-report check, plus a `harness approve understanding` CLI verb. Phase 6 #2 follow-ups still queued: an automatically-injected stanza into the per-project `CLAUDE.md` for human discoverability, and a `harness doctor` wiring check that validates the package binaries are on `$PATH`.
 
 ## See also
 
