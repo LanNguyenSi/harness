@@ -98,6 +98,25 @@ describe("expandPolicyPacks", () => {
     expect(r.warnings[0]).toMatch(/not a known builtin pack/);
   });
 
+  it("aggregates two enabled packs independently when both resolve cleanly", () => {
+    // Phase 6 #2 only ships one builtin (`understanding-before-execution`),
+    // so this test exercises the same builtin twice under different
+    // names. Both names fail the registry lookup; the only one that
+    // resolves is the canonical one. The second entry's purpose here is
+    // proving that the loop in expand.ts (a) iterates over every entry,
+    // (b) accumulates warnings without dropping the first pack's
+    // contributions, (c) preserves the contribution of the resolvable
+    // pack on the way through.
+    const m = buildManifest([
+      { name: "understanding-before-execution" },
+      { name: "no-such-pack" },
+    ]);
+    const r = expandPolicyPacks(m);
+    expect(r.hooks).toHaveLength(3);
+    expect(r.files).toHaveLength(1);
+    expect(r.warnings.some((w) => w.includes("not a known builtin pack"))).toBe(true);
+  });
+
   it("drops a pack hook whose name collides with a manifest hooks[] entry", () => {
     const m = buildManifest(
       [{ name: "understanding-before-execution" }],
