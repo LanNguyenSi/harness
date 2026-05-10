@@ -12,10 +12,12 @@
 // is wired correctly"; whether Codex itself reads the emitted TOML is
 // up to the operator's `~/.codex/config.toml` setup.
 
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { expandPolicyPacks } from "../../policy-packs/index.js";
 import type { Hook, Manifest } from "../../schema/index.js";
+import { VERSION as HARNESS_VERSION } from "../../version.js";
 
 export type CodexCheckStatus = "ok" | "warn" | "error";
 
@@ -41,13 +43,15 @@ export interface RunCodexCheckOptions {
   isExecutable?: (p: string) => boolean;
   /** Override for the `harness` binary location (test injection). */
   harnessBinary?: string;
+  /**
+   * Override for the `harness --version` probe. Returns null when the
+   * probe could not run (binary missing, spawn error, non-zero exit).
+   * Returns the trimmed stdout otherwise. Test injection only.
+   */
+  versionProbe?: (binary: string) => string | null;
 }
 
 const HARNESS_COMMAND_PREFIX = "harness ";
-const REQUIRED_SUBCOMMANDS = [
-  "harness pack hook codex-pre-tool-use",
-  "harness pack hook codex-user-prompt-submit",
-] as const;
 const CODEX_CONFIG_RELPATH = path.join("harness.generated", "codex", "config.toml");
 const REPORTS_RELPATH = path.join(".understanding-gate", "reports");
 
@@ -91,52 +95,132 @@ function resolveHookCommand(
   };
 }
 
-function checkHarnessBinary(
+function resolveHarnessBinary(
   opts: Required<Pick<RunCodexCheckOptions, "pathEnv" | "isExecutable">>,
   override?: string,
-): CodexCheckEntry {
+): { entry: CodexCheckEntry; resolved: string | null } {
   if (override !== undefined) {
     if (override === "" || !fs.existsSync(override) || !opts.isExecutable(override)) {
       return {
-        name: "harness binary",
-        status: "error",
-        message: `harness binary override does not resolve: ${override}`,
+        entry: {
+          name: "harness binary",
+          status: "error",
+          message: `harness binary override does not resolve: ${override}`,
+        },
+        resolved: null,
       };
     }
     return {
-      name: "harness binary",
-      status: "ok",
-      message: `resolved (override): ${override}`,
+      entry: {
+        name: "harness binary",
+        status: "ok",
+        message: `resolved (override): ${override}`,
+      },
+      resolved: override,
     };
   }
   const resolved = findOnPath("harness", opts.pathEnv, opts.isExecutable);
   if (!resolved) {
     return {
-      name: "harness binary",
-      status: "error",
-      message:
-        "`harness` not found on PATH; the codex-* subcommands cannot be invoked. Install harness globally or expose its bin via PATH.",
+      entry: {
+        name: "harness binary",
+        status: "error",
+        message:
+          "`harness` not found on PATH; the codex-* subcommands cannot be invoked. Install harness globally or expose its bin via PATH.",
+      },
+      resolved: null,
     };
   }
   return {
-    name: "harness binary",
-    status: "ok",
-    message: `resolved: ${resolved}`,
+    entry: {
+      name: "harness binary",
+      status: "ok",
+      message: `resolved: ${resolved}`,
+    },
+    resolved,
   };
 }
 
-function checkSubcommandsAvailable(harnessOk: boolean): CodexCheckEntry {
-  if (!harnessOk) {
+// Phase 6 #6 ships in 0.7.0 (the version this module is shipped from).
+// A stale `harness` on PATH from before Phase 6 #6 would resolve as a
+// binary but reject the codex-* subcommands at runtime. The
+// version-gate catches that.
+const MIN_VERSION_WITH_CODEX_SUBCOMMANDS = "0.7.0";
+
+function defaultVersionProbe(binary: string): string | null {
+  try {
+    const result = spawnSync(binary, ["--version"], {
+      encoding: "utf8",
+      timeout: 5_000,
+    });
+    if (result.status !== 0 || result.error) return null;
+    return (result.stdout ?? "").trim();
+  } catch {
+    return null;
+  }
+}
+
+function compareSemver(a: string, b: string): number {
+  const aa = a.split(".").map((n) => Number.parseInt(n, 10));
+  const bb = b.split(".").map((n) => Number.parseInt(n, 10));
+  const len = Math.max(aa.length, bb.length);
+  for (let i = 0; i < len; i++) {
+    const ai = aa[i] ?? 0;
+    const bi = bb[i] ?? 0;
+    if (Number.isNaN(ai) || Number.isNaN(bi)) return 0;
+    if (ai > bi) return 1;
+    if (ai < bi) return -1;
+  }
+  return 0;
+}
+
+function checkSubcommandsAvailable(
+  harnessBinaryPath: string | null,
+  versionProbe: (binary: string) => string | null,
+): CodexCheckEntry | null {
+  // When the binary is missing the operator already gets a clear error
+  // from `checkHarnessBinary`; emitting a second cascade-error here
+  // would double-count in `errorCount` for one root cause. Skip
+  // entirely.
+  if (!harnessBinaryPath) {
+    return null;
+  }
+  const stdout = versionProbe(harnessBinaryPath);
+  if (stdout === null) {
+    return {
+      name: "codex-* subcommands",
+      status: "warn",
+      message: `\`${harnessBinaryPath} --version\` did not respond cleanly; cannot confirm the codex-* subcommands are wired (need >= ${MIN_VERSION_WITH_CODEX_SUBCOMMANDS})`,
+    };
+  }
+  const m = stdout.match(/(\d+(?:\.\d+){0,3})/);
+  if (!m || !m[1]) {
+    return {
+      name: "codex-* subcommands",
+      status: "warn",
+      message: `could not parse a version from "${stdout}"; cannot confirm the codex-* subcommands are wired`,
+    };
+  }
+  const actual = m[1];
+  if (compareSemver(actual, MIN_VERSION_WITH_CODEX_SUBCOMMANDS) < 0) {
     return {
       name: "codex-* subcommands",
       status: "error",
-      message: `cannot verify ${REQUIRED_SUBCOMMANDS.join(", ")} until the harness binary resolves`,
+      message: `harness on PATH is v${actual}; codex-* subcommands require >= ${MIN_VERSION_WITH_CODEX_SUBCOMMANDS}. Update the harness install.`,
     };
   }
+  // Sanity-check against the version this module is shipped from: if
+  // the harness on PATH is markedly newer or older than the in-process
+  // version, the operator probably has more than one harness install.
+  // Not an error; just informative.
+  const note =
+    actual !== HARNESS_VERSION
+      ? ` (in-process v${HARNESS_VERSION}; mismatch is harmless if intentional)`
+      : "";
   return {
     name: "codex-* subcommands",
     status: "ok",
-    message: `subcommands assumed present (shipped with harness binary): ${REQUIRED_SUBCOMMANDS.join(", ")}`,
+    message: `harness on PATH v${actual} >= ${MIN_VERSION_WITH_CODEX_SUBCOMMANDS}${note}`,
   };
 }
 
@@ -210,6 +294,11 @@ function checkHookCommands(
     // Bare `harness` subcommands resolve as long as the harness binary
     // does (already checked above); skip the per-hook PATH lookup for
     // them so the error tally doesn't double-count a missing harness.
+    // Bare `harness <subcommand>` form: any operator-authored hook that
+    // calls into the harness binary lands here, not just pack-contributed
+    // ones. The harness-binary check above is the upstream gate; the
+    // version-gate (`checkSubcommandsAvailable`) catches stale installs
+    // that would reject the subcommand at runtime.
     if (h.command.startsWith(HARNESS_COMMAND_PREFIX)) {
       out.push({
         name: `hook ${h.name}`,
@@ -274,15 +363,17 @@ export function runCodexTargetChecks(
 ): CodexTargetReport {
   const pathEnv = opts.pathEnv ?? process.env["PATH"] ?? "";
   const isExecutable = opts.isExecutable ?? defaultIsExecutable;
+  const versionProbe = opts.versionProbe ?? defaultVersionProbe;
   const cwd = opts.cwd ?? process.cwd();
 
   const checks: CodexCheckEntry[] = [];
-  const harnessCheck = checkHarnessBinary(
+  const harnessResult = resolveHarnessBinary(
     { pathEnv, isExecutable },
     opts.harnessBinary,
   );
-  checks.push(harnessCheck);
-  checks.push(checkSubcommandsAvailable(harnessCheck.status === "ok"));
+  checks.push(harnessResult.entry);
+  const subcmdEntry = checkSubcommandsAvailable(harnessResult.resolved, versionProbe);
+  if (subcmdEntry !== null) checks.push(subcmdEntry);
   checks.push(checkConfigToml(opts.manifestDir));
   checks.push(...checkHookCommands(manifest, pathEnv, isExecutable));
   checks.push(checkReportsDir(cwd));

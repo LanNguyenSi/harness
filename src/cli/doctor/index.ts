@@ -8,7 +8,6 @@ import {
   type McpProbe,
   type McpProbeResult,
 } from "../../probes/mcp.js";
-import { isRuntime, type Runtime } from "../../policy-packs/index.js";
 import type { Manifest } from "../../schema/index.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import {
@@ -16,13 +15,16 @@ import {
   runCodexTargetChecks,
   type RunCodexCheckOptions,
 } from "./codex.js";
-import type {
-  CliEntryReport,
-  DoctorReport,
-  HookEntryReport,
-  ManifestSection,
-  PolicyEntryReport,
-  ToolsSection,
+import {
+  isDoctorTarget,
+  KNOWN_DOCTOR_TARGETS,
+  type CliEntryReport,
+  type DoctorReport,
+  type DoctorTarget,
+  type HookEntryReport,
+  type ManifestSection,
+  type PolicyEntryReport,
+  type ToolsSection,
 } from "./types.js";
 
 export interface DoctorOptions extends LoaderOptions {
@@ -36,13 +38,15 @@ export interface DoctorOptions extends LoaderOptions {
    * Phase 6 #6 follow-up: when set to `codex`, run the harness-side
    * codex adapter health checks in addition to the default suite.
    * Future runtimes plug in here without restructuring the surface.
+   * Restricted to targets that have a wired adapter-health module
+   * (today: `codex`); see `KNOWN_DOCTOR_TARGETS`.
    */
-  target?: Runtime;
+  target?: DoctorTarget;
   /** Test-injection knobs forwarded to the codex target evaluator. */
   codexCheckOptions?: Partial<RunCodexCheckOptions>;
 }
 
-export { isRuntime };
+export { isDoctorTarget, KNOWN_DOCTOR_TARGETS };
 
 const HOME_PLACEHOLDER = "~";
 

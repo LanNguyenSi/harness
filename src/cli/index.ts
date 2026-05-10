@@ -21,8 +21,9 @@ import { describe, isPillar, type Pillar } from "./describe.js";
 import { diff as diffRun } from "./diff/index.js";
 import { diffSinceApply } from "./diff/since-apply.js";
 import { exportManifest } from "./export.js";
-import { doctor } from "./doctor/index.js";
+import { doctor, isDoctorTarget, KNOWN_DOCTOR_TARGETS } from "./doctor/index.js";
 import { format as formatDoctor } from "./doctor/format.js";
+import type { DoctorTarget } from "./doctor/types.js";
 import { EX_FAIL, EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { explain } from "./explain.js";
 import { init, isTemplate, KNOWN_TEMPLATES } from "./init/index.js";
@@ -129,7 +130,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .option("--shallow", "skip MCP probes (CLI --version probes still run); report manifest-reference state only")
     .option(
       "--target <runtime>",
-      "additionally evaluate the harness-side adapter health for a runtime (today: codex)",
+      `additionally evaluate the harness-side adapter health for a runtime (allowed: ${KNOWN_DOCTOR_TARGETS.join(", ")})`,
     )
     .option("--json", "emit a structured JSON DoctorReport instead of prose")
     .action(
@@ -140,11 +141,11 @@ export function buildProgram(opts: RunOptions = {}): Command {
         target?: string;
         json?: boolean;
       }) => {
-        let target: Runtime | undefined;
+        let target: DoctorTarget | undefined;
         if (options.target !== undefined) {
-          if (!isRuntime(options.target)) {
+          if (!isDoctorTarget(options.target)) {
             stderr(
-              `unknown --target ${JSON.stringify(options.target)}; expected one of ${KNOWN_RUNTIMES.join(", ")}\n`,
+              `unknown --target ${JSON.stringify(options.target)}; expected one of ${KNOWN_DOCTOR_TARGETS.join(", ")}\n`,
             );
             throw new HarnessExitError("", EX_USAGE);
           }

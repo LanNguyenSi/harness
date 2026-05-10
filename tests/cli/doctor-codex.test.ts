@@ -72,6 +72,7 @@ describe("doctor --target codex", () => {
         manifestDir: home,
         harnessBinary: harnessBin,
         cwd: home,
+        versionProbe: () => "harness 0.7.0",
       },
     });
 
@@ -82,6 +83,11 @@ describe("doctor --target codex", () => {
     expect(
       report.codexTarget!.checks.some(
         (c) => c.name === "harness binary" && c.status === "ok",
+      ),
+    ).toBe(true);
+    expect(
+      report.codexTarget!.checks.some(
+        (c) => c.name === "codex-* subcommands" && c.status === "ok",
       ),
     ).toBe(true);
     expect(
@@ -98,7 +104,7 @@ describe("doctor --target codex", () => {
     ).toBe(true);
   });
 
-  it("reports an error when the harness binary cannot be resolved", async () => {
+  it("reports a single error (no cascade) when the harness binary cannot be resolved", async () => {
     const home = tempHome();
     writeManifestWithPack(home);
     await apply({ homeDir: home, runtime: "codex" });
@@ -123,13 +129,70 @@ describe("doctor --target codex", () => {
     );
     expect(harnessCheck?.status).toBe("error");
     expect(harnessCheck?.message).toMatch(/not found on PATH/);
-    // The cascade-suppression on the subcommands check fires too.
+    // The codex-* subcommands check is suppressed entirely (would
+    // otherwise double-count this same root cause in errorCount).
+    expect(
+      report.codexTarget!.checks.some((c) => c.name === "codex-* subcommands"),
+    ).toBe(false);
+    // Exactly one codex-section error: the missing binary.
+    const codexErrors = report.codexTarget!.checks.filter((c) => c.status === "error");
+    expect(codexErrors.length).toBe(1);
+  });
+
+  it("reports an error when the harness on PATH is older than the codex-* introduction", async () => {
+    const home = tempHome();
+    writeManifestWithPack(home);
+    await apply({ homeDir: home, runtime: "codex" });
+
+    const harnessBin = fakeHarnessBinary(home);
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe(),
+      versionProbe: () => null,
+      pathEnv: "",
+      target: "codex",
+      codexCheckOptions: {
+        manifestDir: home,
+        harnessBinary: harnessBin,
+        cwd: home,
+        versionProbe: () => "harness 0.6.4",
+      },
+    });
+
     const subcmdCheck = report.codexTarget!.checks.find(
       (c) => c.name === "codex-* subcommands",
     );
     expect(subcmdCheck?.status).toBe("error");
-    // Top-level error counter incorporates the codex section.
-    expect(report.errorCount).toBeGreaterThanOrEqual(1);
+    expect(subcmdCheck?.message).toMatch(/v0\.6\.4.*require >= 0\.7\.0/);
+  });
+
+  it("warns (not errors) when the version probe fails to respond cleanly", async () => {
+    const home = tempHome();
+    writeManifestWithPack(home);
+    await apply({ homeDir: home, runtime: "codex" });
+
+    const harnessBin = fakeHarnessBinary(home);
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe(),
+      versionProbe: () => null,
+      pathEnv: "",
+      target: "codex",
+      codexCheckOptions: {
+        manifestDir: home,
+        harnessBinary: harnessBin,
+        cwd: home,
+        versionProbe: () => null,
+      },
+    });
+
+    const subcmdCheck = report.codexTarget!.checks.find(
+      (c) => c.name === "codex-* subcommands",
+    );
+    expect(subcmdCheck?.status).toBe("warn");
+    expect(subcmdCheck?.message).toMatch(/did not respond cleanly/);
   });
 
   it("reports an error when the codex config artefact has not been generated", async () => {
