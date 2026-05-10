@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-10
+
+**Headline: Understanding-Gate Policy Pack, end-to-end.** Phase 6 lands
+the *Policy Pack* concept as a first-class harness unit: a reusable
+bundle of instruction template, hooks, policies, and permission
+profiles that ships under one name and is referenced from
+`harness.yaml` with one key. The first showcase pack,
+`understanding-before-execution`, forces an agent to expose its task
+interpretation, an Understanding Report, before any write-capable
+tool fires. The user confirms or corrects; only after explicit
+approval is recorded as evidence may the agent edit, run shell,
+commit, push, or open a PR. The pack ships across two runtimes
+(Claude Code and Codex), three permission profiles
+(`safe-start` / `implementation-after-approval` / `high-risk-grill-me`),
+a CLI surface (`harness pack add / remove / list`,
+`harness apply --runtime <runtime>`, `harness approve understanding`,
+`harness doctor --target codex`), and a synthetic-stdin dogfood smoke
+under `dogfood/phase6-6/` that exercises block, allow, capture, and
+approve round-trips without a real Codex binary.
+
+Operator note: no schema bump (still `version: 1`). New manifest blocks
+(`policy_packs:`, `permission_profiles:`) are additive and default to
+empty, so `0.7.0` manifests parse byte-identically. Manifests with the
+pack enabled need a one-time `harness apply` after upgrade so the new
+`harness pack hook pre-tool-use` blocker replaces the npm package's
+standalone bin in the rendered `settings.json`. Ensure `harness` is on
+`$PATH` (`npm i -g @lannguyensi/harness@0.8.0`) before the next session
+starts.
+
 ### Added
 - Phase 6 #6 follow-up: `harness pack hook codex-stop` captures the
   agent's Understanding Report into

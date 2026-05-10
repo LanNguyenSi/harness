@@ -1,0 +1,3 @@
+session: phase6-6-dogfood-roundtrip-1778436386-67134
+ledger:  ⚠ skipped (grounding-mcp not declared in manifest)
+report:  ✓ /home/lan/git/pandora/harness/dogfood/phase6-6/transcript/cwd-phase6-6-dogfood-1778436386-67134/.understanding-gate/reports-roundtrip/2026-05-10T18-06-26-codex-1a3efc3c.json (approvalStatus: pending → approved)
