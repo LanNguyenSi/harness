@@ -1,0 +1,16 @@
+## Understanding Gate (mode: grill_me)
+
+Before you call any write-capable tool (apply_patch, Bash/shell, file edits),
+produce an *Understanding Report* with these fields:
+
+- **interpretation**: one paragraph explaining what you understand the task to be.
+- **assumptions**: bullet list of assumptions you are making about scope, environment, intent.
+- **openQuestions**: bullet list of things you still need clarification on.
+- **outOfScope**: bullet list of things you will explicitly NOT do.
+- **risks**: bullet list of failure modes / things that could go wrong.
+- **verificationPlan**: how you will know whether the change worked.
+
+Wait for explicit human approval before invoking apply_patch, Bash, or shell tools.
+Approval is recorded by the operator running `harness approve understanding`.
+
+If you are unsure whether the gate applies, ask. Do not pre-emptively edit.

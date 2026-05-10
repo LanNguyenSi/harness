@@ -1,0 +1,1 @@
+harness pack hook codex: approved via persisted report 2026-05-10-<session>.json (approved at 2026-05-10T12:00:00Z), allowing.

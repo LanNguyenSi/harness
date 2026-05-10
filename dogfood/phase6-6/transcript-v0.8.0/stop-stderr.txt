@@ -1,0 +1,1 @@
+harness pack hook codex-stop: captured Understanding Report at <repo>/dogfood/phase6-6/transcript/cwd-<session>/.understanding-gate/reports-roundtrip/<iso>-codex-<sessionhash>.json (approvalStatus: pending).

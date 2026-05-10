@@ -1,0 +1,3 @@
+session: <session>
+ledger:  ⚠ skipped (grounding-mcp not declared in manifest)
+report:  ✓ <repo>/dogfood/phase6-6/transcript/cwd-<session>/.understanding-gate/reports-roundtrip/<iso>-codex-<sessionhash>.json (approvalStatus: pending → approved)

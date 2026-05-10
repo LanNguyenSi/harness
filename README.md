@@ -13,10 +13,14 @@ applies, audits, and *enforces*.
 `harness` collapses the six-to-eight surfaces a working agent harness
 leaks across (`settings.json`, `CLAUDE.md`, memory frontmatter, MCP
 registrations, per-project overrides, hook scripts) into a single
-source of truth. Today (`v0.7.0`) policies fire end-to-end: a
+source of truth. Today (`v0.8.0`) policies fire end-to-end and ship as
+reusable *Policy Packs*: a
 `mcp__agent-tasks__pull_requests_merge` call against a session
-without a `review:${PR_NUMBER}` ledger entry refuses; `harness
-explain review-before-merge --trace` shows exactly why.
+without a `review:${PR_NUMBER}` ledger entry refuses; an `Edit` /
+`apply_patch` against a session without an approved Understanding
+Report refuses; `harness explain --last --trace` shows exactly why.
+The Understanding Gate ships across both Claude Code and Codex
+runtimes via `harness apply --runtime <claude-code|codex>`.
 
 ## What harness does
 
@@ -106,24 +110,59 @@ would match, before any ledger I/O.
       blocks, `harness session-export`, `explain --last`, audience-
       specific docs surfaces, released as
       [`v0.7.0`](CHANGELOG.md#070---2026-05-06).
-- [ ] Phase 6, Understanding Gate Policy Pack: agents must expose and
-      confirm task understanding before write-capable tools fire.
+- [x] Phase 6, Understanding Gate Policy Pack: `policy_packs:`
+      manifest block, the canonical `understanding-before-execution`
+      pack, `harness pack add / remove / list`,
+      `harness apply --runtime <claude-code|codex>` with TOML config
+      output for Codex, three permission profiles
+      (`safe-start` / `implementation-after-approval` /
+      `high-risk-grill-me`), a harness-side PreToolUse blocker that
+      consults both the evidence-ledger tag and the persisted JSON
+      report, `harness approve understanding`,
+      `harness doctor --target codex`, and a Codex Stop-equivalent
+      that captures Understanding Reports into
+      `.understanding-gate/reports/`. Released as
+      [`v0.8.0`](CHANGELOG.md#080---2026-05-10).
 - [ ] Phase 7, Risk Gate: Action Envelope + Risk Classifier +
       `allow / warn / require_approval / deny` for destructive-action
       prevention.
 
+## Policy Packs (v0.8.0)
+
+A *Policy Pack* is a reusable bundle of instruction template, hooks,
+policies, and permission profiles that ships under one name and is
+referenced from `harness.yaml` with a single key. The first pack,
+`understanding-before-execution`, forces agents to expose and confirm
+their task interpretation before any write-capable tool fires.
+
+```yaml
+policy_packs:
+  - name: understanding-before-execution
+    config:
+      mode: grill_me                       # fast_confirm | grill_me | strict
+      permission_profile: safe-start       # safe-start | implementation-after-approval | high-risk-grill-me
+```
+
+Manage packs with `harness pack add / remove / list`. Apply against
+either runtime:
+
+```sh
+harness apply --runtime claude-code        # default; writes harness.generated/settings.json
+harness apply --runtime codex              # writes harness.generated/codex/config.toml
+```
+
+Approve a session's Understanding Report via
+`harness approve understanding --session <id>` (round-trips both the
+evidence-ledger tag and the persisted JSON report). Verify the
+adapter wiring with `harness doctor --target codex` (`--json` for
+machine-readable). The full reference lives in
+[`docs/policy-packs/understanding-before-execution.md`](docs/policy-packs/understanding-before-execution.md);
+synthetic-stdin dogfood under
+[`dogfood/phase6-6/`](dogfood/phase6-6/run-smoke.sh) exercises the
+block / allow / capture / approve round-trip without a real Codex
+binary.
+
 ## What's next
-
-Two structurally larger themes are queued after Phase 5's polish.
-
-**Phase 6, Understanding Gate.** Before an agent edits files, runs
-shell, commits, or opens a PR, it must produce an *Understanding
-Report* (its interpretation of the task: derived todos, acceptance
-criteria, assumptions, out-of-scope, risks). The user confirms,
-corrects, or "grills me until precise enough". Only after explicit
-approval is recorded in the evidence ledger may write-capable tools
-fire. Ships as the first `harness` *Policy Pack*: a reusable bundle
-of instruction template + hooks + policies + permission profiles.
 
 **Phase 7, Risk Gate.** Today's policy model evaluates a rule per
 matching trigger and returns a binary block/allow. Phase 7 makes
@@ -138,8 +177,8 @@ Motivating use case: prevent `DROP TABLE users`, `kubectl delete
 namespace prod`, `terraform destroy` against an unverified production
 target, even if the model would have happily run them.
 
-Both build on Phase 4's `policy intercept` runtime backbone; neither
-replaces it.
+Phase 7 builds on Phase 4's `policy intercept` runtime backbone and
+Phase 6's Policy Pack distribution surface; neither is replaced.
 
 > Bring your favorite agent harness. Add governance.
 
