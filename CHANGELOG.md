@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Phase 6 #6 follow-up: `harness pack hook codex-stop` captures the
+  agent's Understanding Report into
+  `.understanding-gate/reports/<iso>-codex-<sessionhash>.json` with
+  `approvalStatus: "pending"`. Wire format on stdin accepts either
+  `last_assistant_message` directly or a `messages[]` array (the last
+  assistant entry is used). The parser recognises markdown headings,
+  bold labels, and plain colon-prefixed labels for the six report
+  fields (interpretation, assumptions, openQuestions, outOfScope,
+  risks, verificationPlan), with synonym support (Questions,
+  Exclusions, Validation). Failure modes (malformed input, missing
+  session id, unwritable reports dir, no recognisable fields)
+  resolve to exit 0 + a stderr diagnostic; capture must never block
+  the agent's stop path. The Codex pack now contributes a Stop hook
+  alongside UserPromptSubmit and PreToolUse. Closes agent-tasks
+  `adf356a0`.
 - Phase 6 #6 follow-up: `harness doctor --target codex` evaluates the
   harness side of the Codex adapter (binary resolution, harness-managed
   `harness.generated/codex/config.toml` presence + banner, contributed

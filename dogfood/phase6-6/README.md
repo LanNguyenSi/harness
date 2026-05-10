@@ -89,9 +89,8 @@ totals.
 
 ## Out of scope (Phase 6 #6 follow-ups)
 
-- A Codex-specific Stop-equivalent that captures the Understanding
-  Report transcript into `.understanding-gate/reports/`. v1 relies on
-  `harness approve understanding` writing the ledger tag (or, in the
-  smoke, a hand-crafted persisted report).
 - A real Codex headless run as a smoke target. Tracked separately
   once the Codex CLI's hook contract is documented + stable.
+- A Codex-side permission-profile translator. `harness apply --runtime
+  codex` warns when `policy_packs[].config.permission_profile` is set;
+  the codex generator does not yet emit a Codex sandbox stanza.

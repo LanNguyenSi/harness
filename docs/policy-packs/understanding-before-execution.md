@@ -197,9 +197,26 @@ Block contract (PreToolUse): exit 2 + reason on stderr. Allow contract: exit 0, 
 
 `--json` emits the structured `DoctorReport` with a `codexTarget` block; the codex error/warning counts roll into the top-level totals. `harness doctor` without `--target codex` is unchanged (back-compat).
 
+### Stop-equivalent (report capture)
+
+`harness pack hook codex-stop` (Phase 6 #6 follow-up, shipped) captures the agent's Understanding Report into `.understanding-gate/reports/<iso>-codex-<sessionhash>.json` with `approvalStatus: "pending"`. Wire format on stdin:
+
+```jsonc
+{
+  "session_id":              "<string>",
+  "last_assistant_message":  "<string>",   // preferred shortcut
+  "messages":                [ /* { role, content } rows; last assistant entry used as fallback */ ]
+}
+```
+
+The parser is heading-driven and lenient: it recognises markdown headings (`## Interpretation`), bold labels (`**Interpretation:**`), and plain colon-prefixed labels (`Interpretation:`). Field names accept `assumptions`, `openQuestions` / `Questions`, `outOfScope` / `Exclusions` / `Scope Exclusions`, `risks`, `verificationPlan` / `Validation` / `Verification`. Bullet lines (starting with `-`, `*`, or `•`) collect into the list-typed fields (`assumptions`, `openQuestions`, `outOfScope`, `risks`); non-bullet lines under a list-typed heading are silently dropped. Lines under a scalar-typed heading (`interpretation`, `verificationPlan`) accumulate into one paragraph until the next heading or a blank line.
+
+Failure mode: any error (malformed input, missing session id, unwritable reports dir, parser yielded zero recognisable fields) resolves to exit 0 + a stderr diagnostic. Stop must never block the agent's response path.
+
+After capture, `harness approve understanding --session <id>` flips `approvalStatus` to `approved` on the captured file and writes the ledger tag, identical to the Claude Code path. Cross-runtime approval is automatic since both runtimes share the same persisted-report directory.
+
 ### Out of scope for v1 (still tracked as follow-ups)
 
-- A Stop-equivalent that captures the Understanding Report transcript into `.understanding-gate/reports/`. v1 relies on `harness approve understanding` (which writes the ledger tag and flips `approvalStatus` on whichever persisted report exists) or on a hand-crafted persisted report.
 - A Codex-side permission-profile translator. `harness apply --runtime codex` warns when `policy_packs[].config.permission_profile` is set; the codex generator does not yet emit a Codex sandbox stanza.
 
 ## What the pack ships at apply time

@@ -22,6 +22,15 @@
 #        - stderr names `persisted-report` as the approval source.
 #   5. Runs the codex-user-prompt-submit injector and asserts the
 #      Understanding-Gate instruction template lands on stdout.
+#   6. Runs the codex-stop hook against a synthetic stop event whose
+#      assistant message contains a full Understanding Report.
+#      Asserts a parseable `.understanding-gate/reports/...json` lands
+#      with `approvalStatus: "pending"`.
+#   7. Runs `harness approve understanding --session <SESSION_B>` to
+#      flip that file's approvalStatus to `approved`, then pipes a
+#      PreToolUse event for SESSION_B into the blocker and asserts the
+#      allow path fires via the persisted-report source. This closes
+#      the capture-then-approve round-trip without a Codex binary.
 #
 # No real Codex binary is required: the wire format on stdin is
 # defined by harness (see
@@ -173,6 +182,94 @@ if ! grep -q "apply_patch" "$TRANSCRIPT_DIR/inject-stdout.txt"; then
   exit 1
 fi
 echo "OK: injector emitted instruction template"
+echo
+
+# ----------------------------------------------------------------------
+# Step 6: codex-stop captures an Understanding Report into a
+#         pending-approval persisted file.
+# ----------------------------------------------------------------------
+echo "--- step 6: codex-stop captures Understanding Report ---"
+SESSION_B="phase6-6-dogfood-roundtrip-$(date +%s)-$$"
+REPORTS_DIR_B="$WORKDIR/.understanding-gate/reports-roundtrip"
+mkdir -p "$REPORTS_DIR_B"
+STOP_EVENT=$(cat <<EOF
+{"session_id":"$SESSION_B","last_assistant_message":"## Interpretation\nRefactor the codex stop adapter dogfood path.\n\n## Assumptions\n- The persisted-report directory is writable.\n- harness approve understanding flips approvalStatus.\n\n## Open Questions\n- None for this synthetic run.\n\n## Out of Scope\n- A real Codex binary roundtrip.\n\n## Risks\n- Parser regresses on a future refactor.\n\n## Verification Plan\nAssert approvalStatus pending then approved end-to-end."}
+EOF
+)
+set +e
+echo "$STOP_EVENT" | $HARNESS_BIN pack hook codex-stop \
+  --config "$ROOT/harness.yaml" \
+  --reports-dir "$REPORTS_DIR_B" \
+  >"$TRANSCRIPT_DIR/stop-stdout.txt" \
+  2>"$TRANSCRIPT_DIR/stop-stderr.txt"
+RC=$?
+set -e
+if [[ "$RC" -ne 0 ]]; then
+  echo "FAIL: codex-stop exited $RC" >&2
+  cat "$TRANSCRIPT_DIR/stop-stderr.txt" >&2
+  exit 1
+fi
+if ! grep -q "captured Understanding Report" "$TRANSCRIPT_DIR/stop-stderr.txt"; then
+  echo "FAIL: codex-stop did not report a capture" >&2
+  cat "$TRANSCRIPT_DIR/stop-stderr.txt" >&2
+  exit 1
+fi
+CAPTURED_REPORT=$(ls "$REPORTS_DIR_B"/*.json | head -1)
+if [[ -z "$CAPTURED_REPORT" ]] || ! grep -q '"approvalStatus": "pending"' "$CAPTURED_REPORT"; then
+  echo "FAIL: captured report missing or not in pending state ($CAPTURED_REPORT)" >&2
+  exit 1
+fi
+echo "OK: codex-stop wrote $CAPTURED_REPORT (approvalStatus: pending)"
+echo
+
+# ----------------------------------------------------------------------
+# Step 7: harness approve understanding flips the captured report,
+#         then PreToolUse for the same session allows.
+# ----------------------------------------------------------------------
+echo "--- step 7: approve + re-block check, expect allow ---"
+set +e
+$HARNESS_BIN approve understanding \
+  --config "$ROOT/harness.yaml" \
+  --session "$SESSION_B" \
+  --reports-dir "$REPORTS_DIR_B" \
+  >"$TRANSCRIPT_DIR/approve-stdout.txt" \
+  2>"$TRANSCRIPT_DIR/approve-stderr.txt"
+RC=$?
+set -e
+if [[ "$RC" -ne 0 ]]; then
+  echo "FAIL: approve understanding exited $RC" >&2
+  cat "$TRANSCRIPT_DIR/approve-stderr.txt" >&2
+  exit 1
+fi
+if ! grep -q '"approvalStatus": "approved"' "$CAPTURED_REPORT"; then
+  echo "FAIL: approvalStatus did not flip to approved in $CAPTURED_REPORT" >&2
+  exit 1
+fi
+echo "OK: approve understanding flipped $CAPTURED_REPORT to approved"
+
+EVENT_B=$(cat <<EOF
+{"session_id":"$SESSION_B","tool_name":"apply_patch","raw_input":{"path":"/tmp/x"}}
+EOF
+)
+set +e
+echo "$EVENT_B" | $HARNESS_BIN pack hook codex-pre-tool-use \
+  --config "$ROOT/harness.yaml" \
+  --reports-dir "$REPORTS_DIR_B" \
+  >"$TRANSCRIPT_DIR/allow-roundtrip-stdout.txt" \
+  2>"$TRANSCRIPT_DIR/allow-roundtrip-stderr.txt"
+RC=$?
+set -e
+if [[ "$RC" -ne 0 ]]; then
+  echo "FAIL: codex-pre-tool-use blocked after approval (exit $RC)" >&2
+  cat "$TRANSCRIPT_DIR/allow-roundtrip-stderr.txt" >&2
+  exit 1
+fi
+if ! grep -q "persisted report" "$TRANSCRIPT_DIR/allow-roundtrip-stderr.txt"; then
+  echo "FAIL: round-trip did not allow via persisted-report source" >&2
+  cat "$TRANSCRIPT_DIR/allow-roundtrip-stderr.txt" >&2
+  exit 1
+fi
+echo "OK: capture + approve + allow round-trip complete"
 echo
 
 echo "=========================================="

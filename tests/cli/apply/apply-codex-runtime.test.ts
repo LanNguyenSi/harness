@@ -78,7 +78,7 @@ describe("apply --runtime codex", () => {
     expect(instructions).toContain("Runtime\n\ncodex");
     expect(instructions).toContain("harness.generated/codex/config.toml");
     expect(instructions).toContain("apply_patch|Bash|shell");
-    expect(instructions).not.toMatch(/Stop` capture/);
+    expect(instructions).toContain("harness pack hook codex-stop");
   });
 
   it("default runtime keeps existing claude-code shape (settings.json present)", async () => {
