@@ -1,0 +1,29 @@
+# Phase 6 #6 dogfood manifest: Codex adapter for the
+# understanding-before-execution policy pack.
+#
+# Apply with:
+#   harness apply --config dogfood/phase6-6/harness.yaml --runtime codex
+#
+# This produces `harness.generated/codex/config.toml` next to the
+# manifest, with the Codex hook stanzas pointing at the harness CLI
+# subcommands `harness pack hook codex-pre-tool-use` and
+# `harness pack hook codex-user-prompt-submit`. The smoke driver
+# `run-smoke.sh` in this directory uses these subcommands directly via
+# stdin, no Codex binary required.
+version: 1
+tools:
+  mcp: []
+  cli: []
+  skills:
+    enabled: []
+    source_dirs: []
+  builtin:
+    known: []
+memory:
+  directories: []
+hooks: []
+policies: []
+policy_packs:
+  - name: understanding-before-execution
+    config:
+      mode: grill_me

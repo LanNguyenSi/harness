@@ -52,10 +52,11 @@ import {
 import { unifiedDiff } from "../../io/patch.js";
 import { emitRestartHints } from "../../io/restart-hints.js";
 import { compare, type ThreeStateVerdict } from "../../io/three-state.js";
-import { expandPolicyPacks } from "../../policy-packs/index.js";
+import { expandPolicyPacks, DEFAULT_RUNTIME, type Runtime } from "../../policy-packs/index.js";
 import { parseManifest, type Manifest } from "../../schema/index.js";
 import { EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
 import { loadManifest } from "../loader.js";
+import { generateCodexConfig } from "./generate-codex-config.js";
 import { generateMemoryIndex } from "./generate-memory-index.js";
 import { generateSettingsWithWarnings } from "./generate-settings.js";
 
@@ -63,6 +64,7 @@ export const GENERATED_DIRNAME = "harness.generated";
 export const SETTINGS_BASENAME = "settings.json";
 export const MEMORY_BASENAME = "MEMORY.md";
 export const MANIFEST_BASENAME = "harness.yaml";
+export const CODEX_CONFIG_BASENAME = "codex/config.toml";
 
 export interface ApplyOptions {
   configPath?: string;
@@ -100,6 +102,17 @@ export interface ApplyOptions {
    * settings as-is. Mutually exclusive with --merge.
    */
   force?: boolean;
+  /**
+   * Phase 6 #6 — `--runtime <claude-code|codex>`. Selects which adapter
+   * shape policy-pack hooks expand into and which artefacts apply
+   * writes. Defaults to `claude-code` (settings.json output unchanged
+   * from previous releases). When set to `codex`, settings.json is NOT
+   * written; instead `harness.generated/codex/config.toml` carries the
+   * Codex adapter configuration. The two runtimes are mutually
+   * exclusive in a single apply for v1; cross-runtime applies are a
+   * future enhancement.
+   */
+  runtime?: Runtime;
   /** Test-injectable confirmation prompt; defaults to a stdin readline. */
   prompt?: (message: string) => Promise<string>;
 }
@@ -241,15 +254,12 @@ function buildExpectedFiles(
   // generate-settings unchanged (they're just additional Hook entries
   // in the in-memory manifest), and pack files flow through the same
   // three-state-compare + lock pipeline as settings.json / MEMORY.md.
-  const packExpansion = expandPolicyPacks(manifest);
+  const runtime: Runtime = opts.runtime ?? DEFAULT_RUNTIME;
+  const packExpansion = expandPolicyPacks(manifest, runtime);
   const augmentedManifest: Manifest =
     packExpansion.hooks.length === 0
       ? manifest
       : { ...manifest, hooks: [...manifest.hooks, ...packExpansion.hooks] };
-  const settingsResult = generateSettingsWithWarnings(augmentedManifest, {
-    ...(packExpansion.permissions && { packPermissions: packExpansion.permissions }),
-  });
-  const settings = `${JSON.stringify(settingsResult.root, null, 2)}\n`;
   const indexResult = generateMemoryIndex(manifest, {
     ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
     ...(opts.project !== undefined ? { projectName: opts.project } : {}),
@@ -259,6 +269,45 @@ function buildExpectedFiles(
   const packFiles: ExpectedFile[] = [...packExpansion.files]
     .sort((a, b) => (a.relativePath < b.relativePath ? -1 : a.relativePath > b.relativePath ? 1 : 0))
     .map((f) => ({ basename: f.relativePath, content: f.content }));
+
+  if (runtime === "codex") {
+    // Codex apply: emit Codex config artefact instead of settings.json.
+    // settings.json is Claude Code's contract and meaningless to Codex.
+    // MEMORY.md and pack instructions.md are runtime-agnostic and ship
+    // unchanged.
+    const codexConfig = generateCodexConfig(augmentedManifest);
+    const codexWarnings = [...codexConfig.warnings];
+    if (packExpansion.permissions) {
+      // Phase 6 #6: pack permission profiles project into Claude Code's
+      // settings.json `permissions` block. The codex generator does not
+      // yet consume them (Codex sandbox shaping is a follow-up); the
+      // contribution would otherwise vanish silently.
+      const totalPerms =
+        packExpansion.permissions.allow.length +
+        packExpansion.permissions.ask.length +
+        packExpansion.permissions.deny.length;
+      if (totalPerms > 0) {
+        codexWarnings.push(
+          `policy_packs contributed ${totalPerms} permission entr${
+            totalPerms === 1 ? "y" : "ies"
+          }; --runtime codex does not yet wire permissions into Codex's sandbox shape (filed as a Phase 6 #6 follow-up)`,
+        );
+      }
+    }
+    return {
+      files: [
+        { basename: CODEX_CONFIG_BASENAME, content: codexConfig.content },
+        { basename: MEMORY_BASENAME, content: indexResult.content },
+        ...packFiles,
+      ],
+      warnings: [...codexWarnings, ...indexResult.warnings, ...packExpansion.warnings],
+    };
+  }
+
+  const settingsResult = generateSettingsWithWarnings(augmentedManifest, {
+    ...(packExpansion.permissions && { packPermissions: packExpansion.permissions }),
+  });
+  const settings = `${JSON.stringify(settingsResult.root, null, 2)}\n`;
   return {
     files: [
       { basename: SETTINGS_BASENAME, content: settings },
@@ -368,6 +417,16 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   if (!targetPath && (opts.merge || opts.force)) {
     throw new HarnessExitError(
       `--${opts.merge ? "merge" : "force"} requires --target`,
+      EX_NOINPUT,
+    );
+  }
+  // Phase 6 #6: --target wires the generated settings.json into a
+  // Claude Code path. The runtime=codex branch does not produce
+  // settings.json at all, so the combination is incoherent. Reject
+  // early instead of writing a half-broken state.
+  if (targetPath && opts.runtime === "codex") {
+    throw new HarnessExitError(
+      "--target is incompatible with --runtime codex (target wires Claude Code's settings.json)",
       EX_NOINPUT,
     );
   }

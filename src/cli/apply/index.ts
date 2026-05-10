@@ -1,5 +1,6 @@
 export {
   apply,
+  CODEX_CONFIG_BASENAME,
   DRIFT_HINT_MESSAGE,
   GENERATED_DIRNAME,
   MANIFEST_BASENAME,
@@ -11,3 +12,4 @@ export {
   type FileApplyOutcome,
 } from "./apply.js";
 export { formatNextSteps, type NextStepsContext } from "./next-steps.js";
+export { generateCodexConfig, type CodexConfigResult } from "./generate-codex-config.js";

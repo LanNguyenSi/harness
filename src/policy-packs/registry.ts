@@ -9,6 +9,7 @@ import {
   PACK_NAME as UNDERSTANDING_BEFORE_EXECUTION,
   resolve as resolveUnderstandingBeforeExecution,
 } from "./builtin/understanding-before-execution.js";
+import { DEFAULT_RUNTIME, type Runtime } from "./runtime.js";
 import type { PackContribution } from "./types.js";
 
 export const KNOWN_BUILTIN_PACKS = [UNDERSTANDING_BEFORE_EXECUTION] as const;
@@ -23,10 +24,13 @@ export interface ResolveBuiltinResult {
   warnings: string[];
 }
 
-export function resolveBuiltin(pack: PolicyPack): ResolveBuiltinResult | null {
+export function resolveBuiltin(
+  pack: PolicyPack,
+  runtime: Runtime = DEFAULT_RUNTIME,
+): ResolveBuiltinResult | null {
   if (!isBuiltinPackName(pack.name)) return null;
   switch (pack.name as BuiltinPackName) {
     case UNDERSTANDING_BEFORE_EXECUTION:
-      return resolveUnderstandingBeforeExecution(pack);
+      return resolveUnderstandingBeforeExecution(pack, runtime);
   }
 }
