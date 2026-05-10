@@ -324,7 +324,18 @@ export async function runPackHookCodexStopCli(
   const packName = opts.pack ?? PACK_NAME;
   const now = opts.now ?? new Date();
 
-  const raw = await readStdin(stdin);
+  // Fail-open on stdin read errors (e.g. EPIPE on a closed pipe). The
+  // Stop hook must never crash the agent's response path; a missed
+  // capture is acceptable, an uncaught reject is not.
+  let raw: string;
+  try {
+    raw = await readStdin(stdin);
+  } catch (err) {
+    return allowResult(
+      `harness pack hook codex-stop: stdin read failed (${(err as Error).message}), skipping capture.`,
+      stderr,
+    );
+  }
   let envelope: StopEnvelope = {};
   try {
     envelope = JSON.parse(raw.trim() || "{}") as StopEnvelope;

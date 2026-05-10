@@ -111,17 +111,63 @@ describe("parseUnderstandingReport", () => {
     expect(reportHasContent(parseUnderstandingReport(null))).toBe(false);
   });
 
-  it("handles synonym field names (Questions, Validation)", () => {
+  it("handles synonym field names (Questions, Validation, Scope Exclusions)", () => {
     const text = [
       "Interpretation: x",
       "Questions:",
       "- q1",
+      "Scope Exclusions:",
+      "- ex1",
       "Validation:",
       "run tests",
     ].join("\n");
     const r = parseUnderstandingReport(text);
     expect(r.openQuestions).toEqual(["q1"]);
+    expect(r.outOfScope).toEqual(["ex1"]);
     expect(r.verificationPlan).toBe("run tests");
+  });
+
+  it("does not falsely match a colon mid-sentence as a section header", () => {
+    const text = [
+      "## Interpretation",
+      "Our interpretation: keep the scope tight.",
+      "Risks:",
+      "- low",
+    ].join("\n");
+    const r = parseUnderstandingReport(text);
+    // The mid-paragraph "Our interpretation:" is normalized as field
+    // "ourinterpretation" which is NOT in the FieldKey set, so the
+    // sentence remains part of the scalar paragraph above.
+    expect(r.interpretation).toContain("Our interpretation: keep the scope tight.");
+    expect(r.risks).toEqual(["low"]);
+  });
+
+  it("a duplicate scalar heading silently overwrites the earlier value (v1 contract)", () => {
+    const text = [
+      "## Interpretation",
+      "first take.",
+      "## Interpretation",
+      "second take.",
+    ].join("\n");
+    const r = parseUnderstandingReport(text);
+    expect(r.interpretation).toBe("second take.");
+  });
+
+  it("tolerates CRLF line endings", () => {
+    const text = ["## Interpretation", "x", "## Risks", "- y"].join("\r\n");
+    const r = parseUnderstandingReport(text);
+    expect(r.interpretation).toBe("x");
+    expect(r.risks).toEqual(["y"]);
+  });
+
+  it("drops non-bullet lines under a list-typed heading (v1 lenient contract)", () => {
+    const text = [
+      "## Assumptions",
+      "Some prose that is not a bullet.",
+      "- real bullet.",
+    ].join("\n");
+    const r = parseUnderstandingReport(text);
+    expect(r.assumptions).toEqual(["real bullet."]);
   });
 });
 
@@ -241,6 +287,26 @@ describe("runPackHookCodexStopCli", () => {
     });
     expect(result.parsed).toBe(false);
     expect(stderr.read()).toMatch(/no session_id/);
+  });
+
+  it("fails open (exit 0) when stdin emits a stream error", async () => {
+    const reportsDir = path.join(tmp, "reports");
+    const stderr = bufferStream();
+    const errored = new Readable({
+      read(): void {
+        this.destroy(new Error("synthetic stdin failure"));
+      },
+    });
+    const result = await runPackHookCodexStopCli({
+      manifest: manifestWithPack(),
+      stdin: errored,
+      stderr: stderr.stream,
+      reportsDir,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.parsed).toBe(false);
+    expect(result.reportPath).toBeNull();
+    expect(stderr.read()).toMatch(/stdin read failed/);
   });
 
   it("end-to-end: capture then approve flips approvalStatus to approved on the same file", async () => {

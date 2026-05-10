@@ -209,7 +209,7 @@ Block contract (PreToolUse): exit 2 + reason on stderr. Allow contract: exit 0, 
 }
 ```
 
-The parser is heading-driven and lenient: it recognises markdown headings (`## Interpretation`), bold labels (`**Interpretation:**`), and plain colon-prefixed labels (`Interpretation:`). Field names accept `assumptions`, `openQuestions` / `Questions`, `outOfScope` / `Exclusions`, `risks`, `verificationPlan` / `Validation`. Bullet lines (starting with `-`, `*`, or `•`) collect into the list-typed fields; the rest collapse into scalar fields.
+The parser is heading-driven and lenient: it recognises markdown headings (`## Interpretation`), bold labels (`**Interpretation:**`), and plain colon-prefixed labels (`Interpretation:`). Field names accept `assumptions`, `openQuestions` / `Questions`, `outOfScope` / `Exclusions` / `Scope Exclusions`, `risks`, `verificationPlan` / `Validation` / `Verification`. Bullet lines (starting with `-`, `*`, or `•`) collect into the list-typed fields (`assumptions`, `openQuestions`, `outOfScope`, `risks`); non-bullet lines under a list-typed heading are silently dropped. Lines under a scalar-typed heading (`interpretation`, `verificationPlan`) accumulate into one paragraph until the next heading or a blank line.
 
 Failure mode: any error (malformed input, missing session id, unwritable reports dir, parser yielded zero recognisable fields) resolves to exit 0 + a stderr diagnostic. Stop must never block the agent's response path.
 

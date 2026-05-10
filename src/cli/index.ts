@@ -953,6 +953,13 @@ export function buildProgram(opts: RunOptions = {}): Command {
         if (options.project) cliOpts.project = options.project;
         if (options.pack) cliOpts.pack = options.pack;
         if (options.reportsDir) cliOpts.reportsDir = options.reportsDir;
+        // Intentional: codex-stop's contract is fail-open. The runner
+        // returns exitCode 0 on every code path (including malformed
+        // input, missing session, parser misses); we deliberately do
+        // NOT throw HarnessExitError on a non-zero exit the way the
+        // codex-pre-tool-use sibling does. A future runner change
+        // that introduces a non-zero exit must also revisit this
+        // contract.
         await runPackHookCodexStopCli(cliOpts);
       },
     );
