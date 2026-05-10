@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Phase 6 #6 follow-up: `harness doctor --target codex` evaluates the
+  harness side of the Codex adapter (binary resolution, harness-managed
+  `harness.generated/codex/config.toml` presence + banner, contributed
+  `[[hooks.*]]` command resolution, and persisted-report directory
+  writability). Codex error/warning counts roll into the top-level
+  totals; `--json` adds a structured `codexTarget` block to the
+  `DoctorReport`. The default `harness doctor` invocation is
+  unchanged. Closes agent-tasks `125fd02b`.
 - Phase 6 #6: Codex adapter for the `understanding-before-execution`
   policy pack. New CLI flag `harness apply --runtime codex` emits
   `harness.generated/codex/config.toml` (TOML hook stanzas) instead of

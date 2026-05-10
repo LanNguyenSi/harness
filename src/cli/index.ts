@@ -127,14 +127,42 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides for this project name")
     .option("--shallow", "skip MCP probes (CLI --version probes still run); report manifest-reference state only")
-    .action(async (options: { config?: string; project?: string; shallow?: boolean }) => {
-      const report = await doctor({
-        configPath: options.config,
-        project: options.project,
-        shallow: options.shallow,
-      });
-      stdout(formatDoctor(report));
-    });
+    .option(
+      "--target <runtime>",
+      "additionally evaluate the harness-side adapter health for a runtime (today: codex)",
+    )
+    .option("--json", "emit a structured JSON DoctorReport instead of prose")
+    .action(
+      async (options: {
+        config?: string;
+        project?: string;
+        shallow?: boolean;
+        target?: string;
+        json?: boolean;
+      }) => {
+        let target: Runtime | undefined;
+        if (options.target !== undefined) {
+          if (!isRuntime(options.target)) {
+            stderr(
+              `unknown --target ${JSON.stringify(options.target)}; expected one of ${KNOWN_RUNTIMES.join(", ")}\n`,
+            );
+            throw new HarnessExitError("", EX_USAGE);
+          }
+          target = options.target;
+        }
+        const report = await doctor({
+          configPath: options.config,
+          project: options.project,
+          shallow: options.shallow,
+          ...(target !== undefined ? { target } : {}),
+        });
+        if (options.json) {
+          stdout(`${JSON.stringify(report, null, 2)}\n`);
+          return;
+        }
+        stdout(formatDoctor(report));
+      },
+    );
 
   program
     .command("list <category>")

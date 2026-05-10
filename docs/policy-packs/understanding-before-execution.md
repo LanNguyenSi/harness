@@ -186,11 +186,21 @@ Block contract (PreToolUse): exit 2 + reason on stderr. Allow contract: exit 0, 
 
 `--target` and `--runtime codex` are mutually exclusive: `--target` wires the Claude-Code-shaped settings.json into a destination path, which the codex runtime does not produce. The two runtimes are mutually exclusive for v1; running apply against a single manifest under both runtimes requires two invocations into separate generated trees.
 
-Out of scope for v1 (tracked as follow-ups):
+### Doctor wiring
+
+`harness doctor --target codex` (Phase 6 #6 follow-up, shipped) evaluates the harness side of the integration:
+
+- The `harness` binary itself is on `$PATH` (so the `harness pack hook codex-*` subcommands resolve).
+- `harness.generated/codex/config.toml` exists and carries the harness-managed banner.
+- Every contributed `[[hooks.*]]` stanza has a command first-token that resolves on `$PATH` (bare `harness` subcommands inherit the binary check above).
+- `.understanding-gate/reports/` is writable, or its parent is (the directory is created on first persisted report).
+
+`--json` emits the structured `DoctorReport` with a `codexTarget` block; the codex error/warning counts roll into the top-level totals. `harness doctor` without `--target codex` is unchanged (back-compat).
+
+### Out of scope for v1 (still tracked as follow-ups)
 
 - A Stop-equivalent that captures the Understanding Report transcript into `.understanding-gate/reports/`. v1 relies on `harness approve understanding` (which writes the ledger tag and flips `approvalStatus` on whichever persisted report exists) or on a hand-crafted persisted report.
-- `harness doctor --target codex` adapter-health check (filed as a separate task).
-- A Codex-CLI-specific Stop-equivalent and a Codex-side permission profile translator.
+- A Codex-side permission-profile translator. `harness apply --runtime codex` warns when `policy_packs[].config.permission_profile` is set; the codex generator does not yet emit a Codex sandbox stanza.
 
 ## What the pack ships at apply time
 

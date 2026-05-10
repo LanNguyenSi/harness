@@ -8,8 +8,14 @@ import {
   type McpProbe,
   type McpProbeResult,
 } from "../../probes/mcp.js";
+import { isRuntime, type Runtime } from "../../policy-packs/index.js";
 import type { Manifest } from "../../schema/index.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
+import {
+  countCodexDiagnostics,
+  runCodexTargetChecks,
+  type RunCodexCheckOptions,
+} from "./codex.js";
 import type {
   CliEntryReport,
   DoctorReport,
@@ -26,7 +32,17 @@ export interface DoctorOptions extends LoaderOptions {
   versionProbe?: (cmd: string[]) => string | null;
   now?: Date;
   homeOverride?: string;
+  /**
+   * Phase 6 #6 follow-up: when set to `codex`, run the harness-side
+   * codex adapter health checks in addition to the default suite.
+   * Future runtimes plug in here without restructuring the surface.
+   */
+  target?: Runtime;
+  /** Test-injection knobs forwarded to the codex target evaluator. */
+  codexCheckOptions?: Partial<RunCodexCheckOptions>;
 }
+
+export { isRuntime };
 
 const HOME_PLACEHOLDER = "~";
 
@@ -279,6 +295,11 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
     if (!d.exists) warningCount++;
   }
   if (report.memory.staleMemories.length > 0) warningCount++;
+  if (report.codexTarget) {
+    const codexCounts = countCodexDiagnostics(report.codexTarget);
+    errorCount += codexCounts.errorCount;
+    warningCount += codexCounts.warningCount;
+  }
   return { errorCount, warningCount };
 }
 
@@ -343,6 +364,17 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     policies,
     workflows,
   };
+  if (opts.target === "codex") {
+    const manifestDir = path.dirname(resolved.base);
+    const codexOpts: RunCodexCheckOptions = {
+      manifestDir,
+      ...(opts.codexCheckOptions ?? {}),
+    };
+    if (codexOpts.pathEnv === undefined && opts.pathEnv !== undefined) {
+      codexOpts.pathEnv = opts.pathEnv;
+    }
+    partial.codexTarget = runCodexTargetChecks(manifest, codexOpts);
+  }
   const counts = countDiagnostics(partial);
   return { ...partial, ...counts };
 }
