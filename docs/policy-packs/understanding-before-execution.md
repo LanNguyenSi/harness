@@ -163,7 +163,34 @@ The package ships an OpenCode plugin (`message.updated` for the auto-capture pat
 
 ### Codex
 
-Not yet covered by `@lannguyensi/understanding-gate`. Harness will ship a Codex adapter as Phase 6 #6. The hook contract used by Codex (UserPromptSubmit + PreToolUse with `apply_patch`/`Bash` matching) maps cleanly onto the same `policy_packs:` config; the deltas are in adapter scripts, not in the pack's manifest shape.
+Shipped in Phase 6 #6. Apply the pack with the Codex runtime selector:
+
+```sh
+harness apply --runtime codex --config <path>/harness.yaml
+```
+
+This emits `harness.generated/codex/config.toml` (instead of `settings.json`) with two harness-managed `[[hooks.*]]` stanzas: one `user_prompt_submit` injector pointing at `harness pack hook codex-user-prompt-submit`, and one `pre_tool_use` blocker on `apply_patch|Bash|shell` pointing at `harness pack hook codex-pre-tool-use`. Operators copy or include the generated TOML under their own `~/.codex/config.toml`; harness owns hook wiring only, not the operator-owned model/auth/sandbox config.
+
+Wire format for the Codex adapter scripts (stdin):
+
+```jsonc
+{
+  "session_id": "<string>",   // also tolerated: "id"
+  "tool_name":  "<string>",   // also tolerated: "tool"
+  "raw_input":  {  /* tool args, opaque */  },
+  "event":      "<string>"    // optional event name
+}
+```
+
+Block contract (PreToolUse): exit 2 + reason on stderr. Allow contract: exit 0, optional diagnostic on stderr. Injector contract (UserPromptSubmit): instruction template on stdout for Codex to prepend to `additional_instructions`.
+
+`--target` and `--runtime codex` are mutually exclusive: `--target` wires the Claude-Code-shaped settings.json into a destination path, which the codex runtime does not produce. The two runtimes are mutually exclusive for v1; running apply against a single manifest under both runtimes requires two invocations into separate generated trees.
+
+Out of scope for v1 (tracked as follow-ups):
+
+- A Stop-equivalent that captures the Understanding Report transcript into `.understanding-gate/reports/`. v1 relies on `harness approve understanding` (which writes the ledger tag and flips `approvalStatus` on whichever persisted report exists) or on a hand-crafted persisted report.
+- `harness doctor --target codex` adapter-health check (filed as a separate task).
+- A Codex-CLI-specific Stop-equivalent and a Codex-side permission profile translator.
 
 ## What the pack ships at apply time
 

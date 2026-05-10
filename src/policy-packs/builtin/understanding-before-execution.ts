@@ -13,6 +13,7 @@
 
 import type { Hook, PolicyPack } from "../../schema/index.js";
 import { profileToSettingsPermissions } from "../permission-translator.js";
+import { DEFAULT_RUNTIME, type Runtime } from "../runtime.js";
 import type {
   PackContribution,
   PackContributionFile,
@@ -34,22 +35,45 @@ export const DEFAULT_MODE: Mode = "grill_me";
 
 const HOOK_NAME_PREFIX = `policy-pack:${PACK_NAME}`;
 
-const PRE_TOOL_USE_MATCH = "Edit|Write|Bash";
+// Per-runtime hook surface. Claude Code keys on tool name (Edit|Write|Bash);
+// Codex's write surface is `apply_patch` + `Bash`/`shell` (the task's
+// in-scope list). The hook contract Codex feeds to the adapter is the
+// same generic envelope harness publishes: `{ session_id, tool_name,
+// raw_input, event }` on stdin, `{ decision }` on stdout, exit 2 on
+// block. See dogfood/phase6-6/README.md for the wire format.
+const PRE_TOOL_USE_MATCH_CLAUDE = "Edit|Write|Bash";
+const PRE_TOOL_USE_MATCH_CODEX = "apply_patch|Bash|shell";
 
 // UserPromptSubmit + Stop hooks point at `@lannguyensi/understanding-gate`
 // bare bin names (npm i -g). The harness validator's checkHooks skips
 // PATH lookup for non-rooted commands by design, so missing-bin shows
 // up at runtime, not at lint. `harness doctor` (Phase 6 #4 follow-up)
 // will add the presence check.
-const BIN_USER_PROMPT_SUBMIT = "understanding-gate-claude-hook";
-const BIN_STOP = "understanding-gate-claude-stop";
+const BIN_USER_PROMPT_SUBMIT_CLAUDE = "understanding-gate-claude-hook";
+const BIN_STOP_CLAUDE = "understanding-gate-claude-stop";
 // PreToolUse blocker is the harness CLI itself (Phase 6 #4): it consults
 // BOTH the evidence-ledger tag (canonical for harnessed sessions) AND
 // the persisted JSON report under `.understanding-gate/reports/`
 // (fallback for sessions without grounding-mcp wired). The npm package's
 // own bin remains available for solo users; the harness blocker is
 // strictly more powerful.
-const PRE_TOOL_USE_COMMAND = "harness pack hook pre-tool-use";
+const PRE_TOOL_USE_COMMAND_CLAUDE = "harness pack hook pre-tool-use";
+
+// Codex variants — Phase 6 #6. The package
+// `@lannguyensi/understanding-gate` does not yet ship Codex bins, so
+// harness owns the adapter (instruction injection on
+// UserPromptSubmit-equivalent + pre-tool blocker on apply_patch/Bash).
+// Cross-runtime sessions can still approve from a Claude Code report:
+// the ledger tag is the canonical source for harnessed sessions,
+// independent of which runtime captured the report.
+//
+// Stop-equivalent (report capture) is intentionally out of scope for
+// v1: the synthetic-smoke acceptance path approves via
+// `harness approve understanding`, which flips approvalStatus on the
+// most recent persisted report or writes the ledger tag directly.
+// Capture is tracked as a Phase 6 #6 follow-up task in agent-tasks.
+const COMMAND_USER_PROMPT_SUBMIT_CODEX = "harness pack hook codex-user-prompt-submit";
+const COMMAND_PRE_TOOL_USE_CODEX = "harness pack hook codex-pre-tool-use";
 
 export function isMode(value: unknown): value is Mode {
   return typeof value === "string" && (MODES as readonly string[]).includes(value);
@@ -65,16 +89,39 @@ export function resolveMode(pack: PolicyPack): { mode: Mode; warning: string | n
   return { mode: DEFAULT_MODE, warning };
 }
 
-function buildHooks(): Hook[] {
+function buildHooks(runtime: Runtime): Hook[] {
   // Per-mode hook commands are identical (the mode is passed via the
   // package's UNDERSTANDING_GATE_MODE env var, set elsewhere — out of
   // scope for Phase 6 #2). What changes per mode is the instructions.md
   // content + the actual injected prompt (owned by the npm package).
+  if (runtime === "codex") {
+    return [
+      {
+        name: `${HOOK_NAME_PREFIX}:codex:user-prompt-submit`,
+        event: "UserPromptSubmit",
+        command: COMMAND_USER_PROMPT_SUBMIT_CODEX,
+        blocking: false,
+        budget_ms: 5000,
+        description:
+          "Codex adapter: inject the Understanding-Gate instruction template before the agent acts. Phase 6 #6.",
+      },
+      {
+        name: `${HOOK_NAME_PREFIX}:codex:pre-tool-use`,
+        event: "PreToolUse",
+        match: PRE_TOOL_USE_MATCH_CODEX,
+        command: COMMAND_PRE_TOOL_USE_CODEX,
+        blocking: "hard",
+        budget_ms: 5000,
+        description:
+          "Codex adapter: block apply_patch/Bash/shell until an approved Understanding Report exists for the session. Consults both the evidence-ledger tag and the persisted JSON report.",
+      },
+    ];
+  }
   return [
     {
       name: `${HOOK_NAME_PREFIX}:user-prompt-submit`,
       event: "UserPromptSubmit",
-      command: BIN_USER_PROMPT_SUBMIT,
+      command: BIN_USER_PROMPT_SUBMIT_CLAUDE,
       blocking: false,
       budget_ms: 5000,
       description:
@@ -83,7 +130,7 @@ function buildHooks(): Hook[] {
     {
       name: `${HOOK_NAME_PREFIX}:stop`,
       event: "Stop",
-      command: BIN_STOP,
+      command: BIN_STOP_CLAUDE,
       blocking: false,
       budget_ms: 5000,
       description:
@@ -92,8 +139,8 @@ function buildHooks(): Hook[] {
     {
       name: `${HOOK_NAME_PREFIX}:pre-tool-use`,
       event: "PreToolUse",
-      match: PRE_TOOL_USE_MATCH,
-      command: PRE_TOOL_USE_COMMAND,
+      match: PRE_TOOL_USE_MATCH_CLAUDE,
+      command: PRE_TOOL_USE_COMMAND_CLAUDE,
       blocking: "hard",
       budget_ms: 5000,
       description:
@@ -113,15 +160,35 @@ function modeFriction(mode: Mode): string {
   }
 }
 
-function buildInstructions(pack: PolicyPack, mode: Mode): string {
+function buildInstructions(pack: PolicyPack, mode: Mode, runtime: Runtime): string {
   const description = pack.description?.trim() ?? "";
+  const isCodex = runtime === "codex";
+  const injectorCmd = isCodex ? COMMAND_USER_PROMPT_SUBMIT_CODEX : BIN_USER_PROMPT_SUBMIT_CLAUDE;
+  const blockerCmd = isCodex ? COMMAND_PRE_TOOL_USE_CODEX : PRE_TOOL_USE_COMMAND_CLAUDE;
+  const blockerMatch = isCodex ? PRE_TOOL_USE_MATCH_CODEX : PRE_TOOL_USE_MATCH_CLAUDE;
+  const settingsArtefact = isCodex
+    ? "`harness.generated/codex/config.toml`"
+    : "harness-managed `settings.json`";
+  // Codex v1 ships injector + blocker only (no Stop-equivalent, see
+  // pack source for rationale).
+  const stopBullet = isCodex
+    ? ""
+    : `2. \`Stop\` capture (\`${BIN_STOP_CLAUDE}\`): persists the emitted Understanding
+   Report under \`.understanding-gate/reports/\` for audit and downstream
+   approval consumption.
+`;
+  const blockerOrdinal = isCodex ? "2" : "3";
   return `# Policy Pack: ${PACK_NAME}
 
 > Operator audit copy. The agent-facing prompt is injected at runtime by
-> the \`${BIN_USER_PROMPT_SUBMIT}\` UserPromptSubmit hook; that text lives
+> the \`${injectorCmd}\` UserPromptSubmit hook; that text lives
 > in the \`@lannguyensi/understanding-gate\` package, not here. This file
 > records WHAT the pack is doing and HOW it is configured so that
 > \`harness diff --since-apply\` can flag operator-facing drift.
+
+## Runtime
+
+${runtime}
 
 ## Mode
 
@@ -131,16 +198,12 @@ ${modeFriction(mode)}
 
 ## Effect
 
-While this pack is enabled, three hooks are wired into the harness-managed
-\`settings.json\`:
+While this pack is enabled, hooks are wired into the ${settingsArtefact}:
 
-1. \`UserPromptSubmit\` injector (\`${BIN_USER_PROMPT_SUBMIT}\`): inserts the
+1. \`UserPromptSubmit\` injector (\`${injectorCmd}\`): inserts the
    Understanding-Gate instruction template into the agent's first response.
-2. \`Stop\` capture (\`${BIN_STOP}\`): persists the emitted Understanding
-   Report under \`.understanding-gate/reports/\` for audit and downstream
-   approval consumption.
-3. \`PreToolUse\` blocker (\`${PRE_TOOL_USE_COMMAND}\`, blocking: hard)
-   on \`Edit|Write|Bash\`: refuses the tool call until an approved
+${stopBullet}${blockerOrdinal}. \`PreToolUse\` blocker (\`${blockerCmd}\`, blocking: hard)
+   on \`${blockerMatch}\`: refuses the tool call until an approved
    report exists for the session. Consults BOTH the evidence-ledger
    tag (\`understanding-approved:\${SESSION_ID}\`, canonical for
    harnessed sessions) AND the persisted JSON report under
@@ -161,6 +224,7 @@ ${description ? `\n> ${description.replace(/\n/g, "\n> ")}\n` : ""}
 - Source: \`builtin\`
 - Pack: \`${PACK_NAME}\`
 - Mode: \`${mode}\`
+- Runtime: \`${runtime}\`
 
 ## See also
 
@@ -193,10 +257,13 @@ function resolvePermissionProfile(
   return { permissions: profileToSettingsPermissions(profile), warning: null };
 }
 
-export function resolve(pack: PolicyPack): { contribution: PackContribution; warnings: string[] } {
+export function resolve(
+  pack: PolicyPack,
+  runtime: Runtime = DEFAULT_RUNTIME,
+): { contribution: PackContribution; warnings: string[] } {
   const { mode, warning } = resolveMode(pack);
-  const hooks = buildHooks();
-  const instructionsContent = buildInstructions(pack, mode);
+  const hooks = buildHooks(runtime);
+  const instructionsContent = buildInstructions(pack, mode, runtime);
   const files: PackContributionFile[] = [
     {
       relativePath: `policy-packs/${PACK_NAME}/instructions.md`,

@@ -17,6 +17,8 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { type LedgerEntry } from "../../policies/index.js";
+import { POLICY_DECISION_TYPE } from "../../runtime/ledger-record.js";
 
 export const APPROVED_LEDGER_TAG_PREFIX = "understanding-approved:";
 
@@ -135,6 +137,49 @@ export interface PersistedReportApprovalCheck {
   approved: boolean;
   detail: string;
   report: PersistedReport | null;
+}
+
+/**
+ * Phase 6 #6 — substring-pollution defence shared by every PreToolUse
+ * blocker (Claude Code + Codex). Drops policy_decision rows so a
+ * `understanding-approved:<sess>` substring inside an audit row's
+ * JSON-encoded `reason` cannot accidentally satisfy the gate.
+ */
+export function isPolicyDecisionRow(e: LedgerEntry): boolean {
+  if (e.type === POLICY_DECISION_TYPE) return true;
+  if (typeof e.content === "string" && e.content.startsWith(`${POLICY_DECISION_TYPE}:`)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Match a ledger fetch against the per-session approval tag. Returns
+ * `{matched: true, detail}` on the first non-policy_decision row whose
+ * content includes the wanted tag; otherwise `{matched: false, detail}`
+ * naming how many rows were scanned. Stable across Claude Code and
+ * Codex blockers so their diagnostic strings stay identical.
+ */
+export function matchLedgerEntries(
+  entries: LedgerEntry[],
+  sessionId: string,
+): { matched: boolean; detail: string } {
+  const wanted = approvedLedgerTagFor(sessionId);
+  let scanned = 0;
+  for (const e of entries) {
+    if (isPolicyDecisionRow(e)) continue;
+    scanned += 1;
+    if (typeof e.content === "string" && e.content.includes(wanted)) {
+      return {
+        matched: true,
+        detail: `approved via ledger tag ${wanted} at ${e.createdAt}`,
+      };
+    }
+  }
+  return {
+    matched: false,
+    detail: `no ledger entry matched ${wanted} (scanned ${scanned} non-policy_decision row(s))`,
+  };
 }
 
 export function checkPersistedReport(

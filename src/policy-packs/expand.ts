@@ -16,10 +16,14 @@
 
 import type { Manifest } from "../schema/index.js";
 import { resolveBuiltin } from "./registry.js";
+import { DEFAULT_RUNTIME, type Runtime } from "./runtime.js";
 import { parsePackSource } from "./source.js";
 import type { PackExpansionResult, PackPermissionsContribution } from "./types.js";
 
-export function expandPolicyPacks(manifest: Manifest): PackExpansionResult {
+export function expandPolicyPacks(
+  manifest: Manifest,
+  runtime: Runtime = DEFAULT_RUNTIME,
+): PackExpansionResult {
   const out: PackExpansionResult = { hooks: [], files: [], warnings: [], skipped: [] };
   if (manifest.policy_packs.length === 0) return out;
 
@@ -44,7 +48,7 @@ export function expandPolicyPacks(manifest: Manifest): PackExpansionResult {
       );
       continue;
     }
-    const resolved = resolveBuiltin(pack);
+    const resolved = resolveBuiltin(pack, runtime);
     if (!resolved) {
       out.warnings.push(
         `policy_packs[${pack.name}]: not a known builtin pack; skipping. See docs/policy-packs/ for supported names.`,

@@ -6,6 +6,13 @@ export {
   type BuiltinPackName,
   type ResolveBuiltinResult,
 } from "./registry.js";
+export {
+  KNOWN_RUNTIMES,
+  DEFAULT_RUNTIME,
+  isRuntime,
+  parseRuntime,
+  type Runtime,
+} from "./runtime.js";
 export { parsePackSource, type PackSourceKind, type PackSourceParseResult } from "./source.js";
 export type {
   PackContribution,

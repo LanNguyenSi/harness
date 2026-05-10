@@ -26,12 +26,11 @@ import {
   type LedgerEntry,
 } from "../../policies/index.js";
 import {
-  approvedLedgerTagFor,
   checkPersistedReport,
   defaultReportsDir,
+  matchLedgerEntries,
   type ApprovalCheckResult,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
-import { POLICY_DECISION_TYPE } from "../../runtime/ledger-record.js";
 import type { Manifest, McpServer } from "../../schema/index.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 
@@ -123,42 +122,6 @@ async function checkLedger(
     return { matched: false, detail: `ledger degraded (${result.reason})` };
   }
   return matchLedgerEntries(result.entries, sessionId);
-}
-
-function isPolicyDecisionRow(e: LedgerEntry): boolean {
-  // Mirrors the substring-pollution defence in src/policies/requires.ts:
-  // policy_decision payloads JSON-encode their reason field, which could
-  // accidentally contain the substring `understanding-approved:<sess>`
-  // and falsely approve. Drop them by type (Phase 5 #4 first-class type)
-  // and by legacy `policy_decision:`-prefixed `fact` rows that older
-  // grounding-mcp versions write.
-  if (e.type === POLICY_DECISION_TYPE) return true;
-  if (typeof e.content === "string" && e.content.startsWith(`${POLICY_DECISION_TYPE}:`)) {
-    return true;
-  }
-  return false;
-}
-
-function matchLedgerEntries(
-  entries: LedgerEntry[],
-  sessionId: string,
-): { matched: boolean; detail: string } {
-  const wanted = approvedLedgerTagFor(sessionId);
-  let scanned = 0;
-  for (const e of entries) {
-    if (isPolicyDecisionRow(e)) continue;
-    scanned += 1;
-    if (typeof e.content === "string" && e.content.includes(wanted)) {
-      return {
-        matched: true,
-        detail: `approved via ledger tag ${wanted} at ${e.createdAt}`,
-      };
-    }
-  }
-  return {
-    matched: false,
-    detail: `no ledger entry matched ${wanted} (scanned ${scanned} non-policy_decision row(s))`,
-  };
 }
 
 export async function runPackHookPreToolUseCli(

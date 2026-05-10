@@ -13,6 +13,9 @@ import {
 import { isRemoveType, KNOWN_REMOVE_TYPES, remove } from "./remove/index.js";
 import { packAdd, packList, packRemove } from "./pack/index.js";
 import { runPackHookPreToolUseCli } from "./pack/hook-pre-tool-use.js";
+import { runPackHookCodexPreToolUseCli } from "./pack/hook-codex-pre-tool-use.js";
+import { runPackHookCodexUserPromptSubmitCli } from "./pack/hook-codex-user-prompt-submit.js";
+import { isRuntime, KNOWN_RUNTIMES, type Runtime } from "../policy-packs/index.js";
 import { approveUnderstanding } from "./approve/understanding.js";
 import { describe, isPillar, type Pillar } from "./describe.js";
 import { diff as diffRun } from "./diff/index.js";
@@ -524,6 +527,12 @@ export function buildProgram(opts: RunOptions = {}): Command {
       "with --target, 3-way merge into an existing target file (replace owned keys, preserve others)",
     )
     .option("--force", "with --target, overwrite an existing target file (no merge)")
+    .option(
+      "--runtime <runtime>",
+      `policy-pack adapter runtime (${KNOWN_RUNTIMES.join(" | ")}; default: claude-code). ` +
+        "Selects which adapter shape policy-pack hooks expand into and which artefacts apply writes. " +
+        "`codex` emits harness.generated/codex/config.toml in place of settings.json.",
+    )
     .option("--quiet", "suppress the post-apply Next-steps hint")
     .option("--json", "emit a structured JSON summary instead of prose (implies --quiet)")
     .action(
@@ -536,9 +545,20 @@ export function buildProgram(opts: RunOptions = {}): Command {
         target?: string;
         merge?: boolean;
         force?: boolean;
+        runtime?: string;
         quiet?: boolean;
         json?: boolean;
       }) => {
+        let runtime: Runtime | undefined;
+        if (options.runtime !== undefined) {
+          if (!isRuntime(options.runtime)) {
+            stderr(
+              `unknown --runtime ${JSON.stringify(options.runtime)}; expected one of ${KNOWN_RUNTIMES.join(", ")}\n`,
+            );
+            throw new HarnessExitError("", EX_USAGE);
+          }
+          runtime = options.runtime;
+        }
         // --json is documented as implying --quiet. Normalize early so any
         // future fall-through path (or new prose branch) honors it without
         // depending on the JSON early-return below as the only chokepoint.
@@ -553,6 +573,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
           ...(options.target !== undefined ? { target: options.target } : {}),
           ...(options.merge ? { merge: true } : {}),
           ...(options.force ? { force: true } : {}),
+          ...(runtime !== undefined ? { runtime } : {}),
         });
 
         if (options.json) {
@@ -823,6 +844,61 @@ export function buildProgram(opts: RunOptions = {}): Command {
           if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
         }
         await runPackHookPreToolUseCli(cliOpts);
+      },
+    );
+
+  // Phase 6 #6 — Codex adapter sub-commands. Mirror the pre-tool-use
+  // shape; UserPromptSubmit equivalent injects the instruction template
+  // on stdout for Codex to prepend to additional_instructions.
+  packHookCmd
+    .command("codex-pre-tool-use")
+    .description(
+      "Codex PreToolUse blocker: read tool-event JSON from stdin, consult ledger + persisted report, exit 2 with stderr reason on block",
+    )
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option("--pack <name>", "pack name to evaluate (default: understanding-before-execution)")
+    .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
+    .option("--reports-dir <path>", "override the persisted-report directory (default: ./.understanding-gate/reports)")
+    .action(
+      async (options: {
+        config?: string;
+        project?: string;
+        pack?: string;
+        ledgerTimeout?: string;
+        reportsDir?: string;
+      }) => {
+        const cliOpts: Parameters<typeof runPackHookCodexPreToolUseCli>[0] = {};
+        if (options.config) cliOpts.configPath = options.config;
+        if (options.project) cliOpts.project = options.project;
+        if (options.pack) cliOpts.pack = options.pack;
+        if (options.reportsDir) cliOpts.reportsDir = options.reportsDir;
+        if (options.ledgerTimeout) {
+          const n = Number.parseInt(options.ledgerTimeout, 10);
+          if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
+        }
+        const result = await runPackHookCodexPreToolUseCli(cliOpts);
+        if (result.exitCode !== 0) {
+          throw new HarnessExitError("", result.exitCode);
+        }
+      },
+    );
+
+  packHookCmd
+    .command("codex-user-prompt-submit")
+    .description(
+      "Codex UserPromptSubmit injector: emit the Understanding-Gate instruction template on stdout for Codex to prepend to additional_instructions",
+    )
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option("--pack <name>", "pack name to evaluate (default: understanding-before-execution)")
+    .action(
+      async (options: { config?: string; project?: string; pack?: string }) => {
+        const cliOpts: Parameters<typeof runPackHookCodexUserPromptSubmitCli>[0] = {};
+        if (options.config) cliOpts.configPath = options.config;
+        if (options.project) cliOpts.project = options.project;
+        if (options.pack) cliOpts.pack = options.pack;
+        await runPackHookCodexUserPromptSubmitCli(cliOpts);
       },
     );
 
