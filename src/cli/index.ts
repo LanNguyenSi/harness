@@ -14,6 +14,7 @@ import { isRemoveType, KNOWN_REMOVE_TYPES, remove } from "./remove/index.js";
 import { packAdd, packList, packRemove } from "./pack/index.js";
 import { runPackHookPreToolUseCli } from "./pack/hook-pre-tool-use.js";
 import { runPackHookCodexPreToolUseCli } from "./pack/hook-codex-pre-tool-use.js";
+import { runPackHookCodexStopCli } from "./pack/hook-codex-stop.js";
 import { runPackHookCodexUserPromptSubmitCli } from "./pack/hook-codex-user-prompt-submit.js";
 import { isRuntime, KNOWN_RUNTIMES, type Runtime } from "../policy-packs/index.js";
 import { approveUnderstanding } from "./approve/understanding.js";
@@ -928,6 +929,31 @@ export function buildProgram(opts: RunOptions = {}): Command {
         if (options.project) cliOpts.project = options.project;
         if (options.pack) cliOpts.pack = options.pack;
         await runPackHookCodexUserPromptSubmitCli(cliOpts);
+      },
+    );
+
+  packHookCmd
+    .command("codex-stop")
+    .description(
+      "Codex Stop-equivalent: parse the agent's last message for an Understanding Report and persist it under .understanding-gate/reports/ as approvalStatus:pending. Failure modes resolve to exit 0 (capture must never block the agent's stop path).",
+    )
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option("--pack <name>", "pack name to evaluate (default: understanding-before-execution)")
+    .option("--reports-dir <path>", "override the persisted-report directory (default: ./.understanding-gate/reports)")
+    .action(
+      async (options: {
+        config?: string;
+        project?: string;
+        pack?: string;
+        reportsDir?: string;
+      }) => {
+        const cliOpts: Parameters<typeof runPackHookCodexStopCli>[0] = {};
+        if (options.config) cliOpts.configPath = options.config;
+        if (options.project) cliOpts.project = options.project;
+        if (options.pack) cliOpts.pack = options.pack;
+        if (options.reportsDir) cliOpts.reportsDir = options.reportsDir;
+        await runPackHookCodexStopCli(cliOpts);
       },
     );
 

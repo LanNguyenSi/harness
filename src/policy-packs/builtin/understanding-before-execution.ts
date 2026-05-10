@@ -59,20 +59,22 @@ const BIN_STOP_CLAUDE = "understanding-gate-claude-stop";
 // strictly more powerful.
 const PRE_TOOL_USE_COMMAND_CLAUDE = "harness pack hook pre-tool-use";
 
-// Codex variants — Phase 6 #6. The package
-// `@lannguyensi/understanding-gate` does not yet ship Codex bins, so
-// harness owns the adapter (instruction injection on
-// UserPromptSubmit-equivalent + pre-tool blocker on apply_patch/Bash).
+// Codex variants. The package `@lannguyensi/understanding-gate` does
+// not yet ship Codex bins, so harness owns the adapter:
+//
+//   - UserPromptSubmit-equivalent injector (Phase 6 #6).
+//   - Stop-equivalent capture into `.understanding-gate/reports/`
+//     (Phase 6 #6 follow-up).
+//   - PreToolUse blocker on apply_patch/Bash/shell (Phase 6 #6).
+//
 // Cross-runtime sessions can still approve from a Claude Code report:
 // the ledger tag is the canonical source for harnessed sessions,
-// independent of which runtime captured the report.
-//
-// Stop-equivalent (report capture) is intentionally out of scope for
-// v1: the synthetic-smoke acceptance path approves via
-// `harness approve understanding`, which flips approvalStatus on the
-// most recent persisted report or writes the ledger tag directly.
-// Capture is tracked as a Phase 6 #6 follow-up task in agent-tasks.
+// independent of which runtime captured the report. The persisted-
+// report directory is shared between runtimes, so a Codex stop that
+// writes a report is approvable via `harness approve understanding`
+// regardless of which runtime invokes the next tool call.
 const COMMAND_USER_PROMPT_SUBMIT_CODEX = "harness pack hook codex-user-prompt-submit";
+const COMMAND_STOP_CODEX = "harness pack hook codex-stop";
 const COMMAND_PRE_TOOL_USE_CODEX = "harness pack hook codex-pre-tool-use";
 
 export function isMode(value: unknown): value is Mode {
@@ -104,6 +106,15 @@ function buildHooks(runtime: Runtime): Hook[] {
         budget_ms: 5000,
         description:
           "Codex adapter: inject the Understanding-Gate instruction template before the agent acts. Phase 6 #6.",
+      },
+      {
+        name: `${HOOK_NAME_PREFIX}:codex:stop`,
+        event: "Stop",
+        command: COMMAND_STOP_CODEX,
+        blocking: false,
+        budget_ms: 5000,
+        description:
+          "Codex adapter: capture the agent's Understanding Report into .understanding-gate/reports/ as approvalStatus:pending. Phase 6 #6 follow-up.",
       },
       {
         name: `${HOOK_NAME_PREFIX}:codex:pre-tool-use`,
@@ -164,20 +175,17 @@ function buildInstructions(pack: PolicyPack, mode: Mode, runtime: Runtime): stri
   const description = pack.description?.trim() ?? "";
   const isCodex = runtime === "codex";
   const injectorCmd = isCodex ? COMMAND_USER_PROMPT_SUBMIT_CODEX : BIN_USER_PROMPT_SUBMIT_CLAUDE;
+  const stopCmd = isCodex ? COMMAND_STOP_CODEX : BIN_STOP_CLAUDE;
   const blockerCmd = isCodex ? COMMAND_PRE_TOOL_USE_CODEX : PRE_TOOL_USE_COMMAND_CLAUDE;
   const blockerMatch = isCodex ? PRE_TOOL_USE_MATCH_CODEX : PRE_TOOL_USE_MATCH_CLAUDE;
   const settingsArtefact = isCodex
     ? "`harness.generated/codex/config.toml`"
     : "harness-managed `settings.json`";
-  // Codex v1 ships injector + blocker only (no Stop-equivalent, see
-  // pack source for rationale).
-  const stopBullet = isCodex
-    ? ""
-    : `2. \`Stop\` capture (\`${BIN_STOP_CLAUDE}\`): persists the emitted Understanding
+  const stopBullet = `2. \`Stop\` capture (\`${stopCmd}\`): persists the emitted Understanding
    Report under \`.understanding-gate/reports/\` for audit and downstream
    approval consumption.
 `;
-  const blockerOrdinal = isCodex ? "2" : "3";
+  const blockerOrdinal = "3";
   return `# Policy Pack: ${PACK_NAME}
 
 > Operator audit copy. The agent-facing prompt is injected at runtime by
