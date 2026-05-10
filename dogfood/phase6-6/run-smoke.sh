@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Phase 6 #6 dogfood — synthetic stdin smoke for the Codex adapter
+# Phase 6 #6 dogfood: synthetic stdin smoke for the Codex adapter
 # Understanding Gate (block + allow).
 #
 # What this exercises end-to-end:
@@ -51,7 +51,7 @@ mkdir -p "$WORKDIR"
 REPORTS_DIR="$WORKDIR/.understanding-gate/reports"
 
 echo "=========================================="
-echo "Phase 6 #6 dogfood — Codex adapter smoke"
+echo "Phase 6 #6 dogfood: Codex adapter smoke"
 echo "=========================================="
 echo "session     = $SESSION"
 echo "workdir     = $WORKDIR"
@@ -77,9 +77,9 @@ echo "OK: codex config.toml written, settings.json absent"
 echo
 
 # ----------------------------------------------------------------------
-# Step 2: PreToolUse event with no approval — expect block (exit 2)
+# Step 2: PreToolUse event with no approval, expect block (exit 2)
 # ----------------------------------------------------------------------
-echo "--- step 2: PreToolUse without approval — expect block ---"
+echo "--- step 2: PreToolUse without approval, expect block ---"
 EVENT_JSON=$(cat <<EOF
 {"session_id":"$SESSION","tool_name":"apply_patch","raw_input":{"path":"/tmp/x","patch":"..."}}
 EOF
@@ -123,9 +123,9 @@ echo "OK: wrote $APPROVED_REPORT"
 echo
 
 # ----------------------------------------------------------------------
-# Step 4: re-run PreToolUse — expect allow (exit 0)
+# Step 4: re-run PreToolUse, expect allow (exit 0)
 # ----------------------------------------------------------------------
-echo "--- step 4: PreToolUse after approval — expect allow ---"
+echo "--- step 4: PreToolUse after approval, expect allow ---"
 set +e
 echo "$EVENT_JSON" | $HARNESS_BIN pack hook codex-pre-tool-use \
   --config "$ROOT/harness.yaml" \
@@ -148,7 +148,7 @@ echo "OK: allow path fired via persisted-report source"
 echo
 
 # ----------------------------------------------------------------------
-# Step 5: UserPromptSubmit injector — instruction template on stdout
+# Step 5: UserPromptSubmit injector, instruction template on stdout
 # ----------------------------------------------------------------------
 echo "--- step 5: UserPromptSubmit injector ---"
 set +e

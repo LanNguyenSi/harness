@@ -61,10 +61,13 @@ export interface PackHookCodexPreToolUseResult {
 interface CodexEventEnvelope {
   session_id?: unknown;
   tool_name?: unknown;
-  // Codex-native synonyms tolerated for resilience: some integrations
-  // pass `tool` instead of `tool_name`, or `id` instead of `session_id`.
+  // One Codex-native synonym tolerated: some integrations pass
+  // `tool` instead of `tool_name`. We deliberately do NOT alias
+  // `event.id` to session_id — `id` in most event-bus shapes is the
+  // event/message id, not the session id, and silently resolving to
+  // the wrong identifier would only show up as a misleading
+  // diagnostic on a fail-block path.
   tool?: unknown;
-  id?: unknown;
 }
 
 async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
@@ -156,9 +159,9 @@ export async function runPackHookCodexPreToolUseCli(
   }
 
   const sessionId =
-    pickString(event.session_id, event.id) ??
-    process.env["CLAUDE_SESSION_ID"] ??
+    pickString(event.session_id) ??
     process.env["CODEX_SESSION_ID"] ??
+    process.env["CLAUDE_SESSION_ID"] ??
     "";
   const toolName = pickString(event.tool_name, event.tool) ?? "(unknown)";
 
@@ -186,7 +189,7 @@ export async function runPackHookCodexPreToolUseCli(
 
   if (sessionId === "") {
     return allowResult(
-      "no session_id resolvable from input or $CLAUDE_SESSION_ID/$CODEX_SESSION_ID",
+      "no session_id resolvable from input or $CODEX_SESSION_ID/$CLAUDE_SESSION_ID",
       "none",
       stderr,
     );
@@ -209,7 +212,7 @@ export async function runPackHookCodexPreToolUseCli(
   // reason; there is no JSON-decision wire to write to stdout.
   const reason = `${ledger.detail}; ${report.detail}`;
   const diagnostic =
-    `harness pack hook codex: BLOCK — ${reason}. Tool: ${toolName}. ` +
+    `harness pack hook codex: BLOCK: ${reason}. Tool: ${toolName}. ` +
     "Run `harness approve understanding` once you have produced and confirmed an Understanding Report.";
   stderr.write(`${diagnostic}\n`);
   return {

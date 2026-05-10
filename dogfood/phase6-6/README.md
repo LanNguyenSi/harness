@@ -1,4 +1,4 @@
-# Phase 6 #6 dogfood — Codex adapter for the Understanding Gate
+# Phase 6 #6 dogfood: Codex adapter for the Understanding Gate
 
 Synthetic smoke for the harness-shipped Codex adapter for the
 `understanding-before-execution` policy pack.
@@ -60,11 +60,11 @@ npm run build && bash dogfood/phase6-6/run-smoke.sh
 
 The driver writes to `dogfood/phase6-6/transcript/`:
 
-- `run.log`             — full smoke output.
-- `block-stderr.txt`    — captured BLOCK reason from step 2.
-- `allow-stderr.txt`    — captured ALLOW diagnostic from step 4.
-- `inject-stdout.txt`   — injector-emitted instruction template.
-- `cwd-<session>/`      — synthetic working directory holding the
+- `run.log`             : full smoke output.
+- `block-stderr.txt`    : captured BLOCK reason from step 2.
+- `allow-stderr.txt`    : captured ALLOW diagnostic from step 4.
+- `inject-stdout.txt`   : injector-emitted instruction template.
+- `cwd-<session>/`      : synthetic working directory holding the
                           persisted report under
                           `.understanding-gate/reports/`.
 

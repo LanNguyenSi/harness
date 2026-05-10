@@ -113,4 +113,33 @@ describe("apply --runtime codex", () => {
     const second = await apply({ homeDir: tmpHome, runtime: "codex" });
     expect(second.outcome).toBe("no-changes");
   });
+
+  it("surfaces a warning when permission_profile is set under --runtime codex (silent-drop guard)", async () => {
+    const manifest = {
+      version: 1,
+      tools: {
+        mcp: [],
+        cli: [],
+        skills: { enabled: [], source_dirs: [] },
+        builtin: { known: [] },
+      },
+      memory: { directories: [] },
+      hooks: [],
+      policies: [],
+      policy_packs: [
+        {
+          name: "understanding-before-execution",
+          config: { permission_profile: "safe-start" },
+        },
+      ],
+    };
+    fs.writeFileSync(path.join(tmpHome, "harness.yaml"), yamlStringify(manifest));
+    const result = await apply({ homeDir: tmpHome, runtime: "codex" });
+    expect(result.outcome).toBe("applied");
+    expect(
+      result.warnings.some(
+        (w) => w.includes("permission") && w.includes("codex"),
+      ),
+    ).toBe(true);
+  });
 });

@@ -276,13 +276,31 @@ function buildExpectedFiles(
     // MEMORY.md and pack instructions.md are runtime-agnostic and ship
     // unchanged.
     const codexConfig = generateCodexConfig(augmentedManifest);
+    const codexWarnings = [...codexConfig.warnings];
+    if (packExpansion.permissions) {
+      // Phase 6 #6: pack permission profiles project into Claude Code's
+      // settings.json `permissions` block. The codex generator does not
+      // yet consume them (Codex sandbox shaping is a follow-up); the
+      // contribution would otherwise vanish silently.
+      const totalPerms =
+        packExpansion.permissions.allow.length +
+        packExpansion.permissions.ask.length +
+        packExpansion.permissions.deny.length;
+      if (totalPerms > 0) {
+        codexWarnings.push(
+          `policy_packs contributed ${totalPerms} permission entr${
+            totalPerms === 1 ? "y" : "ies"
+          }; --runtime codex does not yet wire permissions into Codex's sandbox shape (filed as a Phase 6 #6 follow-up)`,
+        );
+      }
+    }
     return {
       files: [
         { basename: CODEX_CONFIG_BASENAME, content: codexConfig.content },
         { basename: MEMORY_BASENAME, content: indexResult.content },
         ...packFiles,
       ],
-      warnings: [...codexConfig.warnings, ...indexResult.warnings, ...packExpansion.warnings],
+      warnings: [...codexWarnings, ...indexResult.warnings, ...packExpansion.warnings],
     };
   }
 

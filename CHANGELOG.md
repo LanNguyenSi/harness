@@ -14,14 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `settings.json`; operators copy or include the generated TOML into
   their own `~/.codex/config.toml`. Two new pack hook subcommands ship:
   `harness pack hook codex-pre-tool-use` (PreToolUse blocker on
-  `apply_patch|Bash|shell` — exit 2 + reason on stderr when no source
+  `apply_patch|Bash|shell`: exit 2 + reason on stderr when no source
   has approved, exit 0 otherwise) and `harness pack hook
   codex-user-prompt-submit` (instruction-template injector that emits
   the Understanding-Gate prompt on stdout for Codex to prepend to
   `additional_instructions`). The Codex blocker shares the
-  approval-check pipeline with the Claude Code blocker — ledger source
+  approval-check pipeline with the Claude Code blocker (ledger source
   via grounding-mcp + persisted report under
-  `.understanding-gate/reports/`, either approves. Synthetic-stdin
+  `.understanding-gate/reports/`, either approves). Synthetic-stdin
   smoke under `dogfood/phase6-6/` exercises block + allow paths
   end-to-end without a Codex binary. `--target` is rejected with
   `--runtime codex` (target wires Claude Code's `settings.json`, not

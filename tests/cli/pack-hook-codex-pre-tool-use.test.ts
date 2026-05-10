@@ -62,7 +62,7 @@ describe("pack hook codex-pre-tool-use blocker", () => {
     });
     expect(result.blocked).toBe(true);
     expect(result.exitCode).toBe(2);
-    expect(stderr.read()).toMatch(/BLOCK — no ledger entry matched .+ no reports found/);
+    expect(stderr.read()).toMatch(/BLOCK: no ledger entry matched .+ no reports found/);
     expect(stderr.read()).toMatch(/apply_patch/);
     expect(stderr.read()).toMatch(/harness approve understanding/);
   });
@@ -154,11 +154,13 @@ describe("pack hook codex-pre-tool-use blocker", () => {
     expect(stderr.read()).toMatch(/no session_id/);
   });
 
-  it("tolerates Codex-native field names (tool, id) in the envelope", async () => {
+  it("tolerates the Codex-native `tool` synonym in the envelope", async () => {
     const stderr = bufferStream();
     const result = await runPackHookCodexPreToolUseCli({
       manifest: manifestWithPack(),
-      stdin: readableFromString(JSON.stringify({ id: "sess-codex", tool: "apply_patch" })),
+      stdin: readableFromString(
+        JSON.stringify({ session_id: "sess-codex", tool: "apply_patch" }),
+      ),
       stderr: stderr.stream,
       reportsDir: path.join(tmp, "no-reports"),
       ledgerQuery: async (sessionId): Promise<LedgerEntry[]> => [
@@ -171,6 +173,21 @@ describe("pack hook codex-pre-tool-use blocker", () => {
     });
     expect(result.blocked).toBe(false);
     expect(result.approvalCheck.source).toBe("ledger");
+  });
+
+  it("does NOT alias `event.id` to session_id (event-id is not session-id)", async () => {
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        JSON.stringify({ id: "msg-event-id-not-a-session", tool: "apply_patch" }),
+      ),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(stderr.read()).toMatch(/no session_id/);
   });
 
   it("allows with diagnostic when stdin is malformed JSON", async () => {

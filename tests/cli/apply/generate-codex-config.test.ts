@@ -89,4 +89,52 @@ describe("generateCodexConfig", () => {
     );
     expect(content).toContain('match = "has \\"quotes\\""');
   });
+
+  it("escapes raw control characters as \\uXXXX or shorthand forms", () => {
+    const SOH = String.fromCharCode(0x01);
+    const { content } = generateCodexConfig(
+      parseManifest({
+        version: 1,
+        hooks: [
+          {
+            name: "controls",
+            event: "PreToolUse",
+            command: "/bin/true",
+            description: `line1\nline2${SOH}end`,
+            blocking: false,
+            budget_ms: 1000,
+          },
+        ],
+      }),
+    );
+    expect(content).toContain('description = "line1\\nline2\\u0001end"');
+    // The emitted TOML basic-string carries no raw control chars.
+    const descriptionLine = content
+      .split("\n")
+      .find((l) => l.startsWith("description = "));
+    expect(descriptionLine).toBeDefined();
+    const controlRe = new RegExp("[\\u0000-\\u001f\\u007f]");
+    expect(controlRe.test(descriptionLine!)).toBe(false);
+  });
+
+  it("warns when a hook carries path_match or bash_match (not projected)", () => {
+    const { warnings } = generateCodexConfig(
+      parseManifest({
+        version: 1,
+        hooks: [
+          {
+            name: "with-filter",
+            event: "PreToolUse",
+            command: "/bin/true",
+            blocking: false,
+            budget_ms: 1000,
+            path_match: "src/**/*.ts",
+            bash_match: "^git push",
+          },
+        ],
+      }),
+    );
+    expect(warnings.some((w) => w.includes("path_match"))).toBe(true);
+    expect(warnings.some((w) => w.includes("bash_match"))).toBe(true);
+  });
 });
