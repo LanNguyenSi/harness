@@ -70,10 +70,25 @@ The driver writes to `dogfood/phase6-6/transcript/`:
 
 Exit 0 = pass.
 
+## Adjacent: `harness doctor --target codex`
+
+Once the manifest has been applied with `--runtime codex`, the
+adapter-health doctor reports OK against this dogfood:
+
+```sh
+harness apply --config dogfood/phase6-6/harness.yaml --runtime codex --quiet
+harness doctor --config dogfood/phase6-6/harness.yaml --target codex
+```
+
+The doctor checks: `harness` on PATH, the codex-* subcommands resolve,
+`harness.generated/codex/config.toml` is present and harness-managed,
+every contributed hook command resolves, and
+`.understanding-gate/reports/` is writable. `--json` emits a structured
+`codexTarget` block whose error/warning counts roll into the top-level
+totals.
+
 ## Out of scope (Phase 6 #6 follow-ups)
 
-- `harness doctor --target codex` adapter-health check (deferred:
-  separate agent-tasks entry).
 - A Codex-specific Stop-equivalent that captures the Understanding
   Report transcript into `.understanding-gate/reports/`. v1 relies on
   `harness approve understanding` writing the ledger tag (or, in the

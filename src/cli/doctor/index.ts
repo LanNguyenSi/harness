@@ -10,13 +10,21 @@ import {
 } from "../../probes/mcp.js";
 import type { Manifest } from "../../schema/index.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
-import type {
-  CliEntryReport,
-  DoctorReport,
-  HookEntryReport,
-  ManifestSection,
-  PolicyEntryReport,
-  ToolsSection,
+import {
+  countCodexDiagnostics,
+  runCodexTargetChecks,
+  type RunCodexCheckOptions,
+} from "./codex.js";
+import {
+  isDoctorTarget,
+  KNOWN_DOCTOR_TARGETS,
+  type CliEntryReport,
+  type DoctorReport,
+  type DoctorTarget,
+  type HookEntryReport,
+  type ManifestSection,
+  type PolicyEntryReport,
+  type ToolsSection,
 } from "./types.js";
 
 export interface DoctorOptions extends LoaderOptions {
@@ -26,7 +34,19 @@ export interface DoctorOptions extends LoaderOptions {
   versionProbe?: (cmd: string[]) => string | null;
   now?: Date;
   homeOverride?: string;
+  /**
+   * Phase 6 #6 follow-up: when set to `codex`, run the harness-side
+   * codex adapter health checks in addition to the default suite.
+   * Future runtimes plug in here without restructuring the surface.
+   * Restricted to targets that have a wired adapter-health module
+   * (today: `codex`); see `KNOWN_DOCTOR_TARGETS`.
+   */
+  target?: DoctorTarget;
+  /** Test-injection knobs forwarded to the codex target evaluator. */
+  codexCheckOptions?: Partial<RunCodexCheckOptions>;
 }
+
+export { isDoctorTarget, KNOWN_DOCTOR_TARGETS };
 
 const HOME_PLACEHOLDER = "~";
 
@@ -279,6 +299,11 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
     if (!d.exists) warningCount++;
   }
   if (report.memory.staleMemories.length > 0) warningCount++;
+  if (report.codexTarget) {
+    const codexCounts = countCodexDiagnostics(report.codexTarget);
+    errorCount += codexCounts.errorCount;
+    warningCount += codexCounts.warningCount;
+  }
   return { errorCount, warningCount };
 }
 
@@ -343,6 +368,17 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     policies,
     workflows,
   };
+  if (opts.target === "codex") {
+    const manifestDir = path.dirname(resolved.base);
+    const codexOpts: RunCodexCheckOptions = {
+      manifestDir,
+      ...(opts.codexCheckOptions ?? {}),
+    };
+    if (codexOpts.pathEnv === undefined && opts.pathEnv !== undefined) {
+      codexOpts.pathEnv = opts.pathEnv;
+    }
+    partial.codexTarget = runCodexTargetChecks(manifest, codexOpts);
+  }
   const counts = countDiagnostics(partial);
   return { ...partial, ...counts };
 }

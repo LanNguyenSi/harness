@@ -1,6 +1,22 @@
 import type { McpProbeResult } from "../../probes/mcp.js";
 import type { MemoryReport, StaleMemory } from "../../probes/memory.js";
 import type { Manifest } from "../../schema/index.js";
+import type { CodexTargetReport } from "./codex.js";
+
+/**
+ * Phase 6 #6 follow-up — doctor target identifier. Distinct from
+ * `Runtime` (which gates `harness apply --runtime`): doctor only adds
+ * a target when the corresponding adapter-health check module exists.
+ * Reusing the apply Runtime enum here would silently accept
+ * `--target claude-code` and do nothing, since there is no
+ * claude-code-specific doctor module today.
+ */
+export const KNOWN_DOCTOR_TARGETS = ["codex"] as const;
+export type DoctorTarget = (typeof KNOWN_DOCTOR_TARGETS)[number];
+
+export function isDoctorTarget(value: unknown): value is DoctorTarget {
+  return typeof value === "string" && (KNOWN_DOCTOR_TARGETS as readonly string[]).includes(value);
+}
 
 export interface ManifestSection {
   topLevelKeysPresent: number;
@@ -60,8 +76,16 @@ export interface DoctorReport {
   hooks: HookEntryReport[];
   policies: PolicyEntryReport[];
   workflows: WorkflowsSectionReport;
+  /**
+   * Phase 6 #6 follow-up: present when `--target codex` is passed.
+   * Aggregates harness-side codex adapter health checks (binary
+   * resolution, generated config presence, hook command resolution,
+   * persisted-report dir writability). Counts roll into the top-level
+   * errorCount / warningCount.
+   */
+  codexTarget?: CodexTargetReport;
   errorCount: number;
   warningCount: number;
 }
 
-export type { Manifest, McpProbeResult, MemoryReport, StaleMemory };
+export type { Manifest, McpProbeResult, MemoryReport, StaleMemory, CodexTargetReport };

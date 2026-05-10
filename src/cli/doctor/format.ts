@@ -151,6 +151,16 @@ function formatWorkflowsSection(report: DoctorReport): string[] {
   return out;
 }
 
+function formatCodexTargetSection(report: DoctorReport): string[] {
+  if (!report.codexTarget) return [];
+  const out: string[] = ["", "Target: codex"];
+  for (const c of report.codexTarget.checks) {
+    const marker = c.status === "ok" ? "✓" : c.status === "warn" ? "⚠" : "✗";
+    out.push(`  ${marker} ${c.name}  ${c.message}`);
+  }
+  return out;
+}
+
 function formatSummary(report: DoctorReport): string[] {
   const out: string[] = ["", "Summary"];
   const errLabel = report.errorCount === 1 ? "error" : "errors";
@@ -168,6 +178,7 @@ export function format(report: DoctorReport): string {
   lines.push(...formatHooksSection(report));
   lines.push(...formatPoliciesSection(report));
   lines.push(...formatWorkflowsSection(report));
+  lines.push(...formatCodexTargetSection(report));
   lines.push(...formatSummary(report));
   lines.push("");
   return lines.join("\n");
