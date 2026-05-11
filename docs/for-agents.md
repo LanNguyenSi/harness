@@ -92,7 +92,7 @@ sequenceDiagram
         Hook-->>CC: allow
         Hook->>Ledger: write policy_decision (allow)
     else requires not satisfied
-        Hook-->>CC: {decision: deny, reason}
+        Hook-->>CC: {decision: block, hookSpecificOutput.permissionDecision: deny, reason}
         Hook->>Ledger: write policy_decision (deny)
     end
     Note over Audit,Ledger: read-side surfaces replay these rows
