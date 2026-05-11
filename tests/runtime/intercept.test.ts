@@ -109,6 +109,38 @@ describe("intercept — match + deny", () => {
   });
 });
 
+describe("intercept — non-PreToolUse deny shape", () => {
+  it("omits hookSpecificOutput for non-PreToolUse events while still blocking", async () => {
+    const promptPolicy: Policy = {
+      ...REVIEW_POLICY,
+      name: "block-bare-prompt",
+      trigger: {
+        event: "UserPromptSubmit",
+        extract: { PR_NUMBER: "toolArgs.prNumber" },
+      },
+      requires: { ledger_tag: "review:${PR_NUMBER}" },
+    };
+    const promptEvent: ToolEvent = {
+      hook_event_name: "UserPromptSubmit",
+      tool_input: { prNumber: 7 },
+      session_id: "sess-1",
+    };
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([promptPolicy]),
+      event: promptEvent,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.blockJson).toEqual({
+      decision: "block",
+      reason: "block-bare-prompt: no matching ledger entry for tag `review:7`",
+    });
+    expect(result.blockJson?.hookSpecificOutput).toBeUndefined();
+  });
+});
+
 describe("intercept — multiple policies, deny if any", () => {
   it("denies when one of two matching policies fails", async () => {
     const second: Policy = {

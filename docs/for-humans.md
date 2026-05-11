@@ -156,11 +156,17 @@ you are happy, `harness apply --target ~/.claude/settings.json
 --merge`, restart Claude Code, and the gate is live.
 
 When the policy actually denies a tool call, the runtime emits Claude
-Code's deny shape on stdout:
+Code's deny shape on stdout. For PreToolUse hooks (the most common case)
+the payload carries both the legacy `decision: "block"` field and the
+Claude Code 2.1+ `hookSpecificOutput` envelope:
 
 ```json
-{"decision":"deny","reason":"review-before-merge: no matching ledger entry for tag `review:42`"}
+{"decision":"block","reason":"review-before-merge: no matching ledger entry for tag `review:42`","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"review-before-merge: no matching ledger entry for tag `review:42`"}}
 ```
+
+For non-PreToolUse hooks (UserPromptSubmit, PostToolUse, Stop, ...) only
+the top-level `decision`/`reason` pair is emitted, since
+`permissionDecision` is PreToolUse-only per Anthropic's hook protocol.
 
 After the entry is recorded, the same call is allowed. `harness audit
 --since 1h --policy review-before-merge` replays the decision row.

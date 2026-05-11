@@ -45,20 +45,24 @@ export interface PolicyDecision {
 }
 
 /**
- * Claude Code PreToolUse "block" output. Carries BOTH the legacy
- * top-level `decision`/`reason` keys (read by Claude Code <2.1) and the
- * `hookSpecificOutput.permissionDecision` envelope (the form 2.1+ honours).
- * Emitting both keeps a single deny JSON portable across CLI versions.
+ * Claude Code hook "block" output. The top-level `decision: "block"` /
+ * `reason` pair is the form every hook event accepts (UserPromptSubmit,
+ * PostToolUse, Stop, ...). The `hookSpecificOutput.permissionDecision`
+ * envelope is PreToolUse-only per Anthropic's hook protocol, so it is
+ * present only when the inbound event is PreToolUse and absent
+ * otherwise. Emitting both keys for a PreToolUse event keeps the deny
+ * JSON readable by older Claude Code CLIs (which look at top-level
+ * `decision`) and current 2.1+ ones (which prefer the envelope).
  *
- * The legacy `decision` value MUST be `"block"`, not `"deny"` — Claude
+ * The legacy `decision` value MUST be `"block"`, not `"deny"`: Claude
  * Code never recognised `"deny"` at the top level, so an emitter that
  * shipped that value silently let the tool call through.
  */
 export interface ClaudeDenyJson {
   decision: "block";
   reason: string;
-  hookSpecificOutput: {
-    hookEventName: string;
+  hookSpecificOutput?: {
+    hookEventName: "PreToolUse";
     permissionDecision: "deny";
     permissionDecisionReason: string;
   };
@@ -278,18 +282,24 @@ export async function intercept(
   );
   if (blocking) {
     const reasonText = `${blocking.policyName}: ${blocking.reason}`;
-    return {
-      decisions,
-      blockJson: {
-        decision: "block",
-        reason: reasonText,
-        hookSpecificOutput: {
-          hookEventName: options.event.hook_event_name ?? "PreToolUse",
-          permissionDecision: "deny",
-          permissionDecisionReason: reasonText,
-        },
-      },
+    const block: ClaudeDenyJson = {
+      decision: "block",
+      reason: reasonText,
     };
+    // permissionDecision is documented for PreToolUse only; emitting the
+    // envelope on other events would invent a shape Claude Code does not
+    // define, so we restrict it strictly. Other event kinds still block
+    // via the top-level `decision: "block"`.
+    if (options.event.hook_event_name === "PreToolUse") {
+      block.hookSpecificOutput = {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        // Duplicates `reason` intentionally: legacy consumers read the
+        // top-level field, modern PreToolUse consumers read this one.
+        permissionDecisionReason: reasonText,
+      };
+    }
+    return { decisions, blockJson: block };
   }
   return { decisions, blockJson: null };
 }

@@ -99,11 +99,15 @@ echo "stderr:"
 cat "$DENY_STDERR"
 echo
 
-if ! grep -q '"decision":"deny"' "$DENY_STDOUT"; then
-  echo "FAIL: expected deny JSON on stdout"
+if ! grep -q '"decision":"block"' "$DENY_STDOUT"; then
+  echo "FAIL: expected top-level decision=block on stdout"
   exit 1
 fi
-echo "PASS: deny JSON observed"
+if ! grep -q '"permissionDecision":"deny"' "$DENY_STDOUT"; then
+  echo "FAIL: expected hookSpecificOutput.permissionDecision=deny on stdout"
+  exit 1
+fi
+echo "PASS: deny JSON observed (legacy decision=block + permissionDecision=deny)"
 echo
 
 # ------------------------------------------------------------------
