@@ -44,9 +44,24 @@ export interface PolicyDecision {
   evaluatedAt: string;
 }
 
+/**
+ * Claude Code PreToolUse "block" output. Carries BOTH the legacy
+ * top-level `decision`/`reason` keys (read by Claude Code <2.1) and the
+ * `hookSpecificOutput.permissionDecision` envelope (the form 2.1+ honours).
+ * Emitting both keeps a single deny JSON portable across CLI versions.
+ *
+ * The legacy `decision` value MUST be `"block"`, not `"deny"` — Claude
+ * Code never recognised `"deny"` at the top level, so an emitter that
+ * shipped that value silently let the tool call through.
+ */
 export interface ClaudeDenyJson {
-  decision: "deny";
+  decision: "block";
   reason: string;
+  hookSpecificOutput: {
+    hookEventName: string;
+    permissionDecision: "deny";
+    permissionDecisionReason: string;
+  };
 }
 
 export interface InterceptResult {
@@ -262,11 +277,17 @@ export async function intercept(
     (d) => d.enforcement === "block" && d.outcome === "deny",
   );
   if (blocking) {
+    const reasonText = `${blocking.policyName}: ${blocking.reason}`;
     return {
       decisions,
       blockJson: {
-        decision: "deny",
-        reason: `${blocking.policyName}: ${blocking.reason}`,
+        decision: "block",
+        reason: reasonText,
+        hookSpecificOutput: {
+          hookEventName: options.event.hook_event_name ?? "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: reasonText,
+        },
       },
     };
   }

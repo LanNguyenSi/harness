@@ -94,9 +94,16 @@ describe("intercept — match + deny", () => {
       builtins: BUILTINS,
       now: NOW,
     });
+    const expectedReason =
+      "review-before-merge: no matching ledger entry for tag `review:42`";
     expect(result.blockJson).toEqual({
-      decision: "deny",
-      reason: "review-before-merge: no matching ledger entry for tag `review:42`",
+      decision: "block",
+      reason: expectedReason,
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: expectedReason,
+      },
     });
     expect(result.decisions[0]?.outcome).toBe("deny");
   });
