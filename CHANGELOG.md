@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `harness policy intercept` now emits a Claude Code hook output that
+  Claude Code actually honours as a deny. Previously the CLI wrote
+  `{"decision":"deny","reason":...}`, which Claude Code parsed as "no
+  recognised decision" (the documented top-level value is `"block"`,
+  not `"deny"`) and let the tool call proceed; the policy ran, the
+  `policy_decision` row landed in the ledger, but the agent still
+  merged. The new payload always carries the documented top-level
+  `decision: "block"` field, and for PreToolUse events it additionally
+  emits the `hookSpecificOutput.permissionDecision: "deny"` envelope
+  Claude Code 2.1+ prefers. Non-PreToolUse events (UserPromptSubmit,
+  PostToolUse, Stop, ...) get the top-level form only, since
+  `permissionDecision` is PreToolUse-only per Anthropic's hook
+  protocol. Repro for the regression was a
+  `mcp__agent-tasks__pull_requests_merge` call with no matching
+  `review:${PR_NUMBER}` ledger entry: it reached agent-tasks and 404'd
+  there instead of being blocked at the hook. The sibling
+  Understanding-Gate emitter at `src/cli/pack/hook-pre-tool-use.ts`
+  was unaffected; it already emits `decision: "block"`, though it does
+  not yet carry the modern envelope. (Tracked as `harness#2436d9bf`.)
+
 ## [0.8.0] - 2026-05-10
 
 **Headline: Understanding-Gate Policy Pack, end-to-end.** Phase 6 lands

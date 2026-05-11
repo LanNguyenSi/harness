@@ -51,7 +51,7 @@ PR reviewers can read the exact output cited below.
 
 | Step | Artifact | What it shows |
 | ---- | -------- | ------------- |
-| 1 | `01-deny.stdout` | `{"decision":"deny","reason":"review-before-merge: no matching ledger entry for tag \`review:42\`"}`. Asserted non-empty by the smoke driver. |
+| 1 | `01-deny.stdout` | `{"decision":"block","reason":"review-before-merge: no matching ledger entry for tag \`review:42\`","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"…"}}`. Asserted by the smoke driver: both `decision=block` (legacy top-level) and `permissionDecision=deny` (PreToolUse envelope) must be present. |
 | 2 | `02-ledger-add.stdout` | grounding-mcp returns the new ledger entry id. Asserted by the driver via `grep '"id":2'`. |
 | 3 | `03-allow.stdout` | empty file. Asserted by the driver via `[ -s "$ALLOW_STDOUT" ]`. |
 | 4a | `04a-audit-5m.stdout` | both fires visible — Phase 5 #8 is fixed (the 5m window correctly returns fresh entries on non-UTC hosts). The driver asserts ≥1 deny row and ≥1 allow row before passing; an empty 5m result here is now a regression. |

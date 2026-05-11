@@ -137,7 +137,7 @@ Three deterministic intercepts via stdin, against the same `grounding-mcp` insta
 # Probe A: PR 99, no ledger entry yet → must deny
 echo '{"hook_event_name":"PreToolUse","session_id":"default","tool_name":"mcp__agent-tasks__pull_requests_merge","tool_input":{"prNumber":99}}' \
   | harness policy intercept
-# → {"decision":"deny","reason":"review-before-merge: no matching ledger entry for tag `review:99`"}
+# → {"decision":"block","reason":"review-before-merge: no matching ledger entry for tag `review:99`","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"…"}}
 
 # Add a ledger entry for PR 99
 # (via mcp__agent-grounding__ledger_add, sessionId="default", content includes "review:99")
@@ -150,7 +150,7 @@ echo '{"hook_event_name":"PreToolUse","session_id":"default","tool_name":"mcp__a
 # Probe C: PR 100, no ledger entry for 100 → must still deny (cross-PR isolation)
 echo '{"hook_event_name":"PreToolUse","session_id":"default","tool_name":"mcp__agent-tasks__pull_requests_merge","tool_input":{"prNumber":100}}' \
   | harness policy intercept
-# → {"decision":"deny","reason":"review-before-merge: no matching ledger entry for tag `review:100`"}
+# → {"decision":"block","reason":"review-before-merge: no matching ledger entry for tag `review:100`","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"…"}}
 ```
 
 `harness audit --since 5m` confirmed the three rows landed correctly:

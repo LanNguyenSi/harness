@@ -44,9 +44,28 @@ export interface PolicyDecision {
   evaluatedAt: string;
 }
 
+/**
+ * Claude Code hook "block" output. The top-level `decision: "block"` /
+ * `reason` pair is the form every hook event accepts (UserPromptSubmit,
+ * PostToolUse, Stop, ...). The `hookSpecificOutput.permissionDecision`
+ * envelope is PreToolUse-only per Anthropic's hook protocol, so it is
+ * present only when the inbound event is PreToolUse and absent
+ * otherwise. Emitting both keys for a PreToolUse event keeps the deny
+ * JSON readable by older Claude Code CLIs (which look at top-level
+ * `decision`) and current 2.1+ ones (which prefer the envelope).
+ *
+ * The legacy `decision` value MUST be `"block"`, not `"deny"`: Claude
+ * Code never recognised `"deny"` at the top level, so an emitter that
+ * shipped that value silently let the tool call through.
+ */
 export interface ClaudeDenyJson {
-  decision: "deny";
+  decision: "block";
   reason: string;
+  hookSpecificOutput?: {
+    hookEventName: "PreToolUse";
+    permissionDecision: "deny";
+    permissionDecisionReason: string;
+  };
 }
 
 export interface InterceptResult {
@@ -262,13 +281,25 @@ export async function intercept(
     (d) => d.enforcement === "block" && d.outcome === "deny",
   );
   if (blocking) {
-    return {
-      decisions,
-      blockJson: {
-        decision: "deny",
-        reason: `${blocking.policyName}: ${blocking.reason}`,
-      },
+    const reasonText = `${blocking.policyName}: ${blocking.reason}`;
+    const block: ClaudeDenyJson = {
+      decision: "block",
+      reason: reasonText,
     };
+    // permissionDecision is documented for PreToolUse only; emitting the
+    // envelope on other events would invent a shape Claude Code does not
+    // define, so we restrict it strictly. Other event kinds still block
+    // via the top-level `decision: "block"`.
+    if (options.event.hook_event_name === "PreToolUse") {
+      block.hookSpecificOutput = {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        // Duplicates `reason` intentionally: legacy consumers read the
+        // top-level field, modern PreToolUse consumers read this one.
+        permissionDecisionReason: reasonText,
+      };
+    }
+    return { decisions, blockJson: block };
   }
   return { decisions, blockJson: null };
 }

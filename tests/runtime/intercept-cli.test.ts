@@ -64,8 +64,13 @@ describe("runInterceptCli", () => {
     expect(result.blocked).toBe(true);
     expect(result.exitCode).toBe(0);
     const parsed = JSON.parse(output().trim());
-    expect(parsed.decision).toBe("deny");
+    expect(parsed.decision).toBe("block");
     expect(parsed.reason).toContain("review-before-merge");
+    expect(parsed.hookSpecificOutput).toEqual({
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: parsed.reason,
+    });
   });
 
   it("stays silent on allow", async () => {
@@ -191,7 +196,9 @@ describe("runInterceptCli — Phase 5 #3: --verbose stderr diagnostics", () => {
       verbose: true,
     });
     const stdoutLine = outOutput().trim();
-    expect(JSON.parse(stdoutLine).decision).toBe("deny");
+    const parsedDeny = JSON.parse(stdoutLine);
+    expect(parsedDeny.decision).toBe("block");
+    expect(parsedDeny.hookSpecificOutput?.permissionDecision).toBe("deny");
     const errText = errOutput();
     expect(errText).toContain("harness policy intercept: review-before-merge: deny");
     expect(errText).toContain("ledger_tag: review:42");
