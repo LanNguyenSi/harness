@@ -212,6 +212,18 @@ export async function runInterceptCli(
     stdout.write(`${JSON.stringify(result.blockJson)}\n`);
   }
 
+  // No-match diagnostic. Always (not gated on --verbose) when the
+  // manifest has at least one policy but none of them matched this
+  // event. Catches the common debug footgun where an operator probes
+  // `harness policy intercept` by hand and forgets `hook_event_name`,
+  // making the engine return exit 0 + empty stdout. The probe then
+  // looks like "policy did not load", when in fact the trigger filter
+  // simply rejected the input. Emits to stderr so the Claude Code
+  // hook contract on stdout is preserved.
+  if (result.decisions.length === 0 && manifest.policies.length > 0) {
+    stderr.write(formatNoMatchHint(event, manifest));
+  }
+
   if (verbose) {
     for (const decision of result.decisions) {
       if (decision.outcome === "allow") continue;
@@ -224,6 +236,26 @@ export async function runInterceptCli(
     decisions: result.decisions,
     blocked: result.blockJson !== null,
   };
+}
+
+function formatNoMatchHint(event: ToolEvent, manifest: Manifest): string {
+  const observedEvent =
+    typeof event.hook_event_name === "string" && event.hook_event_name.length > 0
+      ? `"${event.hook_event_name}"`
+      : "(missing)";
+  const observedTool =
+    typeof event.tool_name === "string" && event.tool_name.length > 0
+      ? `"${event.tool_name}"`
+      : "(missing)";
+  const registeredEvents = Array.from(
+    new Set(manifest.policies.map((p) => p.trigger.event)),
+  ).sort();
+  return (
+    `harness policy intercept: no policy matched event ` +
+    `hook_event_name=${observedEvent} tool_name=${observedTool} ` +
+    `(registered policy events: ${registeredEvents.join(", ")}). ` +
+    `If probing by hand, ensure stdin includes hook_event_name (e.g. "PreToolUse" for tool gates).\n`
+  );
 }
 
 export type { LedgerEntry };

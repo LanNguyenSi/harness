@@ -111,13 +111,105 @@ describe("runInterceptCli", () => {
 
   it("does not block when stdin is empty / non-JSON", async () => {
     const { stream, output } = captureStdout();
+    const { stream: err } = captureStream();
     const result = await runInterceptCli({
       stdin: streamFrom(""),
       stdout: stream,
+      stderr: err,
       manifest: fakeManifest([REVIEW_POLICY]),
     });
     expect(result.blocked).toBe(false);
     expect(output()).toBe("");
+  });
+
+  it("emits a stderr no-match hint when hook_event_name is missing", async () => {
+    const { stream: out, output: outOutput } = captureStream();
+    const { stream: err, output: errOutput } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "mcp__agent-tasks__pull_requests_merge",
+          tool_input: { prNumber: 42 },
+        }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([REVIEW_POLICY]),
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.decisions).toHaveLength(0);
+    expect(outOutput()).toBe("");
+    const errText = errOutput();
+    expect(errText).toContain("harness policy intercept: no policy matched event");
+    expect(errText).toContain("hook_event_name=(missing)");
+    expect(errText).toContain('tool_name="mcp__agent-tasks__pull_requests_merge"');
+    expect(errText).toContain("registered policy events: PreToolUse");
+  });
+
+  it("emits a stderr no-match hint when hook_event_name does not match any policy", async () => {
+    const { stream: err, output: errOutput } = captureStream();
+    const { stream: out } = captureStream();
+    await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          session_id: "sess-1",
+          hook_event_name: "Stop",
+          tool_name: "anything",
+        }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([REVIEW_POLICY]),
+    });
+    const errText = errOutput();
+    expect(errText).toContain('hook_event_name="Stop"');
+    expect(errText).toContain("registered policy events: PreToolUse");
+  });
+
+  it("does NOT emit a no-match hint when at least one policy matched", async () => {
+    const ledger: LedgerClient = {
+      async query() {
+        return { kind: "ok", entries: [] };
+      },
+      async record() {
+        /* no-op */
+      },
+    };
+    const { stream: err, output: errOutput } = captureStream();
+    const { stream: out } = captureStream();
+    await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "mcp__agent-tasks__pull_requests_merge",
+          tool_input: { prNumber: 42 },
+          session_id: "sess-1",
+        }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([REVIEW_POLICY]),
+      ledger,
+    });
+    expect(errOutput()).not.toContain("no policy matched event");
+  });
+
+  it("does NOT emit a no-match hint when the manifest has zero policies", async () => {
+    const { stream: err, output: errOutput } = captureStream();
+    const { stream: out } = captureStream();
+    await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "mcp__agent-tasks__pull_requests_merge",
+        }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([]),
+    });
+    expect(errOutput()).toBe("");
   });
 });
 
