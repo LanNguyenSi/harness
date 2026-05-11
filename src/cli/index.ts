@@ -1213,7 +1213,10 @@ export function buildProgram(opts: RunOptions = {}): Command {
   policy
     .command("intercept")
     .description(
-      "PreToolUse hook entrypoint: read tool-event JSON from stdin, evaluate matching policies, emit Claude Code deny JSON on block",
+      "PreToolUse hook entrypoint: read tool-event JSON from stdin, evaluate matching policies, emit Claude Code deny JSON on block. " +
+        "Stdin shape (per Claude Code hook protocol): " +
+        "{ session_id, hook_event_name, tool_name, tool_input, cwd?, transcript_path? }. " +
+        "hook_event_name is required for any policy to match; if missing or unmatched, a one-line diagnostic is written to stderr.",
     )
     .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- `harness policy intercept` now writes a one-line stderr diagnostic
+  when the manifest has policies but none of them matched the inbound
+  event, e.g. `no policy matched event hook_event_name=(missing)
+  tool_name="..." (registered policy events: PreToolUse). If probing
+  by hand, ensure stdin includes hook_event_name (...).`. Previously
+  the engine exited 0 with empty stdout in that case, so an operator
+  hand-probing the CLI without `hook_event_name` saw what looked like
+  "the policy did not load" while the real cause was just a stripped
+  trigger field. The hint fires unconditionally (not gated on
+  `--verbose`) and stdout is unchanged, so the Claude Code hook
+  contract is preserved. Also extends the `harness policy intercept`
+  command help with the documented stdin shape so the next operator
+  does not have to source-dive. (Tracked as `harness#4fef0e1f`.)
+
 ### Fixed
 
 - `harness policy intercept` now emits a Claude Code hook output that
