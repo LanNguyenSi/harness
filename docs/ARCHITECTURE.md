@@ -230,7 +230,7 @@ Blocking semantics, three levels:
 
 - **`false`** (non-blocking): hook may inject `additionalContext` via stdout-JSON but the tool call always proceeds. Default choice when the hook's job is to inform.
 - **`soft`**: hook may warn; agent sees the warning but the tool call still proceeds. For patterns like "you probably shouldn't `rm -rf` here" that have legitimate exceptions.
-- **`hard`**: hook's non-zero exit or explicit `decision: deny` aborts the tool call. Reserved for cases where false positives are tolerable — e.g. review-evidence-gate, dogfood-trace-gate.
+- **`hard`**: hook's non-zero exit or explicit `decision: "block"` (with `hookSpecificOutput.permissionDecision: "deny"` for PreToolUse, per Claude Code 2.1+) aborts the tool call. Reserved for cases where false positives are tolerable — e.g. review-evidence-gate, dogfood-trace-gate.
 
 Pick the softest level that solves the problem. Hard-blocking is a commitment that false positives will not happen under reasonable inputs; if you're not sure, start at `soft` and promote.
 

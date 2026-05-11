@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-05-11
+
+**Headline: policy-pack enforcement actually blocks now.** 0.8.0 shipped
+the runtime intercept, the ledger plumbing, and the manifest schema, but
+the deny path was effectively observability-only: Claude Code never
+honoured the hook output shape harness emitted, so a denied tool call
+proceeded to the MCP transport and only failed at the downstream
+service. Live verification on 2026-05-11 against
+`mcp__agent-tasks__pull_requests_merge` with no matching
+`review:${PR_NUMBER}` ledger entry confirmed the new build is refused
+at the hook layer, before reaching agent-tasks. Operators on 0.8.0
+should upgrade.
+
 ### Changed
 
 - `harness policy intercept` now writes a one-line stderr diagnostic

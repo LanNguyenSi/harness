@@ -196,7 +196,7 @@ tools:
         "--shallow",
       ]);
       expect(r.code).toBe(0);
-      expect(r.stdout).toMatch(/^harness 0\.8\.0/);
+      expect(r.stdout).toMatch(/^harness 0\.8\.1/);
       expect(r.stdout).toContain("Manifest");
       expect(r.stdout).toContain("Tools");
       expect(r.stdout).toContain("Memory");
