@@ -109,13 +109,25 @@ policies:
 
 ```bash
 harness apply --target ~/.claude/settings.json --merge
-# → applied 0 file(s):
-#   merged into ~/.claude/settings.json: replaced 1 owned key (hooks), preserved 6 other keys
-#   harness.lock written to ~/.claude/harness.lock
-#   restart hint: mcp servers changed; /mcp reconnect required
 ```
 
-`permissions`, `enabledPlugins`, `effortLevel`, `skipDangerousModePermissionPrompt`, `bypassPermissions`, and `env` were preserved verbatim. Only `hooks` was rewritten, and `mcpServers` added.
+Stdout against a fresh target (the apply is idempotent, so re-applying after this prints `no changes`):
+
+```
+applied 0 file(s):
+merged into ~/.claude/settings.json: replaced 1 owned key (hooks), added 1 (mcpServers), preserved 6 other keys
+harness.lock written to ~/.claude/harness.lock
+
+wired into ~/.claude/settings.json
+verify: claude -p "say hi" --settings ~/.claude/settings.json --output-format stream-json --include-hook-events
+```
+
+`permissions`, `enabledPlugins`, `effortLevel`, `skipDangerousModePermissionPrompt`, `bypassPermissions`, and `env` were preserved verbatim. `hooks` was rewritten wholesale, `mcpServers` was added. Two further files were written next to the manifest as the rendered baseline, useful for `harness diff --since-apply` later:
+
+- `~/.claude/harness.generated/settings.json`
+- `~/.claude/harness.generated/MEMORY.md`
+
+When subsequent applies change which MCP servers are declared, harness prints a `restart hint: mcp servers changed; /mcp reconnect required` line to stderr. The first apply on a clean target does not emit that hint.
 
 ## Dogfood probe
 
@@ -128,14 +140,16 @@ echo '{"hook_event_name":"PreToolUse","session_id":"default","tool_name":"mcp__a
 # → {"decision":"deny","reason":"review-before-merge: no matching ledger entry for tag `review:99`"}
 
 # Add a ledger entry for PR 99
-# (via mcp__agent-grounding__ledger_add — sessionId="default", content includes "review:99")
+# (via mcp__agent-grounding__ledger_add, sessionId="default", content includes "review:99")
 
 # Probe B: PR 99, ledger entry present → must allow
-echo '...prNumber":99}}' | harness policy intercept
+echo '{"hook_event_name":"PreToolUse","session_id":"default","tool_name":"mcp__agent-tasks__pull_requests_merge","tool_input":{"prNumber":99}}' \
+  | harness policy intercept
 # → (empty stdout, exit 0)
 
 # Probe C: PR 100, no ledger entry for 100 → must still deny (cross-PR isolation)
-echo '...prNumber":100}}' | harness policy intercept
+echo '{"hook_event_name":"PreToolUse","session_id":"default","tool_name":"mcp__agent-tasks__pull_requests_merge","tool_input":{"prNumber":100}}' \
+  | harness policy intercept
 # → {"decision":"deny","reason":"review-before-merge: no matching ledger entry for tag `review:100`"}
 ```
 
