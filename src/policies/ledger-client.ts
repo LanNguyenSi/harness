@@ -150,7 +150,7 @@ interface CallResult {
   child: ChildProcessWithoutNullStreams;
   stderrBuf: { value: string };
   pending: Map<number, PendingResponse>;
-  /** Sends a JSON-RPC request; resolves on response, "exit", or "timeout". */
+  /** Sends a JSON-RPC request; resolves on response, child close, or timeout. */
   call: (
     id: number,
     method: string,
@@ -192,6 +192,7 @@ function startSubprocess(
   const stderrBuf = { value: "" };
   let stdoutBuf = "";
   let processExited = false;
+  let processClosed = false;
   let exitCode: number | null = null;
   let exitSignal: NodeJS.Signals | null = null;
   const pending = new Map<number, PendingResponse>();
@@ -201,17 +202,28 @@ function startSubprocess(
     stderrBuf.value += chunk.toString("utf8");
   });
   child.stdin.on("error", () => {
-    /* EPIPE on shutdown; surfaced via the exit listener. */
+    /* EPIPE on shutdown; surfaced via the close listener. */
   });
   let spawnError: Error | null = null;
   child.on("error", (err: Error) => {
+    // Spawn failure (ENOENT etc.). Setting `processClosed = true` is safe
+    // because the child never executed, so there is no stdio buffer to drain;
+    // the exit-promise short-circuit reaches `exitDiagnostic` and reports the
+    // spawn error directly.
     spawnError = err;
     processExited = true;
+    processClosed = true;
   });
   child.on("exit", (code, signal) => {
     processExited = true;
     exitCode = code;
     exitSignal = signal;
+  });
+  child.on("close", () => {
+    // Node fires `close` only after every stdio pipe has drained. Racing
+    // on `exit` would surface `(no stderr)` whenever the kernel buffer
+    // hadn't been flushed yet, which is the symptom the v0.8.1 review caught.
+    processClosed = true;
   });
   child.stdout.on("data", (chunk: Buffer) => {
     stdoutBuf += chunk.toString("utf8");
@@ -238,12 +250,12 @@ function startSubprocess(
   });
 
   const exitPromise = new Promise<"exit">((resolve) => {
-    if (processExited) {
+    if (processClosed) {
       resolve("exit");
       return;
     }
     const done = (): void => resolve("exit");
-    child.once("exit", done);
+    child.once("close", done);
     child.once("error", done);
   });
 
