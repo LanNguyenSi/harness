@@ -27,13 +27,28 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runInterceptCli } from "../../src/cli/policy/intercept.js";
 
 let cleanups: Array<() => void> = [];
+let savedVerboseEnv: string | undefined;
+
+beforeEach(() => {
+  // Strip HARNESS_POLICY_VERBOSE so `expect(stderr).toBe("")` assertions
+  // hold deterministically. Mirrors the sibling unit suite at
+  // `tests/runtime/intercept-cli.test.ts`.
+  savedVerboseEnv = process.env.HARNESS_POLICY_VERBOSE;
+  delete process.env.HARNESS_POLICY_VERBOSE;
+});
+
 afterEach(() => {
   for (const c of cleanups) c();
   cleanups = [];
+  if (savedVerboseEnv === undefined) {
+    delete process.env.HARNESS_POLICY_VERBOSE;
+  } else {
+    process.env.HARNESS_POLICY_VERBOSE = savedVerboseEnv;
+  }
 });
 
 function makeTmpDir(prefix: string): string {
@@ -94,6 +109,12 @@ process.stdin.on("data", (d) => {
     try { msg = JSON.parse(line); } catch { nl = buf.indexOf("\\n"); continue; }
     if (msg.method === "initialize") {
       process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\\n");
+    } else if (msg.method === "tools/list") {
+      // Forward-compat: queryLedgerByTag only calls tools/list when a
+      // sinceIso/contentPrefix filter is requested. Responding with an
+      // empty tools array keeps the fake honest if a future caller flips
+      // that on, instead of hanging on the 5s detect-timeout.
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { tools: [] } }) + "\\n");
     } else if (msg.method === "tools/call" && msg.params) {
       const toolName = msg.params.name;
       if (INVOCATION_LOG) {
@@ -111,6 +132,12 @@ process.stdin.on("data", (d) => {
         // record itself is not under test here; we just need the round-trip
         // to complete.
         process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: '{"ok":true}' }] } }) + "\\n");
+      } else {
+        // Unknown tools/call name: reply with a JSON-RPC error rather than
+        // hanging. The caller's "ledger_summary error: ..." degraded path
+        // is preferable to a silent 5s timeout if a future revision adds
+        // a new verb we haven't mocked.
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "unknown tool: " + toolName } }) + "\\n");
       }
     }
     nl = buf.indexOf("\\n");
@@ -225,6 +252,7 @@ describe("policy intercept: manifest-driven E2E flow", () => {
 
     expect(result.blocked).toBe(true);
     expect(result.exitCode).toBe(0);
+    expect(result.decisions).toHaveLength(1);
     expect(stderrOut()).toBe("");
     const parsed = JSON.parse(stdoutOut().trim());
     // PR #81: top-level `decision:"block"` AND
@@ -319,6 +347,12 @@ describe("policy intercept: manifest-driven E2E flow", () => {
     // The policy's `requires.ledger_tag` substitution should reach the
     // ledger client and the active session id should land server-side.
     expect(summaries[0].args.sessionId).toBe("e2e-sess-1");
+    // The deny path also exercises recordPolicyDecision, which spawns the
+    // ledger again and calls ledger_add. Asserting it fired covers the
+    // second half of the manifest-to-real-spawn coverage gap.
+    const adds = calls.filter((c) => c.tool === "ledger_add");
+    expect(adds.length).toBeGreaterThanOrEqual(1);
+    expect(adds[0].args.sessionId).toBe("e2e-sess-1");
   });
 
   it("emits the PR #82 stderr no-match hint when hook_event_name is missing", async () => {
@@ -379,6 +413,12 @@ describe("policy intercept: manifest-driven E2E flow", () => {
     expect(result.exitCode).toBe(0);
     expect(result.blocked).toBe(false);
     expect(stdoutOut()).toBe("");
+    expect(result.decisions).toHaveLength(1);
     expect(result.decisions[0]?.outcome).toBe("warn-degraded");
+    // Anchor on the ledger-unreachable branch specifically. A regression
+    // that silently routed warn-degraded through template-unresolved or
+    // requires-eval-threw would still match outcome="warn-degraded";
+    // the reason string is what pins us to the spawn-failure branch.
+    expect(result.decisions[0]?.reason).toMatch(/grounding-mcp/);
   });
 });
