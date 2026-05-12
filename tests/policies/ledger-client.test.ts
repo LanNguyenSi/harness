@@ -213,6 +213,27 @@ describe("queryLedgerByTag", () => {
     }
   });
 
+  it("captures stderr deterministically across 20 repeats (was flaky pre-close-event fix)", async () => {
+    // Regression net for the race where `exit` fired before stderr drained,
+    // surfacing `(no stderr)` instead of the last stderr line. The fix races
+    // on `close` (guaranteed post-stdio-drain) rather than `exit`. Twenty
+    // serial iterations make the race window cumulative enough to catch a
+    // re-regression without ballooning suite time.
+    for (let i = 0; i < 20; i++) {
+      const script = makeScript("#!/bin/sh\necho 'ledger db missing' >&2\nexit 2\n");
+      const result = await queryLedgerByTag({
+        mcpCommand: [script],
+        sessionId: "sess-1",
+        timeoutMs: 2000,
+      });
+      expect(result.kind).toBe("degraded");
+      if (result.kind === "degraded") {
+        expect(result.reason, `iteration ${i}`).toContain("ledger db missing");
+        expect(result.reason, `iteration ${i}`).toMatch(/exit 2/);
+      }
+    }
+  });
+
   describe("Phase 5 #4: policy_decision bucket flattening", () => {
     it("flattens the policyDecisions bucket and tags entries with type='policy_decision'", async () => {
       const script = makeScript(
