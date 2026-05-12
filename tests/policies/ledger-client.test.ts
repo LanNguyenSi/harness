@@ -219,8 +219,8 @@ describe("queryLedgerByTag", () => {
     // on `close` (guaranteed post-stdio-drain) rather than `exit`. Twenty
     // serial iterations make the race window cumulative enough to catch a
     // re-regression without ballooning suite time.
+    const script = makeScript("#!/bin/sh\necho 'ledger db missing' >&2\nexit 2\n");
     for (let i = 0; i < 20; i++) {
-      const script = makeScript("#!/bin/sh\necho 'ledger db missing' >&2\nexit 2\n");
       const result = await queryLedgerByTag({
         mcpCommand: [script],
         sessionId: "sess-1",

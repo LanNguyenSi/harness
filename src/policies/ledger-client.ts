@@ -150,7 +150,7 @@ interface CallResult {
   child: ChildProcessWithoutNullStreams;
   stderrBuf: { value: string };
   pending: Map<number, PendingResponse>;
-  /** Sends a JSON-RPC request; resolves on response, "exit", or "timeout". */
+  /** Sends a JSON-RPC request; resolves on response, child close, or timeout. */
   call: (
     id: number,
     method: string,
@@ -206,6 +206,10 @@ function startSubprocess(
   });
   let spawnError: Error | null = null;
   child.on("error", (err: Error) => {
+    // Spawn failure (ENOENT etc.). Setting `processClosed = true` is safe
+    // because the child never executed, so there is no stdio buffer to drain;
+    // the exit-promise short-circuit reaches `exitDiagnostic` and reports the
+    // spawn error directly.
     spawnError = err;
     processExited = true;
     processClosed = true;
