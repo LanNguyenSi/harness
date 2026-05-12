@@ -25,7 +25,12 @@ export interface RunClaudeOptions {
   outputDir: string;
   /** Hard wall-clock budget. Hitting it kills claude and resolves the run. */
   timeoutMs: number;
-  /** Extra env merged onto process.env. Always overrides HARNESS_POLICY_VERBOSE. */
+  /**
+   * Extra env merged onto process.env. `HARNESS_POLICY_VERBOSE=1` is
+   * baked in BEFORE this map, so an operator who explicitly passes
+   * `HARNESS_POLICY_VERBOSE=0` in `env` wins. (The verb sets the verbose
+   * default because `--expect-decision warn` reads the stderr diagnostic.)
+   */
   env?: Record<string, string>;
   /**
    * Test-injectable spawn. Defaults to node:child_process.spawn. The
@@ -121,16 +126,40 @@ export async function runClaude(
     stderrWriter.write(chunk);
   });
 
+  // Both timers are captured in scope so the close-listener can clear
+  // them when claude exits before the budget. Without that, every fast
+  // smoke run leaked an `unref`'d setTimeout pair that fires on a dead
+  // PID minutes later, a non-issue at process exit but visible noise in
+  // a long-lived parent (e.g. vitest batches).
+  let outerTimer: NodeJS.Timeout | null = null;
+  let killTimer: NodeJS.Timeout | null = null;
+  const clearTimers = (): void => {
+    if (outerTimer) {
+      clearTimeout(outerTimer);
+      outerTimer = null;
+    }
+    if (killTimer) {
+      clearTimeout(killTimer);
+      killTimer = null;
+    }
+  };
+
   const exitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
     (resolve) => {
-      child.once("close", (code, signal) => resolve({ code, signal }));
-      child.once("error", () => resolve({ code: null, signal: null }));
+      child.once("close", (code, signal) => {
+        clearTimers();
+        resolve({ code, signal });
+      });
+      child.once("error", () => {
+        clearTimers();
+        resolve({ code: null, signal: null });
+      });
     },
   );
 
   const timeoutPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
     (resolve) => {
-      const t = setTimeout(() => {
+      outerTimer = setTimeout(() => {
         timedOut = true;
         try {
           child.kill("SIGTERM");
@@ -139,22 +168,24 @@ export async function runClaude(
         }
         // SIGKILL escalation after a short grace period so a wedged
         // claude does not hang the runner past `timeoutMs + epsilon`.
-        setTimeout(() => {
+        killTimer = setTimeout(() => {
           try {
             child.kill("SIGKILL");
           } catch {
             /* already gone */
           }
-        }, 2000).unref();
+        }, 2000);
+        killTimer.unref();
         // Hand the resolved value over to the race; the close listener
         // will land its own value first when the child exits cleanly.
         exitPromise.then(resolve);
       }, opts.timeoutMs);
-      t.unref();
+      outerTimer.unref();
     },
   );
 
   const { code, signal } = await Promise.race([exitPromise, timeoutPromise]);
+  clearTimers();
 
   // Flush writers before returning so a caller that re-reads the files
   // sees the same bytes the in-memory text holds.

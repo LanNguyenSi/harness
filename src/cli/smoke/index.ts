@@ -154,7 +154,22 @@ export async function runSmoke(opts: SmokeOptions): Promise<SmokeResult> {
   };
   if (opts.configPath) applyOpts.configPath = opts.configPath;
   if (opts.project) applyOpts.project = opts.project;
-  await applyImpl(applyOpts);
+  const applyResult = await applyImpl(applyOpts);
+  // `apply` can return a refusal outcome without throwing. Without this
+  // guard a stale generated/ dir or an unresolved --target conflict
+  // silently lets smoke run claude against the OLD settings, which then
+  // looks green for the wrong reason. Fail loud instead.
+  const REFUSAL_OUTCOMES = new Set([
+    "drift-refuse",
+    "lock-drift-refuse",
+    "target-exists-refuse",
+  ]);
+  if (REFUSAL_OUTCOMES.has(applyResult.outcome)) {
+    throw new HarnessExitError(
+      `harness smoke: apply refused with outcome="${applyResult.outcome}"; resolve drift before re-running`,
+      EX_FAIL,
+    );
+  }
 
   const sessionId = opts.sessionId ?? randomUUID();
   const timeoutMs = opts.timeoutMs ?? 60_000;
@@ -184,13 +199,33 @@ export async function runSmoke(opts: SmokeOptions): Promise<SmokeResult> {
   const failures = evaluateExpectations(summary, opts.expectations ?? {});
 
   // Even if the user passed no expectations, surface a timeout or a
-  // non-zero claude exit as a failure so green-or-red is unambiguous.
+  // claude crash as a failure so green-or-red is unambiguous.
   if (failures.length === 0 && runResult.timedOut) {
     failures.push({
       kind: "expect-exit",
       expected: "claude completes before timeout",
       actual: `claude killed after ${timeoutMs}ms`,
       detail: `harness smoke: claude exceeded the ${timeoutMs}ms budget and was SIGTERM'd. Stream may be truncated.`,
+    });
+  }
+  // Claude crashed before emitting a terminal result event AND exited
+  // non-zero. Without an --expect-exit assertion this would silently
+  // pass; treat it as an implicit miss so the operator never sees
+  // green on a broken-pipe / ENOENT-after-spawn / abort-during-init.
+  if (
+    failures.length === 0 &&
+    !runResult.timedOut &&
+    runResult.exitCode !== null &&
+    runResult.exitCode !== 0 &&
+    summary.result === null
+  ) {
+    failures.push({
+      kind: "expect-exit",
+      expected: "claude emits a terminal result event",
+      actual: `claude exited ${runResult.exitCode} without a terminal result event`,
+      detail:
+        `harness smoke: claude exited ${runResult.exitCode} and the stream carries ` +
+        "no terminal `result` event. Treating as implicit failure; check stderr.log for forensics.",
     });
   }
 

@@ -88,6 +88,14 @@ export function classifyDecision(
   }
   // Heuristic: any PreToolUse hook is potentially policy-driven. If
   // there are no PreToolUse hooks at all, decision is N/A.
+  //
+  // Known false-positive: a manifest can wire non-policy PreToolUse
+  // hooks (audit/logging shims) alongside `harness policy intercept`.
+  // If only the non-policy hook fired and no policy was evaluated at
+  // all, this still classifies as `allow`. Operators chasing the
+  // policy-bypass case should pair `--expect-decision deny` with a
+  // prompt that is known to trigger the policy's tool matcher, so the
+  // assertion fails loudly on a missing fire.
   const sawPreToolUse = hooks.some(
     (h) => h.hookEvent === "PreToolUse" || h.hookName === "PreToolUse",
   );

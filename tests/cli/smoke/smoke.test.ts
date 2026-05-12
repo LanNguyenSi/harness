@@ -306,6 +306,121 @@ describe("runSmoke: timeout", () => {
     // Should kill well before the fake's 2s sleep; allow generous slack for CI.
     expect(elapsed).toBeLessThan(1500);
   });
+
+  it("escalates to SIGKILL when the child traps SIGTERM", async () => {
+    const outputDir = makeTmpDir("smoke-sigkill-");
+    // Fake claude that explicitly ignores SIGTERM and sleeps long enough
+    // that the runner's 2s grace before SIGKILL is exercised end-to-end.
+    const dir = makeTmpDir("fake-trap-claude-");
+    const claudePath = path.join(dir, "claude");
+    fs.writeFileSync(
+      claudePath,
+      `#!/usr/bin/env node
+process.on("SIGTERM", () => { /* swallow on purpose */ });
+// Stay alive long past timeoutMs + SIGKILL grace so a missing SIGKILL
+// would hang the run far past the wall-clock budget we assert on.
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+    fs.chmodSync(claudePath, 0o755);
+
+    const start = Date.now();
+    const result = await runSmoke({
+      prompt: "x",
+      outputDir,
+      claudeBin: claudePath,
+      applyImpl: stubApply(),
+      timeoutMs: 200,
+    });
+    const elapsed = Date.now() - start;
+    expect(result.claudeTimedOut).toBe(true);
+    expect(result.exitCode).toBe(1);
+    // 200ms budget + 2000ms grace + epsilon. Slack is generous for CI.
+    expect(elapsed).toBeGreaterThanOrEqual(2000);
+    expect(elapsed).toBeLessThan(4500);
+  });
+});
+
+describe("runSmoke: implicit failure on claude crash without terminal result", () => {
+  it("returns EX_FAIL when claude exits non-zero with no result event, even without --expect-* flags", async () => {
+    const outputDir = makeTmpDir("smoke-crash-");
+    // Stream carries an init event but no terminal result; exit code !=0.
+    const claude = makeFakeClaude({
+      stdout: `${INIT}\n`,
+      exit: 7,
+    });
+    const result = await runSmoke({
+      prompt: "x",
+      outputDir,
+      claudeBin: claude,
+      applyImpl: stubApply(),
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]?.kind).toBe("expect-exit");
+    expect(result.failures[0]?.actual).toContain("exited 7");
+  });
+
+  it("stays green when claude exits non-zero BUT a terminal result event is present", async () => {
+    // Some claude builds may exit non-zero after emitting a result event
+    // (e.g. on a non-fatal post-result error). If the operator did not
+    // pass --expect-exit, we honour the stream's verdict, not the OS
+    // exit code, so we don't double-flag.
+    const outputDir = makeTmpDir("smoke-nonzero-ok-");
+    const claude = makeFakeClaude({
+      stdout: `${INIT}\n${RESULT_OK}\n`,
+      exit: 3,
+    });
+    const result = await runSmoke({
+      prompt: "x",
+      outputDir,
+      claudeBin: claude,
+      applyImpl: stubApply(),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.failures).toEqual([]);
+  });
+});
+
+describe("runSmoke: apply refusal", () => {
+  it("returns EX_FAIL when apply reports a drift-refuse outcome", async () => {
+    const outputDir = makeTmpDir("smoke-drift-");
+    const claude = makeFakeClaude({ stdout: `${RESULT_OK}\n` });
+
+    const refusingApply: NonNullable<Parameters<typeof runSmoke>[0]["applyImpl"]> = (async (
+      opts: { target?: string },
+    ) => {
+      if (opts.target) {
+        fs.mkdirSync(path.dirname(opts.target), { recursive: true });
+        fs.writeFileSync(opts.target, '{"hooks":{}}', "utf8");
+      }
+      return {
+        manifestPath: "",
+        generatedDir: "",
+        files: [],
+        warnings: [],
+        restartHints: [],
+        lockDrift: [],
+        outcome: "drift-refuse" as const,
+        written: false,
+        dryRun: false,
+        lockPath: "",
+      } as unknown as Awaited<ReturnType<NonNullable<Parameters<typeof runSmoke>[0]["applyImpl"]>>>;
+    }) as NonNullable<Parameters<typeof runSmoke>[0]["applyImpl"]>;
+
+    await expect(
+      runSmoke({
+        prompt: "x",
+        outputDir,
+        claudeBin: claude,
+        applyImpl: refusingApply,
+      }),
+    ).rejects.toMatchObject({
+      name: "HarnessExitError",
+      message: expect.stringContaining("drift-refuse"),
+    });
+  });
 });
 
 describe("runSmoke: HARNESS_POLICY_VERBOSE injection", () => {
