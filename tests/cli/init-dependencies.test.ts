@@ -44,12 +44,15 @@ describe("dependenciesForProfile — chain composition", () => {
     expect(new Set(bins).size).toBe(bins.length);
   });
 
-  it("full inherits team + adds codebase-oracle", () => {
-    const deps = dependenciesForProfile("full");
-    const bins = deps.map((d) => d.binary);
-    expect(bins).toContain("codebase-oracle");
-    expect(bins).toContain("agent-tasks-mcp-bridge");
-    expect(bins).toContain("memory-router-user-prompt-submit");
+  it("full inherits the team chain unchanged (no extra Full-only npm deps)", () => {
+    // Full ships extra policies and skills, but the binary dependencies
+    // are the same set as Team: the Pandora-only `codebase-oracle` MCP
+    // server is not yet published under a non-colliding npm name, so it
+    // is not declared in the dependency chain.
+    const fullBins = dependenciesForProfile("full").map((d) => d.binary);
+    const teamBins = dependenciesForProfile("team").map((d) => d.binary);
+    expect(fullBins).toEqual(teamBins);
+    expect(fullBins).not.toContain("codebase-oracle");
   });
 });
 

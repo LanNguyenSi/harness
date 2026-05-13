@@ -115,6 +115,42 @@ describe("inspectMemory: directory + router resolution", () => {
     expect(report.routerExecutable).not.toBeNull();
     expect(report.routerExecutable!.exists).toBe(false);
   });
+
+  it("resolves a bare bin name through PATH (bin-shaped manifests, not just file paths)", () => {
+    // Drop a stub binary into a tmp dir, point PATH at it, and assert
+    // the router probe finds it. Locks the contract that a manifest
+    // shipping `command: [memory-router-user-prompt-submit]` (the
+    // published bin shape) reads as installed.
+    const home = makeTmpHome();
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "memprobe-bin-"));
+    try {
+      const binPath = path.join(binDir, "memory-router-user-prompt-submit");
+      fs.writeFileSync(binPath, "#!/bin/sh\nexit 0\n");
+      fs.chmodSync(binPath, 0o755);
+      const manifest = manifestFor({
+        directories: [{ path: "~/", scope: "user" }],
+        router: { command: ["memory-router-user-prompt-submit"] },
+      });
+      const report = inspectMemory(manifest, { homeDir: home, pathEnv: binDir });
+      expect(report.routerExecutable).not.toBeNull();
+      expect(report.routerExecutable!.path).toBe(binPath);
+      expect(report.routerExecutable!.exists).toBe(true);
+    } finally {
+      fs.rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports routerExecutable.exists=false for a bare bin name absent from PATH", () => {
+    const home = makeTmpHome();
+    const manifest = manifestFor({
+      directories: [{ path: "~/", scope: "user" }],
+      router: { command: ["no-such-router-bin"] },
+    });
+    const report = inspectMemory(manifest, { homeDir: home, pathEnv: "/nonexistent" });
+    expect(report.routerExecutable).not.toBeNull();
+    expect(report.routerExecutable!.path).toBe("no-such-router-bin");
+    expect(report.routerExecutable!.exists).toBe(false);
+  });
 });
 
 describe("inspectMemory: staleness + recursion-error catch", () => {

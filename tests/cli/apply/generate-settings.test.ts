@@ -138,6 +138,76 @@ describe("generateSettings", () => {
     expect(preToolUse[1]?.matcher).toBe("Edit");
   });
 
+  it("dedupes identical (command, timeout) pairs inside one matcher group", () => {
+    // The full template wires every PreToolUse policy to the same
+    // `harness policy intercept` engine; several of those share the
+    // Bash matcher. Claude Code spawns each entry in hooks[] for the
+    // same event, so emitting duplicates burns CPU on identical
+    // ledger queries. Lock the dedupe contract: identical
+    // (command, timeout) tuples collapse to one entry per group.
+    const m = manifestOf([
+      {
+        name: "dogfood",
+        event: "PreToolUse",
+        match: "Bash",
+        bash_match: "^(npm publish|git tag v.*)",
+        command: "harness policy intercept",
+        blocking: "hard",
+        budget_ms: 2000,
+      },
+      {
+        name: "preflight-read",
+        event: "PreToolUse",
+        match: "Bash",
+        bash_match: "^git (status|log|diff|branch)",
+        command: "harness policy intercept",
+        blocking: "hard",
+        budget_ms: 2000,
+      },
+      {
+        name: "preflight-push",
+        event: "PreToolUse",
+        match: "Bash",
+        bash_match: "^git push",
+        command: "harness policy intercept",
+        blocking: "hard",
+        budget_ms: 2000,
+      },
+    ]);
+    const out = generateSettings(m);
+    const bashGroup = out.hooks.PreToolUse?.find((g) => g.matcher === "Bash");
+    expect(bashGroup).toBeDefined();
+    expect(bashGroup?.hooks).toHaveLength(1);
+    expect(bashGroup?.hooks[0]?.command).toBe("harness policy intercept");
+  });
+
+  it("does NOT dedupe across distinct timeouts (different policies, different budgets)", () => {
+    // Same matcher + same command but different timeout means the
+    // operator wanted distinct enforcement budgets; we must NOT collapse.
+    const m = manifestOf([
+      {
+        name: "fast",
+        event: "PreToolUse",
+        match: "Bash",
+        command: "harness policy intercept",
+        blocking: "hard",
+        budget_ms: 1000,
+      },
+      {
+        name: "slow",
+        event: "PreToolUse",
+        match: "Bash",
+        command: "harness policy intercept",
+        blocking: "hard",
+        budget_ms: 5000,
+      },
+    ]);
+    const out = generateSettings(m);
+    const bashGroup = out.hooks.PreToolUse?.find((g) => g.matcher === "Bash");
+    expect(bashGroup?.hooks).toHaveLength(2);
+    expect(bashGroup?.hooks.map((h) => h.timeout).sort()).toEqual([1000, 5000]);
+  });
+
   it("emits one event key per distinct event with the right matcher/command tuples", () => {
     const m = manifestOf([
       {

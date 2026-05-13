@@ -412,73 +412,42 @@ describe("interactive wizard — dependency install", () => {
 });
 
 describe("interactive wizard — Full profile", () => {
-  it("requires explicit hook-script disclaimer before writing the full manifest", async () => {
-    fs.mkdirSync(path.join(tmpHome, ".claude"));
-    const cap = captureStreams();
-    // Mock everything present + fake spawn so the dep step is a no-op on
-    // hosts that DO miss codebase-oracle. Without the PATH override the
-    // dep check would also prompt and the confirm-queue length would
-    // depend on which dev's machine ran the test.
-    const tmpBin = fs.mkdtempSync(path.join(os.tmpdir(), "harness-deps-present-"));
-    try {
-      for (const bin of [
-        "memory-router-user-prompt-submit",
-        "understanding-gate-claude-hook",
-        "understanding-gate-claude-stop",
-        "agent-tasks-mcp-bridge",
-        "grounding-mcp",
-        "codebase-oracle",
-      ]) {
-        const p = path.join(tmpBin, bin);
-        fs.writeFileSync(p, "#!/bin/sh\n");
-        fs.chmodSync(p, 0o755);
-      }
-      const result = await runInteractive({
-        homeDir: tmpHome,
-        dependencyPathEnv: tmpBin,
-        prompts: mockPrompts({
-          select: ["full"],
-          input: ["~/.claude/projects/{project}/memory"],
-          confirm: [
-            true, // accept hook-script disclaimer
-            true, // proceed despite missing agent-tasks in settings.json
-            true, // write manifest
-            false, // decline wire-now (Full's hooks would fail apply anyway)
-          ],
-        }),
-        stdout: cap.out,
-        stderr: cap.err,
-      });
-      expect(result.aborted).toBe(false);
-      expect(result.profile).toBe("full");
-      expect(fs.existsSync(path.join(tmpHome, ".claude", "harness.yaml"))).toBe(true);
-      const content = fs.readFileSync(path.join(tmpHome, ".claude", "harness.yaml"), "utf8");
-      // Full template carries the additional reference policies that
-      // Team does not ship.
-      expect(content).toContain("review-before-merge");
-      expect(content).toContain("dogfood-before-release");
-      expect(content).toContain("preflight-before-investigation");
-    } finally {
-      fs.rmSync(tmpBin, { recursive: true, force: true });
-    }
-  });
-
-  it("aborts when the operator declines the Full disclaimer", async () => {
+  it("writes a self-contained full manifest with no external hook scripts", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
     const cap = captureStreams();
     const result = await runInteractive({
       homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
       prompts: mockPrompts({
         select: ["full"],
-        confirm: [false], // decline disclaimer
+        input: ["~/.claude/projects/{project}/memory"],
+        confirm: [
+          true, // proceed despite missing agent-tasks in settings.json
+          true, // write manifest
+          false, // decline wire-now (no real bridge to talk to in this test)
+        ],
       }),
       stdout: cap.out,
       stderr: cap.err,
     });
-    expect(result.aborted).toBe(true);
+    expect(result.aborted).toBe(false);
     expect(result.profile).toBe("full");
-    expect(cap.stderr()).toMatch(/hook scripts must be authored before adoption/);
-    expect(fs.existsSync(path.join(tmpHome, ".claude", "harness.yaml"))).toBe(false);
+    expect(fs.existsSync(path.join(tmpHome, ".claude", "harness.yaml"))).toBe(true);
+    const content = fs.readFileSync(path.join(tmpHome, ".claude", "harness.yaml"), "utf8");
+    // Full template carries the additional reference policies that
+    // Team does not ship.
+    expect(content).toContain("review-before-merge");
+    expect(content).toContain("dogfood-before-release");
+    expect(content).toContain("preflight-before-investigation");
+    // Regression guard: every hook in Full now uses the bundled
+    // `harness policy intercept` engine. No hook's `command:` field
+    // may reference an external .sh script.
+    expect(content).not.toMatch(/^\s*command:.*\.sh\b/m);
+    // The Glob + Grep builtins should be listed so doctor stops
+    // emitting the spurious "runtime advertises X but manifest does not
+    // list it" warnings.
+    expect(content).toContain("Glob");
+    expect(content).toContain("Grep");
   });
 });
 
