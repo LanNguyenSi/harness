@@ -27,6 +27,7 @@ import { format as formatDoctor } from "./doctor/format.js";
 import type { DoctorTarget } from "./doctor/types.js";
 import { EX_FAIL, EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { explain } from "./explain.js";
+import { detect as detectInit } from "./init/detect.js";
 import { init, isTemplate, KNOWN_TEMPLATES } from "./init/index.js";
 import { isListCategory, list, type ListCategory } from "./list.js";
 import { audit, type AuditOutcome } from "./audit.js";
@@ -270,21 +271,43 @@ export function buildProgram(opts: RunOptions = {}): Command {
       "--config <path>",
       "manifest path to write (default: ~/.claude/harness.yaml)",
     )
-    .action(async (options: { template?: string; force?: boolean; config?: string }) => {
-      if (options.template !== undefined && !isTemplate(options.template)) {
-        throw new HarnessExitError(
-          `unknown template "${options.template}"; expected one of ${KNOWN_TEMPLATES.join(", ")}`,
-          EX_USAGE,
-        );
-      }
-      const result = await init({
-        template: options.template,
-        force: options.force,
-        configPath: options.config,
-      });
-      if (result.stderr) stderr(result.stderr);
-      stdout(result.stdout);
-    });
+    .option(
+      "--probe",
+      "skip writing — print a JSON snapshot of detected runtimes (Claude Code, Codex), the existing ~/.claude/harness.yaml, and MCP servers wired in settings.json. Read-only.",
+    )
+    .action(
+      async (options: {
+        template?: string;
+        force?: boolean;
+        config?: string;
+        probe?: boolean;
+      }) => {
+        if (options.probe) {
+          if (options.template !== undefined || options.force || options.config !== undefined) {
+            throw new HarnessExitError(
+              "--probe is read-only; pass it without --template / --force / --config",
+              EX_USAGE,
+            );
+          }
+          const result = await detectInit();
+          stdout(`${JSON.stringify(result, null, 2)}\n`);
+          return;
+        }
+        if (options.template !== undefined && !isTemplate(options.template)) {
+          throw new HarnessExitError(
+            `unknown template "${options.template}"; expected one of ${KNOWN_TEMPLATES.join(", ")}`,
+            EX_USAGE,
+          );
+        }
+        const result = await init({
+          template: options.template,
+          force: options.force,
+          configPath: options.config,
+        });
+        if (result.stderr) stderr(result.stderr);
+        stdout(result.stdout);
+      },
+    );
 
   const addCmd = program
     .command("add")
