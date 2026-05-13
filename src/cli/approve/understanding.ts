@@ -109,8 +109,26 @@ export async function approveUnderstanding(
 ): Promise<ApproveUnderstandingResult> {
   const sessionId = opts.session ?? process.env.CLAUDE_SESSION_ID ?? "";
   if (sessionId === "") {
+    // Operators routinely hit this when approving from a second terminal
+    // (the one running Claude has $CLAUDE_SESSION_ID set; a fresh shell
+    // does not). Spell out the two retrieval paths so they do not have
+    // to dig through docs.
     throw new HarnessExitError(
-      "no session id available. Pass --session <id> or set $CLAUDE_SESSION_ID.",
+      [
+        "no session id available. Pass --session <id> or set $CLAUDE_SESSION_ID.",
+        "",
+        "Finding the active Claude Code session id:",
+        "  • From inside Claude: ask the agent to print $CLAUDE_SESSION_ID.",
+        "  • From a second shell, take the basename of the newest project",
+        "    transcript:",
+        "      ls -t ~/.claude/projects/*/[0-9a-f]*.jsonl | head -1 \\",
+        "        | xargs -n1 basename | sed 's/\\.jsonl$//'",
+        "",
+        "If approve writes the tag but the gate still blocks, the running",
+        "Claude session is using a different session id than the transcript",
+        "filename. In that case ask the agent to read its own session id",
+        "and pass that exact value to --session.",
+      ].join("\n"),
       EX_FAIL,
     );
   }

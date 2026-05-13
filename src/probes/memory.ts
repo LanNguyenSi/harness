@@ -10,7 +10,13 @@ export interface StaleMemory {
 }
 
 export interface MemoryReport {
-  directories: Array<{ path: string; scope: string; exists: boolean }>;
+  /**
+   * `unresolved: true` marks an entry that still contains a placeholder
+   * (e.g. `{project}`) because no project context was provided to the
+   * probe. The doctor renders these as informational notes instead of
+   * "missing", since the real directory only exists per-project.
+   */
+  directories: Array<{ path: string; scope: string; exists: boolean; unresolved?: boolean }>;
   routerExecutable: { path: string; exists: boolean } | null;
   staleMemories: StaleMemory[];
 }
@@ -60,11 +66,17 @@ export function inspectMemory(manifest: Manifest, opts: MemoryOptions = {}): Mem
   const cutoffMs = now.getTime() - stalenessDays * 86400000;
 
   const directories: MemoryReport["directories"] = manifest.memory.directories.map((d) => {
-    const expanded = expandHome(substituteProject(d.path, opts.project), home);
+    const substituted = substituteProject(d.path, opts.project);
+    const expanded = expandHome(substituted, home);
+    const unresolved = expanded.includes("{project}");
     return {
       path: expanded,
       scope: d.scope,
-      exists: fs.existsSync(expanded),
+      // An entry with an unresolved placeholder is a pattern, not a
+      // concrete path; existence is not meaningful and the doctor
+      // should not flag it as missing.
+      exists: unresolved ? true : fs.existsSync(expanded),
+      ...(unresolved ? { unresolved: true } : {}),
     };
   });
 

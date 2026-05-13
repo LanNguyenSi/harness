@@ -17,6 +17,13 @@ export interface NextStepsContext {
   targetPath?: string;
   /** Path of harness.generated/settings.json (always present on a successful apply). */
   generatedSettingsPath: string;
+  /**
+   * True when the apply made on-disk changes. Used to soften the no-target
+   * lede on re-runs where the generated files are already up to date and
+   * the operator may have wired a target on a previous run, so claiming
+   * "nothing is wired into Claude Code yet" would be a falsehood.
+   */
+  anyChanged?: boolean;
 }
 
 export function formatNextSteps(ctx: NextStepsContext): string {
@@ -33,12 +40,30 @@ export function formatNextSteps(ctx: NextStepsContext): string {
       "",
     ].join("\n");
   }
+  // Recommended first, alternatives second. A bare `harness apply` only
+  // writes to harness.generated/; nothing is wired until the user runs a
+  // second command. Putting the user-global merge at the top, and
+  // labelling it explicitly, prevents the "ran apply, nothing happened"
+  // confusion. The two alternates stay for users who want a one-shot or
+  // a project-scoped wiring.
+  //
+  // On no-op re-applies we soften the lede: the operator may already have
+  // wired a target on a previous run, so claiming "nothing is wired" is a
+  // potential falsehood. Keep the recommendation; drop the over-claim.
+  const lede =
+    ctx.anyChanged === false
+      ? "Generated manifest is already up to date."
+      : "Generated files written. Nothing is wired into Claude Code yet.";
   return [
     "",
-    "Next steps to wire into Claude Code:",
-    `  • One-shot:    claude -p "..." --settings ${ctx.generatedSettingsPath}`,
-    `  • Project:     harness apply --target .claude/settings.local.json`,
-    `  • User-global: harness apply --target ~/.claude/settings.json --merge`,
+    lede,
+    "",
+    "Recommended next step (wires into your user-global Claude settings):",
+    `  harness apply --target ~/.claude/settings.json --merge`,
+    "",
+    "Alternatives:",
+    `  • Project-scoped:  harness apply --target .claude/settings.local.json --merge`,
+    `  • One-shot only:   claude -p "..." --settings ${ctx.generatedSettingsPath}`,
     "",
   ].join("\n");
 }

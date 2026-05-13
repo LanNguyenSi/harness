@@ -57,14 +57,17 @@ describe("inspectMemory: directory + router resolution", () => {
     expect(report.directories[0]!.scope).toBe("project");
   });
 
-  it("leaves {project} literal when no project is supplied", () => {
+  it("flags {project} literal as unresolved (pattern, not missing) when no project is supplied", () => {
     const home = makeTmpHome();
     const manifest = manifestFor({
       directories: [{ path: "~/claude/{project}/memory", scope: "project" }],
     });
     const report = inspectMemory(manifest, { homeDir: home });
     expect(report.directories[0]!.path).toBe(path.join(home, "claude", "{project}", "memory"));
-    expect(report.directories[0]!.exists).toBe(false);
+    // Unresolved patterns are informational, not "missing": a placeholder
+    // is not a concrete path, so existence is not meaningful.
+    expect(report.directories[0]!.unresolved).toBe(true);
+    expect(report.directories[0]!.exists).toBe(true);
   });
 
   it("flags non-existent directories with exists:false and skips staleness scan", () => {

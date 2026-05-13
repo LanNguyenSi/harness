@@ -94,9 +94,14 @@ grounding:
 tools:
   mcp:
     - name: agent-tasks
-      command: [node, ~/git/pandora/agent-tasks/mcp-server/dist/server.js]
-      env:
-        AGENT_TASKS_URL: https://agent-tasks.opentriologue.ai
+      # Zero-setup entry: \`@agent-tasks/mcp-bridge\` exposes the
+      # \`agent-tasks-mcp-bridge\` binary on PATH after
+      # \`npm i -g @agent-tasks/mcp-bridge\`. The bridge owns token
+      # storage (OS keychain or file fallback) and defaults the base
+      # URL to https://agent-tasks.opentriologue.ai, so no env is
+      # required here. Override with \`AGENT_TASKS_BASE_URL\` /
+      # \`AGENT_TASKS_TOKEN\` if you self-host or want explicit creds.
+      command: [agent-tasks-mcp-bridge]
       health:
         verb: projects_list
         timeout_ms: 5000

@@ -91,7 +91,9 @@ function formatMemorySection(report: DoctorReport): string[] {
     out.push(`  ⚠ no memory router declared`);
   }
   for (const d of report.memory.directories) {
-    if (!d.exists) {
+    if (d.unresolved) {
+      out.push(`  ℹ memory directory pattern: ${d.path} (resolved per-project at runtime)`);
+    } else if (!d.exists) {
       out.push(`  ⚠ memory directory missing: ${d.path}`);
     }
   }
