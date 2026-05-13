@@ -30,7 +30,7 @@ The wizard is one of three ways to bootstrap a manifest:
 
 7. **Validate.** After the write, the wizard runs `harness validate` and reports the error / warning counts and the per-diagnostic details. A non-zero error count makes the wizard exit `1` so CI scripts notice; the manifest stays on disk for inspection.
 
-8. **Next steps.** The wizard prints the suggested `harness apply --runtime claude` follow-up but does NOT run it. Auto-apply would risk silently mutating `settings.json` after a partial confirmation; the operator should review the new manifest first.
+8. **Next steps.** The wizard prints the suggested `harness apply --runtime claude-code` follow-up but does NOT run it. Auto-apply would risk silently mutating `settings.json` after a partial confirmation; the operator should review the new manifest first.
 
 ## Ctrl-C semantics
 

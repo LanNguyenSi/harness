@@ -56,13 +56,38 @@ npm i -g @lannguyensi/harness
 
 The CLI binary is `harness`. Node 20 or newer required.
 
-## First five minutes
+## First-time setup (recommended)
+
+If this is your first install on this machine, run the guided wizard:
+
+```bash
+harness init --interactive
+```
+
+It probes your environment (existing `~/.claude/` and `~/.codex/`, MCP
+servers wired in `settings.json`, harness binary version), asks you to
+pick a profile (`solo` / `team` / `custom`), and writes a
+validate-clean starting `harness.yaml` to `~/.claude/harness.yaml`.
+Ctrl-C at any prompt aborts with no partial write. The wizard prints
+the suggested `harness apply --runtime claude-code` follow-up but does
+not run it, so you can review the manifest first. Full walkthrough and
+limitations in [`init-interactive.md`](init-interactive.md).
+
+If you prefer a non-interactive bootstrap (CI, fresh-VM provisioning),
+the next section walks the manual template path.
+
+## First five minutes (manual template path)
 
 1. Bootstrap a starter manifest into `/tmp/harness-demo/`:
 
    ```bash
-   harness init --template starter --config /tmp/harness-demo/harness.yaml
+   harness init --template solo --config /tmp/harness-demo/harness.yaml
    ```
+
+   Valid templates: `minimal` (header only), `solo` (memory-router +
+   understanding-before-execution pack), `team` (solo + agent-tasks +
+   review-before-merge), `full` (everything from the reference
+   manifest).
 
 2. See what is in it:
 

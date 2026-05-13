@@ -218,7 +218,7 @@ export async function runInteractive(
 
     if (validateClean) {
       stderr(
-        `\nNext: \`harness apply --runtime claude\` to wire ~/.claude/settings.json. The wizard does not run apply for you; review the generated manifest first.\n`,
+        `\nNext: \`harness apply --runtime claude-code\` to wire ~/.claude/settings.json. The wizard does not run apply for you; review the generated manifest first.\n`,
       );
     } else {
       stderr(
