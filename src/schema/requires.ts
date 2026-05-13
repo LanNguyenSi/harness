@@ -49,6 +49,23 @@ export const RequiresSchema = z
 
 export type Requires = z.infer<typeof RequiresSchema>;
 
+// The five built-ins ship resolved by the runtime, so policies may
+// reference them in `requires.ledger_tag` without declaring a matching
+// `trigger.extract` entry. The schema check in `PolicySchema.superRefine`
+// skips them via `isBuiltinVariable`.
+//
+// Resolution sources (all live as of Phase 5, see ARCHITECTURE §6):
+//   - SESSION_ID — `src/runtime/session-id.ts:resolveSessionId`, fed from
+//     the hook event's `session_id` or `$CLAUDE_SESSION_ID`. End-to-end
+//     coverage in `tests/runtime/intercept.test.ts` (the `dogfood:${SESSION_ID}`
+//     fixture).
+//   - REPO / BRANCH / CWD — populated by the runtime from git + process state
+//     before `evaluateExtract` runs (`src/policies/extract.ts:ExtractBuiltins`).
+//   - TOOL_NAME — taken from the hook event payload.
+//
+// Adding a new variable here is a spec change: update ARCHITECTURE §6, wire
+// the runtime source, and add `isBuiltinVariable` test coverage in the same
+// PR.
 const BUILTIN_VARIABLES = new Set([
   "SESSION_ID",
   "REPO",

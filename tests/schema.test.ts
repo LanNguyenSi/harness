@@ -131,6 +131,54 @@ describe("parseManifest — invalid fixtures", () => {
   }
 });
 
+describe("parseManifest — built-in variables bypass trigger.extract", () => {
+  // The five runtime-resolved built-ins listed in `src/schema/requires.ts`
+  // may be referenced in `requires.ledger_tag` without a matching
+  // `trigger.extract` entry. This guards against an accidental tightening
+  // that would break dogfood manifests + ARCHITECTURE §6 examples.
+  const BUILTINS = ["SESSION_ID", "REPO", "BRANCH", "TOOL_NAME", "CWD"];
+
+  for (const name of BUILTINS) {
+    it(`accepts \${${name}} with no trigger.extract entry`, () => {
+      expect(() =>
+        parseManifest({
+          version: 1,
+          hooks: [{ name: "h", event: "PreToolUse", command: "/bin/true", blocking: false }],
+          policies: [
+            {
+              name: "p",
+              description: "d",
+              trigger: { event: "PreToolUse" },
+              requires: { ledger_tag: `t:\${${name}}` },
+              hook: "h",
+              enforcement: "block",
+            },
+          ],
+        }),
+      ).not.toThrow();
+    });
+  }
+
+  it("still rejects a non-built-in reference without trigger.extract", () => {
+    expect(() =>
+      parseManifest({
+        version: 1,
+        hooks: [{ name: "h", event: "PreToolUse", command: "/bin/true", blocking: false }],
+        policies: [
+          {
+            name: "p",
+            description: "d",
+            trigger: { event: "PreToolUse" },
+            requires: { ledger_tag: "t:${CUSTOM_VAR}" },
+            hook: "h",
+            enforcement: "block",
+          },
+        ],
+      }),
+    ).toThrow(/CUSTOM_VAR/);
+  });
+});
+
 describe("parseManifest — requires shapes", () => {
   function buildPolicyManifest(requires: unknown): unknown {
     return {
