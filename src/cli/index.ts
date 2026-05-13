@@ -29,6 +29,7 @@ import { EX_FAIL, EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { explain } from "./explain.js";
 import { detect as detectInit } from "./init/detect.js";
 import { init, isTemplate, KNOWN_TEMPLATES } from "./init/index.js";
+import { runInteractive } from "./init/interactive.js";
 import { isListCategory, list, type ListCategory } from "./list.js";
 import { audit, type AuditOutcome } from "./audit.js";
 import { sessionExport, type ExportFormat } from "./session-export/index.js";
@@ -273,7 +274,11 @@ export function buildProgram(opts: RunOptions = {}): Command {
     )
     .option(
       "--probe",
-      "skip writing — print a JSON snapshot of detected runtimes (Claude Code, Codex), the existing ~/.claude/harness.yaml, and MCP servers wired in settings.json. Read-only.",
+      "skip writing, print a JSON snapshot of detected runtimes (Claude Code, Codex), the existing ~/.claude/harness.yaml, and MCP servers wired in settings.json. Read-only.",
+    )
+    .option(
+      "--interactive",
+      "run the guided wizard (detect environment, pick profile, preview + write). Mutually exclusive with --probe / --template.",
     )
     .action(
       async (options: {
@@ -281,7 +286,14 @@ export function buildProgram(opts: RunOptions = {}): Command {
         force?: boolean;
         config?: string;
         probe?: boolean;
+        interactive?: boolean;
       }) => {
+        if (options.probe && options.interactive) {
+          throw new HarnessExitError(
+            "--probe and --interactive are mutually exclusive",
+            EX_USAGE,
+          );
+        }
         if (options.probe) {
           if (options.template !== undefined || options.force || options.config !== undefined) {
             throw new HarnessExitError(
@@ -291,6 +303,25 @@ export function buildProgram(opts: RunOptions = {}): Command {
           }
           const result = await detectInit();
           stdout(`${JSON.stringify(result, null, 2)}\n`);
+          return;
+        }
+        if (options.interactive) {
+          if (options.template !== undefined || options.config !== undefined) {
+            throw new HarnessExitError(
+              "--interactive owns its own template + path choices; do not combine with --template / --config",
+              EX_USAGE,
+            );
+          }
+          const r = await runInteractive({ stdout, stderr });
+          if (r.aborted) {
+            return;
+          }
+          if (r.validateClean === false) {
+            throw new HarnessExitError(
+              `manifest written but failed harness validate; see stderr for diagnostics`,
+              EX_FAIL,
+            );
+          }
           return;
         }
         if (options.template !== undefined && !isTemplate(options.template)) {
