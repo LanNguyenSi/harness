@@ -126,9 +126,14 @@ operator-driven flows.
 | `apply` | mutating | renders manifest to `harness.generated/` (or `--target`), updates `harness.lock`. |
 | `add` | mutating | mutates `harness.yaml` in place to add an mcp / cli / skill / hook entry. |
 | `remove` | mutating | removes an entry by type + name from the manifest. |
-| `init` | mutating | scaffolds a new manifest from a template. |
+| `init --template <name>` | mutating | scaffolds a manifest non-interactively. Templates: `minimal`, `solo`, `team`, `full`. |
+| `init --interactive` | mutating | operator-facing wizard (`@inquirer/prompts`). Detects env, picks a profile, writes the manifest. Not for agent driver scripts. |
+| `init --probe` | read-only | prints a JSON snapshot of detected runtimes + MCPs + manifest; no writes. |
 | `adopt` | mutating | reverse engineers a manifest from an existing settings.json. |
 | `export` | mutating-ish | emits a manifest snapshot to a chosen path. |
+| `pack add / remove / list` | mutating (add/remove), read-only (list) | manages `policy_packs:` entries in the manifest. Today's canonical pack: `understanding-before-execution`. |
+| `approve understanding --session <id>` | mutating | operator action that approves a captured Understanding Report (round-trips evidence-ledger tag + persisted JSON). Required before write-capable tools fire under the understanding-before-execution pack. |
+| `doctor --target codex` | read-only | verifies Codex adapter wiring after `apply --runtime codex`. `--json` for machine-readable output. |
 | `policy intercept` | runtime hook | called by Claude Code via `settings.json`, not directly by agents. |
 
 ## The audit triumvirate

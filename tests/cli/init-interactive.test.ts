@@ -77,6 +77,11 @@ describe("interactive wizard — Solo path", () => {
     expect(fs.existsSync(path.join(tmpHome, ".claude", "harness.yaml"))).toBe(true);
     expect(cap.stderr()).toMatch(/Environment probe/);
     expect(cap.stderr()).toMatch(/harness validate: 0 error/);
+    // Regression guard: the Next-step hint must reference a real runtime
+    // value (claude-code / codex), not the shorthand "claude". The latter
+    // falls back at runtime with a warning but the user-facing message is
+    // wrong. Locked here so the doc + code stay in sync.
+    expect(cap.stderr()).toContain("harness apply --runtime claude-code");
   });
 });
 

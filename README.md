@@ -111,6 +111,9 @@ substitutes `${PR_NUMBER}=42` through the JSONPath-restricted extract
 DSL, and tells you exactly which hooks would fire and which policies
 would match, before any ledger I/O.
 
+Convinced? Install globally and set up your own:
+`npm i -g @lannguyensi/harness && harness init --interactive`.
+
 ## Status
 
 - [x] Phase 1, read-only inventory (`describe`, `validate`, `doctor`,
