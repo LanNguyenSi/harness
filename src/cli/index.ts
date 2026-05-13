@@ -749,10 +749,16 @@ export function buildProgram(opts: RunOptions = {}): Command {
             // is already in sync (`targetWritten: false`), fall back to
             // the three-option block so the user sees a real next step
             // instead of an ambiguous "wired into ..." for a no-op.
+            // `anyChanged` softens the no-target lede when the generated
+            // manifest is already up to date (avoids over-claiming
+            // "nothing is wired" against operators who wired a target
+            // on a previous run).
             const generatedSettingsPath = path.join(result.generatedDir, SETTINGS_BASENAME);
+            const anyChanged = result.files.some((f) => f.changed);
             stdout(
               formatNextSteps({
                 generatedSettingsPath,
+                anyChanged,
                 ...(result.targetWritten && result.targetPath
                   ? { targetPath: result.targetPath }
                   : {}),

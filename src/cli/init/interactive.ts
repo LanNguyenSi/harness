@@ -26,6 +26,7 @@ import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
 import { detect, type DetectionResult } from "./detect.js";
 import { init, type InitResult } from "./index.js";
 import { validate } from "../validate/index.js";
+import { apply, type ApplyResult } from "../apply/index.js";
 
 export type ProfileChoice = "solo" | "team" | "custom";
 
@@ -56,6 +57,8 @@ export interface InteractiveResult {
   profile?: ProfileChoice;
   /** Whether `harness validate` reported zero errors after the write. */
   validateClean?: boolean;
+  /** Present when the wizard ran the post-write merge-apply step. */
+  apply?: ApplyResult;
 }
 
 const DEFAULT_PROMPTS: InteractivePrompts = { select, confirm, input };
@@ -158,7 +161,7 @@ export async function runInteractive(
     if (profileNeedsAgentTasks(profile) && !detectionHasAgentTasks(detection)) {
       const proceed = await prompts.confirm({
         message:
-          "The Team profile wires the agent-tasks MCP, but no agent-tasks server is wired in Claude's settings.json yet. The hooks will still be written, but you will need to wire agent-tasks (or run `harness apply`) before they fire. Proceed?",
+          "The Team profile wires the agent-tasks MCP via the `agent-tasks-mcp-bridge` binary. Claude's settings.json does not yet declare it; the wizard will offer to wire it in a moment via `harness apply --target ~/.claude/settings.json --merge`. Make sure the bridge is installed (`npm i -g @agent-tasks/mcp-bridge`). Proceed?",
         default: true,
       });
       if (!proceed) {
@@ -216,17 +219,73 @@ export async function runInteractive(
       stderr(`  [${d.severity}] ${d.path}: ${d.message}\n`);
     }
 
-    if (validateClean) {
-      stderr(
-        `\nNext: \`harness apply --runtime claude-code\` to wire ~/.claude/settings.json. The wizard does not run apply for you; review the generated manifest first.\n`,
-      );
-    } else {
+    if (!validateClean) {
       stderr(
         `\nValidate reported errors. Fix the manifest before running \`harness apply\`.\n`,
       );
+      return { aborted: false, profile, init: initResult, validateClean };
     }
 
-    return { aborted: false, profile, init: initResult, validateClean };
+    // Validate-clean: offer to wire into Claude Code right now. A bare
+    // `harness init` leaves the manifest on disk but Claude Code does
+    // not see it until `apply --target ... --merge` runs. Without this
+    // prompt the operator gets a clean manifest, runs `harness apply`,
+    // sees `harness.generated/` files appear, and is stuck wondering
+    // why Claude still does not honour any hooks. Auto-offering the
+    // merge here collapses that two-step trap into one.
+    const claudeSettingsPath = path.join(
+      detection.runtimes.find((r) => r.name === "claude-code")?.home ?? path.join(opts.homeDir ?? process.env.HOME ?? "", ".claude"),
+      "settings.json",
+    );
+    const wireNow = await prompts.confirm({
+      message: `Wire into Claude Code now? (merges hooks + mcpServers into ${claudeSettingsPath})`,
+      default: true,
+    });
+    if (!wireNow) {
+      stderr(
+        `\nManifest written. To wire it into Claude Code later:\n  harness apply --target ${claudeSettingsPath} --merge\n`,
+      );
+      return { aborted: false, profile, init: initResult, validateClean };
+    }
+
+    const applyOpts: Parameters<typeof apply>[0] = {
+      configPath: initResult.path,
+      target: claudeSettingsPath,
+      merge: true,
+    };
+    if (opts.homeDir !== undefined) {
+      applyOpts.homeDir = path.join(opts.homeDir, ".claude");
+    }
+    // The merge-apply touches a real file under ~/.claude; permission
+    // errors and pre-existing malformed JSON both throw from apply().
+    // Catch here so a clean manifest write is not undone by a stack
+    // trace, and the operator still sees the manual fallback command
+    // they need to recover.
+    let applyResult: ApplyResult | undefined;
+    try {
+      applyResult = await apply(applyOpts);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      stderr(`\nFailed to wire ${claudeSettingsPath}: ${message}\n`);
+      stderr(
+        `Manifest is on disk. To retry the merge manually:\n  harness apply --target ${claudeSettingsPath} --merge\n`,
+      );
+      return { aborted: false, profile, init: initResult, validateClean };
+    }
+    if (applyResult.targetMergeSummary) {
+      stderr(`\n${applyResult.targetMergeSummary}\n`);
+    }
+    if (applyResult.targetWritten) {
+      stderr(`wired into ${applyResult.targetPath}\n`);
+      stderr(
+        `verify: claude -p "say hi" --settings ${applyResult.targetPath} --output-format stream-json --include-hook-events\n`,
+      );
+    }
+    for (const hint of applyResult.restartHints) {
+      stderr(`restart hint: ${hint}\n`);
+    }
+
+    return { aborted: false, profile, init: initResult, validateClean, apply: applyResult };
   } catch (err) {
     if (isAbortError(err)) {
       stderr("Aborted: Ctrl-C received during prompt; no manifest written.\n");

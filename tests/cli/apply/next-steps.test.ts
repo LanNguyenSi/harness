@@ -2,14 +2,19 @@ import { describe, expect, it } from "vitest";
 import { formatNextSteps } from "../../../src/cli/apply/next-steps.js";
 
 describe("formatNextSteps", () => {
-  it("default (no --target) lists three wire-up paths", () => {
+  it("default (no --target) recommends the user-global merge first and warns nothing is wired yet", () => {
     const s = formatNextSteps({
       generatedSettingsPath: "/abs/harness.generated/settings.json",
     });
-    expect(s).toContain("Next steps to wire into Claude Code:");
+    expect(s).toContain("Nothing is wired into Claude Code yet");
+    expect(s).toContain("Recommended next step");
+    // Recommended path appears before the alternatives header.
+    const recIdx = s.indexOf("harness apply --target ~/.claude/settings.json --merge");
+    const altIdx = s.indexOf("Alternatives:");
+    expect(recIdx).toBeGreaterThan(-1);
+    expect(altIdx).toBeGreaterThan(recIdx);
     expect(s).toContain("--settings /abs/harness.generated/settings.json");
-    expect(s).toContain("--target .claude/settings.local.json");
-    expect(s).toContain("--target ~/.claude/settings.json --merge");
+    expect(s).toContain("--target .claude/settings.local.json --merge");
   });
 
   it("with targetPath collapses to a verify hint that includes --settings", () => {

@@ -330,7 +330,8 @@ memory:
       ]);
       expect(r.code).toBe(0);
       expect(r.stdout).toContain("applied 2 file(s)");
-      expect(r.stdout).toContain("Next steps to wire into Claude Code:");
+      expect(r.stdout).toContain("Nothing is wired into Claude Code yet");
+      expect(r.stdout).toContain("Recommended next step");
       // Regression for the 2026-05-03 hallucination incident: an agent
       // suggested `claude -p ... --output-dir`, a flag that does not exist.
       // The hint must not contain it.
@@ -348,7 +349,7 @@ memory:
       ]);
       expect(r.code).toBe(0);
       expect(r.stdout).toContain("applied 2 file(s)");
-      expect(r.stdout).not.toContain("Next steps to wire into Claude Code:");
+      expect(r.stdout).not.toContain("Nothing is wired into Claude Code yet");
     });
   });
 
@@ -361,7 +362,7 @@ memory:
         "--json",
       ]);
       expect(r.code).toBe(0);
-      expect(r.stdout).not.toContain("Next steps to wire into Claude Code:");
+      expect(r.stdout).not.toContain("Nothing is wired into Claude Code yet");
       expect(r.stdout).not.toContain("applied 2 file(s)");
       const parsed = JSON.parse(r.stdout);
       expect(parsed.outcome).toBe("applied");

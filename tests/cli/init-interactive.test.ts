@@ -66,7 +66,10 @@ describe("interactive wizard — Solo path", () => {
       prompts: mockPrompts({
         select: ["solo"],
         input: ["~/.claude/projects/{project}/memory"],
-        confirm: [true], // write
+        confirm: [
+          true, // write manifest
+          false, // decline wire-now (test the manifest-only path)
+        ],
       }),
       stdout: cap.out,
       stderr: cap.err,
@@ -74,14 +77,83 @@ describe("interactive wizard — Solo path", () => {
     expect(result.aborted).toBe(false);
     expect(result.profile).toBe("solo");
     expect(result.validateClean).toBe(true);
+    expect(result.apply).toBeUndefined();
     expect(fs.existsSync(path.join(tmpHome, ".claude", "harness.yaml"))).toBe(true);
     expect(cap.stderr()).toMatch(/Environment probe/);
     expect(cap.stderr()).toMatch(/harness validate: 0 error/);
-    // Regression guard: the Next-step hint must reference a real runtime
-    // value (claude-code / codex), not the shorthand "claude". The latter
-    // falls back at runtime with a warning but the user-facing message is
-    // wrong. Locked here so the doc + code stay in sync.
-    expect(cap.stderr()).toContain("harness apply --runtime claude-code");
+    // When the operator declines the wire-now offer, the manifest-only
+    // follow-up command MUST be the merge-into-settings.json incantation
+    // (not the bare `apply --runtime claude-code` that only writes to
+    // harness.generated/ and confuses fresh users).
+    expect(cap.stderr()).toContain("harness apply --target");
+    expect(cap.stderr()).toContain("--merge");
+    // Hallucination regression guard from the original test: the wizard
+    // must NOT suggest `--runtime claude` shorthand (the real flag value
+    // is `claude-code`; the bare `claude` shorthand falls back at runtime
+    // with a warning and reads as wrong to operators).
+    expect(cap.stderr()).not.toContain("--runtime claude\n");
+    expect(cap.stderr()).not.toContain("--runtime claude ");
+  });
+
+  it("auto-runs the merge-apply when the operator accepts the wire-now offer", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      prompts: mockPrompts({
+        select: ["solo"],
+        input: ["~/.claude/projects/{project}/memory"],
+        confirm: [
+          true, // write manifest
+          true, // accept wire-now
+        ],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(false);
+    expect(result.validateClean).toBe(true);
+    expect(result.apply).toBeDefined();
+    expect(result.apply?.targetWritten).toBe(true);
+    const settingsPath = path.join(tmpHome, ".claude", "settings.json");
+    expect(result.apply?.targetPath).toBe(settingsPath);
+    expect(fs.existsSync(settingsPath)).toBe(true);
+    // Verify the merge actually projected the harness-owned shape — not
+    // just that a file exists at the path. Future refactors that break
+    // the projection without breaking the existence check still trip
+    // this assertion.
+    const wired = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+    expect(wired.hooks).toBeDefined();
+    expect(cap.stderr()).toContain("wired into");
+    expect(cap.stderr()).toContain("verify: claude -p");
+    expect(cap.stderr()).not.toContain("--runtime claude\n");
+  });
+
+  it("recovers gracefully when the wire-now merge throws (permission denied / malformed target)", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    // Pre-create the target as unreadable JSON: apply --merge throws
+    // when the existing file is not valid JSON. The wizard must catch
+    // that, print a recovery hint, and still return validateClean.
+    fs.writeFileSync(path.join(tmpHome, ".claude", "settings.json"), "not-json{");
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      prompts: mockPrompts({
+        select: ["solo"],
+        input: ["~/.claude/projects/{project}/memory"],
+        confirm: [
+          true, // write manifest
+          true, // accept wire-now (will fail inside apply)
+        ],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(false);
+    expect(result.validateClean).toBe(true);
+    expect(result.apply).toBeUndefined();
+    expect(cap.stderr()).toMatch(/Failed to wire/);
+    expect(cap.stderr()).toMatch(/harness apply --target .* --merge/);
   });
 });
 
@@ -96,6 +168,7 @@ describe("interactive wizard — Team path", () => {
         confirm: [
           true, // proceed despite missing agent-tasks
           true, // confirm write
+          false, // decline wire-now
         ],
         input: ["~/.claude/projects/{project}/memory"],
       }),
@@ -118,7 +191,10 @@ describe("interactive wizard — Team path", () => {
       homeDir: tmpHome,
       prompts: mockPrompts({
         select: ["team"],
-        confirm: [true], // single confirm: write (no agent-tasks warning prompt)
+        confirm: [
+          true, // write (no agent-tasks warning prompt)
+          false, // decline wire-now
+        ],
         input: ["~/.claude/projects/{project}/memory"],
       }),
       stdout: cap.out,
@@ -174,6 +250,7 @@ describe("interactive wizard — overwrite guard", () => {
         confirm: [
           true, // overwrite
           true, // write
+          false, // decline wire-now
         ],
         input: ["~/.claude/projects/{project}/memory"],
       }),
@@ -196,7 +273,10 @@ describe("interactive wizard — no-detection path", () => {
       homeDir: tmpHome,
       prompts: mockPrompts({
         select: ["solo"],
-        confirm: [true], // write
+        confirm: [
+          true, // write
+          false, // decline wire-now
+        ],
         input: ["~/.claude/projects/{project}/memory"],
       }),
       stdout: cap.out,
