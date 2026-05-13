@@ -568,6 +568,44 @@ describe("buildMcpServers", () => {
     expect(out).toEqual({});
     expect(w).toContain("tools.mcp.ghost: empty command, skipping");
   });
+
+  it("warns when an env value starts with a literal `~/` (cwd-relative trap)", () => {
+    // Regression for agent-tasks/42d224a6: a manifest with
+    // `env: { EVIDENCE_LEDGER_DB: "~/.evidence-ledger/ledger.db" }`
+    // silently created rogue ledger DBs under
+    // <cwd>/~/.evidence-ledger/ledger.db because better-sqlite3
+    // opens the literal-tilde path as cwd-relative, not $HOME-relative.
+    // The warning steers operators at an absolute path or no env at all.
+    const w: string[] = [];
+    const entries = [
+      {
+        name: "g",
+        command: "grounding-mcp",
+        env: { EVIDENCE_LEDGER_DB: "~/.evidence-ledger/ledger.db" },
+        enabled: true,
+      },
+    ] as McpServer[];
+    const out = buildMcpServers(entries, w);
+    // The env is still written to settings.json verbatim (the operator
+    // may have a reason for it); the warning is informational.
+    expect(out.g?.env).toEqual({ EVIDENCE_LEDGER_DB: "~/.evidence-ledger/ledger.db" });
+    expect(w.some((m) => m.includes("starts with a literal ~"))).toBe(true);
+    expect(w.some((m) => m.includes("tools.mcp.g.env.EVIDENCE_LEDGER_DB"))).toBe(true);
+  });
+
+  it("does NOT warn when an env value is an absolute path", () => {
+    const w: string[] = [];
+    const entries = [
+      {
+        name: "g",
+        command: "grounding-mcp",
+        env: { EVIDENCE_LEDGER_DB: "/home/operator/.evidence-ledger/ledger.db" },
+        enabled: true,
+      },
+    ] as McpServer[];
+    buildMcpServers(entries, w);
+    expect(w.some((m) => m.includes("starts with a literal ~"))).toBe(false);
+  });
 });
 
 describe("generateSettings + mcpServers integration", () => {
