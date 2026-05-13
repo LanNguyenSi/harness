@@ -7,13 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-13
+
+**Headline: guided onboarding.** `harness init` grows three new entry
+points so first-time operators do not have to hand-author a manifest.
+`harness init --interactive` runs a wizard via `@inquirer/prompts` that
+detects the environment, picks a profile, and writes a validate-clean
+starting manifest. `harness init --template solo|team` lands the two
+new opinionated profile templates non-interactively. `harness init
+--probe` prints a read-only JSON snapshot of what the harness sees in
+the operator's config dirs.
+
 ### Added
 
-- `harness init --probe`: read-only JSON snapshot of detected runtimes
-  (Claude Code, Codex), the existing `~/.claude/harness.yaml`, and MCP
-  servers wired in Claude's `settings.json`. Foundation for the
-  `init --interactive` wizard (separate task), standalone-useful for
-  operators debugging what the harness sees in their environment.
 - `harness init --interactive`: guided wizard that detects the
   environment, picks a profile (Solo / Team / Custom), confirms a
   memory directory, writes the manifest, and runs `harness validate`.
@@ -32,6 +38,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   hook command uses the built-in `harness policy intercept` CLI verb,
   so no per-policy shell script under `~/.claude/hooks/` needs to exist
   for the gate to fire.
+- `harness init --probe`: read-only JSON snapshot of detected runtimes
+  (Claude Code, Codex), the existing `~/.claude/harness.yaml`, and MCP
+  servers wired in Claude's `settings.json`. Foundation for the
+  `init --interactive` wizard, standalone-useful for operators
+  debugging what the harness sees in their environment.
+
+### Changed
+
+- The README's first-time-setup path now points at
+  `harness init --interactive` instead of jumping straight to `dry-run`.
 
 ## [0.8.1] - 2026-05-11
 

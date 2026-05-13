@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { doctor } from "../../src/cli/doctor/index.js";
 import { format } from "../../src/cli/doctor/format.js";
+import { VERSION } from "../../src/version.js";
 import type { McpProbe, McpProbeResult } from "../../src/probes/mcp.js";
 import type { McpServer } from "../../src/schema/index.js";
 
@@ -313,7 +314,7 @@ policies: []
       pathEnv: "",
     });
     const text = format(report);
-    expect(text).toMatch(/^harness 0\.8\.1/);
+    expect(text).toMatch(new RegExp(`^harness ${VERSION.replace(/\./g, "\\.")}`));
     expect(text).toContain(`(version 1) [shallow]`);
   });
 });
