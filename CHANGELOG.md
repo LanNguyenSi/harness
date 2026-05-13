@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-05-13
+
+**Headline: wizard hint fix + two new canonical example policies.** A
+patch release for the surface that shipped in v0.9.0. The interactive
+wizard printed a `harness apply --runtime claude` follow-up that was
+not a valid runtime value (`claude-code` and `codex` are accepted, not
+`claude`); operators who ran `harness init --interactive` on v0.9.0
+saw the wrong instruction. Fixed in source and the documentation
+echo, plus a regression test that locks the corrected hint. The
+reference manifest gains two more example policies covering incident
+classes already documented in the operator's memory log.
+
+### Fixed
+
+- `harness init --interactive`: the wizard's "Next:" hint after a
+  successful run now prints `harness apply --runtime claude-code`
+  (not `harness apply --runtime claude`, which fell back to the
+  default at runtime with a warning). Source fix in
+  `src/cli/init/interactive.ts` and the matching echo in
+  `docs/init-interactive.md`. Regression guard locked in
+  `tests/cli/init-interactive.test.ts` so the next drift fails loudly.
+  (#94)
+
+### Changed
+
+- `docs/for-humans.md`: added a "First-time setup (recommended)"
+  block that walks operators through `harness init --interactive`
+  before the manual template path; replaced the bogus
+  `--template starter` invocation with `--template solo` and listed
+  the four valid templates. (#94)
+- `docs/for-agents.md`: split the CLI cheat-sheet's `init` row into
+  `init --template`, `init --interactive`, and `init --probe` (the
+  last is read-only); added rows for `pack add/remove/list`,
+  `approve understanding`, and `doctor --target codex`. (#94)
+- `README.md`: one-line bridge from the "Try it in 60 seconds"
+  dry-run pitch to `npm i -g @lannguyensi/harness && harness init
+  --interactive` so readers can graduate from evaluation to install
+  without scrolling. (#94)
+
+### Added
+
+- Two new canonical policy patterns in
+  `docs/examples/full-manifest.yaml` and
+  `src/cli/init/templates.ts:FULL_TEMPLATE`:
+  `review-subagent-before-pr-create` gates
+  `mcp__agent-tasks__pull_requests_create` on a
+  `review-subagent:${TASK_ID}` ledger entry (stronger than
+  `review-before-merge` because the rigorous review subagent must
+  have actually run BEFORE the PR opens). `preflight-before-push`
+  gates `Bash` matching `^git push` on a fresh `preflight:${BRANCH}`
+  entry with `within: 10m` (complements the read-side
+  `preflight-before-investigation`). Both policies wired into the
+  init template so `harness init --template full` produces a
+  manifest consistent with the example file. Field-level invariants
+  locked in `tests/schema.test.ts`. (#95)
+- `docs/for-humans.md`: "More policy patterns" section that walks
+  operators through both new gates plus `dogfood-before-release` as
+  a coherent set. (#95)
+
 ## [0.9.0] - 2026-05-13
 
 **Headline: guided onboarding.** `harness init` grows three new entry
