@@ -47,14 +47,41 @@ function captureStreams(): { stdout: () => string; stderr: () => string; out: (s
   };
 }
 
+// `fakeDepsPath` points at a tmp directory containing executable stubs
+// for every binary `dependenciesForProfile("full")` looks for. Tests
+// that do not exercise the dependency-install flow pass
+// `dependencyPathEnv: fakeDepsPath` to short-circuit the dep check
+// (every dep reads as "already installed"), so the wizard never tries
+// to run `npm i -g`.
+//
+// Without this, tests on CI (where the @lannguyensi/* binaries are NOT
+// globally installed by `npm ci`) would fall through into the install
+// prompt, consume a queued confirm meant for a later step, and spawn a
+// real `npm i -g` that times out under the 5s vitest budget. See
+// agent-tasks/69ef84cd for the regression incident.
 let tmpHome: string;
+let fakeDepsPath: string;
 
 beforeEach(() => {
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-wizard-"));
+  fakeDepsPath = fs.mkdtempSync(path.join(os.tmpdir(), "harness-wizard-deps-"));
+  for (const bin of [
+    "memory-router-user-prompt-submit",
+    "understanding-gate-claude-hook",
+    "understanding-gate-claude-stop",
+    "agent-tasks-mcp-bridge",
+    "grounding-mcp",
+    "codebase-oracle",
+  ]) {
+    const p = path.join(fakeDepsPath, bin);
+    fs.writeFileSync(p, "#!/bin/sh\n");
+    fs.chmodSync(p, 0o755);
+  }
 });
 
 afterEach(() => {
   fs.rmSync(tmpHome, { recursive: true, force: true });
+  fs.rmSync(fakeDepsPath, { recursive: true, force: true });
 });
 
 describe("interactive wizard — Solo path", () => {
@@ -63,6 +90,7 @@ describe("interactive wizard — Solo path", () => {
     const cap = captureStreams();
     const result = await runInteractive({
       homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
       prompts: mockPrompts({
         select: ["solo"],
         input: ["~/.claude/projects/{project}/memory"],
@@ -100,6 +128,7 @@ describe("interactive wizard — Solo path", () => {
     const cap = captureStreams();
     const result = await runInteractive({
       homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
       prompts: mockPrompts({
         select: ["solo"],
         input: ["~/.claude/projects/{project}/memory"],
@@ -138,6 +167,7 @@ describe("interactive wizard — Solo path", () => {
     const cap = captureStreams();
     const result = await runInteractive({
       homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
       prompts: mockPrompts({
         select: ["solo"],
         input: ["~/.claude/projects/{project}/memory"],
@@ -163,6 +193,7 @@ describe("interactive wizard — Team path", () => {
     const cap = captureStreams();
     const result = await runInteractive({
       homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
       prompts: mockPrompts({
         select: ["team"],
         confirm: [
@@ -189,6 +220,7 @@ describe("interactive wizard — Team path", () => {
     const cap = captureStreams();
     const result = await runInteractive({
       homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
       prompts: mockPrompts({
         select: ["team"],
         confirm: [
@@ -245,6 +277,7 @@ describe("interactive wizard — overwrite guard", () => {
     const cap = captureStreams();
     const result = await runInteractive({
       homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
       prompts: mockPrompts({
         select: ["solo"],
         confirm: [
@@ -271,6 +304,7 @@ describe("interactive wizard — no-detection path", () => {
     const cap = captureStreams();
     const result = await runInteractive({
       homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
       prompts: mockPrompts({
         select: ["solo"],
         confirm: [
