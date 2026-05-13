@@ -21,3 +21,4 @@ coverage/
 # Generated harness artefacts (will live here once Phase 3+ ships)
 .harness/
 harness.generated/
+~

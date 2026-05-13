@@ -23,11 +23,14 @@ version: 1
 
 export const FULL_TEMPLATE = `# ~/.claude/harness.yaml
 #
-# Bootstrapped by \`harness init --template full\`. Mirrors the example manifest
-# from docs/ARCHITECTURE.md Appendix A. Paths under \`command:\` reference the
-# developer machine that authored Appendix A — adapt them to your host (or
-# move host-specific paths to ~/.claude/machines/<hostname>.harness.overrides.yaml
-# per ARCHITECTURE.md §8) before running \`harness validate\`.
+# Bootstrapped by \`harness init --template full\`. The reference manifest:
+# all 5 example policies wired through the generic \`harness policy intercept\`
+# engine, so no external shell scripts under ~/.claude/hooks/ are required.
+#
+# What you still need on PATH (the wizard offers to \`npm i -g\` these on
+# init): agent-tasks-mcp-bridge, grounding-mcp, memory-router-*,
+# understanding-gate-claude-*. Optional add-on: a local codebase-oracle
+# MCP server (see comment under tools.mcp below).
 
 version: 1
 
@@ -42,26 +45,27 @@ grounding:
 
 tools:
   mcp:
-    - name: codebase-oracle
-      command: [npx, tsx, ~/git/pandora/codebase-oracle/src/mcp-server.ts]
-      health:
-        verb: oracle_list_repos
-        timeout_ms: 5000
-      enabled: true
+    # codebase-oracle (the Pandora RAG MCP server) is intentionally NOT
+    # in this default. The npm name \`codebase-oracle\` is already taken
+    # by an unrelated CLI, and the Pandora variant is not yet published
+    # under a non-colliding scope. Operators who run from a local
+    # checkout can add it back with (note: \`harness add\` splits the
+    # command on commas, not whitespace):
+    #   harness add mcp codebase-oracle \\
+    #     --command 'npx,tsx,~/git/pandora/codebase-oracle/src/mcp-server.ts'
     - name: agent-tasks
       # Zero-setup entry: \`@agent-tasks/mcp-bridge\` exposes the
-      # \`agent-tasks-mcp-bridge\` binary on PATH after
-      # \`npm i -g @agent-tasks/mcp-bridge\`. The bridge owns token
-      # storage and defaults to the hosted backend, so no env is
-      # required. Override with \`AGENT_TASKS_BASE_URL\` /
-      # \`AGENT_TASKS_TOKEN\` for self-hosted setups.
+      # \`agent-tasks-mcp-bridge\` binary on PATH. The bridge owns token
+      # storage and defaults to the hosted backend; override with
+      # \`AGENT_TASKS_BASE_URL\` / \`AGENT_TASKS_TOKEN\` for self-hosted.
       command: [agent-tasks-mcp-bridge]
       health:
         verb: projects_list
         timeout_ms: 5000
       enabled: true
     - name: grounding-mcp
-      command: [node, ~/git/pandora/agent-grounding/packages/grounding-mcp/dist/server.js]
+      # Published bin from \`@lannguyensi/grounding-mcp\`.
+      command: [grounding-mcp]
       env:
         EVIDENCE_LEDGER_DB: ~/.evidence-ledger/ledger.db
       health:
@@ -70,16 +74,9 @@ tools:
       enabled: true
 
   cli:
-    - name: git-batch
-      binary: git-batch
-      min_version: "0.2.0"
-      required: true
     - name: gh
       binary: gh
       required: true
-    - name: ledger
-      binary: ledger
-      required: false
 
   skills:
     enabled:
@@ -91,14 +88,15 @@ tools:
       - ~/.claude/skills
 
   builtin:
-    known: [Read, Edit, Write, Bash, Agent, Skill, TaskCreate]
+    known: [Read, Edit, Write, Bash, Agent, Skill, TaskCreate, Glob, Grep]
 
 memory:
   directories:
     - path: ~/.claude/projects/{project}/memory
       scope: project
   router:
-    command: [node, ~/git/pandora/agent-memory/packages/memory-router/dist/hooks/user-prompt-submit.js]
+    # Published bin from \`@lannguyensi/memory-router\`.
+    command: [memory-router-user-prompt-submit]
     enabled: true
   retention:
     staleness_days: 180
@@ -107,25 +105,30 @@ memory:
     default: project
     allowed: [project, user]
 
+# All PreToolUse hooks share the generic \`harness policy intercept\` CLI
+# entrypoint. The engine reads the tool event on stdin, evaluates whichever
+# policy below has a matching trigger (\`match\` + optional \`bash_match\`),
+# and emits Claude Code's deny envelope when the required ledger tag is
+# absent. No external shell scripts are required.
+#
+# Operators who want a SessionStart producer that writes \`preflight:\${REPO}\`
+# (so the \`preflight-before-investigation\` policy unblocks) need an
+# agent-preflight-style runner; the bundled \`harness session-start preflight\`
+# builtin is on the roadmap (agent-tasks follow-up). Until then, supply your
+# own \`~/.claude/hooks/git-preflight.sh\` and add an entry here.
 hooks:
-  - name: git-preflight
-    event: SessionStart
-    command: ~/.claude/hooks/git-preflight.sh
-    blocking: false
-    budget_ms: 30000
-    description: "Run agent-preflight on session start; record ready + confidence into the ledger as preflight:\${REPO}."
-
   - name: require-review-evidence
     event: PreToolUse
     match: "mcp__agent-tasks__pull_requests_merge"
-    command: ~/.claude/hooks/require-review-evidence.sh
+    command: harness policy intercept
     blocking: hard
     budget_ms: 2000
 
   - name: require-dogfood-evidence
     event: PreToolUse
     match: "Bash"
-    command: ~/.claude/hooks/require-dogfood-evidence.sh
+    bash_match: "^(npm publish|git tag v.*)"
+    command: harness policy intercept
     blocking: hard
     budget_ms: 2000
 
@@ -133,14 +136,14 @@ hooks:
     event: PreToolUse
     match: "Bash"
     bash_match: "^git (status|log|diff|branch)"
-    command: ~/.claude/hooks/require-preflight-evidence.sh
+    command: harness policy intercept
     blocking: hard
     budget_ms: 1000
 
   - name: require-review-subagent-evidence
     event: PreToolUse
     match: "mcp__agent-tasks__pull_requests_create"
-    command: ~/.claude/hooks/require-review-subagent-evidence.sh
+    command: harness policy intercept
     blocking: hard
     budget_ms: 2000
 
@@ -148,7 +151,7 @@ hooks:
     event: PreToolUse
     match: "Bash"
     bash_match: "^git push"
-    command: ~/.claude/hooks/require-preflight-push-evidence.sh
+    command: harness policy intercept
     blocking: hard
     budget_ms: 1000
 
@@ -212,6 +215,19 @@ policies:
       within: 10m
     hook: require-preflight-push-evidence
     enforcement: block
+
+# Full inherits the Solo/Team understanding-gate stack: the Stop hook
+# persists each Understanding Report and the PreToolUse pre-tool-use
+# blocker refuses Edit/Write/Bash until the report is approved. Drop
+# this block if you want the reference policies above without the
+# baseline gate.
+policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+    enabled: true
+    description: Force agents to expose their task interpretation and wait for explicit human approval before any write-capable tool fires.
+    config:
+      mode: grill_me
 `;
 
 import { SOLO_TEMPLATE, TEAM_TEMPLATE } from "./profiles.js";

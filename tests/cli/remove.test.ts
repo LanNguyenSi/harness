@@ -17,24 +17,15 @@ beforeEach(async () => {
   hooksDir = path.join(tmpHome, "hooks");
   fs.mkdirSync(hooksDir, { recursive: true });
   await init({ homeDir: tmpHome, template: "full" });
-  // Rewrite hook paths in the full template into our tmp hooks dir + chmod +x
-  // so post-remove asset checks (run via add() in setup) and validate stays
-  // honest. Keeping the manifest in the tmpdir entirely avoids touching the
-  // user's real ~/.claude.
-  // Rewrite hook paths into the tmp hooks dir, drop `required:true` from the
-  // full template's CLI entries (CI doesn't have git-batch on PATH so the
-  // post-mutate asset check would otherwise trip in any test that goes through
-  // a verb like add() during setup), and chmod the hook scripts so the asset
-  // check would pass if anyone reruns it on this fixture.
-  const yaml = fs.readFileSync(manifestPath, "utf8")
-    .replace(/~\/\.claude\/hooks\//g, `${hooksDir}/`)
+  // Drop `required: true` from the full template's CLI entries (`gh`) so
+  // the post-mutate asset check does not trip on CI hosts that lack the
+  // binary. Hook scripts no longer apply: the full template since
+  // `harness@>0.9.1` wires every PreToolUse hook through the bundled
+  // `harness policy intercept` engine, so there is nothing to chmod.
+  const yaml = fs
+    .readFileSync(manifestPath, "utf8")
     .replace(/required: true\n/g, "required: false\n");
   fs.writeFileSync(manifestPath, yaml);
-  for (const name of ["git-preflight.sh", "require-review-evidence.sh", "require-dogfood-evidence.sh", "require-preflight-evidence.sh"]) {
-    const p = path.join(hooksDir, name);
-    fs.writeFileSync(p, "#!/bin/sh\nexit 0\n");
-    fs.chmodSync(p, 0o755);
-  }
 });
 
 afterEach(() => {
@@ -54,9 +45,12 @@ describe("remove mcp / cli / skill", () => {
   });
 
   it("removes a cli entry by name", async () => {
-    await remove("cli", "ledger", { configPath: manifestPath, homeDir: tmpHome });
+    // The full template ships a single `gh` cli entry post-refactor;
+    // exercising the remove verb on it is sufficient to lock the
+    // contract.
+    await remove("cli", "gh", { configPath: manifestPath, homeDir: tmpHome });
     const m = readManifest() as { tools?: { cli?: { name: string }[] } };
-    expect(m.tools?.cli?.map((e) => e.name)).not.toContain("ledger");
+    expect(m.tools?.cli?.map((e) => e.name) ?? []).not.toContain("gh");
   });
 
   it("removes a skill name from tools.skills.enabled[]", async () => {
@@ -124,7 +118,9 @@ describe("remove — unknown name", () => {
     ).rejects.toMatchObject({
       name: "HarnessExitError",
       exitCode: 1,
-      message: expect.stringMatching(/codebase-oracle/),
+      // Any of the MCP entries the full template declares is fine; we
+      // just need the error to surface an available-name suggestion.
+      message: expect.stringMatching(/agent-tasks|grounding-mcp/),
     });
   });
 });

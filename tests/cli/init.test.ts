@@ -53,19 +53,40 @@ describe("init — full template", () => {
     const r = await init({ homeDir: tmpHome, template: "full" });
     expect(r.template).toBe("full");
     const yaml = fs.readFileSync(manifestPath, "utf8");
-    // 3 MCP servers per Appendix A
-    expect(yaml).toContain("codebase-oracle");
-    expect(yaml).toContain("agent-tasks");
-    expect(yaml).toContain("grounding-mcp");
-    // 4 hooks per Appendix A (require-preflight-evidence is the founding-incident hook)
-    expect(yaml).toContain("git-preflight");
-    expect(yaml).toContain("require-review-evidence");
-    expect(yaml).toContain("require-dogfood-evidence");
-    expect(yaml).toContain("require-preflight-evidence");
-    // 3 policies per Appendix A
-    expect(yaml).toContain("review-before-merge");
-    expect(yaml).toContain("dogfood-before-release");
-    expect(yaml).toContain("preflight-before-investigation");
+    // Parse to YAML so substring matches against comment prose cannot
+    // create false-greens. Earlier the test asserted on bare strings
+    // like "codebase-oracle"; once those entries moved into comments
+    // the assertion stayed green for the wrong reason.
+    const parsed = parseYaml(yaml) as {
+      tools?: { mcp?: { name: string }[] };
+      hooks?: { name: string }[];
+      policies?: { name: string }[];
+    };
+    const mcpNames = parsed.tools?.mcp?.map((m) => m.name) ?? [];
+    const hookNames = parsed.hooks?.map((h) => h.name) ?? [];
+    const policyNames = parsed.policies?.map((p) => p.name) ?? [];
+    // MCP servers the Full default ships. codebase-oracle was removed
+    // because the npm name collides with an unrelated CLI; operators
+    // who want the Pandora MCP server add it back manually.
+    expect(mcpNames).toContain("agent-tasks");
+    expect(mcpNames).toContain("grounding-mcp");
+    expect(mcpNames).not.toContain("codebase-oracle");
+    // Hooks: all 5 PreToolUse policies now route through the bundled
+    // engine. git-preflight was a SessionStart producer; it depended on
+    // unbundled tools and was removed pending the harness session-start
+    // builtin (follow-up task).
+    expect(hookNames).toContain("require-review-evidence");
+    expect(hookNames).toContain("require-dogfood-evidence");
+    expect(hookNames).toContain("require-preflight-evidence");
+    expect(hookNames).toContain("require-review-subagent-evidence");
+    expect(hookNames).toContain("require-preflight-push-evidence");
+    expect(hookNames).not.toContain("git-preflight");
+    // The 5 reference policies that drive those hooks.
+    expect(policyNames).toContain("review-before-merge");
+    expect(policyNames).toContain("dogfood-before-release");
+    expect(policyNames).toContain("preflight-before-investigation");
+    expect(policyNames).toContain("review-subagent-before-pr-create");
+    expect(policyNames).toContain("preflight-before-push");
   });
 
   it("the full template parses as a schema-valid manifest", async () => {

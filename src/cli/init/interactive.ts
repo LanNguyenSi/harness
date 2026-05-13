@@ -155,10 +155,10 @@ export async function runInteractive(
           description: "Adds the merge gate that blocks PR merges without a review ledger entry.",
         },
         {
-          name: "Full (Team + codebase-oracle + 6 hook policies, REQUIRES MANUAL HOOK SCRIPT SETUP)",
+          name: "Full (Team + 5 reference policies wired through harness policy intercept)",
           value: "full",
           description:
-            "Ships the reference manifest with every example policy (dogfood gate, preflight gates, review-subagent gate). 6 hooks (1 SessionStart, 5 PreToolUse) reference ~/.claude/hooks/*.sh scripts that you must write yourself.",
+            "Ships the reference manifest with every example policy (dogfood gate, preflight gates, review-subagent gate). All hooks run through the bundled `harness policy intercept` engine, so no external shell scripts are required.",
         },
         {
           name: "Custom (advanced, bail out and hand-edit)",
@@ -181,18 +181,6 @@ export async function runInteractive(
         ].join("\n"),
       );
       return { aborted: true, profile };
-    }
-
-    if (profile === "full") {
-      const proceedFull = await prompts.confirm({
-        message:
-          "Full profile ships 6 hooks (1 SessionStart, 5 PreToolUse) that reference ~/.claude/hooks/*.sh scripts: git-preflight, require-review-evidence, require-dogfood-evidence, require-preflight-evidence, require-review-subagent-evidence, require-preflight-push-evidence. These scripts are NOT bundled, so `harness doctor` will report them as missing until you supply them. Continue anyway?",
-        default: false,
-      });
-      if (!proceedFull) {
-        stderr("Aborted: Full profile declined; hook scripts must be authored before adoption.\n");
-        return { aborted: true, profile };
-      }
     }
 
     if (profileNeedsAgentTasks(profile) && !detectionHasAgentTasks(detection)) {

@@ -194,9 +194,26 @@ function buildGroups(hooks: Hook[]): SettingsHookGroup[] {
   const groups: SettingsHookGroup[] = [];
   for (const key of matcherKeys) {
     const groupHooks = byMatcher.get(key) ?? [];
-    const inner: SettingsHookCommand[] = [...groupHooks]
-      .sort((a, b) => (a.command < b.command ? -1 : a.command > b.command ? 1 : 0))
-      .map(toSettingsCommand);
+    // Multiple harness hooks frequently share the same command (the
+    // generic `harness policy intercept` engine is the obvious case:
+    // every PreToolUse policy in the full template wires to it). Claude
+    // Code spawns each entry in `hooks[]` independently for the same
+    // tool event, so emitting duplicates causes redundant Node bootstraps
+    // and ledger queries per tool call. Dedupe by (command, timeout)
+    // inside each matcher group so only one spawn happens per
+    // logically-identical hook, regardless of how many manifest entries
+    // map to it.
+    const seen = new Set<string>();
+    const inner: SettingsHookCommand[] = [];
+    for (const h of [...groupHooks].sort((a, b) =>
+      a.command < b.command ? -1 : a.command > b.command ? 1 : 0,
+    )) {
+      const cmd = toSettingsCommand(h);
+      const fingerprint = `${cmd.command} ${cmd.timeout ?? ""}`;
+      if (seen.has(fingerprint)) continue;
+      seen.add(fingerprint);
+      inner.push(cmd);
+    }
     const group: SettingsHookGroup =
       key === "" ? { hooks: inner } : { matcher: key, hooks: inner };
     groups.push(group);
