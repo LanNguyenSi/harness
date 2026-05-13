@@ -171,8 +171,19 @@ policies:
     enforcement: block
 `;
 
-export type TemplateName = "minimal" | "full";
+import { SOLO_TEMPLATE, TEAM_TEMPLATE } from "./profiles.js";
+
+export type TemplateName = "minimal" | "full" | "solo" | "team";
 
 export function getTemplate(name: TemplateName): string {
-  return name === "full" ? FULL_TEMPLATE : MINIMAL_TEMPLATE;
+  switch (name) {
+    case "full":
+      return FULL_TEMPLATE;
+    case "solo":
+      return SOLO_TEMPLATE;
+    case "team":
+      return TEAM_TEMPLATE;
+    case "minimal":
+      return MINIMAL_TEMPLATE;
+  }
 }

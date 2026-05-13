@@ -14,6 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   servers wired in Claude's `settings.json`. Foundation for the
   `init --interactive` wizard (separate task), standalone-useful for
   operators debugging what the harness sees in their environment.
+- `harness init --template solo|team`: two new opinionated profile
+  templates beside the existing `minimal` / `full` pair. `solo` wires
+  memory-router plus the `understanding-before-execution` policy pack.
+  `team` extends solo with the `agent-tasks` MCP server,
+  `grounding-mcp` (required for policy enforcement to bind, per
+  `feedback_harness_policies_warn_mode`), and the `review-before-merge`
+  policy. Both profiles pass `harness validate` cleanly. The `team`
+  hook command uses the built-in `harness policy intercept` CLI verb,
+  so no per-policy shell script under `~/.claude/hooks/` needs to exist
+  for the gate to fire.
 
 ## [0.8.1] - 2026-05-11
 

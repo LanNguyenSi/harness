@@ -82,7 +82,7 @@ export async function init(opts: InitOptions = {}): Promise<InitResult> {
   return { path: target, template, overwrote: exists, stdout, stderr };
 }
 
-export const KNOWN_TEMPLATES: TemplateName[] = ["minimal", "full"];
+export const KNOWN_TEMPLATES: TemplateName[] = ["minimal", "solo", "team", "full"];
 
 export function isTemplate(s: string): s is TemplateName {
   return (KNOWN_TEMPLATES as string[]).includes(s);

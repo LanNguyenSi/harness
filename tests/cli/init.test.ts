@@ -79,6 +79,68 @@ describe("init — full template", () => {
   });
 });
 
+describe("init — solo profile", () => {
+  it("writes a manifest with memory-router + understanding-before-execution pack", async () => {
+    const r = await init({ homeDir: tmpHome, template: "solo" });
+    expect(r.template).toBe("solo");
+    const yaml = fs.readFileSync(manifestPath, "utf8");
+    expect(yaml).toContain("memory-router");
+    expect(yaml).toContain("understanding-before-execution");
+    expect(yaml).toContain("mode: grill_me");
+    // Solo intentionally does NOT wire agent-tasks or the merge policy.
+    // The comment header may name "agent-tasks" in a negation ("No
+    // agent-tasks loop") so we check the structural keys, not the
+    // raw string.
+    expect(yaml).not.toMatch(/^\s*- name: agent-tasks/m);
+    expect(yaml).not.toMatch(/^\s*- name: review-before-merge/m);
+  });
+
+  it("the solo template passes harness validate cleanly (0 errors, 0 warnings)", async () => {
+    await init({ homeDir: tmpHome, template: "solo" });
+    const v = validate({ configPath: manifestPath });
+    expect(v.errorCount).toBe(0);
+    expect(v.warningCount).toBe(0);
+  });
+});
+
+describe("init — team profile", () => {
+  it("writes a manifest with solo content plus agent-tasks + review-before-merge", async () => {
+    const r = await init({ homeDir: tmpHome, template: "team" });
+    expect(r.template).toBe("team");
+    const yaml = fs.readFileSync(manifestPath, "utf8");
+    expect(yaml).toContain("memory-router");
+    expect(yaml).toContain("understanding-before-execution");
+    expect(yaml).toContain("agent-tasks");
+    expect(yaml).toContain("grounding-mcp");
+    expect(yaml).toContain("review-before-merge");
+    expect(yaml).toContain("mcp__agent-tasks__pull_requests_merge");
+    // Hook command uses the built-in CLI verb, not a placeholder shell script.
+    expect(yaml).toContain("command: harness policy intercept");
+  });
+
+  it("the team template passes harness validate cleanly (0 errors, 0 warnings)", async () => {
+    await init({ homeDir: tmpHome, template: "team" });
+    const v = validate({ configPath: manifestPath });
+    expect(v.errorCount).toBe(0);
+    expect(v.warningCount).toBe(0);
+  });
+
+  it("wires grounding-mcp so the review-before-merge policy does not degrade to warn-mode", async () => {
+    // Memory `feedback_harness_policies_warn_mode`: a manifest with
+    // policies: that doesn't declare grounding-mcp in tools.mcp silently
+    // lets all policies through. The team profile must include
+    // grounding-mcp explicitly to honour the gate.
+    await init({ homeDir: tmpHome, template: "team" });
+    const v = validate({ configPath: manifestPath });
+    const hasPolicyWarning = v.diagnostics.some(
+      (d) =>
+        d.severity === "warning" &&
+        d.message.includes("grounding-mcp not wired"),
+    );
+    expect(hasPolicyWarning).toBe(false);
+  });
+});
+
 describe("init — refuse on existing without --force", () => {
   it("throws HarnessExitError naming the existing path", async () => {
     fs.writeFileSync(manifestPath, "version: 1\n");
