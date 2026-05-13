@@ -167,10 +167,21 @@ describe("pack hook pre-tool-use blocker", () => {
     const decision = JSON.parse(stdout.read().trim()) as {
       decision: string;
       reason: string;
+      hookSpecificOutput?: {
+        hookEventName?: string;
+        permissionDecision?: string;
+        permissionDecisionReason?: string;
+      };
     };
     expect(decision.decision).toBe("block");
     expect(decision.reason).toMatch(/Understanding Gate/);
     expect(decision.reason).toMatch(/harness approve understanding/);
+    // Claude Code 2.1+ envelope: mirrors PR #81 in runtime/intercept.ts.
+    expect(decision.hookSpecificOutput).toEqual({
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: decision.reason,
+    });
     expect(stderr.read()).toMatch(/BLOCK/);
   });
 

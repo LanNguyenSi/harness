@@ -84,10 +84,23 @@ function findGroundingMcp(manifest: Manifest): McpServer | null {
   return manifest.tools.mcp.find((m) => m.name === "grounding-mcp") ?? null;
 }
 
+// The Claude Code "block" envelope. Mirrors the runtime/intercept.ts
+// shape (PR #81): `decision: "block"` keeps legacy 2.0.x CLIs blocking,
+// `hookSpecificOutput.permissionDecision: "deny"` is the Claude Code
+// 2.1+ documented contract for PreToolUse. This hook is always wired to
+// PreToolUse (the pack contributes only a PreToolUse hook), so the
+// envelope is unconditional here — no event-kind branch like
+// runtime/intercept.ts needs.
 function blockJson(toolName: string, reason: string): string {
+  const reasonText = `Understanding Gate: ${reason}. Tool: ${toolName}. Run \`harness approve understanding\` once you have produced and confirmed an Understanding Report.`;
   return JSON.stringify({
     decision: "block",
-    reason: `Understanding Gate: ${reason}. Tool: ${toolName}. Run \`harness approve understanding\` once you have produced and confirmed an Understanding Report.`,
+    reason: reasonText,
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: reasonText,
+    },
   });
 }
 
