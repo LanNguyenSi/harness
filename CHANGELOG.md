@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `harness init --probe`: read-only JSON snapshot of detected runtimes
+  (Claude Code, Codex), the existing `~/.claude/harness.yaml`, and MCP
+  servers wired in Claude's `settings.json`. Foundation for the
+  `init --interactive` wizard (separate task), standalone-useful for
+  operators debugging what the harness sees in their environment.
+
 ## [0.8.1] - 2026-05-11
 
 **Headline: policy-pack enforcement actually blocks now.** 0.8.0 shipped

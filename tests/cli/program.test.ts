@@ -104,6 +104,49 @@ describe("CLI program — --version + --help", () => {
   });
 });
 
+describe("CLI program — init --probe", () => {
+  it("emits a JSON snapshot of detection results, no manifest write", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const pathMod = await import("node:path");
+    const home = fs.mkdtempSync(pathMod.join(os.tmpdir(), "harness-probe-cli-"));
+    fs.mkdirSync(pathMod.join(home, ".claude"));
+    fs.writeFileSync(
+      pathMod.join(home, ".claude", "settings.json"),
+      JSON.stringify({ mcpServers: { "agent-tasks": { command: "node", args: ["x.js"] } } }),
+    );
+    const savedHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const r = await exec(["init", "--probe"]);
+      expect(r.code).toBe(0);
+      expect(r.stderr).toBe("");
+      const parsed = JSON.parse(r.stdout) as {
+        harness: { version: string };
+        runtimes: Array<{ name: string; homeExists: boolean }>;
+        manifest: { exists: boolean };
+        mcpServers: Array<{ name: string }>;
+      };
+      expect(parsed.harness.version).toBe(VERSION);
+      expect(parsed.runtimes.find((x) => x.name === "claude-code")?.homeExists).toBe(true);
+      expect(parsed.manifest.exists).toBe(false);
+      expect(parsed.mcpServers.map((s) => s.name)).toEqual(["agent-tasks"]);
+      // No write side effect.
+      expect(fs.existsSync(pathMod.join(home, ".claude", "harness.yaml"))).toBe(false);
+    } finally {
+      if (savedHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedHome;
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects --probe with --template/--force/--config (read-only contract)", async () => {
+    const r = await exec(["init", "--probe", "--template", "minimal"]);
+    expect(r.code).toBe(64);
+    expect(r.stderr).toMatch(/probe is read-only/);
+  });
+});
+
 describe("CLI program — list + explain commands", () => {
   it("list mcp emits a name-keyed table on stdout", async () => {
     const r = await exec(["list", "mcp", "--config", FULL_MANIFEST]);
