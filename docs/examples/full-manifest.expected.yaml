@@ -109,6 +109,19 @@ hooks:
     bash_match: ^git (status|log|diff|branch)
     blocking: hard
     budget_ms: 1000
+  - name: require-review-subagent-evidence
+    event: PreToolUse
+    command: ~/.claude/hooks/require-review-subagent-evidence.sh
+    match: mcp__agent-tasks__pull_requests_create
+    blocking: hard
+    budget_ms: 2000
+  - name: require-preflight-push-evidence
+    event: PreToolUse
+    command: ~/.claude/hooks/require-preflight-push-evidence.sh
+    match: Bash
+    bash_match: ^git push
+    blocking: hard
+    budget_ms: 1000
 policies:
   - name: review-before-merge
     description: Block PR merges unless a ledger entry tagged review:<pr-number> exists for this session.
@@ -155,6 +168,28 @@ policies:
       ledger_tag: preflight:${REPO}
       within: 1h
     hook: require-preflight-evidence
+    enforcement: block
+  - name: review-subagent-before-pr-create
+    description: Block agent-tasks PR creation unless a review-subagent ledger entry tagged for this task already exists. Forces the rigorous review BEFORE the PR opens, not after.
+    trigger:
+      event: PreToolUse
+      match: mcp__agent-tasks__pull_requests_create
+      extract:
+        TASK_ID: toolArgs.taskId
+    requires:
+      ledger_tag: review-subagent:${TASK_ID}
+    hook: require-review-subagent-evidence
+    enforcement: block
+  - name: preflight-before-push
+    description: Block git push unless a fresh preflight ledger entry exists for the current branch. Catches the stale-checkout class of incident at the last reversible step.
+    trigger:
+      event: PreToolUse
+      match: Bash
+      bash_match: ^git push
+    requires:
+      ledger_tag: preflight:${BRANCH}
+      within: 10m
+    hook: require-preflight-push-evidence
     enforcement: block
 policy_packs:
   - name: understanding-before-execution
