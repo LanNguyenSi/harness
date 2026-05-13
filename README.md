@@ -67,6 +67,33 @@ npm i -g @lannguyensi/harness
 
 The CLI binary is `harness`. Node 20 or newer required.
 
+## First-time setup
+
+```bash
+harness init --interactive
+```
+
+Guided wizard that detects your environment (existing `~/.claude/` and
+`~/.codex/`, MCP servers already wired in `settings.json`, harness
+binary version), picks a profile (`solo` / `team` / `custom`), and
+writes a starting `harness.yaml`. Ctrl-C at any prompt aborts with no
+partial write. Walkthrough + limitations: `docs/init-interactive.md`.
+
+If you prefer non-interactive (CI, fresh-VM provisioning), pick a
+template directly:
+
+```bash
+harness init --template solo   # memory-router + understanding-before-execution pack
+harness init --template team   # solo + agent-tasks MCP + review-before-merge policy
+harness init --template full   # everything from the Appendix A reference manifest
+```
+
+Debug what the harness sees in your env without writing anything:
+
+```bash
+harness init --probe   # JSON snapshot of detected runtimes + MCPs + manifest
+```
+
 ## Try it in 60 seconds
 
 ```bash
