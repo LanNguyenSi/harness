@@ -289,6 +289,165 @@ describe("interactive wizard — no-detection path", () => {
   });
 });
 
+describe("interactive wizard — dependency install", () => {
+  it("offers to install missing packages and continues on success", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    const spawnCalls: string[][] = [];
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      // Empty PATH forces every dep to look missing.
+      dependencyPathEnv: "/nonexistent-bin-dir-for-tests",
+      installSpawn: async (_cmd: string, args: string[]) => {
+        spawnCalls.push(args);
+        return { code: 0, stderr: "" };
+      },
+      prompts: mockPrompts({
+        select: ["solo"],
+        input: ["~/.claude/projects/{project}/memory"],
+        confirm: [
+          true, // accept the install prompt
+          true, // write manifest
+          false, // decline wire-now
+        ],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(false);
+    expect(result.profile).toBe("solo");
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0]?.slice(0, 2)).toEqual(["i", "-g"]);
+    // The two missing solo packages must show up in the install args.
+    expect(spawnCalls[0]).toContain("@lannguyensi/memory-router");
+    expect(spawnCalls[0]).toContain("@lannguyensi/understanding-gate");
+    expect(cap.stderr()).toMatch(/Installed 2 package\(s\) successfully/);
+  });
+
+  it("aborts and does NOT write the manifest when npm install fails", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: "/nonexistent-bin-dir-for-tests",
+      installSpawn: async () => ({ code: 1, stderr: "npm ERR! EACCES\n" }),
+      prompts: mockPrompts({
+        select: ["solo"],
+        input: ["~/.claude/projects/{project}/memory"],
+        confirm: [
+          true, // accept install
+        ],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(true);
+    expect(result.profile).toBe("solo");
+    expect(cap.stderr()).toMatch(/npm install exited 1/);
+    expect(cap.stderr()).toMatch(/Manifest NOT written/);
+    expect(fs.existsSync(path.join(tmpHome, ".claude", "harness.yaml"))).toBe(false);
+  });
+
+  it("aborts when the operator declines the install offer", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    let spawned = false;
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: "/nonexistent-bin-dir-for-tests",
+      installSpawn: async () => {
+        spawned = true;
+        return { code: 0, stderr: "" };
+      },
+      prompts: mockPrompts({
+        select: ["solo"],
+        input: ["~/.claude/projects/{project}/memory"],
+        confirm: [
+          false, // decline install
+        ],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(true);
+    expect(spawned).toBe(false);
+    expect(cap.stderr()).toMatch(/dependencies missing and install declined/);
+    expect(cap.stderr()).toMatch(/To install manually: npm i -g/);
+    expect(fs.existsSync(path.join(tmpHome, ".claude", "harness.yaml"))).toBe(false);
+  });
+});
+
+describe("interactive wizard — Full profile", () => {
+  it("requires explicit hook-script disclaimer before writing the full manifest", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    // Mock everything present + fake spawn so the dep step is a no-op on
+    // hosts that DO miss codebase-oracle. Without the PATH override the
+    // dep check would also prompt and the confirm-queue length would
+    // depend on which dev's machine ran the test.
+    const tmpBin = fs.mkdtempSync(path.join(os.tmpdir(), "harness-deps-present-"));
+    try {
+      for (const bin of [
+        "memory-router-user-prompt-submit",
+        "understanding-gate-claude-hook",
+        "understanding-gate-claude-stop",
+        "agent-tasks-mcp-bridge",
+        "grounding-mcp",
+        "codebase-oracle",
+      ]) {
+        const p = path.join(tmpBin, bin);
+        fs.writeFileSync(p, "#!/bin/sh\n");
+        fs.chmodSync(p, 0o755);
+      }
+      const result = await runInteractive({
+        homeDir: tmpHome,
+        dependencyPathEnv: tmpBin,
+        prompts: mockPrompts({
+          select: ["full"],
+          input: ["~/.claude/projects/{project}/memory"],
+          confirm: [
+            true, // accept hook-script disclaimer
+            true, // proceed despite missing agent-tasks in settings.json
+            true, // write manifest
+            false, // decline wire-now (Full's hooks would fail apply anyway)
+          ],
+        }),
+        stdout: cap.out,
+        stderr: cap.err,
+      });
+      expect(result.aborted).toBe(false);
+      expect(result.profile).toBe("full");
+      expect(fs.existsSync(path.join(tmpHome, ".claude", "harness.yaml"))).toBe(true);
+      const content = fs.readFileSync(path.join(tmpHome, ".claude", "harness.yaml"), "utf8");
+      // Full template carries the additional reference policies that
+      // Team does not ship.
+      expect(content).toContain("review-before-merge");
+      expect(content).toContain("dogfood-before-release");
+      expect(content).toContain("preflight-before-investigation");
+    } finally {
+      fs.rmSync(tmpBin, { recursive: true, force: true });
+    }
+  });
+
+  it("aborts when the operator declines the Full disclaimer", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      prompts: mockPrompts({
+        select: ["full"],
+        confirm: [false], // decline disclaimer
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(true);
+    expect(result.profile).toBe("full");
+    expect(cap.stderr()).toMatch(/hook scripts must be authored before adoption/);
+    expect(fs.existsSync(path.join(tmpHome, ".claude", "harness.yaml"))).toBe(false);
+  });
+});
+
 describe("interactive wizard — Ctrl-C", () => {
   it("treats an ExitPromptError from the prompt library as an abort, writes nothing", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
