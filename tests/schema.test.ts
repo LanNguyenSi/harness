@@ -30,11 +30,28 @@ describe("parseManifest — happy path", () => {
     expect(manifest.tools.mcp).toHaveLength(3);
     expect(manifest.tools.mcp[0]?.name).toBe("codebase-oracle");
     expect(manifest.tools.mcp[2]?.name).toBe("grounding-mcp");
-    expect(manifest.hooks).toHaveLength(4);
-    expect(manifest.policies).toHaveLength(4);
+    expect(manifest.hooks).toHaveLength(6);
+    expect(manifest.policies).toHaveLength(6);
     const reviewPolicy = manifest.policies.find((p) => p.name === "review-before-merge");
     expect(reviewPolicy?.requires.ledger_tag).toBe("review:${PR_NUMBER}");
     expect(reviewPolicy?.trigger.extract?.PR_NUMBER).toBe("toolArgs.prNumber");
+    // Field-level invariants on the two policies added alongside this test.
+    // Schema parsing alone would not catch a typo like `toolArgs.task_id` —
+    // it's grammatical per the extract DSL but would silently never resolve
+    // at runtime. Lock the load-bearing strings explicitly.
+    const reviewSubagentPolicy = manifest.policies.find(
+      (p) => p.name === "review-subagent-before-pr-create",
+    );
+    expect(reviewSubagentPolicy?.trigger.match).toBe("mcp__agent-tasks__pull_requests_create");
+    expect(reviewSubagentPolicy?.trigger.extract?.TASK_ID).toBe("toolArgs.taskId");
+    expect(reviewSubagentPolicy?.requires.ledger_tag).toBe("review-subagent:${TASK_ID}");
+    const preflightPushPolicy = manifest.policies.find(
+      (p) => p.name === "preflight-before-push",
+    );
+    expect(preflightPushPolicy?.trigger.match).toBe("Bash");
+    expect(preflightPushPolicy?.trigger.bash_match).toBe("^git push");
+    expect(preflightPushPolicy?.requires.ledger_tag).toBe("preflight:${BRANCH}");
+    expect(preflightPushPolicy?.requires.within).toBe("10m");
     expect(manifest.policy_packs).toHaveLength(1);
     expect(manifest.policy_packs[0]?.name).toBe("understanding-before-execution");
     expect(manifest.policy_packs[0]?.source).toBe("builtin");

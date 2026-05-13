@@ -40,6 +40,8 @@ describe("list — categories", () => {
       "require-review-evidence",
       "require-dogfood-evidence",
       "require-preflight-evidence",
+      "require-review-subagent-evidence",
+      "require-preflight-push-evidence",
     ]);
     const head = r.rows[0]!;
     expect(head.event).toBe("SessionStart");
@@ -53,6 +55,8 @@ describe("list — categories", () => {
       "dogfood-before-release",
       "two-reviewers-required",
       "preflight-before-investigation",
+      "review-subagent-before-pr-create",
+      "preflight-before-push",
     ]);
     expect(r.rows[0]!.enforcement).toBe("block");
   });

@@ -198,6 +198,43 @@ After the entry is recorded, the same call is allowed. `harness audit
 `harness explain review-before-merge --trace` walks the requires
 evaluator step by step so you can see what matched.
 
+## More policy patterns
+
+Three gates worth copying from
+[`docs/examples/full-manifest.yaml`](examples/full-manifest.yaml) once
+the first one feels comfortable. The first two were added alongside
+this section; `dogfood-before-release` has been in the reference
+manifest since v0.4.0 and is included here so the cluster reads as a
+coherent set. Each maps to a recurring incident class rather than to a
+theoretical risk.
+
+**`review-subagent-before-pr-create`**: gates
+`mcp__agent-tasks__pull_requests_create` on a
+`review-subagent:${TASK_ID}` ledger entry. Stronger than
+`review-before-merge` because it forces the rigorous-review subagent to
+have actually run BEFORE the PR opens, not after. The motivating
+incident: a batch of 60 README audit tasks once shipped 5 broken PRs
+because review was skipped pre-merge; gating PR creation instead of
+merge catches the failure earlier.
+
+**`preflight-before-push`**: gates `Bash` calls matching `^git push` on
+a `preflight:${BRANCH}` ledger entry with `within: 10m`. Complements
+the read-side `preflight-before-investigation` (which gates
+`git status / log / diff / branch`). Catches the stale-checkout class
+of incident at the last reversible step: an operator who started work
+on a 16-commits-behind branch can still notice and pull before the
+push lands on the remote.
+
+**`dogfood-before-release`**: gates `npm publish` and `git tag v*` on a
+fresh `dogfood:${SESSION_ID}` entry (`within: 24h`). Tags pushed in
+bulk only fire one workflow on GitHub, so the smoke test you skip
+sometimes ships untested versions silently. The gate makes that
+impossible.
+
+All three are written out in the reference manifest. Copy the hook
+declaration and the policy declaration together; both sides of the
+pair are required for `harness apply` to wire the gate end-to-end.
+
 ## What you should NOT do
 
 - Do not hand-edit anything under `harness.generated/`. It gets
