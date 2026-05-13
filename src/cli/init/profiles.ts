@@ -50,7 +50,10 @@ memory:
     - path: ~/.claude/projects/{project}/memory
       scope: project
   router:
-    command: [node, ~/git/pandora/agent-memory/packages/memory-router/dist/hooks/user-prompt-submit.js]
+    # \`memory-router-user-prompt-submit\` is the published bin from
+    # \`@lannguyensi/memory-router\`. \`harness init\` offers to
+    # \`npm i -g\` it for you; doctor expects it on PATH.
+    command: [memory-router-user-prompt-submit]
     enabled: true
   retention:
     staleness_days: 180
@@ -107,7 +110,9 @@ tools:
         timeout_ms: 5000
       enabled: true
     - name: grounding-mcp
-      command: [node, ~/git/pandora/agent-grounding/packages/grounding-mcp/dist/server.js]
+      # \`grounding-mcp\` bin is published in \`@lannguyensi/grounding-mcp\`.
+      # \`harness init\` offers to \`npm i -g\` it for you.
+      command: [grounding-mcp]
       env:
         EVIDENCE_LEDGER_DB: ~/.evidence-ledger/ledger.db
       health:
@@ -122,7 +127,10 @@ memory:
     - path: ~/.claude/projects/{project}/memory
       scope: project
   router:
-    command: [node, ~/git/pandora/agent-memory/packages/memory-router/dist/hooks/user-prompt-submit.js]
+    # \`memory-router-user-prompt-submit\` is the published bin from
+    # \`@lannguyensi/memory-router\`. \`harness init\` offers to
+    # \`npm i -g\` it for you; doctor expects it on PATH.
+    command: [memory-router-user-prompt-submit]
     enabled: true
   retention:
     staleness_days: 180

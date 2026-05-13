@@ -27,8 +27,14 @@ import { detect, type DetectionResult } from "./detect.js";
 import { init, type InitResult } from "./index.js";
 import { validate } from "../validate/index.js";
 import { apply, type ApplyResult } from "../apply/index.js";
+import {
+  checkDependencies,
+  formatDependencyTable,
+  installPackagesGlobally,
+  type InstallOptions,
+} from "./dependencies.js";
 
-export type ProfileChoice = "solo" | "team" | "custom";
+export type ProfileChoice = "solo" | "team" | "full" | "custom";
 
 export interface InteractivePrompts {
   select: typeof select;
@@ -46,6 +52,15 @@ export interface RunInteractiveOptions {
   /** Force-confirm overwrite of existing manifest. Real users go through
    * the prompt; tests can pre-set this. */
   forceOverwrite?: boolean;
+  /** Override the `npm i -g` runner. Tests fake success/failure here. */
+  installSpawn?: InstallOptions["spawn"];
+  /**
+   * Override the PATH probed by the dependency check. Tests set this
+   * to a directory with no binaries (or a curated one) to exercise the
+   * "everything missing" / "partially installed" branches without
+   * needing the real packages on the test host.
+   */
+  dependencyPathEnv?: string;
 }
 
 export interface InteractiveResult {
@@ -85,7 +100,10 @@ function summariseDetection(d: DetectionResult): string {
 }
 
 function profileNeedsAgentTasks(profile: ProfileChoice): boolean {
-  return profile === "team";
+  // Full inherits the team layer, including the agent-tasks MCP and
+  // the review-before-merge policy, so it has the same Claude-side
+  // wiring requirement as Team.
+  return profile === "team" || profile === "full";
 }
 
 function detectionHasAgentTasks(d: DetectionResult): boolean {
@@ -137,10 +155,16 @@ export async function runInteractive(
           description: "Adds the merge gate that blocks PR merges without a review ledger entry.",
         },
         {
+          name: "Full (Team + codebase-oracle + 6 hook policies, REQUIRES MANUAL HOOK SCRIPT SETUP)",
+          value: "full",
+          description:
+            "Ships the reference manifest with every example policy (dogfood gate, preflight gates, review-subagent gate). 6 hooks (1 SessionStart, 5 PreToolUse) reference ~/.claude/hooks/*.sh scripts that you must write yourself.",
+        },
+        {
           name: "Custom (advanced, bail out and hand-edit)",
           value: "custom",
           description:
-            "Print the install layout and exit. Run `harness init --template full` to get the full reference manifest and edit it directly.",
+            "Print the install layout and exit. Use this when none of the profiles fit and you plan to author the manifest from scratch.",
         },
       ],
     })) as ProfileChoice;
@@ -148,26 +172,87 @@ export async function runInteractive(
     if (profile === "custom") {
       stderr(
         [
-          "Custom profile selected. The interactive wizard does not yet build",
-          "manifests à la carte. Run `harness init --template full` to land",
-          "the full Appendix A manifest, then hand-edit it. Detection results",
-          "above tell you what the harness already sees in your environment.",
+          "Custom profile selected. The interactive wizard does not build",
+          "manifests à la carte. Start from `harness init --template minimal`",
+          "or `harness init --template full` for the reference manifest, then",
+          "edit it directly. Detection results above tell you what the",
+          "harness already sees in your environment.",
           "",
         ].join("\n"),
       );
       return { aborted: true, profile };
     }
 
+    if (profile === "full") {
+      const proceedFull = await prompts.confirm({
+        message:
+          "Full profile ships 6 hooks (1 SessionStart, 5 PreToolUse) that reference ~/.claude/hooks/*.sh scripts: git-preflight, require-review-evidence, require-dogfood-evidence, require-preflight-evidence, require-review-subagent-evidence, require-preflight-push-evidence. These scripts are NOT bundled, so `harness doctor` will report them as missing until you supply them. Continue anyway?",
+        default: false,
+      });
+      if (!proceedFull) {
+        stderr("Aborted: Full profile declined; hook scripts must be authored before adoption.\n");
+        return { aborted: true, profile };
+      }
+    }
+
     if (profileNeedsAgentTasks(profile) && !detectionHasAgentTasks(detection)) {
       const proceed = await prompts.confirm({
         message:
-          "The Team profile wires the agent-tasks MCP via the `agent-tasks-mcp-bridge` binary. Claude's settings.json does not yet declare it; the wizard will offer to wire it in a moment via `harness apply --target ~/.claude/settings.json --merge`. Make sure the bridge is installed (`npm i -g @agent-tasks/mcp-bridge`). Proceed?",
+          "The Team profile wires the agent-tasks MCP via the `agent-tasks-mcp-bridge` binary. Claude's settings.json does not yet declare it; the wizard will offer to install missing packages and wire it in a moment via `harness apply --target ~/.claude/settings.json --merge`. Proceed?",
         default: true,
       });
       if (!proceed) {
         stderr("Aborted: Team profile declined because agent-tasks is not yet wired.\n");
         return { aborted: true, profile };
       }
+    }
+
+    // Dependency check + install. Runs before the manifest is written
+    // so an `npm i -g` failure leaves no half-installed state behind.
+    // The operator decision (2026-05-13) is: abort on install error,
+    // surface the npm output, let the user fix npm and re-run init.
+    const depResult = checkDependencies(
+      profile,
+      opts.dependencyPathEnv !== undefined ? { pathEnv: opts.dependencyPathEnv } : {},
+    );
+    if (depResult.statuses.length > 0) {
+      stderr(`\n${formatDependencyTable(profile, depResult)}\n`);
+    }
+    if (depResult.missingPackages.length > 0) {
+      const installNow = await prompts.confirm({
+        message: `Install ${depResult.missingPackages.length} missing package(s) with \`npm i -g ${depResult.missingPackages.join(" ")}\`?`,
+        default: true,
+      });
+      if (!installNow) {
+        stderr(
+          [
+            "",
+            "Aborted: dependencies missing and install declined.",
+            `To install manually: npm i -g ${depResult.missingPackages.join(" ")}`,
+            "Then re-run `harness init --interactive`.",
+            "",
+          ].join("\n"),
+        );
+        return { aborted: true, profile };
+      }
+      stderr(`\nRunning npm i -g ${depResult.missingPackages.join(" ")}\n`);
+      const installResult = await installPackagesGlobally(
+        depResult.missingPackages,
+        opts.installSpawn ? { spawn: opts.installSpawn } : {},
+      );
+      if (!installResult.ok) {
+        stderr(
+          [
+            "",
+            `Aborted: npm install exited ${installResult.exitCode}. Manifest NOT written.`,
+            "Common fixes: re-run with sudo, switch nvm to a writable node, or check network proxy.",
+            `Then re-run: harness init --interactive`,
+            "",
+          ].join("\n"),
+        );
+        return { aborted: true, profile };
+      }
+      stderr(`Installed ${installResult.attempted.length} package(s) successfully.\n`);
     }
 
     const defaultMemoryDir = path.join(detection.runtimes[0]?.home ?? "~/.claude", "projects", "{project}", "memory");
@@ -189,8 +274,8 @@ export async function runInteractive(
       return { aborted: true, profile };
     }
 
-    // `custom` was handled above with an early return, so the remaining
-    // value is one of the two real TemplateName entries.
+    // `custom` returned early above; the remaining values map 1:1 to
+    // TemplateName entries that `init()` understands.
     //
     // Path semantics are deliberately split: detect() treats `homeDir`
     // as the user's $HOME and synthesizes `.claude` from it, while
@@ -198,7 +283,7 @@ export async function runInteractive(
     // by passing the .claude path explicitly when the caller overrides
     // homeDir (test scenarios). When unset, both fall back to their own
     // defaults from os.homedir().
-    const initOpts: { template: "solo" | "team"; force: boolean; homeDir?: string } = {
+    const initOpts: { template: "solo" | "team" | "full"; force: boolean; homeDir?: string } = {
       template: profile,
       force: detection.manifest.exists,
     };
