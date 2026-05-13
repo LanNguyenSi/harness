@@ -111,10 +111,12 @@ tools:
       enabled: true
     - name: grounding-mcp
       # \`grounding-mcp\` bin is published in \`@lannguyensi/grounding-mcp\`.
-      # \`harness init\` offers to \`npm i -g\` it for you.
+      # \`harness init\` offers to \`npm i -g\` it for you. No env is set:
+      # the bundled default resolves to \`~/.evidence-ledger/ledger.db\`
+      # via os.homedir() at startup. Passing a literal tilde in env
+      # bypasses shell expansion and creates rogue cwd-relative DB files
+      # (see agent-tasks/42d224a6 incident).
       command: [grounding-mcp]
-      env:
-        EVIDENCE_LEDGER_DB: ~/.evidence-ledger/ledger.db
       health:
         verb: ledger_status
         timeout_ms: 5000

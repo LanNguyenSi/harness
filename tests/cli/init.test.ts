@@ -98,6 +98,38 @@ describe("init — full template", () => {
     const r = validateBeforeWrite(parseYaml(yaml));
     expect(r.ok).toBe(true);
   });
+
+  it("no MCP env entry carries a literal `~/` path (agent-tasks/42d224a6 regression)", async () => {
+    // Background: better-sqlite3 (and node's fs primitives) open literal
+    // tilde paths as cwd-relative, not $HOME-relative. The harness used
+    // to wire `env: { EVIDENCE_LEDGER_DB: "~/.evidence-ledger/ledger.db" }`
+    // on the grounding-mcp entry; this produced cwd-relative rogue DBs
+    // scattered across the operator's filesystem and silently broke the
+    // approve/gate round-trip (approve wrote to one rogue DB, gate read
+    // from another). Lock the contract here: no template ever ships an
+    // env value beginning with `~/`. Use absolute paths or omit the env
+    // entirely (the bundled defaults use os.homedir() at startup).
+    for (const template of ["solo", "team", "full"] as const) {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `tilde-${template}-`));
+      try {
+        await init({ homeDir: tmp, template });
+        const yaml = fs.readFileSync(path.join(tmp, "harness.yaml"), "utf8");
+        const parsed = parseYaml(yaml) as {
+          tools?: { mcp?: { name: string; env?: Record<string, string> }[] };
+        };
+        for (const m of parsed.tools?.mcp ?? []) {
+          for (const [key, value] of Object.entries(m.env ?? {})) {
+            expect(
+              value.startsWith("~/"),
+              `${template} template: tools.mcp.${m.name}.env.${key} = ${value}`,
+            ).toBe(false);
+          }
+        }
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    }
+  });
 });
 
 describe("init — solo profile", () => {

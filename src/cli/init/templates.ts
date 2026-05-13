@@ -64,10 +64,12 @@ tools:
         timeout_ms: 5000
       enabled: true
     - name: grounding-mcp
-      # Published bin from \`@lannguyensi/grounding-mcp\`.
+      # Published bin from \`@lannguyensi/grounding-mcp\`. No env is set:
+      # the bundled default resolves to \`~/.evidence-ledger/ledger.db\`
+      # via os.homedir() at startup. Passing a literal tilde in env
+      # bypasses shell expansion and creates rogue cwd-relative DB files
+      # (see agent-tasks/42d224a6 incident).
       command: [grounding-mcp]
-      env:
-        EVIDENCE_LEDGER_DB: ~/.evidence-ledger/ledger.db
       health:
         verb: ledger_status
         timeout_ms: 5000

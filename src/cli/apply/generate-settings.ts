@@ -173,7 +173,26 @@ export function buildMcpServers(
     // tokens[0]! is safe — guarded by the length check above.
     const spec: SettingsMcpServer = { command: tokens[0]! };
     if (tokens.length > 1) spec.args = tokens.slice(1);
-    if (e.env && Object.keys(e.env).length > 0) spec.env = { ...e.env };
+    if (e.env && Object.keys(e.env).length > 0) {
+      // Warn on values that look like paths starting with a literal `~`.
+      // Claude Code passes these to the MCP child verbatim; libraries that
+      // do file-system lookups (better-sqlite3, fs.readFileSync, ...) then
+      // open them as cwd-relative paths, NOT $HOME-relative. The bug
+      // surfaced in agent-tasks/42d224a6 where `EVIDENCE_LEDGER_DB:
+      // ~/.evidence-ledger/ledger.db` silently created rogue DBs scattered
+      // across spawn cwds. We only warn (not error) because a literal
+      // tilde could be intentional in a few exotic cases, but the
+      // diagnostic surface tells the operator to switch to an absolute
+      // path or drop the env so the bundled default fires.
+      for (const [key, value] of Object.entries(e.env)) {
+        if (typeof value === "string" && value.startsWith("~/")) {
+          warnings.push(
+            `tools.mcp.${e.name}.env.${key}: value "${value}" starts with a literal ~ ; child processes will treat this as cwd-relative, not $HOME-relative. Use an absolute path (e.g. "/home/you/...") or drop the env if the default suffices.`,
+          );
+        }
+      }
+      spec.env = { ...e.env };
+    }
     out[e.name] = spec;
   }
   return out;
