@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   servers wired in Claude's `settings.json`. Foundation for the
   `init --interactive` wizard (separate task), standalone-useful for
   operators debugging what the harness sees in their environment.
+- `harness init --interactive`: guided wizard that detects the
+  environment, picks a profile (Solo / Team / Custom), confirms a
+  memory directory, writes the manifest, and runs `harness validate`.
+  Aborts cleanly on Ctrl-C with no partial write. The wizard never
+  invokes `harness apply` itself, it prints the suggested command and
+  lets the operator review the manifest first. Adds `@inquirer/prompts`
+  as a runtime dependency. Operator docs: `docs/init-interactive.md`.
+  E2E smoke: `dogfood/interactive-init/scripted-solo.mjs`.
 - `harness init --template solo|team`: two new opinionated profile
   templates beside the existing `minimal` / `full` pair. `solo` wires
   memory-router plus the `understanding-before-execution` policy pack.
