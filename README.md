@@ -136,6 +136,9 @@ The CLI binary is `harness`. Node 20 or newer required.
 
 ## First-time setup
 
+In a hurry? [`docs/quickstart.md`](docs/quickstart.md) is the bare
+command path, install to wired-in, no prose.
+
 ```bash
 harness init --interactive
 ```
