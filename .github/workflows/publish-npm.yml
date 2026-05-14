@@ -3,6 +3,12 @@ name: Publish to npm
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v0.10.0). The tag must already exist on the repo."
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -13,12 +19,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           registry-url: "https://registry.npmjs.org"
+
+      - name: Resolve release tag
+        id: tag
+        env:
+          RESOLVED_TAG: ${{ inputs.tag || github.ref_name }}
+        run: echo "name=${RESOLVED_TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Preflight, verify NPM_TOKEN secret is set
         env:
@@ -33,11 +47,13 @@ jobs:
         run: npm ci
 
       - name: Verify package.json version matches tag
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
         run: |
-          tag_version="${GITHUB_REF_NAME#v}"
+          tag_version="${TAG#v}"
           pkg_version=$(node -p "require('./package.json').version")
           if [ "$pkg_version" != "$tag_version" ]; then
-            echo "Tag version ($tag_version) does not match package.json ($pkg_version)" >&2
+            echo "::error::Tag version ($tag_version) does not match package.json ($pkg_version)" >&2
             exit 1
           fi
 
@@ -50,4 +66,45 @@ jobs:
       - name: Publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --provenance
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          pkg=$(node -p "require('./package.json').name")
+
+          # Idempotency: a re-run (workflow_dispatch, or "Re-run failed jobs")
+          # can land on a version a prior attempt already published.
+          if npm view "${pkg}@${version}" version > /dev/null 2>&1; then
+            echo "::notice::${pkg}@${version} is already on the registry; nothing to publish."
+            exit 0
+          fi
+
+          # Sigstore Rekor occasionally returns a transient TLOG_CREATE_ENTRY
+          # 409 (npm/cli#6892) that fails --provenance even though the tarball
+          # is fine. Retry up to 3 times with exponential backoff, and treat
+          # "already published" as success in case a failed attempt actually
+          # reached the registry.
+          max=3
+          attempt=1
+          while true; do
+            echo "npm publish attempt ${attempt}/${max}"
+            if npm publish --access public --provenance; then
+              echo "::notice::Published ${pkg}@${version} on attempt ${attempt}."
+              exit 0
+            fi
+            # A failed --provenance publish can still have landed the tarball;
+            # give the registry a moment to settle before checking.
+            sleep 5
+            if npm view "${pkg}@${version}" version > /dev/null 2>&1; then
+              echo "::notice::${pkg}@${version} reached the registry despite a non-zero publish exit; treating as success."
+              exit 0
+            fi
+            if [ "${attempt}" -ge "${max}" ]; then
+              echo "::error::npm publish failed after ${max} attempts. If the failure is a Sigstore TLog 409, re-run this workflow (Actions -> Publish to npm -> Run workflow) once the Rekor service recovers." >&2
+              exit 1
+            fi
+            backoff=$((2 ** attempt * 5))
+            echo "publish failed; retrying in ${backoff}s"
+            sleep "${backoff}"
+            attempt=$((attempt + 1))
+          done
