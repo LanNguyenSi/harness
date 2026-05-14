@@ -1093,7 +1093,15 @@ export function buildProgram(opts: RunOptions = {}): Command {
         if (options.approvedBy) cliOpts.approvedBy = options.approvedBy;
         const result = await approveUnderstanding(cliOpts);
         const lines: string[] = [];
-        lines.push(`session: ${result.sessionId}`);
+        // Annotate non-explicit session sources so the operator can spot
+        // a wrong id before it lands in the ledger.
+        const sourceNote =
+          result.sessionSource === "pending-approval"
+            ? " (resolved from .pending-approval staged by the gate hook)"
+            : result.sessionSource === "env"
+              ? " (from $CLAUDE_SESSION_ID)"
+              : "";
+        lines.push(`session: ${result.sessionId}${sourceNote}`);
         if (result.ledger.ok) {
           lines.push(`ledger:  ✓ wrote ${result.ledger.tag}`);
         } else {

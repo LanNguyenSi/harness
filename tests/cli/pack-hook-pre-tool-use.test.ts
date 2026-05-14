@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runPackHookPreToolUseCli } from "../../src/cli/pack/hook-pre-tool-use.js";
 import type { LedgerEntry } from "../../src/policies/index.js";
+import { readPendingApproval } from "../../src/runtime/pending-approval.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
 let tmp: string;
@@ -392,5 +393,99 @@ describe("pack hook pre-tool-use blocker — operator-approval escape commands (
     expect(result.asked).toBeFalsy();
     expect(result.approvalCheck.source).toBe("ledger");
     expect(stdout.read()).toBe("");
+  });
+});
+
+describe("pack hook pre-tool-use blocker — .pending-approval staging (task 33abc147)", () => {
+  it("stages the session id when it blocks a normal tool", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event({ tool_name: "Edit" })),
+      stdout: bufferStream().stream,
+      stderr: bufferStream().stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(readPendingApproval(generatedDir)).toBe("sess-1");
+  });
+
+  it("stages the session id on the ask path (operator-approval escape command)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        event({ tool_name: "Bash", tool_input: { command: "harness approve understanding" } }),
+      ),
+      stdout: bufferStream().stream,
+      stderr: bufferStream().stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.asked).toBe(true);
+    expect(readPendingApproval(generatedDir)).toBe("sess-1");
+  });
+
+  it("does NOT stage anything when a source already approves (allow path)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event()),
+      stdout: bufferStream().stream,
+      stderr: bufferStream().stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (sessionId): Promise<LedgerEntry[]> => [
+        {
+          id: "1",
+          content: `understanding-approved:${sessionId}`,
+          createdAt: "2026-05-07T08:00:00Z",
+        },
+      ],
+    });
+    expect(result.blocked).toBe(false);
+    expect(readPendingApproval(generatedDir)).toBeNull();
+  });
+
+  it("blocks normally even when no generatedDir is resolvable (staging skipped)", async () => {
+    // An injected manifest carries no resolved path, so generatedDir is
+    // undefined and staging is skipped — but the block must still fire.
+    const stdout = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event({ tool_name: "Edit" })),
+      stdout: stdout.stream,
+      stderr: bufferStream().stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    const decision = JSON.parse(stdout.read().trim()) as { decision: string };
+    expect(decision.decision).toBe("block");
+  });
+
+  it("blocks normally even when the staging write throws (best-effort)", async () => {
+    // Force writePendingApproval to throw: a regular file sits where the
+    // generated dir's parent component should be, so the mkdir inside
+    // atomicWriteFile fails with ENOTDIR. The block must still fire.
+    const notADir = path.join(tmp, "not-a-dir");
+    fs.writeFileSync(notADir, "");
+    const generatedDir = path.join(notADir, "harness.generated");
+    const stdout = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event({ tool_name: "Edit" })),
+      stdout: stdout.stream,
+      stderr: bufferStream().stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    const decision = JSON.parse(stdout.read().trim()) as { decision: string };
+    expect(decision.decision).toBe("block");
   });
 });
