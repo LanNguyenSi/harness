@@ -29,8 +29,9 @@ tools:
       enabled: true
     - name: grounding-mcp
       command: [node, ~/git/pandora/agent-grounding/packages/grounding-mcp/dist/server.js]
-      env:
-        EVIDENCE_LEDGER_DB: ~/.evidence-ledger/ledger.db
+      # No env block on purpose: grounding-mcp resolves EVIDENCE_LEDGER_DB via
+      # os.homedir(). A literal `~` here is not expanded and scatters a rogue
+      # ./~/.evidence-ledger/ledger.db relative to cwd (v0.10.0 template fix).
       health:
         verb: ledger_status
         timeout_ms: 5000
