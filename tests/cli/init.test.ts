@@ -71,16 +71,16 @@ describe("init — full template", () => {
     expect(mcpNames).toContain("agent-tasks");
     expect(mcpNames).toContain("grounding-mcp");
     expect(mcpNames).not.toContain("codebase-oracle");
-    // Hooks: all 5 PreToolUse policies now route through the bundled
-    // engine. git-preflight was a SessionStart producer; it depended on
-    // unbundled tools and was removed pending the harness session-start
-    // builtin (follow-up task).
+    // Hooks: 5 PreToolUse policy gates route through the bundled
+    // `harness policy intercept` engine, plus the `git-preflight`
+    // SessionStart producer (`harness session-start preflight`), which
+    // is the write side that satisfies the preflight-before-* policies.
     expect(hookNames).toContain("require-review-evidence");
     expect(hookNames).toContain("require-dogfood-evidence");
     expect(hookNames).toContain("require-preflight-evidence");
     expect(hookNames).toContain("require-review-subagent-evidence");
     expect(hookNames).toContain("require-preflight-push-evidence");
-    expect(hookNames).not.toContain("git-preflight");
+    expect(hookNames).toContain("git-preflight");
     // The 5 reference policies that drive those hooks.
     expect(policyNames).toContain("review-before-merge");
     expect(policyNames).toContain("dogfood-before-release");

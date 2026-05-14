@@ -44,15 +44,17 @@ describe("dependenciesForProfile — chain composition", () => {
     expect(new Set(bins).size).toBe(bins.length);
   });
 
-  it("full inherits the team chain unchanged (no extra Full-only npm deps)", () => {
-    // Full ships extra policies and skills, but the binary dependencies
-    // are the same set as Team: the Pandora-only `codebase-oracle` MCP
-    // server is not yet published under a non-colliding npm name, so it
-    // is not declared in the dependency chain.
+  it("full extends the team chain with the agent-preflight producer", () => {
+    // Full inherits the whole Team chain and adds exactly one binary:
+    // `preflight` (the SessionStart preflight producer). The Pandora-only
+    // `codebase-oracle` MCP server is still not in the chain — it is not
+    // yet published under a non-colliding npm name.
     const fullBins = dependenciesForProfile("full").map((d) => d.binary);
     const teamBins = dependenciesForProfile("team").map((d) => d.binary);
-    expect(fullBins).toEqual(teamBins);
+    expect(fullBins).toEqual([...teamBins, "preflight"]);
     expect(fullBins).not.toContain("codebase-oracle");
+    const preflight = dependenciesForProfile("full").find((d) => d.binary === "preflight");
+    expect(preflight?.npmPackage).toBe("@lannguyensi/agent-preflight");
   });
 });
 

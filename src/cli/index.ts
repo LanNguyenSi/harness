@@ -35,6 +35,7 @@ import { audit, type AuditOutcome } from "./audit.js";
 import { sessionExport, type ExportFormat } from "./session-export/index.js";
 import { dryRun } from "./dry-run.js";
 import { runInterceptCli } from "./policy/intercept.js";
+import { runSessionStartPreflight } from "./session-start/index.js";
 import {
   formatSmokeReport,
   runSmoke,
@@ -1369,6 +1370,41 @@ export function buildProgram(opts: RunOptions = {}): Command {
       if (result.exitCode !== 0) {
         throw new HarnessExitError("", result.exitCode);
       }
+    });
+
+  const sessionStart = program
+    .command("session-start")
+    .description("SessionStart hook entrypoints (called by Claude Code via settings.json)");
+  sessionStart
+    .command("preflight")
+    .description(
+      "SessionStart producer: run agent-preflight against the session cwd and, on a ready:true result, " +
+        "record a `preflight:${REPO}` fact to the evidence ledger so the preflight-before-* policies have a " +
+        "fresh tag to match. Reads SessionStart event JSON from stdin ({ session_id, cwd, hook_event_name }). " +
+        "blocking:false — every failure path logs to stderr and exits 0.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option("--timeout <ms>", "agent-preflight subprocess timeout in milliseconds (default 25000)")
+    .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
+    .action(async (options: {
+      config?: string;
+      project?: string;
+      timeout?: string;
+      ledgerTimeout?: string;
+    }) => {
+      const cliOpts: Parameters<typeof runSessionStartPreflight>[0] = {};
+      if (options.config) cliOpts.configPath = options.config;
+      if (options.project) cliOpts.project = options.project;
+      if (options.timeout) {
+        const n = Number.parseInt(options.timeout, 10);
+        if (Number.isFinite(n) && n > 0) cliOpts.preflightTimeoutMs = n;
+      }
+      if (options.ledgerTimeout) {
+        const n = Number.parseInt(options.ledgerTimeout, 10);
+        if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
+      }
+      await runSessionStartPreflight(cliOpts);
     });
 
   const policy = program.command("policy").description("Policy runtime verbs");

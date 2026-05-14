@@ -69,13 +69,23 @@ export const PROFILE_DEPENDENCIES: Record<Exclude<ProfileChoice, "custom">, Prof
       description: "grounding-mcp MCP server",
     },
   ],
-  // Full inherits everything from Solo + Team. The Pandora-specific
-  // codebase-oracle MCP server is not in the default Full chain because
-  // it is not yet published under a non-colliding npm name (the
-  // top-level `codebase-oracle` package on the registry is an unrelated
-  // CLI). Operators who want it can `harness add mcp codebase-oracle`
-  // pointing at their local checkout.
-  full: [],
+  // Full inherits everything from Solo + Team, and adds the
+  // SessionStart preflight producer: the `git-preflight` hook shells out
+  // to `agent-preflight` (`preflight` binary) to write `preflight:${REPO}`
+  // to the ledger, which is what the `preflight-before-*` policies match.
+  //
+  // The Pandora-specific codebase-oracle MCP server is not in the
+  // default Full chain because it is not yet published under a
+  // non-colliding npm name (the top-level `codebase-oracle` package on
+  // the registry is an unrelated CLI). Operators who want it can
+  // `harness add mcp codebase-oracle` pointing at their local checkout.
+  full: [
+    {
+      binary: "preflight",
+      npmPackage: "@lannguyensi/agent-preflight",
+      description: "agent-preflight (SessionStart preflight producer)",
+    },
+  ],
 };
 
 /**

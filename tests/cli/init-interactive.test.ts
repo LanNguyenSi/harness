@@ -71,6 +71,7 @@ beforeEach(() => {
     "understanding-gate-claude-stop",
     "agent-tasks-mcp-bridge",
     "grounding-mcp",
+    "preflight",
     "codebase-oracle",
   ]) {
     const p = path.join(fakeDepsPath, bin);

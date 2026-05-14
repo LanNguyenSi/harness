@@ -113,12 +113,21 @@ memory:
 # and emits Claude Code's deny envelope when the required ledger tag is
 # absent. No external shell scripts are required.
 #
-# Operators who want a SessionStart producer that writes \`preflight:\${REPO}\`
-# (so the \`preflight-before-investigation\` policy unblocks) need an
-# agent-preflight-style runner; the bundled \`harness session-start preflight\`
-# builtin is on the roadmap (agent-tasks follow-up). Until then, supply your
-# own \`~/.claude/hooks/git-preflight.sh\` and add an entry here.
+# The \`git-preflight\` SessionStart hook is the producer side of the
+# \`preflight-before-*\` policies: \`harness session-start preflight\` runs
+# agent-preflight against the session cwd and, on a ready:true result,
+# records \`preflight:\${REPO}\` to the evidence ledger. It needs the
+# \`preflight\` binary on PATH (\`npm i -g @lannguyensi/agent-preflight\`); when
+# that is absent the hook logs to stderr and exits 0, so the session is
+# never broken — the preflight gates just stay closed until a tag is
+# produced some other way.
 hooks:
+  - name: git-preflight
+    event: SessionStart
+    command: harness session-start preflight
+    blocking: false
+    budget_ms: 30000
+
   - name: require-review-evidence
     event: PreToolUse
     match: "mcp__agent-tasks__pull_requests_merge"
