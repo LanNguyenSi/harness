@@ -10,18 +10,84 @@ applies, audits, and *enforces*.
 > `harness` tells you what an agent is *allowed to do*, under this
 > exact context, and why.
 
-`harness` collapses the six-to-eight surfaces a working agent harness
-leaks across (`settings.json`, `CLAUDE.md`, memory frontmatter, MCP
-registrations, per-project overrides, hook scripts) into a single
-source of truth. Today (`v0.11.0`) `harness init --interactive` walks
-new operators through a guided setup wizard, policies fire end-to-end
-and ship as reusable *Policy Packs*: a
-`mcp__agent-tasks__pull_requests_merge` call against a session
-without a `review:${PR_NUMBER}` ledger entry refuses; an `Edit` /
-`apply_patch` against a session without an approved Understanding
-Report refuses; `harness explain --last --trace` shows exactly why.
-The Understanding Gate ships across both Claude Code and Codex
-runtimes via `harness apply --runtime <claude-code|codex>`.
+A coding agent like Claude Code is configured across half a dozen
+files: `settings.json`, `CLAUDE.md`, memory notes, MCP registrations,
+hook scripts, per-project overrides. No single file answers *"what can
+this agent do right now, and why is it set up that way?"*, so
+configuration drifts between sessions, rules you wrote down in one
+place quietly stop firing, and a broken tool is discovered only by
+tripping over it.
+
+`harness` puts all of that in one YAML file you can read, validate,
+and diff. From that file it generates the config the agent actually
+loads, and at runtime it enforces the rules you declared: it blocks a
+tool call that violates one, and records every decision so you can
+see what fired and why.
+
+## See it work
+
+One rule, declared in `harness.yaml`: *no session may merge a PR
+until it has logged a review.*
+
+Claude Code goes to merge PR 42. Before the tool call runs, the
+runtime hands the event to `harness`, which checks it against the
+manifest:
+
+```console
+$ harness policy intercept       # Claude Code runs this before each tool call
+{"decision":"block","reason":"review-before-merge: no matching ledger entry for tag `review:42`","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"review-before-merge: no matching ledger entry for tag `review:42`"}}
+```
+
+Blocked. `harness explain` says exactly why:
+
+```console
+$ harness explain review-before-merge --trace
+name: review-before-merge
+decision: deny
+enforcement: block
+reason: no matching ledger entry for tag `review:42`
+ledgerTag: review:42
+extract:
+  PR_NUMBER: "42"
+requiresEval:
+  matchedCount: 0
+  reason: no matching ledger entry for tag `review:42`
+# ... (trimmed; the full trace also shows the matched trigger, every extracted variable, and the ledger query)
+```
+
+The rule pulled `PR_NUMBER=42` out of the tool call and looked for a
+`review:42` entry in the evidence ledger. There wasn't one. So the
+reviewer (or a review subagent) logs that entry, and the *same* merge
+call, retried, goes straight through, no restart, no config edit:
+
+```console
+$ harness policy intercept       # same call, after the review was logged
+$                                # (no output, exit 0: allowed)
+```
+
+Every one of those decisions is recorded:
+
+```console
+$ harness audit --since 1h --policy review-before-merge
+timestamp            policy               outcome  reason
+-------------------  -------------------  -------  --------------------------------------------
+2026-05-14 19:09:03  review-before-merge  deny     no matching ledger entry for tag `review:42`
+2026-05-14 19:09:13  review-before-merge  allow    1 matching ledger entry for tag `review:42`
+```
+
+Declare the rule once; every session is held to it, with a paper
+trail of every decision.
+
+## Concepts in six lines
+
+| Term | What it is |
+|------|-----------|
+| **manifest** | The one YAML file (`harness.yaml`) where you declare everything: tools, hooks, policies, memory. |
+| **apply** | `harness apply` renders the manifest into the config files the agent runtime actually reads. |
+| **policy** | A rule of the form *when the agent does X, require evidence Y*. Evaluated at runtime; can block the call. |
+| **evidence ledger** | An append-only log of facts an agent records during a session. Policies check it; `audit` / `explain` replay it. |
+| **hook** | A script the agent runtime runs at a lifecycle event (session start, before every tool call, ...). How policies get enforced. |
+| **policy pack** | A reusable bundle of policies, hooks, and templates shipped under one name and enabled with a single manifest key. |
 
 ## What harness does
 
@@ -95,7 +161,11 @@ Debug what the harness sees in your env without writing anything:
 harness init --probe   # JSON snapshot of detected runtimes + MCPs + manifest
 ```
 
-## Try it in 60 seconds
+## Try it yourself
+
+The demo above shows the runtime path. To see policy matching without
+installing anything or touching the ledger, run `dry-run` against the
+reference manifest:
 
 ```bash
 git clone https://github.com/LanNguyenSi/harness && cd harness
@@ -116,55 +186,23 @@ Convinced? Install globally and set up your own:
 
 ## Status
 
-- [x] Phase 1, read-only inventory (`describe`, `validate`, `doctor`,
-      `list`, `explain`, `diff`), released as
-      [`v0.1.0`](CHANGELOG.md#010---2026-04-29).
-- [x] Phase 2, managed edits (`init`, `add`, `remove`, `adopt`,
-      `export`), released as [`v0.2.0`](CHANGELOG.md#020---2026-04-29).
-- [x] Phase 3, declarative truth (`apply`, `diff --since-apply`,
-      `harness.lock`), released as
-      [`v0.3.0`](CHANGELOG.md#030---2026-04-30).
-- [x] Phase 4, policy layer (`policy intercept`, `explain --trace`,
-      `audit`, `dry-run`, requires-evaluator + extract DSL +
-      grounding-mcp adapter), released as
-      [`v0.4.0`](CHANGELOG.md#040---2026-04-30).
-- [x] Phase 5, polish + dogfood lessons (`--verbose` policy
-      diagnostics, `$CLAUDE_SESSION_ID` env fallback, server-side
-      `audit` filter pushdown, `policy_decision` first-class entry
-      type, npm distribution as `@lannguyensi/harness`), released as
-      [`v0.5.0`](CHANGELOG.md#050---2026-05-01).
-- [x] Apply-into-settings cycle, `harness adopt`, `apply --target /
-      --merge`, `harness.lock` target tracking, released as
-      [`v0.6.0`](CHANGELOG.md#060---2026-05-03).
-- [x] Workflows-as-data + full-session audit forensics: additive
-      `workflows:` / `review_templates:` / `audit.redact[]` manifest
-      blocks, `harness session-export`, `explain --last`, audience-
-      specific docs surfaces, released as
-      [`v0.7.0`](CHANGELOG.md#070---2026-05-06).
-- [x] Phase 6, Understanding Gate Policy Pack: `policy_packs:`
-      manifest block, the canonical `understanding-before-execution`
-      pack, `harness pack add / remove / list`,
-      `harness apply --runtime <claude-code|codex>` with TOML config
-      output for Codex, three permission profiles
-      (`safe-start` / `implementation-after-approval` /
-      `high-risk-grill-me`), a harness-side PreToolUse blocker that
-      consults both the evidence-ledger tag and the persisted JSON
-      report, `harness approve understanding`,
-      `harness doctor --target codex`, and a Codex Stop-equivalent
-      that captures Understanding Reports into
-      `.understanding-gate/reports/`. Released as
-      [`v0.8.0`](CHANGELOG.md#080---2026-05-10).
-- [ ] Phase 7, Risk Gate: Action Envelope + Risk Classifier +
-      `allow / warn / require_approval / deny` for destructive-action
-      prevention.
+harness ships in phases. Phases 1 through 6 are released: read-only
+inventory → managed edits → declarative truth → policy layer → polish
+and dogfood lessons → the Understanding Gate Policy Pack. Phase 7, the
+Risk Gate, is next. The current release is `v0.11.0`.
 
-## Policy Packs (v0.9.0)
+The phase-by-phase plan with acceptance criteria lives in
+[`docs/ROADMAP.md`](docs/ROADMAP.md); what shipped in each version is
+in [`CHANGELOG.md`](CHANGELOG.md).
+
+## Policy Packs
 
 A *Policy Pack* is a reusable bundle of instruction template, hooks,
 policies, and permission profiles that ships under one name and is
 referenced from `harness.yaml` with a single key. The first pack,
-`understanding-before-execution`, forces agents to expose and confirm
-their task interpretation before any write-capable tool fires.
+`understanding-before-execution` (shipped in `v0.9.0`), forces agents
+to expose and confirm their task interpretation before any
+write-capable tool fires.
 
 ```yaml
 policy_packs:
