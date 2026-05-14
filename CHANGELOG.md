@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `harness session-start preflight`: the SessionStart producer for the
+  `preflight-before-*` policies. The Full template restores its
+  `git-preflight` hook wired to this command; it runs `agent-preflight`
+  (`preflight run --json <cwd>`) against the session cwd and, on a
+  `ready:true` result, records one ledger fact carrying both
+  `preflight:${REPO}` and `preflight:${BRANCH}` so it satisfies
+  `preflight-before-investigation` (REPO, within 1h) and
+  `preflight-before-push` (BRANCH, within 10m). Both are resolved with
+  the same git-context walk the intercept engine uses, so producer and
+  consumer agree on the tags. Caveat: a SessionStart producer cannot
+  keep the 10m push window fresh through a long session, so
+  `preflight-before-push` benefits from a push-time refresh that this
+  hook does not provide. A `ready:false` result deliberately leaves the
+  tags unwritten so the gates stay closed. SessionStart hooks are
+  `blocking:false`: a missing `preflight` binary, a timeout, or an
+  unreachable ledger logs one line to stderr and exits 0, never
+  breaking the session. The Full init profile now lists
+  `@lannguyensi/agent-preflight` so the wizard offers to install it. (#111)
 - `harness doctor` now flags a `block`-enforcement policy whose required
   ledger tag carries a `requires.within` freshness window but has no
   producer hook in the manifest. Such a policy needs the tag kept fresh,
