@@ -100,12 +100,21 @@ function isVerboseEnabled(opts: InterceptCliOptions): boolean {
   return !/^(0|false|no|off)$/i.test(env.trim());
 }
 
-function realLedgerClient(server: McpServer, opts: InterceptCliOptions): LedgerClient {
+/**
+ * Real grounding-mcp-backed ledger client. Exported for testing: the
+ * `record` adapter's failure-surfacing path is exercised against a
+ * bogus mcpCommand in tests/runtime/intercept-cli.test.ts.
+ */
+export function realLedgerClient(
+  server: McpServer,
+  opts: InterceptCliOptions,
+): LedgerClient {
   const command = Array.isArray(server.command)
     ? server.command
     : server.command.trim().split(/\s+/);
   const env = server.env ?? undefined;
   const timeoutMs = opts.ledgerTimeoutMs ?? server.health?.timeout_ms ?? 5_000;
+  const stderr = opts.stderr ?? process.stderr;
   return {
     async query(_tag, sessionId): Promise<LedgerQueryResult> {
       return queryLedgerByTag({
@@ -116,11 +125,21 @@ function realLedgerClient(server: McpServer, opts: InterceptCliOptions): LedgerC
       });
     },
     async record(decision, sessionId): Promise<void> {
-      await recordPolicyDecision(decision, sessionId, {
+      const result = await recordPolicyDecision(decision, sessionId, {
         mcpCommand: command,
         ...(env && { mcpEnv: env }),
         timeoutMs,
       });
+      // A failed audit-write must not block the tool — the decision is
+      // still applied — but it must not be silent either: an unrecorded
+      // decision is invisible to `harness audit` / `explain --trace`.
+      // Goes to stderr so Claude Code's stdout deny-JSON contract holds.
+      if (!result.ok) {
+        stderr.write(
+          `harness policy intercept: audit-write failed for ` +
+            `${decision.policyName}: ${result.reason ?? "unknown error"}\n`,
+        );
+      }
     },
   };
 }

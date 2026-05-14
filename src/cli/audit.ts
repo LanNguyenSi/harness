@@ -11,7 +11,10 @@ import {
   type PolicyDecisionPayload,
 } from "../runtime/ledger-record.js";
 import { POLICY_DECISION_TYPE } from "../runtime/ledger-record.js";
-import { resolveSessionId } from "../runtime/session-id.js";
+import {
+  resolveReadSessionId,
+  type ResolveReadSessionOptions,
+} from "../runtime/session-id.js";
 import { EX_UNAVAILABLE, EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { loadManifest, type LoaderOptions } from "./loader.js";
 
@@ -25,6 +28,13 @@ export interface AuditOptions extends LoaderOptions {
   policy?: string;
   outcome?: AuditOutcome;
   sessionId?: string;
+  /**
+   * Read-path session resolution overrides (tests). When `sessionId` is
+   * not given, `resolveReadSessionId` discovers the live session from
+   * the newest Claude Code transcript; this seam lets tests stub that
+   * scan so they stay hermetic.
+   */
+  sessionDiscovery?: ResolveReadSessionOptions;
   /**
    * Override the ledger fetcher (tests). The optional `filters` arg
    * carries the Phase 5 #5 server-side narrowing hints (sinceIso,
@@ -148,7 +158,7 @@ export async function audit(opts: AuditOptions = {}): Promise<AuditResult> {
     );
   }
 
-  const sessionId = resolveSessionId(opts.sessionId);
+  const sessionId = resolveReadSessionId(opts.sessionId, opts.sessionDiscovery);
   const fetch = opts.fetchLedger ?? defaultFetcher(opts);
   // Phase 5 #5 — push filters server-side when the connected
   // grounding-mcp supports them (capability-detected by

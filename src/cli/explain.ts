@@ -9,7 +9,10 @@ import {
   decodeLedgerContent,
   type PolicyDecisionPayload,
 } from "../runtime/ledger-record.js";
-import { resolveSessionId } from "../runtime/session-id.js";
+import {
+  resolveReadSessionId,
+  type ResolveReadSessionOptions,
+} from "../runtime/session-id.js";
 import { EX_FAIL, EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { loadManifest, type LoaderOptions } from "./loader.js";
 
@@ -20,6 +23,13 @@ export interface ExplainOptions extends LoaderOptions {
   trace?: boolean;
   /** Session whose audit log to inspect for `--trace`. */
   sessionId?: string;
+  /**
+   * Read-path session resolution overrides (tests). When `sessionId` is
+   * not given, `resolveReadSessionId` discovers the live session from
+   * the newest Claude Code transcript; this seam lets tests stub that
+   * scan so they stay hermetic.
+   */
+  sessionDiscovery?: ResolveReadSessionOptions;
   /**
    * When true, ignore the policy-name argument and trace the most recent
    * decision recorded in the ledger (any policy). Implies --trace.
@@ -112,7 +122,7 @@ export async function explain(
   const { manifest } = loadManifest(opts);
 
   if (opts.last) {
-    const sessionId = resolveSessionId(opts.sessionId);
+    const sessionId = resolveReadSessionId(opts.sessionId, opts.sessionDiscovery);
     const fetch = opts.fetchLedger ?? defaultFetcher(opts);
     const result = await fetch(sessionId);
     if (result.kind === "degraded") {
@@ -164,7 +174,7 @@ export async function explain(
     return { output };
   }
 
-  const sessionId = resolveSessionId(opts.sessionId);
+  const sessionId = resolveReadSessionId(opts.sessionId, opts.sessionDiscovery);
   const fetch = opts.fetchLedger ?? defaultFetcher(opts);
   const result = await fetch(sessionId);
   if (result.kind === "degraded") {
@@ -176,7 +186,9 @@ export async function explain(
   const latest = selectLatestForPolicy(result.entries, policyName);
   if (!latest) {
     throw new HarnessExitError(
-      `no recorded evaluations for policy \`${policyName}\`; the policy may not have fired yet, or grounding-mcp is unreachable`,
+      `no recorded evaluations for policy \`${policyName}\` in session \`${sessionId}\`; ` +
+        `the policy may not have fired yet, grounding-mcp is unreachable, or the ` +
+        `decisions landed under a different session (pass --session <id>)`,
       EX_FAIL,
     );
   }
