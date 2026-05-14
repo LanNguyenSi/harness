@@ -40,6 +40,18 @@ command, so the operator's prompt approval is the recovery.
 
 ### Fixed
 
+- The `${REPO}` and `${BRANCH}` policy-template builtins resolved only
+  from the `HARNESS_REPO` / `HARNESS_BRANCH` env vars, which nothing
+  sets, so every `preflight:${REPO}` and `preflight:${BRANCH}` ledger
+  tag collapsed to the literal `preflight:`. That silently degraded the
+  founding-incident policies to one session-global tag: a preflight run
+  in repo A satisfied the gate in repo B, defeating the per-repo
+  isolation the policies are written to provide. The intercept engine
+  now derives `REPO` (work-tree basename) and `BRANCH` from the tool
+  event's `cwd` via a bounded filesystem walk (no `git` subprocess, so
+  it stays cheap on the per-tool-call hook path); the env vars are kept
+  as an explicit operator override. `harness dry-run` resolves them the
+  same way so its prediction matches runtime. (#110)
 - `harness audit` and `harness explain --trace/--last` reported "no
   policy decisions" even though `harness policy intercept` had recorded
   them: the readers resolved the session id via `resolveSessionId`,
