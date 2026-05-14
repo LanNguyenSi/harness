@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Policy `bash_match` regexes in the reference manifest
+  (`preflight-before-investigation`, `preflight-before-push`,
+  `dogfood-before-release`) were start-anchored (`^git push`). Any command
+  that did not literally begin with the pattern, such as
+  `cd <repo> && git push`, `git -C <repo> push`, or an env-var-prefixed
+  `git push`, slipped past the gate ungated. The patterns now match at
+  command position: start of string, or after `;`, `|`, `&&`, `(`, a
+  newline, or optional env-var assignments. The realistic bypass forms are
+  caught; string-argument mentions like `git commit -m "...git push..."`
+  and `echo "git status"` are not false-positives. Updated in
+  `docs/examples/full-manifest.yaml`, `FULL_TEMPLATE`, and
+  `dogfood/harness.yaml`; regression tests in
+  `tests/runtime/intercept.test.ts`. (#103)
+
 ## [0.9.1] - 2026-05-13
 
 **Headline: wizard hint fix + two new canonical example policies.** A

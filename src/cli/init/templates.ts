@@ -129,7 +129,7 @@ hooks:
   - name: require-dogfood-evidence
     event: PreToolUse
     match: "Bash"
-    bash_match: "^(npm publish|git tag v.*)"
+    bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*(npm publish\\b|git( -C \\S+)* tag v)'
     command: harness policy intercept
     blocking: hard
     budget_ms: 2000
@@ -137,7 +137,7 @@ hooks:
   - name: require-preflight-evidence
     event: PreToolUse
     match: "Bash"
-    bash_match: "^git (status|log|diff|branch)"
+    bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* (status|log|diff|branch)\\b'
     command: harness policy intercept
     blocking: hard
     budget_ms: 1000
@@ -152,7 +152,7 @@ hooks:
   - name: require-preflight-push-evidence
     event: PreToolUse
     match: "Bash"
-    bash_match: "^git push"
+    bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b'
     command: harness policy intercept
     blocking: hard
     budget_ms: 1000
@@ -175,7 +175,7 @@ policies:
     trigger:
       event: PreToolUse
       match: "Bash"
-      bash_match: "^(npm publish|git tag v.*)"
+      bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*(npm publish\\b|git( -C \\S+)* tag v)'
     requires:
       ledger_tag: "dogfood:\${SESSION_ID}"
       within: 24h
@@ -187,7 +187,7 @@ policies:
     trigger:
       event: PreToolUse
       match: "Bash"
-      bash_match: "^git (status|log|diff|branch)"
+      bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* (status|log|diff|branch)\\b'
     requires:
       ledger_tag: "preflight:\${REPO}"
       within: 1h
@@ -211,7 +211,7 @@ policies:
     trigger:
       event: PreToolUse
       match: "Bash"
-      bash_match: "^git push"
+      bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b'
     requires:
       ledger_tag: "preflight:\${BRANCH}"
       within: 10m
