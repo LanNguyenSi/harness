@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-05-14
+
+**Headline: the policy layer works end-to-end and is legible.** The
+founding-incident preflight loop is now closed: `harness session-start
+preflight` produces the `preflight:${REPO}` / `preflight:${BRANCH}` tags
+(#111), `${REPO}` / `${BRANCH}` resolve per-repo instead of collapsing
+to one global `preflight:` tag (#110), and `harness audit` /
+`explain --trace` can finally read the decisions the engine records
+(#108). `harness doctor` now surfaces a `block` policy that has no
+producer for its required tag (#109) instead of reporting it healthy.
+And the understanding gate no longer hard-locks a session: its hook
+asks instead of denying for the operator-approval command (#105), which
+resolves the session id from a staging file with no arguments (#107).
+
 ### Added
 
 - `harness session-start preflight`: the SessionStart producer for the
@@ -48,13 +62,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   operator hand-deriving it from the newest project transcript. The CLI
   prints which tier supplied the id, and the staging file is consumed on a
   successful approve so a later call cannot revive a stale id. (#107)
-
-**Headline: the Understanding Gate no longer hard-locks a session.**
-v0.10.0's Full template wires the `understanding-before-execution` pack;
-its PreToolUse hook denied every write-capable tool until an Understanding
-Report was approved, with no in-session way to record that approval. This
-patch makes the gate ask instead of hard-denying for the operator-approval
-command, so the operator's prompt approval is the recovery.
 
 ### Fixed
 
