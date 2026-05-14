@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The `understanding-before-execution` policy pack's PreToolUse hook
+  hard-denied every `Edit`/`Write`/`Bash` call until an Understanding
+  Report was approved, including `harness approve understanding` itself (a
+  Bash call caught by the same matcher). A hook `deny` gives no interactive
+  prompt, so the gate could lock a session out with no in-session recovery.
+  The hook now emits `permissionDecision: "ask"` for the operator-approval
+  command `harness approve ...` instead of `"deny"`: Claude Code surfaces
+  the normal permission prompt, and the operator's approval of that prompt
+  is the human approval the gate was waiting for. The escape-command match
+  is strict (no shell chaining, substitution, or redirection), so it cannot
+  be used to smuggle other work past the gate. (#105)
+
 ## [0.10.0] - 2026-05-14
 
 **Headline: the init wizard becomes a real installer, the Full template
