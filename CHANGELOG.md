@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-05-14
+
+**Headline: the Understanding Gate no longer hard-locks a session.**
+v0.10.0's Full template wires the `understanding-before-execution` pack;
+its PreToolUse hook denied every write-capable tool until an Understanding
+Report was approved, with no in-session way to record that approval. This
+patch makes the gate ask instead of hard-denying for the operator-approval
+command, so the operator's prompt approval is the recovery.
+
 ### Fixed
 
 - The `understanding-before-execution` policy pack's PreToolUse hook
