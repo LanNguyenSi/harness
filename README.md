@@ -13,7 +13,7 @@ applies, audits, and *enforces*.
 `harness` collapses the six-to-eight surfaces a working agent harness
 leaks across (`settings.json`, `CLAUDE.md`, memory frontmatter, MCP
 registrations, per-project overrides, hook scripts) into a single
-source of truth. Today (`v0.10.0`) `harness init --interactive` walks
+source of truth. Today (`v0.10.1`) `harness init --interactive` walks
 new operators through a guided setup wizard, policies fire end-to-end
 and ship as reusable *Policy Packs*: a
 `mcp__agent-tasks__pull_requests_merge` call against a session
