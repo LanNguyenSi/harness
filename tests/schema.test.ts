@@ -49,7 +49,9 @@ describe("parseManifest — happy path", () => {
       (p) => p.name === "preflight-before-push",
     );
     expect(preflightPushPolicy?.trigger.match).toBe("Bash");
-    expect(preflightPushPolicy?.trigger.bash_match).toBe("^git push");
+    expect(preflightPushPolicy?.trigger.bash_match).toBe(
+      "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b",
+    );
     expect(preflightPushPolicy?.requires.ledger_tag).toBe("preflight:${BRANCH}");
     expect(preflightPushPolicy?.requires.within).toBe("10m");
     expect(manifest.policy_packs).toHaveLength(1);

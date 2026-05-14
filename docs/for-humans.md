@@ -217,9 +217,11 @@ incident: a batch of 60 README audit tasks once shipped 5 broken PRs
 because review was skipped pre-merge; gating PR creation instead of
 merge catches the failure earlier.
 
-**`preflight-before-push`**: gates `Bash` calls matching `^git push` on
-a `preflight:${BRANCH}` ledger entry with `within: 10m`. Complements
-the read-side `preflight-before-investigation` (which gates
+**`preflight-before-push`**: gates `Bash` calls running `git push` on
+a `preflight:${BRANCH}` ledger entry with `within: 10m`. The match is
+not start-anchored, so `cd <repo> && git push` and `git -C <repo> push`
+are caught too. Complements the read-side
+`preflight-before-investigation` (which gates
 `git status / log / diff / branch`). Catches the stale-checkout class
 of incident at the last reversible step: an operator who started work
 on a 16-commits-behind branch can still notice and pull before the

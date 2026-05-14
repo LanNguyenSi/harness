@@ -253,6 +253,98 @@ describe("intercept — bash_match", () => {
     });
     expect(result.decisions).toHaveLength(0);
   });
+
+  // Regression for task ec2336c1: the reference policy regexes were once
+  // start-anchored (`^git push`), so `cd <repo> && git push`, `git -C <repo>
+  // push`, and env-prefixed forms slipped past the gate entirely. These lock
+  // the un-anchored, command-position match against both the bypass class
+  // and the string-argument false-positive class (`git commit -m "...push"`).
+  describe("command-position bash_match (ec2336c1 regression)", () => {
+    const cases: Array<{
+      policyName: string;
+      bashMatch: string;
+      shouldMatch: string[];
+      shouldSkip: string[];
+    }> = [
+      {
+        policyName: "preflight-before-push",
+        bashMatch: "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b",
+        shouldMatch: [
+          "git push",
+          "cd /home/lan/repo && git push",
+          "git -C /home/lan/repo push",
+          "GIT_TRACE=1 git push origin master",
+        ],
+        shouldSkip: [
+          'git commit -m "remember to git push"',
+          "echo git push",
+          "legit pushups",
+        ],
+      },
+      {
+        policyName: "preflight-before-investigation",
+        bashMatch:
+          "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* (status|log|diff|branch)\\b",
+        shouldMatch: [
+          "git status",
+          "cd /repo && git status --short",
+          "git -C /repo log --oneline",
+        ],
+        shouldSkip: ['echo "git status"', "git stash", "git statusfoo"],
+      },
+      {
+        policyName: "dogfood-before-release",
+        bashMatch:
+          "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*(npm publish\\b|git( -C \\S+)* tag v)",
+        shouldMatch: ["npm publish", "cd /repo && git tag v0.10.0", "git tag v1.2.3"],
+        shouldSkip: ['echo "npm publish"', "npm publishx", "git tag -l"],
+      },
+    ];
+
+    for (const c of cases) {
+      const pol: Policy = policy({
+        name: c.policyName,
+        trigger: { event: "PreToolUse", match: "Bash", bash_match: c.bashMatch },
+        requires: { ledger_tag: "gate:${SESSION_ID}", within: "24h" },
+        hook: "h",
+      });
+      for (const command of c.shouldMatch) {
+        it(`${c.policyName}: matches ${JSON.stringify(command)}`, async () => {
+          const result = await intercept({
+            manifest: manifest([pol]),
+            event: {
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command },
+              session_id: "sess-1",
+            },
+            ledger: makeLedger({ kind: "ok", entries: [] }),
+            builtins: BUILTINS,
+            now: NOW,
+          });
+          expect(result.decisions).toHaveLength(1);
+          expect(result.decisions[0]?.outcome).toBe("deny");
+        });
+      }
+      for (const command of c.shouldSkip) {
+        it(`${c.policyName}: skips ${JSON.stringify(command)}`, async () => {
+          const result = await intercept({
+            manifest: manifest([pol]),
+            event: {
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command },
+              session_id: "sess-1",
+            },
+            ledger: makeLedger({ kind: "ok", entries: [] }),
+            builtins: BUILTINS,
+            now: NOW,
+          });
+          expect(result.decisions).toHaveLength(0);
+        });
+      }
+    }
+  });
 });
 
 describe("intercept — degraded ledger", () => {
