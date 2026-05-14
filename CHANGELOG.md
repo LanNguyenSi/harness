@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.10.1] - 2026-05-14
+### Added
+
+- `harness approve understanding` now resolves the session id from a
+  `harness.generated/.pending-approval` staging file when neither
+  `--session` nor `$CLAUDE_SESSION_ID` is given. The
+  `understanding-before-execution` PreToolUse hook writes the blocked
+  session's id to that file on every block or ask, so an arg-less
+  `harness approve understanding` run from the operator's `!`-shell (where
+  `$CLAUDE_SESSION_ID` is not set) resolves the exact id instead of the
+  operator hand-deriving it from the newest project transcript. The CLI
+  prints which tier supplied the id, and the staging file is consumed on a
+  successful approve so a later call cannot revive a stale id. (#107)
 
 **Headline: the Understanding Gate no longer hard-locks a session.**
 v0.10.0's Full template wires the `understanding-before-execution` pack;

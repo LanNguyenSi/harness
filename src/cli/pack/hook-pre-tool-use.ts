@@ -31,6 +31,10 @@ import {
   matchLedgerEntries,
   type ApprovalCheckResult,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
+import {
+  resolveGeneratedDir,
+  writePendingApproval,
+} from "../../runtime/pending-approval.js";
 import type { Manifest, McpServer } from "../../schema/index.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 
@@ -41,6 +45,8 @@ export interface PackHookPreToolUseOptions extends LoaderOptions {
   pack?: string;
   /** Override report directory (test injection). */
   reportsDir?: string;
+  /** Override the harness.generated/ directory (test injection). */
+  generatedDir?: string;
   /** Override timeout per ledger call. */
   ledgerTimeoutMs?: number;
   /** Defaults to process.stdin. */
@@ -208,10 +214,20 @@ export async function runPackHookPreToolUseCli(
   const commandStr = typeof rawCommand === "string" ? rawCommand : "";
 
   // Load manifest (or use injection). Bail to allow on any failure so a
-  // missing harness install never bricks the session.
+  // missing harness install never bricks the session. The resolved
+  // manifest path feeds the harness.generated/ lookup below; an injected
+  // manifest has no path, so the staging write is skipped in that case
+  // (tests inject `generatedDir` directly instead).
   let manifest: Manifest;
+  let manifestPath: string | undefined;
   try {
-    manifest = opts.manifest ?? loadManifest(opts).manifest;
+    if (opts.manifest) {
+      manifest = opts.manifest;
+    } else {
+      const loaded = loadManifest(opts);
+      manifest = loaded.manifest;
+      manifestPath = loaded.resolved.base;
+    }
   } catch (err) {
     const diagnostic = `harness pack hook: manifest load failed (${
       (err as Error).message
@@ -291,6 +307,27 @@ export async function runPackHookPreToolUseCli(
 
   // Neither source approved.
   const reason = `${ledger.detail}; ${report.detail}`;
+
+  // Stage the session id so `harness approve`, run from the operator's
+  // shell where $CLAUDE_SESSION_ID is unset, can resolve it without
+  // guessing from transcript filenames. Covers both the ask and the
+  // block branches below. Best-effort: a staging-write failure must not
+  // escalate a gate block into a hook error.
+  const generatedDir =
+    opts.generatedDir ??
+    (manifestPath !== undefined
+      ? resolveGeneratedDir({
+          ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
+          manifestPath,
+        })
+      : undefined);
+  if (generatedDir !== undefined) {
+    try {
+      writePendingApproval(generatedDir, sessionId);
+    } catch {
+      /* best-effort; the ask / block below proceeds regardless */
+    }
+  }
 
   // Exception: the operator-approval command itself. Hard-denying
   // `harness approve understanding` is a catch-22: it is the very command

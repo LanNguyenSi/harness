@@ -25,15 +25,22 @@ import {
   listPersistedReports,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { addLedgerFact } from "../../runtime/ledger-add.js";
+import {
+  clearPendingApproval,
+  readPendingApproval,
+  resolveGeneratedDir,
+} from "../../runtime/pending-approval.js";
 import type { Manifest, McpServer } from "../../schema/index.js";
 import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
-import { loadManifest, type LoaderOptions } from "../loader.js";
+import { loadManifest, resolvePaths, type LoaderOptions } from "../loader.js";
 
 export interface ApproveUnderstandingOptions extends LoaderOptions {
   /** Explicit session id (overrides $CLAUDE_SESSION_ID). */
   session?: string;
   /** Override the reports directory (test injection). */
   reportsDir?: string;
+  /** Override the harness.generated/ directory (test injection). */
+  generatedDir?: string;
   /** Override "now" for deterministic tests. */
   now?: Date;
   /** Override the actor recorded in the persisted report. */
@@ -46,6 +53,12 @@ export interface ApproveUnderstandingOptions extends LoaderOptions {
 
 export interface ApproveUnderstandingResult {
   sessionId: string;
+  /**
+   * Where `sessionId` came from. Surfaced so the CLI can show the
+   * operator when the id was not explicit (`pending-approval` / `env`),
+   * which is the moment to sanity-check it against the live session.
+   */
+  sessionSource: "flag" | "env" | "pending-approval";
   ledger: { ok: boolean; tag: string; reason?: string };
   persistedReport:
     | { ok: true; filePath: string; previousStatus: string | null; approvedAt: string }
@@ -107,17 +120,59 @@ function rewriteReportApproved(
 export async function approveUnderstanding(
   opts: ApproveUnderstandingOptions = {},
 ): Promise<ApproveUnderstandingResult> {
-  const sessionId = opts.session ?? process.env.CLAUDE_SESSION_ID ?? "";
+  // harness.generated/ holds the `.pending-approval` staging file (the
+  // third resolution tier below) and is the directory this command cleans
+  // up after consuming a staged id. `resolvePaths` only computes paths —
+  // it does not read or parse the manifest — so the lookup still works
+  // even when the manifest itself is unparseable.
+  const generatedDir =
+    opts.generatedDir ??
+    resolveGeneratedDir({
+      ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
+      manifestPath: resolvePaths(opts).base,
+    });
+
+  // Session id resolution, in precedence order:
+  //   1. explicit --session flag
+  //   2. $CLAUDE_SESSION_ID (set inside a live Claude Code session)
+  //   3. the `.pending-approval` file the gate hook staged on its last
+  //      block — this is what makes an arg-less `harness approve` work
+  //      from the operator's `!`-shell, where neither of the above is set.
+  let sessionId = "";
+  let sessionSource: ApproveUnderstandingResult["sessionSource"] = "flag";
+  if (typeof opts.session === "string" && opts.session.length > 0) {
+    sessionId = opts.session;
+    sessionSource = "flag";
+  } else if (
+    typeof process.env.CLAUDE_SESSION_ID === "string" &&
+    process.env.CLAUDE_SESSION_ID.length > 0
+  ) {
+    sessionId = process.env.CLAUDE_SESSION_ID;
+    sessionSource = "env";
+  } else {
+    const staged = readPendingApproval(generatedDir);
+    if (staged !== null) {
+      sessionId = staged;
+      sessionSource = "pending-approval";
+    }
+  }
+
   if (sessionId === "") {
-    // Operators routinely hit this when approving from a second terminal
-    // (the one running Claude has $CLAUDE_SESSION_ID set; a fresh shell
-    // does not). Spell out the two retrieval paths so they do not have
-    // to dig through docs.
+    // Reaching here means no flag, no $CLAUDE_SESSION_ID, AND no staged
+    // `.pending-approval` — the gate either never blocked this session or
+    // the staging file was already consumed. Spell out the retrieval
+    // paths so the operator does not have to dig through docs.
     throw new HarnessExitError(
       [
         "no session id available. Pass --session <id> or set $CLAUDE_SESSION_ID.",
         "",
-        "Finding the active Claude Code session id:",
+        "Normally the understanding-gate hook stages the session id in",
+        `  ${generatedDir}/.pending-approval`,
+        "the moment it blocks a tool, and `harness approve` reads it with no",
+        "arguments. An empty result here means the gate has not blocked this",
+        "session yet (nothing to approve), or the file was already consumed.",
+        "",
+        "To find the id by hand:",
         "  • From inside Claude: ask the agent to print $CLAUDE_SESSION_ID.",
         "  • From a second shell, take the basename of the newest project",
         "    transcript:",
@@ -180,8 +235,18 @@ export async function approveUnderstanding(
     }
   }
 
+  // Drop the staging file once we have consumed it AND the canonical
+  // (ledger) write landed, so a later arg-less `harness approve` cannot
+  // revive this id. A failed ledger write keeps the file so the operator
+  // can retry once grounding-mcp recovers; an id supplied by flag/env was
+  // never "ours" to clean up.
+  if (sessionSource === "pending-approval" && ledgerResult.ok) {
+    clearPendingApproval(generatedDir);
+  }
+
   return {
     sessionId,
+    sessionSource,
     ledger: ledgerResult.ok
       ? { ok: true, tag }
       : { ok: false, tag, reason: ledgerResult.reason },

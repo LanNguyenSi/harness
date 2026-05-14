@@ -226,7 +226,7 @@ After capture, `harness approve understanding --session <id>` flips `approvalSta
 - Three hooks in the harness-managed `settings.json`:
   - `UserPromptSubmit` injector: bare bin `understanding-gate-claude-hook` (from the npm package; user must `npm i -g`).
   - `Stop` capture: bare bin `understanding-gate-claude-stop` (same).
-  - `PreToolUse` blocker on `Edit|Write|Bash`: `harness pack hook pre-tool-use` (Phase 6 #4). The harness-side blocker consults BOTH the evidence-ledger tag `understanding-approved:${SESSION_ID}` (via `grounding-mcp`'s `ledger_summary`, canonical for harnessed sessions) AND the persisted JSON report under `.understanding-gate/reports/` (fallback for sessions without `grounding-mcp` wired). Either source approves. The npm package's standalone `understanding-gate-claude-pre-tool-use` blocker remains available for solo users; the harness blocker is the superset (it covers the persisted-report case too, plus the ledger).
+  - `PreToolUse` blocker on `Edit|Write|Bash`: `harness pack hook pre-tool-use` (Phase 6 #4). The harness-side blocker consults BOTH the evidence-ledger tag `understanding-approved:${SESSION_ID}` (via `grounding-mcp`'s `ledger_summary`, canonical for harnessed sessions) AND the persisted JSON report under `.understanding-gate/reports/` (fallback for sessions without `grounding-mcp` wired). Either source approves. The npm package's standalone `understanding-gate-claude-pre-tool-use` blocker remains available for solo users; the harness blocker is the superset (it covers the persisted-report case too, plus the ledger). On every block or ask it also stages the session id to `harness.generated/.pending-approval` so `harness approve` can resolve it without a flag (see [Session-id resolution](#session-id-resolution)).
   - Hook names are namespaced (`policy-pack:understanding-before-execution:<role>`) to avoid collisions with operator-authored hooks.
 - An operator audit copy at `harness.generated/policy-packs/understanding-before-execution/instructions.md`. This file documents what the pack is doing in the operator's voice (mode, hook list, approval flow); the agent-facing prompt is injected at runtime by the `UserPromptSubmit` hook and lives in the npm package, not here. Drift on the audit copy means an operator edited something they shouldn't have, and `harness diff --since-apply` flags it.
 
@@ -242,6 +242,16 @@ Round-trips both approval sources:
 - Flips `approvalStatus: "approved"` on the latest matching persisted JSON report (canonical for solo users without `grounding-mcp`).
 
 A degraded ledger surfaces as a warning, not a hard failure, so the persisted-report path keeps working independently. The blocker on the next tool call sees the new approval from whichever source landed.
+
+### Session-id resolution
+
+`harness approve` needs the running session's id. Operators usually run it from a fresh `!`-shell where `$CLAUDE_SESSION_ID` is not set, so the id is resolved in this precedence order:
+
+1. `--session <id>` flag.
+2. `$CLAUDE_SESSION_ID` env.
+3. `harness.generated/.pending-approval`: the PreToolUse blocker writes the blocked session's id here every time it blocks or asks, so an arg-less `harness approve understanding` picks it up with no guessing.
+
+The CLI prints which tier supplied the id (`session: <id> (resolved from .pending-approval ...)`), so a wrong id is visible before it lands in the ledger. After a successful resolve from `.pending-approval` with the ledger write landed, the staging file is deleted so a later arg-less call cannot revive a stale id; a failed ledger write keeps it for a retry. When all three tiers come up empty, the command exits with the retrieval-path hint instead of a guess.
 
 Phase 6 #2 follow-ups still queued: an automatically-injected stanza into the per-project `CLAUDE.md` for human discoverability, and a `harness doctor` wiring check that validates the package binaries are on `$PATH`.
 
