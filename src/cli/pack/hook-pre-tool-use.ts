@@ -58,6 +58,13 @@ export interface PackHookPreToolUseOptions extends LoaderOptions {
 export interface PackHookPreToolUseResult {
   exitCode: number;
   blocked: boolean;
+  /**
+   * True when the hook deferred to the operator's interactive permission
+   * prompt (`permissionDecision: "ask"`) instead of hard-denying. Used for
+   * the `harness approve` / `harness gate` escape commands so the operator's
+   * go on the prompt IS the approval. Mutually exclusive with `blocked`.
+   */
+  asked?: boolean;
   approvalCheck: ApprovalCheckResult;
   /** Diagnostic line emitted to stderr (always; even on allow). */
   diagnostic: string;
@@ -66,6 +73,7 @@ export interface PackHookPreToolUseResult {
 interface ToolEventLite {
   session_id?: unknown;
   tool_name?: unknown;
+  tool_input?: unknown;
 }
 
 async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
@@ -100,6 +108,39 @@ function blockJson(toolName: string, reason: string): string {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
       permissionDecisionReason: reasonText,
+    },
+  });
+}
+
+function isEscapeCommand(command: string): boolean {
+  // The operator-approval command `harness approve ...`. The Understanding
+  // Gate must not hard-deny it: a `deny` gives no interactive prompt, so
+  // denying the very command that records the operator's approval makes the
+  // gate un-recoverable from inside the session. Deliberately strict: the
+  // command must BE a `harness approve` invocation, with no shell chaining,
+  // substitution, or redirection, so the allowlist cannot be used to smuggle
+  // other work past the gate.
+  const trimmed = command.trim();
+  if (/[;&|\n<>]/.test(trimmed)) return false;
+  if (trimmed.includes("`") || trimmed.includes("$(")) return false;
+  return /^harness\s+approve\b/.test(trimmed);
+}
+
+// The Claude Code PreToolUse "ask" envelope: surface the normal interactive
+// permission prompt. Per the hooks contract `permissionDecision: "ask"` is
+// PreToolUse-only, and the legacy top-level `decision` field is omitted on
+// purpose: a `decision: "block"` would hard-block legacy 2.0.x CLIs and
+// defeat the ask.
+function askJson(): string {
+  const reason =
+    "Understanding Gate: no approved Understanding Report yet. This is a " +
+    "`harness approve` command (the operator-approval path). Approve this " +
+    "prompt to record your go.";
+  return JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "ask",
+      permissionDecisionReason: reason,
     },
   });
 }
@@ -160,6 +201,11 @@ export async function runPackHookPreToolUseCli(
     process.env.CLAUDE_SESSION_ID ??
     "";
   const toolName = typeof event.tool_name === "string" ? event.tool_name : "(unknown)";
+  const rawCommand =
+    event.tool_input && typeof event.tool_input === "object"
+      ? (event.tool_input as { command?: unknown }).command
+      : undefined;
+  const commandStr = typeof rawCommand === "string" ? rawCommand : "";
 
   // Load manifest (or use injection). Bail to allow on any failure so a
   // missing harness install never bricks the session.
@@ -245,6 +291,26 @@ export async function runPackHookPreToolUseCli(
 
   // Neither source approved.
   const reason = `${ledger.detail}; ${report.detail}`;
+
+  // Exception: the operator-approval command itself. Hard-denying
+  // `harness approve understanding` is a catch-22: it is the very command
+  // that records the operator's go, and a Bash `deny` gives no prompt to
+  // approve. Defer it to the interactive permission prompt instead, so the
+  // operator's go on that prompt IS the approval, and `harness approve
+  // understanding` then writes the ledger tag that unblocks the session.
+  if (toolName === "Bash" && isEscapeCommand(commandStr)) {
+    const diagnostic = `harness pack hook: ASK: operator-approval command, deferring to the interactive permission prompt`;
+    stderr.write(`${diagnostic}\n`);
+    stdout.write(`${askJson()}\n`);
+    return {
+      exitCode: 0,
+      blocked: false,
+      asked: true,
+      approvalCheck: { approved: false, source: "none", detail: reason },
+      diagnostic,
+    };
+  }
+
   const diagnostic = `harness pack hook: BLOCK — ${reason}`;
   stderr.write(`${diagnostic}\n`);
   stdout.write(`${blockJson(toolName, "no approved Understanding Report for this session")}\n`);

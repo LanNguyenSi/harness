@@ -255,3 +255,142 @@ describe("pack hook pre-tool-use blocker", () => {
     expect(stderr.read()).toMatch(/not declared in manifest/);
   });
 });
+
+describe("pack hook pre-tool-use blocker — operator-approval escape commands (task 367fb12f)", () => {
+  type Decision = {
+    decision?: string;
+    hookSpecificOutput?: { hookEventName?: string; permissionDecision?: string };
+  };
+
+  it("asks (not denies) for `harness approve understanding` when no source approves", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        event({ tool_name: "Bash", tool_input: { command: "harness approve understanding" } }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.asked).toBe(true);
+    const decision = JSON.parse(stdout.read().trim()) as Decision;
+    // PreToolUse "ask" envelope: no legacy top-level `decision` (that would
+    // hard-block legacy 2.0.x CLIs), just the hookSpecificOutput nesting.
+    expect(decision.decision).toBeUndefined();
+    expect(decision.hookSpecificOutput?.permissionDecision).toBe("ask");
+    expect(decision.hookSpecificOutput?.hookEventName).toBe("PreToolUse");
+    expect(stderr.read()).toMatch(/ASK/);
+  });
+
+  it("hard-denies an escape command carrying substitution or redirection", async () => {
+    for (const command of [
+      "harness approve understanding $(whoami)",
+      "harness approve understanding `id`",
+      "harness approve understanding > /etc/x",
+      "harness approve understanding < /etc/shadow",
+    ]) {
+      const stdout = bufferStream();
+      const stderr = bufferStream();
+      const result = await runPackHookPreToolUseCli({
+        manifest: manifestWithPack(),
+        stdin: readableFromString(event({ tool_name: "Bash", tool_input: { command } })),
+        stdout: stdout.stream,
+        stderr: stderr.stream,
+        reportsDir: path.join(tmp, "no-reports"),
+        ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+      });
+      expect(result.blocked, command).toBe(true);
+      expect(result.asked, command).toBeFalsy();
+    }
+  });
+
+  it("hard-denies a chained command even when it starts with an escape command", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        event({
+          tool_name: "Bash",
+          tool_input: { command: "harness approve understanding && rm -rf /tmp/x" },
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.asked).toBeFalsy();
+    const decision = JSON.parse(stdout.read().trim()) as Decision;
+    expect(decision.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+
+  it("hard-denies a command that merely mentions an escape command", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        event({
+          tool_name: "Bash",
+          tool_input: { command: 'echo "run harness approve understanding"' },
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.asked).toBeFalsy();
+  });
+
+  it("still hard-denies a normal Bash command when no source approves", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        event({ tool_name: "Bash", tool_input: { command: "git status" } }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.asked).toBeFalsy();
+    const decision = JSON.parse(stdout.read().trim()) as Decision;
+    expect(decision.decision).toBe("block");
+  });
+
+  it("allows an escape command normally when the ledger already approves the session", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        event({ tool_name: "Bash", tool_input: { command: "harness approve understanding" } }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (sessionId): Promise<LedgerEntry[]> => [
+        {
+          id: "1",
+          content: `understanding-approved:${sessionId}`,
+          createdAt: "2026-05-07T08:00:00Z",
+        },
+      ],
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.asked).toBeFalsy();
+    expect(result.approvalCheck.source).toBe("ledger");
+    expect(stdout.read()).toBe("");
+  });
+});
