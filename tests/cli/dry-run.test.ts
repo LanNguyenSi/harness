@@ -98,6 +98,27 @@ describe("dry-run — with --tool", () => {
   });
 });
 
+describe("dry-run — REPO builtin resolves from cwd", () => {
+  it("substitutes the cwd-derived repo name into a preflight policy's ledgerQuery", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-dryrun-git-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const repo = path.join(root, "sample-repo");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    const r = dryRun("look around", {
+      configPath: FULL_MANIFEST,
+      tool: "Bash",
+      toolArgs: JSON.stringify({ command: "git status" }),
+      builtins: { CWD: repo },
+    });
+    const preflight = r.report.matchingPolicies.find(
+      (p) => p.name === "preflight-before-investigation",
+    );
+    // Before the fix this was the literal `preflight:` (empty REPO).
+    expect(preflight?.ledgerQuery).toBe("preflight:sample-repo");
+  });
+});
+
 describe("dry-run — memory routing", () => {
   it("surfaces the configured memory directories with their scopes", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-dryrun-mem-"));

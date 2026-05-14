@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realLedgerClient, runInterceptCli } from "../../src/cli/policy/intercept.js";
@@ -423,5 +426,120 @@ describe("realLedgerClient — audit-write failure is surfaced, not swallowed", 
       "harness policy intercept: audit-write failed for preflight-before-investigation:"
         .length,
     );
+  });
+});
+
+describe("runInterceptCli — REPO / BRANCH builtins resolve from event.cwd", () => {
+  let cleanups: Array<() => void> = [];
+  afterEach(() => {
+    for (const c of cleanups) c();
+    cleanups = [];
+  });
+
+  // A `block` policy whose tag references both per-repo builtins, so
+  // the recorded decision's extractValues expose what the engine
+  // resolved.
+  const PREFLIGHT_POLICY: Policy = {
+    name: "preflight-before-investigation",
+    description: "gate git reads on a per-repo preflight tag",
+    trigger: { event: "PreToolUse", match: "Bash" },
+    requires: { ledger_tag: "preflight:${REPO}" },
+    hook: "h",
+    enforcement: "block",
+  } as Policy;
+
+  const emptyLedger: LedgerClient = {
+    async query() {
+      return { kind: "ok", entries: [] };
+    },
+    async record() {
+      /* no-op */
+    },
+  };
+
+  function makeRepoFixture(name: string, branch: string): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-intercept-git-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const repo = path.join(root, name);
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+    return repo;
+  }
+
+  async function decisionFor(cwd: string): Promise<Record<string, string>> {
+    const { stream: out } = captureStream();
+    const { stream: err } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "git status" },
+          session_id: "sess-1",
+          cwd,
+        }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([PREFLIGHT_POLICY]),
+      ledger: emptyLedger,
+    });
+    expect(result.decisions).toHaveLength(1);
+    return result.decisions[0]!.extractValues;
+  }
+
+  it("derives REPO (work-tree basename) and BRANCH from the event cwd", async () => {
+    const repo = makeRepoFixture("widget-service", "release/2.0");
+    const extract = await decisionFor(repo);
+    expect(extract.REPO).toBe("widget-service");
+    expect(extract.BRANCH).toBe("release/2.0");
+  });
+
+  it("substitutes the resolved REPO into the policy's ledger_tag", async () => {
+    const repo = makeRepoFixture("widget-service", "main");
+    const { stream: out } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "git status" },
+          session_id: "sess-1",
+          cwd: repo,
+        }),
+      ),
+      stdout: out,
+      manifest: fakeManifest([PREFLIGHT_POLICY]),
+      ledger: emptyLedger,
+    });
+    // No ledger entry → deny, and the reason names the *resolved* tag,
+    // not the literal `preflight:` placeholder.
+    expect(result.decisions[0]!.ledgerTag).toBe("preflight:widget-service");
+  });
+
+  it("leaves REPO / BRANCH empty when the cwd is not in a git work tree", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-intercept-nogit-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const extract = await decisionFor(root);
+    expect(extract.REPO).toBe("");
+    expect(extract.BRANCH).toBe("");
+  });
+
+  it("HARNESS_REPO / HARNESS_BRANCH env vars override the derived values", async () => {
+    const savedRepo = process.env.HARNESS_REPO;
+    const savedBranch = process.env.HARNESS_BRANCH;
+    process.env.HARNESS_REPO = "override-repo";
+    process.env.HARNESS_BRANCH = "override-branch";
+    try {
+      const repo = makeRepoFixture("derived-repo", "derived-branch");
+      const extract = await decisionFor(repo);
+      expect(extract.REPO).toBe("override-repo");
+      expect(extract.BRANCH).toBe("override-branch");
+    } finally {
+      if (savedRepo === undefined) delete process.env.HARNESS_REPO;
+      else process.env.HARNESS_REPO = savedRepo;
+      if (savedBranch === undefined) delete process.env.HARNESS_BRANCH;
+      else process.env.HARNESS_BRANCH = savedBranch;
+    }
   });
 });

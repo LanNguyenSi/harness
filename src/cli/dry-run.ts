@@ -5,6 +5,7 @@ import {
   type ExtractBuiltins,
   type ExtractEventContext,
 } from "../policies/index.js";
+import { resolveGitContext } from "../runtime/git-context.js";
 import type { Hook, Manifest, Policy } from "../schema/index.js";
 import { EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { loadManifest, type LoaderOptions } from "./loader.js";
@@ -62,12 +63,17 @@ const PROMPT_EVENTS = new Set(["UserPromptSubmit", "SessionStart"]);
 
 function builtinsFor(opts: DryRunOptions, tool: string | null): ExtractBuiltins {
   const fromOpts = opts.builtins ?? {};
+  // Derive REPO / BRANCH from the cwd so the prediction matches what the
+  // intercept engine resolves at runtime; an explicit builtins override
+  // (tests, or a deliberate caller) still wins.
+  const cwd = fromOpts.CWD ?? process.cwd();
+  const gitContext = resolveGitContext(cwd);
   return {
     SESSION_ID: fromOpts.SESSION_ID ?? "dry-run",
-    REPO: fromOpts.REPO ?? "",
-    BRANCH: fromOpts.BRANCH ?? "",
+    REPO: fromOpts.REPO ?? gitContext.repo,
+    BRANCH: fromOpts.BRANCH ?? gitContext.branch,
     TOOL_NAME: fromOpts.TOOL_NAME ?? (tool ?? ""),
-    CWD: fromOpts.CWD ?? process.cwd(),
+    CWD: cwd,
   };
 }
 

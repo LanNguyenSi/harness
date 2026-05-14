@@ -12,6 +12,7 @@ import {
 import {
   intercept,
   recordPolicyDecision,
+  resolveGitContext,
   type LedgerClient,
   type PolicyDecision,
   type ToolEvent,
@@ -210,12 +211,20 @@ export async function runInterceptCli(
   // a stripped event can pick up the active session.
   const eventSessionId = typeof event.session_id === "string" ? event.session_id : undefined;
   const builtinSessionId = eventSessionId ?? process.env.CLAUDE_SESSION_ID ?? "";
+  // REPO / BRANCH are derived from the tool event's cwd so that per-repo
+  // and per-branch ledger tags (`preflight:${REPO}`, `preflight:${BRANCH}`)
+  // actually namespace — they were previously read from HARNESS_REPO /
+  // HARNESS_BRANCH env vars that nothing sets, collapsing every tag to the
+  // literal `preflight:`. An explicit env var still wins: it is the
+  // operator's deliberate override of the derived value.
+  const cwd = typeof event.cwd === "string" ? event.cwd : process.cwd();
+  const gitContext = resolveGitContext(cwd);
   const builtins = {
     SESSION_ID: builtinSessionId,
-    REPO: process.env.HARNESS_REPO ?? "",
-    BRANCH: process.env.HARNESS_BRANCH ?? "",
+    REPO: process.env.HARNESS_REPO ?? gitContext.repo,
+    BRANCH: process.env.HARNESS_BRANCH ?? gitContext.branch,
     TOOL_NAME: typeof event.tool_name === "string" ? event.tool_name : "",
-    CWD: typeof event.cwd === "string" ? event.cwd : process.cwd(),
+    CWD: cwd,
   };
 
   const result = await intercept({

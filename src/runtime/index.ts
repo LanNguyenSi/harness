@@ -18,6 +18,7 @@ export {
   type PolicyDecisionPayload,
 } from "./ledger-record.js";
 export { resolveSessionId } from "./session-id.js";
+export { resolveGitContext, type GitRepoContext } from "./git-context.js";
 export {
   addLedgerFact,
   type AddLedgerFactOptions,
