@@ -129,7 +129,16 @@ function formatHooksSection(report: DoctorReport): string[] {
 function formatPoliciesSection(report: DoctorReport): string[] {
   const out: string[] = ["", "Policies"];
   for (const p of report.policies) {
-    out.push(`  ✓ ${p.name}  ${p.caveat}`);
+    if (p.producerGap) {
+      out.push(
+        `  ⚠ ${p.name}  requires fresh \`${p.producerGap.ledgerTag}\` (within ${p.producerGap.within}) but no manifest hook produces it`,
+      );
+      out.push(
+        `      the gate will block its trigger until the tag is supplied out-of-band; add a producer hook (e.g. a SessionStart runner)`,
+      );
+    } else {
+      out.push(`  ✓ ${p.name}  ${p.caveat}`);
+    }
   }
   if (report.policies.length === 0) out.push(`  (no policies declared)`);
   return out;

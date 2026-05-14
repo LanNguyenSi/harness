@@ -8,7 +8,7 @@ import {
   type McpProbe,
   type McpProbeResult,
 } from "../../probes/mcp.js";
-import type { Manifest } from "../../schema/index.js";
+import type { Manifest, Policy } from "../../schema/index.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import {
   countCodexDiagnostics,
@@ -218,12 +218,68 @@ function checkHooks(manifest: Manifest, home: string): HookEntryReport[] {
   });
 }
 
+/** The literal prefix of a ledger tag — the part before the first `:`. */
+function ledgerTagPrefix(ledgerTag: string): string {
+  const colon = ledgerTag.indexOf(":");
+  return colon === -1 ? ledgerTag : ledgerTag.slice(0, colon);
+}
+
+/**
+ * Does any manifest hook plausibly *produce* `prefix`-tagged ledger
+ * entries? The policy's own consumer hook (`policy.hook`) is excluded:
+ * a gate that reads the tag cannot also be what satisfies it.
+ *
+ * "Plausibly produces" is a coarse substring match of the tag prefix
+ * against the hook command — a producer is typically a SessionStart
+ * runner like `agent-preflight` whose command names the domain. The
+ * match is prefix-granular by necessity: the command is an opaque
+ * shell string, and the full `preflight:${BRANCH}` tag never appears
+ * in it literally. So the signal is asymmetric. "No producer found"
+ * is reliable. "Producer found" is a heuristic that can give false
+ * reassurance: a hook producing `preflight:${REPO}` will mask a
+ * `preflight:${BRANCH}` gap, and a once-per-session producer will mask
+ * a `within: 10m` window it cannot actually keep fresh. This check is
+ * therefore a floor (it catches the total-absence case), not a proof
+ * of satisfiability.
+ */
+function hasProducerHook(manifest: Manifest, policy: Policy, prefix: string): boolean {
+  // An empty prefix (a leading-colon tag like `:foo`) would
+  // substring-match every hook command. Treat it as "no producer
+  // identifiable" so the gap is surfaced rather than silently
+  // suppressed by a vacuous match.
+  if (prefix === "") return false;
+  return manifest.hooks.some(
+    (h) => h.name !== policy.hook && h.command.includes(prefix),
+  );
+}
+
 function buildPolicies(manifest: Manifest): PolicyEntryReport[] {
-  return manifest.policies.map((p) => ({
-    name: p.name,
-    schemaValid: true,
-    caveat: "schema valid; last-evaluated tracking ships in Phase 4",
-  }));
+  return manifest.policies.map((p) => {
+    const report: PolicyEntryReport = {
+      name: p.name,
+      schemaValid: true,
+      caveat: "schema valid; last-evaluated tracking ships in Phase 4",
+    };
+    // Producer-gap check (task ce50df99): a `block` policy whose
+    // required tag carries a `within` freshness window cannot stay
+    // satisfied by a one-time action — it needs a recurring producer.
+    // If no manifest hook produces the tag, the gate silently walls
+    // off whatever it triggers on (the founding-incident lockout:
+    // `preflight-before-investigation` blocking every `git status`).
+    // Policies without `within` only need the tag to exist once, which
+    // the normal review / PR workflow supplies, so they are not
+    // flagged.
+    if (p.enforcement === "block" && p.requires.within !== undefined) {
+      const prefix = ledgerTagPrefix(p.requires.ledger_tag);
+      if (!hasProducerHook(manifest, p, prefix)) {
+        report.producerGap = {
+          ledgerTag: p.requires.ledger_tag,
+          within: p.requires.within,
+        };
+      }
+    }
+    return report;
+  });
 }
 
 function buildWorkflows(manifest: Manifest): import("./types.js").WorkflowsSectionReport {
@@ -292,6 +348,9 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   for (const h of report.hooks) {
     if (h.status === "error") errorCount++;
     else if (h.status === "warn") warningCount++;
+  }
+  for (const p of report.policies) {
+    if (p.producerGap) warningCount++;
   }
   if (report.memory.routerExecutable && !report.memory.routerExecutable.exists) errorCount++;
   if (!report.memory.routerExecutable) warningCount++;
