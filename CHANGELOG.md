@@ -7,21 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-14
+
+**Headline: the init wizard becomes a real installer, the Full template
+goes self-contained, and a class of cwd-relative path footguns is closed.**
+Operators on `npm i -g @lannguyensi/harness` were still on v0.9.1 behavior:
+a stale agent-tasks MCP template, a buried apply hint, unbundled Full
+hooks, and a literal-tilde `EVIDENCE_LEDGER_DB` env that scattered rogue
+ledger databases. This release ships those fixes plus a hardened publish
+workflow and a policy-matching correctness fix.
+
+### Added
+
+- `harness init --interactive` is now a real installer: it runs a
+  per-profile dependency check, offers to `npm i -g` the missing packages
+  with operator permission, and aborts cleanly with a manual-install
+  fallback on failure. A wire-now prompt at the end offers to run
+  `harness apply` immediately. Full is surfaced as a fourth wizard
+  profile. (#98)
+
+### Changed
+
+- `harness init` templates now reference published bin names
+  (`agent-tasks-mcp-bridge`, `memory-router-user-prompt-submit`,
+  `grounding-mcp`) instead of `~/git/pandora/...` local paths. The Full
+  template is self-contained: its PreToolUse hooks run through the bundled
+  `harness policy intercept` engine, so no external shell scripts are
+  required. Full now also ships `Glob` + `Grep` in `builtin.known` and
+  includes the understanding-before-execution policy pack. (#98, #100)
+- `harness apply` Next-steps now leads with the user-global
+  `--target ~/.claude/settings.json --merge` recommendation, and uses a
+  softer lede on no-op re-runs. Hooks with an identical
+  `(command, timeout)` inside one matcher group are deduplicated. (#97)
+- `.github/workflows/publish-npm.yml` retries the `npm publish` step up to
+  3 times with exponential backoff to ride out transient Sigstore Rekor
+  `TLOG_CREATE_ENTRY` 409s, short-circuits when the version is already on
+  the registry, and gains a `workflow_dispatch` trigger with a `tag` input
+  so a release can be re-published without re-tagging. (#102)
+
 ### Fixed
 
+- `harness init`: the interactive wizard wired a stale agent-tasks MCP
+  template, `harness apply`'s target was not surfaced clearly, and a
+  `{project}` memory-dir pattern produced a false-positive warning. (#97)
+- `harness doctor` treats `{project}` patterns as informational rather
+  than a warning. The memory-router probe resolves bare bin names through
+  `PATH` and guards against `node` / `npx` / wrapper false positives.
+  (#97, #100)
+- `harness approve understanding`: the no-session-id error message is
+  expanded with concrete one-liners for retrieving the active session id.
+  (#100)
+- `grounding-mcp` wiring: the literal-tilde `EVIDENCE_LEDGER_DB` env block
+  is removed from the Team and Full templates. It expanded to a literal
+  `~` directory and scattered rogue `<cwd>/~/.evidence-ledger/` databases
+  on every spawn cwd; the ledger now resolves to `~/.evidence-ledger/` via
+  `os.homedir()`. An apply-time warning catches operators still carrying
+  the old wiring. (#101)
 - Policy `bash_match` regexes in the reference manifest
   (`preflight-before-investigation`, `preflight-before-push`,
-  `dogfood-before-release`) were start-anchored (`^git push`). Any command
-  that did not literally begin with the pattern, such as
+  `dogfood-before-release`) were start-anchored (`^git push`), so a
+  command that did not literally begin with the pattern, such as
   `cd <repo> && git push`, `git -C <repo> push`, or an env-var-prefixed
   `git push`, slipped past the gate ungated. The patterns now match at
   command position: start of string, or after `;`, `|`, `&&`, `(`, a
-  newline, or optional env-var assignments. The realistic bypass forms are
-  caught; string-argument mentions like `git commit -m "...git push..."`
-  and `echo "git status"` are not false-positives. Updated in
-  `docs/examples/full-manifest.yaml`, `FULL_TEMPLATE`, and
-  `dogfood/harness.yaml`; regression tests in
-  `tests/runtime/intercept.test.ts`. (#103)
+  newline, or optional env-var assignments. String-argument mentions like
+  `git commit -m "...git push..."` and `echo "git status"` are not
+  false-positives. (#103)
+- CI: the interactive-wizard tests no longer shell out to a real
+  `npm i -g` on CI runners. (#99)
 
 ## [0.9.1] - 2026-05-13
 
