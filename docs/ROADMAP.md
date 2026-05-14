@@ -1,6 +1,6 @@
 # Roadmap
 
-This document turns the four phases sketched in [`README.md`](../README.md)'s status checklist into testable acceptance criteria. It is downstream of [`VISION.md`](VISION.md) (the *why*) and [`ARCHITECTURE.md`](ARCHITECTURE.md) (the *what*); both are inputs, not variables.
+This document turns the phases summarised in [`README.md`](../README.md)'s status section into testable acceptance criteria. It is downstream of [`VISION.md`](VISION.md) (the *why*) and [`ARCHITECTURE.md`](ARCHITECTURE.md) (the *what*); both are inputs, not variables.
 
 Each phase below ships in this shape:
 
@@ -408,7 +408,7 @@ The reasoning is the one already encoded in `ARCHITECTURE.md` §2: claim-gate po
 For one final pass of expectation-setting:
 
 - **Cross-runtime portability** beyond Claude Code. The hook-event vocabulary is Claude-Code-specific; porting to a hypothetical second runtime is a separate effort.
-- **Manifest schema v2.** All four phases stay on `version: 1`. v2 is a future doc.
+- **Manifest schema v2.** All seven phases stay on `version: 1`. v2 is a future doc.
 - **Web UI / TUI.** CLI-only across all phases.
 - **Cloud sync.** No team-shared manifests, no upstream policy bundles, no remote ledger.
 - **Auto-restart of Claude Code or MCP servers.** `apply` and `add` print restart hints; the user (or agent) does the actual restart.
