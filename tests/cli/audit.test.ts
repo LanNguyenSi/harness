@@ -254,7 +254,7 @@ describe("audit — Phase 5 #2: sessionId env fallback", () => {
     }
   });
 
-  it("falls back to 'default' when neither env nor flag is set", async () => {
+  it("falls back to 'default' when env, flag, and transcript discovery all miss", async () => {
     const saved = process.env.CLAUDE_SESSION_ID;
     delete process.env.CLAUDE_SESSION_ID;
     try {
@@ -262,6 +262,8 @@ describe("audit — Phase 5 #2: sessionId env fallback", () => {
       await audit({
         configPath: MANIFEST_PATH,
         now: NOW,
+        // Stub the transcript scan so the test stays hermetic.
+        sessionDiscovery: { discover: () => null },
         fetchLedger: async (sid) => {
           observedSessionId = sid;
           return { kind: "ok", entries: [] };
@@ -270,6 +272,27 @@ describe("audit — Phase 5 #2: sessionId env fallback", () => {
       expect(observedSessionId).toBe("default");
     } finally {
       if (saved !== undefined) process.env.CLAUDE_SESSION_ID = saved;
+    }
+  });
+
+  it("discovers the live session from the newest transcript when no env or flag", async () => {
+    const saved = process.env.CLAUDE_SESSION_ID;
+    delete process.env.CLAUDE_SESSION_ID;
+    try {
+      let observedSessionId: string | undefined;
+      await audit({
+        configPath: MANIFEST_PATH,
+        now: NOW,
+        sessionDiscovery: { discover: () => "discovered-session-88" },
+        fetchLedger: async (sid) => {
+          observedSessionId = sid;
+          return { kind: "ok", entries: [] };
+        },
+      });
+      expect(observedSessionId).toBe("discovered-session-88");
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_SESSION_ID;
+      else process.env.CLAUDE_SESSION_ID = saved;
     }
   });
 });

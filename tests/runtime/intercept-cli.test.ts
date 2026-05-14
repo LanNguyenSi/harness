@@ -1,8 +1,9 @@
 import { Readable, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { runInterceptCli } from "../../src/cli/policy/intercept.js";
+import { realLedgerClient, runInterceptCli } from "../../src/cli/policy/intercept.js";
 import type { LedgerClient } from "../../src/runtime/intercept.js";
-import type { Policy } from "../../src/schema/index.js";
+import type { McpServer, Policy } from "../../src/schema/index.js";
+import { makeDecision } from "../_helpers/decision.js";
 import { makeManifest } from "../_helpers/manifest.js";
 
 function streamFrom(s: string): NodeJS.ReadableStream {
@@ -388,5 +389,39 @@ describe("runInterceptCli — Phase 5 #3: --verbose stderr diagnostics", () => {
       verbose: false,
     });
     expect(errOutput()).toBe("");
+  });
+});
+
+describe("realLedgerClient — audit-write failure is surfaced, not swallowed", () => {
+  // recordPolicyDecision reports failure via a `{ ok: false, reason }`
+  // return value rather than throwing. The adapter previously discarded
+  // it, so a persistently-failing recorder left `harness audit` /
+  // `explain --trace` blind with zero signal. The adapter now writes a
+  // one-line stderr diagnostic; stdout stays untouched.
+  const badServer = {
+    name: "grounding-mcp",
+    command: ["/nonexistent-harness-test-binary-xyz"],
+    enabled: true,
+  } as unknown as McpServer;
+
+  it("writes a stderr diagnostic when recordPolicyDecision returns !ok", async () => {
+    const { stream: err, output: errOutput } = captureStream();
+    const client = realLedgerClient(badServer, {
+      stderr: err,
+      ledgerTimeoutMs: 2000,
+    });
+    await client.record(
+      makeDecision({ policyName: "preflight-before-investigation" }),
+      "sess-err",
+    );
+    const text = errOutput();
+    expect(text).toContain(
+      "harness policy intercept: audit-write failed for preflight-before-investigation",
+    );
+    // A reason string is always appended — never a bare, contextless line.
+    expect(text.trim().length).toBeGreaterThan(
+      "harness policy intercept: audit-write failed for preflight-before-investigation:"
+        .length,
+    );
   });
 });
