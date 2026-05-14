@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `harness doctor` now flags a `block`-enforcement policy whose required
+  ledger tag carries a `requires.within` freshness window but has no
+  producer hook in the manifest. Such a policy needs the tag kept fresh,
+  so with nothing producing it the gate silently walls off whatever it
+  triggers on while doctor still reports it healthy. Producer detection
+  is a coarse substring match of the tag prefix against hook commands,
+  excluding the policy's own consumer hook: it is a floor, so "no
+  producer found" is reliable but "producer found" is heuristic and can
+  miss tag-suffix or cadence mismatches. Policies without a `within`
+  window are not flagged, since a one-time tag is supplied by the normal
+  review / PR workflow. Each gap counts as a doctor warning. (#109)
 - `harness approve understanding` now resolves the session id from a
   `harness.generated/.pending-approval` staging file when neither
   `--session` nor `$CLAUDE_SESSION_ID` is given. The
@@ -29,6 +40,18 @@ command, so the operator's prompt approval is the recovery.
 
 ### Fixed
 
+- `harness audit` and `harness explain --trace/--last` reported "no
+  policy decisions" even though `harness policy intercept` had recorded
+  them: the readers resolved the session id via `resolveSessionId`,
+  which falls back to the literal `"default"` session when neither
+  `--session` nor `$CLAUDE_SESSION_ID` is set, and Claude Code does not
+  export `$CLAUDE_SESSION_ID` into the Bash tool environment. The
+  read path now uses `resolveReadSessionId`, which adds a
+  transcript-discovery tier: it reads the live session id off the newest
+  `~/.claude/projects/*/<uuid>.jsonl`. The write path (`policy
+  intercept`) is unchanged. Separately, `realLedgerClient.record` no
+  longer discards `recordPolicyDecision`'s failure result; a failed
+  audit write now emits a one-line stderr diagnostic. (#108)
 - The `understanding-before-execution` policy pack's PreToolUse hook
   hard-denied every `Edit`/`Write`/`Bash` call until an Understanding
   Report was approved, including `harness approve understanding` itself (a

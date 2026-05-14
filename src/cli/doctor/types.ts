@@ -44,10 +44,26 @@ export interface HookEntryReport {
   message?: string;
 }
 
+/**
+ * A `block`-enforcement policy whose required ledger tag carries a
+ * `within` freshness window, but no manifest hook produces that tag.
+ * The gate will wall off whatever it triggers on until the tag is
+ * supplied out-of-band (a manual `ledger_add`, an external tool), with
+ * no in-manifest way to keep it satisfied. See task ce50df99.
+ */
+export interface PolicyProducerGap {
+  /** The unresolved `requires.ledger_tag`, e.g. `preflight:${REPO}`. */
+  ledgerTag: string;
+  /** The `requires.within` window the tag must stay fresh inside. */
+  within: string;
+}
+
 export interface PolicyEntryReport {
   name: string;
   schemaValid: boolean;
   caveat: string;
+  /** Present when this policy has an unproduced freshness-gated tag. */
+  producerGap?: PolicyProducerGap;
 }
 
 export interface WorkflowEntryReport {

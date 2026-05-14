@@ -318,3 +318,193 @@ policies: []
     expect(text).toContain(`(version 1) [shallow]`);
   });
 });
+
+describe("doctor — policy producer-gap check (task ce50df99)", () => {
+  // alpha: block + within, no hook produces `alpha:` → GAP
+  // beta:  block + within, `produce-beta` hook produces `beta:` → no gap
+  // gamma: block, NO within → no gap (one-time tag, satisfied by workflow)
+  // delta: `warn` enforcement + within, no producer → no gap (not block)
+  // epsilon: block + within; the ONLY hook whose command contains
+  //          `epsilon` is epsilon's own consumer hook, which the
+  //          `h.name !== policy.hook` exclusion must skip → GAP
+  // zeta:  block + within, leading-colon tag `:zeta` → empty prefix,
+  //        must not vacuously match every hook → GAP
+  const MANIFEST = `version: 1
+tools:
+  builtin:
+    known: [Read, Edit, Bash]
+hooks:
+  - name: consume-alpha
+    event: PreToolUse
+    match: Bash
+    command: harness policy intercept
+    blocking: hard
+  - name: consume-beta
+    event: PreToolUse
+    match: Bash
+    command: harness policy intercept
+    blocking: hard
+  - name: produce-beta
+    event: SessionStart
+    command: beta-runner --emit
+    blocking: soft
+  - name: consume-gamma
+    event: PreToolUse
+    match: Bash
+    command: harness policy intercept
+    blocking: hard
+  - name: consume-delta
+    event: PreToolUse
+    match: Bash
+    command: harness policy intercept
+    blocking: hard
+  - name: epsilon-policy-runner
+    event: PreToolUse
+    match: Bash
+    command: harness policy intercept --pack epsilon
+    blocking: hard
+  - name: consume-zeta
+    event: PreToolUse
+    match: Bash
+    command: harness policy intercept
+    blocking: hard
+policies:
+  - name: alpha-gate
+    description: gated on a freshness-windowed alpha tag with no producer
+    trigger:
+      event: PreToolUse
+      match: Bash
+    requires:
+      ledger_tag: "alpha:\${REPO}"
+      within: 1h
+    hook: consume-alpha
+    enforcement: block
+  - name: beta-gate
+    description: gated on beta, but a SessionStart hook produces it
+    trigger:
+      event: PreToolUse
+      match: Bash
+    requires:
+      ledger_tag: "beta:\${REPO}"
+      within: 1h
+    hook: consume-beta
+    enforcement: block
+  - name: gamma-gate
+    description: block policy with no within window
+    trigger:
+      event: PreToolUse
+      match: Bash
+    requires:
+      ledger_tag: "gamma:\${REPO}"
+    hook: consume-gamma
+    enforcement: block
+  - name: delta-gate
+    description: warn-enforcement policy with a within window
+    trigger:
+      event: PreToolUse
+      match: Bash
+    requires:
+      ledger_tag: "delta:\${REPO}"
+      within: 1h
+    hook: consume-delta
+    enforcement: warn
+  - name: epsilon-gate
+    description: its own consumer hook command names the prefix, but must not self-satisfy
+    trigger:
+      event: PreToolUse
+      match: Bash
+    requires:
+      ledger_tag: "epsilon:\${REPO}"
+      within: 1h
+    hook: epsilon-policy-runner
+    enforcement: block
+  - name: zeta-gate
+    description: leading-colon tag yields an empty prefix
+    trigger:
+      event: PreToolUse
+      match: Bash
+    requires:
+      ledger_tag: ":zeta"
+      within: 1h
+    hook: consume-zeta
+    enforcement: block
+`;
+
+  async function run() {
+    const home = makeFixture({ "harness.yaml": MANIFEST });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => null,
+      pathEnv: "",
+    });
+    return report;
+  }
+
+  it("flags a block policy whose within-gated tag has no producer hook", async () => {
+    const report = await run();
+    const alpha = report.policies.find((p) => p.name === "alpha-gate");
+    expect(alpha?.producerGap).toEqual({ ledgerTag: "alpha:${REPO}", within: "1h" });
+  });
+
+  it("does not flag a policy whose tag IS produced by a manifest hook", async () => {
+    const report = await run();
+    const beta = report.policies.find((p) => p.name === "beta-gate");
+    expect(beta?.producerGap).toBeUndefined();
+  });
+
+  it("does not flag a block policy without a within window", async () => {
+    const report = await run();
+    const gamma = report.policies.find((p) => p.name === "gamma-gate");
+    expect(gamma?.producerGap).toBeUndefined();
+  });
+
+  it("does not flag a warn-enforcement policy even with a within window", async () => {
+    const report = await run();
+    const delta = report.policies.find((p) => p.name === "delta-gate");
+    expect(delta?.producerGap).toBeUndefined();
+  });
+
+  it("excludes the policy's own consumer hook from producer detection", async () => {
+    const report = await run();
+    const epsilon = report.policies.find((p) => p.name === "epsilon-gate");
+    // epsilon-policy-runner is epsilon-gate's `hook:` (the consumer) AND
+    // its command literally contains `epsilon`. It must not count as the
+    // producer of `epsilon:` — the `h.name !== policy.hook` exclusion is
+    // what keeps this a gap; drop that clause and this test fails.
+    expect(epsilon?.producerGap).toEqual({
+      ledgerTag: "epsilon:${REPO}",
+      within: "1h",
+    });
+  });
+
+  it("does not let a leading-colon (empty-prefix) tag vacuously match every hook", async () => {
+    const report = await run();
+    const zeta = report.policies.find((p) => p.name === "zeta-gate");
+    // `:zeta` has an empty prefix; a naive `command.includes("")` would
+    // match every hook and silently suppress the gap. It must still flag.
+    expect(zeta?.producerGap).toEqual({ ledgerTag: ":zeta", within: "1h" });
+  });
+
+  it("counts each producer gap as a warning and renders the ⚠ line", async () => {
+    const report = await run();
+    const gaps = report.policies.filter((p) => p.producerGap);
+    expect(gaps.map((p) => p.name).sort()).toEqual([
+      "alpha-gate",
+      "epsilon-gate",
+      "zeta-gate",
+    ]);
+    // This fixture declares no `memory:` block, which on its own yields
+    // exactly one warning ("no memory router declared"). The three
+    // producer gaps push the total to 4 — proving each gap is counted.
+    expect(report.warningCount).toBe(4);
+    const text = format(report);
+    expect(text).toContain(
+      "⚠ alpha-gate  requires fresh `alpha:${REPO}` (within 1h) but no manifest hook produces it",
+    );
+    expect(text).toContain("add a producer hook (e.g. a SessionStart runner)");
+    expect(text).toContain("✓ beta-gate");
+    expect(text).toContain("✓ gamma-gate");
+  });
+});
