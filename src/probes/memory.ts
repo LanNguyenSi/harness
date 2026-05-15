@@ -1,12 +1,24 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { compareNumericVersions } from "../io/version-compare.js";
 import type { Manifest } from "../schema/index.js";
 
 export interface StaleMemory {
   path: string;
   lastTouched: Date;
   ageDays: number;
+}
+
+/**
+ * Optional `min_version` probe for the memory router. Same shape as
+ * `McpVersionReport`; populated only when the router declares
+ * `min_version`. Skipped when the router is disabled or its executable
+ * could not be located.
+ */
+export interface RouterVersionReport {
+  status: "ok" | "warn";
+  message: string;
 }
 
 export interface MemoryReport {
@@ -18,6 +30,7 @@ export interface MemoryReport {
    */
   directories: Array<{ path: string; scope: string; exists: boolean; unresolved?: boolean }>;
   routerExecutable: { path: string; exists: boolean } | null;
+  routerVersion?: RouterVersionReport;
   staleMemories: StaleMemory[];
 }
 
@@ -31,6 +44,13 @@ export interface MemoryOptions {
    * host's real PATH into the assertion surface.
    */
   pathEnv?: string;
+  /**
+   * Optional probe for the memory router's `min_version` check. Tests
+   * inject a deterministic stub; `harness doctor` wires a real
+   * spawnSync probe at CLI invocation. Returning `null` is treated as
+   * "version probe failed" and emits a warn line.
+   */
+  versionProbe?: (cmd: string[]) => string | null;
 }
 
 function expandHome(p: string, home: string): string {
@@ -130,6 +150,53 @@ export function inspectMemory(manifest: Manifest, opts: MemoryOptions = {}): Mem
     }
   }
 
+  // Optional min_version probe for memory.router. Mirrors the
+  // `tools.mcp[]` version-check contract: skipped when no min_version
+  // declared, when router is disabled, or when the executable isn't
+  // located. Outdated emits `warn`, not `error` (the router still
+  // runs; the warning is informational).
+  let routerVersion: RouterVersionReport | undefined;
+  if (
+    manifest.memory.router &&
+    manifest.memory.router.enabled !== false &&
+    manifest.memory.router.min_version &&
+    routerExecutable?.exists
+  ) {
+    const probe = opts.versionProbe ?? (() => null);
+    const minVersion = manifest.memory.router.min_version;
+    const cmd = manifest.memory.router.command;
+    const versionCmd = manifest.memory.router.version_command ?? [
+      routerExecutable.path,
+      ...cmd.slice(1),
+      "--version",
+    ];
+    const stdout = probe(versionCmd);
+    if (stdout === null) {
+      routerVersion = {
+        status: "warn",
+        message: `version probe failed for ${versionCmd.join(" ")}`,
+      };
+    } else {
+      const m = stdout.match(/(\d+(?:\.\d+){0,3})/);
+      if (!m || !m[1]) {
+        routerVersion = {
+          status: "warn",
+          message: `could not parse a version from "${stdout.trim()}"`,
+        };
+      } else {
+        const actual = m[1];
+        const cmp = compareNumericVersions(actual, minVersion);
+        routerVersion =
+          cmp < 0
+            ? {
+                status: "warn",
+                message: `outdated: installed v${actual} < required ${minVersion}`,
+              }
+            : { status: "ok", message: `v${actual} ≥ ${minVersion}` };
+      }
+    }
+  }
+
   const staleMemories: StaleMemory[] = [];
   for (const dir of directories) {
     if (!dir.exists) continue;
@@ -151,5 +218,10 @@ export function inspectMemory(manifest: Manifest, opts: MemoryOptions = {}): Mem
   }
   staleMemories.sort((a, b) => a.lastTouched.getTime() - b.lastTouched.getTime());
 
-  return { directories, routerExecutable, staleMemories };
+  return {
+    directories,
+    routerExecutable,
+    ...(routerVersion ? { routerVersion } : {}),
+    staleMemories,
+  };
 }

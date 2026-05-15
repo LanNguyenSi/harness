@@ -99,6 +99,10 @@ function formatMemorySection(report: DoctorReport): string[] {
   } else {
     out.push(`  ⚠ no memory router declared`);
   }
+  if (report.memory.routerVersion) {
+    const marker = report.memory.routerVersion.status === "ok" ? "✓" : "⚠";
+    out.push(`    ${marker} version: ${report.memory.routerVersion.message}`);
+  }
   for (const d of report.memory.directories) {
     if (d.unresolved) {
       out.push(`  ℹ memory directory pattern: ${d.path} (resolved per-project at runtime)`);
@@ -130,6 +134,10 @@ function formatHooksSection(report: DoctorReport): string[] {
     const marker = h.status === "ok" ? "✓" : h.status === "warn" ? "⚠" : "✗";
     const tail = h.message ? `  ${h.message}` : "";
     out.push(`  ${marker} ${h.name}  ${h.event}, blocking: ${h.blocking}${tail}`);
+    if (h.version) {
+      const vMarker = h.version.status === "ok" ? "✓" : "⚠";
+      out.push(`      ${vMarker} version: ${h.version.message}`);
+    }
   }
   if (report.hooks.length === 0) out.push(`  (no hooks declared)`);
   return out;

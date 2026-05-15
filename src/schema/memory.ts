@@ -13,6 +13,8 @@ export const MemoryRouterSchema = z
   .object({
     command: z.array(z.string().min(1)).min(1),
     enabled: z.boolean().default(true),
+    min_version: z.string().min(1).optional(),
+    version_command: z.array(z.string().min(1)).min(1).optional(),
   })
   .strict();
 

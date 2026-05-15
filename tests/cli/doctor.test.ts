@@ -653,3 +653,192 @@ ${mcpBlock}
     expect(report.tools.mcpVersions[0]?.status).toBe("ok");
   });
 });
+
+describe("doctor — hooks[] min_version", () => {
+  function buildManifest(hooks: string): string {
+    return `version: 1
+hooks:
+${hooks}
+policies: []
+tools:
+  builtin:
+    known: []
+`;
+  }
+
+  it("emits no version line for hooks without min_version", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`  - name: bare-hook
+    event: SessionStart
+    command: /bin/true
+    blocking: false`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => "v9.9.9\n",
+      pathEnv: "",
+    });
+    expect(report.hooks[0]?.version).toBeUndefined();
+  });
+
+  it("warns when the probed hook version is below min_version", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`  - name: stale-hook
+    event: SessionStart
+    command: /bin/true
+    blocking: false
+    min_version: "0.5.0"
+    version_command: [my-hook-bin, "--version"]`),
+    });
+    let received: string[] | null = null;
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: (cmd) => {
+        received = cmd;
+        return "my-hook-bin v0.2.0\n";
+      },
+      pathEnv: "",
+    });
+    expect(received).toEqual(["my-hook-bin", "--version"]);
+    expect(report.hooks[0]?.version).toEqual({
+      status: "warn",
+      message: "outdated: installed v0.2.0 < required 0.5.0",
+    });
+    expect(report.warningCount).toBeGreaterThanOrEqual(1);
+    const text = format(report);
+    expect(text).toContain("⚠ version: outdated: installed v0.2.0 < required 0.5.0");
+  });
+
+  it("emits ok when the probed hook version meets min_version", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`  - name: ok-hook
+    event: SessionStart
+    command: /bin/true
+    blocking: false
+    min_version: "0.5.0"
+    version_command: [my-hook-bin, "--version"]`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => "my-hook-bin v0.6.0\n",
+      pathEnv: "",
+    });
+    expect(report.hooks[0]?.version).toEqual({
+      status: "ok",
+      message: "v0.6.0 ≥ 0.5.0",
+    });
+  });
+
+  it("rejects min_version without version_command at schema-validation time", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`  - name: bad-hook
+    event: SessionStart
+    command: /bin/true
+    blocking: false
+    min_version: "0.5.0"`),
+    });
+    await expect(
+      doctor({
+        configPath: path.join(home, "harness.yaml"),
+        homeOverride: home,
+        mcpProbe: new FakeProbe({}),
+        versionProbe: () => null,
+        pathEnv: "",
+      }),
+    ).rejects.toThrow(/version_command/);
+  });
+});
+
+describe("doctor — memory.router min_version", () => {
+  function buildManifest(routerBlock: string): string {
+    return `version: 1
+hooks: []
+policies: []
+tools:
+  builtin:
+    known: []
+memory:
+  router:
+${routerBlock}
+`;
+  }
+
+  it("emits no routerVersion entry when min_version is absent", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    command: [/bin/true]`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => "v0.9.0\n",
+      pathEnv: "",
+    });
+    expect(report.memory.routerVersion).toBeUndefined();
+  });
+
+  it("warns when the probed router version is below min_version", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    command: [/bin/true]
+    min_version: "0.5.0"
+    version_command: ["/bin/true", "--version"]`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => "router v0.1.0\n",
+      pathEnv: "",
+    });
+    expect(report.memory.routerVersion).toEqual({
+      status: "warn",
+      message: "outdated: installed v0.1.0 < required 0.5.0",
+    });
+    expect(report.warningCount).toBeGreaterThanOrEqual(1);
+    const text = format(report);
+    expect(text).toContain("⚠ version: outdated: installed v0.1.0 < required 0.5.0");
+  });
+
+  it("emits ok when the probed router version meets min_version", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    command: [/bin/true]
+    min_version: "0.5.0"
+    version_command: ["/bin/true", "--version"]`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => "router v0.6.0\n",
+      pathEnv: "",
+    });
+    expect(report.memory.routerVersion).toEqual({
+      status: "ok",
+      message: "v0.6.0 ≥ 0.5.0",
+    });
+  });
+
+  it("skips the router version check when the router executable is missing", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    command: [/this/does/not/exist/router]
+    min_version: "0.5.0"
+    version_command: ["/this/does/not/exist/router", "--version"]`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => {
+        throw new Error("versionProbe must not be invoked when the router executable is missing");
+      },
+      pathEnv: "",
+    });
+    expect(report.memory.routerVersion).toBeUndefined();
+  });
+});
