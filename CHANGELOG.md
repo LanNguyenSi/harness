@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - `buildRecordHint` now flips to a `keep evidence-ledger entries containing \`<tag>\` at or below <N>` phrasing for `count.max`-only requires (agent-tasks/aee9c085). The previous "record N entries" shape was exactly the wrong nudge for a "too many already" deny. `count.min`-only and the combined min/max cases keep the recording phrasing (recording more is the satisfying action).
+- `checkApprovalMarker` uses `lstatSync` (not `statSync`) and rejects symlinks at the marker path (agent-tasks/d39f160e). Defense-in-depth: the agent has no Edit / Write / Bash path to plant a symlink under `harness.generated/` today, but the gate's contract is to assume the agent is hostile, so the lstat reject is cheap insurance.
 
 ## [0.13.0] - 2026-05-15
 
