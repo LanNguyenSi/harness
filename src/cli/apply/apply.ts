@@ -52,6 +52,7 @@ import {
 import { unifiedDiff } from "../../io/patch.js";
 import { emitRestartHints } from "../../io/restart-hints.js";
 import { compare, type ThreeStateVerdict } from "../../io/three-state.js";
+import { reportsDirForManifest } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { expandPolicyPacks, DEFAULT_RUNTIME, type Runtime } from "../../policy-packs/index.js";
 import { parseManifest, type Manifest } from "../../schema/index.js";
 import { EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
@@ -253,16 +254,9 @@ function buildExpectedFiles(
   // touches the persisted-report dir then resolves the same location,
   // independent of cwd. Without this, the pack's Stop hook (cwd =
   // session) and `harness approve understanding` (cwd = operator
-  // terminal) silently diverge. Path is computed inline rather than
-  // imported from `understanding-before-execution-runtime` to avoid
-  // pulling that module's `runtime/ledger-record` transitive import
-  // into `cli/apply/apply` at module-init time (it would shortcut the
-  // ledger-record ↔ policies/index ↔ ledger-client cycle and trip a TDZ
-  // on POLICY_DECISION_TYPE; the cycle is pre-existing but only fires
-  // when a new top-level import path forces ledger-record to load before
-  // policies/index).
+  // terminal) silently diverge.
   const runtime: Runtime = opts.runtime ?? DEFAULT_RUNTIME;
-  const reportsDir = path.join(path.dirname(manifestPath), ".understanding-gate", "reports");
+  const reportsDir = reportsDirForManifest(manifestPath);
   const packExpansion = expandPolicyPacks(manifest, runtime, { reportsDir });
   const augmentedManifest: Manifest =
     packExpansion.hooks.length === 0

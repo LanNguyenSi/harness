@@ -24,15 +24,7 @@ import {
   resolveProfile,
   KNOWN_PROFILE_NAMES,
 } from "./permission-profiles.js";
-
-// Local copy of the env var name so this module does NOT need to import
-// from `understanding-before-execution-runtime.js`. That sibling pulls
-// in `runtime/ledger-record.js`, which sits in a pre-existing cycle
-// with `policies/ledger-client.js` (POLICY_DECISION_TYPE); routing the
-// import here would cause a TDZ failure at CLI startup. The runtime
-// helper exports the same constant under the same name for the consumer
-// side (defaultReportsDir + the test assertions).
-const REPORTS_DIR_ENV = "UNDERSTANDING_GATE_REPORT_DIR";
+import { REPORTS_DIR_ENV } from "./understanding-before-execution-runtime.js";
 
 export const PACK_NAME = "understanding-before-execution";
 
