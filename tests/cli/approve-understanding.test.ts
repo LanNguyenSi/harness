@@ -76,6 +76,77 @@ describe("approveUnderstanding", () => {
     expect(result.persistedReport.reason).toMatch(/no reports found/);
   });
 
+  it("surfaces the latest parse-error log when reports/ is empty", async () => {
+    // Simulate the layout the standalone Stop hook writes:
+    //   <reports-parent>/.understanding-gate/{reports,parse-errors}/
+    // tmp itself is the reports dir; parse-errors is its sibling.
+    const reportsParent = fs.mkdtempSync(path.join(os.tmpdir(), "ug-with-parse-err-"));
+    const reportsDir = path.join(reportsParent, "reports");
+    const parseErrorsDir = path.join(reportsParent, "parse-errors");
+    fs.mkdirSync(reportsDir);
+    fs.mkdirSync(parseErrorsDir);
+    fs.writeFileSync(
+      path.join(parseErrorsDir, "2026-05-13T19-02-25-498Z-831a51.log"),
+      `${JSON.stringify({
+        reason: "missing_sections",
+        missing: ["currentUnderstanding", "intendedOutcome"],
+        message: "Missing required sections: currentUnderstanding, intendedOutcome",
+      })}\n--- raw ---\noriginal assistant text\n`,
+    );
+    try {
+      const result = await approveUnderstanding({
+        manifest: manifest(),
+        session: "sess-1",
+        reportsDir,
+        ledgerAdd: async () => ({ ok: true }),
+      });
+      expect(result.persistedReport.ok).toBe(false);
+      if (result.persistedReport.ok) return;
+      expect(result.persistedReport.reason).toMatch(/no reports found/);
+      expect(result.persistedReport.reason).toMatch(/latest parse-error at/);
+      expect(result.persistedReport.reason).toMatch(/Missing required sections/);
+    } finally {
+      fs.rmSync(reportsParent, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the first header line when the parse-error log isn't recognised JSON", async () => {
+    const reportsParent = fs.mkdtempSync(path.join(os.tmpdir(), "ug-with-bad-parse-err-"));
+    const reportsDir = path.join(reportsParent, "reports");
+    const parseErrorsDir = path.join(reportsParent, "parse-errors");
+    fs.mkdirSync(reportsDir);
+    fs.mkdirSync(parseErrorsDir);
+    fs.writeFileSync(
+      path.join(parseErrorsDir, "weird-format.log"),
+      "freeform: something exploded\nmore context\n",
+    );
+    try {
+      const result = await approveUnderstanding({
+        manifest: manifest(),
+        session: "sess-1",
+        reportsDir,
+        ledgerAdd: async () => ({ ok: true }),
+      });
+      expect(result.persistedReport.ok).toBe(false);
+      if (result.persistedReport.ok) return;
+      expect(result.persistedReport.reason).toMatch(/freeform: something exploded/);
+    } finally {
+      fs.rmSync(reportsParent, { recursive: true, force: true });
+    }
+  });
+
+  it("stays silent about parse-errors when the parse-errors dir does not exist", async () => {
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-1",
+      reportsDir: tmp,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.persistedReport.ok).toBe(false);
+    if (result.persistedReport.ok) return;
+    expect(result.persistedReport.reason).not.toMatch(/parse-error/);
+  });
+
   it("warns but does not throw when ledger write fails", async () => {
     writeReport("rpt.json", { sessionId: "sess-1", approvalStatus: "pending" });
     const result = await approveUnderstanding({

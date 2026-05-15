@@ -101,6 +101,73 @@ async function writeLedgerTag(
   });
 }
 
+interface ParseErrorSummary {
+  filePath: string;
+  /** One-line human-readable summary suitable for inlining in the CLI reason. */
+  summary: string;
+}
+
+/**
+ * Find the freshest parse-error log under `<dir>` (the
+ * `<reports-dir>/../parse-errors/` location the standalone Stop hook
+ * writes to when `parseReport` rejects the agent's last message). Used
+ * to upgrade `approve understanding`'s "no reports found" diagnostic
+ * from a silent dead end to a "hook fired but parse failed because X"
+ * pointer. Best-effort: any I/O error is swallowed and we report no
+ * parse-error, mirroring the listPersistedReports contract.
+ */
+function findLatestParseError(dir: string): ParseErrorSummary | null {
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return null;
+  }
+  let newest: { filePath: string; mtimeMs: number } | null = null;
+  for (const name of names) {
+    if (!name.endsWith(".log")) continue;
+    const full = path.join(dir, name);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(full);
+    } catch {
+      continue;
+    }
+    if (!stat.isFile()) continue;
+    if (!newest || stat.mtimeMs > newest.mtimeMs) {
+      newest = { filePath: full, mtimeMs: stat.mtimeMs };
+    }
+  }
+  if (!newest) return null;
+  let raw: string;
+  try {
+    raw = fs.readFileSync(newest.filePath, "utf8");
+  } catch {
+    return { filePath: newest.filePath, summary: "<unreadable>" };
+  }
+  // The standalone package writes a JSON header followed by `--- raw ---`
+  // and the original assistant text. Read the header for a `message`,
+  // `reason`, or `missing` field; fall back to the first line if the
+  // schema is unfamiliar so a future format change still surfaces
+  // *something* rather than going silent.
+  const header = raw.split("\n--- raw ---")[0] ?? raw;
+  let summary = (header.split("\n")[0] ?? "").trim();
+  try {
+    const parsed = JSON.parse(header) as Record<string, unknown>;
+    if (typeof parsed["message"] === "string" && parsed["message"].length > 0) {
+      summary = parsed["message"] as string;
+    } else if (typeof parsed["reason"] === "string") {
+      const missing = Array.isArray(parsed["missing"])
+        ? ` (missing: ${(parsed["missing"] as unknown[]).filter((m) => typeof m === "string").join(", ")})`
+        : "";
+      summary = `${parsed["reason"] as string}${missing}`;
+    }
+  } catch {
+    /* keep the first-line fallback */
+  }
+  return { filePath: newest.filePath, summary };
+}
+
 function rewriteReportApproved(
   filePath: string,
   approvedAt: string,
@@ -217,13 +284,25 @@ export async function approveUnderstanding(
 
   let persistedReport: ApproveUnderstandingResult["persistedReport"];
   if (!latest) {
-    persistedReport = {
-      ok: false,
-      reason:
-        reports.length === 0
-          ? `no reports found at ${reportsDir}`
-          : `no report matched session_id=${sessionId} (${reports.length} report(s) for other sessions)`,
-    };
+    // When no matching report exists, look at the sibling parse-errors
+    // directory (`<dir-of-reports>/../parse-errors/`, the path the
+    // standalone @lannguyensi/understanding-gate Stop hook writes to
+    // when its parser rejects the agent's last message). Surface the
+    // newest entry's reason so "no reports found" becomes "the hook
+    // fired but the parser rejected the report — here is why", rather
+    // than a silent dead end.
+    const parseErrorsDir = path.join(path.dirname(reportsDir), "parse-errors");
+    const latestParseError = findLatestParseError(parseErrorsDir);
+    let reason: string;
+    if (reports.length === 0) {
+      reason = `no reports found at ${reportsDir}`;
+      if (latestParseError) {
+        reason += `; latest parse-error at ${latestParseError.filePath}: ${latestParseError.summary}`;
+      }
+    } else {
+      reason = `no report matched session_id=${sessionId} (${reports.length} report(s) for other sessions)`;
+    }
+    persistedReport = { ok: false, reason };
   } else {
     const approvedAt = (opts.now ?? new Date()).toISOString();
     const approvedBy = opts.approvedBy ?? DEFAULT_APPROVED_BY;
