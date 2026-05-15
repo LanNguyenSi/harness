@@ -51,12 +51,24 @@ export interface ToolsSection {
   skillsRequiredMissing: string[];
 }
 
+/**
+ * Result of the optional `min_version` probe for a hook entry. Populated
+ * only when the hook declares both `min_version` and `version_command`;
+ * absent otherwise (the path-existence check on the hook command still
+ * runs unconditionally and surfaces via the main `status` field).
+ */
+export interface HookVersionReport {
+  status: "ok" | "warn";
+  message: string;
+}
+
 export interface HookEntryReport {
   name: string;
   event: string;
   blocking: string;
   status: "ok" | "warn" | "error";
   message?: string;
+  version?: HookVersionReport;
 }
 
 /**

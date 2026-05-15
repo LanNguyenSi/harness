@@ -181,6 +181,7 @@ Notes:
 
 - **`directories`** is a list of `{path, scope}` — `{project}` is a placeholder that `harness describe --project <name>` substitutes. For user-scope, the path is literal.
 - **`router.command`** wires the existing `memory-router` hook; the manifest does not re-implement routing. In Phase 3 the `settings.json` hook section is regenerated from this value.
+- **`router.min_version`** (optional, string) and **`router.version_command`** (optional, `string[]`) follow the same contract as `tools.mcp[]`: `harness doctor` runs `version_command` (defaults to `[<resolved router path>, --version]`) and emits a `⚠ outdated` line when the parsed version is below the floor. The check skips when the router is disabled or its executable was not located.
 - **`retention.broken_refs`** decides how `validate` treats memories that reference functions/files that no longer exist. `warn` is the safe default; `error` is for projects that want a hard gate.
 - **`scopes.allowed`** bounds future growth — adding `team` or `public` scope is a manifest-version bump, not a silent extension.
 
@@ -227,6 +228,8 @@ Schema per entry:
 | `blocking` | enum | yes | `false` / `soft` / `hard` |
 | `budget_ms` | integer | no (default 30000) | timeout before hook is killed |
 | `description` | string | no | surfaced by `harness describe` |
+| `min_version` | string | no | semver floor; `harness doctor` runs `version_command` and emits a `⚠ outdated` line when the parsed version is below this value. Requires `version_command` (validate rejects min_version alone): hook commands are arbitrary shell strings (`harness session-start preflight`, `~/.claude/hooks/foo.sh`, etc.), so no useful default exists. |
+| `version_command` | `string[]` | no | argv to spawn for the version probe; required when `min_version` is set. Point this at the **source-of-truth binary** whose version your `min_version` floor pins, not at a wrapper or launcher: for `understanding-gate-claude-hook` that wraps the `understanding-gate` CLI, use `[understanding-gate, --version]`, not `[understanding-gate-claude-hook, --version]`. |
 
 Blocking semantics, three levels:
 

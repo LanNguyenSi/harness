@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { compareNumericVersions } from "../../io/version-compare.js";
 import { inspectMemory } from "../../probes/memory.js";
 import {
   RealMcpProbe,
@@ -207,19 +208,9 @@ function checkMcpVersions(manifest: Manifest, opts: DoctorOptions): McpVersionRe
   return out;
 }
 
-function compareVersions(a: string, b: string): number {
-  const aa = a.split(".").map((n) => Number.parseInt(n, 10));
-  const bb = b.split(".").map((n) => Number.parseInt(n, 10));
-  const len = Math.max(aa.length, bb.length);
-  for (let i = 0; i < len; i++) {
-    const ai = aa[i] ?? 0;
-    const bi = bb[i] ?? 0;
-    if (Number.isNaN(ai) || Number.isNaN(bi)) return 0;
-    if (ai > bi) return 1;
-    if (ai < bi) return -1;
-  }
-  return 0;
-}
+// `compareVersions` aliases the shared helper to avoid renaming every
+// existing call site in this file.
+const compareVersions = compareNumericVersions;
 
 function checkSkills(manifest: Manifest, home: string): { enabled: string[]; missing: string[] } {
   const enabled = manifest.tools.skills.enabled;
@@ -239,53 +230,67 @@ function checkSkills(manifest: Manifest, home: string): { enabled: string[]; mis
   return { enabled, missing };
 }
 
-function checkHooks(manifest: Manifest, home: string): HookEntryReport[] {
+function checkHookVersion(
+  hook: Manifest["hooks"][number],
+  versionProbe: (cmd: string[]) => string | null,
+): HookEntryReport["version"] | undefined {
+  // The schema enforces min_version + version_command both present; this
+  // is the safety belt that lets the runtime stay narrowly typed without
+  // re-asserting it.
+  if (!hook.min_version || !hook.version_command) return undefined;
+  const stdout = versionProbe(hook.version_command);
+  if (stdout === null) {
+    return {
+      status: "warn",
+      message: `version probe failed for ${hook.version_command.join(" ")}`,
+    };
+  }
+  const m = stdout.match(/(\d+(?:\.\d+){0,3})/);
+  if (!m || !m[1]) {
+    return {
+      status: "warn",
+      message: `could not parse a version from "${stdout.trim()}"`,
+    };
+  }
+  const actual = m[1];
+  const cmp = compareVersions(actual, hook.min_version);
+  return cmp < 0
+    ? { status: "warn", message: `outdated: installed v${actual} < required ${hook.min_version}` }
+    : { status: "ok", message: `v${actual} ≥ ${hook.min_version}` };
+}
+
+function checkHooks(
+  manifest: Manifest,
+  home: string,
+  opts: Pick<DoctorOptions, "versionProbe">,
+): HookEntryReport[] {
+  const versionProbe = opts.versionProbe ?? (() => null);
   return manifest.hooks.map((hook) => {
     const blockingLabel = hook.blocking === false ? "false" : hook.blocking;
+    const version = checkHookVersion(hook, versionProbe);
     const first = hook.command.trim().split(/\s+/)[0] ?? "";
-    if (!path.isAbsolute(first) && first !== HOME_PLACEHOLDER && !first.startsWith("~/")) {
-      return {
-        name: hook.name,
-        event: hook.event,
-        blocking: blockingLabel,
-        status: "ok",
-      };
-    }
-    const resolved = expandHome(first, home);
-    if (!fs.existsSync(resolved)) {
-      return {
-        name: hook.name,
-        event: hook.event,
-        blocking: blockingLabel,
-        status: "error",
-        message: `path does not exist: ${resolved}`,
-      };
-    }
-    const stat = fs.statSync(resolved);
-    if (!stat.isFile()) {
-      return {
-        name: hook.name,
-        event: hook.event,
-        blocking: blockingLabel,
-        status: "error",
-        message: `not a regular file: ${resolved}`,
-      };
-    }
-    if (!isExecutable(resolved)) {
-      return {
-        name: hook.name,
-        event: hook.event,
-        blocking: blockingLabel,
-        status: "error",
-        message: `not executable: ${resolved}`,
-      };
-    }
-    return {
+    const base = (extra: Partial<HookEntryReport>): HookEntryReport => ({
       name: hook.name,
       event: hook.event,
       blocking: blockingLabel,
-      status: "ok",
-    };
+      ...(version ? { version } : {}),
+      ...extra,
+    } as HookEntryReport);
+    if (!path.isAbsolute(first) && first !== HOME_PLACEHOLDER && !first.startsWith("~/")) {
+      return base({ status: "ok" });
+    }
+    const resolved = expandHome(first, home);
+    if (!fs.existsSync(resolved)) {
+      return base({ status: "error", message: `path does not exist: ${resolved}` });
+    }
+    const stat = fs.statSync(resolved);
+    if (!stat.isFile()) {
+      return base({ status: "error", message: `not a regular file: ${resolved}` });
+    }
+    if (!isExecutable(resolved)) {
+      return base({ status: "error", message: `not executable: ${resolved}` });
+    }
+    return base({ status: "ok" });
   });
 }
 
@@ -423,12 +428,14 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   for (const h of report.hooks) {
     if (h.status === "error") errorCount++;
     else if (h.status === "warn") warningCount++;
+    if (h.version?.status === "warn") warningCount++;
   }
   for (const p of report.policies) {
     if (p.producerGap) warningCount++;
   }
   if (report.memory.routerExecutable && !report.memory.routerExecutable.exists) errorCount++;
   if (!report.memory.routerExecutable) warningCount++;
+  if (report.memory.routerVersion?.status === "warn") warningCount++;
   for (const d of report.memory.directories) {
     if (!d.exists) warningCount++;
   }
@@ -485,9 +492,11 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     homeDir: home,
     project: opts.project,
     now: opts.now,
+    ...(opts.pathEnv !== undefined ? { pathEnv: opts.pathEnv } : {}),
+    ...(opts.versionProbe !== undefined ? { versionProbe: opts.versionProbe } : {}),
   });
 
-  const hooks = checkHooks(manifest, home);
+  const hooks = checkHooks(manifest, home, opts);
   const policies = buildPolicies(manifest);
   const workflows = buildWorkflows(manifest);
   const manifestSec = manifestSection(manifest);
