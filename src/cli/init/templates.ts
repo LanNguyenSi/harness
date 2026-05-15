@@ -64,10 +64,12 @@ tools:
       # \`agent-tasks-mcp-bridge\` binary on PATH. The bridge owns token
       # storage and defaults to the hosted backend; override with
       # \`AGENT_TASKS_BASE_URL\` / \`AGENT_TASKS_TOKEN\` for self-hosted.
-      # \`min_version\` is intentionally absent: the published bin does
-      # not yet implement \`--version\`, so pinning would noise the doctor
-      # report on a fresh install. Set it once the bin grows the flag.
+      # \`min_version\` floor: 0.6.0 added the \`--version\` short-circuit
+      # the doctor probe needs (PR agent-tasks/240, release-cut PR 241).
+      # Bump the floor whenever a fix you depend on lands; loose floors
+      # are fine, the point is the drift signal not pinning a specific cut.
       command: [agent-tasks-mcp-bridge]
+      min_version: "0.6.0"
       health:
         verb: projects_list
         timeout_ms: 5000
@@ -77,9 +79,11 @@ tools:
       # the bundled default resolves to \`~/.evidence-ledger/ledger.db\`
       # via os.homedir() at startup. Passing a literal tilde in env
       # bypasses shell expansion and creates rogue cwd-relative DB files
-      # (see agent-tasks/42d224a6 incident). \`min_version\` is omitted
-      # for the same reason as agent-tasks above.
+      # (see agent-tasks/42d224a6 incident). \`min_version\` floor: 0.2.0
+      # added the \`--version\` short-circuit the doctor probe needs (PR
+      # agent-grounding/76, release-cut PR 77).
       command: [grounding-mcp]
+      min_version: "0.2.0"
       health:
         verb: ledger_status
         timeout_ms: 5000
