@@ -64,6 +64,9 @@ tools:
       # \`agent-tasks-mcp-bridge\` binary on PATH. The bridge owns token
       # storage and defaults to the hosted backend; override with
       # \`AGENT_TASKS_BASE_URL\` / \`AGENT_TASKS_TOKEN\` for self-hosted.
+      # \`min_version\` is intentionally absent: the published bin does
+      # not yet implement \`--version\`, so pinning would noise the doctor
+      # report on a fresh install. Set it once the bin grows the flag.
       command: [agent-tasks-mcp-bridge]
       health:
         verb: projects_list
@@ -74,7 +77,8 @@ tools:
       # the bundled default resolves to \`~/.evidence-ledger/ledger.db\`
       # via os.homedir() at startup. Passing a literal tilde in env
       # bypasses shell expansion and creates rogue cwd-relative DB files
-      # (see agent-tasks/42d224a6 incident).
+      # (see agent-tasks/42d224a6 incident). \`min_version\` is omitted
+      # for the same reason as agent-tasks above.
       command: [grounding-mcp]
       health:
         verb: ledger_status

@@ -23,6 +23,7 @@ import {
   type DoctorTarget,
   type HookEntryReport,
   type ManifestSection,
+  type McpVersionReport,
   type PolicyEntryReport,
   type ToolsSection,
 } from "./types.js";
@@ -130,6 +131,76 @@ function checkCli(manifest: Manifest, opts: DoctorOptions): CliEntryReport[] {
         name: cli.name,
         status: "ok",
         message: `v${actual} ≥ ${cli.min_version}`,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Resolve the binary token from an MCP server's `command` shape. The
+ * schema permits either a single string or a non-empty string[]. For
+ * version probing we only need the first token — the rest are args.
+ */
+function mcpBinary(command: string | string[]): string {
+  if (Array.isArray(command)) return command[0] ?? "";
+  return command.trim().split(/\s+/)[0] ?? "";
+}
+
+/**
+ * Mirrors `checkCli` for `tools.mcp[]`. Skipped silently when the entry
+ * has no `min_version` (the common case, preserves the v1 manifest
+ * contract). Below threshold emits a `warn`, not `error`: a stale MCP
+ * still functions; the warning is the drift signal the operator needs
+ * to decide whether to `npm i -g <pkg>@latest`.
+ */
+function checkMcpVersions(manifest: Manifest, opts: DoctorOptions): McpVersionReport[] {
+  const out: McpVersionReport[] = [];
+  const versionProbe = opts.versionProbe ?? (() => null);
+  for (const mcp of manifest.tools.mcp) {
+    if (!mcp.min_version) continue;
+    if (mcp.enabled === false) continue;
+    const binary = mcpBinary(mcp.command);
+    if (!binary) {
+      out.push({
+        name: mcp.name,
+        status: "warn",
+        message: "command has no resolvable binary token",
+      });
+      continue;
+    }
+    const versionCmd = mcp.version_command ?? [binary, "--version"];
+    const stdout = versionProbe(versionCmd);
+    if (stdout === null) {
+      out.push({
+        name: mcp.name,
+        status: "warn",
+        message: `version probe failed for ${versionCmd.join(" ")}`,
+      });
+      continue;
+    }
+    const m = stdout.match(/(\d+(?:\.\d+){0,3})/);
+    if (!m || !m[1]) {
+      out.push({
+        name: mcp.name,
+        status: "warn",
+        message: `could not parse a version from "${stdout.trim()}"`,
+      });
+      continue;
+    }
+    const actual = m[1];
+    const cmp = compareVersions(actual, mcp.min_version);
+    if (cmp < 0) {
+      out.push({
+        name: mcp.name,
+        status: "warn",
+        message: `outdated: installed v${actual} < required ${mcp.min_version}`,
+      });
+    } else {
+      out.push({
+        name: mcp.name,
+        status: "ok",
+        message: `v${actual} ≥ ${mcp.min_version}`,
       });
     }
   }
@@ -344,6 +415,10 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
     if (c.status === "error") errorCount++;
     else if (c.status === "warn") warningCount++;
   }
+  for (const v of report.tools.mcpVersions) {
+    if (v.status === "error") errorCount++;
+    else if (v.status === "warn") warningCount++;
+  }
   errorCount += report.tools.skillsRequiredMissing.length;
   for (const h of report.hooks) {
     if (h.status === "error") errorCount++;
@@ -396,9 +471,11 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
       });
 
   const cli = checkCli(manifest, opts);
+  const mcpVersions = checkMcpVersions(manifest, opts);
   const skills = checkSkills(manifest, home);
   const tools: ToolsSection = {
     mcp: mcpResults,
+    mcpVersions,
     cli,
     skillsEnabled: skills.enabled,
     skillsRequiredMissing: skills.missing,

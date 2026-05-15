@@ -58,6 +58,15 @@ function formatToolsSection(report: DoctorReport): string[] {
   const out: string[] = ["", "Tools"];
   out.push(`  MCP servers (${report.tools.mcp.length} declared)`);
   for (const m of report.tools.mcp) out.push(mcpLine(m, report.shallow));
+  // Only render the version-check sub-block when at least one MCP server
+  // declared `min_version`; an empty list otherwise would be noise.
+  if (report.tools.mcpVersions.length > 0) {
+    out.push(`    versions:`);
+    for (const v of report.tools.mcpVersions) {
+      const marker = v.status === "ok" ? "✓" : v.status === "warn" ? "⚠" : "✗";
+      out.push(`      ${marker} ${v.name}  ${v.message}`);
+    }
+  }
 
   const cliCount = report.tools.cli.length;
   out.push(`  CLI tools (${cliCount} declared)`);
