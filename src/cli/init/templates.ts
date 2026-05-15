@@ -112,7 +112,10 @@ memory:
       scope: project
   router:
     # Published bin from \`@lannguyensi/memory-router\`.
+    # \`min_version\` floor: 0.3.0 added the \`--version\` short-circuit
+    # the doctor probe needs (PR agent-memory/40, release-cut PR 41).
     command: [memory-router-user-prompt-submit]
+    min_version: "0.3.0"
     enabled: true
   retention:
     staleness_days: 180
