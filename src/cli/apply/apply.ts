@@ -56,11 +56,12 @@ import { expandPolicyPacks, DEFAULT_RUNTIME, type Runtime } from "../../policy-p
 import { parseManifest, type Manifest } from "../../schema/index.js";
 import { EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
 import { loadManifest } from "../loader.js";
+import { GENERATED_DIRNAME, resolveGeneratedDir } from "../../io/generated-dir.js";
 import { generateCodexConfig } from "./generate-codex-config.js";
 import { generateMemoryIndex } from "./generate-memory-index.js";
 import { generateSettingsWithWarnings } from "./generate-settings.js";
 
-export const GENERATED_DIRNAME = "harness.generated";
+export { GENERATED_DIRNAME };
 export const SETTINGS_BASENAME = "settings.json";
 export const MEMORY_BASENAME = "MEMORY.md";
 export const MANIFEST_BASENAME = "harness.yaml";
@@ -218,16 +219,6 @@ function serializeJson(obj: Record<string, unknown>): string {
   return `${JSON.stringify(obj, null, 2)}\n`;
 }
 
-// `harness.generated/` lives next to whichever manifest is in use. If the
-// user passed `--config /repo/path/harness.yaml`, generated artefacts go to
-// `/repo/path/harness.generated/` (NOT `~/.claude/harness.generated/`). This
-// avoids the footgun of `harness apply --config <some-other-tree>` writing
-// state into the user's global runtime directory.
-function resolveGeneratedDir(opts: ApplyOptions, manifestPath: string): string {
-  if (opts.homeDir !== undefined) return path.join(opts.homeDir, GENERATED_DIRNAME);
-  return path.join(path.dirname(manifestPath), GENERATED_DIRNAME);
-}
-
 // Prompts must survive `harness apply | tee log` (the user still needs to
 // see the question even when stdout is piped), so we write to stderr and
 // read from stdin. Don't "fix" this back to stdout.
@@ -375,7 +366,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     );
   }
 
-  const generatedDir = resolveGeneratedDir(opts, manifestPath);
+  const generatedDir = resolveGeneratedDir({ homeDir: opts.homeDir, manifestPath });
   const lockPath = path.join(path.dirname(manifestPath), LOCK_BASENAME);
 
   const loaderOpts: Parameters<typeof loadManifest>[0] = {

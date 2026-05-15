@@ -13,6 +13,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { atomicWriteFile } from "../../io/atomic-write.js";
+import { resolveGeneratedDir } from "../../io/generated-dir.js";
 import { writeLastApply } from "../../io/last-apply.js";
 import {
   LAST_APPLY_BASENAME,
@@ -46,16 +47,10 @@ export interface PackRemoveResult {
 
 const DEFAULT_BASENAME = "harness.yaml";
 const LOCK_BASENAME = ".harness.lock";
-const GENERATED_DIRNAME = "harness.generated";
 
 function resolveTargetPath(opts: PackRemoveOptions): string {
   if (opts.configPath) return path.resolve(opts.configPath);
   return path.join(opts.homeDir ?? path.join(os.homedir(), ".claude"), DEFAULT_BASENAME);
-}
-
-function resolveGeneratedDir(opts: PackRemoveOptions, manifestPath: string): string {
-  if (opts.homeDir !== undefined) return path.join(opts.homeDir, GENERATED_DIRNAME);
-  return path.join(path.dirname(manifestPath), GENERATED_DIRNAME);
 }
 
 function packFileKeys(record: LastApplyRecord | null, packName: string): string[] {
@@ -124,7 +119,7 @@ export async function packRemove(
     );
   }
 
-  const generatedDir = resolveGeneratedDir(opts, target);
+  const generatedDir = resolveGeneratedDir({ homeDir: opts.homeDir, manifestPath: target });
   const lastApply = readLastApply(generatedDir);
   const trackedFiles = packFileKeys(lastApply, name);
 

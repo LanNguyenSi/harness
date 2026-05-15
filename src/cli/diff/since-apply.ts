@@ -29,6 +29,7 @@ import {
   readLock,
   type LockEntry,
 } from "../../io/harness-lock.js";
+import { resolveGeneratedDir } from "../../io/generated-dir.js";
 import {
   LAST_APPLY_BASENAME,
   readLastApply,
@@ -37,8 +38,6 @@ import {
 } from "../../io/last-apply.js";
 import { unifiedDiff } from "../../io/patch.js";
 import { EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
-
-export const GENERATED_DIRNAME = "harness.generated";
 
 export interface SinceApplyOptions {
   configPath?: string;
@@ -95,11 +94,6 @@ function defaultHome(opts: SinceApplyOptions): string {
 function resolveManifestPath(opts: SinceApplyOptions): string {
   if (opts.configPath) return path.resolve(opts.configPath);
   return path.join(defaultHome(opts), "harness.yaml");
-}
-
-function resolveGeneratedDir(opts: SinceApplyOptions, manifestPath: string): string {
-  if (opts.homeDir !== undefined) return path.join(opts.homeDir, GENERATED_DIRNAME);
-  return path.join(path.dirname(manifestPath), GENERATED_DIRNAME);
 }
 
 function sha256OfBuffer(buf: Buffer): string {
@@ -301,7 +295,7 @@ function formatReport(result: {
 
 export function diffSinceApply(opts: SinceApplyOptions = {}): SinceApplyResult {
   const manifestPath = resolveManifestPath(opts);
-  const generatedDir = resolveGeneratedDir(opts, manifestPath);
+  const generatedDir = resolveGeneratedDir({ homeDir: opts.homeDir, manifestPath });
   const lockPath = path.join(path.dirname(manifestPath), LOCK_BASENAME);
 
   const lastApply = readLastApply(generatedDir);

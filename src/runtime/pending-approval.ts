@@ -21,27 +21,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { atomicWriteFile } from "../io/atomic-write.js";
+import { GENERATED_DIRNAME, resolveGeneratedDir } from "../io/generated-dir.js";
 
-// Mirrors `GENERATED_DIRNAME` in cli/apply/apply.ts — also independently
-// duplicated in cli/pack/remove.ts and cli/diff/since-apply.ts. The
-// constant has no single home yet; consolidating the four copies is a
-// separate cleanup.
-export const GENERATED_DIRNAME = "harness.generated";
+export { GENERATED_DIRNAME, resolveGeneratedDir };
 
 export const PENDING_APPROVAL_BASENAME = ".pending-approval";
-
-/**
- * Resolve `harness.generated/` the way `harness apply` does: a sibling of
- * the manifest, unless an explicit `homeDir` override is in play (tests,
- * non-default home).
- */
-export function resolveGeneratedDir(opts: {
-  homeDir?: string;
-  manifestPath: string;
-}): string {
-  if (opts.homeDir !== undefined) return path.join(opts.homeDir, GENERATED_DIRNAME);
-  return path.join(path.dirname(opts.manifestPath), GENERATED_DIRNAME);
-}
 
 export function pendingApprovalPath(generatedDir: string): string {
   return path.join(generatedDir, PENDING_APPROVAL_BASENAME);
