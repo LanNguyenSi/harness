@@ -202,8 +202,16 @@ export async function approveUnderstanding(
     ? await writeLedgerTag(manifest, sessionId, tag, opts)
     : { ok: false as const, reason: "manifest unreadable; skipped ledger write" };
 
-  // Persisted report: flip the latest matching one.
-  const reportsDir = opts.reportsDir ?? defaultReportsDir();
+  // Persisted report: flip the latest matching one. Resolution mirrors
+  // what `harness apply` bakes into the pack's hook commands so all three
+  // actors (Stop hook, PreToolUse blocker, this verb) agree regardless
+  // of cwd:
+  //   1. explicit opts.reportsDir (test injection).
+  //   2. UNDERSTANDING_GATE_REPORT_DIR env (honored by defaultReportsDir,
+  //      and what apply prefixes onto the hook command strings).
+  //   3. manifest-anchored fallback: <dir-of-manifest>/.understanding-gate/reports.
+  const manifestAnchoredCwd = path.dirname(resolvePaths(opts).base);
+  const reportsDir = opts.reportsDir ?? defaultReportsDir(manifestAnchoredCwd);
   const reports = listPersistedReports(reportsDir);
   const latest = findLatestReportForSession(reports, sessionId);
 

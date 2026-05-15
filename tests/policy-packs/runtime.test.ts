@@ -8,6 +8,8 @@ import {
   defaultReportsDir,
   findLatestReportForSession,
   listPersistedReports,
+  REPORTS_DIR_ENV,
+  reportsDirForManifest,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 
 let tmp: string;
@@ -33,9 +35,39 @@ describe("approvedLedgerTagFor", () => {
 });
 
 describe("defaultReportsDir", () => {
-  it("returns <cwd>/.understanding-gate/reports", () => {
+  const savedEnv = process.env[REPORTS_DIR_ENV];
+  afterEach(() => {
+    if (savedEnv === undefined) delete process.env[REPORTS_DIR_ENV];
+    else process.env[REPORTS_DIR_ENV] = savedEnv;
+  });
+
+  it("returns <cwd>/.understanding-gate/reports when the env var is unset", () => {
+    delete process.env[REPORTS_DIR_ENV];
     const dir = defaultReportsDir("/tmp/some-project");
     expect(dir).toBe("/tmp/some-project/.understanding-gate/reports");
+  });
+
+  it("honors UNDERSTANDING_GATE_REPORT_DIR over the cwd fallback", () => {
+    process.env[REPORTS_DIR_ENV] = "/var/lib/gate-reports";
+    expect(defaultReportsDir("/tmp/ignored")).toBe("/var/lib/gate-reports");
+  });
+
+  it("ignores an empty env var and uses the cwd fallback", () => {
+    process.env[REPORTS_DIR_ENV] = "";
+    expect(defaultReportsDir("/tmp/proj")).toBe("/tmp/proj/.understanding-gate/reports");
+  });
+});
+
+describe("reportsDirForManifest", () => {
+  it("anchors to the manifest's directory", () => {
+    expect(reportsDirForManifest("/home/u/.claude/harness.yaml")).toBe(
+      "/home/u/.claude/.understanding-gate/reports",
+    );
+  });
+  it("works for in-repo manifests too", () => {
+    expect(reportsDirForManifest("/repo/proj/harness.yaml")).toBe(
+      "/repo/proj/.understanding-gate/reports",
+    );
   });
 });
 

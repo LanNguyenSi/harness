@@ -15,14 +15,18 @@
 // re-parse if a caller re-validates.
 
 import type { Manifest } from "../schema/index.js";
+import type { ResolvePackOptions } from "./builtin/understanding-before-execution.js";
 import { resolveBuiltin } from "./registry.js";
 import { DEFAULT_RUNTIME, type Runtime } from "./runtime.js";
 import { parsePackSource } from "./source.js";
 import type { PackExpansionResult, PackPermissionsContribution } from "./types.js";
 
+export type ExpandPolicyPacksOptions = ResolvePackOptions;
+
 export function expandPolicyPacks(
   manifest: Manifest,
   runtime: Runtime = DEFAULT_RUNTIME,
+  opts: ExpandPolicyPacksOptions = {},
 ): PackExpansionResult {
   const out: PackExpansionResult = { hooks: [], files: [], warnings: [], skipped: [] };
   if (manifest.policy_packs.length === 0) return out;
@@ -48,7 +52,7 @@ export function expandPolicyPacks(
       );
       continue;
     }
-    const resolved = resolveBuiltin(pack, runtime);
+    const resolved = resolveBuiltin(pack, runtime, opts);
     if (!resolved) {
       out.warnings.push(
         `policy_packs[${pack.name}]: not a known builtin pack; skipping. See docs/policy-packs/ for supported names.`,

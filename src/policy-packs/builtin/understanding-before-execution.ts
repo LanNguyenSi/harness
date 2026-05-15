@@ -25,6 +25,15 @@ import {
   KNOWN_PROFILE_NAMES,
 } from "./permission-profiles.js";
 
+// Local copy of the env var name so this module does NOT need to import
+// from `understanding-before-execution-runtime.js`. That sibling pulls
+// in `runtime/ledger-record.js`, which sits in a pre-existing cycle
+// with `policies/ledger-client.js` (POLICY_DECISION_TYPE); routing the
+// import here would cause a TDZ failure at CLI startup. The runtime
+// helper exports the same constant under the same name for the consumer
+// side (defaultReportsDir + the test assertions).
+const REPORTS_DIR_ENV = "UNDERSTANDING_GATE_REPORT_DIR";
+
 export const PACK_NAME = "understanding-before-execution";
 
 export type Mode = "fast_confirm" | "grill_me" | "strict";
@@ -81,6 +90,37 @@ export function isMode(value: unknown): value is Mode {
   return typeof value === "string" && (MODES as readonly string[]).includes(value);
 }
 
+export interface ResolvePackOptions {
+  /**
+   * Absolute path to the persisted-report directory the pack's hooks
+   * should write/read. When provided, the pack prefixes each contributed
+   * hook command with `UNDERSTANDING_GATE_REPORT_DIR=<path>` so the
+   * Stop hook (writes the report), the PreToolUse blocker (reads it),
+   * and `harness approve understanding` (flips it) all resolve the same
+   * directory regardless of each process's cwd. Apply sets this to a
+   * manifest-anchored absolute path; in test/legacy paths it may be
+   * omitted, in which case the commands are emitted unchanged and the
+   * runtime `defaultReportsDir()` falls back to the env-var-or-cwd
+   * precedence.
+   */
+  reportsDir?: string;
+}
+
+/**
+ * POSIX single-quote-escape for an arbitrary path. Safe inside the
+ * `VAR=<value>` prefix of a `sh -c` command line. Always quotes — paths
+ * derived from `path.dirname()` may contain spaces or other shell
+ * metacharacters, and a plain `VAR=$path` would split on whitespace.
+ */
+function shellQuoteSingle(s: string): string {
+  return `'${s.replace(/'/g, "'\\''")}'`;
+}
+
+function prefixCommandWithReportsDir(command: string, reportsDir: string | undefined): string {
+  if (!reportsDir) return command;
+  return `${REPORTS_DIR_ENV}=${shellQuoteSingle(reportsDir)} ${command}`;
+}
+
 export function resolveMode(pack: PolicyPack): { mode: Mode; warning: string | null } {
   const raw = pack.config["mode"];
   if (raw === undefined) return { mode: DEFAULT_MODE, warning: null };
@@ -91,11 +131,17 @@ export function resolveMode(pack: PolicyPack): { mode: Mode; warning: string | n
   return { mode: DEFAULT_MODE, warning };
 }
 
-function buildHooks(runtime: Runtime): Hook[] {
+function buildHooks(runtime: Runtime, opts: ResolvePackOptions = {}): Hook[] {
   // Per-mode hook commands are identical (the mode is passed via the
   // package's UNDERSTANDING_GATE_MODE env var, set elsewhere — out of
   // scope for Phase 6 #2). What changes per mode is the instructions.md
   // content + the actual injected prompt (owned by the npm package).
+  //
+  // When `opts.reportsDir` is set (the apply path), each command is
+  // prefixed with `UNDERSTANDING_GATE_REPORT_DIR=<absolute>` so all hooks
+  // — including the standalone-package Stop bin which honors the same
+  // env var — write/read the same directory.
+  const wrap = (cmd: string): string => prefixCommandWithReportsDir(cmd, opts.reportsDir);
   if (runtime === "codex") {
     return [
       {
@@ -110,7 +156,7 @@ function buildHooks(runtime: Runtime): Hook[] {
       {
         name: `${HOOK_NAME_PREFIX}:codex:stop`,
         event: "Stop",
-        command: COMMAND_STOP_CODEX,
+        command: wrap(COMMAND_STOP_CODEX),
         blocking: false,
         budget_ms: 5000,
         description:
@@ -120,7 +166,7 @@ function buildHooks(runtime: Runtime): Hook[] {
         name: `${HOOK_NAME_PREFIX}:codex:pre-tool-use`,
         event: "PreToolUse",
         match: PRE_TOOL_USE_MATCH_CODEX,
-        command: COMMAND_PRE_TOOL_USE_CODEX,
+        command: wrap(COMMAND_PRE_TOOL_USE_CODEX),
         blocking: "hard",
         budget_ms: 5000,
         description:
@@ -141,7 +187,7 @@ function buildHooks(runtime: Runtime): Hook[] {
     {
       name: `${HOOK_NAME_PREFIX}:stop`,
       event: "Stop",
-      command: BIN_STOP_CLAUDE,
+      command: wrap(BIN_STOP_CLAUDE),
       blocking: false,
       budget_ms: 5000,
       description:
@@ -151,7 +197,7 @@ function buildHooks(runtime: Runtime): Hook[] {
       name: `${HOOK_NAME_PREFIX}:pre-tool-use`,
       event: "PreToolUse",
       match: PRE_TOOL_USE_MATCH_CLAUDE,
-      command: PRE_TOOL_USE_COMMAND_CLAUDE,
+      command: wrap(PRE_TOOL_USE_COMMAND_CLAUDE),
       blocking: "hard",
       budget_ms: 5000,
       description:
@@ -268,9 +314,10 @@ function resolvePermissionProfile(
 export function resolve(
   pack: PolicyPack,
   runtime: Runtime = DEFAULT_RUNTIME,
+  opts: ResolvePackOptions = {},
 ): { contribution: PackContribution; warnings: string[] } {
   const { mode, warning } = resolveMode(pack);
-  const hooks = buildHooks(runtime);
+  const hooks = buildHooks(runtime, opts);
   const instructionsContent = buildInstructions(pack, mode, runtime);
   const files: PackContributionFile[] = [
     {

@@ -45,6 +45,65 @@ describe("expandPolicyPacks", () => {
     expect(pre?.match).toBe("Edit|Write|Bash");
   });
 
+  it("emits unwrapped hook commands when no reportsDir is supplied", () => {
+    const m = buildManifest([{ name: "understanding-before-execution" }]);
+    const r = expandPolicyPacks(m);
+    expect(r.hooks.find((h) => h.event === "Stop")?.command).toBe(
+      "understanding-gate-claude-stop",
+    );
+    expect(r.hooks.find((h) => h.event === "PreToolUse")?.command).toBe(
+      "harness pack hook pre-tool-use",
+    );
+    expect(r.hooks.find((h) => h.event === "UserPromptSubmit")?.command).toBe(
+      "understanding-gate-claude-hook",
+    );
+  });
+
+  it("prefixes Stop + PreToolUse commands with UNDERSTANDING_GATE_REPORT_DIR when reportsDir is supplied", () => {
+    const m = buildManifest([{ name: "understanding-before-execution" }]);
+    const r = expandPolicyPacks(m, undefined, {
+      reportsDir: "/home/u/.claude/.understanding-gate/reports",
+    });
+    // Stop hook (writer) and PreToolUse hook (reader) both get the env
+    // prefix so they round-trip the same dir as the operator's
+    // `harness approve understanding` invocation.
+    expect(r.hooks.find((h) => h.event === "Stop")?.command).toBe(
+      "UNDERSTANDING_GATE_REPORT_DIR='/home/u/.claude/.understanding-gate/reports' understanding-gate-claude-stop",
+    );
+    expect(r.hooks.find((h) => h.event === "PreToolUse")?.command).toBe(
+      "UNDERSTANDING_GATE_REPORT_DIR='/home/u/.claude/.understanding-gate/reports' harness pack hook pre-tool-use",
+    );
+    // UserPromptSubmit injector does not write/read the reports dir,
+    // so we keep its command unprefixed (smaller surface, no needless
+    // env in the visible command).
+    expect(r.hooks.find((h) => h.event === "UserPromptSubmit")?.command).toBe(
+      "understanding-gate-claude-hook",
+    );
+  });
+
+  it("escapes single quotes in reportsDir paths", () => {
+    const m = buildManifest([{ name: "understanding-before-execution" }]);
+    const r = expandPolicyPacks(m, undefined, {
+      reportsDir: "/has/q'uote/reports",
+    });
+    expect(r.hooks.find((h) => h.event === "Stop")?.command).toContain(
+      "UNDERSTANDING_GATE_REPORT_DIR='/has/q'\\''uote/reports'",
+    );
+  });
+
+  it("prefixes the Codex Stop + PreToolUse adapters too", () => {
+    const m = buildManifest([{ name: "understanding-before-execution" }]);
+    const r = expandPolicyPacks(m, "codex", {
+      reportsDir: "/tmp/reports",
+    });
+    expect(r.hooks.find((h) => h.event === "Stop")?.command).toBe(
+      "UNDERSTANDING_GATE_REPORT_DIR='/tmp/reports' harness pack hook codex-stop",
+    );
+    expect(r.hooks.find((h) => h.event === "PreToolUse")?.command).toBe(
+      "UNDERSTANDING_GATE_REPORT_DIR='/tmp/reports' harness pack hook codex-pre-tool-use",
+    );
+  });
+
   it("uses default mode 'grill_me' when config omits mode", () => {
     const m = buildManifest([{ name: "understanding-before-execution" }]);
     const r = expandPolicyPacks(m);
