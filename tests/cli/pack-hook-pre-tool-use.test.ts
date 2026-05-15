@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runPackHookPreToolUseCli } from "../../src/cli/pack/hook-pre-tool-use.js";
 import type { LedgerEntry } from "../../src/policies/index.js";
+import { writeApprovalMarker } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 import { readPendingApproval } from "../../src/runtime/pending-approval.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
@@ -54,15 +55,81 @@ function writeReport(dir: string, name: string, body: Record<string, unknown>): 
 }
 
 describe("pack hook pre-tool-use blocker", () => {
-  it("allows when ledger query matches the approved tag", async () => {
+  it("allows when an approval marker is present for the session (agent-tasks/88ca4bb3)", async () => {
     const stdout = bufferStream();
     const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-05-07T08:00:00Z",
+      approvedBy: "test-operator",
+    });
     const result = await runPackHookPreToolUseCli({
       manifest: manifestWithPack(),
       stdin: readableFromString(event()),
       stdout: stdout.stream,
       stderr: stderr.stream,
       reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.approvalCheck.source).toBe("marker");
+    expect(stdout.read()).toBe("");
+    expect(stderr.read()).toMatch(/approved via marker sess-1/);
+  });
+
+  it("agent self-approval via MCP ledger_add does not satisfy the gate (agent-tasks/88ca4bb3, headline security test)", async () => {
+    // Threat model: an agent with grounding-MCP wired can call
+    // ledger_add and write `understanding-approved:<sid>` for its own
+    // session id. Pre-v0.14.0 that row alone unblocked the gate. This
+    // test pins the new boundary: the row is still in the ledger (and
+    // surfaces in the diagnostic for forensics), but the gate blocks
+    // because no operator wrote the marker file.
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event()),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      // Agent self-write: same shape ledger_add would emit.
+      ledgerQuery: async (sessionId): Promise<LedgerEntry[]> => [
+        {
+          id: "agent-self-write",
+          content: `understanding-approved:${sessionId}`,
+          source: "mcp",
+          createdAt: "2026-05-15T12:00:00Z",
+        },
+      ],
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.approvalCheck.source).toBe("none");
+    const stderrText = stderr.read();
+    expect(stderrText).toContain("no approval marker for session sess-1");
+    expect(stderrText).toContain("audit: ledger tag understanding-approved:sess-1");
+    expect(stderrText).toContain("no longer satisfies the gate");
+  });
+
+  it("ledger entry ALONE does not approve (closes the self-approval backdoor, agent-tasks/88ca4bb3)", async () => {
+    // Pre-v0.14.0 contract: any `understanding-approved:<sid>` row in
+    // the ledger unblocked the gate. Because the agent has direct MCP
+    // access to that ledger, it could self-approve. The marker file
+    // (which Edit / Write / Bash all cannot reach) is now the canonical
+    // signal; the ledger row remains for forensics but no longer
+    // satisfies on its own.
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event()),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
       ledgerQuery: async (sessionId): Promise<LedgerEntry[]> => [
         {
           id: "1",
@@ -71,10 +138,10 @@ describe("pack hook pre-tool-use blocker", () => {
         },
       ],
     });
-    expect(result.blocked).toBe(false);
-    expect(result.approvalCheck.source).toBe("ledger");
-    expect(stdout.read()).toBe("");
-    expect(stderr.read()).toMatch(/approved via ledger tag/);
+    expect(result.blocked).toBe(true);
+    expect(result.approvalCheck.source).toBe("none");
+    expect(stderr.read()).toMatch(/no approval marker for session sess-1/);
+    expect(stderr.read()).toMatch(/no longer satisfies the gate/);
   });
 
   it("falls back to persisted report when ledger has no match", async () => {
@@ -370,9 +437,14 @@ describe("pack hook pre-tool-use blocker — operator-approval escape commands (
     expect(decision.decision).toBe("block");
   });
 
-  it("allows an escape command normally when the ledger already approves the session", async () => {
+  it("allows an escape command normally when the marker already approves the session", async () => {
     const stdout = bufferStream();
     const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-05-07T08:00:00Z",
+      approvedBy: "test-operator",
+    });
     const result = await runPackHookPreToolUseCli({
       manifest: manifestWithPack(),
       stdin: readableFromString(
@@ -381,17 +453,12 @@ describe("pack hook pre-tool-use blocker — operator-approval escape commands (
       stdout: stdout.stream,
       stderr: stderr.stream,
       reportsDir: path.join(tmp, "no-reports"),
-      ledgerQuery: async (sessionId): Promise<LedgerEntry[]> => [
-        {
-          id: "1",
-          content: `understanding-approved:${sessionId}`,
-          createdAt: "2026-05-07T08:00:00Z",
-        },
-      ],
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
     });
     expect(result.blocked).toBe(false);
     expect(result.asked).toBeFalsy();
-    expect(result.approvalCheck.source).toBe("ledger");
+    expect(result.approvalCheck.source).toBe("marker");
     expect(stdout.read()).toBe("");
   });
 });
@@ -431,6 +498,10 @@ describe("pack hook pre-tool-use blocker — .pending-approval staging (task 33a
 
   it("does NOT stage anything when a source already approves (allow path)", async () => {
     const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-05-07T08:00:00Z",
+      approvedBy: "test-operator",
+    });
     const result = await runPackHookPreToolUseCli({
       manifest: manifestWithPack(),
       stdin: readableFromString(event()),
@@ -438,13 +509,7 @@ describe("pack hook pre-tool-use blocker — .pending-approval staging (task 33a
       stderr: bufferStream().stream,
       reportsDir: path.join(tmp, "no-reports"),
       generatedDir,
-      ledgerQuery: async (sessionId): Promise<LedgerEntry[]> => [
-        {
-          id: "1",
-          content: `understanding-approved:${sessionId}`,
-          createdAt: "2026-05-07T08:00:00Z",
-        },
-      ],
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
     });
     expect(result.blocked).toBe(false);
     expect(readPendingApproval(generatedDir)).toBeNull();

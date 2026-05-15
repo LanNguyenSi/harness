@@ -27,11 +27,12 @@ Stop hook persists report     (from @lannguyensi/understanding-gate)
     ▼
 Human reviews and approves
     │  via `harness approve understanding`  ← Phase 6 #4
-    │  writes ledger tag: understanding-approved:${SESSION_ID}
+    │  writes approval marker: harness.generated/.approvals/${SESSION_ID}
     │  flips approvalStatus=approved on the persisted report
+    │  also writes ledger tag understanding-approved:${SESSION_ID} (audit only)
     ▼
 PreToolUse hook               ← Phase 6 #4 (harness-side blocker)
-    │  consults BOTH the ledger tag AND the persisted report
+    │  consults the approval marker file OR the persisted report
     │  passes for Edit / Write / Bash / commit / push / PR creation
     ▼
 Agent executes
@@ -144,10 +145,10 @@ Phase 6 #5 follow-ups still queued: an inline `requires:` shape on profile actio
 
 Two parallel sources of truth, by design:
 
-1. **Persisted JSON report** at `.understanding-gate/reports/<iso>-<slug>-<hash>.json`. Owned by `@lannguyensi/understanding-gate`; the canonical source for solo users running the package without harness.
-2. **Evidence ledger tag** `understanding-approved:${SESSION_ID}`. Owned by harness; the canonical source for harnessed sessions, queried via `grounding-mcp`'s `ledger_summary`.
+1. **Filesystem approval marker** at `harness.generated/.approvals/<sessionId>`. Owned by harness; the canonical source for harnessed sessions. Written by `harness approve understanding` from the operator's shell. Edit / Write / Bash are all gated by this same PreToolUse hook, and no configured MCP exposes filesystem writes, so the marker is reachable only from operator-launched processes. This is what closes the self-approval boundary (agent-tasks/88ca4bb3).
+2. **Persisted JSON report** at `.understanding-gate/reports/<iso>-<slug>-<hash>.json`. Owned by `@lannguyensi/understanding-gate`; the canonical source for solo users running the package without harness. Flipped to `approvalStatus: "approved"` by the same `harness approve understanding` call. The agent's Stop hook only writes `pending` reports; the operator-side flip has no agent-reachable equivalent.
 
-The harness-side PreToolUse blocker (Phase 6 #4) consults both: ledger tag wins when present, persisted report is the fallback. `harness approve understanding` (Phase 6 #4) round-trips both: it writes the ledger tag AND flips `approvalStatus: "approved"` on the most recent persisted report.
+The harness-side PreToolUse blocker (Phase 6 #4) consults both: marker beats persisted-report. `harness approve understanding` round-trips both, plus writes a `understanding-approved:${SESSION_ID}` row to the evidence ledger as a forensics audit trail. The ledger row no longer satisfies the gate on its own (the agent has direct MCP access to the same ledger); it is surfaced in the diagnostic output, labelled `(no longer satisfies the gate)`, so an operator chasing a flapping approval can see when an approval was actually recorded.
 
 This avoids the failure mode where one source goes stale relative to the other. It also means a solo `understanding-gate` user can adopt harness later without losing approval history.
 
@@ -226,7 +227,7 @@ After capture, `harness approve understanding --session <id>` flips `approvalSta
 - Three hooks in the harness-managed `settings.json`:
   - `UserPromptSubmit` injector: bare bin `understanding-gate-claude-hook` (from the npm package; user must `npm i -g`).
   - `Stop` capture: bare bin `understanding-gate-claude-stop` (same).
-  - `PreToolUse` blocker on `Edit|Write|Bash`: `harness pack hook pre-tool-use` (Phase 6 #4). The harness-side blocker consults BOTH the evidence-ledger tag `understanding-approved:${SESSION_ID}` (via `grounding-mcp`'s `ledger_summary`, canonical for harnessed sessions) AND the persisted JSON report under `.understanding-gate/reports/` (fallback for sessions without `grounding-mcp` wired). Either source approves. The npm package's standalone `understanding-gate-claude-pre-tool-use` blocker remains available for solo users; the harness blocker is the superset (it covers the persisted-report case too, plus the ledger). On every block or ask it also stages the session id to `harness.generated/.pending-approval` so `harness approve` can resolve it without a flag (see [Session-id resolution](#session-id-resolution)).
+  - `PreToolUse` blocker on `Edit|Write|Bash`: `harness pack hook pre-tool-use` (Phase 6 #4). The harness-side blocker consults the approval marker file `harness.generated/.approvals/${SESSION_ID}` (canonical for harnessed sessions, agent-tasks/88ca4bb3) and the persisted JSON report under `.understanding-gate/reports/` (fallback for solo users). Either source approves. The npm package's standalone `understanding-gate-claude-pre-tool-use` blocker remains available for solo users; the harness blocker is the superset (it covers the marker file and persisted-report cases). The blocker also probes the evidence ledger for the historic `understanding-approved:${SESSION_ID}` tag as forensics; that probe never grants approval but surfaces in the diagnostic so an operator can see the audit trail. On every block or ask it stages the session id to `harness.generated/.pending-approval` so `harness approve` can resolve it without a flag (see [Session-id resolution](#session-id-resolution)).
   - Hook names are namespaced (`policy-pack:understanding-before-execution:<role>`) to avoid collisions with operator-authored hooks.
 - An operator audit copy at `harness.generated/policy-packs/understanding-before-execution/instructions.md`. This file documents what the pack is doing in the operator's voice (mode, hook list, approval flow); the agent-facing prompt is injected at runtime by the `UserPromptSubmit` hook and lives in the npm package, not here. Drift on the audit copy means an operator edited something they shouldn't have, and `harness diff --since-apply` flags it.
 
@@ -236,12 +237,13 @@ After capture, `harness approve understanding --session <id>` flips `approvalSta
 harness approve understanding [--session <id>] [--reports-dir <path>]
 ```
 
-Round-trips both approval sources:
+Round-trips all three approval-state sinks:
 
-- Writes the `understanding-approved:${SESSION_ID}` tag via `grounding-mcp`'s `ledger_add` (canonical for harnessed sessions).
+- Writes the approval marker `harness.generated/.approvals/${SESSION_ID}` (canonical gate signal, agent-tasks/88ca4bb3). A failed marker write is a HARD error in the CLI output; the gate will keep blocking until the marker exists.
 - Flips `approvalStatus: "approved"` on the latest matching persisted JSON report (canonical for solo users without `grounding-mcp`).
+- Writes the `understanding-approved:${SESSION_ID}` tag via `grounding-mcp`'s `ledger_add` for audit / forensics. A degraded ledger surfaces as a warning, not a hard failure.
 
-A degraded ledger surfaces as a warning, not a hard failure, so the persisted-report path keeps working independently. The blocker on the next tool call sees the new approval from whichever source landed.
+The blocker on the next tool call sees the new approval from whichever operator-authored source landed (marker or persisted report).
 
 ### Session-id resolution
 
@@ -251,7 +253,7 @@ A degraded ledger surfaces as a warning, not a hard failure, so the persisted-re
 2. `$CLAUDE_SESSION_ID` env.
 3. `harness.generated/.pending-approval`: the PreToolUse blocker writes the blocked session's id here every time it blocks or asks, so an arg-less `harness approve understanding` picks it up with no guessing.
 
-The CLI prints which tier supplied the id (`session: <id> (resolved from .pending-approval ...)`), so a wrong id is visible before it lands in the ledger. After a successful resolve from `.pending-approval` with the ledger write landed, the staging file is deleted so a later arg-less call cannot revive a stale id; a failed ledger write keeps it for a retry. When all three tiers come up empty, the command exits with the retrieval-path hint instead of a guess.
+The CLI prints which tier supplied the id (`session: <id> (resolved from .pending-approval ...)`), so a wrong id is visible before it lands. After a successful resolve from `.pending-approval` with the marker write landed, the staging file is deleted so a later arg-less call cannot revive a stale id; a failed marker write keeps it for a retry. When all three tiers come up empty, the command exits with the retrieval-path hint instead of a guess.
 
 Phase 6 #2 follow-ups still queued: an automatically-injected stanza into the per-project `CLAUDE.md` for human discoverability, and a `harness doctor` wiring check that validates the package binaries are on `$PATH`.
 

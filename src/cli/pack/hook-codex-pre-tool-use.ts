@@ -22,11 +22,13 @@
 
 import { queryLedgerByTag, type LedgerEntry } from "../../policies/index.js";
 import {
+  checkApprovalMarker,
   checkPersistedReport,
   defaultReportsDir,
   matchLedgerEntries,
   type ApprovalCheckResult,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
+import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
 import type { Manifest, McpServer } from "../../schema/index.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 
@@ -38,6 +40,8 @@ export interface PackHookCodexPreToolUseOptions extends LoaderOptions {
   pack?: string;
   /** Override report directory (test injection). */
   reportsDir?: string;
+  /** Override harness.generated/ directory (test injection). */
+  generatedDir?: string;
   /** Override timeout per ledger call. */
   ledgerTimeoutMs?: number;
   /** Defaults to process.stdin. */
@@ -168,8 +172,15 @@ export async function runPackHookCodexPreToolUseCli(
   // Load manifest (or use injection). Bail to allow on any failure so a
   // missing harness install never bricks the session.
   let manifest: Manifest;
+  let manifestPath: string | undefined;
   try {
-    manifest = opts.manifest ?? loadManifest(opts).manifest;
+    if (opts.manifest) {
+      manifest = opts.manifest;
+    } else {
+      const loaded = loadManifest(opts);
+      manifest = loaded.manifest;
+      manifestPath = loaded.resolved.base;
+    }
   } catch (err) {
     return allowResult(
       `manifest load failed (${(err as Error).message})`,
@@ -195,10 +206,25 @@ export async function runPackHookCodexPreToolUseCli(
     );
   }
 
-  // Source 1: ledger.
-  const ledger = await checkLedger(manifest, sessionId, opts);
-  if (ledger.matched) {
-    return allowResult(ledger.detail, "ledger", stderr);
+  // Resolve generatedDir up-front for the marker check.
+  const generatedDir =
+    opts.generatedDir ??
+    (manifestPath !== undefined
+      ? resolveGeneratedDir({
+          ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
+          manifestPath,
+        })
+      : undefined);
+
+  // Source 1: filesystem marker (agent-tasks/88ca4bb3). Same boundary
+  // as the Claude blocker: operator-authored marker beats ledger
+  // self-approval. Falls through to ledger-as-audit when generatedDir
+  // is unresolvable (test injection without a manifest path).
+  if (generatedDir !== undefined) {
+    const marker = checkApprovalMarker(generatedDir, sessionId);
+    if (marker.matched) {
+      return allowResult(marker.detail, "marker", stderr);
+    }
   }
 
   // Source 2: persisted report.
@@ -208,9 +234,14 @@ export async function runPackHookCodexPreToolUseCli(
     return allowResult(report.detail, "persisted-report", stderr);
   }
 
-  // Neither source approved. Codex blocks via non-zero exit + stderr
-  // reason; there is no JSON-decision wire to write to stdout.
-  const reason = `${ledger.detail}; ${report.detail}`;
+  // Audit-only ledger probe.
+  const ledger = await checkLedger(manifest, sessionId, opts);
+
+  // Neither operator source approved. Codex blocks via non-zero exit
+  // + stderr reason; there is no JSON-decision wire to write to stdout.
+  const reason = generatedDir !== undefined
+    ? `no approval marker for session ${sessionId}; ${report.detail}; ${ledger.detail}`
+    : `generatedDir not resolvable (test/injection path); ${report.detail}; ${ledger.detail}`;
   const diagnostic =
     `harness pack hook codex: BLOCK: ${reason}. Tool: ${toolName}. ` +
     "Run `harness approve understanding` once you have produced and confirmed an Understanding Report.";

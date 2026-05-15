@@ -26,6 +26,7 @@ import {
   type LedgerEntry,
 } from "../../policies/index.js";
 import {
+  checkApprovalMarker,
   checkPersistedReport,
   defaultReportsDir,
   matchLedgerEntries,
@@ -278,20 +279,42 @@ export async function runPackHookPreToolUseCli(
     };
   }
 
-  // Source 1: ledger.
-  const ledger = await checkLedger(manifest, sessionId, opts);
-  if (ledger.matched) {
-    const diagnostic = `harness pack hook: ${ledger.detail}, allowing.`;
-    stderr.write(`${diagnostic}\n`);
-    return {
-      exitCode: 0,
-      blocked: false,
-      approvalCheck: { approved: true, source: "ledger", detail: ledger.detail },
-      diagnostic,
-    };
+  // Resolve generatedDir up-front: marker check and pending-approval
+  // staging both depend on it.
+  const generatedDir =
+    opts.generatedDir ??
+    (manifestPath !== undefined
+      ? resolveGeneratedDir({
+          ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
+          manifestPath,
+        })
+      : undefined);
+
+  // Source 1: filesystem marker (agent-tasks/88ca4bb3). Canonical for
+  // harnessed sessions. The ledger check is no longer authoritative
+  // because the agent has direct MCP access to the same ledger and
+  // could self-approve; the marker file lives in harness.generated/
+  // which Edit / Write / Bash are all gated from writing to. Bail to
+  // ledger-as-audit only when generatedDir is unresolvable (injected
+  // manifest without a resolved path: only happens in tests).
+  if (generatedDir !== undefined) {
+    const marker = checkApprovalMarker(generatedDir, sessionId);
+    if (marker.matched) {
+      const diagnostic = `harness pack hook: ${marker.detail}, allowing.`;
+      stderr.write(`${diagnostic}\n`);
+      return {
+        exitCode: 0,
+        blocked: false,
+        approvalCheck: { approved: true, source: "marker", detail: marker.detail },
+        diagnostic,
+      };
+    }
   }
 
-  // Source 2: persisted report.
+  // Source 2: persisted report. Operator-authored (the agent's Stop
+  // hook only writes `pending`; flipping to `approved` requires the
+  // operator-side rewrite path in `harness approve understanding`),
+  // and the agent has no Edit / Write / Bash path to forge it.
   const reportsDir = opts.reportsDir ?? defaultReportsDir();
   const report = checkPersistedReport(reportsDir, sessionId);
   if (report.approved) {
@@ -305,22 +328,23 @@ export async function runPackHookPreToolUseCli(
     };
   }
 
-  // Neither source approved.
-  const reason = `${ledger.detail}; ${report.detail}`;
+  // Audit-only ledger probe: the ledger row is still recorded by
+  // `harness approve understanding`, and we surface its presence in
+  // the diagnostic so an operator chasing a flapping gate can see the
+  // historic trail. The result intentionally does NOT influence the
+  // allow/block decision.
+  const ledger = await checkLedger(manifest, sessionId, opts);
+
+  // Neither operator source approved.
+  const reason = generatedDir !== undefined
+    ? `no approval marker for session ${sessionId}; ${report.detail}; ${ledger.detail}`
+    : `generatedDir not resolvable (test/injection path); ${report.detail}; ${ledger.detail}`;
 
   // Stage the session id so `harness approve`, run from the operator's
   // shell where $CLAUDE_SESSION_ID is unset, can resolve it without
   // guessing from transcript filenames. Covers both the ask and the
   // block branches below. Best-effort: a staging-write failure must not
   // escalate a gate block into a hook error.
-  const generatedDir =
-    opts.generatedDir ??
-    (manifestPath !== undefined
-      ? resolveGeneratedDir({
-          ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
-          manifestPath,
-        })
-      : undefined);
   if (generatedDir !== undefined) {
     try {
       writePendingApproval(generatedDir, sessionId);

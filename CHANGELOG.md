@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security (BREAKING for upgraders)
+
+- **Understanding-gate self-approval backdoor closed** (agent-tasks/88ca4bb3). Through v0.13.0 the gate read a `understanding-approved:<sessionId>` ledger row as approval. Because the agent has direct MCP access to `grounding-mcp`'s `ledger_add`, any agent could write that row itself and self-approve, collapsing the gate to advisory. Starting this release the canonical gate signal is `harness.generated/.approvals/<sessionId>`, a filesystem marker that `harness approve understanding` writes from the operator's shell. Edit / Write / Bash are all gated by the same PreToolUse hook, and no configured MCP exposes filesystem writes, so the marker is reachable only from operator-launched processes.
+  - The ledger row is still written by `harness approve understanding` for audit / forensics. `harness audit` and the gate's diagnostic output still surface it, labelled `(no longer satisfies the gate)`. The Claude blocker and the Codex blocker share the same change.
+  - **Operator action required after upgrade**: re-run `harness approve understanding` once in your active session; the file marker will write and the gate will pass. Sessions that had no live block (`.pending-approval` absent) need no action.
+  - **Persisted JSON report path** (the `@lannguyensi/understanding-gate` package's fallback for solo users) is unchanged. The agent's Stop hook only ever writes `pending` reports; flipping to `approved` requires the operator-side rewrite in `harness approve`, which the agent has no path to forge.
+
 ### Added
 
 - Policy deny messages now include a one-line "to satisfy" hint so a blocked operator sees the satisfying ledger contract, not just the missing tag (agent-tasks/32ed47cb). Format: `<policy>: no matching ledger entry for tag \`<resolved-tag>\`. To satisfy: record an evidence-ledger entry containing \`<tag>\` (session \`<id>\`).` The hint covers the `count.min`/`count.exact` and `within` variants too. Deliberately omits the *how* (no recording verb named) so the deny path stays neutral on producer; see agent-tasks/88ca4bb3 for why pointing at a specific MCP would be the wrong suggestion.

@@ -248,7 +248,11 @@ describe("approveUnderstanding — .pending-approval session resolution (task 33
     expect(readPendingApproval(generatedDir)).toBeNull();
   });
 
-  it("keeps .pending-approval when the ledger write fails (retry-friendly)", async () => {
+  it("clears .pending-approval even when the (audit-only) ledger write fails, as long as the marker landed (agent-tasks/88ca4bb3)", async () => {
+    // Pre-v0.14.0 the ledger was the canonical signal, so its failure
+    // had to keep the staging file for a later retry. With the marker
+    // file as the canonical signal, the ledger write is audit-only and
+    // a degraded ledger does NOT block consumption of the staged id.
     const generatedDir = path.join(tmp, "harness.generated");
     writePendingApproval(generatedDir, "sess-staged");
     const result = await approveUnderstanding({
@@ -258,6 +262,28 @@ describe("approveUnderstanding — .pending-approval session resolution (task 33
       ledgerAdd: async () => ({ ok: false, reason: "grounding-mcp timeout" }),
     });
     expect(result.ledger.ok).toBe(false);
+    expect(result.marker.ok).toBe(true);
+    expect(readPendingApproval(generatedDir)).toBeNull();
+  });
+
+  it("keeps .pending-approval when the (canonical) marker write fails (retry-friendly)", async () => {
+    // Park a regular file where the marker's parent directory would
+    // need to go: atomicWriteFile's mkdirSync fails with ENOTDIR, the
+    // marker result is `ok:false`, the cleanup gate keeps the staged
+    // id so the operator can retry once the path is unblocked.
+    const generatedDir = path.join(tmp, "harness.generated-blocked");
+    writePendingApproval(generatedDir, "sess-staged"); // creates generatedDir
+    // Now park a regular file at <generatedDir>/.approvals so the
+    // mkdirSync inside writeApprovalMarker fails. The .pending-approval
+    // staging file already wrote into the dir and survives.
+    fs.writeFileSync(path.join(generatedDir, ".approvals"), "");
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      reportsDir: tmp,
+      generatedDir,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.marker.ok).toBe(false);
     expect(readPendingApproval(generatedDir)).toBe("sess-staged");
   });
 

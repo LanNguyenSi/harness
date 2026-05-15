@@ -3,26 +3,44 @@
 // Two-source approval check that the harness-side PreToolUse blocker
 // consults:
 //
-//   1. Evidence ledger via `grounding-mcp` (canonical for harnessed
-//      sessions). Tags shaped like `understanding-approved:${SESSION_ID}`.
+//   1. Filesystem marker `<generatedDir>/.approvals/<sessionId>` written
+//      by `harness approve understanding` from the operator's shell.
+//      Canonical for harnessed sessions. Replaces the ledger-substring
+//      check that shipped through v0.13.0 (agent-tasks/88ca4bb3): the
+//      agent has direct MCP access to the same ledger that gate path
+//      consulted, so any agent could write `understanding-approved:<sid>`
+//      itself and self-approve. Edit / Write / Bash are all gated by
+//      this same PreToolUse hook, and the configured MCP servers do not
+//      expose filesystem writes, so the marker file is reachable only
+//      from a process the operator launched (their `!`-shell or any
+//      other un-hooked terminal). Operator-side: writeApprovalMarker
+//      below. Forensics: the ledger row is still written by
+//      `harness approve understanding`, for audit only.
 //   2. Persisted JSON report under `.understanding-gate/reports/`
 //      (canonical for solo `@lannguyensi/understanding-gate` users).
 //      The package writes one file per session; the latest with
-//      `approvalStatus: "approved"` matching the session_id wins.
+//      `approvalStatus: "approved"` matching the session_id wins. The
+//      report is flipped to "approved" by `harness approve`; the
+//      agent's Stop hook only writes `pending` reports and cannot flip
+//      them (Edit/Write/Bash gated), so this source is also operator-
+//      authored.
 //
 // Either source approves. The persisted-report fallback is what makes a
 // solo user without grounding-mcp wired still able to approve via the
-// package's CLI; the ledger path is what makes a harnessed session see
+// package's CLI; the marker path is what makes a harnessed session see
 // the approval immediately on the next tool call.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { atomicWriteFile } from "../../io/atomic-write.js";
 import { type LedgerEntry } from "../../policies/index.js";
 import { POLICY_DECISION_TYPE } from "../../runtime/ledger-record.js";
 
 export const APPROVED_LEDGER_TAG_PREFIX = "understanding-approved:";
 
-export type ApprovalSource = "ledger" | "persisted-report" | "none";
+export const APPROVAL_MARKER_DIRNAME = ".approvals";
+
+export type ApprovalSource = "marker" | "ledger" | "persisted-report" | "none";
 
 export interface ApprovalCheckResult {
   approved: boolean;
@@ -187,11 +205,14 @@ export function isPolicyDecisionRow(e: LedgerEntry): boolean {
 }
 
 /**
- * Match a ledger fetch against the per-session approval tag. Returns
- * `{matched: true, detail}` on the first non-policy_decision row whose
- * content includes the wanted tag; otherwise `{matched: false, detail}`
- * naming how many rows were scanned. Stable across Claude Code and
- * Codex blockers so their diagnostic strings stay identical.
+ * Match a ledger fetch against the per-session approval tag. Kept for
+ * the audit / forensics path only: a ledger entry tagged
+ * `understanding-approved:<sid>` is no longer a sufficient signal to
+ * unblock the gate (agent-tasks/88ca4bb3: the agent has the same MCP
+ * surface and could self-write the row). Use `checkApprovalMarker`
+ * for the gate decision; this helper now serves `harness audit` /
+ * `harness explain --trace` style read paths that surface the
+ * historic ledger trail without granting approval power.
  */
 export function matchLedgerEntries(
   entries: LedgerEntry[],
@@ -205,7 +226,7 @@ export function matchLedgerEntries(
     if (typeof e.content === "string" && e.content.includes(wanted)) {
       return {
         matched: true,
-        detail: `approved via ledger tag ${wanted} at ${e.createdAt}`,
+        detail: `audit: ledger tag ${wanted} present at ${e.createdAt} (no longer satisfies the gate; see harness.generated/${APPROVAL_MARKER_DIRNAME}/${sessionId})`,
       };
     }
   }
@@ -213,6 +234,104 @@ export function matchLedgerEntries(
     matched: false,
     detail: `no ledger entry matched ${wanted} (scanned ${scanned} non-policy_decision row(s))`,
   };
+}
+
+/** Filesystem path of the per-session approval marker. */
+export function approvalMarkerPathFor(generatedDir: string, sessionId: string): string {
+  return path.join(generatedDir, APPROVAL_MARKER_DIRNAME, sessionId);
+}
+
+export interface ApprovalMarker {
+  approvedAt: string;
+  approvedBy: string;
+}
+
+/**
+ * Operator-side: write the marker file the gate consults. Atomic so a
+ * crash mid-write cannot leave a half-empty file the gate would accept
+ * as approved. Caller is `harness approve understanding`, which the
+ * operator runs from their un-hooked shell; if the agent could call
+ * this path the gate's value would collapse, so it lives behind the
+ * approve CLI rather than as a generally importable verb.
+ */
+export function writeApprovalMarker(
+  generatedDir: string,
+  sessionId: string,
+  marker: ApprovalMarker,
+): string {
+  const filePath = approvalMarkerPathFor(generatedDir, sessionId);
+  atomicWriteFile(filePath, `${JSON.stringify(marker, null, 2)}\n`);
+  return filePath;
+}
+
+export interface MarkerCheck {
+  matched: boolean;
+  detail: string;
+  marker: ApprovalMarker | null;
+}
+
+/**
+ * Gate-side: is the per-session marker file present and readable?
+ * Returns `matched: true` even if the marker JSON is malformed: the
+ * file's *existence* is the operator's intent. Corrupted contents
+ * surface as `marker: null` in the diagnostic but do not invalidate the
+ * approval, since invalidating on a parse error would hand a denial-
+ * of-service vector to anyone (including the agent) who could append a
+ * stray byte to the file. Edit / Write / Bash are gated, so writing
+ * stray bytes from inside Claude is not possible today, but the
+ * existence-only contract is the defensible boundary regardless.
+ */
+export function checkApprovalMarker(generatedDir: string, sessionId: string): MarkerCheck {
+  const filePath = approvalMarkerPathFor(generatedDir, sessionId);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(filePath);
+  } catch {
+    return {
+      matched: false,
+      detail: `no approval marker at ${filePath}`,
+      marker: null,
+    };
+  }
+  if (!stat.isFile()) {
+    return {
+      matched: false,
+      detail: `approval marker path is not a regular file: ${filePath}`,
+      marker: null,
+    };
+  }
+  let marker: ApprovalMarker | null = null;
+  try {
+    const raw = fs.readFileSync(filePath, "utf8");
+    const parsed = safeJsonParse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const obj = parsed as Record<string, unknown>;
+      const approvedAt = typeof obj["approvedAt"] === "string" ? obj["approvedAt"] : "";
+      const approvedBy = typeof obj["approvedBy"] === "string" ? obj["approvedBy"] : "";
+      if (approvedAt.length > 0 && approvedBy.length > 0) {
+        marker = { approvedAt, approvedBy };
+      }
+    }
+  } catch {
+    /* keep marker:null; existence already satisfied the gate */
+  }
+  const provenance = marker
+    ? `approved at ${marker.approvedAt} by ${marker.approvedBy}`
+    : "marker present, body unreadable (existence still satisfies the gate)";
+  return {
+    matched: true,
+    detail: `approved via marker ${path.basename(filePath)}: ${provenance}`,
+    marker,
+  };
+}
+
+/** Clear the per-session marker (used by `harness approve --revoke` and tests). */
+export function clearApprovalMarker(generatedDir: string, sessionId: string): void {
+  try {
+    fs.rmSync(approvalMarkerPathFor(generatedDir, sessionId));
+  } catch {
+    /* already gone */
+  }
 }
 
 export function checkPersistedReport(
