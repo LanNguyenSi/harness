@@ -40,8 +40,41 @@ export interface PersistedReport {
 const DEFAULT_REPORTS_DIRNAME = ".understanding-gate";
 const REPORTS_SUBDIR = "reports";
 
+/**
+ * Env var the persisted-report directory can be set from. Honored by
+ * harness (`defaultReportsDir` below + emitted by `harness apply` onto
+ * the pack-contributed hook commands) AND by `@lannguyensi/understanding-gate`
+ * (its `core/persistence.js:resolveReportDir` reads the same name), so
+ * the three actors that touch the directory — Stop hook (package),
+ * PreToolUse blocker (harness), `harness approve understanding` — can
+ * agree on the path regardless of each process's cwd.
+ */
+export const REPORTS_DIR_ENV = "UNDERSTANDING_GATE_REPORT_DIR";
+
+/**
+ * Resolve the persisted-report directory. Precedence:
+ *   1. `UNDERSTANDING_GATE_REPORT_DIR` (taken verbatim — apply emits an
+ *      absolute path, operator-exported values are shell-expanded before
+ *      we see them).
+ *   2. `<cwd>/.understanding-gate/reports` — backward-compat fallback.
+ *      Callers that have a stable anchor (the manifest directory) pass
+ *      it as `cwd` so the fallback agrees with whatever path apply
+ *      baked into the hook commands.
+ */
 export function defaultReportsDir(cwd: string = process.cwd()): string {
+  const fromEnv = process.env[REPORTS_DIR_ENV];
+  if (typeof fromEnv === "string" && fromEnv.length > 0) return fromEnv;
   return path.join(cwd, DEFAULT_REPORTS_DIRNAME, REPORTS_SUBDIR);
+}
+
+/**
+ * Project root anchor for the reports directory: `<dir-of-manifest>/.understanding-gate/reports`.
+ * Used by `harness apply` to bake an absolute, manifest-anchored value into
+ * the pack-contributed hook commands' env, and by `harness approve` as the
+ * fallback when `UNDERSTANDING_GATE_REPORT_DIR` is unset.
+ */
+export function reportsDirForManifest(manifestPath: string): string {
+  return path.join(path.dirname(manifestPath), DEFAULT_REPORTS_DIRNAME, REPORTS_SUBDIR);
 }
 
 /** Build the per-session ledger tag the pack searches for. */

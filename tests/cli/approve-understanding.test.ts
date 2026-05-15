@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { approveUnderstanding } from "../../src/cli/approve/understanding.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
+import { REPORTS_DIR_ENV } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 import { readPendingApproval, writePendingApproval } from "../../src/runtime/pending-approval.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
@@ -235,5 +236,101 @@ describe("approveUnderstanding — .pending-approval session resolution (task 33
     expect(caught).toBeInstanceOf(HarnessExitError);
     expect((caught as Error).message).toMatch(/no session id available/);
     expect((caught as Error).message).toMatch(/\.pending-approval/);
+  });
+});
+
+describe("approveUnderstanding — reports-dir resolution (task 4f4a1178)", () => {
+  let savedEnv: string | undefined;
+  let originalCwd: string;
+
+  beforeEach(() => {
+    savedEnv = process.env[REPORTS_DIR_ENV];
+    delete process.env[REPORTS_DIR_ENV];
+    originalCwd = process.cwd();
+  });
+
+  afterEach(() => {
+    if (savedEnv === undefined) delete process.env[REPORTS_DIR_ENV];
+    else process.env[REPORTS_DIR_ENV] = savedEnv;
+    process.chdir(originalCwd);
+  });
+
+  it("anchors the reports dir to the manifest directory when env + opt are unset", async () => {
+    // The manifest's location is the stable anchor. The operator's cwd
+    // is intentionally something completely unrelated so the test fails
+    // loudly if the old cwd-relative resolution sneaks back in.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "ug-approve-home-"));
+    const unrelated = fs.mkdtempSync(path.join(os.tmpdir(), "ug-approve-cwd-"));
+    try {
+      const reportsDir = path.join(home, ".understanding-gate", "reports");
+      fs.mkdirSync(reportsDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(reportsDir, "rpt.json"),
+        `${JSON.stringify({ sessionId: "sess-x", approvalStatus: "pending" }, null, 2)}\n`,
+      );
+      // Also pre-create the harness.yaml stub so resolvePaths().base
+      // resolves under `home` (it computes <home>/harness.yaml).
+      fs.writeFileSync(path.join(home, "harness.yaml"), "version: 1\n");
+
+      process.chdir(unrelated);
+      const result = await approveUnderstanding({
+        manifest: manifest(),
+        homeDir: home,
+        session: "sess-x",
+        generatedDir: path.join(home, "harness.generated"),
+        ledgerAdd: async () => ({ ok: true }),
+      });
+
+      expect(result.persistedReport.ok).toBe(true);
+      if (!result.persistedReport.ok) return;
+      // The flipped report sits under the manifest-anchored dir, not
+      // under `unrelated` (the operator's cwd).
+      expect(result.persistedReport.filePath.startsWith(reportsDir)).toBe(true);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(unrelated, { recursive: true, force: true });
+    }
+  });
+
+  it("honors UNDERSTANDING_GATE_REPORT_DIR over the manifest-anchored fallback", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "ug-approve-home-"));
+    const envDir = fs.mkdtempSync(path.join(os.tmpdir(), "ug-approve-env-"));
+    try {
+      fs.writeFileSync(path.join(home, "harness.yaml"), "version: 1\n");
+      // Decoy: a report under the manifest-anchored dir that should NOT
+      // be picked up because the env-var-pointed dir takes precedence.
+      const manifestAnchored = path.join(home, ".understanding-gate", "reports");
+      fs.mkdirSync(manifestAnchored, { recursive: true });
+      fs.writeFileSync(
+        path.join(manifestAnchored, "decoy.json"),
+        `${JSON.stringify({ sessionId: "sess-x", approvalStatus: "pending" }, null, 2)}\n`,
+      );
+      // Real report lives under the env-var-pointed dir.
+      fs.writeFileSync(
+        path.join(envDir, "rpt.json"),
+        `${JSON.stringify({ sessionId: "sess-x", approvalStatus: "pending" }, null, 2)}\n`,
+      );
+
+      process.env[REPORTS_DIR_ENV] = envDir;
+      const result = await approveUnderstanding({
+        manifest: manifest(),
+        homeDir: home,
+        session: "sess-x",
+        generatedDir: path.join(home, "harness.generated"),
+        ledgerAdd: async () => ({ ok: true }),
+      });
+
+      expect(result.persistedReport.ok).toBe(true);
+      if (!result.persistedReport.ok) return;
+      expect(result.persistedReport.filePath.startsWith(envDir)).toBe(true);
+      // Decoy file untouched.
+      const decoyAfter = JSON.parse(
+        fs.readFileSync(path.join(manifestAnchored, "decoy.json"), "utf8"),
+      ) as Record<string, unknown>;
+      expect(decoyAfter.approvalStatus).toBe("pending");
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(envDir, { recursive: true, force: true });
+    }
   });
 });

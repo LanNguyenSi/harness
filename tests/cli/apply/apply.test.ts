@@ -1257,11 +1257,23 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
       for (const g of groups) for (const h of g.hooks) allCommands.push(h.command);
     }
     expect(allCommands).toContain("understanding-gate-claude-hook");
-    expect(allCommands).toContain("understanding-gate-claude-stop");
     // Phase 6 #4: harness owns the PreToolUse blocker (consults BOTH
     // ledger + persisted report). The package's own bin still works for
     // solo users but the pack now wires harness's stronger blocker.
-    expect(allCommands).toContain("harness pack hook pre-tool-use");
+    // The Stop and PreToolUse hooks carry an
+    // `UNDERSTANDING_GATE_REPORT_DIR=<manifest-anchored>` env prefix so
+    // the standalone Stop bin (writer) and harness's blocker (reader)
+    // resolve the same persisted-report dir regardless of cwd.
+    const stopCommand = allCommands.find((c) => c.endsWith("understanding-gate-claude-stop"));
+    expect(stopCommand).toBeDefined();
+    expect(stopCommand).toMatch(
+      /^UNDERSTANDING_GATE_REPORT_DIR='[^']+\/\.understanding-gate\/reports' understanding-gate-claude-stop$/,
+    );
+    const preToolUseCommand = allCommands.find((c) => c.endsWith("harness pack hook pre-tool-use"));
+    expect(preToolUseCommand).toBeDefined();
+    expect(preToolUseCommand).toMatch(
+      /^UNDERSTANDING_GATE_REPORT_DIR='[^']+\/\.understanding-gate\/reports' harness pack hook pre-tool-use$/,
+    );
     expect(Object.keys(settings.hooks).sort()).toEqual(["PreToolUse", "Stop", "UserPromptSubmit"]);
 
     const preToolUseGroup = settings.hooks["PreToolUse"]?.[0];

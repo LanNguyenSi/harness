@@ -1,4 +1,4 @@
-export { expandPolicyPacks } from "./expand.js";
+export { expandPolicyPacks, type ExpandPolicyPacksOptions } from "./expand.js";
 export {
   KNOWN_BUILTIN_PACKS,
   isBuiltinPackName,

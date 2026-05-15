@@ -248,14 +248,31 @@ interface ExpectedFile {
 function buildExpectedFiles(
   manifest: Manifest,
   opts: ApplyOptions,
+  manifestPath: string,
 ): { files: ExpectedFile[]; warnings: string[] } {
   // Phase 6 #2: expand policy_packs[] into hook contributions + extra
   // generated files BEFORE settings projection. Pack hooks flow through
   // generate-settings unchanged (they're just additional Hook entries
   // in the in-memory manifest), and pack files flow through the same
   // three-state-compare + lock pipeline as settings.json / MEMORY.md.
+  //
+  // The `reportsDir` opt threads a manifest-anchored absolute path into
+  // the understanding-before-execution pack so its emitted hook commands
+  // carry `UNDERSTANDING_GATE_REPORT_DIR=<path>` — every actor that
+  // touches the persisted-report dir then resolves the same location,
+  // independent of cwd. Without this, the pack's Stop hook (cwd =
+  // session) and `harness approve understanding` (cwd = operator
+  // terminal) silently diverge. Path is computed inline rather than
+  // imported from `understanding-before-execution-runtime` to avoid
+  // pulling that module's `runtime/ledger-record` transitive import
+  // into `cli/apply/apply` at module-init time (it would shortcut the
+  // ledger-record ↔ policies/index ↔ ledger-client cycle and trip a TDZ
+  // on POLICY_DECISION_TYPE; the cycle is pre-existing but only fires
+  // when a new top-level import path forces ledger-record to load before
+  // policies/index).
   const runtime: Runtime = opts.runtime ?? DEFAULT_RUNTIME;
-  const packExpansion = expandPolicyPacks(manifest, runtime);
+  const reportsDir = path.join(path.dirname(manifestPath), ".understanding-gate", "reports");
+  const packExpansion = expandPolicyPacks(manifest, runtime, { reportsDir });
   const augmentedManifest: Manifest =
     packExpansion.hooks.length === 0
       ? manifest
@@ -368,7 +385,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   if (opts.project !== undefined) loaderOpts.project = opts.project;
   const { manifest } = loadManifest(loaderOpts);
 
-  const { files: expected, warnings } = buildExpectedFiles(manifest, opts);
+  const { files: expected, warnings } = buildExpectedFiles(manifest, opts, manifestPath);
   const lastApply = readLastApply(generatedDir);
 
   // Asset-content drift detection (Phase 3 #6): if a previous apply wrote
