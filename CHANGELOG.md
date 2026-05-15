@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-05-15
+
+**Headline: understanding-gate self-approval backdoor closed.** Through v0.13.0 the gate read a `understanding-approved:<sessionId>` row from the evidence ledger as approval. The agent has direct MCP access to that ledger via `grounding-mcp`'s `ledger_add`, so any agent could write the row for its own session and self-approve, collapsing the human-in-the-loop control to advisory. v0.14.0 moves the canonical signal to a filesystem marker at `harness.generated/.approvals/<sessionId>` written by `harness approve understanding` from the operator's shell. Edit / Write / Bash are all gated by the same PreToolUse hook and no configured MCP exposes filesystem writes, so the marker is reachable only from operator-launched processes. Headline regression test (`tests/cli/pack-hook-pre-tool-use.test.ts`): an injected ledger row with `source: "mcp"` (exact shape `ledger_add` produces) MUST still block. Pinned for Claude and Codex blockers alike.
+
+**Operator action required**: re-run `harness approve understanding` once in your active session after upgrade. Sessions without a live block need no action.
+
+Adjacent release content: the backdoor closure itself (PR #132, agent-tasks/88ca4bb3); a one-line "to satisfy" hint on every deny envelope and `harness explain` output (PR #131, agent-tasks/32ed47cb); a tighter phrasing for `count.max`-only deny (PR #134, agent-tasks/aee9c085); symlink reject at the marker path (PR #135, agent-tasks/d39f160e); regression guard that `harness apply` preserves `.approvals/` and `.pending-approval` byte-for-byte across re-applies (PR #133, agent-tasks/bf8e1be8); marker-lifetime + session-id-reuse docs subsection (PR #136, agent-tasks/a65c32a8); README + quickstart relabel of `docs/examples/full-manifest.yaml` as a schema-coverage reference (PR #130, agent-tasks/1d1911ec).
+
 ### Security (BREAKING for upgraders)
 
 - **Understanding-gate self-approval backdoor closed** (agent-tasks/88ca4bb3). Through v0.13.0 the gate read a `understanding-approved:<sessionId>` ledger row as approval. Because the agent has direct MCP access to `grounding-mcp`'s `ledger_add`, any agent could write that row itself and self-approve, collapsing the gate to advisory. Starting this release the canonical gate signal is `harness.generated/.approvals/<sessionId>`, a filesystem marker that `harness approve understanding` writes from the operator's shell. Edit / Write / Bash are all gated by the same PreToolUse hook, and no configured MCP exposes filesystem writes, so the marker is reachable only from operator-launched processes.
