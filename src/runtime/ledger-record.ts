@@ -7,7 +7,8 @@
 // `harness explain --trace` (Phase 4 #6/#7) grep for.
 
 import { spawn } from "node:child_process";
-import { parseLedgerTimestamp, type LedgerEntry } from "../policies/index.js";
+import type { LedgerEntry } from "../policies/requires.js";
+import { parseLedgerTimestamp } from "../policies/timestamp.js";
 import type { PolicyDecision } from "./intercept.js";
 import { VERSION } from "../version.js";
 
