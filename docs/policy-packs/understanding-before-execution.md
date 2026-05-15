@@ -154,6 +154,17 @@ This avoids the failure mode where one source goes stale relative to the other. 
 
 `harness apply` regeneration does NOT touch `harness.generated/.approvals/`. The apply path only writes its own known files into `harness.generated/`; sibling state (the approval marker and the `.pending-approval` staging file) survives a re-apply byte-for-byte. Pinned by `tests/cli/apply/apply.test.ts` "apply preserves sibling state under harness.generated/" so live sessions stay approved across re-applies.
 
+### Marker lifetime and session-id reuse
+
+The approval marker has no TTL: once `harness approve understanding` writes `harness.generated/.approvals/<sessionId>`, the gate is satisfied for the lifetime of that session id. The contract is "one Understanding Report approved per session, not per tool call"; a time-bounded shape similar to `within: 1h` on other policies is a possible v2 feature, not v1 behaviour.
+
+Claude Code session ids are UUIDs so accidental collision is not a concern. Two operator-controlled paths that DO carry approval across logical session boundaries, and that are worth flagging as known-properties:
+
+- **Manually copying a marker between session ids.** `cp harness.generated/.approvals/<old> harness.generated/.approvals/<new>` is a "yes I really mean it" admin action, but it works exactly because the marker is operator-authored.
+- **Scripted runs that reuse a session id.** If your test harness or wrapper pins a fixed session id and approves once, every subsequent run under that id is pre-approved. That is the intended shape for some CI flows, but make it deliberate.
+
+Delete the marker (`rm harness.generated/.approvals/<sessionId>`) to force a re-approval on the next tool call. Symlinks at the marker path are refused (see `checkApprovalMarker` in `src/policy-packs/builtin/understanding-before-execution-runtime.ts`), so a symlinked marker cannot be used to redirect approval at a target the operator did not write directly.
+
 ## Adapter notes
 
 ### Claude Code (first-class target)

@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `buildRecordHint` now flips to a `keep evidence-ledger entries containing \`<tag>\` at or below <N>` phrasing for `count.max`-only requires (agent-tasks/aee9c085). The previous "record N entries" shape was exactly the wrong nudge for a "too many already" deny. `count.min`-only and the combined min/max cases keep the recording phrasing (recording more is the satisfying action).
 - `checkApprovalMarker` uses `lstatSync` (not `statSync`) and rejects symlinks at the marker path (agent-tasks/d39f160e). Defense-in-depth: the agent has no Edit / Write / Bash path to plant a symlink under `harness.generated/` today, but the gate's contract is to assume the agent is hostile, so the lstat reject is cheap insurance.
 
+### Docs
+
+- `docs/policy-packs/understanding-before-execution.md` "Approval state" gains a "Marker lifetime and session-id reuse" subsection (agent-tasks/a65c32a8). Documents the no-TTL contract, names the two operator-controlled paths that carry approval across logical session boundaries (manual marker copy, scripted session-id reuse), and points operators at `rm harness.generated/.approvals/<sessionId>` for forced re-approval.
+
 ## [0.13.0] - 2026-05-15
 
 **Headline: `harness doctor` detects MCP, hook, and memory-router version drift end-to-end.** PR #125 added the `tools.mcp[]` `min_version` schema + production probe and shipped the load-bearing fix for the prior `tools.cli` no-op (`opts.versionProbe` defaulted to `null` outside tests). PR #126 extended the same contract to `hooks[]` and `memory.router`, lifting the numeric compare into a shared `src/io/version-compare.ts` so all three sites use one implementation. PRs #127 and #128 then activated the surface in FULL_TEMPLATE with three concrete floors so a fresh `harness init` ships the drift signal turned on.
