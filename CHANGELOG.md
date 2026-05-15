@@ -7,6 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-05-15
+
+**Headline: the understanding-gate stack is now operator-recoverable
+end-to-end.** The persisted-report directory desync that silently broke
+`harness approve understanding` from a second terminal (#116) is closed
+by anchoring the path to the manifest at apply time. The lockout class
+that twice during install dogfood left a session unable to recover
+without a hand-crafted Python snippet now has a first-class reversible
+escape hatch: `harness gate disable` / `harness gate enable` (#119).
+And two adjacent silent-degradation paths are loud now: `harness approve
+understanding` surfaces the standalone Stop-hook's parse-error reason
+inline instead of just "no reports found" (#117), and
+`harness session-start preflight` no longer pretends success when it
+silently falls back to the literal "default" session (#118).
+
+### Added
+
+- `harness gate disable` / `harness gate enable`: reversible operator
+  escape hatch for hard-blocking hooks. `gate disable` with no flags
+  lists every hook group in `~/.claude/settings.json` with its event,
+  index, matcher, and command summary; with `--matcher <substring>` it
+  removes every group whose matcher contains the substring, writes a
+  snapshot of the removed groups to
+  `<settings-dir>/harness.gate-disable.<ts>.json`, and backs up the
+  original to `settings.json.bak.<ts>` before the live rewrite. `gate
+  enable` restores from the newest snapshot, is idempotent on an
+  already-restored file, and refuses when settings.json has been edited
+  since the snapshot was taken; `--force` overrides and the restore
+  only touches the `hooks` key so every other operator-added top-level
+  key is preserved verbatim. Both verbs refuse to operate on a
+  settings.json that is not a JSON object, so a broken file is
+  surfaced rather than silently rewritten. v1 scope: substring matcher
+  + latest-snapshot restore; `--event` filter, `--all`, named-snapshot
+  selection ship later if demand surfaces. (#119)
+- `harness session-start preflight --session <id>`: explicit session-id
+  flag for manual or scripted invocations where no SessionStart event
+  JSON is piped on stdin. (#118)
+
+### Fixed
+
+- The `understanding-before-execution` pack's persisted-report
+  directory was `path.join(process.cwd(), ".understanding-gate",
+  "reports")` with no precedence, so the three actors that touch it
+  (the standalone Stop hook, the PreToolUse blocker, and `harness
+  approve understanding`) silently diverged whenever the operator
+  approved from a second terminal. `defaultReportsDir()` now honors
+  `UNDERSTANDING_GATE_REPORT_DIR` ahead of the cwd fallback, and
+  `harness apply` bakes
+  `UNDERSTANDING_GATE_REPORT_DIR=<manifest-dir>/.understanding-gate/reports`
+  onto every command the pack contributes (Stop + PreToolUse, both
+  claude-code and codex variants). The path is resolved absolute at
+  apply time so the spawned hook process inherits a stable location
+  regardless of the cwd Claude Code launches it with. `harness approve
+  understanding` uses the manifest directory as the fallback cwd, and
+  `harness doctor --target codex` switches to the same resolver so its
+  reported writable path matches what the rest of the stack actually
+  touches. Same bug class as the v0.10.0 EVIDENCE_LEDGER_DB
+  literal-tilde fix. (#116)
+- `harness approve understanding` reported "no reports found at <dir>"
+  as a silent dead end when the standalone Stop hook fired but its
+  `parseReport` rejected the agent's last message (missing sections,
+  schema errors, etc). The verb now checks the sibling parse-errors
+  directory (`<dir-of-reports>/../parse-errors/`, where the standalone
+  package writes its diagnostic logs) and surfaces the newest entry's
+  `message` or `reason` plus optional `missing[]` array inline in the
+  diagnostic. Format-tolerant: the JSON header is preferred, with a
+  freeform-line fallback so future Stop-hook log-format changes still
+  surface something. Missing parse-errors dir stays silent. (#117)
+- `harness session-start preflight` invoked manually (no SessionStart
+  event piped on stdin, `$CLAUDE_SESSION_ID` unexported) recorded its
+  `preflight:` tags under the literal session `"default"`. The success
+  line read as if the producer worked, but no `preflight-before-*`
+  policy queries `"default"`, they query the real Claude Code session
+  id, so the tag was a no-op. The resolver now mirrors `harness approve
+  understanding`'s chain: `--session` flag → stdin `event.session_id`
+  → `$CLAUDE_SESSION_ID` → newest Claude Code transcript (the same
+  heuristic `harness audit` / `harness explain --trace` use) → literal
+  `"default"`, with a loud stderr WARNING when the fallback hits
+  explaining that the recorded tag will not satisfy any
+  preflight-before-* gate. The result also exposes `sessionId` +
+  `sessionSource` for in-process callers. (#118)
+
 ## [0.11.0] - 2026-05-14
 
 **Headline: the policy layer works end-to-end and is legible.** The
