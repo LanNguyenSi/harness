@@ -508,3 +508,148 @@ policies:
     expect(text).toContain("✓ gamma-gate");
   });
 });
+
+
+describe("doctor — MCP min_version", () => {
+  function buildManifest(mcpBlock: string): string {
+    return `version: 1
+hooks: []
+policies: []
+tools:
+  mcp:
+${mcpBlock}
+  builtin:
+    known: []
+`;
+  }
+
+  it("emits no entry for MCP servers without min_version", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    - name: bare
+      command: [/usr/bin/true]`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({ bare: { kind: "missing-verb" } }),
+      versionProbe: () => "v0.1.0\n",
+      pathEnv: "",
+    });
+    expect(report.tools.mcpVersions).toEqual([]);
+  });
+
+  it("emits ok when the probed version meets min_version", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    - name: ok-mcp
+      command: [my-mcp-bin]
+      min_version: "0.5.0"`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({ "ok-mcp": { kind: "missing-verb" } }),
+      versionProbe: (cmd) => (cmd[0] === "my-mcp-bin" ? "my-mcp-bin v0.6.1\n" : null),
+      pathEnv: "",
+    });
+    expect(report.tools.mcpVersions).toEqual([
+      { name: "ok-mcp", status: "ok", message: "v0.6.1 ≥ 0.5.0" },
+    ]);
+    // The fixture has no `memory:` block, so a baseline "no memory
+    // router declared" warning is expected; assert no version-check
+    // warning surfaced on top of it.
+    const versionWarnings = report.tools.mcpVersions.filter((v) => v.status === "warn").length;
+    expect(versionWarnings).toBe(0);
+  });
+
+  it("emits warn (not error) and counts when the probed version is below min_version", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    - name: stale-mcp
+      command: [stale-bin]
+      min_version: "0.5.0"`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({ "stale-mcp": { kind: "missing-verb" } }),
+      versionProbe: () => "stale-bin v0.2.0\n",
+      pathEnv: "",
+    });
+    expect(report.tools.mcpVersions).toEqual([
+      {
+        name: "stale-mcp",
+        status: "warn",
+        message: "outdated: installed v0.2.0 < required 0.5.0",
+      },
+    ]);
+    expect(report.warningCount).toBeGreaterThanOrEqual(1);
+    const text = format(report);
+    expect(text).toContain("outdated: installed v0.2.0 < required 0.5.0");
+  });
+
+  it("skips disabled servers even when min_version is set", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    - name: skipped
+      command: [skipped-bin]
+      enabled: false
+      min_version: "9.9.9"`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => {
+        throw new Error("versionProbe must not be invoked for a disabled server");
+      },
+      pathEnv: "",
+    });
+    expect(report.tools.mcpVersions).toEqual([]);
+  });
+
+  it("warns when the version probe fails or returns no parseable version", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    - name: probe-fail
+      command: [missing-bin]
+      min_version: "0.1.0"
+    - name: garbled
+      command: [garbled-bin]
+      min_version: "0.1.0"`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({
+        "probe-fail": { kind: "missing-verb" },
+        garbled: { kind: "missing-verb" },
+      }),
+      versionProbe: (cmd) => (cmd[0] === "garbled-bin" ? "no number in here\n" : null),
+      pathEnv: "",
+    });
+    const byName = Object.fromEntries(report.tools.mcpVersions.map((v) => [v.name, v]));
+    expect(byName["probe-fail"]?.status).toBe("warn");
+    expect(byName["probe-fail"]?.message).toMatch(/version probe failed/);
+    expect(byName.garbled?.status).toBe("warn");
+    expect(byName.garbled?.message).toMatch(/could not parse a version/);
+  });
+
+  it("honours an explicit version_command override", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    - name: custom
+      command: [custom-bin]
+      min_version: "1.0.0"
+      version_command: [custom-bin, "--print-version"]`),
+    });
+    let received: string[] | null = null;
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({ custom: { kind: "missing-verb" } }),
+      versionProbe: (cmd) => {
+        received = cmd;
+        return "1.2.3\n";
+      },
+      pathEnv: "",
+    });
+    expect(received).toEqual(["custom-bin", "--print-version"]);
+    expect(report.tools.mcpVersions[0]?.status).toBe("ok");
+  });
+});

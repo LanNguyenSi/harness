@@ -1,5 +1,23 @@
+import { spawnSync } from "node:child_process";
 import * as path from "node:path";
 import { Command } from "commander";
+
+// Production version probe for `harness doctor`: synchronous --version
+// invocation with a 5s timeout. Tests inject their own probe; the CLI
+// entrypoint wires this default. Same shape as `cli/doctor/codex.ts`.
+function defaultVersionProbe(cmd: string[]): string | null {
+  if (cmd.length === 0) return null;
+  try {
+    const result = spawnSync(cmd[0]!, cmd.slice(1), {
+      encoding: "utf8",
+      timeout: 5_000,
+    });
+    if (result.status !== 0 || result.error) return null;
+    return (result.stdout ?? "").trim() || null;
+  } catch {
+    return null;
+  }
+}
 import { add } from "./add/index.js";
 import type { AddEntry } from "./add/mutate.js";
 import { adopt } from "./adopt/index.js";
@@ -168,6 +186,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
           configPath: options.config,
           project: options.project,
           shallow: options.shallow,
+          versionProbe: defaultVersionProbe,
           ...(target !== undefined ? { target } : {}),
         });
         if (options.json) {

@@ -126,6 +126,8 @@ Per-type schemas:
 | `env` | `{[key: string]: string}` | no | env vars for the child process |
 | `health` | `{verb: string, timeout_ms?: number}` | no | MCP verb to invoke for liveness |
 | `enabled` | boolean | no (default `true`) | `false` removes from generated `~/.claude.json` in Phase 3 |
+| `min_version` | string | no | semver floor; `harness doctor` runs `version_command` against the first command token and emits a `⚠ outdated` line when the parsed version is below this value |
+| `version_command` | `string[]` | no | defaults to `[<first command token>, --version]` |
 
 ### `tools.cli[]`
 

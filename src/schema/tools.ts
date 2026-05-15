@@ -16,6 +16,8 @@ export const McpServerSchema = z
     env: z.record(z.string()).optional(),
     health: McpHealthSchema.optional(),
     enabled: z.boolean().default(true),
+    min_version: z.string().min(1).optional(),
+    version_command: z.array(z.string().min(1)).min(1).optional(),
   })
   .strict();
 

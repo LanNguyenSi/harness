@@ -29,8 +29,23 @@ export interface CliEntryReport {
   message: string;
 }
 
+/**
+ * Outcome of a `min_version` check against an MCP server's first command
+ * token. Distinct from `McpProbeResult` (which probes the running server's
+ * health verb), this runs `<bin> --version` (or `version_command` when
+ * overridden) and compares the parsed version against `min_version`. Below
+ * threshold maps to `warn`, not `error`: the binary still works, the gap
+ * is informational so the operator can decide to upgrade.
+ */
+export interface McpVersionReport {
+  name: string;
+  status: "ok" | "warn" | "error";
+  message: string;
+}
+
 export interface ToolsSection {
   mcp: McpProbeResult[];
+  mcpVersions: McpVersionReport[];
   cli: CliEntryReport[];
   skillsEnabled: string[];
   skillsRequiredMissing: string[];
