@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `harness explain <policy> --trace` reuses the same hint, synthesised from the current manifest's `requires` so older audit-log payloads (which predate the field) still render `toSatisfy:` in the trace.
 - New `buildRecordHint(requires, tag)` exported from `src/policies/index.ts` so consumers can render the same hint without firing an evaluation.
 
+### Changed
+
+- `buildRecordHint` now flips to a `keep evidence-ledger entries containing \`<tag>\` at or below <N>` phrasing for `count.max`-only requires (agent-tasks/aee9c085). The previous "record N entries" shape was exactly the wrong nudge for a "too many already" deny. `count.min`-only and the combined min/max cases keep the recording phrasing (recording more is the satisfying action).
+
 ## [0.13.0] - 2026-05-15
 
 **Headline: `harness doctor` detects MCP, hook, and memory-router version drift end-to-end.** PR #125 added the `tools.mcp[]` `min_version` schema + production probe and shipped the load-bearing fix for the prior `tools.cli` no-op (`opts.versionProbe` defaulted to `null` outside tests). PR #126 extended the same contract to `hooks[]` and `memory.router`, lifting the numeric compare into a shared `src/io/version-compare.ts` so all three sites use one implementation. PRs #127 and #128 then activated the surface in FULL_TEMPLATE with three concrete floors so a fresh `harness init` ships the drift signal turned on.

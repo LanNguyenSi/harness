@@ -404,6 +404,52 @@ describe("buildRecordHint / recordHint plumbing (agent-tasks/32ed47cb)", () => {
       ),
     ).toBe("record an evidence-ledger entry containing `review:${PR_NUMBER}` within 1h");
   });
+
+  it("with `count.max` only: hint flips to bound-phrasing, not record-phrasing (agent-tasks/aee9c085)", () => {
+    // The "record N entries" shape is exactly wrong for count.max-only:
+    // the deny is "you already have too many", recording more would
+    // deny harder. The hint flips to a keep-at-or-below phrasing.
+    expect(
+      buildRecordHint({ ledger_tag: "review:42", count: { max: 1 } }, "review:42"),
+    ).toBe("keep evidence-ledger entries containing `review:42` at or below 1");
+  });
+
+  it("with `count.max` + `within`: the bound-phrasing carries the freshness window too", () => {
+    expect(
+      buildRecordHint(
+        { ledger_tag: "dogfood:foo", count: { max: 3 }, within: "24h" },
+        "dogfood:foo",
+      ),
+    ).toBe("keep evidence-ledger entries containing `dogfood:foo` at or below 3 within 24h");
+  });
+
+  it("with `count.min` AND `count.max`: the min branch wins (the under-count case is the actionable failure)", () => {
+    // When both bounds are declared, count.min failure dominates the
+    // hint because recording more is the satisfying action; count.max
+    // failure on top of that would be a different deny.
+    expect(
+      buildRecordHint(
+        { ledger_tag: "review:42", count: { min: 2, max: 5 } },
+        "review:42",
+      ),
+    ).toBe("record 2 evidence-ledger entries containing `review:42`");
+  });
+
+  it("evaluateRequires count.max deny surfaces the bound-phrased hint", () => {
+    const result = evaluateRequires(
+      { ledger_tag: "review:42", count: { max: 1 } },
+      [
+        entry({ id: "e1", content: "review:42:approved" }),
+        entry({ id: "e2", content: "review:42:approved-again" }),
+      ],
+      { now: NOW },
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("2 matching entries exceeds count.max 1");
+    expect(result.recordHint).toBe(
+      "keep evidence-ledger entries containing `review:42` at or below 1",
+    );
+  });
 });
 
 describe("evaluateRequires — traceData", () => {
