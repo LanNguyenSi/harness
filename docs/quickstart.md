@@ -83,6 +83,9 @@ harness audit --since 1h                       # what fired recently?
 - Change the rule or add your own: [`for-humans.md`](for-humans.md),
   "First hour: a real policy".
 - Every manifest field, in one file:
-  [`examples/full-manifest.yaml`](examples/full-manifest.yaml).
+  [`examples/full-manifest.yaml`](examples/full-manifest.yaml). This is
+  a schema-coverage reference, not a runnable config: `validate` will
+  flag the install-specific hook paths it references. The file's
+  header explains what to expect.
 - What an agent needs to know about the gates:
   [`for-agents.md`](for-agents.md).

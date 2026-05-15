@@ -184,6 +184,14 @@ substitutes `${PR_NUMBER}=42` through the JSONPath-restricted extract
 DSL, and tells you exactly which hooks would fire and which policies
 would match, before any ledger I/O.
 
+The reference manifest is a schema-coverage example, not a runnable
+config. `harness validate --config docs/examples/full-manifest.yaml`
+will report errors for install-specific hook script paths it
+references (and warnings for binaries like `git-batch` that only exist
+in a real install). That is expected; the file header spells out the
+contract. Use `harness init --template full` to get a manifest
+tailored to your machine.
+
 Convinced? Install globally and set up your own:
 `npm i -g @lannguyensi/harness && harness init --interactive`.
 
