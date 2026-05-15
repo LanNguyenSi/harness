@@ -118,6 +118,56 @@ describe("init detect — MCP servers from Claude settings.json", () => {
     expect(claude?.settingsParseError).toMatch(/invalid JSON/);
     expect(r.mcpServers).toEqual([]);
   });
+
+  it("defaults args to [] when the entry's args field is not an array", async () => {
+    writeJson(settingsPath(), {
+      mcpServers: { x: { command: "/bin/x", args: "not-an-array" } },
+    });
+    const r = await detect({ homeDir: tmpHome });
+    expect(r.mcpServers).toEqual([
+      { name: "x", runtime: "claude-code", command: "/bin/x", args: [] },
+    ]);
+  });
+
+  it("filters non-string elements out of args, keeping the string-typed ones", async () => {
+    writeJson(settingsPath(), {
+      mcpServers: { x: { command: "/bin/x", args: [1, "keep", null, "also-keep", false] } },
+    });
+    const r = await detect({ homeDir: tmpHome });
+    expect(r.mcpServers).toEqual([
+      { name: "x", runtime: "claude-code", command: "/bin/x", args: ["keep", "also-keep"] },
+    ]);
+  });
+
+  it("drops entries whose command field is not a string", async () => {
+    writeJson(settingsPath(), {
+      mcpServers: {
+        valid: { command: "/bin/valid" },
+        nonStringCommand: { command: 42, args: ["--ignored"] },
+      },
+    });
+    const r = await detect({ homeDir: tmpHome });
+    expect(r.mcpServers.map((s) => s.name)).toEqual(["valid"]);
+  });
+
+  it("reports settingsParseError when settings.json is unreadable", async () => {
+    // Exercise the safeReadFile null path (permission denied on read).
+    // chmod 0000 is unreliable for root, so skip when running as root.
+    if (process.getuid?.() === 0) return;
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    fs.writeFileSync(settingsPath(), JSON.stringify({ mcpServers: {} }));
+    fs.chmodSync(settingsPath(), 0o000);
+    try {
+      const r = await detect({ homeDir: tmpHome });
+      const claude = r.runtimes.find((x) => x.name === "claude-code");
+      expect(claude?.settingsExists).toBe(true);
+      expect(claude?.settingsParseError).toBe("settings.json unreadable");
+      expect(r.mcpServers).toEqual([]);
+    } finally {
+      // Restore so afterEach's rmSync can clean up the tmp tree.
+      fs.chmodSync(settingsPath(), 0o600);
+    }
+  });
 });
 
 describe("init detect — harness self-report", () => {
