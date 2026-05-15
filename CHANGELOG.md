@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Policy deny messages now include a one-line "to satisfy" hint so a blocked operator sees the satisfying ledger contract, not just the missing tag (agent-tasks/32ed47cb). Format: `<policy>: no matching ledger entry for tag \`<resolved-tag>\`. To satisfy: record an evidence-ledger entry containing \`<tag>\` (session \`<id>\`).` The hint covers the `count.min`/`count.exact` and `within` variants too. Deliberately omits the *how* (no recording verb named) so the deny path stays neutral on producer; see agent-tasks/88ca4bb3 for why pointing at a specific MCP would be the wrong suggestion.
+- `harness explain <policy>` (non-trace) now prints a `toSatisfy` line built from the policy's `requires` spec with the un-substituted tag template, so contributors reading the policy contract see the same shape a blocked operator sees in Claude Code.
+- `harness explain <policy> --trace` reuses the same hint, synthesised from the current manifest's `requires` so older audit-log payloads (which predate the field) still render `toSatisfy:` in the trace.
+- New `buildRecordHint(requires, tag)` exported from `src/policies/index.ts` so consumers can render the same hint without firing an evaluation.
+
 ## [0.13.0] - 2026-05-15
 
 **Headline: `harness doctor` detects MCP, hook, and memory-router version drift end-to-end.** PR #125 added the `tools.mcp[]` `min_version` schema + production probe and shipped the load-bearing fix for the prior `tools.cli` no-op (`opts.versionProbe` defaulted to `null` outside tests). PR #126 extended the same contract to `hooks[]` and `memory.router`, lifting the numeric compare into a shared `src/io/version-compare.ts` so all three sites use one implementation. PRs #127 and #128 then activated the surface in FULL_TEMPLATE with three concrete floors so a fresh `harness init` ships the drift signal turned on.

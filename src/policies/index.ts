@@ -1,4 +1,5 @@
 export {
+  buildRecordHint,
   evaluateRequires,
   RequiresEvaluationError,
   type EvaluateRequiresOptions,

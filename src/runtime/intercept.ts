@@ -41,6 +41,14 @@ export interface PolicyDecision {
   extractValues: Record<string, string>;
   ledgerTag: string;
   requiresEval?: { matchedCount: number; reason: string };
+  /**
+   * One-line "to satisfy" hint synthesised from the policy's `requires`
+   * spec. Carried on the live decision so the deny-envelope formatter
+   * can append it to the user-facing reason text together with the
+   * session id. Optional because the warn-degraded path (requires eval
+   * threw) skips the requires evaluator and has no hint to forward.
+   */
+  recordHint?: string;
   evaluatedAt: string;
 }
 
@@ -232,6 +240,7 @@ async function evaluateOnePolicy(
       matchedCount: evaluation.matchedCount,
       reason: evaluation.reason,
     },
+    recordHint: evaluation.recordHint,
     evaluatedAt,
   };
 }
@@ -281,7 +290,18 @@ export async function intercept(
     (d) => d.enforcement === "block" && d.outcome === "deny",
   );
   if (blocking) {
-    const reasonText = `${blocking.policyName}: ${blocking.reason}`;
+    const sessionId = resolveSessionId(options.event.session_id);
+    // Append the "to satisfy" hint so Claude Code's deny message tells
+    // the operator (or the agent reading the same surface) what evidence
+    // would unblock the gate, instead of just naming the missing tag.
+    // The hint is content + window only; it does not prescribe a
+    // recording verb so the deny path stays neutral on producer (see
+    // agent-tasks/88ca4bb3 for why "use mcp__..." would be the wrong
+    // suggestion).
+    const hintSuffix = blocking.recordHint
+      ? ` To satisfy: ${blocking.recordHint} (session \`${sessionId}\`).`
+      : "";
+    const reasonText = `${blocking.policyName}: ${blocking.reason}.${hintSuffix}`;
     const block: ClaudeDenyJson = {
       decision: "block",
       reason: reasonText,

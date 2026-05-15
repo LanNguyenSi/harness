@@ -26,6 +26,20 @@ export interface RequiresEvaluation {
   reason: string;
   matchedCount: number;
   traceData: RequiresTrace;
+  /**
+   * One-line "to satisfy" hint describing what evidence-ledger entry
+   * would unblock the gate, derived from the policy's `requires` spec
+   * with no runtime context. Names the content to log and (if a
+   * `within` window is declared) the freshness bound. Always omits the
+   * "how": the policy gate accepts ledger entries from any producer,
+   * and naming a specific recording verb in the deny path would
+   * advertise a self-service path to an agent that the operator may
+   * not want it to take (see agent-tasks/88ca4bb3). Set on both allow
+   * and deny so consumers can show the same satisfaction contract
+   * uniformly (e.g. `harness explain <policy>` displaying it on a
+   * green-path policy).
+   */
+  recordHint: string;
 }
 
 export interface RequiresTrace {
@@ -90,6 +104,28 @@ function describeBound(c: NonNullable<Requires["count"]>): string {
   return "?";
 }
 
+/**
+ * Build a one-line "to satisfy" hint from a `requires` spec. Exported so
+ * `harness explain <policy>` can show the same hint that `evaluateRequires`
+ * surfaces in its deny path, without having to fire an actual evaluation.
+ * `tag` is normally `requires.ledger_tag` after `${VAR}` substitution; the
+ * caller may also pass the un-substituted template (explain non-trace path)
+ * so the hint reads as a contract instead of a per-event message.
+ */
+export function buildRecordHint(requires: Requires, tag: string): string {
+  const count = requires.count;
+  let countPhrase: string;
+  if (count?.exact !== undefined) {
+    countPhrase = `${count.exact} evidence-ledger entr${count.exact === 1 ? "y" : "ies"}`;
+  } else if (count?.min !== undefined) {
+    countPhrase = `${count.min} evidence-ledger entr${count.min === 1 ? "y" : "ies"}`;
+  } else {
+    countPhrase = "an evidence-ledger entry";
+  }
+  const windowPhrase = requires.within !== undefined ? ` within ${requires.within}` : "";
+  return `record ${countPhrase} containing \`${tag}\`${windowPhrase}`;
+}
+
 export function evaluateRequires(
   requires: Requires,
   ledgerEntries: LedgerEntry[],
@@ -143,6 +179,7 @@ export function evaluateRequires(
     countBound,
     evaluatedAt,
   };
+  const recordHint = buildRecordHint(requires, tag);
 
   if (requires.count !== undefined) {
     const c = requires.count;
@@ -162,6 +199,7 @@ export function evaluateRequires(
         reason,
         matchedCount,
         traceData: trace,
+        recordHint,
       };
     }
     return {
@@ -169,6 +207,7 @@ export function evaluateRequires(
       reason: `${matchedCount} entries matched (count bound: ${describeBound(c)})`,
       matchedCount,
       traceData: trace,
+      recordHint,
     };
   }
 
@@ -179,6 +218,7 @@ export function evaluateRequires(
         reason: `no matching entry within ${requires.within}`,
         matchedCount,
         traceData: trace,
+        recordHint,
       };
     }
     return {
@@ -186,6 +226,7 @@ export function evaluateRequires(
       reason: `no matching ledger entry for tag \`${tag}\``,
       matchedCount,
       traceData: trace,
+      recordHint,
     };
   }
 
@@ -194,5 +235,6 @@ export function evaluateRequires(
     reason: `${matchedCount} matching ledger entr${matchedCount === 1 ? "y" : "ies"} for tag \`${tag}\``,
     matchedCount,
     traceData: trace,
+    recordHint,
   };
 }

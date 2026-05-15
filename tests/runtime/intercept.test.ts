@@ -95,7 +95,8 @@ describe("intercept — match + deny", () => {
       now: NOW,
     });
     const expectedReason =
-      "review-before-merge: no matching ledger entry for tag `review:42`";
+      "review-before-merge: no matching ledger entry for tag `review:42`. " +
+      "To satisfy: record an evidence-ledger entry containing `review:42` (session `sess-1`).";
     expect(result.blockJson).toEqual({
       decision: "block",
       reason: expectedReason,
@@ -106,6 +107,9 @@ describe("intercept — match + deny", () => {
       },
     });
     expect(result.decisions[0]?.outcome).toBe("deny");
+    expect(result.decisions[0]?.recordHint).toBe(
+      "record an evidence-ledger entry containing `review:42`",
+    );
   });
 });
 
@@ -135,7 +139,9 @@ describe("intercept — non-PreToolUse deny shape", () => {
     });
     expect(result.blockJson).toEqual({
       decision: "block",
-      reason: "block-bare-prompt: no matching ledger entry for tag `review:7`",
+      reason:
+        "block-bare-prompt: no matching ledger entry for tag `review:7`. " +
+        "To satisfy: record an evidence-ledger entry containing `review:7` (session `sess-1`).",
     });
     expect(result.blockJson?.hookSpecificOutput).toBeUndefined();
   });
