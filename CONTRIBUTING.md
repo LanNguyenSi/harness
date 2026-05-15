@@ -35,6 +35,15 @@ npm run build
 
 Match the surrounding code. Prefer small, reviewable diffs.
 
+## Canonical manifests
+
+Two files describe the example policy surface and must stay in sync:
+
+- `docs/examples/full-manifest.yaml`: canonical schema-coverage reference. Use this file as the source of truth when adding or editing an example policy or policy_pack entry.
+- `src/cli/init/templates.ts` (`FULL_TEMPLATE`): the runnable manifest emitted by `harness init --template full`. Intentionally different on `tools.mcp` commands, hook commands, and the optional `workflows` / `review_templates` / `audit` blocks, but its `policies` and `policy_packs` sections must mirror the reference.
+
+The parity vitest `tests/cli/init-full-template-parity.test.ts` fails the build on drift in policy names, load-bearing policy fields (`trigger.match`, `trigger.extract`, `requires.*`, `enforcement`, `hook`), or `policy_packs` definitions. If you add a policy to one file, add it to the other in the same PR.
+
 ## Releasing
 
 Publishing is driven by `.github/workflows/publish-npm.yml`. Pushing a `v*` tag triggers it; the workflow checks the tag against `package.json`, builds, tests, then runs `npm publish --provenance`.

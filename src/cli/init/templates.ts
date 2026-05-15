@@ -24,8 +24,14 @@ version: 1
 export const FULL_TEMPLATE = `# ~/.claude/harness.yaml
 #
 # Bootstrapped by \`harness init --template full\`. The reference manifest:
-# all 5 example policies wired through the generic \`harness policy intercept\`
-# engine, so no external shell scripts under ~/.claude/hooks/ are required.
+# every example policy from docs/examples/full-manifest.yaml wired through
+# the generic \`harness policy intercept\` engine, so no external shell
+# scripts under ~/.claude/hooks/ are required.
+#
+# Canonical source for the policy + policy_packs sections is
+# docs/examples/full-manifest.yaml. A parity vitest
+# (tests/cli/init-full-template-parity.test.ts) fails the build if the
+# two diverge on policy names or load-bearing fields.
 #
 # What you still need on PATH (the wizard offers to \`npm i -g\` these on
 # init): agent-tasks-mcp-bridge, grounding-mcp, memory-router-*,
@@ -190,6 +196,20 @@ policies:
       within: 24h
     hook: require-dogfood-evidence
     enforcement: block
+
+  - name: two-reviewers-required
+    description: At least two distinct reviewer ledger entries must exist for the PR.
+    trigger:
+      event: PreToolUse
+      match: "mcp__agent-tasks__pull_requests_merge"
+      extract:
+        PR_NUMBER: "toolArgs.prNumber"
+    requires:
+      ledger_tag: "review:\${PR_NUMBER}"
+      count:
+        min: 2
+    hook: require-review-evidence
+    enforcement: warn
 
   - name: preflight-before-investigation
     description: Block investigative git reads (status/log/diff/branch) when agent-preflight has not run recently with ready:true for the current repo.

@@ -81,9 +81,12 @@ describe("init — full template", () => {
     expect(hookNames).toContain("require-review-subagent-evidence");
     expect(hookNames).toContain("require-preflight-push-evidence");
     expect(hookNames).toContain("git-preflight");
-    // The 5 reference policies that drive those hooks.
+    // The 6 reference policies that drive those hooks. `two-reviewers-required`
+    // is a warn-level companion to review-before-merge, sharing the same hook;
+    // see docs/examples/full-manifest.yaml for the canonical definition.
     expect(policyNames).toContain("review-before-merge");
     expect(policyNames).toContain("dogfood-before-release");
+    expect(policyNames).toContain("two-reviewers-required");
     expect(policyNames).toContain("preflight-before-investigation");
     expect(policyNames).toContain("review-subagent-before-pr-create");
     expect(policyNames).toContain("preflight-before-push");
