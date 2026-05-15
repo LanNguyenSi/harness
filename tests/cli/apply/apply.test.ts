@@ -1375,3 +1375,94 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
     expect(fs.existsSync(instructionsPath("understanding-before-execution"))).toBe(true);
   });
 });
+
+describe("apply: preserves sibling state under harness.generated/ (agent-tasks/bf8e1be8)", () => {
+  // Regression guard for the v0.14.0 marker introduction. `harness apply`
+  // is allowed to write its own known files into harness.generated/ but
+  // MUST NOT wipe sibling state. Two files in particular live there now:
+  //
+  //   - .approvals/<sessionId>: operator-written canonical gate signal
+  //     (agent-tasks/88ca4bb3, PR #132). Wiping it on apply would silently
+  //     re-block every live session.
+  //   - .pending-approval: staged session id the gate hook writes when
+  //     it blocks. Same survival contract; existing behaviour pre-#132,
+  //     pinned here for completeness.
+
+  it("approval marker at harness.generated/.approvals/<sid> survives apply unchanged", async () => {
+    writeManifest({
+      hooks: [
+        {
+          name: "h",
+          event: "SessionStart",
+          command: "/h.sh",
+          blocking: false,
+          budget_ms: 30000,
+        },
+      ],
+    });
+    const generatedDir = path.join(tmpHome, GENERATED_DIRNAME);
+    const markerPath = path.join(generatedDir, ".approvals", "sess-live");
+    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+    const markerBody = `${JSON.stringify(
+      { approvedAt: "2026-05-15T19:00:00Z", approvedBy: "test-operator" },
+      null,
+      2,
+    )}\n`;
+    fs.writeFileSync(markerPath, markerBody);
+
+    const r = await apply({ homeDir: tmpHome });
+    expect(r.outcome).toBe("applied");
+    expect(fs.existsSync(markerPath)).toBe(true);
+    expect(fs.readFileSync(markerPath, "utf8")).toBe(markerBody);
+  });
+
+  it("a subsequent (no-op) apply also leaves the marker intact", async () => {
+    writeManifest({
+      hooks: [
+        {
+          name: "h",
+          event: "SessionStart",
+          command: "/h.sh",
+          blocking: false,
+          budget_ms: 30000,
+        },
+      ],
+    });
+    await apply({ homeDir: tmpHome });
+    const generatedDir = path.join(tmpHome, GENERATED_DIRNAME);
+    const markerPath = path.join(generatedDir, ".approvals", "sess-live");
+    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+    const markerBody = `${JSON.stringify(
+      { approvedAt: "2026-05-15T19:00:00Z", approvedBy: "test-operator" },
+      null,
+      2,
+    )}\n`;
+    fs.writeFileSync(markerPath, markerBody);
+
+    const r2 = await apply({ homeDir: tmpHome });
+    expect(r2.outcome).toBe("no-changes");
+    expect(fs.readFileSync(markerPath, "utf8")).toBe(markerBody);
+  });
+
+  it(".pending-approval staging file is also preserved", async () => {
+    // Pinned alongside .approvals/ so a future "clean up harness.generated/"
+    // refactor cannot regress the staging file without flipping this test.
+    writeManifest({
+      hooks: [
+        {
+          name: "h",
+          event: "SessionStart",
+          command: "/h.sh",
+          blocking: false,
+          budget_ms: 30000,
+        },
+      ],
+    });
+    const stagingPath = path.join(tmpHome, GENERATED_DIRNAME, ".pending-approval");
+    fs.mkdirSync(path.dirname(stagingPath), { recursive: true });
+    fs.writeFileSync(stagingPath, "sess-staged\n");
+
+    await apply({ homeDir: tmpHome });
+    expect(fs.readFileSync(stagingPath, "utf8")).toBe("sess-staged\n");
+  });
+});
