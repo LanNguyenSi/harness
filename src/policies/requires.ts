@@ -114,6 +114,17 @@ function describeBound(c: NonNullable<Requires["count"]>): string {
  */
 export function buildRecordHint(requires: Requires, tag: string): string {
   const count = requires.count;
+  // count.max-only is a "too many" shape: the satisfying action is not
+  // recording but keeping the count at or below the bound. Recording
+  // more entries would deny harder, so the "record N entries..."
+  // phrasing the other shapes use is exactly wrong here. Branch to a
+  // bound-phrased hint (agent-tasks/aee9c085).
+  const onlyMax =
+    count?.max !== undefined && count.min === undefined && count.exact === undefined;
+  if (onlyMax) {
+    const windowPhrase = requires.within !== undefined ? ` within ${requires.within}` : "";
+    return `keep evidence-ledger entries containing \`${tag}\` at or below ${count.max}${windowPhrase}`;
+  }
   let countPhrase: string;
   if (count?.exact !== undefined) {
     countPhrase = `${count.exact} evidence-ledger entr${count.exact === 1 ? "y" : "ies"}`;
