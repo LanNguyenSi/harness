@@ -152,6 +152,8 @@ The harness-side PreToolUse blocker (Phase 6 #4) consults both: marker beats per
 
 This avoids the failure mode where one source goes stale relative to the other. It also means a solo `understanding-gate` user can adopt harness later without losing approval history.
 
+`harness apply` regeneration does NOT touch `harness.generated/.approvals/`. The apply path only writes its own known files into `harness.generated/`; sibling state (the approval marker and the `.pending-approval` staging file) survives a re-apply byte-for-byte. Pinned by `tests/cli/apply/apply.test.ts` "apply preserves sibling state under harness.generated/" so live sessions stay approved across re-applies.
+
 ## Adapter notes
 
 ### Claude Code (first-class target)

@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   - The ledger row is still written by `harness approve understanding` for audit / forensics. `harness audit` and the gate's diagnostic output still surface it, labelled `(no longer satisfies the gate)`. The Claude blocker and the Codex blocker share the same change.
   - **Operator action required after upgrade**: re-run `harness approve understanding` once in your active session; the file marker will write and the gate will pass. Sessions that had no live block (`.pending-approval` absent) need no action.
   - **Persisted JSON report path** (the `@lannguyensi/understanding-gate` package's fallback for solo users) is unchanged. The agent's Stop hook only ever writes `pending` reports; flipping to `approved` requires the operator-side rewrite in `harness approve`, which the agent has no path to forge.
+  - **`harness apply` preserves `.approvals/` across re-applies** (agent-tasks/bf8e1be8). Regression-pinned by new tests in `tests/cli/apply/apply.test.ts`; `.pending-approval` staging gets the same pin so a future "clean up harness.generated/" refactor cannot regress either file silently.
 
 ### Added
 
