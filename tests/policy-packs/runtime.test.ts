@@ -3,13 +3,17 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  approvalMarkerPathFor,
   approvedLedgerTagFor,
+  checkApprovalMarker,
   checkPersistedReport,
+  clearApprovalMarker,
   defaultReportsDir,
   findLatestReportForSession,
   listPersistedReports,
   REPORTS_DIR_ENV,
   reportsDirForManifest,
+  writeApprovalMarker,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 
 let tmp: string;
@@ -152,5 +156,85 @@ describe("checkPersistedReport", () => {
     const r = checkPersistedReport(tmp, "s1");
     expect(r.approved).toBe(false);
     expect(r.detail).toMatch(/no report matched session_id=s1/);
+  });
+});
+
+describe("approvalMarkerPathFor", () => {
+  it("composes the canonical marker path under <generatedDir>/.approvals/<sid>", () => {
+    expect(approvalMarkerPathFor("/g", "sess-1")).toBe("/g/.approvals/sess-1");
+  });
+});
+
+describe("writeApprovalMarker / checkApprovalMarker / clearApprovalMarker (agent-tasks/88ca4bb3)", () => {
+  it("a written marker is matched by the gate-side check", () => {
+    const filePath = writeApprovalMarker(tmp, "sess-1", {
+      approvedAt: "2026-05-15T20:00:00Z",
+      approvedBy: "test-operator",
+    });
+    expect(filePath).toBe(path.join(tmp, ".approvals", "sess-1"));
+    const r = checkApprovalMarker(tmp, "sess-1");
+    expect(r.matched).toBe(true);
+    expect(r.marker).toEqual({
+      approvedAt: "2026-05-15T20:00:00Z",
+      approvedBy: "test-operator",
+    });
+    expect(r.detail).toMatch(/approved at 2026-05-15T20:00:00Z by test-operator/);
+  });
+
+  it("missing marker returns matched:false with the path in the detail", () => {
+    const r = checkApprovalMarker(tmp, "sess-absent");
+    expect(r.matched).toBe(false);
+    expect(r.detail).toMatch(/no approval marker at/);
+    expect(r.detail).toMatch(/sess-absent/);
+  });
+
+  it("marker with corrupt JSON body still satisfies the gate by file existence", () => {
+    const markerPath = path.join(tmp, ".approvals", "sess-corrupt");
+    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+    fs.writeFileSync(markerPath, "{not-json");
+    const r = checkApprovalMarker(tmp, "sess-corrupt");
+    expect(r.matched).toBe(true);
+    expect(r.marker).toBeNull();
+    expect(r.detail).toMatch(/body unreadable/);
+  });
+
+  it("symlink at marker path is REJECTED, even pointing at a regular file (agent-tasks/d39f160e)", () => {
+    // Defense-in-depth: the agent has no Edit/Write/Bash path to plant
+    // a symlink under harness.generated/ today, but the gate's
+    // contract is to assume the agent is hostile. lstat + reject is
+    // the cheap insurance.
+    const realFile = path.join(tmp, "approved.json");
+    fs.writeFileSync(
+      realFile,
+      `${JSON.stringify({ approvedAt: "2026-05-15T20:00:00Z", approvedBy: "evil" })}\n`,
+    );
+    const markerDir = path.join(tmp, ".approvals");
+    fs.mkdirSync(markerDir, { recursive: true });
+    const markerPath = path.join(markerDir, "sess-symlink");
+    fs.symlinkSync(realFile, markerPath);
+    const r = checkApprovalMarker(tmp, "sess-symlink");
+    expect(r.matched).toBe(false);
+    expect(r.detail).toMatch(/symlink, refusing for safety/);
+    expect(r.marker).toBeNull();
+  });
+
+  it("non-file (e.g. directory) at marker path is rejected", () => {
+    fs.mkdirSync(path.join(tmp, ".approvals", "sess-dir"), { recursive: true });
+    const r = checkApprovalMarker(tmp, "sess-dir");
+    expect(r.matched).toBe(false);
+    expect(r.detail).toMatch(/not a regular file/);
+  });
+
+  it("clearApprovalMarker removes an existing marker; is a no-op when absent", () => {
+    writeApprovalMarker(tmp, "sess-1", {
+      approvedAt: "2026-05-15T20:00:00Z",
+      approvedBy: "test-operator",
+    });
+    expect(checkApprovalMarker(tmp, "sess-1").matched).toBe(true);
+    clearApprovalMarker(tmp, "sess-1");
+    expect(checkApprovalMarker(tmp, "sess-1").matched).toBe(false);
+    // No-op on already-missing.
+    clearApprovalMarker(tmp, "sess-1");
+    expect(checkApprovalMarker(tmp, "sess-1").matched).toBe(false);
   });
 });

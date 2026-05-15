@@ -285,11 +285,25 @@ export function checkApprovalMarker(generatedDir: string, sessionId: string): Ma
   const filePath = approvalMarkerPathFor(generatedDir, sessionId);
   let stat: fs.Stats;
   try {
-    stat = fs.statSync(filePath);
+    // lstatSync (NOT statSync): defense-in-depth against a symlink at
+    // the marker path pointing at an arbitrary target the agent
+    // controls. In today's threat model the agent has no Edit / Write
+    // / Bash path to plant such a symlink (the same PreToolUse hook
+    // gates all three), but the gate's contract is to assume the
+    // agent is hostile, so the lstat reject is cheap insurance
+    // (agent-tasks/d39f160e).
+    stat = fs.lstatSync(filePath);
   } catch {
     return {
       matched: false,
       detail: `no approval marker at ${filePath}`,
+      marker: null,
+    };
+  }
+  if (stat.isSymbolicLink()) {
+    return {
+      matched: false,
+      detail: `approval marker is a symlink, refusing for safety: ${filePath}`,
       marker: null,
     };
   }
