@@ -64,6 +64,8 @@ describe("runSessionStartPreflight", () => {
       wrote: true,
       repo: "widget-service",
       branch: "release/2.0",
+      sessionId: "sess-9",
+      sessionSource: "stdin",
     });
     // One fact carrying both tags — the requires evaluator substring-
     // matches, so this satisfies both `preflight:${REPO}` (within 1h)
@@ -100,7 +102,14 @@ describe("runSessionStartPreflight", () => {
         return { ok: true };
       },
     });
-    expect(result).toEqual({ exitCode: 0, wrote: true, repo: "detached-repo", branch: "" });
+    expect(result).toEqual({
+      exitCode: 0,
+      wrote: true,
+      repo: "detached-repo",
+      branch: "",
+      sessionId: "s",
+      sessionSource: "stdin",
+    });
     expect(writes).toEqual(["preflight:detached-repo ready:true confidence:0.90"]);
   });
 
@@ -178,6 +187,8 @@ describe("runSessionStartPreflight", () => {
       wrote: false,
       repo: "",
       branch: "",
+      sessionId: "default",
+      sessionSource: "default",
       reason: expect.stringContaining("not inside a git work tree"),
     });
     expect(errOut()).toContain("not inside a git work tree");
@@ -256,5 +267,90 @@ describe("runSessionStartPreflight", () => {
     });
     expect(result).toMatchObject({ exitCode: 0, wrote: false });
     expect(errOut()).toContain("grounding-mcp not declared");
+  });
+});
+
+describe("runSessionStartPreflight — session-id resolution (task 5e84191b)", () => {
+  it("--session flag overrides every other source (sessionSource=flag)", async () => {
+    const repo = makeRepoFixture("repo-flag", "main");
+    const { stream: err } = captureStream();
+    const writes: string[] = [];
+    const result = await runSessionStartPreflight({
+      // stdin carries a session_id but the explicit flag wins.
+      stdin: streamFrom(JSON.stringify({ session_id: "from-stdin", cwd: repo })),
+      stderr: err,
+      session: "from-flag",
+      runPreflight: readyPreflight(0.9),
+      writeLedger: async (args) => {
+        writes.push(args.sessionId);
+        return { ok: true };
+      },
+    });
+    expect(result.sessionId).toBe("from-flag");
+    expect(result.sessionSource).toBe("flag");
+    expect(writes).toEqual(["from-flag"]);
+  });
+
+  it("falls through to the transcript-discovery tier when stdin/env carry no id", async () => {
+    const repo = makeRepoFixture("repo-disc", "main");
+    const { stream: err } = captureStream();
+    const writes: string[] = [];
+    const result = await runSessionStartPreflight({
+      // No session_id in stdin event.
+      stdin: streamFrom(JSON.stringify({ cwd: repo })),
+      stderr: err,
+      runPreflight: readyPreflight(0.9),
+      // Inject the resolver so we don't depend on a real ~/.claude/projects/
+      // layout. With no explicit value, the production resolver would walk
+      // env → transcripts → default; the injected one returns a discovered id.
+      resolveSession: (explicit) =>
+        typeof explicit === "string" && explicit.length > 0
+          ? explicit
+          : "discovered-from-transcripts",
+      writeLedger: async (args) => {
+        writes.push(args.sessionId);
+        return { ok: true };
+      },
+    });
+    expect(result.sessionId).toBe("discovered-from-transcripts");
+    expect(result.sessionSource).toBe("transcript");
+    expect(writes).toEqual(["discovered-from-transcripts"]);
+  });
+
+  it("loud-warns to stderr when the resolved id is the literal 'default'", async () => {
+    const repo = makeRepoFixture("repo-default", "main");
+    const { stream: err, output: errOut } = captureStream();
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ cwd: repo })), // no session_id
+      stderr: err,
+      runPreflight: readyPreflight(0.9),
+      // Resolver returns the literal "default" — simulates a host with no
+      // env var and no Claude transcripts (rare, but possible: fresh box,
+      // scripted invocation, etc).
+      resolveSession: () => "default",
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.sessionId).toBe("default");
+    expect(result.sessionSource).toBe("default");
+    expect(result.wrote).toBe(true); // tag still landed
+    const text = errOut();
+    // Both the success-style "recorded" line AND the loud warning are
+    // present — that pair is the actionable signal the operator needs.
+    expect(text).toContain("recorded preflight:repo-default");
+    expect(text).toContain("WARNING: session resolved to the literal \"default\"");
+    expect(text).toMatch(/preflight-before-\*\s+gates query the real Claude Code session id/);
+  });
+
+  it("a stdin session_id keeps sessionSource=stdin (no warning)", async () => {
+    const repo = makeRepoFixture("repo-stdin", "main");
+    const { stream: err, output: errOut } = captureStream();
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "real-uuid", cwd: repo })),
+      stderr: err,
+      runPreflight: readyPreflight(0.9),
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.sessionSource).toBe("stdin");
+    expect(errOut()).not.toContain("WARNING");
   });
 });

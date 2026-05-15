@@ -21,10 +21,15 @@ import { execFile } from "node:child_process";
 import {
   addLedgerFact,
   resolveGitContext,
-  resolveSessionId,
 } from "../../runtime/index.js";
+import {
+  resolveReadSessionId,
+  type ResolveReadSessionOptions,
+} from "../../runtime/session-id.js";
 import type { Manifest, McpServer } from "../../schema/index.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
+
+const FALLBACK_SESSION = "default";
 
 const PREFLIGHT_BIN = "preflight";
 const DEFAULT_PREFLIGHT_TIMEOUT_MS = 25_000;
@@ -52,6 +57,12 @@ export interface SessionStartPreflightOptions extends LoaderOptions {
   stdin?: NodeJS.ReadableStream;
   /** Defaults to process.stderr. stdout is never written (SessionStart). */
   stderr?: NodeJS.WritableStream;
+  /**
+   * Explicit session id (overrides every other source). Wired to the
+   * `--session <id>` CLI flag for manual / scripted invocations where
+   * no SessionStart event JSON is being piped on stdin.
+   */
+  session?: string;
   /** `preflight` subprocess timeout in ms. */
   preflightTimeoutMs?: number;
   /** Per-call ledger timeout in ms. */
@@ -64,6 +75,13 @@ export interface SessionStartPreflightOptions extends LoaderOptions {
     content: string;
     source: string;
   }) => Promise<{ ok: boolean; reason?: string }>;
+  /**
+   * Inject the read-path session resolver (env + transcript discovery).
+   * Test seam — production uses `resolveReadSessionId` from
+   * `runtime/session-id` so we get the same precedence chain as
+   * `harness audit` and `harness explain --trace`.
+   */
+  resolveSession?: (explicit: string | undefined, opts: ResolveReadSessionOptions) => string;
 }
 
 export interface SessionStartPreflightResult {
@@ -75,6 +93,15 @@ export interface SessionStartPreflightResult {
   repo: string;
   /** Resolved branch (the `${BRANCH}` a tag is namespaced by; "" if detached). */
   branch: string;
+  /**
+   * Which tier the session id came from. Surfaced so the CLI can
+   * loud-warn when the resolved id is the literal `"default"` (a tag
+   * recorded under that id will not satisfy any `preflight-before-*`
+   * gate, which queries by the real Claude Code session id).
+   */
+  sessionSource: "flag" | "stdin" | "env" | "transcript" | "default";
+  /** Resolved session id. */
+  sessionId: string;
   /** Human-readable explanation of a non-write outcome, for diagnostics. */
   reason?: string;
 }
@@ -181,12 +208,16 @@ export async function runSessionStartPreflight(
     wrote: boolean,
     repo: string,
     branch: string,
+    sessionId: string,
+    sessionSource: SessionStartPreflightResult["sessionSource"],
     reason?: string,
   ): SessionStartPreflightResult => ({
     exitCode: 0,
     wrote,
     repo,
     branch,
+    sessionId,
+    sessionSource,
     ...(reason !== undefined && { reason }),
   });
 
@@ -196,7 +227,7 @@ export async function runSessionStartPreflight(
   } catch (err) {
     const reason = `malformed event JSON: ${(err as Error).message}`;
     note(reason);
-    return done(false, "", "", reason);
+    return done(false, "", "", FALLBACK_SESSION, "default", reason);
   }
 
   const cwd = typeof event.cwd === "string" && event.cwd.length > 0 ? event.cwd : process.cwd();
@@ -204,22 +235,48 @@ export async function runSessionStartPreflight(
   if (repo === "") {
     const reason = `cwd is not inside a git work tree (${cwd}); nothing to preflight`;
     note(reason);
-    return done(false, "", "", reason);
+    return done(false, "", "", FALLBACK_SESSION, "default", reason);
   }
-  const sessionId = resolveSessionId(
-    typeof event.session_id === "string" ? event.session_id : undefined,
-  );
+
+  // Session-id resolution chain. The hook-driven path (Claude Code feeds
+  // SessionStart event JSON on stdin) lands at tier "stdin" and is the
+  // common case. Manual invocations from an operator's `!`-shell — where
+  // there is no event JSON — fall back through env, then transcript
+  // discovery (same heuristic `harness audit` / `harness explain --trace`
+  // use), and only as a last resort to the literal `"default"`. Tags
+  // recorded under `"default"` will never satisfy a `preflight-before-*`
+  // gate, so we loud-warn rather than letting the success line read as
+  // if the producer worked.
+  const explicit =
+    typeof opts.session === "string" && opts.session.length > 0
+      ? opts.session
+      : typeof event.session_id === "string" && event.session_id.length > 0
+        ? event.session_id
+        : undefined;
+  const resolveSession = opts.resolveSession ?? resolveReadSessionId;
+  const sessionId = resolveSession(explicit, {});
+  const sessionSource: SessionStartPreflightResult["sessionSource"] =
+    typeof opts.session === "string" && opts.session.length > 0
+      ? "flag"
+      : typeof event.session_id === "string" && event.session_id.length > 0
+        ? "stdin"
+        : sessionId === FALLBACK_SESSION
+          ? "default"
+          : typeof process.env.CLAUDE_SESSION_ID === "string" &&
+              process.env.CLAUDE_SESSION_ID === sessionId
+            ? "env"
+            : "transcript";
 
   const runPreflight = opts.runPreflight ?? spawnPreflight;
   const preflight = await runPreflight(cwd, preflightTimeoutMs);
   if (!preflight.ok) {
     note(preflight.reason);
-    return done(false, repo, branch, preflight.reason);
+    return done(false, repo, branch, sessionId, sessionSource, preflight.reason);
   }
   if (preflight.json.ready !== true) {
     const reason = describeNotReady(preflight.json);
     note(`${reason} — leaving the preflight tag unwritten so the gate stays closed`);
-    return done(false, repo, branch, reason);
+    return done(false, repo, branch, sessionId, sessionSource, reason);
   }
 
   const confidence =
@@ -245,13 +302,13 @@ export async function runSessionStartPreflight(
     } catch (err) {
       const reason = `manifest load failed: ${(err as Error).message}`;
       note(reason);
-      return done(false, repo, branch, reason);
+      return done(false, repo, branch, sessionId, sessionSource, reason);
     }
     const server = findGroundingMcp(manifest);
     if (!server) {
       const reason = "grounding-mcp not declared in manifest; cannot record preflight tag";
       note(reason);
-      return done(false, repo, branch, reason);
+      return done(false, repo, branch, sessionId, sessionSource, reason);
     }
     const command = mcpCommandList(server);
     const env = server.env ?? undefined;
@@ -269,8 +326,18 @@ export async function runSessionStartPreflight(
   if (!result.ok) {
     const reason = `ledger write failed: ${result.reason ?? "unknown error"}`;
     note(reason);
-    return done(false, repo, branch, reason);
+    return done(false, repo, branch, sessionId, sessionSource, reason);
   }
   note(`recorded ${content} for session ${sessionId}`);
-  return done(true, repo, branch);
+  if (sessionSource === "default") {
+    // Loud-warn: the tag landed under the literal "default" session, which
+    // no `preflight-before-*` policy ever queries. The recorded line above
+    // can read as success; this second line is the actionable corrective.
+    note(
+      "WARNING: session resolved to the literal \"default\". preflight-before-* gates query " +
+        "the real Claude Code session id and will NOT see this tag. Pipe SessionStart event JSON " +
+        "on stdin, export $CLAUDE_SESSION_ID, or pass --session <id> for manual / scripted use.",
+    );
+  }
+  return done(true, repo, branch, sessionId, sessionSource);
 }

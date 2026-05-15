@@ -1385,17 +1385,26 @@ export function buildProgram(opts: RunOptions = {}): Command {
     )
     .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
+    .option(
+      "--session <id>",
+      "explicit session id (overrides stdin event + env). Use for manual / scripted invocations " +
+        "where no SessionStart event JSON is piped on stdin. Without it the resolver tries " +
+        "stdin event → $CLAUDE_SESSION_ID → newest Claude Code transcript → 'default' (which logs " +
+        "a loud warning since the literal 'default' session never satisfies a preflight-before-* gate).",
+    )
     .option("--timeout <ms>", "agent-preflight subprocess timeout in milliseconds (default 25000)")
     .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
     .action(async (options: {
       config?: string;
       project?: string;
+      session?: string;
       timeout?: string;
       ledgerTimeout?: string;
     }) => {
       const cliOpts: Parameters<typeof runSessionStartPreflight>[0] = {};
       if (options.config) cliOpts.configPath = options.config;
       if (options.project) cliOpts.project = options.project;
+      if (options.session) cliOpts.session = options.session;
       if (options.timeout) {
         const n = Number.parseInt(options.timeout, 10);
         if (Number.isFinite(n) && n > 0) cliOpts.preflightTimeoutMs = n;
