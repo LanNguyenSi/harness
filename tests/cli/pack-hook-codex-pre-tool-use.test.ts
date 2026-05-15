@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runPackHookCodexPreToolUseCli } from "../../src/cli/pack/hook-codex-pre-tool-use.js";
 import type { LedgerEntry } from "../../src/policies/index.js";
+import { writeApprovalMarker } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
 let tmp: string;
@@ -53,27 +54,52 @@ function writeReport(dir: string, name: string, body: Record<string, unknown>): 
 describe("pack hook codex-pre-tool-use blocker", () => {
   it("blocks with exit 2 + stderr reason when no source approves", async () => {
     const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
     const result = await runPackHookCodexPreToolUseCli({
       manifest: manifestWithPack(),
       stdin: readableFromString(event()),
       stderr: stderr.stream,
       reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
       ledgerQuery: async (): Promise<LedgerEntry[]> => [],
     });
     expect(result.blocked).toBe(true);
     expect(result.exitCode).toBe(2);
-    expect(stderr.read()).toMatch(/BLOCK: no ledger entry matched .+ no reports found/);
+    expect(stderr.read()).toMatch(/BLOCK: no approval marker for session sess-codex/);
     expect(stderr.read()).toMatch(/apply_patch/);
     expect(stderr.read()).toMatch(/harness approve understanding/);
   });
 
-  it("allows on exit 0 when ledger query matches the approved tag", async () => {
+  it("allows on exit 0 when an approval marker is present for the session (agent-tasks/88ca4bb3)", async () => {
     const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-codex", {
+      approvedAt: "2026-05-07T08:00:00Z",
+      approvedBy: "test-operator",
+    });
     const result = await runPackHookCodexPreToolUseCli({
       manifest: manifestWithPack(),
       stdin: readableFromString(event()),
       stderr: stderr.stream,
       reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.approvalCheck.source).toBe("marker");
+    expect(stderr.read()).toMatch(/approved via marker sess-codex/);
+  });
+
+  it("ledger entry ALONE does not approve (codex parity with claude blocker, agent-tasks/88ca4bb3)", async () => {
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event()),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
       ledgerQuery: async (sessionId): Promise<LedgerEntry[]> => [
         {
           id: "1",
@@ -82,10 +108,10 @@ describe("pack hook codex-pre-tool-use blocker", () => {
         },
       ],
     });
-    expect(result.blocked).toBe(false);
-    expect(result.exitCode).toBe(0);
-    expect(result.approvalCheck.source).toBe("ledger");
-    expect(stderr.read()).toMatch(/approved via ledger tag/);
+    expect(result.blocked).toBe(true);
+    expect(result.exitCode).toBe(2);
+    expect(result.approvalCheck.source).toBe("none");
+    expect(stderr.read()).toMatch(/no approval marker for session sess-codex/);
   });
 
   it("falls back to persisted report when ledger has no match", async () => {
@@ -156,6 +182,11 @@ describe("pack hook codex-pre-tool-use blocker", () => {
 
   it("tolerates the Codex-native `tool` synonym in the envelope", async () => {
     const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-codex", {
+      approvedAt: "2026-05-07T08:00:00Z",
+      approvedBy: "test-operator",
+    });
     const result = await runPackHookCodexPreToolUseCli({
       manifest: manifestWithPack(),
       stdin: readableFromString(
@@ -163,16 +194,11 @@ describe("pack hook codex-pre-tool-use blocker", () => {
       ),
       stderr: stderr.stream,
       reportsDir: path.join(tmp, "no-reports"),
-      ledgerQuery: async (sessionId): Promise<LedgerEntry[]> => [
-        {
-          id: "1",
-          content: `understanding-approved:${sessionId}`,
-          createdAt: "2026-05-07T08:00:00Z",
-        },
-      ],
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
     });
     expect(result.blocked).toBe(false);
-    expect(result.approvalCheck.source).toBe("ledger");
+    expect(result.approvalCheck.source).toBe("marker");
   });
 
   it("does NOT alias `event.id` to session_id (event-id is not session-id)", async () => {

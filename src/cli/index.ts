@@ -1124,10 +1124,18 @@ export function buildProgram(opts: RunOptions = {}): Command {
               ? " (from $CLAUDE_SESSION_ID)"
               : "";
         lines.push(`session: ${result.sessionId}${sourceNote}`);
-        if (result.ledger.ok) {
-          lines.push(`ledger:  ✓ wrote ${result.ledger.tag}`);
+        if (result.marker.ok) {
+          lines.push(`marker:  ✓ ${result.marker.filePath} (canonical gate signal)`);
         } else {
-          lines.push(`ledger:  ⚠ skipped (${result.ledger.reason ?? "unknown"})`);
+          lines.push(`marker:  ✗ FAILED (${result.marker.reason})`);
+          lines.push(
+            "  the gate WILL block the next tool call until the marker exists.",
+          );
+        }
+        if (result.ledger.ok) {
+          lines.push(`ledger:  ✓ wrote ${result.ledger.tag} (audit only)`);
+        } else {
+          lines.push(`ledger:  ⚠ skipped (${result.ledger.reason ?? "unknown"}) (audit only)`);
         }
         if (result.persistedReport.ok) {
           const prev = result.persistedReport.previousStatus ?? "<missing>";

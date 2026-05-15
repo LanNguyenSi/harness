@@ -23,6 +23,7 @@ import {
   defaultReportsDir,
   findLatestReportForSession,
   listPersistedReports,
+  writeApprovalMarker,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { addLedgerFact } from "../../runtime/ledger-add.js";
 import {
@@ -59,6 +60,14 @@ export interface ApproveUnderstandingResult {
    * which is the moment to sanity-check it against the live session.
    */
   sessionSource: "flag" | "env" | "pending-approval";
+  /**
+   * Canonical gate-satisfying signal as of agent-tasks/88ca4bb3.
+   * `ok: false` means the marker file could not be written (rare:
+   * fs permission, missing parent directory) and the gate will still
+   * block on the next tool call. The CLI surfaces this as a hard error
+   * to the operator so they don't think they approved when they didn't.
+   */
+  marker: { ok: true; filePath: string; approvedAt: string } | { ok: false; reason: string };
   ledger: { ok: boolean; tag: string; reason?: string };
   persistedReport:
     | { ok: true; filePath: string; previousStatus: string | null; approvedAt: string }
@@ -264,6 +273,26 @@ export async function approveUnderstanding(
     /* swallow; ledger write becomes a degraded-ok */
   }
 
+  // Write the canonical approval marker first. The gate consults this
+  // file (not the ledger) since agent-tasks/88ca4bb3 closed the self-
+  // approval backdoor: the agent has direct MCP access to the ledger,
+  // but no path to write a file under harness.generated/.
+  const approvedAtMarker = (opts.now ?? new Date()).toISOString();
+  const approvedByMarker = opts.approvedBy ?? DEFAULT_APPROVED_BY;
+  let markerResult: ApproveUnderstandingResult["marker"];
+  try {
+    const filePath = writeApprovalMarker(generatedDir, sessionId, {
+      approvedAt: approvedAtMarker,
+      approvedBy: approvedByMarker,
+    });
+    markerResult = { ok: true, filePath, approvedAt: approvedAtMarker };
+  } catch (err) {
+    markerResult = {
+      ok: false,
+      reason: `failed to write approval marker: ${(err as Error).message}`,
+    };
+  }
+
   const tag = approvedLedgerTagFor(sessionId);
   const ledgerResult = manifest
     ? await writeLedgerTag(manifest, sessionId, tag, opts)
@@ -323,17 +352,17 @@ export async function approveUnderstanding(
   }
 
   // Drop the staging file once we have consumed it AND the canonical
-  // (ledger) write landed, so a later arg-less `harness approve` cannot
-  // revive this id. A failed ledger write keeps the file so the operator
-  // can retry once grounding-mcp recovers; an id supplied by flag/env was
-  // never "ours" to clean up.
-  if (sessionSource === "pending-approval" && ledgerResult.ok) {
+  // (marker) write landed, so a later arg-less `harness approve` cannot
+  // revive this id. A failed marker write keeps the file so the operator
+  // can retry; an id supplied by flag/env was never "ours" to clean up.
+  if (sessionSource === "pending-approval" && markerResult.ok) {
     clearPendingApproval(generatedDir);
   }
 
   return {
     sessionId,
     sessionSource,
+    marker: markerResult,
     ledger: ledgerResult.ok
       ? { ok: true, tag }
       : { ok: false, tag, reason: ledgerResult.reason },
