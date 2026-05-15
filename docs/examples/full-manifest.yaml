@@ -1,5 +1,19 @@
 # Reference manifest covering every field in ARCHITECTURE.md Appendix A.
 # Used as the schema-parser fixture for parseManifest() acceptance tests.
+#
+# NOT a runnable config. This file is a schema-coverage example that
+# exercises every supported field, including install-specific hook
+# script paths under ~/.claude/hooks/. Running
+#   harness validate --config docs/examples/full-manifest.yaml
+# on an arbitrary machine WILL report a handful of "path does not exist"
+# errors for those hook scripts (and a few warnings for binaries that
+# only exist in a real install, e.g. git-batch, ledger). That is
+# expected: validate is doing its job, the manifest is doing its job,
+# the assets just only exist on a wired-up host. To explore policy
+# matching against this manifest without touching disk, use
+#   harness dry-run "<intent>" --tool <tool> --config docs/examples/full-manifest.yaml
+# (see README "Try it yourself"). Run `harness init --template full`
+# for a manifest tailored to your machine.
 version: 1
 
 grounding:
