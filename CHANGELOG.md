@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-05-15
+
+**Headline: `harness doctor` detects MCP, hook, and memory-router version drift end-to-end.** PR #125 added the `tools.mcp[]` `min_version` schema + production probe and shipped the load-bearing fix for the prior `tools.cli` no-op (`opts.versionProbe` defaulted to `null` outside tests). PR #126 extended the same contract to `hooks[]` and `memory.router`, lifting the numeric compare into a shared `src/io/version-compare.ts` so all three sites use one implementation. PRs #127 and #128 then activated the surface in FULL_TEMPLATE with three concrete floors so a fresh `harness init` ships the drift signal turned on.
+
+Operator note: a fresh `harness init --template full` now expects three published bins on PATH at the floor versions. Upgrade with `npm i -g @agent-tasks/mcp-bridge@latest @lannguyensi/grounding-mcp@latest @lannguyensi/memory-router@latest` if `harness doctor --shallow` reports an outdated entry.
+
+### Added
+
+- `tools.mcp[].min_version` + `tools.mcp[].version_command` (#125): same shape as the existing `tools.cli[]` fields. `harness doctor` runs a production version probe (`spawnSync` with a 5s timeout) and emits a `versions:` sub-block under `MCP servers`. Outdated entries warn (informational, not error: a stale MCP still works). Empty when no entry has `min_version`, to keep the report quiet by default.
+- `hooks[].min_version` + `hooks[].version_command` (#126): both must be present together. Hook commands are arbitrary shell strings (`harness session-start preflight`, `~/.claude/hooks/foo.sh`, npm bins, wrappers) so there is no useful default for `version_command`; `min_version` alone is rejected at validate time. Docs nudge operators to point `version_command` at the underlying source-of-truth binary, not at the wrapper.
+- `memory.router.min_version` + `memory.router.version_command` (#126): same default shape as `tools.mcp[]`. The check skips when the router is disabled or the executable cannot be located.
+- FULL_TEMPLATE pins (#127 + #128) for the three published bins:
+  - `agent-tasks-mcp-bridge`: `min_version: "0.6.0"` (PR agent-tasks/240 added the flag, PR agent-tasks/241 cut the release)
+  - `grounding-mcp`: `min_version: "0.2.0"` (PR agent-grounding/76 added the flag, PR agent-grounding/77 cut the release)
+  - `memory-router-user-prompt-submit`: `min_version: "0.3.0"` (PR agent-memory/40 added the flag, PR agent-memory/41 cut the release)
+
+### Changed
+
+- `cli/index.ts` now wires `defaultVersionProbe` into the doctor invocation (#125). Prior to this, even the existing `tools.cli[]` `min_version` check was a no-op in production because `opts.versionProbe ?? (() => null)` defaulted to null when no test injected a probe. The fix unblocks `tools.cli`, `tools.mcp`, hook, and memory-router probes alike.
+- `src/io/version-compare.ts` (#126): new leaf module exporting `compareNumericVersions`. Lifts the duplicated implementation out of `doctor/index.ts` so `memory.ts` can reuse it without re-creating the runtime/policies cycle that #123 just broke.
+
+### Schema
+
+- `McpServerSchema`, `HookSchema`, and `MemoryRouterSchema` all gain optional `min_version: z.string()` and `version_command: z.string()` fields, validated together where co-required.
+
 ## [0.12.0] - 2026-05-15
 
 **Headline: the understanding-gate stack is now operator-recoverable
