@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildRecordHint,
   evaluateRequires,
   RequiresEvaluationError,
   type LedgerEntry,
@@ -344,6 +345,64 @@ describe("evaluateRequires — composition (within + count)", () => {
     );
     expect(result.allowed).toBe(false);
     expect(result.reason).toBe("0 of required 1 entries found");
+  });
+});
+
+describe("buildRecordHint / recordHint plumbing (agent-tasks/32ed47cb)", () => {
+  it("bare ledger_tag: hint names the content the operator must log", () => {
+    expect(buildRecordHint({ ledger_tag: "review:42" }, "review:42")).toBe(
+      "record an evidence-ledger entry containing `review:42`",
+    );
+  });
+
+  it("with `within`: hint advertises the freshness window", () => {
+    expect(
+      buildRecordHint({ ledger_tag: "preflight:harness", within: "1h" }, "preflight:harness"),
+    ).toBe("record an evidence-ledger entry containing `preflight:harness` within 1h");
+  });
+
+  it("with `count.min`: hint pluralises the entry count", () => {
+    expect(
+      buildRecordHint(
+        { ledger_tag: "review:42", count: { min: 2 } },
+        "review:42",
+      ),
+    ).toBe("record 2 evidence-ledger entries containing `review:42`");
+  });
+
+  it("with `count.exact: 1`: hint uses singular `entry`", () => {
+    expect(
+      buildRecordHint({ ledger_tag: "x", count: { exact: 1 } }, "x"),
+    ).toBe("record 1 evidence-ledger entry containing `x`");
+  });
+
+  it("evaluateRequires surfaces the same hint on the deny path", () => {
+    const result = evaluateRequires({ ledger_tag: "review:42" }, [], { now: NOW });
+    expect(result.allowed).toBe(false);
+    expect(result.recordHint).toBe(
+      "record an evidence-ledger entry containing `review:42`",
+    );
+  });
+
+  it("evaluateRequires also carries the hint on the allow path so consumers can render the contract uniformly", () => {
+    const result = evaluateRequires(
+      { ledger_tag: "review:42" },
+      [entry({ id: "e1", content: "review:42:approved" })],
+      { now: NOW },
+    );
+    expect(result.allowed).toBe(true);
+    expect(result.recordHint).toBe(
+      "record an evidence-ledger entry containing `review:42`",
+    );
+  });
+
+  it("hint accepts the un-substituted tag template (explain non-trace path)", () => {
+    expect(
+      buildRecordHint(
+        { ledger_tag: "review:${PR_NUMBER}", within: "1h" },
+        "review:${PR_NUMBER}",
+      ),
+    ).toBe("record an evidence-ledger entry containing `review:${PR_NUMBER}` within 1h");
   });
 });
 

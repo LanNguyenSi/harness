@@ -37,6 +37,19 @@ describe("explain — happy path", () => {
     expect(parsed.name).toBe("dogfood-before-release");
     expect(parsed.requires.within).toBe("24h");
   });
+
+  it("non-trace projection includes a `toSatisfy` hint built from the policy's requires spec (agent-tasks/32ed47cb)", async () => {
+    const r = await explain("review-before-merge", {
+      configPath: FULL_MANIFEST,
+      json: true,
+    });
+    const parsed = JSON.parse(r.output);
+    // The reference manifest's review-before-merge requires the
+    // un-substituted `review:${PR_NUMBER}` tag; explain shows the
+    // contract, not a per-event instance, so the placeholder survives.
+    expect(parsed.toSatisfy).toMatch(/review:\$\{PR_NUMBER\}/);
+    expect(parsed.toSatisfy).toMatch(/evidence-ledger entry/);
+  });
 });
 
 describe("explain — error handling", () => {

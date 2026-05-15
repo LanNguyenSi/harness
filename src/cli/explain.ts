@@ -1,5 +1,6 @@
 import { stringify as stringifyYaml } from "yaml";
 import {
+  buildRecordHint,
   queryLedgerByTag,
   type LedgerEntry,
   type LedgerQueryResult,
@@ -55,6 +56,13 @@ interface TraceProjection {
   triggerMatched: { event: string; match?: string; bashMatch?: string };
   extract: Record<string, string>;
   requiresEval?: PolicyDecisionPayload["requiresEval"];
+  /**
+   * The recorded decision predates the recordHint field, so the trace
+   * synthesises it from the current manifest's `requires` spec for the
+   * same policy. Absent when the policy is no longer declared in the
+   * manifest (the trace already flags that case via `triggerMatched.event`).
+   */
+  toSatisfy?: string;
   ledgerQuery: { verb: "ledger_summary"; sessionId: string };
 }
 
@@ -164,6 +172,13 @@ export async function explain(
       description: policy.description,
       trigger: policy.trigger,
       requires: policy.requires,
+      // toSatisfy mirrors the deny-time hint surfaced by `harness policy
+      // intercept`, so a contributor reading the policy under `harness
+      // explain <policy>` sees the same contract a blocked operator
+      // sees in Claude Code. Built from the un-substituted ledger_tag
+      // template (e.g. `review:${PR_NUMBER}`) so it reads as the policy
+      // contract, not a specific event's instance.
+      toSatisfy: buildRecordHint(policy.requires, policy.requires.ledger_tag),
       hook: policy.hook,
       enforcement: policy.enforcement,
       note: "run with --trace to see the last evaluation's full decision trail",
@@ -218,6 +233,9 @@ function renderTrace(
     },
     extract: latest.payload.extractValues,
     ...(latest.payload.requiresEval && { requiresEval: latest.payload.requiresEval }),
+    ...(policy && {
+      toSatisfy: buildRecordHint(policy.requires, latest.payload.ledgerTag),
+    }),
     ledgerQuery: { verb: "ledger_summary", sessionId },
   };
 
