@@ -16,6 +16,7 @@ import {
   runCodexTargetChecks,
   type RunCodexCheckOptions,
 } from "./codex.js";
+import { scanForRogueLedgers, type RogueLedgerScanOptions } from "./rogue-ledger.js";
 import {
   isDoctorTarget,
   KNOWN_DOCTOR_TARGETS,
@@ -46,6 +47,12 @@ export interface DoctorOptions extends LoaderOptions {
   target?: DoctorTarget;
   /** Test-injection knobs forwarded to the codex target evaluator. */
   codexCheckOptions?: Partial<RunCodexCheckOptions>;
+  /**
+   * Test-injection knobs for the rogue-ledger scan. `homeDir` and `cwd`
+   * default to the runtime values resolved inside `doctor`; tests
+   * usually override both plus `fsInterface`.
+   */
+  rogueLedgerScanOptions?: Partial<RogueLedgerScanOptions>;
 }
 
 export { isDoctorTarget, KNOWN_DOCTOR_TARGETS };
@@ -445,6 +452,7 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
     errorCount += codexCounts.errorCount;
     warningCount += codexCounts.warningCount;
   }
+  warningCount += report.rogueLedgerDbs.length;
   return { errorCount, warningCount };
 }
 
@@ -501,6 +509,14 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const workflows = buildWorkflows(manifest);
   const manifestSec = manifestSection(manifest);
 
+  const rogueLedgerDbs = scanForRogueLedgers({
+    homeDir: opts.rogueLedgerScanOptions?.homeDir ?? home,
+    cwd: opts.rogueLedgerScanOptions?.cwd ?? process.cwd(),
+    ...(opts.rogueLedgerScanOptions?.fsInterface !== undefined
+      ? { fsInterface: opts.rogueLedgerScanOptions.fsInterface }
+      : {}),
+  });
+
   const partial: Omit<DoctorReport, "errorCount" | "warningCount"> = {
     manifestPath: resolved.base,
     manifestVersion: manifest.version,
@@ -512,6 +528,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     hooks,
     policies,
     workflows,
+    rogueLedgerDbs,
   };
   if (opts.target === "codex") {
     const manifestDir = path.dirname(resolved.base);
