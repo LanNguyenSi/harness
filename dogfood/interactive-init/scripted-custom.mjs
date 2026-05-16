@@ -61,6 +61,7 @@ for (const bin of [
   "agent-tasks-mcp-bridge",
   "grounding-mcp",
   "preflight",
+  "codebase-oracle",
 ]) {
   const p = path.join(fakeDeps, bin);
   fs.writeFileSync(p, "#!/bin/sh\n");
@@ -76,11 +77,16 @@ try {
       // packs, mcps, policies — full pick to exercise every composer branch.
       checkbox: [
         ["understanding-before-execution"],
-        ["agent-tasks", "grounding-mcp", "memory-router"],
+        // Full MCP surface incl. codebase-oracle (env-var warning expected).
+        ["agent-tasks", "grounding-mcp", "memory-router", "codebase-oracle"],
+        // All six reference policies.
         [
           "review-before-merge",
           "preflight-before-investigation",
           "review-subagent-before-pr-create",
+          "preflight-before-push",
+          "dogfood-before-release",
+          "two-reviewers-required",
         ],
         [], // wire-now multiselect — skip
       ],
@@ -120,9 +126,13 @@ try {
     "agent-tasks",
     "grounding-mcp",
     "memory-router-user-prompt-submit",
+    "codebase-oracle",
     "review-before-merge",
     "preflight-before-investigation",
     "review-subagent-before-pr-create",
+    "preflight-before-push",
+    "dogfood-before-release",
+    "two-reviewers-required",
   ]) {
     if (!content.includes(needle)) {
       console.error(`FAIL: composed manifest missing expected entry "${needle}"`);

@@ -41,17 +41,15 @@ The wizard is one of three ways to bootstrap a manifest:
 
 Custom is for power users who want a manifest narrower or wider than the named profiles. The wizard branches into three checkbox prompts:
 
-1. **Policy packs** — pre-checked: none (settings.json carries no pack signal today). v1 surface: `understanding-before-execution`.
-2. **MCP servers** — pre-checked from `detect()`: any MCP name found in `settings.json mcpServers` is ticked. v1 surface: `agent-tasks`, `grounding-mcp`, `memory-router` (note: `memory-router` lives under `memory.router`, not `tools.mcp[]`; the composer puts it in the right slot).
-3. **Reference policies** — pre-checked: none. v1 surface: `review-before-merge`, `preflight-before-investigation`, `review-subagent-before-pr-create`. Each policy carries its hook entry automatically.
+1. **Policy packs** — pre-checked: none (settings.json carries no pack signal today). Surface: `understanding-before-execution`.
+2. **MCP servers** — pre-checked from `detect()`: any MCP name found in `settings.json mcpServers` is ticked. Surface: `agent-tasks`, `grounding-mcp`, `memory-router` (wired under `memory.router`, not `tools.mcp[]`; the composer puts it in the right slot), and `codebase-oracle` (requires `ORACLE_SCAN_ROOT` + `OPENAI_API_KEY` env vars that the wizard does NOT prompt for; an advisory prints when ticked).
+3. **Reference policies** — pre-checked: none. Surface mirrors `--template full`: `review-before-merge`, `preflight-before-investigation`, `review-subagent-before-pr-create`, `preflight-before-push`, `dogfood-before-release`, `two-reviewers-required` (warn-level companion to review-before-merge with `count.min: 2`). Each policy carries its hook entry automatically; shared hook names (e.g. `require-review-evidence` for both `review-before-merge` and `two-reviewers-required`) are deduplicated.
 
 Acceptance:
 
 - **Empty selection** across all three prompts aborts the wizard with no write.
 - **A Custom selection** rejoins the shared tail (dependency check → memory dir → confirm → write → validate → wire-now multiselect), so write semantics are identical to the named profiles.
-- **Producer-coupling advisories** print to stderr when a selected policy has no producer for its ledger tag (e.g. `review-before-merge` selected without `agent-tasks`). These are warnings, not blockers; `harness validate` still passes.
-
-The v1 surface is intentionally a subset of `--template full`. Remaining packs (none today), MCPs (`codebase-oracle`), and policies (`dogfood-before-release`, `preflight-before-push`, `two-reviewers-required`) are tracked as follow-up; the composer is structured so adding them is a single-entry diff in `src/cli/init/composer.ts`.
+- **Producer-coupling advisories** print to stderr when a selected policy has no producer for its ledger tag (e.g. `dogfood-before-release` selected without `grounding-mcp` would block every `npm publish`). These are warnings, not blockers; `harness validate` still passes.
 
 ## Ctrl-C semantics
 
@@ -68,6 +66,7 @@ harness validate            # expect: no validation findings
 
 ## Limitations (will land later)
 
-- **Custom-profile surface coverage.** The v1 Custom composer ships a deliberate subset: 1 pack, 3 MCPs, 3 reference policies. Expanding the catalogue to cover the rest of `--template full` (and `codebase-oracle`, the `opencode` runtime pack) is a follow-up task.
+- **Custom-profile per-field editing.** Whole packs / MCPs / policies are pickable; field-level edits (e.g. tweaking `within:` windows, swapping a `match:` regex) still require hand-editing the YAML.
+- **`opencode` runtime pack.** Blocked on agent-tasks `f34eb233` (runtime adapter prerequisite); will surface as a disabled checkbox like the wire-now multiselect already does for the wiring step.
 - **Opencode runtime.** v1 covers Claude Code and Codex; the wizard surfaces `opencode` as a disabled checkbox until the runtime adapter task `f34eb233` lands.
 - **Cross-runtime apply lock state.** `harness apply` is single-runtime per invocation, so when the wizard wires both Claude Code and Codex in one run it calls `apply` twice; `harness.lock` reflects the last-applied runtime's artefacts. Drift detection on the first runtime's outputs is unreliable until you re-run `harness apply --runtime <name>` for that runtime. Tracked for a future single-call multi-runtime apply.
