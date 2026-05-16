@@ -69,21 +69,27 @@ export const PROFILE_DEPENDENCIES: Record<Exclude<ProfileChoice, "custom">, Prof
       description: "grounding-mcp MCP server",
     },
   ],
-  // Full inherits everything from Solo + Team, and adds the
-  // SessionStart preflight producer: the `git-preflight` hook shells out
-  // to `agent-preflight` (`preflight` binary) to write `preflight:${REPO}`
-  // to the ledger, which is what the `preflight-before-*` policies match.
-  //
-  // The Pandora-specific codebase-oracle MCP server is not in the
-  // default Full chain because it is not yet published under a
-  // non-colliding npm name (the top-level `codebase-oracle` package on
-  // the registry is an unrelated CLI). Operators who want it can
-  // `harness add mcp codebase-oracle` pointing at their local checkout.
+  // Full inherits everything from Solo + Team, and adds:
+  // - the SessionStart preflight producer: the `git-preflight` hook
+  //   shells out to `agent-preflight` (`preflight` binary) to write
+  //   `preflight:${REPO}` to the ledger, which is what the
+  //   `preflight-before-*` policies match.
+  // - the codebase-oracle MCP server: a RAG index over the operator's
+  //   local repos that other agents can query via `oracle_search` /
+  //   `oracle_query` instead of grepping. The Full template wires it
+  //   in via `command: [codebase-oracle, mcp]`; that bin is shipped by
+  //   the scoped npm package `@lannguyensi/codebase-oracle` (the
+  //   unscoped `codebase-oracle` on the registry is an unrelated CLI).
   full: [
     {
       binary: "preflight",
       npmPackage: "@lannguyensi/agent-preflight",
       description: "agent-preflight (SessionStart preflight producer)",
+    },
+    {
+      binary: "codebase-oracle",
+      npmPackage: "@lannguyensi/codebase-oracle",
+      description: "codebase-oracle (RAG MCP server)",
     },
   ],
 };

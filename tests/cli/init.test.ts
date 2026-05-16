@@ -65,12 +65,12 @@ describe("init — full template", () => {
     const mcpNames = parsed.tools?.mcp?.map((m) => m.name) ?? [];
     const hookNames = parsed.hooks?.map((h) => h.name) ?? [];
     const policyNames = parsed.policies?.map((p) => p.name) ?? [];
-    // MCP servers the Full default ships. codebase-oracle was removed
-    // because the npm name collides with an unrelated CLI; operators
-    // who want the Pandora MCP server add it back manually.
+    // MCP servers the Full default ships. codebase-oracle is back in
+    // the chain after the @lannguyensi npm scope rename + `mcp`
+    // subcommand wiring (codebase-oracle v0.6.1).
+    expect(mcpNames).toContain("codebase-oracle");
     expect(mcpNames).toContain("agent-tasks");
     expect(mcpNames).toContain("grounding-mcp");
-    expect(mcpNames).not.toContain("codebase-oracle");
     // Hooks: 5 PreToolUse policy gates route through the bundled
     // `harness policy intercept` engine, plus the `git-preflight`
     // SessionStart producer (`harness session-start preflight`), which
