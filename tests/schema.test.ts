@@ -59,6 +59,18 @@ describe("parseManifest — happy path", () => {
     expect(manifest.policy_packs[0]?.source).toBe("builtin");
     expect(manifest.policy_packs[0]?.enabled).toBe(true);
     expect(manifest.policy_packs[0]?.config).toEqual({ mode: "grill_me" });
+    // Producers (agent-tasks/3804b785): the three policies that ship
+    // with remediation hints today must carry an MCP path, since that
+    // is the ungated recovery route for Bash-lockout scenarios.
+    for (const policyName of [
+      "preflight-before-investigation",
+      "review-subagent-before-pr-create",
+      "preflight-before-push",
+    ]) {
+      const p = manifest.policies.find((x) => x.name === policyName);
+      expect(p?.producers, `${policyName} producers`).toBeDefined();
+      expect(p?.producers?.some((pr) => pr.kind === "mcp"), `${policyName} has mcp producer`).toBe(true);
+    }
   });
 
   it("applies defaults when optional sections are omitted", () => {
@@ -81,6 +93,54 @@ describe("parseManifest — happy path", () => {
       tools: { mcp: [{ name: "x", command: "node /tmp/x.js" }] },
     });
     expect(m.tools.mcp[0]?.command).toBe("node /tmp/x.js");
+  });
+
+  it("rejects a policy whose producers list has no mcp entry", () => {
+    // The MCP path is the ungated recovery route for Bash-lockout
+    // scenarios. A producers list that omits it would leave agents
+    // stuck. The schema's superRefine enforces at-least-one-mcp.
+    expect(() =>
+      parseManifest({
+        version: 1,
+        hooks: [{ name: "h", event: "PreToolUse", command: "/bin/true", blocking: false }],
+        policies: [
+          {
+            name: "p",
+            description: "d",
+            trigger: { event: "PreToolUse" },
+            requires: { ledger_tag: "x:${SESSION_ID}" },
+            hook: "h",
+            enforcement: "block",
+            producers: [
+              { kind: "bash", command: "harness do-thing", description: "the standard producer" },
+            ],
+          },
+        ],
+      }),
+    ).toThrow(/at least one producer with kind:mcp/);
+  });
+
+  it("accepts a policy with mixed-kind producers (bash + mcp)", () => {
+    const m = parseManifest({
+      version: 1,
+      hooks: [{ name: "h", event: "PreToolUse", command: "/bin/true", blocking: false }],
+      policies: [
+        {
+          name: "p",
+          description: "d",
+          trigger: { event: "PreToolUse" },
+          requires: { ledger_tag: "x:${SESSION_ID}" },
+          hook: "h",
+          enforcement: "block",
+          producers: [
+            { kind: "bash", command: "harness do-thing", description: "standard" },
+            { kind: "mcp", verb: "mcp__x__write", example: '{tag:"x:${SESSION_ID}"}', description: "ungated fallback" },
+          ],
+        },
+      ],
+    });
+    expect(m.policies[0]?.producers).toHaveLength(2);
+    expect(m.policies[0]?.producers?.[1]?.kind).toBe("mcp");
   });
 
   it("accepts ISO-8601 and shorthand within values", () => {

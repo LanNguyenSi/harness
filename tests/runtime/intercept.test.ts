@@ -113,6 +113,59 @@ describe("intercept — match + deny", () => {
   });
 });
 
+describe("intercept — deny with producer hints", () => {
+  it("appends rendered producers (with substituted vars) to the deny reason", async () => {
+    // The producers field is opt-in per policy. When present, the
+    // engine renders bash/mcp/ask hints with ${VAR} substituted
+    // against the same extract.values the ledger_tag resolved with
+    // (agent-tasks/3804b785).
+    const policyWithProducers: Policy = {
+      ...REVIEW_POLICY,
+      producers: [
+        {
+          kind: "mcp",
+          verb: "mcp__agent-grounding__ledger_add",
+          example: '{type:"fact", content:"review:${PR_NUMBER}"}',
+          description: "Persist the review verdict tagged with the PR number.",
+        },
+      ],
+    } as Policy;
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([policyWithProducers]),
+      event: MERGE_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    const reason = result.blockJson?.reason ?? "";
+    expect(reason).toContain("no matching ledger entry for tag `review:42`");
+    expect(reason).toContain("To satisfy: record an evidence-ledger entry");
+    expect(reason).toContain("To produce this tag:");
+    expect(reason).toContain("1. [mcp]  mcp__agent-grounding__ledger_add");
+    expect(reason).toContain('example={type:"fact", content:"review:42"}');
+    expect(reason).toContain("Persist the review verdict tagged with the PR number.");
+    // Lock the assembled order: <policyName>: <reason>. <hintSuffix>
+    // <producersBlock>. Structured consumers (or human readers
+    // skimming) rely on the hint coming before the producer list.
+    expect(reason.indexOf("To satisfy:")).toBeLessThan(reason.indexOf("To produce this tag:"));
+  });
+
+  it("legacy neutral envelope is preserved when policy has no producers", async () => {
+    // Backwards-compat: a policy without `producers:` keeps the
+    // existing deny shape (recordHint only, no producer block).
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([REVIEW_POLICY]),
+      event: MERGE_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.blockJson?.reason).not.toContain("To produce this tag:");
+  });
+});
+
 describe("intercept — non-PreToolUse deny shape", () => {
   it("omits hookSpecificOutput for non-PreToolUse events while still blocking", async () => {
     const promptPolicy: Policy = {

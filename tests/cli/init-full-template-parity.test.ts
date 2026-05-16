@@ -55,6 +55,11 @@ type LoadBearingPolicy = {
   countMax: number | undefined;
   enforcement: string;
   hook: string;
+  // Producers (agent-tasks/3804b785): the structured remediation hints
+  // appended to a deny envelope. Parity-pinned so a policy that declares
+  // producers in one manifest must declare matching producers in the
+  // other — otherwise the documented recovery path silently drifts.
+  producers: Manifest["policies"][number]["producers"];
 };
 
 function loadBearing(p: Manifest["policies"][number]): LoadBearingPolicy {
@@ -72,6 +77,7 @@ function loadBearing(p: Manifest["policies"][number]): LoadBearingPolicy {
     countMax: p.requires.count?.max ?? undefined,
     enforcement: p.enforcement,
     hook: p.hook,
+    producers: p.producers,
   };
 }
 

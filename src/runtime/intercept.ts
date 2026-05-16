@@ -18,6 +18,7 @@ import {
   type LedgerQueryResult,
   type RequiresEvaluation,
 } from "../policies/index.js";
+import { renderProducers } from "../policies/producers.js";
 import type { Manifest, Policy } from "../schema/index.js";
 import { POLICY_DECISION_TYPE } from "./ledger-record.js";
 import { resolveSessionId } from "./session-id.js";
@@ -297,11 +298,24 @@ export async function intercept(
     // The hint is content + window only; it does not prescribe a
     // recording verb so the deny path stays neutral on producer (see
     // agent-tasks/88ca4bb3 for why "use mcp__..." would be the wrong
-    // suggestion).
+    // suggestion when the engine is the source of that suggestion).
     const hintSuffix = blocking.recordHint
       ? ` To satisfy: ${blocking.recordHint} (session \`${sessionId}\`).`
       : "";
-    const reasonText = `${blocking.policyName}: ${blocking.reason}.${hintSuffix}`;
+    // Opt-in producer block: when the policy declares `producers:` in
+    // the manifest, render the structured remediation list (bash / mcp
+    // / ask recipes) with ${VAR} placeholders substituted against the
+    // same extract.values the ledger_tag was resolved with. Schema
+    // validation guarantees at least one `mcp` producer per declared
+    // list, so an agent stuck in a Bash lockout always has an ungated
+    // recovery path. Policies without `producers:` get the legacy
+    // neutral deny envelope unchanged (agent-tasks/3804b785).
+    const blockingPolicy = matching.find((p) => p.name === blocking.policyName);
+    const producersBlock = renderProducers(
+      blockingPolicy?.producers,
+      blocking.extractValues,
+    );
+    const reasonText = `${blocking.policyName}: ${blocking.reason}.${hintSuffix}${producersBlock}`;
     const block: ClaudeDenyJson = {
       decision: "block",
       reason: reasonText,

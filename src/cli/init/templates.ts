@@ -235,6 +235,14 @@ policies:
       within: 1h
     hook: require-preflight-evidence
     enforcement: block
+    producers:
+      - kind: bash
+        command: harness session-start preflight
+        description: Runs agent-preflight against the current cwd; on ready:true, records preflight:\${REPO} to the ledger. Standard producer.
+      - kind: mcp
+        verb: mcp__agent-grounding__ledger_add
+        example: '{type:"fact", content:"preflight:\${REPO}", source:"manual"}'
+        description: Direct ledger write. Use when the Bash hook is locked down (e.g. understanding-gate active) or when the standard producer is unavailable.
 
   - name: review-subagent-before-pr-create
     description: Block agent-tasks PR creation unless a review-subagent ledger entry tagged for this task already exists. Forces the rigorous review BEFORE the PR opens, not after.
@@ -247,6 +255,11 @@ policies:
       ledger_tag: "review-subagent:\${TASK_ID}"
     hook: require-review-subagent-evidence
     enforcement: block
+    producers:
+      - kind: mcp
+        verb: mcp__agent-grounding__ledger_add
+        example: '{type:"fact", content:"review-subagent:\${TASK_ID} — <verdict + key findings + nits>", source:"Agent(general-purpose) review"}'
+        description: After running a review subagent against the staged diff, persist its verdict + load-bearing findings as a ledger entry tagged with the task UUID. The content should be self-contained enough to audit later without re-reading the chat.
 
   - name: preflight-before-push
     description: Block git push unless a fresh preflight ledger entry exists for the current branch. Catches the stale-checkout class of incident at the last reversible step.
@@ -259,6 +272,14 @@ policies:
       within: 10m
     hook: require-preflight-push-evidence
     enforcement: block
+    producers:
+      - kind: bash
+        command: harness session-start preflight
+        description: Runs agent-preflight against the current cwd; on ready:true, records preflight:\${BRANCH} to the ledger. Standard producer.
+      - kind: mcp
+        verb: mcp__agent-grounding__ledger_add
+        example: '{type:"fact", content:"preflight:\${BRANCH} — <summary of what is on the branch + smoke results>", source:"manual"}'
+        description: Direct ledger write. The branch is the WIP review surface; the content should summarise what is staged + the smoke evidence so a reviewer can audit later without re-reading the chat.
 
 # Full inherits the Solo/Team understanding-gate stack: the Stop hook
 # persists each Understanding Report and the PreToolUse pre-tool-use
