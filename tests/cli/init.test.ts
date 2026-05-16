@@ -92,6 +92,26 @@ describe("init — full template", () => {
     expect(policyNames).toContain("preflight-before-push");
   });
 
+  it("codebase-oracle entry exposes ORACLE_SCAN_ROOT in its env block", async () => {
+    // Locks the wizard-discoverability contract added in
+    // agent-tasks/89c39e33: a fresh `harness init --template full`
+    // user must SEE the required env in the manifest, not discover it
+    // by crashing the MCP server on first call. A future no-env
+    // refactor or accidental wipe should fail this assertion loudly.
+    // OPENAI_API_KEY is intentionally NOT pinned: it inherits from
+    // the operator's shell, and setting it (even empty) here would
+    // shadow what they already exported.
+    await init({ homeDir: tmpHome, template: "full" });
+    const yaml = fs.readFileSync(manifestPath, "utf8");
+    const parsed = parseYaml(yaml) as {
+      tools?: { mcp?: { name: string; env?: Record<string, string> }[] };
+    };
+    const oracle = parsed.tools?.mcp?.find((m) => m.name === "codebase-oracle");
+    expect(oracle).toBeDefined();
+    expect(oracle?.env).toBeDefined();
+    expect(Object.keys(oracle?.env ?? {})).toContain("ORACLE_SCAN_ROOT");
+  });
+
   it("the full template parses as a schema-valid manifest", async () => {
     await init({ homeDir: tmpHome, template: "full" });
     // Schema-level only: full-template paths reference the developer machine

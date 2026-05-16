@@ -52,16 +52,32 @@ tools:
   mcp:
     - name: codebase-oracle
       # Published bin from \`@lannguyensi/codebase-oracle\`. The CLI's
-      # \`mcp\` subcommand starts the MCP server over stdio. Set
-      # \`ORACLE_SCAN_ROOT\` (env) to the directory holding your git
-      # repos and \`OPENAI_API_KEY\` for the default embedding provider;
-      # see https://github.com/LanNguyenSi/codebase-oracle for other
-      # providers. \`min_version\` floor: 0.6.1 is the first scoped
-      # release with the \`mcp\` subcommand wired up (the 0.6.0 publish
-      # attempt was rejected by sigstore for an unrelated repository.url
-      # issue and never reached the registry).
+      # \`mcp\` subcommand starts the MCP server over stdio. The two env
+      # vars below are REQUIRED: the server crashes at startup if
+      # \`ORACLE_SCAN_ROOT\` is unset, and the default embedding lane
+      # needs \`OPENAI_API_KEY\` (switch to Ollama or an OpenAI-compatible
+      # provider per https://github.com/LanNguyenSi/codebase-oracle/blob/master/docs/configuration.md).
+      # \`min_version\` floor: 0.6.1 is the first scoped release with
+      # the \`mcp\` subcommand wired up (the 0.6.0 publish attempt was
+      # rejected by sigstore for a repository.url issue and never
+      # reached the registry).
       command: [codebase-oracle, mcp]
       min_version: "0.6.1"
+      # Also required: OPENAI_API_KEY in the spawning shell, unless you
+      # configure an alternate provider via ORACLE_LLM_PROVIDER (see
+      # codebase-oracle docs/configuration.md). OPENAI_API_KEY is NOT
+      # set in this env block on purpose: an empty value here would
+      # shadow whatever the operator already exported in their shell
+      # and yield a confusing 401 instead of inheriting cleanly.
+      env:
+        # REQUIRED: absolute path to the parent directory holding your
+        # git repos. Without this the MCP server fails its first call
+        # with a Zod error on \`scanRoot\`. Use an absolute path: a
+        # literal \`~/...\` is not shell-expanded by the MCP env and
+        # scatters a rogue \`./~/\` directory at cwd (the same
+        # agent-tasks/42d224a6 incident that the grounding-mcp comment
+        # above warns about). Resolve before setting, e.g. /home/you/git.
+        ORACLE_SCAN_ROOT: ""
       health:
         verb: oracle_list_repos
         timeout_ms: 5000
