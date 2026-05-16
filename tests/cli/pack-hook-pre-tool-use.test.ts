@@ -253,6 +253,94 @@ describe("pack hook pre-tool-use blocker", () => {
     expect(stderr.read()).toMatch(/BLOCK/);
   });
 
+  it("renders config.producers into the deny envelope (agent-tasks/25bced52)", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    // Manifest that exercises the config.producers extension. The
+    // engine validates at-least-one-ask and substitutes ${SESSION_ID}.
+    const manifest = parseManifest({
+      version: 1,
+      policy_packs: [
+        {
+          name: "understanding-before-execution",
+          enabled: true,
+          config: {
+            mode: "grill_me",
+            producers: [
+              {
+                kind: "ask",
+                command: "harness approve understanding",
+                description: "Bare command. Operator approval IS the gate satisfaction.",
+              },
+              {
+                kind: "bash",
+                command: "harness approve understanding",
+                description: "From un-hooked terminal. Writes marker at .approvals/${SESSION_ID}.",
+              },
+            ],
+          },
+        },
+      ],
+    });
+    const result = await runPackHookPreToolUseCli({
+      manifest,
+      stdin: readableFromString(event()),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    const decision = JSON.parse(stdout.read().trim()) as { reason: string };
+    expect(decision.reason).toMatch(/Understanding Gate/);
+    expect(decision.reason).toMatch(/harness approve understanding/);
+    // New: producer block appended with substituted ${SESSION_ID}.
+    expect(decision.reason).toContain("To produce this tag:");
+    expect(decision.reason).toContain("1. [ask]  `harness approve understanding`");
+    expect(decision.reason).toContain("2. [bash] `harness approve understanding`");
+    expect(decision.reason).toContain(".approvals/sess-1");
+    // Suffix comes BEFORE producer block.
+    expect(decision.reason.indexOf("Run `harness approve")).toBeLessThan(
+      decision.reason.indexOf("To produce this tag:"),
+    );
+  });
+
+  it("rejects malformed config.producers and falls back to legacy envelope", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    // producers: bash-only (no ask) violates the at-least-one-ask
+    // constraint for the understanding-gate. The hook should log the
+    // rejection to stderr and emit the legacy deny envelope without
+    // the producer block.
+    const manifest = parseManifest({
+      version: 1,
+      policy_packs: [
+        {
+          name: "understanding-before-execution",
+          enabled: true,
+          config: {
+            mode: "grill_me",
+            producers: [
+              { kind: "bash", command: "harness approve understanding", description: "bash only" },
+            ],
+          },
+        },
+      ],
+    });
+    const result = await runPackHookPreToolUseCli({
+      manifest,
+      stdin: readableFromString(event()),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    const decision = JSON.parse(stdout.read().trim()) as { reason: string };
+    expect(decision.reason).not.toContain("To produce this tag:");
+    expect(stderr.read()).toMatch(/config\.producers ignored/);
+  });
+
   it("treats a degraded ledger as no-match (still falls through to report)", async () => {
     const reportsDir = path.join(tmp, "reports");
     writeReport(reportsDir, "rpt.json", {

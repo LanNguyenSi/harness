@@ -25,6 +25,7 @@ import {
   queryLedgerByTag,
   type LedgerEntry,
 } from "../../policies/index.js";
+import { renderProducers } from "../../policies/producers.js";
 import {
   checkApprovalMarker,
   checkPersistedReport,
@@ -36,7 +37,13 @@ import {
   resolveGeneratedDir,
   writePendingApproval,
 } from "../../runtime/pending-approval.js";
-import type { Manifest, McpServer } from "../../schema/index.js";
+import {
+  ProducerSchema,
+  type Manifest,
+  type McpServer,
+  type Producer,
+} from "../../schema/index.js";
+import { z } from "zod";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 
 const PACK_NAME = "understanding-before-execution";
@@ -106,8 +113,52 @@ function findGroundingMcp(manifest: Manifest): McpServer | null {
 // PreToolUse (the pack contributes only a PreToolUse hook), so the
 // envelope is unconditional here — no event-kind branch like
 // runtime/intercept.ts needs.
-function blockJson(toolName: string, reason: string): string {
-  const reasonText = `Understanding Gate: ${reason}. Tool: ${toolName}. Run \`harness approve understanding\` once you have produced and confirmed an Understanding Report.`;
+// Producers list from the pack's config (agent-tasks/25bced52). Same
+// shape as the policy engine's `producers:` field, surfaced through the
+// understanding-gate's separate deny path. The constraint differs from
+// the policy engine: here we require at-least-one `ask` (the canonical
+// unblock surface) rather than at-least-one `mcp`, because post-v0.14.0
+// the gate signal is a filesystem marker and the mcp ledger_add path no
+// longer satisfies the gate. Only the operator-approval (`ask`) or a
+// shell from an un-hooked terminal can write the marker.
+const ProducersConfigSchema = z
+  .array(ProducerSchema)
+  .min(1)
+  .refine(
+    (arr) => arr.some((p) => p.kind === "ask"),
+    "understanding-gate config.producers must include at least one kind:ask entry (the canonical unblock surface)",
+  );
+
+function parseConfigProducers(
+  raw: unknown,
+  stderr: NodeJS.WritableStream,
+): Producer[] | undefined {
+  if (raw === undefined) return undefined;
+  const result = ProducersConfigSchema.safeParse(raw);
+  if (!result.success) {
+    stderr.write(
+      `harness pack hook: config.producers ignored (${result.error.issues
+        .map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`)
+        .join("; ")})\n`,
+    );
+    return undefined;
+  }
+  return result.data;
+}
+
+function blockJson(
+  toolName: string,
+  reason: string,
+  producers: Producer[] | undefined,
+  sessionId: string,
+): string {
+  // Legacy suffix kept unchanged so existing operators / docs that quote
+  // the old surface still find the recognizable string. The producers
+  // block (when configured) appends AFTER, so a reader's eye lands on
+  // the structured recipe last.
+  const suffix = `Run \`harness approve understanding\` once you have produced and confirmed an Understanding Report.`;
+  const producersBlock = renderProducers(producers, { SESSION_ID: sessionId });
+  const reasonText = `Understanding Gate: ${reason}. Tool: ${toolName}. ${suffix}${producersBlock}`;
   return JSON.stringify({
     decision: "block",
     reason: reasonText,
@@ -374,7 +425,13 @@ export async function runPackHookPreToolUseCli(
 
   const diagnostic = `harness pack hook: BLOCK — ${reason}`;
   stderr.write(`${diagnostic}\n`);
-  stdout.write(`${blockJson(toolName, "no approved Understanding Report for this session")}\n`);
+  const configProducers = parseConfigProducers(
+    (declared.config as Record<string, unknown>)["producers"],
+    stderr,
+  );
+  stdout.write(
+    `${blockJson(toolName, "no approved Understanding Report for this session", configProducers, sessionId)}\n`,
+  );
   return {
     exitCode: 0,
     blocked: true,
