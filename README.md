@@ -305,7 +305,9 @@ conversation is the origin of this repo.
   local preflight validator; the canonical implementation of
   preflight-hook content harness wires.
 - [`codebase-oracle`](https://github.com/LanNguyenSi/codebase-oracle):
-  one of the MCP surfaces being registered.
+  an opt-in MCP surface for multi-repo RAG search. Not in the Full
+  default; operators wire it via `harness add mcp codebase-oracle
+  --command codebase-oracle,mcp`.
 - [`agent-dx`](https://github.com/LanNguyenSi/agent-dx): ships
   `git-batch-cli`, a day-to-day tool whose inventory appears in
   `harness describe`.
