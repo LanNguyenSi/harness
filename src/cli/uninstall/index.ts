@@ -61,9 +61,26 @@ const MANIFEST_BASENAME = "harness.yaml";
 const LOCK_BASENAME = "harness.lock";
 const SETTINGS_BASENAME = "settings.json";
 const PRE_HARNESS_BACKUP_PREFIX = "settings.json.pre-harness-";
-/** MCP servers harness installs by default when no manifest can be read. */
-const DEFAULT_OWNED_MCP_SERVERS = ["grounding-mcp"] as const;
-/** Prefixes a hook command must start with for the group to count as harness-owned. */
+/**
+ * MCP servers harness wires by default across its bundled templates
+ * (see `src/cli/init/templates.ts` + `src/cli/init/composer.ts`). Used
+ * as the fallback ownership set when the manifest has been deleted
+ * out-of-band and we can't enumerate `tools.mcp[].name`. Widening this
+ * list catches the same entries the templates planted; narrowing it
+ * would leave them stranded after manifest-less uninstall.
+ */
+const DEFAULT_OWNED_MCP_SERVERS = [
+  "agent-tasks",
+  "codebase-oracle",
+  "grounding-mcp",
+] as const;
+/**
+ * Prefixes a hook command must start with for the group to count as
+ * harness-owned. The bundled templates only ever emit `harness ...`
+ * plain commands (resolved via PATH); operators who hand-wired hooks
+ * with an absolute path to `dist/cli/main.js` or a non-PATH binary
+ * will NOT be matched here and must clean those groups themselves.
+ */
 const HARNESS_COMMAND_PREFIXES = ["harness ", "npx @lannguyensi/harness "] as const;
 
 export class UninstallError extends Error {
@@ -569,7 +586,6 @@ function writeSettingsWithRemovals(
     settingsAfterSha256: afterSha,
     removedHookGroups,
     removedMcpServers,
-    removedFiles: [],
   };
 
   // Snapshot lands BEFORE the live rewrite (same ordering rationale as
@@ -626,7 +642,6 @@ function writeRestoreSnapshot(
     settingsAfterSha256: afterSha,
     removedHookGroups,
     removedMcpServers,
-    removedFiles: [],
     restoredFrom: restoreSource,
   };
 

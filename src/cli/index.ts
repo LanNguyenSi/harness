@@ -1550,10 +1550,11 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .description(
       "Clean teardown of a harness installation. Inventories harness-owned " +
         "entries in ~/.claude/ (manifest, lock, harness.generated/, hook groups " +
-        "and mcpServers in settings.json, settings.json.pre-harness-<TS> backups) " +
-        "and prints them. With --apply, removes them after writing a reversible " +
-        "settings.json backup + snapshot. With --restore-from <path>, atomically " +
-        "overwrites settings.json from that backup (typically a settings.json.pre-harness-<TS> file).",
+        "and mcpServers in settings.json) and prints them. With --apply, removes " +
+        "them after writing a reversible settings.json backup + snapshot. " +
+        "settings.json.pre-harness-<TS> backups are listed but never deleted, " +
+        "so the operator can hand them to --restore-from <path> (atomic restore " +
+        "from that file) or `rm` them manually.",
     )
     .option("--apply", "execute the teardown (default: dry-run listing only)")
     .option(

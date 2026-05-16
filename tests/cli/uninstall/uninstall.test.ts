@@ -61,7 +61,7 @@ describe("uninstall — inventory (no --apply)", () => {
       },
       mcpServers: {
         "grounding-mcp": { command: "node", args: ["./grounding/dist/server.js"] },
-        "agent-tasks": { command: "node", args: ["./agent-tasks/server.js"] },
+        "foreign-mcp": { command: "node", args: ["./foreign/server.js"] },
       },
     });
 
@@ -78,7 +78,7 @@ describe("uninstall — inventory (no --apply)", () => {
       "PreToolUse[1]",
       "SessionStart[0]",
     ]);
-    // grounding-mcp is owned by the default allowlist; agent-tasks is foreign.
+    // grounding-mcp is owned by the default allowlist; foreign-mcp is foreign.
     expect(r.inventory.mcpServers).toEqual(["grounding-mcp"]);
 
     // No new files on disk besides what we set up.
@@ -117,6 +117,27 @@ describe("uninstall — inventory (no --apply)", () => {
     if (r.mode !== "list") throw new Error("expected list");
     expect(r.inventory.hookGroups).toEqual([]);
     expect(r.inventory.warnings.join("\n")).toMatch(/mixed group/);
+  });
+
+  it("falls back to the bundled-template allowlist when the manifest is gone", () => {
+    // No manifest on disk. uninstall must still recognise the MCP names
+    // the bundled templates wire by default (agent-tasks, codebase-oracle,
+    // grounding-mcp), else a manifest-less uninstall silently strands them.
+    writeSettings({
+      mcpServers: {
+        "agent-tasks": { command: "a" },
+        "codebase-oracle": { command: "c" },
+        "grounding-mcp": { command: "g" },
+        "foreign": { command: "f" },
+      },
+    });
+    const r = uninstall({ homeDir, settingsPath });
+    if (r.mode !== "list") throw new Error("expected list");
+    expect(r.inventory.mcpServers.sort()).toEqual([
+      "agent-tasks",
+      "codebase-oracle",
+      "grounding-mcp",
+    ]);
   });
 
   it("picks up manifest-declared MCP names beyond the default allowlist", () => {

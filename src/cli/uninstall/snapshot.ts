@@ -53,8 +53,6 @@ export interface UninstallSnapshot {
   removedHookGroups: RemovedHookGroup[];
   /** Removed mcpServers entries, sorted by name. */
   removedMcpServers: RemovedMcpServer[];
-  /** Paths of harness-owned files unlinked from disk. */
-  removedFiles: string[];
 }
 
 export function sha256Hex(input: string | Buffer): string {
