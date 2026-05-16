@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { isBuiltinPackName } from "../../policy-packs/index.js";
 import { parsePackSource } from "../../policy-packs/source.js";
+import { expandHome } from "../../runtime/expand-home.js";
 import type { Manifest } from "../../schema/index.js";
 import type { Diagnostic } from "./types.js";
 
@@ -24,12 +25,6 @@ const DEFAULT_RUNTIME_BUILTINS = [
   "Glob",
   "Grep",
 ];
-
-function expandHome(p: string, home: string): string {
-  if (p === "~") return home;
-  if (p.startsWith("~/")) return path.join(home, p.slice(2));
-  return p;
-}
 
 function isRootedPath(p: string): boolean {
   return path.isAbsolute(p) || p === "~" || p.startsWith("~/");
