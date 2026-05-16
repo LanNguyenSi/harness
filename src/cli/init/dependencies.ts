@@ -30,12 +30,22 @@ import type { ProfileChoice } from "./interactive.js";
  * we list them all so that a partial install still reads as "complete"
  * for whichever binaries we depend on (e.g. understanding-gate ships
  * three hook adapters; the manifest only wires two of them).
+ *
+ * `minVersion` is informational only today (rendered in the wizard's
+ * dependency table next to the package name) so operators see the
+ * floor a feature depends on. The wizard does NOT yet probe the
+ * installed bin's version, so a stale install proceeds silently;
+ * upgrade hint is on the operator. Adding actual enforcement is a
+ * separate task (mirrors the MCP `min_version` doctor probe pattern
+ * already wired in FULL_TEMPLATE for MCP entries).
  */
 export interface ProfileDependency {
   binary: string;
   npmPackage: string;
   /** Short label rendered in the wizard's dependency table. */
   description: string;
+  /** Optional floor, displayed as `pkg@x.y.z+`. Informational only. */
+  minVersion?: string;
 }
 
 export const PROFILE_DEPENDENCIES: Record<Exclude<ProfileChoice, "custom">, ProfileDependency[]> = {
@@ -44,16 +54,24 @@ export const PROFILE_DEPENDENCIES: Record<Exclude<ProfileChoice, "custom">, Prof
       binary: "memory-router-user-prompt-submit",
       npmPackage: "@lannguyensi/memory-router",
       description: "memory router (UserPromptSubmit hook)",
+      // Mirrors the FULL_TEMPLATE memory.router min_version floor (the
+      // `--version` short-circuit harness doctor expects landed in 0.3.0).
+      minVersion: "0.3.0",
     },
     {
       binary: "understanding-gate-claude-hook",
       npmPackage: "@lannguyensi/understanding-gate",
       description: "understanding gate (UserPromptSubmit injector)",
+      // 0.3.0 added parser-side bullet-to-section mapping so
+      // fast_confirm reports actually persist end-to-end (agent-grounding
+      // PR #78). Operators on 0.2.x silently miss the fix.
+      minVersion: "0.3.0",
     },
     {
       binary: "understanding-gate-claude-stop",
       npmPackage: "@lannguyensi/understanding-gate",
       description: "understanding gate (Stop capture)",
+      minVersion: "0.3.0",
     },
   ],
   team: [
@@ -184,9 +202,15 @@ export function formatDependencyTable(profile: ProfileChoice, result: Dependency
   lines.push(`Profile "${profile}" depends on these binaries:`);
   for (const status of result.statuses) {
     const mark = status.installed ? "✓" : "✗";
+    // minVersion is informational only at this layer (the wizard does
+    // not yet probe the installed bin's version); show it next to the
+    // package name so operators see the floor a feature depends on.
+    const pkgLabel = status.dep.minVersion
+      ? `${status.dep.npmPackage}@${status.dep.minVersion}+`
+      : status.dep.npmPackage;
     const where = status.installed
       ? `(already installed)`
-      : `→ ${status.dep.npmPackage}`;
+      : `→ ${pkgLabel}`;
     lines.push(`  ${mark} ${status.dep.binary.padEnd(36)} ${where}`);
   }
   if (result.missingPackages.length === 0) {
