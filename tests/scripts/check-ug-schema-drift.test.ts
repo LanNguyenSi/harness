@@ -64,6 +64,35 @@ const FAST_CONFIRM_PREFIXES = [
 ];`;
     expect(extractUpstreamSectionKeys(fixture)).toEqual(["a", "b"]);
   });
+
+  it("does NOT truncate on a `]` inside a string literal (task 6f9c56b3)", () => {
+    // Subagent on PR #153 reproduced this case: a SECTIONS alias
+    // containing `]` made the naive bracket walker close the array
+    // early, producing false-positive drift. The string-aware walker
+    // skips brackets inside string literals.
+    const fixture = `const SECTIONS = [
+  { key: "a", aliases: ["foo ] bar"] },
+  { key: "b", aliases: ["clean"] },
+];`;
+    expect(extractUpstreamSectionKeys(fixture)).toEqual(["a", "b"]);
+  });
+
+  it("honors `\\` escapes inside string literals so an escaped quote does not exit string mode", () => {
+    const fixture = `const SECTIONS = [
+  { key: "a", aliases: ["foo \\"] still string"] },
+  { key: "b" },
+];`;
+    expect(extractUpstreamSectionKeys(fixture)).toEqual(["a", "b"]);
+  });
+
+  it("handles all three string-delimiter styles (single, double, template)", () => {
+    const fixture = `const SECTIONS = [
+  { key: "a", aliases: ['single ] quote'] },
+  { key: "b", aliases: [\`template ] backtick\`] },
+  { key: "c" },
+];`;
+    expect(extractUpstreamSectionKeys(fixture)).toEqual(["a", "b", "c"]);
+  });
 });
 
 describe("diffKeys", () => {
