@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-05-16
+
+**Headline: interactive wizard major upgrade.** `harness init --interactive` gains a runtime multiselect for the wire-now step (Claude Code + Codex, with `opencode` parked until its adapter lands) and a real Custom-profile composer at full reference-policy parity (1 pack, 4 MCPs, 6 reference policies, ticked à la carte). The old Custom branch, an advertised menu item that printed "use --template full and hand-edit" and aborted, is gone. Adjacent: every policy's deny envelope now carries a one-line producer hint so a blocked operator sees not just the missing tag but the satisfying contract; runtime tilde expansion on MCP env values at spawn time closes the "literal `~/foo` creates rogue cwd files" footgun for every wired server, not just `grounding-mcp`.
+
+Operator note: no required action. Custom is still opt-in from the wizard, and the new producer hints are additive.
+
+### Added
+
+- **Interactive wizard: runtime multiselect** (#147, agent-tasks/696f7560). The wire-now step is now an `@inquirer/prompts` `checkbox` over `claude-code` and `codex`; whichever runtimes `detect()` found configured are pre-checked so the historical single-runtime flow stays one Enter press. Selecting Codex runs `harness apply --runtime codex` and prints the manual-merge instruction for `~/.codex/config.toml`; selecting both warns the operator that `harness.lock` reflects the last-applied runtime. `opencode` listed disabled until task `f34eb233` lands the runtime adapter.
+- **Interactive wizard: Custom-profile composer** (#148 + #149, agent-tasks/31d2fbb5 + 5dd3d8a6). Custom is a real à-la-carte builder: three checkbox prompts (packs / MCPs / policies) feed `composeCustom(selection)` which emits YAML the rest of the wizard's tail (validate → wire-now) consumes unchanged. v0.15.0 ships parity with `--template full`: 1 pack (`understanding-before-execution`), 4 MCPs (`agent-tasks`, `grounding-mcp`, `memory-router` routed under `memory.router`, `codebase-oracle` with an env-var advisory), 6 reference policies (review-before-merge, preflight-before-investigation, review-subagent-before-pr-create, preflight-before-push, dogfood-before-release, two-reviewers-required). Producer-coupling advisories print to stderr when a selected policy has no producer for its ledger tag.
+- **Policy deny envelope: producer hints** (#141 + #142 + #143). Every reference policy in `FULL_TEMPLATE` now has a populated `producers:` field rendered into the deny envelope + `harness explain` output. The understanding-gate deny envelope picks up the same treatment so a blocked agent sees the `harness approve understanding` golden path rendered verbatim. The producer choice (`harness session-start preflight` vs `mcp__agent-grounding__ledger_add`) is recorded next to the tag the operator must produce.
+- **Wizard dep table: min_version floor** (#144). The "Profile X depends on these binaries" table now shows `pkg@x.y.z+` next to packages whose `min_version` is declared, so operators see the floor a feature needs even without running `harness doctor`.
+
+### Changed
+
+- **`dependenciesForCustom` resolves codebase-oracle + agent-preflight** (#149 dependency layer). Custom selections that tick `codebase-oracle` or any `preflight-*` policy now get the matching binaries added to the wizard's `npm i -g` list, mirroring `PROFILE_DEPENDENCIES.full`.
+- **Internal: shared `expandHome` helper** (#146). Three duplicate implementations consolidated into `src/runtime/expand-home.ts`. No behaviour change; refactor lands in the same release as #145 so the fix and the consolidation can be reasoned about together.
+- **`codebase-oracle` stays out of the FULL default** (#138 + #139 + #140 net). The thrash trio settles on "not in default, opt-in via Custom composer or hand-edit"; the FULL template now carries an explicit comment explaining the omission plus the manual wiring recipe with required env vars (`ORACLE_SCAN_ROOT`, `OPENAI_API_KEY`).
+
+### Fixed
+
+- **MCP env values: leading `~/` expands at spawn time** (#145). Previously a literal `~/foo` in an `env:` block was passed verbatim, and the receiving MCP server (process started by the runtime, not a login shell) saw no tilde expansion, creating rogue cwd-relative files. Now every value beginning with `~/` is rewritten to `$HOME/...` at the runtime spawn boundary. Closes the same class of incident grounding-mcp hit in v0.14.0.
+
 ## [0.14.0] - 2026-05-15
 
 **Headline: understanding-gate self-approval backdoor closed.** Through v0.13.0 the gate read a `understanding-approved:<sessionId>` row from the evidence ledger as approval. The agent has direct MCP access to that ledger via `grounding-mcp`'s `ledger_add`, so any agent could write the row for its own session and self-approve, collapsing the human-in-the-loop control to advisory. v0.14.0 moves the canonical signal to a filesystem marker at `harness.generated/.approvals/<sessionId>` written by `harness approve understanding` from the operator's shell. Edit / Write / Bash are all gated by the same PreToolUse hook and no configured MCP exposes filesystem writes, so the marker is reachable only from operator-launched processes. Headline regression test (`tests/cli/pack-hook-pre-tool-use.test.ts`): an injected ledger row with `source: "mcp"` (exact shape `ledger_add` produces) MUST still block. Pinned for Claude and Codex blockers alike.
