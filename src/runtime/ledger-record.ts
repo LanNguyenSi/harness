@@ -9,6 +9,7 @@
 import { spawn } from "node:child_process";
 import type { LedgerEntry } from "../policies/requires.js";
 import { parseLedgerTimestamp } from "../policies/timestamp.js";
+import { expandHome, expandHomeInEnv } from "./expand-home.js";
 import type { PolicyDecision } from "./intercept.js";
 import { VERSION } from "../version.js";
 
@@ -31,12 +32,6 @@ const SOURCE = "harness-policy-intercept";
  */
 export const POLICY_DECISION_TYPE = "policy_decision";
 const PREFIX = POLICY_DECISION_TYPE;
-
-function expandHomePath(p: string): string {
-  if (p === "~") return process.env.HOME ?? "";
-  if (p.startsWith("~/")) return `${process.env.HOME ?? ""}/${p.slice(2)}`;
-  return p;
-}
 
 export interface PolicyDecisionPayload {
   name: string;
@@ -113,18 +108,25 @@ export async function recordPolicyDecision(
   if (!list || list.length === 0) {
     return { ok: false, reason: "grounding-mcp command is empty" };
   }
-  const exe = expandHomePath(list[0]!);
-  const args = list.slice(1).map(expandHomePath);
+  const exe = expandHome(list[0]!);
+  const args = list.slice(1).map((p) => expandHome(p));
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const payload = payloadFromDecision(decision);
   const content = encodeLedgerContent(payload);
+  // Defense-in-depth (agent-tasks/973596d7): expand leading `~/` in
+  // every env value before merging into the spawned process env. The
+  // validate-time warning still fires for operators with the literal
+  // tilde in their manifest, but a manifest that bypassed validate
+  // (or the warning was ignored on) cannot now scatter a rogue
+  // cwd-relative `./~/…` path. See expandHome doc for scope.
+  const expandedEnv = expandHomeInEnv(opts.mcpEnv);
 
   return new Promise((resolve) => {
     let child;
     try {
       child = spawn(exe, args, {
         cwd: opts.cwd,
-        env: { ...process.env, ...(opts.mcpEnv ?? {}) },
+        env: { ...process.env, ...(expandedEnv ?? {}) },
         stdio: ["pipe", "pipe", "pipe"],
       });
     } catch (err) {

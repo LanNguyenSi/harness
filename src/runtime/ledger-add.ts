@@ -9,6 +9,7 @@
 // degrade gracefully rather than throw mid-CLI.
 
 import { spawn } from "node:child_process";
+import { expandHome, expandHomeInEnv } from "./expand-home.js";
 import { VERSION } from "../version.js";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
@@ -31,8 +32,14 @@ export async function addLedgerFact(
   if (opts.mcpCommand.length === 0) {
     return { ok: false, reason: "grounding-mcp command is empty" };
   }
-  const exe = opts.mcpCommand[0]!;
-  const args = opts.mcpCommand.slice(1);
+  // Defense-in-depth (agent-tasks/973596d7): expand leading `~/` in
+  // command tokens AND env values. Node's `spawn` does not
+  // shell-interpolate; a literal `~/...` would otherwise become a
+  // cwd-relative rogue path. ledger-record.ts does the same; the
+  // shared helper lives in ./expand-home.ts.
+  const exe = expandHome(opts.mcpCommand[0]!);
+  const args = opts.mcpCommand.slice(1).map((p) => expandHome(p));
+  const expandedEnv = expandHomeInEnv(opts.mcpEnv);
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   return new Promise<AddLedgerFactResult>((resolve) => {
@@ -52,7 +59,7 @@ export async function addLedgerFact(
     try {
       child = spawn(exe, args, {
         cwd: opts.cwd,
-        env: { ...process.env, ...(opts.mcpEnv ?? {}) },
+        env: { ...process.env, ...(expandedEnv ?? {}) },
         stdio: ["pipe", "pipe", "pipe"],
       });
     } catch (err) {

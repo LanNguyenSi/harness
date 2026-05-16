@@ -41,10 +41,19 @@ afterEach(() => {
  */
 function makeCaptureServer(opts: {
   behavior: "reject-policy-decision" | "always-ok";
-}): { script: string; logPath: string } {
+  /**
+   * Optional env-capture: on startup the server snapshots these keys
+   * from its own process.env and writes the JSON dict to a sidecar
+   * log file. Used by the tilde-expansion test to confirm the env
+   * the spawn child saw matches what mcpEnv was supposed to deliver
+   * (agent-tasks/973596d7).
+   */
+  captureEnvKeys?: string[];
+}): { script: string; logPath: string; envLogPath: string } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-record-"));
   cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
   const logPath = path.join(dir, "calls.log");
+  const envLogPath = path.join(dir, "env.log");
   const file = path.join(dir, "server.js");
   const rejectBranch = `if (args.type === "policy_decision") {
         process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, error: { code: -32602, message: "Invalid type 'policy_decision'" } }) + "\\n");
@@ -52,8 +61,12 @@ function makeCaptureServer(opts: {
         process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "ok" }] } }) + "\\n");
       }`;
   const acceptBranch = `process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "ok" }] } }) + "\\n");`;
+  const envCapture = opts.captureEnvKeys
+    ? `const captured = {}; for (const k of ${JSON.stringify(opts.captureEnvKeys)}) { if (process.env[k] !== undefined) captured[k] = process.env[k]; } fs.writeFileSync(${JSON.stringify(envLogPath)}, JSON.stringify(captured) + "\\n");`
+    : "";
   const body = `#!/usr/bin/env node
 const fs = require("node:fs");
+${envCapture}
 let buf = "";
 process.stdin.on("data", (d) => {
   buf += d.toString();
@@ -77,7 +90,7 @@ process.stdin.on("data", (d) => {
 `;
   fs.writeFileSync(file, body, "utf8");
   fs.chmodSync(file, 0o755);
-  return { script: file, logPath };
+  return { script: file, logPath, envLogPath };
 }
 
 describe("policy_decision encoding", () => {
@@ -158,6 +171,36 @@ describe("recordPolicyDecision writer fallback", () => {
     // grep keeps finding it under either type.
     expect(calls[1]!.content.startsWith("policy_decision:review-before-merge:deny ")).toBe(true);
     expect(calls[1]!.sessionId).toBe("sess-1");
+  });
+
+  it("expands leading ~/ in mcpEnv values before spawn (agent-tasks/973596d7)", async () => {
+    // Defense-in-depth: env values like `~/.evidence-ledger/ledger.db`
+    // would otherwise become a cwd-relative `./~/...` rogue path (the
+    // agent-tasks/42d224a6 incident). Wire an env-capture into the
+    // capture server so the test can assert the spawned child saw
+    // the expanded absolute path, not the literal tilde.
+    const { script, envLogPath } = makeCaptureServer({
+      behavior: "always-ok",
+      captureEnvKeys: ["TEST_TILDE", "TEST_ABSOLUTE", "TEST_NO_TILDE"],
+    });
+    const result = await recordPolicyDecision(decision, "sess-1", {
+      mcpCommand: [script],
+      mcpEnv: {
+        TEST_TILDE: "~/.evidence-ledger/ledger.db",
+        TEST_ABSOLUTE: "/already/absolute/path",
+        TEST_NO_TILDE: "plain-value-no-tilde",
+      },
+      timeoutMs: 4000,
+    });
+    expect(result.ok).toBe(true);
+    const envLine = fs.readFileSync(envLogPath, "utf8").trim();
+    const captured = JSON.parse(envLine) as Record<string, string>;
+    // The leading `~/` must have expanded to the operator's HOME.
+    expect(captured.TEST_TILDE).toMatch(/\/\.evidence-ledger\/ledger\.db$/);
+    expect(captured.TEST_TILDE.startsWith("~")).toBe(false);
+    // Absolute + plain values pass through untouched.
+    expect(captured.TEST_ABSOLUTE).toBe("/already/absolute/path");
+    expect(captured.TEST_NO_TILDE).toBe("plain-value-no-tilde");
   });
 
   it("does not send a second ledger_add when the new server accepts 'policy_decision'", async () => {
