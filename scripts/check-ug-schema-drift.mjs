@@ -24,7 +24,7 @@
 //      slice to camelCase before comparing).
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -53,13 +53,31 @@ export function extractUpstreamSectionKeys(parserSource) {
     throw new Error("parser.js layout changed: no `const SECTIONS = [` declaration found");
   }
   // Walk brackets from the start of the array literal until the matching
-  // `]`. The minified-friendly choice is bracket-balance, not a regex,
-  // since SECTIONS entries can contain nested arrays (`aliases: [...]`).
+  // `]`. Bracket-balance (not a regex) since SECTIONS entries can contain
+  // nested arrays (`aliases: [...]`). String-aware so brackets inside a
+  // string literal (`aliases: ["foo ] bar"`) don't truncate the slice
+  // and produce false-positive drift. Honors `\` escapes inside strings.
   const openIdx = parserSource.indexOf("[", start);
   let depth = 0;
   let endIdx = -1;
+  let inString = null; // null | '"' | "'" | "`"
+  let escape = false;
   for (let i = openIdx; i < parserSource.length; i++) {
     const ch = parserSource[i];
+    if (inString !== null) {
+      if (escape) {
+        escape = false;
+      } else if (ch === "\\") {
+        escape = true;
+      } else if (ch === inString) {
+        inString = null;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      inString = ch;
+      continue;
+    }
     if (ch === "[") depth++;
     else if (ch === "]") {
       depth--;
@@ -100,10 +118,19 @@ function fetchUpstreamParserSource() {
   }
 }
 
-async function loadHarnessMirror() {
+export async function loadHarnessMirror() {
   // The hint module is shipped as the compiled .js. We import it
   // dynamically so this script does not depend on a TypeScript step.
-  const moduleUrl = pathToFileURL(join(process.cwd(), HARNESS_HINT_MODULE_RELPATH)).href;
+  // Precheck file existence first: a missing dist file is the common
+  // "operator forgot to build" case, and the generic Node import error
+  // ("Cannot find module ...") buries the actionable next step.
+  const modulePath = join(process.cwd(), HARNESS_HINT_MODULE_RELPATH);
+  if (!existsSync(modulePath)) {
+    throw new Error(
+      `harness mirror not found at ${modulePath}; run \`npm run build\` first to emit ${HARNESS_HINT_MODULE_RELPATH}.`,
+    );
+  }
+  const moduleUrl = pathToFileURL(modulePath).href;
   const mod = await import(moduleUrl);
   if (!Array.isArray(mod.UNDERSTANDING_REPORT_REQUIRED_SECTIONS)) {
     throw new Error(

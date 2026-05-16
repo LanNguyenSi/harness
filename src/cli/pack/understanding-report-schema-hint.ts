@@ -41,8 +41,16 @@ export const UNDERSTANDING_REPORT_REQUIRED_SECTIONS = [
  * formatter, and stderr is read as-is by the operator).
  */
 export function renderReportSchemaHint(): string {
+  // Note on the intro wording: the previous iteration included an "e.g."
+  // alias example ("Current Understanding" or "My Current Understanding")
+  // that suggested those two were the canonical pair. The parser
+  // actually accepts more aliases (e.g. `derivedTodos` ⇄ "todos", "derived
+  // todos / specs"; `verificationPlan` ⇄ "verification"), and listing
+  // one pair implied exhaustiveness. The bullets below show the canonical
+  // names; the parser's alias-tolerance is a quiet bonus, not something
+  // the agent needs to choose between.
   const intro =
-    "Report format (parsed by `@lannguyensi/understanding-gate`): markdown with these nine sections, any heading level (#, ##, ###), names case-insensitive and alias-tolerant (e.g. \"Current Understanding\" or \"My Current Understanding\"). Missing any section produces a parse-error under `.understanding-gate/parse-errors/` and the audit trail is empty even though the gate-approval marker still gets written.";
+    "Report format (parsed by `@lannguyensi/understanding-gate`): markdown with these nine sections, any heading level (#, ##, ###), names case-insensitive. Missing any section produces a parse-error under `.understanding-gate/parse-errors/` and the audit trail is empty even though the gate-approval marker still gets written.";
   const bullets = UNDERSTANDING_REPORT_REQUIRED_SECTIONS.map((s) => `  - ${s}`).join("\n");
   return `${intro}\n${bullets}`;
 }

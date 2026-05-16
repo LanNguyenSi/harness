@@ -26,6 +26,17 @@ describe("renderReportSchemaHint", () => {
     expect(bulletLines).toHaveLength(9);
   });
 
+  it("does not imply single-alias exhaustiveness in the intro (task e9967501)", () => {
+    // Previous wording inlined an "e.g." alias example that suggested
+    // the parser accepts ONLY "Current Understanding" or "My Current
+    // Understanding" — misleading since the parser tolerates more
+    // aliases per section. Bullets carry the canonical names; the
+    // intro should not single out one alias pair.
+    const hint = renderReportSchemaHint();
+    expect(hint).not.toContain("My Current Understanding");
+    expect(hint).not.toContain("alias-tolerant");
+  });
+
   it("preserves the canonical section ordering (matches parser SECTIONS order)", () => {
     // The standalone parser tries aliases in declaration order; keeping
     // the same order in the hint helps an agent who scans top-to-bottom.

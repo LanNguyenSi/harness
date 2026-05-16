@@ -1,8 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   diffKeys,
   extractUpstreamSectionKeys,
   labelToCamelKey,
+  loadHarnessMirror,
 } from "../../scripts/check-ug-schema-drift.mjs";
 
 describe("labelToCamelKey", () => {
@@ -64,6 +68,56 @@ const FAST_CONFIRM_PREFIXES = [
 ];`;
     expect(extractUpstreamSectionKeys(fixture)).toEqual(["a", "b"]);
   });
+
+  it("does NOT truncate on a `]` inside a string literal (task 6f9c56b3)", () => {
+    // Subagent on PR #153 reproduced this case: a SECTIONS alias
+    // containing `]` made the naive bracket walker close the array
+    // early, producing false-positive drift. The string-aware walker
+    // skips brackets inside string literals.
+    const fixture = `const SECTIONS = [
+  { key: "a", aliases: ["foo ] bar"] },
+  { key: "b", aliases: ["clean"] },
+];`;
+    expect(extractUpstreamSectionKeys(fixture)).toEqual(["a", "b"]);
+  });
+
+  it("honors `\\` escapes inside string literals so an escaped quote does not exit string mode", () => {
+    const fixture = `const SECTIONS = [
+  { key: "a", aliases: ["foo \\"] still string"] },
+  { key: "b" },
+];`;
+    expect(extractUpstreamSectionKeys(fixture)).toEqual(["a", "b"]);
+  });
+
+  it("treats a doubled backslash as an escaped backslash, so the next quote closes the string", () => {
+    // "trailing \\" — the `\\` is an escaped backslash, NOT an escape of
+    // the following quote, so the string closes and `]` outside it is
+    // honored as the array terminator.
+    const fixture = `const SECTIONS = [
+  { key: "a", aliases: ["trailing \\\\"] },
+  { key: "b" },
+];`;
+    expect(extractUpstreamSectionKeys(fixture)).toEqual(["a", "b"]);
+  });
+
+  it("throws (does not loop) when an unclosed string runs to end-of-source", () => {
+    // Defensive: if upstream parser.js is truncated mid-string, the
+    // walker must exit cleanly with the "SECTIONS array not closed"
+    // signal rather than spin forever.
+    const fixture = `const SECTIONS = [
+  { key: "a", aliases: ["unterminated
+];`;
+    expect(() => extractUpstreamSectionKeys(fixture)).toThrow(/SECTIONS array not closed/);
+  });
+
+  it("handles all three string-delimiter styles (single, double, template)", () => {
+    const fixture = `const SECTIONS = [
+  { key: "a", aliases: ['single ] quote'] },
+  { key: "b", aliases: [\`template ] backtick\`] },
+  { key: "c" },
+];`;
+    expect(extractUpstreamSectionKeys(fixture)).toEqual(["a", "b", "c"]);
+  });
 });
 
 describe("diffKeys", () => {
@@ -97,5 +151,34 @@ describe("diffKeys", () => {
     const diff = diffKeys(["a", "stale"], ["a", "new"]);
     expect(diff!.onlyLocal).toEqual(["stale"]);
     expect(diff!.onlyUpstream).toEqual(["new"]);
+  });
+});
+
+describe("loadHarnessMirror", () => {
+  // The mirror loader resolves against `process.cwd()`. We point cwd at
+  // an empty tmpdir so the precheck fires and emits the build-hint
+  // instead of falling through to a generic ESM import error.
+  let originalCwd: string;
+  let tmpDir: string;
+
+  beforeEach(() => {
+    originalCwd = process.cwd();
+    tmpDir = mkdtempSync(join(tmpdir(), "ug-drift-mirror-"));
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("throws an actionable build-hint when the dist mirror module is missing (task a7e9a9e8)", async () => {
+    await expect(loadHarnessMirror()).rejects.toThrow(/npm run build/);
+  });
+
+  it("names the expected dist path in the build-hint so the operator can see what was missed", async () => {
+    await expect(loadHarnessMirror()).rejects.toThrow(
+      /dist\/cli\/pack\/understanding-report-schema-hint\.js/,
+    );
   });
 });
