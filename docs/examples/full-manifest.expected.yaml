@@ -232,6 +232,13 @@ policy_packs:
     description: Force agents to expose their task interpretation and wait for explicit human approval before any write-capable tool fires.
     config:
       mode: grill_me
+      producers:
+        - kind: ask
+          command: harness approve understanding
+          description: Bare command, no pipes or chaining. The hook recognises it via isEscapeCommand and emits permissionDecision:ask; the operator's go on that prompt IS the gate approval. Golden path.
+        - kind: bash
+          command: harness approve understanding
+          description: Same command from any un-hooked terminal (operator only, not reachable from inside the gated session). Writes the canonical marker at harness.generated/.approvals/${SESSION_ID}.
 permission_profiles: {}
 workflows:
   - name: feature-pr

@@ -308,6 +308,19 @@ policy_packs:
     description: Force agents to expose their task interpretation and wait for explicit human approval before any write-capable tool fires.
     config:
       mode: grill_me
+      # Producers (agent-tasks/25bced52): rendered into the gate's deny
+      # envelope by the same engine as policy producers. Constraint at
+      # this layer: at-least-one \`ask\`. Post-v0.14.0 the gate signal
+      # is a filesystem marker and the mcp ledger_add path no longer
+      # satisfies the gate; the canonical unblock surface is the
+      # operator-approval prompt.
+      producers:
+        - kind: ask
+          command: harness approve understanding
+          description: "Bare command, no pipes or chaining. The hook recognises it via isEscapeCommand and emits permissionDecision:ask; the operator's go on that prompt IS the gate approval. Golden path."
+        - kind: bash
+          command: harness approve understanding
+          description: Same command from any un-hooked terminal (operator only, not reachable from inside the gated session). Writes the canonical marker at harness.generated/.approvals/\${SESSION_ID}.
 `;
 
 import { SOLO_TEMPLATE, TEAM_TEMPLATE } from "./profiles.js";
