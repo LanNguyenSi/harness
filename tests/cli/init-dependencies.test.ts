@@ -93,7 +93,10 @@ describe("formatDependencyTable — rendered surface", () => {
     const text = formatDependencyTable("solo", result);
     expect(text).toContain('Profile "solo"');
     expect(text).toContain("✗ memory-router-user-prompt-submit");
-    expect(text).toContain("→ @lannguyensi/memory-router");
+    // minVersion floor is shown in the missing-row arrow target so
+    // operators see the floor without an extra column (agent-tasks/3a536aca).
+    expect(text).toContain("→ @lannguyensi/memory-router@0.3.0+");
+    expect(text).toContain("→ @lannguyensi/understanding-gate@0.3.0+");
   });
 
   it('announces "all present" when nothing is missing', () => {
