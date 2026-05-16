@@ -27,8 +27,8 @@
 
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { expandHome } from "../runtime/expand-home.js";
 import type { Manifest } from "../schema/index.js";
 import { atomicWriteFile } from "./atomic-write.js";
 
@@ -63,13 +63,6 @@ export const LOCK_BASENAME = "harness.lock";
 
 function sha256Hex(input: string | Buffer): string {
   return crypto.createHash("sha256").update(input).digest("hex");
-}
-
-function expandHome(p: string, homeDir?: string): string {
-  const home = homeDir ?? os.homedir();
-  if (p === "~") return home;
-  if (p.startsWith("~/")) return path.join(home, p.slice(2));
-  return p;
 }
 
 export function computeAssetEntry(absolutePath: string): AssetEntry {

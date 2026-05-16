@@ -11,6 +11,7 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { LedgerEntry } from "./requires.js";
+import { expandHome } from "../runtime/expand-home.js";
 import { POLICY_DECISION_TYPE } from "../runtime/ledger-record.js";
 import { VERSION } from "../version.js";
 
@@ -61,12 +62,6 @@ interface JsonRpcResponse {
 interface PendingResponse {
   id: number;
   resolve: (value: JsonRpcResponse) => void;
-}
-
-function expandHomePath(p: string): string {
-  if (p === "~") return process.env.HOME ?? "";
-  if (p.startsWith("~/")) return `${process.env.HOME ?? ""}/${p.slice(2)}`;
-  return p;
 }
 
 interface RawLedgerEntry {
@@ -171,8 +166,8 @@ function startSubprocess(
   if (!list || list.length === 0) {
     return { ok: false, reason: "grounding-mcp command is empty" };
   }
-  const exe = expandHomePath(list[0]!);
-  const args = list.slice(1).map(expandHomePath);
+  const exe = expandHome(list[0]!);
+  const args = list.slice(1).map((p) => expandHome(p));
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   let child: ChildProcessWithoutNullStreams;
