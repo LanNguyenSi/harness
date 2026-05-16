@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Built-in policy pack: `branch-protection`** (agent-tasks/79fd5895). Blocks `Write`/`Edit` (claude-code) or `apply_patch` (codex) at the first source mutation when the agent is on a protected branch. Closes the loop on the edit-on-master incident pattern: today's `preflight-before-push` catches the issue at the last reversible step; `branch-protection` catches it at the first. Two satisfying signals: a fresh `branch:non-protected` tag from the SessionStart producer (`harness session-start branch-check`, runnable on demand), or a `branch-protection-ack:<reason>` override the operator writes via `mcp__agent-grounding__ledger_add`. Default protected list `master, main, develop` is overridable via `config.protected_branches`. Fails closed (any load / parse / ledger error refuses). OFF by default; enable with `harness pack add branch-protection`. Full reference: `docs/policy-packs/branch-protection.md`.
+
 ## [0.15.0] - 2026-05-16
 
 **Headline: interactive wizard major upgrade.** `harness init --interactive` gains a runtime multiselect for the wire-now step (Claude Code + Codex, with `opencode` parked until its adapter lands) and a real Custom-profile composer at full reference-policy parity (1 pack, 4 MCPs, 6 reference policies, ticked à la carte). The old Custom branch, an advertised menu item that printed "use --template full and hand-edit" and aborted, is gone. Adjacent: every policy's deny envelope now carries a one-line producer hint so a blocked operator sees not just the missing tag but the satisfying contract; runtime tilde expansion on MCP env values at spawn time closes the "literal `~/foo` creates rogue cwd files" footgun for every wired server, not just `grounding-mcp`.
