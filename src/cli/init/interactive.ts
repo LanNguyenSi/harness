@@ -11,22 +11,28 @@
 //   matching `/ExitPrompt|aborted/i`. The wizard catches it, prints an
 //   abort line to stderr, and returns `aborted:true` WITHOUT calling
 //   `init()`. No partial manifest is ever written.
-// - The wizard never invokes `harness apply` itself. It prints the
-//   suggested command and lets the operator decide. This is a
-//   deliberate scope-cut for v1 (per the task description's
-//   out-of-scope list).
+// - After validate-clean the wizard offers a runtime multiselect and
+//   runs `harness apply` once per selected runtime (task 696f7560).
+//   The set defaults to whichever runtimes detect() found configured,
+//   so a fresh CC-only machine sees the historical single-runtime flow.
+//   Unchecking everything skips wiring and prints the manual fallback.
 // - Acceptance criterion "fresh ~/.claude/ produces a valid harness.yaml":
 //   we delegate writing to the existing `init()` so the same atomic
 //   write + file-lock + post-write validate path is reused. The wizard
 //   is essentially a UI for picking the `--template` value.
 
-import { select, confirm, input } from "@inquirer/prompts";
+import { select, confirm, input, checkbox } from "@inquirer/prompts";
 import * as path from "node:path";
 import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
-import { detect, type DetectionResult } from "./detect.js";
+import {
+  detect,
+  type DetectionResult,
+  type DetectedRuntime,
+  type RuntimeName,
+} from "./detect.js";
 import { init, type InitResult } from "./index.js";
 import { validate } from "../validate/index.js";
-import { apply, type ApplyResult } from "../apply/index.js";
+import { apply, CODEX_CONFIG_BASENAME, type ApplyResult } from "../apply/index.js";
 import {
   checkDependencies,
   formatDependencyTable,
@@ -40,6 +46,23 @@ export interface InteractivePrompts {
   select: typeof select;
   confirm: typeof confirm;
   input: typeof input;
+  checkbox: typeof checkbox;
+}
+
+/**
+ * Wire targets the wizard knows about. `claude-code` and `codex` map to
+ * the runtimes that `harness apply` already supports. `opencode` is
+ * surfaced as disabled until the runtime adapter (agent-tasks/f34eb233)
+ * lands; including it here keeps the checkbox slot stable so docs and
+ * screenshots do not churn when the adapter ships.
+ */
+export type WireableRuntime = RuntimeName;
+export interface RuntimeApplyOutcome {
+  runtime: WireableRuntime;
+  /** undefined if `apply()` threw — recoveryHint carries the user-facing message. */
+  apply?: ApplyResult;
+  /** Operator-facing recovery message when apply threw, or the manual merge command for codex. */
+  recoveryHint?: string;
 }
 
 export interface RunInteractiveOptions {
@@ -72,11 +95,23 @@ export interface InteractiveResult {
   profile?: ProfileChoice;
   /** Whether `harness validate` reported zero errors after the write. */
   validateClean?: boolean;
-  /** Present when the wizard ran the post-write merge-apply step. */
+  /**
+   * Per-runtime apply outcome from the wire-now step. Present when the
+   * operator selected at least one runtime in the multiselect (default:
+   * every detected runtime is pre-checked). Empty array means the
+   * operator unchecked all runtimes — manifest stays on disk, no wiring.
+   */
+  applies?: RuntimeApplyOutcome[];
+  /**
+   * Legacy single-runtime shorthand: the claude-code apply outcome, if
+   * the wizard wired claude-code this run. Preserved so callers that
+   * predate task 696f7560 keep working. New code should read `applies[]`
+   * instead.
+   */
   apply?: ApplyResult;
 }
 
-const DEFAULT_PROMPTS: InteractivePrompts = { select, confirm, input };
+const DEFAULT_PROMPTS: InteractivePrompts = { select, confirm, input, checkbox };
 
 function isAbortError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
@@ -108,6 +143,87 @@ function profileNeedsAgentTasks(profile: ProfileChoice): boolean {
 
 function detectionHasAgentTasks(d: DetectionResult): boolean {
   return d.mcpServers.some((s) => s.name === "agent-tasks");
+}
+
+function runtimeIsConfigured(r: DetectedRuntime | undefined): boolean {
+  if (!r) return false;
+  return r.homeExists || r.settingsExists;
+}
+
+interface WireRuntimeOpts {
+  runtime: WireableRuntime;
+  configPath: string;
+  homeDir?: string;
+  claudeSettingsPath: string;
+  codexConfigPath: string;
+  stderr: (s: string) => void;
+}
+
+async function wireRuntime(o: WireRuntimeOpts): Promise<RuntimeApplyOutcome> {
+  // Defensive: only claude-code and codex have apply paths in v1. The
+  // checkbox UI disables "opencode" until task f34eb233 lands, so this
+  // branch is unreachable through normal use; the guard fires if the
+  // disabled flag is ever removed without wiring an adapter, instead of
+  // silently returning a half-built RuntimeApplyOutcome.
+  if (o.runtime !== "claude-code" && o.runtime !== "codex") {
+    throw new HarnessExitError(
+      `wireRuntime: ${o.runtime} is not a wirable runtime in this harness build`,
+      EX_FAIL,
+    );
+  }
+  if (o.runtime === "claude-code") {
+    const applyOpts: Parameters<typeof apply>[0] = {
+      configPath: o.configPath,
+      target: o.claudeSettingsPath,
+      merge: true,
+    };
+    if (o.homeDir !== undefined) applyOpts.homeDir = path.join(o.homeDir, ".claude");
+    try {
+      const r = await apply(applyOpts);
+      if (r.targetMergeSummary) o.stderr(`\n${r.targetMergeSummary}\n`);
+      if (r.targetWritten) {
+        o.stderr(`wired into ${r.targetPath}\n`);
+        o.stderr(
+          `verify: claude -p "say hi" --settings ${r.targetPath} --output-format stream-json --include-hook-events\n`,
+        );
+      }
+      for (const hint of r.restartHints) o.stderr(`restart hint: ${hint}\n`);
+      return { runtime: "claude-code", apply: r };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const recoveryHint = `harness apply --target ${o.claudeSettingsPath} --merge`;
+      o.stderr(`\nFailed to wire ${o.claudeSettingsPath}: ${message}\n`);
+      o.stderr(`Manifest is on disk. To retry the merge manually:\n  ${recoveryHint}\n`);
+      return { runtime: "claude-code", recoveryHint };
+    }
+  }
+  // Codex path: apply --runtime codex emits harness.generated/codex/config.toml.
+  // We deliberately do NOT pass --target: apply rejects --target+codex (see
+  // apply.ts) because harness owns harness.generated/, the operator owns
+  // ~/.codex/config.toml, and there is no in-place TOML merge yet. We print
+  // the exact merge command the operator needs instead.
+  const applyOpts: Parameters<typeof apply>[0] = {
+    configPath: o.configPath,
+    runtime: "codex",
+  };
+  if (o.homeDir !== undefined) applyOpts.homeDir = path.join(o.homeDir, ".claude");
+  try {
+    const r = await apply(applyOpts);
+    const generatedCodexPath = path.join(r.generatedDir, CODEX_CONFIG_BASENAME);
+    o.stderr(`\ncodex config generated at ${generatedCodexPath}\n`);
+    o.stderr(
+      `To activate: copy or include those [[hooks.*]] entries into ${o.codexConfigPath}\n`,
+    );
+    for (const hint of r.restartHints) o.stderr(`restart hint: ${hint}\n`);
+    const recoveryHint = `merge ${generatedCodexPath} into ${o.codexConfigPath}`;
+    return { runtime: "codex", apply: r, recoveryHint };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const recoveryHint = `harness apply --runtime codex   # then merge harness.generated/codex/config.toml into ${o.codexConfigPath}`;
+    o.stderr(`\nFailed to generate codex config: ${message}\n`);
+    o.stderr(`To retry manually:\n  ${recoveryHint}\n`);
+    return { runtime: "codex", recoveryHint };
+  }
 }
 
 export async function runInteractive(
@@ -299,66 +415,107 @@ export async function runInteractive(
       return { aborted: false, profile, init: initResult, validateClean };
     }
 
-    // Validate-clean: offer to wire into Claude Code right now. A bare
-    // `harness init` leaves the manifest on disk but Claude Code does
-    // not see it until `apply --target ... --merge` runs. Without this
-    // prompt the operator gets a clean manifest, runs `harness apply`,
-    // sees `harness.generated/` files appear, and is stuck wondering
-    // why Claude still does not honour any hooks. Auto-offering the
-    // merge here collapses that two-step trap into one.
+    // Validate-clean: offer to wire each runtime right now. A bare
+    // `harness init` leaves the manifest on disk but Claude Code / Codex
+    // do not see it until `harness apply` runs. Without this prompt the
+    // operator gets a clean manifest, runs `harness apply`, sees
+    // `harness.generated/` files appear, and is stuck wondering why
+    // the runtime still does not honour any hooks. The multiselect
+    // collapses that two-step trap into one and pre-checks whichever
+    // runtimes detect() found configured so the common single-runtime
+    // case stays a single Enter press.
+    const claudeRuntime = detection.runtimes.find((r) => r.name === "claude-code");
+    const codexRuntime = detection.runtimes.find((r) => r.name === "codex");
     const claudeSettingsPath = path.join(
-      detection.runtimes.find((r) => r.name === "claude-code")?.home ?? path.join(opts.homeDir ?? process.env.HOME ?? "", ".claude"),
+      claudeRuntime?.home ?? path.join(opts.homeDir ?? process.env.HOME ?? "", ".claude"),
       "settings.json",
     );
-    const wireNow = await prompts.confirm({
-      message: `Wire into Claude Code now? (merges hooks + mcpServers into ${claudeSettingsPath})`,
-      default: true,
-    });
-    if (!wireNow) {
+    const codexConfigPath = path.join(
+      codexRuntime?.home ?? path.join(opts.homeDir ?? process.env.HOME ?? "", ".codex"),
+      "config.toml",
+    );
+
+    const wireChoices: { name: string; value: WireableRuntime; checked: boolean; disabled?: string }[] = [
+      {
+        name: `claude-code  → merges into ${claudeSettingsPath}`,
+        value: "claude-code",
+        checked: runtimeIsConfigured(claudeRuntime) || claudeRuntime === undefined,
+      },
+      {
+        name: `codex        → writes harness.generated/codex/config.toml, you merge into ${codexConfigPath}`,
+        value: "codex",
+        checked: runtimeIsConfigured(codexRuntime),
+      },
+    ];
+
+    const selectedRuntimes = (await prompts.checkbox({
+      message: "Wire harness into which runtimes now? (space to toggle, return to confirm; uncheck all to skip)",
+      choices: [
+        ...wireChoices,
+        // opencode is parked until the runtime adapter (task f34eb233)
+        // lands. Listing it disabled keeps the slot stable so the wizard
+        // copy and screenshots do not churn when v1.1 enables it.
+        {
+          name: "opencode     (shipping in harness v1.1 — adapter task f34eb233)",
+          value: "opencode" as WireableRuntime,
+          checked: false,
+          disabled: "(disabled until f34eb233 lands)",
+        },
+      ],
+    })) as WireableRuntime[];
+
+    if (selectedRuntimes.length === 0) {
       stderr(
-        `\nManifest written. To wire it into Claude Code later:\n  harness apply --target ${claudeSettingsPath} --merge\n`,
+        [
+          "",
+          "Manifest written; no runtimes selected for wiring. To wire later:",
+          `  claude-code: harness apply --target ${claudeSettingsPath} --merge`,
+          `  codex:       harness apply --runtime codex   # then merge harness.generated/codex/config.toml into ${codexConfigPath}`,
+          "",
+        ].join("\n"),
       );
-      return { aborted: false, profile, init: initResult, validateClean };
+      return { aborted: false, profile, init: initResult, validateClean, applies: [] };
     }
 
-    const applyOpts: Parameters<typeof apply>[0] = {
-      configPath: initResult.path,
-      target: claudeSettingsPath,
-      merge: true,
+    if (selectedRuntimes.length > 1) {
+      // Cross-runtime apply is not yet a single-call operation (apply.ts
+      // notes "mutually exclusive in a single apply for v1"). Running
+      // the two sequentially works for both runtime artefacts but the
+      // second `harness apply` overwrites harness.lock from the first's
+      // perspective, so drift detection on the first runtime's outputs
+      // is unreliable until a re-apply. Surface this so the operator is
+      // not surprised by a subsequent `harness apply` report.
+      stderr(
+        "\nMulti-runtime wiring: harness.lock will reflect the last-applied runtime; re-run `harness apply --runtime <name>` to refresh drift baselines.\n",
+      );
+    }
+
+    const applies: RuntimeApplyOutcome[] = [];
+    for (const runtime of selectedRuntimes) {
+      const outcome = await wireRuntime({
+        runtime,
+        configPath: initResult.path,
+        homeDir: opts.homeDir,
+        claudeSettingsPath,
+        codexConfigPath,
+        stderr,
+      });
+      applies.push(outcome);
+    }
+
+    // Legacy `apply` field carries the claude-code result if claude-code
+    // was wired this run. Callers that predate task 696f7560 keep
+    // working; new tests should consult `applies` directly.
+    const legacyApply = applies.find((a) => a.runtime === "claude-code")?.apply;
+    const result: InteractiveResult = {
+      aborted: false,
+      profile,
+      init: initResult,
+      validateClean,
+      applies,
     };
-    if (opts.homeDir !== undefined) {
-      applyOpts.homeDir = path.join(opts.homeDir, ".claude");
-    }
-    // The merge-apply touches a real file under ~/.claude; permission
-    // errors and pre-existing malformed JSON both throw from apply().
-    // Catch here so a clean manifest write is not undone by a stack
-    // trace, and the operator still sees the manual fallback command
-    // they need to recover.
-    let applyResult: ApplyResult | undefined;
-    try {
-      applyResult = await apply(applyOpts);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      stderr(`\nFailed to wire ${claudeSettingsPath}: ${message}\n`);
-      stderr(
-        `Manifest is on disk. To retry the merge manually:\n  harness apply --target ${claudeSettingsPath} --merge\n`,
-      );
-      return { aborted: false, profile, init: initResult, validateClean };
-    }
-    if (applyResult.targetMergeSummary) {
-      stderr(`\n${applyResult.targetMergeSummary}\n`);
-    }
-    if (applyResult.targetWritten) {
-      stderr(`wired into ${applyResult.targetPath}\n`);
-      stderr(
-        `verify: claude -p "say hi" --settings ${applyResult.targetPath} --output-format stream-json --include-hook-events\n`,
-      );
-    }
-    for (const hint of applyResult.restartHints) {
-      stderr(`restart hint: ${hint}\n`);
-    }
-
-    return { aborted: false, profile, init: initResult, validateClean, apply: applyResult };
+    if (legacyApply !== undefined) result.apply = legacyApply;
+    return result;
   } catch (err) {
     if (isAbortError(err)) {
       stderr("Aborted: Ctrl-C received during prompt; no manifest written.\n");

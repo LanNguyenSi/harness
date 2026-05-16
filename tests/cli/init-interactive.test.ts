@@ -6,13 +6,19 @@ import { runInteractive, type InteractivePrompts } from "../../src/cli/init/inte
 
 // Helper: build a mock prompts pack that returns queued answers in order
 // the wizard asks them. This is intentionally dumb — we match by prompt
-// kind (select / confirm / input), not by message string, because tying
-// tests to copy means every wording tweak breaks them. The wizard's
-// prompt order is documented in src/cli/init/interactive.ts.
-function mockPrompts(queue: { select?: string[]; confirm?: boolean[]; input?: string[] }): InteractivePrompts {
+// kind (select / confirm / input / checkbox), not by message string,
+// because tying tests to copy means every wording tweak breaks them.
+// The wizard's prompt order is documented in src/cli/init/interactive.ts.
+function mockPrompts(queue: {
+  select?: string[];
+  confirm?: boolean[];
+  input?: string[];
+  checkbox?: string[][];
+}): InteractivePrompts {
   const selectQ = [...(queue.select ?? [])];
   const confirmQ = [...(queue.confirm ?? [])];
   const inputQ = [...(queue.input ?? [])];
+  const checkboxQ = [...(queue.checkbox ?? [])];
   return {
     select: (async () => {
       const v = selectQ.shift();
@@ -29,6 +35,11 @@ function mockPrompts(queue: { select?: string[]; confirm?: boolean[]; input?: st
       if (v === undefined) throw new Error("mockPrompts: input queue empty");
       return v;
     }) as unknown as InteractivePrompts["input"],
+    checkbox: (async () => {
+      const v = checkboxQ.shift();
+      if (v === undefined) throw new Error("mockPrompts: checkbox queue empty");
+      return v;
+    }) as unknown as InteractivePrompts["checkbox"],
   };
 }
 
@@ -85,7 +96,7 @@ afterEach(() => {
 });
 
 describe("interactive wizard — Solo path", () => {
-  it("writes a solo manifest, runs validate, returns validateClean", async () => {
+  it("writes a solo manifest, runs validate, returns validateClean (skip wiring)", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
     const cap = captureStreams();
     const result = await runInteractive({
@@ -96,7 +107,9 @@ describe("interactive wizard — Solo path", () => {
         input: ["~/.claude/projects/{project}/memory"],
         confirm: [
           true, // write manifest
-          false, // decline wire-now (test the manifest-only path)
+        ],
+        checkbox: [
+          [], // uncheck every runtime → skip wiring
         ],
       }),
       stdout: cap.out,
@@ -106,15 +119,19 @@ describe("interactive wizard — Solo path", () => {
     expect(result.profile).toBe("solo");
     expect(result.validateClean).toBe(true);
     expect(result.apply).toBeUndefined();
+    expect(result.applies).toEqual([]);
     expect(fs.existsSync(path.join(tmpHome, ".claude", "harness.yaml"))).toBe(true);
     expect(cap.stderr()).toMatch(/Environment probe/);
     expect(cap.stderr()).toMatch(/harness validate: 0 error/);
-    // When the operator declines the wire-now offer, the manifest-only
+    // When the operator unchecks all runtimes, the manifest-only
     // follow-up command MUST be the merge-into-settings.json incantation
     // (not the bare `apply --runtime claude-code` that only writes to
     // harness.generated/ and confuses fresh users).
     expect(cap.stderr()).toContain("harness apply --target");
     expect(cap.stderr()).toContain("--merge");
+    // The skip-fallback must also surface the codex manual path so a
+    // Codex-only operator who reads the skip message knows how to wire.
+    expect(cap.stderr()).toContain("harness apply --runtime codex");
     // Hallucination regression guard from the original test: the wizard
     // must NOT suggest `--runtime claude` shorthand (the real flag value
     // is `claude-code`; the bare `claude` shorthand falls back at runtime
@@ -123,7 +140,7 @@ describe("interactive wizard — Solo path", () => {
     expect(cap.stderr()).not.toContain("--runtime claude ");
   });
 
-  it("auto-runs the merge-apply when the operator accepts the wire-now offer", async () => {
+  it("auto-runs the merge-apply when the operator selects claude-code", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
     const cap = captureStreams();
     const result = await runInteractive({
@@ -134,7 +151,9 @@ describe("interactive wizard — Solo path", () => {
         input: ["~/.claude/projects/{project}/memory"],
         confirm: [
           true, // write manifest
-          true, // accept wire-now
+        ],
+        checkbox: [
+          ["claude-code"],
         ],
       }),
       stdout: cap.out,
@@ -142,6 +161,10 @@ describe("interactive wizard — Solo path", () => {
     });
     expect(result.aborted).toBe(false);
     expect(result.validateClean).toBe(true);
+    expect(result.applies).toHaveLength(1);
+    expect(result.applies?.[0]?.runtime).toBe("claude-code");
+    expect(result.applies?.[0]?.apply?.targetWritten).toBe(true);
+    // Legacy `apply` shorthand still set for claude-code wiring.
     expect(result.apply).toBeDefined();
     expect(result.apply?.targetWritten).toBe(true);
     const settingsPath = path.join(tmpHome, ".claude", "settings.json");
@@ -173,7 +196,9 @@ describe("interactive wizard — Solo path", () => {
         input: ["~/.claude/projects/{project}/memory"],
         confirm: [
           true, // write manifest
-          true, // accept wire-now (will fail inside apply)
+        ],
+        checkbox: [
+          ["claude-code"], // wire-now will fail inside apply
         ],
       }),
       stdout: cap.out,
@@ -181,6 +206,10 @@ describe("interactive wizard — Solo path", () => {
     });
     expect(result.aborted).toBe(false);
     expect(result.validateClean).toBe(true);
+    expect(result.applies).toHaveLength(1);
+    expect(result.applies?.[0]?.runtime).toBe("claude-code");
+    expect(result.applies?.[0]?.apply).toBeUndefined();
+    expect(result.applies?.[0]?.recoveryHint).toMatch(/harness apply --target .* --merge/);
     expect(result.apply).toBeUndefined();
     expect(cap.stderr()).toMatch(/Failed to wire/);
     expect(cap.stderr()).toMatch(/harness apply --target .* --merge/);
@@ -199,8 +228,8 @@ describe("interactive wizard — Team path", () => {
         confirm: [
           true, // proceed despite missing agent-tasks
           true, // confirm write
-          false, // decline wire-now
         ],
+        checkbox: [[]],
         input: ["~/.claude/projects/{project}/memory"],
       }),
       stdout: cap.out,
@@ -225,8 +254,8 @@ describe("interactive wizard — Team path", () => {
         select: ["team"],
         confirm: [
           true, // write (no agent-tasks warning prompt)
-          false, // decline wire-now
         ],
+        checkbox: [[]],
         input: ["~/.claude/projects/{project}/memory"],
       }),
       stdout: cap.out,
@@ -283,8 +312,8 @@ describe("interactive wizard — overwrite guard", () => {
         confirm: [
           true, // overwrite
           true, // write
-          false, // decline wire-now
         ],
+        checkbox: [[]],
         input: ["~/.claude/projects/{project}/memory"],
       }),
       stdout: cap.out,
@@ -309,8 +338,8 @@ describe("interactive wizard — no-detection path", () => {
         select: ["solo"],
         confirm: [
           true, // write
-          false, // decline wire-now
         ],
+        checkbox: [[]],
         input: ["~/.claude/projects/{project}/memory"],
       }),
       stdout: cap.out,
@@ -342,8 +371,8 @@ describe("interactive wizard — dependency install", () => {
         confirm: [
           true, // accept the install prompt
           true, // write manifest
-          false, // decline wire-now
         ],
+        checkbox: [[]],
       }),
       stdout: cap.out,
       stderr: cap.err,
@@ -424,8 +453,8 @@ describe("interactive wizard — Full profile", () => {
         confirm: [
           true, // proceed despite missing agent-tasks in settings.json
           true, // write manifest
-          false, // decline wire-now (no real bridge to talk to in this test)
         ],
+        checkbox: [[]],
       }),
       stdout: cap.out,
       stderr: cap.err,
@@ -451,6 +480,136 @@ describe("interactive wizard — Full profile", () => {
   });
 });
 
+describe("interactive wizard — runtime multiselect (task 696f7560)", () => {
+  it("wires only codex when the operator picks codex", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      prompts: mockPrompts({
+        select: ["solo"],
+        input: ["~/.claude/projects/{project}/memory"],
+        confirm: [true],
+        checkbox: [["codex"]],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(false);
+    expect(result.validateClean).toBe(true);
+    expect(result.applies).toHaveLength(1);
+    expect(result.applies?.[0]?.runtime).toBe("codex");
+    expect(result.applies?.[0]?.apply).toBeDefined();
+    // Codex apply emits harness.generated/codex/config.toml — the
+    // operator-owned ~/.codex/config.toml is NEVER touched by the
+    // wizard (apply.ts rejects --target+codex).
+    const codexGenerated = path.join(
+      tmpHome,
+      ".claude",
+      "harness.generated",
+      "codex",
+      "config.toml",
+    );
+    expect(fs.existsSync(codexGenerated)).toBe(true);
+    expect(fs.existsSync(path.join(tmpHome, ".codex", "config.toml"))).toBe(false);
+    // Legacy `apply` field stays undefined when only codex is wired.
+    expect(result.apply).toBeUndefined();
+    expect(cap.stderr()).toContain("codex config generated at");
+    expect(cap.stderr()).toMatch(/copy or include those \[\[hooks\.\*\]\] entries/);
+    // Claude Code's settings.json must NOT be touched when only codex is selected.
+    expect(fs.existsSync(path.join(tmpHome, ".claude", "settings.json"))).toBe(false);
+  });
+
+  it("wires both runtimes in one run when the operator picks both", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      prompts: mockPrompts({
+        select: ["solo"],
+        input: ["~/.claude/projects/{project}/memory"],
+        confirm: [true],
+        checkbox: [["claude-code", "codex"]],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(false);
+    expect(result.applies).toHaveLength(2);
+    expect(result.applies?.map((a) => a.runtime).sort()).toEqual(["claude-code", "codex"]);
+    // Claude settings.json was wired AND the codex generated artefact exists.
+    expect(fs.existsSync(path.join(tmpHome, ".claude", "settings.json"))).toBe(true);
+    expect(
+      fs.existsSync(path.join(tmpHome, ".claude", "harness.generated", "codex", "config.toml")),
+    ).toBe(true);
+    expect(result.apply).toBeDefined();
+    expect(result.apply?.targetWritten).toBe(true);
+    // Operator gets the lock-drift caveat (documented in apply.ts).
+    expect(cap.stderr()).toMatch(/harness\.lock will reflect the last-applied runtime/);
+  });
+
+  it("uncheck-all skips wiring entirely and surfaces both manual fallback commands", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      prompts: mockPrompts({
+        select: ["solo"],
+        input: ["~/.claude/projects/{project}/memory"],
+        confirm: [true],
+        checkbox: [[]],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(false);
+    expect(result.validateClean).toBe(true);
+    expect(result.applies).toEqual([]);
+    expect(result.apply).toBeUndefined();
+    expect(fs.existsSync(path.join(tmpHome, ".claude", "harness.yaml"))).toBe(true);
+    // No runtime file landed.
+    expect(fs.existsSync(path.join(tmpHome, ".claude", "settings.json"))).toBe(false);
+    expect(
+      fs.existsSync(path.join(tmpHome, ".claude", "harness.generated", "codex", "config.toml")),
+    ).toBe(false);
+    expect(cap.stderr()).toContain("no runtimes selected");
+    expect(cap.stderr()).toMatch(/harness apply --target .* --merge/);
+    expect(cap.stderr()).toContain("harness apply --runtime codex");
+  });
+
+  it("Ctrl-C at the runtime checkbox aborts without touching wiring (manifest stays)", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    const exitErr = new Error("User force closed the prompt with 0 null");
+    exitErr.name = "ExitPromptError";
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      prompts: {
+        select: (async () => "solo") as unknown as InteractivePrompts["select"],
+        confirm: (async () => true) as unknown as InteractivePrompts["confirm"],
+        input: (async () => "~/.claude/projects/{project}/memory") as unknown as InteractivePrompts["input"],
+        checkbox: (async () => {
+          throw exitErr;
+        }) as unknown as InteractivePrompts["checkbox"],
+      },
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(true);
+    expect(cap.stderr()).toMatch(/Ctrl-C received/);
+    // Manifest was already written before the runtime prompt — the
+    // wizard does not roll it back; the abort contract is "no NEW
+    // side effects after this prompt", and the manifest is the prior
+    // step's output. Settings.json must NOT have been touched, though.
+    expect(fs.existsSync(path.join(tmpHome, ".claude", "harness.yaml"))).toBe(true);
+    expect(fs.existsSync(path.join(tmpHome, ".claude", "settings.json"))).toBe(false);
+  });
+});
+
 describe("interactive wizard — Ctrl-C", () => {
   it("treats an ExitPromptError from the prompt library as an abort, writes nothing", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
@@ -463,6 +622,7 @@ describe("interactive wizard — Ctrl-C", () => {
       }) as unknown as InteractivePrompts["select"],
       confirm: (async () => true) as unknown as InteractivePrompts["confirm"],
       input: (async () => "ignored") as unknown as InteractivePrompts["input"],
+      checkbox: (async () => []) as unknown as InteractivePrompts["checkbox"],
     };
     const result = await runInteractive({
       homeDir: tmpHome,
