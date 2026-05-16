@@ -173,7 +173,18 @@ timestamp            policy               outcome  reason
 ## Rollback
 
 ```bash
-cp ~/.claude/settings.json.pre-harness-2026-05-11 ~/.claude/settings.json
-rm ~/.claude/harness.yaml ~/.claude/harness.lock
-rm -rf ~/.claude/harness.generated
+# Dry-run first: print every harness-owned artefact under ~/.claude/.
+harness uninstall
+
+# Tear down: removes the manifest, lock, harness.generated/, harness-owned
+# hook groups and mcpServers entries from settings.json. Writes a
+# reversible settings.json backup + snapshot next to settings.json.
+harness uninstall --apply
+
+# Alternative: if you kept the pre-install backup from the install step,
+# atomically restore it instead of selective removal.
+harness uninstall --restore-from ~/.claude/settings.json.pre-harness-2026-05-11
+
+# Finally, drop the CLI itself (harness uninstall does not touch npm):
+npm uninstall -g @lannguyensi/harness
 ```
