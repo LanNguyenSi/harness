@@ -189,6 +189,19 @@ function formatCodexTargetSection(report: DoctorReport): string[] {
   return out;
 }
 
+function formatRogueLedgerSection(report: DoctorReport): string[] {
+  if (report.rogueLedgerDbs.length === 0) return [];
+  const out: string[] = ["", "Rogue evidence-ledger DBs"];
+  for (const r of report.rogueLedgerDbs) {
+    out.push(`  ⚠ rogue evidence-ledger db found: ${r.path}`);
+    out.push(
+      `      left over from the EVIDENCE_LEDGER_DB literal-tilde bug (agent-tasks/42d224a6).`,
+    );
+    out.push(`      safe to delete: \`rm -rf ${r.rogueDir}\``);
+  }
+  return out;
+}
+
 function formatSummary(report: DoctorReport): string[] {
   const out: string[] = ["", "Summary"];
   const errLabel = report.errorCount === 1 ? "error" : "errors";
@@ -207,6 +220,7 @@ export function format(report: DoctorReport): string {
   lines.push(...formatPoliciesSection(report));
   lines.push(...formatWorkflowsSection(report));
   lines.push(...formatCodexTargetSection(report));
+  lines.push(...formatRogueLedgerSection(report));
   lines.push(...formatSummary(report));
   lines.push("");
   return lines.join("\n");

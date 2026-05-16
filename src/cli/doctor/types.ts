@@ -2,6 +2,7 @@ import type { McpProbeResult } from "../../probes/mcp.js";
 import type { MemoryReport, StaleMemory } from "../../probes/memory.js";
 import type { Manifest } from "../../schema/index.js";
 import type { CodexTargetReport } from "./codex.js";
+import type { RogueLedgerDb } from "./rogue-ledger.js";
 
 /**
  * Phase 6 #6 follow-up — doctor target identifier. Distinct from
@@ -127,8 +128,23 @@ export interface DoctorReport {
    * errorCount / warningCount.
    */
   codexTarget?: CodexTargetReport;
+  /**
+   * Leftover `<parent>/~/.evidence-ledger/ledger.db` files from the
+   * literal-tilde `EVIDENCE_LEDGER_DB` env leak (agent-tasks/42d224a6,
+   * harness PR #101). Always scanned; harmless when empty. Each entry
+   * rolls into `warningCount`. The scan walks `$HOME`, `$HOME/git/*`
+   * (one level deep), and `$PWD`; see `rogue-ledger.ts` for rationale.
+   */
+  rogueLedgerDbs: RogueLedgerDb[];
   errorCount: number;
   warningCount: number;
 }
 
-export type { Manifest, McpProbeResult, MemoryReport, StaleMemory, CodexTargetReport };
+export type {
+  Manifest,
+  McpProbeResult,
+  MemoryReport,
+  StaleMemory,
+  CodexTargetReport,
+  RogueLedgerDb,
+};
