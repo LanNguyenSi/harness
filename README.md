@@ -195,6 +195,22 @@ tailored to your machine.
 Convinced? Install globally and set up your own:
 `npm i -g @lannguyensi/harness && harness init --interactive`.
 
+## Uninstall
+
+`harness uninstall` is the single-command teardown: dry-run by default,
+`--apply` to mutate. It inventories what harness planted under
+`~/.claude/` (manifest, lock, `harness.generated/`, harness-owned hook
+groups and `mcpServers` entries in `settings.json`, any leftover
+`settings.json.pre-harness-<TS>` backups), then removes them after
+writing a reversible backup + JSON snapshot next to `settings.json`.
+
+```bash
+harness uninstall                                      # list, exit 0
+harness uninstall --apply                              # tear down
+harness uninstall --restore-from <pre-harness-backup>  # atomic restore
+npm uninstall -g @lannguyensi/harness                  # drop the CLI itself
+```
+
 ## Status
 
 harness ships in phases. Phases 1 through 6 are released: read-only

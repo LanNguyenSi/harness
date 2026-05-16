@@ -56,6 +56,7 @@ import { runInterceptCli } from "./policy/intercept.js";
 import { runSessionStartPreflight } from "./session-start/index.js";
 import { gateDisable, GateDisableError } from "./gate/disable.js";
 import { gateEnable, GateEnableError } from "./gate/enable.js";
+import { uninstall, UninstallError } from "./uninstall/index.js";
 import {
   formatSmokeReport,
   runSmoke,
@@ -1538,6 +1539,123 @@ export function buildProgram(opts: RunOptions = {}): Command {
         );
       } catch (err) {
         if (err instanceof GateEnableError) {
+          throw new HarnessExitError(err.message, EX_FAIL);
+        }
+        throw err;
+      }
+    });
+
+  program
+    .command("uninstall")
+    .description(
+      "Clean teardown of a harness installation. Inventories harness-owned " +
+        "entries in ~/.claude/ (manifest, lock, harness.generated/, hook groups " +
+        "and mcpServers in settings.json) and prints them. With --apply, removes " +
+        "them after writing a reversible settings.json backup + snapshot. " +
+        "settings.json.pre-harness-<TS> backups are listed but never deleted, " +
+        "so the operator can hand them to --restore-from <path> (atomic restore " +
+        "from that file) or `rm` them manually.",
+    )
+    .option("--apply", "execute the teardown (default: dry-run listing only)")
+    .option(
+      "--restore-from <path>",
+      "atomic restore: copy this file over settings.json instead of selective removal (implies --apply)",
+    )
+    .option("--home <path>", "override ~/.claude/ root (for tests / non-default installs)")
+    .option("--settings <path>", "override ~/.claude/settings.json")
+    .action(async (options: { apply?: boolean; restoreFrom?: string; home?: string; settings?: string }) => {
+      const cliOpts: Parameters<typeof uninstall>[0] = {};
+      if (options.apply) cliOpts.apply = true;
+      if (options.restoreFrom) cliOpts.restoreFrom = options.restoreFrom;
+      if (options.home) cliOpts.homeDir = options.home;
+      if (options.settings) cliOpts.settingsPath = options.settings;
+      try {
+        const result = uninstall(cliOpts);
+        const inv = result.inventory;
+        if (result.mode === "list") {
+          const nothing =
+            inv.manifestPath === null &&
+            inv.lockPath === null &&
+            inv.generatedDir === null &&
+            inv.hookGroups.length === 0 &&
+            inv.mcpServers.length === 0 &&
+            inv.preHarnessBackups.length === 0;
+          if (nothing) {
+            stdout(`no harness install found under ${inv.homeDir}; nothing to do.\n`);
+            for (const w of inv.warnings) stderr(`warning: ${w}\n`);
+            return;
+          }
+          stdout(`harness install under ${inv.homeDir}:\n`);
+          if (inv.manifestPath) stdout(`  manifest:  ${inv.manifestPath}\n`);
+          if (inv.lockPath) stdout(`  lock:      ${inv.lockPath}\n`);
+          if (inv.generatedDir) stdout(`  generated: ${inv.generatedDir}/\n`);
+          if (inv.hookGroups.length > 0) {
+            stdout(`  hook groups in ${inv.settingsPath}:\n`);
+            for (const g of inv.hookGroups) {
+              const matcherLabel = g.matcher === null ? "(no matcher)" : JSON.stringify(g.matcher);
+              stdout(`    ${g.event}[${g.index}] matcher=${matcherLabel}: ${g.description}\n`);
+            }
+          }
+          if (inv.mcpServers.length > 0) {
+            stdout(`  mcpServers in ${inv.settingsPath}: ${inv.mcpServers.join(", ")}\n`);
+          }
+          if (inv.preHarnessBackups.length > 0) {
+            stdout(`  pre-harness backups:\n`);
+            for (const b of inv.preHarnessBackups) stdout(`    ${b}\n`);
+            stdout(
+              `\n  Restore from one of these with: harness uninstall --restore-from <path>\n`,
+            );
+          }
+          stdout(`\nPass --apply to remove the above. This is a dry-run.\n`);
+          for (const w of inv.warnings) stderr(`warning: ${w}\n`);
+          return;
+        }
+        if (result.mode === "restore") {
+          stdout(`restored ${inv.settingsPath} from ${result.restoredFrom}.\n`);
+          stdout(`backup:   ${result.backupPath}\n`);
+          stdout(`snapshot: ${result.snapshotPath}\n`);
+          if (result.removedFiles.length > 0) {
+            stdout(`removed:\n`);
+            for (const f of result.removedFiles) stdout(`  ${f}\n`);
+          }
+          stdout(
+            `\nTo finish: \`npm uninstall -g @lannguyensi/harness\` (uninstall does not touch the npm install).\n`,
+          );
+          for (const w of inv.warnings) stderr(`warning: ${w}\n`);
+          return;
+        }
+        // apply
+        if (result.backupPath !== null && result.snapshotPath !== null) {
+          stdout(`mutated ${inv.settingsPath}:\n`);
+          if (inv.hookGroups.length > 0) {
+            stdout(`  removed ${inv.hookGroups.length} hook group(s): `);
+            stdout(inv.hookGroups.map((g) => `${g.event}[${g.index}]`).join(", "));
+            stdout(`\n`);
+          }
+          if (inv.mcpServers.length > 0) {
+            stdout(`  removed mcpServers: ${inv.mcpServers.join(", ")}\n`);
+          }
+          stdout(`backup:   ${result.backupPath}\n`);
+          stdout(`snapshot: ${result.snapshotPath}\n`);
+        }
+        if (result.removedFiles.length > 0) {
+          stdout(`removed from disk:\n`);
+          for (const f of result.removedFiles) stdout(`  ${f}\n`);
+        }
+        if (
+          result.backupPath === null &&
+          result.snapshotPath === null &&
+          result.removedFiles.length === 0
+        ) {
+          stdout(`no harness install found under ${inv.homeDir}; nothing to remove.\n`);
+        } else {
+          stdout(
+            `\nTo finish: \`npm uninstall -g @lannguyensi/harness\` (uninstall does not touch the npm install).\n`,
+          );
+        }
+        for (const w of inv.warnings) stderr(`warning: ${w}\n`);
+      } catch (err) {
+        if (err instanceof UninstallError) {
           throw new HarnessExitError(err.message, EX_FAIL);
         }
         throw err;
