@@ -30,7 +30,11 @@ The wizard is one of three ways to bootstrap a manifest:
 
 7. **Validate.** After the write, the wizard runs `harness validate` and reports the error / warning counts and the per-diagnostic details. A non-zero error count makes the wizard exit `1` so CI scripts notice; the manifest stays on disk for inspection.
 
-8. **Next steps.** The wizard prints the suggested `harness apply --runtime claude-code` follow-up but does NOT run it. Auto-apply would risk silently mutating `settings.json` after a partial confirmation; the operator should review the new manifest first.
+8. **Runtime wire-now multiselect.** A checkbox prompt offers `claude-code` and `codex` (and a disabled `opencode` slot pending [task `f34eb233`](https://github.com/LanNguyenSi/harness/issues)). Whichever runtimes the probe found configured are pre-checked, so the common single-runtime case is one Enter press. For each ticked runtime:
+   - `claude-code` → `harness apply --target ~/.claude/settings.json --merge` is run; the merge summary, `wired into …`, and `verify: …` lines print to stderr.
+   - `codex` → `harness apply --runtime codex` writes `harness.generated/codex/config.toml`; the operator gets the path and the merge instruction (`copy or include those [[hooks.*]] entries into ~/.codex/config.toml`). The wizard never edits `~/.codex/config.toml` directly because `apply --target` is incompatible with `--runtime codex`.
+   - Unchecking everything skips wiring entirely; both manual fallback commands print so the operator can wire later by hand.
+   - Selecting both runtimes runs the two applies sequentially. `harness.lock` then reflects the **last-applied** runtime; a follow-up `harness apply --runtime <name>` per runtime refreshes its drift baseline. The wizard surfaces this caveat to stderr.
 
 ## Ctrl-C semantics
 
@@ -48,6 +52,5 @@ harness validate            # expect: no validation findings
 ## Limitations (will land later)
 
 - **Custom profile.** Today the Custom choice just hands you off to `--template full`. A future PR can expose the checkbox flow described in task `c5287b80` (per-pack / per-MCP / per-hook selection).
-- **Opencode runtime.** v1 covers Claude Code and Codex. Opencode adapter is a separate prerequisite task (`f34eb233`).
-- **Auto-apply.** The wizard prints the `harness apply` command but does not invoke it; manifests are written, runtime wiring stays explicit.
-- **Multi-runtime selection.** v1 writes a manifest that works for both Claude Code and Codex without asking. A future revision can offer a runtime checkbox if there is demand.
+- **Opencode runtime.** v1 covers Claude Code and Codex; the wizard surfaces `opencode` as a disabled checkbox until the runtime adapter task `f34eb233` lands.
+- **Cross-runtime apply lock state.** `harness apply` is single-runtime per invocation, so when the wizard wires both Claude Code and Codex in one run it calls `apply` twice; `harness.lock` reflects the last-applied runtime's artefacts. Drift detection on the first runtime's outputs is unreliable until you re-run `harness apply --runtime <name>` for that runtime. Tracked for a future single-call multi-runtime apply.
