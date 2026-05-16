@@ -45,6 +45,7 @@ import {
 } from "../../schema/index.js";
 import { z } from "zod";
 import { loadManifest, type LoaderOptions } from "../loader.js";
+import { renderReportSchemaHint } from "./understanding-report-schema-hint.js";
 
 const PACK_NAME = "understanding-before-execution";
 
@@ -155,10 +156,14 @@ function blockJson(
   // Legacy suffix kept unchanged so existing operators / docs that quote
   // the old surface still find the recognizable string. The producers
   // block (when configured) appends AFTER, so a reader's eye lands on
-  // the structured recipe last.
+  // the structured recipe last. The schema-hint paragraph sits between
+  // them: the agent reads the call-to-action first, then learns what
+  // shape the report needs to take (without this, freeform prose
+  // satisfies the marker write but silently fails the parser).
   const suffix = `Run \`harness approve understanding\` once you have produced and confirmed an Understanding Report.`;
+  const schemaHint = renderReportSchemaHint();
   const producersBlock = renderProducers(producers, { SESSION_ID: sessionId });
-  const reasonText = `Understanding Gate: ${reason}. Tool: ${toolName}. ${suffix}${producersBlock}`;
+  const reasonText = `Understanding Gate: ${reason}. Tool: ${toolName}. ${suffix}\n${schemaHint}${producersBlock}`;
   return JSON.stringify({
     decision: "block",
     reason: reasonText,

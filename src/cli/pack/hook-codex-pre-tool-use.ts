@@ -31,6 +31,7 @@ import {
 import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
 import type { Manifest, McpServer } from "../../schema/index.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
+import { renderReportSchemaHint } from "./understanding-report-schema-hint.js";
 
 const PACK_NAME = "understanding-before-execution";
 const EXIT_BLOCK = 2;
@@ -244,7 +245,8 @@ export async function runPackHookCodexPreToolUseCli(
     : `generatedDir not resolvable (test/injection path); ${report.detail}; ${ledger.detail}`;
   const diagnostic =
     `harness pack hook codex: BLOCK: ${reason}. Tool: ${toolName}. ` +
-    "Run `harness approve understanding` once you have produced and confirmed an Understanding Report.";
+    "Run `harness approve understanding` once you have produced and confirmed an Understanding Report.\n" +
+    renderReportSchemaHint();
   stderr.write(`${diagnostic}\n`);
   return {
     exitCode: EXIT_BLOCK,
