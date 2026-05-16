@@ -59,10 +59,14 @@ describe("parseManifest — happy path", () => {
     expect(manifest.policy_packs[0]?.source).toBe("builtin");
     expect(manifest.policy_packs[0]?.enabled).toBe(true);
     expect(manifest.policy_packs[0]?.config).toEqual({ mode: "grill_me" });
-    // Producers (agent-tasks/3804b785): the three policies that ship
-    // with remediation hints today must carry an MCP path, since that
-    // is the ungated recovery route for Bash-lockout scenarios.
+    // Producers (agent-tasks/3804b785 + fa4b188b): all six reference
+    // policies must ship with remediation hints carrying an MCP path,
+    // since that is the ungated recovery route for Bash-lockout
+    // scenarios. The full chain was completed in fa4b188b.
     for (const policyName of [
+      "review-before-merge",
+      "dogfood-before-release",
+      "two-reviewers-required",
       "preflight-before-investigation",
       "review-subagent-before-pr-create",
       "preflight-before-push",

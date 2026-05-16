@@ -132,6 +132,11 @@ policies:
       ledger_tag: review:${PR_NUMBER}
     hook: require-review-evidence
     enforcement: block
+    producers:
+      - kind: mcp
+        verb: mcp__agent-grounding__ledger_add
+        example: '{type:"fact", content:"review:${PR_NUMBER} — <verdict + key findings + nits>", source:"Agent(general-purpose) review"}'
+        description: Spawn a review subagent against the PR diff, capture its verdict, then persist a ledger entry tagged with the PR number. The content should be self-contained enough for an auditor to read without re-opening the chat.
   - name: dogfood-before-release
     description: Block npm publish / git tag v* without a recent dogfood ledger entry.
     trigger:
@@ -143,6 +148,11 @@ policies:
       within: 24h
     hook: require-dogfood-evidence
     enforcement: block
+    producers:
+      - kind: mcp
+        verb: mcp__agent-grounding__ledger_add
+        example: '{type:"fact", content:"dogfood:${SESSION_ID} — <end-to-end smoke summary against the live system>", source:"manual smoke test"}'
+        description: Before tagging or publishing, run the release path end-to-end against the live system (not just unit tests) and persist the result as a session-tagged ledger entry. Document what you exercised (install, CLI happy path, MCP handshake, etc.) so a future auditor can tell whether the smoke covered the change.
   - name: two-reviewers-required
     description: At least two distinct reviewer ledger entries must exist for the PR.
     trigger:
@@ -156,6 +166,11 @@ policies:
         min: 2
     hook: require-review-evidence
     enforcement: warn
+    producers:
+      - kind: mcp
+        verb: mcp__agent-grounding__ledger_add
+        example: '{type:"fact", content:"review:${PR_NUMBER} — <verdict + key findings + nits>", source:"Agent(general-purpose) review (reviewer 2)"}'
+        description: Same shape as review-before-merge but TWO DISTINCT reviewer entries must exist before the gate is satisfied (count.min 2). Distinguish reviewers by source so the count is honest. Warn-level enforcement, so the agent CAN merge with one reviewer but should consider spawning a second for load-bearing changes.
   - name: preflight-before-investigation
     description: Block investigative git reads when agent-preflight has not run recently with ready:true for the current repo (founding-incident policy).
     trigger:
