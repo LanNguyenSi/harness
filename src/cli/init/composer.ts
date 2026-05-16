@@ -1,14 +1,17 @@
 // À la carte manifest composer for `harness init --interactive` Custom
-// profile (task 31d2fbb5). The composer turns a discrete checkbox
-// selection into a YAML manifest that `harness validate` accepts.
+// profile (tasks 31d2fbb5 + 5dd3d8a6). The composer turns a discrete
+// checkbox selection into a YAML manifest that `harness validate`
+// accepts.
 //
-// v1 scope (per task scope-cut): a single policy pack
-// (understanding-before-execution), three MCPs (agent-tasks,
-// grounding-mcp, memory-router — note memory-router lives under
-// memory.router, not tools.mcp[]), and three reference policies. The
-// remaining packs/MCPs/policies in the FULL template are deliberately
-// deferred to a follow-up task so the Custom surface stays
-// reviewable in one PR.
+// Current surface (parity with FULL_TEMPLATE): one policy pack
+// (understanding-before-execution), four MCPs (agent-tasks,
+// grounding-mcp, memory-router — wired under memory.router, NOT
+// tools.mcp[] — and codebase-oracle), and six reference policies
+// (review-before-merge, preflight-before-investigation,
+// review-subagent-before-pr-create, preflight-before-push,
+// dogfood-before-release, two-reviewers-required). The opencode pack
+// stays disabled in the wire-now multiselect until its runtime adapter
+// (agent-tasks/f34eb233) lands.
 //
 // Design: build a plain object matching the Manifest schema, then
 // serialise via the `yaml` library. The shared `init()` path
@@ -19,11 +22,18 @@
 import { stringify } from "yaml";
 
 export type CustomPackKey = "understanding-before-execution";
-export type CustomMcpKey = "agent-tasks" | "grounding-mcp" | "memory-router";
+export type CustomMcpKey =
+  | "agent-tasks"
+  | "grounding-mcp"
+  | "memory-router"
+  | "codebase-oracle";
 export type CustomPolicyKey =
   | "review-before-merge"
   | "preflight-before-investigation"
-  | "review-subagent-before-pr-create";
+  | "review-subagent-before-pr-create"
+  | "preflight-before-push"
+  | "dogfood-before-release"
+  | "two-reviewers-required";
 
 export interface ComposableOption<K extends string> {
   key: K;
@@ -56,6 +66,12 @@ export const COMPOSABLE_MCPS: ReadonlyArray<ComposableOption<CustomMcpKey>> = [
     label: "memory-router  (wired under memory.router, not tools.mcp[])",
     description: "Cross-conversation memory routing via UserPromptSubmit.",
   },
+  {
+    key: "codebase-oracle",
+    label: "codebase-oracle  (needs ORACLE_SCAN_ROOT + OPENAI_API_KEY env vars)",
+    description:
+      "Multi-repo semantic search MCP server. Set ORACLE_SCAN_ROOT to an absolute path (tilde is NOT expanded) and an embedding-provider key before the first call.",
+  },
 ];
 
 export const COMPOSABLE_POLICIES: ReadonlyArray<ComposableOption<CustomPolicyKey>> = [
@@ -76,6 +92,24 @@ export const COMPOSABLE_POLICIES: ReadonlyArray<ComposableOption<CustomPolicyKey
     label: "review-subagent-before-pr-create",
     description:
       "Block mcp__agent-tasks__pull_requests_create unless a review-subagent:<task-id> ledger entry exists.",
+  },
+  {
+    key: "preflight-before-push",
+    label: "preflight-before-push",
+    description:
+      "Block git push unless preflight:<branch> ledger entry exists for the current branch (within 10m).",
+  },
+  {
+    key: "dogfood-before-release",
+    label: "dogfood-before-release",
+    description:
+      "Block npm publish / git tag v* unless a dogfood:<session-id> ledger entry exists in this session (within 24h).",
+  },
+  {
+    key: "two-reviewers-required",
+    label: "two-reviewers-required  (warn-level companion to review-before-merge)",
+    description:
+      "Warn when PR-merge runs without TWO distinct review:<pr-number> ledger entries. Enforcement: warn.",
   },
 ];
 
@@ -117,7 +151,11 @@ interface PolicySpec {
     bash_match?: string;
     extract?: Record<string, string>;
   };
-  requires: { ledger_tag: string; within?: string };
+  requires: {
+    ledger_tag: string;
+    within?: string;
+    count?: { min?: number; max?: number; exact?: number };
+  };
   hook: string;
   enforcement: string;
 }
@@ -145,6 +183,38 @@ const HOOK_FOR_POLICY: Record<CustomPolicyKey, HookSpec> = {
     name: "require-review-subagent-evidence",
     event: "PreToolUse",
     match: "mcp__agent-tasks__pull_requests_create",
+    command: "harness policy intercept",
+    blocking: "hard",
+    budget_ms: 2000,
+  },
+  "preflight-before-push": {
+    name: "require-preflight-push-evidence",
+    event: "PreToolUse",
+    match: "Bash",
+    bash_match: "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b",
+    command: "harness policy intercept",
+    blocking: "hard",
+    budget_ms: 1000,
+  },
+  "dogfood-before-release": {
+    name: "require-dogfood-evidence",
+    event: "PreToolUse",
+    match: "Bash",
+    bash_match:
+      "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*(npm publish\\b|git( -C \\S+)* tag v)",
+    command: "harness policy intercept",
+    blocking: "hard",
+    budget_ms: 2000,
+  },
+  // two-reviewers-required shares review-before-merge's hook; the policy
+  // intercept engine evaluates both policies under the same trigger and
+  // each enforces independently (block vs warn). We still need a hook
+  // entry so the policy's `hook:` field round-trips through validate,
+  // but it's the same row as require-review-evidence.
+  "two-reviewers-required": {
+    name: "require-review-evidence",
+    event: "PreToolUse",
+    match: "mcp__agent-tasks__pull_requests_merge",
     command: "harness policy intercept",
     blocking: "hard",
     budget_ms: 2000,
@@ -192,14 +262,53 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
     hook: "require-review-subagent-evidence",
     enforcement: "block",
   },
+  "preflight-before-push": {
+    name: "preflight-before-push",
+    description:
+      "Block git push unless a fresh preflight ledger entry exists for the current branch. Catches the stale-checkout class of incident at the last reversible step.",
+    trigger: {
+      event: "PreToolUse",
+      match: "Bash",
+      bash_match: "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b",
+    },
+    requires: { ledger_tag: "preflight:${BRANCH}", within: "10m" },
+    hook: "require-preflight-push-evidence",
+    enforcement: "block",
+  },
+  "dogfood-before-release": {
+    name: "dogfood-before-release",
+    description: "Block npm publish / git tag v* without a recent dogfood ledger entry.",
+    trigger: {
+      event: "PreToolUse",
+      match: "Bash",
+      bash_match:
+        "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*(npm publish\\b|git( -C \\S+)* tag v)",
+    },
+    requires: { ledger_tag: "dogfood:${SESSION_ID}", within: "24h" },
+    hook: "require-dogfood-evidence",
+    enforcement: "block",
+  },
+  "two-reviewers-required": {
+    name: "two-reviewers-required",
+    description: "At least two distinct reviewer ledger entries must exist for the PR.",
+    trigger: {
+      event: "PreToolUse",
+      match: "mcp__agent-tasks__pull_requests_merge",
+      extract: { PR_NUMBER: "toolArgs.prNumber" },
+    },
+    requires: { ledger_tag: "review:${PR_NUMBER}", count: { min: 2 } },
+    hook: "require-review-evidence",
+    enforcement: "warn",
+  },
 };
 
 interface McpEntry {
   name: string;
   command: string[];
-  min_version: string;
-  health: { verb: string; timeout_ms: number };
+  min_version?: string;
+  health?: { verb: string; timeout_ms: number };
   enabled: boolean;
+  env?: Record<string, string>;
 }
 
 const MCP_ENTRY: Record<Exclude<CustomMcpKey, "memory-router">, McpEntry> = {
@@ -215,6 +324,20 @@ const MCP_ENTRY: Record<Exclude<CustomMcpKey, "memory-router">, McpEntry> = {
     command: ["grounding-mcp"],
     min_version: "0.2.0",
     health: { verb: "ledger_status", timeout_ms: 5000 },
+    enabled: true,
+  },
+  // codebase-oracle: harness wires the MCP entry but cannot prompt for
+  // the absolute ORACLE_SCAN_ROOT path or the OPENAI_API_KEY (or any
+  // other embedding-provider key). The wizard emits a composer.warning
+  // when this is picked so the operator knows the env vars still need
+  // to be set in their shell or settings.json before the first call.
+  // Note: passing a literal tilde in env values bypasses shell expansion
+  // (see grounding-mcp incident in FULL_TEMPLATE comments), so the
+  // wizard does NOT auto-default ORACLE_SCAN_ROOT to ~/code — the
+  // operator must supply an absolute path themselves.
+  "codebase-oracle": {
+    name: "codebase-oracle",
+    command: ["codebase-oracle", "mcp"],
     enabled: true,
   },
 };
@@ -252,16 +375,37 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
       "policy review-subagent-before-pr-create fires on agent-tasks MCP verbs; selecting it without the agent-tasks MCP is allowed but the gate has no event to evaluate.",
     );
   }
+  if (sel.policies.includes("two-reviewers-required") && !mcpSet.has("agent-tasks")) {
+    warnings.push(
+      "policy two-reviewers-required fires on agent-tasks MCP verbs; selecting it without the agent-tasks MCP is allowed but the gate has no event to evaluate.",
+    );
+  }
   // Note: understanding-before-execution does NOT produce preflight tags
   // (it produces the operator-approve marker, a different gate signal).
   // The pack is therefore NOT a substitute for grounding-mcp here; the
-  // only v1 producer the wizard can wire is grounding-mcp's ledger_add.
+  // only Custom-surface producer the wizard can wire is grounding-mcp's
+  // ledger_add.
   if (
     sel.policies.includes("preflight-before-investigation") &&
     !mcpSet.has("grounding-mcp")
   ) {
     warnings.push(
-      "policy preflight-before-investigation requires a producer that writes preflight:<repo> tags to the evidence ledger. Without grounding-mcp (ledger_add) or a separate SessionStart preflight hook (not in the v1 Custom surface), the gate stays closed forever.",
+      "policy preflight-before-investigation requires a producer that writes preflight:<repo> tags to the evidence ledger. Without grounding-mcp (ledger_add) or a separate SessionStart preflight hook (not in the Custom surface), the gate stays closed forever.",
+    );
+  }
+  if (sel.policies.includes("preflight-before-push") && !mcpSet.has("grounding-mcp")) {
+    warnings.push(
+      "policy preflight-before-push requires a producer that writes preflight:<branch> tags to the evidence ledger. Without grounding-mcp (ledger_add) or a separate SessionStart preflight hook (not in the Custom surface), the gate stays closed forever.",
+    );
+  }
+  if (sel.policies.includes("dogfood-before-release") && !mcpSet.has("grounding-mcp")) {
+    warnings.push(
+      "policy dogfood-before-release requires a producer that writes dogfood:<session-id> tags to the evidence ledger. Without grounding-mcp (ledger_add) the gate stays closed forever — every npm publish / git tag v* will be blocked.",
+    );
+  }
+  if (mcpSet.has("codebase-oracle")) {
+    warnings.push(
+      "MCP codebase-oracle requires ORACLE_SCAN_ROOT (absolute path; tilde is NOT expanded) and OPENAI_API_KEY (or ORACLE_LLM_PROVIDER + the matching provider key) set in your shell or in Claude's settings.json env block before the first call. The wizard does NOT prompt for these.",
     );
   }
 
@@ -305,7 +449,20 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
   }
 
   if (sel.policies.length > 0) {
-    manifest.hooks = sel.policies.map((p) => HOOK_FOR_POLICY[p]);
+    // Dedup hooks by name: two-reviewers-required + review-before-merge
+    // both reference `require-review-evidence`, but the schema's
+    // superRefine rejects duplicate hook names (each hook entry must be
+    // unique). Emit each hook at most once; the same row services every
+    // referencing policy.
+    const seenHookName = new Set<string>();
+    const hooks: HookSpec[] = [];
+    for (const p of sel.policies) {
+      const h = HOOK_FOR_POLICY[p];
+      if (seenHookName.has(h.name)) continue;
+      seenHookName.add(h.name);
+      hooks.push(h);
+    }
+    manifest.hooks = hooks;
     manifest.policies = sel.policies.map((p) => POLICY[p]);
   }
 

@@ -83,6 +83,54 @@ describe("composeCustom — policies", () => {
   });
 });
 
+describe("composeCustom — new policy entries (task 5dd3d8a6)", () => {
+  it("preflight-before-push: emits the push-specific hook + within:10m requires", () => {
+    const { manifest } = compose({ policies: ["preflight-before-push"] });
+    const policy = manifest.policies.find((p) => p.name === "preflight-before-push");
+    expect(policy?.requires?.within).toBe("10m");
+    expect(policy?.requires?.ledger_tag).toBe("preflight:${BRANCH}");
+    expect(manifest.hooks.find((h) => h.name === "require-preflight-push-evidence")).toBeDefined();
+  });
+
+  it("dogfood-before-release: matches the npm-publish/git-tag bash_match + within:24h", () => {
+    const { manifest } = compose({ policies: ["dogfood-before-release"] });
+    const policy = manifest.policies.find((p) => p.name === "dogfood-before-release");
+    expect(policy?.requires?.within).toBe("24h");
+    expect(policy?.requires?.ledger_tag).toBe("dogfood:${SESSION_ID}");
+    expect(policy?.enforcement).toBe("block");
+    const hook = manifest.hooks.find((h) => h.name === "require-dogfood-evidence");
+    expect(hook?.bash_match).toMatch(/npm publish/);
+    expect(hook?.bash_match).toMatch(/tag v/);
+  });
+
+  it("two-reviewers-required: warn-level enforcement + count.min:2, dedups hook with review-before-merge", () => {
+    const { manifest } = compose({
+      policies: ["review-before-merge", "two-reviewers-required"],
+    });
+    const two = manifest.policies.find((p) => p.name === "two-reviewers-required");
+    expect(two?.enforcement).toBe("warn");
+    expect(two?.requires?.count?.min).toBe(2);
+    // Both policies reference require-review-evidence; the composer must
+    // emit that hook exactly once (schema rejects duplicate hook names).
+    const reviewHooks = manifest.hooks.filter((h) => h.name === "require-review-evidence");
+    expect(reviewHooks).toHaveLength(1);
+  });
+});
+
+describe("composeCustom — codebase-oracle MCP", () => {
+  it("emits codebase-oracle under tools.mcp[] without env defaults; surfaces an env-var warning", () => {
+    const { manifest, warnings } = compose({ mcps: ["codebase-oracle"] });
+    const mcp = manifest.tools.mcp.find((m) => m.name === "codebase-oracle");
+    expect(mcp).toBeDefined();
+    expect(mcp?.command).toEqual(["codebase-oracle", "mcp"]);
+    // The composer does NOT inject env defaults — a literal tilde in
+    // ORACLE_SCAN_ROOT bypasses shell expansion (see grounding-mcp
+    // incident); the operator must set it themselves.
+    expect(mcp?.env).toBeUndefined();
+    expect(warnings.some((w) => /codebase-oracle/.test(w) && /ORACLE_SCAN_ROOT/.test(w))).toBe(true);
+  });
+});
+
 describe("composeCustom — producer-coupling warnings", () => {
   it("warns when review-before-merge is selected without agent-tasks", () => {
     const { warnings } = compose({ policies: ["review-before-merge"] });
@@ -106,7 +154,7 @@ describe("composeCustom — producer-coupling warnings", () => {
     ).toBe(true);
   });
 
-  it("does NOT warn when policy producers are satisfied (full pick)", () => {
+  it("does NOT warn when policy producers are satisfied (full pick, sans codebase-oracle)", () => {
     const { warnings } = compose({
       packs: ["understanding-before-execution"],
       mcps: ["agent-tasks", "grounding-mcp", "memory-router"],
@@ -114,9 +162,33 @@ describe("composeCustom — producer-coupling warnings", () => {
         "review-before-merge",
         "preflight-before-investigation",
         "review-subagent-before-pr-create",
+        "preflight-before-push",
+        "dogfood-before-release",
+        "two-reviewers-required",
       ],
     });
     expect(warnings).toEqual([]);
+  });
+
+  it("warns when preflight-before-push is selected without grounding-mcp", () => {
+    const { warnings } = compose({ policies: ["preflight-before-push"] });
+    expect(
+      warnings.some((w) => /preflight-before-push/.test(w) && /producer/.test(w)),
+    ).toBe(true);
+  });
+
+  it("warns when dogfood-before-release is selected without grounding-mcp (every npm publish would block)", () => {
+    const { warnings } = compose({ policies: ["dogfood-before-release"] });
+    expect(
+      warnings.some((w) => /dogfood-before-release/.test(w) && /every npm publish/.test(w)),
+    ).toBe(true);
+  });
+
+  it("warns when two-reviewers-required is selected without agent-tasks (no merge events to evaluate)", () => {
+    const { warnings } = compose({ policies: ["two-reviewers-required"] });
+    expect(
+      warnings.some((w) => /two-reviewers-required/.test(w) && /agent-tasks/.test(w)),
+    ).toBe(true);
   });
 });
 
@@ -128,17 +200,21 @@ describe("composeCustom — memoryDir override", () => {
 });
 
 describe("composer surface (catalogues)", () => {
-  it("keeps the v1 surface small and stable for snapshot review", () => {
+  it("matches FULL_TEMPLATE parity (1 pack, 4 MCPs, 6 reference policies) for snapshot review", () => {
     expect(COMPOSABLE_PACKS.map((p) => p.key)).toEqual(["understanding-before-execution"]);
     expect(COMPOSABLE_MCPS.map((m) => m.key)).toEqual([
       "agent-tasks",
       "grounding-mcp",
       "memory-router",
+      "codebase-oracle",
     ]);
     expect(COMPOSABLE_POLICIES.map((p) => p.key)).toEqual([
       "review-before-merge",
       "preflight-before-investigation",
       "review-subagent-before-pr-create",
+      "preflight-before-push",
+      "dogfood-before-release",
+      "two-reviewers-required",
     ]);
   });
 });

@@ -226,18 +226,44 @@ export function dependenciesForCustom(sel: CustomSelection): ProfileDependency[]
       if (dep.binary.startsWith("understanding-gate-")) push(dep);
     }
   }
-  // MCPs → their bridges / bins.
+  // MCPs → their bridges / bins. codebase-oracle is treated as a
+  // first-class dep here even though FULL_TEMPLATE deliberately omits
+  // it (the doc-table reasoning is that its setup cost is too high for
+  // every Full operator). Custom is opt-in, so an operator who ticks
+  // codebase-oracle has accepted that cost; we still install the bin
+  // for them. The env-var requirement is surfaced as a composer warning.
   const mcpToBinary: Record<CustomSelection["mcps"][number], string> = {
     "agent-tasks": "agent-tasks-mcp-bridge",
     "grounding-mcp": "grounding-mcp",
     "memory-router": "memory-router-user-prompt-submit",
+    "codebase-oracle": "codebase-oracle",
   };
+  const extraDeps: ProfileDependency[] = [
+    {
+      binary: "codebase-oracle",
+      npmPackage: "@lannguyensi/codebase-oracle",
+      description: "codebase-oracle MCP server",
+    },
+  ];
   for (const m of sel.mcps) {
     const targetBin = mcpToBinary[m];
     const dep =
       PROFILE_DEPENDENCIES.solo.find((d) => d.binary === targetBin) ??
-      PROFILE_DEPENDENCIES.team.find((d) => d.binary === targetBin);
+      PROFILE_DEPENDENCIES.team.find((d) => d.binary === targetBin) ??
+      extraDeps.find((d) => d.binary === targetBin);
     if (dep) push(dep);
+  }
+  // preflight-* policies need agent-preflight on PATH (the
+  // SessionStart hook FULL_TEMPLATE wires; mirrors PROFILE_DEPENDENCIES.full).
+  // Even though the Custom surface does not expose the SessionStart hook
+  // yet, operators wiring the preflight gates will still want the
+  // producer binary installed so a manual `harness session-start preflight`
+  // invocation can populate the ledger tag.
+  const wantsPreflight = sel.policies.some((p) => p.startsWith("preflight-"));
+  if (wantsPreflight) {
+    for (const dep of PROFILE_DEPENDENCIES.full) {
+      if (dep.binary === "preflight") push(dep);
+    }
   }
   return chain;
 }
