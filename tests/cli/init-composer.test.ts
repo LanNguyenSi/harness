@@ -96,6 +96,16 @@ describe("composeCustom — producer-coupling warnings", () => {
     ).toBe(true);
   });
 
+  it("still warns when the only thing selected alongside preflight-before-investigation is the understanding-before-execution pack (the pack does NOT produce preflight tags)", () => {
+    const { warnings } = compose({
+      packs: ["understanding-before-execution"],
+      policies: ["preflight-before-investigation"],
+    });
+    expect(
+      warnings.some((w) => /preflight-before-investigation/.test(w) && /producer/.test(w)),
+    ).toBe(true);
+  });
+
   it("does NOT warn when policy producers are satisfied (full pick)", () => {
     const { warnings } = compose({
       packs: ["understanding-before-execution"],

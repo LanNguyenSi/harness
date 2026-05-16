@@ -232,7 +232,6 @@ const HEADER = [
 export function composeCustom(sel: CustomSelection): ComposeResult {
   const warnings: string[] = [];
   const mcpSet = new Set(sel.mcps);
-  const packSet = new Set(sel.packs);
 
   // Producer-consistency advisories: each policy's `requires.ledger_tag`
   // implies some producer must populate that tag. agent-tasks-coupled
@@ -253,13 +252,16 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
       "policy review-subagent-before-pr-create fires on agent-tasks MCP verbs; selecting it without the agent-tasks MCP is allowed but the gate has no event to evaluate.",
     );
   }
+  // Note: understanding-before-execution does NOT produce preflight tags
+  // (it produces the operator-approve marker, a different gate signal).
+  // The pack is therefore NOT a substitute for grounding-mcp here; the
+  // only v1 producer the wizard can wire is grounding-mcp's ledger_add.
   if (
     sel.policies.includes("preflight-before-investigation") &&
-    !mcpSet.has("grounding-mcp") &&
-    !packSet.has("understanding-before-execution")
+    !mcpSet.has("grounding-mcp")
   ) {
     warnings.push(
-      "policy preflight-before-investigation requires a producer that writes preflight:<repo> tags to the evidence ledger. Without grounding-mcp (ledger_add) or a separate SessionStart preflight hook, the gate stays closed forever.",
+      "policy preflight-before-investigation requires a producer that writes preflight:<repo> tags to the evidence ledger. Without grounding-mcp (ledger_add) or a separate SessionStart preflight hook (not in the v1 Custom surface), the gate stays closed forever.",
     );
   }
 
