@@ -189,6 +189,19 @@ function formatCodexTargetSection(report: DoctorReport): string[] {
   return out;
 }
 
+/**
+ * Wrap a filesystem path for safe inclusion inside a single-quoted shell
+ * argument. Repo directory names under $HOME/git/* can contain quotes or
+ * metacharacters (rare but possible: `foo's-repo`, `weird;name`); the
+ * cleanup hint we render is meant to be copy-pasted into a shell, so the
+ * quoted form must survive that round trip without rewriting other
+ * directories. Standard POSIX recipe: close the open quote, insert an
+ * escaped quote, reopen.
+ */
+function shellQuoteSingle(p: string): string {
+  return `'${p.replace(/'/g, `'\\''`)}'`;
+}
+
 function formatRogueLedgerSection(report: DoctorReport): string[] {
   if (report.rogueLedgerDbs.length === 0) return [];
   const out: string[] = ["", "Rogue evidence-ledger DBs"];
@@ -197,7 +210,7 @@ function formatRogueLedgerSection(report: DoctorReport): string[] {
     out.push(
       `      left over from the EVIDENCE_LEDGER_DB literal-tilde bug (agent-tasks/42d224a6).`,
     );
-    out.push(`      safe to delete: \`rm -rf ${r.rogueDir}\``);
+    out.push(`      safe to delete: \`rm -rf ${shellQuoteSingle(r.rogueDir)}\``);
   }
   return out;
 }

@@ -153,8 +153,34 @@ describe("doctor — rogue evidence-ledger scan", () => {
     const text = format(report);
     expect(text).toContain("Rogue evidence-ledger DBs");
     expect(text).toContain(`rogue evidence-ledger db found: ${dbPath}`);
-    expect(text).toContain(`safe to delete: \`rm -rf ${rogueDir}\``);
+    expect(text).toContain(`safe to delete: \`rm -rf '${rogueDir}'\``);
     expect(text).toContain("EVIDENCE_LEDGER_DB literal-tilde bug");
+  });
+
+  it("shell-quotes paths containing single quotes so the cleanup hint stays paste-safe", async () => {
+    const home = tempHome();
+    writeMinimalManifest(home);
+    // Plant a rogue at the canonical $HOME/~ location, then patch the
+    // scan result to carry a path with a `'` to verify the rendering
+    // path. Doing this end-to-end (planting a real dir whose name
+    // contains a quote) is OS-dependent and brittle; the format layer
+    // is the unit under test here.
+    const planted = plantRogueLedger(home);
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe(),
+      versionProbe: () => null,
+      pathEnv: "",
+      rogueLedgerScanOptions: { homeDir: home, cwd: home },
+    });
+    // Inject a quote-containing path into the report and re-render.
+    report.rogueLedgerDbs[0] = {
+      path: planted.dbPath,
+      rogueDir: "/tmp/weird's-repo/~",
+    };
+    const text = format(report);
+    expect(text).toContain(`safe to delete: \`rm -rf '/tmp/weird'\\''s-repo/~'\``);
   });
 
   it("does not render the rogue section on a clean host", async () => {
@@ -193,5 +219,95 @@ describe("doctor — rogue evidence-ledger scan", () => {
     });
 
     expect(report.rogueLedgerDbs).toEqual([]);
+  });
+});
+
+describe("scanForRogueLedgers — symlink semantics (task 44f66fa4 polish)", () => {
+  it("does NOT flag a symlinked `~` directory (M3: lstat short-circuit)", () => {
+    const home = tempHome();
+    const cwd = tempHome();
+    // Create a real ~/.evidence-ledger/ledger.db elsewhere and symlink
+    // <home>/~ at it. The scan would follow stat into the symlink and
+    // false-positive without the lstat guard.
+    const realTarget = path.join(home, "real-tree");
+    fs.mkdirSync(path.join(realTarget, ".evidence-ledger"), { recursive: true });
+    fs.writeFileSync(path.join(realTarget, ".evidence-ledger", "ledger.db"), "");
+    fs.symlinkSync(realTarget, path.join(home, "~"));
+
+    const hits = scanForRogueLedgers({ homeDir: home, cwd });
+
+    expect(hits).toEqual([]);
+  });
+
+  it("deduplicates by realpath when two parents symlink to the same physical dir (M2)", () => {
+    // Use the fs-interface injection knob: real cross-tmpdir symlinks
+    // behave differently on macOS vs Linux because of /tmp -> /private/tmp,
+    // which makes this case noisy to test against real fs. The injected
+    // realpathSync collapses both parents to the same target, exercising
+    // the dedup contract directly.
+    const homeDir = "/fake/home";
+    const cwd = "/fake/pwd";
+    const collidingTarget = "/fake/physical/~/.evidence-ledger/ledger.db";
+
+    const existsPaths = new Set<string>([
+      "/fake/home/~",
+      "/fake/home/~/.evidence-ledger/ledger.db",
+      "/fake/pwd/~",
+      "/fake/pwd/~/.evidence-ledger/ledger.db",
+    ]);
+    const fakeFs = {
+      existsSync: (p: fs.PathLike) => existsPaths.has(String(p)),
+      statSync: (() => ({ isFile: () => true })) as unknown as typeof fs.statSync,
+      lstatSync: (() => ({ isSymbolicLink: () => false })) as unknown as typeof fs.lstatSync,
+      readdirSync: (() => []) as unknown as typeof fs.readdirSync,
+      realpathSync: ((_p: fs.PathLike) => collidingTarget) as unknown as typeof fs.realpathSync,
+    };
+
+    const hits = scanForRogueLedgers({ homeDir, cwd, fsInterface: fakeFs });
+
+    expect(hits).toHaveLength(1);
+  });
+
+  it("falls back to the joined path when realpathSync throws (EACCES race)", () => {
+    const homeDir = "/fake/home";
+    const cwd = "/fake/pwd";
+    const existsPaths = new Set<string>([
+      "/fake/home/~",
+      "/fake/home/~/.evidence-ledger/ledger.db",
+      "/fake/pwd/~",
+      "/fake/pwd/~/.evidence-ledger/ledger.db",
+    ]);
+    const fakeFs = {
+      existsSync: (p: fs.PathLike) => existsPaths.has(String(p)),
+      statSync: (() => ({ isFile: () => true })) as unknown as typeof fs.statSync,
+      lstatSync: (() => ({ isSymbolicLink: () => false })) as unknown as typeof fs.lstatSync,
+      readdirSync: (() => []) as unknown as typeof fs.readdirSync,
+      realpathSync: ((() => {
+        throw new Error("EACCES");
+      }) as unknown) as typeof fs.realpathSync,
+    };
+
+    const hits = scanForRogueLedgers({ homeDir, cwd, fsInterface: fakeFs });
+
+    // With realpath broken, dedup falls back to joined path. Two distinct
+    // parents → two hits.
+    expect(hits.map((h) => h.path).sort()).toEqual([
+      "/fake/home/~/.evidence-ledger/ledger.db",
+      "/fake/pwd/~/.evidence-ledger/ledger.db",
+    ]);
+  });
+
+  it("deduplicates when $HOME/git/<repo> is the same parent as $PWD (N3)", () => {
+    const home = tempHome();
+    const repoDir = path.join(home, "git", "shared-repo");
+    fs.mkdirSync(repoDir, { recursive: true });
+    plantRogueLedger(repoDir);
+    // $PWD == $HOME/git/shared-repo — the walker would discover the same
+    // rogue dir twice (once via the git/<repo> loop, once via the cwd
+    // probe) without dedup.
+
+    const hits = scanForRogueLedgers({ homeDir: home, cwd: repoDir });
+
+    expect(hits).toHaveLength(1);
   });
 });

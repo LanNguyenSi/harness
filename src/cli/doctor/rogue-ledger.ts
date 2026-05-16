@@ -9,7 +9,7 @@
 // forensics ("why do I have three identical-shape ledger DBs?"). This
 // scan flags them so the operator can `rm -rf` at their convenience.
 //
-// Scan scope is bounded by design — the literal `~` directory only ever
+// Scan scope is bounded by design: the literal `~` directory only ever
 // appears one level deep under wherever grounding-mcp was spawned. The
 // well-known spawn-cwd locations are: $HOME (when claude-code spawns from
 // the user's home), $HOME/git/<repo> (the per-repo working tree), and
@@ -29,8 +29,13 @@ export interface RogueLedgerDb {
 export interface RogueLedgerScanOptions {
   homeDir: string;
   cwd: string;
-  /** Test injection: override the fs interface. */
-  fsInterface?: Pick<typeof fs, "existsSync" | "statSync" | "readdirSync">;
+  /**
+   * Test injection: override fs operations. realpathSync is included so
+   * fixtures can simulate symlinks-with-same-target without actually
+   * creating cross-tmpdir symlinks (which surface differently on macOS
+   * and Linux because of /tmp -> /private/tmp resolution).
+   */
+  fsInterface?: Pick<typeof fs, "existsSync" | "statSync" | "lstatSync" | "readdirSync" | "realpathSync">;
 }
 
 const ROGUE_DIRNAME = "~";
@@ -38,13 +43,24 @@ const LEDGER_RELPATH = path.join(".evidence-ledger", "ledger.db");
 
 function hasRogueLedgerUnder(
   parent: string,
-  fsInterface: NonNullable<RogueLedgerScanOptions["fsInterface"]>,
+  fsi: NonNullable<RogueLedgerScanOptions["fsInterface"]>,
 ): RogueLedgerDb | null {
+  // lstat (not stat) the `~` dir: a symlink at <parent>/~ pointing at
+  // /etc or at the real ~/.evidence-ledger would otherwise yield a
+  // false-positive flag (read-only, no security impact, but the
+  // operator gets nudged to rm -rf an arbitrary target). The orphan
+  // pattern we care about is a *real* literal-tilde directory.
   const rogueDir = path.join(parent, ROGUE_DIRNAME);
-  const candidate = path.join(rogueDir, LEDGER_RELPATH);
-  if (!fsInterface.existsSync(candidate)) return null;
+  if (!fsi.existsSync(rogueDir)) return null;
   try {
-    if (!fsInterface.statSync(candidate).isFile()) return null;
+    if (fsi.lstatSync(rogueDir).isSymbolicLink()) return null;
+  } catch {
+    return null;
+  }
+  const candidate = path.join(rogueDir, LEDGER_RELPATH);
+  if (!fsi.existsSync(candidate)) return null;
+  try {
+    if (!fsi.statSync(candidate).isFile()) return null;
   } catch {
     return null;
   }
@@ -52,10 +68,29 @@ function hasRogueLedgerUnder(
 }
 
 /**
+ * Dedup key for a hit: prefer the realpath of the ledger.db file so two
+ * parent dirs that symlink to the same physical location collapse into a
+ * single hit. Falls back to the joined path when realpath is unavailable
+ * (EACCES on a strict-mode mount, ENOENT during a race with deletion).
+ * The fallback preserves the v1 dedup behavior so existing fixtures
+ * stay stable.
+ */
+function dedupKey(
+  hit: RogueLedgerDb,
+  fsi: NonNullable<RogueLedgerScanOptions["fsInterface"]>,
+): string {
+  try {
+    return fsi.realpathSync(hit.path);
+  } catch {
+    return hit.path;
+  }
+}
+
+/**
  * Walk a small set of well-known parent directories for a literal `~`
  * subdirectory that contains `.evidence-ledger/ledger.db`. Best-effort:
  * unreadable directories are silently skipped. Returns deduplicated
- * results sorted by path for stable rendering.
+ * results (by realpath) sorted by path for stable rendering.
  */
 export function scanForRogueLedgers(opts: RogueLedgerScanOptions): RogueLedgerDb[] {
   const fsi = opts.fsInterface ?? fs;
@@ -65,8 +100,9 @@ export function scanForRogueLedgers(opts: RogueLedgerScanOptions): RogueLedgerDb
   const consider = (parent: string): void => {
     const hit = hasRogueLedgerUnder(parent, fsi);
     if (!hit) return;
-    if (seen.has(hit.path)) return;
-    seen.add(hit.path);
+    const key = dedupKey(hit, fsi);
+    if (seen.has(key)) return;
+    seen.add(key);
     out.push(hit);
   };
 
@@ -75,26 +111,15 @@ export function scanForRogueLedgers(opts: RogueLedgerScanOptions): RogueLedgerDb
 
   const gitParent = path.join(opts.homeDir, "git");
   if (fsi.existsSync(gitParent)) {
-    let entries: fs.Dirent[] | string[] = [];
+    let entries: fs.Dirent[] = [];
     try {
       entries = fsi.readdirSync(gitParent, { withFileTypes: true });
     } catch {
       entries = [];
     }
     for (const e of entries) {
-      const name = typeof e === "string" ? e : e.name;
-      const isDir =
-        typeof e === "string"
-          ? (() => {
-              try {
-                return fsi.statSync(path.join(gitParent, name)).isDirectory();
-              } catch {
-                return false;
-              }
-            })()
-          : e.isDirectory();
-      if (!isDir) continue;
-      consider(path.join(gitParent, name));
+      if (!e.isDirectory()) continue;
+      consider(path.join(gitParent, e.name));
     }
   }
 
