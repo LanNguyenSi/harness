@@ -21,6 +21,7 @@ import { existsSync, accessSync, constants } from "node:fs";
 import * as path from "node:path";
 
 import type { ProfileChoice } from "./interactive.js";
+import type { CustomSelection } from "./composer.js";
 
 /**
  * One required binary that must end up on PATH for a given profile's
@@ -177,10 +178,23 @@ export function checkDependencies(
   profile: Exclude<ProfileChoice, "custom">,
   opts: CheckOptions = {},
 ): DependencyCheckResult {
+  return checkDependencyList(dependenciesForProfile(profile), opts);
+}
+
+/**
+ * List-based variant of `checkDependencies` for callers that compute a
+ * bespoke dep set (e.g. the Custom-profile composer in task 31d2fbb5).
+ * Same semantics: resolve each binary on PATH, return statuses +
+ * de-duped missing packages.
+ */
+export function checkDependencyList(
+  deps: ProfileDependency[],
+  opts: CheckOptions = {},
+): DependencyCheckResult {
   const pathEnv = opts.pathEnv ?? process.env.PATH ?? "";
   const statuses: DependencyStatus[] = [];
   const missingPackages = new Set<string>();
-  for (const dep of dependenciesForProfile(profile)) {
+  for (const dep of deps) {
     const resolved = findOnPath(dep.binary, pathEnv);
     if (resolved) {
       statuses.push({ dep, installed: true, resolvedPath: resolved });
@@ -190,6 +204,42 @@ export function checkDependencies(
     }
   }
   return { statuses, missingPackages: [...missingPackages] };
+}
+
+/**
+ * Resolve the dependency list for a Custom-profile selection. Maps each
+ * checkbox key to its underlying binary requirement. Used by the
+ * interactive wizard's Custom branch so the dependency-check + install
+ * UX is identical to the named profiles.
+ */
+export function dependenciesForCustom(sel: CustomSelection): ProfileDependency[] {
+  const chain: ProfileDependency[] = [];
+  const seen = new Set<string>();
+  const push = (dep: ProfileDependency) => {
+    if (seen.has(dep.binary)) return;
+    seen.add(dep.binary);
+    chain.push(dep);
+  };
+  // Pack → understanding-gate adapters (mirrors PROFILE_DEPENDENCIES.solo).
+  if (sel.packs.includes("understanding-before-execution")) {
+    for (const dep of PROFILE_DEPENDENCIES.solo) {
+      if (dep.binary.startsWith("understanding-gate-")) push(dep);
+    }
+  }
+  // MCPs → their bridges / bins.
+  const mcpToBinary: Record<CustomSelection["mcps"][number], string> = {
+    "agent-tasks": "agent-tasks-mcp-bridge",
+    "grounding-mcp": "grounding-mcp",
+    "memory-router": "memory-router-user-prompt-submit",
+  };
+  for (const m of sel.mcps) {
+    const targetBin = mcpToBinary[m];
+    const dep =
+      PROFILE_DEPENDENCIES.solo.find((d) => d.binary === targetBin) ??
+      PROFILE_DEPENDENCIES.team.find((d) => d.binary === targetBin);
+    if (dep) push(dep);
+  }
+  return chain;
 }
 
 /**

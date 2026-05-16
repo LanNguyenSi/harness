@@ -266,20 +266,143 @@ describe("interactive wizard — Team path", () => {
   });
 });
 
-describe("interactive wizard — Custom path", () => {
-  it("bails out with a hint about --template full, writes nothing", async () => {
+describe("interactive wizard — Custom path (task 31d2fbb5)", () => {
+  it("aborts cleanly with no write when every checkbox is empty", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
     const cap = captureStreams();
     const result = await runInteractive({
       homeDir: tmpHome,
-      prompts: mockPrompts({ select: ["custom"] }),
+      prompts: mockPrompts({
+        select: ["custom"],
+        // packs / mcps / policies all empty.
+        checkbox: [[], [], []],
+      }),
       stdout: cap.out,
       stderr: cap.err,
     });
     expect(result.aborted).toBe(true);
     expect(result.profile).toBe("custom");
-    expect(cap.stderr()).toMatch(/harness init --template full/);
+    expect(cap.stderr()).toMatch(/no components selected/);
+    // Crucially: NO manifest landed on disk for an empty selection.
     expect(fs.existsSync(path.join(tmpHome, ".claude", "harness.yaml"))).toBe(false);
+  });
+
+  it("composes a minimal-pick manifest that harness validate accepts (just the understanding pack)", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      prompts: mockPrompts({
+        select: ["custom"],
+        // packs: just understanding-before-execution; mcps: none; policies: none.
+        checkbox: [
+          ["understanding-before-execution"],
+          [],
+          [],
+          [], // wire-now multiselect — skip wiring
+        ],
+        input: ["~/.claude/projects/{project}/memory"],
+        confirm: [true], // confirm write
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(false);
+    expect(result.profile).toBe("custom");
+    expect(result.init?.template).toBe("custom");
+    expect(result.validateClean).toBe(true);
+    const manifestPath = path.join(tmpHome, ".claude", "harness.yaml");
+    expect(fs.existsSync(manifestPath)).toBe(true);
+    const content = fs.readFileSync(manifestPath, "utf8");
+    expect(content).toContain("Custom profile");
+    expect(content).toContain("understanding-before-execution");
+    // Minimal-pick manifest must NOT carry policies/MCPs the operator didn't tick.
+    expect(content).not.toContain("agent-tasks");
+    expect(content).not.toContain("review-before-merge");
+  });
+
+  it("composes a full-equivalent pick (every checkbox, with the three reference policies)", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      prompts: mockPrompts({
+        select: ["custom"],
+        checkbox: [
+          ["understanding-before-execution"],
+          ["agent-tasks", "grounding-mcp", "memory-router"],
+          [
+            "review-before-merge",
+            "preflight-before-investigation",
+            "review-subagent-before-pr-create",
+          ],
+          [], // wire-now skip
+        ],
+        input: ["~/.claude/projects/{project}/memory"],
+        confirm: [true],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(false);
+    expect(result.validateClean).toBe(true);
+    const content = fs.readFileSync(
+      path.join(tmpHome, ".claude", "harness.yaml"),
+      "utf8",
+    );
+    expect(content).toContain("agent-tasks");
+    expect(content).toContain("grounding-mcp");
+    // memory-router is wired under memory.router, not tools.mcp[]; the
+    // composer must NOT emit it as an MCP entry.
+    expect(content).toContain("memory-router-user-prompt-submit");
+    expect(content).toMatch(/router:\s*\n\s+command:\s*\n?\s*-\s+memory-router-user-prompt-submit/);
+    expect(content).toContain("review-before-merge");
+    expect(content).toContain("preflight-before-investigation");
+    expect(content).toContain("review-subagent-before-pr-create");
+    // No producer-coupling warnings since agent-tasks + grounding-mcp + pack are all selected.
+    expect(cap.stderr()).not.toMatch(/composer warning/);
+  });
+
+  it("pre-checks MCPs whose names are already wired in detected settings.json", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    // Pre-wire agent-tasks in settings.json so detect() surfaces it.
+    fs.writeFileSync(
+      path.join(tmpHome, ".claude", "settings.json"),
+      JSON.stringify({ mcpServers: { "agent-tasks": { command: "node", args: ["x.js"] } } }),
+    );
+    let capturedMcpChoices: { value: string; checked: boolean }[] = [];
+    const cap = captureStreams();
+    const recordingCheckbox = (async (args: { choices: { value: string; checked?: boolean }[] }) => {
+      // Capture the second checkbox call (MCPs); first is packs, third is policies.
+      if (args.choices.some((c) => c.value === "agent-tasks")) {
+        capturedMcpChoices = args.choices.map((c) => ({
+          value: c.value,
+          checked: c.checked === true,
+        }));
+      }
+      // Empty selection for every checkbox keeps the wizard from proceeding past the abort guard.
+      return [];
+    }) as unknown as InteractivePrompts["checkbox"];
+    const prompts: InteractivePrompts = {
+      select: (async () => "custom") as unknown as InteractivePrompts["select"],
+      confirm: (async () => false) as unknown as InteractivePrompts["confirm"],
+      input: (async () => "~/.claude/projects/{project}/memory") as unknown as InteractivePrompts["input"],
+      checkbox: recordingCheckbox,
+    };
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      prompts,
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(true); // Empty selection → abort
+    const at = capturedMcpChoices.find((c) => c.value === "agent-tasks");
+    const gm = capturedMcpChoices.find((c) => c.value === "grounding-mcp");
+    expect(at?.checked).toBe(true);
+    expect(gm?.checked).toBe(false);
   });
 });
 

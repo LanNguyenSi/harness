@@ -35,10 +35,22 @@ import { validate } from "../validate/index.js";
 import { apply, CODEX_CONFIG_BASENAME, type ApplyResult } from "../apply/index.js";
 import {
   checkDependencies,
+  checkDependencyList,
+  dependenciesForCustom,
   formatDependencyTable,
   installPackagesGlobally,
   type InstallOptions,
 } from "./dependencies.js";
+import {
+  COMPOSABLE_MCPS,
+  COMPOSABLE_PACKS,
+  COMPOSABLE_POLICIES,
+  composeCustom,
+  type CustomMcpKey,
+  type CustomPackKey,
+  type CustomPolicyKey,
+  type CustomSelection,
+} from "./composer.js";
 
 export type ProfileChoice = "solo" | "team" | "full" | "custom";
 
@@ -286,17 +298,13 @@ export async function runInteractive(
     })) as ProfileChoice;
 
     if (profile === "custom") {
-      stderr(
-        [
-          "Custom profile selected. The interactive wizard does not build",
-          "manifests à la carte. Start from `harness init --template minimal`",
-          "or `harness init --template full` for the reference manifest, then",
-          "edit it directly. Detection results above tell you what the",
-          "harness already sees in your environment.",
-          "",
-        ].join("\n"),
-      );
-      return { aborted: true, profile };
+      return await runCustomProfile({
+        detection,
+        prompts,
+        stderr,
+        stdout,
+        opts,
+      });
     }
 
     if (profileNeedsAgentTasks(profile) && !detectionHasAgentTasks(detection)) {
@@ -395,127 +403,16 @@ export async function runInteractive(
       initOpts.homeDir = path.join(opts.homeDir, ".claude");
     }
     const initResult = await init(initOpts);
-
-    if (initResult.stderr) stderr(initResult.stderr);
     stdout(initResult.stdout);
 
-    const v = validate({ configPath: initResult.path });
-    const validateClean = v.errorCount === 0;
-    stderr(
-      `\nharness validate: ${v.errorCount} error(s), ${v.warningCount} warning(s)\n`,
-    );
-    for (const d of v.diagnostics) {
-      stderr(`  [${d.severity}] ${d.path}: ${d.message}\n`);
-    }
-
-    if (!validateClean) {
-      stderr(
-        `\nValidate reported errors. Fix the manifest before running \`harness apply\`.\n`,
-      );
-      return { aborted: false, profile, init: initResult, validateClean };
-    }
-
-    // Validate-clean: offer to wire each runtime right now. A bare
-    // `harness init` leaves the manifest on disk but Claude Code / Codex
-    // do not see it until `harness apply` runs. Without this prompt the
-    // operator gets a clean manifest, runs `harness apply`, sees
-    // `harness.generated/` files appear, and is stuck wondering why
-    // the runtime still does not honour any hooks. The multiselect
-    // collapses that two-step trap into one and pre-checks whichever
-    // runtimes detect() found configured so the common single-runtime
-    // case stays a single Enter press.
-    const claudeRuntime = detection.runtimes.find((r) => r.name === "claude-code");
-    const codexRuntime = detection.runtimes.find((r) => r.name === "codex");
-    const claudeSettingsPath = path.join(
-      claudeRuntime?.home ?? path.join(opts.homeDir ?? process.env.HOME ?? "", ".claude"),
-      "settings.json",
-    );
-    const codexConfigPath = path.join(
-      codexRuntime?.home ?? path.join(opts.homeDir ?? process.env.HOME ?? "", ".codex"),
-      "config.toml",
-    );
-
-    const wireChoices: { name: string; value: WireableRuntime; checked: boolean; disabled?: string }[] = [
-      {
-        name: `claude-code  → merges into ${claudeSettingsPath}`,
-        value: "claude-code",
-        checked: runtimeIsConfigured(claudeRuntime) || claudeRuntime === undefined,
-      },
-      {
-        name: `codex        → writes harness.generated/codex/config.toml, you merge into ${codexConfigPath}`,
-        value: "codex",
-        checked: runtimeIsConfigured(codexRuntime),
-      },
-    ];
-
-    const selectedRuntimes = (await prompts.checkbox({
-      message: "Wire harness into which runtimes now? (space to toggle, return to confirm; uncheck all to skip)",
-      choices: [
-        ...wireChoices,
-        // opencode is parked until the runtime adapter (task f34eb233)
-        // lands. Listing it disabled keeps the slot stable so the wizard
-        // copy and screenshots do not churn when v1.1 enables it.
-        {
-          name: "opencode     (shipping in harness v1.1 — adapter task f34eb233)",
-          value: "opencode" as WireableRuntime,
-          checked: false,
-          disabled: "(disabled until f34eb233 lands)",
-        },
-      ],
-    })) as WireableRuntime[];
-
-    if (selectedRuntimes.length === 0) {
-      stderr(
-        [
-          "",
-          "Manifest written; no runtimes selected for wiring. To wire later:",
-          `  claude-code: harness apply --target ${claudeSettingsPath} --merge`,
-          `  codex:       harness apply --runtime codex   # then merge harness.generated/codex/config.toml into ${codexConfigPath}`,
-          "",
-        ].join("\n"),
-      );
-      return { aborted: false, profile, init: initResult, validateClean, applies: [] };
-    }
-
-    if (selectedRuntimes.length > 1) {
-      // Cross-runtime apply is not yet a single-call operation (apply.ts
-      // notes "mutually exclusive in a single apply for v1"). Running
-      // the two sequentially works for both runtime artefacts but the
-      // second `harness apply` overwrites harness.lock from the first's
-      // perspective, so drift detection on the first runtime's outputs
-      // is unreliable until a re-apply. Surface this so the operator is
-      // not surprised by a subsequent `harness apply` report.
-      stderr(
-        "\nMulti-runtime wiring: harness.lock will reflect the last-applied runtime; re-run `harness apply --runtime <name>` to refresh drift baselines.\n",
-      );
-    }
-
-    const applies: RuntimeApplyOutcome[] = [];
-    for (const runtime of selectedRuntimes) {
-      const outcome = await wireRuntime({
-        runtime,
-        configPath: initResult.path,
-        homeDir: opts.homeDir,
-        claudeSettingsPath,
-        codexConfigPath,
-        stderr,
-      });
-      applies.push(outcome);
-    }
-
-    // Legacy `apply` field carries the claude-code result if claude-code
-    // was wired this run. Callers that predate task 696f7560 keep
-    // working; new tests should consult `applies` directly.
-    const legacyApply = applies.find((a) => a.runtime === "claude-code")?.apply;
-    const result: InteractiveResult = {
-      aborted: false,
+    return await runPostInitTail({
+      initResult,
       profile,
-      init: initResult,
-      validateClean,
-      applies,
-    };
-    if (legacyApply !== undefined) result.apply = legacyApply;
-    return result;
+      detection,
+      prompts,
+      stderr,
+      opts,
+    });
   } catch (err) {
     if (isAbortError(err)) {
       stderr("Aborted: Ctrl-C received during prompt; no manifest written.\n");
@@ -523,4 +420,293 @@ export async function runInteractive(
     }
     throw err;
   }
+}
+
+interface PostInitTailOpts {
+  initResult: InitResult;
+  profile: ProfileChoice;
+  detection: DetectionResult;
+  prompts: InteractivePrompts;
+  stderr: (s: string) => void;
+  opts: RunInteractiveOptions;
+}
+
+/**
+ * Run the shared tail after the manifest has been written: validate the
+ * on-disk file, surface diagnostics, then offer the runtime-multiselect
+ * wire-now step. Used by both the named-profile path (Solo / Team /
+ * Full) and the Custom-profile composer path (task 31d2fbb5) so they
+ * share identical post-init UX.
+ */
+async function runPostInitTail(t: PostInitTailOpts): Promise<InteractiveResult> {
+  const { initResult, profile, detection, prompts, stderr, opts } = t;
+  if (initResult.stderr) stderr(initResult.stderr);
+
+  const v = validate({ configPath: initResult.path });
+  const validateClean = v.errorCount === 0;
+  stderr(`\nharness validate: ${v.errorCount} error(s), ${v.warningCount} warning(s)\n`);
+  for (const d of v.diagnostics) {
+    stderr(`  [${d.severity}] ${d.path}: ${d.message}\n`);
+  }
+
+  if (!validateClean) {
+    stderr(`\nValidate reported errors. Fix the manifest before running \`harness apply\`.\n`);
+    return { aborted: false, profile, init: initResult, validateClean };
+  }
+
+  // Validate-clean: offer to wire each runtime right now. A bare
+  // `harness init` leaves the manifest on disk but Claude Code / Codex
+  // do not see it until `harness apply` runs. The multiselect collapses
+  // that trap into one and pre-checks whichever runtimes detect() found
+  // configured so the common single-runtime case stays a single Enter
+  // press.
+  const claudeRuntime = detection.runtimes.find((r) => r.name === "claude-code");
+  const codexRuntime = detection.runtimes.find((r) => r.name === "codex");
+  const claudeSettingsPath = path.join(
+    claudeRuntime?.home ?? path.join(opts.homeDir ?? process.env.HOME ?? "", ".claude"),
+    "settings.json",
+  );
+  const codexConfigPath = path.join(
+    codexRuntime?.home ?? path.join(opts.homeDir ?? process.env.HOME ?? "", ".codex"),
+    "config.toml",
+  );
+
+  const wireChoices: { name: string; value: WireableRuntime; checked: boolean; disabled?: string }[] = [
+    {
+      name: `claude-code  → merges into ${claudeSettingsPath}`,
+      value: "claude-code",
+      checked: runtimeIsConfigured(claudeRuntime) || claudeRuntime === undefined,
+    },
+    {
+      name: `codex        → writes harness.generated/codex/config.toml, you merge into ${codexConfigPath}`,
+      value: "codex",
+      checked: runtimeIsConfigured(codexRuntime),
+    },
+  ];
+
+  const selectedRuntimes = (await prompts.checkbox({
+    message: "Wire harness into which runtimes now? (space to toggle, return to confirm; uncheck all to skip)",
+    choices: [
+      ...wireChoices,
+      // opencode is parked until the runtime adapter (task f34eb233)
+      // lands. Listing it disabled keeps the slot stable so the wizard
+      // copy and screenshots do not churn when v1.1 enables it.
+      {
+        name: "opencode     (shipping in harness v1.1 — adapter task f34eb233)",
+        value: "opencode" as WireableRuntime,
+        checked: false,
+        disabled: "(disabled until f34eb233 lands)",
+      },
+    ],
+  })) as WireableRuntime[];
+
+  if (selectedRuntimes.length === 0) {
+    stderr(
+      [
+        "",
+        "Manifest written; no runtimes selected for wiring. To wire later:",
+        `  claude-code: harness apply --target ${claudeSettingsPath} --merge`,
+        `  codex:       harness apply --runtime codex   # then merge harness.generated/codex/config.toml into ${codexConfigPath}`,
+        "",
+      ].join("\n"),
+    );
+    return { aborted: false, profile, init: initResult, validateClean, applies: [] };
+  }
+
+  if (selectedRuntimes.length > 1) {
+    stderr(
+      "\nMulti-runtime wiring: harness.lock will reflect the last-applied runtime; re-run `harness apply --runtime <name>` to refresh drift baselines.\n",
+    );
+  }
+
+  const applies: RuntimeApplyOutcome[] = [];
+  for (const runtime of selectedRuntimes) {
+    const outcome = await wireRuntime({
+      runtime,
+      configPath: initResult.path,
+      homeDir: opts.homeDir,
+      claudeSettingsPath,
+      codexConfigPath,
+      stderr,
+    });
+    applies.push(outcome);
+  }
+
+  const legacyApply = applies.find((a) => a.runtime === "claude-code")?.apply;
+  const result: InteractiveResult = {
+    aborted: false,
+    profile,
+    init: initResult,
+    validateClean,
+    applies,
+  };
+  if (legacyApply !== undefined) result.apply = legacyApply;
+  return result;
+}
+
+interface RunCustomOpts {
+  detection: DetectionResult;
+  prompts: InteractivePrompts;
+  stderr: (s: string) => void;
+  stdout: (s: string) => void;
+  opts: RunInteractiveOptions;
+}
+
+/**
+ * Custom-profile à-la-carte builder (task 31d2fbb5). Drives three
+ * checkbox prompts (packs / MCPs / policies), feeds them into the
+ * composer, then rejoins the shared write + wire-now tail. v1 surface
+ * is intentionally a subset of the FULL template; remaining packs,
+ * MCPs, and policies are tracked as follow-up.
+ */
+async function runCustomProfile(rc: RunCustomOpts): Promise<InteractiveResult> {
+  const { detection, prompts, stderr, stdout, opts } = rc;
+  const profile: ProfileChoice = "custom";
+
+  // Pre-check MCPs whose names appear in detected settings.json
+  // mcpServers. Packs and policies have no detection signal today
+  // (settings.json doesn't carry them), so they start unchecked and
+  // the operator opts in.
+  const detectedMcpNames = new Set(detection.mcpServers.map((s) => s.name));
+  const detectedHasMemoryRouterDir = (() => {
+    // memory.router is structurally not in settings.json mcpServers,
+    // so this stays unchecked by default; operators who already have a
+    // memory.router config can re-check it in the prompt.
+    return false;
+  })();
+
+  const packs = (await prompts.checkbox({
+    message: "Custom: pick policy packs",
+    choices: COMPOSABLE_PACKS.map((p) => ({
+      name: `${p.label}  ${p.description}`,
+      value: p.key,
+      checked: false,
+    })),
+  })) as CustomPackKey[];
+
+  const mcps = (await prompts.checkbox({
+    message: "Custom: pick MCP servers / routers",
+    choices: COMPOSABLE_MCPS.map((m) => ({
+      name: `${m.label}  ${m.description}`,
+      value: m.key,
+      checked:
+        m.key === "memory-router" ? detectedHasMemoryRouterDir : detectedMcpNames.has(m.key),
+    })),
+  })) as CustomMcpKey[];
+
+  const policies = (await prompts.checkbox({
+    message: "Custom: pick reference policies",
+    choices: COMPOSABLE_POLICIES.map((p) => ({
+      name: `${p.label}  ${p.description}`,
+      value: p.key,
+      checked: false,
+    })),
+  })) as CustomPolicyKey[];
+
+  if (packs.length === 0 && mcps.length === 0 && policies.length === 0) {
+    stderr(
+      [
+        "",
+        "Custom: no components selected — nothing to compose. Aborted; no manifest written.",
+        "Re-run `harness init --interactive` and pick at least one pack, MCP, or policy.",
+        "",
+      ].join("\n"),
+    );
+    return { aborted: true, profile };
+  }
+
+  // Dependency check uses the Custom-specific dep resolver. Same install
+  // UX as the named-profile path.
+  const customDeps = dependenciesForCustom({ packs, mcps, policies });
+  const depResult = checkDependencyList(
+    customDeps,
+    opts.dependencyPathEnv !== undefined ? { pathEnv: opts.dependencyPathEnv } : {},
+  );
+  if (depResult.statuses.length > 0) {
+    stderr(`\n${formatDependencyTable(profile, depResult)}\n`);
+  }
+  if (depResult.missingPackages.length > 0) {
+    const installNow = await prompts.confirm({
+      message: `Install ${depResult.missingPackages.length} missing package(s) with \`npm i -g ${depResult.missingPackages.join(" ")}\`?`,
+      default: true,
+    });
+    if (!installNow) {
+      stderr(
+        [
+          "",
+          "Aborted: dependencies missing and install declined.",
+          `To install manually: npm i -g ${depResult.missingPackages.join(" ")}`,
+          "Then re-run `harness init --interactive`.",
+          "",
+        ].join("\n"),
+      );
+      return { aborted: true, profile };
+    }
+    stderr(`\nRunning npm i -g ${depResult.missingPackages.join(" ")}\n`);
+    const installResult = await installPackagesGlobally(
+      depResult.missingPackages,
+      opts.installSpawn ? { spawn: opts.installSpawn } : {},
+    );
+    if (!installResult.ok) {
+      stderr(
+        [
+          "",
+          `Aborted: npm install exited ${installResult.exitCode}. Manifest NOT written.`,
+          "Common fixes: re-run with sudo, switch nvm to a writable node, or check network proxy.",
+          `Then re-run: harness init --interactive`,
+          "",
+        ].join("\n"),
+      );
+      return { aborted: true, profile };
+    }
+    stderr(`Installed ${installResult.attempted.length} package(s) successfully.\n`);
+  }
+
+  const defaultMemoryDir = path.join(
+    detection.runtimes[0]?.home ?? "~/.claude",
+    "projects",
+    "{project}",
+    "memory",
+  );
+  const memoryDir = await prompts.input({
+    message: "Memory directory pattern (use {project} for the per-project slug)",
+    default: defaultMemoryDir,
+  });
+  if (memoryDir.trim() === "") {
+    stderr("Aborted: memory directory left empty.\n");
+    return { aborted: true, profile };
+  }
+
+  const selection: CustomSelection = { packs, mcps, policies, memoryDir: memoryDir.trim() };
+  const composed = composeCustom(selection);
+  for (const w of composed.warnings) {
+    stderr(`composer warning: ${w}\n`);
+  }
+
+  const confirmWrite = await prompts.confirm({
+    message: `Write composed harness.yaml to ${detection.manifest.path}?`,
+    default: true,
+  });
+  if (!confirmWrite) {
+    stderr("Aborted: declined to write manifest.\n");
+    return { aborted: true, profile };
+  }
+
+  const initOpts: { content: string; contentLabel: string; force: boolean; homeDir?: string } = {
+    content: composed.yaml,
+    contentLabel: "custom",
+    force: detection.manifest.exists,
+  };
+  if (opts.homeDir !== undefined) initOpts.homeDir = path.join(opts.homeDir, ".claude");
+  const initResult = await init(initOpts);
+  stdout(initResult.stdout);
+
+  return await runPostInitTail({
+    initResult,
+    profile,
+    detection,
+    prompts,
+    stderr,
+    opts,
+  });
 }
