@@ -65,12 +65,14 @@ describe("init — full template", () => {
     const mcpNames = parsed.tools?.mcp?.map((m) => m.name) ?? [];
     const hookNames = parsed.hooks?.map((h) => h.name) ?? [];
     const policyNames = parsed.policies?.map((p) => p.name) ?? [];
-    // MCP servers the Full default ships. codebase-oracle is back in
-    // the chain after the @lannguyensi npm scope rename + `mcp`
-    // subcommand wiring (codebase-oracle v0.6.1).
-    expect(mcpNames).toContain("codebase-oracle");
+    // MCP servers the Full default ships. codebase-oracle is
+    // intentionally NOT in the chain: it is a useful standalone MCP
+    // but an opinionated workflow add-on rather than infrastructure
+    // harness itself depends on. Operators add it manually via
+    // `harness add mcp codebase-oracle --command codebase-oracle,mcp`.
     expect(mcpNames).toContain("agent-tasks");
     expect(mcpNames).toContain("grounding-mcp");
+    expect(mcpNames).not.toContain("codebase-oracle");
     // Hooks: 5 PreToolUse policy gates route through the bundled
     // `harness policy intercept` engine, plus the `git-preflight`
     // SessionStart producer (`harness session-start preflight`), which
@@ -92,25 +94,6 @@ describe("init — full template", () => {
     expect(policyNames).toContain("preflight-before-push");
   });
 
-  it("codebase-oracle entry exposes ORACLE_SCAN_ROOT in its env block", async () => {
-    // Locks the wizard-discoverability contract added in
-    // agent-tasks/89c39e33: a fresh `harness init --template full`
-    // user must SEE the required env in the manifest, not discover it
-    // by crashing the MCP server on first call. A future no-env
-    // refactor or accidental wipe should fail this assertion loudly.
-    // OPENAI_API_KEY is intentionally NOT pinned: it inherits from
-    // the operator's shell, and setting it (even empty) here would
-    // shadow what they already exported.
-    await init({ homeDir: tmpHome, template: "full" });
-    const yaml = fs.readFileSync(manifestPath, "utf8");
-    const parsed = parseYaml(yaml) as {
-      tools?: { mcp?: { name: string; env?: Record<string, string> }[] };
-    };
-    const oracle = parsed.tools?.mcp?.find((m) => m.name === "codebase-oracle");
-    expect(oracle).toBeDefined();
-    expect(oracle?.env).toBeDefined();
-    expect(Object.keys(oracle?.env ?? {})).toContain("ORACLE_SCAN_ROOT");
-  });
 
   it("the full template parses as a schema-valid manifest", async () => {
     await init({ homeDir: tmpHome, template: "full" });

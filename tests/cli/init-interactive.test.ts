@@ -72,7 +72,6 @@ beforeEach(() => {
     "agent-tasks-mcp-bridge",
     "grounding-mcp",
     "preflight",
-    "codebase-oracle",
   ]) {
     const p = path.join(fakeDepsPath, bin);
     fs.writeFileSync(p, "#!/bin/sh\n");

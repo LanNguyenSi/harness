@@ -69,27 +69,24 @@ export const PROFILE_DEPENDENCIES: Record<Exclude<ProfileChoice, "custom">, Prof
       description: "grounding-mcp MCP server",
     },
   ],
-  // Full inherits everything from Solo + Team, and adds:
-  // - the SessionStart preflight producer: the `git-preflight` hook
-  //   shells out to `agent-preflight` (`preflight` binary) to write
-  //   `preflight:${REPO}` to the ledger, which is what the
-  //   `preflight-before-*` policies match.
-  // - the codebase-oracle MCP server: a RAG index over the operator's
-  //   local repos that other agents can query via `oracle_search` /
-  //   `oracle_query` instead of grepping. The Full template wires it
-  //   in via `command: [codebase-oracle, mcp]`; that bin is shipped by
-  //   the scoped npm package `@lannguyensi/codebase-oracle` (the
-  //   unscoped `codebase-oracle` on the registry is an unrelated CLI).
+  // Full inherits everything from Solo + Team, and adds the
+  // SessionStart preflight producer: the `git-preflight` hook shells
+  // out to `agent-preflight` (`preflight` binary) to write
+  // `preflight:${REPO}` to the ledger, which is what the
+  // `preflight-before-*` policies match.
+  //
+  // codebase-oracle (`@lannguyensi/codebase-oracle`) is intentionally
+  // NOT in the Full chain. It is a useful standalone MCP for multi-repo
+  // semantic search, but harness itself does not require it and the
+  // setup cost (ORACLE_SCAN_ROOT + an embedding provider key + initial
+  // index run) is not worth pushing on every Full-profile operator.
+  // See FULL_TEMPLATE comment under `tools.mcp` for the manual wiring
+  // recipe (`harness add mcp codebase-oracle --command codebase-oracle,mcp`).
   full: [
     {
       binary: "preflight",
       npmPackage: "@lannguyensi/agent-preflight",
       description: "agent-preflight (SessionStart preflight producer)",
-    },
-    {
-      binary: "codebase-oracle",
-      npmPackage: "@lannguyensi/codebase-oracle",
-      description: "codebase-oracle (RAG MCP server)",
     },
   ],
 };
