@@ -44,18 +44,18 @@ describe("dependenciesForProfile — chain composition", () => {
     expect(new Set(bins).size).toBe(bins.length);
   });
 
-  it("full extends the team chain with preflight + codebase-oracle", () => {
-    // Full inherits the whole Team chain and adds the SessionStart
-    // preflight producer (`preflight` binary) plus the codebase-oracle
-    // MCP server (back in the chain after the @lannguyensi scope rename
-    // landed in codebase-oracle v0.6.1).
+  it("full extends the team chain with the agent-preflight producer", () => {
+    // Full inherits the whole Team chain and adds exactly one binary:
+    // `preflight` (the SessionStart preflight producer). The
+    // codebase-oracle MCP server is intentionally NOT in the chain —
+    // it is a useful standalone but an opinionated workflow add-on
+    // that operators wire manually if they want multi-repo RAG.
     const fullBins = dependenciesForProfile("full").map((d) => d.binary);
     const teamBins = dependenciesForProfile("team").map((d) => d.binary);
-    expect(fullBins).toEqual([...teamBins, "preflight", "codebase-oracle"]);
+    expect(fullBins).toEqual([...teamBins, "preflight"]);
+    expect(fullBins).not.toContain("codebase-oracle");
     const preflight = dependenciesForProfile("full").find((d) => d.binary === "preflight");
     expect(preflight?.npmPackage).toBe("@lannguyensi/agent-preflight");
-    const oracle = dependenciesForProfile("full").find((d) => d.binary === "codebase-oracle");
-    expect(oracle?.npmPackage).toBe("@lannguyensi/codebase-oracle");
   });
 });
 
