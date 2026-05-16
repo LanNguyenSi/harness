@@ -216,7 +216,7 @@ npm uninstall -g @lannguyensi/harness                  # drop the CLI itself
 harness ships in phases. Phases 1 through 6 are released: read-only
 inventory → managed edits → declarative truth → policy layer → polish
 and dogfood lessons → the Understanding Gate Policy Pack. Phase 7, the
-Risk Gate, is next. The current release is `v0.11.0`.
+Risk Gate, is next. The current release is `v0.16.0`.
 
 The phase-by-phase plan with acceptance criteria lives in
 [`docs/ROADMAP.md`](docs/ROADMAP.md); what shipped in each version is
