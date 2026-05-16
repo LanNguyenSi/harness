@@ -30,3 +30,11 @@ jobs:
 
       - name: Test
         run: npm test
+
+      - name: Understanding-gate schema drift check
+        # Fetches @lannguyensi/understanding-gate@latest and compares its
+        # parser SECTIONS array against the local mirror in
+        # src/cli/pack/understanding-report-schema-hint.ts. Fails on drift
+        # so a stale gate block message can't silently ship.
+        # Depends on Build (consumes dist/cli/pack/...).
+        run: npm run check:ug-schema-drift
