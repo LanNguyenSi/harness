@@ -44,17 +44,18 @@ describe("dependenciesForProfile — chain composition", () => {
     expect(new Set(bins).size).toBe(bins.length);
   });
 
-  it("full extends the team chain with the agent-preflight producer", () => {
-    // Full inherits the whole Team chain and adds exactly one binary:
-    // `preflight` (the SessionStart preflight producer). The Pandora-only
-    // `codebase-oracle` MCP server is still not in the chain — it is not
-    // yet published under a non-colliding npm name.
+  it("full extends the team chain with preflight + codebase-oracle", () => {
+    // Full inherits the whole Team chain and adds the SessionStart
+    // preflight producer (`preflight` binary) plus the codebase-oracle
+    // MCP server (back in the chain after the @lannguyensi scope rename
+    // landed in codebase-oracle v0.6.1).
     const fullBins = dependenciesForProfile("full").map((d) => d.binary);
     const teamBins = dependenciesForProfile("team").map((d) => d.binary);
-    expect(fullBins).toEqual([...teamBins, "preflight"]);
-    expect(fullBins).not.toContain("codebase-oracle");
+    expect(fullBins).toEqual([...teamBins, "preflight", "codebase-oracle"]);
     const preflight = dependenciesForProfile("full").find((d) => d.binary === "preflight");
     expect(preflight?.npmPackage).toBe("@lannguyensi/agent-preflight");
+    const oracle = dependenciesForProfile("full").find((d) => d.binary === "codebase-oracle");
+    expect(oracle?.npmPackage).toBe("@lannguyensi/codebase-oracle");
   });
 });
 

@@ -34,9 +34,8 @@ export const FULL_TEMPLATE = `# ~/.claude/harness.yaml
 # two diverge on policy names or load-bearing fields.
 #
 # What you still need on PATH (the wizard offers to \`npm i -g\` these on
-# init): agent-tasks-mcp-bridge, grounding-mcp, memory-router-*,
-# understanding-gate-claude-*. Optional add-on: a local codebase-oracle
-# MCP server (see comment under tools.mcp below).
+# init): codebase-oracle, agent-tasks-mcp-bridge, grounding-mcp,
+# memory-router-*, understanding-gate-claude-*.
 
 version: 1
 
@@ -51,14 +50,22 @@ grounding:
 
 tools:
   mcp:
-    # codebase-oracle (the Pandora RAG MCP server) is intentionally NOT
-    # in this default. The npm name \`codebase-oracle\` is already taken
-    # by an unrelated CLI, and the Pandora variant is not yet published
-    # under a non-colliding scope. Operators who run from a local
-    # checkout can add it back with (note: \`harness add\` splits the
-    # command on commas, not whitespace):
-    #   harness add mcp codebase-oracle \\
-    #     --command 'npx,tsx,~/git/pandora/codebase-oracle/src/mcp-server.ts'
+    - name: codebase-oracle
+      # Published bin from \`@lannguyensi/codebase-oracle\`. The CLI's
+      # \`mcp\` subcommand starts the MCP server over stdio. Set
+      # \`ORACLE_SCAN_ROOT\` (env) to the directory holding your git
+      # repos and \`OPENAI_API_KEY\` for the default embedding provider;
+      # see https://github.com/LanNguyenSi/codebase-oracle for other
+      # providers. \`min_version\` floor: 0.6.1 is the first scoped
+      # release with the \`mcp\` subcommand wired up (the 0.6.0 publish
+      # attempt was rejected by sigstore for an unrelated repository.url
+      # issue and never reached the registry).
+      command: [codebase-oracle, mcp]
+      min_version: "0.6.1"
+      health:
+        verb: oracle_list_repos
+        timeout_ms: 5000
+      enabled: true
     - name: agent-tasks
       # Zero-setup entry: \`@agent-tasks/mcp-bridge\` exposes the
       # \`agent-tasks-mcp-bridge\` binary on PATH. The bridge owns token
