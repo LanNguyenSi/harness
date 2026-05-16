@@ -29,6 +29,7 @@ function mockPrompts(queue) {
   const selectQ = [...(queue.select ?? [])];
   const confirmQ = [...(queue.confirm ?? [])];
   const inputQ = [...(queue.input ?? [])];
+  const checkboxQ = [...(queue.checkbox ?? [])];
   return {
     select: async () => {
       const v = selectQ.shift();
@@ -45,6 +46,11 @@ function mockPrompts(queue) {
       if (v === undefined) throw new Error("input queue empty");
       return v;
     },
+    checkbox: async () => {
+      const v = checkboxQ.shift();
+      if (v === undefined) throw new Error("checkbox queue empty");
+      return v;
+    },
   };
 }
 
@@ -57,6 +63,7 @@ try {
       select: ["solo"],
       input: ["~/.claude/projects/{project}/memory"],
       confirm: [true], // write
+      checkbox: [[]], // skip wire-now multiselect (task 696f7560)
     }),
     stdout: (s) => process.stdout.write(s),
     stderr: (s) => process.stderr.write(s),

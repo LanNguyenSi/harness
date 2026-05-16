@@ -16,11 +16,12 @@ The wizard is one of three ways to bootstrap a manifest:
 
 2. **Overwrite guard.** If `~/.claude/harness.yaml` already exists, the wizard asks before overwriting. Default is `false`, so a stray return key never blows away a hand-edited manifest. Decline and the wizard exits with no write.
 
-3. **Profile selection.** Three choices:
+3. **Profile selection.** Four choices:
 
    - **Solo**: `memory-router` + the `understanding-before-execution` policy pack. Single-operator baseline.
    - **Team**: Solo + the `agent-tasks` MCP server + `grounding-mcp` + the `review-before-merge` policy. Wires the merge gate that blocks PR-merge MCP calls without a ledger entry tagged `review:<pr-number>`.
-   - **Custom (advanced)**: Bails out with a hint to run `harness init --template full` and hand-edit the resulting manifest. The wizard does not yet build manifests à la carte; that is a follow-up.
+   - **Full**: Team + the reference policies (`dogfood-before-release`, `preflight-before-*`, `review-subagent-before-pr-create`). All hooks run through the bundled `harness policy intercept` engine.
+   - **Custom (advanced)**: à-la-carte composer (see [Custom flow](#custom-flow) below). Pick discrete packs / MCPs / policies; the wizard composes a validate-clean manifest from your selection.
 
 4. **Agent-tasks warning (Team only).** If you pick `team` but the probe did not find an `agent-tasks` entry in `settings.json`, the wizard asks whether to proceed. The manifest will still be written, the hook will still fire, but agent-tasks needs to be wired by `harness apply` or by hand before the gate is actually enforceable. Default is `true` because the most common case is "I am setting up everything from scratch and agent-tasks is about to land alongside this manifest".
 
@@ -35,6 +36,22 @@ The wizard is one of three ways to bootstrap a manifest:
    - `codex` → `harness apply --runtime codex` writes `harness.generated/codex/config.toml`; the operator gets the path and the merge instruction (`copy or include those [[hooks.*]] entries into ~/.codex/config.toml`). The wizard never edits `~/.codex/config.toml` directly because `apply --target` is incompatible with `--runtime codex`.
    - Unchecking everything skips wiring entirely; both manual fallback commands print so the operator can wire later by hand.
    - Selecting both runtimes runs the two applies sequentially. `harness.lock` then reflects the **last-applied** runtime; a follow-up `harness apply --runtime <name>` per runtime refreshes its drift baseline. The wizard surfaces this caveat to stderr.
+
+## Custom flow
+
+Custom is for power users who want a manifest narrower or wider than the named profiles. The wizard branches into three checkbox prompts:
+
+1. **Policy packs** — pre-checked: none (settings.json carries no pack signal today). v1 surface: `understanding-before-execution`.
+2. **MCP servers** — pre-checked from `detect()`: any MCP name found in `settings.json mcpServers` is ticked. v1 surface: `agent-tasks`, `grounding-mcp`, `memory-router` (note: `memory-router` lives under `memory.router`, not `tools.mcp[]`; the composer puts it in the right slot).
+3. **Reference policies** — pre-checked: none. v1 surface: `review-before-merge`, `preflight-before-investigation`, `review-subagent-before-pr-create`. Each policy carries its hook entry automatically.
+
+Acceptance:
+
+- **Empty selection** across all three prompts aborts the wizard with no write.
+- **A Custom selection** rejoins the shared tail (dependency check → memory dir → confirm → write → validate → wire-now multiselect), so write semantics are identical to the named profiles.
+- **Producer-coupling advisories** print to stderr when a selected policy has no producer for its ledger tag (e.g. `review-before-merge` selected without `agent-tasks`). These are warnings, not blockers; `harness validate` still passes.
+
+The v1 surface is intentionally a subset of `--template full`. Remaining packs (none today), MCPs (`codebase-oracle`), and policies (`dogfood-before-release`, `preflight-before-push`, `two-reviewers-required`) are tracked as follow-up; the composer is structured so adding them is a single-entry diff in `src/cli/init/composer.ts`.
 
 ## Ctrl-C semantics
 
@@ -51,6 +68,6 @@ harness validate            # expect: no validation findings
 
 ## Limitations (will land later)
 
-- **Custom profile.** Today the Custom choice just hands you off to `--template full`. A future PR can expose the checkbox flow described in task `c5287b80` (per-pack / per-MCP / per-hook selection).
+- **Custom-profile surface coverage.** The v1 Custom composer ships a deliberate subset: 1 pack, 3 MCPs, 3 reference policies. Expanding the catalogue to cover the rest of `--template full` (and `codebase-oracle`, the `opencode` runtime pack) is a follow-up task.
 - **Opencode runtime.** v1 covers Claude Code and Codex; the wizard surfaces `opencode` as a disabled checkbox until the runtime adapter task `f34eb233` lands.
 - **Cross-runtime apply lock state.** `harness apply` is single-runtime per invocation, so when the wizard wires both Claude Code and Codex in one run it calls `apply` twice; `harness.lock` reflects the last-applied runtime's artefacts. Drift detection on the first runtime's outputs is unreliable until you re-run `harness apply --runtime <name>` for that runtime. Tracked for a future single-call multi-runtime apply.

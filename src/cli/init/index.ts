@@ -13,6 +13,19 @@ import { getTemplate, type TemplateName } from "./templates.js";
 
 export interface InitOptions {
   template?: TemplateName;
+  /**
+   * Pre-composed manifest YAML; bypasses the template lookup. Used by
+   * the interactive Custom-profile composer (task 31d2fbb5) so the same
+   * lock + validateBeforeWrite + overwrite-guard path is reused without
+   * needing a second write surface.
+   */
+  content?: string;
+  /**
+   * Label surfaced to the operator and recorded on `InitResult.template`
+   * when `content` is provided (the YAML carries no template name of its
+   * own). Defaults to `"custom"`.
+   */
+  contentLabel?: string;
   force?: boolean;
   configPath?: string;
   homeDir?: string;
@@ -20,7 +33,11 @@ export interface InitOptions {
 
 export interface InitResult {
   path: string;
-  template: TemplateName;
+  /**
+   * The template name written, or `contentLabel` (default "custom")
+   * when the caller passed `content` instead of selecting a preset.
+   */
+  template: TemplateName | string;
   overwrote: boolean;
   stdout: string;
   stderr: string;
@@ -40,15 +57,25 @@ function resolveTargetPath(opts: InitOptions): string {
 
 export async function init(opts: InitOptions = {}): Promise<InitResult> {
   const target = resolveTargetPath(opts);
-  const template: TemplateName = opts.template ?? "minimal";
-  const content = getTemplate(template);
+  // When the caller supplied pre-composed YAML, use it verbatim and
+  // record the contentLabel (default "custom") in the result. Otherwise
+  // fall back to the named-template path.
+  const usingContent = opts.content !== undefined;
+  const templateLabel: TemplateName | string = usingContent
+    ? opts.contentLabel ?? "custom"
+    : opts.template ?? "minimal";
+  const content = usingContent
+    ? (opts.content as string)
+    : getTemplate(opts.template ?? "minimal");
 
-  // Validate the template before any disk work — a broken template is a code
-  // bug, not a user error, but failing loud here makes that bug obvious.
+  // Validate before any disk work. For named templates a failure is a
+  // code bug; for composer output it's also a code bug (the composer is
+  // expected to emit validate-clean YAML). Either way we want to fail
+  // loud BEFORE clobbering the on-disk manifest.
   const validation = validateBeforeWrite(parseYaml(content));
   if (!validation.ok) {
     throw new HarnessExitError(
-      `template "${template}" failed validation:\n${formatValidationErrors(validation.errors)}`,
+      `${usingContent ? "composed manifest" : `template "${templateLabel}"`} failed validation:\n${formatValidationErrors(validation.errors)}`,
       EX_SOFTWARE,
     );
   }
@@ -70,7 +97,7 @@ export async function init(opts: InitOptions = {}): Promise<InitResult> {
 
   const stderr = exists ? `(overwriting existing manifest at ${target})\n` : "";
   const stdout = [
-    `harness manifest written to ${target} (template: ${template})`,
+    `harness manifest written to ${target} (template: ${templateLabel})`,
     "",
     "Next steps:",
     `  harness validate --config ${target}`,
@@ -79,7 +106,7 @@ export async function init(opts: InitOptions = {}): Promise<InitResult> {
     "",
   ].join("\n");
 
-  return { path: target, template, overwrote: exists, stdout, stderr };
+  return { path: target, template: templateLabel, overwrote: exists, stdout, stderr };
 }
 
 export const KNOWN_TEMPLATES: TemplateName[] = ["minimal", "solo", "team", "full"];
