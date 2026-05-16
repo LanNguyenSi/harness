@@ -1,0 +1,343 @@
+// `harness pack hook branch-protection` — PreToolUse blocker for the
+// `branch-protection` policy pack.
+//
+// Receives Claude Code's PreToolUse event JSON on stdin and emits a
+// `{ decision: "block" }` envelope when the agent is about to mutate
+// source on a protected branch without a satisfying ledger tag.
+//
+// Two paths satisfy the gate:
+//
+//   1. **Producer path** — a `branch:non-protected` tag exists in the
+//      ledger from within the last 5 minutes (set by
+//      `harness session-start branch-check` when the session opened on
+//      a non-protected branch).
+//
+//   2. **Override path** — a `branch-protection-ack:` tag exists in the
+//      ledger (any age). The operator writes this from outside the
+//      gated shell via `mcp__agent-grounding__ledger_add` to bless a
+//      deliberate protected-branch edit (version bumps, CI workflow
+//      patches, hotfixes). The `:<reason>` suffix is free-form so the
+//      audit log can read WHY the override fired.
+//
+// Failure mode: any error in load / parse / ledger query resolves to
+// BLOCK. This is the inverse of understanding-before-execution's
+// fail-open contract: branch-protection's whole job is to prevent
+// edit-on-master incidents, so a bug in the blocker that silently
+// allowed Writes through would defeat the purpose. The block envelope
+// always names a recovery path so the operator is never wedged.
+
+import {
+  queryLedgerByTag,
+  type LedgerEntry,
+} from "../../policies/index.js";
+import {
+  ACK_TAG_PREFIX,
+  NON_PROTECTED_TAG_PREFIX,
+  PACK_NAME,
+  PRODUCER_FRESHNESS_MS,
+  resolveProtectedBranches,
+} from "../../policy-packs/builtin/branch-protection-runtime.js";
+import { resolveGitContext } from "../../runtime/git-context.js";
+import type { Manifest, McpServer } from "../../schema/index.js";
+import { loadManifest, type LoaderOptions } from "../loader.js";
+
+export interface PackHookBranchProtectionOptions extends LoaderOptions {
+  /** Defaults to process.stdin. */
+  stdin?: NodeJS.ReadableStream;
+  /** Defaults to process.stdout. */
+  stdout?: NodeJS.WritableStream;
+  /** Defaults to process.stderr. */
+  stderr?: NodeJS.WritableStream;
+  /** Override "now" for deterministic freshness-window tests. */
+  now?: Date;
+  /** Override the cwd resolution (test injection). */
+  cwd?: string;
+  /** Per-call ledger timeout in ms. */
+  ledgerTimeoutMs?: number;
+  /** Inject a manifest (test). */
+  manifest?: Manifest;
+  /** Inject a fake ledger query (test). */
+  ledgerQuery?: (sessionId: string) => Promise<LedgerEntry[] | { degraded: string }>;
+}
+
+export interface PackHookBranchProtectionResult {
+  exitCode: number;
+  blocked: boolean;
+  /** Diagnostic line emitted to stderr (always, even on allow). */
+  diagnostic: string;
+}
+
+interface ToolEventLite {
+  session_id?: unknown;
+  tool_name?: unknown;
+  cwd?: unknown;
+}
+
+async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    stream.setEncoding("utf8");
+    stream.on("data", (chunk: string) => {
+      data += chunk;
+    });
+    stream.on("end", () => resolve(data));
+    stream.on("error", (err) => reject(err));
+  });
+}
+
+function findGroundingMcp(manifest: Manifest): McpServer | null {
+  return manifest.tools.mcp.find((m) => m.name === "grounding-mcp") ?? null;
+}
+
+interface LedgerCheck {
+  hasFreshProducer: boolean;
+  hasAck: boolean;
+  freshProducerContent: string | null;
+  ackContent: string | null;
+  totalEntries: number;
+  degraded: string | null;
+}
+
+function evaluateEntries(entries: LedgerEntry[], now: Date): LedgerCheck {
+  const cutoff = now.getTime() - PRODUCER_FRESHNESS_MS;
+  let hasFreshProducer = false;
+  let hasAck = false;
+  let freshProducerContent: string | null = null;
+  let ackContent: string | null = null;
+  for (const e of entries) {
+    if (e.content.includes(ACK_TAG_PREFIX)) {
+      hasAck = true;
+      if (ackContent === null) ackContent = e.content;
+      continue;
+    }
+    if (!e.content.includes(NON_PROTECTED_TAG_PREFIX)) continue;
+    const ts = new Date(typeof e.createdAt === "string" ? e.createdAt : e.createdAt);
+    if (Number.isNaN(ts.getTime())) continue;
+    if (ts.getTime() >= cutoff) {
+      hasFreshProducer = true;
+      if (freshProducerContent === null) freshProducerContent = e.content;
+    }
+  }
+  return {
+    hasFreshProducer,
+    hasAck,
+    freshProducerContent,
+    ackContent,
+    totalEntries: entries.length,
+    degraded: null,
+  };
+}
+
+async function probeLedger(
+  manifest: Manifest | null,
+  sessionId: string,
+  opts: PackHookBranchProtectionOptions,
+): Promise<LedgerCheck> {
+  if (opts.ledgerQuery) {
+    const r = await opts.ledgerQuery(sessionId);
+    if ("degraded" in r) {
+      return {
+        hasFreshProducer: false,
+        hasAck: false,
+        freshProducerContent: null,
+        ackContent: null,
+        totalEntries: 0,
+        degraded: r.degraded,
+      };
+    }
+    return evaluateEntries(r, opts.now ?? new Date());
+  }
+  if (!manifest) {
+    return {
+      hasFreshProducer: false,
+      hasAck: false,
+      freshProducerContent: null,
+      ackContent: null,
+      totalEntries: 0,
+      degraded: "manifest unavailable",
+    };
+  }
+  const server = findGroundingMcp(manifest);
+  if (!server) {
+    return {
+      hasFreshProducer: false,
+      hasAck: false,
+      freshProducerContent: null,
+      ackContent: null,
+      totalEntries: 0,
+      degraded: "grounding-mcp not declared in manifest",
+    };
+  }
+  const command = Array.isArray(server.command)
+    ? server.command
+    : server.command.trim().split(/\s+/);
+  const env = server.env ?? undefined;
+  const timeoutMs = opts.ledgerTimeoutMs ?? server.health?.timeout_ms ?? 5_000;
+  const result = await queryLedgerByTag({
+    mcpCommand: command,
+    ...(env && { mcpEnv: env }),
+    sessionId,
+    timeoutMs,
+  });
+  if (result.kind === "degraded") {
+    return {
+      hasFreshProducer: false,
+      hasAck: false,
+      freshProducerContent: null,
+      ackContent: null,
+      totalEntries: 0,
+      degraded: result.reason,
+    };
+  }
+  return evaluateEntries(result.entries, opts.now ?? new Date());
+}
+
+function blockJson(
+  toolName: string,
+  branch: string,
+  detail: string,
+  protectedList: readonly string[],
+): string {
+  const minutes = Math.round(PRODUCER_FRESHNESS_MS / 60000);
+  const reasonText =
+    `branch-protection: refusing ${toolName} on protected branch "${branch}". ` +
+    `${detail}\n` +
+    `To proceed, cut a feature branch and re-run the producer:\n` +
+    `  git checkout -b <feature-slug>\n` +
+    `  harness session-start branch-check\n` +
+    `Once the gate sees a fresh ${NON_PROTECTED_TAG_PREFIX} tag (within ${minutes}m), this tool call will succeed.\n` +
+    `\n` +
+    `Override (use sparingly): write \`${ACK_TAG_PREFIX}:<reason>\` to the ledger via mcp__agent-grounding__ledger_add. ` +
+    `The override survives the session and bypasses this gate.\n` +
+    `\n` +
+    `Protected branches: ${protectedList.join(", ")}.`;
+  return JSON.stringify({
+    decision: "block",
+    reason: reasonText,
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: reasonText,
+    },
+  });
+}
+
+export async function runPackHookBranchProtectionCli(
+  opts: PackHookBranchProtectionOptions = {},
+): Promise<PackHookBranchProtectionResult> {
+  const stdin = opts.stdin ?? process.stdin;
+  const stdout = opts.stdout ?? process.stdout;
+  const stderr = opts.stderr ?? process.stderr;
+  const note = (msg: string): void => {
+    stderr.write(`harness pack hook branch-protection: ${msg}\n`);
+  };
+
+  // Defensive stdin parse. Empty / malformed input resolves to BLOCK
+  // (the inverse of understanding-before-execution's allow-on-malformed
+  // default): we'd rather block a Write we couldn't classify than let
+  // it through silently.
+  const raw = await readStdin(stdin);
+  let event: ToolEventLite = {};
+  try {
+    event = JSON.parse(raw.trim() || "{}") as ToolEventLite;
+  } catch {
+    /* event stays {} — handled by the sessionId check below */
+  }
+
+  const sessionId =
+    (typeof event.session_id === "string" ? event.session_id : undefined) ??
+    process.env.CLAUDE_SESSION_ID ??
+    "";
+  const toolName = typeof event.tool_name === "string" ? event.tool_name : "(unknown)";
+  const cwd =
+    typeof opts.cwd === "string" && opts.cwd.length > 0
+      ? opts.cwd
+      : typeof event.cwd === "string" && event.cwd.length > 0
+        ? event.cwd
+        : process.cwd();
+
+  // Load manifest to resolve the protected-branches list AND the
+  // grounding-mcp wiring. A manifest load failure forces BLOCK with a
+  // clear hint — we can't know if the gate should fire if we can't
+  // read its config.
+  let manifest: Manifest | null = null;
+  if (opts.manifest) {
+    manifest = opts.manifest;
+  } else {
+    try {
+      manifest = loadManifest(opts).manifest;
+    } catch (err) {
+      const reason = `manifest load failed (${(err as Error).message}); refusing on failsafe`;
+      const diagnostic = `BLOCK — ${reason}`;
+      note(diagnostic);
+      stdout.write(
+        `${blockJson(toolName, "(unresolvable)", reason, ["master", "main", "develop"])}\n`,
+      );
+      return { exitCode: 0, blocked: true, diagnostic };
+    }
+  }
+
+  const pack = manifest.policy_packs.find((p) => p.name === PACK_NAME);
+  if (!pack) {
+    const diagnostic = `pack "${PACK_NAME}" not declared in manifest, allowing`;
+    note(diagnostic);
+    return { exitCode: 0, blocked: false, diagnostic };
+  }
+  if (!pack.enabled) {
+    const diagnostic = `pack "${PACK_NAME}" is enabled:false, allowing`;
+    note(diagnostic);
+    return { exitCode: 0, blocked: false, diagnostic };
+  }
+
+  const { branches: protectedList } = resolveProtectedBranches(pack);
+  const { branch } = resolveGitContext(cwd);
+
+  // Outside a git work tree (or detached HEAD) we can't tell what the
+  // edit would land on. We choose to allow here — the alternative is
+  // blocking every Write in non-git workspaces, which would be hostile
+  // to standalone-script workflows. A detached HEAD on an in-repo cwd
+  // also lands here; arguably should block, but git-detached-HEAD
+  // edits don't auto-push to a protected ref so the downstream
+  // `preflight-before-push` gate still catches the actual hazard.
+  if (branch === "") {
+    const diagnostic = `cwd is not on a named branch (detached HEAD or outside a git work tree); allowing`;
+    note(diagnostic);
+    return { exitCode: 0, blocked: false, diagnostic };
+  }
+
+  if (!protectedList.includes(branch)) {
+    const diagnostic = `branch "${branch}" is not in the protected list (${protectedList.join(", ")}); allowing`;
+    note(diagnostic);
+    return { exitCode: 0, blocked: false, diagnostic };
+  }
+
+  // On a protected branch: probe the ledger for either gate path.
+  if (sessionId === "") {
+    const reason = `no session_id resolvable from stdin or $CLAUDE_SESSION_ID; cannot consult ledger`;
+    const diagnostic = `BLOCK — ${reason}`;
+    note(diagnostic);
+    stdout.write(`${blockJson(toolName, branch, reason, protectedList)}\n`);
+    return { exitCode: 0, blocked: true, diagnostic };
+  }
+
+  const check = await probeLedger(manifest, sessionId, opts);
+  if (check.hasAck) {
+    const diagnostic = `ACK override active (${check.ackContent ?? ACK_TAG_PREFIX}); allowing`;
+    note(diagnostic);
+    return { exitCode: 0, blocked: false, diagnostic };
+  }
+  if (check.hasFreshProducer) {
+    const diagnostic = `fresh producer tag (${check.freshProducerContent ?? NON_PROTECTED_TAG_PREFIX}); allowing`;
+    note(diagnostic);
+    return { exitCode: 0, blocked: false, diagnostic };
+  }
+
+  const why =
+    check.degraded !== null
+      ? `ledger degraded (${check.degraded}); refusing on failsafe`
+      : `no fresh ${NON_PROTECTED_TAG_PREFIX} tag (${check.totalEntries} entries scanned) and no ${ACK_TAG_PREFIX} override`;
+  const diagnostic = `BLOCK — ${why}`;
+  note(diagnostic);
+  stdout.write(`${blockJson(toolName, branch, why, protectedList)}\n`);
+  return { exitCode: 0, blocked: true, diagnostic };
+}

@@ -54,6 +54,8 @@ import { sessionExport, type ExportFormat } from "./session-export/index.js";
 import { dryRun } from "./dry-run.js";
 import { runInterceptCli } from "./policy/intercept.js";
 import { runSessionStartPreflight } from "./session-start/index.js";
+import { runSessionStartBranchCheck } from "./session-start/branch-check.js";
+import { runPackHookBranchProtectionCli } from "./pack/hook-branch-protection.js";
 import { gateDisable, GateDisableError } from "./gate/disable.js";
 import { gateEnable, GateEnableError } from "./gate/enable.js";
 import { uninstall, UninstallError } from "./uninstall/index.js";
@@ -1023,6 +1025,37 @@ export function buildProgram(opts: RunOptions = {}): Command {
     );
 
   packHookCmd
+    .command("branch-protection")
+    .description(
+      "PreToolUse blocker for the branch-protection pack: read tool-event JSON from stdin, consult the " +
+        "evidence ledger, emit a deny envelope on protected branches unless either a fresh " +
+        "`branch:non-protected` tag (within 5m) or a `branch-protection-ack` override is present.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
+    .option("--cwd <path>", "override cwd resolution (default: stdin event.cwd then process.cwd())")
+    .action(async (options: {
+      config?: string;
+      project?: string;
+      ledgerTimeout?: string;
+      cwd?: string;
+    }) => {
+      const cliOpts: Parameters<typeof runPackHookBranchProtectionCli>[0] = {};
+      if (options.config) cliOpts.configPath = options.config;
+      if (options.project) cliOpts.project = options.project;
+      if (options.cwd) cliOpts.cwd = options.cwd;
+      if (options.ledgerTimeout) {
+        const n = Number.parseInt(options.ledgerTimeout, 10);
+        if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
+      }
+      const result = await runPackHookBranchProtectionCli(cliOpts);
+      if (result.exitCode !== 0) {
+        throw new HarnessExitError("", result.exitCode);
+      }
+    });
+
+  packHookCmd
     .command("codex-stop")
     .description(
       "Codex Stop-equivalent: parse the agent's last message for an Understanding Report and persist it under .understanding-gate/reports/ as approvalStatus:pending. Failure modes resolve to exit 0 (capture must never block the agent's stop path).",
@@ -1444,6 +1477,41 @@ export function buildProgram(opts: RunOptions = {}): Command {
         if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
       }
       await runSessionStartPreflight(cliOpts);
+    });
+  sessionStart
+    .command("branch-check")
+    .description(
+      "SessionStart producer for the branch-protection pack: read .git/HEAD for the session cwd and, " +
+        "when the branch is NOT in the operator's protected list (default: master, main, develop), " +
+        "record a `branch:non-protected:<branch>` fact to the evidence ledger so the pack's PreToolUse " +
+        "blocker has a fresh tag to satisfy its 5-minute freshness window. Also runnable on demand from " +
+        "the operator's shell. blocking:false — every failure path logs to stderr and exits 0.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option(
+      "--session <id>",
+      "explicit session id (overrides stdin event + env)",
+    )
+    .option("--cwd <path>", "override cwd resolution (default: stdin event.cwd then process.cwd())")
+    .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
+    .action(async (options: {
+      config?: string;
+      project?: string;
+      session?: string;
+      cwd?: string;
+      ledgerTimeout?: string;
+    }) => {
+      const cliOpts: Parameters<typeof runSessionStartBranchCheck>[0] = {};
+      if (options.config) cliOpts.configPath = options.config;
+      if (options.project) cliOpts.project = options.project;
+      if (options.session) cliOpts.session = options.session;
+      if (options.cwd) cliOpts.cwd = options.cwd;
+      if (options.ledgerTimeout) {
+        const n = Number.parseInt(options.ledgerTimeout, 10);
+        if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
+      }
+      await runSessionStartBranchCheck(cliOpts);
     });
 
   // `harness gate` — operator escape hatch for hard-blocking hooks.
