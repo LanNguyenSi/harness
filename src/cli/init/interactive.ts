@@ -160,6 +160,17 @@ interface WireRuntimeOpts {
 }
 
 async function wireRuntime(o: WireRuntimeOpts): Promise<RuntimeApplyOutcome> {
+  // Defensive: only claude-code and codex have apply paths in v1. The
+  // checkbox UI disables "opencode" until task f34eb233 lands, so this
+  // branch is unreachable through normal use; the guard fires if the
+  // disabled flag is ever removed without wiring an adapter, instead of
+  // silently returning a half-built RuntimeApplyOutcome.
+  if (o.runtime !== "claude-code" && o.runtime !== "codex") {
+    throw new HarnessExitError(
+      `wireRuntime: ${o.runtime} is not a wirable runtime in this harness build`,
+      EX_FAIL,
+    );
+  }
   if (o.runtime === "claude-code") {
     const applyOpts: Parameters<typeof apply>[0] = {
       configPath: o.configPath,
