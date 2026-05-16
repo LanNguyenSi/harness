@@ -68,6 +68,19 @@ describe("pack hook codex-pre-tool-use blocker", () => {
     expect(stderr.read()).toMatch(/BLOCK: no approval marker for session sess-codex/);
     expect(stderr.read()).toMatch(/apply_patch/);
     expect(stderr.read()).toMatch(/harness approve understanding/);
+    // Schema hint enumerates the parser's required sections so the agent
+    // can produce a parser-acceptable report on the first try (task 5ec5772d).
+    const stderrSnapshot = stderr.read();
+    expect(stderrSnapshot).toContain("Report format");
+    expect(stderrSnapshot).toContain("Current Understanding");
+    expect(stderrSnapshot).toContain("Intended Outcome");
+    expect(stderrSnapshot).toContain("Derived Todos");
+    expect(stderrSnapshot).toContain("Acceptance Criteria");
+    expect(stderrSnapshot).toContain("Assumptions");
+    expect(stderrSnapshot).toContain("Open Questions");
+    expect(stderrSnapshot).toContain("Out Of Scope");
+    expect(stderrSnapshot).toContain("Risks");
+    expect(stderrSnapshot).toContain("Verification Plan");
   });
 
   it("allows on exit 0 when an approval marker is present for the session (agent-tasks/88ca4bb3)", async () => {

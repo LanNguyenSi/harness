@@ -303,6 +303,24 @@ describe("pack hook pre-tool-use blocker", () => {
     expect(decision.reason.indexOf("Run `harness approve")).toBeLessThan(
       decision.reason.indexOf("To produce this tag:"),
     );
+    // Schema hint enumerates the parser's required sections so the agent
+    // can produce a parser-acceptable report on the first try (task 5ec5772d).
+    expect(decision.reason).toContain("Current Understanding");
+    expect(decision.reason).toContain("Intended Outcome");
+    expect(decision.reason).toContain("Derived Todos");
+    expect(decision.reason).toContain("Acceptance Criteria");
+    expect(decision.reason).toContain("Assumptions");
+    expect(decision.reason).toContain("Open Questions");
+    expect(decision.reason).toContain("Out Of Scope");
+    expect(decision.reason).toContain("Risks");
+    expect(decision.reason).toContain("Verification Plan");
+    // Hint sits between suffix and producer block, in that order.
+    expect(decision.reason.indexOf("Report format")).toBeGreaterThan(
+      decision.reason.indexOf("Run `harness approve"),
+    );
+    expect(decision.reason.indexOf("Report format")).toBeLessThan(
+      decision.reason.indexOf("To produce this tag:"),
+    );
   });
 
   it("rejects malformed config.producers and falls back to legacy envelope", async () => {
