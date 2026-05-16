@@ -1,14 +1,17 @@
 // À la carte manifest composer for `harness init --interactive` Custom
-// profile (task 31d2fbb5). The composer turns a discrete checkbox
-// selection into a YAML manifest that `harness validate` accepts.
+// profile (tasks 31d2fbb5 + 5dd3d8a6). The composer turns a discrete
+// checkbox selection into a YAML manifest that `harness validate`
+// accepts.
 //
-// v1 scope (per task scope-cut): a single policy pack
-// (understanding-before-execution), three MCPs (agent-tasks,
-// grounding-mcp, memory-router — note memory-router lives under
-// memory.router, not tools.mcp[]), and three reference policies. The
-// remaining packs/MCPs/policies in the FULL template are deliberately
-// deferred to a follow-up task so the Custom surface stays
-// reviewable in one PR.
+// Current surface (parity with FULL_TEMPLATE): one policy pack
+// (understanding-before-execution), four MCPs (agent-tasks,
+// grounding-mcp, memory-router — wired under memory.router, NOT
+// tools.mcp[] — and codebase-oracle), and six reference policies
+// (review-before-merge, preflight-before-investigation,
+// review-subagent-before-pr-create, preflight-before-push,
+// dogfood-before-release, two-reviewers-required). The opencode pack
+// stays disabled in the wire-now multiselect until its runtime adapter
+// (agent-tasks/f34eb233) lands.
 //
 // Design: build a plain object matching the Manifest schema, then
 // serialise via the `yaml` library. The shared `init()` path
