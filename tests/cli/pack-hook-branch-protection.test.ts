@@ -44,14 +44,6 @@ function manifestWithPack(config: Record<string, unknown> = {}, enabled = true):
   });
 }
 
-function makeLedgerEntry(content: string, ageMs = 0, id = "1"): LedgerEntry {
-  return {
-    id,
-    content,
-    createdAt: new Date(Date.now() - ageMs).toISOString(),
-  };
-}
-
 const NOW = new Date("2026-05-16T12:00:00Z");
 function ledgerAt(content: string, minutesAgo = 0, id = "1"): LedgerEntry {
   return {
@@ -260,15 +252,16 @@ describe("runPackHookBranchProtectionCli — edge cases", () => {
     expect(result.diagnostic).toMatch(/not declared in manifest/);
   });
 
-  it("does not classify a `policy_decision` audit row as a satisfying tag", async () => {
-    // The requires evaluator skips policy_decision rows so the same tag
-    // it audited doesn't satisfy the gate it was about. The blocker's
-    // own evaluator scans content + age only, so an entry that LOOKS
-    // like an audit serialization should not unblock the gate. Verify
-    // we filter by the producer-tag substring before time-checking.
+  it("rejects a `policy_decision` row whose serialized content embeds the producer tag (substring pollution)", async () => {
+    // policy_decision rows can incidentally carry the same tag they
+    // audit (e.g. an engine-recorded denial referencing this very
+    // pack's ledger_tag). Mirrors the filter in src/policies/requires.ts.
+    // Without this filter, any past denied decision against
+    // branch-protection would unblock the next gate evaluation.
     const repo = makeRepoFixture("svc", "master");
     const { stream: out, output: outBuf } = captureStream();
     const { stream: err } = captureStream();
+    const recent = new Date(NOW.getTime() - 60_000).toISOString();
     const result = await runPackHookBranchProtectionCli({
       stdin: streamFrom(eventJson({ cwd: repo })),
       stdout: out,
@@ -276,11 +269,56 @@ describe("runPackHookBranchProtectionCli — edge cases", () => {
       manifest: manifestWithPack(),
       now: NOW,
       ledgerQuery: async () => [
-        // A row that doesn't contain either tag prefix — should not satisfy.
-        makeLedgerEntry("policy_decision:no-edit-on-protected-branch outcome:deny", 60_000),
+        // Row carries the literal producer tag in its content AND is
+        // fresh, but is a policy_decision audit record — must NOT
+        // satisfy the gate.
+        {
+          id: "pd-1",
+          content: '{"ledgerTag":"branch:non-protected","outcome":"deny"}',
+          createdAt: recent,
+          type: "policy_decision",
+        },
+        // Legacy backstop: pre-Phase-5-#4 rows lack a type field but
+        // carry the policy_decision: prefix in content. Same rejection.
+        {
+          id: "pd-legacy",
+          content: "policy_decision:branch:non-protected outcome:deny",
+          createdAt: recent,
+        },
+        // Same for the ack prefix — a denied decision referencing the
+        // ack tag should not flip the override on.
+        {
+          id: "pd-ack",
+          content: '{"ledgerTag":"branch-protection-ack","outcome":"deny"}',
+          createdAt: recent,
+          type: "policy_decision",
+        },
       ],
     });
     expect(result.blocked).toBe(true);
     expect(outBuf()).toContain('"decision":"block"');
+  });
+
+  it("blocks (failsafe) when the manifest cannot be loaded", async () => {
+    // Manifest unresolvable: we can't know if the pack is enabled or
+    // what the protected list is. The blocker must refuse rather than
+    // silently allow, with a clear hint pointing at the failure.
+    const { stream: out, output: outBuf } = captureStream();
+    const { stream: err, output: errOut } = captureStream();
+    const result = await runPackHookBranchProtectionCli({
+      stdin: streamFrom(eventJson()),
+      stdout: out,
+      stderr: err,
+      // Point at a manifest path that does not exist. loadManifest()
+      // throws HarnessExitError for ENOENT; the blocker catches and
+      // forces a block.
+      configPath: "/nonexistent/path/harness.yaml",
+      ledgerQuery: async () => [],
+    });
+    expect(result.blocked).toBe(true);
+    const envelope = JSON.parse(outBuf());
+    expect(envelope.decision).toBe("block");
+    expect(envelope.reason).toMatch(/manifest load failed/);
+    expect(errOut()).toMatch(/refusing on failsafe/);
   });
 });

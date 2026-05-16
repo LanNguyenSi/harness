@@ -32,12 +32,14 @@ import {
 } from "../../policies/index.js";
 import {
   ACK_TAG_PREFIX,
+  DEFAULT_PROTECTED_BRANCHES,
   NON_PROTECTED_TAG_PREFIX,
   PACK_NAME,
   PRODUCER_FRESHNESS_MS,
   resolveProtectedBranches,
 } from "../../policy-packs/builtin/branch-protection-runtime.js";
 import { resolveGitContext } from "../../runtime/git-context.js";
+import { POLICY_DECISION_TYPE } from "../../runtime/ledger-record.js";
 import type { Manifest, McpServer } from "../../schema/index.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 
@@ -105,13 +107,23 @@ function evaluateEntries(entries: LedgerEntry[], now: Date): LedgerCheck {
   let freshProducerContent: string | null = null;
   let ackContent: string | null = null;
   for (const e of entries) {
+    // Skip policy_decision audit rows: their serialized payload
+    // incidentally contains the tag they're about (e.g. a denied
+    // decision the engine recorded for THIS pack would carry the
+    // literal "branch:non-protected" or "branch-protection-ack" in
+    // its JSON, falsely satisfying the gate). Two-tier filter
+    // mirrors `src/policies/requires.ts:75-83`: by-type for current
+    // ledger rows, by-content-prefix as a backstop for legacy rows
+    // a pre-Phase-5-#4 ledger may still carry.
+    if (e.type === POLICY_DECISION_TYPE) continue;
+    if (e.content.startsWith(`${POLICY_DECISION_TYPE}:`)) continue;
     if (e.content.includes(ACK_TAG_PREFIX)) {
       hasAck = true;
       if (ackContent === null) ackContent = e.content;
       continue;
     }
     if (!e.content.includes(NON_PROTECTED_TAG_PREFIX)) continue;
-    const ts = new Date(typeof e.createdAt === "string" ? e.createdAt : e.createdAt);
+    const ts = e.createdAt instanceof Date ? e.createdAt : new Date(e.createdAt);
     if (Number.isNaN(ts.getTime())) continue;
     if (ts.getTime() >= cutoff) {
       hasFreshProducer = true;
@@ -271,7 +283,7 @@ export async function runPackHookBranchProtectionCli(
       const diagnostic = `BLOCK — ${reason}`;
       note(diagnostic);
       stdout.write(
-        `${blockJson(toolName, "(unresolvable)", reason, ["master", "main", "develop"])}\n`,
+        `${blockJson(toolName, "(unresolvable)", reason, DEFAULT_PROTECTED_BRANCHES)}\n`,
       );
       return { exitCode: 0, blocked: true, diagnostic };
     }

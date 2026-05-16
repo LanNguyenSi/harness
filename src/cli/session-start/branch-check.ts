@@ -29,6 +29,7 @@ import {
   type ResolveReadSessionOptions,
 } from "../../runtime/session-id.js";
 import {
+  DEFAULT_PROTECTED_BRANCHES,
   isProtectedBranch,
   NON_PROTECTED_TAG_PREFIX,
   PACK_NAME,
@@ -165,7 +166,7 @@ export async function runSessionStartBranchCheck(
   const pack = manifest?.policy_packs.find((p) => p.name === PACK_NAME);
   const { branches: protectedList, warning: protectedWarning } = pack
     ? resolveProtectedBranches(pack)
-    : { branches: [...["master", "main", "develop"]], warning: null };
+    : { branches: [...DEFAULT_PROTECTED_BRANCHES], warning: null };
   if (protectedWarning) note(protectedWarning);
 
   // Resolve session id with the same precedence chain as
