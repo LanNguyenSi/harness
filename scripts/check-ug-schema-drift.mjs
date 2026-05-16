@@ -118,7 +118,7 @@ function fetchUpstreamParserSource() {
   }
 }
 
-async function loadHarnessMirror() {
+export async function loadHarnessMirror() {
   // The hint module is shipped as the compiled .js. We import it
   // dynamically so this script does not depend on a TypeScript step.
   // Precheck file existence first: a missing dist file is the common
