@@ -37,6 +37,7 @@
     "test:watch": "vitest",
     "test:cov": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
+    "check:ug-schema-drift": "node scripts/check-ug-schema-drift.mjs",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
