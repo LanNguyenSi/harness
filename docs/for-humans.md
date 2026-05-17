@@ -224,8 +224,9 @@ What lands on each surface:
 
 Every built-in template (`solo` / `team` / `full`) ships `ux:`
 defaults on every block-enforcement policy and on the
-understanding-before-execution + branch-protection packs since
-v0.17.1. Manifests without `ux:` keep the legacy envelope verbatim;
+understanding-before-execution pack (since v0.17.1) and
+branch-protection pack (since v0.17.3, after the pack itself
+default-shipped in v0.17.2). Manifests without `ux:` keep the legacy envelope verbatim;
 no migration needed for 0.16.x installs. The agent-facing reference
 is [`for-agents.md`](for-agents.md#agent-facing-block-messages-ux-block).
 

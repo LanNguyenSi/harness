@@ -40,8 +40,10 @@ $ harness policy intercept       # Claude Code runs this before each tool call
 {"decision":"block","reason":"review-before-merge: no matching ledger entry for tag `review:42`","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"review-before-merge: no matching ledger entry for tag `review:42`"}}
 ```
 
-Since v0.17.0 every built-in policy ships a `ux:` block, so the agent
-actually sees the plain-language three-section form instead (see
+Since v0.17.0 every built-in block-enforcement policy ships a `ux:`
+block (the warn-only `two-reviewers-required` omits it; the agent
+never sees a warn), so the agent actually sees the plain-language
+three-section form instead (see
 [What the agent sees vs what the engine records](#what-the-agent-sees-vs-what-the-engine-records)
 below). The engine-vocabulary text stays in the audit ledger.
 

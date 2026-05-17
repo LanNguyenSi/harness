@@ -118,7 +118,9 @@ review-before-merge: no matching ledger entry for tag `review:42`
 ```
 
 **Agent-facing shape** (`ux:` declared, default for every built-in
-v0.17.x policy and pack): three sections, verbatim from
+block-enforcement policy and pack as of v0.17.x; the warn-only
+`two-reviewers-required` policy omits it because the agent never
+sees a warn): three sections, verbatim from
 `formatAgentFacingMessage` in `src/runtime/agent-facing.ts`:
 
 ```

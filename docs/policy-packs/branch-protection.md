@@ -94,7 +94,7 @@ Run:
 
 The engine-vocabulary BLOCK reason (naming the protected list, freshness window, ledger health, session id) still lands on stderr. Both runtime blockers, claude-code and codex, share the same renderer.
 
-Verbatim three-section form, full `${VAR}` substitution context (`${BRANCH}` / `${REPO}` / `${SESSION_ID}` plus pack-specific values), and the agent / operator surface split: [`docs/for-agents.md`](../for-agents.md#agent-facing-block-messages-ux-block).
+Verbatim three-section form, the agent / operator surface split, and the full builtin set are documented in [`docs/for-agents.md`](../for-agents.md#agent-facing-block-messages-ux-block). The branch-protection blocker itself resolves `${BRANCH}`, `${TOOL_NAME}`, and `${SESSION_ID}`; other builtins (`${REPO}`, `${CWD}`) are not provided by this pack's hook.
 
 ## Escape hatches
 
