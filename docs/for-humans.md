@@ -306,6 +306,9 @@ pair are required for `harness apply` to wire the gate end-to-end.
 - [`docs/for-agents.md`](for-agents.md): how agents interact with the
   same harness instance, the audit triumvirate, the merge-gate
   contract.
+- [`docs/writing-custom-policies.md`](writing-custom-policies.md):
+  task-oriented how-to for authoring your own policies (four worked
+  recipes, validated in CI).
 - [`docs/ARCHITECTURE.md`](ARCHITECTURE.md): YAML shape, CLI surface,
   drift handling, `requires` schema.
 - [`docs/ROADMAP.md`](ROADMAP.md): phases 1 through 7 with acceptance
