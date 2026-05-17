@@ -11,18 +11,13 @@ applies, audits, and *enforces*.
 > exact context, and why.
 
 A coding agent like Claude Code is configured across half a dozen
-files: `settings.json`, `CLAUDE.md`, memory notes, MCP registrations,
-hook scripts, per-project overrides. No single file answers *"what can
-this agent do right now, and why is it set up that way?"*, so
-configuration drifts between sessions, rules you wrote down in one
-place quietly stop firing, and a broken tool is discovered only by
-tripping over it.
-
-`harness` puts all of that in one YAML file you can read, validate,
-and diff. From that file it generates the config the agent actually
-loads, and at runtime it enforces the rules you declared: it blocks a
-tool call that violates one, and records every decision so you can
-see what fired and why.
+files (`settings.json`, `CLAUDE.md`, memory notes, MCP registrations,
+hook scripts, per-project overrides), and no single file answers
+*"what can this agent do right now, and why is it set up that way?"*.
+`harness` puts all of it in one YAML you read, validate, and diff;
+generates the config the agent loads from it; and at runtime blocks
+tool calls that violate the declared rules while recording every
+decision.
 
 ## See it work
 
@@ -40,12 +35,10 @@ $ harness policy intercept       # Claude Code runs this before each tool call
 {"decision":"block","reason":"review-before-merge: no matching ledger entry for tag `review:42`","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"review-before-merge: no matching ledger entry for tag `review:42`"}}
 ```
 
-Since v0.17.0 every built-in block-enforcement policy ships a `ux:`
-block (the warn-only `two-reviewers-required` omits it; the agent
-never sees a warn), so the agent actually sees the plain-language
-three-section form instead (see
-[What the agent sees vs what the engine records](#what-the-agent-sees-vs-what-the-engine-records)
-below). The engine-vocabulary text stays in the audit ledger.
+Built-in block-enforcement policies ship a `ux:` block since v0.17.0,
+so the agent sees a plain-language three-section form
+([`docs/for-agents.md`](docs/for-agents.md#agent-facing-block-messages-ux-block));
+the engine-vocabulary text above stays in the audit ledger.
 
 Blocked. `harness explain` says exactly why:
 
@@ -87,54 +80,6 @@ timestamp            policy               outcome  reason
 Declare the rule once; every session is held to it, with a paper
 trail of every decision.
 
-## What the agent sees vs what the engine records
-
-A policy has two readers: the audit ledger (which wants every internal
-detail) and the agent (which only needs to know what is blocked, what
-condition is missing, and which command satisfies it). Declaring a
-policy's `ux:` block splits those readers cleanly.
-
-Engine-internal model (unchanged): session IDs, ledger entries,
-attestations, provenance chains, policy DAGs. All of it still feeds
-`audit`, `explain --trace`, and the evidence-ledger writes that
-`session-export` replays.
-
-Agent-facing model (new, opt-in per policy): `cannot` (what is
-blocked), `required` (the missing precondition, in plain words), and
-`run` (the exact command to satisfy it). When `ux:` is declared, the
-agent sees only this shape, with `${VAR}` references substituted
-against the same context the `ledger_tag` resolved against.
-
-```yaml
-policies:
-  - name: preflight-before-investigation
-    requires: { ledger_tag: "preflight:${REPO}", within: "1h" }
-    enforcement: block
-    ux:
-      cannot: "You cannot investigate this repository yet."
-      required: ["verified repository preflight"]
-      run: ["harness preflight"]
-```
-
-On block, the agent sees:
-
-```
-You cannot investigate this repository yet.
-
-Required:
-- verified repository preflight
-
-Run:
-  harness preflight
-```
-
-Not `no matching ledger entry for tag preflight:harness`. The
-internal failure (tag, hint, matched count) is still written to the
-ledger for `audit` and `explain --trace`. Policies without `ux:` keep
-the legacy deny envelope unchanged, so existing 0.16.x manifests need
-no changes; the canonical form for agents writing new policies lives
-in [`docs/for-agents.md`](docs/for-agents.md#agent-facing-block-messages-ux-block).
-
 ## Concepts in six lines
 
 | Term | What it is |
@@ -163,25 +108,15 @@ flowchart LR
     observe -. refine .-> declare
 ```
 
-One manifest declares grounding, tools, memory, hooks, policies, and
-workflows. `apply` materialises that into the files Claude Code
-actually reads. At runtime, hooks and policies enforce the contract
-and write decision rows to the evidence ledger. The read-side
-surfaces (`audit`, `explain --trace`, `session-export`) replay those
-rows so you can see what fired, why, and across which session.
-Whatever you learn from observing flows back into the manifest. That
-loop is the whole product.
+Observe → refine → declare is the whole loop. The read-side surfaces
+(`audit`, `explain --trace`, `session-export`) replay rows the runtime
+already recorded, so what flows back into the manifest is grounded in
+what actually happened.
 
 ## Pick your audience
 
-- **Operator?** Read [`docs/for-humans.md`](docs/for-humans.md). It
-  walks from `npm i -g @lannguyensi/harness` through your first
-  `apply`, your first real policy, and the diagnostics cheat sheet.
-- **Agent (or onboarding one)?** Read
-  [`docs/for-agents.md`](docs/for-agents.md). It defines the
-  workflow lifecycle, the policy / ledger sequence, the CLI cheat
-  sheet split by side-effect class, and the audit triumvirate
-  (`audit` vs `explain --trace` vs `session-export`).
+- **Operator?** [`docs/for-humans.md`](docs/for-humans.md): install through first `apply`, first real policy, diagnostics cheat sheet.
+- **Agent (or onboarding one)?** [`docs/for-agents.md`](docs/for-agents.md): workflow lifecycle, policy / ledger sequence, CLI cheat sheet by side-effect class, the audit triumvirate.
 
 ## Install
 
@@ -200,11 +135,11 @@ command path, install to wired-in, no prose.
 harness init --interactive
 ```
 
-Guided wizard that detects your environment (existing `~/.claude/` and
-`~/.codex/`, MCP servers already wired in `settings.json`, harness
-binary version), picks a profile (`solo` / `team` / `custom`), and
-writes a starting `harness.yaml`. Ctrl-C at any prompt aborts with no
-partial write. Walkthrough + limitations: `docs/init-interactive.md`.
+Guided wizard. Detects `~/.claude/` and `~/.codex/`, MCP servers
+already wired in `settings.json`, harness binary version. Picks a
+profile (`solo` / `team` / `custom`) and writes a starting
+`harness.yaml`. Ctrl-C aborts cleanly. Walkthrough +
+limitations: [`docs/init-interactive.md`](docs/init-interactive.md).
 
 If you prefer non-interactive (CI, fresh-VM provisioning), pick a
 template directly:
@@ -215,17 +150,14 @@ harness init --template team   # solo + agent-tasks MCP + review-before-merge po
 harness init --template full   # everything from the Appendix A reference manifest
 ```
 
-Debug what the harness sees in your env without writing anything:
+Use `harness init --probe` for a JSON snapshot of detected runtimes
+and MCPs without writing anything.
 
-```bash
-harness init --probe   # JSON snapshot of detected runtimes + MCPs + manifest
-```
+## Try it without installing
 
-## Try it yourself
-
-The demo above shows the runtime path. To see policy matching without
-installing anything or touching the ledger, run `dry-run` against the
-reference manifest:
+`harness dry-run` reports which hooks fire and which policies match
+for a given tool call, against the reference manifest, before any
+ledger I/O:
 
 ```bash
 git clone https://github.com/LanNguyenSi/harness && cd harness
@@ -236,44 +168,23 @@ node dist/cli/main.js dry-run "merge PR 42" \
   --config docs/examples/full-manifest.yaml
 ```
 
-`dry-run` reads the reference manifest, runs the trigger matcher,
-substitutes `${PR_NUMBER}=42` through the JSONPath-restricted extract
-DSL, and tells you exactly which hooks would fire and which policies
-would match, before any ledger I/O.
-
-The reference manifest is a schema-coverage example, not a runnable
-config. `harness validate --config docs/examples/full-manifest.yaml`
-will report errors for install-specific hook script paths it
-references (and warnings for binaries like `git-batch` that only exist
-in a real install). That is expected; the file header spells out the
-contract. Use `harness init --template full` to get a manifest
-tailored to your machine.
-
-Convinced? Install globally and set up your own:
-`npm i -g @lannguyensi/harness && harness init --interactive`.
+`docs/examples/full-manifest.yaml` is a schema-coverage example, not a
+runnable config (the file header spells out the contract). For a
+manifest tailored to your machine, install globally and run
+`harness init --interactive`.
 
 ## Uninstall
 
 `harness uninstall` is the single-command teardown: dry-run by default,
-`--apply` to mutate. It inventories what harness planted under
-`~/.claude/` (manifest, lock, `harness.generated/`, harness-owned hook
-groups and `mcpServers` entries in `settings.json`, any leftover
-`settings.json.pre-harness-<TS>` backups), then removes them after
-writing a reversible backup + JSON snapshot next to `settings.json`.
-
-```bash
-harness uninstall                                      # list, exit 0
-harness uninstall --apply                              # tear down
-harness uninstall --restore-from <pre-harness-backup>  # atomic restore
-npm uninstall -g @lannguyensi/harness                  # drop the CLI itself
-```
+`--apply` to mutate, `--restore-from <backup>` to roll back. Full
+inventory + recommended order in [`docs/uninstall.md`](docs/uninstall.md).
 
 ## Status
 
 harness ships in phases. Phases 1 through 6 are released: read-only
 inventory → managed edits → declarative truth → policy layer → polish
 and dogfood lessons → the Understanding Gate Policy Pack. Phase 7, the
-Risk Gate, is next. The current release is `v0.17.4`.
+Risk Gate, is next. The current release is `v0.18.0`.
 
 The phase-by-phase plan with acceptance criteria lives in
 [`docs/ROADMAP.md`](docs/ROADMAP.md); what shipped in each version is
@@ -281,109 +192,61 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Policy Packs
 
-A *Policy Pack* is a reusable bundle of instruction template, hooks,
-policies, and permission profiles that ships under one name and is
-referenced from `harness.yaml` with a single key. The first pack,
-`understanding-before-execution` (shipped in `v0.9.0`), forces agents
-to expose and confirm their task interpretation before any
-write-capable tool fires.
+A *Policy Pack* is a reusable bundle of hooks, policies, instruction
+template, and permission profiles shipped under one name and enabled
+from `harness.yaml` with a single key:
 
 ```yaml
 policy_packs:
   - name: understanding-before-execution
     config:
-      mode: grill_me                       # fast_confirm | grill_me | strict
-      permission_profile: safe-start       # safe-start | implementation-after-approval | high-risk-grill-me
+      mode: grill_me                  # fast_confirm | grill_me | strict
+      permission_profile: safe-start  # safe-start | implementation-after-approval | high-risk-grill-me
 ```
 
-Manage packs with `harness pack add / remove / list`. Apply against
-either runtime:
-
-```sh
-harness apply --runtime claude-code        # default; writes harness.generated/settings.json
-harness apply --runtime codex              # writes harness.generated/codex/config.toml
-```
-
-Approve a session's Understanding Report via
-`harness approve understanding --session <id>` (round-trips both the
-evidence-ledger tag and the persisted JSON report). Verify the
-adapter wiring with `harness doctor --target codex` (`--json` for
-machine-readable). The full reference lives in
-[`docs/policy-packs/understanding-before-execution.md`](docs/policy-packs/understanding-before-execution.md);
-synthetic-stdin dogfood under
-[`dogfood/phase6-6/`](dogfood/phase6-6/run-smoke.sh) exercises the
-block / allow / capture / approve round-trip without a real Codex
-binary.
+Manage packs with `harness pack add / remove / list`. Two packs ship
+today: [`understanding-before-execution`](docs/policy-packs/understanding-before-execution.md)
+(forces an Understanding Report before any write-capable tool fires)
+and [`branch-protection`](docs/policy-packs/branch-protection.md)
+(blocks source mutations on protected branches without an explicit
+override). Custom packs from `path:`, `npm:`, or `git:` sources are
+out of scope for v1 (see the pack docs for the future-vocabulary
+contract).
 
 ## What's next
 
-**Phase 7, Risk Gate.** Today's policy model evaluates a rule per
-matching trigger and returns a binary block/allow. Phase 7 makes
-harness reason about *the action itself*: an Action Envelope (tool +
-raw input + session + runtime context) is enriched by a Context
-Resolver (production / staging / dev / unknown), classified by a Risk
-Classifier (severity + categories + reversibility), then matched
-against policies whose `when:` clauses can reference
-`risk.severity_at_least`, `environment.name`, and similar. The
-decision space extends to `allow / warn / require_approval / deny`.
-Motivating use case: prevent `DROP TABLE users`, `kubectl delete
-namespace prod`, `terraform destroy` against an unverified production
-target, even if the model would have happily run them.
-
-Phase 7 builds on Phase 4's `policy intercept` runtime backbone and
-Phase 6's Policy Pack distribution surface; neither is replaced.
+**Phase 7, Risk Gate.** Today's policy model returns a binary
+block/allow per matching trigger. Phase 7 lets harness reason about
+the action itself (Action Envelope → Context Resolver → Risk
+Classifier) and extends the decision space to `allow / warn /
+require_approval / deny`. Motivating use case: block `DROP TABLE
+users`, `kubectl delete namespace prod`, `terraform destroy` against
+unverified production targets. Full plan in
+[`docs/ROADMAP.md#phase-7--risk-gate`](docs/ROADMAP.md#phase-7--risk-gate).
 
 > Bring your favorite agent harness. Add governance.
 
 ## Why this exists
 
-A working agent harness today has six to eight configuration
-surfaces, each with its own schema and lifecycle: `~/.claude/settings.json`,
-`CLAUDE.md` (per repo + root), `~/.claude/projects/*/memory/*.md`
-with frontmatter, `~/.claude/keybindings.json`, MCP server
-registrations in `~/.claude.json`, skill directories, per-project
-overrides, and external CLIs that behave differently per project.
-
-There is no single place that answers *"what can this agent do right
-now, and why is that configured that way?"*. Drift between sessions
-is invisible until it breaks something. Humans editing one surface
-do not know which other surfaces they need to touch. A fresh agent
-instance has no way to audit its own setup.
-
-Our entry point into this problem: on 2026-04-23, an
-`agent-grounding` checkout that was 16 commits behind origin led two
-tasks to be incorrectly called "stale". The check that would have
-caught it already exists,
+On 2026-04-23, an `agent-grounding` checkout that was 16 commits
+behind origin led two tasks to be incorrectly called "stale". The
+check that would have caught it already existed:
 [`agent-preflight`](https://github.com/LanNguyenSi/agent-preflight)
-runs `git fetch` + `git status` (alongside lint, typecheck, test,
-audit) and emits a structured `ready` + confidence-score result. The
-missing piece was not the check itself, it was the deterministic
-*trigger*: a `SessionStart` hook that invokes `preflight run` and a
-policy that gates further work on the result. Building that wiring
-needs an agreed-upon place for harness config to live first. That
-conversation is the origin of this repo.
+runs `git fetch` + `git status` and emits a structured `ready` +
+confidence-score result. The missing piece was not the check, it was
+the deterministic *trigger*: a `SessionStart` hook that invokes
+`preflight run` and a policy that gates further work on the result.
+Building that wiring needs an agreed-upon place for harness config to
+live first. That conversation is the origin of this repo.
 
 ## Related
 
-- [`agent-grounding`](https://github.com/LanNguyenSi/agent-grounding):
-  grounding primitives (evidence-ledger, claim-gate,
-  review-claim-gate); `grounding-mcp` is the canonical client surface
-  harness queries through `queryLedgerByTag`.
-- [`agent-memory`](https://github.com/LanNguyenSi/agent-memory):
-  memory surfaces the control plane inventories.
-- [`agent-tasks`](https://github.com/LanNguyenSi/agent-tasks): the
-  MCP-registered task platform whose registration + health appear in
-  `harness describe`.
-- [`agent-preflight`](https://github.com/LanNguyenSi/agent-preflight):
-  local preflight validator; the canonical implementation of
-  preflight-hook content harness wires.
-- [`codebase-oracle`](https://github.com/LanNguyenSi/codebase-oracle):
-  an opt-in MCP surface for multi-repo RAG search. Not in the Full
-  default; operators wire it via `harness add mcp codebase-oracle
-  --command codebase-oracle,mcp`.
-- [`agent-dx`](https://github.com/LanNguyenSi/agent-dx): ships
-  `git-batch-cli`, a day-to-day tool whose inventory appears in
-  `harness describe`.
+- [`agent-grounding`](https://github.com/LanNguyenSi/agent-grounding): evidence-ledger, claim-gate, review-claim-gate; `grounding-mcp` is the canonical client surface harness queries through `queryLedgerByTag`.
+- [`agent-memory`](https://github.com/LanNguyenSi/agent-memory): the memory surfaces the control plane inventories.
+- [`agent-tasks`](https://github.com/LanNguyenSi/agent-tasks): MCP-registered task platform whose registration + health appear in `harness describe`.
+- [`agent-preflight`](https://github.com/LanNguyenSi/agent-preflight): local preflight validator; the canonical implementation of preflight-hook content harness wires.
+- [`codebase-oracle`](https://github.com/LanNguyenSi/codebase-oracle): opt-in MCP for multi-repo RAG search; not in Full, wire via `harness add mcp codebase-oracle --command codebase-oracle,mcp`.
+- [`agent-dx`](https://github.com/LanNguyenSi/agent-dx): ships `git-batch-cli`, a day-to-day tool whose inventory appears in `harness describe`.
 
 ## License
 
