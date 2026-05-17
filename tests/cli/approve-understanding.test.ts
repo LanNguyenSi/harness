@@ -111,7 +111,7 @@ describe("approveUnderstanding", () => {
     }
   });
 
-  it("filters parse-errors to the current session — stale logs from other sessions never leak", async () => {
+  it("filters parse-errors to the current session: stale logs from other sessions never leak", async () => {
     // Regression for agent-tasks/b13205b2: a previous-session parse-error
     // log would surface in the current operator's approve output and read
     // like a failure of THEIR session. The lookup is now sessionId-filtered.
