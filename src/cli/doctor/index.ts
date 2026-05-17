@@ -352,7 +352,22 @@ function buildPolicies(manifest: Manifest): PolicyEntryReport[] {
     // Policies without `within` only need the tag to exist once, which
     // the normal review / PR workflow supplies, so they are not
     // flagged.
-    if (p.enforcement === "block" && p.requires.within !== undefined) {
+    //
+    // Refinement (task f97e152f): a non-empty `producers:` array on
+    // the policy itself is the schema's way of declaring the recovery
+    // path. For example `dogfood-before-release` deliberately wants
+    // the operator to record a manual smoke summary; an automatic
+    // SessionStart producer would defeat the gate's purpose. When that
+    // documented producer exists the warning would be a false positive
+    // and is suppressed. The check still fires when both kinds are
+    // absent. The `length === 0` clause is defensive: the schema
+    // already enforces `producers: .min(1).optional()`, so a defined
+    // array is guaranteed non-empty for any manifest that loaded.
+    if (
+      p.enforcement === "block" &&
+      p.requires.within !== undefined &&
+      (p.producers === undefined || p.producers.length === 0)
+    ) {
       const prefix = ledgerTagPrefix(p.requires.ledger_tag);
       if (!hasProducerHook(manifest, p, prefix)) {
         report.producerGap = {

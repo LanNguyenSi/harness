@@ -74,10 +74,16 @@ export interface HookEntryReport {
 
 /**
  * A `block`-enforcement policy whose required ledger tag carries a
- * `within` freshness window, but no manifest hook produces that tag.
- * The gate will wall off whatever it triggers on until the tag is
- * supplied out-of-band (a manual `ledger_add`, an external tool), with
- * no in-manifest way to keep it satisfied. See task ce50df99.
+ * `within` freshness window, but no manifest hook produces that tag
+ * AND the policy itself declares no `producers:` array. The gate will
+ * wall off whatever it triggers on until the tag is supplied
+ * out-of-band, with no in-manifest way to keep it satisfied or any
+ * recovery path visible to the agent. Policies that document the
+ * recovery in `producers:` (e.g. dogfood-before-release deliberately
+ * wanting an operator-driven manual smoke summary) are NOT flagged
+ * here, since that producer is the schema-blessed manual path. See
+ * tasks ce50df99 (initial check) and f97e152f (producers-respect
+ * refinement).
  */
 export interface PolicyProducerGap {
   /** The unresolved `requires.ledger_tag`, e.g. `preflight:${REPO}`. */

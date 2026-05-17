@@ -148,10 +148,10 @@ function formatPoliciesSection(report: DoctorReport): string[] {
   for (const p of report.policies) {
     if (p.producerGap) {
       out.push(
-        `  ⚠ ${p.name}  requires fresh \`${p.producerGap.ledgerTag}\` (within ${p.producerGap.within}) but no manifest hook produces it`,
+        `  ⚠ ${p.name}  requires fresh \`${p.producerGap.ledgerTag}\` (within ${p.producerGap.within}) but no manifest hook produces it AND the policy declares no \`producers:\` array`,
       );
       out.push(
-        `      the gate will block its trigger until the tag is supplied out-of-band; add a producer hook (e.g. a SessionStart runner)`,
+        `      the gate will block its trigger until the tag is supplied out-of-band; add a producer hook (e.g. a SessionStart runner) OR document the manual recovery path in the policy's \`producers:\` array`,
       );
     } else {
       out.push(`  ✓ ${p.name}  ${p.caveat}`);

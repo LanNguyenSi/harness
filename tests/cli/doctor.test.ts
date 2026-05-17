@@ -329,6 +329,10 @@ describe("doctor — policy producer-gap check (task ce50df99)", () => {
   //          `h.name !== policy.hook` exclusion must skip → GAP
   // zeta:  block + within, leading-colon tag `:zeta` → empty prefix,
   //        must not vacuously match every hook → GAP
+  // eta:   block + within, NO automatic producer hook, but the policy
+  //        itself declares a `producers:` array (task f97e152f) →
+  //        the schema-blessed manual recovery path counts as documented
+  //        producer → NO GAP (suppression refinement)
   const MANIFEST = `version: 1
 tools:
   builtin:
@@ -364,6 +368,11 @@ hooks:
     command: harness policy intercept --pack epsilon
     blocking: hard
   - name: consume-zeta
+    event: PreToolUse
+    match: Bash
+    command: harness policy intercept
+    blocking: hard
+  - name: consume-eta
     event: PreToolUse
     match: Bash
     command: harness policy intercept
@@ -428,6 +437,21 @@ policies:
       within: 1h
     hook: consume-zeta
     enforcement: block
+  - name: eta-gate
+    description: block + within, no automatic producer, but documents a manual producer in producers[]
+    trigger:
+      event: PreToolUse
+      match: Bash
+    requires:
+      ledger_tag: "eta:\${REPO}"
+      within: 1h
+    hook: consume-eta
+    enforcement: block
+    producers:
+      - kind: mcp
+        verb: mcp__agent-grounding__ledger_add
+        example: '{type:"fact", content:"eta:\${REPO} (operator-driven smoke summary)"}'
+        description: Document what was exercised so the gate has an auditable manual recovery path.
 `;
 
   async function run() {
@@ -487,6 +511,18 @@ policies:
     expect(zeta?.producerGap).toEqual({ ledgerTag: ":zeta", within: "1h" });
   });
 
+  it("does not flag a policy that declares a non-empty producers[] array (task f97e152f)", async () => {
+    const report = await run();
+    const eta = report.policies.find((p) => p.name === "eta-gate");
+    // eta-gate has NO automatic producer hook but DOES declare a
+    // producers[] entry. The producers field IS the schema-blessed
+    // manual recovery path (the agent sees it in the deny envelope),
+    // so doctor must not flag a gap that doesn't exist from the
+    // agent's perspective. Drop the `p.producers === undefined || ...`
+    // clause in buildPolicies and this test fails.
+    expect(eta?.producerGap).toBeUndefined();
+  });
+
   it("counts each producer gap as a warning and renders the ⚠ line", async () => {
     const report = await run();
     const gaps = report.policies.filter((p) => p.producerGap);
@@ -504,8 +540,16 @@ policies:
       "⚠ alpha-gate  requires fresh `alpha:${REPO}` (within 1h) but no manifest hook produces it",
     );
     expect(text).toContain("add a producer hook (e.g. a SessionStart runner)");
+    // Refinement (task f97e152f): warning text now also names the
+    // schema-blessed manual recovery path so operators do not assume
+    // the only way out is a SessionStart hook.
+    expect(text).toContain("OR document the manual recovery path in the policy's `producers:` array");
     expect(text).toContain("✓ beta-gate");
     expect(text).toContain("✓ gamma-gate");
+    // eta-gate is the producers-suppression case: must render as ✓
+    // (no ⚠ line) even though it has within + no automatic producer.
+    expect(text).toContain("✓ eta-gate");
+    expect(text).not.toMatch(/⚠ eta-gate/);
   });
 });
 
