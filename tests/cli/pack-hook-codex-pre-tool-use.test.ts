@@ -241,3 +241,97 @@ describe("pack hook codex-pre-tool-use blocker", () => {
     expect(result.exitCode).toBe(0);
   });
 });
+
+describe("pack hook codex-pre-tool-use blocker — agent-facing ux (agent-tasks/e48e3b45)", () => {
+  // Codex blocks via non-zero exit + stderr (no stdout JSON wire).
+  // When config.ux is declared, the stderr diagnostic carries the
+  // plain-language { cannot, required, run } shape instead of the
+  // legacy "Run `harness approve understanding` once you have produced..."
+  // + schemaHint vocabulary. The engine-vocabulary `reason` prefix
+  // (BLOCK: no approval marker ...) stays so a flapping gate remains
+  // diagnosable from logs.
+  function manifestWithUx(): Manifest {
+    return parseManifest({
+      version: 1,
+      policy_packs: [
+        {
+          name: "understanding-before-execution",
+          enabled: true,
+          config: {
+            mode: "grill_me",
+            ux: {
+              cannot: "You cannot use write-capable tools yet.",
+              required: ["an approved Understanding Report for this session"],
+              run: [
+                "Write an Understanding Report covering the nine sections",
+                "Run `harness approve understanding` and approve the prompt",
+              ],
+            },
+          },
+        },
+      ],
+    });
+  }
+
+  it("emits the agent-facing block in the stderr diagnostic on block", async () => {
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithUx(),
+      stdin: readableFromString(event()),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.exitCode).toBe(2);
+    const out = stderr.read();
+    expect(out).toContain("You cannot use write-capable tools yet.");
+    expect(out).toContain("Required:\n- an approved Understanding Report for this session");
+    expect(out).toContain("Run:\n  Write an Understanding Report covering the nine sections");
+    expect(out).toContain("  Run `harness approve understanding` and approve the prompt");
+  });
+
+  it("does not leak schemaHint vocabulary when ux is declared", async () => {
+    const stderr = bufferStream();
+    await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithUx(),
+      stdin: readableFromString(event()),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    const out = stderr.read();
+    // schemaHint enumerates 9 sections as a "Report format" paragraph.
+    // With ux declared we replaced it with a plain-language run line.
+    expect(out).not.toContain("Report format");
+  });
+
+  it("keeps the engine-vocabulary BLOCK reason prefix (operator audit)", async () => {
+    const stderr = bufferStream();
+    await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithUx(),
+      stdin: readableFromString(event()),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(stderr.read()).toMatch(/BLOCK: no approval marker for session sess-codex/);
+  });
+
+  it("falls back to the legacy stderr text when ux is missing", async () => {
+    const stderr = bufferStream();
+    await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event()),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    const out = stderr.read();
+    expect(out).toContain("Run `harness approve understanding`");
+    expect(out).toContain("Report format");
+  });
+});
