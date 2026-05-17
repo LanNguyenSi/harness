@@ -94,7 +94,10 @@ hooks:
     event: SessionStart
     command: ~/.claude/hooks/git-preflight.sh
     blocking: false
-    budget_ms: 30000
+    # 70s budget covers a healthy preflight on medium-size repos
+    # (default subprocess timeout is 60s in the bundled wrapper since
+    # agent-tasks/7265599e); leave 10s headroom for ledger write.
+    budget_ms: 70000
     description: "Run agent-preflight on session start; record ready + confidence into the ledger as preflight:${REPO}."
 
   - name: require-review-evidence

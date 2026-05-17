@@ -1448,7 +1448,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option("--session <id>", "explicit session id (overrides stdin event + env)")
-    .option("--timeout <ms>", "agent-preflight subprocess timeout in milliseconds (default 25000)")
+    .option("--timeout <ms>", "agent-preflight subprocess timeout in milliseconds (default 60000)")
     .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
     .action(async (options: {
       config?: string;
@@ -1492,7 +1492,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         "stdin event → $CLAUDE_SESSION_ID → newest Claude Code transcript → 'default' (which logs " +
         "a loud warning since the literal 'default' session never satisfies a preflight-before-* gate).",
     )
-    .option("--timeout <ms>", "agent-preflight subprocess timeout in milliseconds (default 25000)")
+    .option("--timeout <ms>", "agent-preflight subprocess timeout in milliseconds (default 60000)")
     .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
     .action(async (options: {
       config?: string;

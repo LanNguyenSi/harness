@@ -113,6 +113,44 @@ describe("runSessionStartPreflight", () => {
     expect(writes).toEqual(["preflight:detached-repo ready:true confidence:0.90"]);
   });
 
+  it("passes the 60s default subprocess timeout when preflightTimeoutMs is omitted", async () => {
+    // Regression for agent-tasks/7265599e: the default used to be 25s,
+    // which killed honest preflights on medium-size repos (the live
+    // failure was agent-grounding at ~28s). Bumped to 60s so the wrapper
+    // covers the realistic ceiling without forcing every operator to
+    // pass `--timeout` by hand. Operators still override per-call.
+    const repo = makeRepoFixture("widget-service");
+    const { stream: err } = captureStream();
+    const seenTimeouts: number[] = [];
+    await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: err,
+      runPreflight: async (_cwd, timeoutMs) => {
+        seenTimeouts.push(timeoutMs);
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(seenTimeouts).toEqual([60_000]);
+  });
+
+  it("honours an explicit preflightTimeoutMs override", async () => {
+    const repo = makeRepoFixture("widget-service");
+    const { stream: err } = captureStream();
+    const seenTimeouts: number[] = [];
+    await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: err,
+      preflightTimeoutMs: 5_000,
+      runPreflight: async (_cwd, timeoutMs) => {
+        seenTimeouts.push(timeoutMs);
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(seenTimeouts).toEqual([5_000]);
+  });
+
   it("does NOT write the tag on a ready:false result, so the gate stays closed", async () => {
     const repo = makeRepoFixture("widget-service");
     const { stream: err, output: errOut } = captureStream();
