@@ -81,6 +81,31 @@ describe("expandPolicyPacks", () => {
     );
   });
 
+  it("npm-backed Claude hooks declare a min_version floor pointing at understanding-gate --version", () => {
+    // Regression guard for agent-tasks/6af1727f: the Claude
+    // UserPromptSubmit + Stop hooks both wrap bins shipped by
+    // @lannguyensi/understanding-gate. Without a min_version floor,
+    // `harness doctor` cannot warn operators on stale 0.2.x installs
+    // (which silently emit no_marker_fast_confirm_attempt parse-error
+    // logs every session per agent-grounding/91b21f31 triage). The floor
+    // is wired at 0.3.1, the first release whose `understanding-gate
+    // --version` reports the real package.json version (agent-grounding
+    // PRs #80 + #81 fixed the hardcoded literal). The PreToolUse hook
+    // is the harness CLI itself, not an npm-backed bin, so it carries
+    // no floor here.
+    const m = buildManifest([{ name: "understanding-before-execution" }]);
+    const r = expandPolicyPacks(m);
+    const ups = r.hooks.find((h) => h.event === "UserPromptSubmit");
+    const stop = r.hooks.find((h) => h.event === "Stop");
+    const pre = r.hooks.find((h) => h.event === "PreToolUse");
+    expect(ups?.min_version).toBe("0.3.1");
+    expect(ups?.version_command).toEqual(["understanding-gate", "--version"]);
+    expect(stop?.min_version).toBe("0.3.1");
+    expect(stop?.version_command).toEqual(["understanding-gate", "--version"]);
+    expect(pre?.min_version).toBeUndefined();
+    expect(pre?.version_command).toBeUndefined();
+  });
+
   it("escapes single quotes in reportsDir paths", () => {
     const m = buildManifest([{ name: "understanding-before-execution" }]);
     const r = expandPolicyPacks(m, undefined, {

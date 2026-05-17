@@ -96,7 +96,7 @@ describe("formatDependencyTable — rendered surface", () => {
     // minVersion floor is shown in the missing-row arrow target so
     // operators see the floor without an extra column (agent-tasks/3a536aca).
     expect(text).toContain("→ @lannguyensi/memory-router@0.3.0+");
-    expect(text).toContain("→ @lannguyensi/understanding-gate@0.3.0+");
+    expect(text).toContain("→ @lannguyensi/understanding-gate@0.3.1+");
   });
 
   it('announces "all present" when nothing is missing', () => {
