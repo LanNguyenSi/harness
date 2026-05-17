@@ -151,6 +151,15 @@ hooks:
     # blew through it. Bumped together with DEFAULT_PREFLIGHT_TIMEOUT_MS
     # (agent-tasks/7265599e).
     budget_ms: 70000
+    # Floor at agent-preflight 0.1.1, the release that distinguishes
+    # "tool not installed" (e.g. an npm script invoking eslint that is
+    # not in devDependencies) from real lint/test/typecheck failures.
+    # Stale 0.1.0 installs silently emit false-positive blockers that
+    # keep the preflight-before-* policies closed forever. version_command
+    # points at the source-of-truth preflight binary, not at the
+    # \`harness session-start preflight\` wrapper.
+    min_version: "0.1.1"
+    version_command: ["preflight", "--version"]
 
   - name: require-review-evidence
     event: PreToolUse

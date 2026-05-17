@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **FULL_TEMPLATE `git-preflight` hook pin: `min_version: "0.1.1"` + `version_command: ["preflight", "--version"]`** (agent-preflight/cb5a1770). Same pattern as the existing pins for `agent-tasks-mcp-bridge` (#127), `grounding-mcp` (#127), `memory-router-user-prompt-submit` (#128). Floor at agent-preflight 0.1.1, the release that distinguishes "tool not installed" (e.g. an npm script invoking eslint that is not in devDependencies) from real lint/test/typecheck failures. Stale 0.1.0 installs silently emit false-positive blockers that keep the `preflight-before-*` policies closed forever; with the floor wired, `harness doctor` now warns operators to upgrade. Graceful-degradation contract preserved: if `preflight` is missing entirely the `git-preflight` SessionStart hook still exits 0 and the policy stays closed until evidence is produced some other way. Mirrored in `docs/examples/full-manifest.yaml` + `full-manifest.expected.yaml` per the CONTRIBUTING.md parity contract, plus a regression-guard at `tests/cli/init-full-template-pins.test.ts`. agent-preflight release: [v0.1.1](https://github.com/LanNguyenSi/agent-preflight/releases/tag/v0.1.1).
+
 ## [0.18.0] - 2026-05-17
 
 **Headline: per-task understanding-gate marker expiry.** Through v0.17.x the approval marker had no lifetime: one `harness approve understanding` covered every subsequent Edit / Write / Bash for the whole session. That contract was correct when the gate was about "agent starts a session, picks ONE interpretation, runs", but no longer matches multi-task sessions, where a stale interpretation can silently drive the next task's edits. Live failure mode from the v0.17.4 dogfood: three sequential tasks in one session, marker stayed valid across all three, the third task started implementing the wrong fix surface before the operator caught the misdiagnose. v0.18 expires the marker on configurable task-boundary tools and (optionally) on a TTL safety net, so a fresh task gets a fresh Understanding Report. Backing task: agent-tasks/d8ee60ca.
