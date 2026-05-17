@@ -1,0 +1,50 @@
+# Recipe D: gate a custom MCP tool (third-party or org-internal)
+#
+# Same shape as Recipe A, but the matched tool is a custom MCP server
+# you registered yourself instead of agent-tasks. Demonstrates that
+# the policy engine has no allowlist of "known" tool names: any
+# tool name from your tools.mcp[] is a valid trigger.match.
+#
+# Use case: an internal MCP that touches production (deploy_service,
+# rotate_secret, ...). The ux: block tells the agent exactly which
+# pre-flight signal to produce.
+#
+# Author loop:
+#   harness validate --config docs/examples/policies/04-custom-mcp-tool.yaml
+
+version: 1
+
+tools:
+  mcp:
+    - name: grounding-mcp
+      command: ["/usr/bin/true"]
+    - name: myorg-ops
+      command: ["/usr/bin/true"]
+
+hooks:
+  - name: require-deploy-readiness
+    event: PreToolUse
+    command: harness policy intercept
+    match: "mcp__myorg-ops__deploy_service"
+    blocking: hard
+    budget_ms: 2000
+
+policies:
+  - name: deploy-needs-readiness
+    description: Block deploy_service unless a deploy-ready:${SERVICE} ledger entry exists within 1h.
+    trigger:
+      event: PreToolUse
+      match: "mcp__myorg-ops__deploy_service"
+      extract:
+        SERVICE: "toolArgs.service"
+    requires:
+      ledger_tag: "deploy-ready:${SERVICE}"
+      within: 1h
+    hook: require-deploy-readiness
+    enforcement: block
+    ux:
+      cannot: "You cannot deploy ${SERVICE} without a fresh readiness signal."
+      required:
+        - "a deploy-ready:${SERVICE} ledger entry from the last hour"
+      run:
+        - "your team's readiness producer (e.g. ./scripts/check-${SERVICE}.sh && ledger_add deploy-ready:${SERVICE})"

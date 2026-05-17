@@ -1,0 +1,46 @@
+# Recipe C: require two distinct reviewers before merge
+#
+# Variant of Recipe A. Only difference: requires.count.min = 2.
+# Same trigger, same extract, same hook wiring. Use this as a template
+# for "I want N pieces of evidence" gates.
+#
+# Demonstrates: requires.count.min for N-of-something gates.
+#
+# Author loop:
+#   harness validate --config docs/examples/policies/03-two-reviewers-required.yaml
+
+version: 1
+
+tools:
+  mcp:
+    - name: grounding-mcp
+      command: ["/usr/bin/true"]
+
+hooks:
+  - name: require-two-reviews
+    event: PreToolUse
+    command: harness policy intercept
+    match: "mcp__agent-tasks__pull_requests_merge"
+    blocking: hard
+    budget_ms: 2000
+
+policies:
+  - name: two-reviewers-before-merge
+    description: Block PR merge until two distinct review:${PR_NUMBER} entries are in the ledger.
+    trigger:
+      event: PreToolUse
+      match: "mcp__agent-tasks__pull_requests_merge"
+      extract:
+        PR_NUMBER: "toolArgs.prNumber"
+    requires:
+      ledger_tag: "review:${PR_NUMBER}"
+      count:
+        min: 2
+    hook: require-two-reviews
+    enforcement: block
+    ux:
+      cannot: "You cannot merge PR ${PR_NUMBER} yet."
+      required:
+        - "two distinct reviews for PR ${PR_NUMBER}"
+      run:
+        - "have each reviewer write review:${PR_NUMBER} via mcp__agent-grounding__ledger_add"

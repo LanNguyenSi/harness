@@ -1,0 +1,57 @@
+# Recipe B: gate `git push` on a custom clean-check (real-world example)
+#
+# Pattern: any check that produces a per-branch ledger tag can gate the
+# push. The example below uses slop-detector (a content linter from
+# agent-dx); substitute your own check (linter / typechecker / fuzzer /
+# preflight) by changing the run: producer and the ledger tag.
+#
+# Demonstrates: bash_match on `git push`, ${BRANCH} builtin (no
+# explicit extract needed), within: freshness window, ux: with
+# producer command in run: so the agent knows exactly how to unblock.
+#
+# The bash_match regex below is identical to the one harness init
+# wires for its built-in preflight-before-push pattern (see
+# src/cli/init/composer.ts). If init's pattern moves, update both
+# this file and Recipe C (if relevant) and re-run the recipe vitest.
+#
+# Author loop:
+#   harness validate --config docs/examples/policies/02-clean-check-before-push.yaml
+#   harness dry-run "git push" \
+#     --tool Bash \
+#     --tool-args '{"command":"git push origin feat/foo"}' \
+#     --config docs/examples/policies/02-clean-check-before-push.yaml
+
+version: 1
+
+tools:
+  mcp:
+    - name: grounding-mcp
+      command: ["/usr/bin/true"]
+
+hooks:
+  - name: require-clean-check
+    event: PreToolUse
+    command: harness policy intercept
+    match: "Bash"
+    bash_match: "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b"
+    blocking: hard
+    budget_ms: 2000
+
+policies:
+  - name: clean-check-before-push
+    description: Block git push unless a clean-check:${BRANCH} ledger entry was written in the last 10 minutes.
+    trigger:
+      event: PreToolUse
+      match: "Bash"
+      bash_match: "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b"
+    requires:
+      ledger_tag: "clean-check:${BRANCH}"
+      within: 10m
+    hook: require-clean-check
+    enforcement: block
+    ux:
+      cannot: "You cannot push branch ${BRANCH} without a recent clean check."
+      required:
+        - "a clean-check:${BRANCH} ledger entry from the last 10 minutes"
+      run:
+        - "slop-detector check . && mcp__agent-grounding__ledger_add { tag: clean-check:${BRANCH} }"
