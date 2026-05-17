@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.17.3] - 2026-05-17
+
+**Headline: `branch-protection` pack now emits the agent-facing `ux:` block on deny.** Closes the gap from v0.17.2 (which shipped the pack in defaults but left its `blockJson` on the legacy "branch-protection: refusing ..." vocabulary, inconsistent with the rest of the 0.17.x UX work). `hook-branch-protection.ts` now reads `config.ux` and renders the plain-language `{ cannot, required, run }` shape with `${BRANCH}` substituted from the resolved git context. Engine-vocabulary BLOCK reason still lands on stderr for operator audit. Backing task: agent-tasks/9806d4f8.
+
+### Changed
+
+- `src/cli/pack/hook-branch-protection.ts`: `blockJson` accepts an optional `ux: PolicyUx` and renders the agent-facing shape via `renderAgentFacing` when set. Adds `parseConfigUx` helper (third copy of this pattern; cleanup follow-up will extract into a shared module).
+- `src/cli/init/templates.ts`, `src/cli/init/composer.ts`, `docs/examples/full-manifest.yaml`: ship `ux:` defaults on the branch-protection pack config. Substitutes `${BRANCH}` so the agent sees "You cannot edit files on protected branch master yet." rather than the legacy refusing-on-protected-branch paragraph.
+
 ## [0.17.2] - 2026-05-17
 
 **Headline: `branch-protection` pack ships in Full + Custom init defaults.** The pack (#158, v0.16.0) was previously opt-in via `harness pack add branch-protection`, so wizard users picking Full or Custom got an install without master/main protection unless they knew to add it manually. `init --template full` now enables the pack by default; the Custom composer surfaces it as a checkbox option. Existing installs are NOT auto-migrated, see the operator note. Backing task: agent-tasks/2fdc5bbe.

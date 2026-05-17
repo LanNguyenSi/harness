@@ -549,18 +549,24 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
         };
       }
       if (k === "branch-protection") {
-        // ux defaults are intentionally NOT shipped here: the
-        // pack's blockJson still emits the legacy engine-vocabulary
-        // envelope; tracked at agent-tasks/9806d4f8 as a v0.17.3
-        // follow-up that will extend hook-branch-protection.ts with
-        // PolicyUxSchema support.
         return {
           name: "branch-protection",
           source: "builtin",
           enabled: true,
           description:
             "Block Write/Edit (claude-code) or apply_patch (codex) on protected branches (master, main, develop) at the first source mutation.",
-          config: {},
+          config: {
+            ux: {
+              cannot: "You cannot edit files on protected branch ${BRANCH} yet.",
+              required: [
+                "a checkout of a non-protected branch (current `${BRANCH}` is protected)",
+              ],
+              run: [
+                "git checkout -b feat/<your-task>",
+                "harness session-start branch-check",
+              ],
+            },
+          },
         };
       }
       throw new Error(`composer: unknown pack ${String(k)}`);

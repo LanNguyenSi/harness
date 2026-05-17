@@ -280,7 +280,14 @@ policy_packs:
     source: builtin
     enabled: true
     description: Block Write/Edit on protected branches (master, main, develop) at the first source mutation.
-    config: {}
+    config:
+      ux:
+        cannot: You cannot edit files on protected branch ${BRANCH} yet.
+        required:
+          - a checkout of a non-protected branch (current `${BRANCH}` is protected)
+        run:
+          - git checkout -b feat/<your-task>
+          - harness session-start branch-check
 permission_profiles: {}
 workflows:
   - name: feature-pr
