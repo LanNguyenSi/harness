@@ -276,6 +276,11 @@ policy_packs:
         run:
           - "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan"
           - Run `harness approve understanding` and approve the prompt
+  - name: branch-protection
+    source: builtin
+    enabled: true
+    description: Block Write/Edit on protected branches (master, main, develop) at the first source mutation.
+    config: {}
 permission_profiles: {}
 workflows:
   - name: feature-pr

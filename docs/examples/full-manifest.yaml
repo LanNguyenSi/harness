@@ -307,6 +307,20 @@ policy_packs:
           - "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan"
           - "Run `harness approve understanding` and approve the prompt"
 
+  # branch-protection (agent-tasks/2fdc5bbe, default-enabled since v0.17.2):
+  # blocks Write/Edit (claude-code) or apply_patch (codex) on protected
+  # branches (default: master, main, develop). Complements
+  # preflight-before-push, which fires at the LAST reversible step;
+  # branch-protection fires at the FIRST source mutation. Set
+  # config.protected_branches to override the default list, or set
+  # enabled: false if your workflow routinely edits master directly.
+  # Full reference: docs/policy-packs/branch-protection.md.
+  - name: branch-protection
+    source: builtin
+    enabled: true
+    description: Block Write/Edit on protected branches (master, main, develop) at the first source mutation.
+    config: {}
+
 workflows:
   - name: feature-pr
     when:
