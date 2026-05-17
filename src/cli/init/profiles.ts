@@ -69,6 +69,17 @@ policy_packs:
     description: Force agents to expose their task interpretation and wait for explicit human approval before any write-capable tool fires.
     config:
       mode: grill_me
+      # ux (agent-tasks/60bc93e5): replaces the legacy engine-vocabulary
+      # deny envelope with the plain-language { cannot, required, run }
+      # shape. Engine details still land in stderr for operator audit;
+      # the agent only sees this.
+      ux:
+        cannot: "You cannot use write-capable tools yet."
+        required:
+          - "an approved Understanding Report for this session"
+        run:
+          - "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan"
+          - "Run \`harness approve understanding\` and approve the prompt"
 `;
 
 export const TEAM_TEMPLATE = `# ~/.claude/harness.yaml
@@ -168,6 +179,12 @@ policies:
       ledger_tag: "review:\${PR_NUMBER}"
     hook: require-review-evidence
     enforcement: block
+    ux:
+      cannot: "You cannot merge PR #\${PR_NUMBER} yet."
+      required:
+        - "a recorded review of PR #\${PR_NUMBER}"
+      run:
+        - 'mcp__agent-grounding__ledger_add { type: "fact", content: "review:\${PR_NUMBER} — <verdict + key findings + nits>" }'
 
 policy_packs:
   - name: understanding-before-execution
@@ -176,4 +193,12 @@ policy_packs:
     description: Force agents to expose their task interpretation and wait for explicit human approval before any write-capable tool fires.
     config:
       mode: grill_me
+      # ux (agent-tasks/60bc93e5): same shape as Solo's pack ux.
+      ux:
+        cannot: "You cannot use write-capable tools yet."
+        required:
+          - "an approved Understanding Report for this session"
+        run:
+          - "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan"
+          - "Run \`harness approve understanding\` and approve the prompt"
 `;

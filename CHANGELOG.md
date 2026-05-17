@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-05-17
+
+**Headline: Solo + Team templates ship `ux:` defaults for parity with Full + Custom.** v0.17.0 wired `ux:` into `init --template full` and `init --interactive` Custom branch, but the Solo and Team profiles in `src/cli/init/profiles.ts` were missed, so wizard users picking either of those got the new release without the UX fix. This patch closes the gap: Solo's understanding-before-execution pack and Team's pack + review-before-merge policy now ship the same plain-language `{ cannot, required, run }` defaults. Existing installs still need to opt in by re-running `init --force` or hand-editing their manifest. Backing task: agent-tasks/60bc93e5.
+
+### Changed
+
+- `src/cli/init/profiles.ts`: Solo and Team templates emit `ux:` defaults matching the Full + Custom shape (agent-tasks/60bc93e5).
+
 ## [0.17.0] - 2026-05-17
 
 **Headline: agent-facing policy block messages stop leaking engine vocabulary.** A new optional `ux: { cannot, required[], run[] }` field on every policy and on the understanding-before-execution pack config replaces deny envelopes like `no matching ledger entry for tag preflight:harness` with a plain-language three-section message:
