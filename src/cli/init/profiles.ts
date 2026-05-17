@@ -80,6 +80,17 @@ policy_packs:
         run:
           - "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan"
           - "Run \`harness approve understanding\` and approve the prompt"
+      # approval_lifecycle (agent-tasks/d8ee60ca, v0.18.0+): expire the
+      # approval marker on task-completion boundaries. Default-on so a
+      # multi-task session re-prompts between tasks. Opt out with
+      # \`approval_lifecycle: { mode: session }\` for the legacy
+      # one-approval-per-session contract.
+      approval_lifecycle:
+        expire_on_tool_match:
+          - mcp__agent-tasks__task_finish
+          - mcp__agent-tasks__task_abandon
+          - mcp__agent-tasks__pull_requests_merge
+        max_age: 4h
 `;
 
 export const TEAM_TEMPLATE = `# ~/.claude/harness.yaml
@@ -201,4 +212,15 @@ policy_packs:
         run:
           - "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan"
           - "Run \`harness approve understanding\` and approve the prompt"
+      # approval_lifecycle (agent-tasks/d8ee60ca, v0.18.0+): expire the
+      # approval marker on task-completion boundaries. Default-on so a
+      # multi-task session re-prompts between tasks. Opt out with
+      # \`approval_lifecycle: { mode: session }\` for the legacy
+      # one-approval-per-session contract.
+      approval_lifecycle:
+        expire_on_tool_match:
+          - mcp__agent-tasks__task_finish
+          - mcp__agent-tasks__task_abandon
+          - mcp__agent-tasks__pull_requests_merge
+        max_age: 4h
 `;

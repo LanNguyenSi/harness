@@ -123,7 +123,62 @@ export function resolveMode(pack: PolicyPack): { mode: Mode; warning: string | n
   return { mode: DEFAULT_MODE, warning };
 }
 
-function buildHooks(runtime: Runtime, opts: ResolvePackOptions = {}): Hook[] {
+// Default tools that mark task-completion boundaries when the operator
+// has not overridden `config.approval_lifecycle.expire_on_tool_match`.
+// agent-tasks verbs are the dogfood case; operators on Linear / JIRA /
+// other task systems override the list in their manifest. Kept here so
+// the PostToolUse hook always emits a sensible match pattern even when
+// the operator hasn't set the config explicitly.
+const DEFAULT_EXPIRE_ON_TOOL_MATCH: ReadonlyArray<string> = [
+  "mcp__agent-tasks__task_finish",
+  "mcp__agent-tasks__task_abandon",
+  "mcp__agent-tasks__pull_requests_merge",
+];
+
+const POST_TOOL_USE_COMMAND_CLAUDE = "harness pack hook post-tool-use";
+
+/**
+ * Compose the PostToolUse `match` regex from the configured tool list.
+ * Each tool name is regex-escaped and joined with `|` so settings.json
+ * fires the hook only when the just-completed tool is one we care
+ * about. When the operator declared `approval_lifecycle: { mode: session }`
+ * (or cleared the list), no PostToolUse hook is emitted at all (caller
+ * filters).
+ */
+function postToolUseMatchPattern(tools: ReadonlyArray<string>): string {
+  const escaped = tools.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return `^(?:${escaped.join("|")})$`;
+}
+
+function resolveExpireOnToolMatch(pack: PolicyPack): { tools: string[]; emitHook: boolean } {
+  const raw = (pack.config as Record<string, unknown>)["approval_lifecycle"];
+  // No config block at all: default-on with the agent-tasks tool list.
+  // This is the intentional behaviour change in v0.18 — operators who
+  // want the legacy "one approval per session" UX opt out via
+  // `approval_lifecycle: { mode: session }`.
+  if (raw === undefined || raw === null) {
+    return { tools: [...DEFAULT_EXPIRE_ON_TOOL_MATCH], emitHook: true };
+  }
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    return { tools: [...DEFAULT_EXPIRE_ON_TOOL_MATCH], emitHook: true };
+  }
+  const obj = raw as Record<string, unknown>;
+  if (obj["mode"] === "session") {
+    return { tools: [], emitHook: false };
+  }
+  const list = obj["expire_on_tool_match"];
+  if (Array.isArray(list)) {
+    const tools = list.filter((v): v is string => typeof v === "string" && v.length > 0);
+    return { tools, emitHook: tools.length > 0 };
+  }
+  return { tools: [...DEFAULT_EXPIRE_ON_TOOL_MATCH], emitHook: true };
+}
+
+function buildHooks(
+  runtime: Runtime,
+  pack: PolicyPack,
+  opts: ResolvePackOptions = {},
+): Hook[] {
   // Per-mode hook commands are identical (the mode is passed via the
   // package's UNDERSTANDING_GATE_MODE env var, set elsewhere — out of
   // scope for Phase 6 #2). What changes per mode is the instructions.md
@@ -210,6 +265,29 @@ function buildHooks(runtime: Runtime, opts: ResolvePackOptions = {}): Hook[] {
       description:
         "Block Edit/Write/Bash until an approved Understanding Report exists for the session. Consults both the evidence-ledger tag (understanding-approved:${SESSION_ID}) and the persisted JSON report.",
     },
+    // PostToolUse marker-expiry hook (agent-tasks/d8ee60ca). Fires on the
+    // configured task-boundary tools and deletes the approval marker so
+    // the next Edit / Write / Bash forces a fresh Understanding Report.
+    // Default tool list expires on agent-tasks task_finish / task_abandon /
+    // pull_requests_merge. Operators on other task systems override the
+    // list via config.approval_lifecycle.expire_on_tool_match; setting
+    // `approval_lifecycle: { mode: session }` opts out entirely and
+    // suppresses this hook from being emitted at all.
+    ...((): Hook[] => {
+      const { tools, emitHook } = resolveExpireOnToolMatch(pack);
+      if (!emitHook) return [];
+      const hook: Hook = {
+        name: `${HOOK_NAME_PREFIX}:post-tool-use`,
+        event: "PostToolUse",
+        match: postToolUseMatchPattern(tools),
+        command: POST_TOOL_USE_COMMAND_CLAUDE,
+        blocking: false,
+        budget_ms: 2000,
+        description:
+          "Expire the approval marker after a task-completion boundary tool (default: agent-tasks task_finish / task_abandon / pull_requests_merge). Forces a fresh Understanding Report on the next task.",
+      };
+      return [hook];
+    })(),
   ];
 }
 
@@ -324,7 +402,7 @@ export function resolve(
   opts: ResolvePackOptions = {},
 ): { contribution: PackContribution; warnings: string[] } {
   const { mode, warning } = resolveMode(pack);
-  const hooks = buildHooks(runtime, opts);
+  const hooks = buildHooks(runtime, pack, opts);
   const instructionsContent = buildInstructions(pack, mode, runtime);
   const files: PackContributionFile[] = [
     {

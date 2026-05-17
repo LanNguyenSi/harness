@@ -309,6 +309,23 @@ policy_packs:
         run:
           - "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan"
           - "Run `harness approve understanding` and approve the prompt"
+      # approval_lifecycle (agent-tasks/d8ee60ca, v0.18.0+): expire the
+      # approval marker on task-completion boundaries so a multi-task
+      # session re-prompts for an Understanding Report between tasks.
+      # Without this, the legacy contract "one approval per session"
+      # lets a stale interpretation drive the next task's edits.
+      #
+      # Defaults shipped when the block is omitted: expire on
+      # agent-tasks task_finish / task_abandon / pull_requests_merge,
+      # no max_age. Operators who prefer the legacy per-session
+      # behaviour opt out with `approval_lifecycle: { mode: session }`.
+      # Operators on other task systems override expire_on_tool_match.
+      approval_lifecycle:
+        expire_on_tool_match:
+          - mcp__agent-tasks__task_finish
+          - mcp__agent-tasks__task_abandon
+          - mcp__agent-tasks__pull_requests_merge
+        max_age: 4h
 
   # branch-protection (agent-tasks/2fdc5bbe, default-enabled since v0.17.2):
   # blocks Write/Edit (claude-code) or apply_patch (codex) on protected
