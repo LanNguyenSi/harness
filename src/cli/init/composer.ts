@@ -239,10 +239,13 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
     requires: { ledger_tag: "review:${PR_NUMBER}" },
     hook: "require-review-evidence",
     enforcement: "block",
-    // No `ux:` yet: the satisfying action is an MCP ledger_add
-    // recipe, not a `harness <verb>` shell command, and the `run:`
-    // field's "exact command" framing does not fit cleanly until a
-    // wrapper verb exists. Follow-up at agent-tasks/902c1b4e.
+    ux: {
+      cannot: "You cannot merge PR #${PR_NUMBER} yet.",
+      required: ["a recorded review of PR #${PR_NUMBER}"],
+      run: [
+        'mcp__agent-grounding__ledger_add { type: "fact", content: "review:${PR_NUMBER} — <verdict + key findings + nits>" }',
+      ],
+    },
   },
   "preflight-before-investigation": {
     name: "preflight-before-investigation",
@@ -275,9 +278,13 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
     requires: { ledger_tag: "review-subagent:${TASK_ID}" },
     hook: "require-review-subagent-evidence",
     enforcement: "block",
-    // No `ux:` yet: same reason as review-before-merge, the satisfying
-    // action is an MCP ledger_add, not a shell verb. Follow-up:
-    // agent-tasks/902c1b4e.
+    ux: {
+      cannot: "You cannot open a pull request for task ${TASK_ID} yet.",
+      required: ["a completed review-subagent pass on this task"],
+      run: [
+        'mcp__agent-grounding__ledger_add { type: "fact", content: "review-subagent:${TASK_ID} — <verdict + key findings + nits>" }',
+      ],
+    },
   },
   "preflight-before-push": {
     name: "preflight-before-push",
@@ -309,9 +316,13 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
     requires: { ledger_tag: "dogfood:${SESSION_ID}", within: "24h" },
     hook: "require-dogfood-evidence",
     enforcement: "block",
-    // No `ux:` yet: same reason as review-before-merge, the satisfying
-    // action is an MCP ledger_add, not a shell verb. Follow-up:
-    // agent-tasks/902c1b4e.
+    ux: {
+      cannot: "You cannot publish a release yet.",
+      required: ["an end-to-end dogfood run in this session"],
+      run: [
+        'mcp__agent-grounding__ledger_add { type: "fact", content: "dogfood:${SESSION_ID} — <end-to-end smoke summary>" }',
+      ],
+    },
   },
   "two-reviewers-required": {
     name: "two-reviewers-required",
