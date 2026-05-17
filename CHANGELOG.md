@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-05-17
+
+**Headline: agent-facing policy block messages stop leaking engine vocabulary.** A new optional `ux: { cannot, required[], run[] }` field on every policy and on the understanding-before-execution pack config replaces deny envelopes like `no matching ledger entry for tag preflight:harness` with a plain-language three-section message:
+
+```
+You cannot investigate this repository yet.
+
+Required:
+- verified repository preflight
+
+Run:
+  harness preflight
+```
+
+The internal model (session IDs, ledger entries, recordHint, ledgerTag, policy DAGs) is unchanged and still feeds the audit ledger, so `audit` / `explain --trace` / `session-export` keep their full trace. All five block-enforcement built-in policies plus the understanding-gate pack ship `ux:` defaults; the warn-only `two-reviewers-required` policy correctly omits ux (the agent never sees it). The Codex blocker mirrors the Claude blocker's UX through its stderr diagnostic. Adjacent: `harness preflight` is now a top-level alias for `harness session-start preflight` so the `ux.run` lines can show the short form agents should type.
+
+Operator note: no required action. Manifests without `ux:` keep the legacy deny envelope verbatim.
+
 ### Added
 
 - **Policy `ux:` block: agent-facing surface separated from engine internals** (agent-tasks/6b74b69d). Optional schema field on every `policies[]` entry: `ux: { cannot, required[], run[] }`. When declared, the deny envelope the agent sees becomes a plain-language three-section message (state / requirement / remedy) instead of engine vocabulary like `no matching ledger entry for tag preflight:harness`. The internal `PolicyDecision` (reason, recordHint, matchedCount, ledgerTag) is unchanged and still feeds the audit ledger, so `audit` / `explain --trace` / `session-export` keep their full trace. Templates substitute `${VAR}` against the same extract.values map the `ledger_tag` resolved against. Producers are suppressed when `ux:` is declared (the `run:` list is the canonical remedy surface; rendering both would give the agent two different command suggestions). The `preflight-before-investigation` and `preflight-before-push` policies ship with `ux:` defaults whose `run:` points at the new `harness preflight` top-level alias for `harness session-start preflight`. The understanding-before-execution pack continues to emit its own engine-vocabulary envelope until agent-tasks/e48e3b45 lands.
