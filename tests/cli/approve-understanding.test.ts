@@ -88,6 +88,7 @@ describe("approveUnderstanding", () => {
     fs.writeFileSync(
       path.join(parseErrorsDir, "2026-05-13T19-02-25-498Z-831a51.log"),
       `${JSON.stringify({
+        sessionId: "sess-1",
         reason: "missing_sections",
         missing: ["currentUnderstanding", "intendedOutcome"],
         message: "Missing required sections: currentUnderstanding, intendedOutcome",
@@ -110,7 +111,94 @@ describe("approveUnderstanding", () => {
     }
   });
 
-  it("falls back to the first header line when the parse-error log isn't recognised JSON", async () => {
+  it("filters parse-errors to the current session — stale logs from other sessions never leak", async () => {
+    // Regression for agent-tasks/b13205b2: a previous-session parse-error
+    // log would surface in the current operator's approve output and read
+    // like a failure of THEIR session. The lookup is now sessionId-filtered.
+    const reportsParent = fs.mkdtempSync(path.join(os.tmpdir(), "ug-cross-session-leak-"));
+    const reportsDir = path.join(reportsParent, "reports");
+    const parseErrorsDir = path.join(reportsParent, "parse-errors");
+    fs.mkdirSync(reportsDir);
+    fs.mkdirSync(parseErrorsDir);
+    // Stale log from a DIFFERENT session, newer mtime than any future log.
+    fs.writeFileSync(
+      path.join(parseErrorsDir, "stale-other-session.log"),
+      `${JSON.stringify({
+        sessionId: "some-OTHER-session",
+        reason: "no_marker_fast_confirm_attempt",
+        mode: "fast_confirm",
+      })}\n--- raw ---\nthe other session's text\n`,
+    );
+    try {
+      const result = await approveUnderstanding({
+        manifest: manifest(),
+        session: "sess-1",
+        reportsDir,
+        ledgerAdd: async () => ({ ok: true }),
+      });
+      expect(result.persistedReport.ok).toBe(false);
+      if (result.persistedReport.ok) return;
+      expect(result.persistedReport.reason).toMatch(/no reports found/);
+      // The cross-session leak: the OLD output would have surfaced
+      // some-OTHER-session's log under "latest parse-error at ...".
+      expect(result.persistedReport.reason).not.toMatch(/parse-error/);
+      expect(result.persistedReport.reason).not.toMatch(/some-OTHER-session/);
+    } finally {
+      fs.rmSync(reportsParent, { recursive: true, force: true });
+    }
+  });
+
+  it("picks the freshest CURRENT-session parse-error even when newer other-session logs exist", async () => {
+    // The lookup must walk candidates in mtime order, not stop at the
+    // first one: the directory-newest log might belong to a different
+    // session, and the operator still wants their own latest failure.
+    const reportsParent = fs.mkdtempSync(path.join(os.tmpdir(), "ug-mixed-sessions-"));
+    const reportsDir = path.join(reportsParent, "reports");
+    const parseErrorsDir = path.join(reportsParent, "parse-errors");
+    fs.mkdirSync(reportsDir);
+    fs.mkdirSync(parseErrorsDir);
+    const ownLog = path.join(parseErrorsDir, "own.log");
+    const otherLog = path.join(parseErrorsDir, "other.log");
+    fs.writeFileSync(
+      ownLog,
+      `${JSON.stringify({
+        sessionId: "sess-1",
+        reason: "missing_sections",
+        message: "Missing required sections: currentUnderstanding",
+      })}\n--- raw ---\nown text\n`,
+    );
+    fs.writeFileSync(
+      otherLog,
+      `${JSON.stringify({
+        sessionId: "another-session",
+        reason: "no_marker_fast_confirm_attempt",
+      })}\n--- raw ---\nother text\n`,
+    );
+    // Make `other.log` strictly NEWER on disk, so an unfiltered mtime
+    // sort would land on it.
+    const now = Date.now();
+    fs.utimesSync(ownLog, now / 1000 - 60, now / 1000 - 60);
+    fs.utimesSync(otherLog, now / 1000, now / 1000);
+    try {
+      const result = await approveUnderstanding({
+        manifest: manifest(),
+        session: "sess-1",
+        reportsDir,
+        ledgerAdd: async () => ({ ok: true }),
+      });
+      expect(result.persistedReport.ok).toBe(false);
+      if (result.persistedReport.ok) return;
+      expect(result.persistedReport.reason).toMatch(/Missing required sections/);
+      expect(result.persistedReport.reason).not.toMatch(/another-session/);
+    } finally {
+      fs.rmSync(reportsParent, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores parse-error logs that cannot be attributed to a session", async () => {
+    // Logs without a JSON header or without a `sessionId` field cannot be
+    // attributed to anyone. Surfacing them would re-introduce the leak,
+    // so they are skipped (same outcome as `no parse-error`).
     const reportsParent = fs.mkdtempSync(path.join(os.tmpdir(), "ug-with-bad-parse-err-"));
     const reportsDir = path.join(reportsParent, "reports");
     const parseErrorsDir = path.join(reportsParent, "parse-errors");
@@ -129,7 +217,8 @@ describe("approveUnderstanding", () => {
       });
       expect(result.persistedReport.ok).toBe(false);
       if (result.persistedReport.ok) return;
-      expect(result.persistedReport.reason).toMatch(/freeform: something exploded/);
+      expect(result.persistedReport.reason).not.toMatch(/parse-error/);
+      expect(result.persistedReport.reason).not.toMatch(/freeform/);
     } finally {
       fs.rmSync(reportsParent, { recursive: true, force: true });
     }

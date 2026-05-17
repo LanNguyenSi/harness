@@ -124,15 +124,25 @@ interface ParseErrorSummary {
  * from a silent dead end to a "hook fired but parse failed because X"
  * pointer. Best-effort: any I/O error is swallowed and we report no
  * parse-error, mirroring the listPersistedReports contract.
+ *
+ * `sessionId` filter (agent-tasks/b13205b2): each parse-error log's JSON
+ * header carries the `sessionId` of the session that produced it. The
+ * lookup used to return the directory-newest log regardless of whose
+ * session wrote it, so a stale parse-error from a previous session would
+ * surface in the current operator's approve output and read like a
+ * failure of THEIR session. Logs whose header sessionId does not match
+ * `sessionId` are now skipped entirely. Logs missing a `sessionId` field
+ * (or whose header is not JSON) are also skipped, since we cannot
+ * attribute them.
  */
-function findLatestParseError(dir: string): ParseErrorSummary | null {
+function findLatestParseError(dir: string, sessionId: string): ParseErrorSummary | null {
   let names: string[];
   try {
     names = fs.readdirSync(dir);
   } catch {
     return null;
   }
-  let newest: { filePath: string; mtimeMs: number } | null = null;
+  const candidates: { filePath: string; mtimeMs: number }[] = [];
   for (const name of names) {
     if (!name.endsWith(".log")) continue;
     const full = path.join(dir, name);
@@ -143,38 +153,44 @@ function findLatestParseError(dir: string): ParseErrorSummary | null {
       continue;
     }
     if (!stat.isFile()) continue;
-    if (!newest || stat.mtimeMs > newest.mtimeMs) {
-      newest = { filePath: full, mtimeMs: stat.mtimeMs };
+    candidates.push({ filePath: full, mtimeMs: stat.mtimeMs });
+  }
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  for (const cand of candidates) {
+    let raw: string;
+    try {
+      raw = fs.readFileSync(cand.filePath, "utf8");
+    } catch {
+      continue;
     }
-  }
-  if (!newest) return null;
-  let raw: string;
-  try {
-    raw = fs.readFileSync(newest.filePath, "utf8");
-  } catch {
-    return { filePath: newest.filePath, summary: "<unreadable>" };
-  }
-  // The standalone package writes a JSON header followed by `--- raw ---`
-  // and the original assistant text. Read the header for a `message`,
-  // `reason`, or `missing` field; fall back to the first line if the
-  // schema is unfamiliar so a future format change still surfaces
-  // *something* rather than going silent.
-  const header = raw.split("\n--- raw ---")[0] ?? raw;
-  let summary = (header.split("\n")[0] ?? "").trim();
-  try {
-    const parsed = JSON.parse(header) as Record<string, unknown>;
-    if (typeof parsed["message"] === "string" && parsed["message"].length > 0) {
-      summary = parsed["message"] as string;
-    } else if (typeof parsed["reason"] === "string") {
-      const missing = Array.isArray(parsed["missing"])
-        ? ` (missing: ${(parsed["missing"] as unknown[]).filter((m) => typeof m === "string").join(", ")})`
-        : "";
-      summary = `${parsed["reason"] as string}${missing}`;
+    // The standalone package writes a JSON header followed by `--- raw ---`
+    // and the original assistant text. Read the header for a `message`,
+    // `reason`, or `missing` field; fall back to the first line if the
+    // schema is unfamiliar so a future format change still surfaces
+    // *something* rather than going silent.
+    const header = raw.split("\n--- raw ---")[0] ?? raw;
+    let summary = (header.split("\n")[0] ?? "").trim();
+    let headerSessionId: string | null = null;
+    try {
+      const parsed = JSON.parse(header) as Record<string, unknown>;
+      if (typeof parsed["sessionId"] === "string") {
+        headerSessionId = parsed["sessionId"] as string;
+      }
+      if (typeof parsed["message"] === "string" && parsed["message"].length > 0) {
+        summary = parsed["message"] as string;
+      } else if (typeof parsed["reason"] === "string") {
+        const missing = Array.isArray(parsed["missing"])
+          ? ` (missing: ${(parsed["missing"] as unknown[]).filter((m) => typeof m === "string").join(", ")})`
+          : "";
+        summary = `${parsed["reason"] as string}${missing}`;
+      }
+    } catch {
+      /* keep the first-line fallback; headerSessionId stays null */
     }
-  } catch {
-    /* keep the first-line fallback */
+    if (headerSessionId !== sessionId) continue;
+    return { filePath: cand.filePath, summary };
   }
-  return { filePath: newest.filePath, summary };
+  return null;
 }
 
 function rewriteReportApproved(
@@ -321,7 +337,7 @@ export async function approveUnderstanding(
     // fired but the parser rejected the report — here is why", rather
     // than a silent dead end.
     const parseErrorsDir = path.join(path.dirname(reportsDir), "parse-errors");
-    const latestParseError = findLatestParseError(parseErrorsDir);
+    const latestParseError = findLatestParseError(parseErrorsDir, sessionId);
     let reason: string;
     if (reports.length === 0) {
       reason = `no reports found at ${reportsDir}`;
