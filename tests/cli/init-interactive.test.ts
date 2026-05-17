@@ -318,6 +318,45 @@ describe("interactive wizard — Team path", () => {
     expect(result.aborted).toBe(false);
     expect(result.profile).toBe("team");
   });
+
+  it("prints the agent-tasks coupling reminder after the manifest write", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      prompts: mockPrompts({
+        select: ["team"],
+        confirm: [true, true],
+        checkbox: [[]],
+        input: ["~/.claude/projects/{project}/memory"],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    // Reminder must (a) name the bridge login recovery and (b) explicitly
+    // call out the Solo fallback for non-agent-tasks workflows.
+    expect(cap.stderr()).toContain("agent-tasks-mcp-bridge login");
+    expect(cap.stderr()).toContain("--template solo");
+  });
+
+  it("does NOT print the agent-tasks coupling reminder for the Solo profile", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      prompts: mockPrompts({
+        select: ["solo"],
+        confirm: [true],
+        checkbox: [[]],
+        input: ["~/.claude/projects/{project}/memory"],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(cap.stderr()).not.toContain("agent-tasks-mcp-bridge login");
+  });
 });
 
 describe("interactive wizard — Custom path (task 31d2fbb5)", () => {

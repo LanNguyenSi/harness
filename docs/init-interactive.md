@@ -16,14 +16,14 @@ The wizard is one of three ways to bootstrap a manifest:
 
 2. **Overwrite guard.** If `~/.claude/harness.yaml` already exists, the wizard asks before overwriting. Default is `false`, so a stray return key never blows away a hand-edited manifest. Decline and the wizard exits with no write.
 
-3. **Profile selection.** Four choices:
+3. **Profile selection.** Four choices, with different external-account assumptions:
 
-   - **Solo**: `memory-router` + the `understanding-before-execution` policy pack. Single-operator baseline.
-   - **Team**: Solo + the `agent-tasks` MCP server + `grounding-mcp` + the `review-before-merge` policy. Wires the merge gate that blocks PR-merge MCP calls without a ledger entry tagged `review:<pr-number>`.
-   - **Full**: Team + the reference policies (`dogfood-before-release`, `preflight-before-*`, `review-subagent-before-pr-create`). All hooks run through the bundled `harness policy intercept` engine.
+   - **Solo** (no external accounts): `memory-router` + the `understanding-before-execution` policy pack. Single-operator baseline. Works against any PR workflow because it does not wire any PR-merge gate.
+   - **Team** (requires an agent-tasks account, hosted or self-hosted): Solo + the `agent-tasks` MCP server + `grounding-mcp` + the `review-before-merge` policy. The merge gate matches the `mcp__agent-tasks__pull_requests_merge` tool only; gh-CLI workflows (`gh pr merge`) stay unguarded today.
+   - **Full** (requires agent-tasks + `@lannguyensi/agent-preflight` + `gh` on PATH): Team + the reference policies (`dogfood-before-release`, `preflight-before-*`, `review-subagent-before-pr-create`). All hooks run through the bundled `harness policy intercept` engine.
    - **Custom (advanced)**: à-la-carte composer (see [Custom flow](#custom-flow) below). Pick discrete packs / MCPs / policies; the wizard composes a validate-clean manifest from your selection.
 
-4. **Agent-tasks warning (Team only).** If you pick `team` but the probe did not find an `agent-tasks` entry in `settings.json`, the wizard asks whether to proceed. The manifest will still be written, the hook will still fire, but agent-tasks needs to be wired by `harness apply` or by hand before the gate is actually enforceable. Default is `true` because the most common case is "I am setting up everything from scratch and agent-tasks is about to land alongside this manifest".
+4. **Agent-tasks warning (Team / Full).** If you pick `team` or `full` but the probe did not find an `agent-tasks` entry in `settings.json`, the wizard asks whether to proceed. The manifest will still be written, the hook will still fire, but two preconditions need to land before the gate is enforceable: (a) `agent-tasks-mcp-bridge` on PATH and wired into Claude's settings.json, (b) a token in the OS keychain or `AGENT_TASKS_TOKEN` env. Default is `true` because the common case is "I am setting up everything from scratch and agent-tasks is about to land alongside this manifest". After the manifest write the wizard prints a reminder line with the `agent-tasks-mcp-bridge login` recovery path.
 
 5. **Memory directory.** Free-text input. Default is `~/.claude/projects/{project}/memory` (the `{project}` token is expanded per-session by the memory router). Press return to accept.
 
