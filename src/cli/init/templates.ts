@@ -377,22 +377,27 @@ policy_packs:
         run:
           - "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan"
           - "Run \`harness approve understanding\` and approve the prompt"
-      # approval_lifecycle (agent-tasks/d8ee60ca, v0.18.0+): expire the
-      # approval marker on task-completion boundaries so a multi-task
-      # session re-prompts for an Understanding Report between tasks.
-      # Without this, the legacy "one approval per session" contract
-      # lets a stale interpretation drive the next task's edits.
+      # approval_lifecycle (agent-tasks/d8ee60ca + harness/f54e0ecb,
+      # v0.18.0+): expire the approval marker on task-completion
+      # boundaries so a multi-task session re-prompts for an
+      # Understanding Report between tasks. Without this the legacy
+      # "one approval per session" contract lets a stale interpretation
+      # drive the next task's edits.
       #
-      # Defaults shipped when the block is omitted: expire on
-      # agent-tasks task_finish / task_abandon / pull_requests_merge,
-      # no max_age. Operators who prefer the legacy per-session
+      # Full ships both boundary kinds: the agent-tasks MCP verbs for
+      # operators on that workflow, plus a Bash regex list for hybrid
+      # operators who also use gh-cli for PR mechanics. \`max_age\` is
+      # the safety net. Operators who prefer the legacy per-session
       # behaviour opt out with \`approval_lifecycle: { mode: session }\`.
-      # Operators on other task systems override expire_on_tool_match.
+      # Operators on other task systems override the matchers.
       approval_lifecycle:
         expire_on_tool_match:
           - mcp__agent-tasks__task_finish
           - mcp__agent-tasks__task_abandon
           - mcp__agent-tasks__pull_requests_merge
+        expire_on_bash_match:
+          - '^gh pr (merge|close)\\b'
+          - '^git push origin (master|main)\\b'
         max_age: 4h
 
   # branch-protection (agent-tasks/2fdc5bbe, default-enabled since v0.17.2):

@@ -128,4 +128,66 @@ describe("parseApprovalLifecycle (agent-tasks/d8ee60ca)", () => {
     );
     expect(lc.expireOnToolMatch).toEqual(["valid", "another"]);
   });
+
+  // --- expire_on_bash_match (harness/f54e0ecb) ----------------------------
+
+  it("defaults expire_on_bash_match to empty when absent", () => {
+    const lc = parseApprovalLifecycle({ expire_on_tool_match: ["A"] }, null);
+    expect(lc.expireOnBashMatch).toEqual([]);
+  });
+
+  it("compiles expire_on_bash_match string[] to RegExp[]", () => {
+    const lc = parseApprovalLifecycle(
+      {
+        expire_on_bash_match: ["^gh pr (merge|close)\\b", "^git push origin (master|main)\\b"],
+      },
+      null,
+    );
+    expect(lc.expireOnBashMatch).toHaveLength(2);
+    expect(lc.expireOnBashMatch[0]?.test("gh pr merge 42")).toBe(true);
+    expect(lc.expireOnBashMatch[0]?.test("git status")).toBe(false);
+    expect(lc.expireOnBashMatch[1]?.test("git push origin master")).toBe(true);
+  });
+
+  it("warns and skips a non-array expire_on_bash_match", () => {
+    const err = noopStderr();
+    const lc = parseApprovalLifecycle({ expire_on_bash_match: "^gh pr merge" }, err);
+    expect(lc.expireOnBashMatch).toEqual([]);
+    expect(err.lines.some((l) => l.includes("expire_on_bash_match ignored"))).toBe(true);
+  });
+
+  it("drops empty and non-string entries from expire_on_bash_match", () => {
+    const lc = parseApprovalLifecycle(
+      { expire_on_bash_match: ["valid", "", 123, null, "^also-valid"] },
+      null,
+    );
+    expect(lc.expireOnBashMatch).toHaveLength(2);
+    expect(lc.expireOnBashMatch[0]?.source).toBe("valid");
+    expect(lc.expireOnBashMatch[1]?.source).toBe("^also-valid");
+  });
+
+  it("warns on an invalid regex pattern but keeps the others", () => {
+    const err = noopStderr();
+    const lc = parseApprovalLifecycle(
+      { expire_on_bash_match: ["[unclosed-character-class", "^gh pr merge\\b"] },
+      err,
+    );
+    expect(lc.expireOnBashMatch).toHaveLength(1);
+    expect(lc.expireOnBashMatch[0]?.source).toBe("^gh pr merge\\b");
+    expect(err.lines.some((l) => l.includes("expire_on_bash_match entry ignored"))).toBe(true);
+  });
+
+  it("legacy mode (mode: session) zeroes both lists", () => {
+    const lc = parseApprovalLifecycle(
+      {
+        mode: "session",
+        expire_on_tool_match: ["A"],
+        expire_on_bash_match: ["^gh"],
+      },
+      null,
+    );
+    expect(lc.legacyMode).toBe(true);
+    expect(lc.expireOnToolMatch).toEqual([]);
+    expect(lc.expireOnBashMatch).toEqual([]);
+  });
 });

@@ -386,27 +386,36 @@ export function checkApprovalMarker(
   };
 }
 
-// approval_lifecycle (agent-tasks/d8ee60ca): per-task expiry of the
-// approval marker. The legacy contract was one approval per session for
-// the session's lifetime; multi-task sessions silently let a stale
-// interpretation drive the next task's edits. The new config block
-// expires the marker on either of two boundaries:
+// approval_lifecycle (agent-tasks/d8ee60ca, harness/f54e0ecb): per-task
+// expiry of the approval marker. The legacy contract was one approval
+// per session for the session's lifetime; multi-task sessions silently
+// let a stale interpretation drive the next task's edits. The new
+// config block expires the marker on three boundary kinds:
 //
-//   1. expire_on_tool_match: a list of tool name patterns. When a tool
-//      matching the list runs (PostToolUse hook), the marker is deleted.
-//      Used to mark task-completion boundaries (task_finish, task_abandon,
+//   1. expire_on_tool_match: a list of MCP tool name patterns. When a
+//      tool whose exact name appears in the list runs (PostToolUse hook),
+//      the marker is deleted. Used to mark task-completion boundaries
+//      for agent-tasks workflows (task_finish, task_abandon,
 //      pull_requests_merge).
-//   2. max_age: a duration string. checkApprovalMarker treats a marker
+//   2. expire_on_bash_match: a list of regex patterns matched against
+//      the Bash tool's command string. Same expiry semantics. Used by
+//      gh-CLI / pure-Bash workflows where the task boundary is a shell
+//      command (gh pr merge, git push origin master, etc.). Compiled
+//      once at parse time; an invalid regex is skipped with a warning
+//      so a typo in one pattern does not break the others.
+//   3. max_age: a duration string. checkApprovalMarker treats a marker
 //      older than this as expired. Safety net so a session that never
-//      hits a listed tool still re-approves after the window.
+//      hits a listed tool / command still re-approves after the window.
 //
-// Both fields are optional. An empty list means no per-tool expiry; an
-// omitted max_age means no TTL. `{ mode: "session" }` is the documented
-// opt-out for operators who want the legacy behaviour.
+// All three fields are optional. An empty list means no per-tool or
+// per-command expiry; an omitted max_age means no TTL. `{ mode: "session" }`
+// is the documented opt-out for operators who want the legacy behaviour.
 
 export interface ApprovalLifecycle {
   /** Tool-name patterns whose successful PostToolUse expires the marker. */
   expireOnToolMatch: string[];
+  /** Pre-compiled regex patterns matched against `Bash` tool_input.command. */
+  expireOnBashMatch: RegExp[];
   /** Max marker age in milliseconds. Undefined means no TTL. */
   maxAgeMs?: number;
   /** Whether the operator explicitly opted out via `{ mode: "session" }`. */
@@ -415,6 +424,7 @@ export interface ApprovalLifecycle {
 
 const DEFAULT_LIFECYCLE: ApprovalLifecycle = {
   expireOnToolMatch: [],
+  expireOnBashMatch: [],
   legacyMode: false,
 };
 
@@ -438,7 +448,7 @@ export function parseApprovalLifecycle(
   }
   const obj = raw as Record<string, unknown>;
   if (obj["mode"] === "session") {
-    return { expireOnToolMatch: [], legacyMode: true };
+    return { expireOnToolMatch: [], expireOnBashMatch: [], legacyMode: true };
   }
   const expireOnToolMatch: string[] = [];
   const list = obj["expire_on_tool_match"];
@@ -449,6 +459,24 @@ export function parseApprovalLifecycle(
   } else if (list !== undefined) {
     stderr?.write(
       `harness pack hook: config.approval_lifecycle.expire_on_tool_match ignored (expected string[], got ${typeof list})\n`,
+    );
+  }
+  const expireOnBashMatch: RegExp[] = [];
+  const bashList = obj["expire_on_bash_match"];
+  if (Array.isArray(bashList)) {
+    for (const v of bashList) {
+      if (typeof v !== "string" || v.length === 0) continue;
+      try {
+        expireOnBashMatch.push(new RegExp(v));
+      } catch (err) {
+        stderr?.write(
+          `harness pack hook: config.approval_lifecycle.expire_on_bash_match entry ignored ("${v}"): ${(err as Error).message}\n`,
+        );
+      }
+    }
+  } else if (bashList !== undefined) {
+    stderr?.write(
+      `harness pack hook: config.approval_lifecycle.expire_on_bash_match ignored (expected string[], got ${typeof bashList})\n`,
     );
   }
   let maxAgeMs: number | undefined;
@@ -467,6 +495,7 @@ export function parseApprovalLifecycle(
   }
   return {
     expireOnToolMatch,
+    expireOnBashMatch,
     ...(maxAgeMs !== undefined && { maxAgeMs }),
     legacyMode: false,
   };
