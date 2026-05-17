@@ -103,6 +103,106 @@ The runtime path is `harness policy intercept` (a subcommand under
 `session-export`) never write; they replay `policy_decision` rows
 the runtime already recorded.
 
+## Agent-facing block messages (`ux:` block)
+
+When a policy denies your tool call, the runtime can render the
+deny envelope in one of two shapes. Which one you see is decided
+per-policy by whether the manifest declares a `ux:` block on that
+policy (or on the pack `config:` for pack-shipped blockers).
+
+**Legacy shape** (no `ux:` declared): the `permissionDecisionReason`
+text leaks engine vocabulary, e.g.
+
+```
+review-before-merge: no matching ledger entry for tag `review:42`
+```
+
+**Agent-facing shape** (`ux:` declared, default for every built-in
+v0.17.x policy and pack): three sections, verbatim from
+`formatAgentFacingMessage` in `src/runtime/agent-facing.ts`:
+
+```
+You cannot investigate this repository yet.
+
+Required:
+- verified repository preflight
+
+Run:
+  harness preflight
+```
+
+The three sections always appear in the same order, with `- ` prefixes
+under `Required:` and a two-space indent under `Run:`. Read them as
+state (what is blocked), requirement (in plain words, never "ledger
+entry for tag X"), remedy (the exact command to type).
+
+### What changes between the two readers
+
+The agent-facing shape replaces only the agent surface. The
+engine-internal model (session IDs, ledger entries, `recordHint`,
+`matchedCount`, `ledgerTag`, policy DAGs) is unchanged and still
+feeds the audit ledger, so `harness audit`, `harness explain
+--trace`, and `harness session-export` keep their full trace. The
+operator-facing BLOCK reason (which names the session id, the
+missing tag, and which approval sources failed) stays on stderr.
+
+```
+┌──────────────────────────────┐    ┌──────────────────────────────┐
+│ Agent (stdout / hookOutput)  │    │ Operator (stderr / audit)    │
+├──────────────────────────────┤    ├──────────────────────────────┤
+│ You cannot push branch X.    │    │ preflight-before-push: no    │
+│                              │    │ matching ledger entry for    │
+│ Required:                    │    │ tag `preflight:feat/foo`     │
+│ - a fresh preflight for X    │    │ within 10m (matchedCount: 0) │
+│                              │    │ session: <uuid>              │
+│ Run:                         │    │                              │
+│   harness preflight          │    │ → policy_decision row written │
+└──────────────────────────────┘    └──────────────────────────────┘
+```
+
+### `${VAR}` substitution context
+
+`cannot`, `required[]`, and `run[]` are templates. `${VAR}`
+references resolve against the same `extract.values` map the
+policy's `ledger_tag` was substituted with, plus the builtins,
+which are available even when the policy declares no `trigger.extract`:
+
+| Variable | Source |
+|---|---|
+| `${SESSION_ID}` | Claude Code session id |
+| `${REPO}` | basename of `cwd` |
+| `${BRANCH}` | resolved git HEAD (or `(detached)`) |
+| `${TOOL_NAME}` | the tool the agent invoked |
+| `${CWD}` | the agent's working directory |
+| `${PR_NUMBER}`, `${TASK_ID}`, ... | per-policy `trigger.extract` keys |
+
+Pack-shipped blockers add their own context. `branch-protection`
+substitutes `${BRANCH}` from the resolved git context;
+`understanding-before-execution` reads `${SESSION_ID}` from the
+hook payload. Unresolved references are left literal so the agent
+can still read what was expected.
+
+### Producers are suppressed when `ux:` is set
+
+A policy with both `producers:` and `ux:` shows only the `ux:`
+shape on the agent surface. The `run:` list is the canonical
+remedy; rendering both would give you two different command
+suggestions for the same block. `producers:` still feeds
+`harness explain --trace` for operator-side diagnostics.
+
+### When you encounter a block
+
+1. Read the three sections in order: state, requirement, remedy.
+2. Run the `Run:` command. If it is a bare `harness ...` invocation,
+   the Bash gate accepts it; if it is an `mcp__agent-grounding__ledger_add`
+   recipe, write it via the MCP tool (the ungated recovery path when
+   Bash is locked down).
+3. Retry the original tool call. The same call goes straight through
+   once the requirement is satisfied, no restart needed.
+4. If you cannot satisfy the requirement, ask the operator. The
+   stderr diagnostic gives them the engine-vocabulary detail to
+   debug from.
+
 ## CLI cheat sheet
 
 Everything in **read-only** is safe to call without side effects:

@@ -45,13 +45,7 @@ gate open against the new HEAD.
 ## Failure mode
 
 The blocker fails **closed**. Any error in load / parse / ledger query
-forces a block envelope with the recovery hint:
-
-> branch-protection: refusing Write on protected branch "master".
-> ledger degraded (mcp connect refused); refusing on failsafe
-> To proceed, cut a feature branch and re-run the producer:
->   git checkout -b <feature-slug>
->   harness session-start branch-check
+forces a block. Engine-vocabulary BLOCK reason (`branch-protection: refusing Write on protected branch "master"`, ledger health, freshness window, session id) lands on stderr for operator audit. The agent surface follows the `config.ux` shape below (v0.17.3+); operators who haven't set `ux:` see the legacy envelope verbatim.
 
 This is the inverse of `understanding-before-execution`'s fail-open
 contract. The whole job of this pack is preventing edit-on-master
@@ -69,11 +63,38 @@ policy_packs:
         - main
         - release/prod
         - production
+      # Agent-facing block message (v0.17.3+; default shipped by every init template).
+      ux:
+        cannot: "You cannot edit files on protected branch ${BRANCH} yet."
+        required:
+          - "a checkout of a non-protected branch (current `${BRANCH}` is protected)"
+        run:
+          - "git checkout -b feat/<your-task>"
+          - "harness session-start branch-check"
 ```
 
 A malformed `protected_branches` value (not an array, empty, all
 non-string entries) falls back to the default list with a warning
 surfaced at `harness apply` time.
+
+### `config.ux` (v0.17.3+)
+
+The blocker reads `config.ux` and renders the plain-language `{ cannot, required, run }` shape via `renderAgentFacing` (`src/runtime/agent-facing.ts`) on every block. `${BRANCH}` substitutes from the resolved git context, so on a Write attempt against master the agent sees:
+
+```
+You cannot edit files on protected branch master yet.
+
+Required:
+- a checkout of a non-protected branch (current `master` is protected)
+
+Run:
+  git checkout -b feat/<your-task>
+  harness session-start branch-check
+```
+
+The engine-vocabulary BLOCK reason (naming the protected list, freshness window, ledger health, session id) still lands on stderr. Both runtime blockers, claude-code and codex, share the same renderer.
+
+Verbatim three-section form, full `${VAR}` substitution context (`${BRANCH}` / `${REPO}` / `${SESSION_ID}` plus pack-specific values), and the agent / operator surface split: [`docs/for-agents.md`](../for-agents.md#agent-facing-block-messages-ux-block).
 
 ## Escape hatches
 

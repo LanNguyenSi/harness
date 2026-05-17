@@ -53,7 +53,24 @@ policy_packs:
     description: "..."        # optional, falls back to the pack's own description
     config:
       mode: grill_me          # fast_confirm | grill_me | strict
+      ux:                     # optional; agent-facing block message (v0.17.0+)
+        cannot: "You cannot use write-capable tools yet."
+        required:
+          - "an approved Understanding Report for this session"
+        run:
+          - "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan"
+          - "Run `harness approve understanding` and approve the prompt"
 ```
+
+### `config.ux`
+
+Optional. When set, both PreToolUse pack hooks (`hook-pre-tool-use.ts` for Claude Code, `hook-codex-pre-tool-use.ts` for Codex) render the agent-facing `{ cannot, required, run }` shape in place of the legacy `Understanding Gate: ...` envelope. The engine-vocabulary BLOCK reason (naming session id and which approval sources failed) stays on stderr for operator audit. Reuses `PolicyUxSchema` from the policy layer; malformed configs fall back to the legacy envelope with a stderr warning.
+
+`${SESSION_ID}` is the typical substitution variable for this pack; `cannot` / `required[]` / `run[]` strings are otherwise plain text. The `init --template solo / team / full` and Custom-composer paths all ship the `ux:` default shown above so wizard users get the plain-language form out of the box (v0.17.1+).
+
+When `config.ux` is set, `config.producers` (the `ask` / `bash` recipes shipped on the pack) is suppressed on the agent surface for the same reason it is suppressed on policies: the `run:` list is the canonical remedy, and showing both would give the agent two different command suggestions for the same block. `producers` still feeds `harness explain --trace`.
+
+Full reference for the verbatim three-section form, `${VAR}` substitution context, and the agent / operator surface split: [`docs/for-agents.md`](../for-agents.md#agent-facing-block-messages-ux-block).
 
 ### `config.mode`
 

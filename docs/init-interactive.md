@@ -37,6 +37,8 @@ The wizard is one of three ways to bootstrap a manifest:
    - Unchecking everything skips wiring entirely; both manual fallback commands print so the operator can wire later by hand.
    - Selecting both runtimes runs the two applies sequentially. `harness.lock` then reflects the **last-applied** runtime; a follow-up `harness apply --runtime <name>` per runtime refreshes its drift baseline. The wizard surfaces this caveat to stderr.
 
+   Since v0.17.4, the `claude-code` wire-now branch passes `overwriteDrift: true` (auto-confirmed) to `apply`. This is the deliberate "start from scratch" intent of `init --interactive`: any pre-existing `~/.claude/harness.generated/settings.json` that drifted out of the last-apply snapshot is overwritten by the freshly-rendered settings rather than refused with `outcome: "drift-refuse"`. Ad-hoc `harness apply` (outside the wizard) keeps the strict drift safeguard unchanged. If `targetWritten` still ends up false for any other reason, the wizard now prints a clear stderr message and a `recoveryHint` instead of leaving the operator with a "wired into …" line that never landed.
+
 ## Custom flow
 
 Custom is for power users who want a manifest narrower or wider than the named profiles. The wizard branches into three checkbox prompts:

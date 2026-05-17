@@ -306,6 +306,8 @@ Schema:
 | `requires` | object | yes | evidence shape; discriminated union, see below |
 | `hook` | string | yes | must reference a `hooks[].name` |
 | `enforcement` | enum | yes | `block` / `warn` — higher level than hook's `blocking` flag |
+| `producers` | array | no | structured remediation hints rendered into the deny envelope; discriminated union of `bash` / `mcp` / `ask` kinds. At least one `mcp` producer is required when set (the ungated recovery path when Bash is locked down). |
+| `ux` | object | no | agent-facing block message; `{ cannot, required[], run[] }`. When set, replaces the engine-vocabulary text on the agent surface (`permissionDecisionReason`) with a plain-language three-section form; the operator-facing reason and audit ledger are unchanged. `${VAR}` references resolve against the same extract map the `ledger_tag` was substituted with, plus builtins (`SESSION_ID` / `REPO` / `BRANCH` / `TOOL_NAME` / `CWD`). Suppresses `producers:` rendering on the agent surface to avoid two competing remedy lists. See [`for-agents.md`](for-agents.md#agent-facing-block-messages-ux-block) for the verbatim form. |
 
 ### `requires` shapes shipped in v1
 

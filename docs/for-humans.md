@@ -193,6 +193,42 @@ For non-PreToolUse hooks (UserPromptSubmit, PostToolUse, Stop, ...) only
 the top-level `decision`/`reason` pair is emitted, since
 `permissionDecision` is PreToolUse-only per Anthropic's hook protocol.
 
+### Splitting the agent surface from the audit surface (`ux:`)
+
+Since v0.17.0, every policy can declare a `ux:` block that replaces
+the agent-facing `permissionDecisionReason` with a plain-language
+three-section message. The engine-vocabulary `reason` field (above)
+stays in the audit ledger and on stderr; only the agent surface
+changes.
+
+```yaml
+policies:
+  - name: review-before-merge
+    # ... trigger / requires / hook / enforcement as before
+    ux:
+      cannot: "You cannot merge PR #${PR_NUMBER} yet."
+      required:
+        - "a recorded review of PR #${PR_NUMBER}"
+      run:
+        - 'mcp__agent-grounding__ledger_add { type: "fact", content: "review:${PR_NUMBER} — <verdict>" }'
+```
+
+What lands on each surface:
+
+| Surface | Without `ux:` | With `ux:` |
+|---|---|---|
+| `permissionDecisionReason` (agent stdout) | `review-before-merge: no matching ledger entry for tag review:42` | `You cannot merge PR #42 yet.\n\nRequired:\n- a recorded review of PR #42\n\nRun:\n  mcp__agent-grounding__ledger_add ...` |
+| `policy_decision` row (audit ledger) | engine-vocabulary reason | engine-vocabulary reason (unchanged) |
+| `harness audit` / `explain --trace` | engine-vocabulary reason | engine-vocabulary reason (unchanged) |
+| stderr diagnostic | engine-vocabulary reason | engine-vocabulary reason (unchanged) |
+
+Every built-in template (`solo` / `team` / `full`) ships `ux:`
+defaults on every block-enforcement policy and on the
+understanding-before-execution + branch-protection packs since
+v0.17.1. Manifests without `ux:` keep the legacy envelope verbatim;
+no migration needed for 0.16.x installs. The agent-facing reference
+is [`for-agents.md`](for-agents.md#agent-facing-block-messages-ux-block).
+
 After the entry is recorded, the same call is allowed. `harness audit
 --since 1h --policy review-before-merge` replays the decision row.
 `harness explain review-before-merge --trace` walks the requires
