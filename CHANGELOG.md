@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.17.4] - 2026-05-17
+
+**Headline: `harness init --interactive` wire-now actually wires settings.json now.** Closes a silent-no-op bug surfaced during the v0.17.2 dogfood (operator picked Full, picked claude-code in wire-now, but branch-protection's hooks never reached `~/.claude/settings.json`). Root cause: wireRuntime called `apply({ target, merge: true })` without `overwriteDrift`. A pre-existing stale or missing `~/.claude/harness.generated/.last-apply` snapshot made the freshly-rendered `harness.generated/settings.json` look like full-file drift, so apply returned `outcome: "drift-refuse"` without throwing. wireRuntime only checked `targetWritten` and printed nothing when it was false — leaving the operator with a "restart hint" line that implied success while settings.json was never updated. Fix: init's wire-now passes `overwriteDrift: true` with an auto-confirm prompt. Drift safeguards remain in place for ad-hoc `harness apply`; init's canonical "start from scratch" intent now always lands. Backing task: agent-tasks/df68b3e6.
+
+### Fixed
+
+- `src/cli/init/interactive.ts`: wireRuntime for claude-code now passes `overwriteDrift: true` + auto-confirming prompt to apply. Also prints a clear stderr message + sets `recoveryHint` when targetWritten ends up false (instead of being silently empty), so operators are never left guessing why the "wired into ..." line is missing. Adds a regression test (`wire-now bypasses stale-snapshot drift`) that seeds a stale `harness.generated/settings.json` and asserts the wire-now merge still lands.
+
 ## [0.17.3] - 2026-05-17
 
 **Headline: `branch-protection` pack now emits the agent-facing `ux:` block on deny.** Closes the gap from v0.17.2 (which shipped the pack in defaults but left its `blockJson` on the legacy "branch-protection: refusing ..." vocabulary, inconsistent with the rest of the 0.17.x UX work). `hook-branch-protection.ts` now reads `config.ux` and renders the plain-language `{ cannot, required, run }` shape with `${BRANCH}` substituted from the resolved git context. Engine-vocabulary BLOCK reason still lands on stderr for operator audit. Backing task: agent-tasks/9806d4f8.

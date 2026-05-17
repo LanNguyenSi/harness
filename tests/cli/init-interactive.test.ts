@@ -181,6 +181,60 @@ describe("interactive wizard — Solo path", () => {
     expect(cap.stderr()).not.toContain("--runtime claude\n");
   });
 
+  it("wire-now bypasses stale-snapshot drift (agent-tasks/df68b3e6 regression)", async () => {
+    // The bug this guards: a pre-existing `~/.claude/harness.generated/settings.json`
+    // (from a prior harness version, or any state where the .last-apply
+    // snapshot is missing/stale) caused the wire-now apply to return
+    // drift-refuse silently. targetWritten stayed false, no "wired into"
+    // message printed, no error thrown — the operator saw the codex
+    // section of the wire output and concluded everything was fine,
+    // while settings.json never received the new pack hooks (this was
+    // the v0.17.2 dogfood incident: branch-protection landed in
+    // FULL_TEMPLATE but never wired into the operator's settings.json).
+    //
+    // Fix: init's wireRuntime passes overwriteDrift + auto-confirm so
+    // the canonical "wire this freshly written manifest" intent always
+    // lands, regardless of pre-existing harness.generated state. Drift
+    // safeguards are appropriate for ad-hoc `harness apply`, not for
+    // init's start-from-scratch path.
+    fs.mkdirSync(path.join(tmpHome, ".claude", "harness.generated"), { recursive: true });
+    // Seed a stale generated/settings.json with content that won't
+    // match the about-to-be-written manifest. Without the fix, the
+    // missing .last-apply snapshot makes this look like full-file
+    // drift and apply refuses to overwrite.
+    fs.writeFileSync(
+      path.join(tmpHome, ".claude", "harness.generated", "settings.json"),
+      JSON.stringify({ hooks: { Stale: [{ hooks: [] }] } }, null, 2),
+    );
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      prompts: mockPrompts({
+        select: ["solo"],
+        input: ["~/.claude/projects/{project}/memory"],
+        confirm: [true],
+        checkbox: [["claude-code"]],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(false);
+    expect(result.validateClean).toBe(true);
+    expect(result.applies?.[0]?.runtime).toBe("claude-code");
+    // The load-bearing assertion: targetWritten is true even though
+    // there was pre-existing drift in harness.generated/settings.json.
+    expect(result.applies?.[0]?.apply?.targetWritten).toBe(true);
+    const settingsPath = path.join(tmpHome, ".claude", "settings.json");
+    expect(fs.existsSync(settingsPath)).toBe(true);
+    const wired = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+    expect(wired.hooks).toBeDefined();
+    // And no "Stale" hooks survive — the merge used the freshly-applied
+    // generated/settings.json, not the stale one we seeded.
+    expect(JSON.stringify(wired.hooks)).not.toContain("Stale");
+    expect(cap.stderr()).toContain("wired into");
+  });
+
   it("recovers gracefully when the wire-now merge throws (permission denied / malformed target)", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
     // Pre-create the target as unreadable JSON: apply --merge throws
