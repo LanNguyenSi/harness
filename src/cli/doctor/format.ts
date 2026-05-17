@@ -54,6 +54,23 @@ function formatManifestSection(report: DoctorReport): string[] {
   return out;
 }
 
+// Environment section: render only when there is something worth
+// reporting. `ok` stays silent (no point in a ✓ line for a check that
+// hits zero issues), `warn` is the actionable case we want loud, and
+// `unknown` stays silent because if npm is missing the other dep
+// checks already failed loudly.
+function formatEnvironmentSection(report: DoctorReport): string[] {
+  const bin = report.npmGlobalBin;
+  if (!bin || bin.status !== "warn") return [];
+  return [
+    "",
+    "Environment",
+    `  ⚠ npm global bin (${bin.binDir}) is not on PATH`,
+    `      harness install commands wrote binaries here but your shell will not find them.`,
+    `      Add to your shell rc (e.g. ~/.bashrc, ~/.zshrc):  ${bin.pathPatchSuggestion}`,
+  ];
+}
+
 function formatToolsSection(report: DoctorReport): string[] {
   const out: string[] = ["", "Tools"];
   out.push(`  MCP servers (${report.tools.mcp.length} declared)`);
@@ -227,6 +244,7 @@ function formatSummary(report: DoctorReport): string[] {
 export function format(report: DoctorReport): string {
   const lines: string[] = [formatHeader(report)];
   lines.push(...formatManifestSection(report));
+  lines.push(...formatEnvironmentSection(report));
   lines.push(...formatToolsSection(report));
   lines.push(...formatMemorySection(report));
   lines.push(...formatHooksSection(report));
