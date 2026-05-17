@@ -98,6 +98,13 @@ hooks:
     # (default subprocess timeout is 60s in the bundled wrapper since
     # agent-tasks/7265599e); leave 10s headroom for ledger write.
     budget_ms: 70000
+    # Floor at agent-preflight 0.1.1, the release that distinguishes
+    # "tool not installed" (e.g. an npm script invoking eslint that
+    # is not in devDependencies) from real lint/test/typecheck failures.
+    # Stale 0.1.0 installs silently emit false-positive blockers that
+    # keep the preflight-before-* policies closed forever.
+    min_version: "0.1.1"
+    version_command: ["preflight", "--version"]
     description: "Run agent-preflight on session start; record ready + confidence into the ledger as preflight:${REPO}."
 
   - name: require-review-evidence
