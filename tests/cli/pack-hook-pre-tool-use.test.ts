@@ -660,3 +660,140 @@ describe("pack hook pre-tool-use blocker — .pending-approval staging (task 33a
     expect(decision.decision).toBe("block");
   });
 });
+
+describe("pack hook pre-tool-use blocker — agent-facing ux (agent-tasks/e48e3b45)", () => {
+  // When config.ux is declared, the deny envelope the agent sees
+  // becomes the plain-language { cannot, required, run } shape and
+  // the legacy "Understanding Gate: ..." + schemaHint + producers
+  // vocabulary is suppressed. The stderr BLOCK diagnostic keeps the
+  // engine-vocabulary reason for operator audit.
+  function manifestWithUx(): Manifest {
+    return parseManifest({
+      version: 1,
+      policy_packs: [
+        {
+          name: "understanding-before-execution",
+          enabled: true,
+          config: {
+            mode: "grill_me",
+            ux: {
+              cannot: "You cannot use write-capable tools yet.",
+              required: ["an approved Understanding Report for this session"],
+              run: [
+                "Write an Understanding Report covering the nine sections",
+                "Run `harness approve understanding` and approve the prompt",
+              ],
+            },
+          },
+        },
+      ],
+    });
+  }
+
+  it("emits the verbatim agent-facing block on no-approval block", async () => {
+    const stdout = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithUx(),
+      stdin: readableFromString(event()),
+      stdout: stdout.stream,
+      stderr: bufferStream().stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    const decision = JSON.parse(stdout.read().trim()) as {
+      reason: string;
+      hookSpecificOutput: { permissionDecisionReason: string };
+    };
+    const expected = [
+      "You cannot use write-capable tools yet.",
+      "",
+      "Required:",
+      "- an approved Understanding Report for this session",
+      "",
+      "Run:",
+      "  Write an Understanding Report covering the nine sections",
+      "  Run `harness approve understanding` and approve the prompt",
+    ].join("\n");
+    expect(decision.reason).toBe(expected);
+    expect(decision.hookSpecificOutput.permissionDecisionReason).toBe(expected);
+  });
+
+  it("does not leak engine vocabulary to the agent surface when ux is declared", async () => {
+    const stdout = bufferStream();
+    await runPackHookPreToolUseCli({
+      manifest: manifestWithUx(),
+      stdin: readableFromString(event()),
+      stdout: stdout.stream,
+      stderr: bufferStream().stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    const decision = JSON.parse(stdout.read().trim()) as { reason: string };
+    expect(decision.reason).not.toContain("Understanding Gate:");
+    expect(decision.reason).not.toContain("Report format");
+    expect(decision.reason).not.toContain("To produce this tag:");
+    expect(decision.reason).not.toMatch(/ledger/i);
+  });
+
+  it("keeps the engine-vocabulary BLOCK reason on stderr (operator audit surface)", async () => {
+    const stderr = bufferStream();
+    await runPackHookPreToolUseCli({
+      manifest: manifestWithUx(),
+      stdin: readableFromString(event()),
+      stdout: bufferStream().stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(stderr.read()).toMatch(/BLOCK — no approval marker for session sess-1/);
+  });
+
+  it("falls back to the legacy envelope when ux is missing", async () => {
+    // Manifest without config.ux: agent-facing surface stays on the
+    // legacy "Understanding Gate: ..." + schemaHint path.
+    const stdout = bufferStream();
+    await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event()),
+      stdout: stdout.stream,
+      stderr: bufferStream().stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    const decision = JSON.parse(stdout.read().trim()) as { reason: string };
+    expect(decision.reason).toContain("Understanding Gate:");
+    expect(decision.reason).toContain("Run `harness approve understanding`");
+  });
+
+  it("logs to stderr and falls back to the legacy envelope when config.ux is malformed", async () => {
+    const manifest = parseManifest({
+      version: 1,
+      policy_packs: [
+        {
+          name: "understanding-before-execution",
+          enabled: true,
+          config: {
+            mode: "grill_me",
+            // Empty required array violates min(1)
+            ux: { cannot: "x", required: [], run: ["y"] },
+          },
+        },
+      ],
+    });
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    await runPackHookPreToolUseCli({
+      manifest,
+      stdin: readableFromString(event()),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(stderr.read()).toMatch(/config\.ux ignored/);
+    const decision = JSON.parse(stdout.read().trim()) as { reason: string };
+    expect(decision.reason).toContain("Understanding Gate:");
+  });
+});

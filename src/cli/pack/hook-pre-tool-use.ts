@@ -38,11 +38,14 @@ import {
   writePendingApproval,
 } from "../../runtime/pending-approval.js";
 import {
+  PolicyUxSchema,
   ProducerSchema,
   type Manifest,
   type McpServer,
+  type PolicyUx,
   type Producer,
 } from "../../schema/index.js";
+import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { z } from "zod";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import { renderReportSchemaHint } from "./understanding-report-schema-hint.js";
@@ -147,23 +150,63 @@ function parseConfigProducers(
   return result.data;
 }
 
+// Agent-facing `ux:` block on the pack config (agent-tasks/e48e3b45).
+// Same shape as PolicyUxSchema, surfaced through the pack's separate
+// deny path. When present, the deny envelope the agent sees becomes
+// the plain-language `{ cannot, required, run }` shape and the legacy
+// "Understanding Gate: no approved..." + schemaHint + producers
+// vocabulary is suppressed. Malformed configs are logged to stderr
+// and fall back to the legacy envelope (mirrors parseConfigProducers).
+function parseConfigUx(
+  raw: unknown,
+  stderr: NodeJS.WritableStream,
+): PolicyUx | undefined {
+  if (raw === undefined) return undefined;
+  const result = PolicyUxSchema.safeParse(raw);
+  if (!result.success) {
+    stderr.write(
+      `harness pack hook: config.ux ignored (${result.error.issues
+        .map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`)
+        .join("; ")})\n`,
+    );
+    return undefined;
+  }
+  return result.data;
+}
+
 function blockJson(
   toolName: string,
   reason: string,
   producers: Producer[] | undefined,
+  ux: PolicyUx | undefined,
   sessionId: string,
 ): string {
-  // Legacy suffix kept unchanged so existing operators / docs that quote
-  // the old surface still find the recognizable string. The producers
-  // block (when configured) appends AFTER, so a reader's eye lands on
-  // the structured recipe last. The schema-hint paragraph sits between
-  // them: the agent reads the call-to-action first, then learns what
-  // shape the report needs to take (without this, freeform prose
-  // satisfies the marker write but silently fails the parser).
-  const suffix = `Run \`harness approve understanding\` once you have produced and confirmed an Understanding Report.`;
-  const schemaHint = renderReportSchemaHint();
-  const producersBlock = renderProducers(producers, { SESSION_ID: sessionId });
-  const reasonText = `Understanding Gate: ${reason}. Tool: ${toolName}. ${suffix}\n${schemaHint}${producersBlock}`;
+  // When the pack config declares `ux:`, the agent-facing surface
+  // becomes the plain-language `{ cannot, required, run }` shape, and
+  // the legacy schemaHint + producers block is suppressed (the ux
+  // entries are now the canonical surface; mixing both would split
+  // the agent's attention). Internal stuff (the `reason` argument's
+  // engine vocabulary) still lands in stderr via the BLOCK diagnostic
+  // for operator audit.
+  let reasonText: string;
+  if (ux) {
+    reasonText = renderAgentFacing(ux, {
+      SESSION_ID: sessionId,
+      TOOL_NAME: toolName,
+    });
+  } else {
+    // Legacy suffix kept unchanged so existing operators / docs that quote
+    // the old surface still find the recognizable string. The producers
+    // block (when configured) appends AFTER, so a reader's eye lands on
+    // the structured recipe last. The schema-hint paragraph sits between
+    // them: the agent reads the call-to-action first, then learns what
+    // shape the report needs to take (without this, freeform prose
+    // satisfies the marker write but silently fails the parser).
+    const suffix = `Run \`harness approve understanding\` once you have produced and confirmed an Understanding Report.`;
+    const schemaHint = renderReportSchemaHint();
+    const producersBlock = renderProducers(producers, { SESSION_ID: sessionId });
+    reasonText = `Understanding Gate: ${reason}. Tool: ${toolName}. ${suffix}\n${schemaHint}${producersBlock}`;
+  }
   return JSON.stringify({
     decision: "block",
     reason: reasonText,
@@ -434,8 +477,12 @@ export async function runPackHookPreToolUseCli(
     (declared.config as Record<string, unknown>)["producers"],
     stderr,
   );
+  const configUx = parseConfigUx(
+    (declared.config as Record<string, unknown>)["ux"],
+    stderr,
+  );
   stdout.write(
-    `${blockJson(toolName, "no approved Understanding Report for this session", configProducers, sessionId)}\n`,
+    `${blockJson(toolName, "no approved Understanding Report for this session", configProducers, configUx, sessionId)}\n`,
   );
   return {
     exitCode: 0,

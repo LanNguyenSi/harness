@@ -29,7 +29,8 @@ import {
   type ApprovalCheckResult,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
-import type { Manifest, McpServer } from "../../schema/index.js";
+import { renderAgentFacing } from "../../runtime/agent-facing.js";
+import { PolicyUxSchema, type Manifest, type McpServer, type PolicyUx } from "../../schema/index.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import { renderReportSchemaHint } from "./understanding-report-schema-hint.js";
 
@@ -85,6 +86,23 @@ async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
     stream.on("end", () => resolve(data));
     stream.on("error", (err) => reject(err));
   });
+}
+
+function parseConfigUx(
+  raw: unknown,
+  stderr: NodeJS.WritableStream,
+): PolicyUx | undefined {
+  if (raw === undefined) return undefined;
+  const result = PolicyUxSchema.safeParse(raw);
+  if (!result.success) {
+    stderr.write(
+      `harness pack hook codex: config.ux ignored (${result.error.issues
+        .map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`)
+        .join("; ")})\n`,
+    );
+    return undefined;
+  }
+  return result.data;
 }
 
 function pickString(...candidates: unknown[]): string | undefined {
@@ -243,10 +261,21 @@ export async function runPackHookCodexPreToolUseCli(
   const reason = generatedDir !== undefined
     ? `no approval marker for session ${sessionId}; ${report.detail}; ${ledger.detail}`
     : `generatedDir not resolvable (test/injection path); ${report.detail}; ${ledger.detail}`;
-  const diagnostic =
-    `harness pack hook codex: BLOCK: ${reason}. Tool: ${toolName}. ` +
-    "Run `harness approve understanding` once you have produced and confirmed an Understanding Report.\n" +
-    renderReportSchemaHint();
+  // When the pack config declares `ux:`, the agent-facing block becomes
+  // the plain-language shape and the legacy schemaHint text is
+  // suppressed. The engine-vocabulary `reason` still lands in stderr
+  // (operator audit surface, not agent surface) so a flapping gate
+  // remains diagnosable.
+  const configUx = parseConfigUx(
+    (declared.config as Record<string, unknown>)["ux"],
+    stderr,
+  );
+  const agentFacing = configUx
+    ? renderAgentFacing(configUx, { SESSION_ID: sessionId, TOOL_NAME: toolName })
+    : `Run \`harness approve understanding\` once you have produced and confirmed an Understanding Report.\n${renderReportSchemaHint()}`;
+  const diagnostic = configUx
+    ? `harness pack hook codex: BLOCK: ${reason}.\n${agentFacing}`
+    : `harness pack hook codex: BLOCK: ${reason}. Tool: ${toolName}. ${agentFacing}`;
   stderr.write(`${diagnostic}\n`);
   return {
     exitCode: EXIT_BLOCK,

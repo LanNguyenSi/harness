@@ -531,6 +531,14 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
                   "Same command from any un-hooked terminal (operator only, not reachable from inside the gated session). Writes the canonical marker at harness.generated/.approvals/${SESSION_ID}.",
               },
             ],
+            ux: {
+              cannot: "You cannot use write-capable tools yet.",
+              required: ["an approved Understanding Report for this session"],
+              run: [
+                "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan",
+                "Run `harness approve understanding` and approve the prompt",
+              ],
+            },
           },
         };
       }
