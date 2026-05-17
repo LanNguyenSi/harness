@@ -60,6 +60,12 @@ type LoadBearingPolicy = {
   // producers in one manifest must declare matching producers in the
   // other — otherwise the documented recovery path silently drifts.
   producers: Manifest["policies"][number]["producers"];
+  // ux (agent-tasks/6b74b69d): the agent-facing block message. Same
+  // parity rationale as producers — a policy that gives the agent the
+  // plain-language `{cannot, required, run}` shape in one manifest must
+  // give it in the other, or the user-facing surface silently drifts
+  // between the wizard's Full output and the reference example.
+  ux: Manifest["policies"][number]["ux"];
 };
 
 function loadBearing(p: Manifest["policies"][number]): LoadBearingPolicy {
@@ -78,6 +84,7 @@ function loadBearing(p: Manifest["policies"][number]): LoadBearingPolicy {
     enforcement: p.enforcement,
     hook: p.hook,
     producers: p.producers,
+    ux: p.ux,
   };
 }
 

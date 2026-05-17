@@ -166,6 +166,135 @@ describe("intercept — deny with producer hints", () => {
   });
 });
 
+describe("intercept — agent-facing ux replaces engine vocabulary", () => {
+  // The preflight-before-investigation reference scenario, end-to-end:
+  // a Bash git-status with no preflight ledger entry triggers the
+  // deny path. With `ux:` declared, the agent sees the plain-language
+  // shape verbatim, with no "ledger entry for tag X" vocabulary leaking
+  // through. The internal decision (reason, recordHint) is unchanged
+  // and still recorded to the audit ledger (covered by the audit-log
+  // describe block).
+  const preflightPolicy: Policy = {
+    name: "preflight-before-investigation",
+    description: "block investigative git reads without a preflight",
+    trigger: {
+      event: "PreToolUse",
+      match: "Bash",
+      bash_match: "git (status|log|diff|branch)",
+    },
+    requires: { ledger_tag: "preflight:${REPO}", within: "1h" },
+    hook: "h",
+    enforcement: "block",
+    ux: {
+      cannot: "You cannot investigate this repository yet.",
+      required: ["verified repository preflight"],
+      run: ["harness preflight"],
+    },
+  } as Policy;
+
+  const investigateEvent: ToolEvent = {
+    hook_event_name: "PreToolUse",
+    tool_name: "Bash",
+    tool_input: { command: "git status" },
+    session_id: "sess-1",
+  };
+
+  it("emits the verbatim agent-facing block on missing preflight", async () => {
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([preflightPolicy]),
+      event: investigateEvent,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    const expectedReason = [
+      "You cannot investigate this repository yet.",
+      "",
+      "Required:",
+      "- verified repository preflight",
+      "",
+      "Run:",
+      "  harness preflight",
+    ].join("\n");
+    expect(result.blockJson?.reason).toBe(expectedReason);
+    expect(result.blockJson?.hookSpecificOutput?.permissionDecisionReason).toBe(
+      expectedReason,
+    );
+  });
+
+  it("does not leak engine vocabulary (ledger / tag / matching) to the agent surface", async () => {
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([preflightPolicy]),
+      event: investigateEvent,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    const reason = result.blockJson?.reason ?? "";
+    expect(reason).not.toMatch(/ledger/i);
+    expect(reason).not.toMatch(/\btag\b/i);
+    expect(reason).not.toMatch(/no matching/i);
+    expect(reason).not.toMatch(/to satisfy:/i);
+    expect(reason).not.toContain("preflight:harness");
+    expect(reason).not.toContain("To produce this tag:");
+  });
+
+  it("keeps the engine-internal reason on the PolicyDecision (audit surface unchanged)", async () => {
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([preflightPolicy]),
+      event: investigateEvent,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    // Internal model is the audit truth: the decision still names the
+    // tag, the reason, and the satisfaction hint. The ledger record()
+    // call gets this same shape (covered by the audit-log describe).
+    expect(result.decisions[0]?.outcome).toBe("deny");
+    expect(result.decisions[0]?.ledgerTag).toBe("preflight:harness");
+    expect(result.decisions[0]?.reason).toBe(
+      "no matching ledger entry for tag `preflight:harness`",
+    );
+    expect(result.decisions[0]?.recordHint).toBe(
+      "record an evidence-ledger entry containing `preflight:harness` within 1h",
+    );
+  });
+
+  it("ux substitutes ${VAR} against extract values + builtins (BRANCH from builtins)", async () => {
+    const pushPolicy: Policy = {
+      ...preflightPolicy,
+      name: "preflight-before-push",
+      trigger: { event: "PreToolUse", match: "Bash", bash_match: "git push" },
+      requires: { ledger_tag: "preflight:${BRANCH}", within: "10m" },
+      ux: {
+        cannot: "You cannot push branch ${BRANCH} yet.",
+        required: ["a fresh preflight for ${BRANCH} (within the last 10 minutes)"],
+        run: ["harness preflight"],
+      },
+    } as Policy;
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([pushPolicy]),
+      event: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "git push" },
+        session_id: "sess-1",
+      },
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.blockJson?.reason).toContain("You cannot push branch master yet.");
+    expect(result.blockJson?.reason).toContain(
+      "- a fresh preflight for master (within the last 10 minutes)",
+    );
+  });
+});
+
 describe("intercept — non-PreToolUse deny shape", () => {
   it("omits hookSpecificOutput for non-PreToolUse events while still blocking", async () => {
     const promptPolicy: Policy = {

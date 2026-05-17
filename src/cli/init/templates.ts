@@ -258,6 +258,12 @@ policies:
         verb: mcp__agent-grounding__ledger_add
         example: '{type:"fact", content:"preflight:\${REPO}", source:"manual"}'
         description: Direct ledger write. Use when the Bash hook is locked down (e.g. understanding-gate active) or when the standard producer is unavailable.
+    ux:
+      cannot: "You cannot investigate this repository yet."
+      required:
+        - "verified repository preflight"
+      run:
+        - "harness preflight"
 
   - name: review-subagent-before-pr-create
     description: Block agent-tasks PR creation unless a review-subagent ledger entry tagged for this task already exists. Forces the rigorous review BEFORE the PR opens, not after.
@@ -295,6 +301,12 @@ policies:
         verb: mcp__agent-grounding__ledger_add
         example: '{type:"fact", content:"preflight:\${BRANCH} — <summary of what is on the branch + smoke results>", source:"manual"}'
         description: Direct ledger write. The branch is the WIP review surface; the content should summarise what is staged + the smoke evidence so a reviewer can audit later without re-reading the chat.
+    ux:
+      cannot: "You cannot push branch \${BRANCH} yet."
+      required:
+        - "a fresh preflight for \${BRANCH} (within the last 10 minutes)"
+      run:
+        - "harness preflight"
 
 # Full inherits the Solo/Team understanding-gate stack: the Stop hook
 # persists each Understanding Report and the PreToolUse pre-tool-use

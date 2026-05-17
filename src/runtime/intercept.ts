@@ -20,6 +20,7 @@ import {
 } from "../policies/index.js";
 import { renderProducers } from "../policies/producers.js";
 import type { Manifest, Policy } from "../schema/index.js";
+import { renderAgentFacing } from "./agent-facing.js";
 import { POLICY_DECISION_TYPE } from "./ledger-record.js";
 import { resolveSessionId } from "./session-id.js";
 
@@ -311,11 +312,27 @@ export async function intercept(
     // recovery path. Policies without `producers:` get the legacy
     // neutral deny envelope unchanged (agent-tasks/3804b785).
     const blockingPolicy = matching.find((p) => p.name === blocking.policyName);
-    const producersBlock = renderProducers(
-      blockingPolicy?.producers,
-      blocking.extractValues,
-    );
-    const reasonText = `${blocking.policyName}: ${blocking.reason}.${hintSuffix}${producersBlock}`;
+    // When the policy declares `ux:`, the agent-facing surface
+    // becomes the plain-language `{cannot, required, run}` shape
+    // instead of the engine-vocabulary deny envelope. The internal
+    // decision (reason, recordHint, requiresEval, ledgerTag) is
+    // unchanged and still recorded to the audit ledger above. The
+    // producers block is suppressed when ux is declared because
+    // `run:` is the canonical remedy surface and rendering both would
+    // give the agent two different command suggestions.
+    let reasonText: string;
+    if (blockingPolicy?.ux) {
+      reasonText = renderAgentFacing(blockingPolicy.ux, {
+        ...blocking.extractValues,
+        SESSION_ID: sessionId,
+      });
+    } else {
+      const producersBlock = renderProducers(
+        blockingPolicy?.producers,
+        blocking.extractValues,
+      );
+      reasonText = `${blocking.policyName}: ${blocking.reason}.${hintSuffix}${producersBlock}`;
+    }
     const block: ClaudeDenyJson = {
       decision: "block",
       reason: reasonText,

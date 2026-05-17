@@ -1435,6 +1435,43 @@ export function buildProgram(opts: RunOptions = {}): Command {
       }
     });
 
+  // Top-level alias for `harness session-start preflight`, so the
+  // policy `ux.run:` field can show the short form the agent should
+  // type: `Run: harness preflight`. The handler delegates to the same
+  // implementation, with the same CLI options.
+  program
+    .command("preflight")
+    .description(
+      "Alias for `harness session-start preflight`: run agent-preflight against the session cwd " +
+        "and, on a ready:true result, record a `preflight:${REPO}` fact to the evidence ledger.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option("--session <id>", "explicit session id (overrides stdin event + env)")
+    .option("--timeout <ms>", "agent-preflight subprocess timeout in milliseconds (default 25000)")
+    .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
+    .action(async (options: {
+      config?: string;
+      project?: string;
+      session?: string;
+      timeout?: string;
+      ledgerTimeout?: string;
+    }) => {
+      const cliOpts: Parameters<typeof runSessionStartPreflight>[0] = {};
+      if (options.config) cliOpts.configPath = options.config;
+      if (options.project) cliOpts.project = options.project;
+      if (options.session) cliOpts.session = options.session;
+      if (options.timeout) {
+        const n = Number.parseInt(options.timeout, 10);
+        if (Number.isFinite(n) && n > 0) cliOpts.preflightTimeoutMs = n;
+      }
+      if (options.ledgerTimeout) {
+        const n = Number.parseInt(options.ledgerTimeout, 10);
+        if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
+      }
+      await runSessionStartPreflight(cliOpts);
+    });
+
   const sessionStart = program
     .command("session-start")
     .description("SessionStart hook entrypoints (called by Claude Code via settings.json)");
