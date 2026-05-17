@@ -145,7 +145,12 @@ hooks:
     event: SessionStart
     command: harness session-start preflight
     blocking: false
-    budget_ms: 30000
+    # 70s budget gives the wrapped preflight (default 60s) headroom plus
+    # ledger-write time. Was 30s through v0.17.4, but a healthy preflight
+    # on a medium-size repo takes ~28s and the old 25s wrapper ceiling
+    # blew through it. Bumped together with DEFAULT_PREFLIGHT_TIMEOUT_MS
+    # (agent-tasks/7265599e).
+    budget_ms: 70000
 
   - name: require-review-evidence
     event: PreToolUse

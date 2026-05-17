@@ -86,7 +86,7 @@ hooks:
     event: SessionStart
     command: ~/.claude/hooks/git-preflight.sh
     blocking: false
-    budget_ms: 30000
+    budget_ms: 70000
     description: Run agent-preflight on session start; record ready + confidence into the ledger as preflight:${REPO}.
   - name: require-review-evidence
     event: PreToolUse

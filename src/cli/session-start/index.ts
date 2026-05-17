@@ -32,7 +32,14 @@ import { loadManifest, type LoaderOptions } from "../loader.js";
 const FALLBACK_SESSION = "default";
 
 const PREFLIGHT_BIN = "preflight";
-const DEFAULT_PREFLIGHT_TIMEOUT_MS = 25_000;
+// Default upper bound on `preflight run --json <cwd>` for the
+// SessionStart producer. Was 25s through v0.17.4; bumped to 60s after
+// the agent-grounding dogfood (agent-tasks/7265599e) where a healthy
+// preflight took ~28s, just past the old ceiling. The wrapper still
+// kills runaway invocations; this only widens the window for honest
+// medium-size repos. Operators with even larger preflights can still
+// override per-call via `harness preflight --timeout <ms>`.
+const DEFAULT_PREFLIGHT_TIMEOUT_MS = 60_000;
 const LEDGER_SOURCE = "harness-session-start-preflight";
 
 interface SessionStartEvent {
