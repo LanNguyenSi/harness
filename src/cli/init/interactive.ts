@@ -184,10 +184,22 @@ async function wireRuntime(o: WireRuntimeOpts): Promise<RuntimeApplyOutcome> {
     );
   }
   if (o.runtime === "claude-code") {
+    // init's wire-now intent is "wire this freshly written manifest"
+    // — the operator already confirmed by ticking claude-code in the
+    // wire-now checkbox. A pre-existing drift in
+    // ~/.claude/harness.generated/settings.json (stale snapshot from
+    // a prior harness version, or first apply on this machine with a
+    // non-empty settings.json) should not silently make the merge
+    // step a no-op. Pass overwriteDrift + auto-confirm so the fresh
+    // manifest actually lands. The drift safeguard is appropriate
+    // for ad-hoc `harness apply` calls, not for init's canonical
+    // "start from scratch" path (agent-tasks/df68b3e6).
     const applyOpts: Parameters<typeof apply>[0] = {
       configPath: o.configPath,
       target: o.claudeSettingsPath,
       merge: true,
+      overwriteDrift: true,
+      prompt: async () => "yes",
     };
     if (o.homeDir !== undefined) applyOpts.homeDir = path.join(o.homeDir, ".claude");
     try {
@@ -198,12 +210,24 @@ async function wireRuntime(o: WireRuntimeOpts): Promise<RuntimeApplyOutcome> {
         o.stderr(
           `verify: claude -p "say hi" --settings ${r.targetPath} --output-format stream-json --include-hook-events\n`,
         );
+      } else {
+        // Outcome was drift-related and overwrite didn't confirm, or
+        // apply returned a no-target outcome. Surface why so the
+        // operator isn't left guessing why "wired into" never showed.
+        const recoveryHint = `harness apply --target ${o.claudeSettingsPath} --merge --overwrite-drift`;
+        o.stderr(
+          `\nWire-now did not write ${o.claudeSettingsPath} (outcome: ${r.outcome}). Retry manually:\n  ${recoveryHint}\n`,
+        );
       }
       for (const hint of r.restartHints) o.stderr(`restart hint: ${hint}\n`);
-      return { runtime: "claude-code", apply: r };
+      const outcome: RuntimeApplyOutcome = { runtime: "claude-code", apply: r };
+      if (!r.targetWritten) {
+        outcome.recoveryHint = `harness apply --target ${o.claudeSettingsPath} --merge --overwrite-drift`;
+      }
+      return outcome;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      const recoveryHint = `harness apply --target ${o.claudeSettingsPath} --merge`;
+      const recoveryHint = `harness apply --target ${o.claudeSettingsPath} --merge --overwrite-drift`;
       o.stderr(`\nFailed to wire ${o.claudeSettingsPath}: ${message}\n`);
       o.stderr(`Manifest is on disk. To retry the merge manually:\n  ${recoveryHint}\n`);
       return { runtime: "claude-code", recoveryHint };
