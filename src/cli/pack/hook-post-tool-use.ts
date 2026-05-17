@@ -54,6 +54,7 @@ export interface PackHookPostToolUseResult {
 interface ToolEventLite {
   session_id?: unknown;
   tool_name?: unknown;
+  tool_input?: unknown;
 }
 
 async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
@@ -70,13 +71,36 @@ async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
 
 // Match a tool name against one of the patterns. The pattern is a plain
 // tool name like `mcp__agent-tasks__task_finish`; wildcard expansion is
-// deliberately not supported in v1 so operators write what they mean
-// (a future `Bash(gh pr merge*)`-style shape can layer in later).
+// deliberately not supported in v1 so operators write what they mean.
 function toolMatches(toolName: string, patterns: readonly string[]): boolean {
   for (const p of patterns) {
     if (p === toolName) return true;
   }
   return false;
+}
+
+// Match a Bash tool_input.command against the operator's regex list.
+// Patterns are pre-compiled by parseApprovalLifecycle, so invalid
+// regexes were dropped (with a warning) at parse time and we just
+// iterate here. Empty / missing command short-circuits to false.
+function bashCommandMatches(command: string, patterns: readonly RegExp[]): RegExp | undefined {
+  if (command === "") return undefined;
+  for (const re of patterns) {
+    if (re.test(command)) return re;
+  }
+  return undefined;
+}
+
+function extractBashCommand(toolInput: unknown): string {
+  if (
+    typeof toolInput !== "object" ||
+    toolInput === null ||
+    Array.isArray(toolInput)
+  ) {
+    return "";
+  }
+  const command = (toolInput as Record<string, unknown>)["command"];
+  return typeof command === "string" ? command : "";
 }
 
 function noop(
@@ -152,15 +176,35 @@ export async function runPackHookPostToolUseCli(
     (declared.config as Record<string, unknown>)["approval_lifecycle"],
     stderr,
   );
-  if (lifecycle.legacyMode || lifecycle.expireOnToolMatch.length === 0) {
+  if (lifecycle.legacyMode) {
     return noop(
-      `harness pack hook post-tool-use: no expire_on_tool_match configured (${lifecycle.legacyMode ? "legacy-session mode" : "empty list"}), skipping`,
+      `harness pack hook post-tool-use: legacy-session mode, skipping`,
       stderr,
     );
   }
-  if (!toolMatches(toolName, lifecycle.expireOnToolMatch)) {
+  const noBoundariesConfigured =
+    lifecycle.expireOnToolMatch.length === 0 && lifecycle.expireOnBashMatch.length === 0;
+  if (noBoundariesConfigured) {
     return noop(
-      `harness pack hook post-tool-use: tool ${toolName} not in expire_on_tool_match, skipping`,
+      `harness pack hook post-tool-use: no expire_on_tool_match or expire_on_bash_match configured, skipping`,
+      stderr,
+    );
+  }
+
+  const toolNameMatched = toolMatches(toolName, lifecycle.expireOnToolMatch);
+  // Bash check only runs when the event is actually a Bash call; an MCP
+  // tool whose name happens to match a regex is not a Bash boundary.
+  const bashRegex =
+    toolName === "Bash"
+      ? bashCommandMatches(extractBashCommand(event.tool_input), lifecycle.expireOnBashMatch)
+      : undefined;
+  if (!toolNameMatched && bashRegex === undefined) {
+    const detail =
+      toolName === "Bash"
+        ? `Bash command did not match any expire_on_bash_match regex`
+        : `tool ${toolName} not in expire_on_tool_match`;
+    return noop(
+      `harness pack hook post-tool-use: ${detail}, skipping`,
       stderr,
     );
   }
@@ -188,9 +232,12 @@ export async function runPackHookPostToolUseCli(
   const markerPath = approvalMarkerPathFor(generatedDir, sessionId);
   const wasPresent = existsSync(markerPath);
   clearApprovalMarker(generatedDir, sessionId);
+  const matchSource = bashRegex !== undefined
+    ? `bash regex /${bashRegex.source}/`
+    : `tool name`;
   const diagnostic = wasPresent
-    ? `harness pack hook post-tool-use: expired approval marker for session ${sessionId} after ${toolName}`
-    : `harness pack hook post-tool-use: ${toolName} matched expire_on_tool_match but no marker present for session ${sessionId}`;
+    ? `harness pack hook post-tool-use: expired approval marker for session ${sessionId} after ${toolName} (${matchSource})`
+    : `harness pack hook post-tool-use: ${toolName} matched ${matchSource} but no marker present for session ${sessionId}`;
   stderr.write(`${diagnostic}\n`);
   return {
     exitCode: 0,

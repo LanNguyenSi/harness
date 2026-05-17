@@ -101,7 +101,7 @@ describe("pack hook post-tool-use marker-expiry (agent-tasks/d8ee60ca)", () => {
     expect(result.matchedExpiry).toBe(true);
     expect(result.markerCleared).toBe(false);
     expect(stderr.read()).toMatch(
-      /matched expire_on_tool_match but no marker present/,
+      /matched tool name but no marker present/,
     );
   });
 
@@ -188,5 +188,127 @@ describe("pack hook post-tool-use marker-expiry (agent-tasks/d8ee60ca)", () => {
     });
     expect(result.matchedExpiry).toBe(false);
     expect(stderr.read()).toMatch(/missing session_id/);
+  });
+});
+
+describe("pack hook post-tool-use marker-expiry: expire_on_bash_match (harness/f54e0ecb)", () => {
+  const BASH_LIFECYCLE = {
+    expire_on_bash_match: ["^gh pr (merge|close)\\b", "^git push origin (master|main)\\b"],
+  };
+  const bashEvent = (command: string): string =>
+    JSON.stringify({
+      session_id: "sess-1",
+      tool_name: "Bash",
+      tool_input: { command },
+    });
+
+  it("deletes the marker when a Bash command matches an expire_on_bash_match regex", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-05-17T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const stderr = bufferStream();
+    const result = await runPackHookPostToolUseCli({
+      manifest: manifestWithPack({ approval_lifecycle: BASH_LIFECYCLE }),
+      stdin: readableFromString(bashEvent("gh pr merge 42 --squash")),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+    expect(result.matchedExpiry).toBe(true);
+    expect(result.markerCleared).toBe(true);
+    expect(fs.existsSync(approvalMarkerPathFor(generatedDir, "sess-1"))).toBe(false);
+    expect(stderr.read()).toMatch(/bash regex \/\^gh pr/);
+  });
+
+  it("no-ops when the Bash command does not match any regex", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-05-17T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const stderr = bufferStream();
+    const result = await runPackHookPostToolUseCli({
+      manifest: manifestWithPack({ approval_lifecycle: BASH_LIFECYCLE }),
+      stdin: readableFromString(bashEvent("git status")),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+    expect(result.matchedExpiry).toBe(false);
+    expect(result.markerCleared).toBe(false);
+    expect(fs.existsSync(approvalMarkerPathFor(generatedDir, "sess-1"))).toBe(true);
+    expect(stderr.read()).toMatch(/Bash command did not match/);
+  });
+
+  it("ignores expire_on_bash_match when the tool is NOT Bash", async () => {
+    // An MCP tool whose name happens to match a regex must NOT trigger
+    // the bash branch, which is event-scoped to actual Bash only.
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-05-17T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const stderr = bufferStream();
+    const result = await runPackHookPostToolUseCli({
+      manifest: manifestWithPack({ approval_lifecycle: BASH_LIFECYCLE }),
+      // A non-Bash tool name that, if accidentally subjected to regex
+      // match, would look like "gh pr merge ...".
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "mcp__unrelated__verb",
+          tool_input: { command: "gh pr merge 42" },
+        }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+    expect(result.matchedExpiry).toBe(false);
+    expect(fs.existsSync(approvalMarkerPathFor(generatedDir, "sess-1"))).toBe(true);
+  });
+
+  it("combines with expire_on_tool_match: either source matches", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-05-17T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const stderr = bufferStream();
+    const result = await runPackHookPostToolUseCli({
+      manifest: manifestWithPack({
+        approval_lifecycle: {
+          expire_on_tool_match: ["mcp__agent-tasks__task_finish"],
+          expire_on_bash_match: ["^gh pr merge\\b"],
+        },
+      }),
+      stdin: readableFromString(bashEvent("gh pr merge 99")),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+    expect(result.matchedExpiry).toBe(true);
+    expect(result.markerCleared).toBe(true);
+  });
+
+  it("invalid regex pattern is dropped at parse time, others still match", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-05-17T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const stderr = bufferStream();
+    const result = await runPackHookPostToolUseCli({
+      manifest: manifestWithPack({
+        approval_lifecycle: {
+          expire_on_bash_match: ["[unclosed-character-class", "^gh pr merge\\b"],
+        },
+      }),
+      stdin: readableFromString(bashEvent("gh pr merge 1")),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+    expect(result.matchedExpiry).toBe(true);
+    const stderrText = stderr.read();
+    expect(stderrText).toMatch(/expire_on_bash_match entry ignored/);
+    expect(stderrText).toMatch(/expired approval marker/);
   });
 });

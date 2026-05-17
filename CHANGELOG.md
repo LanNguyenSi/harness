@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **understanding-gate: `approval_lifecycle.expire_on_bash_match`** (harness/f54e0ecb). New optional schema field on the `understanding-before-execution` pack config: a string array of regex patterns matched against the `Bash` tool's `tool_input.command`. When a Bash command matches, the per-session approval marker is deleted on PostToolUse, same semantics as the existing `expire_on_tool_match` does for MCP tool names. Enables gh-CLI / pure-Bash workflows to declare task boundaries (e.g. `^gh pr (merge|close)\b`, `^git push origin (master|main)\b`) so the gate's per-task re-prompt works for them too.
+
+  Profile defaults updated:
+  - **Solo**: drops the agent-tasks `expire_on_tool_match` list (dead weight in Solo, which wires no agent-tasks MCP) and ships the Bash list as its only matcher. `max_age` cut from 4h to 1h since Solo has no MCP task boundaries to catch on as backup.
+  - **Team / Full**: keep the agent-tasks tool list AND add the Bash list, so hybrid operators who mix `task_finish` and `gh pr merge` are covered in both directions.
+
+  Closes the silent regression where Solo / Team-without-agent-tasks operators got "one approval per session for 4h" instead of the per-task expiry that the v0.18.0 headline promised. Patterns are pre-compiled at parse time; an invalid regex in the list is dropped with a warning so a typo in one entry does not break the others. `{ mode: "session" }` opt-out zeroes both lists. Covered by 6 new unit tests in `tests/policy-packs/marker-max-age.test.ts` (parser) and 5 new integration tests in `tests/cli/pack-hook-post-tool-use.test.ts` (runtime dispatch: bash-match, no-match, non-Bash-tool isolation, combined with tool-match, invalid-regex resilience).
+
 ### Changed
 
 - **`harness doctor`: producer-gap warning now respects the policy's own `producers:` array** (harness/f97e152f). A `block` policy with a `within:` window used to be flagged with `⚠ ... no manifest hook produces it` whenever no automatic SessionStart hook wrote the required tag, even when the policy itself declared a `producers:` entry pointing the agent at the manual recovery (`mcp__agent-grounding__ledger_add`). For `dogfood-before-release` in the Full template that was a false positive: the gate is deliberately operator-driven (an automatic SessionStart producer would defeat its purpose, either by running a smoke test on every session start or by auto-writing a meaningless tag), and the `producers:` array IS the schema-blessed manual recovery path the agent sees in the deny envelope. Doctor now treats a non-empty `producers:` array as a documented producer and suppresses the warning. The warning still fires when both kinds are absent: no automatic SessionStart producer AND no `producers:` array on the policy. Visible effect on the Full template: one fewer false-positive warning (dogfood-before-release flips from `⚠` to `✓`); the two preflight policies were already satisfied by the `git-preflight` SessionStart hook and stay green. Warning text now names both fix paths so operators understand the manual option exists. Regression-guarded by a new `eta-gate` fixture entry in `tests/cli/doctor.test.ts`.
