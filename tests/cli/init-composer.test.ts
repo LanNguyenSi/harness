@@ -200,8 +200,11 @@ describe("composeCustom — memoryDir override", () => {
 });
 
 describe("composer surface (catalogues)", () => {
-  it("matches FULL_TEMPLATE parity (1 pack, 4 MCPs, 6 reference policies) for snapshot review", () => {
-    expect(COMPOSABLE_PACKS.map((p) => p.key)).toEqual(["understanding-before-execution"]);
+  it("matches FULL_TEMPLATE parity (2 packs, 4 MCPs, 6 reference policies) for snapshot review", () => {
+    expect(COMPOSABLE_PACKS.map((p) => p.key)).toEqual([
+      "understanding-before-execution",
+      "branch-protection",
+    ]);
     expect(COMPOSABLE_MCPS.map((m) => m.key)).toEqual([
       "agent-tasks",
       "grounding-mcp",

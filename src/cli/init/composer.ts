@@ -21,7 +21,7 @@
 
 import { stringify } from "yaml";
 
-export type CustomPackKey = "understanding-before-execution";
+export type CustomPackKey = "understanding-before-execution" | "branch-protection";
 export type CustomMcpKey =
   | "agent-tasks"
   | "grounding-mcp"
@@ -47,6 +47,12 @@ export const COMPOSABLE_PACKS: ReadonlyArray<ComposableOption<CustomPackKey>> = 
     label: "understanding-before-execution",
     description:
       "Force agents to expose their interpretation and wait for approval before any write-capable tool fires.",
+  },
+  {
+    key: "branch-protection",
+    label: "branch-protection",
+    description:
+      "Block Write/Edit (claude-code) or apply_patch (codex) on protected branches (master, main, develop) at the first source mutation. Complements preflight-before-push at the LAST step. Two satisfying signals: a SessionStart `branch-check` tag, or an operator-written `branch-protection-ack` override.",
   },
 ];
 
@@ -540,6 +546,21 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
               ],
             },
           },
+        };
+      }
+      if (k === "branch-protection") {
+        // ux defaults are intentionally NOT shipped here: the
+        // pack's blockJson still emits the legacy engine-vocabulary
+        // envelope; tracked at agent-tasks/9806d4f8 as a v0.17.3
+        // follow-up that will extend hook-branch-protection.ts with
+        // PolicyUxSchema support.
+        return {
+          name: "branch-protection",
+          source: "builtin",
+          enabled: true,
+          description:
+            "Block Write/Edit (claude-code) or apply_patch (codex) on protected branches (master, main, develop) at the first source mutation.",
+          config: {},
         };
       }
       throw new Error(`composer: unknown pack ${String(k)}`);

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.17.2] - 2026-05-17
+
+**Headline: `branch-protection` pack ships in Full + Custom init defaults.** The pack (#158, v0.16.0) was previously opt-in via `harness pack add branch-protection`, so wizard users picking Full or Custom got an install without master/main protection unless they knew to add it manually. `init --template full` now enables the pack by default; the Custom composer surfaces it as a checkbox option. Existing installs are NOT auto-migrated, see the operator note. Backing task: agent-tasks/2fdc5bbe.
+
+Operator note: this is opinionated default. Workflows that routinely edit master directly (one-file repos, dotfiles, docs-only setups) can opt out with `enabled: false` on the pack entry or by removing the entry from `~/.claude/harness.yaml`. Existing manifests are untouched; pick the new defaults via `harness pack add branch-protection` or by re-running `harness init --force` after backing up.
+
+Known gap (tracked at agent-tasks/9806d4f8, v0.17.3 follow-up): the branch-protection pack's deny envelope still emits legacy engine vocabulary, inconsistent with the rest of the 0.17.x UX work. Will plumb `ux:` through `hook-branch-protection.ts` in a separate patch.
+
+### Changed
+
+- `src/cli/init/templates.ts` (FULL_TEMPLATE), `src/cli/init/composer.ts` (COMPOSABLE_PACKS + pack-emit), `docs/examples/full-manifest.yaml`: ship `branch-protection` pack `enabled: true` with default config (`protected_branches: ["master", "main", "develop"]` via the pack's resolver).
+
 ## [0.17.1] - 2026-05-17
 
 **Headline: Solo + Team templates ship `ux:` defaults for parity with Full + Custom.** v0.17.0 wired `ux:` into `init --template full` and `init --interactive` Custom branch, but the Solo and Team profiles in `src/cli/init/profiles.ts` were missed, so wizard users picking either of those got the new release without the UX fix. This patch closes the gap: Solo's understanding-before-execution pack and Team's pack + review-before-merge policy now ship the same plain-language `{ cannot, required, run }` defaults. Existing installs still need to opt in by re-running `init --force` or hand-editing their manifest. Backing task: agent-tasks/60bc93e5.

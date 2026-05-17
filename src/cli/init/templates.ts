@@ -363,6 +363,30 @@ policy_packs:
         run:
           - "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan"
           - "Run \`harness approve understanding\` and approve the prompt"
+
+  # branch-protection (agent-tasks/2fdc5bbe, default-enabled since v0.17.2):
+  # blocks Write/Edit (claude-code) or apply_patch (codex) on protected
+  # branches (default: master, main, develop). Complements
+  # preflight-before-push, which fires at the LAST reversible step;
+  # branch-protection fires at the FIRST source mutation, catching the
+  # \"forgot to branch off master\" pattern earlier in the cycle.
+  #
+  # Two satisfying signals: a fresh \`branch:non-protected:<branch>\` tag
+  # from the SessionStart producer (\`harness session-start branch-check\`),
+  # or a \`branch-protection-ack:<reason>\` override the operator writes
+  # via mcp__agent-grounding__ledger_add for deliberate protected-branch
+  # edits (version bumps, CI workflow patches, hotfixes).
+  #
+  # Fails closed (any load / parse / ledger error refuses). Disable by
+  # setting \`enabled: false\` or removing this entry if your workflow
+  # routinely edits master directly. Override the protected list via
+  # \`config.protected_branches\`. Full reference:
+  # docs/policy-packs/branch-protection.md.
+  - name: branch-protection
+    source: builtin
+    enabled: true
+    description: Block Write/Edit on protected branches (master, main, develop) at the first source mutation.
+    config: {}
 `;
 
 import { SOLO_TEMPLATE, TEAM_TEMPLATE } from "./profiles.js";

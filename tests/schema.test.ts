@@ -54,10 +54,13 @@ describe("parseManifest — happy path", () => {
     );
     expect(preflightPushPolicy?.requires.ledger_tag).toBe("preflight:${BRANCH}");
     expect(preflightPushPolicy?.requires.within).toBe("10m");
-    expect(manifest.policy_packs).toHaveLength(1);
+    expect(manifest.policy_packs).toHaveLength(2);
     expect(manifest.policy_packs[0]?.name).toBe("understanding-before-execution");
     expect(manifest.policy_packs[0]?.source).toBe("builtin");
     expect(manifest.policy_packs[0]?.enabled).toBe(true);
+    expect(manifest.policy_packs[1]?.name).toBe("branch-protection");
+    expect(manifest.policy_packs[1]?.source).toBe("builtin");
+    expect(manifest.policy_packs[1]?.enabled).toBe(true);
     // config carries the gate mode + the producers list extension
     // (agent-tasks/25bced52). Assert on keys rather than deep-equality
     // so further config additions don't churn this test.
