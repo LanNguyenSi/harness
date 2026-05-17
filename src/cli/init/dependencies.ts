@@ -65,14 +65,18 @@ export const PROFILE_DEPENDENCIES: Record<Exclude<ProfileChoice, "custom">, Prof
       description: "understanding gate (UserPromptSubmit injector)",
       // 0.3.0 added parser-side bullet-to-section mapping so
       // fast_confirm reports actually persist end-to-end (agent-grounding
-      // PR #78). Operators on 0.2.x silently miss the fix.
-      minVersion: "0.3.0",
+      // PR #78). 0.3.1 made `understanding-gate --version` honest so the
+      // matching `min_version` floor on the pack's hooks (agent-tasks
+      // 6af1727f) does not false-positive on every install. Pin to 0.3.1
+      // so the wizard does not suggest an install version that then
+      // immediately trips the floor.
+      minVersion: "0.3.1",
     },
     {
       binary: "understanding-gate-claude-stop",
       npmPackage: "@lannguyensi/understanding-gate",
       description: "understanding gate (Stop capture)",
-      minVersion: "0.3.0",
+      minVersion: "0.3.1",
     },
   ],
   team: [

@@ -166,6 +166,17 @@ function buildHooks(runtime: Runtime, opts: ResolvePackOptions = {}): Hook[] {
       },
     ];
   }
+  // `min_version` floor on the npm-backed bins: 0.3.1 is the first release
+  // whose published `understanding-gate --version` reports the actual
+  // installed version rather than a stale literal (agent-grounding PRs
+  // #80 + #81). 0.3.0 shipped the parser-side fast_confirm fix but the
+  // dist cli.js hardcoded "0.2.3" so every install looked stale to
+  // doctor; without this floor, an operator on 0.2.x would silently get
+  // the no_marker_fast_confirm_attempt parse-error noise documented in
+  // harness PR #169. The PreToolUse blocker below is the harness CLI
+  // itself, not an npm-backed bin, so it does not carry a floor here.
+  const UG_MIN_VERSION = "0.3.1";
+  const UG_VERSION_COMMAND: [string, string] = ["understanding-gate", "--version"];
   return [
     {
       name: `${HOOK_NAME_PREFIX}:user-prompt-submit`,
@@ -173,6 +184,8 @@ function buildHooks(runtime: Runtime, opts: ResolvePackOptions = {}): Hook[] {
       command: BIN_USER_PROMPT_SUBMIT_CLAUDE,
       blocking: false,
       budget_ms: 5000,
+      min_version: UG_MIN_VERSION,
+      version_command: UG_VERSION_COMMAND,
       description:
         "Inject the Understanding-Gate instruction template before the agent acts. Source: @lannguyensi/understanding-gate.",
     },
@@ -182,6 +195,8 @@ function buildHooks(runtime: Runtime, opts: ResolvePackOptions = {}): Hook[] {
       command: wrap(BIN_STOP_CLAUDE),
       blocking: false,
       budget_ms: 5000,
+      min_version: UG_MIN_VERSION,
+      version_command: UG_VERSION_COMMAND,
       description:
         "Capture the agent's Understanding Report into .understanding-gate/reports/. Source: @lannguyensi/understanding-gate.",
     },
