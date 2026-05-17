@@ -142,6 +142,16 @@ profile (`solo` / `team` / `custom`) and writes a starting
 `harness.yaml`. Ctrl-C aborts cleanly. Walkthrough +
 limitations: [`docs/init-interactive.md`](docs/init-interactive.md).
 
+### Profiles at a glance
+
+| Profile | External accounts / tools required | Best for |
+|---------|------------------------------------|----------|
+| `solo`  | None. `npm` + Claude Code is enough. | Single operators who want the Understanding Gate without committing to a tasking system. |
+| `team`  | An **agent-tasks** account ([hosted](https://agent-tasks.opentriologue.ai) or [self-hosted](https://github.com/LanNguyenSi/agent-tasks)). | Teams that already use `agent-tasks` for PR review tracking. The merge gate (`review:<pr-number>` ledger tag) wires against the agent-tasks MCP. |
+| `full`  | Same as `team` plus `@lannguyensi/agent-preflight` and `gh` on PATH. | Operators who want every reference policy enforced (dogfood gate, preflight gates, review-subagent gate, merge gate). |
+
+**Not using agent-tasks?** Pick `solo`. The `team` and `full` review gates currently match only the agent-tasks MCP tool names, so a `gh pr create` workflow stays unprotected by them today. Tool-agnostic gates that also match `gh pr` are tracked in the backlog.
+
 If you prefer non-interactive (CI, fresh-VM provisioning), pick a
 template directly:
 

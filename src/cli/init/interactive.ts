@@ -299,18 +299,19 @@ export async function runInteractive(
         {
           name: "Solo  (memory-router + understanding-before-execution)",
           value: "solo",
-          description: "Single-operator baseline. No agent-tasks loop, no merge gate.",
+          description: "Standalone. No external accounts required. Single-operator baseline.",
         },
         {
           name: "Team  (Solo + agent-tasks MCP + review-before-merge policy)",
           value: "team",
-          description: "Adds the merge gate that blocks PR merges without a review ledger entry.",
+          description:
+            "Requires an agent-tasks account (hosted or self-hosted). Adds the merge gate that blocks PR-merge MCP calls without a review ledger entry. The gate matches the agent-tasks MCP only; gh-CLI PR workflows stay unguarded today.",
         },
         {
           name: "Full (Team + 5 reference policies wired through harness policy intercept)",
           value: "full",
           description:
-            "Ships the reference manifest with every example policy (dogfood gate, preflight gates, review-subagent gate). All hooks run through the bundled `harness policy intercept` engine, so no external shell scripts are required.",
+            "Requires agent-tasks + @lannguyensi/agent-preflight on PATH. Ships the reference manifest with every example policy (dogfood gate, preflight gates, review-subagent gate). All hooks run through the bundled `harness policy intercept` engine.",
         },
         {
           name: "Custom (advanced, bail out and hand-edit)",
@@ -334,7 +335,7 @@ export async function runInteractive(
     if (profileNeedsAgentTasks(profile) && !detectionHasAgentTasks(detection)) {
       const proceed = await prompts.confirm({
         message:
-          "The Team profile wires the agent-tasks MCP via the `agent-tasks-mcp-bridge` binary. Claude's settings.json does not yet declare it; the wizard will offer to install missing packages and wire it in a moment via `harness apply --target ~/.claude/settings.json --merge`. Proceed?",
+          "The Team profile wires the agent-tasks MCP via the `agent-tasks-mcp-bridge` binary AND assumes you have an agent-tasks account (hosted or self-hosted). Claude's settings.json does not yet declare the MCP; the wizard will offer to install missing packages and wire it in a moment via `harness apply --target ~/.claude/settings.json --merge`. Proceed?",
         default: true,
       });
       if (!proceed) {
@@ -476,6 +477,23 @@ async function runPostInitTail(t: PostInitTailOpts): Promise<InteractiveResult> 
   if (!validateClean) {
     stderr(`\nValidate reported errors. Fix the manifest before running \`harness apply\`.\n`);
     return { aborted: false, profile, init: initResult, validateClean };
+  }
+
+  if (profile === "team" || profile === "full") {
+    stderr(
+      [
+        "",
+        "ℹ This profile wires the agent-tasks MCP and its review-merge gate.",
+        "  Already use agent-tasks? Run `agent-tasks-mcp-bridge login` to store",
+        "  a token in your OS keychain (or set AGENT_TASKS_TOKEN). Without a",
+        "  token the MCP loads but every tool call returns an auth error.",
+        "",
+        "  Not using agent-tasks? The review-merge gate only matches",
+        "  agent-tasks MCP tool names today, not `gh pr` Bash calls. Re-run",
+        "  with --template solo to drop the agent-tasks coupling.",
+        "",
+      ].join("\n"),
+    );
   }
 
   // Validate-clean: offer to wire each runtime right now. A bare

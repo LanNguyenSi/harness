@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Docs
+
+- **Profile dependency clarity** (harness/75de11c4). README, `docs/init-interactive.md`, `docs/for-humans.md`, the wizard's profile-choice descriptions, and the Team-profile confirm prompt now state the external-account assumptions of each profile up-front: Solo is standalone, Team requires an agent-tasks account, Full additionally requires `@lannguyensi/agent-preflight` and `gh` on PATH. The wizard also prints a post-init reminder for Team/Full operators naming `agent-tasks-mcp-bridge login` as the auth recovery path and `--template solo` as the fallback for non-agent-tasks workflows. Two new regression-guard tests in `tests/cli/init-interactive.test.ts` pin the reminder behaviour (present for Team, absent for Solo). Pure docs + wizard-UX; the gates themselves remain agent-tasks-coupled until the tool-agnostic-matcher work lands (separate task).
+
 ### Added
 
 - **FULL_TEMPLATE `git-preflight` hook pin: `min_version: "0.1.1"` + `version_command: ["preflight", "--version"]`** (agent-preflight/cb5a1770). Same pattern as the existing pins for `agent-tasks-mcp-bridge` (#127), `grounding-mcp` (#127), `memory-router-user-prompt-submit` (#128). Floor at agent-preflight 0.1.1, the release that distinguishes "tool not installed" (e.g. an npm script invoking eslint that is not in devDependencies) from real lint/test/typecheck failures. Stale 0.1.0 installs silently emit false-positive blockers that keep the `preflight-before-*` policies closed forever; with the floor wired, `harness doctor` now warns operators to upgrade. Graceful-degradation contract preserved: if `preflight` is missing entirely the `git-preflight` SessionStart hook still exits 0 and the policy stays closed until evidence is produced some other way. Mirrored in `docs/examples/full-manifest.yaml` + `full-manifest.expected.yaml` per the CONTRIBUTING.md parity contract, plus a regression-guard at `tests/cli/init-full-template-pins.test.ts`. agent-preflight release: [v0.1.1](https://github.com/LanNguyenSi/agent-preflight/releases/tag/v0.1.1).
