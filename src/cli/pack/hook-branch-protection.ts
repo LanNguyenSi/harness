@@ -40,7 +40,8 @@ import {
 } from "../../policy-packs/builtin/branch-protection-runtime.js";
 import { resolveGitContext } from "../../runtime/git-context.js";
 import { POLICY_DECISION_TYPE } from "../../runtime/ledger-record.js";
-import type { Manifest, McpServer } from "../../schema/index.js";
+import { renderAgentFacing } from "../../runtime/agent-facing.js";
+import { PolicyUxSchema, type Manifest, type McpServer, type PolicyUx } from "../../schema/index.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 
 export interface PackHookBranchProtectionOptions extends LoaderOptions {
@@ -204,25 +205,62 @@ async function probeLedger(
   return evaluateEntries(result.entries, opts.now ?? new Date());
 }
 
+// Parse pack config.ux. Mirrors parseConfigUx in hook-pre-tool-use.ts
+// and hook-codex-pre-tool-use.ts; a follow-up cleanup will extract the
+// three copies into a shared helper once we have a fourth call site.
+function parseConfigUx(
+  raw: unknown,
+  stderr: NodeJS.WritableStream,
+): PolicyUx | undefined {
+  if (raw === undefined) return undefined;
+  const result = PolicyUxSchema.safeParse(raw);
+  if (!result.success) {
+    stderr.write(
+      `harness pack hook branch-protection: config.ux ignored (${result.error.issues
+        .map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`)
+        .join("; ")})\n`,
+    );
+    return undefined;
+  }
+  return result.data;
+}
+
 function blockJson(
   toolName: string,
   branch: string,
   detail: string,
   protectedList: readonly string[],
+  ux: PolicyUx | undefined,
+  sessionId: string,
 ): string {
-  const minutes = Math.round(PRODUCER_FRESHNESS_MS / 60000);
-  const reasonText =
-    `branch-protection: refusing ${toolName} on protected branch "${branch}". ` +
-    `${detail}\n` +
-    `To proceed, cut a feature branch and re-run the producer:\n` +
-    `  git checkout -b <feature-slug>\n` +
-    `  harness session-start branch-check\n` +
-    `Once the gate sees a fresh ${NON_PROTECTED_TAG_PREFIX} tag (within ${minutes}m), this tool call will succeed.\n` +
-    `\n` +
-    `Override (use sparingly): write \`${ACK_TAG_PREFIX}:<reason>\` to the ledger via mcp__agent-grounding__ledger_add. ` +
-    `The override survives the session and bypasses this gate.\n` +
-    `\n` +
-    `Protected branches: ${protectedList.join(", ")}.`;
+  // When the pack config declares `ux:`, the agent-facing surface
+  // becomes the plain-language `{ cannot, required, run }` shape and
+  // the legacy "branch-protection: refusing ..." vocabulary is
+  // suppressed. The stderr BLOCK diagnostic keeps the engine reason
+  // (`detail`) for operator audit. `${BRANCH}` / `${TOOL_NAME}` /
+  // `${SESSION_ID}` substitute against the pack runtime context.
+  let reasonText: string;
+  if (ux) {
+    reasonText = renderAgentFacing(ux, {
+      BRANCH: branch,
+      TOOL_NAME: toolName,
+      SESSION_ID: sessionId,
+    });
+  } else {
+    const minutes = Math.round(PRODUCER_FRESHNESS_MS / 60000);
+    reasonText =
+      `branch-protection: refusing ${toolName} on protected branch "${branch}". ` +
+      `${detail}\n` +
+      `To proceed, cut a feature branch and re-run the producer:\n` +
+      `  git checkout -b <feature-slug>\n` +
+      `  harness session-start branch-check\n` +
+      `Once the gate sees a fresh ${NON_PROTECTED_TAG_PREFIX} tag (within ${minutes}m), this tool call will succeed.\n` +
+      `\n` +
+      `Override (use sparingly): write \`${ACK_TAG_PREFIX}:<reason>\` to the ledger via mcp__agent-grounding__ledger_add. ` +
+      `The override survives the session and bypasses this gate.\n` +
+      `\n` +
+      `Protected branches: ${protectedList.join(", ")}.`;
+  }
   return JSON.stringify({
     decision: "block",
     reason: reasonText,
@@ -282,8 +320,10 @@ export async function runPackHookBranchProtectionCli(
       const reason = `manifest load failed (${(err as Error).message}); refusing on failsafe`;
       const diagnostic = `BLOCK — ${reason}`;
       note(diagnostic);
+      // Manifest didn't load, so no ux config to honour; legacy
+      // envelope is the only available surface here.
       stdout.write(
-        `${blockJson(toolName, "(unresolvable)", reason, DEFAULT_PROTECTED_BRANCHES)}\n`,
+        `${blockJson(toolName, "(unresolvable)", reason, DEFAULT_PROTECTED_BRANCHES, undefined, sessionId)}\n`,
       );
       return { exitCode: 0, blocked: true, diagnostic };
     }
@@ -303,6 +343,10 @@ export async function runPackHookBranchProtectionCli(
 
   const { branches: protectedList } = resolveProtectedBranches(pack);
   const { branch } = resolveGitContext(cwd);
+  const configUx = parseConfigUx(
+    (pack.config as Record<string, unknown>)["ux"],
+    stderr,
+  );
 
   // Outside a git work tree (or detached HEAD) we can't tell what the
   // edit would land on. We choose to allow here — the alternative is
@@ -328,7 +372,7 @@ export async function runPackHookBranchProtectionCli(
     const reason = `no session_id resolvable from stdin or $CLAUDE_SESSION_ID; cannot consult ledger`;
     const diagnostic = `BLOCK — ${reason}`;
     note(diagnostic);
-    stdout.write(`${blockJson(toolName, branch, reason, protectedList)}\n`);
+    stdout.write(`${blockJson(toolName, branch, reason, protectedList, configUx, sessionId)}\n`);
     return { exitCode: 0, blocked: true, diagnostic };
   }
 
@@ -350,6 +394,6 @@ export async function runPackHookBranchProtectionCli(
       : `no fresh ${NON_PROTECTED_TAG_PREFIX} tag (${check.totalEntries} entries scanned) and no ${ACK_TAG_PREFIX} override`;
   const diagnostic = `BLOCK — ${why}`;
   note(diagnostic);
-  stdout.write(`${blockJson(toolName, branch, why, protectedList)}\n`);
+  stdout.write(`${blockJson(toolName, branch, why, protectedList, configUx, sessionId)}\n`);
   return { exitCode: 0, blocked: true, diagnostic };
 }

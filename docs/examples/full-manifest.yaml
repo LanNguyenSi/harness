@@ -319,7 +319,18 @@ policy_packs:
     source: builtin
     enabled: true
     description: Block Write/Edit on protected branches (master, main, develop) at the first source mutation.
-    config: {}
+    config:
+      # ux (agent-tasks/9806d4f8): replaces the legacy
+      # "branch-protection: refusing ..." envelope with the
+      # plain-language { cannot, required, run } shape. Engine details
+      # stay on stderr for operator audit.
+      ux:
+        cannot: "You cannot edit files on protected branch ${BRANCH} yet."
+        required:
+          - "a checkout of a non-protected branch (current `${BRANCH}` is protected)"
+        run:
+          - "git checkout -b feat/<your-task>"
+          - "harness session-start branch-check"
 
 workflows:
   - name: feature-pr

@@ -322,3 +322,109 @@ describe("runPackHookBranchProtectionCli — edge cases", () => {
     expect(errOut()).toMatch(/refusing on failsafe/);
   });
 });
+
+describe("runPackHookBranchProtectionCli — agent-facing ux (agent-tasks/9806d4f8)", () => {
+  // When config.ux is declared, the deny envelope the agent sees
+  // becomes the plain-language { cannot, required, run } shape with
+  // ${BRANCH} substituted, and the legacy "branch-protection:
+  // refusing ... + Protected branches: ..." vocabulary is suppressed.
+  // The stderr BLOCK diagnostic keeps the engine-vocabulary reason
+  // (`detail` argument) for operator audit.
+  const UX = {
+    cannot: "You cannot edit files on protected branch ${BRANCH} yet.",
+    required: ["a checkout of a non-protected branch (current `${BRANCH}` is protected)"],
+    run: ["git checkout -b feat/<your-task>", "harness session-start branch-check"],
+  };
+
+  it("emits the verbatim agent-facing block with ${BRANCH} substituted", async () => {
+    const repo = makeRepoFixture("svc", "master");
+    const { stream: out, output: outBuf } = captureStream();
+    const { stream: err } = captureStream();
+    const result = await runPackHookBranchProtectionCli({
+      stdin: streamFrom(eventJson({ cwd: repo })),
+      stdout: out,
+      stderr: err,
+      manifest: manifestWithPack({ ux: UX }),
+      ledgerQuery: async () => [],
+    });
+    expect(result.blocked).toBe(true);
+    const envelope = JSON.parse(outBuf());
+    const expected = [
+      "You cannot edit files on protected branch master yet.",
+      "",
+      "Required:",
+      "- a checkout of a non-protected branch (current `master` is protected)",
+      "",
+      "Run:",
+      "  git checkout -b feat/<your-task>",
+      "  harness session-start branch-check",
+    ].join("\n");
+    expect(envelope.reason).toBe(expected);
+    expect(envelope.hookSpecificOutput.permissionDecisionReason).toBe(expected);
+  });
+
+  it("does not leak legacy engine vocabulary to the agent surface when ux is declared", async () => {
+    const repo = makeRepoFixture("svc", "main");
+    const { stream: out, output: outBuf } = captureStream();
+    const { stream: err } = captureStream();
+    await runPackHookBranchProtectionCli({
+      stdin: streamFrom(eventJson({ cwd: repo })),
+      stdout: out,
+      stderr: err,
+      manifest: manifestWithPack({ ux: UX }),
+      ledgerQuery: async () => [],
+    });
+    const envelope = JSON.parse(outBuf());
+    expect(envelope.reason).not.toContain("branch-protection: refusing");
+    expect(envelope.reason).not.toContain("Protected branches:");
+    expect(envelope.reason).not.toContain("Override (use sparingly)");
+    expect(envelope.reason).not.toMatch(/ledger/i);
+  });
+
+  it("keeps the engine-vocabulary BLOCK reason on stderr (operator audit surface)", async () => {
+    const repo = makeRepoFixture("svc", "master");
+    const { stream: out } = captureStream();
+    const { stream: err, output: errOut } = captureStream();
+    await runPackHookBranchProtectionCli({
+      stdin: streamFrom(eventJson({ cwd: repo })),
+      stdout: out,
+      stderr: err,
+      manifest: manifestWithPack({ ux: UX }),
+      ledgerQuery: async () => [],
+    });
+    expect(errOut()).toMatch(/BLOCK — no fresh branch:non-protected tag/);
+  });
+
+  it("falls back to the legacy envelope when ux is missing", async () => {
+    const repo = makeRepoFixture("svc", "master");
+    const { stream: out, output: outBuf } = captureStream();
+    const { stream: err } = captureStream();
+    await runPackHookBranchProtectionCli({
+      stdin: streamFrom(eventJson({ cwd: repo })),
+      stdout: out,
+      stderr: err,
+      manifest: manifestWithPack({}),
+      ledgerQuery: async () => [],
+    });
+    const envelope = JSON.parse(outBuf());
+    expect(envelope.reason).toContain("branch-protection: refusing");
+    expect(envelope.reason).toContain("Protected branches:");
+  });
+
+  it("logs to stderr and falls back to the legacy envelope when config.ux is malformed", async () => {
+    const repo = makeRepoFixture("svc", "master");
+    const { stream: out, output: outBuf } = captureStream();
+    const { stream: err, output: errOut } = captureStream();
+    await runPackHookBranchProtectionCli({
+      stdin: streamFrom(eventJson({ cwd: repo })),
+      stdout: out,
+      stderr: err,
+      // Empty required array violates min(1)
+      manifest: manifestWithPack({ ux: { cannot: "x", required: [], run: ["y"] } }),
+      ledgerQuery: async () => [],
+    });
+    expect(errOut()).toMatch(/config\.ux ignored/);
+    const envelope = JSON.parse(outBuf());
+    expect(envelope.reason).toContain("branch-protection: refusing");
+  });
+});
