@@ -31,12 +31,21 @@ until it has logged a review.*
 
 Claude Code goes to merge PR 42. Before the tool call runs, the
 runtime hands the event to `harness`, which checks it against the
-manifest:
+manifest. The hook protocol wire shape is the legacy engine-vocabulary
+envelope (operators see this on stderr; agents read it via
+`permissionDecisionReason` when the policy declares no `ux:` block):
 
 ```console
 $ harness policy intercept       # Claude Code runs this before each tool call
 {"decision":"block","reason":"review-before-merge: no matching ledger entry for tag `review:42`","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"review-before-merge: no matching ledger entry for tag `review:42`"}}
 ```
+
+Since v0.17.0 every built-in block-enforcement policy ships a `ux:`
+block (the warn-only `two-reviewers-required` omits it; the agent
+never sees a warn), so the agent actually sees the plain-language
+three-section form instead (see
+[What the agent sees vs what the engine records](#what-the-agent-sees-vs-what-the-engine-records)
+below). The engine-vocabulary text stays in the audit ledger.
 
 Blocked. `harness explain` says exactly why:
 
@@ -122,7 +131,9 @@ Run:
 Not `no matching ledger entry for tag preflight:harness`. The
 internal failure (tag, hint, matched count) is still written to the
 ledger for `audit` and `explain --trace`. Policies without `ux:` keep
-the legacy deny envelope unchanged.
+the legacy deny envelope unchanged, so existing 0.16.x manifests need
+no changes; the canonical form for agents writing new policies lives
+in [`docs/for-agents.md`](docs/for-agents.md#agent-facing-block-messages-ux-block).
 
 ## Concepts in six lines
 
@@ -262,7 +273,7 @@ npm uninstall -g @lannguyensi/harness                  # drop the CLI itself
 harness ships in phases. Phases 1 through 6 are released: read-only
 inventory → managed edits → declarative truth → policy layer → polish
 and dogfood lessons → the Understanding Gate Policy Pack. Phase 7, the
-Risk Gate, is next. The current release is `v0.16.0`.
+Risk Gate, is next. The current release is `v0.17.4`.
 
 The phase-by-phase plan with acceptance criteria lives in
 [`docs/ROADMAP.md`](docs/ROADMAP.md); what shipped in each version is
