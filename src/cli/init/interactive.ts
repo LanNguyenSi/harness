@@ -42,6 +42,12 @@ import {
   type InstallOptions,
 } from "./dependencies.js";
 import {
+  probeAgentTasksAuth,
+  runBridgeLogin,
+  type LoginSpawn,
+  type ProbeSpawn,
+} from "./agent-tasks-auth.js";
+import {
   COMPOSABLE_MCPS,
   COMPOSABLE_PACKS,
   COMPOSABLE_POLICIES,
@@ -96,6 +102,10 @@ export interface RunInteractiveOptions {
    * needing the real packages on the test host.
    */
   dependencyPathEnv?: string;
+  /** Override the agent-tasks-mcp-bridge `status` probe runner (tests). */
+  authProbeSpawn?: ProbeSpawn;
+  /** Override the agent-tasks-mcp-bridge `login` runner (tests). */
+  authLoginSpawn?: LoginSpawn;
 }
 
 export interface InteractiveResult {
@@ -262,6 +272,147 @@ async function wireRuntime(o: WireRuntimeOpts): Promise<RuntimeApplyOutcome> {
   }
 }
 
+interface EnsureAgentTasksAuthOpts {
+  prompts: InteractivePrompts;
+  stderr: (s: string) => void;
+  probeSpawn?: ProbeSpawn;
+  loginSpawn?: LoginSpawn;
+}
+
+/**
+ * Post-install auth check for the agent-tasks bridge. Probes the
+ * bridge's `status` verb and, when no token is configured, offers the
+ * operator a login / signup / skip dialog. Token-validation failures
+ * (backend unreachable, expired token) print an informational line and
+ * continue, because that case is not actionable from inside the
+ * wizard.
+ *
+ * Returns `aborted:true` only when the operator picks the explicit
+ * "create an account first" path; the wizard then exits with a
+ * pointer to the signup URL and the re-run command.
+ */
+async function ensureAgentTasksAuth(
+  o: EnsureAgentTasksAuthOpts,
+): Promise<{ aborted: boolean }> {
+  const probeOpts = o.probeSpawn ? { spawn: o.probeSpawn } : {};
+  const probe = await probeAgentTasksAuth(probeOpts);
+  if (probe.kind === "ok") {
+    o.stderr("✓ agent-tasks token validated against the backend.\n");
+    return { aborted: false };
+  }
+  if (probe.kind === "validation_failed") {
+    o.stderr(
+      [
+        "",
+        "⚠ agent-tasks token is stored but the backend rejected it or could not be reached.",
+        `  bridge said: ${probe.message}`,
+        "  The MCP will load but tool calls will fail until this resolves. Re-check with",
+        "  `agent-tasks-mcp-bridge status` once your endpoint is reachable.",
+        "",
+      ].join("\n"),
+    );
+    return { aborted: false };
+  }
+  if (probe.kind === "binary_missing" || probe.kind === "probe_error") {
+    o.stderr(
+      [
+        "",
+        `⚠ Could not probe the agent-tasks bridge (${probe.kind}). Skipping the auth check.`,
+        "  Run `agent-tasks-mcp-bridge status` manually after the wizard finishes.",
+        "",
+      ].join("\n"),
+    );
+    return { aborted: false };
+  }
+  // probe.kind === "no_token" — actionable dialog.
+  o.stderr(
+    [
+      "",
+      "ℹ The agent-tasks MCP is wired but no auth token is configured yet.",
+      "  Without a token the MCP loads but every tool call returns an auth error.",
+      "",
+    ].join("\n"),
+  );
+  const choice = (await o.prompts.select({
+    message: "How would you like to configure agent-tasks auth?",
+    choices: [
+      {
+        name: "Run `agent-tasks-mcp-bridge login` now (recommended)",
+        value: "login",
+        description: "Interactive login. The bridge prompts for a token and stores it in your OS keychain.",
+      },
+      {
+        name: "Skip: I'll run `agent-tasks-mcp-bridge login` later",
+        value: "skip",
+        description: "Manifest stays as-is, MCP is non-functional until login runs.",
+      },
+      {
+        name: "Abort wizard: I need to create an agent-tasks account first",
+        value: "abort",
+        description: "Exit with a pointer to the signup URL and the re-run command. Manifest is NOT written.",
+      },
+    ],
+  })) as "login" | "skip" | "abort";
+
+  if (choice === "abort") {
+    o.stderr(
+      [
+        "",
+        "Aborted: create an agent-tasks account first.",
+        "  Hosted:      https://agent-tasks.opentriologue.ai",
+        "  Self-hosted: https://github.com/LanNguyenSi/agent-tasks",
+        "Then re-run: harness init --interactive",
+        "",
+      ].join("\n"),
+    );
+    return { aborted: true };
+  }
+
+  if (choice === "skip") {
+    o.stderr(
+      [
+        "",
+        "Skipped auth setup. Manifest will be written and the MCP wired.",
+        "Recover later with: agent-tasks-mcp-bridge login",
+        "",
+      ].join("\n"),
+    );
+    return { aborted: false };
+  }
+
+  // login path
+  const loginOpts = o.loginSpawn ? { spawn: o.loginSpawn } : {};
+  const login = await runBridgeLogin(loginOpts);
+  if (!login.ok) {
+    o.stderr(
+      [
+        "",
+        "⚠ `agent-tasks-mcp-bridge login` did not complete successfully.",
+        "  Manifest will be written and the MCP wired; finish the login manually with",
+        "  `agent-tasks-mcp-bridge login`.",
+        "",
+      ].join("\n"),
+    );
+    return { aborted: false };
+  }
+  // Re-probe to confirm token now validates.
+  const reprobe = await probeAgentTasksAuth(probeOpts);
+  if (reprobe.kind === "ok") {
+    o.stderr("\n✓ agent-tasks login complete, token validates against the backend.\n\n");
+  } else {
+    o.stderr(
+      [
+        "",
+        "⚠ Login finished but the follow-up `status` probe did not return ok.",
+        `  bridge probe: ${reprobe.kind}`,
+        "  The MCP is wired; finish troubleshooting with `agent-tasks-mcp-bridge status`.",
+        "",
+      ].join("\n"),
+    );
+  }
+  return { aborted: false };
+}
+
 export async function runInteractive(
   opts: RunInteractiveOptions = {},
 ): Promise<InteractiveResult> {
@@ -390,6 +541,23 @@ export async function runInteractive(
         return { aborted: true, profile };
       }
       stderr(`Installed ${installResult.attempted.length} package(s) successfully.\n`);
+    }
+
+    // Auth probe + login dispatcher for the agent-tasks bridge. Runs
+    // after a successful (or pre-existing) install of the bridge so
+    // the wizard does not declare success when the MCP is wired but
+    // unauthenticated.
+    const dependsOnAgentTasksBridge = depResult.statuses.some(
+      (s) => s.dep.binary === "agent-tasks-mcp-bridge",
+    );
+    if (dependsOnAgentTasksBridge) {
+      const authResult = await ensureAgentTasksAuth({
+        prompts,
+        stderr,
+        ...(opts.authProbeSpawn ? { probeSpawn: opts.authProbeSpawn } : {}),
+        ...(opts.authLoginSpawn ? { loginSpawn: opts.authLoginSpawn } : {}),
+      });
+      if (authResult.aborted) return { aborted: true, profile };
     }
 
     const defaultMemoryDir = path.join(detection.runtimes[0]?.home ?? "~/.claude", "projects", "{project}", "memory");
@@ -702,6 +870,21 @@ async function runCustomProfile(rc: RunCustomOpts): Promise<InteractiveResult> {
       return { aborted: true, profile };
     }
     stderr(`Installed ${installResult.attempted.length} package(s) successfully.\n`);
+  }
+
+  // Auth probe for the agent-tasks bridge if the Custom selection
+  // pulled it in (same rationale as the named-profile path).
+  const customDependsOnAgentTasksBridge = depResult.statuses.some(
+    (s) => s.dep.binary === "agent-tasks-mcp-bridge",
+  );
+  if (customDependsOnAgentTasksBridge) {
+    const authResult = await ensureAgentTasksAuth({
+      prompts,
+      stderr,
+      ...(opts.authProbeSpawn ? { probeSpawn: opts.authProbeSpawn } : {}),
+      ...(opts.authLoginSpawn ? { loginSpawn: opts.authLoginSpawn } : {}),
+    });
+    if (authResult.aborted) return { aborted: true, profile };
   }
 
   const defaultMemoryDir = path.join(

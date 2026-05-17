@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`harness init --interactive`: post-install auth probe for the agent-tasks bridge** (harness/3f775180). After a successful `npm i -g @agent-tasks/mcp-bridge`, the wizard runs `agent-tasks-mcp-bridge status` to detect whether a token is configured. Three branches:
+  - **ok**: prints `✓ agent-tasks token validated against the backend.` and continues.
+  - **token present but validation fails** (backend unreachable, expired token, wrong base URL): prints an informational warning naming the bridge's reason and continues. The wizard does not block on this because the recovery is not actionable from inside it.
+  - **no token stored**: opens a three-option dialog: (a) run `agent-tasks-mcp-bridge login` interactively now via stdio pass-through, (b) skip with a reminder, (c) abort the wizard with a pointer to the signup URL and the re-run command. After a successful login the wizard re-probes to confirm.
+
+  Closes the silent footgun where a fresh operator could finish the wizard with `harness doctor` reporting all-green but every `mcp__agent-tasks__*` call returning an auth error. The new `agent-tasks-auth.ts` module wraps the bridge's `status` and `login` verbs; both spawn paths are injectable via new `authProbeSpawn` / `authLoginSpawn` test seams on `RunInteractiveOptions`. Discriminator covered by direct unit tests in `tests/cli/init-agent-tasks-auth.test.ts` (8 cases pinning bridge stderr text shapes), plus 7 integration tests in `tests/cli/init-interactive.test.ts` covering each dialog branch and the Solo no-probe path.
+
 ### Docs
 
 - **Profile dependency clarity** (harness/75de11c4). README, `docs/init-interactive.md`, `docs/for-humans.md`, the wizard's profile-choice descriptions, and the Team-profile confirm prompt now state the external-account assumptions of each profile up-front: Solo is standalone, Team requires an agent-tasks account, Full additionally requires `@lannguyensi/agent-preflight` and `gh` on PATH. The wizard also prints a post-init reminder for Team/Full operators naming `agent-tasks-mcp-bridge login` as the auth recovery path and `--template solo` as the fallback for non-agent-tasks workflows. Two new regression-guard tests in `tests/cli/init-interactive.test.ts` pin the reminder behaviour (present for Team, absent for Solo). Pure docs + wizard-UX; the gates themselves remain agent-tasks-coupled until the tool-agnostic-matcher work lands (separate task).
