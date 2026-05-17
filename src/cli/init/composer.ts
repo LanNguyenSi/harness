@@ -545,6 +545,17 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
                 "Run `harness approve understanding` and approve the prompt",
               ],
             },
+            // agent-tasks/d8ee60ca: expire the approval marker on
+            // task-completion boundaries so multi-task sessions
+            // re-prompt for an Understanding Report between tasks.
+            approval_lifecycle: {
+              expire_on_tool_match: [
+                "mcp__agent-tasks__task_finish",
+                "mcp__agent-tasks__task_abandon",
+                "mcp__agent-tasks__pull_requests_merge",
+              ],
+              max_age: "4h",
+            },
           },
         };
       }

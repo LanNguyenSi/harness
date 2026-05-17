@@ -1274,7 +1274,13 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
     expect(preToolUseCommand).toMatch(
       /^UNDERSTANDING_GATE_REPORT_DIR='[^']+\/\.understanding-gate\/reports' harness pack hook pre-tool-use$/,
     );
-    expect(Object.keys(settings.hooks).sort()).toEqual(["PreToolUse", "Stop", "UserPromptSubmit"]);
+    // v0.18 default-on PostToolUse marker-expiry hook (agent-tasks/d8ee60ca).
+    expect(Object.keys(settings.hooks).sort()).toEqual([
+      "PostToolUse",
+      "PreToolUse",
+      "Stop",
+      "UserPromptSubmit",
+    ]);
 
     const preToolUseGroup = settings.hooks["PreToolUse"]?.[0];
     expect(preToolUseGroup?.matcher).toBe("Edit|Write|Bash");

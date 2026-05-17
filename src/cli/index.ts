@@ -31,6 +31,7 @@ import {
 import { isRemoveType, KNOWN_REMOVE_TYPES, remove } from "./remove/index.js";
 import { packAdd, packList, packRemove } from "./pack/index.js";
 import { runPackHookPreToolUseCli } from "./pack/hook-pre-tool-use.js";
+import { runPackHookPostToolUseCli } from "./pack/hook-post-tool-use.js";
 import { runPackHookCodexPreToolUseCli } from "./pack/hook-codex-pre-tool-use.js";
 import { runPackHookCodexStopCli } from "./pack/hook-codex-stop.js";
 import { runPackHookCodexUserPromptSubmitCli } from "./pack/hook-codex-user-prompt-submit.js";
@@ -966,6 +967,24 @@ export function buildProgram(opts: RunOptions = {}): Command {
           if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
         }
         await runPackHookPreToolUseCli(cliOpts);
+      },
+    );
+
+  packHookCmd
+    .command("post-tool-use")
+    .description(
+      "PostToolUse marker-expiry: read tool-event JSON from stdin, delete the per-session approval marker when the just-completed tool matches config.approval_lifecycle.expire_on_tool_match (agent-tasks/d8ee60ca)",
+    )
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option("--pack <name>", "pack name to evaluate (default: understanding-before-execution)")
+    .action(
+      async (options: { config?: string; project?: string; pack?: string }) => {
+        const cliOpts: Parameters<typeof runPackHookPostToolUseCli>[0] = {};
+        if (options.config) cliOpts.configPath = options.config;
+        if (options.project) cliOpts.project = options.project;
+        if (options.pack) cliOpts.pack = options.pack;
+        await runPackHookPostToolUseCli(cliOpts);
       },
     );
 

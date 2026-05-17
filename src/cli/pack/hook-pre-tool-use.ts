@@ -31,6 +31,7 @@ import {
   checkPersistedReport,
   defaultReportsDir,
   matchLedgerEntries,
+  parseApprovalLifecycle,
   type ApprovalCheckResult,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import {
@@ -397,7 +398,13 @@ export async function runPackHookPreToolUseCli(
   // ledger-as-audit only when generatedDir is unresolvable (injected
   // manifest without a resolved path: only happens in tests).
   if (generatedDir !== undefined) {
-    const marker = checkApprovalMarker(generatedDir, sessionId);
+    const lifecycle = parseApprovalLifecycle(
+      (declared.config as Record<string, unknown>)["approval_lifecycle"],
+      stderr,
+    );
+    const marker = checkApprovalMarker(generatedDir, sessionId, {
+      ...(lifecycle.maxAgeMs !== undefined && { maxAgeMs: lifecycle.maxAgeMs }),
+    });
     if (marker.matched) {
       const diagnostic = `harness pack hook: ${marker.detail}, allowing.`;
       stderr.write(`${diagnostic}\n`);

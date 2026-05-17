@@ -371,8 +371,14 @@ describe("interactive wizard — Custom path (task 31d2fbb5)", () => {
     const content = fs.readFileSync(manifestPath, "utf8");
     expect(content).toContain("Custom profile");
     expect(content).toContain("understanding-before-execution");
-    // Minimal-pick manifest must NOT carry policies/MCPs the operator didn't tick.
-    expect(content).not.toContain("agent-tasks");
+    // Minimal-pick manifest must NOT carry policies/MCPs the operator
+    // didn't tick. Match the wiring shape (an MCP entry or a hook
+    // bound to one) rather than the bare string "agent-tasks", since
+    // the v0.18 approval_lifecycle defaults legitimately reference
+    // `mcp__agent-tasks__*` tool-name patterns in the pack config
+    // without wiring the MCP itself (agent-tasks/d8ee60ca).
+    expect(content).not.toContain("agent-tasks-mcp-bridge");
+    expect(content).not.toMatch(/^\s+- name: agent-tasks$/m);
     expect(content).not.toContain("review-before-merge");
   });
 

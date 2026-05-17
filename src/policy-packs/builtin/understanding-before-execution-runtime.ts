@@ -33,7 +33,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { atomicWriteFile } from "../../io/atomic-write.js";
-import { type LedgerEntry } from "../../policies/index.js";
+import { InvalidDurationError, parseDurationSeconds, type LedgerEntry } from "../../policies/index.js";
 import { POLICY_DECISION_TYPE } from "../../runtime/ledger-record.js";
 
 export const APPROVED_LEDGER_TAG_PREFIX = "understanding-approved:";
@@ -270,6 +270,25 @@ export interface MarkerCheck {
   marker: ApprovalMarker | null;
 }
 
+export interface CheckApprovalMarkerOptions {
+  /**
+   * Max marker age in milliseconds (agent-tasks/d8ee60ca). When set,
+   * a marker whose `approvedAt` is older than `now - maxAgeMs` is
+   * treated as expired and returns `matched:false` with an
+   * "expired" detail. When omitted, the marker has no TTL — the
+   * legacy contract (one approval per session, no expiry).
+   *
+   * A marker whose body is unreadable (malformed JSON, missing
+   * `approvedAt`) is treated as approved-but-undateable: the
+   * existence-only contract documented above wins, so an operator
+   * who hand-wrote an empty marker file still gets through. This
+   * matters because the legacy DoS-resistance argument still holds.
+   */
+  maxAgeMs?: number;
+  /** Override "now" for deterministic tests. */
+  now?: Date;
+}
+
 /**
  * Gate-side: is the per-session marker file present and readable?
  * Returns `matched: true` even if the marker JSON is malformed: the
@@ -280,8 +299,20 @@ export interface MarkerCheck {
  * stray byte to the file. Edit / Write / Bash are gated, so writing
  * stray bytes from inside Claude is not possible today, but the
  * existence-only contract is the defensible boundary regardless.
+ *
+ * `opts.maxAgeMs` (agent-tasks/d8ee60ca): when set, a marker whose
+ * `approvedAt` is older than the cutoff returns `matched:false` with
+ * an "expired" detail so the agent gets the same "no approval" UX as
+ * a never-approved session and must re-approve. A marker with no
+ * readable `approvedAt` (body corrupted) skips the freshness check
+ * and is treated as approved — same DoS-resistance rationale as the
+ * body-unreadable branch below.
  */
-export function checkApprovalMarker(generatedDir: string, sessionId: string): MarkerCheck {
+export function checkApprovalMarker(
+  generatedDir: string,
+  sessionId: string,
+  opts: CheckApprovalMarkerOptions = {},
+): MarkerCheck {
   const filePath = approvalMarkerPathFor(generatedDir, sessionId);
   let stat: fs.Stats;
   try {
@@ -329,6 +360,22 @@ export function checkApprovalMarker(generatedDir: string, sessionId: string): Ma
   } catch {
     /* keep marker:null; existence already satisfied the gate */
   }
+  if (opts.maxAgeMs !== undefined && marker !== null) {
+    const approvedAtMs = Date.parse(marker.approvedAt);
+    if (Number.isFinite(approvedAtMs)) {
+      const nowMs = (opts.now ?? new Date()).getTime();
+      const ageMs = nowMs - approvedAtMs;
+      if (ageMs > opts.maxAgeMs) {
+        const ageMin = Math.round(ageMs / 60_000);
+        const maxMin = Math.round(opts.maxAgeMs / 60_000);
+        return {
+          matched: false,
+          detail: `approval marker ${path.basename(filePath)} expired: age ${ageMin}m > max ${maxMin}m (approved at ${marker.approvedAt})`,
+          marker,
+        };
+      }
+    }
+  }
   const provenance = marker
     ? `approved at ${marker.approvedAt} by ${marker.approvedBy}`
     : "marker present, body unreadable (existence still satisfies the gate)";
@@ -336,6 +383,92 @@ export function checkApprovalMarker(generatedDir: string, sessionId: string): Ma
     matched: true,
     detail: `approved via marker ${path.basename(filePath)}: ${provenance}`,
     marker,
+  };
+}
+
+// approval_lifecycle (agent-tasks/d8ee60ca): per-task expiry of the
+// approval marker. The legacy contract was one approval per session for
+// the session's lifetime; multi-task sessions silently let a stale
+// interpretation drive the next task's edits. The new config block
+// expires the marker on either of two boundaries:
+//
+//   1. expire_on_tool_match: a list of tool name patterns. When a tool
+//      matching the list runs (PostToolUse hook), the marker is deleted.
+//      Used to mark task-completion boundaries (task_finish, task_abandon,
+//      pull_requests_merge).
+//   2. max_age: a duration string. checkApprovalMarker treats a marker
+//      older than this as expired. Safety net so a session that never
+//      hits a listed tool still re-approves after the window.
+//
+// Both fields are optional. An empty list means no per-tool expiry; an
+// omitted max_age means no TTL. `{ mode: "session" }` is the documented
+// opt-out for operators who want the legacy behaviour.
+
+export interface ApprovalLifecycle {
+  /** Tool-name patterns whose successful PostToolUse expires the marker. */
+  expireOnToolMatch: string[];
+  /** Max marker age in milliseconds. Undefined means no TTL. */
+  maxAgeMs?: number;
+  /** Whether the operator explicitly opted out via `{ mode: "session" }`. */
+  legacyMode: boolean;
+}
+
+const DEFAULT_LIFECYCLE: ApprovalLifecycle = {
+  expireOnToolMatch: [],
+  legacyMode: false,
+};
+
+/**
+ * Parse the optional `approval_lifecycle` block from a pack config.
+ * Best-effort: malformed values fall back to the default (no expiry,
+ * legacyMode=false) and write a one-line warning to the supplied
+ * stderr. The PreToolUse / PostToolUse hooks must keep working even
+ * when the operator typed a typo in the YAML.
+ */
+export function parseApprovalLifecycle(
+  raw: unknown,
+  stderr?: { write: (s: string) => void } | null,
+): ApprovalLifecycle {
+  if (raw === undefined || raw === null) return DEFAULT_LIFECYCLE;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    stderr?.write(
+      `harness pack hook: config.approval_lifecycle ignored (expected object, got ${typeof raw})\n`,
+    );
+    return DEFAULT_LIFECYCLE;
+  }
+  const obj = raw as Record<string, unknown>;
+  if (obj["mode"] === "session") {
+    return { expireOnToolMatch: [], legacyMode: true };
+  }
+  const expireOnToolMatch: string[] = [];
+  const list = obj["expire_on_tool_match"];
+  if (Array.isArray(list)) {
+    for (const v of list) {
+      if (typeof v === "string" && v.length > 0) expireOnToolMatch.push(v);
+    }
+  } else if (list !== undefined) {
+    stderr?.write(
+      `harness pack hook: config.approval_lifecycle.expire_on_tool_match ignored (expected string[], got ${typeof list})\n`,
+    );
+  }
+  let maxAgeMs: number | undefined;
+  const maxAgeRaw = obj["max_age"];
+  if (typeof maxAgeRaw === "string" && maxAgeRaw.length > 0) {
+    try {
+      maxAgeMs = parseDurationSeconds(maxAgeRaw) * 1_000;
+    } catch (err) {
+      const msg = err instanceof InvalidDurationError ? err.message : String(err);
+      stderr?.write(`harness pack hook: config.approval_lifecycle.max_age ignored: ${msg}\n`);
+    }
+  } else if (maxAgeRaw !== undefined) {
+    stderr?.write(
+      `harness pack hook: config.approval_lifecycle.max_age ignored (expected duration string like "4h", got ${typeof maxAgeRaw})\n`,
+    );
+  }
+  return {
+    expireOnToolMatch,
+    ...(maxAgeMs !== undefined && { maxAgeMs }),
+    legacyMode: false,
   };
 }
 

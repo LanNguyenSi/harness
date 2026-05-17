@@ -17,14 +17,20 @@ describe("expandPolicyPacks", () => {
     expect(r).toEqual({ hooks: [], files: [], warnings: [], skipped: [] });
   });
 
-  it("resolves the understanding-before-execution builtin into 3 hooks + 1 instructions file", () => {
+  it("resolves the understanding-before-execution builtin into 4 hooks + 1 instructions file", () => {
+    // Was 3 hooks through v0.17.x (UserPromptSubmit + Stop + PreToolUse).
+    // v0.18 adds the PostToolUse marker-expiry hook (agent-tasks/d8ee60ca)
+    // default-on, so the default expansion now ships four hooks. Operators
+    // who opt out via `approval_lifecycle: { mode: session }` drop back
+    // to three (covered by a dedicated test below).
     const m = buildManifest([{ name: "understanding-before-execution" }]);
     const r = expandPolicyPacks(m);
-    expect(r.hooks).toHaveLength(3);
+    expect(r.hooks).toHaveLength(4);
     const events = r.hooks.map((h) => h.event).sort();
-    expect(events).toEqual(["PreToolUse", "Stop", "UserPromptSubmit"]);
+    expect(events).toEqual(["PostToolUse", "PreToolUse", "Stop", "UserPromptSubmit"]);
     const names = r.hooks.map((h) => h.name).sort();
     expect(names).toEqual([
+      "policy-pack:understanding-before-execution:post-tool-use",
       "policy-pack:understanding-before-execution:pre-tool-use",
       "policy-pack:understanding-before-execution:stop",
       "policy-pack:understanding-before-execution:user-prompt-submit",
@@ -35,6 +41,48 @@ describe("expandPolicyPacks", () => {
     );
     expect(r.files[0]?.content).toContain("# Policy Pack: understanding-before-execution");
     expect(r.warnings).toEqual([]);
+  });
+
+  it("PostToolUse hook fires on the default agent-tasks task-boundary tools", () => {
+    const m = buildManifest([{ name: "understanding-before-execution" }]);
+    const r = expandPolicyPacks(m);
+    const post = r.hooks.find((h) => h.event === "PostToolUse");
+    expect(post).toBeDefined();
+    expect(post?.command).toBe("harness pack hook post-tool-use");
+    expect(post?.blocking).toBe(false);
+    // Match pattern is anchored + alternation of the three defaults.
+    expect(post?.match).toBe(
+      "^(?:mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__pull_requests_merge)$",
+    );
+  });
+
+  it("PostToolUse hook is suppressed when approval_lifecycle.mode = session", () => {
+    // Opt-out path for operators who prefer the legacy per-session contract.
+    const m = buildManifest([
+      {
+        name: "understanding-before-execution",
+        config: { approval_lifecycle: { mode: "session" } },
+      },
+    ]);
+    const r = expandPolicyPacks(m);
+    expect(r.hooks.find((h) => h.event === "PostToolUse")).toBeUndefined();
+    expect(r.hooks).toHaveLength(3);
+  });
+
+  it("PostToolUse hook match pattern reflects custom expire_on_tool_match list", () => {
+    const m = buildManifest([
+      {
+        name: "understanding-before-execution",
+        config: {
+          approval_lifecycle: {
+            expire_on_tool_match: ["mcp__linear__issue_close", "Bash"],
+          },
+        },
+      },
+    ]);
+    const r = expandPolicyPacks(m);
+    const post = r.hooks.find((h) => h.event === "PostToolUse");
+    expect(post?.match).toBe("^(?:mcp__linear__issue_close|Bash)$");
   });
 
   it("PreToolUse hook is hard-blocking with the documented match", () => {
@@ -196,7 +244,7 @@ describe("expandPolicyPacks", () => {
       { name: "no-such-pack" },
     ]);
     const r = expandPolicyPacks(m);
-    expect(r.hooks).toHaveLength(3);
+    expect(r.hooks).toHaveLength(4); // v0.18 default: 3 legacy + 1 PostToolUse expiry
     expect(r.files).toHaveLength(1);
     expect(r.warnings.some((w) => w.includes("not a known builtin pack"))).toBe(true);
   });
@@ -254,7 +302,7 @@ describe("expandPolicyPacks", () => {
       ],
     );
     const r = expandPolicyPacks(m);
-    expect(r.hooks).toHaveLength(2);
+    expect(r.hooks).toHaveLength(3); // 4 contributions - 1 dropped collision (Stop)
     expect(r.hooks.find((h) => h.event === "Stop")).toBeUndefined();
     expect(r.warnings.some((w) => w.includes("collides with a manifest hooks"))).toBe(true);
   });
