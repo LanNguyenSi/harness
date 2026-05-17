@@ -202,6 +202,12 @@ policies:
         verb: mcp__agent-grounding__ledger_add
         example: '{type:"fact", content:"review:\${PR_NUMBER} — <verdict + key findings + nits>", source:"Agent(general-purpose) review"}'
         description: Spawn a review subagent against the PR diff, capture its verdict, then persist a ledger entry tagged with the PR number. The content should be self-contained enough for an auditor to read without re-opening the chat.
+    ux:
+      cannot: "You cannot merge PR #\${PR_NUMBER} yet."
+      required:
+        - "a recorded review of PR #\${PR_NUMBER}"
+      run:
+        - 'mcp__agent-grounding__ledger_add { type: "fact", content: "review:\${PR_NUMBER} — <verdict + key findings + nits>" }'
 
   - name: dogfood-before-release
     description: Block npm publish / git tag v* without a recent dogfood ledger entry.
@@ -219,6 +225,12 @@ policies:
         verb: mcp__agent-grounding__ledger_add
         example: '{type:"fact", content:"dogfood:\${SESSION_ID} — <end-to-end smoke summary against the live system>", source:"manual smoke test"}'
         description: Before tagging or publishing, run the release path end-to-end against the live system (not just unit tests) and persist the result as a session-tagged ledger entry. Document what you exercised (install, CLI happy path, MCP handshake, etc.) so a future auditor can tell whether the smoke covered the change.
+    ux:
+      cannot: "You cannot publish a release yet."
+      required:
+        - "an end-to-end dogfood run in this session"
+      run:
+        - 'mcp__agent-grounding__ledger_add { type: "fact", content: "dogfood:\${SESSION_ID} — <end-to-end smoke summary>" }'
 
   - name: two-reviewers-required
     description: At least two distinct reviewer ledger entries must exist for the PR.
@@ -281,6 +293,12 @@ policies:
         verb: mcp__agent-grounding__ledger_add
         example: '{type:"fact", content:"review-subagent:\${TASK_ID} — <verdict + key findings + nits>", source:"Agent(general-purpose) review"}'
         description: After running a review subagent against the staged diff, persist its verdict + load-bearing findings as a ledger entry tagged with the task UUID. The content should be self-contained enough to audit later without re-reading the chat.
+    ux:
+      cannot: "You cannot open a pull request for task \${TASK_ID} yet."
+      required:
+        - "a completed review-subagent pass on this task"
+      run:
+        - 'mcp__agent-grounding__ledger_add { type: "fact", content: "review-subagent:\${TASK_ID} — <verdict + key findings + nits>" }'
 
   - name: preflight-before-push
     description: Block git push unless a fresh preflight ledger entry exists for the current branch. Catches the stale-checkout class of incident at the last reversible step.

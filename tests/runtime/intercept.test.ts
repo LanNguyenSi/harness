@@ -295,6 +295,147 @@ describe("intercept — agent-facing ux replaces engine vocabulary", () => {
   });
 });
 
+describe("intercept — agent-facing ux for non-preflight policies (MCP-recipe run field)", () => {
+  // Review / dogfood policies cannot point `run:` at a shell verb,
+  // their satisfying action is an MCP ledger_add. The ux contract is
+  // the same shape; the `run:` lines name the MCP verb instead. These
+  // snapshots pin the verbatim form so future composer / template
+  // edits cannot silently drift the agent-facing surface.
+
+  it("review-before-merge: names the ledger_add recipe in run:", async () => {
+    const reviewPolicy: Policy = {
+      name: "review-before-merge",
+      description: "block merges without review evidence",
+      trigger: {
+        event: "PreToolUse",
+        match: "mcp__agent-tasks__pull_requests_merge",
+        extract: { PR_NUMBER: "toolArgs.prNumber" },
+      },
+      requires: { ledger_tag: "review:${PR_NUMBER}" },
+      hook: "h",
+      enforcement: "block",
+      ux: {
+        cannot: "You cannot merge PR #${PR_NUMBER} yet.",
+        required: ["a recorded review of PR #${PR_NUMBER}"],
+        run: [
+          'mcp__agent-grounding__ledger_add { type: "fact", content: "review:${PR_NUMBER} — <verdict + key findings + nits>" }',
+        ],
+      },
+    } as Policy;
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([reviewPolicy]),
+      event: MERGE_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.blockJson?.reason).toBe(
+      [
+        "You cannot merge PR #42 yet.",
+        "",
+        "Required:",
+        "- a recorded review of PR #42",
+        "",
+        "Run:",
+        '  mcp__agent-grounding__ledger_add { type: "fact", content: "review:42 — <verdict + key findings + nits>" }',
+      ].join("\n"),
+    );
+  });
+
+  it("review-subagent-before-pr-create: substitutes TASK_ID into the ledger_add recipe", async () => {
+    const reviewSubagentPolicy: Policy = {
+      name: "review-subagent-before-pr-create",
+      description: "block PR create without review-subagent evidence",
+      trigger: {
+        event: "PreToolUse",
+        match: "mcp__agent-tasks__pull_requests_create",
+        extract: { TASK_ID: "toolArgs.taskId" },
+      },
+      requires: { ledger_tag: "review-subagent:${TASK_ID}" },
+      hook: "h",
+      enforcement: "block",
+      ux: {
+        cannot: "You cannot open a pull request for task ${TASK_ID} yet.",
+        required: ["a completed review-subagent pass on this task"],
+        run: [
+          'mcp__agent-grounding__ledger_add { type: "fact", content: "review-subagent:${TASK_ID} — <verdict + key findings + nits>" }',
+        ],
+      },
+    } as Policy;
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([reviewSubagentPolicy]),
+      event: {
+        hook_event_name: "PreToolUse",
+        tool_name: "mcp__agent-tasks__pull_requests_create",
+        tool_input: { taskId: "abc-123" },
+        session_id: "sess-1",
+      },
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.blockJson?.reason).toBe(
+      [
+        "You cannot open a pull request for task abc-123 yet.",
+        "",
+        "Required:",
+        "- a completed review-subagent pass on this task",
+        "",
+        "Run:",
+        '  mcp__agent-grounding__ledger_add { type: "fact", content: "review-subagent:abc-123 — <verdict + key findings + nits>" }',
+      ].join("\n"),
+    );
+  });
+
+  it("dogfood-before-release: substitutes SESSION_ID from builtins into the ledger_add recipe", async () => {
+    const dogfoodPolicy: Policy = {
+      name: "dogfood-before-release",
+      description: "block release without dogfood evidence",
+      trigger: {
+        event: "PreToolUse",
+        match: "Bash",
+        bash_match: "npm publish",
+      },
+      requires: { ledger_tag: "dogfood:${SESSION_ID}", within: "24h" },
+      hook: "h",
+      enforcement: "block",
+      ux: {
+        cannot: "You cannot publish a release yet.",
+        required: ["an end-to-end dogfood run in this session"],
+        run: [
+          'mcp__agent-grounding__ledger_add { type: "fact", content: "dogfood:${SESSION_ID} — <end-to-end smoke summary>" }',
+        ],
+      },
+    } as Policy;
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([dogfoodPolicy]),
+      event: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "npm publish" },
+        session_id: "sess-1",
+      },
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.blockJson?.reason).toBe(
+      [
+        "You cannot publish a release yet.",
+        "",
+        "Required:",
+        "- an end-to-end dogfood run in this session",
+        "",
+        "Run:",
+        '  mcp__agent-grounding__ledger_add { type: "fact", content: "dogfood:sess-1 — <end-to-end smoke summary>" }',
+      ].join("\n"),
+    );
+  });
+});
+
 describe("intercept — non-PreToolUse deny shape", () => {
   it("omits hookSpecificOutput for non-PreToolUse events while still blocking", async () => {
     const promptPolicy: Policy = {
