@@ -52,6 +52,10 @@ tools:
       mcpProbe: new FakeProbe({}),
       versionProbe: () => null,
       pathEnv: "",
+      // Stub npm bin probe so this test stays env-independent (the
+      // real probe shells out to `npm prefix -g` and can drift the
+      // section count based on whether npm is installed in CI).
+      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
     });
     const text = format(report);
     expect(text).toMatch(/Manifest\n/);
@@ -462,6 +466,11 @@ policies:
       mcpProbe: new FakeProbe({}),
       versionProbe: () => null,
       pathEnv: "",
+      // Stub npm bin probe to the silent "unknown" branch (non-zero
+      // exit) so the new check (task 4ddd78ed) does not add an
+      // env-dependent warning to the count assertion below. The real
+      // probe is covered by its own test file with all three branches.
+      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
     });
     return report;
   }
@@ -553,6 +562,114 @@ policies:
   });
 });
 
+
+describe("doctor — npm global-bin PATH check (task 4ddd78ed)", () => {
+  const MIN_MANIFEST = `version: 1
+hooks: []
+policies: []
+tools:
+  builtin:
+    known: [Read, Edit]
+`;
+
+  it("renders the warning section when npm bin dir is not on PATH", async () => {
+    const home = makeFixture({ "harness.yaml": MIN_MANIFEST });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => null,
+      pathEnv: "/usr/bin",
+      npmBinExec: async () => ({
+        code: 0,
+        stdout: "/home/lan/.nvm/versions/node/v22.22.0\n",
+        stderr: "",
+      }),
+    });
+    expect(report.npmGlobalBin?.status).toBe("warn");
+    expect(report.npmGlobalBin?.binDir).toBe(
+      "/home/lan/.nvm/versions/node/v22.22.0/bin",
+    );
+    const text = format(report);
+    expect(text).toMatch(/\nEnvironment\n/);
+    expect(text).toContain(
+      "⚠ npm global bin (/home/lan/.nvm/versions/node/v22.22.0/bin) is not on PATH",
+    );
+    expect(text).toContain(
+      `export PATH="/home/lan/.nvm/versions/node/v22.22.0/bin:$PATH"`,
+    );
+  });
+
+  it("renders no Environment section when npm bin dir IS on PATH (no noise)", async () => {
+    const home = makeFixture({ "harness.yaml": MIN_MANIFEST });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => null,
+      pathEnv: "/usr/bin" + path.delimiter + "/usr/local/bin",
+      npmBinExec: async () => ({ code: 0, stdout: "/usr/local\n", stderr: "" }),
+    });
+    expect(report.npmGlobalBin?.status).toBe("ok");
+    const text = format(report);
+    expect(text).not.toMatch(/\nEnvironment\n/);
+    expect(text).not.toMatch(/⚠ npm global bin/);
+  });
+
+  it("stays silent on the unknown branch (npm missing / errored)", async () => {
+    const home = makeFixture({ "harness.yaml": MIN_MANIFEST });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => null,
+      pathEnv: "/usr/bin",
+      npmBinExec: async () => ({ code: 127, stdout: "", stderr: "command not found" }),
+    });
+    expect(report.npmGlobalBin?.status).toBe("unknown");
+    const text = format(report);
+    expect(text).not.toMatch(/\nEnvironment\n/);
+  });
+
+  it("skips the npm-bin probe entirely under --shallow (no field on report)", async () => {
+    const home = makeFixture({ "harness.yaml": MIN_MANIFEST });
+    let probeCalled = false;
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => null,
+      pathEnv: "/usr/bin",
+      shallow: true,
+      npmBinExec: async () => {
+        probeCalled = true;
+        return { code: 0, stdout: "/should/not/be/called\n", stderr: "" };
+      },
+    });
+    // Shallow contract: the npm-bin probe must not spawn, and the
+    // report field must be absent (not just "unknown").
+    expect(probeCalled).toBe(false);
+    expect(report.npmGlobalBin).toBeUndefined();
+    const text = format(report);
+    expect(text).not.toMatch(/\nEnvironment\n/);
+  });
+
+  it("warns roll into warningCount", async () => {
+    const home = makeFixture({ "harness.yaml": MIN_MANIFEST });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => null,
+      pathEnv: "/usr/bin",
+      npmBinExec: async () => ({ code: 0, stdout: "/opt/node\n", stderr: "" }),
+    });
+    // The minimal manifest also misses memory.router (+1 warning); the
+    // npm-bin warn adds another. We assert the npm one is included by
+    // checking that the count exceeds the no-npm-warn baseline.
+    expect(report.warningCount).toBeGreaterThanOrEqual(2);
+  });
+});
 
 describe("doctor — MCP min_version", () => {
   function buildManifest(mcpBlock: string): string {

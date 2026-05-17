@@ -2,6 +2,7 @@ import type { McpProbeResult } from "../../probes/mcp.js";
 import type { MemoryReport, StaleMemory } from "../../probes/memory.js";
 import type { Manifest } from "../../schema/index.js";
 import type { CodexTargetReport } from "./codex.js";
+import type { NpmBinReport } from "./npm-bin-path.js";
 import type { RogueLedgerDb } from "./rogue-ledger.js";
 
 /**
@@ -122,6 +123,14 @@ export interface DoctorReport {
   shallow: boolean;
   manifest: ManifestSection;
   tools: ToolsSection;
+  /**
+   * Resolution + PATH-membership check for the npm global bin
+   * directory. Surfaces the nvm-drift footgun where an `npm i -g` runs
+   * against one Node's prefix but the shell PATH points at a different
+   * one, so installed binaries are silently invisible to subsequent
+   * doctor / harness probes. See task 4ddd78ed.
+   */
+  npmGlobalBin?: NpmBinReport;
   memory: MemoryReport;
   hooks: HookEntryReport[];
   policies: PolicyEntryReport[];
@@ -145,6 +154,8 @@ export interface DoctorReport {
   errorCount: number;
   warningCount: number;
 }
+
+export type { NpmBinReport } from "./npm-bin-path.js";
 
 export type {
   Manifest,

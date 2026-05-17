@@ -16,6 +16,7 @@ import {
   runCodexTargetChecks,
   type RunCodexCheckOptions,
 } from "./codex.js";
+import { checkNpmBinPath, type NpmExec } from "./npm-bin-path.js";
 import { scanForRogueLedgers, type RogueLedgerScanOptions } from "./rogue-ledger.js";
 import {
   isDoctorTarget,
@@ -53,6 +54,13 @@ export interface DoctorOptions extends LoaderOptions {
    * usually override both plus `fsInterface`.
    */
   rogueLedgerScanOptions?: Partial<RogueLedgerScanOptions>;
+  /**
+   * Test-injection knob for the npm global-bin PATH check (task
+   * 4ddd78ed). Tests fake the `npm prefix -g` invocation by passing a
+   * stub that returns specific stdout / exit codes; production omits
+   * this and the real `npm` is spawned.
+   */
+  npmBinExec?: NpmExec;
 }
 
 export { isDoctorTarget, KNOWN_DOCTOR_TARGETS };
@@ -455,6 +463,7 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   for (const p of report.policies) {
     if (p.producerGap) warningCount++;
   }
+  if (report.npmGlobalBin?.status === "warn") warningCount++;
   if (report.memory.routerExecutable && !report.memory.routerExecutable.exists) errorCount++;
   if (!report.memory.routerExecutable) warningCount++;
   if (report.memory.routerVersion?.status === "warn") warningCount++;
@@ -532,6 +541,16 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
       : {}),
   });
 
+  // Shallow mode skips real spawns: the npm-bin probe shells out to
+  // `npm prefix -g` which costs ~30ms and breaks the shallow timing
+  // budget. Mirrors how MCP probes degrade above.
+  const npmGlobalBin = opts.shallow
+    ? undefined
+    : await checkNpmBinPath({
+        ...(opts.npmBinExec !== undefined ? { exec: opts.npmBinExec } : {}),
+        ...(opts.pathEnv !== undefined ? { pathEnv: opts.pathEnv } : {}),
+      });
+
   const partial: Omit<DoctorReport, "errorCount" | "warningCount"> = {
     manifestPath: resolved.base,
     manifestVersion: manifest.version,
@@ -544,6 +563,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     policies,
     workflows,
     rogueLedgerDbs,
+    ...(npmGlobalBin !== undefined ? { npmGlobalBin } : {}),
   };
   if (opts.target === "codex") {
     const manifestDir = path.dirname(resolved.base);
