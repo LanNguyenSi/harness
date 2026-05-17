@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **`harness doctor`: producer-gap warning now respects the policy's own `producers:` array** (harness/f97e152f). A `block` policy with a `within:` window used to be flagged with `⚠ ... no manifest hook produces it` whenever no automatic SessionStart hook wrote the required tag, even when the policy itself declared a `producers:` entry pointing the agent at the manual recovery (`mcp__agent-grounding__ledger_add`). For `dogfood-before-release` in the Full template that was a false positive: the gate is deliberately operator-driven (an automatic SessionStart producer would defeat its purpose, either by running a smoke test on every session start or by auto-writing a meaningless tag), and the `producers:` array IS the schema-blessed manual recovery path the agent sees in the deny envelope. Doctor now treats a non-empty `producers:` array as a documented producer and suppresses the warning. The warning still fires when both kinds are absent: no automatic SessionStart producer AND no `producers:` array on the policy. Visible effect on the Full template: one fewer false-positive warning (dogfood-before-release flips from `⚠` to `✓`); the two preflight policies were already satisfied by the `git-preflight` SessionStart hook and stay green. Warning text now names both fix paths so operators understand the manual option exists. Regression-guarded by a new `eta-gate` fixture entry in `tests/cli/doctor.test.ts`.
+
 ### Added
 
 - **`harness init --interactive`: post-install auth probe for the agent-tasks bridge** (harness/3f775180). After a successful `npm i -g @agent-tasks/mcp-bridge`, the wizard runs `agent-tasks-mcp-bridge status` to detect whether a token is configured. Three branches:
