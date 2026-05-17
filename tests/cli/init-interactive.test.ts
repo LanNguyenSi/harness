@@ -359,6 +359,172 @@ describe("interactive wizard — Team path", () => {
   });
 });
 
+describe("interactive wizard — agent-tasks auth probe (after install)", () => {
+  it("skips the dialog and prints ✓ when the probe returns ok", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
+      prompts: mockPrompts({
+        select: ["team"],
+        confirm: [true, true],
+        checkbox: [[]],
+        input: ["~/.claude/projects/{project}/memory"],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(false);
+    expect(cap.stderr()).toContain("token validated against the backend");
+    // Must not have presented the dialog.
+    expect(cap.stderr()).not.toContain("How would you like to configure agent-tasks auth?");
+  });
+
+  it("no_token + operator picks skip → reminder printed, wizard continues", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      authProbeSpawn: async () => ({ code: 1, stderr: "No token stored (keychain). Run 'login' first.\n" }),
+      prompts: mockPrompts({
+        select: ["team", "skip"],
+        confirm: [true, true],
+        checkbox: [[]],
+        input: ["~/.claude/projects/{project}/memory"],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(false);
+    expect(cap.stderr()).toContain("Skipped auth setup");
+    expect(cap.stderr()).toContain("agent-tasks-mcp-bridge login");
+  });
+
+  it("no_token + operator picks abort → wizard aborts with signup pointer, NO manifest written", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const manifestPath = path.join(tmpHome, ".claude", "harness.yaml");
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      authProbeSpawn: async () => ({ code: 1, stderr: "No token stored (keychain). Run 'login' first.\n" }),
+      prompts: mockPrompts({
+        select: ["team", "abort"],
+        confirm: [true],
+        checkbox: [[]],
+        input: [],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(true);
+    expect(cap.stderr()).toContain("create an agent-tasks account first");
+    expect(cap.stderr()).toContain("https://agent-tasks.opentriologue.ai");
+    expect(fs.existsSync(manifestPath)).toBe(false);
+  });
+
+  it("no_token + login chosen, login spawn ok, re-probe ok → completion message", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    // First probe call reports no_token, second (after login) reports ok.
+    let probeCalls = 0;
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      authProbeSpawn: async () => {
+        probeCalls += 1;
+        if (probeCalls === 1) {
+          return { code: 1, stderr: "No token stored (keychain). Run 'login' first.\n" };
+        }
+        return { code: 0, stderr: "ok (store: keychain)\n" };
+      },
+      authLoginSpawn: async () => ({ code: 0 }),
+      prompts: mockPrompts({
+        select: ["team", "login"],
+        confirm: [true, true],
+        checkbox: [[]],
+        input: ["~/.claude/projects/{project}/memory"],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(false);
+    expect(probeCalls).toBe(2);
+    expect(cap.stderr()).toContain("login complete, token validates");
+  });
+
+  it("no_token + login chosen but login spawn fails → warning, wizard continues", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      authProbeSpawn: async () => ({ code: 1, stderr: "No token stored (keychain). Run 'login' first.\n" }),
+      authLoginSpawn: async () => ({ code: 1 }),
+      prompts: mockPrompts({
+        select: ["team", "login"],
+        confirm: [true, true],
+        checkbox: [[]],
+        input: ["~/.claude/projects/{project}/memory"],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(false);
+    expect(cap.stderr()).toContain("login` did not complete successfully");
+  });
+
+  it("validation_failed → informational warning, NO dialog, wizard continues", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      authProbeSpawn: async () => ({
+        code: 1,
+        stderr: "Token present (keychain) but validation failed: fetch failed\n",
+      }),
+      prompts: mockPrompts({
+        select: ["team"],
+        confirm: [true, true],
+        checkbox: [[]],
+        input: ["~/.claude/projects/{project}/memory"],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(false);
+    expect(cap.stderr()).toContain("token is stored but the backend rejected it");
+    expect(cap.stderr()).not.toContain("How would you like to configure agent-tasks auth?");
+  });
+
+  it("Solo profile does NOT trigger the auth probe at all", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    let probeCalled = false;
+    await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      authProbeSpawn: async () => {
+        probeCalled = true;
+        return { code: 1, stderr: "No token stored\n" };
+      },
+      prompts: mockPrompts({
+        select: ["solo"],
+        confirm: [true],
+        checkbox: [[]],
+        input: ["~/.claude/projects/{project}/memory"],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(probeCalled).toBe(false);
+  });
+});
+
 describe("interactive wizard — Custom path (task 31d2fbb5)", () => {
   it("aborts cleanly with no write when every checkbox is empty", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));

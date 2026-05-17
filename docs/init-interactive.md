@@ -25,13 +25,18 @@ The wizard is one of three ways to bootstrap a manifest:
 
 4. **Agent-tasks warning (Team / Full).** If you pick `team` or `full` but the probe did not find an `agent-tasks` entry in `settings.json`, the wizard asks whether to proceed. The manifest will still be written, the hook will still fire, but two preconditions need to land before the gate is enforceable: (a) `agent-tasks-mcp-bridge` on PATH and wired into Claude's settings.json, (b) a token in the OS keychain or `AGENT_TASKS_TOKEN` env. Default is `true` because the common case is "I am setting up everything from scratch and agent-tasks is about to land alongside this manifest". After the manifest write the wizard prints a reminder line with the `agent-tasks-mcp-bridge login` recovery path.
 
-5. **Memory directory.** Free-text input. Default is `~/.claude/projects/{project}/memory` (the `{project}` token is expanded per-session by the memory router). Press return to accept.
+5. **Agent-tasks auth probe (Team / Full / Custom-with-bridge).** After a successful `npm i -g` of the missing packages, the wizard runs `agent-tasks-mcp-bridge status` against the freshly installed binary. Three observed outcomes:
+   - **Token present, validates against the backend**: prints `✓ agent-tasks token validated against the backend.` and continues.
+   - **Token present, validation fails** (backend unreachable, expired token, wrong base URL): prints an informational warning naming the bridge's reason and continues. The wizard does not block on this because the recovery path (`agent-tasks-mcp-bridge status` once your endpoint is reachable) is not actionable from inside the wizard.
+   - **No token stored**: opens a three-option dialog: (a) run `agent-tasks-mcp-bridge login` interactively now (recommended; the bridge prompts for a token with TTY masking and stores it via the OS keychain), (b) skip and run login manually later, (c) abort the wizard with a pointer to the hosted signup URL and the re-run command. After a successful login the wizard re-probes to confirm.
 
-6. **Write confirmation.** Last chance to bail.
+6. **Memory directory.** Free-text input. Default is `~/.claude/projects/{project}/memory` (the `{project}` token is expanded per-session by the memory router). Press return to accept.
 
-7. **Validate.** After the write, the wizard runs `harness validate` and reports the error / warning counts and the per-diagnostic details. A non-zero error count makes the wizard exit `1` so CI scripts notice; the manifest stays on disk for inspection.
+7. **Write confirmation.** Last chance to bail.
 
-8. **Runtime wire-now multiselect.** A checkbox prompt offers `claude-code` and `codex` (and a disabled `opencode` slot pending [task `f34eb233`](https://github.com/LanNguyenSi/harness/issues)). Whichever runtimes the probe found configured are pre-checked, so the common single-runtime case is one Enter press. For each ticked runtime:
+8. **Validate.** After the write, the wizard runs `harness validate` and reports the error / warning counts and the per-diagnostic details. A non-zero error count makes the wizard exit `1` so CI scripts notice; the manifest stays on disk for inspection.
+
+9. **Runtime wire-now multiselect.** A checkbox prompt offers `claude-code` and `codex` (and a disabled `opencode` slot pending [task `f34eb233`](https://github.com/LanNguyenSi/harness/issues)). Whichever runtimes the probe found configured are pre-checked, so the common single-runtime case is one Enter press. For each ticked runtime:
    - `claude-code` → `harness apply --target ~/.claude/settings.json --merge` is run; the merge summary, `wired into …`, and `verify: …` lines print to stderr.
    - `codex` → `harness apply --runtime codex` writes `harness.generated/codex/config.toml`; the operator gets the path and the merge instruction (`copy or include those [[hooks.*]] entries into ~/.codex/config.toml`). The wizard never edits `~/.codex/config.toml` directly because `apply --target` is incompatible with `--runtime codex`.
    - Unchecking everything skips wiring entirely; both manual fallback commands print so the operator can wire later by hand.
