@@ -158,6 +158,11 @@ interface PolicySpec {
   };
   hook: string;
   enforcement: string;
+  ux?: {
+    cannot: string;
+    required: string[];
+    run: string[];
+  };
 }
 
 const HOOK_FOR_POLICY: Record<CustomPolicyKey, HookSpec> = {
@@ -234,6 +239,10 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
     requires: { ledger_tag: "review:${PR_NUMBER}" },
     hook: "require-review-evidence",
     enforcement: "block",
+    // No `ux:` yet: the satisfying action is an MCP ledger_add
+    // recipe, not a `harness <verb>` shell command, and the `run:`
+    // field's "exact command" framing does not fit cleanly until a
+    // wrapper verb exists. Follow-up at agent-tasks/902c1b4e.
   },
   "preflight-before-investigation": {
     name: "preflight-before-investigation",
@@ -248,6 +257,11 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
     requires: { ledger_tag: "preflight:${REPO}", within: "1h" },
     hook: "require-preflight-evidence",
     enforcement: "block",
+    ux: {
+      cannot: "You cannot investigate this repository yet.",
+      required: ["verified repository preflight"],
+      run: ["harness preflight"],
+    },
   },
   "review-subagent-before-pr-create": {
     name: "review-subagent-before-pr-create",
@@ -261,6 +275,9 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
     requires: { ledger_tag: "review-subagent:${TASK_ID}" },
     hook: "require-review-subagent-evidence",
     enforcement: "block",
+    // No `ux:` yet: same reason as review-before-merge, the satisfying
+    // action is an MCP ledger_add, not a shell verb. Follow-up:
+    // agent-tasks/902c1b4e.
   },
   "preflight-before-push": {
     name: "preflight-before-push",
@@ -274,6 +291,11 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
     requires: { ledger_tag: "preflight:${BRANCH}", within: "10m" },
     hook: "require-preflight-push-evidence",
     enforcement: "block",
+    ux: {
+      cannot: "You cannot push branch ${BRANCH} yet.",
+      required: ["a fresh preflight for ${BRANCH} (within the last 10 minutes)"],
+      run: ["harness preflight"],
+    },
   },
   "dogfood-before-release": {
     name: "dogfood-before-release",
@@ -287,6 +309,9 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
     requires: { ledger_tag: "dogfood:${SESSION_ID}", within: "24h" },
     hook: "require-dogfood-evidence",
     enforcement: "block",
+    // No `ux:` yet: same reason as review-before-merge, the satisfying
+    // action is an MCP ledger_add, not a shell verb. Follow-up:
+    // agent-tasks/902c1b4e.
   },
   "two-reviewers-required": {
     name: "two-reviewers-required",
@@ -299,6 +324,9 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
     requires: { ledger_tag: "review:${PR_NUMBER}", count: { min: 2 } },
     hook: "require-review-evidence",
     enforcement: "warn",
+    // No `ux:`: this policy is warn-only and never blocks, so the
+    // agent never sees its message. The audit ledger still gets the
+    // engine-internal trace.
   },
 };
 

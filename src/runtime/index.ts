@@ -18,6 +18,12 @@ export {
   type PolicyDecisionPayload,
 } from "./ledger-record.js";
 export { resolveSessionId } from "./session-id.js";
+export {
+  buildAgentFacingBlock,
+  formatAgentFacingMessage,
+  renderAgentFacing,
+  type AgentFacingBlock,
+} from "./agent-facing.js";
 export { resolveGitContext, type GitRepoContext } from "./git-context.js";
 export {
   addLedgerFact,

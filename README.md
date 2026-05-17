@@ -78,6 +78,52 @@ timestamp            policy               outcome  reason
 Declare the rule once; every session is held to it, with a paper
 trail of every decision.
 
+## What the agent sees vs what the engine records
+
+A policy has two readers: the audit ledger (which wants every internal
+detail) and the agent (which only needs to know what is blocked, what
+condition is missing, and which command satisfies it). Declaring a
+policy's `ux:` block splits those readers cleanly.
+
+Engine-internal model (unchanged): session IDs, ledger entries,
+attestations, provenance chains, policy DAGs. All of it still feeds
+`audit`, `explain --trace`, and the evidence-ledger writes that
+`session-export` replays.
+
+Agent-facing model (new, opt-in per policy): `cannot` (what is
+blocked), `required` (the missing precondition, in plain words), and
+`run` (the exact command to satisfy it). When `ux:` is declared, the
+agent sees only this shape, with `${VAR}` references substituted
+against the same context the `ledger_tag` resolved against.
+
+```yaml
+policies:
+  - name: preflight-before-investigation
+    requires: { ledger_tag: "preflight:${REPO}", within: "1h" }
+    enforcement: block
+    ux:
+      cannot: "You cannot investigate this repository yet."
+      required: ["verified repository preflight"]
+      run: ["harness preflight"]
+```
+
+On block, the agent sees:
+
+```
+You cannot investigate this repository yet.
+
+Required:
+- verified repository preflight
+
+Run:
+  harness preflight
+```
+
+Not `no matching ledger entry for tag preflight:harness`. The
+internal failure (tag, hint, matched count) is still written to the
+ledger for `audit` and `explain --trace`. Policies without `ux:` keep
+the legacy deny envelope unchanged.
+
 ## Concepts in six lines
 
 | Term | What it is |

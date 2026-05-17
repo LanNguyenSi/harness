@@ -55,6 +55,35 @@ export const ProducerSchema = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 
+// `ux:` is the agent-facing translation of an engine-internal block.
+//
+// When a policy denies a tool call, the engine has two readers: the
+// audit ledger (which wants every internal detail: tag, hint,
+// matchedCount, session) and the agent (which only needs to know what
+// it cannot do, what condition is missing, and which command satisfies
+// it). The legacy deny envelope leaks engine vocabulary
+// ("no matching ledger entry for tag preflight:harness") to both.
+//
+// `ux:`, when declared, replaces the agent-facing reason text with a
+// structured, plain-language form: a `cannot` sentence, a `required:`
+// list of human-readable preconditions, and a `run:` list of exact
+// commands. The internal decision (PolicyDecision.reason, recordHint,
+// matchedCount) is unchanged and still written to the audit ledger.
+//
+// All three fields are templates: `${VAR}` references resolve against
+// the same extract.values map the ledger_tag was substituted with, so
+// the rendered text reflects the exact context the agent just hit at
+// block time.
+// Builtins (SESSION_ID / REPO / BRANCH / TOOL_NAME / CWD) are
+// available even when the policy declares no `trigger.extract` map.
+export const PolicyUxSchema = z
+  .object({
+    cannot: z.string().min(1),
+    required: z.array(z.string().min(1)).min(1),
+    run: z.array(z.string().min(1)).min(1),
+  })
+  .strict();
+
 export const PolicySchema = z
   .object({
     name: z.string().min(1),
@@ -64,6 +93,7 @@ export const PolicySchema = z
     hook: z.string().min(1),
     enforcement: PolicyEnforcementSchema,
     producers: z.array(ProducerSchema).min(1).optional(),
+    ux: PolicyUxSchema.optional(),
   })
   .strict()
   .superRefine((policy, ctx) => {
@@ -108,3 +138,4 @@ export const PoliciesSchema = z.array(PolicySchema).superRefine((policies, ctx) 
 
 export type Policy = z.infer<typeof PolicySchema>;
 export type Producer = z.infer<typeof ProducerSchema>;
+export type PolicyUx = z.infer<typeof PolicyUxSchema>;
