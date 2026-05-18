@@ -56,6 +56,7 @@ import { sessionExport, type ExportFormat } from "./session-export/index.js";
 import { dryRun } from "./dry-run.js";
 import { runInterceptCli } from "./policy/intercept.js";
 import { runSessionStartPreflight } from "./session-start/index.js";
+import { writePendingApproval } from "../runtime/pending-approval.js";
 import { runSessionStartBranchCheck } from "./session-start/branch-check.js";
 import { runPackHookBranchProtectionCli } from "./pack/hook-branch-protection.js";
 import { gateDisable, GateDisableError } from "./gate/disable.js";
@@ -1529,6 +1530,10 @@ export function buildProgram(opts: RunOptions = {}): Command {
         const n = Number.parseInt(options.ledgerTimeout, 10);
         if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
       }
+      // Opt into the bootstrap-staging side effect from the CLI entry
+      // point only. Library callers (vitest cases) get the no-op default
+      // so they cannot clobber the operator's real pending-approval file.
+      cliOpts.stagePendingApproval = writePendingApproval;
       await runSessionStartPreflight(cliOpts);
     });
 
@@ -1573,6 +1578,10 @@ export function buildProgram(opts: RunOptions = {}): Command {
         const n = Number.parseInt(options.ledgerTimeout, 10);
         if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
       }
+      // Opt into the bootstrap-staging side effect from the CLI entry
+      // point only. Library callers (vitest cases) get the no-op default
+      // so they cannot clobber the operator's real pending-approval file.
+      cliOpts.stagePendingApproval = writePendingApproval;
       await runSessionStartPreflight(cliOpts);
     });
   sessionStart
