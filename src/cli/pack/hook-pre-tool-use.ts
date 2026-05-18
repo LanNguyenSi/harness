@@ -27,7 +27,7 @@ import {
 } from "../../policies/index.js";
 import { renderProducers } from "../../policies/producers.js";
 import {
-  checkAnyTaskApprovalMarker,
+  checkActiveClaimApprovalMarker,
   checkApprovalMarker,
   checkPersistedReport,
   defaultReportsDir,
@@ -428,15 +428,16 @@ export async function runPackHookPreToolUseCli(
     const ageOpts = lifecycle.maxAgeMs !== undefined
       ? { maxAgeMs: lifecycle.maxAgeMs }
       : {};
-    // Source 1a: task-scoped marker (harness/1ee26e77). Any fresh
-    // `.approvals/task-<id>` marker satisfies the gate, regardless of
-    // which session approved it. This is the design-intent target for
-    // multi-task sessions; the operator opts in by passing `--task <id>`
-    // to `harness approve understanding`. When no task markers exist
-    // (operator never used --task, or all markers expired), the gate
-    // falls through to the session marker below — preserving the legacy
-    // contract for solo workflows.
-    const taskMarker = checkAnyTaskApprovalMarker(generatedDir, ageOpts);
+    // Source 1a: task-scoped marker for the currently-claimed task
+    // (harness/1ee26e77 + PR #198 correctness fix). The check reads
+    // `<gen>/active-claim` and ONLY consults `.approvals/task-<claim>`.
+    // Pre-#198 this scan returned ANY existing task marker, which let
+    // a stale approval from a finished task silently auto-bypass the
+    // gate for any subsequent session/task. When `active-claim` is
+    // absent (legacy / solo workflows that never call `task_start`),
+    // this returns matched:false and the gate falls through to the
+    // session marker below.
+    const taskMarker = checkActiveClaimApprovalMarker(generatedDir, ageOpts);
     if (taskMarker.matched) {
       const diagnostic = `harness pack hook: ${taskMarker.detail}, allowing.`;
       stderr.write(`${diagnostic}\n`);
@@ -447,6 +448,10 @@ export async function runPackHookPreToolUseCli(
         diagnostic,
       };
     }
+    // Trace the task-marker miss to stderr so an operator chasing
+    // "why isn't my approval working?" sees the active-claim vs marker
+    // mismatch, not just the eventual generic session-marker miss.
+    stderr.write(`harness pack hook: task-scoped check: ${taskMarker.detail}\n`);
     // Source 1b: session-scoped marker (legacy / fallback).
     const marker = checkApprovalMarker(generatedDir, sessionId, ageOpts);
     if (marker.matched) {
