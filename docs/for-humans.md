@@ -252,7 +252,12 @@ theoretical risk.
 have actually run BEFORE the PR opens, not after. The motivating
 incident: a batch of 60 README audit tasks once shipped 5 broken PRs
 because review was skipped pre-merge; gating PR creation instead of
-merge catches the failure earlier.
+merge catches the failure earlier. For operators on `gh pr create`
+instead of agent-tasks MCP, the full template also ships
+`review-subagent-before-pr-create-bash` (and `review-before-merge-bash`)
+which match the Bash surface and tag by `${BRANCH}`. See
+[`writing-custom-policies.md`](writing-custom-policies.md#same-gate-two-pr-surface-variants-mcp-plus-gh-cli)
+for the dual-surface pattern.
 
 **`preflight-before-push`**: gates `Bash` calls running `git push` on
 a `preflight:${BRANCH}` ledger entry with `within: 10m`. The match is
