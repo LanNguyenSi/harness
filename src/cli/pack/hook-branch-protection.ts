@@ -26,6 +26,7 @@
 // allowed Writes through would defeat the purpose. The block envelope
 // always names a recovery path so the operator is never wedged.
 
+import * as path from "node:path";
 import {
   queryLedgerByTag,
   type LedgerEntry,
@@ -74,6 +75,34 @@ interface ToolEventLite {
   session_id?: unknown;
   tool_name?: unknown;
   cwd?: unknown;
+  tool_input?: unknown;
+}
+
+/**
+ * Pull the destination file path out of a PreToolUse event's `tool_input`
+ * payload for the tools that mutate a single file. Returns null for tools
+ * that don't have a single resolvable target (Bash, search tools, etc.) —
+ * those keep cwd-based protection.
+ *
+ * Path-aware tools today: Write, Edit, MultiEdit, NotebookEdit.
+ */
+function extractTargetPath(toolName: string, toolInput: unknown): string | null {
+  if (typeof toolInput !== "object" || toolInput === null) return null;
+  const input = toolInput as Record<string, unknown>;
+  switch (toolName) {
+    case "Write":
+    case "Edit":
+    case "MultiEdit": {
+      const fp = input["file_path"];
+      return typeof fp === "string" && fp.length > 0 ? fp : null;
+    }
+    case "NotebookEdit": {
+      const np = input["notebook_path"];
+      return typeof np === "string" && np.length > 0 ? np : null;
+    }
+    default:
+      return null;
+  }
 }
 
 async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
@@ -342,21 +371,41 @@ export async function runPackHookBranchProtectionCli(
   }
 
   const { branches: protectedList } = resolveProtectedBranches(pack);
-  const { branch } = resolveGitContext(cwd);
   const configUx = parseConfigUx(
     (pack.config as Record<string, unknown>)["ux"],
     stderr,
   );
 
+  // Resolve the branch context to gate against. For tools that target a
+  // single file (Write, Edit, MultiEdit, NotebookEdit), the relevant
+  // branch is whatever repo OWNS the target path — not cwd. Without this
+  // step, a Write to `~/.claude/memory/foo.md` from inside a checkout on
+  // a protected branch would be wrongly blocked, even though the target
+  // is outside any repo (memory files), or inside an unrelated repo, and
+  // the protection rules of cwd's repo have no bearing on it. For
+  // path-less tools (Bash, etc.) we fall back to cwd as before.
+  const targetPath = extractTargetPath(toolName, event.tool_input);
+  let branchSourceDir = cwd;
+  let branchSource: "target" | "cwd" = "cwd";
+  if (targetPath !== null) {
+    const absTarget = path.isAbsolute(targetPath)
+      ? targetPath
+      : path.resolve(cwd, targetPath);
+    branchSourceDir = path.dirname(absTarget);
+    branchSource = "target";
+  }
+  const { branch } = resolveGitContext(branchSourceDir);
+
   // Outside a git work tree (or detached HEAD) we can't tell what the
   // edit would land on. We choose to allow here — the alternative is
   // blocking every Write in non-git workspaces, which would be hostile
-  // to standalone-script workflows. A detached HEAD on an in-repo cwd
-  // also lands here; arguably should block, but git-detached-HEAD
-  // edits don't auto-push to a protected ref so the downstream
+  // to standalone-script workflows and to writes that target machine
+  // state under $HOME / /tmp. A detached HEAD on an in-repo target also
+  // lands here; arguably should block, but detached-HEAD edits don't
+  // auto-push to a protected ref so the downstream
   // `preflight-before-push` gate still catches the actual hazard.
   if (branch === "") {
-    const diagnostic = `cwd is not on a named branch (detached HEAD or outside a git work tree); allowing`;
+    const diagnostic = `${branchSource} is not on a named branch (detached HEAD or outside a git work tree); allowing`;
     note(diagnostic);
     return { exitCode: 0, blocked: false, diagnostic };
   }
