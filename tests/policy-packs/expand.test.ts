@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import { expandPolicyPacks } from "../../src/policy-packs/expand.js";
 import { parseManifest } from "../../src/schema/index.js";
 
-function buildManifest(packs: unknown[], extraHooks: unknown[] = []): ReturnType<typeof parseManifest> {
+function buildManifest(
+  packs: unknown[],
+  extraHooks: unknown[] = [],
+): ReturnType<typeof parseManifest> {
   return parseManifest({
     version: 1,
     hooks: extraHooks,
@@ -31,7 +34,13 @@ describe("expandPolicyPacks", () => {
     const r = expandPolicyPacks(m);
     expect(r.hooks).toHaveLength(5);
     const events = r.hooks.map((h) => h.event).sort();
-    expect(events).toEqual(["PostToolUse", "PostToolUse", "PreToolUse", "Stop", "UserPromptSubmit"]);
+    expect(events).toEqual([
+      "PostToolUse",
+      "PostToolUse",
+      "PreToolUse",
+      "Stop",
+      "UserPromptSubmit",
+    ]);
     const names = r.hooks.map((h) => h.name).sort();
     expect(names).toEqual([
       "policy-pack:understanding-before-execution:post-tool-use",
@@ -44,7 +53,9 @@ describe("expandPolicyPacks", () => {
     expect(r.files[0]?.relativePath).toBe(
       "policy-packs/understanding-before-execution/instructions.md",
     );
-    expect(r.files[0]?.content).toContain("# Policy Pack: understanding-before-execution");
+    expect(r.files[0]?.content).toContain(
+      "# Policy Pack: understanding-before-execution",
+    );
     expect(r.warnings).toEqual([]);
   });
 
@@ -189,6 +200,9 @@ describe("expandPolicyPacks", () => {
     expect(r.hooks.find((h) => h.event === "PreToolUse")?.command).toBe(
       "UNDERSTANDING_GATE_REPORT_DIR='/tmp/reports' harness pack hook codex-pre-tool-use",
     );
+    expect(r.hooks.find((h) => h.event === "PreToolUse")?.match).toBe(
+      "apply_patch|Bash|shell|exec_command|functions.exec_command",
+    );
   });
 
   it("uses default mode 'grill_me' when config omits mode", () => {
@@ -199,15 +213,22 @@ describe("expandPolicyPacks", () => {
 
   it("threads explicit modes through the instructions file", () => {
     for (const mode of ["fast_confirm", "grill_me", "strict"] as const) {
-      const m = buildManifest([{ name: "understanding-before-execution", config: { mode } }]);
+      const m = buildManifest([
+        { name: "understanding-before-execution", config: { mode } },
+      ]);
       const r = expandPolicyPacks(m);
-      expect(r.files[0]?.content).toMatch(new RegExp(`## Mode\\s*\\n\\s*${mode}`));
+      expect(r.files[0]?.content).toMatch(
+        new RegExp(`## Mode\\s*\\n\\s*${mode}`),
+      );
     }
   });
 
   it("warns and falls back to grill_me when mode is unrecognised", () => {
     const m = buildManifest([
-      { name: "understanding-before-execution", config: { mode: "definitely_invalid" } },
+      {
+        name: "understanding-before-execution",
+        config: { mode: "definitely_invalid" },
+      },
     ]);
     const r = expandPolicyPacks(m);
     expect(r.warnings.some((w) => w.includes("definitely_invalid"))).toBe(true);
@@ -216,7 +237,11 @@ describe("expandPolicyPacks", () => {
 
   it("skips an enabled:false pack and records its name in `skipped`", () => {
     const m = buildManifest([
-      { name: "understanding-before-execution", enabled: false, config: { mode: "strict" } },
+      {
+        name: "understanding-before-execution",
+        enabled: false,
+        config: { mode: "strict" },
+      },
     ]);
     const r = expandPolicyPacks(m);
     expect(r.hooks).toEqual([]);
@@ -260,12 +285,17 @@ describe("expandPolicyPacks", () => {
     const r = expandPolicyPacks(m);
     expect(r.hooks).toHaveLength(5); // v0.18: 3 legacy + 1 PostToolUse expiry; v2 (494fd1e5): +1 track-active-claim
     expect(r.files).toHaveLength(1);
-    expect(r.warnings.some((w) => w.includes("not a known builtin pack"))).toBe(true);
+    expect(r.warnings.some((w) => w.includes("not a known builtin pack"))).toBe(
+      true,
+    );
   });
 
   it("contributes permissions when config.permission_profile names a builtin", () => {
     const m = buildManifest([
-      { name: "understanding-before-execution", config: { permission_profile: "safe-start" } },
+      {
+        name: "understanding-before-execution",
+        config: { permission_profile: "safe-start" },
+      },
     ]);
     const r = expandPolicyPacks(m);
     expect(r.permissions).toBeDefined();
@@ -282,11 +312,16 @@ describe("expandPolicyPacks", () => {
 
   it("warns and skips permissions when permission_profile is unrecognised", () => {
     const m = buildManifest([
-      { name: "understanding-before-execution", config: { permission_profile: "ghost" } },
+      {
+        name: "understanding-before-execution",
+        config: { permission_profile: "ghost" },
+      },
     ]);
     const r = expandPolicyPacks(m);
     expect(r.permissions).toBeUndefined();
-    expect(r.warnings.some((w) => w.includes("unrecognised profile"))).toBe(true);
+    expect(r.warnings.some((w) => w.includes("unrecognised profile"))).toBe(
+      true,
+    );
   });
 
   it("threads implementation-after-approval permissions through", () => {
@@ -318,6 +353,8 @@ describe("expandPolicyPacks", () => {
     const r = expandPolicyPacks(m);
     expect(r.hooks).toHaveLength(4); // 5 contributions - 1 dropped collision (Stop)
     expect(r.hooks.find((h) => h.event === "Stop")).toBeUndefined();
-    expect(r.warnings.some((w) => w.includes("collides with a manifest hooks"))).toBe(true);
+    expect(
+      r.warnings.some((w) => w.includes("collides with a manifest hooks")),
+    ).toBe(true);
   });
 });

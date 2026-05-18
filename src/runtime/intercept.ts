@@ -23,6 +23,10 @@ import type { Manifest, Policy } from "../schema/index.js";
 import { renderAgentFacing } from "./agent-facing.js";
 import { POLICY_DECISION_TYPE } from "./ledger-record.js";
 import { resolveSessionId } from "./session-id.js";
+import {
+  expandToolNameAliases,
+  extractShellCommand,
+} from "./tool-name-aliases.js";
 
 export interface ToolEvent {
   hook_event_name?: string;
@@ -85,7 +89,11 @@ export interface InterceptResult {
 }
 
 export interface LedgerClient {
-  query(tag: string, sessionId: string, timeoutMs?: number): Promise<LedgerQueryResult>;
+  query(
+    tag: string,
+    sessionId: string,
+    timeoutMs?: number,
+  ): Promise<LedgerQueryResult>;
   /**
    * Record a `policy_decision` entry to the evidence ledger. Implementations
    * MUST be best-effort: failures bubble back as `null`/false so a degraded
@@ -117,25 +125,30 @@ function policyMatchesEvent(policy: Policy, event: ToolEvent): boolean {
   if (policy.trigger.event !== event.hook_event_name) return false;
   if (policy.trigger.match !== undefined) {
     if (typeof event.tool_name !== "string") return false;
-    if (!event.tool_name.includes(policy.trigger.match)) return false;
+    const toolNames = expandToolNameAliases(event.tool_name);
+    if (
+      !toolNames.some((toolName) => toolName.includes(policy.trigger.match!))
+    ) {
+      return false;
+    }
   }
   if (policy.trigger.bash_match !== undefined) {
-    const args = event.tool_input as { command?: unknown } | undefined;
-    if (!args || typeof args.command !== "string") return false;
+    const command = extractShellCommand(event);
+    if (command === null) return false;
     let re: RegExp;
     try {
       re = new RegExp(policy.trigger.bash_match);
     } catch {
       return false;
     }
-    if (!re.test(args.command)) return false;
+    if (!re.test(command)) return false;
   }
   return true;
 }
 
 function buildEventContext(event: ToolEvent): ExtractEventContext {
   return {
-    toolArgs: event.tool_input,
+    toolArgs: event.tool_input ?? event.raw_input ?? event.input,
     event,
     session: { id: event.session_id ?? "" },
     git: {},
@@ -261,7 +274,10 @@ async function evaluateOnePolicy(
   };
 }
 
-function filterEntriesByTag(entries: LedgerEntry[], tag: string): LedgerEntry[] {
+function filterEntriesByTag(
+  entries: LedgerEntry[],
+  tag: string,
+): LedgerEntry[] {
   // The ledger client returns the entire session's entries; filter to those
   // whose content/source matches the substituted tag. evaluateRequires also
   // does a substring match, but pre-filtering here keeps the trace quieter
@@ -281,7 +297,8 @@ function filterEntriesByTag(entries: LedgerEntry[], tag: string): LedgerEntry[] 
       // flushing their dev ledger doesn't keep paying the pollution
       // tax. New rows are caught by the type check above.
       !e.content.startsWith(`${POLICY_DECISION_TYPE}:`) &&
-      (e.content.includes(tag) || (e.source !== undefined && e.source.includes(tag))),
+      (e.content.includes(tag) ||
+        (e.source !== undefined && e.source.includes(tag))),
   );
 }
 
@@ -296,7 +313,10 @@ export async function intercept(
     const decision = await evaluateOnePolicy(policy, options);
     decisions.push(decision);
     try {
-      await options.ledger.record(decision, resolveSessionId(options.event.session_id));
+      await options.ledger.record(
+        decision,
+        resolveSessionId(options.event.session_id),
+      );
     } catch {
       /* audit-write failure must not block; the decision is still applied. */
     }
