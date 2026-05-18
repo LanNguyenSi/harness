@@ -501,6 +501,73 @@ export function parseApprovalLifecycle(
   };
 }
 
+/**
+ * Flip the latest matching persisted report's approvalStatus to
+ * `expired` so it no longer satisfies the gate's persisted-report
+ * fallback (harness/1ee26e77 follow-up: post-tool-use expiry was
+ * marker-only; the persisted report at .understanding-gate/reports/
+ * silently kept satisfying the gate even after task_finish deleted
+ * the marker).
+ *
+ * Atomic rewrite. Preserves the rest of the report body so the audit
+ * trail (the operator's actual Understanding text + previous approval
+ * timestamps) stays intact; only the status fields change.
+ *
+ * Returns `{ ok: true, filePath, previousStatus }` on success,
+ * `{ ok: false, reason }` when no matching report exists or rewrite
+ * failed. Non-throwing: caller (post-tool-use hook) uses this as a
+ * best-effort cleanup so a missing report dir or unrelated I/O issue
+ * does not escalate into a session-breaking hook failure.
+ */
+export function expirePersistedReport(
+  reportsDir: string,
+  sessionId: string,
+  now: Date = new Date(),
+): { ok: true; filePath: string; previousStatus: string | null } | { ok: false; reason: string } {
+  const reports = listPersistedReports(reportsDir);
+  if (reports.length === 0) {
+    return { ok: false, reason: `no reports under ${reportsDir}` };
+  }
+  const latest = findLatestReportForSession(reports, sessionId);
+  if (!latest) {
+    return {
+      ok: false,
+      reason: `no report matched session_id=${sessionId} (${reports.length} report(s) for other sessions)`,
+    };
+  }
+  if (latest.approvalStatus !== "approved") {
+    return {
+      ok: false,
+      reason: `latest report ${path.basename(latest.filePath)} already has approvalStatus=${latest.approvalStatus ?? "<missing>"}, nothing to expire`,
+    };
+  }
+  let raw: string;
+  try {
+    raw = fs.readFileSync(latest.filePath, "utf8");
+  } catch (err) {
+    return { ok: false, reason: `failed to read ${latest.filePath}: ${(err as Error).message}` };
+  }
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(raw) as Record<string, unknown>;
+  } catch (err) {
+    return { ok: false, reason: `failed to parse ${latest.filePath}: ${(err as Error).message}` };
+  }
+  const previousStatus =
+    typeof parsed["approvalStatus"] === "string" ? (parsed["approvalStatus"] as string) : null;
+  parsed["approvalStatus"] = "expired";
+  parsed["expiredAt"] = now.toISOString();
+  try {
+    atomicWriteFile(latest.filePath, `${JSON.stringify(parsed, null, 2)}\n`);
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `failed to rewrite ${latest.filePath}: ${(err as Error).message}`,
+    };
+  }
+  return { ok: true, filePath: latest.filePath, previousStatus };
+}
+
 /** Clear the per-session marker (used by `harness approve --revoke` and tests). */
 export function clearApprovalMarker(generatedDir: string, sessionId: string): void {
   try {

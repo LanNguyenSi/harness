@@ -26,6 +26,8 @@ import {
   approvalMarkerPathFor,
   clearApprovalMarker,
   clearTaskApprovalMarker,
+  defaultReportsDir,
+  expirePersistedReport,
   parseApprovalLifecycle,
   taskApprovalMarkerPathFor,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
@@ -38,9 +40,18 @@ const PACK_NAME = "understanding-before-execution";
 export interface PackHookPostToolUseOptions extends LoaderOptions {
   pack?: string;
   generatedDir?: string;
+  /**
+   * Override the persisted-report directory. Defaults to
+   * `defaultReportsDir()` which honours `UNDERSTANDING_GATE_REPORT_DIR`
+   * (set by the pack's hook-command wrapper) or falls back to
+   * `<cwd>/.understanding-gate/reports`.
+   */
+  reportsDir?: string;
   stdin?: NodeJS.ReadableStream;
   stderr?: NodeJS.WritableStream;
   manifest?: Manifest;
+  /** Override "now" for deterministic tests. */
+  now?: Date;
 }
 
 export interface PackHookPostToolUseResult {
@@ -56,6 +67,14 @@ export interface PackHookPostToolUseResult {
    * for that task id. False otherwise. Independent of markerCleared.
    */
   taskMarkerCleared: boolean;
+  /**
+   * Was the persisted report (`.understanding-gate/reports/...json`)
+   * flipped from `approved` to `expired`? Closes the silent re-approval
+   * bypass that pre-this-fix existed since PR #172: the marker was
+   * deleted on task_finish but the persisted-report fallback still
+   * satisfied the gate.
+   */
+  persistedReportExpired: boolean;
   /** Diagnostic line emitted to stderr. */
   diagnostic: string;
 }
@@ -139,6 +158,7 @@ function noop(
     matchedExpiry: false,
     markerCleared: false,
     taskMarkerCleared: false,
+    persistedReportExpired: false,
     diagnostic,
   };
 }
@@ -283,21 +303,36 @@ export async function runPackHookPostToolUseCli(
     }
   }
 
+  // Persisted-report expiry (harness/1ee26e77 follow-up). Closes the
+  // silent bypass that existed since PR #172: marker-deletion alone
+  // did not invalidate the persisted-report fallback the gate consults
+  // when the marker is absent, so the next Edit/Write/Bash silently
+  // re-approved via the report even though the marker had just been
+  // expired. Best-effort; a missing reports dir or unrelated read
+  // failure is logged but does not break the hook.
+  const reportsDir = opts.reportsDir ?? defaultReportsDir();
+  const reportExpiry = expirePersistedReport(reportsDir, sessionId, opts.now);
+  const persistedReportExpired = reportExpiry.ok;
+
   const matchSource = bashRegex !== undefined
     ? `bash regex /${bashRegex.source}/`
     : `tool name`;
   const taskNote = taskMarkerCleared
     ? `; also cleared task marker for task ${clearedTaskId}`
     : "";
+  const reportNote = reportExpiry.ok
+    ? `; expired persisted report ${reportExpiry.filePath}`
+    : `; persisted-report expiry skipped (${reportExpiry.reason})`;
   const diagnostic = wasPresent
-    ? `harness pack hook post-tool-use: expired approval marker for session ${sessionId} after ${toolName} (${matchSource})${taskNote}`
-    : `harness pack hook post-tool-use: ${toolName} matched ${matchSource} but no marker present for session ${sessionId}${taskNote}`;
+    ? `harness pack hook post-tool-use: expired approval marker for session ${sessionId} after ${toolName} (${matchSource})${taskNote}${reportNote}`
+    : `harness pack hook post-tool-use: ${toolName} matched ${matchSource} but no marker present for session ${sessionId}${taskNote}${reportNote}`;
   stderr.write(`${diagnostic}\n`);
   return {
     exitCode: 0,
     matchedExpiry: true,
     markerCleared: wasPresent,
     taskMarkerCleared,
+    persistedReportExpired,
     diagnostic,
   };
 }

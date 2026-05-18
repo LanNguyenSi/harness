@@ -381,6 +381,103 @@ describe("pack hook post-tool-use — task-scoped marker cleanup (harness/1ee26e
     ).toBe(true);
   });
 
+  it("flips the persisted report from approved to expired when the matched tool fires (closes the bypass introduced in PR #172)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-05-18T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    // Reports dir is a sibling of generatedDir.
+    const reportsDir = path.join(tmp, "reports");
+    fs.mkdirSync(reportsDir, { recursive: true });
+    const reportPath = path.join(reportsDir, "rpt-sess-1.json");
+    fs.writeFileSync(
+      reportPath,
+      `${JSON.stringify(
+        {
+          sessionId: "sess-1",
+          approvalStatus: "approved",
+          approvedAt: "2026-05-18T08:00:00Z",
+          approvedBy: "test-operator",
+          body: "the operator's actual understanding text",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const stderr = bufferStream();
+    const result = await runPackHookPostToolUseCli({
+      manifest: manifestWithPack({ approval_lifecycle: DEFAULT_LIFECYCLE }),
+      stdin: readableFromString(eventBody()),
+      stderr: stderr.stream,
+      generatedDir,
+      reportsDir,
+      now: new Date("2026-05-18T10:00:00Z"),
+    });
+
+    expect(result.matchedExpiry).toBe(true);
+    expect(result.markerCleared).toBe(true);
+    expect(result.persistedReportExpired).toBe(true);
+
+    const after = JSON.parse(fs.readFileSync(reportPath, "utf8")) as Record<string, unknown>;
+    expect(after.approvalStatus).toBe("expired");
+    expect(after.expiredAt).toBe("2026-05-18T10:00:00.000Z");
+    // Operator's report body preserved for audit.
+    expect(after.body).toBe("the operator's actual understanding text");
+    expect(after.approvedAt).toBe("2026-05-18T08:00:00Z");
+    expect(stderr.read()).toMatch(/expired persisted report/);
+  });
+
+  it("degrades gracefully when no persisted report exists for the session", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-05-18T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const reportsDir = path.join(tmp, "empty-reports");
+
+    const stderr = bufferStream();
+    const result = await runPackHookPostToolUseCli({
+      manifest: manifestWithPack({ approval_lifecycle: DEFAULT_LIFECYCLE }),
+      stdin: readableFromString(eventBody()),
+      stderr: stderr.stream,
+      generatedDir,
+      reportsDir,
+    });
+
+    expect(result.matchedExpiry).toBe(true);
+    expect(result.markerCleared).toBe(true);
+    expect(result.persistedReportExpired).toBe(false);
+    expect(stderr.read()).toMatch(/persisted-report expiry skipped \(no reports/);
+  });
+
+  it("is idempotent: a second post-tool-use call on an already-expired report does not re-touch it", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    fs.mkdirSync(reportsDir, { recursive: true });
+    const reportPath = path.join(reportsDir, "rpt-sess-1.json");
+    fs.writeFileSync(
+      reportPath,
+      `${JSON.stringify({ sessionId: "sess-1", approvalStatus: "expired" }, null, 2)}\n`,
+    );
+
+    const stderr = bufferStream();
+    const result = await runPackHookPostToolUseCli({
+      manifest: manifestWithPack({ approval_lifecycle: DEFAULT_LIFECYCLE }),
+      stdin: readableFromString(eventBody()),
+      stderr: stderr.stream,
+      generatedDir,
+      reportsDir,
+    });
+
+    expect(result.persistedReportExpired).toBe(false);
+    expect(stderr.read()).toMatch(/persisted-report expiry skipped/);
+    // File untouched.
+    const after = JSON.parse(fs.readFileSync(reportPath, "utf8")) as Record<string, unknown>;
+    expect(after.approvalStatus).toBe("expired");
+  });
+
   it("leaves the task-scoped marker untouched when the matched event is a Bash regex boundary (no taskId on Bash)", async () => {
     const generatedDir = path.join(tmp, "harness.generated");
     writeApprovalMarker(generatedDir, "sess-1", {
