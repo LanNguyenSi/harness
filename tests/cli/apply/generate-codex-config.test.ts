@@ -137,4 +137,37 @@ describe("generateCodexConfig", () => {
     expect(warnings.some((w) => w.includes("path_match"))).toBe(true);
     expect(warnings.some((w) => w.includes("bash_match"))).toBe(true);
   });
+
+  it("projects memory.router into a user_prompt_submit hook (PR #203)", () => {
+    // Codex parity with generate-settings.ts: per-prompt memory
+    // augmentation must wire on both runtimes, otherwise a Codex
+    // operator who uses memory-router would silently lose the feature.
+    const { content } = generateCodexConfig(
+      parseManifest({
+        version: 1,
+        memory: {
+          directories: [],
+          router: { command: ["memory-router-user-prompt-submit"] },
+        },
+      }),
+    );
+    expect(content).toContain("[[hooks.user_prompt_submit]]");
+    expect(content).toContain('name = "memory:router"');
+    expect(content).toContain('command = "memory-router-user-prompt-submit"');
+    expect(content).toContain("timeout_ms = 5000");
+  });
+
+  it("omits memory.router from codex config when enabled:false", () => {
+    const { content } = generateCodexConfig(
+      parseManifest({
+        version: 1,
+        memory: {
+          directories: [],
+          router: { command: ["memory-router-user-prompt-submit"], enabled: false },
+        },
+      }),
+    );
+    expect(content).not.toContain("memory-router-user-prompt-submit");
+    expect(content).not.toContain("memory:router");
+  });
 });
