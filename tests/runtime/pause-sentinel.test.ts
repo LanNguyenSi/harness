@@ -91,6 +91,26 @@ describe("readSentinel", () => {
     );
     expect(readSentinel(tmp).kind).toBe("active");
   });
+
+  it("rejects a typed-wrong expiresAt as malformed (not downgraded to indefinite)", () => {
+    // Without strict typing, an attacker who can write the sentinel could
+    // smuggle `expiresAt: 42` and turn it into a no-auto-resume pause. The
+    // normalizeSentinel guard rejects the file as malformed, which reads
+    // as absent (the gate continues to evaluate normally).
+    fs.writeFileSync(
+      sentinelPath(tmp),
+      JSON.stringify({ pausedAt: "2026-05-18T12:00:00Z", expiresAt: 42 }),
+    );
+    expect(readSentinel(tmp).kind).toBe("absent");
+  });
+
+  it("treats an empty-string expiresAt as malformed", () => {
+    fs.writeFileSync(
+      sentinelPath(tmp),
+      JSON.stringify({ pausedAt: "2026-05-18T12:00:00Z", expiresAt: "" }),
+    );
+    expect(readSentinel(tmp).kind).toBe("absent");
+  });
 });
 
 describe("deleteSentinel", () => {

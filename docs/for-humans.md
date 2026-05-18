@@ -345,6 +345,19 @@ Audit trail: every pause / resume / auto-expiry writes an
 the evidence ledger. `harness audit --since 24h` surfaces them
 alongside policy decisions.
 
+**Trust boundary.** The sentinel file is plain JSON at
+`<generatedDir>/.harness-paused` with no signature. The operator-only
+CLI guardrails (`$CLAUDE_SESSION_ID` refusal, non-TTY refusal) keep
+agents from invoking `harness pause` against you, but they do not
+stop an agent that already has `Write` access to anywhere under
+`harness.generated/` from dropping a forged sentinel. If you wire
+`Write` policies that block writes outside specific allowed paths,
+include `harness.generated/.harness-paused` in the block list. The
+default install does not auto-restrict this path; the agent surface
+typically does not need write access to `harness.generated/` for
+anything else, so a blanket deny on that directory is the simplest
+defence.
+
 ## Diagnostics cheat-sheet
 
 | You want to know | Run |

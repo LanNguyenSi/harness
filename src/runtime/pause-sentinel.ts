@@ -72,9 +72,20 @@ export function readSentinel(generatedDir: string, now: Date = new Date()): Read
 function normalizeSentinel(raw: Record<string, unknown>): PauseSentinel {
   const pausedAt = typeof raw["pausedAt"] === "string" ? raw["pausedAt"] : "";
   if (pausedAt === "") throw new Error("missing pausedAt");
+  // expiresAt must be either an explicit null (indefinite) or a non-empty
+  // string. A typed-wrong value (e.g. number 42) is rejected as malformed
+  // rather than silently downgraded to indefinite — without this, a forged
+  // sentinel of `{"pausedAt":"...","expiresAt":42}` would read as a no-
+  // auto-resume pause that survives every hook fire.
   const expiresAtRaw = raw["expiresAt"];
-  const expiresAt =
-    typeof expiresAtRaw === "string" && expiresAtRaw.length > 0 ? expiresAtRaw : null;
+  let expiresAt: string | null;
+  if (expiresAtRaw === null || expiresAtRaw === undefined) {
+    expiresAt = null;
+  } else if (typeof expiresAtRaw === "string" && expiresAtRaw.length > 0) {
+    expiresAt = expiresAtRaw;
+  } else {
+    throw new Error("expiresAt must be a non-empty ISO string or null");
+  }
   const reason = typeof raw["reason"] === "string" ? raw["reason"] : null;
   const pausedBy = typeof raw["pausedBy"] === "string" ? raw["pausedBy"] : null;
   return { pausedAt, expiresAt, reason, pausedBy };

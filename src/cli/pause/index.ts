@@ -29,7 +29,16 @@ import { expandHome } from "../../runtime/expand-home.js";
 
 const DEFAULT_PAUSE_SECONDS = 15 * 60;
 
-/** Synthetic grounding session bucket for operator-side pause/resume events. */
+/**
+ * Synthetic grounding session bucket for operator-side pause/resume
+ * events. Audit consumers (`harness audit --since 24h`, the `explain
+ * --last` walker, any custom ledger query) need to know to look in
+ * `default` for these facts, not in a per-agent session id — pause runs
+ * from the operator shell where no `$CLAUDE_SESSION_ID` is set, so a
+ * synthetic bucket is the only option that keeps the audit trail
+ * queryable. This matches the convention `harness audit` already uses
+ * when `$CLAUDE_SESSION_ID` is unset.
+ */
 export const OPERATOR_LEDGER_SESSION = "default";
 
 export interface PauseOptions extends LoaderOptions {
