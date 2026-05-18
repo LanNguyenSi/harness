@@ -291,6 +291,73 @@ pair are required for `harness apply` to wire the gate end-to-end.
   misnamed hooks, undeclared template references, and bad duration
   strings before they ship.
 
+## Pause and resume (recovery / debug / incident-mode only)
+
+Three situations need a way to make harness hooks dormant for a few
+minutes without `npm uninstall -g` and without hand-editing
+`settings.json`:
+
+1. **Lockout recovery.** A misconfigured gate is rejecting your shell.
+2. **"Is this harness or my code?" debug.** You want to A/B-test
+   whether a gate is responsible for a surprising block.
+3. **Incident / hotfix.** Prod is down, an unrelated preflight is
+   failing, and you need to push the fix now.
+
+The verbs are intentionally narrow:
+
+```bash
+harness pause                  # default 15m auto-resume
+harness pause --for 5m         # explicit window
+harness pause --for 1h --reason "prod incident #482"
+harness resume                 # cuts the pause short
+```
+
+While paused, every PreToolUse / PostToolUse hook emits a one-line
+stderr notice (`harness <hook>: PAUSED since 3m ago (reason: ...);
+auto-resumes in 7m. Run \`harness resume\` to re-enable.`) and allows
+the tool call without evaluating. After the window expires, the next
+hook fire silently deletes the sentinel and resumes normal gating.
+
+**Operator-only by design.** `harness pause` refuses to run when
+`$CLAUDE_SESSION_ID` is set (the variable is always set inside an
+agent shell) and refuses non-TTY stdin without `--i-am-the-operator`.
+This is the guardrail against pause becoming an agent-driven bypass
+of the gates harness exists to enforce. From inside Claude Code,
+prefix the command with `! ` so it runs in your own shell.
+
+**Pause is not for routine gate bypass.** Three rules of thumb:
+
+- **For permanent per-policy disable**, edit `policies[].enabled`
+  in the manifest or set `policy_packs[].enabled: false`. Persistent,
+  diff-able, source-controlled.
+- **For "I want to move fast on a prototype branch"**, define a
+  branch-aware policy with a `when:` clause, not a session-wide pause.
+- **For lockout recovery / debug / incident**, pause is the right
+  tool, but always with `--for <duration>` so a forgotten pause
+  cannot silently disable your gates across sessions.
+
+`--indefinite` exists for genuinely open-ended recovery flows but
+requires `--i-am-the-operator-and-accept-no-auto-resume` as a separate
+flag; the verbose flag itself is the friction.
+
+Audit trail: every pause / resume / auto-expiry writes an
+`harness-paused:<pausedAt>` / `harness-resumed:<pausedAt>` fact to
+the evidence ledger. `harness audit --since 24h` surfaces them
+alongside policy decisions.
+
+**Trust boundary.** The sentinel file is plain JSON at
+`<generatedDir>/.harness-paused` with no signature. The operator-only
+CLI guardrails (`$CLAUDE_SESSION_ID` refusal, non-TTY refusal) keep
+agents from invoking `harness pause` against you, but they do not
+stop an agent that already has `Write` access to anywhere under
+`harness.generated/` from dropping a forged sentinel. If you wire
+`Write` policies that block writes outside specific allowed paths,
+include `harness.generated/.harness-paused` in the block list. The
+default install does not auto-restrict this path; the agent surface
+typically does not need write access to `harness.generated/` for
+anything else, so a blanket deny on that directory is the simplest
+defence.
+
 ## Diagnostics cheat-sheet
 
 | You want to know | Run |
@@ -305,6 +372,8 @@ pair are required for `harness apply` to wire the gate end-to-end.
 | Replay recent policy decisions | `harness audit --since 24h` |
 | Why did this exact policy fire just now? | `harness explain --last` |
 | Full chronological session export (transcript + ledger, redacted) | `harness session-export <sessionId>` |
+| Temporarily make all hooks dormant (recovery / debug / incident) | `harness pause --for <duration>` |
+| Re-enable hooks before the pause window expires | `harness resume` |
 
 ## Where to read next
 

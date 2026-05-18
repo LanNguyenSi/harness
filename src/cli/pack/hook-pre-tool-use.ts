@@ -50,6 +50,7 @@ import {
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { z } from "zod";
 import { loadManifest, type LoaderOptions } from "../loader.js";
+import { checkPauseFromLoader } from "./pause-check.js";
 import { renderReportSchemaHint } from "./understanding-report-schema-hint.js";
 
 const PACK_NAME = "understanding-before-execution";
@@ -314,6 +315,27 @@ export async function runPackHookPreToolUseCli(
       ? (event.tool_input as { command?: unknown }).command
       : undefined;
   const commandStr = typeof rawCommand === "string" ? rawCommand : "";
+
+  // Pause sentinel — operator-only kill switch. Honoured BEFORE manifest
+  // load so the lockout-recovery flow (where the manifest is exactly
+  // what's broken) still respects an active pause.
+  {
+    const pauseOpts: Parameters<typeof checkPauseFromLoader>[0] = {
+      loaderOpts: opts,
+      hookLabel: "pre-tool-use",
+      stderr,
+    };
+    if (opts.generatedDir !== undefined) pauseOpts.generatedDir = opts.generatedDir;
+    if (checkPauseFromLoader(pauseOpts).paused) {
+      const diagnostic = "harness paused; pre-tool-use allowing without evaluating.";
+      return {
+        exitCode: 0,
+        blocked: false,
+        approvalCheck: { approved: true, source: "none", detail: diagnostic },
+        diagnostic,
+      };
+    }
+  }
 
   // Load manifest (or use injection). Bail to allow on any failure so a
   // missing harness install never bricks the session. The resolved

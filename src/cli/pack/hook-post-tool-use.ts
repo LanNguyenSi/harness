@@ -34,6 +34,7 @@ import {
 import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
 import type { Manifest } from "../../schema/index.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
+import { checkPauseFromLoader } from "./pause-check.js";
 
 const PACK_NAME = "understanding-before-execution";
 
@@ -179,6 +180,23 @@ export async function runPackHookPostToolUseCli(
       "harness pack hook post-tool-use: malformed event JSON, skipping marker expiry",
       stderr,
     );
+  }
+
+  // Pause sentinel — skip marker expiry while paused so a debug A/B-test
+  // doesn't silently invalidate the operator's approval state.
+  {
+    const pauseOpts: Parameters<typeof checkPauseFromLoader>[0] = {
+      loaderOpts: opts,
+      hookLabel: "post-tool-use",
+      stderr,
+    };
+    if (opts.generatedDir !== undefined) pauseOpts.generatedDir = opts.generatedDir;
+    if (checkPauseFromLoader(pauseOpts).paused) {
+      return noop(
+        "harness paused; post-tool-use skipping marker expiry without evaluating.",
+        stderr,
+      );
+    }
   }
 
   const sessionId =

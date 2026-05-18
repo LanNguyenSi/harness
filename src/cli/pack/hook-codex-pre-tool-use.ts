@@ -32,6 +32,7 @@ import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { PolicyUxSchema, type Manifest, type McpServer, type PolicyUx } from "../../schema/index.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
+import { checkPauseFromLoader } from "./pause-check.js";
 import { renderReportSchemaHint } from "./understanding-report-schema-hint.js";
 
 const PACK_NAME = "understanding-before-execution";
@@ -187,6 +188,20 @@ export async function runPackHookCodexPreToolUseCli(
     process.env["CLAUDE_SESSION_ID"] ??
     "";
   const toolName = pickString(event.tool_name, event.tool) ?? "(unknown)";
+
+  // Pause sentinel — honoured BEFORE manifest load so the lockout-recovery
+  // flow (broken install) still respects an active pause.
+  {
+    const pauseOpts: Parameters<typeof checkPauseFromLoader>[0] = {
+      loaderOpts: opts,
+      hookLabel: "codex-pre-tool-use",
+      stderr,
+    };
+    if (opts.generatedDir !== undefined) pauseOpts.generatedDir = opts.generatedDir;
+    if (checkPauseFromLoader(pauseOpts).paused) {
+      return allowResult("harness paused", "none", stderr);
+    }
+  }
 
   // Load manifest (or use injection). Bail to allow on any failure so a
   // missing harness install never bricks the session.

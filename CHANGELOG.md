@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`harness pause` / `harness resume`: sentinel-based hook bypass without unwiring** (harness/07850f73). New operator-only verbs write a JSON sentinel under `<generatedDir>/.harness-paused`; every PreToolUse / PostToolUse pack hook (`pre-tool-use`, `codex-pre-tool-use`, `post-tool-use`, `track-active-claim`, `branch-protection`) checks the sentinel before evaluating and short-circuits to allow + a one-line stderr notice while it is active. Auto-resume on first hook fire past the expiry. Default window is 15 minutes; `--for <duration>` accepts the same shorthand and ISO-8601 forms `requires.within` does. `--indefinite` exists for genuinely open-ended recovery flows but requires `--i-am-the-operator-and-accept-no-auto-resume` as a separate verbose flag, so the friction itself discourages routine indefinite-pausing. Each pause / resume / auto-expiry also writes an `harness-paused:<pausedAt>` / `harness-resumed:<pausedAt>` evidence-ledger fact so the audit trail outlives the ephemeral sentinel file. Intended for three narrow flows: lockout recovery (replaces the `ledger_add understanding-approved:<sessionId>` hack documented in `feedback_understanding_gate_lockout_recovery`), "is this harness or my code?" debug A/B-tests, and incident hotfix mode. NOT a routine bypass: the load-bearing guardrail is `harness pause` refuses to run when `$CLAUDE_SESSION_ID` is set (always set inside an agent shell) AND refuses non-TTY stdin without `--i-am-the-operator`. For permanent per-policy disable, edit `policies[].enabled` in the manifest — pause exists for the temporary case only. New docs section in `docs/for-humans.md` enumerates the boundary; `harness audit --since 24h` surfaces the ledger trail alongside policy decisions.
+
 ## [0.21.1] - 2026-05-18
 
 ### Fixed

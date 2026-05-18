@@ -38,6 +38,7 @@ import {
 import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
 import type { Manifest } from "../../schema/index.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
+import { checkPauseFromLoader } from "./pause-check.js";
 
 const PACK_NAME = "understanding-before-execution";
 
@@ -131,6 +132,22 @@ export async function runPackHookTrackActiveClaimCli(
       "harness pack hook track-active-claim: malformed event JSON, skipping",
       stderr,
     );
+  }
+
+  // Pause sentinel — skip claim-file mutations while paused.
+  {
+    const pauseOpts: Parameters<typeof checkPauseFromLoader>[0] = {
+      loaderOpts: opts,
+      hookLabel: "track-active-claim",
+      stderr,
+    };
+    if (opts.generatedDir !== undefined) pauseOpts.generatedDir = opts.generatedDir;
+    if (checkPauseFromLoader(pauseOpts).paused) {
+      return noop(
+        "harness paused; track-active-claim skipping without evaluating.",
+        stderr,
+      );
+    }
   }
 
   const toolName = typeof event.tool_name === "string" ? event.tool_name : "";

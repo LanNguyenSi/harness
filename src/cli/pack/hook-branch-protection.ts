@@ -44,6 +44,7 @@ import { POLICY_DECISION_TYPE } from "../../runtime/ledger-record.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { PolicyUxSchema, type Manifest, type McpServer, type PolicyUx } from "../../schema/index.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
+import { checkPauseFromLoader } from "./pause-check.js";
 
 export interface PackHookBranchProtectionOptions extends LoaderOptions {
   /** Defaults to process.stdin. */
@@ -321,6 +322,19 @@ export async function runPackHookBranchProtectionCli(
     event = JSON.parse(raw.trim() || "{}") as ToolEventLite;
   } catch {
     /* event stays {} — handled by the sessionId check below */
+  }
+
+  // Pause sentinel — even branch-protection (the strictest gate) yields
+  // to an operator pause. The whole point of the incident-mode flow is
+  // pushing a hotfix to a protected branch when normal gates are in the
+  // way.
+  if (checkPauseFromLoader({
+    loaderOpts: opts,
+    hookLabel: "branch-protection",
+    stderr,
+  }).paused) {
+    const diagnostic = "harness paused; branch-protection allowing without evaluating.";
+    return { exitCode: 0, blocked: false, diagnostic };
   }
 
   const sessionId =
