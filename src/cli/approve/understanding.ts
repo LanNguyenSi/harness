@@ -23,6 +23,7 @@ import {
   defaultReportsDir,
   findLatestReportForSession,
   listPersistedReports,
+  readActiveClaim,
   writeApprovalMarker,
   writeTaskApprovalMarker,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
@@ -46,6 +47,13 @@ export interface ApproveUnderstandingOptions extends LoaderOptions {
    * legacy session-scoped marker. Either satisfies the gate; the
    * task-scoped marker is the design-intent target for multi-task
    * sessions so the next task can require its own Understanding Report.
+   *
+   * When omitted, `harness approve understanding` falls back to reading
+   * `<generatedDir>/active-claim` (written by the track-active-claim
+   * PostToolUse hook on `task_start`, harness/494fd1e5). If that file
+   * exists, its content is used as the task id. If absent, no task
+   * marker is written — the session marker is the only one (v1
+   * back-compat).
    */
   task?: string;
   /** Override the reports directory (test injection). */
@@ -79,13 +87,18 @@ export interface ApproveUnderstandingResult {
    */
   marker: { ok: true; filePath: string; approvedAt: string } | { ok: false; reason: string };
   /**
-   * Task-scoped marker write outcome. Present only when --task / opts.task
-   * was supplied; null otherwise so a regression cannot silently flip
-   * session-only sessions into task-mode.
+   * Task-scoped marker write outcome. Present when --task / opts.task
+   * was supplied OR when the active-claim file resolved one
+   * (harness/494fd1e5). Null when no task was resolved through either
+   * surface so a regression cannot silently flip session-only sessions
+   * into task-mode.
+   *
+   * The `source` field tells the operator which surface fed the id so
+   * a wrong claim file can be spotted before it lands in the marker.
    */
   taskMarker:
-    | { ok: true; taskId: string; filePath: string; approvedAt: string }
-    | { ok: false; taskId: string; reason: string }
+    | { ok: true; taskId: string; filePath: string; approvedAt: string; source: "flag" | "active-claim" }
+    | { ok: false; taskId: string; reason: string; source: "flag" | "active-claim" }
     | null;
   ledger: { ok: boolean; tag: string; reason?: string };
   persistedReport:
@@ -328,28 +341,44 @@ export async function approveUnderstanding(
     };
   }
 
-  // Task-scoped marker (harness/1ee26e77). Written alongside the
-  // session marker when the operator supplied --task. A failure here is
-  // surfaced loudly but does not abort the approve flow — the session
-  // marker still satisfies the gate as a fallback.
+  // Task-scoped marker (harness/1ee26e77 + v2 auto-resolve in
+  // harness/494fd1e5). Written alongside the session marker when:
+  //   - --task / opts.task was supplied (explicit, source: "flag"), OR
+  //   - the active-claim file resolves to a taskId (source: "active-claim").
+  // A failure here is surfaced loudly but does not abort the approve
+  // flow; the session marker still satisfies the gate as a fallback.
   let taskMarkerResult: ApproveUnderstandingResult["taskMarker"] = null;
+  let resolvedTaskId: string | null = null;
+  let taskSource: "flag" | "active-claim" = "flag";
   if (typeof opts.task === "string" && opts.task.length > 0) {
+    resolvedTaskId = opts.task;
+    taskSource = "flag";
+  } else {
+    const fromFile = readActiveClaim(generatedDir);
+    if (fromFile !== null) {
+      resolvedTaskId = fromFile;
+      taskSource = "active-claim";
+    }
+  }
+  if (resolvedTaskId !== null) {
     try {
-      const filePath = writeTaskApprovalMarker(generatedDir, opts.task, {
+      const filePath = writeTaskApprovalMarker(generatedDir, resolvedTaskId, {
         approvedAt: approvedAtMarker,
         approvedBy: approvedByMarker,
       });
       taskMarkerResult = {
         ok: true,
-        taskId: opts.task,
+        taskId: resolvedTaskId,
         filePath,
         approvedAt: approvedAtMarker,
+        source: taskSource,
       };
     } catch (err) {
       taskMarkerResult = {
         ok: false,
-        taskId: opts.task,
+        taskId: resolvedTaskId,
         reason: `failed to write task marker: ${(err as Error).message}`,
+        source: taskSource,
       };
     }
   }

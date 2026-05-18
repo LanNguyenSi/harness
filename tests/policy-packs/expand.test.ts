@@ -17,22 +17,27 @@ describe("expandPolicyPacks", () => {
     expect(r).toEqual({ hooks: [], files: [], warnings: [], skipped: [] });
   });
 
-  it("resolves the understanding-before-execution builtin into 4 hooks + 1 instructions file", () => {
+  it("resolves the understanding-before-execution builtin into 5 hooks + 1 instructions file", () => {
     // Was 3 hooks through v0.17.x (UserPromptSubmit + Stop + PreToolUse).
-    // v0.18 adds the PostToolUse marker-expiry hook (agent-tasks/d8ee60ca)
-    // default-on, so the default expansion now ships four hooks. Operators
-    // who opt out via `approval_lifecycle: { mode: session }` drop back
-    // to three (covered by a dedicated test below).
+    // v0.18 added the PostToolUse marker-expiry hook (agent-tasks/d8ee60ca)
+    // default-on, growing the default expansion to four. v2 of the
+    // task-scope work (harness/494fd1e5) adds a second PostToolUse hook
+    // for active-claim tracking (always emitted; matcher is agent-tasks
+    // specific so it's a no-op for other tasking systems). Operators who
+    // opt out of marker expiry via `approval_lifecycle: { mode: session }`
+    // drop the first PostToolUse hook but keep the active-claim tracker
+    // (covered by a dedicated test below).
     const m = buildManifest([{ name: "understanding-before-execution" }]);
     const r = expandPolicyPacks(m);
-    expect(r.hooks).toHaveLength(4);
+    expect(r.hooks).toHaveLength(5);
     const events = r.hooks.map((h) => h.event).sort();
-    expect(events).toEqual(["PostToolUse", "PreToolUse", "Stop", "UserPromptSubmit"]);
+    expect(events).toEqual(["PostToolUse", "PostToolUse", "PreToolUse", "Stop", "UserPromptSubmit"]);
     const names = r.hooks.map((h) => h.name).sort();
     expect(names).toEqual([
       "policy-pack:understanding-before-execution:post-tool-use",
       "policy-pack:understanding-before-execution:pre-tool-use",
       "policy-pack:understanding-before-execution:stop",
+      "policy-pack:understanding-before-execution:track-active-claim",
       "policy-pack:understanding-before-execution:user-prompt-submit",
     ]);
     expect(r.files).toHaveLength(1);
@@ -56,8 +61,11 @@ describe("expandPolicyPacks", () => {
     );
   });
 
-  it("PostToolUse hook is suppressed when approval_lifecycle.mode = session", () => {
-    // Opt-out path for operators who prefer the legacy per-session contract.
+  it("marker-expiry PostToolUse hook is suppressed when approval_lifecycle.mode = session (but track-active-claim still emits)", () => {
+    // Opt-out path for operators who prefer the legacy per-session
+    // contract for MARKER expiry. The track-active-claim hook is
+    // independent (it maintains an ergonomic shortcut for `harness
+    // approve --task` regardless of marker semantics) and always emits.
     const m = buildManifest([
       {
         name: "understanding-before-execution",
@@ -65,8 +73,12 @@ describe("expandPolicyPacks", () => {
       },
     ]);
     const r = expandPolicyPacks(m);
-    expect(r.hooks.find((h) => h.event === "PostToolUse")).toBeUndefined();
-    expect(r.hooks).toHaveLength(3);
+    const postToolUseHooks = r.hooks.filter((h) => h.event === "PostToolUse");
+    expect(postToolUseHooks).toHaveLength(1);
+    expect(postToolUseHooks[0]?.name).toBe(
+      "policy-pack:understanding-before-execution:track-active-claim",
+    );
+    expect(r.hooks).toHaveLength(4);
   });
 
   it("PostToolUse hook match pattern reflects custom expire_on_tool_match list", () => {
@@ -244,7 +256,7 @@ describe("expandPolicyPacks", () => {
       { name: "no-such-pack" },
     ]);
     const r = expandPolicyPacks(m);
-    expect(r.hooks).toHaveLength(4); // v0.18 default: 3 legacy + 1 PostToolUse expiry
+    expect(r.hooks).toHaveLength(5); // v0.18: 3 legacy + 1 PostToolUse expiry; v2 (494fd1e5): +1 track-active-claim
     expect(r.files).toHaveLength(1);
     expect(r.warnings.some((w) => w.includes("not a known builtin pack"))).toBe(true);
   });
@@ -302,7 +314,7 @@ describe("expandPolicyPacks", () => {
       ],
     );
     const r = expandPolicyPacks(m);
-    expect(r.hooks).toHaveLength(3); // 4 contributions - 1 dropped collision (Stop)
+    expect(r.hooks).toHaveLength(4); // 5 contributions - 1 dropped collision (Stop)
     expect(r.hooks.find((h) => h.event === "Stop")).toBeUndefined();
     expect(r.warnings.some((w) => w.includes("collides with a manifest hooks"))).toBe(true);
   });

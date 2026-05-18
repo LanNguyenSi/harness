@@ -136,6 +136,14 @@ const DEFAULT_EXPIRE_ON_TOOL_MATCH: ReadonlyArray<string> = [
 ];
 
 const POST_TOOL_USE_COMMAND_CLAUDE = "harness pack hook post-tool-use";
+const TRACK_ACTIVE_CLAIM_COMMAND_CLAUDE = "harness pack hook track-active-claim";
+
+// Hardcoded matcher for the v2 active-claim tracker (harness/494fd1e5).
+// Agent-tasks specific; operators on other tasking systems can ignore
+// this hook (the matcher won't fire for their tools). A config-driven
+// extension can land later if a second tasking system asks for it.
+const TRACK_ACTIVE_CLAIM_MATCH =
+  "^(?:mcp__agent-tasks__task_start|mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon)$";
 
 /**
  * Compose the PostToolUse `match` regex from the configured tool list.
@@ -292,6 +300,23 @@ function buildHooks(
       };
       return [hook];
     })(),
+    // Active-claim tracker (harness/494fd1e5). PostToolUse hook on
+    // agent-tasks task_start / task_finish / task_abandon. Maintains a
+    // small file at <generatedDir>/active-claim so `harness approve
+    // understanding` can auto-resolve the task id when --task is
+    // absent. Always emitted alongside the pack — operators on other
+    // tasking systems are unaffected (the matcher won't fire for
+    // their tools), the file simply never appears.
+    {
+      name: `${HOOK_NAME_PREFIX}:track-active-claim`,
+      event: "PostToolUse",
+      match: TRACK_ACTIVE_CLAIM_MATCH,
+      command: TRACK_ACTIVE_CLAIM_COMMAND_CLAUDE,
+      blocking: false,
+      budget_ms: 2000,
+      description:
+        "Track the active agent-tasks claim by writing/clearing <generatedDir>/active-claim on task_start / task_finish / task_abandon. Lets `harness approve understanding` auto-resolve the task id (harness/494fd1e5).",
+    },
   ];
 }
 
