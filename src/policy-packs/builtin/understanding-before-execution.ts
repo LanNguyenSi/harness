@@ -280,11 +280,15 @@ function buildHooks(
         name: `${HOOK_NAME_PREFIX}:post-tool-use`,
         event: "PostToolUse",
         match: postToolUseMatchPattern(tools),
-        command: POST_TOOL_USE_COMMAND_CLAUDE,
+        // Wrap with UNDERSTANDING_GATE_REPORT_DIR so the post-tool-use
+        // hook resolves the same persisted-reports directory as the
+        // pre-tool-use blocker; otherwise it can't expire the persisted
+        // report alongside the marker (harness/1ee26e77 follow-up).
+        command: wrap(POST_TOOL_USE_COMMAND_CLAUDE),
         blocking: false,
         budget_ms: 2000,
         description:
-          "Expire the approval marker after a task-completion boundary tool (default: agent-tasks task_finish / task_abandon / pull_requests_merge). Forces a fresh Understanding Report on the next task.",
+          "Expire the approval marker AND the persisted report after a task-completion boundary tool (default: agent-tasks task_finish / task_abandon / pull_requests_merge). Forces a fresh Understanding Report on the next task.",
       };
       return [hook];
     })(),

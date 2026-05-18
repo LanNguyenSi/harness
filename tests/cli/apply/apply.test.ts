@@ -1274,6 +1274,16 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
     expect(preToolUseCommand).toMatch(
       /^UNDERSTANDING_GATE_REPORT_DIR='[^']+\/\.understanding-gate\/reports' harness pack hook pre-tool-use$/,
     );
+    // post-tool-use carries the same env wrap so the marker-expiry hook
+    // also flips the persisted report at the correct dir (harness/1ee26e77
+    // follow-up). Without the wrap, post-tool-use would fall back to
+    // <cwd>/.understanding-gate/reports and miss the file harness approve
+    // actually wrote when invoked from a different cwd.
+    const postToolUseCommand = allCommands.find((c) => c.endsWith("harness pack hook post-tool-use"));
+    expect(postToolUseCommand).toBeDefined();
+    expect(postToolUseCommand).toMatch(
+      /^UNDERSTANDING_GATE_REPORT_DIR='[^']+\/\.understanding-gate\/reports' harness pack hook post-tool-use$/,
+    );
     // v0.18 default-on PostToolUse marker-expiry hook (agent-tasks/d8ee60ca).
     expect(Object.keys(settings.hooks).sort()).toEqual([
       "PostToolUse",
