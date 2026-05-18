@@ -36,6 +36,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:cov": "vitest run --coverage",
+    "test:integration": "HARNESS_INTEGRATION_TESTS=1 vitest run tests/integration/",
     "typecheck": "tsc --noEmit",
     "check:ug-schema-drift": "node scripts/check-ug-schema-drift.mjs",
     "prepublishOnly": "npm run build"
