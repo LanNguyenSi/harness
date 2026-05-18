@@ -648,20 +648,33 @@ async function runPostInitTail(t: PostInitTailOpts): Promise<InteractiveResult> 
   }
 
   if (profile === "team" || profile === "full") {
-    stderr(
-      [
-        "",
-        "ℹ This profile wires the agent-tasks MCP and its review-merge gate.",
-        "  Already use agent-tasks? Run `agent-tasks-mcp-bridge login` to store",
-        "  a token in your OS keychain (or set AGENT_TASKS_TOKEN). Without a",
-        "  token the MCP loads but every tool call returns an auth error.",
-        "",
-        "  Not using agent-tasks? The review-merge gate only matches",
-        "  agent-tasks MCP tool names today, not `gh pr` Bash calls. Re-run",
-        "  with --template solo to drop the agent-tasks coupling.",
-        "",
-      ].join("\n"),
-    );
+    // Reminder splits at the "Not using agent-tasks?" paragraph because
+    // Full ships review-before-merge-bash + review-subagent-before-pr-create-bash
+    // (PR #188, v0.20.0) so its `gh pr (merge|create)` Bash calls ARE
+    // gated, while Team still matches only the agent-tasks MCP verbs.
+    const head = [
+      "",
+      "ℹ This profile wires the agent-tasks MCP and its review-merge gate.",
+      "  Already use agent-tasks? Run `agent-tasks-mcp-bridge login` to store",
+      "  a token in your OS keychain (or set AGENT_TASKS_TOKEN). Without a",
+      "  token the MCP loads but every tool call returns an auth error.",
+      "",
+    ];
+    const tail =
+      profile === "team"
+        ? [
+            "  Not using agent-tasks? The review-merge gate only matches",
+            "  agent-tasks MCP tool names today, not `gh pr` Bash calls. Re-run",
+            "  with --template solo to drop the agent-tasks coupling.",
+          ]
+        : [
+            "  Both `mcp__agent-tasks__pull_requests_*` AND `gh pr (merge|create)`",
+            "  Bash calls are gated. Tag shape differs: `review:${PR_NUMBER}` for",
+            "  the MCP surface, `review:${BRANCH}` for the gh-cli surface. Re-run",
+            "  with --template team if you want only the MCP gate, or",
+            "  --template solo to drop the agent-tasks coupling.",
+          ];
+    stderr([...head, ...tail, ""].join("\n"));
   }
 
   // Validate-clean: offer to wire each runtime right now. A bare
