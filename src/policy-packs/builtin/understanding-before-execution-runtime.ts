@@ -751,6 +751,13 @@ export function writeActiveClaim(generatedDir: string, taskId: string): string {
  * null when the file is absent / unreadable / empty. `harness approve
  * understanding` calls this when --task is absent, then passes the
  * resolved id to writeTaskApprovalMarker.
+ *
+ * Defense-in-depth: if the on-disk content fails the same
+ * path-traversal / newline check that gates writes, the read returns
+ * null instead of surfacing a poisoned id. The write side guards
+ * against a malformed taskId reaching the file in the first place,
+ * but a stale file authored before this guard (or hand-edited)
+ * shouldn't escalate into a forged task-marker write downstream.
  */
 export function readActiveClaim(generatedDir: string): string | null {
   const filePath = activeClaimPathFor(generatedDir);
@@ -762,6 +769,11 @@ export function readActiveClaim(generatedDir: string): string | null {
   }
   const trimmed = raw.trim();
   if (trimmed.length === 0) return null;
+  try {
+    rejectMalformedClaimId(trimmed);
+  } catch {
+    return null;
+  }
   return trimmed;
 }
 

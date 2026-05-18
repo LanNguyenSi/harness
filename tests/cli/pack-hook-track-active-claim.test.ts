@@ -232,6 +232,23 @@ describe("pack hook track-active-claim — guards and fall-through", () => {
     expect(stderr.read()).toMatch(/not tracked/);
   });
 
+  it("readActiveClaim returns null on an empty file (no false-positive resolution to empty string)", () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    fs.mkdirSync(generatedDir, { recursive: true });
+    fs.writeFileSync(activeClaimPathFor(generatedDir), "\n");
+    expect(readActiveClaim(generatedDir)).toBeNull();
+  });
+
+  it("readActiveClaim rejects a poisoned file (defense-in-depth on read)", () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    fs.mkdirSync(generatedDir, { recursive: true });
+    // Hand-planted file with a path-traversal id — write-side guard
+    // would never let this happen, but the read-side check stops a
+    // downstream forged marker if it slipped through somehow.
+    fs.writeFileSync(activeClaimPathFor(generatedDir), "../escape\n");
+    expect(readActiveClaim(generatedDir)).toBeNull();
+  });
+
   it("skips on malformed event JSON without crashing", async () => {
     const generatedDir = path.join(tmp, "harness.generated");
     const stderr = bufferStream();
