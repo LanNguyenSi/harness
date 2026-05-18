@@ -109,6 +109,45 @@ describe("pack hook pre-tool-use blocker", () => {
     expect(stderr.read()).toMatch(/approved via marker sess-1/);
   });
 
+  it("accepts a fresh task-scoped marker even when a stale sibling task marker is present", async () => {
+    // Pins the loop in checkAnyTaskApprovalMarker: if any task marker
+    // is stale and the next one is fresh, the fresh marker still wins.
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeTaskApprovalMarker(generatedDir, "task-old", {
+      approvedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      approvedBy: "test-operator",
+    });
+    writeTaskApprovalMarker(generatedDir, "task-fresh", {
+      approvedAt: new Date(Date.now() - 60 * 1000).toISOString(),
+      approvedBy: "test-operator",
+    });
+    const result = await runPackHookPreToolUseCli({
+      manifest: parseManifest({
+        version: 1,
+        policy_packs: [
+          {
+            name: "understanding-before-execution",
+            enabled: true,
+            config: {
+              approval_lifecycle: { max_age: "4h" },
+            },
+          },
+        ],
+      }),
+      stdin: readableFromString(event()),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.approvalCheck.source).toBe("marker");
+    expect(stderr.read()).toMatch(/task-scoped marker for task task-fresh/);
+  });
+
   it("blocks when only a STALE task-scoped marker exists (max_age exceeded)", async () => {
     const stdout = bufferStream();
     const stderr = bufferStream();

@@ -532,8 +532,27 @@ export function clearApprovalMarker(generatedDir: string, sessionId: string): vo
 
 export const APPROVAL_MARKER_TASK_PREFIX = "task-";
 
+/**
+ * Reject taskIds that would escape the approvals/ namespace via path
+ * traversal or directory separators. The operator's --task flag value
+ * lands here verbatim; an accidental shell-expanded `..` or `/` would
+ * otherwise write to a sibling directory. This is defensive — the
+ * caller is the operator's own shell — but pins the trust boundary.
+ */
+function rejectMalformedTaskId(taskId: string): void {
+  if (taskId.length === 0) {
+    throw new Error("taskId is empty");
+  }
+  if (taskId.includes("/") || taskId.includes("\\") || taskId.includes("..")) {
+    throw new Error(
+      `taskId contains path-separator or traversal characters: ${JSON.stringify(taskId)}`,
+    );
+  }
+}
+
 /** Filesystem path of a per-task approval marker. */
 export function taskApprovalMarkerPathFor(generatedDir: string, taskId: string): string {
+  rejectMalformedTaskId(taskId);
   return path.join(generatedDir, APPROVAL_MARKER_DIRNAME, `${APPROVAL_MARKER_TASK_PREFIX}${taskId}`);
 }
 
