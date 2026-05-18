@@ -329,6 +329,7 @@ describe("runPackHookCodexStopCli", () => {
       manifest: manifestWithPack(),
       session: sessionId,
       reportsDir,
+      generatedDir: path.join(tmp, "harness.generated"),
     });
     expect(approveResult.persistedReport.ok).toBe(true);
     expect(approveResult.persistedReport).toMatchObject({

@@ -39,6 +39,7 @@ describe("approveUnderstanding", () => {
       manifest: manifest(),
       session: "sess-1",
       reportsDir: tmp,
+      generatedDir: path.join(tmp, "harness.generated"),
       now: new Date("2026-05-07T08:00:00Z"),
       approvedBy: "test-suite",
       ledgerAdd: async (sessionId, content) => {
@@ -68,6 +69,7 @@ describe("approveUnderstanding", () => {
       manifest: manifest(),
       session: "sess-1",
       reportsDir: tmp,
+      generatedDir: path.join(tmp, "harness.generated"),
       ledgerAdd: async () => ({ ok: true }),
     });
     expect(result.ledger.ok).toBe(true);
@@ -99,6 +101,7 @@ describe("approveUnderstanding", () => {
         manifest: manifest(),
         session: "sess-1",
         reportsDir,
+        generatedDir: path.join(reportsParent, "harness.generated"),
         ledgerAdd: async () => ({ ok: true }),
       });
       expect(result.persistedReport.ok).toBe(false);
@@ -134,6 +137,7 @@ describe("approveUnderstanding", () => {
         manifest: manifest(),
         session: "sess-1",
         reportsDir,
+        generatedDir: path.join(reportsParent, "harness.generated"),
         ledgerAdd: async () => ({ ok: true }),
       });
       expect(result.persistedReport.ok).toBe(false);
@@ -184,6 +188,7 @@ describe("approveUnderstanding", () => {
         manifest: manifest(),
         session: "sess-1",
         reportsDir,
+        generatedDir: path.join(reportsParent, "harness.generated"),
         ledgerAdd: async () => ({ ok: true }),
       });
       expect(result.persistedReport.ok).toBe(false);
@@ -213,6 +218,7 @@ describe("approveUnderstanding", () => {
         manifest: manifest(),
         session: "sess-1",
         reportsDir,
+        generatedDir: path.join(reportsParent, "harness.generated"),
         ledgerAdd: async () => ({ ok: true }),
       });
       expect(result.persistedReport.ok).toBe(false);
@@ -229,6 +235,7 @@ describe("approveUnderstanding", () => {
       manifest: manifest(),
       session: "sess-1",
       reportsDir: tmp,
+      generatedDir: path.join(tmp, "harness.generated"),
       ledgerAdd: async () => ({ ok: true }),
     });
     expect(result.persistedReport.ok).toBe(false);
@@ -242,6 +249,7 @@ describe("approveUnderstanding", () => {
       manifest: manifest(),
       session: "sess-1",
       reportsDir: tmp,
+      generatedDir: path.join(tmp, "harness.generated"),
       ledgerAdd: async () => ({ ok: false, reason: "grounding-mcp not declared" }),
     });
     expect(result.ledger.ok).toBe(false);
@@ -281,6 +289,7 @@ describe("approveUnderstanding", () => {
       manifest: manifest(),
       session: "sess-1",
       reportsDir: tmp,
+      generatedDir: path.join(tmp, "harness.generated"),
       ledgerAdd: async () => ({ ok: true }),
     });
     expect(result.persistedReport.ok).toBe(true);
