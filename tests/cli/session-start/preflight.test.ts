@@ -175,13 +175,22 @@ describe("runSessionStartPreflight", () => {
     expect(result.exitCode).toBe(0);
   });
 
-  it("respects stagePendingApproval:null (caller opts out of staging)", async () => {
-    const repo = makeRepoFixture("widget-service");
+  it("respects stagePendingApproval:null (caller opts out of staging, no file written)", async () => {
+    // Isolate generatedDir under a tmp homeDir so we can assert the
+    // staging file is NOT created on disk: the null opt-out must bypass
+    // the default `writePendingApproval` writer entirely, not just the
+    // sink seam.
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-null-"));
+    cleanups.push(() => fs.rmSync(tmpHome, { recursive: true, force: true }));
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-null-repo-"));
+    cleanups.push(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+    const repo = path.join(repoRoot, "no-stage-repo");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    fs.writeFileSync(path.join(tmpHome, "harness.yaml"), "version: 1\n");
     const { stream: err } = captureStream();
-    // No `staged` capture needed: passing null disables the call site
-    // entirely, so the default `writePendingApproval` is never invoked
-    // and the test passes purely by reaching the assertions below.
     const result = await runSessionStartPreflight({
+      homeDir: tmpHome,
       stdin: streamFrom(JSON.stringify({ session_id: "sess-no-stage", cwd: repo })),
       stderr: err,
       runPreflight: readyPreflight(0.83),
@@ -189,6 +198,8 @@ describe("runSessionStartPreflight", () => {
       stagePendingApproval: null,
     });
     expect(result.wrote).toBe(true);
+    const stagedPath = path.join(tmpHome, "harness.generated", ".pending-approval");
+    expect(fs.existsSync(stagedPath)).toBe(false);
   });
 
   it("appends `head:<sha>` when resolveGitContext can read the loose ref", async () => {

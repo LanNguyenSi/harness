@@ -94,7 +94,7 @@ export interface SessionStartPreflightOptions extends LoaderOptions {
    */
   resolveSession?: (explicit: string | undefined, opts: ResolveReadSessionOptions) => string;
   /**
-   * Inject the `.pending-approval` writer. Test seam — production uses
+   * Inject the `.pending-approval` writer. Test seam, production uses
    * `writePendingApproval` from `runtime/pending-approval`. Called
    * best-effort whenever the producer resolves a non-default session
    * id, so `harness approve understanding` (no flags) works from the
@@ -294,10 +294,15 @@ export async function runSessionStartPreflight(
   // `!`-shell without needing a prior PreToolUse gate-block. Producer
   // hand-off matches the PreToolUse hook's existing one (same writer,
   // same path, same single-line content). Skipped when the session id
-  // is the literal "default" — pointing approve at "default" would never
-  // satisfy any task-scoped gate. Best-effort: a write failure must NOT
-  // break the session loop, so any error is silently swallowed (the
-  // operator can always fall back to `--session <id>` as before).
+  // is the literal "default", since pointing approve at "default" would
+  // never satisfy any task-scoped gate. Best-effort: a write failure
+  // must NOT break the session loop, so any error is silently swallowed
+  // (the operator can always fall back to `--session <id>` as before).
+  // Multi-session caveat: two parallel Claude sessions on the same host
+  // will clobber each other's `.pending-approval` (single-slot file).
+  // Acceptable for the one-Claude-per-repo operator pattern; the worst
+  // case is approve resolving to the wrong session id, which the operator
+  // catches via the canonical-gate-signal line in the approve output.
   if (sessionSource !== "default" && opts.stagePendingApproval !== null) {
     try {
       const generatedDir = resolveGeneratedDir({
