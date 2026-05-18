@@ -5,7 +5,10 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runPackHookPreToolUseCli } from "../../src/cli/pack/hook-pre-tool-use.js";
 import type { LedgerEntry } from "../../src/policies/index.js";
-import { writeApprovalMarker } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
+import {
+  writeApprovalMarker,
+  writeTaskApprovalMarker,
+} from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 import { readPendingApproval } from "../../src/runtime/pending-approval.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
@@ -55,6 +58,129 @@ function writeReport(dir: string, name: string, body: Record<string, unknown>): 
 }
 
 describe("pack hook pre-tool-use blocker", () => {
+  it("allows when a task-scoped marker is present for a different session id (harness/1ee26e77)", async () => {
+    // Operator approved via `harness approve understanding --task <id>`
+    // from a previous session; the task marker is keyed by task id, not
+    // by the current session id, so the gate accepts it across sessions
+    // for as long as that task is in progress.
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeTaskApprovalMarker(generatedDir, "task-uuid-abc", {
+      approvedAt: "2026-05-18T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event({ session_id: "sess-different" })),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.approvalCheck.source).toBe("marker");
+    expect(stdout.read()).toBe("");
+    expect(stderr.read()).toMatch(/task-scoped marker for task task-uuid-abc/);
+  });
+
+  it("falls through from task-scoped to session-scoped marker check (legacy compat)", async () => {
+    // No task markers present, session marker present → gate allows via
+    // the legacy session path. Pins the fall-through ordering.
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-05-18T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event()),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.approvalCheck.source).toBe("marker");
+    expect(stderr.read()).toMatch(/approved via marker sess-1/);
+  });
+
+  it("accepts a fresh task-scoped marker even when a stale sibling task marker is present", async () => {
+    // Pins the loop in checkAnyTaskApprovalMarker: if any task marker
+    // is stale and the next one is fresh, the fresh marker still wins.
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeTaskApprovalMarker(generatedDir, "task-old", {
+      approvedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      approvedBy: "test-operator",
+    });
+    writeTaskApprovalMarker(generatedDir, "task-fresh", {
+      approvedAt: new Date(Date.now() - 60 * 1000).toISOString(),
+      approvedBy: "test-operator",
+    });
+    const result = await runPackHookPreToolUseCli({
+      manifest: parseManifest({
+        version: 1,
+        policy_packs: [
+          {
+            name: "understanding-before-execution",
+            enabled: true,
+            config: {
+              approval_lifecycle: { max_age: "4h" },
+            },
+          },
+        ],
+      }),
+      stdin: readableFromString(event()),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.approvalCheck.source).toBe("marker");
+    expect(stderr.read()).toMatch(/task-scoped marker for task task-fresh/);
+  });
+
+  it("blocks when only a STALE task-scoped marker exists (max_age exceeded)", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    // Marker approved 24h ago.
+    writeTaskApprovalMarker(generatedDir, "task-stale", {
+      approvedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      approvedBy: "test-operator",
+    });
+    const result = await runPackHookPreToolUseCli({
+      manifest: parseManifest({
+        version: 1,
+        policy_packs: [
+          {
+            name: "understanding-before-execution",
+            enabled: true,
+            config: {
+              approval_lifecycle: { max_age: "4h" },
+            },
+          },
+        ],
+      }),
+      stdin: readableFromString(event()),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.approvalCheck.source).toBe("none");
+  });
+
   it("allows when an approval marker is present for the session (agent-tasks/88ca4bb3)", async () => {
     const stdout = bufferStream();
     const stderr = bufferStream();

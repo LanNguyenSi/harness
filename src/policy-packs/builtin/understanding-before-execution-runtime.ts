@@ -510,6 +510,128 @@ export function clearApprovalMarker(generatedDir: string, sessionId: string): vo
   }
 }
 
+// Task-scoped approval markers (harness/1ee26e77). When the operator
+// passes `--task <id>` to `harness approve understanding`, a second
+// marker file is written next to the session marker, keyed by the
+// agent-tasks task id and prefixed `task-` so a directory scan can
+// distinguish them from session-keyed markers (UUIDs do not start with
+// `task-`). Either marker satisfies the gate; the session marker
+// remains for back-compat with operators who don't pass --task and for
+// non-agent-tasks workflows.
+//
+// Why task-scope: a session can span many distinct tasks; the operator's
+// Understanding Report for task A doesn't transfer trust to task B
+// (different surface, different acceptance criteria). Without per-task
+// markers a multi-task session re-uses the first task's approval for
+// every subsequent task. The expire_on_tool_match PostToolUse hook
+// already deletes the session marker on `task_finish`, but if delivery
+// is unreliable (e.g. PostToolUse skipped for an MCP tool) the marker
+// silently persists. A task-keyed marker side-steps that delivery
+// concern because the next task's id is different even if the previous
+// marker file outlives its scope.
+
+export const APPROVAL_MARKER_TASK_PREFIX = "task-";
+
+/**
+ * Reject taskIds that would escape the approvals/ namespace via path
+ * traversal or directory separators. The operator's --task flag value
+ * lands here verbatim; an accidental shell-expanded `..` or `/` would
+ * otherwise write to a sibling directory. This is defensive — the
+ * caller is the operator's own shell — but pins the trust boundary.
+ */
+function rejectMalformedTaskId(taskId: string): void {
+  if (taskId.length === 0) {
+    throw new Error("taskId is empty");
+  }
+  if (taskId.includes("/") || taskId.includes("\\") || taskId.includes("..")) {
+    throw new Error(
+      `taskId contains path-separator or traversal characters: ${JSON.stringify(taskId)}`,
+    );
+  }
+}
+
+/** Filesystem path of a per-task approval marker. */
+export function taskApprovalMarkerPathFor(generatedDir: string, taskId: string): string {
+  rejectMalformedTaskId(taskId);
+  return path.join(generatedDir, APPROVAL_MARKER_DIRNAME, `${APPROVAL_MARKER_TASK_PREFIX}${taskId}`);
+}
+
+/**
+ * Operator-side: write a task-scoped marker file. Atomic. Caller is
+ * `harness approve understanding --task <id>`. The session marker is
+ * written separately by the same caller for back-compat.
+ */
+export function writeTaskApprovalMarker(
+  generatedDir: string,
+  taskId: string,
+  marker: ApprovalMarker,
+): string {
+  const filePath = taskApprovalMarkerPathFor(generatedDir, taskId);
+  atomicWriteFile(filePath, `${JSON.stringify(marker, null, 2)}\n`);
+  return filePath;
+}
+
+/**
+ * Gate-side: scan the approvals directory for any task-scoped marker
+ * (`task-<id>`) that is present, readable, and (when `maxAgeMs` is set)
+ * fresh. Returns the first matching marker's path; null when none match.
+ *
+ * Two-tier filter mirrors `checkApprovalMarker`: existence is the
+ * operator's intent (a body-unreadable marker counts as approved), and
+ * symlinks are refused for safety. Stale markers (older than maxAgeMs)
+ * are skipped silently so a long-running session doesn't latch onto a
+ * marker from a previous day's task.
+ */
+export function checkAnyTaskApprovalMarker(
+  generatedDir: string,
+  opts: CheckApprovalMarkerOptions = {},
+): MarkerCheck {
+  const approvalsDir = path.join(generatedDir, APPROVAL_MARKER_DIRNAME);
+  let names: string[];
+  try {
+    names = fs.readdirSync(approvalsDir);
+  } catch {
+    return {
+      matched: false,
+      detail: `no approvals directory at ${approvalsDir}`,
+      marker: null,
+    };
+  }
+  const taskMarkerNames = names.filter((n) => n.startsWith(APPROVAL_MARKER_TASK_PREFIX));
+  if (taskMarkerNames.length === 0) {
+    return {
+      matched: false,
+      detail: `no task-scoped markers under ${approvalsDir}`,
+      marker: null,
+    };
+  }
+  for (const name of taskMarkerNames) {
+    const taskId = name.slice(APPROVAL_MARKER_TASK_PREFIX.length);
+    const check = checkApprovalMarker(generatedDir, name, opts);
+    if (check.matched) {
+      return {
+        matched: true,
+        detail: `task-scoped marker for task ${taskId}: ${check.detail}`,
+        marker: check.marker,
+      };
+    }
+  }
+  return {
+    matched: false,
+    detail: `${taskMarkerNames.length} task-scoped marker(s) present but none fresh`,
+    marker: null,
+  };
+}
+
+/** Clear a specific task-scoped marker. Used by the post-tool-use hook. */
+export function clearTaskApprovalMarker(generatedDir: string, taskId: string): void {
+  try {
+    fs.rmSync(taskApprovalMarkerPathFor(generatedDir, taskId));
+  } catch {
+    /* already gone */
+  }
+}
+
 export function checkPersistedReport(
   reportsDir: string,
   sessionId: string,

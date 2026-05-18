@@ -27,6 +27,7 @@ import {
 } from "../../policies/index.js";
 import { renderProducers } from "../../policies/producers.js";
 import {
+  checkAnyTaskApprovalMarker,
   checkApprovalMarker,
   checkPersistedReport,
   defaultReportsDir,
@@ -402,9 +403,30 @@ export async function runPackHookPreToolUseCli(
       (declared.config as Record<string, unknown>)["approval_lifecycle"],
       stderr,
     );
-    const marker = checkApprovalMarker(generatedDir, sessionId, {
-      ...(lifecycle.maxAgeMs !== undefined && { maxAgeMs: lifecycle.maxAgeMs }),
-    });
+    const ageOpts = lifecycle.maxAgeMs !== undefined
+      ? { maxAgeMs: lifecycle.maxAgeMs }
+      : {};
+    // Source 1a: task-scoped marker (harness/1ee26e77). Any fresh
+    // `.approvals/task-<id>` marker satisfies the gate, regardless of
+    // which session approved it. This is the design-intent target for
+    // multi-task sessions; the operator opts in by passing `--task <id>`
+    // to `harness approve understanding`. When no task markers exist
+    // (operator never used --task, or all markers expired), the gate
+    // falls through to the session marker below — preserving the legacy
+    // contract for solo workflows.
+    const taskMarker = checkAnyTaskApprovalMarker(generatedDir, ageOpts);
+    if (taskMarker.matched) {
+      const diagnostic = `harness pack hook: ${taskMarker.detail}, allowing.`;
+      stderr.write(`${diagnostic}\n`);
+      return {
+        exitCode: 0,
+        blocked: false,
+        approvalCheck: { approved: true, source: "marker", detail: taskMarker.detail },
+        diagnostic,
+      };
+    }
+    // Source 1b: session-scoped marker (legacy / fallback).
+    const marker = checkApprovalMarker(generatedDir, sessionId, ageOpts);
     if (marker.matched) {
       const diagnostic = `harness pack hook: ${marker.detail}, allowing.`;
       stderr.write(`${diagnostic}\n`);

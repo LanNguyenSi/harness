@@ -25,7 +25,9 @@ import { existsSync } from "node:fs";
 import {
   approvalMarkerPathFor,
   clearApprovalMarker,
+  clearTaskApprovalMarker,
   parseApprovalLifecycle,
+  taskApprovalMarkerPathFor,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
 import type { Manifest } from "../../schema/index.js";
@@ -45,8 +47,15 @@ export interface PackHookPostToolUseResult {
   exitCode: number;
   /** Did the just-completed tool match the expiry list? */
   matchedExpiry: boolean;
-  /** Was the marker actually cleared (false if it was already absent). */
+  /** Was the session marker actually cleared (false if it was already absent). */
   markerCleared: boolean;
+  /**
+   * Was a task-scoped marker also cleared (harness/1ee26e77)? Only set
+   * when the matched tool was an agent-tasks task-transition verb AND
+   * `tool_input.taskId` was present in the event, AND a marker existed
+   * for that task id. False otherwise. Independent of markerCleared.
+   */
+  taskMarkerCleared: boolean;
   /** Diagnostic line emitted to stderr. */
   diagnostic: string;
 }
@@ -103,12 +112,35 @@ function extractBashCommand(toolInput: unknown): string {
   return typeof command === "string" ? command : "";
 }
 
+// Pull `taskId` out of an MCP tool_input payload. agent-tasks verbs that
+// mark a task boundary (`task_finish`, `task_abandon`, etc.) carry the
+// taskId as a top-level string field. When present, the post-tool-use
+// hook also clears the corresponding task-scoped approval marker
+// (harness/1ee26e77). Returns "" when absent / malformed.
+function extractTaskId(toolInput: unknown): string {
+  if (
+    typeof toolInput !== "object" ||
+    toolInput === null ||
+    Array.isArray(toolInput)
+  ) {
+    return "";
+  }
+  const tid = (toolInput as Record<string, unknown>)["taskId"];
+  return typeof tid === "string" ? tid : "";
+}
+
 function noop(
   diagnostic: string,
   stderr: NodeJS.WritableStream,
 ): PackHookPostToolUseResult {
   stderr.write(`${diagnostic}\n`);
-  return { exitCode: 0, matchedExpiry: false, markerCleared: false, diagnostic };
+  return {
+    exitCode: 0,
+    matchedExpiry: false,
+    markerCleared: false,
+    taskMarkerCleared: false,
+    diagnostic,
+  };
 }
 
 export async function runPackHookPostToolUseCli(
@@ -232,17 +264,40 @@ export async function runPackHookPostToolUseCli(
   const markerPath = approvalMarkerPathFor(generatedDir, sessionId);
   const wasPresent = existsSync(markerPath);
   clearApprovalMarker(generatedDir, sessionId);
+
+  // Task-scoped marker cleanup (harness/1ee26e77). Only when the
+  // matched tool is an MCP task-transition verb whose tool_input.taskId
+  // names a specific task; Bash regex boundaries don't carry a taskId
+  // by design.
+  let taskMarkerCleared = false;
+  let clearedTaskId = "";
+  if (toolNameMatched) {
+    const taskId = extractTaskId(event.tool_input);
+    if (taskId !== "") {
+      const taskMarkerPath = taskApprovalMarkerPathFor(generatedDir, taskId);
+      if (existsSync(taskMarkerPath)) {
+        clearTaskApprovalMarker(generatedDir, taskId);
+        taskMarkerCleared = true;
+        clearedTaskId = taskId;
+      }
+    }
+  }
+
   const matchSource = bashRegex !== undefined
     ? `bash regex /${bashRegex.source}/`
     : `tool name`;
+  const taskNote = taskMarkerCleared
+    ? `; also cleared task marker for task ${clearedTaskId}`
+    : "";
   const diagnostic = wasPresent
-    ? `harness pack hook post-tool-use: expired approval marker for session ${sessionId} after ${toolName} (${matchSource})`
-    : `harness pack hook post-tool-use: ${toolName} matched ${matchSource} but no marker present for session ${sessionId}`;
+    ? `harness pack hook post-tool-use: expired approval marker for session ${sessionId} after ${toolName} (${matchSource})${taskNote}`
+    : `harness pack hook post-tool-use: ${toolName} matched ${matchSource} but no marker present for session ${sessionId}${taskNote}`;
   stderr.write(`${diagnostic}\n`);
   return {
     exitCode: 0,
     matchedExpiry: true,
     markerCleared: wasPresent,
+    taskMarkerCleared,
     diagnostic,
   };
 }

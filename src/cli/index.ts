@@ -1150,6 +1150,10 @@ export function buildProgram(opts: RunOptions = {}): Command {
       "--session <id>",
       "explicit session id (default: $CLAUDE_SESSION_ID)",
     )
+    .option(
+      "--task <id>",
+      "agent-tasks task id — when set, also writes a task-scoped marker so the next task re-prompts for an Understanding Report (harness/1ee26e77)",
+    )
     .option("--reports-dir <path>", "override the persisted-report directory (default: ./.understanding-gate/reports)")
     .option("--approved-by <actor>", "actor to record on the persisted report (default: harness-approve-cli)")
     .action(
@@ -1157,6 +1161,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         config?: string;
         project?: string;
         session?: string;
+        task?: string;
         reportsDir?: string;
         approvedBy?: string;
       }) => {
@@ -1164,6 +1169,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         if (options.config) cliOpts.configPath = options.config;
         if (options.project) cliOpts.project = options.project;
         if (options.session) cliOpts.session = options.session;
+        if (options.task) cliOpts.task = options.task;
         if (options.reportsDir) cliOpts.reportsDir = options.reportsDir;
         if (options.approvedBy) cliOpts.approvedBy = options.approvedBy;
         const result = await approveUnderstanding(cliOpts);
@@ -1184,6 +1190,18 @@ export function buildProgram(opts: RunOptions = {}): Command {
           lines.push(
             "  the gate WILL block the next tool call until the marker exists.",
           );
+        }
+        if (result.taskMarker !== null) {
+          if (result.taskMarker.ok) {
+            lines.push(
+              `task:    ✓ ${result.taskMarker.filePath} (task-scoped, expires when this task ends)`,
+            );
+          } else {
+            lines.push(`task:    ✗ FAILED for task ${result.taskMarker.taskId} (${result.taskMarker.reason})`);
+            lines.push(
+              "  the session marker above is still in effect; the task-scoped path is degraded.",
+            );
+          }
         }
         if (result.ledger.ok) {
           lines.push(`ledger:  ✓ wrote ${result.ledger.tag} (audit only)`);
