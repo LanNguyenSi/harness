@@ -103,6 +103,64 @@ describe("composeCustom — new policy entries (task 5dd3d8a6)", () => {
     expect(hook?.bash_match).toMatch(/tag v/);
   });
 
+  it("FULL_TEMPLATE: every ux.run ledger_add example names sessionId (PR #206 templates.ts pin)", async () => {
+    // Composer-side test below only covers the 3 policies in the custom
+    // POLICY map. The Full template adds two bash parallels
+    // (review-before-merge-bash, review-subagent-before-pr-create-bash)
+    // that live only in templates.ts. Materialise + parse the full
+    // manifest text and assert every ledger_add line is sessionId-tagged
+    // so a future contributor adding a new ux.run hint to the Full
+    // template is caught here.
+    const { FULL_TEMPLATE } = await import("../../src/cli/init/templates.js");
+    const yamlMod = await import("yaml");
+    const parsed = yamlMod.parse(FULL_TEMPLATE) as {
+      policies?: Array<{ name: string; ux?: { run?: string[] } }>;
+    };
+    const ledgerLines: Array<{ policy: string; line: string }> = [];
+    for (const p of parsed.policies ?? []) {
+      for (const r of p.ux?.run ?? []) {
+        if (r.includes("mcp__agent-grounding__ledger_add")) {
+          ledgerLines.push({ policy: p.name, line: r });
+        }
+      }
+    }
+    expect(ledgerLines.length).toBeGreaterThanOrEqual(5);
+    for (const { policy, line } of ledgerLines) {
+      expect(line, `Full template policy ${policy} ux.run ledger_add missing sessionId`).toContain(
+        'sessionId: "${SESSION_ID}"',
+      );
+    }
+  });
+
+  it("ux.run examples name sessionId: \"${SESSION_ID}\" on all ledger_add-producing policies (PR #206)", () => {
+    // Pre-#206 the ux.run renderer omitted the sessionId param from the
+    // ledger_add example, so operators bound sessionId to the tag UUID
+    // (review-subagent's TASK_ID for instance) and the gate kept refusing
+    // with the same opaque message. Pin that all four ledger-add policies
+    // now emit a sessionId hint pointing at the current session id.
+    const { manifest } = compose({
+      policies: [
+        "review-before-merge",
+        "review-subagent-before-pr-create",
+        "dogfood-before-release",
+      ],
+    });
+    const ledgerPolicies = manifest.policies.filter(
+      (p) =>
+        p.ux?.run?.some((r) => r.includes("mcp__agent-grounding__ledger_add")),
+    );
+    expect(ledgerPolicies.length).toBeGreaterThan(0);
+    for (const p of ledgerPolicies) {
+      const runs = p.ux?.run ?? [];
+      const ledgerCall = runs.find((r) => r.includes("mcp__agent-grounding__ledger_add"));
+      expect(ledgerCall, `policy ${p.name} missing ledger_add line`).toBeDefined();
+      expect(
+        ledgerCall,
+        `policy ${p.name} ux.run ledger_add example must include sessionId: "\${SESSION_ID}"`,
+      ).toContain('sessionId: "${SESSION_ID}"');
+    }
+  });
+
   it("two-reviewers-required: warn-level enforcement + count.min:2, dedups hook with review-before-merge", () => {
     const { manifest } = compose({
       policies: ["review-before-merge", "two-reviewers-required"],

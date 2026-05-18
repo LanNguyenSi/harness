@@ -198,7 +198,7 @@ policies:
       required:
         - "a recorded review of PR #\${PR_NUMBER}"
       run:
-        - 'mcp__agent-grounding__ledger_add { type: "fact", content: "review:\${PR_NUMBER} — <verdict + key findings + nits>" }'
+        - 'mcp__agent-grounding__ledger_add { sessionId: "\${SESSION_ID}", type: "fact", content: "review:\${PR_NUMBER} — <verdict + key findings + nits>" }'
 
 policy_packs:
   - name: understanding-before-execution
