@@ -336,7 +336,7 @@ policies:
     ux:
       cannot: "You cannot push branch \${BRANCH} yet."
       required:
-        - "a fresh preflight for \${BRANCH} (within the last 10 minutes)"
+        - "a fresh preflight for \${BRANCH}, captured within the last 10 minutes AND after your latest commit. A preflight from earlier in the session does NOT cover a push that landed a new commit since."
       run:
         - "harness preflight"
 
