@@ -175,7 +175,35 @@ describe("runSessionStartPreflight", () => {
     expect(result.exitCode).toBe(0);
   });
 
-  it("respects stagePendingApproval:null (caller opts out of staging, no file written)", async () => {
+  it("defaults to no staging when stagePendingApproval is not supplied (no file written, hotfix-0.21.1)", async () => {
+    // Library-callers (and the entire vitest suite) MUST get the opt-in
+    // default. Tests that don't isolate homeDir would otherwise clobber
+    // the operator's real `~/.claude/harness.generated/.pending-approval`
+    // on every preflight invocation that triggers vitest via the
+    // npm-test agent-preflight check (the v0.21.0 regression).
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-default-off-"));
+    cleanups.push(() => fs.rmSync(tmpHome, { recursive: true, force: true }));
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-default-off-repo-"));
+    cleanups.push(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+    const repo = path.join(repoRoot, "no-stage-repo");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    fs.writeFileSync(path.join(tmpHome, "harness.yaml"), "version: 1\n");
+    const { stream: err } = captureStream();
+    const result = await runSessionStartPreflight({
+      homeDir: tmpHome,
+      stdin: streamFrom(JSON.stringify({ session_id: "sess-no-default-stage", cwd: repo })),
+      stderr: err,
+      runPreflight: readyPreflight(0.83),
+      writeLedger: async () => ({ ok: true }),
+      // Intentionally NOT setting stagePendingApproval.
+    });
+    expect(result.wrote).toBe(true);
+    const stagedPath = path.join(tmpHome, "harness.generated", ".pending-approval");
+    expect(fs.existsSync(stagedPath)).toBe(false);
+  });
+
+  it("respects stagePendingApproval:null (explicit opt-out, no file written)", async () => {
     // Isolate generatedDir under a tmp homeDir so we can assert the
     // staging file is NOT created on disk: the null opt-out must bypass
     // the default `writePendingApproval` writer entirely, not just the

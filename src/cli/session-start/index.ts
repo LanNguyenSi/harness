@@ -22,10 +22,7 @@ import {
   addLedgerFact,
   resolveGitContext,
 } from "../../runtime/index.js";
-import {
-  resolveGeneratedDir,
-  writePendingApproval,
-} from "../../runtime/pending-approval.js";
+import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
 import {
   resolveReadSessionId,
   type ResolveReadSessionOptions,
@@ -94,12 +91,17 @@ export interface SessionStartPreflightOptions extends LoaderOptions {
    */
   resolveSession?: (explicit: string | undefined, opts: ResolveReadSessionOptions) => string;
   /**
-   * Inject the `.pending-approval` writer. Test seam, production uses
-   * `writePendingApproval` from `runtime/pending-approval`. Called
-   * best-effort whenever the producer resolves a non-default session
-   * id, so `harness approve understanding` (no flags) works from the
-   * operator's `!`-shell without needing a prior PreToolUse gate-block
-   * to stage the file. Pass `null` to disable staging entirely.
+   * Inject the `.pending-approval` writer. Opt-in: staging only happens
+   * when the caller explicitly passes a writer. The CLI entry points
+   * (`harness preflight` and `harness session-start preflight`) wire
+   * `writePendingApproval` from `runtime/pending-approval`, so operators
+   * get the bootstrap fix; library callers that import this function
+   * directly do not pollute the real `~/.claude/harness.generated/`
+   * unless they opt in. Hotfix for v0.21.0 which defaulted to ON and
+   * caused vitest runs to clobber the operator's pending-approval file
+   * via the `npm-test` preflight check (agent-tasks/<this hotfix>).
+   * Pass `null` to make the opt-out explicit; `undefined` (the default)
+   * is the same no-op.
    */
   stagePendingApproval?:
     | ((generatedDir: string, sessionId: string) => void)
@@ -303,14 +305,22 @@ export async function runSessionStartPreflight(
   // Acceptable for the one-Claude-per-repo operator pattern; the worst
   // case is approve resolving to the wrong session id, which the operator
   // catches via the canonical-gate-signal line in the approve output.
-  if (sessionSource !== "default" && opts.stagePendingApproval !== null) {
+  // OPT-IN: only fires when the caller explicitly passes a writer. The
+  // CLI entry points wire `writePendingApproval`; library callers (and
+  // every existing vitest case) get the no-op default, so the producer
+  // never pollutes the real `~/.claude/harness.generated/` from a test.
+  // Hotfix for v0.21.0 which defaulted to ON and caused the npm-test
+  // preflight check to clobber the operator's pending-approval file.
+  if (
+    sessionSource !== "default" &&
+    typeof opts.stagePendingApproval === "function"
+  ) {
     try {
       const generatedDir = resolveGeneratedDir({
         ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
         manifestPath: resolvePaths(opts).base,
       });
-      const stage = opts.stagePendingApproval ?? writePendingApproval;
-      stage(generatedDir, sessionId);
+      opts.stagePendingApproval(generatedDir, sessionId);
     } catch {
       /* best-effort, never escalate into a hook error */
     }
