@@ -336,9 +336,16 @@ setInterval(() => {}, 1000);
     const elapsed = Date.now() - start;
     expect(result.claudeTimedOut).toBe(true);
     expect(result.exitCode).toBe(1);
-    // 200ms budget + 2000ms grace + epsilon. Slack is generous for CI.
+    // 200ms budget + 2000ms grace + epsilon. Upper bound at 7000ms
+    // (was 4500ms): under CI load the wall-clock SIGKILL escalation
+    // was observed at ~4756ms (agent-tasks/595ba01e, PR #208), so the
+    // tighter 4500 ceiling flaked roughly once per ~20 full-suite runs.
+    // 7000 keeps the regression-detection floor (a real 6s+ cleanup
+    // bug still trips) while eliminating the flake. If a deterministic
+    // refactor lands (fake timers + stubbed SIGTERM), the bound can
+    // tighten back down.
     expect(elapsed).toBeGreaterThanOrEqual(2000);
-    expect(elapsed).toBeLessThan(4500);
+    expect(elapsed).toBeLessThan(7000);
   });
 });
 
