@@ -45,12 +45,36 @@ const PACK_NAME = "understanding-before-execution";
 export const TOOL_NAME_TASK_START = "mcp__agent-tasks__task_start";
 export const TOOL_NAME_TASK_FINISH = "mcp__agent-tasks__task_finish";
 export const TOOL_NAME_TASK_ABANDON = "mcp__agent-tasks__task_abandon";
+// Legacy v1 verb: takes an explicit `status` param ("open" | "in_progress" |
+// "review" | "done"). Only `done` is a terminal "work claim released" state
+// in v2 semantics (per task_finish docs: "The work claim is cleared when
+// going to done and kept when going to review"). open / review / in_progress
+// keep the claim, so the hook treats them as no-op (PR #200, agent-tasks
+// 9e06175f). Adding this verb closes the marker-GC gap left by PR #198,
+// which fixed the auto-bypass but did not GC the stale markers themselves.
+export const TOOL_NAME_TASKS_TRANSITION = "mcp__agent-tasks__tasks_transition";
 
 export const TRACK_ACTIVE_CLAIM_TOOLS: readonly string[] = [
   TOOL_NAME_TASK_START,
   TOOL_NAME_TASK_FINISH,
   TOOL_NAME_TASK_ABANDON,
+  TOOL_NAME_TASKS_TRANSITION,
 ];
+
+/** Status values that cause `tasks_transition` to behave like task_finish→done. */
+const TASKS_TRANSITION_CLEAR_STATUSES: ReadonlySet<string> = new Set(["done"]);
+
+function extractStatus(toolInput: unknown): string {
+  if (
+    typeof toolInput !== "object" ||
+    toolInput === null ||
+    Array.isArray(toolInput)
+  ) {
+    return "";
+  }
+  const s = (toolInput as Record<string, unknown>)["status"];
+  return typeof s === "string" ? s : "";
+}
 
 export interface PackHookTrackActiveClaimOptions extends LoaderOptions {
   pack?: string;
@@ -241,6 +265,29 @@ export async function runPackHookTrackActiveClaimCli(
   ) {
     clearActiveClaim(generatedDir);
     const diagnostic = `harness pack hook track-active-claim: cleared active-claim after ${toolName}`;
+    stderr.write(`${diagnostic}\n`);
+    return {
+      exitCode: 0,
+      claimWritten: false,
+      claimCleared: true,
+      taskId: taskId === "" ? null : taskId,
+      diagnostic,
+    };
+  }
+
+  if (toolName === TOOL_NAME_TASKS_TRANSITION) {
+    const status = extractStatus(event.tool_input);
+    if (!TASKS_TRANSITION_CLEAR_STATUSES.has(status)) {
+      // open / in_progress / review keep the work claim per v2 semantics
+      // (see task_finish docs). Malformed / missing status also falls
+      // here, since we cannot prove the agent meant to release.
+      return noop(
+        `harness pack hook track-active-claim: tasks_transition status=${status || "(missing)"} keeps claim, skipping`,
+        stderr,
+      );
+    }
+    clearActiveClaim(generatedDir);
+    const diagnostic = `harness pack hook track-active-claim: cleared active-claim after tasks_transition status=${status}`;
     stderr.write(`${diagnostic}\n`);
     return {
       exitCode: 0,

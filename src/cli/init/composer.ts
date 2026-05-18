@@ -563,6 +563,7 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
                 "mcp__agent-tasks__task_finish",
                 "mcp__agent-tasks__task_abandon",
                 "mcp__agent-tasks__pull_requests_merge",
+                "mcp__agent-tasks__tasks_transition",
               ],
               max_age: "4h",
             },

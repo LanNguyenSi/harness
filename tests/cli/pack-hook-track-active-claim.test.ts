@@ -195,6 +195,112 @@ describe("pack hook track-active-claim — task_finish / task_abandon clears the
   });
 });
 
+describe("pack hook track-active-claim — tasks_transition v1 verb (PR #200)", () => {
+  const TASKS_TRANSITION = "mcp__agent-tasks__tasks_transition";
+
+  it("clears active-claim when tasks_transition fires with status=done", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    fs.mkdirSync(generatedDir, { recursive: true });
+    writeActiveClaim(generatedDir, "task-uuid-abc");
+
+    const stderr = bufferStream();
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBody(TASKS_TRANSITION, { taskId: "task-uuid-abc", status: "done" }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(true);
+    expect(readActiveClaim(generatedDir)).toBeNull();
+    expect(stderr.read()).toMatch(/cleared active-claim after tasks_transition status=done/);
+  });
+
+  it("is a no-op when tasks_transition fires with status=in_progress (claim verb)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    fs.mkdirSync(generatedDir, { recursive: true });
+    writeActiveClaim(generatedDir, "task-uuid-abc");
+
+    const stderr = bufferStream();
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBody(TASKS_TRANSITION, { taskId: "task-uuid-abc", status: "in_progress" }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(false);
+    expect(result.claimWritten).toBe(false);
+    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+    expect(stderr.read()).toMatch(/status=in_progress keeps claim/);
+  });
+
+  it("is a no-op when tasks_transition fires with status=review (work claim kept per v2 docs)", async () => {
+    // Pins the v2 contract: task_finish→review keeps the work claim, so
+    // tasks_transition→review must mirror that.
+    const generatedDir = path.join(tmp, "harness.generated");
+    fs.mkdirSync(generatedDir, { recursive: true });
+    writeActiveClaim(generatedDir, "task-uuid-abc");
+
+    const stderr = bufferStream();
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBody(TASKS_TRANSITION, { taskId: "task-uuid-abc", status: "review" }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(false);
+    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+    expect(stderr.read()).toMatch(/status=review keeps claim/);
+  });
+
+  it("is a no-op when tasks_transition fires with missing status (defensive)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    fs.mkdirSync(generatedDir, { recursive: true });
+    writeActiveClaim(generatedDir, "task-uuid-abc");
+
+    const stderr = bufferStream();
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBody(TASKS_TRANSITION, { taskId: "task-uuid-abc" }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(false);
+    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+    expect(stderr.read()).toMatch(/status=\(missing\) keeps claim/);
+  });
+
+  it("is a no-op when tasks_transition fires with status as a non-string type (defensive)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    fs.mkdirSync(generatedDir, { recursive: true });
+    writeActiveClaim(generatedDir, "task-uuid-abc");
+
+    const stderr = bufferStream();
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBody(TASKS_TRANSITION, { taskId: "task-uuid-abc", status: 42 }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(false);
+    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+  });
+});
+
 describe("pack hook track-active-claim — guards and fall-through", () => {
   it("skips silently when pack is enabled:false", async () => {
     const generatedDir = path.join(tmp, "harness.generated");
