@@ -639,53 +639,46 @@ export function writeTaskApprovalMarker(
 }
 
 /**
- * Gate-side: scan the approvals directory for any task-scoped marker
- * (`task-<id>`) that is present, readable, and (when `maxAgeMs` is set)
- * fresh. Returns the first matching marker's path; null when none match.
+ * Gate-side: resolve the active agent-tasks claim (via `active-claim`)
+ * and check ONLY that task's approval marker. When no active claim is
+ * recorded, this returns `matched:false` so the caller falls through
+ * to the session marker — preserving the legacy contract for solo /
+ * non-agent-tasks workflows that never call `task_start`.
  *
- * Two-tier filter mirrors `checkApprovalMarker`: existence is the
- * operator's intent (a body-unreadable marker counts as approved), and
- * symlinks are refused for safety. Stale markers (older than maxAgeMs)
- * are skipped silently so a long-running session doesn't latch onto a
- * marker from a previous day's task.
+ * Replaces the v1 "any task marker satisfies the gate" behaviour
+ * (PR #198): a stale approval from a different, already-completed task
+ * was silently authorising every Edit/Write/Bash in the next session
+ * because the scan returned the first existing marker regardless of
+ * which task the agent had actually claimed.
+ *
+ * Same safety filters as `checkApprovalMarker` (existence-is-enough,
+ * symlink rejection, optional freshness via `maxAgeMs`); the only
+ * difference is the filename suffix derived from `active-claim`.
  */
-export function checkAnyTaskApprovalMarker(
+export function checkActiveClaimApprovalMarker(
   generatedDir: string,
   opts: CheckApprovalMarkerOptions = {},
 ): MarkerCheck {
-  const approvalsDir = path.join(generatedDir, APPROVAL_MARKER_DIRNAME);
-  let names: string[];
-  try {
-    names = fs.readdirSync(approvalsDir);
-  } catch {
+  const claim = readActiveClaim(generatedDir);
+  if (claim === null) {
     return {
       matched: false,
-      detail: `no approvals directory at ${approvalsDir}`,
+      detail: `no active-claim recorded; task-scoped check skipped`,
       marker: null,
     };
   }
-  const taskMarkerNames = names.filter((n) => n.startsWith(APPROVAL_MARKER_TASK_PREFIX));
-  if (taskMarkerNames.length === 0) {
+  const markerName = `${APPROVAL_MARKER_TASK_PREFIX}${claim}`;
+  const check = checkApprovalMarker(generatedDir, markerName, opts);
+  if (check.matched) {
     return {
-      matched: false,
-      detail: `no task-scoped markers under ${approvalsDir}`,
-      marker: null,
+      matched: true,
+      detail: `task-scoped marker for active-claim ${claim}: ${check.detail}`,
+      marker: check.marker,
     };
-  }
-  for (const name of taskMarkerNames) {
-    const taskId = name.slice(APPROVAL_MARKER_TASK_PREFIX.length);
-    const check = checkApprovalMarker(generatedDir, name, opts);
-    if (check.matched) {
-      return {
-        matched: true,
-        detail: `task-scoped marker for task ${taskId}: ${check.detail}`,
-        marker: check.marker,
-      };
-    }
   }
   return {
     matched: false,
-    detail: `${taskMarkerNames.length} task-scoped marker(s) present but none fresh`,
+    detail: `active-claim ${claim} has no fresh task marker (${check.detail})`,
     marker: null,
   };
 }

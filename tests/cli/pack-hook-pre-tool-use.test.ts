@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runPackHookPreToolUseCli } from "../../src/cli/pack/hook-pre-tool-use.js";
 import type { LedgerEntry } from "../../src/policies/index.js";
 import {
+  writeActiveClaim,
   writeApprovalMarker,
   writeTaskApprovalMarker,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
@@ -58,14 +59,15 @@ function writeReport(dir: string, name: string, body: Record<string, unknown>): 
 }
 
 describe("pack hook pre-tool-use blocker", () => {
-  it("allows when a task-scoped marker is present for a different session id (harness/1ee26e77)", async () => {
+  it("allows when active-claim names an approved task, even from a different session id (harness/1ee26e77 + PR #198 scope)", async () => {
     // Operator approved via `harness approve understanding --task <id>`
     // from a previous session; the task marker is keyed by task id, not
     // by the current session id, so the gate accepts it across sessions
-    // for as long as that task is in progress.
+    // for as long as the active-claim still names that same task.
     const stdout = bufferStream();
     const stderr = bufferStream();
     const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-uuid-abc");
     writeTaskApprovalMarker(generatedDir, "task-uuid-abc", {
       approvedAt: "2026-05-18T08:00:00Z",
       approvedBy: "test-operator",
@@ -82,7 +84,37 @@ describe("pack hook pre-tool-use blocker", () => {
     expect(result.blocked).toBe(false);
     expect(result.approvalCheck.source).toBe("marker");
     expect(stdout.read()).toBe("");
-    expect(stderr.read()).toMatch(/task-scoped marker for task task-uuid-abc/);
+    expect(stderr.read()).toMatch(/task-scoped marker for active-claim task-uuid-abc/);
+  });
+
+  it("BLOCKS when a marker exists for a DIFFERENT task than the active-claim (PR #198 security pin)", async () => {
+    // The pre-#198 contract was "any fresh task marker satisfies the
+    // gate". This let a stale approval from a finished task silently
+    // authorise every Edit/Write/Bash in the next session. The fix
+    // requires the marker to match the currently-claimed task.
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-current");
+    writeTaskApprovalMarker(generatedDir, "task-stale-from-yesterday", {
+      approvedAt: new Date(Date.now() - 60 * 1000).toISOString(),
+      approvedBy: "test-operator",
+    });
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event()),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.approvalCheck.source).toBe("none");
+    // Sibling task marker must not appear in any allow-path diagnostic.
+    const stderrText = stderr.read();
+    expect(stderrText).not.toMatch(/marker for active-claim task-stale-from-yesterday/);
+    expect(stderrText).not.toMatch(/marker for task task-stale-from-yesterday/);
   });
 
   it("falls through from task-scoped to session-scoped marker check (legacy compat)", async () => {
@@ -109,12 +141,16 @@ describe("pack hook pre-tool-use blocker", () => {
     expect(stderr.read()).toMatch(/approved via marker sess-1/);
   });
 
-  it("accepts a fresh task-scoped marker even when a stale sibling task marker is present", async () => {
-    // Pins the loop in checkAnyTaskApprovalMarker: if any task marker
-    // is stale and the next one is fresh, the fresh marker still wins.
+  it("ignores a stale sibling marker even when the active-claim task is approved (max_age applies per-claim)", async () => {
+    // Active-claim points at task-fresh, which has a fresh marker.
+    // A stale task-old marker also exists, but the new check only
+    // consults the active-claim's marker — the sibling marker should
+    // not influence the decision either way (pre-#198 this scan
+    // returned the first match across all task markers).
     const stdout = bufferStream();
     const stderr = bufferStream();
     const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-fresh");
     writeTaskApprovalMarker(generatedDir, "task-old", {
       approvedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
       approvedBy: "test-operator",
@@ -145,13 +181,14 @@ describe("pack hook pre-tool-use blocker", () => {
     });
     expect(result.blocked).toBe(false);
     expect(result.approvalCheck.source).toBe("marker");
-    expect(stderr.read()).toMatch(/task-scoped marker for task task-fresh/);
+    expect(stderr.read()).toMatch(/task-scoped marker for active-claim task-fresh/);
   });
 
-  it("blocks when only a STALE task-scoped marker exists (max_age exceeded)", async () => {
+  it("blocks when active-claim's task marker is STALE (max_age exceeded)", async () => {
     const stdout = bufferStream();
     const stderr = bufferStream();
     const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-stale");
     // Marker approved 24h ago.
     writeTaskApprovalMarker(generatedDir, "task-stale", {
       approvedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),

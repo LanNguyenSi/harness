@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Understanding-gate silently auto-bypassed via any stale task marker, active-claim ignored** (agent-tasks/a13a537b, PR #198). `checkAnyTaskApprovalMarker` scanned `<gen>/.approvals/` and matched the FIRST fresh `task-<id>` marker it found, regardless of whether that task was the currently-claimed one. A single approval marker left lying around (typical pattern: operator approves task A, the marker is not GC'd at task A's completion, a fresh session picks up task B and never sees an understanding-gate prompt) silently auto-allowed every Edit/Write/Bash in every subsequent session until the marker aged out. Discovered when an operator on a freshly-assigned task ran the pre-tool-use hook by hand and watched it report `task-scoped marker for task <unrelated-id>: approved at <hours ago> by harness-approve-cli, allowing` for a task that had been merged earlier the same day. The behaviour was design-by-comment ("Any fresh `.approvals/task-<id>` marker satisfies the gate, regardless of which session approved it") but the comment encoded the bug: a session-agnostic check is exactly what makes a task-scoped marker secure across sessions; a task-agnostic check is what makes it insecure across tasks. Replaced with `checkActiveClaimApprovalMarker`, which reads `<gen>/active-claim` and ONLY consults the marker for that specific task. When `active-claim` is absent (legacy / solo workflows that never call `task_start`), the new function returns `matched:false` and the gate falls through to the session marker, preserving the legacy contract. `checkAnyTaskApprovalMarker` is removed from the runtime surface (only one internal caller). New tests pin the security contract: a `task-OTHER` marker plus an `active-claim` pointing elsewhere now blocks. **Operator cleanup**: list `.approvals/task-*` entries whose UUIDs do NOT match any task you are currently working on, and rm those that pre-date the next `task_start`:
+
+```bash
+ls ~/.claude/harness.generated/.approvals/task-* 2>/dev/null
+# For each entry: confirm the task is closed, then rm it.
+cat ~/.claude/harness.generated/active-claim
+# Markers whose taskId does not match this file are inert under the
+# new gate; they can be removed without affecting any live approval.
+```
+
 ## [0.22.0] - 2026-05-18
 
 **Headline: two operator-experience deliveries in one release.** First, `harness pause` / `harness resume`, two operator-only verbs that make every PreToolUse / PostToolUse pack hook dormant by writing a JSON sentinel under `harness.generated/`. Replaces the `ledger_add understanding-approved:<sessionId>` lockout-recovery hack, the comment-out-and-readd `settings.json` dance for gate debugging, and the no-clean-answer incident-hotfix path; the operator-only guardrails (refuses agent shell, refuses non-TTY) keep it from becoming a routine bypass. Second, a critical test-isolation fix: every `npx vitest run` since v0.20.0 silently wrote `.approvals/task-<real-task-id>` markers into the operator's real `~/.claude/harness.generated/.approvals/`, auto-approving whatever task the live `active-claim` pointed to and short-circuiting the understanding-gate. Same class as the v0.21.1 preflight leak; this release fixes 10 leak sites and adds a pin-test that asserts no writes happen under real `~/.claude/` for any future `approveUnderstanding` test caller.
