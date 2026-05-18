@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { intercept, type LedgerClient, type ToolEvent } from "../../src/runtime/index.js";
-import type { ExtractBuiltins, LedgerEntry, LedgerQueryResult } from "../../src/policies/index.js";
+import {
+  intercept,
+  type LedgerClient,
+  type ToolEvent,
+} from "../../src/runtime/index.js";
+import type {
+  ExtractBuiltins,
+  LedgerEntry,
+  LedgerQueryResult,
+} from "../../src/policies/index.js";
 import type { Policy } from "../../src/schema/index.js";
 import { makeManifest, makePolicy as policy } from "../_helpers/manifest.js";
 
@@ -80,7 +88,28 @@ describe("intercept — match + allow", () => {
     expect(result.decisions[0]?.outcome).toBe("allow");
     expect(result.decisions[0]?.ledgerTag).toBe("review:42");
     expect(result.decisions[0]?.extractValues.PR_NUMBER).toBe("42");
-    expect(ledger.queryCalls).toEqual([{ tag: "review:42", sessionId: "sess-1" }]);
+    expect(ledger.queryCalls).toEqual([
+      { tag: "review:42", sessionId: "sess-1" },
+    ]);
+  });
+
+  it("matches Codex MCP underscore and dot tool names against hyphenated policy triggers", async () => {
+    const ledger = makeLedger({ kind: "ok", entries: [matchingEntry] });
+    const result = await intercept({
+      manifest: manifest([REVIEW_POLICY]),
+      event: {
+        ...MERGE_EVENT,
+        tool_name: "mcp__agent_tasks__.pull_requests_merge",
+        tool_input: undefined,
+        raw_input: { prNumber: 42 },
+      },
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.outcome).toBe("allow");
+    expect(result.decisions[0]?.ledgerTag).toBe("review:42");
   });
 });
 
@@ -144,11 +173,15 @@ describe("intercept — deny with producer hints", () => {
     expect(reason).toContain("To produce this tag:");
     expect(reason).toContain("1. [mcp]  mcp__agent-grounding__ledger_add");
     expect(reason).toContain('example={type:"fact", content:"review:42"}');
-    expect(reason).toContain("Persist the review verdict tagged with the PR number.");
+    expect(reason).toContain(
+      "Persist the review verdict tagged with the PR number.",
+    );
     // Lock the assembled order: <policyName>: <reason>. <hintSuffix>
     // <producersBlock>. Structured consumers (or human readers
     // skimming) rely on the hint coming before the producer list.
-    expect(reason.indexOf("To satisfy:")).toBeLessThan(reason.indexOf("To produce this tag:"));
+    expect(reason.indexOf("To satisfy:")).toBeLessThan(
+      reason.indexOf("To produce this tag:"),
+    );
   });
 
   it("legacy neutral envelope is preserved when policy has no producers", async () => {
@@ -223,6 +256,26 @@ describe("intercept — agent-facing ux replaces engine vocabulary", () => {
     );
   });
 
+  it("matches Codex exec_command shell events and reads cmd for bash_match", async () => {
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([preflightPolicy]),
+      event: {
+        ...investigateEvent,
+        tool_name: "exec_command",
+        tool_input: { cmd: "git status" },
+      },
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+
+    expect(result.decisions).toHaveLength(1);
+    expect(result.blockJson?.reason).toContain(
+      "You cannot investigate this repository yet.",
+    );
+  });
+
   it("does not leak engine vocabulary (ledger / tag / matching) to the agent surface", async () => {
     const ledger = makeLedger({ kind: "ok", entries: [] });
     const result = await intercept({
@@ -271,7 +324,9 @@ describe("intercept — agent-facing ux replaces engine vocabulary", () => {
       requires: { ledger_tag: "preflight:${BRANCH}", within: "10m" },
       ux: {
         cannot: "You cannot push branch ${BRANCH} yet.",
-        required: ["a fresh preflight for ${BRANCH} (within the last 10 minutes)"],
+        required: [
+          "a fresh preflight for ${BRANCH} (within the last 10 minutes)",
+        ],
         run: ["harness preflight"],
       },
     } as Policy;
@@ -288,7 +343,9 @@ describe("intercept — agent-facing ux replaces engine vocabulary", () => {
       builtins: BUILTINS,
       now: NOW,
     });
-    expect(result.blockJson?.reason).toContain("You cannot push branch master yet.");
+    expect(result.blockJson?.reason).toContain(
+      "You cannot push branch master yet.",
+    );
     expect(result.blockJson?.reason).toContain(
       "- a fresh preflight for master (within the last 10 minutes)",
     );
@@ -597,7 +654,8 @@ describe("intercept — bash_match", () => {
     }> = [
       {
         policyName: "preflight-before-push",
-        bashMatch: "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b",
+        bashMatch:
+          "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b",
         shouldMatch: [
           "git push",
           "cd /home/lan/repo && git push",
@@ -625,7 +683,11 @@ describe("intercept — bash_match", () => {
         policyName: "dogfood-before-release",
         bashMatch:
           "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*(npm publish\\b|git( -C \\S+)* tag v)",
-        shouldMatch: ["npm publish", "cd /repo && git tag v0.10.0", "git tag v1.2.3"],
+        shouldMatch: [
+          "npm publish",
+          "cd /repo && git tag v0.10.0",
+          "git tag v1.2.3",
+        ],
         shouldSkip: ['echo "npm publish"', "npm publishx", "git tag -l"],
       },
     ];
@@ -633,7 +695,11 @@ describe("intercept — bash_match", () => {
     for (const c of cases) {
       const pol: Policy = policy({
         name: c.policyName,
-        trigger: { event: "PreToolUse", match: "Bash", bash_match: c.bashMatch },
+        trigger: {
+          event: "PreToolUse",
+          match: "Bash",
+          bash_match: c.bashMatch,
+        },
         requires: { ledger_tag: "gate:${SESSION_ID}", within: "24h" },
         hook: "h",
       });
@@ -678,7 +744,10 @@ describe("intercept — bash_match", () => {
 
 describe("intercept — degraded ledger", () => {
   it("returns warn-degraded outcome and does NOT block", async () => {
-    const ledger = makeLedger({ kind: "degraded", reason: "ledger db missing" });
+    const ledger = makeLedger({
+      kind: "degraded",
+      reason: "ledger db missing",
+    });
     const result = await intercept({
       manifest: manifest([REVIEW_POLICY]),
       event: MERGE_EVENT,
@@ -747,7 +816,9 @@ describe("intercept — review-before-merge-bash (gh pr merge surface)", () => {
     });
     expect(result.decisions[0]?.outcome).toBe("deny");
     expect(result.decisions[0]?.ledgerTag).toBe("review:master");
-    expect(ledger.queryCalls).toEqual([{ tag: "review:master", sessionId: "sess-1" }]);
+    expect(ledger.queryCalls).toEqual([
+      { tag: "review:master", sessionId: "sess-1" },
+    ]);
   });
 
   it("allows when the ledger carries a matching review:<branch> entry", async () => {

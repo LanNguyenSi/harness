@@ -37,13 +37,15 @@ export const DEFAULT_MODE: Mode = "grill_me";
 const HOOK_NAME_PREFIX = `policy-pack:${PACK_NAME}`;
 
 // Per-runtime hook surface. Claude Code keys on tool name (Edit|Write|Bash);
-// Codex's write surface is `apply_patch` + `Bash`/`shell` (the task's
-// in-scope list). The hook contract Codex feeds to the adapter is the
-// same generic envelope harness publishes: `{ session_id, tool_name,
-// raw_input, event }` on stdin, `{ decision }` on stdout, exit 2 on
-// block. See dogfood/phase6-6/README.md for the wire format.
+// Codex's write surface is `apply_patch` plus shell tool aliases used by
+// current runtimes (`Bash`/`shell`/`exec_command`). The hook contract Codex
+// feeds to the adapter is the same generic envelope harness publishes:
+// `{ session_id, tool_name, raw_input, event }` on stdin, `{ decision }`
+// on stdout, exit 2 on block. See dogfood/phase6-6/README.md for the wire
+// format.
 const PRE_TOOL_USE_MATCH_CLAUDE = "Edit|Write|Bash";
-const PRE_TOOL_USE_MATCH_CODEX = "apply_patch|Bash|shell";
+const PRE_TOOL_USE_MATCH_CODEX =
+  "apply_patch|Bash|shell|exec_command|functions.exec_command";
 
 // UserPromptSubmit + Stop hooks point at `@lannguyensi/understanding-gate`
 // bare bin names (npm i -g). The harness validator's checkHooks skips
@@ -66,7 +68,7 @@ const PRE_TOOL_USE_COMMAND_CLAUDE = "harness pack hook pre-tool-use";
 //   - UserPromptSubmit-equivalent injector (Phase 6 #6).
 //   - Stop-equivalent capture into `.understanding-gate/reports/`
 //     (Phase 6 #6 follow-up).
-//   - PreToolUse blocker on apply_patch/Bash/shell (Phase 6 #6).
+//   - PreToolUse blocker on apply_patch plus Codex shell aliases (Phase 6 #6).
 //
 // Cross-runtime sessions can still approve from a Claude Code report:
 // the ledger tag is the canonical source for harnessed sessions,
@@ -74,12 +76,15 @@ const PRE_TOOL_USE_COMMAND_CLAUDE = "harness pack hook pre-tool-use";
 // report directory is shared between runtimes, so a Codex stop that
 // writes a report is approvable via `harness approve understanding`
 // regardless of which runtime invokes the next tool call.
-const COMMAND_USER_PROMPT_SUBMIT_CODEX = "harness pack hook codex-user-prompt-submit";
+const COMMAND_USER_PROMPT_SUBMIT_CODEX =
+  "harness pack hook codex-user-prompt-submit";
 const COMMAND_STOP_CODEX = "harness pack hook codex-stop";
 const COMMAND_PRE_TOOL_USE_CODEX = "harness pack hook codex-pre-tool-use";
 
 export function isMode(value: unknown): value is Mode {
-  return typeof value === "string" && (MODES as readonly string[]).includes(value);
+  return (
+    typeof value === "string" && (MODES as readonly string[]).includes(value)
+  );
 }
 
 export interface ResolvePackOptions {
@@ -108,12 +113,18 @@ function shellQuoteSingle(s: string): string {
   return `'${s.replace(/'/g, "'\\''")}'`;
 }
 
-function prefixCommandWithReportsDir(command: string, reportsDir: string | undefined): string {
+function prefixCommandWithReportsDir(
+  command: string,
+  reportsDir: string | undefined,
+): string {
   if (!reportsDir) return command;
   return `${REPORTS_DIR_ENV}=${shellQuoteSingle(reportsDir)} ${command}`;
 }
 
-export function resolveMode(pack: PolicyPack): { mode: Mode; warning: string | null } {
+export function resolveMode(pack: PolicyPack): {
+  mode: Mode;
+  warning: string | null;
+} {
   const raw = pack.config["mode"];
   if (raw === undefined) return { mode: DEFAULT_MODE, warning: null };
   if (isMode(raw)) return { mode: raw, warning: null };
@@ -141,7 +152,8 @@ const DEFAULT_EXPIRE_ON_TOOL_MATCH: ReadonlyArray<string> = [
 ];
 
 const POST_TOOL_USE_COMMAND_CLAUDE = "harness pack hook post-tool-use";
-const TRACK_ACTIVE_CLAIM_COMMAND_CLAUDE = "harness pack hook track-active-claim";
+const TRACK_ACTIVE_CLAIM_COMMAND_CLAUDE =
+  "harness pack hook track-active-claim";
 
 // Hardcoded matcher for the v2 active-claim tracker (harness/494fd1e5).
 // Agent-tasks specific; operators on other tasking systems can ignore
@@ -163,7 +175,10 @@ function postToolUseMatchPattern(tools: ReadonlyArray<string>): string {
   return `^(?:${escaped.join("|")})$`;
 }
 
-function resolveExpireOnToolMatch(pack: PolicyPack): { tools: string[]; emitHook: boolean } {
+function resolveExpireOnToolMatch(pack: PolicyPack): {
+  tools: string[];
+  emitHook: boolean;
+} {
   const raw = (pack.config as Record<string, unknown>)["approval_lifecycle"];
   // No config block at all: default-on with the agent-tasks tool list.
   // This is the intentional behaviour change in v0.18 — operators who
@@ -181,7 +196,9 @@ function resolveExpireOnToolMatch(pack: PolicyPack): { tools: string[]; emitHook
   }
   const list = obj["expire_on_tool_match"];
   if (Array.isArray(list)) {
-    const tools = list.filter((v): v is string => typeof v === "string" && v.length > 0);
+    const tools = list.filter(
+      (v): v is string => typeof v === "string" && v.length > 0,
+    );
     return { tools, emitHook: tools.length > 0 };
   }
   return { tools: [...DEFAULT_EXPIRE_ON_TOOL_MATCH], emitHook: true };
@@ -201,7 +218,8 @@ function buildHooks(
   // prefixed with `UNDERSTANDING_GATE_REPORT_DIR=<absolute>` so all hooks
   // — including the standalone-package Stop bin which honors the same
   // env var — write/read the same directory.
-  const wrap = (cmd: string): string => prefixCommandWithReportsDir(cmd, opts.reportsDir);
+  const wrap = (cmd: string): string =>
+    prefixCommandWithReportsDir(cmd, opts.reportsDir);
   if (runtime === "codex") {
     return [
       {
@@ -230,7 +248,7 @@ function buildHooks(
         blocking: "hard",
         budget_ms: 5000,
         description:
-          "Codex adapter: block apply_patch/Bash/shell until an approved Understanding Report exists for the session. Consults both the evidence-ledger tag and the persisted JSON report.",
+          "Codex adapter: block apply_patch and Codex shell tools until an approved Understanding Report exists for the session. Consults both the evidence-ledger tag and the persisted JSON report.",
       },
     ];
   }
@@ -244,7 +262,10 @@ function buildHooks(
   // harness PR #169. The PreToolUse blocker below is the harness CLI
   // itself, not an npm-backed bin, so it does not carry a floor here.
   const UG_MIN_VERSION = "0.3.1";
-  const UG_VERSION_COMMAND: [string, string] = ["understanding-gate", "--version"];
+  const UG_VERSION_COMMAND: [string, string] = [
+    "understanding-gate",
+    "--version",
+  ];
   return [
     {
       name: `${HOOK_NAME_PREFIX}:user-prompt-submit`,
@@ -336,13 +357,23 @@ function modeFriction(mode: Mode): string {
   }
 }
 
-function buildInstructions(pack: PolicyPack, mode: Mode, runtime: Runtime): string {
+function buildInstructions(
+  pack: PolicyPack,
+  mode: Mode,
+  runtime: Runtime,
+): string {
   const description = pack.description?.trim() ?? "";
   const isCodex = runtime === "codex";
-  const injectorCmd = isCodex ? COMMAND_USER_PROMPT_SUBMIT_CODEX : BIN_USER_PROMPT_SUBMIT_CLAUDE;
+  const injectorCmd = isCodex
+    ? COMMAND_USER_PROMPT_SUBMIT_CODEX
+    : BIN_USER_PROMPT_SUBMIT_CLAUDE;
   const stopCmd = isCodex ? COMMAND_STOP_CODEX : BIN_STOP_CLAUDE;
-  const blockerCmd = isCodex ? COMMAND_PRE_TOOL_USE_CODEX : PRE_TOOL_USE_COMMAND_CLAUDE;
-  const blockerMatch = isCodex ? PRE_TOOL_USE_MATCH_CODEX : PRE_TOOL_USE_MATCH_CLAUDE;
+  const blockerCmd = isCodex
+    ? COMMAND_PRE_TOOL_USE_CODEX
+    : PRE_TOOL_USE_COMMAND_CLAUDE;
+  const blockerMatch = isCodex
+    ? PRE_TOOL_USE_MATCH_CODEX
+    : PRE_TOOL_USE_MATCH_CLAUDE;
   const settingsArtefact = isCodex
     ? "`harness.generated/codex/config.toml`"
     : "harness-managed `settings.json`";
@@ -406,9 +437,10 @@ ${description ? `\n> ${description.replace(/\n/g, "\n> ")}\n` : ""}
 `;
 }
 
-function resolvePermissionProfile(
-  pack: PolicyPack,
-): { permissions: PackPermissionsContribution | null; warning: string | null } {
+function resolvePermissionProfile(pack: PolicyPack): {
+  permissions: PackPermissionsContribution | null;
+  warning: string | null;
+} {
   const raw = pack.config["permission_profile"];
   if (raw === undefined) return { permissions: null, warning: null };
   if (typeof raw !== "string") {
@@ -450,7 +482,8 @@ export function resolve(
   const profileResult = resolvePermissionProfile(pack);
   if (profileResult.warning) warnings.push(profileResult.warning);
   const contribution: PackContribution = { hooks, files };
-  if (profileResult.permissions) contribution.permissions = profileResult.permissions;
+  if (profileResult.permissions)
+    contribution.permissions = profileResult.permissions;
 
   return { contribution, warnings };
 }

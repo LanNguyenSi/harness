@@ -26,6 +26,7 @@
 //     the hooks alone are the enforcement.
 
 import type { Hook, Manifest } from "../../schema/index.js";
+import { expandCodexHookMatchPattern } from "../../runtime/tool-name-aliases.js";
 import { buildMemoryRouterHook } from "./generate-settings.js";
 
 export interface CodexConfigResult {
@@ -104,6 +105,10 @@ function eventKey(event: string): string {
       return "pre_tool_use";
     case "Stop":
       return "stop";
+    case "PostToolUse":
+      return "post_tool_use";
+    case "SessionStart":
+      return "session_start";
     default:
       return event;
   }
@@ -115,7 +120,7 @@ function emitHook(h: Hook): string {
   lines.push(`name = ${tomlString(h.name)}`);
   lines.push(`command = ${tomlString(h.command)}`);
   if (h.match !== undefined) {
-    lines.push(`match = ${tomlString(h.match)}`);
+    lines.push(`match = ${tomlString(expandCodexHookMatchPattern(h.match))}`);
   }
   lines.push(`timeout_ms = ${h.budget_ms}`);
   if (h.blocking === "hard") {
@@ -137,7 +142,9 @@ export function generateCodexConfig(manifest: Manifest): CodexConfigResult {
   // operator gets per-prompt augmentation wired into their config.toml
   // alongside the standard pack hooks (PR #203, agent-tasks/eefbcaa8).
   const routerHook = buildMemoryRouterHook(manifest);
-  const allHooks = routerHook ? [...manifest.hooks, routerHook] : manifest.hooks;
+  const allHooks = routerHook
+    ? [...manifest.hooks, routerHook]
+    : manifest.hooks;
   const hooks = [...allHooks].sort((a, b) => {
     if (a.event !== b.event) return a.event < b.event ? -1 : 1;
     return a.command < b.command ? -1 : a.command > b.command ? 1 : 0;
