@@ -520,3 +520,57 @@ describe("approveUnderstanding — reports-dir resolution (task 4f4a1178)", () =
     }
   });
 });
+
+describe("approveUnderstanding — task-scoped marker (harness/1ee26e77)", () => {
+  it("writes a task-scoped marker alongside the session marker when --task is supplied", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-1",
+      task: "task-uuid-abc",
+      reportsDir: tmp,
+      generatedDir,
+      now: new Date("2026-05-18T08:00:00Z"),
+      approvedBy: "test-suite",
+      ledgerAdd: async () => ({ ok: true }),
+    });
+
+    expect(result.marker.ok).toBe(true);
+    if (!result.marker.ok) return;
+    expect(fs.existsSync(result.marker.filePath)).toBe(true);
+
+    expect(result.taskMarker).not.toBeNull();
+    if (result.taskMarker === null || !result.taskMarker.ok) {
+      throw new Error("expected ok task marker");
+    }
+    expect(result.taskMarker.taskId).toBe("task-uuid-abc");
+    expect(result.taskMarker.filePath).toBe(
+      path.join(generatedDir, ".approvals", "task-task-uuid-abc"),
+    );
+    expect(fs.existsSync(result.taskMarker.filePath)).toBe(true);
+
+    const written = JSON.parse(fs.readFileSync(result.taskMarker.filePath, "utf8")) as {
+      approvedAt: string;
+      approvedBy: string;
+    };
+    expect(written.approvedAt).toBe("2026-05-18T08:00:00.000Z");
+    expect(written.approvedBy).toBe("test-suite");
+  });
+
+  it("leaves taskMarker as null when --task is not supplied (no regression)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-1",
+      reportsDir: tmp,
+      generatedDir,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+
+    expect(result.marker.ok).toBe(true);
+    expect(result.taskMarker).toBeNull();
+    // Approvals directory has only the session marker, no task-* siblings.
+    const approvals = fs.readdirSync(path.join(generatedDir, ".approvals"));
+    expect(approvals.some((n) => n.startsWith("task-"))).toBe(false);
+  });
+});

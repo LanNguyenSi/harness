@@ -24,6 +24,7 @@ import {
   findLatestReportForSession,
   listPersistedReports,
   writeApprovalMarker,
+  writeTaskApprovalMarker,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { addLedgerFact } from "../../runtime/ledger-add.js";
 import {
@@ -38,6 +39,15 @@ import { loadManifest, resolvePaths, type LoaderOptions } from "../loader.js";
 export interface ApproveUnderstandingOptions extends LoaderOptions {
   /** Explicit session id (overrides $CLAUDE_SESSION_ID). */
   session?: string;
+  /**
+   * Optional agent-tasks task id (harness/1ee26e77). When set, an
+   * additional task-scoped marker file is written at
+   * `<generatedDir>/.approvals/task-<taskId>`, in addition to the
+   * legacy session-scoped marker. Either satisfies the gate; the
+   * task-scoped marker is the design-intent target for multi-task
+   * sessions so the next task can require its own Understanding Report.
+   */
+  task?: string;
   /** Override the reports directory (test injection). */
   reportsDir?: string;
   /** Override the harness.generated/ directory (test injection). */
@@ -68,6 +78,15 @@ export interface ApproveUnderstandingResult {
    * to the operator so they don't think they approved when they didn't.
    */
   marker: { ok: true; filePath: string; approvedAt: string } | { ok: false; reason: string };
+  /**
+   * Task-scoped marker write outcome. Present only when --task / opts.task
+   * was supplied; null otherwise so a regression cannot silently flip
+   * session-only sessions into task-mode.
+   */
+  taskMarker:
+    | { ok: true; taskId: string; filePath: string; approvedAt: string }
+    | { ok: false; taskId: string; reason: string }
+    | null;
   ledger: { ok: boolean; tag: string; reason?: string };
   persistedReport:
     | { ok: true; filePath: string; previousStatus: string | null; approvedAt: string }
@@ -309,6 +328,32 @@ export async function approveUnderstanding(
     };
   }
 
+  // Task-scoped marker (harness/1ee26e77). Written alongside the
+  // session marker when the operator supplied --task. A failure here is
+  // surfaced loudly but does not abort the approve flow — the session
+  // marker still satisfies the gate as a fallback.
+  let taskMarkerResult: ApproveUnderstandingResult["taskMarker"] = null;
+  if (typeof opts.task === "string" && opts.task.length > 0) {
+    try {
+      const filePath = writeTaskApprovalMarker(generatedDir, opts.task, {
+        approvedAt: approvedAtMarker,
+        approvedBy: approvedByMarker,
+      });
+      taskMarkerResult = {
+        ok: true,
+        taskId: opts.task,
+        filePath,
+        approvedAt: approvedAtMarker,
+      };
+    } catch (err) {
+      taskMarkerResult = {
+        ok: false,
+        taskId: opts.task,
+        reason: `failed to write task marker: ${(err as Error).message}`,
+      };
+    }
+  }
+
   const tag = approvedLedgerTagFor(sessionId);
   const ledgerResult = manifest
     ? await writeLedgerTag(manifest, sessionId, tag, opts)
@@ -379,6 +424,7 @@ export async function approveUnderstanding(
     sessionId,
     sessionSource,
     marker: markerResult,
+    taskMarker: taskMarkerResult,
     ledger: ledgerResult.ok
       ? { ok: true, tag }
       : { ok: false, tag, reason: ledgerResult.reason },

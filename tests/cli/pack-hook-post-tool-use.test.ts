@@ -6,7 +6,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runPackHookPostToolUseCli } from "../../src/cli/pack/hook-post-tool-use.js";
 import {
   approvalMarkerPathFor,
+  taskApprovalMarkerPathFor,
   writeApprovalMarker,
+  writeTaskApprovalMarker,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
@@ -310,5 +312,114 @@ describe("pack hook post-tool-use marker-expiry: expire_on_bash_match (harness/f
     const stderrText = stderr.read();
     expect(stderrText).toMatch(/expire_on_bash_match entry ignored/);
     expect(stderrText).toMatch(/expired approval marker/);
+  });
+});
+
+describe("pack hook post-tool-use — task-scoped marker cleanup (harness/1ee26e77)", () => {
+  it("clears a task-scoped marker when tool_input.taskId is present and a marker exists for it", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-05-18T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    writeTaskApprovalMarker(generatedDir, "task-uuid-abc", {
+      approvedAt: "2026-05-18T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const stderr = bufferStream();
+
+    const result = await runPackHookPostToolUseCli({
+      manifest: manifestWithPack({ approval_lifecycle: DEFAULT_LIFECYCLE }),
+      stdin: readableFromString(
+        eventBody({ tool_input: { taskId: "task-uuid-abc" } }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.matchedExpiry).toBe(true);
+    expect(result.markerCleared).toBe(true);
+    expect(result.taskMarkerCleared).toBe(true);
+    // Both files are gone.
+    expect(
+      fs.existsSync(approvalMarkerPathFor(generatedDir, "sess-1")),
+    ).toBe(false);
+    expect(
+      fs.existsSync(taskApprovalMarkerPathFor(generatedDir, "task-uuid-abc")),
+    ).toBe(false);
+    expect(stderr.read()).toMatch(/also cleared task marker for task task-uuid-abc/);
+  });
+
+  it("leaves the task-scoped marker untouched when tool_input.taskId is absent", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-05-18T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    writeTaskApprovalMarker(generatedDir, "task-uuid-xyz", {
+      approvedAt: "2026-05-18T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const stderr = bufferStream();
+
+    const result = await runPackHookPostToolUseCli({
+      manifest: manifestWithPack({ approval_lifecycle: DEFAULT_LIFECYCLE }),
+      stdin: readableFromString(eventBody()), // no tool_input
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.matchedExpiry).toBe(true);
+    expect(result.markerCleared).toBe(true);
+    expect(result.taskMarkerCleared).toBe(false);
+    // Session marker cleared, task marker preserved.
+    expect(
+      fs.existsSync(approvalMarkerPathFor(generatedDir, "sess-1")),
+    ).toBe(false);
+    expect(
+      fs.existsSync(taskApprovalMarkerPathFor(generatedDir, "task-uuid-xyz")),
+    ).toBe(true);
+  });
+
+  it("leaves the task-scoped marker untouched when the matched event is a Bash regex boundary (no taskId on Bash)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-05-18T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    writeTaskApprovalMarker(generatedDir, "task-uuid-still-active", {
+      approvedAt: "2026-05-18T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const stderr = bufferStream();
+
+    const result = await runPackHookPostToolUseCli({
+      manifest: manifestWithPack({
+        approval_lifecycle: {
+          expire_on_bash_match: ["^gh pr merge\\b"],
+        },
+      }),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "Bash",
+          tool_input: { command: "gh pr merge 1", taskId: "decoy-should-be-ignored" },
+        }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.matchedExpiry).toBe(true);
+    expect(result.markerCleared).toBe(true);
+    // taskId on a Bash event is ignored by design (only toolNameMatched
+    // triggers task-scoped cleanup).
+    expect(result.taskMarkerCleared).toBe(false);
+    expect(
+      fs.existsSync(taskApprovalMarkerPathFor(generatedDir, "task-uuid-still-active")),
+    ).toBe(true);
+    expect(
+      fs.existsSync(taskApprovalMarkerPathFor(generatedDir, "decoy-should-be-ignored")),
+    ).toBe(false);
   });
 });
