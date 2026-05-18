@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.23.2] - 2026-05-18
+
+**Headline: policy-gate hint clarification + smoke flake.** Three PRs all merged today. PR #206 + PR #207 close the silent-fail trap on ledger_add hints in policy `ux.run` and `producers[].example`: the prior form named the required content tag but NOT the `sessionId` parameter, so an operator binding `sessionId` to the tag UUID (the natural assumption since the tag literally contains the task / PR number / branch) saw the same opaque rejection repeated. The two PRs sweep both rendering surfaces plus the operator-facing doc-prose. PR #208 bumps a flaky smoke-test wall-clock assertion (4500ms to 7000ms) that under CI load caused `npm test` to occasionally fail and confused downstream `preflight run .` into a false `npm-test: fail` blocker. **Operator action**: re-run `harness apply` (or `harness init --force`) to regenerate `settings.json` with the updated policy hints.
+
 ### Fixed
 
 - **Flaky `smoke.test.ts` SIGKILL escalation upper bound bumped from 4500ms to 7000ms** (agent-tasks/595ba01e, PR #208). The "escalates to SIGKILL when the child traps SIGTERM" test asserted wall-clock elapsed `< 4500ms` (200ms budget + 2000ms grace + epsilon), but under CI load the actual escalation was observed at ~4756ms, causing the test to flake roughly once per ~20 full-suite runs. Downstream impact was particularly bad: when this flake fired during `npm test`, `preflight run .` reported `npm-test: fail` and the pre-push gate blocked. Bumped the bound to 7000ms with an explaining comment naming the observed worst-case + headroom rationale. Regression-detection floor preserved (a real 6s+ cleanup bug still trips the assertion). If the flake reoccurs at the new bound, the follow-up direction is a deterministic refactor (fake timers + stubbed SIGTERM dance) per the task's Option B.
