@@ -161,6 +161,7 @@ interface PolicySpec {
     ledger_tag: string;
     within?: string;
     count?: { min?: number; max?: number; exact?: number };
+    at_head?: boolean;
   };
   hook: string;
   enforcement: string;
@@ -301,13 +302,20 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
       match: "Bash",
       bash_match: "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b",
     },
-    requires: { ledger_tag: "preflight:${BRANCH}", within: "10m" },
+    requires: {
+      ledger_tag: "preflight:${BRANCH}",
+      within: "10m",
+      // at_head:true lets a preflight at the current HEAD satisfy at
+      // any age (standard producer writes head:<sha>). The 10m window
+      // is the freshness ceiling for the head-mismatch case.
+      at_head: true,
+    },
     hook: "require-preflight-push-evidence",
     enforcement: "block",
     ux: {
       cannot: "You cannot push branch ${BRANCH} yet.",
       required: [
-        "a fresh preflight for ${BRANCH}, captured within the last 10 minutes. If you committed since the last preflight, re-run it before pushing: a preflight from earlier in the session does NOT cover a push that landed a new commit since.",
+        "a preflight for ${BRANCH} at the current HEAD (any age) OR any preflight within the last 10 minutes. Re-run `harness preflight` if you committed since the last preflight AND it has been more than 10 minutes.",
       ],
       run: ["harness preflight"],
     },

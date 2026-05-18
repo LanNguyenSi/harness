@@ -103,6 +103,14 @@ export interface InterceptOptions {
   ledgerTimeoutMs?: number;
   /** Override "now" for deterministic tests. */
   now?: Date;
+  /**
+   * Current git HEAD sha for the event's cwd, resolved by the CLI
+   * wrapper. Threaded through to `evaluateRequires` so the `at_head`
+   * branch can compare against ledger entries' `head:<sha>` token.
+   * Optional: omitted on non-git events, in which case the at_head
+   * branch falls through to the standard time-window check.
+   */
+  currentHeadSha?: string;
 }
 
 function policyMatchesEvent(policy: Policy, event: ToolEvent): boolean {
@@ -209,7 +217,13 @@ async function evaluateOnePolicy(
     }
   }
 
-  const evalOpts: EvaluateRequiresOptions = options.now ? { now: options.now } : {};
+  const evalOpts: EvaluateRequiresOptions = {
+    ...(options.now && { now: options.now }),
+    ...(options.currentHeadSha !== undefined &&
+      options.currentHeadSha.length > 0 && {
+        currentHeadSha: options.currentHeadSha,
+      }),
+  };
   const filtered = filterEntriesByTag(queryResult.entries, ledgerTag);
   let evaluation: RequiresEvaluation;
   try {

@@ -412,20 +412,26 @@ policies:
     requires:
       ledger_tag: "preflight:\${BRANCH}"
       within: 10m
+      # at_head:true lets a preflight at the current HEAD satisfy the
+      # gate at any age (the standard producer writes head:<sha> into
+      # the tag content). The 10m window remains the freshness ceiling
+      # for the head-mismatch case (operator switched branch, preflight
+      # predates HEAD shift, runtime couldn't resolve a sha).
+      at_head: true
     hook: require-preflight-push-evidence
     enforcement: block
     producers:
       - kind: bash
         command: harness session-start preflight
-        description: Runs agent-preflight against the current cwd; on ready:true, records preflight:\${BRANCH} to the ledger. Standard producer.
+        description: Runs agent-preflight against the current cwd; on ready:true, records preflight:\${BRANCH} ready:true confidence:<n> head:<sha> to the ledger. Standard producer.
       - kind: mcp
         verb: mcp__agent-grounding__ledger_add
-        example: '{type:"fact", content:"preflight:\${BRANCH} — <summary of what is on the branch + smoke results>", source:"manual"}'
-        description: Direct ledger write. The branch is the WIP review surface; the content should summarise what is staged + the smoke evidence so a reviewer can audit later without re-reading the chat.
+        example: '{type:"fact", content:"preflight:\${BRANCH} head:<full-sha> — <summary of what is on the branch + smoke results>", source:"manual"}'
+        description: Direct ledger write. Include head:<full-sha> if you want the entry to count under at_head; the branch is the WIP review surface and the content should summarise what is staged + the smoke evidence so a reviewer can audit later without re-reading the chat.
     ux:
       cannot: "You cannot push branch \${BRANCH} yet."
       required:
-        - "a fresh preflight for \${BRANCH}, captured within the last 10 minutes. If you committed since the last preflight, re-run it before pushing: a preflight from earlier in the session does NOT cover a push that landed a new commit since."
+        - "a preflight for \${BRANCH} at the current HEAD (any age) OR any preflight within the last 10 minutes. Re-run \`harness preflight\` if you committed since the last preflight AND it has been more than 10 minutes."
       run:
         - "harness preflight"
 

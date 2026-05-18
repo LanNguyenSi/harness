@@ -28,12 +28,22 @@ export interface GitRepoContext {
   repo: string;
   /**
    * Current branch name, or "" when not in a repo or HEAD is detached
-   * (a raw SHA — there is no branch to name).
+   * (a raw SHA, there is no branch to name).
    */
   branch: string;
+  /**
+   * Current HEAD commit sha (40 lowercase hex chars), or "" when not in
+   * a repo or the sha could not be resolved. On a detached HEAD this is
+   * the raw sha from `.git/HEAD`; on a branch it is the sha pointed at
+   * by `.git/refs/heads/<branch>` (or the matching entry in
+   * `.git/packed-refs` when the loose ref is absent). Used by the
+   * `at_head:true` requires-flag so a preflight whose recorded HEAD
+   * equals the current HEAD satisfies the gate regardless of age.
+   */
+  sha: string;
 }
 
-const EMPTY: GitRepoContext = { repo: "", branch: "" };
+const EMPTY: GitRepoContext = { repo: "", branch: "", sha: "" };
 
 // A `.git` *file* (linked worktree / submodule) points at the real git
 // dir: `gitdir: <path>`.
@@ -41,6 +51,8 @@ const GITDIR_RE = /^gitdir:\s*(.+)$/;
 // `.git/HEAD` on a branch: `ref: refs/heads/<branch>`. A detached HEAD
 // holds a raw SHA instead and matches nothing here.
 const HEAD_REF_RE = /^ref:\s*refs\/heads\/(.+)$/;
+// A loose ref or detached-HEAD sha is exactly 40 lowercase hex chars.
+const SHA_RE = /^[0-9a-f]{40}$/;
 
 interface GitEntry {
   /** Directory that contains the `.git` entry (the work-tree root). */
@@ -86,9 +98,38 @@ function findGitEntry(startDir: string): GitEntry | null {
 }
 
 /**
- * Resolve `{ repo, branch }` for a working directory. Returns empty
+ * Look up a branch's sha by reading the loose ref file first, then
+ * falling back to `packed-refs`. Both sources are plain text; the
+ * lookup stays cheap (no `git` subprocess).
+ */
+function resolveBranchSha(gitDir: string, branch: string): string {
+  try {
+    const loose = fs
+      .readFileSync(path.join(gitDir, "refs", "heads", branch), "utf8")
+      .trim();
+    if (SHA_RE.test(loose)) return loose;
+  } catch {
+    /* loose ref missing, try packed-refs */
+  }
+  try {
+    const packed = fs.readFileSync(path.join(gitDir, "packed-refs"), "utf8");
+    const target = `refs/heads/${branch}`;
+    for (const raw of packed.split("\n")) {
+      const line = raw.trim();
+      if (line === "" || line.startsWith("#") || line.startsWith("^")) continue;
+      const [sha, ref] = line.split(/\s+/, 2);
+      if (ref === target && sha && SHA_RE.test(sha)) return sha;
+    }
+  } catch {
+    /* packed-refs missing too — caller treats "" as "unknown" */
+  }
+  return "";
+}
+
+/**
+ * Resolve `{ repo, branch, sha }` for a working directory. Returns empty
  * strings (never throws) when `cwd` is not inside a git work tree, or
- * when any individual lookup fails — callers treat "" as "unknown" and
+ * when any individual lookup fails: callers treat "" as "unknown" and
  * fall through to their own behaviour.
  */
 export function resolveGitContext(cwd: string): GitRepoContext {
@@ -97,14 +138,21 @@ export function resolveGitContext(cwd: string): GitRepoContext {
   if (!entry) return EMPTY;
   const repo = path.basename(entry.worktreeRoot);
   let branch = "";
+  let sha = "";
   if (entry.gitDir) {
     try {
       const head = fs.readFileSync(path.join(entry.gitDir, "HEAD"), "utf8").trim();
       const match = HEAD_REF_RE.exec(head);
-      if (match) branch = match[1]!.trim();
+      if (match) {
+        branch = match[1]!.trim();
+        sha = resolveBranchSha(entry.gitDir, branch);
+      } else if (SHA_RE.test(head)) {
+        // Detached HEAD: the file contains the raw sha directly.
+        sha = head;
+      }
     } catch {
-      /* unreadable HEAD — branch stays "" */
+      /* unreadable HEAD — branch + sha stay "" */
     }
   }
-  return { repo, branch };
+  return { repo, branch, sha };
 }

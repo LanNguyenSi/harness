@@ -54,6 +54,21 @@ export interface RequiresTrace {
 export interface EvaluateRequiresOptions {
   /** Override "now" for deterministic testing. */
   now?: Date;
+  /**
+   * Current git HEAD sha (40 lowercase hex chars). Consulted only when
+   * `requires.at_head === true`: an entry containing `head:<sha>`
+   * equal to this value satisfies the gate regardless of `within`.
+   * Pass `undefined` (or omit) on non-git events; the at_head branch
+   * then falls through to the standard time-window check.
+   */
+  currentHeadSha?: string;
+}
+
+const HEAD_TOKEN_RE = /(?:^|\s)head:([0-9a-f]{40})(?:\s|$)/;
+
+function entryHeadSha(entry: LedgerEntry): string | null {
+  const match = HEAD_TOKEN_RE.exec(entry.content);
+  return match ? match[1]! : null;
 }
 
 export class RequiresEvaluationError extends Error {
@@ -166,10 +181,32 @@ export function evaluateRequires(
 
   const tagMatched = ledgerEntries.filter((e) => entryMatches(e, tag));
 
-  let windowMatched = tagMatched;
-  if (windowSeconds !== null) {
+  // at_head bypass: when the policy opts in and the runtime resolved a
+  // current HEAD, an entry whose `head:<sha>` token equals it satisfies
+  // regardless of the time-window. Bypass returns the head-matched
+  // subset as `windowMatched` so the rest of the evaluator (count
+  // check, allowed/reason summary) flows unchanged; falls through to
+  // the standard window check when there is no head match (entry
+  // predates the head shift, operator switched branches, producer
+  // ran on a different HEAD, runtime could not resolve a sha).
+  let headMatched: LedgerEntry[] | null = null;
+  if (
+    requires.at_head === true &&
+    typeof options.currentHeadSha === "string" &&
+    options.currentHeadSha.length > 0
+  ) {
+    const current = options.currentHeadSha;
+    headMatched = tagMatched.filter((e) => entryHeadSha(e) === current);
+  }
+
+  let windowMatched: LedgerEntry[];
+  if (headMatched && headMatched.length > 0) {
+    windowMatched = headMatched;
+  } else if (windowSeconds !== null) {
     const cutoff = now.getTime() - windowSeconds * 1000;
     windowMatched = tagMatched.filter((e) => entryTime(e) >= cutoff);
+  } else {
+    windowMatched = tagMatched;
   }
 
   const matchedCount = windowMatched.length;
@@ -223,6 +260,34 @@ export function evaluateRequires(
   }
 
   if (matchedCount === 0) {
+    // at_head opt-in but no head match: name the drift explicitly so
+    // the operator sees WHY a recent-looking preflight didn't satisfy.
+    // Quotes the latest head: token from the tag-matched entries (the
+    // last preflight ran on that sha) and the current sha for contrast.
+    if (
+      headMatched !== null &&
+      typeof options.currentHeadSha === "string" &&
+      options.currentHeadSha.length > 0 &&
+      tagMatched.length > 0
+    ) {
+      const latestRecordedHead = entryHeadSha(tagMatched[tagMatched.length - 1]!);
+      const current = options.currentHeadSha;
+      const driftSuffix =
+        latestRecordedHead !== null
+          ? ` (HEAD drift: last preflight at ${latestRecordedHead.slice(0, 7)}, current ${current.slice(0, 7)})`
+          : ` (HEAD drift: current ${current.slice(0, 7)} has no preflight)`;
+      const base =
+        windowSeconds !== null
+          ? `no matching entry within ${requires.within}`
+          : `no matching ledger entry for tag \`${tag}\``;
+      return {
+        allowed: false,
+        reason: `${base}${driftSuffix}`,
+        matchedCount,
+        traceData: trace,
+        recordHint,
+      };
+    }
     if (windowSeconds !== null && tagMatched.length > 0) {
       return {
         allowed: false,
@@ -241,9 +306,13 @@ export function evaluateRequires(
     };
   }
 
+  const headSatisfied = headMatched !== null && headMatched.length > 0;
+  const baseAllowReason = `${matchedCount} matching ledger entr${matchedCount === 1 ? "y" : "ies"} for tag \`${tag}\``;
   return {
     allowed: true,
-    reason: `${matchedCount} matching ledger entr${matchedCount === 1 ? "y" : "ies"} for tag \`${tag}\``,
+    reason: headSatisfied
+      ? `${baseAllowReason} (HEAD ${options.currentHeadSha!.slice(0, 7)})`
+      : baseAllowReason,
     matchedCount,
     traceData: trace,
     recordHint,

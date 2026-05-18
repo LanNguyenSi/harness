@@ -110,7 +110,39 @@ describe("runSessionStartPreflight", () => {
       sessionId: "s",
       sessionSource: "stdin",
     });
-    expect(writes).toEqual(["preflight:detached-repo ready:true confidence:0.90"]);
+    // Detached HEAD: only the per-repo tag (no branch), but the raw
+    // sha is still captured as `head:<sha>` so at_head:true on
+    // preflight-before-push works in detached-HEAD reviews / bisects.
+    expect(writes).toEqual([
+      "preflight:detached-repo ready:true confidence:0.90 head:9fceb02d0ae598e95dc970b74767f19372d61af8",
+    ]);
+  });
+
+  it("appends `head:<sha>` when resolveGitContext can read the loose ref", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-head-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const repo = path.join(root, "headful");
+    fs.mkdirSync(path.join(repo, ".git", "refs", "heads"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    fs.writeFileSync(
+      path.join(repo, ".git", "refs", "heads", "main"),
+      "abcdef0123456789abcdef0123456789abcdef01\n",
+    );
+    const writes: string[] = [];
+    const { stream: err } = captureStream();
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: err,
+      runPreflight: readyPreflight(0.7),
+      writeLedger: async (args) => {
+        writes.push(args.content);
+        return { ok: true };
+      },
+    });
+    expect(result.wrote).toBe(true);
+    expect(writes).toEqual([
+      "preflight:headful preflight:main ready:true confidence:0.70 head:abcdef0123456789abcdef0123456789abcdef01",
+    ]);
   });
 
   it("passes the 60s default subprocess timeout when preflightTimeoutMs is omitted", async () => {
