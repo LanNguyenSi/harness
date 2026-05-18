@@ -32,6 +32,7 @@ import { isRemoveType, KNOWN_REMOVE_TYPES, remove } from "./remove/index.js";
 import { packAdd, packList, packRemove } from "./pack/index.js";
 import { runPackHookPreToolUseCli } from "./pack/hook-pre-tool-use.js";
 import { runPackHookPostToolUseCli } from "./pack/hook-post-tool-use.js";
+import { runPackHookTrackActiveClaimCli } from "./pack/hook-track-active-claim.js";
 import { runPackHookCodexPreToolUseCli } from "./pack/hook-codex-pre-tool-use.js";
 import { runPackHookCodexStopCli } from "./pack/hook-codex-stop.js";
 import { runPackHookCodexUserPromptSubmitCli } from "./pack/hook-codex-user-prompt-submit.js";
@@ -988,6 +989,24 @@ export function buildProgram(opts: RunOptions = {}): Command {
       },
     );
 
+  packHookCmd
+    .command("track-active-claim")
+    .description(
+      "PostToolUse: read tool-event JSON from stdin, maintain ~/.claude/harness.generated/active-claim on agent-tasks task_start / task_finish / task_abandon so `harness approve understanding` can auto-resolve the task id without --task (harness/494fd1e5).",
+    )
+    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option("--pack <name>", "pack name to evaluate (default: understanding-before-execution)")
+    .action(
+      async (options: { config?: string; project?: string; pack?: string }) => {
+        const cliOpts: Parameters<typeof runPackHookTrackActiveClaimCli>[0] = {};
+        if (options.config) cliOpts.configPath = options.config;
+        if (options.project) cliOpts.project = options.project;
+        if (options.pack) cliOpts.pack = options.pack;
+        await runPackHookTrackActiveClaimCli(cliOpts);
+      },
+    );
+
   // Phase 6 #6 — Codex adapter sub-commands. Mirror the pre-tool-use
   // shape; UserPromptSubmit equivalent injects the instruction template
   // on stdout for Codex to prepend to additional_instructions.
@@ -1192,12 +1211,16 @@ export function buildProgram(opts: RunOptions = {}): Command {
           );
         }
         if (result.taskMarker !== null) {
+          const sourceNote =
+            result.taskMarker.source === "active-claim"
+              ? " (auto-resolved from active-claim file)"
+              : "";
           if (result.taskMarker.ok) {
             lines.push(
-              `task:    ✓ ${result.taskMarker.filePath} (task-scoped, expires when this task ends)`,
+              `task:    ✓ ${result.taskMarker.filePath} (task-scoped, expires when this task ends)${sourceNote}`,
             );
           } else {
-            lines.push(`task:    ✗ FAILED for task ${result.taskMarker.taskId} (${result.taskMarker.reason})`);
+            lines.push(`task:    ✗ FAILED for task ${result.taskMarker.taskId}${sourceNote} (${result.taskMarker.reason})`);
             lines.push(
               "  the session marker above is still in effect; the task-scoped path is degraded.",
             );

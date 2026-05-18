@@ -573,4 +573,71 @@ describe("approveUnderstanding — task-scoped marker (harness/1ee26e77)", () =>
     const approvals = fs.readdirSync(path.join(generatedDir, ".approvals"));
     expect(approvals.some((n) => n.startsWith("task-"))).toBe(false);
   });
+
+  it("auto-resolves the task id from the active-claim file when --task is not supplied (harness/494fd1e5)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    // Simulate the track-active-claim hook having written the file on
+    // task_start.
+    fs.mkdirSync(generatedDir, { recursive: true });
+    fs.writeFileSync(path.join(generatedDir, "active-claim"), "task-from-file\n");
+
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-1",
+      // NO `task:` option.
+      reportsDir: tmp,
+      generatedDir,
+      now: new Date("2026-05-18T09:00:00Z"),
+      approvedBy: "test-suite",
+      ledgerAdd: async () => ({ ok: true }),
+    });
+
+    expect(result.taskMarker).not.toBeNull();
+    if (result.taskMarker === null || !result.taskMarker.ok) {
+      throw new Error("expected ok task marker");
+    }
+    expect(result.taskMarker.taskId).toBe("task-from-file");
+    expect(result.taskMarker.source).toBe("active-claim");
+    expect(result.taskMarker.filePath).toBe(
+      path.join(generatedDir, ".approvals", "task-task-from-file"),
+    );
+    expect(fs.existsSync(result.taskMarker.filePath)).toBe(true);
+  });
+
+  it("--task overrides the active-claim file when both are present", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    fs.mkdirSync(generatedDir, { recursive: true });
+    fs.writeFileSync(path.join(generatedDir, "active-claim"), "task-from-file\n");
+
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-1",
+      task: "task-from-flag", // takes precedence
+      reportsDir: tmp,
+      generatedDir,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+
+    if (result.taskMarker === null || !result.taskMarker.ok) {
+      throw new Error("expected ok task marker");
+    }
+    expect(result.taskMarker.taskId).toBe("task-from-flag");
+    expect(result.taskMarker.source).toBe("flag");
+  });
+
+  it("falls back to session-only when no --task AND no active-claim file exists (v1 back-compat)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-1",
+      reportsDir: tmp,
+      generatedDir,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+
+    expect(result.taskMarker).toBeNull();
+    const approvals = fs.readdirSync(path.join(generatedDir, ".approvals"));
+    expect(approvals.some((n) => n.startsWith("task-"))).toBe(false);
+  });
 });

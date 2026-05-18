@@ -1284,6 +1284,15 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
     expect(postToolUseCommand).toMatch(
       /^UNDERSTANDING_GATE_REPORT_DIR='[^']+\/\.understanding-gate\/reports' harness pack hook post-tool-use$/,
     );
+    // v2 (harness/494fd1e5) track-active-claim hook: same PostToolUse
+    // event, hardcoded matcher for agent-tasks task_start / task_finish
+    // / task_abandon. Maintains the active-claim file so `harness
+    // approve understanding` can auto-resolve the task id without --task.
+    // Unwrapped — the hook does not read the persisted-report dir.
+    const trackActiveClaimCommand = allCommands.find((c) =>
+      c.endsWith("harness pack hook track-active-claim"),
+    );
+    expect(trackActiveClaimCommand).toBe("harness pack hook track-active-claim");
     // v0.18 default-on PostToolUse marker-expiry hook (agent-tasks/d8ee60ca).
     expect(Object.keys(settings.hooks).sort()).toEqual([
       "PostToolUse",
