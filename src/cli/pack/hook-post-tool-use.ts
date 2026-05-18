@@ -149,6 +149,23 @@ function extractTaskId(toolInput: unknown): string {
   return typeof tid === "string" ? tid : "";
 }
 
+// `tasks_transition` (v1) carries `status: "open" | "in_progress" | "review" | "done"`.
+// Only "done" releases the work claim (per task_finish docs); other values
+// keep the marker so the agent's continued work on the same task remains
+// approved. Returns "" for malformed / missing status; the caller treats
+// any non-"done" return as keep-claim.
+function extractTasksTransitionStatus(toolInput: unknown): string {
+  if (
+    typeof toolInput !== "object" ||
+    toolInput === null ||
+    Array.isArray(toolInput)
+  ) {
+    return "";
+  }
+  const s = (toolInput as Record<string, unknown>)["status"];
+  return typeof s === "string" ? s : "";
+}
+
 function noop(
   diagnostic: string,
   stderr: NodeJS.WritableStream,
@@ -261,7 +278,20 @@ export async function runPackHookPostToolUseCli(
     );
   }
 
-  const toolNameMatched = toolMatches(toolName, lifecycle.expireOnToolMatch);
+  // tool-name match is the first filter; status-based refinement below
+  // catches the legacy v1 `tasks_transition` verb whose terminality
+  // depends on `tool_input.status` rather than on the tool name alone.
+  const rawToolNameMatched = toolMatches(toolName, lifecycle.expireOnToolMatch);
+  // Legacy v1 `tasks_transition`: only `status=done` releases the work
+  // claim (per task_finish docs: "The work claim is cleared when going
+  // to done and kept when going to review"). open / in_progress / review
+  // / missing status keep the marker so subsequent agent work on the
+  // same task continues to satisfy the gate.
+  const tasksTransitionStatusOk =
+    toolName === "mcp__agent-tasks__tasks_transition"
+      ? extractTasksTransitionStatus(event.tool_input) === "done"
+      : true;
+  const toolNameMatched = rawToolNameMatched && tasksTransitionStatusOk;
   // Bash check only runs when the event is actually a Bash call; an MCP
   // tool whose name happens to match a regex is not a Bash boundary.
   const bashRegex =
@@ -269,10 +299,11 @@ export async function runPackHookPostToolUseCli(
       ? bashCommandMatches(extractBashCommand(event.tool_input), lifecycle.expireOnBashMatch)
       : undefined;
   if (!toolNameMatched && bashRegex === undefined) {
-    const detail =
-      toolName === "Bash"
+    const detail = !rawToolNameMatched
+      ? toolName === "Bash"
         ? `Bash command did not match any expire_on_bash_match regex`
-        : `tool ${toolName} not in expire_on_tool_match`;
+        : `tool ${toolName} not in expire_on_tool_match`
+      : `tasks_transition status keeps work claim, skipping`;
     return noop(
       `harness pack hook post-tool-use: ${detail}, skipping`,
       stderr,

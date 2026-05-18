@@ -55,9 +55,11 @@ describe("expandPolicyPacks", () => {
     expect(post).toBeDefined();
     expect(post?.command).toBe("harness pack hook post-tool-use");
     expect(post?.blocking).toBe(false);
-    // Match pattern is anchored + alternation of the three defaults.
+    // Match pattern is anchored + alternation of the default boundary
+    // tools. tasks_transition is included since PR #200 with an in-hook
+    // status filter (only `status=done` actually clears the marker).
     expect(post?.match).toBe(
-      "^(?:mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__pull_requests_merge)$",
+      "^(?:mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__pull_requests_merge|mcp__agent-tasks__tasks_transition)$",
     );
   });
 

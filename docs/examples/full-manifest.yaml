@@ -418,6 +418,11 @@ policy_packs:
           - mcp__agent-tasks__task_finish
           - mcp__agent-tasks__task_abandon
           - mcp__agent-tasks__pull_requests_merge
+          # Legacy v1 verb; the hook applies a status filter so only
+          # `tool_input.status == "done"` actually expires the marker
+          # (open / in_progress / review keep the work claim per v2
+          # semantics, see PR #200).
+          - mcp__agent-tasks__tasks_transition
         expire_on_bash_match:
           - '^gh pr (merge|close)\b'
           - '^git push origin (master|main)\b'

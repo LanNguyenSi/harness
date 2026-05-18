@@ -520,3 +520,156 @@ describe("pack hook post-tool-use — task-scoped marker cleanup (harness/1ee26e
     ).toBe(false);
   });
 });
+
+describe("pack hook post-tool-use — tasks_transition v1 status filter (PR #200)", () => {
+  const LIFECYCLE_WITH_TASKS_TRANSITION = {
+    expire_on_tool_match: [
+      "mcp__agent-tasks__task_finish",
+      "mcp__agent-tasks__tasks_transition",
+    ],
+    max_age: "4h",
+  };
+
+  it("clears session + task markers on tasks_transition status=done", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-05-18T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    writeTaskApprovalMarker(generatedDir, "task-uuid-abc", {
+      approvedAt: "2026-05-18T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const stderr = bufferStream();
+
+    const result = await runPackHookPostToolUseCli({
+      manifest: manifestWithPack({ approval_lifecycle: LIFECYCLE_WITH_TASKS_TRANSITION }),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "mcp__agent-tasks__tasks_transition",
+          tool_input: { taskId: "task-uuid-abc", status: "done" },
+        }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.matchedExpiry).toBe(true);
+    expect(result.markerCleared).toBe(true);
+    expect(result.taskMarkerCleared).toBe(true);
+    expect(fs.existsSync(approvalMarkerPathFor(generatedDir, "sess-1"))).toBe(false);
+    expect(
+      fs.existsSync(taskApprovalMarkerPathFor(generatedDir, "task-uuid-abc")),
+    ).toBe(false);
+  });
+
+  it("is a no-op on tasks_transition status=review (work claim kept per v2 docs)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-05-18T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    writeTaskApprovalMarker(generatedDir, "task-uuid-abc", {
+      approvedAt: "2026-05-18T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const stderr = bufferStream();
+
+    const result = await runPackHookPostToolUseCli({
+      manifest: manifestWithPack({ approval_lifecycle: LIFECYCLE_WITH_TASKS_TRANSITION }),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "mcp__agent-tasks__tasks_transition",
+          tool_input: { taskId: "task-uuid-abc", status: "review" },
+        }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.matchedExpiry).toBe(false);
+    expect(result.markerCleared).toBe(false);
+    expect(fs.existsSync(approvalMarkerPathFor(generatedDir, "sess-1"))).toBe(true);
+    expect(
+      fs.existsSync(taskApprovalMarkerPathFor(generatedDir, "task-uuid-abc")),
+    ).toBe(true);
+    expect(stderr.read()).toMatch(/tasks_transition status keeps work claim/);
+  });
+
+  it("is a no-op on tasks_transition status=in_progress", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-05-18T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const stderr = bufferStream();
+
+    const result = await runPackHookPostToolUseCli({
+      manifest: manifestWithPack({ approval_lifecycle: LIFECYCLE_WITH_TASKS_TRANSITION }),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "mcp__agent-tasks__tasks_transition",
+          tool_input: { taskId: "task-uuid-abc", status: "in_progress" },
+        }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.matchedExpiry).toBe(false);
+    expect(fs.existsSync(approvalMarkerPathFor(generatedDir, "sess-1"))).toBe(true);
+  });
+
+  it("is a no-op on tasks_transition with missing status (defensive)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-05-18T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const stderr = bufferStream();
+
+    const result = await runPackHookPostToolUseCli({
+      manifest: manifestWithPack({ approval_lifecycle: LIFECYCLE_WITH_TASKS_TRANSITION }),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "mcp__agent-tasks__tasks_transition",
+          tool_input: { taskId: "task-uuid-abc" },
+        }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.matchedExpiry).toBe(false);
+    expect(fs.existsSync(approvalMarkerPathFor(generatedDir, "sess-1"))).toBe(true);
+  });
+
+  it("is a no-op on tasks_transition when tool_input is malformed (non-object)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-05-18T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const stderr = bufferStream();
+
+    const result = await runPackHookPostToolUseCli({
+      manifest: manifestWithPack({ approval_lifecycle: LIFECYCLE_WITH_TASKS_TRANSITION }),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "mcp__agent-tasks__tasks_transition",
+          tool_input: "not-an-object",
+        }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.matchedExpiry).toBe(false);
+    expect(fs.existsSync(approvalMarkerPathFor(generatedDir, "sess-1"))).toBe(true);
+  });
+});

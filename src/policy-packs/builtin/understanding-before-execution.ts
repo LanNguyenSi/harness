@@ -133,6 +133,11 @@ const DEFAULT_EXPIRE_ON_TOOL_MATCH: ReadonlyArray<string> = [
   "mcp__agent-tasks__task_finish",
   "mcp__agent-tasks__task_abandon",
   "mcp__agent-tasks__pull_requests_merge",
+  // Legacy v1 verb; the post-tool-use hook applies a status filter so only
+  // `tool_input.status === "done"` actually clears the marker (PR #200,
+  // agent-tasks 9e06175f). Listed here so settings.json fires the hook
+  // at all; the status refinement happens in TypeScript.
+  "mcp__agent-tasks__tasks_transition",
 ];
 
 const POST_TOOL_USE_COMMAND_CLAUDE = "harness pack hook post-tool-use";
@@ -143,7 +148,7 @@ const TRACK_ACTIVE_CLAIM_COMMAND_CLAUDE = "harness pack hook track-active-claim"
 // this hook (the matcher won't fire for their tools). A config-driven
 // extension can land later if a second tasking system asks for it.
 const TRACK_ACTIVE_CLAIM_MATCH =
-  "^(?:mcp__agent-tasks__task_start|mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon)$";
+  "^(?:mcp__agent-tasks__task_start|mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__tasks_transition)$";
 
 /**
  * Compose the PostToolUse `match` regex from the configured tool list.
