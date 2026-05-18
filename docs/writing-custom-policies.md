@@ -217,7 +217,7 @@ policies:
       required:
         - "a recorded review of the PR for branch ${BRANCH}"
       run:
-        - 'mcp__agent-grounding__ledger_add { type: "fact", content: "review:${BRANCH} — <verdict + key findings + nits>" }'
+        - 'mcp__agent-grounding__ledger_add { sessionId: "${SESSION_ID}", type: "fact", content: "review:${BRANCH} — <verdict + key findings + nits>" }'
 ```
 
 If your workflow only uses one surface, ship only that policy. The

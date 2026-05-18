@@ -132,6 +132,40 @@ describe("composeCustom — new policy entries (task 5dd3d8a6)", () => {
     }
   });
 
+  it("FULL_TEMPLATE: every producers[].example for ledger_add names sessionId (PR #207 fallback pin)", async () => {
+    // PR #206 fixed ux.run; this pin covers the parallel
+    // producers[].example field that lands in the engine-vocabulary
+    // fallback envelope when an operator strips `ux:` from their
+    // manifest. Same silent-fail trap one fallback away — pin it so a
+    // future ledger-add producer can't slip past either surface.
+    const { FULL_TEMPLATE } = await import("../../src/cli/init/templates.js");
+    const yamlMod = await import("yaml");
+    const parsed = yamlMod.parse(FULL_TEMPLATE) as {
+      policies?: Array<{
+        name: string;
+        producers?: Array<{ verb?: string; example?: string }>;
+      }>;
+    };
+    const ledgerExamples: Array<{ policy: string; example: string }> = [];
+    for (const p of parsed.policies ?? []) {
+      for (const prod of p.producers ?? []) {
+        if (
+          prod.verb === "mcp__agent-grounding__ledger_add" &&
+          typeof prod.example === "string"
+        ) {
+          ledgerExamples.push({ policy: p.name, example: prod.example });
+        }
+      }
+    }
+    expect(ledgerExamples.length).toBeGreaterThanOrEqual(8);
+    for (const { policy, example } of ledgerExamples) {
+      expect(
+        example,
+        `Full template policy ${policy} producers[].example missing sessionId`,
+      ).toContain('sessionId:"${SESSION_ID}"');
+    }
+  });
+
   it("ux.run examples name sessionId: \"${SESSION_ID}\" on all ledger_add-producing policies (PR #206)", () => {
     // Pre-#206 the ux.run renderer omitted the sessionId param from the
     // ledger_add example, so operators bound sessionId to the tag UUID
