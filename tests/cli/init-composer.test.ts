@@ -200,7 +200,7 @@ describe("composeCustom — memoryDir override", () => {
 });
 
 describe("composer surface (catalogues)", () => {
-  it("matches FULL_TEMPLATE parity (2 packs, 4 MCPs, 6 reference policies) for snapshot review", () => {
+  it("exposes the composer-surfaced subset (2 packs, 4 MCPs, 6 reference policies; intentionally smaller than FULL_TEMPLATE, which ships 8 policies including the bash-surface parallels)", () => {
     expect(COMPOSABLE_PACKS.map((p) => p.key)).toEqual([
       "understanding-before-execution",
       "branch-protection",

@@ -180,6 +180,49 @@ trigger:
     SERVICE: "toolArgs.service"
 ```
 
+### Same gate, two PR-surface variants (MCP plus gh-cli)
+
+`review-before-merge` matches `mcp__agent-tasks__pull_requests_merge`. If
+your team also uses `gh pr merge` from the shell, that path is unguarded
+unless you ship a parallel policy. A `PolicyTrigger` can only AND-match
+one surface (MCP tool-name OR Bash command), so the minimum-scope answer
+is a second policy with the same `requires.ledger_tag` shape but a Bash
+trigger. The full template (`docs/examples/full-manifest.yaml`) ships
+both: `review-before-merge` plus `review-before-merge-bash`, and the
+analogous pair for `pull_requests_create` / `gh pr create`.
+
+The tag shape differs by necessity. The MCP variant can extract
+`PR_NUMBER` from `toolArgs.prNumber`; the Bash variant cannot, because
+the extract DSL is JSONPath against tool args, not regex against
+`tool_input.command`. The closest stable identifier on the Bash side is
+the builtin `${BRANCH}`. So a hybrid operator who uses both surfaces
+has both gates active with two tag shapes (`review:42` for the MCP
+merge, `review:feat/foo` for the `gh pr merge`), which is honest at the
+ledger layer.
+
+```yaml
+policies:
+  - name: review-before-merge-bash
+    description: Block `gh pr merge` unless a review:${BRANCH} ledger entry exists.
+    trigger:
+      event: PreToolUse
+      match: "Bash"
+      bash_match: '(^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*gh pr merge\b'
+    requires:
+      ledger_tag: "review:${BRANCH}"
+    hook: require-review-evidence-bash
+    enforcement: block
+    ux:
+      cannot: "You cannot merge the PR for branch ${BRANCH} via `gh pr merge` yet."
+      required:
+        - "a recorded review of the PR for branch ${BRANCH}"
+      run:
+        - 'mcp__agent-grounding__ledger_add { type: "fact", content: "review:${BRANCH} — <verdict + key findings + nits>" }'
+```
+
+If your workflow only uses one surface, ship only that policy. The
+parallel definitions are a per-surface opt-in, not a coupled pair.
+
 ### `ux:` versus `producers:`
 
 `ux:` is what the agent reads. `producers:` is a structured

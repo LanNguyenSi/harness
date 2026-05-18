@@ -114,6 +114,18 @@ hooks:
     blocking: hard
     budget_ms: 2000
 
+  # Tool-agnostic parallel for operators on the gh-cli workflow
+  # (`gh pr merge`) instead of agent-tasks MCP. A PolicyTrigger can only
+  # AND-match one surface (MCP tool-name OR Bash command), so two parallel
+  # definitions are the minimum-scope way to cover both PR surfaces.
+  - name: require-review-evidence-bash
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '(^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*gh pr merge\b'
+    command: ~/.claude/hooks/require-review-evidence.sh
+    blocking: hard
+    budget_ms: 2000
+
   - name: require-dogfood-evidence
     event: PreToolUse
     match: "Bash"
@@ -132,6 +144,17 @@ hooks:
   - name: require-review-subagent-evidence
     event: PreToolUse
     match: "mcp__agent-tasks__pull_requests_create"
+    command: ~/.claude/hooks/require-review-subagent-evidence.sh
+    blocking: hard
+    budget_ms: 2000
+
+  # Bash-surface parallel for operators who open PRs with `gh pr create`
+  # instead of agent-tasks MCP. Tags by BRANCH because no task UUID is in
+  # the `gh pr create` arguments.
+  - name: require-review-subagent-evidence-bash
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '(^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*gh pr create\b'
     command: ~/.claude/hooks/require-review-subagent-evidence.sh
     blocking: hard
     budget_ms: 2000
@@ -167,6 +190,35 @@ policies:
         - "a recorded review of PR #${PR_NUMBER}"
       run:
         - 'mcp__agent-grounding__ledger_add { type: "fact", content: "review:${PR_NUMBER} — <verdict + key findings + nits>" }'
+
+  # Bash-surface parallel of review-before-merge for operators on the gh-cli
+  # workflow. Tag shape is `review:${BRANCH}` instead of `review:${PR_NUMBER}`
+  # because PR_NUMBER is not extractable from `tool_input.command` with the
+  # JSONPath-only extract DSL; BRANCH is the stable identifier the producer
+  # can record at review time. Sits ALONGSIDE review-before-merge, not as a
+  # replacement: an operator using both surfaces gets both gates, each with
+  # its own tag shape.
+  - name: review-before-merge-bash
+    description: Block `gh pr merge` unless a ledger entry tagged review:<branch> exists for this session.
+    trigger:
+      event: PreToolUse
+      match: "Bash"
+      bash_match: '(^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*gh pr merge\b'
+    requires:
+      ledger_tag: "review:${BRANCH}"
+    hook: require-review-evidence-bash
+    enforcement: block
+    producers:
+      - kind: mcp
+        verb: mcp__agent-grounding__ledger_add
+        example: '{type:"fact", content:"review:${BRANCH} — <verdict + key findings + nits>", source:"Agent(general-purpose) review"}'
+        description: Spawn a review subagent against the branch diff, capture its verdict, then persist a ledger entry tagged with the branch name. Mirror of the review-before-merge producer for the gh-cli surface.
+    ux:
+      cannot: "You cannot merge the PR for branch ${BRANCH} via `gh pr merge` yet."
+      required:
+        - "a recorded review of the PR for branch ${BRANCH}"
+      run:
+        - 'mcp__agent-grounding__ledger_add { type: "fact", content: "review:${BRANCH} — <verdict + key findings + nits>" }'
 
   - name: dogfood-before-release
     description: Block npm publish / git tag v* without a recent dogfood ledger entry.
@@ -258,6 +310,32 @@ policies:
         - "a completed review-subagent pass on this task"
       run:
         - 'mcp__agent-grounding__ledger_add { type: "fact", content: "review-subagent:${TASK_ID} — <verdict + key findings + nits>" }'
+
+  # Bash-surface parallel of review-subagent-before-pr-create. Tag shape is
+  # `review-subagent:${BRANCH}` because TASK_ID is an agent-tasks-only concept;
+  # for the gh-cli workflow the working branch is the closest stable handle
+  # for "the PR-in-progress" at this point in the cycle.
+  - name: review-subagent-before-pr-create-bash
+    description: Block `gh pr create` unless a review-subagent ledger entry tagged review-subagent:<branch> exists for this session. Forces the rigorous review BEFORE the PR opens.
+    trigger:
+      event: PreToolUse
+      match: "Bash"
+      bash_match: '(^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*gh pr create\b'
+    requires:
+      ledger_tag: "review-subagent:${BRANCH}"
+    hook: require-review-subagent-evidence-bash
+    enforcement: block
+    producers:
+      - kind: mcp
+        verb: mcp__agent-grounding__ledger_add
+        example: '{type:"fact", content:"review-subagent:${BRANCH} — <verdict + key findings + nits>", source:"Agent(general-purpose) review"}'
+        description: After running a review subagent against the staged diff for the working branch, persist its verdict + load-bearing findings as a ledger entry tagged with the branch name. Mirror of the review-subagent-before-pr-create producer for the gh-cli surface.
+    ux:
+      cannot: "You cannot open a pull request for branch ${BRANCH} via `gh pr create` yet."
+      required:
+        - "a completed review-subagent pass on branch ${BRANCH}"
+      run:
+        - 'mcp__agent-grounding__ledger_add { type: "fact", content: "review-subagent:${BRANCH} — <verdict + key findings + nits>" }'
 
   - name: preflight-before-push
     description: Block git push unless a fresh preflight ledger entry exists for the current branch. Catches the stale-checkout class of incident at the last reversible step.

@@ -38,9 +38,11 @@ describe("list — categories", () => {
     expect(r.rows.map((row) => row.name)).toEqual([
       "git-preflight",
       "require-review-evidence",
+      "require-review-evidence-bash",
       "require-dogfood-evidence",
       "require-preflight-evidence",
       "require-review-subagent-evidence",
+      "require-review-subagent-evidence-bash",
       "require-preflight-push-evidence",
     ]);
     const head = r.rows[0]!;
@@ -52,10 +54,12 @@ describe("list — categories", () => {
     const r = list("policies", { configPath: FULL_MANIFEST });
     expect(r.rows.map((row) => row.name)).toEqual([
       "review-before-merge",
+      "review-before-merge-bash",
       "dogfood-before-release",
       "two-reviewers-required",
       "preflight-before-investigation",
       "review-subagent-before-pr-create",
+      "review-subagent-before-pr-create-bash",
       "preflight-before-push",
     ]);
     expect(r.rows[0]!.enforcement).toBe("block");

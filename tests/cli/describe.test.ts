@@ -83,7 +83,7 @@ describeBlock("describe — --json", () => {
     const parsed = JSON.parse(result.output);
     expect(parsed.version).toBe(1);
     expect(parsed.tools.mcp).toHaveLength(3);
-    expect(parsed.policies).toHaveLength(6);
+    expect(parsed.policies).toHaveLength(8);
   });
 
   it("emits valid filtered JSON when --pillar is combined with --json", () => {

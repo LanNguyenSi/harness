@@ -709,6 +709,159 @@ describe("intercept — unresolved template variables", () => {
   });
 });
 
+// Bash-surface parallels of the MCP review policies (task 7eed0bb2 / V3).
+// A PolicyTrigger can only AND-match one surface (MCP tool-name OR Bash
+// command), so the full template ships two parallel policies per PR
+// surface; the tag shape switches from PR_NUMBER/TASK_ID (extractable from
+// MCP toolArgs) to BRANCH (a builtin) on the Bash side. These tests pin
+// the matcher behaviour for both new policies + a negative case so an
+// unrelated Bash command does not vacuously trip the gate.
+describe("intercept — review-before-merge-bash (gh pr merge surface)", () => {
+  const POLICY: Policy = {
+    name: "review-before-merge-bash",
+    description: "block `gh pr merge` without review evidence",
+    trigger: {
+      event: "PreToolUse",
+      match: "Bash",
+      bash_match: "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b",
+    },
+    requires: { ledger_tag: "review:${BRANCH}" },
+    hook: "h",
+    enforcement: "block",
+  } as Policy;
+  const EVENT: ToolEvent = {
+    hook_event_name: "PreToolUse",
+    tool_name: "Bash",
+    tool_input: { command: "gh pr merge 42 --squash" },
+    session_id: "sess-1",
+  };
+
+  it("blocks when the ledger has no review:<branch> entry", async () => {
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([POLICY]),
+      event: EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.decisions[0]?.outcome).toBe("deny");
+    expect(result.decisions[0]?.ledgerTag).toBe("review:master");
+    expect(ledger.queryCalls).toEqual([{ tag: "review:master", sessionId: "sess-1" }]);
+  });
+
+  it("allows when the ledger carries a matching review:<branch> entry", async () => {
+    const branchEntry: LedgerEntry = {
+      id: "br-1",
+      content: "review:master — approved (no findings)",
+      createdAt: NOW.toISOString(),
+    };
+    const ledger = makeLedger({ kind: "ok", entries: [branchEntry] });
+    const result = await intercept({
+      manifest: manifest([POLICY]),
+      event: EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.blockJson).toBeNull();
+    expect(result.decisions[0]?.outcome).toBe("allow");
+  });
+
+  it("does not trip on unrelated Bash commands (e.g. `git status`)", async () => {
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([POLICY]),
+      event: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "git status" },
+        session_id: "sess-1",
+      },
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.decisions).toHaveLength(0);
+    expect(result.blockJson).toBeNull();
+    expect(ledger.queryCalls).toEqual([]);
+  });
+});
+
+describe("intercept — review-subagent-before-pr-create-bash (gh pr create surface)", () => {
+  const POLICY: Policy = {
+    name: "review-subagent-before-pr-create-bash",
+    description: "block `gh pr create` without review-subagent evidence",
+    trigger: {
+      event: "PreToolUse",
+      match: "Bash",
+      bash_match: "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*gh pr create\\b",
+    },
+    requires: { ledger_tag: "review-subagent:${BRANCH}" },
+    hook: "h",
+    enforcement: "block",
+  } as Policy;
+  const EVENT: ToolEvent = {
+    hook_event_name: "PreToolUse",
+    tool_name: "Bash",
+    tool_input: { command: "gh pr create --fill" },
+    session_id: "sess-1",
+  };
+
+  it("blocks when the ledger has no review-subagent:<branch> entry", async () => {
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([POLICY]),
+      event: EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.decisions[0]?.outcome).toBe("deny");
+    expect(result.decisions[0]?.ledgerTag).toBe("review-subagent:master");
+    expect(ledger.queryCalls).toEqual([
+      { tag: "review-subagent:master", sessionId: "sess-1" },
+    ]);
+  });
+
+  it("allows when the ledger carries a matching review-subagent:<branch> entry", async () => {
+    const branchEntry: LedgerEntry = {
+      id: "br-2",
+      content: "review-subagent:master — approved",
+      createdAt: NOW.toISOString(),
+    };
+    const ledger = makeLedger({ kind: "ok", entries: [branchEntry] });
+    const result = await intercept({
+      manifest: manifest([POLICY]),
+      event: EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.blockJson).toBeNull();
+    expect(result.decisions[0]?.outcome).toBe("allow");
+  });
+
+  it("does not trip on unrelated Bash commands (e.g. `gh repo view`)", async () => {
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([POLICY]),
+      event: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "gh repo view" },
+        session_id: "sess-1",
+      },
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.decisions).toHaveLength(0);
+    expect(result.blockJson).toBeNull();
+    expect(ledger.queryCalls).toEqual([]);
+  });
+});
+
 describe("intercept — audit log", () => {
   it("records one ledger entry per matching policy", async () => {
     const ledger = makeLedger({ kind: "ok", entries: [matchingEntry] });

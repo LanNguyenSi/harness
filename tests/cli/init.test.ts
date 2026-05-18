@@ -73,24 +73,32 @@ describe("init — full template", () => {
     expect(mcpNames).toContain("agent-tasks");
     expect(mcpNames).toContain("grounding-mcp");
     expect(mcpNames).not.toContain("codebase-oracle");
-    // Hooks: 5 PreToolUse policy gates route through the bundled
+    // Hooks: PreToolUse policy gates route through the bundled
     // `harness policy intercept` engine, plus the `git-preflight`
     // SessionStart producer (`harness session-start preflight`), which
     // is the write side that satisfies the preflight-before-* policies.
+    // The `-bash` variants cover the gh-cli surface alongside the
+    // agent-tasks MCP surface (task 7eed0bb2).
     expect(hookNames).toContain("require-review-evidence");
+    expect(hookNames).toContain("require-review-evidence-bash");
     expect(hookNames).toContain("require-dogfood-evidence");
     expect(hookNames).toContain("require-preflight-evidence");
     expect(hookNames).toContain("require-review-subagent-evidence");
+    expect(hookNames).toContain("require-review-subagent-evidence-bash");
     expect(hookNames).toContain("require-preflight-push-evidence");
     expect(hookNames).toContain("git-preflight");
-    // The 6 reference policies that drive those hooks. `two-reviewers-required`
+    // The reference policies that drive those hooks. `two-reviewers-required`
     // is a warn-level companion to review-before-merge, sharing the same hook;
     // see docs/examples/full-manifest.yaml for the canonical definition.
+    // The `-bash` variants are the tool-agnostic parallels of the MCP
+    // policies for operators on the gh-cli workflow (task 7eed0bb2).
     expect(policyNames).toContain("review-before-merge");
+    expect(policyNames).toContain("review-before-merge-bash");
     expect(policyNames).toContain("dogfood-before-release");
     expect(policyNames).toContain("two-reviewers-required");
     expect(policyNames).toContain("preflight-before-investigation");
     expect(policyNames).toContain("review-subagent-before-pr-create");
+    expect(policyNames).toContain("review-subagent-before-pr-create-bash");
     expect(policyNames).toContain("preflight-before-push");
   });
 
