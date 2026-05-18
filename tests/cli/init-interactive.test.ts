@@ -866,6 +866,33 @@ describe("interactive wizard — Full profile", () => {
     expect(content).toContain("Glob");
     expect(content).toContain("Grep");
   });
+
+  it("prints the Full-specific reminder that mentions both MCP and gh-cli coverage", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      prompts: mockPrompts({
+        select: ["full"],
+        input: ["~/.claude/projects/{project}/memory"],
+        confirm: [true, true],
+        checkbox: [[]],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    const err = cap.stderr();
+    // Full ships review-before-merge-bash + review-subagent-before-pr-create-bash
+    // (PR #188), so the reminder must explicitly state that gh-cli PR
+    // calls are also gated, not just the agent-tasks MCP verbs.
+    expect(err).toContain("agent-tasks-mcp-bridge login");
+    expect(err).toContain("gh pr (merge|create)");
+    expect(err).toContain("--template team");
+    // The Team-only "review-merge gate only matches agent-tasks MCP tool
+    // names today" sentence must NOT appear for Full.
+    expect(err).not.toContain("only matches\n  agent-tasks MCP tool names today");
+  });
 });
 
 describe("interactive wizard — runtime multiselect (task 696f7560)", () => {
