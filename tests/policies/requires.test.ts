@@ -317,6 +317,155 @@ describe("evaluateRequires — count", () => {
   });
 });
 
+describe("evaluateRequires — at_head (HEAD-match freshness)", () => {
+  const tag = "preflight:fix/some-branch";
+  const HEAD_A = "1111111111111111111111111111111111111111";
+  const HEAD_B = "2222222222222222222222222222222222222222";
+  const fresh = new Date(NOW.getTime() - 2 * 60 * 1000); // 2m ago
+  const stale = new Date(NOW.getTime() - 30 * 60 * 1000); // 30m ago
+
+  it("satisfies a stale entry when its head: token matches currentHeadSha", () => {
+    const result = evaluateRequires(
+      { ledger_tag: tag, within: "10m", at_head: true },
+      [
+        entry({
+          id: "old-but-head-match",
+          content: `${tag} ready:true confidence:0.80 head:${HEAD_A}`,
+          createdAt: stale,
+        }),
+      ],
+      { now: NOW, currentHeadSha: HEAD_A },
+    );
+    expect(result.allowed).toBe(true);
+    expect(result.matchedCount).toBe(1);
+    expect(result.reason).toContain("HEAD");
+    expect(result.traceData.matchedEntryIds).toEqual(["old-but-head-match"]);
+  });
+
+  it("prefers the head-matching entry over a fresher but mismatching one", () => {
+    const result = evaluateRequires(
+      { ledger_tag: tag, within: "10m", at_head: true },
+      [
+        entry({
+          id: "fresh-mismatch",
+          content: `${tag} head:${HEAD_B}`,
+          createdAt: fresh,
+        }),
+        entry({
+          id: "stale-match",
+          content: `${tag} head:${HEAD_A}`,
+          createdAt: stale,
+        }),
+      ],
+      { now: NOW, currentHeadSha: HEAD_A },
+    );
+    expect(result.allowed).toBe(true);
+    expect(result.traceData.matchedEntryIds).toEqual(["stale-match"]);
+  });
+
+  it("falls through to the time-window check when no entry head-matches", () => {
+    const result = evaluateRequires(
+      { ledger_tag: tag, within: "10m", at_head: true },
+      [
+        entry({
+          id: "fresh-mismatch",
+          content: `${tag} head:${HEAD_B}`,
+          createdAt: fresh,
+        }),
+      ],
+      { now: NOW, currentHeadSha: HEAD_A },
+    );
+    expect(result.allowed).toBe(true);
+    expect(result.traceData.matchedEntryIds).toEqual(["fresh-mismatch"]);
+  });
+
+  it("blocks with a HEAD-drift suffix when the window also fails", () => {
+    const result = evaluateRequires(
+      { ledger_tag: tag, within: "10m", at_head: true },
+      [
+        entry({
+          id: "stale-mismatch",
+          content: `${tag} head:${HEAD_B}`,
+          createdAt: stale,
+        }),
+      ],
+      { now: NOW, currentHeadSha: HEAD_A },
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain("HEAD drift");
+    expect(result.reason).toContain("2222222");
+    expect(result.reason).toContain("1111111");
+  });
+
+  it("ignores at_head when currentHeadSha is absent (acts like a plain window)", () => {
+    const result = evaluateRequires(
+      { ledger_tag: tag, within: "10m", at_head: true },
+      [
+        entry({
+          id: "stale-match",
+          content: `${tag} head:${HEAD_A}`,
+          createdAt: stale,
+        }),
+      ],
+      { now: NOW },
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("no matching entry within 10m");
+  });
+
+  it("ignores at_head when the flag is false (plain window behaviour)", () => {
+    const result = evaluateRequires(
+      { ledger_tag: tag, within: "10m" },
+      [
+        entry({
+          id: "stale-match",
+          content: `${tag} head:${HEAD_A}`,
+          createdAt: stale,
+        }),
+      ],
+      { now: NOW, currentHeadSha: HEAD_A },
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("no matching entry within 10m");
+  });
+
+  it("at_head:true with no within still satisfies on head match", () => {
+    const result = evaluateRequires(
+      { ledger_tag: tag, at_head: true },
+      [
+        entry({
+          id: "any-age-head-match",
+          content: `${tag} head:${HEAD_A}`,
+          createdAt: stale,
+        }),
+      ],
+      { now: NOW, currentHeadSha: HEAD_A },
+    );
+    expect(result.allowed).toBe(true);
+    expect(result.matchedCount).toBe(1);
+  });
+
+  it("rejects an entry whose head: token is malformed (non-hex)", () => {
+    const result = evaluateRequires(
+      { ledger_tag: tag, within: "10m", at_head: true },
+      [
+        entry({
+          id: "bad-token",
+          content: `${tag} head:not-a-real-sha`,
+          createdAt: stale,
+        }),
+      ],
+      { now: NOW, currentHeadSha: HEAD_A },
+    );
+    // No valid head token → no head match → falls through to window,
+    // which fails (stale), so the gate denies with HEAD-drift detail
+    // (the entry's head was unparseable so the drift suffix uses the
+    // "no preflight at current head" variant).
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain("HEAD drift");
+  });
+});
+
 describe("evaluateRequires — composition (within + count)", () => {
   const tag = "x";
   it("filters by window before counting", () => {

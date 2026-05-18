@@ -50,6 +50,7 @@ type LoadBearingPolicy = {
   triggerExtract: Record<string, string> | undefined;
   ledgerTag: string;
   within: string | undefined;
+  atHead: boolean | undefined;
   countMin: number | undefined;
   countExact: number | undefined;
   countMax: number | undefined;
@@ -78,6 +79,7 @@ function loadBearing(p: Manifest["policies"][number]): LoadBearingPolicy {
     triggerExtract: p.trigger.extract,
     ledgerTag: p.requires.ledger_tag,
     within: p.requires.within ?? undefined,
+    atHead: p.requires.at_head ?? undefined,
     countMin: p.requires.count?.min ?? undefined,
     countExact: p.requires.count?.exact ?? undefined,
     countMax: p.requires.count?.max ?? undefined,

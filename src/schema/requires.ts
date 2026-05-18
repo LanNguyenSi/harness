@@ -44,6 +44,20 @@ export const RequiresSchema = z
     ledger_tag: z.string().min(1),
     within: DurationSchema.optional(),
     count: CountSchema.optional(),
+    /**
+     * When true, a tag-matching ledger entry whose `head:<sha>` token
+     * equals the runtime-resolved current HEAD sha satisfies the gate
+     * regardless of `within`. Falls through to the time-window check
+     * when no entry head-matches (entry predates the head shift,
+     * operator switched branches, producer ran on a different HEAD,
+     * runtime could not resolve the current HEAD). The producer must
+     * emit `head:<sha>` into the entry content for this to bite; the
+     * standard `harness session-start preflight` producer does so as
+     * of the `at_head` rollout. Designed for `preflight-before-push`
+     * to eliminate per-commit re-preflight churn while keeping the
+     * time-window as a freshness ceiling for the head-mismatch case.
+     */
+    at_head: z.boolean().optional(),
   })
   .strict();
 

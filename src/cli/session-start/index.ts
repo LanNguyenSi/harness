@@ -238,7 +238,7 @@ export async function runSessionStartPreflight(
   }
 
   const cwd = typeof event.cwd === "string" && event.cwd.length > 0 ? event.cwd : process.cwd();
-  const { repo, branch } = resolveGitContext(cwd);
+  const { repo, branch, sha } = resolveGitContext(cwd);
   if (repo === "") {
     const reason = `cwd is not inside a git work tree (${cwd}); nothing to preflight`;
     note(reason);
@@ -298,8 +298,15 @@ export async function runSessionStartPreflight(
   // producer cannot keep the 10m push window fresh through a long
   // session — a push-time refresh is a separate concern (see task notes).
   // On a detached HEAD `branch` is "" — only the REPO tag is written.
+  // `head:<sha>` is appended when resolveGitContext returned a sha (loose
+  // ref read or packed-refs fallback succeeded, or detached HEAD held a
+  // raw sha). The at_head requires-flag relies on this token to satisfy
+  // the gate at the recorded HEAD regardless of `within`; consumers that
+  // ignore the flag continue to work because the token is ignored by
+  // substring-match logic.
   const tags = branch.length > 0 ? `preflight:${repo} preflight:${branch}` : `preflight:${repo}`;
-  const content = `${tags} ready:true confidence:${confidence}`;
+  const headSuffix = sha.length > 0 ? ` head:${sha}` : "";
+  const content = `${tags} ready:true confidence:${confidence}${headSuffix}`;
 
   let writeLedger = opts.writeLedger;
   if (!writeLedger) {
