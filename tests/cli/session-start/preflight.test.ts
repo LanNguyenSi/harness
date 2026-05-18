@@ -118,6 +118,90 @@ describe("runSessionStartPreflight", () => {
     ]);
   });
 
+  it("stages .pending-approval as soon as a non-default session id resolves (task 0dbc9549)", async () => {
+    const repo = makeRepoFixture("widget-service");
+    const { stream: err } = captureStream();
+    const staged: Array<{ generatedDir: string; sessionId: string }> = [];
+    await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "sess-bootstrap", cwd: repo })),
+      stderr: err,
+      runPreflight: readyPreflight(0.83),
+      writeLedger: async () => ({ ok: true }),
+      stagePendingApproval: (generatedDir, sessionId) => {
+        staged.push({ generatedDir, sessionId });
+      },
+    });
+    expect(staged).toHaveLength(1);
+    expect(staged[0]?.sessionId).toBe("sess-bootstrap");
+    expect(staged[0]?.generatedDir).toMatch(/harness\.generated$/);
+  });
+
+  it("does NOT stage .pending-approval when the resolved session id is the literal 'default'", async () => {
+    const repo = makeRepoFixture("widget-service");
+    const { stream: err } = captureStream();
+    const staged: string[] = [];
+    await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ cwd: repo })), // no session_id
+      stderr: err,
+      runPreflight: readyPreflight(0.83),
+      writeLedger: async () => ({ ok: true }),
+      // Force the discovery tier to fall back to "default" so we hit the
+      // sessionSource:"default" branch the guard protects.
+      resolveSession: () => "default",
+      stagePendingApproval: (_generatedDir, sessionId) => {
+        staged.push(sessionId);
+      },
+    });
+    expect(staged).toEqual([]);
+  });
+
+  it("swallows .pending-approval write errors (best-effort, must not break the session loop)", async () => {
+    const repo = makeRepoFixture("widget-service");
+    const { stream: err } = captureStream();
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "sess-best-effort", cwd: repo })),
+      stderr: err,
+      runPreflight: readyPreflight(0.83),
+      writeLedger: async () => ({ ok: true }),
+      stagePendingApproval: () => {
+        throw new Error("disk full");
+      },
+    });
+    // Stage failure must NOT prevent the ledger write or the result from
+    // reporting wrote:true — preflight stays the canonical producer for
+    // the gate, pending-approval is a convenience side-channel.
+    expect(result.wrote).toBe(true);
+    expect(result.sessionId).toBe("sess-best-effort");
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("respects stagePendingApproval:null (caller opts out of staging, no file written)", async () => {
+    // Isolate generatedDir under a tmp homeDir so we can assert the
+    // staging file is NOT created on disk: the null opt-out must bypass
+    // the default `writePendingApproval` writer entirely, not just the
+    // sink seam.
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-null-"));
+    cleanups.push(() => fs.rmSync(tmpHome, { recursive: true, force: true }));
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-null-repo-"));
+    cleanups.push(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+    const repo = path.join(repoRoot, "no-stage-repo");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    fs.writeFileSync(path.join(tmpHome, "harness.yaml"), "version: 1\n");
+    const { stream: err } = captureStream();
+    const result = await runSessionStartPreflight({
+      homeDir: tmpHome,
+      stdin: streamFrom(JSON.stringify({ session_id: "sess-no-stage", cwd: repo })),
+      stderr: err,
+      runPreflight: readyPreflight(0.83),
+      writeLedger: async () => ({ ok: true }),
+      stagePendingApproval: null,
+    });
+    expect(result.wrote).toBe(true);
+    const stagedPath = path.join(tmpHome, "harness.generated", ".pending-approval");
+    expect(fs.existsSync(stagedPath)).toBe(false);
+  });
+
   it("appends `head:<sha>` when resolveGitContext can read the loose ref", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-head-"));
     cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
