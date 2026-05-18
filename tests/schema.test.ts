@@ -360,6 +360,85 @@ describe("parseManifest — uniqueness checks", () => {
     ).toThrow(/duplicate hook/i);
   });
 
+  it("rejects hook names starting with reserved `memory:` prefix (PR #204)", () => {
+    // `harness apply` injects a synthetic Hook with `name: "memory:router"`
+    // for the memory-router projection. Without this check, an operator
+    // who happened to name their own hook with the same prefix would
+    // produce a duplicate entry in the generated settings.json silently.
+    expect(() =>
+      parseManifest({
+        version: 1,
+        hooks: [
+          {
+            name: "memory:router",
+            event: "UserPromptSubmit",
+            command: "/bin/true",
+            blocking: false,
+          },
+        ],
+      }),
+    ).toThrow(/reserved prefix.*"memory:"/);
+  });
+
+  it("rejects any hook name starting with `memory:` even when not literally `memory:router`", () => {
+    // Prefix reservation is whole-namespace, not exact-string. Future
+    // memory-* synthetic projections (e.g. memory:retention) are
+    // pre-reserved without needing another schema bump.
+    expect(() =>
+      parseManifest({
+        version: 1,
+        hooks: [
+          {
+            name: "memory:my-custom-thing",
+            event: "PreToolUse",
+            command: "/bin/true",
+            blocking: false,
+          },
+        ],
+      }),
+    ).toThrow(/reserved prefix.*"memory:"/);
+  });
+
+  it("reserved-prefix check is case-sensitive (`Memory:router` parses, intentional)", () => {
+    // startsWith is case-sensitive; we deliberately do not normalize.
+    // Claude Code and Codex hook keys are compared verbatim, so a
+    // capital-M variant cannot collide with the lowercase synthetic.
+    // Pin the intent here so a future "let's be lenient and lowercase
+    // both sides" refactor breaks this test explicitly.
+    expect(() =>
+      parseManifest({
+        version: 1,
+        hooks: [
+          {
+            name: "Memory:router",
+            event: "UserPromptSubmit",
+            command: "/bin/true",
+            blocking: false,
+          },
+        ],
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts hook names that merely contain `memory:` as a substring", () => {
+    // Prefix check is `startsWith`, not `includes`. A hook named
+    // `xmemory:y` or `policy-pack:memory:router` does not collide with
+    // the synthetic projection and must continue to parse.
+    expect(() =>
+      parseManifest({
+        version: 1,
+        hooks: [
+          {
+            name: "policy-pack:memory:router",
+            event: "UserPromptSubmit",
+            command: "/bin/true",
+            blocking: false,
+          },
+        ],
+      }),
+    ).not.toThrow();
+  });
+
   it("rejects duplicate policy names", () => {
     expect(() =>
       parseManifest({
