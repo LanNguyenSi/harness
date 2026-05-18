@@ -41,6 +41,24 @@ function defaultHome(opts: LoaderOptions): string {
 }
 
 export function resolvePaths(opts: LoaderOptions = {}): ResolvedPaths {
+  if (
+    opts.homeDir === undefined &&
+    opts.configPath === undefined &&
+    process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"] !== "1"
+  ) {
+    // Defense against the recurring test-isolation class (v0.21.1 preflight
+    // stage leak, v0.22.0 approveUnderstanding marker leak, latent post-pause
+    // pause-sentinel read leak): without an explicit `homeDir` or
+    // `configPath`, this resolver would silently fall back to
+    // `~/.claude/harness.yaml` and the caller would read/write the
+    // operator's runtime dir. The harness CLI binary sets the env var
+    // before `run()`; tests don't, so this throw surfaces leak sites at
+    // assertion time instead of as silent operator-state mutation.
+    throw new Error(
+      "resolvePaths refused to fall back to ~/.claude/ — set { homeDir } or { configPath } on LoaderOptions, " +
+        "or (for the real harness binary) set HARNESS_ALLOW_REAL_GENERATED_DIR=1",
+    );
+  }
   const home = defaultHome(opts);
   const base = opts.configPath ?? path.join(home, DEFAULT_BASENAME);
   const machinesDir = path.join(home, "machines");

@@ -400,8 +400,12 @@ export async function approveUnderstanding(
   //   2. UNDERSTANDING_GATE_REPORT_DIR env (honored by defaultReportsDir,
   //      and what apply prefixes onto the hook command strings).
   //   3. manifest-anchored fallback: <dir-of-manifest>/.understanding-gate/reports.
-  const manifestAnchoredCwd = path.dirname(resolvePaths(opts).base);
-  const reportsDir = opts.reportsDir ?? defaultReportsDir(manifestAnchoredCwd);
+  // resolvePaths is evaluated lazily so a test that injects opts.reportsDir
+  // does not also need to inject homeDir/configPath to satisfy the
+  // HARNESS_ALLOW_REAL_GENERATED_DIR loader guard (test-isolation class
+  // documented in CHANGELOG v0.21.1 / v0.22.0).
+  const reportsDir =
+    opts.reportsDir ?? defaultReportsDir(path.dirname(resolvePaths(opts).base));
   const reports = listPersistedReports(reportsDir);
   const latest = findLatestReportForSession(reports, sessionId);
 
