@@ -26,6 +26,7 @@
 //     the hooks alone are the enforcement.
 
 import type { Hook, Manifest } from "../../schema/index.js";
+import { buildMemoryRouterHook } from "./generate-settings.js";
 
 export interface CodexConfigResult {
   content: string;
@@ -132,7 +133,12 @@ function emitHook(h: Hook): string {
 
 export function generateCodexConfig(manifest: Manifest): CodexConfigResult {
   const warnings: string[] = [];
-  const hooks = [...manifest.hooks].sort((a, b) => {
+  // Same memory.router projection as generate-settings.ts so the Codex
+  // operator gets per-prompt augmentation wired into their config.toml
+  // alongside the standard pack hooks (PR #203, agent-tasks/eefbcaa8).
+  const routerHook = buildMemoryRouterHook(manifest);
+  const allHooks = routerHook ? [...manifest.hooks, routerHook] : manifest.hooks;
+  const hooks = [...allHooks].sort((a, b) => {
     if (a.event !== b.event) return a.event < b.event ? -1 : 1;
     return a.command < b.command ? -1 : a.command > b.command ? 1 : 0;
   });

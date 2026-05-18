@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_BUDGET_MS,
   buildMcpServers,
+  buildMemoryRouterHook,
   generateSettings,
   generateSettingsWithWarnings,
 } from "../../../src/cli/apply/generate-settings.js";
@@ -645,5 +646,140 @@ describe("generateSettings + mcpServers integration", () => {
     const r = generateSettingsWithWarnings(m);
     expect(r.warnings).toContain("tools.mcp.ghost: empty command, skipping");
     expect(r.root).not.toHaveProperty("mcpServers");
+  });
+});
+
+describe("generateSettings — memory.router projection (PR #203)", () => {
+  function manifestWithRouter(router: unknown, hooks: unknown[] = []): Manifest {
+    return parseManifest({
+      version: 1,
+      tools: { mcp: [], cli: [], skills: { enabled: [], source_dirs: [] }, builtin: { known: [] } },
+      memory: { directories: [], router },
+      hooks,
+      policies: [],
+    });
+  }
+
+  it("projects memory.router into a UserPromptSubmit hook when enabled (default)", () => {
+    // Pre-#203 the router was declared in the manifest but never written
+    // into settings.json. The wizard's "(already installed)" check on the
+    // binary made the silent unwiring particularly hard to diagnose; an
+    // operator could ship the harness for months without ever exercising
+    // per-prompt memory augmentation.
+    const m = manifestWithRouter({
+      command: ["memory-router-user-prompt-submit"],
+    });
+    const out = generateSettings(m);
+    expect(out.hooks.UserPromptSubmit).toHaveLength(1);
+    const group = out.hooks.UserPromptSubmit?.[0];
+    expect(group).toBeDefined();
+    expect(group?.matcher).toBeUndefined();
+    expect(group?.hooks).toEqual([
+      { type: "command", command: "memory-router-user-prompt-submit", timeout: 5000 },
+    ]);
+  });
+
+  it("omits memory.router when enabled:false", () => {
+    const m = manifestWithRouter({
+      command: ["memory-router-user-prompt-submit"],
+      enabled: false,
+    });
+    const out = generateSettings(m);
+    expect(out.hooks).not.toHaveProperty("UserPromptSubmit");
+  });
+
+  it("omits memory.router when memory.router is undefined", () => {
+    const out = generateSettings(
+      parseManifest({
+        version: 1,
+        tools: { mcp: [], cli: [], skills: { enabled: [], source_dirs: [] }, builtin: { known: [] } },
+        memory: { directories: [] },
+        hooks: [],
+        policies: [],
+      }),
+    );
+    expect(out.hooks).not.toHaveProperty("UserPromptSubmit");
+  });
+
+  it("co-exists with another UserPromptSubmit hook (gate + router both fire, alphabetical order)", () => {
+    // Real-world Full profile: both understanding-gate-claude-hook AND
+    // memory-router-user-prompt-submit declare UserPromptSubmit. They
+    // share a matcher group (no `match` field on either) and Claude Code
+    // spawns both per prompt. Alphabetical sort by command places the
+    // router before the gate, but both fire.
+    const m = manifestWithRouter(
+      { command: ["memory-router-user-prompt-submit"] },
+      [
+        {
+          name: "ug:user-prompt-submit",
+          event: "UserPromptSubmit",
+          command: "understanding-gate-claude-hook",
+          blocking: false,
+          budget_ms: 5000,
+        },
+      ],
+    );
+    const out = generateSettings(m);
+    expect(out.hooks.UserPromptSubmit).toHaveLength(1);
+    const inner = out.hooks.UserPromptSubmit?.[0]?.hooks ?? [];
+    expect(inner).toHaveLength(2);
+    expect(inner[0]?.command).toBe("memory-router-user-prompt-submit");
+    expect(inner[1]?.command).toBe("understanding-gate-claude-hook");
+  });
+
+  it("forwards min_version and version_command to the synthetic hook (both-or-neither)", () => {
+    // harness doctor's version-floor probe is wired via Hook.min_version
+    // / version_command. Pre-#203 this was lost (the router never became
+    // a Hook). The synthetic projection must carry both when set so
+    // `harness doctor` continues to surface a floor warning if the
+    // installed router lags the declared min_version.
+    const m = manifestWithRouter({
+      command: ["memory-router-user-prompt-submit"],
+      min_version: "0.3.0",
+      version_command: ["memory-router-user-prompt-submit", "--version"],
+    });
+    // The settings.json projection deliberately strips min_version /
+    // version_command (they are doctor-side metadata not consumed by
+    // Claude Code), so we verify forwarding by going one level deeper:
+    // the synthetic Hook the helper produces is the doctor's input, and
+    // its presence in the byEvent map is the contract. Cross-checking
+    // via the lock-file projection would couple this test to harness-lock
+    // internals; instead we re-import the helper directly.
+    const hook = buildMemoryRouterHook(m);
+    if (hook === null) throw new Error("expected non-null hook");
+    expect(hook.min_version).toBe("0.3.0");
+    expect(hook.version_command).toEqual([
+      "memory-router-user-prompt-submit",
+      "--version",
+    ]);
+  });
+
+  it("does not forward min_version when version_command is absent (HookSchema invariant)", () => {
+    // The schema constructed via parseManifest enforces min_version /
+    // version_command both-or-neither at the Hook level; the router
+    // schema does not co-validate, so a router declaration with only
+    // min_version is parseable. The helper must NOT carry a half-set
+    // pair forward (would fail Hook schema downstream / mislead doctor).
+    const m = manifestWithRouter({
+      command: ["memory-router-user-prompt-submit"],
+      min_version: "0.3.0",
+    });
+    const hook = buildMemoryRouterHook(m);
+    if (hook === null) throw new Error("expected non-null hook");
+    expect(hook.min_version).toBeUndefined();
+    expect(hook.version_command).toBeUndefined();
+  });
+
+  it("joins multi-token command arrays with a single space", () => {
+    // The schema is `command: string[]` (min 1) for forward-compat. A
+    // multi-token form like `["node", "/opt/router.js"]` joins to one
+    // shell string Claude Code spawns. Single-bin form is the common
+    // case and joins to itself.
+    const m = manifestWithRouter({
+      command: ["node", "/opt/router/dist/cli.js", "--mode", "augment"],
+    });
+    const out = generateSettings(m);
+    const inner = out.hooks.UserPromptSubmit?.[0]?.hooks[0];
+    expect(inner?.command).toBe("node /opt/router/dist/cli.js --mode augment");
   });
 });

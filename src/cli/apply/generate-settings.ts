@@ -111,6 +111,19 @@ export function generateSettingsWithWarnings(
     byEvent.set(h.event, list);
   }
 
+  // memory.router projects into a UserPromptSubmit hook so per-prompt
+  // memory augmentation actually fires (PR #203, agent-tasks/eefbcaa8).
+  // Pre-#203 the router was declared in the manifest, asset-locked by
+  // harness-lock, restart-hinted on change, but never written into
+  // settings.json — a silent install-time wiring gap that left
+  // memory-router on PATH but inert in every Claude Code session.
+  const routerHook = buildMemoryRouterHook(manifest);
+  if (routerHook !== null) {
+    const list = byEvent.get(routerHook.event) ?? [];
+    list.push(routerHook);
+    byEvent.set(routerHook.event, list);
+  }
+
   const out: SettingsRoot = { hooks: {} };
   const eventNames = [...byEvent.keys()].sort();
 
@@ -196,6 +209,50 @@ export function buildMcpServers(
     out[e.name] = spec;
   }
   return out;
+}
+
+// Translate manifest `memory.router` into a synthetic UserPromptSubmit
+// hook so per-prompt context augmentation actually fires alongside the
+// understanding-gate hook. Returns null when memory.router is absent or
+// `enabled: false`, in which case no entry lands in settings.json.
+//
+// Command joining: the schema accepts `command: string[]` (min 1). For
+// the typical single-bin case `[memory-router-user-prompt-submit]` the
+// projection emits exactly that; for multi-token commands the array is
+// space-joined to produce a single shell-string that Claude Code can
+// spawn (same convention `harness-lock.ts` uses when iterating the
+// command tokens). Embedded whitespace inside a single token is a known
+// limitation of this projection; operators with such paths should use
+// the `tools.mcp[].command: string` form on a different surface, or
+// avoid spaces in installed binary paths.
+//
+// Timeout: `memory.router` has no manifest-level budget_ms field, so we
+// pick 5000ms to match the existing `understanding-gate-claude-hook`
+// timeout. A per-prompt augmentation that visibly delays prompt-submit
+// would be hostile UX; 5s is generous for the router's typical
+// memory-file scan.
+export function buildMemoryRouterHook(manifest: Manifest): Hook | null {
+  const router = manifest.memory.router;
+  if (!router) return null;
+  if (router.enabled === false) return null;
+  const tokens = router.command.filter((t) => t.length > 0);
+  if (tokens.length === 0) return null;
+  const hook: Hook = {
+    name: "memory:router",
+    event: "UserPromptSubmit",
+    command: tokens.join(" "),
+    blocking: false,
+    budget_ms: 5000,
+  };
+  // Forward min_version + version_command so `harness doctor` keeps
+  // probing the router binary the same way it would for any other
+  // hook with a declared floor. Both fields must be carried together
+  // per HookSchema's invariant; carry neither when only one is set.
+  if (router.min_version !== undefined && router.version_command !== undefined) {
+    hook.min_version = router.min_version;
+    hook.version_command = router.version_command;
+  }
+  return hook;
 }
 
 function buildGroups(hooks: Hook[]): SettingsHookGroup[] {
