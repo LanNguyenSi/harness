@@ -23,11 +23,15 @@ import {
   resolveGitContext,
 } from "../../runtime/index.js";
 import {
+  resolveGeneratedDir,
+  writePendingApproval,
+} from "../../runtime/pending-approval.js";
+import {
   resolveReadSessionId,
   type ResolveReadSessionOptions,
 } from "../../runtime/session-id.js";
 import type { Manifest, McpServer } from "../../schema/index.js";
-import { loadManifest, type LoaderOptions } from "../loader.js";
+import { loadManifest, resolvePaths, type LoaderOptions } from "../loader.js";
 
 const FALLBACK_SESSION = "default";
 
@@ -89,6 +93,17 @@ export interface SessionStartPreflightOptions extends LoaderOptions {
    * `harness audit` and `harness explain --trace`.
    */
   resolveSession?: (explicit: string | undefined, opts: ResolveReadSessionOptions) => string;
+  /**
+   * Inject the `.pending-approval` writer. Test seam — production uses
+   * `writePendingApproval` from `runtime/pending-approval`. Called
+   * best-effort whenever the producer resolves a non-default session
+   * id, so `harness approve understanding` (no flags) works from the
+   * operator's `!`-shell without needing a prior PreToolUse gate-block
+   * to stage the file. Pass `null` to disable staging entirely.
+   */
+  stagePendingApproval?:
+    | ((generatedDir: string, sessionId: string) => void)
+    | null;
 }
 
 export interface SessionStartPreflightResult {
@@ -273,6 +288,28 @@ export async function runSessionStartPreflight(
               process.env.CLAUDE_SESSION_ID === sessionId
             ? "env"
             : "transcript";
+
+  // Stage `.pending-approval` as soon as we resolve a real session id so
+  // `harness approve understanding` (no flags) works from the operator's
+  // `!`-shell without needing a prior PreToolUse gate-block. Producer
+  // hand-off matches the PreToolUse hook's existing one (same writer,
+  // same path, same single-line content). Skipped when the session id
+  // is the literal "default" — pointing approve at "default" would never
+  // satisfy any task-scoped gate. Best-effort: a write failure must NOT
+  // break the session loop, so any error is silently swallowed (the
+  // operator can always fall back to `--session <id>` as before).
+  if (sessionSource !== "default" && opts.stagePendingApproval !== null) {
+    try {
+      const generatedDir = resolveGeneratedDir({
+        ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
+        manifestPath: resolvePaths(opts).base,
+      });
+      const stage = opts.stagePendingApproval ?? writePendingApproval;
+      stage(generatedDir, sessionId);
+    } catch {
+      /* best-effort, never escalate into a hook error */
+    }
+  }
 
   const runPreflight = opts.runPreflight ?? spawnPreflight;
   const preflight = await runPreflight(cwd, preflightTimeoutMs);

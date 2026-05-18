@@ -118,6 +118,79 @@ describe("runSessionStartPreflight", () => {
     ]);
   });
 
+  it("stages .pending-approval as soon as a non-default session id resolves (task 0dbc9549)", async () => {
+    const repo = makeRepoFixture("widget-service");
+    const { stream: err } = captureStream();
+    const staged: Array<{ generatedDir: string; sessionId: string }> = [];
+    await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "sess-bootstrap", cwd: repo })),
+      stderr: err,
+      runPreflight: readyPreflight(0.83),
+      writeLedger: async () => ({ ok: true }),
+      stagePendingApproval: (generatedDir, sessionId) => {
+        staged.push({ generatedDir, sessionId });
+      },
+    });
+    expect(staged).toHaveLength(1);
+    expect(staged[0]?.sessionId).toBe("sess-bootstrap");
+    expect(staged[0]?.generatedDir).toMatch(/harness\.generated$/);
+  });
+
+  it("does NOT stage .pending-approval when the resolved session id is the literal 'default'", async () => {
+    const repo = makeRepoFixture("widget-service");
+    const { stream: err } = captureStream();
+    const staged: string[] = [];
+    await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ cwd: repo })), // no session_id
+      stderr: err,
+      runPreflight: readyPreflight(0.83),
+      writeLedger: async () => ({ ok: true }),
+      // Force the discovery tier to fall back to "default" so we hit the
+      // sessionSource:"default" branch the guard protects.
+      resolveSession: () => "default",
+      stagePendingApproval: (_generatedDir, sessionId) => {
+        staged.push(sessionId);
+      },
+    });
+    expect(staged).toEqual([]);
+  });
+
+  it("swallows .pending-approval write errors (best-effort, must not break the session loop)", async () => {
+    const repo = makeRepoFixture("widget-service");
+    const { stream: err } = captureStream();
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "sess-best-effort", cwd: repo })),
+      stderr: err,
+      runPreflight: readyPreflight(0.83),
+      writeLedger: async () => ({ ok: true }),
+      stagePendingApproval: () => {
+        throw new Error("disk full");
+      },
+    });
+    // Stage failure must NOT prevent the ledger write or the result from
+    // reporting wrote:true — preflight stays the canonical producer for
+    // the gate, pending-approval is a convenience side-channel.
+    expect(result.wrote).toBe(true);
+    expect(result.sessionId).toBe("sess-best-effort");
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("respects stagePendingApproval:null (caller opts out of staging)", async () => {
+    const repo = makeRepoFixture("widget-service");
+    const { stream: err } = captureStream();
+    // No `staged` capture needed: passing null disables the call site
+    // entirely, so the default `writePendingApproval` is never invoked
+    // and the test passes purely by reaching the assertions below.
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "sess-no-stage", cwd: repo })),
+      stderr: err,
+      runPreflight: readyPreflight(0.83),
+      writeLedger: async () => ({ ok: true }),
+      stagePendingApproval: null,
+    });
+    expect(result.wrote).toBe(true);
+  });
+
   it("appends `head:<sha>` when resolveGitContext can read the loose ref", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-head-"));
     cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
