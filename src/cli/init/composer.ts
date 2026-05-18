@@ -250,7 +250,7 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
       cannot: "You cannot merge PR #${PR_NUMBER} yet.",
       required: ["a recorded review of PR #${PR_NUMBER}"],
       run: [
-        'mcp__agent-grounding__ledger_add { type: "fact", content: "review:${PR_NUMBER} — <verdict + key findings + nits>" }',
+        'mcp__agent-grounding__ledger_add { sessionId: "${SESSION_ID}", type: "fact", content: "review:${PR_NUMBER} — <verdict + key findings + nits>" }',
       ],
     },
   },
@@ -289,7 +289,7 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
       cannot: "You cannot open a pull request for task ${TASK_ID} yet.",
       required: ["a completed review-subagent pass on this task"],
       run: [
-        'mcp__agent-grounding__ledger_add { type: "fact", content: "review-subagent:${TASK_ID} — <verdict + key findings + nits>" }',
+        'mcp__agent-grounding__ledger_add { sessionId: "${SESSION_ID}", type: "fact", content: "review-subagent:${TASK_ID} — <verdict + key findings + nits>" }',
       ],
     },
   },
@@ -336,7 +336,7 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
       cannot: "You cannot publish a release yet.",
       required: ["an end-to-end dogfood run in this session"],
       run: [
-        'mcp__agent-grounding__ledger_add { type: "fact", content: "dogfood:${SESSION_ID} — <end-to-end smoke summary>" }',
+        'mcp__agent-grounding__ledger_add { sessionId: "${SESSION_ID}", type: "fact", content: "dogfood:${SESSION_ID} — <end-to-end smoke summary>" }',
       ],
     },
   },

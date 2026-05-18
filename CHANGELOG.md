@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Policy `ux.run` examples for `mcp__agent-grounding__ledger_add` now name the `sessionId` parameter** (agent-tasks/426e7049, PR #206). When a policy gate (`review-before-merge`, `review-subagent-before-pr-create`, `review-subagent-before-pr-create-bash`, `dogfood-before-release`) blocked an MCP/Bash call, the rendered hint named the required content tag but NOT which `sessionId` to pass. The runtime gate evaluates against the current Claude session id, so an operator who bound `sessionId` to the tag UUID (the natural assumption, since the tag literally contains the task / PR number) saw the same opaque rejection repeated. Now all four `ux.run` lines emit `mcp__agent-grounding__ledger_add { sessionId: "${SESSION_ID}", type: "fact", content: "..." }` so the binding is explicit. **Operator action**: re-run `harness apply` (or `harness init --force`) to regenerate `settings.json` with the updated hints; existing operators see no functional change in gate behaviour, only clearer hints on the next block. New pin-test in `tests/cli/init-composer.test.ts` asserts every ledger-add-producing policy includes the sessionId in its example.
+
 ## [0.23.1] - 2026-05-18
 
 **Headline: memory-router wiring hotfix.** Same-day patch on v0.23.0. The Full profile's `memory.router` declaration was never translated into a UserPromptSubmit hook by `harness apply` — operators saw the wizard report `memory-router-user-prompt-submit (already installed)` but the binary never actually fired because `settings.json` / `config.toml` only got the understanding-gate hook. PR #203 closes the wiring gap on both runtimes; PR #204 is the defence pair that reserves the `memory:` hook-name prefix at schema validation time so the synthetic projection can't silently collide with an operator-declared hook of the same name. **Operator action**: re-run `harness apply` (or `harness init --force`) to pick up the wiring; the synthetic hook fires alongside the gate.

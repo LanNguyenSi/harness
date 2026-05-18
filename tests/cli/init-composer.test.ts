@@ -103,6 +103,35 @@ describe("composeCustom — new policy entries (task 5dd3d8a6)", () => {
     expect(hook?.bash_match).toMatch(/tag v/);
   });
 
+  it("ux.run examples name sessionId: \"${SESSION_ID}\" on all ledger_add-producing policies (PR #206)", () => {
+    // Pre-#206 the ux.run renderer omitted the sessionId param from the
+    // ledger_add example, so operators bound sessionId to the tag UUID
+    // (review-subagent's TASK_ID for instance) and the gate kept refusing
+    // with the same opaque message. Pin that all four ledger-add policies
+    // now emit a sessionId hint pointing at the current session id.
+    const { manifest } = compose({
+      policies: [
+        "review-before-merge",
+        "review-subagent-before-pr-create",
+        "dogfood-before-release",
+      ],
+    });
+    const ledgerPolicies = manifest.policies.filter(
+      (p) =>
+        p.ux?.run?.some((r) => r.includes("mcp__agent-grounding__ledger_add")),
+    );
+    expect(ledgerPolicies.length).toBeGreaterThan(0);
+    for (const p of ledgerPolicies) {
+      const runs = p.ux?.run ?? [];
+      const ledgerCall = runs.find((r) => r.includes("mcp__agent-grounding__ledger_add"));
+      expect(ledgerCall, `policy ${p.name} missing ledger_add line`).toBeDefined();
+      expect(
+        ledgerCall,
+        `policy ${p.name} ux.run ledger_add example must include sessionId: "\${SESSION_ID}"`,
+      ).toContain('sessionId: "${SESSION_ID}"');
+    }
+  });
+
   it("two-reviewers-required: warn-level enforcement + count.min:2, dedups hook with review-before-merge", () => {
     const { manifest } = compose({
       policies: ["review-before-merge", "two-reviewers-required"],
