@@ -242,7 +242,7 @@ policies:
     producers:
       - kind: mcp
         verb: mcp__agent-grounding__ledger_add
-        example: '{type:"fact", content:"review:\${PR_NUMBER} — <verdict + key findings + nits>", source:"Agent(general-purpose) review"}'
+        example: '{sessionId:"\${SESSION_ID}", type:"fact", content:"review:\${PR_NUMBER} — <verdict + key findings + nits>", source:"Agent(general-purpose) review"}'
         description: Spawn a review subagent against the PR diff, capture its verdict, then persist a ledger entry tagged with the PR number. The content should be self-contained enough for an auditor to read without re-opening the chat.
     ux:
       cannot: "You cannot merge PR #\${PR_NUMBER} yet."
@@ -275,7 +275,7 @@ policies:
     producers:
       - kind: mcp
         verb: mcp__agent-grounding__ledger_add
-        example: '{type:"fact", content:"review:\${BRANCH} — <verdict + key findings + nits>", source:"Agent(general-purpose) review"}'
+        example: '{sessionId:"\${SESSION_ID}", type:"fact", content:"review:\${BRANCH} — <verdict + key findings + nits>", source:"Agent(general-purpose) review"}'
         description: Spawn a review subagent against the branch diff, capture its verdict, then persist a ledger entry tagged with the branch name. Mirror of the review-before-merge producer for the gh-cli surface.
     ux:
       cannot: "You cannot merge the PR for branch \${BRANCH} via \`gh pr merge\` yet."
@@ -298,7 +298,7 @@ policies:
     producers:
       - kind: mcp
         verb: mcp__agent-grounding__ledger_add
-        example: '{type:"fact", content:"dogfood:\${SESSION_ID} — <end-to-end smoke summary against the live system>", source:"manual smoke test"}'
+        example: '{sessionId:"\${SESSION_ID}", type:"fact", content:"dogfood:\${SESSION_ID} — <end-to-end smoke summary against the live system>", source:"manual smoke test"}'
         description: Before tagging or publishing, run the release path end-to-end against the live system (not just unit tests) and persist the result as a session-tagged ledger entry. Document what you exercised (install, CLI happy path, MCP handshake, etc.) so a future auditor can tell whether the smoke covered the change.
     ux:
       cannot: "You cannot publish a release yet."
@@ -323,7 +323,7 @@ policies:
     producers:
       - kind: mcp
         verb: mcp__agent-grounding__ledger_add
-        example: '{type:"fact", content:"review:\${PR_NUMBER} — <verdict + key findings + nits>", source:"Agent(general-purpose) review (reviewer 2)"}'
+        example: '{sessionId:"\${SESSION_ID}", type:"fact", content:"review:\${PR_NUMBER} — <verdict + key findings + nits>", source:"Agent(general-purpose) review (reviewer 2)"}'
         description: Same shape as review-before-merge but TWO DISTINCT reviewer entries must exist before the gate is satisfied (count.min 2). Distinguish reviewers by source so the count is honest. Warn-level enforcement, so the agent CAN merge with one reviewer but should consider spawning a second for load-bearing changes.
 
   - name: preflight-before-investigation
@@ -343,7 +343,7 @@ policies:
         description: Runs agent-preflight against the current cwd; on ready:true, records preflight:\${REPO} to the ledger. Standard producer.
       - kind: mcp
         verb: mcp__agent-grounding__ledger_add
-        example: '{type:"fact", content:"preflight:\${REPO}", source:"manual"}'
+        example: '{sessionId:"\${SESSION_ID}", type:"fact", content:"preflight:\${REPO}", source:"manual"}'
         description: Direct ledger write. Use when the Bash hook is locked down (e.g. understanding-gate active) or when the standard producer is unavailable.
     ux:
       cannot: "You cannot investigate this repository yet."
@@ -366,7 +366,7 @@ policies:
     producers:
       - kind: mcp
         verb: mcp__agent-grounding__ledger_add
-        example: '{type:"fact", content:"review-subagent:\${TASK_ID} — <verdict + key findings + nits>", source:"Agent(general-purpose) review"}'
+        example: '{sessionId:"\${SESSION_ID}", type:"fact", content:"review-subagent:\${TASK_ID} — <verdict + key findings + nits>", source:"Agent(general-purpose) review"}'
         description: After running a review subagent against the staged diff, persist its verdict + load-bearing findings as a ledger entry tagged with the task UUID. The content should be self-contained enough to audit later without re-reading the chat.
     ux:
       cannot: "You cannot open a pull request for task \${TASK_ID} yet."
@@ -394,7 +394,7 @@ policies:
     producers:
       - kind: mcp
         verb: mcp__agent-grounding__ledger_add
-        example: '{type:"fact", content:"review-subagent:\${BRANCH} — <verdict + key findings + nits>", source:"Agent(general-purpose) review"}'
+        example: '{sessionId:"\${SESSION_ID}", type:"fact", content:"review-subagent:\${BRANCH} — <verdict + key findings + nits>", source:"Agent(general-purpose) review"}'
         description: After running a review subagent against the staged diff for the working branch, persist its verdict + load-bearing findings as a ledger entry tagged with the branch name. Mirror of the review-subagent-before-pr-create producer for the gh-cli surface.
     ux:
       cannot: "You cannot open a pull request for branch \${BRANCH} via \`gh pr create\` yet."
@@ -426,7 +426,7 @@ policies:
         description: Runs agent-preflight against the current cwd; on ready:true, records preflight:\${BRANCH} ready:true confidence:<n> head:<sha> to the ledger. Standard producer.
       - kind: mcp
         verb: mcp__agent-grounding__ledger_add
-        example: '{type:"fact", content:"preflight:\${BRANCH} head:<full-sha> — <summary of what is on the branch + smoke results>", source:"manual"}'
+        example: '{sessionId:"\${SESSION_ID}", type:"fact", content:"preflight:\${BRANCH} head:<full-sha> — <summary of what is on the branch + smoke results>", source:"manual"}'
         description: Direct ledger write. Include head:<full-sha> if you want the entry to count under at_head; the branch is the WIP review surface and the content should summarise what is staged + the smoke evidence so a reviewer can audit later without re-reading the chat.
     ux:
       cannot: "You cannot push branch \${BRANCH} yet."
