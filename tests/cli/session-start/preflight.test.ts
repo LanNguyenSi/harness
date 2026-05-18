@@ -127,6 +127,10 @@ describe("runSessionStartPreflight", () => {
       stderr: err,
       runPreflight: readyPreflight(0.83),
       writeLedger: async () => ({ ok: true }),
+      // Inject homeDir so the staging path resolves under tmp instead of
+      // tripping the HARNESS_ALLOW_REAL_GENERATED_DIR loader guard, which
+      // would silently degrade the staging branch and break the assertion.
+      homeDir: repo,
       stagePendingApproval: (generatedDir, sessionId) => {
         staged.push({ generatedDir, sessionId });
       },
