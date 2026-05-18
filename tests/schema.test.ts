@@ -399,6 +399,27 @@ describe("parseManifest — uniqueness checks", () => {
     ).toThrow(/reserved prefix.*"memory:"/);
   });
 
+  it("reserved-prefix check is case-sensitive (`Memory:router` parses, intentional)", () => {
+    // startsWith is case-sensitive; we deliberately do not normalize.
+    // Claude Code and Codex hook keys are compared verbatim, so a
+    // capital-M variant cannot collide with the lowercase synthetic.
+    // Pin the intent here so a future "let's be lenient and lowercase
+    // both sides" refactor breaks this test explicitly.
+    expect(() =>
+      parseManifest({
+        version: 1,
+        hooks: [
+          {
+            name: "Memory:router",
+            event: "UserPromptSubmit",
+            command: "/bin/true",
+            blocking: false,
+          },
+        ],
+      }),
+    ).not.toThrow();
+  });
+
   it("accepts hook names that merely contain `memory:` as a substring", () => {
     // Prefix check is `startsWith`, not `includes`. A hook named
     // `xmemory:y` or `policy-pack:memory:router` does not collide with
