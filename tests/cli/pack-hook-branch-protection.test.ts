@@ -53,12 +53,20 @@ function ledgerAt(content: string, minutesAgo = 0, id = "1"): LedgerEntry {
   };
 }
 
-function eventJson(over: Partial<{ session_id: string; tool_name: string; cwd: string }> = {}): string {
+function eventJson(
+  over: Partial<{
+    session_id: string;
+    tool_name: string;
+    cwd: string;
+    tool_input: Record<string, unknown>;
+  }> = {},
+): string {
   return JSON.stringify({
     hook_event_name: "PreToolUse",
     session_id: over.session_id ?? "sess-1",
     tool_name: over.tool_name ?? "Write",
     cwd: over.cwd ?? "/tmp",
+    ...(over.tool_input !== undefined && { tool_input: over.tool_input }),
   });
 }
 
@@ -117,6 +125,87 @@ describe("runPackHookBranchProtectionCli — allow paths", () => {
     expect(result.diagnostic).toMatch(/ACK override active/);
   });
 
+  it("allows a Write whose target path is outside any git repo, even from a protected-branch cwd", async () => {
+    const repo = makeRepoFixture("svc", "master");
+    const memoryDir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-bp-memory-"));
+    cleanups.push(() => fs.rmSync(memoryDir, { recursive: true, force: true }));
+    const target = path.join(memoryDir, "feedback_thing.md");
+    const { stream: out, output: outBuf } = captureStream();
+    const { stream: err } = captureStream();
+    const result = await runPackHookBranchProtectionCli({
+      stdin: streamFrom(
+        eventJson({ cwd: repo, tool_name: "Write", tool_input: { file_path: target } }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: manifestWithPack(),
+      ledgerQuery: async () => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(outBuf()).toBe("");
+    expect(result.diagnostic).toMatch(/target is not on a named branch/);
+  });
+
+  it("allows a Write whose target is in a different repo on a NON-protected branch, even when cwd is on a protected branch", async () => {
+    const cwdRepo = makeRepoFixture("svc-on-master", "master");
+    const otherRepo = makeRepoFixture("svc-on-feat", "feat/cool");
+    const target = path.join(otherRepo, "src/index.ts");
+    const { stream: out, output: outBuf } = captureStream();
+    const { stream: err } = captureStream();
+    const result = await runPackHookBranchProtectionCli({
+      stdin: streamFrom(
+        eventJson({ cwd: cwdRepo, tool_name: "Edit", tool_input: { file_path: target } }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: manifestWithPack(),
+      ledgerQuery: async () => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(outBuf()).toBe("");
+    expect(result.diagnostic).toMatch(/not in the protected list/);
+  });
+
+  it("falls back to cwd for tools without a single target path (e.g. Bash) — and allows when cwd's branch is unprotected", async () => {
+    const repo = makeRepoFixture("svc", "feat/cool");
+    const { stream: out, output: outBuf } = captureStream();
+    const { stream: err } = captureStream();
+    const result = await runPackHookBranchProtectionCli({
+      stdin: streamFrom(
+        eventJson({ cwd: repo, tool_name: "Bash", tool_input: { command: "ls" } }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: manifestWithPack(),
+      ledgerQuery: async () => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(outBuf()).toBe("");
+    expect(result.diagnostic).toMatch(/not in the protected list/);
+  });
+
+  it("treats a relative file_path as relative to cwd (so a Write to './src/x.ts' in cwd-repo still gates on cwd-repo's branch)", async () => {
+    const repo = makeRepoFixture("svc", "feat/cool");
+    const { stream: out, output: outBuf } = captureStream();
+    const { stream: err } = captureStream();
+    const result = await runPackHookBranchProtectionCli({
+      stdin: streamFrom(
+        eventJson({
+          cwd: repo,
+          tool_name: "Write",
+          tool_input: { file_path: "./src/index.ts" },
+        }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: manifestWithPack(),
+      ledgerQuery: async () => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(outBuf()).toBe("");
+    expect(result.diagnostic).toMatch(/not in the protected list/);
+  });
+
   it("allows when the pack is enabled:false (gate is opt-in)", async () => {
     const repo = makeRepoFixture("svc", "master");
     const { stream: out, output: outBuf } = captureStream();
@@ -158,6 +247,49 @@ describe("runPackHookBranchProtectionCli — block paths", () => {
     expect(envelope.reason).toMatch(/git checkout -b/);
     expect(envelope.reason).toMatch(/harness session-start branch-check/);
     expect(envelope.reason).toMatch(/branch-protection-ack/);
+  });
+
+  it("blocks a Write to a file inside the cwd's repo when both are on a protected branch (no regression)", async () => {
+    const repo = makeRepoFixture("svc", "master");
+    const target = path.join(repo, "src/index.ts");
+    const { stream: out, output: outBuf } = captureStream();
+    const { stream: err } = captureStream();
+    const result = await runPackHookBranchProtectionCli({
+      stdin: streamFrom(
+        eventJson({ cwd: repo, tool_name: "Write", tool_input: { file_path: target } }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: manifestWithPack(),
+      now: NOW,
+      ledgerQuery: async () => [],
+    });
+    expect(result.blocked).toBe(true);
+    const envelope = JSON.parse(outBuf());
+    expect(envelope.decision).toBe("block");
+    expect(envelope.reason).toMatch(/refusing Write on protected branch "master"/);
+  });
+
+  it("blocks a Write when the TARGET path is in a different repo that is ALSO on a protected branch (gate follows target, not cwd)", async () => {
+    const cwdRepo = makeRepoFixture("svc-feat", "feat/cool");
+    const targetRepo = makeRepoFixture("svc-prod", "master");
+    const target = path.join(targetRepo, "src/index.ts");
+    const { stream: out, output: outBuf } = captureStream();
+    const { stream: err } = captureStream();
+    const result = await runPackHookBranchProtectionCli({
+      stdin: streamFrom(
+        eventJson({ cwd: cwdRepo, tool_name: "Edit", tool_input: { file_path: target } }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: manifestWithPack(),
+      now: NOW,
+      ledgerQuery: async () => [],
+    });
+    expect(result.blocked).toBe(true);
+    const envelope = JSON.parse(outBuf());
+    expect(envelope.decision).toBe("block");
+    expect(envelope.reason).toMatch(/refusing Edit on protected branch "master"/);
   });
 
   it("honors a custom protected_branches list (blocks on develop when extended)", async () => {
