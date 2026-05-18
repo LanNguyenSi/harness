@@ -46,6 +46,17 @@ export const HookSchema = z
     },
   );
 
+// Hook name prefixes reserved for harness's synthetic projections.
+// `harness apply` injects synthetic Hook objects with these names AFTER
+// HooksSchema validates `manifest.hooks[]`, so without an explicit reject
+// an operator-declared `name: "memory:router"` would silently produce a
+// duplicate entry in the runtime config (settings.json / config.toml).
+//
+// Reserve at parse time, fail loud, point the operator at the convention.
+// Add new entries here when a future synthetic projection lands; this is
+// the single source of truth for which prefixes operators must avoid.
+const RESERVED_HOOK_NAME_PREFIXES: ReadonlyArray<string> = ["memory:"];
+
 export const HooksSchema = z.array(HookSchema).superRefine((hooks, ctx) => {
   const seen = new Set<string>();
   hooks.forEach((h, i) => {
@@ -57,6 +68,19 @@ export const HooksSchema = z.array(HookSchema).superRefine((hooks, ctx) => {
       });
     }
     seen.add(h.name);
+    for (const prefix of RESERVED_HOOK_NAME_PREFIXES) {
+      if (h.name.startsWith(prefix)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [i, "name"],
+          message:
+            `hook name "${h.name}" uses reserved prefix "${prefix}" ` +
+            `(claimed by harness apply's synthetic projection for the ` +
+            `corresponding manifest section, e.g. memory.router → ` +
+            `"memory:router"). Rename your hook to a non-reserved prefix.`,
+        });
+      }
+    }
   });
 });
 
