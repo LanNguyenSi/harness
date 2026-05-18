@@ -459,7 +459,7 @@ export async function runInteractive(
             "Requires an agent-tasks account (hosted or self-hosted). Adds the merge gate that blocks PR-merge MCP calls without a review ledger entry. The gate matches the agent-tasks MCP only; gh-CLI PR workflows stay unguarded today.",
         },
         {
-          name: "Full (Team + 5 reference policies wired through harness policy intercept)",
+          name: "Full (Team + the reference policies wired through harness policy intercept)",
           value: "full",
           description:
             "Requires agent-tasks + @lannguyensi/agent-preflight on PATH. Ships the reference manifest with every example policy (dogfood gate, preflight gates, review-subagent gate). All hooks run through the bundled `harness policy intercept` engine.",
