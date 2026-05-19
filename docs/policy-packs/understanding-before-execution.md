@@ -281,7 +281,7 @@ The blocker on the next tool call sees the new approval from whichever operator-
 
 1. `--session <id>` flag.
 2. `$CLAUDE_SESSION_ID` env (live Claude Code session).
-3. `$CODEX_SESSION_ID` env (live Codex session — symmetric with the Codex pre-tool-use hook's own fallback chain).
+3. `$CODEX_SESSION_ID` env (live Codex session, symmetric with the Codex pre-tool-use hook's own fallback chain).
 4. `harness.generated/.pending-approval`: both the PreToolUse blocker (Claude AND Codex variants) and `harness session-start preflight` write the resolved session's id here, so an arg-less `harness approve understanding` picks it up with no guessing.
 5. The freshest persisted Understanding Report under `<reportsDir>` whose JSON `sessionId` field is non-null. Runtime-neutral fallback that covers the post-Understanding-Report-pre-block window: the agent has produced a report, no tool call has yet tripped the gate to stage `.pending-approval`, and the operator wants to approve right away.
 
