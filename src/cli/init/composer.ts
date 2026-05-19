@@ -398,7 +398,7 @@ const MCP_ENTRY: Record<Exclude<CustomMcpKey, "memory-router">, McpEntry> = {
 };
 
 const HEADER = [
-  "# ~/.claude/harness.yaml",
+  "# ~/.harness/harness.yaml (legacy: ~/.claude/harness.yaml)",
   "#",
   "# Bootstrapped by `harness init --interactive` (Custom profile).",
   "#",

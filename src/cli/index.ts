@@ -300,11 +300,11 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .option("--force", "overwrite an existing manifest")
     .option(
       "--config <path>",
-      "manifest path to write (default: ~/.claude/harness.yaml)",
+      "manifest path to write (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)",
     )
     .option(
       "--probe",
-      "skip writing, print a JSON snapshot of detected runtimes (Claude Code, Codex), the existing ~/.claude/harness.yaml, and MCP servers wired in settings.json. Read-only.",
+      "skip writing, print a JSON snapshot of detected runtimes (Claude Code, Codex), the existing ~/.harness/harness.yaml (or legacy ~/.claude/harness.yaml), and MCP servers wired in settings.json. Read-only.",
     )
     .option(
       "--interactive",
