@@ -44,7 +44,17 @@ describe("resolvePaths isolation guard (PR #199)", () => {
   it("allows the implicit homedir fallback when HARNESS_ALLOW_REAL_GENERATED_DIR=1 (binary opt-in)", () => {
     process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"] = "1";
     const resolved = resolvePaths({});
-    expect(resolved.base.endsWith(".claude/harness.yaml")).toBe(true);
+    // The v0.24.0 resolver returns ~/.harness/harness.yaml on a clean
+    // system and ~/.claude/harness.yaml when the legacy fallback kicks
+    // in (existing harness state in the legacy root). Either ending is
+    // acceptable proof that the env opt-in unlocked the real-homedir
+    // resolution. CI containers are clean and will land on the new
+    // path; an operator with v0.23.x state pre-migration lands on the
+    // legacy path.
+    expect(
+      resolved.base.endsWith(".harness/harness.yaml") ||
+        resolved.base.endsWith(".claude/harness.yaml"),
+    ).toBe(true);
   });
 
   it("works without env opt-in when homeDir is supplied", () => {
