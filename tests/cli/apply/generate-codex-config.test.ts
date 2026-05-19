@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { generateCodexConfig } from "../../../src/cli/apply/generate-codex-config.js";
+import {
+  CODEX_GENERATED_HEADER_LINE,
+  generateCodexConfig,
+} from "../../../src/cli/apply/generate-codex-config.js";
 import { parseManifest, type Manifest } from "../../../src/schema/index.js";
 
 function manifest(extra: Record<string, unknown> = {}): Manifest {
@@ -28,6 +31,17 @@ function manifest(extra: Record<string, unknown> = {}): Manifest {
 }
 
 describe("generateCodexConfig", () => {
+  it("emits CODEX_GENERATED_HEADER_LINE as the first line (apply's recovery branch pin)", () => {
+    // src/cli/apply/apply.ts:recoverMissingLastApplyContent detects a
+    // harness-generated codex artefact by `onDisk.startsWith(CODEX_GENERATED_HEADER_LINE)`.
+    // If the generator's banner ever drifts away from this literal,
+    // recovery silently disables and post-migration codex applies start
+    // refusing again. Pin the link explicitly so a banner re-word fails
+    // here loud instead of in a future operator's dogfood.
+    const { content } = generateCodexConfig(manifest());
+    expect(content.startsWith(CODEX_GENERATED_HEADER_LINE)).toBe(true);
+  });
+
   it("emits a header banner and one TOML stanza per hook", () => {
     const { content, warnings } = generateCodexConfig(manifest());
     expect(warnings).toEqual([]);
