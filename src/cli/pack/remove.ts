@@ -9,9 +9,9 @@
 // a clean no-op.
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { parse as parseYaml } from "yaml";
+import { resolveHomeDir } from "../../runtime/home-dir.js";
 import { atomicWriteFile } from "../../io/atomic-write.js";
 import { resolveGeneratedDir } from "../../io/generated-dir.js";
 import { writeLastApply } from "../../io/last-apply.js";
@@ -50,7 +50,10 @@ const LOCK_BASENAME = ".harness.lock";
 
 function resolveTargetPath(opts: PackRemoveOptions): string {
   if (opts.configPath) return path.resolve(opts.configPath);
-  return path.join(opts.homeDir ?? path.join(os.homedir(), ".claude"), DEFAULT_BASENAME);
+  return path.join(
+    resolveHomeDir({ ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}) }).path,
+    DEFAULT_BASENAME,
+  );
 }
 
 function packFileKeys(record: LastApplyRecord | null, packName: string): string[] {

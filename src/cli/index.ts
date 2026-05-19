@@ -62,6 +62,7 @@ import { runPackHookBranchProtectionCli } from "./pack/hook-branch-protection.js
 import { gateDisable, GateDisableError } from "./gate/disable.js";
 import { gateEnable, GateEnableError } from "./gate/enable.js";
 import { uninstall, UninstallError } from "./uninstall/index.js";
+import { migrateHome } from "./migrate-home/index.js";
 import { pause as pauseHarness, resume as resumeHarness } from "./pause/index.js";
 import {
   formatSmokeReport,
@@ -109,7 +110,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
   program
     .command("describe")
     .description("Print the effective merged manifest")
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides for this project name")
     .option(
       "--pillar <pillar>",
@@ -141,7 +142,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
   program
     .command("validate")
     .description("Lint the manifest + referenced assets")
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides for this project name")
     .option("--strict", "promote warnings to errors")
     .option("--check-lock", "surface harness.lock asset-content drift as warnings (or errors with --strict)")
@@ -163,7 +164,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
   program
     .command("doctor")
     .description("Health summary across all pillars")
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides for this project name")
     .option("--shallow", "skip MCP probes (CLI --version probes still run); report manifest-reference state only")
     .option(
@@ -209,7 +210,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .description(
       "Flat denormalised listing per category: mcp / cli / skills / memories / hooks / policies / workflows",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option("--filter <substr>", "case-insensitive substring filter on name (or path for memories)")
     .option("--json", "emit JSON array instead of an aligned text table")
@@ -241,7 +242,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         "applied state (--since-apply). --memory-detail expands per-memory-dir " +
         "Merkle drift back to per-file changes.",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option("--since <ref>", "git ref to diff against")
     .option("--since-apply", "diff against harness.generated/.last-apply")
@@ -375,7 +376,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
 
   function addCommonOptions(c: Command): Command {
     return c
-      .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+      .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
       .option("--dry-run", "print the unified diff and exit without writing");
   }
 
@@ -551,7 +552,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         "(or JSON). --sanitize redacts /home/<user>/ paths and env values whose " +
         "key looks credential-shaped.",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides for this project name")
     .option("--sanitize", "redact /home/<user>/ paths and credential-shaped env values")
     .option("--json", "emit JSON instead of YAML")
@@ -587,7 +588,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         "into the manifest. Diffs against the manifest's current declarations and " +
         "prompts y/N before writing.",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--yes", "skip the confirmation prompt (for non-interactive use)")
     .action(async (file: string, options: { config?: string; yes?: boolean }) => {
       const result = await adopt(file, { configPath: options.config, yes: options.yes });
@@ -627,7 +628,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         "from the manifest. Refuses to overwrite hand-edits without --overwrite-drift; " +
         "use `harness adopt <file>` to capture them back into the manifest instead.",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides for this project name")
     .option("--dry-run", "print the would-be diff + restart hints; do not write")
     .option(
@@ -841,7 +842,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
       `Remove an entry by name. <type> is one of ${KNOWN_REMOVE_TYPES.join(" | ")}. ` +
         "Refuses to remove a hook still referenced by a policy unless --force.",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--dry-run", "print the unified diff and exit without writing")
     .option(
       "--force",
@@ -887,7 +888,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .description(
       "Insert a new policy_packs entry. <name> must be a known builtin (see docs/policy-packs/).",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--mode <mode>", "pack-specific config.mode value (e.g. fast_confirm | grill_me | strict)")
     .option("--source <src>", "pack source (default: builtin)")
     .option("--description <text>", "operator-facing description")
@@ -928,7 +929,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
       "Remove a policy_packs entry. Refuses without --force when applied state " +
         "is recorded in .last-apply.",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--dry-run", "print the unified diff and exit without writing")
     .option(
       "--force",
@@ -970,7 +971,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .description(
       "PreToolUse blocker: read tool-event JSON from stdin, consult ledger + persisted report, emit deny JSON on block",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option("--pack <name>", "pack name to evaluate (default: understanding-before-execution)")
     .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
@@ -1001,7 +1002,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .description(
       "PostToolUse marker-expiry: read tool-event JSON from stdin, delete the per-session approval marker when the just-completed tool matches config.approval_lifecycle.expire_on_tool_match (agent-tasks/d8ee60ca)",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option("--pack <name>", "pack name to evaluate (default: understanding-before-execution)")
     .action(
@@ -1019,7 +1020,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .description(
       "PostToolUse: read tool-event JSON from stdin, maintain ~/.claude/harness.generated/active-claim on agent-tasks task_start / task_finish / task_abandon so `harness approve understanding` can auto-resolve the task id without --task (harness/494fd1e5).",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option("--pack <name>", "pack name to evaluate (default: understanding-before-execution)")
     .action(
@@ -1040,7 +1041,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .description(
       "Codex PreToolUse blocker: read tool-event JSON from stdin, consult ledger + persisted report, exit 2 with stderr reason on block",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option("--pack <name>", "pack name to evaluate (default: understanding-before-execution)")
     .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
@@ -1074,7 +1075,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .description(
       "Codex UserPromptSubmit injector: emit the Understanding-Gate instruction template on stdout for Codex to prepend to additional_instructions",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option("--pack <name>", "pack name to evaluate (default: understanding-before-execution)")
     .action(
@@ -1094,7 +1095,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         "evidence ledger, emit a deny envelope on protected branches unless either a fresh " +
         "`branch:non-protected` tag (within 5m) or a `branch-protection-ack` override is present.",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
     .option("--cwd <path>", "override cwd resolution (default: stdin event.cwd then process.cwd())")
@@ -1123,7 +1124,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .description(
       "Codex Stop-equivalent: parse the agent's last message for an Understanding Report and persist it under .understanding-gate/reports/ as approvalStatus:pending. Failure modes resolve to exit 0 (capture must never block the agent's stop path).",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option("--pack <name>", "pack name to evaluate (default: understanding-before-execution)")
     .option("--reports-dir <path>", "override the persisted-report directory (default: ./.understanding-gate/reports)")
@@ -1153,7 +1154,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
   packCmd
     .command("list")
     .description("Print policy_packs entries as a flat table or JSON.")
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option("--enabled-only", "skip entries with enabled: false")
     .option("--json", "emit JSON array instead of an aligned text table")
@@ -1188,7 +1189,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
       "Mark the latest Understanding Report as approved AND write the evidence-ledger tag. " +
         "Round-trips both sources so harnessed and solo (@lannguyensi/understanding-gate) stacks stay in sync.",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option(
       "--session <id>",
@@ -1280,7 +1281,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
   program
     .command("explain [policy]")
     .description("Print a policy's definition; --trace reads the last recorded evaluation; --last traces the most recent decision in the ledger")
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option("--json", "emit JSON instead of YAML")
     .option("--trace", "include the full decision trail from the most recent evaluation")
@@ -1344,7 +1345,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
       "--outcome <outcome>",
       "filter by decision outcome (allow / deny / warn-degraded)",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option("--session <id>", "grounding session whose audit log to read (default: $CLAUDE_SESSION_ID, then 'default')")
     .option("--json", "emit JSON instead of a table")
@@ -1374,7 +1375,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .description(
       "Export a chronological audit artifact joining the on-disk transcript JSONL and the evidence ledger for a session",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option(
       "--format <fmt>",
@@ -1415,7 +1416,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .description(
       "Statically predict which hooks fire / policies match / memories route for a prompt",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option("--tool <name>", "simulate a PreToolUse event for this tool name")
     .option("--tool-args <json>", "JSON for tool_input (default: {})")
@@ -1446,7 +1447,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     )
     .requiredOption("--prompt <text>", "Prompt fed to claude -p")
     .requiredOption("--output-dir <path>", "Directory for stream.jsonl + stderr.log + settings.json")
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option("--session-id <id>", "session id (default: fresh uuid)")
     .option("--claude-bin <path>", "claude binary (default: $CLAUDE_BIN, then 'claude' on PATH)")
@@ -1534,7 +1535,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
       "Alias for `harness session-start preflight`: run agent-preflight against the session cwd " +
         "and, on a ready:true result, record a `preflight:${REPO}` fact to the evidence ledger.",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option("--session <id>", "explicit session id (overrides stdin event + env)")
     .option("--timeout <ms>", "agent-preflight subprocess timeout in milliseconds (default 60000)")
@@ -1576,7 +1577,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         "fresh tag to match. Reads SessionStart event JSON from stdin ({ session_id, cwd, hook_event_name }). " +
         "blocking:false — every failure path logs to stderr and exits 0.",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option(
       "--session <id>",
@@ -1621,7 +1622,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         "blocker has a fresh tag to satisfy its 5-minute freshness window. Also runnable on demand from " +
         "the operator's shell. blocking:false — every failure path logs to stderr and exits 0.",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option(
       "--session <id>",
@@ -1865,6 +1866,21 @@ export function buildProgram(opts: RunOptions = {}): Command {
     });
 
   program
+    .command("migrate-home")
+    .description(
+      "Move harness operator-state from the legacy ~/.claude/ root to the runtime-neutral " +
+        "~/.harness/ root introduced in v0.24.0. Dry-run by default; pass --apply to perform " +
+        "the move. Re-running on already-migrated state is a no-op. Moves: harness.yaml, " +
+        "harness.generated/, .understanding-gate/, harness.lock. Does NOT touch settings.json " +
+        "or any other ~/.claude/ contents.",
+    )
+    .option("--apply", "perform the move (default: dry-run report only)")
+    .action(async (options: { apply?: boolean }) => {
+      const result = migrateHome({ ...(options.apply ? { apply: true } : {}) });
+      if (result.outcome === "target-conflict") {
+        throw new HarnessExitError("", EX_FAIL);
+      }
+    })
     .command("pause")
     .description(
       "Temporarily make all harness hooks dormant by writing a sentinel under harness.generated/. " +
@@ -1872,7 +1888,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         "lockout recovery, debug A/B-tests, and incident hotfixes. NOT for routine gate bypass: " +
         "for permanent per-policy disable, edit `policies[].enabled` in the manifest.",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option(
       "--for <duration>",
@@ -1934,7 +1950,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
       "Delete the pause sentinel and re-enable harness hooks. Operator-only. Idempotent: " +
         "running against an un-paused install exits 0 with a notice.",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option("--i-am-the-operator", "acknowledge a scripted / non-TTY invocation (otherwise refused)")
     .action(
@@ -1973,7 +1989,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         "{ session_id, hook_event_name, tool_name, tool_input, cwd?, transcript_path? }. " +
         "hook_event_name is required for any policy to match; if missing or unmatched, a one-line diagnostic is written to stderr.",
     )
-    .option("--config <path>", "manifest path (default: ~/.claude/harness.yaml)")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
     .option(

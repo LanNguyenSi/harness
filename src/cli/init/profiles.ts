@@ -18,7 +18,7 @@
 // `~/.claude/...`); operators on a different layout should override via
 // `~/.claude/machines/<host>.harness.overrides.yaml` (ARCHITECTURE §8).
 
-export const SOLO_TEMPLATE = `# ~/.claude/harness.yaml
+export const SOLO_TEMPLATE = `# ~/.harness/harness.yaml (legacy: ~/.claude/harness.yaml)
 #
 # Bootstrapped by \`harness init --template solo\`.
 #
@@ -96,7 +96,7 @@ policy_packs:
         max_age: 1h
 `;
 
-export const TEAM_TEMPLATE = `# ~/.claude/harness.yaml
+export const TEAM_TEMPLATE = `# ~/.harness/harness.yaml (legacy: ~/.claude/harness.yaml)
 #
 # Bootstrapped by \`harness init --template team\`.
 #

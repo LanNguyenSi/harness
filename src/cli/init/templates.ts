@@ -1,4 +1,4 @@
-export const MINIMAL_TEMPLATE = `# ~/.claude/harness.yaml
+export const MINIMAL_TEMPLATE = `# ~/.harness/harness.yaml (legacy: ~/.claude/harness.yaml)
 #
 # Bootstrapped by \`harness init --template minimal\`.
 #
@@ -21,7 +21,7 @@ export const MINIMAL_TEMPLATE = `# ~/.claude/harness.yaml
 version: 1
 `;
 
-export const FULL_TEMPLATE = `# ~/.claude/harness.yaml
+export const FULL_TEMPLATE = `# ~/.harness/harness.yaml (legacy: ~/.claude/harness.yaml)
 #
 # Bootstrapped by \`harness init --template full\`. The reference manifest:
 # every example policy from docs/examples/full-manifest.yaml wired through

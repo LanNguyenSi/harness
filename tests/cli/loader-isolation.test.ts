@@ -37,7 +37,7 @@ afterEach(() => {
 describe("resolvePaths isolation guard (PR #199)", () => {
   it("throws when neither homeDir nor configPath is supplied and the env opt-in is unset", () => {
     expect(() => resolvePaths({})).toThrow(
-      /refused to fall back to ~\/\.claude\/.*HARNESS_ALLOW_REAL_GENERATED_DIR/,
+      /refused to fall back to the real harness home dir.*HARNESS_ALLOW_REAL_GENERATED_DIR/,
     );
   });
 

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { atomicWriteFile } from "../../io/atomic-write.js";
+import { resolveHomeDir } from "../../runtime/home-dir.js";
 import { withFileLock } from "../../io/lock.js";
 import {
   formatValidationErrors,
@@ -47,7 +47,7 @@ const DEFAULT_BASENAME = "harness.yaml";
 const LOCK_BASENAME = ".harness.lock";
 
 function defaultHome(opts: InitOptions): string {
-  return opts.homeDir ?? path.join(os.homedir(), ".claude");
+  return resolveHomeDir({ ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}) }).path;
 }
 
 function resolveTargetPath(opts: InitOptions): string {
