@@ -323,7 +323,7 @@ Phase 6 ships as six sequential sub-tasks. Each is a separate PR with its own do
 #### Phase 6 #6, Codex adapter *(shipped)*
 
 - Codex hook adapter for UserPromptSubmit (instruction injection via `harness pack hook codex-user-prompt-submit`) and PreToolUse (`apply_patch|Bash|shell` blocking via `harness pack hook codex-pre-tool-use`). Mirrors the Claude Code shape; reuses the same persisted-report format under `.understanding-gate/reports/`.
-- New CLI flag `harness apply --runtime codex` emits `harness.generated/codex/config.toml` (TOML hook stanzas) instead of `settings.json`. Operators copy or include the generated TOML into their own `~/.codex/config.toml`.
+- New CLI flag `harness apply --runtime codex` emits `harness.generated/codex/config.toml` (TOML hook stanzas) instead of `settings.json`. `--install` additionally merges those stanzas into a marked harness-managed block in `~/.codex/config.toml`.
 - Smoke test under `dogfood/phase6-6/` exercises the synthetic-stdin path: PreToolUse blocks with exit 2 + reason on stderr, then allows with exit 0 after a persisted report flips `approvalStatus` to `approved`.
 - Phase 6 #6 follow-ups (filed as separate agent-tasks entries): `harness doctor --target codex` adapter-health check; Codex-specific Stop-equivalent for transcript capture; permission-profile translator into Codex's sandbox shape.
 

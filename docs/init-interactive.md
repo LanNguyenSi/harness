@@ -38,7 +38,7 @@ The wizard is one of three ways to bootstrap a manifest:
 
 9. **Runtime wire-now multiselect.** A checkbox prompt offers `claude-code` and `codex` (and a disabled `opencode` slot pending [task `f34eb233`](https://github.com/LanNguyenSi/harness/issues)). Whichever runtimes the probe found configured are pre-checked, so the common single-runtime case is one Enter press. For each ticked runtime:
    - `claude-code` → `harness apply --target ~/.claude/settings.json --merge` is run; the merge summary, `wired into …`, and `verify: …` lines print to stderr.
-   - `codex` → `harness apply --runtime codex` writes `harness.generated/codex/config.toml`; the operator gets the path and the merge instruction (`copy or include those [[hooks.*]] entries into ~/.codex/config.toml`). The wizard never edits `~/.codex/config.toml` directly because `apply --target` is incompatible with `--runtime codex`.
+   - `codex` → `harness apply --runtime codex --install` writes `harness.generated/codex/config.toml`, then replaces only the marked harness-managed hook block in `~/.codex/config.toml`. Operator-owned model/auth/sandbox/MCP settings stay outside that block.
    - Unchecking everything skips wiring entirely; both manual fallback commands print so the operator can wire later by hand.
    - Selecting both runtimes runs the two applies sequentially. `harness.lock` then reflects the **last-applied** runtime; a follow-up `harness apply --runtime <name>` per runtime refreshes its drift baseline. The wizard surfaces this caveat to stderr.
 

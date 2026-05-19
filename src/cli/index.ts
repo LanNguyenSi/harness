@@ -653,6 +653,14 @@ export function buildProgram(opts: RunOptions = {}): Command {
         "Selects which adapter shape policy-pack hooks expand into and which artefacts apply writes. " +
         "`codex` emits harness.generated/codex/config.toml in place of settings.json.",
     )
+    .option(
+      "--install",
+      "with --runtime codex, merge the generated hook block into ~/.codex/config.toml",
+    )
+    .option(
+      "--codex-config <path>",
+      "with --runtime codex --install, override the Codex config path (default ~/.codex/config.toml)",
+    )
     .option("--quiet", "suppress the post-apply Next-steps hint")
     .option("--json", "emit a structured JSON summary instead of prose (implies --quiet)")
     .action(
@@ -666,6 +674,8 @@ export function buildProgram(opts: RunOptions = {}): Command {
         merge?: boolean;
         force?: boolean;
         runtime?: string;
+        install?: boolean;
+        codexConfig?: string;
         quiet?: boolean;
         json?: boolean;
       }) => {
@@ -694,6 +704,10 @@ export function buildProgram(opts: RunOptions = {}): Command {
           ...(options.merge ? { merge: true } : {}),
           ...(options.force ? { force: true } : {}),
           ...(runtime !== undefined ? { runtime } : {}),
+          ...(options.install ? { installCodex: true } : {}),
+          ...(options.codexConfig !== undefined
+            ? { codexConfigPath: options.codexConfig }
+            : {}),
         });
 
         if (options.json) {
@@ -758,6 +772,9 @@ export function buildProgram(opts: RunOptions = {}): Command {
           for (const f of changedFiles) {
             stdout(`  ${f.path}\n`);
           }
+          if (result.codexConfigInstall?.changed) {
+            stdout(`  ${result.codexConfigInstall.configPath} (Codex install)\n`);
+          }
         } else {
           stdout(`applied ${changedFiles.length} file(s):\n`);
           for (const f of changedFiles) {
@@ -768,6 +785,12 @@ export function buildProgram(opts: RunOptions = {}): Command {
               stdout(`${result.targetMergeSummary}\n`);
             } else {
               stdout(`wrote target: ${result.targetPath}\n`);
+            }
+          }
+          if (result.codexConfigInstall?.written) {
+            stdout(`${result.codexConfigInstall.summary}\n`);
+            if (result.codexConfigInstall.backupPath) {
+              stdout(`backup written to ${result.codexConfigInstall.backupPath}\n`);
             }
           }
           stdout(`harness.lock written to ${result.lockPath}\n`);

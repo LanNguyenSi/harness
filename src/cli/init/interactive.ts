@@ -251,21 +251,28 @@ async function wireRuntime(o: WireRuntimeOpts): Promise<RuntimeApplyOutcome> {
   const applyOpts: Parameters<typeof apply>[0] = {
     configPath: o.configPath,
     runtime: "codex",
+    installCodex: true,
+    codexConfigPath: o.codexConfigPath,
   };
   if (o.homeDir !== undefined) applyOpts.homeDir = path.join(o.homeDir, ".claude");
   try {
     const r = await apply(applyOpts);
     const generatedCodexPath = path.join(r.generatedDir, CODEX_CONFIG_BASENAME);
     o.stderr(`\ncodex config generated at ${generatedCodexPath}\n`);
-    o.stderr(
-      `To activate: copy or include those [[hooks.*]] entries into ${o.codexConfigPath}\n`,
-    );
+    if (r.codexConfigInstall?.written) {
+      o.stderr(`codex config installed into ${o.codexConfigPath}\n`);
+      if (r.codexConfigInstall.backupPath) {
+        o.stderr(`backup written to ${r.codexConfigInstall.backupPath}\n`);
+      }
+    } else {
+      o.stderr(`codex config already up to date at ${o.codexConfigPath}\n`);
+    }
     for (const hint of r.restartHints) o.stderr(`restart hint: ${hint}\n`);
-    const recoveryHint = `merge ${generatedCodexPath} into ${o.codexConfigPath}`;
+    const recoveryHint = `harness apply --runtime codex --install --codex-config ${o.codexConfigPath}`;
     return { runtime: "codex", apply: r, recoveryHint };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const recoveryHint = `harness apply --runtime codex   # then merge harness.generated/codex/config.toml into ${o.codexConfigPath}`;
+    const recoveryHint = `harness apply --runtime codex --install --codex-config ${o.codexConfigPath}`;
     o.stderr(`\nFailed to generate codex config: ${message}\n`);
     o.stderr(`To retry manually:\n  ${recoveryHint}\n`);
     return { runtime: "codex", recoveryHint };
@@ -701,7 +708,7 @@ async function runPostInitTail(t: PostInitTailOpts): Promise<InteractiveResult> 
       checked: runtimeIsConfigured(claudeRuntime) || claudeRuntime === undefined,
     },
     {
-      name: `codex        → writes harness.generated/codex/config.toml, you merge into ${codexConfigPath}`,
+      name: `codex        → installs harness-managed block into ${codexConfigPath} (with backup)`,
       value: "codex",
       checked: runtimeIsConfigured(codexRuntime),
     },
@@ -729,7 +736,7 @@ async function runPostInitTail(t: PostInitTailOpts): Promise<InteractiveResult> 
         "",
         "Manifest written; no runtimes selected for wiring. To wire later:",
         `  claude-code: harness apply --target ${claudeSettingsPath} --merge`,
-        `  codex:       harness apply --runtime codex   # then merge harness.generated/codex/config.toml into ${codexConfigPath}`,
+        `  codex:       harness apply --runtime codex --install --codex-config ${codexConfigPath}`,
         "",
       ].join("\n"),
     );

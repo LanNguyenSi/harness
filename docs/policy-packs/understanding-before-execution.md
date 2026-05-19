@@ -197,10 +197,10 @@ The package ships an OpenCode plugin (`message.updated` for the auto-capture pat
 Shipped in Phase 6 #6. Apply the pack with the Codex runtime selector:
 
 ```sh
-harness apply --runtime codex --config <path>/harness.yaml
+harness apply --runtime codex --install --config <path>/harness.yaml
 ```
 
-This emits `harness.generated/codex/config.toml` (instead of `settings.json`) with harness-managed Codex hook groups such as `[[hooks.UserPromptSubmit]]`, `[[hooks.Stop]]`, and `[[hooks.PreToolUse]]`. Each group contains a nested command hook entry (`hooks = [{ type = "command", command = "...", timeout = 5 }]`); the PreToolUse blocker uses the expanded matcher `apply_patch|Bash|shell|exec_command|functions.exec_command`. Operators copy or include the generated TOML under their own `~/.codex/config.toml`; harness owns hook wiring only, not the operator-owned model/auth/sandbox config.
+This emits `harness.generated/codex/config.toml` (instead of `settings.json`) with harness-managed Codex hook groups such as `[[hooks.UserPromptSubmit]]`, `[[hooks.Stop]]`, and `[[hooks.PreToolUse]]`. Each group contains a nested command hook entry (`hooks = [{ type = "command", command = "...", timeout = 5 }]`); the PreToolUse blocker uses the expanded matcher `apply_patch|Bash|shell|exec_command|functions.exec_command`. With `--install`, harness replaces only the marked harness-managed block under `~/.codex/config.toml`; harness owns hook wiring only, not the operator-owned model/auth/sandbox config.
 
 Wire format for the Codex adapter scripts (stdin):
 
