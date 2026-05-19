@@ -1223,9 +1223,13 @@ export function buildProgram(opts: RunOptions = {}): Command {
         const sourceNote =
           result.sessionSource === "pending-approval"
             ? " (resolved from .pending-approval staged by the gate hook)"
-            : result.sessionSource === "env"
+            : result.sessionSource === "env-claude"
               ? " (from $CLAUDE_SESSION_ID)"
-              : "";
+              : result.sessionSource === "env-codex"
+                ? " (from $CODEX_SESSION_ID)"
+                : result.sessionSource === "newest-report"
+                  ? " (resolved from sessionId field of the newest persisted Understanding Report)"
+                  : "";
         lines.push(`session: ${result.sessionId}${sourceNote}`);
         if (result.marker.ok) {
           lines.push(`marker:  ✓ ${result.marker.filePath} (canonical gate signal)`);

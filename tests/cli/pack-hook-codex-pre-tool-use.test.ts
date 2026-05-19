@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runPackHookCodexPreToolUseCli } from "../../src/cli/pack/hook-codex-pre-tool-use.js";
 import type { LedgerEntry } from "../../src/policies/index.js";
 import { writeApprovalMarker } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
+import { readPendingApproval } from "../../src/runtime/pending-approval.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
 let tmp: string;
@@ -239,6 +240,79 @@ describe("pack hook codex-pre-tool-use blocker", () => {
     });
     expect(result.blocked).toBe(false);
     expect(result.exitCode).toBe(0);
+  });
+});
+
+describe("pack hook codex-pre-tool-use blocker — .pending-approval staging (task f608b4ee)", () => {
+  // Mirrors the Claude pre-tool-use staging contract: on the block path,
+  // write the resolved session id into <generatedDir>/.pending-approval so
+  // arg-less `harness approve understanding` from the operator's shell
+  // resolves it without scraping the runtime's logs.
+  it("stages the session id when it blocks a Codex tool call", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event()),
+      stderr: bufferStream().stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(readPendingApproval(generatedDir)).toBe("sess-codex");
+  });
+
+  it("does NOT stage anything when a source already approves (allow path)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-codex", {
+      approvedAt: "2026-05-19T07:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event()),
+      stderr: bufferStream().stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(readPendingApproval(generatedDir)).toBeNull();
+  });
+
+  it("blocks normally even when no generatedDir is resolvable (staging skipped)", async () => {
+    // An injected manifest carries no resolved path, so generatedDir is
+    // undefined and staging is skipped — but the block must still fire.
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event()),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.exitCode).toBe(2);
+  });
+
+  it("blocks normally even when the staging write throws (best-effort)", async () => {
+    // A regular file sits where the generated dir's parent component
+    // should be, so writePendingApproval's mkdir/atomicWrite throws.
+    // The block must still fire and exit 2.
+    const notADir = path.join(tmp, "not-a-dir");
+    fs.writeFileSync(notADir, "");
+    const generatedDir = path.join(notADir, "harness.generated");
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event()),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.exitCode).toBe(2);
   });
 });
 

@@ -77,7 +77,12 @@ export interface ApproveUnderstandingResult {
    * operator when the id was not explicit (`pending-approval` / `env`),
    * which is the moment to sanity-check it against the live session.
    */
-  sessionSource: "flag" | "env" | "pending-approval";
+  sessionSource:
+    | "flag"
+    | "env-claude"
+    | "env-codex"
+    | "pending-approval"
+    | "newest-report";
   /**
    * Canonical gate-satisfying signal as of agent-tasks/88ca4bb3.
    * `ok: false` means the marker file could not be written (rare:
@@ -259,9 +264,27 @@ export async function approveUnderstanding(
   // Session id resolution, in precedence order:
   //   1. explicit --session flag
   //   2. $CLAUDE_SESSION_ID (set inside a live Claude Code session)
-  //   3. the `.pending-approval` file the gate hook staged on its last
+  //   3. $CODEX_SESSION_ID (set inside a live Codex session — symmetric
+  //      with the Codex pre-tool-use hook's own env fallback)
+  //   4. the `.pending-approval` file the gate hook staged on its last
   //      block — this is what makes an arg-less `harness approve` work
   //      from the operator's `!`-shell, where neither of the above is set.
+  //   5. the freshest persisted Understanding Report under <reportsDir>
+  //      whose JSON `sessionId` field is non-null. Runtime-neutral
+  //      fallback when the gate has not blocked yet (e.g. arg-less
+  //      approval right after the agent produced an Understanding Report,
+  //      before any tool call hit the gate to stage `.pending-approval`).
+  //
+  // Reports-dir resolution mirrors the downstream persisted-report write
+  // path: explicit opts.reportsDir wins (test injection), then
+  // UNDERSTANDING_GATE_REPORT_DIR env (honoured by defaultReportsDir),
+  // then manifest-anchored fallback via resolvePaths. resolvePaths is
+  // evaluated lazily so a test that injects opts.reportsDir does not
+  // also need to inject homeDir/configPath to satisfy the
+  // HARNESS_ALLOW_REAL_GENERATED_DIR loader guard.
+  const reportsDir =
+    opts.reportsDir ??
+    defaultReportsDir(path.dirname(resolvePaths(opts).base));
   let sessionId = "";
   let sessionSource: ApproveUnderstandingResult["sessionSource"] = "flag";
   if (typeof opts.session === "string" && opts.session.length > 0) {
@@ -272,45 +295,65 @@ export async function approveUnderstanding(
     process.env.CLAUDE_SESSION_ID.length > 0
   ) {
     sessionId = process.env.CLAUDE_SESSION_ID;
-    sessionSource = "env";
+    sessionSource = "env-claude";
+  } else if (
+    typeof process.env.CODEX_SESSION_ID === "string" &&
+    process.env.CODEX_SESSION_ID.length > 0
+  ) {
+    sessionId = process.env.CODEX_SESSION_ID;
+    sessionSource = "env-codex";
   } else {
     const staged = readPendingApproval(generatedDir);
     if (staged !== null) {
       sessionId = staged;
       sessionSource = "pending-approval";
+    } else {
+      const newest = listPersistedReports(reportsDir).find(
+        (r) => r.sessionId !== null,
+      );
+      if (newest && newest.sessionId !== null) {
+        sessionId = newest.sessionId;
+        sessionSource = "newest-report";
+      }
     }
   }
 
   if (sessionId === "") {
-    // Reaching here means no flag, no $CLAUDE_SESSION_ID, AND no staged
-    // `.pending-approval` — the gate either never blocked this session or
-    // the staging file was already consumed. Spell out the retrieval
-    // paths so the operator does not have to dig through docs.
+    // Reaching here means: no --session flag, no $CLAUDE_SESSION_ID /
+    // $CODEX_SESSION_ID env, no staged `.pending-approval`, AND no
+    // persisted Understanding Report under <reportsDir> carries a
+    // sessionId field. The gate has never blocked this session and the
+    // agent never produced a report — or every report's sessionId is
+    // null (very old package versions). Spell out the retrieval paths
+    // so the operator does not have to dig through docs.
     throw new HarnessExitError(
       [
-        "no session id available. Pass --session <id> or set $CLAUDE_SESSION_ID.",
+        "no session id available. Pass --session <id>, or set $CLAUDE_SESSION_ID / $CODEX_SESSION_ID.",
         "",
         `Both the understanding-gate PreToolUse hook AND \`harness session-start preflight\``,
         "stage the session id in",
         `  ${generatedDir}/.pending-approval`,
         "(the hook on block, the preflight on every run with a resolved id) so an",
         "arg-less `harness approve` works after either event. An empty result here means",
-        "neither has fired for the current session yet, or the file was already consumed.",
+        "neither has fired for the current session yet, or the staging file was already consumed.",
         "",
         "Fastest fix: run `harness preflight` once, then re-run `harness approve",
         "understanding`. The preflight stages the staging file as a side effect.",
         "",
-        "To find the id by hand:",
-        "  • From inside Claude: ask the agent to print $CLAUDE_SESSION_ID.",
-        "  • From a second shell, take the basename of the newest project",
-        "    transcript:",
-        "      ls -t ~/.claude/projects/*/[0-9a-f]*.jsonl | head -1 \\",
-        "        | xargs -n1 basename | sed 's/\\.jsonl$//'",
+        "Other runtime-neutral recovery paths:",
+        `  • Read the JSON \`sessionId\` field from the newest report under`,
+        `      ${reportsDir}`,
+        "    The agent writes one report per Understanding Report it produces,",
+        "    so this is the canonical session-id source for both Claude Code",
+        "    and Codex runtimes regardless of cwd.",
+        "  • From inside the running agent: ask it to print its session id",
+        "    (Claude Code exposes $CLAUDE_SESSION_ID; Codex exposes",
+        "    $CODEX_SESSION_ID and also prints it in `codex doctor --json`).",
         "",
         "If approve writes the tag but the gate still blocks, the running",
-        "Claude session is using a different session id than the transcript",
-        "filename. In that case ask the agent to read its own session id",
-        "and pass that exact value to --session.",
+        "session is using a different session id than the report you picked.",
+        "In that case ask the agent to read its own session id and pass",
+        "that exact value to --session.",
       ].join("\n"),
       EX_FAIL,
     );
@@ -392,20 +435,9 @@ export async function approveUnderstanding(
     ? await writeLedgerTag(manifest, sessionId, tag, opts)
     : { ok: false as const, reason: "manifest unreadable; skipped ledger write" };
 
-  // Persisted report: flip the latest matching one. Resolution mirrors
-  // what `harness apply` bakes into the pack's hook commands so all three
-  // actors (Stop hook, PreToolUse blocker, this verb) agree regardless
-  // of cwd:
-  //   1. explicit opts.reportsDir (test injection).
-  //   2. UNDERSTANDING_GATE_REPORT_DIR env (honored by defaultReportsDir,
-  //      and what apply prefixes onto the hook command strings).
-  //   3. manifest-anchored fallback: <dir-of-manifest>/.understanding-gate/reports.
-  // resolvePaths is evaluated lazily so a test that injects opts.reportsDir
-  // does not also need to inject homeDir/configPath to satisfy the
-  // HARNESS_ALLOW_REAL_GENERATED_DIR loader guard (test-isolation class
-  // documented in CHANGELOG v0.21.1 / v0.22.0).
-  const reportsDir =
-    opts.reportsDir ?? defaultReportsDir(path.dirname(resolvePaths(opts).base));
+  // Persisted report: flip the latest matching one. `reportsDir` was
+  // resolved up front (alongside session-id tier-5 lookup) so both
+  // paths agree on the same directory.
   const reports = listPersistedReports(reportsDir);
   const latest = findLatestReportForSession(reports, sessionId);
 

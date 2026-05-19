@@ -28,7 +28,10 @@ import {
   matchLedgerEntries,
   type ApprovalCheckResult,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
-import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
+import {
+  resolveGeneratedDir,
+  writePendingApproval,
+} from "../../runtime/pending-approval.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { PolicyUxSchema, type Manifest, type McpServer, type PolicyUx } from "../../schema/index.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
@@ -270,6 +273,21 @@ export async function runPackHookCodexPreToolUseCli(
 
   // Audit-only ledger probe.
   const ledger = await checkLedger(manifest, sessionId, opts);
+
+  // Stage the session id so `harness approve understanding`, run from
+  // the operator's shell where neither $CODEX_SESSION_ID nor
+  // $CLAUDE_SESSION_ID is set, can resolve it without scraping logs or
+  // grepping transcript dirs. Mirrors the Claude blocker's symmetric
+  // staging (hook-pre-tool-use.ts) so arg-less approval after a Codex
+  // PreToolUse block has the same shape. Best-effort: a staging-write
+  // failure must not escalate a gate block into a hook error.
+  if (generatedDir !== undefined) {
+    try {
+      writePendingApproval(generatedDir, sessionId);
+    } catch {
+      /* best-effort; the block below proceeds regardless */
+    }
+  }
 
   // Neither operator source approved. Codex blocks via non-zero exit
   // + stderr reason; there is no JSON-decision wire to write to stdout.

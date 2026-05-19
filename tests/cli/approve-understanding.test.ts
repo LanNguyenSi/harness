@@ -412,7 +412,7 @@ describe("approveUnderstanding — .pending-approval session resolution (task 33
       ledgerAdd: async () => ({ ok: true }),
     });
     expect(result.sessionId).toBe("sess-env");
-    expect(result.sessionSource).toBe("env");
+    expect(result.sessionSource).toBe("env-claude");
     expect(readPendingApproval(generatedDir)).toBe("sess-staged");
   });
 
@@ -451,6 +451,175 @@ describe("approveUnderstanding — .pending-approval session resolution (task 33
     }
     expect((caught as Error).message).toMatch(/harness preflight/);
     expect((caught as Error).message).toMatch(/Fastest fix/);
+  });
+});
+
+describe("approveUnderstanding — runtime-neutral session-id resolution (task f608b4ee)", () => {
+  // Codex-only operators (no Claude Code installed) running arg-less
+  // `harness approve understanding` historically saw a hint that named
+  // only $CLAUDE_SESSION_ID and ~/.claude/projects/*/*.jsonl. Two
+  // complementary fixes in this task: (a) $CODEX_SESSION_ID is now a
+  // peer of $CLAUDE_SESSION_ID in the env-tier, (b) the freshest
+  // persisted report's sessionId field is a tier-5 fallback so the
+  // post-Understanding-Report-pre-block window also resolves cleanly.
+  let savedClaude: string | undefined;
+  let savedCodex: string | undefined;
+
+  beforeEach(() => {
+    savedClaude = process.env.CLAUDE_SESSION_ID;
+    savedCodex = process.env.CODEX_SESSION_ID;
+    delete process.env.CLAUDE_SESSION_ID;
+    delete process.env.CODEX_SESSION_ID;
+  });
+
+  afterEach(() => {
+    if (savedClaude === undefined) delete process.env.CLAUDE_SESSION_ID;
+    else process.env.CLAUDE_SESSION_ID = savedClaude;
+    if (savedCodex === undefined) delete process.env.CODEX_SESSION_ID;
+    else process.env.CODEX_SESSION_ID = savedCodex;
+  });
+
+  it("resolves $CODEX_SESSION_ID when $CLAUDE_SESSION_ID is unset", async () => {
+    process.env.CODEX_SESSION_ID = "sess-codex-env";
+    writeReport("rpt.json", {
+      sessionId: "sess-codex-env",
+      approvalStatus: "pending",
+    });
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      reportsDir: tmp,
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.sessionId).toBe("sess-codex-env");
+    expect(result.sessionSource).toBe("env-codex");
+  });
+
+  it("prefers $CLAUDE_SESSION_ID over $CODEX_SESSION_ID when both are set", async () => {
+    // Documented precedence: a dual-env environment (an operator running
+    // Codex from inside a Claude shell, or vice versa) takes the Claude
+    // tier first — this is back-compat with the pre-task behaviour where
+    // $CLAUDE_SESSION_ID was the only env tier. The PR body / hint text
+    // calls out this precedence so the operator can pin via --session if
+    // the wrong one wins.
+    process.env.CLAUDE_SESSION_ID = "sess-claude-env";
+    process.env.CODEX_SESSION_ID = "sess-codex-env";
+    writeReport("rpt.json", {
+      sessionId: "sess-claude-env",
+      approvalStatus: "pending",
+    });
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      reportsDir: tmp,
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.sessionId).toBe("sess-claude-env");
+    expect(result.sessionSource).toBe("env-claude");
+  });
+
+  it("falls back to the newest report's sessionId when flag/env/pending-approval are all empty", async () => {
+    // Three reports, second one is newest by mtime; sessionId comes
+    // from that one. Mirrors the Codex dogfood flow where the agent
+    // produced an Understanding Report but no Bash tool call has yet
+    // tripped the PreToolUse hook to stage `.pending-approval`.
+    const older = writeReport("rpt-older.json", {
+      sessionId: "sess-older",
+      approvalStatus: "pending",
+    });
+    const newest = writeReport("rpt-newest.json", {
+      sessionId: "sess-newest",
+      approvalStatus: "pending",
+    });
+    // Force mtime ordering: older's mtime BEFORE newest's, by an amount
+    // larger than fs mtime quantum (s on some platforms).
+    const past = new Date("2026-05-19T07:00:00Z");
+    const now = new Date("2026-05-19T08:00:00Z");
+    fs.utimesSync(older, past, past);
+    fs.utimesSync(newest, now, now);
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      reportsDir: tmp,
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.sessionId).toBe("sess-newest");
+    expect(result.sessionSource).toBe("newest-report");
+  });
+
+  it("skips reports whose sessionId is null and picks the newest one that has it", async () => {
+    // Legacy package versions wrote reports without a sessionId field.
+    // The tier-5 lookup must walk past them, not stop at the bare-newest.
+    const legacy = writeReport("rpt-legacy.json", {
+      approvalStatus: "pending",
+    });
+    const tagged = writeReport("rpt-tagged.json", {
+      sessionId: "sess-tagged",
+      approvalStatus: "pending",
+    });
+    // Legacy is newer by mtime, but its sessionId is null so the tier-5
+    // lookup skips it and picks the older tagged one.
+    const newer = new Date("2026-05-19T08:00:00Z");
+    const older = new Date("2026-05-19T07:00:00Z");
+    fs.utimesSync(legacy, newer, newer);
+    fs.utimesSync(tagged, older, older);
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      reportsDir: tmp,
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.sessionId).toBe("sess-tagged");
+    expect(result.sessionSource).toBe("newest-report");
+  });
+
+  it("staged .pending-approval still wins over a newer report (tier-4 beats tier-5)", async () => {
+    // Documented precedence: a recent gate-block staging signal beats
+    // an even-newer report file, because the staging file was written
+    // by an actual gate trip and is therefore guaranteed to match the
+    // session that is currently being blocked.
+    const generatedDir = path.join(tmp, "harness.generated");
+    writePendingApproval(generatedDir, "sess-staged");
+    writeReport("rpt-newer.json", {
+      sessionId: "sess-newer-report",
+      approvalStatus: "pending",
+    });
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      reportsDir: tmp,
+      generatedDir,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.sessionId).toBe("sess-staged");
+    expect(result.sessionSource).toBe("pending-approval");
+  });
+
+  it("no-session error message mentions $CODEX_SESSION_ID and the reports dir, not Claude's transcript path", async () => {
+    let caught: unknown;
+    try {
+      await approveUnderstanding({
+        manifest: manifest(),
+        reportsDir: path.join(tmp, "no-reports"),
+        generatedDir: path.join(tmp, "harness.generated"),
+        ledgerAdd: async () => ({ ok: true }),
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(HarnessExitError);
+    const msg = (caught as Error).message;
+    // Codex-friendly env hint.
+    expect(msg).toContain("$CODEX_SESSION_ID");
+    expect(msg).toContain("$CLAUDE_SESSION_ID");
+    // Runtime-neutral discovery: the reports dir + sessionId JSON field.
+    expect(msg).toContain("sessionId");
+    expect(msg).toContain(path.join(tmp, "no-reports"));
+    // Claude-only transcript-grep guidance must be gone.
+    expect(msg).not.toContain("~/.claude/projects/");
+    expect(msg).not.toContain(".jsonl");
+    // The "harness preflight" fastest-fix line is preserved.
+    expect(msg).toMatch(/harness preflight/);
+    expect(msg).toMatch(/Fastest fix/);
   });
 });
 
