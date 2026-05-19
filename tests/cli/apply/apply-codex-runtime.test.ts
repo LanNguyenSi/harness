@@ -68,8 +68,13 @@ describe("apply --runtime codex", () => {
     expect(config).toContain("harness pack hook codex-pre-tool-use");
     expect(config).toContain("harness pack hook codex-user-prompt-submit");
     expect(config).toContain(
-      'match = "apply_patch|Bash|shell|exec_command|functions.exec_command"',
+      'matcher = "apply_patch|Bash|shell|exec_command|functions.exec_command"',
     );
+    expect(config).toContain("[[hooks.PreToolUse]]");
+    expect(config).toContain('hooks = [{ type = "command"');
+    expect(config).not.toContain("[[hooks.pre_tool_use]]");
+    expect(config).not.toContain("timeout_ms = ");
+    expect(config).not.toContain("blocking = ");
   });
 
   it("emits the operator audit instructions.md with runtime: codex", async () => {

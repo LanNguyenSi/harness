@@ -200,7 +200,7 @@ Shipped in Phase 6 #6. Apply the pack with the Codex runtime selector:
 harness apply --runtime codex --config <path>/harness.yaml
 ```
 
-This emits `harness.generated/codex/config.toml` (instead of `settings.json`) with two harness-managed `[[hooks.*]]` stanzas: one `user_prompt_submit` injector pointing at `harness pack hook codex-user-prompt-submit`, and one `pre_tool_use` blocker on `apply_patch|Bash|shell` pointing at `harness pack hook codex-pre-tool-use`. Operators copy or include the generated TOML under their own `~/.codex/config.toml`; harness owns hook wiring only, not the operator-owned model/auth/sandbox config.
+This emits `harness.generated/codex/config.toml` (instead of `settings.json`) with harness-managed Codex hook groups such as `[[hooks.UserPromptSubmit]]`, `[[hooks.Stop]]`, and `[[hooks.PreToolUse]]`. Each group contains a nested command hook entry (`hooks = [{ type = "command", command = "...", timeout = 5 }]`); the PreToolUse blocker uses the expanded matcher `apply_patch|Bash|shell|exec_command|functions.exec_command`. Operators copy or include the generated TOML under their own `~/.codex/config.toml`; harness owns hook wiring only, not the operator-owned model/auth/sandbox config.
 
 Wire format for the Codex adapter scripts (stdin):
 
@@ -223,7 +223,7 @@ Block contract (PreToolUse): exit 2 + reason on stderr. Allow contract: exit 0, 
 
 - The `harness` binary itself is on `$PATH` (so the `harness pack hook codex-*` subcommands resolve).
 - `harness.generated/codex/config.toml` exists and carries the harness-managed banner.
-- Every contributed `[[hooks.*]]` stanza has a command first-token that resolves on `$PATH` (bare `harness` subcommands inherit the binary check above).
+- Every contributed Codex hook group has a command first-token that resolves on `$PATH` (bare `harness` subcommands inherit the binary check above).
 - `.understanding-gate/reports/` is writable, or its parent is (the directory is created on first persisted report).
 
 `--json` emits the structured `DoctorReport` with a `codexTarget` block; the codex error/warning counts roll into the top-level totals. `harness doctor` without `--target codex` is unchanged (back-compat).
