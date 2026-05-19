@@ -708,7 +708,7 @@ async function runPostInitTail(t: PostInitTailOpts): Promise<InteractiveResult> 
       checked: runtimeIsConfigured(claudeRuntime) || claudeRuntime === undefined,
     },
     {
-      name: `codex        → writes harness.generated/codex/config.toml, you merge into ${codexConfigPath}`,
+      name: `codex        → installs harness-managed block into ${codexConfigPath} (with backup)`,
       value: "codex",
       checked: runtimeIsConfigured(codexRuntime),
     },
