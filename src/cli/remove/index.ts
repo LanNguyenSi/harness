@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { atomicWriteFile } from "../../io/atomic-write.js";
+import { resolveHomeDir } from "../../runtime/home-dir.js";
 import { withFileLock } from "../../io/lock.js";
 import { unifiedDiff } from "../../io/patch.js";
 import {
@@ -33,7 +33,10 @@ const LOCK_BASENAME = ".harness.lock";
 
 function resolveTargetPath(opts: RemoveOptions): string {
   if (opts.configPath) return path.resolve(opts.configPath);
-  return path.join(opts.homeDir ?? path.join(os.homedir(), ".claude"), DEFAULT_BASENAME);
+  return path.join(
+    resolveHomeDir({ ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}) }).path,
+    DEFAULT_BASENAME,
+  );
 }
 
 function formatNameList(names: string[]): string {

@@ -338,6 +338,12 @@ Phase 6 ships as six sequential sub-tasks. Each is a separate PR with its own do
 
 A fresh agent on a clean repo refuses to call write-capable tools until an Understanding Report has been produced and explicitly approved. The `understanding-before-execution` pack is declarable via `harness pack add`, applies cleanly via `harness apply`, and `harness doctor` reports the wiring as healthy. The PR-level cut tags `v0.8.0` after #6 lands; intermediate sub-tasks ship as patch releases.
 
+## v0.24.0, runtime-neutral state root *(shipped)*
+
+- Harness's operator-state root moves from `~/.claude/` to `~/.harness/`. The new resolver (`src/runtime/home-dir.ts`) picks the root from explicit flag, `$HARNESS_HOME` env, existing `~/.harness/`, legacy `~/.claude/` with deprecation warning, or create-on-first-use `~/.harness/`.
+- New `harness migrate-home` command: dry-run by default, `--apply` to atomically move `harness.yaml`, `harness.generated/`, `.understanding-gate/`, `harness.lock` into the new root. Idempotent; refuses to overwrite. Operator guide at `docs/migration/v0.24.0-home-dir.md`.
+- Backed by agent-tasks/e65decef, surfaced during the Codex approval-UX dogfood (f608b4ee). Legacy fallback supported throughout v0.24.x; deletion targeted for v0.25.0.
+
 ## Phase 7 — Risk Gate
 
 ### Scope

@@ -1,5 +1,4 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { applyLayers } from "../overrides/merge.js";
@@ -9,6 +8,7 @@ import {
   type DiscriminatorOptions,
 } from "../overrides/machines.js";
 import { ManifestParseError, parseManifest, type Manifest } from "../schema/index.js";
+import { resolveHomeDir } from "../runtime/home-dir.js";
 import { EX_NOINPUT, HarnessExitError } from "./exit-codes.js";
 
 export interface LoaderOptions {
@@ -37,7 +37,10 @@ export interface LoadedRaw {
 const DEFAULT_BASENAME = "harness.yaml";
 
 function defaultHome(opts: LoaderOptions): string {
-  return opts.homeDir ?? path.join(os.homedir(), ".claude");
+  // resolveHomeDir handles flag > $HARNESS_HOME > ~/.harness/ (new) >
+  // ~/.claude/ (legacy fallback with deprecation warning) >
+  // ~/.harness/ (create-on-first-use). See runtime/home-dir.ts.
+  return resolveHomeDir({ ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}) }).path;
 }
 
 export function resolvePaths(opts: LoaderOptions = {}): ResolvedPaths {
@@ -49,13 +52,14 @@ export function resolvePaths(opts: LoaderOptions = {}): ResolvedPaths {
     // Defense against the recurring test-isolation class (v0.21.1 preflight
     // stage leak, v0.22.0 approveUnderstanding marker leak, latent post-pause
     // pause-sentinel read leak): without an explicit `homeDir` or
-    // `configPath`, this resolver would silently fall back to
-    // `~/.claude/harness.yaml` and the caller would read/write the
-    // operator's runtime dir. The harness CLI binary sets the env var
-    // before `run()`; tests don't, so this throw surfaces leak sites at
-    // assertion time instead of as silent operator-state mutation.
+    // `configPath`, this resolver would silently fall back to the
+    // operator's real `~/.harness/` (or legacy `~/.claude/`) and the
+    // caller would read/write that real state dir. The harness CLI
+    // binary sets the env var before `run()`; tests don't, so this
+    // throw surfaces leak sites at assertion time instead of as silent
+    // operator-state mutation.
     throw new Error(
-      "resolvePaths refused to fall back to ~/.claude/ — set { homeDir } or { configPath } on LoaderOptions, " +
+      "resolvePaths refused to fall back to the real harness home dir, set { homeDir } or { configPath } on LoaderOptions, " +
         "or (for the real harness binary) set HARNESS_ALLOW_REAL_GENERATED_DIR=1",
     );
   }

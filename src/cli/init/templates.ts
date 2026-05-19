@@ -1,4 +1,4 @@
-export const MINIMAL_TEMPLATE = `# ~/.claude/harness.yaml
+export const MINIMAL_TEMPLATE = `# ~/.harness/harness.yaml (legacy: ~/.claude/harness.yaml)
 #
 # Bootstrapped by \`harness init --template minimal\`.
 #
@@ -13,7 +13,7 @@ export const MINIMAL_TEMPLATE = `# ~/.claude/harness.yaml
 #
 # Phase 2 verbs to add entries safely: \`harness add mcp <name> ...\`,
 # \`harness add cli\`, \`harness add hook\`, \`harness add skill\`.
-# Per-machine overrides live at ~/.claude/machines/<discriminator>.harness.overrides.yaml
+# Per-machine overrides live at ~/.harness/machines/<discriminator>.harness.overrides.yaml
 # (ARCHITECTURE.md §8) for paths that vary per host.
 #
 # Docs: https://github.com/LanNguyenSi/harness
@@ -21,7 +21,7 @@ export const MINIMAL_TEMPLATE = `# ~/.claude/harness.yaml
 version: 1
 `;
 
-export const FULL_TEMPLATE = `# ~/.claude/harness.yaml
+export const FULL_TEMPLATE = `# ~/.harness/harness.yaml (legacy: ~/.claude/harness.yaml)
 #
 # Bootstrapped by \`harness init --template full\`. The reference manifest:
 # every example policy from docs/examples/full-manifest.yaml wired through

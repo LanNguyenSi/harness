@@ -16,9 +16,9 @@
 // Both manifests are validate-clean against the v1 schema. They use the
 // same path layouts as the existing FULL template (`~/git/pandora/...`,
 // `~/.claude/...`); operators on a different layout should override via
-// `~/.claude/machines/<host>.harness.overrides.yaml` (ARCHITECTURE §8).
+// `~/.harness/machines/<host>.harness.overrides.yaml` (ARCHITECTURE §8).
 
-export const SOLO_TEMPLATE = `# ~/.claude/harness.yaml
+export const SOLO_TEMPLATE = `# ~/.harness/harness.yaml (legacy: ~/.claude/harness.yaml)
 #
 # Bootstrapped by \`harness init --template solo\`.
 #
@@ -29,7 +29,7 @@ export const SOLO_TEMPLATE = `# ~/.claude/harness.yaml
 # review-gating).
 #
 # Adapt the paths under \`command:\` to your install layout, or move
-# host-specific paths to ~/.claude/machines/<host>.harness.overrides.yaml.
+# host-specific paths to ~/.harness/machines/<host>.harness.overrides.yaml.
 
 version: 1
 
@@ -96,7 +96,7 @@ policy_packs:
         max_age: 1h
 `;
 
-export const TEAM_TEMPLATE = `# ~/.claude/harness.yaml
+export const TEAM_TEMPLATE = `# ~/.harness/harness.yaml (legacy: ~/.claude/harness.yaml)
 #
 # Bootstrapped by \`harness init --template team\`.
 #
@@ -107,7 +107,7 @@ export const TEAM_TEMPLATE = `# ~/.claude/harness.yaml
 # before it can land.
 #
 # Adapt the paths under \`command:\` to your install layout, or move
-# host-specific paths to ~/.claude/machines/<host>.harness.overrides.yaml.
+# host-specific paths to ~/.harness/machines/<host>.harness.overrides.yaml.
 
 version: 1
 

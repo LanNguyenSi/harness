@@ -1,6 +1,8 @@
 #!/usr/bin/env node
-// Opt the binary into reading the operator's real `~/.claude/harness.yaml`
-// fallback when no --config / --home is supplied. The loader (`resolvePaths`)
+// Opt the binary into reading the operator's real harness home dir
+// (`~/.harness/harness.yaml` preferred, `~/.claude/harness.yaml` as
+// legacy fallback) when no --config / --home is supplied. The loader
+// (`resolvePaths`)
 // refuses that fallback unless this flag is set, so tests that forget to
 // inject `homeDir` / `generatedDir` fail loudly instead of silently
 // reading/writing the operator's runtime dir. Recurring class, two prior

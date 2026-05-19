@@ -58,6 +58,7 @@ import { parseManifest, type Manifest } from "../../schema/index.js";
 import { EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
 import { loadManifest } from "../loader.js";
 import { GENERATED_DIRNAME, resolveGeneratedDir } from "../../io/generated-dir.js";
+import { resolveHomeDir } from "../../runtime/home-dir.js";
 import { generateCodexConfig } from "./generate-codex-config.js";
 import { generateMemoryIndex } from "./generate-memory-index.js";
 import { generateSettingsWithWarnings } from "./generate-settings.js";
@@ -205,7 +206,10 @@ const DRIFT_HINT_MESSAGE =
 
 function resolveManifestPath(opts: ApplyOptions): string {
   if (opts.configPath) return path.resolve(opts.configPath);
-  return path.join(opts.homeDir ?? path.join(os.homedir(), ".claude"), MANIFEST_BASENAME);
+  const home = resolveHomeDir({
+    ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
+  }).path;
+  return path.join(home, MANIFEST_BASENAME);
 }
 
 function resolveTargetPath(target: string, homeDir?: string): string {
