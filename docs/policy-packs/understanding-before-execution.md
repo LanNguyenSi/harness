@@ -277,13 +277,15 @@ The blocker on the next tool call sees the new approval from whichever operator-
 
 ### Session-id resolution
 
-`harness approve` needs the running session's id. Operators usually run it from a fresh `!`-shell where `$CLAUDE_SESSION_ID` is not set, so the id is resolved in this precedence order:
+`harness approve` needs the running session's id. Operators usually run it from a fresh `!`-shell where neither `$CLAUDE_SESSION_ID` nor `$CODEX_SESSION_ID` is set, so the id is resolved in this precedence order:
 
 1. `--session <id>` flag.
-2. `$CLAUDE_SESSION_ID` env.
-3. `harness.generated/.pending-approval`: the PreToolUse blocker writes the blocked session's id here every time it blocks or asks, so an arg-less `harness approve understanding` picks it up with no guessing.
+2. `$CLAUDE_SESSION_ID` env (live Claude Code session).
+3. `$CODEX_SESSION_ID` env (live Codex session, symmetric with the Codex pre-tool-use hook's own fallback chain).
+4. `harness.generated/.pending-approval`: both the PreToolUse blocker (Claude AND Codex variants) and `harness session-start preflight` write the resolved session's id here, so an arg-less `harness approve understanding` picks it up with no guessing.
+5. The freshest persisted Understanding Report under `<reportsDir>` whose JSON `sessionId` field is non-null. Runtime-neutral fallback that covers the post-Understanding-Report-pre-block window: the agent has produced a report, no tool call has yet tripped the gate to stage `.pending-approval`, and the operator wants to approve right away.
 
-The CLI prints which tier supplied the id (`session: <id> (resolved from .pending-approval ...)`), so a wrong id is visible before it lands. After a successful resolve from `.pending-approval` with the marker write landed, the staging file is deleted so a later arg-less call cannot revive a stale id; a failed marker write keeps it for a retry. When all three tiers come up empty, the command exits with the retrieval-path hint instead of a guess.
+The CLI prints which tier supplied the id (e.g. `session: <id> (resolved from .pending-approval ...)`, `(from $CODEX_SESSION_ID)`, `(resolved from sessionId field of the newest persisted Understanding Report)`), so a wrong id is visible before it lands. After a successful resolve from `.pending-approval` with the marker write landed, the staging file is deleted so a later arg-less call cannot revive a stale id; a failed marker write keeps it for a retry. When all five tiers come up empty, the command exits with the retrieval-path hint instead of a guess.
 
 Phase 6 #2 follow-ups still queued: an automatically-injected stanza into the per-project `CLAUDE.md` for human discoverability, and a `harness doctor` wiring check that validates the package binaries are on `$PATH`.
 
