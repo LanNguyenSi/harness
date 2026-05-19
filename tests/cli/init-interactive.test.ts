@@ -916,9 +916,9 @@ describe("interactive wizard — runtime multiselect (task 696f7560)", () => {
     expect(result.applies).toHaveLength(1);
     expect(result.applies?.[0]?.runtime).toBe("codex");
     expect(result.applies?.[0]?.apply).toBeDefined();
-    // Codex apply emits harness.generated/codex/config.toml — the
-    // operator-owned ~/.codex/config.toml is NEVER touched by the
-    // wizard (apply.ts rejects --target+codex).
+    // Codex apply emits harness.generated/codex/config.toml, then
+    // installs only the marked harness-owned block into the active
+    // ~/.codex/config.toml.
     const codexGenerated = path.join(
       tmpHome,
       ".claude",
@@ -927,11 +927,15 @@ describe("interactive wizard — runtime multiselect (task 696f7560)", () => {
       "config.toml",
     );
     expect(fs.existsSync(codexGenerated)).toBe(true);
-    expect(fs.existsSync(path.join(tmpHome, ".codex", "config.toml"))).toBe(false);
+    const activeCodexConfig = path.join(tmpHome, ".codex", "config.toml");
+    expect(fs.existsSync(activeCodexConfig)).toBe(true);
+    expect(fs.readFileSync(activeCodexConfig, "utf8")).toContain(
+      "# BEGIN harness-managed codex hooks",
+    );
     // Legacy `apply` field stays undefined when only codex is wired.
     expect(result.apply).toBeUndefined();
     expect(cap.stderr()).toContain("codex config generated at");
-    expect(cap.stderr()).toMatch(/copy or include those \[\[hooks\.\*\]\] entries/);
+    expect(cap.stderr()).toContain("codex config installed into");
     // Claude Code's settings.json must NOT be touched when only codex is selected.
     expect(fs.existsSync(path.join(tmpHome, ".claude", "settings.json"))).toBe(false);
   });

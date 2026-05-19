@@ -61,6 +61,12 @@ import { GENERATED_DIRNAME, resolveGeneratedDir } from "../../io/generated-dir.j
 import { generateCodexConfig } from "./generate-codex-config.js";
 import { generateMemoryIndex } from "./generate-memory-index.js";
 import { generateSettingsWithWarnings } from "./generate-settings.js";
+import {
+  planCodexConfigInstall,
+  writeCodexConfigInstall,
+  type CodexConfigInstallPlan,
+  type CodexConfigInstallResult,
+} from "./install-codex-config.js";
 
 export { GENERATED_DIRNAME };
 export const SETTINGS_BASENAME = "settings.json";
@@ -115,6 +121,16 @@ export interface ApplyOptions {
    * future enhancement.
    */
   runtime?: Runtime;
+  /**
+   * `--install` with `--runtime codex`: merge the generated Codex hook
+   * stanzas into the active Codex config as a marked harness-managed
+   * block. The installer preserves every byte outside that block.
+   */
+  installCodex?: boolean;
+  /** Override the active Codex config path for --runtime codex --install. */
+  codexConfigPath?: string;
+  /** Test-injectable clock for timestamped Codex config backups. */
+  now?: Date;
   /** Test-injectable confirmation prompt; defaults to a stdin readline. */
   prompt?: (message: string) => Promise<string>;
 }
@@ -136,6 +152,14 @@ export interface FileApplyOutcome {
   diff?: string;
   /** True when `expected !== onDiskCurrent` (whether or not we wrote). */
   changed: boolean;
+}
+
+export interface CodexConfigInstallOutcome {
+  configPath: string;
+  changed: boolean;
+  written: boolean;
+  summary: string;
+  backupPath?: string;
 }
 
 export interface ApplyResult {
@@ -172,6 +196,8 @@ export interface ApplyResult {
    * Present when --merge succeeded against an existing target.
    */
   targetMergeSummary?: string;
+  /** Present when --runtime codex --install was requested. */
+  codexConfigInstall?: CodexConfigInstallOutcome;
 }
 
 const DRIFT_HINT_MESSAGE =
@@ -218,6 +244,20 @@ function readTargetJson(targetPath: string): {
 
 function serializeJson(obj: Record<string, unknown>): string {
   return `${JSON.stringify(obj, null, 2)}\n`;
+}
+
+function codexInstallOutcome(
+  result: CodexConfigInstallPlan | CodexConfigInstallResult,
+): CodexConfigInstallOutcome {
+  return {
+    configPath: result.configPath,
+    changed: result.changed,
+    written: "written" in result ? result.written : false,
+    summary: result.summary,
+    ...("backupPath" in result && result.backupPath !== undefined
+      ? { backupPath: result.backupPath }
+      : {}),
+  };
 }
 
 // Prompts must survive `harness apply | tee log` (the user still needs to
@@ -352,6 +392,7 @@ function buildPrevManifestForHints(record: LastApplyRecord | null): Manifest | n
 }
 
 export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
+  const runtime: Runtime = opts.runtime ?? DEFAULT_RUNTIME;
   const manifestPath = resolveManifestPath(opts);
   if (!fs.existsSync(manifestPath)) {
     throw new HarnessExitError(
@@ -372,6 +413,10 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
 
   const { files: expected, warnings } = buildExpectedFiles(manifest, opts, manifestPath);
   const lastApply = readLastApply(generatedDir);
+
+  if (opts.installCodex && runtime !== "codex") {
+    throw new HarnessExitError("--install requires --runtime codex", EX_NOINPUT);
+  }
 
   // Asset-content drift detection (Phase 3 #6): if a previous apply wrote
   // harness.lock, re-hash every locked asset / memory-dir Merkle and report
@@ -502,6 +547,30 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     }
   }
 
+  let codexInstallPlan: CodexConfigInstallPlan | undefined;
+  let codexInstallChanged = false;
+  if (opts.installCodex) {
+    const codexExpected = expected.find(
+      (f) => f.basename === CODEX_CONFIG_BASENAME,
+    );
+    if (!codexExpected) {
+      throw new HarnessExitError(
+        "internal: codex/config.toml missing from expected files",
+        EX_NOINPUT,
+      );
+    }
+    codexInstallPlan = planCodexConfigInstall({
+      ...(opts.codexConfigPath !== undefined
+        ? { configPath: resolveTargetPath(opts.codexConfigPath) }
+        : {}),
+      ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
+      generatedPath: path.join(generatedDir, CODEX_CONFIG_BASENAME),
+      generatedContent: codexExpected.content,
+      ...(opts.now !== undefined ? { now: opts.now } : {}),
+    });
+    codexInstallChanged = codexInstallPlan.changed;
+  }
+
   const fileOutcomes: FileApplyOutcome[] = [];
   let anyDriftRefuse = false;
   let anyChanged = false;
@@ -536,7 +605,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   }
 
   if (anyDriftRefuse && !opts.overwriteDrift) {
-    return {
+    const result: ApplyResult = {
       manifestPath,
       generatedDir,
       files: fileOutcomes,
@@ -548,6 +617,8 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
       dryRun: opts.dryRun ?? false,
       lockPath,
     };
+    if (codexInstallPlan) result.codexConfigInstall = codexInstallOutcome(codexInstallPlan);
+    return result;
   }
 
   if (anyDriftRefuse && opts.overwriteDrift) {
@@ -558,7 +629,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     // Case-insensitive comparison: a user typing `YES` or `Yes` is clearly
     // confirming. We still reject `y` per spec ("literal yes, not y").
     if (answer.trim().toLowerCase() !== "yes") {
-      return {
+      const result: ApplyResult = {
         manifestPath,
         generatedDir,
         files: fileOutcomes,
@@ -570,6 +641,8 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
         dryRun: opts.dryRun ?? false,
         lockPath,
       };
+      if (codexInstallPlan) result.codexConfigInstall = codexInstallOutcome(codexInstallPlan);
+      return result;
     }
     // Confirmed: continue to the write phase. The per-file `verdict` field
     // remains `drift-refuse` so callers can still see which files would
@@ -588,7 +661,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
       files: fileOutcomes,
       warnings,
       restartHints,
-      outcome: anyChanged || targetChanged ? "would-apply" : "no-changes",
+      outcome: anyChanged || targetChanged || codexInstallChanged ? "would-apply" : "no-changes",
       lockDrift,
       written: false,
       dryRun: true,
@@ -599,10 +672,11 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
       result.targetWritten = false;
       if (targetMergeSummary !== undefined) result.targetMergeSummary = targetMergeSummary;
     }
+    if (codexInstallPlan) result.codexConfigInstall = codexInstallOutcome(codexInstallPlan);
     return result;
   }
 
-  if (!anyChanged && !targetChanged && lastApply !== null) {
+  if (!anyChanged && !targetChanged && !codexInstallChanged && lastApply !== null) {
     // Idempotent no-op for generated files. If asset-content drift was
     // detected against harness.lock, rewrite the lock now with current
     // SHAs so the drift is not "sticky": the user sees the drift line
@@ -638,6 +712,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
       result.targetPath = targetPath;
       result.targetWritten = false;
     }
+    if (codexInstallPlan) result.codexConfigInstall = codexInstallOutcome(codexInstallPlan);
     return result;
   }
 
@@ -677,6 +752,15 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     targetWritten = true;
   }
 
+  let codexInstallResult: CodexConfigInstallResult | undefined;
+  if (codexInstallPlan && codexInstallPlan.changed) {
+    codexInstallResult = writeCodexConfigInstall(codexInstallPlan, {
+      ...(opts.now !== undefined ? { now: opts.now } : {}),
+    });
+  } else if (codexInstallPlan) {
+    codexInstallResult = { ...codexInstallPlan, written: false };
+  }
+
   const lockEntriesWithTarget = appendTargetEntry(
     lockEntries,
     targetPath,
@@ -709,10 +793,11 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     restartHints,
     outcome: "applied",
     lockDrift,
-    written: anyChanged,
+    written: anyChanged || codexInstallResult?.written === true,
     dryRun: false,
     lockPath,
   };
+  if (codexInstallResult) result.codexConfigInstall = codexInstallOutcome(codexInstallResult);
   if (targetPath) {
     result.targetPath = targetPath;
     result.targetWritten = targetWritten;
