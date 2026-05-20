@@ -238,8 +238,15 @@ async function wireRuntime(o: WireRuntimeOpts): Promise<RuntimeApplyOutcome> {
     try {
       const r = await apply(applyOpts);
       if (r.targetMergeSummary) o.stderr(`\n${r.targetMergeSummary}\n`);
-      if (r.targetWritten) {
-        o.stderr(`wired into ${r.targetPath}\n`);
+      if (r.targetWritten || r.targetInSync) {
+        // `targetInSync` without `targetWritten` is an idempotent merge:
+        // the merged content was byte-identical to the existing
+        // settings.json, so apply wrote nothing. That is success — the
+        // runtime IS wired — not a failure. Reporting it as a failure
+        // (the old `!targetWritten` branch did) sent the operator into a
+        // loop of redundant `harness apply` retries.
+        const syncNote = r.targetWritten ? "" : " (already in sync)";
+        o.stderr(`wired into ${r.targetPath}${syncNote}\n`);
         o.stderr(
           `verify: claude -p "say hi" --settings ${r.targetPath} --output-format stream-json --include-hook-events\n`,
         );
@@ -254,7 +261,7 @@ async function wireRuntime(o: WireRuntimeOpts): Promise<RuntimeApplyOutcome> {
       }
       for (const hint of r.restartHints) o.stderr(`restart hint: ${hint}\n`);
       const outcome: RuntimeApplyOutcome = { runtime: "claude-code", apply: r };
-      if (!r.targetWritten) {
+      if (!r.targetWritten && !r.targetInSync) {
         outcome.recoveryHint = `harness apply --target ${o.claudeSettingsPath} --merge --overwrite-drift`;
       }
       return outcome;

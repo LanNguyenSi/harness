@@ -790,11 +790,18 @@ export function buildProgram(opts: RunOptions = {}): Command {
           for (const f of changedFiles) {
             stdout(`  ${f.path}\n`);
           }
-          if (result.targetWritten && result.targetPath) {
-            if (result.targetMergeSummary) {
-              stdout(`${result.targetMergeSummary}\n`);
+          if (result.targetPath && (result.targetWritten || result.targetInSync)) {
+            if (result.targetWritten) {
+              if (result.targetMergeSummary) {
+                stdout(`${result.targetMergeSummary}\n`);
+              } else {
+                stdout(`wrote target: ${result.targetPath}\n`);
+              }
             } else {
-              stdout(`wrote target: ${result.targetPath}\n`);
+              // Idempotent re-apply: the merge was a no-op because the
+              // target already held the merged content. Report it as
+              // success, not silence.
+              stdout(`target already in sync: ${result.targetPath}\n`);
             }
           }
           if (result.codexConfigInstall?.written) {
@@ -806,11 +813,13 @@ export function buildProgram(opts: RunOptions = {}): Command {
           stdout(`harness.lock written to ${result.lockPath}\n`);
 
           if (!options.quiet) {
-            // The hint passes `targetPath` only when the target was
-            // actually written this run. On a re-apply where the target
-            // is already in sync (`targetWritten: false`), fall back to
-            // the three-option block so the user sees a real next step
-            // instead of an ambiguous "wired into ..." for a no-op.
+            // `formatNextSteps` collapses to the single "wired into ..."
+            // line when it receives `targetPath`. Pass it whenever the
+            // target ended this run in sync — written this run, OR
+            // already byte-identical (`targetInSync`). Gating on
+            // `targetWritten` alone misclassified an idempotent
+            // re-apply as "nothing is wired" and looped the operator
+            // through redundant apply commands.
             // `anyChanged` softens the no-target lede when the generated
             // manifest is already up to date (avoids over-claiming
             // "nothing is wired" against operators who wired a target
@@ -821,7 +830,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
               formatNextSteps({
                 generatedSettingsPath,
                 anyChanged,
-                ...(result.targetWritten && result.targetPath
+                ...((result.targetWritten || result.targetInSync) && result.targetPath
                   ? { targetPath: result.targetPath }
                   : {}),
               }),

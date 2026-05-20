@@ -429,4 +429,41 @@ memory:
       expect(r.stdout).not.toContain("wired into");
     });
   });
+
+  it("re-apply after generated-state loss keeps an in-sync target reported as wired (700636f4 regression)", async () => {
+    await withTmpManifest(async (home) => {
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const target = `${home}/settings.local.json`;
+      const r1 = await exec([
+        "apply",
+        "--config",
+        `${home}/harness.yaml`,
+        "--target",
+        target,
+        "--merge",
+      ]);
+      expect(r1.code).toBe(0);
+      expect(r1.stdout).toContain(`wired into ${target}`);
+      // Lose the generated state: the next apply must re-write
+      // harness.generated/ (outcome `applied`) while the --merge into the
+      // target stays a byte-identical no-op (`targetWritten:false`). That
+      // is the case the init wire-now bug misreported as "Nothing is
+      // wired", sending the operator into a loop of apply commands.
+      fs.rmSync(path.join(home, "harness.generated"), { recursive: true, force: true });
+      fs.rmSync(path.join(home, "harness.lock"), { force: true });
+      const r2 = await exec([
+        "apply",
+        "--config",
+        `${home}/harness.yaml`,
+        "--target",
+        target,
+        "--merge",
+      ]);
+      expect(r2.code).toBe(0);
+      expect(r2.stdout).not.toContain("Nothing is wired into Claude Code yet");
+      expect(r2.stdout).toContain(`target already in sync: ${target}`);
+      expect(r2.stdout).toContain(`wired into ${target}`);
+    });
+  });
 });
