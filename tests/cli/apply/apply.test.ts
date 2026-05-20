@@ -994,6 +994,9 @@ describe("apply --target / --merge", () => {
     const r = await apply({ homeDir: tmpHome, target });
     expect(r.outcome).toBe("target-exists-refuse");
     expect(r.targetWritten).toBe(false);
+    // A refused target is genuinely not wired: targetInSync must be false
+    // so callers can tell this apart from an idempotent in-sync no-op.
+    expect(r.targetInSync).toBe(false);
     // Target untouched.
     expect(JSON.parse(fs.readFileSync(target, "utf8"))).toEqual({ env: { FOO: "1" } });
   });
@@ -1070,7 +1073,36 @@ describe("apply --target / --merge", () => {
     const r2 = await apply({ homeDir: tmpHome, target, merge: true });
     expect(r2.outcome).toBe("no-changes");
     expect(r2.targetWritten).toBe(false);
+    // Nothing was written because the target already holds the merged
+    // content: in sync, not "not wired".
+    expect(r2.targetInSync).toBe(true);
     expect(fs.readFileSync(target, "utf8")).toBe(after1);
+  });
+
+  it("generated-file change with an in-sync target reports applied + targetInSync (700636f4 regression)", async () => {
+    // The init wire-now false-negative: when harness.generated/ files
+    // change but the --merge into the target is byte-identical to what is
+    // already on disk, apply returns `outcome: applied` with
+    // `targetWritten: false`. `targetInSync` must still be true — the
+    // target IS correctly wired — so callers (init wire-now, the apply
+    // Next-steps hint) don't misreport it as a failure and loop the
+    // operator through redundant apply commands.
+    writeManifest({ hooks: [basicHook()] });
+    const target = path.join(tmpHome, "settings.local.json");
+    fs.writeFileSync(target, JSON.stringify({ env: { FOO: "1" } }, null, 2));
+    const r1 = await apply({ homeDir: tmpHome, target, merge: true });
+    expect(r1.outcome).toBe("applied");
+    expect(r1.targetWritten).toBe(true);
+    expect(r1.targetInSync).toBe(true);
+    // Drop the generated state so the next apply must re-write
+    // harness.generated/ (anyChanged) while the target merge stays a
+    // byte-identical no-op (the target already holds the merged content).
+    fs.rmSync(path.join(tmpHome, GENERATED_DIRNAME), { recursive: true, force: true });
+    fs.rmSync(lockPath(), { force: true });
+    const r2 = await apply({ homeDir: tmpHome, target, merge: true });
+    expect(r2.outcome).toBe("applied");
+    expect(r2.targetWritten).toBe(false);
+    expect(r2.targetInSync).toBe(true);
   });
 
   it("malformed JSON in target with --merge fails clearly", async () => {

@@ -190,6 +190,48 @@ describe("interactive wizard — Solo path", () => {
     expect(cap.stderr()).not.toContain("--runtime claude\n");
   });
 
+  it("wire-now reports success when settings.json is already in sync (700636f4 regression)", async () => {
+    // The init wire-now false-negative: an idempotent merge (the merged
+    // content is byte-identical to the existing settings.json, so apply
+    // writes nothing) returns `targetWritten: false`. The old wire-now
+    // branch read `!targetWritten` as "not wired" and printed
+    // "Wire-now did not write ... Retry manually", sending the operator
+    // into a loop of redundant `harness apply` commands. It must instead
+    // report the runtime as wired.
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const runOnce = async (
+      forceOverwrite: boolean,
+    ): Promise<{ result: Awaited<ReturnType<typeof runInteractive>>; stderr: string }> => {
+      const cap = captureStreams();
+      const result = await runInteractive({
+        homeDir: tmpHome,
+        dependencyPathEnv: fakeDepsPath,
+        forceOverwrite,
+        prompts: mockPrompts({
+          select: ["solo"],
+          input: ["~/.claude/projects/{project}/memory"],
+          confirm: [true],
+          checkbox: [["claude-code"]],
+        }),
+        stdout: cap.out,
+        stderr: cap.err,
+      });
+      return { result, stderr: cap.stderr() };
+    };
+    // First run wires settings.json from scratch.
+    const first = await runOnce(false);
+    expect(first.result.applies?.[0]?.apply?.targetWritten).toBe(true);
+    // Second run: manifest + settings.json are already in sync, so
+    // wire-now's merge is an idempotent no-op.
+    const second = await runOnce(true);
+    const secondApply = second.result.applies?.[0]?.apply;
+    expect(secondApply?.targetWritten).toBe(false);
+    expect(secondApply?.targetInSync).toBe(true);
+    expect(second.stderr).toContain("wired into");
+    expect(second.stderr).toContain("(already in sync)");
+    expect(second.stderr).not.toContain("Wire-now did not write");
+  });
+
   it("wire-now bypasses stale-snapshot drift (agent-tasks/df68b3e6 regression)", async () => {
     // The bug this guards: a pre-existing `~/.claude/harness.generated/settings.json`
     // (from a prior harness version, or any state where the .last-apply

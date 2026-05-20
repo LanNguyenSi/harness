@@ -195,6 +195,17 @@ export interface ApplyResult {
   /** Whether the target file was written this run. */
   targetWritten?: boolean;
   /**
+   * Set when --target was passed: whether the target file holds the
+   * merged/generated settings after this run. True when the file was
+   * written this run OR was already byte-identical (an idempotent
+   * re-apply); false only when the target exists and apply refused to
+   * touch it (`target-exists-refuse`). Distinct from `targetWritten`,
+   * which is false in BOTH the already-in-sync and the refused cases —
+   * callers that need "is the target correctly wired?" must read this,
+   * not `!targetWritten`.
+   */
+  targetInSync?: boolean;
+  /**
    * Human-readable one-liner describing the merge outcome, e.g.
    * `merged into /path: replaced 1 owned key (hooks), preserved 4 other keys`.
    * Present when --merge succeeded against an existing target.
@@ -587,6 +598,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
           lockPath,
           targetPath,
           targetWritten: false,
+          targetInSync: false,
         };
       }
     } else {
@@ -729,6 +741,9 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     if (targetPath) {
       result.targetPath = targetPath;
       result.targetWritten = false;
+      // Dry run writes nothing, so "in sync" reflects the current
+      // on-disk state: in sync iff the merge would be a no-op.
+      result.targetInSync = !targetChanged;
       if (targetMergeSummary !== undefined) result.targetMergeSummary = targetMergeSummary;
     }
     if (codexInstallPlan) result.codexConfigInstall = codexInstallOutcome(codexInstallPlan);
@@ -782,6 +797,9 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     if (targetPath) {
       result.targetPath = targetPath;
       result.targetWritten = false;
+      // `no-changes` is reached only when targetChanged is false, i.e.
+      // the target already holds the merged content: in sync.
+      result.targetInSync = true;
     }
     if (codexInstallPlan) result.codexConfigInstall = codexInstallOutcome(codexInstallPlan);
     return result;
@@ -864,6 +882,10 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   if (targetPath) {
     result.targetPath = targetPath;
     result.targetWritten = targetWritten;
+    // Reached the write phase without refusing the target: the file now
+    // holds the merged content, whether written this run (targetChanged)
+    // or already byte-identical.
+    result.targetInSync = true;
     if (targetMergeSummary !== undefined) result.targetMergeSummary = targetMergeSummary;
   }
   return result;
