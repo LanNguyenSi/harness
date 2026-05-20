@@ -11,6 +11,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { resolveHomeDir } from "../../runtime/home-dir.js";
 import { VERSION } from "../../version.js";
 
 export type RuntimeName = "claude-code" | "codex";
@@ -138,8 +139,20 @@ function parseClaudeMcpServers(
   return { servers };
 }
 
-function detectManifest(claudeHome: string): DetectedManifest {
-  const manifestPath = path.join(claudeHome, "harness.yaml");
+function detectManifest(userHome: string): DetectedManifest {
+  // The harness manifest lives under the runtime-neutral harness home
+  // (`resolveHomeDir`: `~/.harness/`, or legacy `~/.claude/` only when
+  // harness state still physically lives there). It is NOT pinned to the
+  // claude-code runtime config dir — the v0.24.0 home-dir migration
+  // decoupled the two. Probing the claude runtime dir here made
+  // `init --interactive` mis-detect the manifest as absent on every
+  // migrated install, so the wizard prompted for the wrong path and then
+  // `init()` (which resolves correctly) refused on the real file
+  // (harness/418cebd4). `userHome` is the operator's `$HOME`; pass it as
+  // `userHome` so `resolveHomeDir`'s preferred-existence checks anchor on
+  // the same home detect() was given.
+  const harnessHome = resolveHomeDir({ userHome }).path;
+  const manifestPath = path.join(harnessHome, "harness.yaml");
   const stat = safeStat(manifestPath);
   return { path: manifestPath, exists: stat?.isFile() ?? false };
 }
@@ -148,7 +161,7 @@ export async function detect(opts: DetectOptions = {}): Promise<DetectionResult>
   const home = resolveHome(opts);
   const claude = detectClaudeRuntime(home);
   const codex = detectCodexRuntime(home);
-  const manifest = detectManifest(claude.home);
+  const manifest = detectManifest(home);
   const { servers, parseError } = parseClaudeMcpServers(claude);
   if (parseError) claude.settingsParseError = parseError;
   return {

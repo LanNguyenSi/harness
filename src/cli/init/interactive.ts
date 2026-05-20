@@ -23,6 +23,7 @@
 
 import { select, confirm, input, checkbox } from "@inquirer/prompts";
 import * as path from "node:path";
+import { resolveHomeDir } from "../../runtime/home-dir.js";
 import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
 import {
   detect,
@@ -140,6 +141,25 @@ function isAbortError(err: unknown): boolean {
   return /ExitPrompt|aborted|cancel/i.test(err.name) || /force.?closed/i.test(err.message);
 }
 
+/**
+ * Resolve the harness state root to hand to `init()` / `apply()`.
+ *
+ * Home-dir semantics, post the v0.24.0 migration: the wizard's own
+ * `opts.homeDir` is the operator's `$HOME` (that is how `detect()`
+ * consumes it), whereas `init()` and `apply()` treat their `homeDir`
+ * argument as the explicit harness state root — both pass it straight
+ * to `resolveHomeDir({ homeDir })`. So the wizard must translate
+ * `$HOME` → harness root via the same resolver `detect()` now uses, or
+ * the wizard and `init()` disagree on where the manifest lives
+ * (harness/418cebd4). Returns `undefined` when the wizard has no
+ * `homeDir` override (production), letting `init()` / `apply()` resolve
+ * from `os.homedir()` themselves — exactly as before.
+ */
+function harnessHomeArg(opts: RunInteractiveOptions): string | undefined {
+  if (opts.homeDir === undefined) return undefined;
+  return resolveHomeDir({ userHome: opts.homeDir }).path;
+}
+
 function summariseDetection(d: DetectionResult): string {
   const lines: string[] = ["Environment probe:"];
   for (const r of d.runtimes) {
@@ -211,7 +231,10 @@ async function wireRuntime(o: WireRuntimeOpts): Promise<RuntimeApplyOutcome> {
       overwriteDrift: true,
       prompt: async () => "yes",
     };
-    if (o.homeDir !== undefined) applyOpts.homeDir = path.join(o.homeDir, ".claude");
+    // `o.homeDir` is already the resolved harness state root (the caller
+    // passes `harnessHomeArg(opts)`); `apply()` consumes `homeDir` as
+    // that root verbatim. Do NOT re-append `.claude` here.
+    if (o.homeDir !== undefined) applyOpts.homeDir = o.homeDir;
     try {
       const r = await apply(applyOpts);
       if (r.targetMergeSummary) o.stderr(`\n${r.targetMergeSummary}\n`);
@@ -254,7 +277,10 @@ async function wireRuntime(o: WireRuntimeOpts): Promise<RuntimeApplyOutcome> {
     installCodex: true,
     codexConfigPath: o.codexConfigPath,
   };
-  if (o.homeDir !== undefined) applyOpts.homeDir = path.join(o.homeDir, ".claude");
+  // `o.homeDir` is already the resolved harness state root (see the
+  // claude-code branch above); `apply()` takes `homeDir` as that root
+  // verbatim. Do NOT re-append `.claude`.
+  if (o.homeDir !== undefined) applyOpts.homeDir = o.homeDir;
   try {
     const r = await apply(applyOpts);
     const generatedCodexPath = path.join(r.generatedDir, CODEX_CONFIG_BASENAME);
@@ -587,20 +613,19 @@ export async function runInteractive(
     }
 
     // `custom` returned early above; the remaining values map 1:1 to
-    // TemplateName entries that `init()` understands.
-    //
-    // Path semantics are deliberately split: detect() treats `homeDir`
-    // as the user's $HOME and synthesizes `.claude` from it, while
-    // init() treats `homeDir` as the .claude directory itself. Bridge
-    // by passing the .claude path explicitly when the caller overrides
-    // homeDir (test scenarios). When unset, both fall back to their own
-    // defaults from os.homedir().
+    // TemplateName entries that `init()` understands. `harnessHomeArg`
+    // translates the wizard's `$HOME`-shaped `opts.homeDir` into the
+    // harness state root `init()` expects (see its doc comment). `force`
+    // is honored from `--force` (forceOverwrite) as well as from a
+    // detected existing manifest, so a re-run with `--force` overwrites
+    // without the wizard re-prompting.
     const initOpts: { template: "solo" | "team" | "full"; force: boolean; homeDir?: string } = {
       template: profile,
-      force: detection.manifest.exists,
+      force: detection.manifest.exists || opts.forceOverwrite === true,
     };
-    if (opts.homeDir !== undefined) {
-      initOpts.homeDir = path.join(opts.homeDir, ".claude");
+    const homeArg = harnessHomeArg(opts);
+    if (homeArg !== undefined) {
+      initOpts.homeDir = homeArg;
     }
     const initResult = await init(initOpts);
     stdout(initResult.stdout);
@@ -751,14 +776,16 @@ async function runPostInitTail(t: PostInitTailOpts): Promise<InteractiveResult> 
 
   const applies: RuntimeApplyOutcome[] = [];
   for (const runtime of selectedRuntimes) {
-    const outcome = await wireRuntime({
+    const wireOpts: Parameters<typeof wireRuntime>[0] = {
       runtime,
       configPath: initResult.path,
-      homeDir: opts.homeDir,
       claudeSettingsPath,
       codexConfigPath,
       stderr,
-    });
+    };
+    const homeArg = harnessHomeArg(opts);
+    if (homeArg !== undefined) wireOpts.homeDir = homeArg;
+    const outcome = await wireRuntime(wireOpts);
     applies.push(outcome);
   }
 
@@ -940,9 +967,10 @@ async function runCustomProfile(rc: RunCustomOpts): Promise<InteractiveResult> {
   const initOpts: { content: string; contentLabel: string; force: boolean; homeDir?: string } = {
     content: composed.yaml,
     contentLabel: "custom",
-    force: detection.manifest.exists,
+    force: detection.manifest.exists || opts.forceOverwrite === true,
   };
-  if (opts.homeDir !== undefined) initOpts.homeDir = path.join(opts.homeDir, ".claude");
+  const homeArg = harnessHomeArg(opts);
+  if (homeArg !== undefined) initOpts.homeDir = homeArg;
   const initResult = await init(initOpts);
   stdout(initResult.stdout);
 
