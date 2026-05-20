@@ -342,7 +342,7 @@ A fresh agent on a clean repo refuses to call write-capable tools until an Under
 
 - Harness's operator-state root moves from `~/.claude/` to `~/.harness/`. The new resolver (`src/runtime/home-dir.ts`) picks the root from explicit flag, `$HARNESS_HOME` env, existing `~/.harness/`, legacy `~/.claude/` with deprecation warning, or create-on-first-use `~/.harness/`.
 - New `harness migrate-home` command: dry-run by default, `--apply` to atomically move `harness.yaml`, `harness.generated/`, `.understanding-gate/`, `harness.lock` into the new root. Idempotent; refuses to overwrite. Operator guide at `docs/migration/v0.24.0-home-dir.md`.
-- Backed by agent-tasks/e65decef, surfaced during the Codex approval-UX dogfood (f608b4ee). Legacy fallback supported throughout v0.24.x; deletion targeted for v0.25.0.
+- Backed by agent-tasks/e65decef, surfaced during the Codex approval-UX dogfood (f608b4ee). Legacy fallback still supported; deletion targeted for a future release.
 
 ## Phase 7 — Risk Gate
 
