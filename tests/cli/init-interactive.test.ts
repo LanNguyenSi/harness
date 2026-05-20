@@ -72,10 +72,17 @@ function captureStreams(): { stdout: () => string; stderr: () => string; out: (s
 // agent-tasks/69ef84cd for the regression incident.
 let tmpHome: string;
 let fakeDepsPath: string;
+let savedHarnessHome: string | undefined;
 
 beforeEach(() => {
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-wizard-"));
   fakeDepsPath = fs.mkdtempSync(path.join(os.tmpdir(), "harness-wizard-deps-"));
+  // The wizard resolves the harness home through `resolveHomeDir`, whose
+  // `$HARNESS_HOME` tier outranks the `userHome`-based resolution these
+  // tests rely on. Clear it so a CI env leak cannot redirect detect() /
+  // init() away from the per-test tmp home.
+  savedHarnessHome = process.env.HARNESS_HOME;
+  delete process.env.HARNESS_HOME;
   for (const bin of [
     "memory-router-user-prompt-submit",
     "understanding-gate-claude-hook",
@@ -93,6 +100,8 @@ beforeEach(() => {
 afterEach(() => {
   fs.rmSync(tmpHome, { recursive: true, force: true });
   fs.rmSync(fakeDepsPath, { recursive: true, force: true });
+  if (savedHarnessHome === undefined) delete process.env.HARNESS_HOME;
+  else process.env.HARNESS_HOME = savedHarnessHome;
 });
 
 describe("interactive wizard — Solo path", () => {
@@ -120,7 +129,7 @@ describe("interactive wizard — Solo path", () => {
     expect(result.validateClean).toBe(true);
     expect(result.apply).toBeUndefined();
     expect(result.applies).toEqual([]);
-    expect(fs.existsSync(path.join(tmpHome, ".claude", "harness.yaml"))).toBe(true);
+    expect(fs.existsSync(path.join(tmpHome, ".harness", "harness.yaml"))).toBe(true);
     expect(cap.stderr()).toMatch(/Environment probe/);
     expect(cap.stderr()).toMatch(/harness validate: 0 error/);
     // When the operator unchecks all runtimes, the manifest-only
@@ -405,7 +414,7 @@ describe("interactive wizard — agent-tasks auth probe (after install)", () => 
 
   it("no_token + operator picks abort → wizard aborts with signup pointer, NO manifest written", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
-    const manifestPath = path.join(tmpHome, ".claude", "harness.yaml");
+    const manifestPath = path.join(tmpHome, ".harness", "harness.yaml");
     const cap = captureStreams();
     const result = await runInteractive({
       homeDir: tmpHome,
@@ -543,7 +552,7 @@ describe("interactive wizard — Custom path (task 31d2fbb5)", () => {
     expect(result.profile).toBe("custom");
     expect(cap.stderr()).toMatch(/no components selected/);
     // Crucially: NO manifest landed on disk for an empty selection.
-    expect(fs.existsSync(path.join(tmpHome, ".claude", "harness.yaml"))).toBe(false);
+    expect(fs.existsSync(path.join(tmpHome, ".harness", "harness.yaml"))).toBe(false);
   });
 
   it("composes a minimal-pick manifest that harness validate accepts (just the understanding pack)", async () => {
@@ -571,7 +580,7 @@ describe("interactive wizard — Custom path (task 31d2fbb5)", () => {
     expect(result.profile).toBe("custom");
     expect(result.init?.template).toBe("custom");
     expect(result.validateClean).toBe(true);
-    const manifestPath = path.join(tmpHome, ".claude", "harness.yaml");
+    const manifestPath = path.join(tmpHome, ".harness", "harness.yaml");
     expect(fs.existsSync(manifestPath)).toBe(true);
     const content = fs.readFileSync(manifestPath, "utf8");
     expect(content).toContain("Custom profile");
@@ -614,7 +623,7 @@ describe("interactive wizard — Custom path (task 31d2fbb5)", () => {
     expect(result.aborted).toBe(false);
     expect(result.validateClean).toBe(true);
     const content = fs.readFileSync(
-      path.join(tmpHome, ".claude", "harness.yaml"),
+      path.join(tmpHome, ".harness", "harness.yaml"),
       "utf8",
     );
     expect(content).toContain("agent-tasks");
@@ -715,6 +724,63 @@ describe("interactive wizard — overwrite guard", () => {
   });
 });
 
+describe("interactive wizard — overwrite guard at the harness home (harness/418cebd4)", () => {
+  // Regression: pre-fix the wizard probed ~/.claude/harness.yaml while
+  // init() resolved the manifest through resolveHomeDir() to
+  // ~/.harness/harness.yaml. On a v0.24.0-migrated install the wizard
+  // never saw the existing manifest, never prompted to overwrite, and
+  // passed force:false to init(), which then refused on the real file.
+  // detect() now resolves the manifest through the same resolveHomeDir()
+  // init() uses, so the two agree.
+  it("detects an existing manifest under ~/.harness/ and the overwrite prompt guards it", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    fs.mkdirSync(path.join(tmpHome, ".harness"));
+    fs.writeFileSync(path.join(tmpHome, ".harness", "harness.yaml"), "version: 1\n# preserved\n");
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      prompts: mockPrompts({ confirm: [false] }), // decline overwrite
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    // Reaching the decline path proves detect() saw the ~/.harness/
+    // manifest: pre-fix detection.manifest.exists was false and this
+    // prompt never fired.
+    expect(result.aborted).toBe(true);
+    expect(cap.stderr()).toMatch(/existing manifest left untouched/);
+    expect(fs.readFileSync(path.join(tmpHome, ".harness", "harness.yaml"), "utf8")).toContain(
+      "preserved",
+    );
+  });
+
+  it("forceOverwrite skips the overwrite prompt and overwrites the ~/.harness/ manifest", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    fs.mkdirSync(path.join(tmpHome, ".harness"));
+    fs.writeFileSync(path.join(tmpHome, ".harness", "harness.yaml"), "version: 1\n# old\n");
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      forceOverwrite: true,
+      dependencyPathEnv: fakeDepsPath,
+      prompts: mockPrompts({
+        select: ["solo"],
+        // No overwrite-confirm queued: forceOverwrite must skip that
+        // prompt. The single `true` is the final "write harness.yaml?".
+        confirm: [true],
+        checkbox: [[]],
+        input: ["~/.claude/projects/{project}/memory"],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(false);
+    expect(result.profile).toBe("solo");
+    const content = fs.readFileSync(path.join(tmpHome, ".harness", "harness.yaml"), "utf8");
+    expect(content).not.toContain("# old");
+    expect(content).toContain("understanding-before-execution");
+  });
+});
+
 describe("interactive wizard — no-detection path", () => {
   it("runs cleanly when no runtime config exists at all", async () => {
     // tmpHome is brand-new; neither .claude nor .codex exist.
@@ -796,7 +862,7 @@ describe("interactive wizard — dependency install", () => {
     expect(result.profile).toBe("solo");
     expect(cap.stderr()).toMatch(/npm install exited 1/);
     expect(cap.stderr()).toMatch(/Manifest NOT written/);
-    expect(fs.existsSync(path.join(tmpHome, ".claude", "harness.yaml"))).toBe(false);
+    expect(fs.existsSync(path.join(tmpHome, ".harness", "harness.yaml"))).toBe(false);
   });
 
   it("aborts when the operator declines the install offer", async () => {
@@ -824,7 +890,7 @@ describe("interactive wizard — dependency install", () => {
     expect(spawned).toBe(false);
     expect(cap.stderr()).toMatch(/dependencies missing and install declined/);
     expect(cap.stderr()).toMatch(/To install manually: npm i -g/);
-    expect(fs.existsSync(path.join(tmpHome, ".claude", "harness.yaml"))).toBe(false);
+    expect(fs.existsSync(path.join(tmpHome, ".harness", "harness.yaml"))).toBe(false);
   });
 });
 
@@ -849,8 +915,8 @@ describe("interactive wizard — Full profile", () => {
     });
     expect(result.aborted).toBe(false);
     expect(result.profile).toBe("full");
-    expect(fs.existsSync(path.join(tmpHome, ".claude", "harness.yaml"))).toBe(true);
-    const content = fs.readFileSync(path.join(tmpHome, ".claude", "harness.yaml"), "utf8");
+    expect(fs.existsSync(path.join(tmpHome, ".harness", "harness.yaml"))).toBe(true);
+    const content = fs.readFileSync(path.join(tmpHome, ".harness", "harness.yaml"), "utf8");
     // Full template carries the additional reference policies that
     // Team does not ship.
     expect(content).toContain("review-before-merge");
@@ -921,7 +987,7 @@ describe("interactive wizard — runtime multiselect (task 696f7560)", () => {
     // ~/.codex/config.toml.
     const codexGenerated = path.join(
       tmpHome,
-      ".claude",
+      ".harness",
       "harness.generated",
       "codex",
       "config.toml",
@@ -961,7 +1027,7 @@ describe("interactive wizard — runtime multiselect (task 696f7560)", () => {
     // Claude settings.json was wired AND the codex generated artefact exists.
     expect(fs.existsSync(path.join(tmpHome, ".claude", "settings.json"))).toBe(true);
     expect(
-      fs.existsSync(path.join(tmpHome, ".claude", "harness.generated", "codex", "config.toml")),
+      fs.existsSync(path.join(tmpHome, ".harness", "harness.generated", "codex", "config.toml")),
     ).toBe(true);
     expect(result.apply).toBeDefined();
     expect(result.apply?.targetWritten).toBe(true);
@@ -988,11 +1054,11 @@ describe("interactive wizard — runtime multiselect (task 696f7560)", () => {
     expect(result.validateClean).toBe(true);
     expect(result.applies).toEqual([]);
     expect(result.apply).toBeUndefined();
-    expect(fs.existsSync(path.join(tmpHome, ".claude", "harness.yaml"))).toBe(true);
+    expect(fs.existsSync(path.join(tmpHome, ".harness", "harness.yaml"))).toBe(true);
     // No runtime file landed.
     expect(fs.existsSync(path.join(tmpHome, ".claude", "settings.json"))).toBe(false);
     expect(
-      fs.existsSync(path.join(tmpHome, ".claude", "harness.generated", "codex", "config.toml")),
+      fs.existsSync(path.join(tmpHome, ".harness", "harness.generated", "codex", "config.toml")),
     ).toBe(false);
     expect(cap.stderr()).toContain("no runtimes selected");
     expect(cap.stderr()).toMatch(/harness apply --target .* --merge/);
@@ -1024,7 +1090,7 @@ describe("interactive wizard — runtime multiselect (task 696f7560)", () => {
     // wizard does not roll it back; the abort contract is "no NEW
     // side effects after this prompt", and the manifest is the prior
     // step's output. Settings.json must NOT have been touched, though.
-    expect(fs.existsSync(path.join(tmpHome, ".claude", "harness.yaml"))).toBe(true);
+    expect(fs.existsSync(path.join(tmpHome, ".harness", "harness.yaml"))).toBe(true);
     expect(fs.existsSync(path.join(tmpHome, ".claude", "settings.json"))).toBe(false);
   });
 });
@@ -1051,6 +1117,6 @@ describe("interactive wizard — Ctrl-C", () => {
     });
     expect(result.aborted).toBe(true);
     expect(cap.stderr()).toMatch(/Ctrl-C received/);
-    expect(fs.existsSync(path.join(tmpHome, ".claude", "harness.yaml"))).toBe(false);
+    expect(fs.existsSync(path.join(tmpHome, ".harness", "harness.yaml"))).toBe(false);
   });
 });

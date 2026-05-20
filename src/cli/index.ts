@@ -342,7 +342,16 @@ export function buildProgram(opts: RunOptions = {}): Command {
               EX_USAGE,
             );
           }
-          const r = await runInteractive({ stdout, stderr });
+          // Thread --force into the wizard's forceOverwrite: without it
+          // an existing manifest makes the wizard re-prompt, and
+          // `harness init --interactive --force` looked like it should
+          // overwrite non-interactively but the flag never reached
+          // runInteractive (harness/418cebd4).
+          const r = await runInteractive({
+            stdout,
+            stderr,
+            ...(options.force ? { forceOverwrite: true } : {}),
+          });
           if (r.aborted) {
             return;
           }

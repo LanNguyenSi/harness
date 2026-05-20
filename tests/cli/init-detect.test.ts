@@ -6,13 +6,22 @@ import { detect } from "../../src/cli/init/detect.js";
 import { VERSION } from "../../src/version.js";
 
 let tmpHome: string;
+let savedHarnessHome: string | undefined;
 
 beforeEach(() => {
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-detect-"));
+  // `detect()` resolves the manifest path through `resolveHomeDir`,
+  // whose `$HARNESS_HOME` tier outranks the `userHome`-based resolution
+  // these tests rely on. Clear it so a CI env leak cannot redirect the
+  // probe away from the per-test tmp home.
+  savedHarnessHome = process.env.HARNESS_HOME;
+  delete process.env.HARNESS_HOME;
 });
 
 afterEach(() => {
   fs.rmSync(tmpHome, { recursive: true, force: true });
+  if (savedHarnessHome === undefined) delete process.env.HARNESS_HOME;
+  else process.env.HARNESS_HOME = savedHarnessHome;
 });
 
 function writeJson(p: string, data: unknown): void {
@@ -51,17 +60,33 @@ describe("init detect — runtime presence", () => {
 });
 
 describe("init detect — manifest presence", () => {
-  it("flags ~/.claude/harness.yaml absent in a clean home", async () => {
+  it("flags ~/.harness/harness.yaml absent in a clean home", async () => {
     const r = await detect({ homeDir: tmpHome });
     expect(r.manifest.exists).toBe(false);
-    expect(r.manifest.path).toBe(path.join(tmpHome, ".claude", "harness.yaml"));
+    // Post the v0.24.0 home-dir migration the manifest is probed under
+    // the runtime-neutral harness home (resolveHomeDir), not the
+    // claude-code runtime dir. A clean home has no ~/.harness/ yet, so
+    // resolveHomeDir reports the create-on-first-use ~/.harness/ target.
+    expect(r.manifest.path).toBe(path.join(tmpHome, ".harness", "harness.yaml"));
   });
 
-  it("flags ~/.claude/harness.yaml present when the file exists", async () => {
+  it("flags ~/.harness/harness.yaml present when the file exists", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".harness"));
+    fs.writeFileSync(path.join(tmpHome, ".harness", "harness.yaml"), "version: 1\n");
+    const r = await detect({ homeDir: tmpHome });
+    expect(r.manifest.exists).toBe(true);
+    expect(r.manifest.path).toBe(path.join(tmpHome, ".harness", "harness.yaml"));
+  });
+
+  it("falls back to a legacy ~/.claude/harness.yaml when state still lives there", async () => {
+    // Un-migrated install: harness state physically under ~/.claude/.
+    // resolveHomeDir's legacy fallback keeps detect() and init() agreed
+    // on that path until the operator runs `harness migrate-home`.
     fs.mkdirSync(path.join(tmpHome, ".claude"));
     fs.writeFileSync(path.join(tmpHome, ".claude", "harness.yaml"), "version: 1\n");
     const r = await detect({ homeDir: tmpHome });
     expect(r.manifest.exists).toBe(true);
+    expect(r.manifest.path).toBe(path.join(tmpHome, ".claude", "harness.yaml"));
   });
 });
 
