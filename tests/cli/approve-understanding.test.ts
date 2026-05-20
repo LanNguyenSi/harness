@@ -624,6 +624,129 @@ describe("approveUnderstanding — runtime-neutral session-id resolution (task f
   });
 });
 
+describe("approveUnderstanding — tier-5 only adopts a pending report (harness/56f51f2b)", () => {
+  // Bug observed 2026-05-20: bare `harness approve understanding` (no
+  // --session, no env, no staged `.pending-approval`) fell through to
+  // tier 5 and adopted the freshest report with ANY approvalStatus.
+  // That picked a 2-day-old `approved`/`expired` report from an
+  // unrelated Codex session and approved THAT session; the live
+  // session stayed gated. Tier 5 now only adopts a `pending` report (a
+  // fresh, not-yet-consumed gate cycle).
+  let savedClaude: string | undefined;
+  let savedCodex: string | undefined;
+
+  beforeEach(() => {
+    savedClaude = process.env.CLAUDE_SESSION_ID;
+    savedCodex = process.env.CODEX_SESSION_ID;
+    delete process.env.CLAUDE_SESSION_ID;
+    delete process.env.CODEX_SESSION_ID;
+  });
+
+  afterEach(() => {
+    if (savedClaude === undefined) delete process.env.CLAUDE_SESSION_ID;
+    else process.env.CLAUDE_SESSION_ID = savedClaude;
+    if (savedCodex === undefined) delete process.env.CODEX_SESSION_ID;
+    else process.env.CODEX_SESSION_ID = savedCodex;
+  });
+
+  it("skips a newer approved/expired report and adopts the older pending one", async () => {
+    // The stale reports are NEWER by mtime: pre-fix the resolver stopped
+    // at the bare-newest and would approve a `sess-stale-*` session.
+    const staleApproved = writeReport("rpt-approved.json", {
+      sessionId: "sess-stale-approved",
+      approvalStatus: "approved",
+    });
+    const staleExpired = writeReport("rpt-expired.json", {
+      sessionId: "sess-stale-expired",
+      approvalStatus: "expired",
+    });
+    const livePending = writeReport("rpt-live.json", {
+      sessionId: "sess-live",
+      approvalStatus: "pending",
+    });
+    const newer = new Date("2026-05-20T09:00:00Z");
+    const older = new Date("2026-05-18T09:00:00Z");
+    fs.utimesSync(staleApproved, newer, newer);
+    fs.utimesSync(staleExpired, newer, newer);
+    fs.utimesSync(livePending, older, older);
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      reportsDir: tmp,
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.sessionId).toBe("sess-live");
+    expect(result.sessionSource).toBe("newest-report");
+    expect(result.newestReportPath).toBe(livePending);
+  });
+
+  it("throws the no-session-id error when every report is approved/expired", async () => {
+    // A finished gate cycle must NOT be silently adopted; with no fresh
+    // `pending` report and no explicit id, the command must fail loudly
+    // rather than approve a stale unrelated session.
+    writeReport("rpt-approved.json", {
+      sessionId: "sess-a",
+      approvalStatus: "approved",
+    });
+    writeReport("rpt-expired.json", {
+      sessionId: "sess-b",
+      approvalStatus: "expired",
+    });
+    let caught: unknown;
+    try {
+      await approveUnderstanding({
+        manifest: manifest(),
+        reportsDir: tmp,
+        generatedDir: path.join(tmp, "harness.generated"),
+        ledgerAdd: async () => ({ ok: true }),
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(HarnessExitError);
+    expect((caught as Error).message).toContain("no session id available");
+  });
+
+  it("leaves newestReportPath undefined for non-tier-5 sources", async () => {
+    writeReport("rpt.json", { sessionId: "sess-flag", approvalStatus: "pending" });
+    const result = await approveUnderstanding({
+      session: "sess-flag",
+      manifest: manifest(),
+      reportsDir: tmp,
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.sessionSource).toBe("flag");
+    expect(result.newestReportPath).toBeUndefined();
+  });
+
+  it("skips a report whose approvalStatus field is missing (legacy Stop-hook output)", async () => {
+    // Older @lannguyensi/understanding-gate versions wrote reports
+    // without an approvalStatus field; readPersistedReport maps that to
+    // null, which is not "pending", so tier 5 must skip it rather than
+    // adopt an unverifiable session id from it.
+    const legacy = writeReport("rpt-legacy.json", {
+      sessionId: "sess-legacy-nostatus",
+    });
+    const pending = writeReport("rpt-pending.json", {
+      sessionId: "sess-pending",
+      approvalStatus: "pending",
+    });
+    const newer = new Date("2026-05-20T09:00:00Z");
+    const older = new Date("2026-05-18T09:00:00Z");
+    fs.utimesSync(legacy, newer, newer);
+    fs.utimesSync(pending, older, older);
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      reportsDir: tmp,
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.sessionId).toBe("sess-pending");
+    expect(result.sessionSource).toBe("newest-report");
+  });
+});
+
 describe("approveUnderstanding — reports-dir resolution (task 4f4a1178)", () => {
   let savedEnv: string | undefined;
   let originalCwd: string;
