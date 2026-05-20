@@ -1196,8 +1196,8 @@ export function buildProgram(opts: RunOptions = {}): Command {
       "explicit session id (default: $CLAUDE_SESSION_ID)",
     )
     .option(
-      "--task <id>",
-      "agent-tasks task id — when set, also writes a task-scoped marker so the next task re-prompts for an Understanding Report (harness/1ee26e77)",
+      "--task <ids...>",
+      "agent-tasks task id(s) — writes one task-scoped marker per id. Pass several (--task a b c, or --task a,b,c) to pre-approve a whole batch in a single operator action so a multi-task session does not re-prompt per task_finish (harness/1ee26e77, harness/0dce3880)",
     )
     .option("--reports-dir <path>", "override the persisted-report directory (default: ./.understanding-gate/reports)")
     .option("--approved-by <actor>", "actor to record on the persisted report (default: harness-approve-cli)")
@@ -1206,7 +1206,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         config?: string;
         project?: string;
         session?: string;
-        task?: string;
+        task?: string[];
         reportsDir?: string;
         approvedBy?: string;
       }) => {
@@ -1214,7 +1214,9 @@ export function buildProgram(opts: RunOptions = {}): Command {
         if (options.config) cliOpts.configPath = options.config;
         if (options.project) cliOpts.project = options.project;
         if (options.session) cliOpts.session = options.session;
-        if (options.task) cliOpts.task = options.task;
+        // Commander's variadic `<ids...>` yields a string[]; comma-split
+        // and de-dup happen inside approveUnderstanding (dedupeTaskIds).
+        if (options.task && options.task.length > 0) cliOpts.tasks = options.task;
         if (options.reportsDir) cliOpts.reportsDir = options.reportsDir;
         if (options.approvedBy) cliOpts.approvedBy = options.approvedBy;
         const result = await approveUnderstanding(cliOpts);
@@ -1240,21 +1242,27 @@ export function buildProgram(opts: RunOptions = {}): Command {
             "  the gate WILL block the next tool call until the marker exists.",
           );
         }
-        if (result.taskMarker !== null) {
+        for (const tm of result.taskMarkers) {
           const sourceNote =
-            result.taskMarker.source === "active-claim"
+            tm.source === "active-claim"
               ? " (auto-resolved from active-claim file)"
               : "";
-          if (result.taskMarker.ok) {
+          if (tm.ok) {
             lines.push(
-              `task:    ✓ ${result.taskMarker.filePath} (task-scoped, expires when this task ends)${sourceNote}`,
+              `task:    ✓ ${tm.filePath} (task-scoped, expires when this task ends)${sourceNote}`,
             );
           } else {
-            lines.push(`task:    ✗ FAILED for task ${result.taskMarker.taskId}${sourceNote} (${result.taskMarker.reason})`);
+            lines.push(`task:    ✗ FAILED for task ${tm.taskId}${sourceNote} (${tm.reason})`);
             lines.push(
               "  the session marker above is still in effect; the task-scoped path is degraded.",
             );
           }
+        }
+        if (result.taskMarkers.length > 1) {
+          const okCount = result.taskMarkers.filter((t) => t.ok).length;
+          lines.push(
+            `         (${okCount}/${result.taskMarkers.length} task markers written — the batch is pre-approved)`,
+          );
         }
         if (result.ledger.ok) {
           lines.push(`ledger:  ✓ wrote ${result.ledger.tag} (audit only)`);
@@ -1263,8 +1271,11 @@ export function buildProgram(opts: RunOptions = {}): Command {
         }
         if (result.persistedReport.ok) {
           const prev = result.persistedReport.previousStatus ?? "<missing>";
+          const stampNote = result.persistedReport.sessionIdStamped
+            ? "; stamped sessionId"
+            : "";
           lines.push(
-            `report:  ✓ ${result.persistedReport.filePath} (approvalStatus: ${prev} → approved)`,
+            `report:  ✓ ${result.persistedReport.filePath} (approvalStatus: ${prev} → approved${stampNote})`,
           );
         } else {
           lines.push(`report:  ⚠ skipped (${result.persistedReport.reason})`);

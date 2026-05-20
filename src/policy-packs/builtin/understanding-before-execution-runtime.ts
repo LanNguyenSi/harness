@@ -161,14 +161,39 @@ export function listPersistedReports(dir: string): PersistedReport[] {
   return reports.map((r) => r.report);
 }
 
+export interface FindReportOptions {
+  /**
+   * Behaviour of the sessionId-null tolerant fallback (older Stop-hook
+   * package versions write reports without a `sessionId` field):
+   *  - `"any"` (default): adopt the freshest sessionId-null report
+   *    regardless of its `approvalStatus`. The gate read path
+   *    (`checkPersistedReport`) and post-tool-use expiry
+   *    (`expirePersistedReport`) rely on this so they keep finding the
+   *    session's own report.
+   *  - `"uncompleted"`: skip sessionId-null reports whose
+   *    `approvalStatus` is a terminal `approved` / `expired`. Such a
+   *    report belongs to a prior, finished approval cycle (often from
+   *    a different task days ago) and must not be silently re-adopted
+   *    as the current session's approval. `harness approve
+   *    understanding` passes this so it never flips a stale unrelated
+   *    report into the live session (harness/0dce3880 friction #1).
+   */
+  tolerantFallback?: "any" | "uncompleted";
+}
+
 /**
  * Return the freshest report for a given session_id, or the freshest
- * report overall when the persisted file lacks a sessionId field
+ * applicable report when the persisted file lacks a sessionId field
  * (older package versions). null when nothing matches.
+ *
+ * The strict (sessionId-equals) match always wins. The tolerant
+ * fallback's appetite is controlled by `opts.tolerantFallback` — see
+ * `FindReportOptions`.
  */
 export function findLatestReportForSession(
   reports: PersistedReport[],
   sessionId: string,
+  opts: FindReportOptions = {},
 ): PersistedReport | null {
   // Strict match first.
   for (const r of reports) {
@@ -178,8 +203,19 @@ export function findLatestReportForSession(
   // applicable to whichever session is asking. Only kicks in when no
   // sessionId-tagged report exists, so harnessed sessions with proper
   // tagging never hit this path.
+  const mode = opts.tolerantFallback ?? "any";
   for (const r of reports) {
-    if (r.sessionId === null) return r;
+    if (r.sessionId !== null) continue;
+    if (
+      mode === "uncompleted" &&
+      (r.approvalStatus === "approved" || r.approvalStatus === "expired")
+    ) {
+      // A completed-cycle report from another session/task; skipping it
+      // here is what stops `harness approve understanding` from binding
+      // the live session to a stale, unrelated report.
+      continue;
+    }
+    return r;
   }
   return null;
 }

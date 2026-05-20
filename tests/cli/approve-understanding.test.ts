@@ -2,7 +2,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { approveUnderstanding } from "../../src/cli/approve/understanding.js";
+import { approveUnderstanding, dedupeTaskIds } from "../../src/cli/approve/understanding.js";
+import { buildProgram } from "../../src/cli/index.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
 import { REPORTS_DIR_ENV } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 import { readPendingApproval, writePendingApproval } from "../../src/runtime/pending-approval.js";
@@ -737,17 +738,18 @@ describe("approveUnderstanding — task-scoped marker (harness/1ee26e77)", () =>
     if (!result.marker.ok) return;
     expect(fs.existsSync(result.marker.filePath)).toBe(true);
 
-    expect(result.taskMarker).not.toBeNull();
-    if (result.taskMarker === null || !result.taskMarker.ok) {
+    expect(result.taskMarkers).toHaveLength(1);
+    const tm = result.taskMarkers[0];
+    if (tm === undefined || !tm.ok) {
       throw new Error("expected ok task marker");
     }
-    expect(result.taskMarker.taskId).toBe("task-uuid-abc");
-    expect(result.taskMarker.filePath).toBe(
+    expect(tm.taskId).toBe("task-uuid-abc");
+    expect(tm.filePath).toBe(
       path.join(generatedDir, ".approvals", "task-task-uuid-abc"),
     );
-    expect(fs.existsSync(result.taskMarker.filePath)).toBe(true);
+    expect(fs.existsSync(tm.filePath)).toBe(true);
 
-    const written = JSON.parse(fs.readFileSync(result.taskMarker.filePath, "utf8")) as {
+    const written = JSON.parse(fs.readFileSync(tm.filePath, "utf8")) as {
       approvedAt: string;
       approvedBy: string;
     };
@@ -755,7 +757,7 @@ describe("approveUnderstanding — task-scoped marker (harness/1ee26e77)", () =>
     expect(written.approvedBy).toBe("test-suite");
   });
 
-  it("leaves taskMarker as null when --task is not supplied (no regression)", async () => {
+  it("leaves taskMarkers empty when --task is not supplied (no regression)", async () => {
     const generatedDir = path.join(tmp, "harness.generated");
     const result = await approveUnderstanding({
       manifest: manifest(),
@@ -766,7 +768,7 @@ describe("approveUnderstanding — task-scoped marker (harness/1ee26e77)", () =>
     });
 
     expect(result.marker.ok).toBe(true);
-    expect(result.taskMarker).toBeNull();
+    expect(result.taskMarkers).toEqual([]);
     // Approvals directory has only the session marker, no task-* siblings.
     const approvals = fs.readdirSync(path.join(generatedDir, ".approvals"));
     expect(approvals.some((n) => n.startsWith("task-"))).toBe(false);
@@ -790,16 +792,17 @@ describe("approveUnderstanding — task-scoped marker (harness/1ee26e77)", () =>
       ledgerAdd: async () => ({ ok: true }),
     });
 
-    expect(result.taskMarker).not.toBeNull();
-    if (result.taskMarker === null || !result.taskMarker.ok) {
+    expect(result.taskMarkers).toHaveLength(1);
+    const tm = result.taskMarkers[0];
+    if (tm === undefined || !tm.ok) {
       throw new Error("expected ok task marker");
     }
-    expect(result.taskMarker.taskId).toBe("task-from-file");
-    expect(result.taskMarker.source).toBe("active-claim");
-    expect(result.taskMarker.filePath).toBe(
+    expect(tm.taskId).toBe("task-from-file");
+    expect(tm.source).toBe("active-claim");
+    expect(tm.filePath).toBe(
       path.join(generatedDir, ".approvals", "task-task-from-file"),
     );
-    expect(fs.existsSync(result.taskMarker.filePath)).toBe(true);
+    expect(fs.existsSync(tm.filePath)).toBe(true);
   });
 
   it("--task overrides the active-claim file when both are present", async () => {
@@ -816,11 +819,12 @@ describe("approveUnderstanding — task-scoped marker (harness/1ee26e77)", () =>
       ledgerAdd: async () => ({ ok: true }),
     });
 
-    if (result.taskMarker === null || !result.taskMarker.ok) {
+    const tm = result.taskMarkers[0];
+    if (tm === undefined || !tm.ok) {
       throw new Error("expected ok task marker");
     }
-    expect(result.taskMarker.taskId).toBe("task-from-flag");
-    expect(result.taskMarker.source).toBe("flag");
+    expect(tm.taskId).toBe("task-from-flag");
+    expect(tm.source).toBe("flag");
   });
 
   it("falls back to session-only when no --task AND no active-claim file exists (v1 back-compat)", async () => {
@@ -834,8 +838,223 @@ describe("approveUnderstanding — task-scoped marker (harness/1ee26e77)", () =>
       ledgerAdd: async () => ({ ok: true }),
     });
 
-    expect(result.taskMarker).toBeNull();
+    expect(result.taskMarkers).toEqual([]);
     const approvals = fs.readdirSync(path.join(generatedDir, ".approvals"));
     expect(approvals.some((n) => n.startsWith("task-"))).toBe(false);
+  });
+});
+
+describe("approveUnderstanding — multi-task pre-approval (harness/0dce3880)", () => {
+  it("writes one marker per id when opts.tasks lists several", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-1",
+      tasks: ["task-a", "task-b", "task-c"],
+      reportsDir: tmp,
+      generatedDir,
+      now: new Date("2026-05-20T08:00:00Z"),
+      approvedBy: "test-suite",
+      ledgerAdd: async () => ({ ok: true }),
+    });
+
+    expect(result.taskMarkers).toHaveLength(3);
+    for (const tm of result.taskMarkers) {
+      if (!tm.ok) throw new Error(`expected ok task marker, got ${tm.reason}`);
+      expect(tm.source).toBe("flag");
+      expect(fs.existsSync(tm.filePath)).toBe(true);
+    }
+    expect(result.taskMarkers.map((t) => t.ok && t.taskId)).toEqual([
+      "task-a",
+      "task-b",
+      "task-c",
+    ]);
+    const approvals = fs.readdirSync(path.join(generatedDir, ".approvals"));
+    expect(approvals.filter((n) => n.startsWith("task-")).sort()).toEqual([
+      "task-task-a",
+      "task-task-b",
+      "task-task-c",
+    ]);
+  });
+
+  it("comma-splits and de-duplicates opts.tasks entries", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-1",
+      // mixed comma-joined + repeated + padded; expect t1,t2,t3 unique.
+      tasks: ["t1,t2", " t2 ", "t3"],
+      reportsDir: tmp,
+      generatedDir,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+
+    expect(result.taskMarkers.map((t) => t.ok && t.taskId)).toEqual([
+      "t1",
+      "t2",
+      "t3",
+    ]);
+  });
+
+  it("opts.tasks takes precedence over the single-id opts.task", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-1",
+      task: "single",
+      tasks: ["multi-a", "multi-b"],
+      reportsDir: tmp,
+      generatedDir,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+
+    expect(result.taskMarkers.map((t) => t.ok && t.taskId)).toEqual([
+      "multi-a",
+      "multi-b",
+    ]);
+  });
+
+  it("a single failing id does not abort the surrounding markers", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    // The middle id contains a path separator; writeTaskApprovalMarker's
+    // rejectMalformedTaskId throws for it. The surrounding ids must
+    // still get their markers.
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-1",
+      tasks: ["good-1", "bad/traversal", "good-2"],
+      reportsDir: tmp,
+      generatedDir,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+
+    expect(result.taskMarkers).toHaveLength(3);
+    const [a, b, c] = result.taskMarkers;
+    expect(a?.ok).toBe(true);
+    expect(b?.ok).toBe(false);
+    expect(c?.ok).toBe(true);
+    if (b === undefined || b.ok) throw new Error("expected middle marker to fail");
+    expect(b.taskId).toBe("bad/traversal");
+    expect(b.reason).toMatch(/path-separator|traversal/);
+    // Both good markers landed on disk.
+    const approvals = fs.readdirSync(path.join(generatedDir, ".approvals"));
+    expect(approvals.filter((n) => n.startsWith("task-")).sort()).toEqual([
+      "task-good-1",
+      "task-good-2",
+    ]);
+  });
+});
+
+describe("dedupeTaskIds", () => {
+  it("comma-splits, trims, drops blanks, de-dups preserving first-seen order", () => {
+    expect(dedupeTaskIds(["t1,t2", " t2 ", "t3", "", "  "])).toEqual([
+      "t1",
+      "t2",
+      "t3",
+    ]);
+  });
+
+  it("returns an empty array for all-blank input", () => {
+    expect(dedupeTaskIds(["", "  ", ","])).toEqual([]);
+  });
+
+  it("leaves a clean single-element list untouched", () => {
+    expect(dedupeTaskIds(["only"])).toEqual(["only"]);
+  });
+});
+
+describe("harness approve understanding — CLI --task option", () => {
+  it("declares --task as a variadic option", () => {
+    const program = buildProgram();
+    const approve = program.commands.find((c) => c.name() === "approve");
+    const understanding = approve?.commands.find((c) => c.name() === "understanding");
+    const taskOpt = understanding?.options.find((o) => o.long === "--task");
+    expect(taskOpt, "--task option should be registered").toBeDefined();
+    expect(taskOpt?.variadic, "--task should be variadic for batch pre-approval").toBe(true);
+  });
+});
+
+describe("approveUnderstanding — report sessionId binding (harness/0dce3880 friction #1)", () => {
+  it("stamps the current sessionId onto a report that lacks one", async () => {
+    const filePath = writeReport("no-session.json", {
+      // NO sessionId field — older Stop-hook package output.
+      approvalStatus: "pending",
+    });
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-stamp",
+      reportsDir: tmp,
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+
+    expect(result.persistedReport.ok).toBe(true);
+    if (!result.persistedReport.ok) return;
+    expect(result.persistedReport.sessionIdStamped).toBe(true);
+    const after = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+    expect(after.sessionId).toBe("sess-stamp");
+    expect(after.approvalStatus).toBe("approved");
+  });
+
+  it("leaves an existing sessionId untouched and reports sessionIdStamped=false", async () => {
+    const filePath = writeReport("own-session.json", {
+      sessionId: "sess-keep",
+      approvalStatus: "pending",
+    });
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-keep",
+      reportsDir: tmp,
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+
+    expect(result.persistedReport.ok).toBe(true);
+    if (!result.persistedReport.ok) return;
+    expect(result.persistedReport.sessionIdStamped).toBe(false);
+    const after = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+    expect(after.sessionId).toBe("sess-keep");
+  });
+
+  it("does NOT adopt a stale completed (expired) sessionId-null report", async () => {
+    // Reproduces the friction: a 2-day-old report from a different task,
+    // already cycled to `expired`, with no sessionId. A fresh session's
+    // `harness approve understanding` must not flip it to approved.
+    writeReport("stale-expired.json", {
+      // NO sessionId; from a finished prior cycle.
+      approvalStatus: "expired",
+      currentUnderstanding: "an unrelated investigation from days ago",
+    });
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "fresh-session",
+      reportsDir: tmp,
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+
+    expect(result.persistedReport.ok).toBe(false);
+    if (result.persistedReport.ok) return;
+    expect(result.persistedReport.reason).toMatch(/no report matched/);
+  });
+
+  it("still adopts a fresh pending sessionId-null report (the legitimate case)", async () => {
+    const filePath = writeReport("fresh-pending.json", {
+      // NO sessionId, but pending — a current Stop-hook report.
+      approvalStatus: "pending",
+    });
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "fresh-session",
+      reportsDir: tmp,
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+
+    expect(result.persistedReport.ok).toBe(true);
+    if (!result.persistedReport.ok) return;
+    expect(result.persistedReport.sessionIdStamped).toBe(true);
+    const after = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+    expect(after.sessionId).toBe("fresh-session");
   });
 });
