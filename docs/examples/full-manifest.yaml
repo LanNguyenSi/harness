@@ -98,12 +98,13 @@ hooks:
     # (default subprocess timeout is 60s in the bundled wrapper since
     # agent-tasks/7265599e); leave 10s headroom for ledger write.
     budget_ms: 70000
-    # Floor at agent-preflight 0.1.1, the release that distinguishes
-    # "tool not installed" (e.g. an npm script invoking eslint that
-    # is not in devDependencies) from real lint/test/typecheck failures.
-    # Stale 0.1.0 installs silently emit false-positive blockers that
-    # keep the preflight-before-* policies closed forever.
-    min_version: "0.1.1"
+    # Floor at agent-preflight 0.2.0, the release that makes secret
+    # detection git-aware and diff-scoped. Pre-0.2.0 installs hard-fail
+    # preflight on the normal correct state (a gitignored .env holding
+    # real credentials), so this SessionStart producer never writes a
+    # preflight: tag and the preflight-before-* policies stay closed
+    # forever on any repo with a local .env.
+    min_version: "0.2.0"
     version_command: ["preflight", "--version"]
     description: "Run agent-preflight on session start; record ready + confidence into the ledger as preflight:${REPO}."
 
