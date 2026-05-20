@@ -1231,9 +1231,29 @@ export function buildProgram(opts: RunOptions = {}): Command {
               : result.sessionSource === "env-codex"
                 ? " (from $CODEX_SESSION_ID)"
                 : result.sessionSource === "newest-report"
-                  ? " (resolved from sessionId field of the newest persisted Understanding Report)"
+                  ? " (GUESSED from the newest pending Understanding Report)"
                   : "";
         lines.push(`session: ${result.sessionId}${sourceNote}`);
+        if (result.sessionSource === "newest-report") {
+          // Tier-5 is a guess: no --session, no env var, no gate-staged
+          // .pending-approval. It is restricted to `pending` reports
+          // (harness/56f51f2b), but a stale session that left a never-
+          // approved report can still be picked. Name the report file
+          // so the operator can open it and confirm the id before
+          // trusting a marker that may approve the wrong session.
+          lines.push("");
+          lines.push("⚠ WARNING: the session id was GUESSED, not confirmed. There was no");
+          lines.push("  --session flag, no $CLAUDE_SESSION_ID / $CODEX_SESSION_ID, and no");
+          lines.push("  gate-staged .pending-approval, so it was read from the newest pending");
+          lines.push("  Understanding Report:");
+          if (result.newestReportPath) {
+            lines.push(`    ${result.newestReportPath}`);
+          }
+          lines.push("  If that is not your live session, the marker above approves the wrong");
+          lines.push("  session and the gate stays blocked. Confirm the id matches the running");
+          lines.push("  agent ($CLAUDE_SESSION_ID / $CODEX_SESSION_ID); if it differs, re-run");
+          lines.push("  with --session <live-id>.");
+        }
         if (result.marker.ok) {
           lines.push(`marker:  ✓ ${result.marker.filePath} (canonical gate signal)`);
         } else {

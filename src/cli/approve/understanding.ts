@@ -105,6 +105,14 @@ export interface ApproveUnderstandingResult {
     | "pending-approval"
     | "newest-report";
   /**
+   * When `sessionSource` is `"newest-report"`, the absolute path of the
+   * persisted report the session id was guessed from. Undefined for
+   * every other source. The CLI names this file in its loud tier-5
+   * "verify this is your live session" warning so the operator can open
+   * it and check before trusting the marker (harness/56f51f2b).
+   */
+  newestReportPath?: string;
+  /**
    * Canonical gate-satisfying signal as of agent-tasks/88ca4bb3.
    * `ok: false` means the marker file could not be written (rare:
    * fs permission, missing parent directory) and the gate will still
@@ -347,6 +355,7 @@ export async function approveUnderstanding(
     defaultReportsDir(path.dirname(resolvePaths(opts).base));
   let sessionId = "";
   let sessionSource: ApproveUnderstandingResult["sessionSource"] = "flag";
+  let newestReportPath: string | undefined;
   if (typeof opts.session === "string" && opts.session.length > 0) {
     sessionId = opts.session;
     sessionSource = "flag";
@@ -368,12 +377,26 @@ export async function approveUnderstanding(
       sessionId = staged;
       sessionSource = "pending-approval";
     } else {
+      // Tier 5: guess the session from the freshest persisted report.
+      // Restricted to `pending` reports. An `approved` / `expired`
+      // report belongs to a finished gate cycle (often a different
+      // session days ago); adopting its sessionId silently approves an
+      // unrelated session while the live one stays gated
+      // (harness/56f51f2b). A `pending` report is one the Stop hook
+      // just produced that no approval has consumed yet, so it is far
+      // more likely to be the current session's. This mirrors the
+      // `tolerantFallback: "uncompleted"` restriction PR #218 applied
+      // to the report-flip path below. The residual case — a stale
+      // session left a never-approved `pending` report — is caught by
+      // the loud tier-5 warning the CLI prints, which names the report
+      // file so the operator can verify before trusting the marker.
       const newest = listPersistedReports(reportsDir).find(
-        (r) => r.sessionId !== null,
+        (r) => r.sessionId !== null && r.approvalStatus === "pending",
       );
       if (newest && newest.sessionId !== null) {
         sessionId = newest.sessionId;
         sessionSource = "newest-report";
+        newestReportPath = newest.filePath;
       }
     }
   }
@@ -381,11 +404,12 @@ export async function approveUnderstanding(
   if (sessionId === "") {
     // Reaching here means: no --session flag, no $CLAUDE_SESSION_ID /
     // $CODEX_SESSION_ID env, no staged `.pending-approval`, AND no
-    // persisted Understanding Report under <reportsDir> carries a
-    // sessionId field. The gate has never blocked this session and the
-    // agent never produced a report — or every report's sessionId is
-    // null (very old package versions). Spell out the retrieval paths
-    // so the operator does not have to dig through docs.
+    // `pending` persisted Understanding Report under <reportsDir>
+    // carries a sessionId field. Either the gate has never blocked this
+    // session and the agent never produced a report, or every report is
+    // already approved/expired or sessionId-null (tier 5 only adopts a
+    // fresh `pending` report). Spell out the retrieval paths so the
+    // operator does not have to dig through docs.
     throw new HarnessExitError(
       [
         "no session id available. Pass --session <id>, or set $CLAUDE_SESSION_ID / $CODEX_SESSION_ID.",
@@ -571,6 +595,7 @@ export async function approveUnderstanding(
   return {
     sessionId,
     sessionSource,
+    ...(newestReportPath !== undefined ? { newestReportPath } : {}),
     marker: markerResult,
     taskMarkers,
     ledger: ledgerResult.ok
