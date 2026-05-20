@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.25.2] - 2026-05-20
+
+**Headline: three patch fixes from post-v0.25.1 dogfooding.** `harness init --interactive` wire-now no longer misreports an idempotent `settings.json` merge as a failure, so an operator re-running the installer against an already-wired runtime is no longer sent looping through redundant `harness apply` commands. A wall-clock-flaky `pause-hook-integration` test that intermittently dropped `harness preflight` confidence and blocked release pushes is deflaked. And the `~/.claude/` legacy-fallback deprecation warning no longer claims the fallback was removed in v0.25.0, a version that shipped with it intact. **Operator action**: none; re-run `npm i -g @lannguyensi/harness` to upgrade.
+
 ### Fixed
 
 - **`pause-hook-integration` auto-expiry test is deterministic, no longer wall-clock flaky** (agent-tasks/8fc70e57, friction #17). The `tests/cli/pause-hook-integration.test.ts` "auto-expires past the `--for` window" test paused harness with a 1s `--for` window, then bridged the gap to the hook fire with a real `setTimeout` (~1100ms) before asserting the sentinel had expired. `pause()` writes `expiresAt` off the wall clock and the PreToolUse hook checks expiry against the wall clock, but `setTimeout` counts monotonic time; on a host whose wall clock drifts relative to the monotonic timer (WSL2, a loaded CI runner) the ~100ms margin could read the sentinel as still active, short-circuit the hook to allow, and flake `res.blocked`. Observed twice on 2026-05-20, once dropping `harness preflight` confidence to 0.59 and blocking a release-branch push. `PackHookPreToolUseOptions` gains an optional `now` (test injection) threaded into the pause-check `now` seam that `checkPauseFromLoader` / `maybeAnnouncePause` / `readSentinel` already accept; the test now pauses and fires the hook off a single injected clock with no real sleep. No runtime behaviour change: `now` defaults to `new Date()` exactly as before.
