@@ -110,6 +110,13 @@ export const PROFILE_DEPENDENCIES: Record<Exclude<ProfileChoice, "custom">, Prof
       binary: "preflight",
       npmPackage: "@lannguyensi/agent-preflight",
       description: "agent-preflight (SessionStart preflight producer)",
+      // Mirrors the FULL_TEMPLATE git-preflight hook's `min_version`
+      // floor. 0.2.0 made secret detection git-aware and diff-scoped;
+      // pre-0.2.0 installs hard-fail preflight on the normal correct
+      // state (a gitignored .env with real credentials), so the
+      // SessionStart producer never writes a `preflight:` tag and the
+      // preflight-before-* policies stay closed forever.
+      minVersion: "0.2.0",
     },
   ],
 };

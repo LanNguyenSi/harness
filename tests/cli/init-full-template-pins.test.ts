@@ -13,20 +13,21 @@ import { parseManifest } from "../../src/schema/index.js";
 // in tests/policy-packs/expand.test.ts:132-155.
 
 describe("FULL_TEMPLATE: npm-bin hook pins", () => {
-  it("git-preflight (agent-preflight) floors at 0.1.1 with `preflight --version` probe", () => {
-    // Floor at agent-preflight 0.1.1: the release that distinguishes
-    // "tool not installed" (e.g. an npm script invoking eslint that
-    // is not in devDependencies) from real lint/test/typecheck
-    // failures. Stale 0.1.0 installs silently emit false-positive
-    // blockers that keep the preflight-before-* policies closed
-    // forever. The version_command points at the source-of-truth
-    // `preflight` binary, not at the `harness session-start preflight`
-    // wrapper, so the floor checks the actual upstream release.
+  it("git-preflight (agent-preflight) floors at 0.2.0 with `preflight --version` probe", () => {
+    // Floor at agent-preflight 0.2.0: the release that makes secret
+    // detection git-aware and diff-scoped. Pre-0.2.0 installs hard-fail
+    // preflight on the normal correct state (a gitignored .env holding
+    // real credentials), so the SessionStart producer never writes a
+    // `preflight:` tag and the preflight-before-* policies stay closed
+    // forever on any repo with a local .env. The version_command points
+    // at the source-of-truth `preflight` binary, not at the `harness
+    // session-start preflight` wrapper, so the floor checks the actual
+    // upstream release.
     const m = parseManifest(parseYaml(FULL_TEMPLATE));
     const gitPreflight = m.hooks.find((h) => h.name === "git-preflight");
     expect(gitPreflight, "FULL_TEMPLATE must declare a git-preflight SessionStart hook").toBeDefined();
     expect(gitPreflight?.event).toBe("SessionStart");
-    expect(gitPreflight?.min_version).toBe("0.1.1");
+    expect(gitPreflight?.min_version).toBe("0.2.0");
     expect(gitPreflight?.version_command).toEqual(["preflight", "--version"]);
   });
 });

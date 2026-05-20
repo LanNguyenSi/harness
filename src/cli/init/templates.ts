@@ -151,14 +151,18 @@ hooks:
     # blew through it. Bumped together with DEFAULT_PREFLIGHT_TIMEOUT_MS
     # (agent-tasks/7265599e).
     budget_ms: 70000
-    # Floor at agent-preflight 0.1.1, the release that distinguishes
-    # "tool not installed" (e.g. an npm script invoking eslint that is
-    # not in devDependencies) from real lint/test/typecheck failures.
-    # Stale 0.1.0 installs silently emit false-positive blockers that
-    # keep the preflight-before-* policies closed forever. version_command
-    # points at the source-of-truth preflight binary, not at the
-    # \`harness session-start preflight\` wrapper.
-    min_version: "0.1.1"
+    # Floor at agent-preflight 0.2.0, the release that makes secret
+    # detection git-aware and diff-scoped: a gitignored+untracked .env,
+    # a .md doc, a non-git dir, or a secret in a tracked file the branch
+    # never touched is a non-blocking warn, not a hard fail. Pre-0.2.0
+    # installs hard-fail preflight on the normal correct state (a
+    # gitignored .env holding real credentials), so this SessionStart
+    # producer never writes a preflight: tag and the preflight-before-*
+    # policies stay closed forever on any repo with a local .env. (0.1.1
+    # had already fixed the wrapper-script "tool not installed" false
+    # positive.) version_command points at the source-of-truth preflight
+    # binary, not at the \`harness session-start preflight\` wrapper.
+    min_version: "0.2.0"
     version_command: ["preflight", "--version"]
 
   - name: require-review-evidence

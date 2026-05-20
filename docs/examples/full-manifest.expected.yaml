@@ -88,7 +88,7 @@ hooks:
     blocking: false
     budget_ms: 70000
     description: Run agent-preflight on session start; record ready + confidence into the ledger as preflight:${REPO}.
-    min_version: 0.1.1
+    min_version: 0.2.0
     version_command:
       - preflight
       - --version
