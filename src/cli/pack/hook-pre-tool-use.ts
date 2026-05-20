@@ -74,6 +74,14 @@ export interface PackHookPreToolUseOptions extends LoaderOptions {
   manifest?: Manifest;
   /** Inject a fake ledger query (test). */
   ledgerQuery?: (sessionId: string) => Promise<LedgerEntry[] | { degraded: string }>;
+  /**
+   * Override "now" for the pause-sentinel expiry check (test injection).
+   * The lower layers (`checkPauseFromLoader`, `maybeAnnouncePause`,
+   * `readSentinel`) already accept a `now`; this threads it through so a
+   * test can drive pause auto-expiry off an injected clock instead of a
+   * real-time sleep.
+   */
+  now?: Date;
 }
 
 export interface PackHookPreToolUseResult {
@@ -326,6 +334,7 @@ export async function runPackHookPreToolUseCli(
       stderr,
     };
     if (opts.generatedDir !== undefined) pauseOpts.generatedDir = opts.generatedDir;
+    if (opts.now !== undefined) pauseOpts.now = opts.now;
     if (checkPauseFromLoader(pauseOpts).paused) {
       const diagnostic = "harness paused; pre-tool-use allowing without evaluating.";
       return {

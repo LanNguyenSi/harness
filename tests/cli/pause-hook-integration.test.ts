@@ -147,20 +147,29 @@ describe("pause → hook fire → resume → hook fire (understanding-before-exe
   });
 
   it("auto-expires past the --for window: hook on next fire blocks normally", async () => {
+    // Deterministic clock. The previous version paused with a 1s `--for`
+    // window and bridged it to the hook fire with a real `setTimeout`
+    // (~1100ms) before asserting expiry. `pause()` writes `expiresAt` off
+    // the wall clock and the hook checks expiry against the wall clock,
+    // but `setTimeout` counts monotonic time — on a host whose wall clock
+    // drifts relative to the monotonic timer (WSL2, a loaded CI runner),
+    // the ~100ms margin could read the sentinel as still active and the
+    // hook would short-circuit to allow, flaking `res.blocked`. Injecting
+    // `now` into both `pause()` and the hook removes the wall-clock
+    // dependency entirely: no real sleep, no race.
+    const pausedAt = new Date("2026-05-20T12:00:00.000Z");
     await pause({
       manifest: manifestWithPack(),
       generatedDir,
       stdinIsTTY: true,
       claudeSessionIdEnv: "",
       forDuration: "1s",
+      now: pausedAt,
       ledgerAdd: async () => ({ ok: true }),
     });
 
-    // Walk the clock past expiry, then fire the hook. The hook reads
-    // its own "now" implicitly via maybeAnnouncePause — for this assertion
-    // we step time forward by simulating a delay long enough to pass 1s.
-    await new Promise((r) => setTimeout(r, 1100));
-
+    // Fire the hook 5s past the 1s window — unambiguously expired.
+    const afterExpiry = new Date(pausedAt.getTime() + 5000);
     const stdout = bufferStream();
     const stderr = bufferStream();
     const res = await runPackHookPreToolUseCli({
@@ -170,6 +179,7 @@ describe("pause → hook fire → resume → hook fire (understanding-before-exe
       stderr: stderr.stream,
       generatedDir,
       reportsDir: path.join(tmp, "no-reports"),
+      now: afterExpiry,
       ledgerQuery: async (): Promise<LedgerEntry[]> => [],
     });
 
