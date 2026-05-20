@@ -103,7 +103,7 @@ export function resolveHomeDir(opts: ResolveHomeDirOptions = {}): HomeDirResolut
     if (!warnedLegacy) {
       const stderr = opts.stderr ?? process.stderr;
       stderr.write(
-        `harness: state still under legacy ${legacyPath}/; run \`harness migrate-home\` to move it to ${newPath}/. The legacy fallback is removed in v0.25.0.\n`,
+        `harness: state still under legacy ${legacyPath}/; run \`harness migrate-home\` to move it to ${newPath}/. The legacy fallback will be removed in a future release.\n`,
       );
       warnedLegacy = true;
     }

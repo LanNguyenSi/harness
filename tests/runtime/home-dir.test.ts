@@ -85,7 +85,14 @@ describe("resolveHomeDir — precedence", () => {
     const result = resolveHomeDir({ userHome: tmp, stderr: stderr.stream });
     expect(result.path).toBe(path.join(tmp, LEGACY_HARNESS_HOME_DIRNAME));
     expect(result.source).toBe("legacy");
-    expect(stderr.read()).toMatch(/state still under legacy.*harness migrate-home/);
+    const warning = stderr.read();
+    expect(warning).toMatch(/state still under legacy.*harness migrate-home/);
+    // The warning must not name a specific removed-in version: the text
+    // outlives any single release, and a stale "removed in vX.Y.Z" tells
+    // operators on a legacy install the fallback is already gone in a
+    // version they may be running (it is not). Regression guard for the
+    // pre-fix "removed in v0.25.0" string (agent-tasks/4fb266a1).
+    expect(warning).not.toMatch(/removed in v\d/);
   });
 
   it("tier 4: falls back to ~/.claude/ when only harness.generated/ exists there", () => {
