@@ -1891,7 +1891,15 @@ export function buildProgram(opts: RunOptions = {}): Command {
       if (result.outcome === "target-conflict") {
         throw new HarnessExitError("", EX_FAIL);
       }
-    })
+    });
+
+  // `harness pause` / `harness resume`: operator-only kill switch.
+  // Sibling top-level commands: `pause` must start its own
+  // `program.command(...)` statement. It was previously chained onto the
+  // `migrate-home` block above, which (Commander's `.command()` returns
+  // the new subcommand) registered it as `harness migrate-home pause`
+  // and dropped it from top-level `harness --help`.
+  program
     .command("pause")
     .description(
       "Temporarily make all harness hooks dormant by writing a sentinel under harness.generated/. " +
