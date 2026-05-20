@@ -54,8 +54,24 @@ export interface ApproveUnderstandingOptions extends LoaderOptions {
    * exists, its content is used as the task id. If absent, no task
    * marker is written — the session marker is the only one (v1
    * back-compat).
+   *
+   * Single-id back-compat field. For pre-approving a batch use `tasks`;
+   * when both are set, `tasks` wins.
    */
   task?: string;
+  /**
+   * Multiple agent-tasks task ids to pre-approve in one operator action
+   * (harness/0dce3880 friction #2). One task-scoped marker is written
+   * per id. As the agent's active claim cycles through the listed
+   * tasks, each `task_start` finds its own marker already present, so a
+   * homogeneous batch (e.g. a CVE sweep across N repos) needs a single
+   * `harness approve understanding --task a b c` instead of one
+   * approval per `task_finish`. The understanding gate stays
+   * task-scoped: the operator's report still has to enumerate every
+   * task it covers; only the round-trip count collapses. Empty / blank
+   * entries are dropped and duplicates de-duplicated.
+   */
+  tasks?: string[];
   /** Override the reports directory (test injection). */
   reportsDir?: string;
   /** Override the harness.generated/ directory (test injection). */
@@ -69,6 +85,11 @@ export interface ApproveUnderstandingOptions extends LoaderOptions {
   /** Override the ledger writer (test). */
   ledgerAdd?: (sessionId: string, content: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
 }
+
+/** Outcome of writing one task-scoped approval marker. */
+export type TaskMarkerOutcome =
+  | { ok: true; taskId: string; filePath: string; approvedAt: string; source: "flag" | "active-claim" }
+  | { ok: false; taskId: string; reason: string; source: "flag" | "active-claim" };
 
 export interface ApproveUnderstandingResult {
   sessionId: string;
@@ -92,22 +113,27 @@ export interface ApproveUnderstandingResult {
    */
   marker: { ok: true; filePath: string; approvedAt: string } | { ok: false; reason: string };
   /**
-   * Task-scoped marker write outcome. Present when --task / opts.task
-   * was supplied OR when the active-claim file resolved one
-   * (harness/494fd1e5). Null when no task was resolved through either
-   * surface so a regression cannot silently flip session-only sessions
-   * into task-mode.
+   * Task-scoped marker write outcomes, one entry per resolved task id
+   * (harness/0dce3880). Populated when `--task` / `opts.task` /
+   * `opts.tasks` was supplied OR when the active-claim file resolved an
+   * id (harness/494fd1e5). Empty array when no task was resolved
+   * through any surface, so a regression cannot silently flip
+   * session-only sessions into task-mode.
    *
-   * The `source` field tells the operator which surface fed the id so
+   * The `source` field tells the operator which surface fed each id so
    * a wrong claim file can be spotted before it lands in the marker.
    */
-  taskMarker:
-    | { ok: true; taskId: string; filePath: string; approvedAt: string; source: "flag" | "active-claim" }
-    | { ok: false; taskId: string; reason: string; source: "flag" | "active-claim" }
-    | null;
+  taskMarkers: TaskMarkerOutcome[];
   ledger: { ok: boolean; tag: string; reason?: string };
   persistedReport:
-    | { ok: true; filePath: string; previousStatus: string | null; approvedAt: string }
+    | {
+        ok: true;
+        filePath: string;
+        previousStatus: string | null;
+        approvedAt: string;
+        /** True when this approval stamped a missing `sessionId` onto the report. */
+        sessionIdStamped: boolean;
+      }
     | { ok: false; reason: string };
 }
 
@@ -234,7 +260,8 @@ function rewriteReportApproved(
   filePath: string,
   approvedAt: string,
   approvedBy: string,
-): { previousStatus: string | null } {
+  sessionId: string,
+): { previousStatus: string | null; sessionIdStamped: boolean } {
   const raw = fs.readFileSync(filePath, "utf8");
   const parsed = JSON.parse(raw) as Record<string, unknown>;
   const previousStatus =
@@ -242,8 +269,41 @@ function rewriteReportApproved(
   parsed["approvalStatus"] = "approved";
   parsed["approvedAt"] = approvedAt;
   parsed["approvedBy"] = approvedBy;
+  // Stamp the session id when the report lacks one (older Stop-hook
+  // package versions write reports without a `sessionId` field). This
+  // binds the report to the session that approved it, so every later
+  // lookup strict-matches it and the sessionId-null tolerant fallback
+  // can never re-adopt it for a different session (harness/0dce3880
+  // friction #1). A report that already carries a sessionId is left
+  // untouched — it is not this command's place to rewrite identity.
+  let sessionIdStamped = false;
+  const existing = parsed["sessionId"];
+  if (typeof existing !== "string" || existing.length === 0) {
+    parsed["sessionId"] = sessionId;
+    sessionIdStamped = true;
+  }
   atomicWriteFile(filePath, `${JSON.stringify(parsed, null, 2)}\n`);
-  return { previousStatus };
+  return { previousStatus, sessionIdStamped };
+}
+
+/**
+ * Normalise a list of task ids supplied via `opts.tasks` (or the CLI's
+ * variadic `--task`). Each entry is comma-split (so `--task a,b` and
+ * `--task a b` are equivalent), trimmed, blank entries dropped, and the
+ * result de-duplicated while preserving first-seen order.
+ */
+export function dedupeTaskIds(raw: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const entry of raw) {
+    for (const part of entry.split(",")) {
+      const id = part.trim();
+      if (id.length === 0 || seen.has(id)) continue;
+      seen.add(id);
+      out.push(id);
+    }
+  }
+  return out;
 }
 
 export async function approveUnderstanding(
@@ -388,45 +448,51 @@ export async function approveUnderstanding(
     };
   }
 
-  // Task-scoped marker (harness/1ee26e77 + v2 auto-resolve in
-  // harness/494fd1e5). Written alongside the session marker when:
-  //   - --task / opts.task was supplied (explicit, source: "flag"), OR
-  //   - the active-claim file resolves to a taskId (source: "active-claim").
-  // A failure here is surfaced loudly but does not abort the approve
-  // flow; the session marker still satisfies the gate as a fallback.
-  let taskMarkerResult: ApproveUnderstandingResult["taskMarker"] = null;
-  let resolvedTaskId: string | null = null;
+  // Task-scoped markers (harness/1ee26e77 + v2 auto-resolve in
+  // harness/494fd1e5 + multi-task batch in harness/0dce3880). Written
+  // alongside the session marker. Resolution precedence:
+  //   - opts.tasks (explicit, multi) — pre-approve a whole batch, OR
+  //   - opts.task (explicit, single, back-compat), OR
+  //   - the active-claim file (source: "active-claim").
+  // A failure on any one id is surfaced loudly but does not abort the
+  // approve flow; the session marker still satisfies the gate as a
+  // fallback, and the other ids still get their markers.
+  let resolvedTaskIds: string[] = [];
   let taskSource: "flag" | "active-claim" = "flag";
-  if (typeof opts.task === "string" && opts.task.length > 0) {
-    resolvedTaskId = opts.task;
+  if (opts.tasks && opts.tasks.length > 0) {
+    resolvedTaskIds = dedupeTaskIds(opts.tasks);
+    taskSource = "flag";
+  } else if (typeof opts.task === "string" && opts.task.length > 0) {
+    resolvedTaskIds = [opts.task];
     taskSource = "flag";
   } else {
     const fromFile = readActiveClaim(generatedDir);
     if (fromFile !== null) {
-      resolvedTaskId = fromFile;
+      resolvedTaskIds = [fromFile];
       taskSource = "active-claim";
     }
   }
-  if (resolvedTaskId !== null) {
+  const taskMarkers: TaskMarkerOutcome[] = [];
+  for (const taskId of resolvedTaskIds) {
     try {
-      const filePath = writeTaskApprovalMarker(generatedDir, resolvedTaskId, {
+      const filePath = writeTaskApprovalMarker(generatedDir, taskId, {
         approvedAt: approvedAtMarker,
         approvedBy: approvedByMarker,
       });
-      taskMarkerResult = {
+      taskMarkers.push({
         ok: true,
-        taskId: resolvedTaskId,
+        taskId,
         filePath,
         approvedAt: approvedAtMarker,
         source: taskSource,
-      };
+      });
     } catch (err) {
-      taskMarkerResult = {
+      taskMarkers.push({
         ok: false,
-        taskId: resolvedTaskId,
+        taskId,
         reason: `failed to write task marker: ${(err as Error).message}`,
         source: taskSource,
-      };
+      });
     }
   }
 
@@ -439,7 +505,14 @@ export async function approveUnderstanding(
   // resolved up front (alongside session-id tier-5 lookup) so both
   // paths agree on the same directory.
   const reports = listPersistedReports(reportsDir);
-  const latest = findLatestReportForSession(reports, sessionId);
+  // `tolerantFallback: "uncompleted"` — never adopt a sessionId-null
+  // report that is already `approved` / `expired`. Such a report is
+  // from a prior, finished cycle (often a different task days ago);
+  // flipping it would bind the live session to a stale, unrelated
+  // Understanding Report (harness/0dce3880 friction #1).
+  const latest = findLatestReportForSession(reports, sessionId, {
+    tolerantFallback: "uncompleted",
+  });
 
   let persistedReport: ApproveUnderstandingResult["persistedReport"];
   if (!latest) {
@@ -466,12 +539,18 @@ export async function approveUnderstanding(
     const approvedAt = (opts.now ?? new Date()).toISOString();
     const approvedBy = opts.approvedBy ?? DEFAULT_APPROVED_BY;
     try {
-      const { previousStatus } = rewriteReportApproved(latest.filePath, approvedAt, approvedBy);
+      const { previousStatus, sessionIdStamped } = rewriteReportApproved(
+        latest.filePath,
+        approvedAt,
+        approvedBy,
+        sessionId,
+      );
       persistedReport = {
         ok: true,
         filePath: latest.filePath,
         previousStatus,
         approvedAt,
+        sessionIdStamped,
       };
     } catch (err) {
       persistedReport = {
@@ -493,7 +572,7 @@ export async function approveUnderstanding(
     sessionId,
     sessionSource,
     marker: markerResult,
-    taskMarker: taskMarkerResult,
+    taskMarkers,
     ledger: ledgerResult.ok
       ? { ok: true, tag }
       : { ok: false, tag, reason: ledgerResult.reason },

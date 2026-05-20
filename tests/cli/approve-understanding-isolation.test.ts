@@ -90,10 +90,11 @@ describe("approveUnderstanding isolation (v0.22.0 hotfix)", () => {
       ledgerAdd: async () => ({ ok: true }),
     });
 
-    if (result.taskMarker === null || !result.taskMarker.ok) {
+    const tm = result.taskMarkers[0];
+    if (tm === undefined || !tm.ok) {
       throw new Error("expected ok task marker");
     }
-    expect(result.taskMarker.filePath.startsWith(generatedDir)).toBe(true);
+    expect(tm.filePath.startsWith(generatedDir)).toBe(true);
 
     const realApprovalsAfter = listRealApprovals();
     const leaked = [...realApprovalsAfter].filter((n) => !realApprovalsBefore.has(n));
@@ -119,12 +120,13 @@ describe("approveUnderstanding isolation (v0.22.0 hotfix)", () => {
       ledgerAdd: async () => ({ ok: true }),
     });
 
-    if (result.taskMarker === null || !result.taskMarker.ok) {
+    const tm = result.taskMarkers[0];
+    if (tm === undefined || !tm.ok) {
       throw new Error("expected ok task marker from active-claim");
     }
-    expect(result.taskMarker.taskId).toBe("tmp-task-uuid");
-    expect(result.taskMarker.source).toBe("active-claim");
-    expect(result.taskMarker.filePath).toBe(
+    expect(tm.taskId).toBe("tmp-task-uuid");
+    expect(tm.source).toBe("active-claim");
+    expect(tm.filePath).toBe(
       path.join(generatedDir, ".approvals", "task-tmp-task-uuid"),
     );
 

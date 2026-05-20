@@ -264,16 +264,20 @@ After capture, `harness approve understanding --session <id>` flips `approvalSta
 ## Approving an Understanding Report
 
 ```sh
-harness approve understanding [--session <id>] [--reports-dir <path>]
+harness approve understanding [--session <id>] [--task <ids...>] [--reports-dir <path>]
 ```
 
 Round-trips all three approval-state sinks:
 
 - Writes the approval marker `harness.generated/.approvals/${SESSION_ID}` (canonical gate signal, agent-tasks/88ca4bb3). A failed marker write is a HARD error in the CLI output; the gate will keep blocking until the marker exists.
-- Flips `approvalStatus: "approved"` on the latest matching persisted JSON report (canonical for solo users without `grounding-mcp`).
+- Flips `approvalStatus: "approved"` on the latest matching persisted JSON report (canonical for solo users without `grounding-mcp`). When the report lacks a `sessionId`, the current session id is stamped onto it so a later lookup strict-matches it (agent-tasks/0dce3880).
 - Writes the `understanding-approved:${SESSION_ID}` tag via `grounding-mcp`'s `ledger_add` for audit / forensics. A degraded ledger surfaces as a warning, not a hard failure.
 
 The blocker on the next tool call sees the new approval from whichever operator-authored source landed (marker or persisted report).
+
+### Pre-approving a batch of tasks
+
+`--task` is variadic. Passing several ids (`--task a b c`, or comma-joined `--task a,b,c`) writes one task-scoped marker per id in a single operator action. The understanding gate is task-scoped — its `expire_on_tool_match` hook expires the approval on every `task_finish` — so without this a multi-task session needs one `harness approve understanding` per task. Pre-approving the batch up front means each `task_start` finds its marker already present. This does not weaken the gate: the operator's Understanding Report still has to enumerate every task it covers; only the round-trip count collapses. With no `--task` flag the active-claim file is auto-resolved as before (single task).
 
 ### Session-id resolution
 

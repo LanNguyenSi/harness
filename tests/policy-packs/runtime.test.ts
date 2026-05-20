@@ -124,6 +124,43 @@ describe("findLatestReportForSession", () => {
     ];
     expect(findLatestReportForSession(reports, "wanted")).toBeNull();
   });
+
+  it('tolerantFallback "uncompleted" skips a completed sessionless report (harness/0dce3880)', () => {
+    // A stale, finished report (no sessionId, already expired) must not
+    // be re-adopted for a fresh session.
+    const reports = [
+      { filePath: "/stale", sessionId: null, approvalStatus: "expired", approvedAt: null },
+    ];
+    expect(
+      findLatestReportForSession(reports, "wanted", { tolerantFallback: "uncompleted" }),
+    ).toBeNull();
+    // Default "any" still adopts it (gate-read / expiry back-compat).
+    expect(
+      findLatestReportForSession(reports, "wanted")?.filePath,
+    ).toBe("/stale");
+  });
+
+  it('tolerantFallback "uncompleted" still adopts a fresh pending sessionless report', () => {
+    const reports = [
+      { filePath: "/expired", sessionId: null, approvalStatus: "expired", approvedAt: null },
+      { filePath: "/pending", sessionId: null, approvalStatus: "pending", approvedAt: null },
+    ];
+    expect(
+      findLatestReportForSession(reports, "wanted", { tolerantFallback: "uncompleted" })
+        ?.filePath,
+    ).toBe("/pending");
+  });
+
+  it('tolerantFallback "uncompleted" never overrides a strict sessionId match', () => {
+    const reports = [
+      { filePath: "/exact", sessionId: "wanted", approvalStatus: "approved", approvedAt: null },
+      { filePath: "/pending", sessionId: null, approvalStatus: "pending", approvedAt: null },
+    ];
+    expect(
+      findLatestReportForSession(reports, "wanted", { tolerantFallback: "uncompleted" })
+        ?.filePath,
+    ).toBe("/exact");
+  });
 });
 
 describe("checkPersistedReport", () => {
