@@ -2,7 +2,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { approveUnderstanding } from "../../src/cli/approve/understanding.js";
+import { approveUnderstanding, dedupeTaskIds } from "../../src/cli/approve/understanding.js";
+import { buildProgram } from "../../src/cli/index.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
 import { REPORTS_DIR_ENV } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 import { readPendingApproval, writePendingApproval } from "../../src/runtime/pending-approval.js";
@@ -911,6 +912,65 @@ describe("approveUnderstanding — multi-task pre-approval (harness/0dce3880)", 
       "multi-a",
       "multi-b",
     ]);
+  });
+
+  it("a single failing id does not abort the surrounding markers", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    // The middle id contains a path separator; writeTaskApprovalMarker's
+    // rejectMalformedTaskId throws for it. The surrounding ids must
+    // still get their markers.
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-1",
+      tasks: ["good-1", "bad/traversal", "good-2"],
+      reportsDir: tmp,
+      generatedDir,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+
+    expect(result.taskMarkers).toHaveLength(3);
+    const [a, b, c] = result.taskMarkers;
+    expect(a?.ok).toBe(true);
+    expect(b?.ok).toBe(false);
+    expect(c?.ok).toBe(true);
+    if (b === undefined || b.ok) throw new Error("expected middle marker to fail");
+    expect(b.taskId).toBe("bad/traversal");
+    expect(b.reason).toMatch(/path-separator|traversal/);
+    // Both good markers landed on disk.
+    const approvals = fs.readdirSync(path.join(generatedDir, ".approvals"));
+    expect(approvals.filter((n) => n.startsWith("task-")).sort()).toEqual([
+      "task-good-1",
+      "task-good-2",
+    ]);
+  });
+});
+
+describe("dedupeTaskIds", () => {
+  it("comma-splits, trims, drops blanks, de-dups preserving first-seen order", () => {
+    expect(dedupeTaskIds(["t1,t2", " t2 ", "t3", "", "  "])).toEqual([
+      "t1",
+      "t2",
+      "t3",
+    ]);
+  });
+
+  it("returns an empty array for all-blank input", () => {
+    expect(dedupeTaskIds(["", "  ", ","])).toEqual([]);
+  });
+
+  it("leaves a clean single-element list untouched", () => {
+    expect(dedupeTaskIds(["only"])).toEqual(["only"]);
+  });
+});
+
+describe("harness approve understanding — CLI --task option", () => {
+  it("declares --task as a variadic option", () => {
+    const program = buildProgram();
+    const approve = program.commands.find((c) => c.name() === "approve");
+    const understanding = approve?.commands.find((c) => c.name() === "understanding");
+    const taskOpt = understanding?.options.find((o) => o.long === "--task");
+    expect(taskOpt, "--task option should be registered").toBeDefined();
+    expect(taskOpt?.variadic, "--task should be variadic for batch pre-approval").toBe(true);
   });
 });
 
