@@ -47,6 +47,7 @@ import { format as formatDoctor } from "./doctor/format.js";
 import type { DoctorTarget } from "./doctor/types.js";
 import { EX_FAIL, EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { explain } from "./explain.js";
+import { explainAction } from "./explain-action.js";
 import { detect as detectInit } from "./init/detect.js";
 import { init, isTemplate, KNOWN_TEMPLATES } from "./init/index.js";
 import { runInteractive } from "./init/interactive.js";
@@ -1382,6 +1383,23 @@ export function buildProgram(opts: RunOptions = {}): Command {
         stdout(result.output);
       },
     );
+
+  program
+    .command("explain-action <event.json>")
+    .description(
+      "Risk Gate debug verb (Phase 7): read a tool-event JSON file (the Claude Code PreToolUse hook payload shape: " +
+        "{ hook_event_name, tool_name, tool_input, session_id, cwd }) and print the normalized Action Envelope. " +
+        "Inspection surface for the envelope that downstream Risk Gate stages consume; does not evaluate policies.",
+    )
+    .option("--json", "emit the envelope as JSON instead of YAML")
+    .action((eventPath: string, options: { json?: boolean }) => {
+      const result = explainAction({
+        eventPath,
+        ...(options.json === true && { json: true }),
+      });
+      stdout(result.output);
+      if (!result.output.endsWith("\n")) stdout("\n");
+    });
 
   program
     .command("audit")

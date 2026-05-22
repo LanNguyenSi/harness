@@ -26,6 +26,13 @@ export {
 } from "./agent-facing.js";
 export { resolveGitContext, type GitRepoContext } from "./git-context.js";
 export {
+  buildActionEnvelope,
+  type ActionEnvelope,
+  type ActionEnvelopeRuntime,
+  type ActionEnvelopeSession,
+  type EnvelopeContext,
+} from "./action-envelope.js";
+export {
   addLedgerFact,
   type AddLedgerFactOptions,
   type AddLedgerFactResult,
