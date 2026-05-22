@@ -254,7 +254,9 @@ describe("pause → policy intercept hook → resume", () => {
     expect(resA.exitCode).toBe(0);
     expect(ledgerQueriedWhilePaused).toBe(false);
     expect(stdoutA.read()).toBe("");
-    expect(stderrA.read()).toContain("PAUSED");
+    // The notice carries the policy-intercept hook label, the one value
+    // that diverges from the reference pack hook.
+    expect(stderrA.read()).toContain("policy intercept: PAUSED");
     expect(stderrA.read()).toContain("wedged preflight gate");
 
     // Resume.
