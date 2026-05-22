@@ -34,7 +34,7 @@ import {
 import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
 import type { Manifest } from "../../schema/index.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
-import { checkPauseFromLoader } from "./pause-check.js";
+import { checkPauseFromLoader } from "../pause-check.js";
 
 const PACK_NAME = "understanding-before-execution";
 

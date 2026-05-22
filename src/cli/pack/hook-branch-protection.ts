@@ -44,7 +44,7 @@ import { POLICY_DECISION_TYPE } from "../../runtime/ledger-record.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { PolicyUxSchema, type Manifest, type McpServer, type PolicyUx } from "../../schema/index.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
-import { checkPauseFromLoader } from "./pause-check.js";
+import { checkPauseFromLoader } from "../pause-check.js";
 
 export interface PackHookBranchProtectionOptions extends LoaderOptions {
   /** Defaults to process.stdin. */

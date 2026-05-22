@@ -19,7 +19,7 @@ import {
 } from "../../runtime/index.js";
 import type { Manifest, McpServer } from "../../schema/index.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
-import { checkPauseFromLoader } from "../pack/pause-check.js";
+import { checkPauseFromLoader } from "../pause-check.js";
 
 export interface InterceptCliOptions extends LoaderOptions {
   /** Defaults to process.stdin. */
