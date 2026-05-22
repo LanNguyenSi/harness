@@ -1,0 +1,17 @@
+# Two risk classifiers share the same name; RiskSchema's superRefine
+# should reject (Phase 7 #1).
+version: 1
+risk:
+  classifiers:
+    - name: dangerous-shell
+      tool: Bash
+      patterns:
+        - pattern: 'terraform\s+destroy'
+          categories: [destructive]
+          severity: critical
+    - name: dangerous-shell
+      tool: Bash
+      patterns:
+        - pattern: 'rm\s+-rf'
+          categories: [destructive]
+          severity: high

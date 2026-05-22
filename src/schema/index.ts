@@ -1,10 +1,12 @@
 import { z } from "zod";
+import { EnvironmentsSchema } from "./environments.js";
 import { GroundingSchema } from "./grounding.js";
 import { HooksSchema } from "./hooks.js";
 import { MemorySchema } from "./memory.js";
 import { PoliciesSchema } from "./policies.js";
 import { PermissionProfilesSchema } from "./permission-profiles.js";
 import { PolicyPacksSchema } from "./policy-packs.js";
+import { RiskSchema } from "./risk.js";
 import { ToolsSchema } from "./tools.js";
 import { AuditSchema } from "./audit.js";
 import { ReviewTemplatesSchema, WorkflowsSchema } from "./workflows.js";
@@ -20,6 +22,10 @@ export const ManifestSchema = z
     hooks: HooksSchema.default([]),
     policies: PoliciesSchema.default([]),
     policy_packs: PolicyPacksSchema.default([]),
+    // Phase 7 Risk Gate inputs — schema vocabulary only, no runtime
+    // surface reads them yet. See docs/risk-gate.md.
+    risk: RiskSchema.default({}),
+    environments: EnvironmentsSchema.default({}),
     permission_profiles: PermissionProfilesSchema.default({}),
     workflows: WorkflowsSchema.default([]),
     review_templates: ReviewTemplatesSchema.default({}),
@@ -86,6 +92,8 @@ export * from "./hooks.js";
 export * from "./permission-profiles.js";
 export * from "./policies.js";
 export * from "./policy-packs.js";
+export * from "./risk.js";
+export * from "./environments.js";
 export * from "./workflows.js";
 export * from "./audit.js";
 export * from "./extract.js";

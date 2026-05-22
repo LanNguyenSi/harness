@@ -348,17 +348,54 @@ A fresh agent on a clean repo refuses to call write-capable tools until an Under
 
 ### Scope
 
-Today's policy model evaluates a rule per matching trigger and returns a binary block/allow. Phase 7 makes harness reason about *the action itself*: an Action Envelope (tool + raw input + session + runtime context) is enriched by a Context Resolver (production / staging / dev / unknown), classified by a Risk Classifier (severity + categories + reversibility), then matched against policies whose `when:` clauses can reference `risk.severity_at_least`, `environment.name`, and similar. Decision space extends to `allow / warn / require_approval / deny`.
+Today's policy model evaluates a rule per matching trigger and returns a binary block/allow. Phase 7 makes harness reason about *the action itself*: an Action Envelope (tool + raw input + session + runtime context) is enriched by a Context Resolver (production / staging / dev / local / unknown), classified by a Risk Classifier (severity + categories + reversibility), then matched against policies whose `when:` clauses can reference `risk.severity_at_least`, `environment.name`, and similar. Decision space extends to `allow / warn / require_approval / deny`.
 
 Motivating use case: prevent `DROP TABLE users`, `kubectl delete namespace prod`, `terraform destroy` against an unverified production target before the runtime even fires the tool, even when the model would happily run them. Long-form design lives in `lava-ice-logs/2026-04-30/harness-risk-gate-extension.md`.
 
-### Deliverables (sketch)
+### Sub-task decomposition
 
-- New top-level YAML keys: `risk.classifiers:` (rule sets that map Action Envelope → severity + category + reversibility) and `environments.resolvers:` (rules that map Action Envelope → environment name).
-- New `policy.when:` clauses (`risk.severity_at_least`, `risk.category_in`, `environment.name`, `action.reversible`) that compose with the existing `requires:` shape.
-- New decision outcomes (`require_approval`) plumbed through `policy intercept`; runtime semantics defined.
-- `harness explain` extended: trace shows classifier match, resolved environment, requires evaluation.
-- A built-in `dangerous-shell` classifier covering destructive shell + cloud-CLI patterns, paired with a policy gating them on `environment.name != "production"` or `require_approval`.
+Phase 7 ships as six sequential sub-tasks, mirroring the Phase 6 model: each is a separate PR with its own dogfood gate. The decomposition follows the A-E implementation phases in `lava-ice-logs/2026-04-30/harness-risk-gate-extension.md`; the canonical in-repo reference is [`docs/risk-gate.md`](risk-gate.md), which also resolves the source design's open questions.
+
+The architectural split is settled: the Risk Gate lives entirely inside harness, layered onto the Phase 4 `policy intercept` runtime. `agent-grounding` stays the evidence backend the gate reads through `grounding-mcp`; it gains no risk-gate code. See `docs/risk-gate.md` for the full rationale.
+
+#### Phase 7 #1, Anchor: Risk Gate vocabulary + canonical doc *(this PR)*
+
+- New top-level manifest keys `risk:` (`classifiers[]`: name, tool, regex `patterns[]` mapping to closed `categories` + `severity` enums) and `environments:` (`resolvers[]`: name, asserted environment, branch / env-var / kube-context / kube-namespace signals). Additive, version 1.
+- New optional `policy.when:` block (`risk.severity_at_least`, `risk.category_in`, `environment.name`, `action.reversible`), parsed and validated alongside the existing `trigger:` / `requires:`.
+- `docs/risk-gate.md`: canonical reference covering target architecture, manifest reference, decision model, the harness-vs-agent-grounding split, and the resolved open questions.
+- Schema-only: duplicate-name rejection, `.strict()` entry shapes, regex validation of classifier patterns, closed category/severity/environment enums. Five invalid fixtures (`19`-`23`). `docs/examples/full-manifest.yaml` carries a worked `dangerous-shell` classifier + `production-signals` resolver; the byte-for-byte `describe` golden covers the output.
+
+**Out of scope here:** any code that reads `risk:` / `environments:` / `policy.when:` at runtime, the Action Envelope, the `require_approval` decision value, any new CLI verb. Those land in #2 through #6. A `when:` block today is parsed and inert; `harness policy intercept` still matches on `trigger:` alone.
+
+#### Phase 7 #2, Action Envelope MVP
+
+- Normalize `PreToolUse` input into a stable `{ event, tool, raw_input, session, runtime }` JSON structure (design phase A).
+- `harness explain-action <event.json>` debug verb prints the envelope.
+- Existing hook behaviour unchanged; the envelope is built but not yet classified.
+
+#### Phase 7 #3, Static risk classification
+
+- Risk Classifier consumes `risk.classifiers[]`: regex-match the envelope, emit `{ severity, categories, reversible, confidence, reasons }` (design phase B).
+- `harness test-risk <event.json>` debug verb shows the classification.
+- "Unknown is not safe": an unclassified command is not implicitly low-risk.
+
+#### Phase 7 #4, Environment resolution
+
+- Context Resolver consumes `environments.resolvers[]`: branch + env-vars + kube-context + namespace signals produce `{ environment.name, environment.confidence, environment.signals }` (design phase C).
+- Unresolved context resolves to `unknown`, matchable by `when.environment.name`.
+
+#### Phase 7 #5, Policy evaluation over the enriched envelope
+
+- `harness policy intercept` ANDs a policy's `when:` clauses onto its `trigger:` match, evaluating against the enriched envelope (design phase D).
+- Decision space extends to `allow / warn / require_approval / deny`; `require_approval` is plumbed through the decision model.
+- `harness explain-policy <policy> --event event.json` shows why a policy matched or did not.
+
+#### Phase 7 #6, Enforcement through `PreToolUse`
+
+- Runtime decisions are authoritative: `deny` aborts the tool call; `require_approval` blocks until matching approval evidence exists in the ledger (design phase E).
+- Approval reuses the Phase 6 ledger-tag pattern (`risk-approved:${SESSION_ID}` written by a `harness approve` verb); `agent-grounding` needs no change.
+- Every decision is written to the evidence ledger; `harness doctor` / `audit` replay them.
+- A built-in `dangerous-shell` classifier + `gate-prod-destructive` policy ship as the canonical worked example.
 
 ### Non-goals
 

@@ -1,0 +1,21 @@
+# A policy declares an empty `when: {}` block; an empty when is a
+# silent no-op, so PolicyWhenSchema's superRefine should reject
+# (Phase 7 #1).
+version: 1
+hooks:
+  - name: risk-gate
+    event: PreToolUse
+    match: "Bash"
+    command: harness policy intercept
+    blocking: hard
+policies:
+  - name: gate-prod-destructive
+    description: Placeholder policy exercising an empty when block.
+    trigger:
+      event: PreToolUse
+      match: "Bash"
+    requires:
+      ledger_tag: "risk-approved:${SESSION_ID}"
+    hook: risk-gate
+    enforcement: block
+    when: {}

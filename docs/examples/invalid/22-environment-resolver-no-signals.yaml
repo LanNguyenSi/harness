@@ -1,0 +1,9 @@
+# An environment resolver declares an empty `signals:` block; with no
+# signal kind it can never fire, so EnvironmentSignalsSchema's
+# superRefine should reject (Phase 7 #1).
+version: 1
+environments:
+  resolvers:
+    - name: production-signals
+      environment: production
+      signals: {}

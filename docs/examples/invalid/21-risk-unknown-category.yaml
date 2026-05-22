@@ -1,0 +1,11 @@
+# A classifier pattern uses a category outside the closed
+# RiskCategorySchema enum; the enum should reject (Phase 7 #1).
+version: 1
+risk:
+  classifiers:
+    - name: dangerous-shell
+      tool: Bash
+      patterns:
+        - pattern: 'rm\s+-rf'
+          categories: [data-loss]
+          severity: high
