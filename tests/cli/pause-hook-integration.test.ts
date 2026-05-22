@@ -14,9 +14,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { pause, resume } from "../../src/cli/pause/index.js";
 import { runPackHookPreToolUseCli } from "../../src/cli/pack/hook-pre-tool-use.js";
 import { runPackHookBranchProtectionCli } from "../../src/cli/pack/hook-branch-protection.js";
+import { runInterceptCli } from "../../src/cli/policy/intercept.js";
 import type { LedgerEntry } from "../../src/policies/index.js";
+import type { LedgerClient } from "../../src/runtime/intercept.js";
 import { sentinelPath } from "../../src/runtime/pause-sentinel.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
+import { makeManifest, makePolicy } from "../_helpers/manifest.js";
 
 let tmp: string;
 let generatedDir: string;
@@ -184,6 +187,149 @@ describe("pause → hook fire → resume → hook fire (understanding-before-exe
     });
 
     expect(res.blocked).toBe(true);
+    // The expired sentinel got auto-deleted on the hook fire.
+    expect(fs.existsSync(sentinelPath(generatedDir))).toBe(false);
+  });
+});
+
+describe("pause → policy intercept hook → resume", () => {
+  // A policy that blocks an agent-tasks PR merge unless a matching
+  // `review:${PR_NUMBER}` ledger entry exists. With an empty ledger it
+  // always blocks, so it is a clean probe for "did the gate evaluate?".
+  const blockingPolicy = makePolicy({
+    name: "review-before-merge",
+    description: "block merges without review evidence",
+    trigger: {
+      event: "PreToolUse",
+      match: "mcp__agent-tasks__pull_requests_merge",
+      extract: { PR_NUMBER: "toolArgs.prNumber" },
+    },
+    requires: { ledger_tag: "review:${PR_NUMBER}" },
+    hook: "h",
+    enforcement: "block",
+  });
+
+  const mergeEvent = JSON.stringify({
+    hook_event_name: "PreToolUse",
+    tool_name: "mcp__agent-tasks__pull_requests_merge",
+    tool_input: { prNumber: 42 },
+    session_id: "sess-int",
+  });
+
+  it("policy intercept yields while paused, re-engages after resume", async () => {
+    await pause({
+      manifest: manifestWithPack(),
+      generatedDir,
+      stdinIsTTY: true,
+      claudeSessionIdEnv: "",
+      forDuration: "10m",
+      reason: "wedged preflight gate",
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(fs.existsSync(sentinelPath(generatedDir))).toBe(true);
+
+    // While paused: the gate must short-circuit BEFORE evaluating, so the
+    // injected ledger is never consulted and nothing is written to stdout.
+    let ledgerQueriedWhilePaused = false;
+    const pausedLedger: LedgerClient = {
+      async query() {
+        ledgerQueriedWhilePaused = true;
+        return { kind: "ok", entries: [] };
+      },
+      async record() {
+        /* no-op */
+      },
+    };
+    const stdoutA = bufferStream();
+    const stderrA = bufferStream();
+    const resA = await runInterceptCli({
+      stdin: readableFromString(mergeEvent),
+      stdout: stdoutA.stream,
+      stderr: stderrA.stream,
+      manifest: makeManifest({ policies: [blockingPolicy] }),
+      ledger: pausedLedger,
+      generatedDir,
+    });
+    expect(resA.blocked).toBe(false);
+    expect(resA.exitCode).toBe(0);
+    expect(ledgerQueriedWhilePaused).toBe(false);
+    expect(stdoutA.read()).toBe("");
+    expect(stderrA.read()).toContain("PAUSED");
+    expect(stderrA.read()).toContain("wedged preflight gate");
+
+    // Resume.
+    await resume({
+      manifest: manifestWithPack(),
+      generatedDir,
+      stdinIsTTY: true,
+      claudeSessionIdEnv: "",
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(fs.existsSync(sentinelPath(generatedDir))).toBe(false);
+
+    // After resume: the gate evaluates normally, consults the ledger, and
+    // blocks the merge because no review evidence exists.
+    let ledgerQueriedAfterResume = false;
+    const liveLedger: LedgerClient = {
+      async query() {
+        ledgerQueriedAfterResume = true;
+        return { kind: "ok", entries: [] };
+      },
+      async record() {
+        /* no-op */
+      },
+    };
+    const stdoutB = bufferStream();
+    const stderrB = bufferStream();
+    const resB = await runInterceptCli({
+      stdin: readableFromString(mergeEvent),
+      stdout: stdoutB.stream,
+      stderr: stderrB.stream,
+      manifest: makeManifest({ policies: [blockingPolicy] }),
+      ledger: liveLedger,
+      generatedDir,
+    });
+    expect(ledgerQueriedAfterResume).toBe(true);
+    expect(resB.blocked).toBe(true);
+    expect(resB.exitCode).toBe(0);
+    expect(stdoutB.read()).toContain('"decision":"block"');
+  });
+
+  it("auto-expires past the --for window: policy intercept evaluates normally", async () => {
+    const pausedAt = new Date("2026-05-20T12:00:00.000Z");
+    await pause({
+      manifest: manifestWithPack(),
+      generatedDir,
+      stdinIsTTY: true,
+      claudeSessionIdEnv: "",
+      forDuration: "1s",
+      now: pausedAt,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+
+    // Fire 5s past the 1s window — unambiguously expired.
+    const afterExpiry = new Date(pausedAt.getTime() + 5000);
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const res = await runInterceptCli({
+      stdin: readableFromString(mergeEvent),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      manifest: makeManifest({ policies: [blockingPolicy] }),
+      ledger: {
+        async query() {
+          return { kind: "ok", entries: [] };
+        },
+        async record() {
+          /* no-op */
+        },
+      },
+      generatedDir,
+      now: afterExpiry,
+    });
+
+    expect(res.blocked).toBe(true);
+    expect(stdout.read()).toContain('"decision":"block"');
     // The expired sentinel got auto-deleted on the hook fire.
     expect(fs.existsSync(sentinelPath(generatedDir))).toBe(false);
   });
