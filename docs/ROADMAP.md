@@ -390,7 +390,7 @@ The architectural split is settled: the Risk Gate lives entirely inside harness,
 - Decision space extends to `allow / warn / require_approval / deny`; `require_approval` is plumbed through the decision model.
 - `harness explain-policy <policy> --event event.json` shows why a policy matched or did not.
 
-#### Phase 7 #6, Enforcement through `PreToolUse`
+#### Phase 7 #6, Enforcement through `PreToolUse` *(shipped)*
 
 - Runtime decisions are authoritative: `deny` aborts the tool call; `require_approval` blocks until matching approval evidence exists in the ledger (design phase E).
 - Approval reuses the Phase 6 ledger-tag pattern (`risk-approved:${SESSION_ID}` written by a `harness approve` verb); `agent-grounding` needs no change.
@@ -405,7 +405,7 @@ The architectural split is settled: the Risk Gate lives entirely inside harness,
 
 ### Exit gate
 
-`harness policy intercept` blocks a `kubectl delete namespace prod` invocation against a manifest that ships the built-in `dangerous-shell` classifier + `gate-prod-destructive` policy, and only allows it after a `require_approval` round-trip. Tag `v0.7.0`.
+`harness policy intercept` blocks a `kubectl delete namespace prod` invocation against a manifest that ships the built-in `dangerous-shell` classifier + `gate-prod-destructive` policy, and only allows it after a `require_approval` round-trip. Tag `v0.27.0` (the phase-numbered `v0.7.0` in the original plan predates the project's diverged release line — Phase 7 #1-#4 shipped under `v0.26.0`, and the Phase 7 completion release is the next minor, `v0.27.0`).
 
 ## Open decisions resolved here
 

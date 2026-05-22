@@ -289,6 +289,24 @@ function outcomeForFailedRequires(
   }
 }
 
+/**
+ * Does a decision abort the tool call? Phase 7 #6 makes the Risk Gate
+ * authoritative at the `PreToolUse` boundary:
+ *   - `deny` aborts (a `block`-enforcement policy whose requires failed,
+ *     the Phase 4 mechanism, unchanged).
+ *   - `require_approval` aborts until the approval evidence exists. In
+ *     Phase 7 #5 this outcome was returned but did not block; #6 makes
+ *     it block. The approval tag is satisfiable through the policy's
+ *     `requires:` (an operator runs `harness approve risk`); once the
+ *     tag is on record the requires evaluation passes and the outcome
+ *     is `allow` instead.
+ *   - `allow` / `warn` / `warn-degraded` never abort.
+ */
+function isBlockingDecision(d: PolicyDecision): boolean {
+  if (d.outcome === "deny") return d.enforcement === "block";
+  return d.outcome === "require_approval";
+}
+
 async function evaluateOnePolicy(
   policy: Policy,
   options: InterceptOptions,
@@ -487,9 +505,10 @@ export async function intercept(
     }
   }
 
-  const blocking = decisions.find(
-    (d) => d.enforcement === "block" && d.outcome === "deny",
-  );
+  // First blocking decision wins the envelope. `deny` and
+  // `require_approval` both abort (Phase 7 #6); the search order is the
+  // manifest's policy order, same as Phase 4.
+  const blocking = decisions.find(isBlockingDecision);
   if (blocking) {
     const sessionId = resolveSessionId(options.event.session_id);
     // Append the "to satisfy" hint so Claude Code's deny message tells

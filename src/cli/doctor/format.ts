@@ -196,6 +196,32 @@ function formatWorkflowsSection(report: DoctorReport): string[] {
   return out;
 }
 
+// Risk Gate section: render only when at least one Risk Gate surface
+// is configured (a classifier, a resolver, or a `when:`-policy).
+// A manifest that uses none stays silent — no point in a section for
+// an unused feature.
+function formatRiskGateSection(report: DoctorReport): string[] {
+  const rg = report.riskGate;
+  if (rg.classifiers === 0 && rg.resolvers === 0 && rg.whenPolicies === 0) {
+    return [];
+  }
+  const out: string[] = ["", "Risk Gate"];
+  out.push(
+    `  ${rg.classifiers} classifier${rg.classifiers === 1 ? "" : "s"}, ` +
+      `${rg.resolvers} environment resolver${rg.resolvers === 1 ? "" : "s"}, ` +
+      `${rg.whenPolicies} policy${rg.whenPolicies === 1 ? "" : " policies"} with when:`,
+  );
+  if (rg.warnings.length === 0) {
+    out.push(`  ✓ wiring coherent`);
+  } else {
+    for (const w of rg.warnings) out.push(`  ⚠ ${w}`);
+  }
+  out.push(
+    `  ℹ recent Risk Gate decisions: \`harness audit\` (filter with --outcome require_approval / deny)`,
+  );
+  return out;
+}
+
 function formatCodexTargetSection(report: DoctorReport): string[] {
   if (!report.codexTarget) return [];
   const out: string[] = ["", "Target: codex"];
@@ -250,6 +276,7 @@ export function format(report: DoctorReport): string {
   lines.push(...formatHooksSection(report));
   lines.push(...formatPoliciesSection(report));
   lines.push(...formatWorkflowsSection(report));
+  lines.push(...formatRiskGateSection(report));
   lines.push(...formatCodexTargetSection(report));
   lines.push(...formatRogueLedgerSection(report));
   lines.push(...formatSummary(report));

@@ -1124,7 +1124,7 @@ describe("intercept — Phase 7 #5 four-way decision", () => {
       resolvers: [PROD_RESOLVER],
     });
 
-  it("require_approval enforcement yields a require_approval outcome and does not block in #5", async () => {
+  it("require_approval enforcement yields a require_approval outcome AND blocks (Phase 7 #6)", async () => {
     const ledger = makeLedger({ kind: "ok", entries: [] });
     const result = await intercept({
       manifest: fullManifest(),
@@ -1135,8 +1135,9 @@ describe("intercept — Phase 7 #5 four-way decision", () => {
       riskContext: riskCtx("main"),
     });
     expect(result.decisions[0]?.outcome).toBe("require_approval");
-    // Enforcement of `require_approval` (the actual block) is Phase 7 #6.
-    expect(result.blockJson).toBeNull();
+    // Phase 7 #6 makes the Risk Gate authoritative: require_approval
+    // aborts the tool call until the approval tag exists.
+    expect(result.blockJson?.decision).toBe("block");
   });
 
   it("require_approval resolves to allow once the approval tag is on record", async () => {

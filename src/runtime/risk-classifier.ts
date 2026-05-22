@@ -73,13 +73,42 @@ export interface RiskProfile {
   reasons: string[];
 }
 
+// Hot-path ReDoS guard (Phase 7 #6). As of Phase 7 #5/#6 the classifier
+// runs operator-authored regexes against tool input on EVERY PreToolUse
+// call inside `harness policy intercept`. Catastrophic-backtracking cost
+// scales with input length, so the match subject is capped before any
+// pattern runs. This bounds the input-length-driven blow-up — the common
+// failure mode for a tool call that pipes a large blob through Bash.
+//
+// It is a mitigation, not a complete fix: harness does NOT screen the
+// classifier patterns themselves for catastrophic backtracking. A
+// manifest is operator-trusted config — the same contract already stated
+// for `environments.resolvers[].kube_context_patterns` in
+// docs/risk-gate.md. A pathological *pattern* is a self-inflicted hazard.
+//
+// 16 KiB comfortably covers any real shell command or serialized tool
+// input. A genuinely dangerous command longer than the cap still does
+// not slip the gate: its head (where `rm -rf` / `terraform destroy` /
+// `kubectl delete` live) is within the cap, and an action that ends up
+// unclassified is treated as risk-bearing by the `when:` evaluator.
+const MAX_SUBJECT_LENGTH = 16 * 1024;
+
 /**
  * The string a classifier's patterns are regex-matched against. For a
  * shell-class tool (or any tool whose input carries a `command` / `cmd`
  * field) it is that command. For other tools it is the serialized raw
  * input — blunt, but it keeps non-shell classifiers usable in the MVP.
+ *
+ * The result is capped at `MAX_SUBJECT_LENGTH` (ReDoS guard, see above).
  */
 function subjectFor(envelope: ActionEnvelope): string {
+  const subject = rawSubjectFor(envelope);
+  return subject.length > MAX_SUBJECT_LENGTH
+    ? subject.slice(0, MAX_SUBJECT_LENGTH)
+    : subject;
+}
+
+function rawSubjectFor(envelope: ActionEnvelope): string {
   const command = extractShellCommand({ raw_input: envelope.raw_input });
   if (command !== null) return command;
   const raw = envelope.raw_input;

@@ -28,6 +28,7 @@ import {
   type ManifestSection,
   type McpVersionReport,
   type PolicyEntryReport,
+  type RiskGateSection,
   type ToolsSection,
 } from "./types.js";
 
@@ -409,6 +410,38 @@ function buildWorkflows(manifest: Manifest): import("./types.js").WorkflowsSecti
   };
 }
 
+/**
+ * Phase 7 #6 — Risk Gate wiring health. Counts the three Risk Gate
+ * surfaces and flags the misconfigurations that make the gate inert or
+ * silently fail-closed. Pure: manifest in, section out, no I/O.
+ */
+function buildRiskGate(manifest: Manifest): RiskGateSection {
+  const classifiers = manifest.risk.classifiers.length;
+  const resolvers = manifest.environments.resolvers.length;
+  const whenPolicies = manifest.policies.filter(
+    (p) => p.when !== undefined,
+  ).length;
+  const warnings: string[] = [];
+  if (whenPolicies > 0 && classifiers === 0) {
+    warnings.push(
+      `${whenPolicies} policy(ies) declare \`when:\` but no \`risk.classifiers[]\` are declared; ` +
+        `every action classifies as unclassified, so \`risk.*\` clauses match fail-closed ("unknown is not safe")`,
+    );
+  }
+  if (whenPolicies > 0 && resolvers === 0) {
+    warnings.push(
+      `${whenPolicies} policy(ies) declare \`when:\` but no \`environments.resolvers[]\` are declared; ` +
+        `every action resolves to environment \`unknown\``,
+    );
+  }
+  if (whenPolicies === 0 && (classifiers > 0 || resolvers > 0)) {
+    warnings.push(
+      "risk classifiers / environment resolvers are declared but no policy consumes them via `when:` — the Risk Gate is inert",
+    );
+  }
+  return { classifiers, resolvers, whenPolicies, warnings };
+}
+
 function manifestSection(manifest: Manifest): ManifestSection {
   const topLevelKeys = [
     "grounding",
@@ -463,6 +496,7 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   for (const p of report.policies) {
     if (p.producerGap) warningCount++;
   }
+  warningCount += report.riskGate.warnings.length;
   if (report.npmGlobalBin?.status === "warn") warningCount++;
   if (report.memory.routerExecutable && !report.memory.routerExecutable.exists) errorCount++;
   if (!report.memory.routerExecutable) warningCount++;
@@ -531,6 +565,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const hooks = checkHooks(manifest, home, opts);
   const policies = buildPolicies(manifest);
   const workflows = buildWorkflows(manifest);
+  const riskGate = buildRiskGate(manifest);
   const manifestSec = manifestSection(manifest);
 
   const rogueLedgerDbs = scanForRogueLedgers({
@@ -562,6 +597,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     hooks,
     policies,
     workflows,
+    riskGate,
     rogueLedgerDbs,
     ...(npmGlobalBin !== undefined ? { npmGlobalBin } : {}),
   };

@@ -180,3 +180,27 @@ describe("classifyRisk — subject extraction", () => {
     expect(p.severity).toBe("high");
   });
 });
+
+describe("classifyRisk — Phase 7 #6 ReDoS subject-length cap", () => {
+  // The classifier runs operator-authored regexes on every PreToolUse
+  // call; the match subject is capped at 16 KiB so catastrophic
+  // backtracking cannot scale with an arbitrarily long tool input.
+  const CAP = 16 * 1024;
+
+  it("classifies a dangerous command whose head is within the cap", () => {
+    // `rm -rf /` at the start, then a long benign tail past the cap.
+    const command = `rm -rf /var ${"x".repeat(CAP * 2)}`;
+    const p = classifyRisk(bashEnvelope(command), [SHELL]);
+    expect(p.classified).toBe(true);
+    expect(p.severity).toBe("critical");
+  });
+
+  it("does not match a pattern that falls entirely beyond the cap", () => {
+    // The only dangerous token sits well past 16 KiB, so the capped
+    // subject never sees it — the action is reported unclassified
+    // (which the `when:` evaluator then treats as risk-bearing anyway).
+    const command = `${"x".repeat(CAP + 100)} DROP TABLE orders`;
+    const p = classifyRisk(bashEnvelope(command), [SHELL]);
+    expect(p.classified).toBe(false);
+  });
+});

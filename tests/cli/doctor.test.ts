@@ -1003,3 +1003,83 @@ ${routerBlock}
     expect(report.memory.routerVersion).toBeUndefined();
   });
 });
+
+describe("doctor — Phase 7 #6 Risk Gate section", () => {
+  const RISK_GATE_MANIFEST = `version: 1
+hooks:
+  - name: risk-gate
+    event: PreToolUse
+    command: /bin/true
+    blocking: false
+risk:
+  classifiers:
+    - name: dangerous-shell
+      tool: Bash
+      patterns:
+        - { pattern: 'terraform destroy', categories: [destructive], severity: critical }
+environments:
+  resolvers:
+    - name: prod
+      environment: production
+      signals: { branch_patterns: [main] }
+policies:
+  - name: gate-prod-destructive
+    description: gate destructive prod actions
+    trigger: { event: PreToolUse, match: "Bash" }
+    when: { environment.name: production }
+    requires: { ledger_tag: "risk-approved:\${SESSION_ID}" }
+    hook: risk-gate
+    enforcement: require_approval
+`;
+
+  it("reports coherent wiring when classifiers, resolvers, and a when: policy are all present", async () => {
+    const home = makeFixture({ "harness.yaml": RISK_GATE_MANIFEST });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.riskGate).toEqual({
+      classifiers: 1,
+      resolvers: 1,
+      whenPolicies: 1,
+      warnings: [],
+    });
+    expect(format(report)).toContain("Risk Gate");
+    expect(format(report)).toContain("✓ wiring coherent");
+  });
+
+  it("warns when a when: policy is declared but no classifier exists", async () => {
+    const noClassifier = RISK_GATE_MANIFEST.replace(
+      /risk:\n  classifiers:\n( {4}.*\n| {6,}.*\n)+/,
+      "risk:\n  classifiers: []\n",
+    );
+    const home = makeFixture({ "harness.yaml": noClassifier });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.riskGate.classifiers).toBe(0);
+    expect(report.riskGate.whenPolicies).toBe(1);
+    expect(report.riskGate.warnings.length).toBeGreaterThan(0);
+    expect(report.riskGate.warnings[0]).toMatch(/no `risk.classifiers/);
+    // The coherence warning rolls into the doctor warning tally.
+    expect(report.warningCount).toBeGreaterThan(0);
+  });
+
+  it("stays silent when the manifest configures no Risk Gate surface", async () => {
+    const home = makeFixture({
+      "harness.yaml": "version: 1\nhooks: []\npolicies: []\n",
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.riskGate).toEqual({
+      classifiers: 0,
+      resolvers: 0,
+      whenPolicies: 0,
+      warnings: [],
+    });
+    expect(format(report)).not.toContain("Risk Gate");
+  });
+});

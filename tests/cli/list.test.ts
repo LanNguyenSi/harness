@@ -44,6 +44,7 @@ describe("list — categories", () => {
       "require-review-subagent-evidence",
       "require-review-subagent-evidence-bash",
       "require-preflight-push-evidence",
+      "risk-gate",
     ]);
     const head = r.rows[0]!;
     expect(head.event).toBe("SessionStart");
@@ -61,6 +62,8 @@ describe("list — categories", () => {
       "review-subagent-before-pr-create",
       "review-subagent-before-pr-create-bash",
       "preflight-before-push",
+      "gate-prod-destructive",
+      "gate-prod-destructive-approval",
     ]);
     expect(r.rows[0]!.enforcement).toBe("block");
   });
