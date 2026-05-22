@@ -367,10 +367,10 @@ The architectural split is settled: the Risk Gate lives entirely inside harness,
 
 **Out of scope here:** any code that reads `risk:` / `environments:` / `policy.when:` at runtime, the Action Envelope, the `require_approval` decision value, any new CLI verb. Those land in #2 through #6. A `when:` block today is parsed and inert; `harness policy intercept` still matches on `trigger:` alone.
 
-#### Phase 7 #2, Action Envelope MVP
+#### Phase 7 #2, Action Envelope MVP *(shipped)*
 
-- Normalize `PreToolUse` input into a stable `{ event, tool, raw_input, session, runtime }` JSON structure (design phase A).
-- `harness explain-action <event.json>` debug verb prints the envelope.
+- Normalize `PreToolUse` input into a stable `{ event, tool, raw_input, session, runtime, timestamp }` JSON structure (design phase A).
+- `harness explain-action <event.json>` debug verb prints the envelope (YAML or `--json`).
 - Existing hook behaviour unchanged; the envelope is built but not yet classified.
 
 #### Phase 7 #3, Static risk classification
