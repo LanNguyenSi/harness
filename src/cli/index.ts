@@ -49,6 +49,7 @@ import { EX_FAIL, EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { explain } from "./explain.js";
 import { explainAction } from "./explain-action.js";
 import { testRisk } from "./test-risk.js";
+import { resolveEnv } from "./resolve-env.js";
 import { detect as detectInit } from "./init/detect.js";
 import { init, isTemplate, KNOWN_TEMPLATES } from "./init/index.js";
 import { runInteractive } from "./init/interactive.js";
@@ -1415,6 +1416,29 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .action(
       (eventPath: string, options: { config?: string; project?: string; json?: boolean }) => {
         const result = testRisk({
+          eventPath,
+          ...(options.config !== undefined && { configPath: options.config }),
+          ...(options.project !== undefined && { project: options.project }),
+          ...(options.json === true && { json: true }),
+        });
+        stdout(result.output);
+        if (!result.output.endsWith("\n")) stdout("\n");
+      },
+    );
+
+  program
+    .command("resolve-env <event.json>")
+    .description(
+      "Risk Gate debug verb (Phase 7): read a tool-event JSON file, build its Action Envelope, and resolve its " +
+        "target environment against the manifest's environments.resolvers[] (branch / env-var / kube-context / " +
+        "kube-namespace signals). An action no resolver matches resolves to `unknown`, not to a safe default.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option("--json", "emit the environment resolution as JSON instead of YAML")
+    .action(
+      (eventPath: string, options: { config?: string; project?: string; json?: boolean }) => {
+        const result = resolveEnv({
           eventPath,
           ...(options.config !== undefined && { configPath: options.config }),
           ...(options.project !== undefined && { project: options.project }),

@@ -106,7 +106,8 @@ categories are a possible v2 escape hatch, noted but not committed.
 ### Environment resolvers (`environments:`)
 
 *Status: parsed and validated (Phase 7 #1). Consumed by the Context
-Resolver in Phase 7 #4.*
+Resolver as of Phase 7 #4, inspectable with `harness resolve-env`.
+Wired into `harness policy intercept` in Phase 7 #5.*
 
 ```yaml
 environments:
@@ -132,11 +133,28 @@ when no resolver matches, so a resolver cannot assert it: "unknown is
 not safe" means policy treats the no-match case as risk-bearing, it
 does not mean a resolver hand-labels something unknown.
 
-Pattern match semantics per signal kind (substring, glob, or regex) are
-defined by the Phase 7 #4 resolver runtime. The anchor stores them as
-plain non-empty strings; `branch_patterns` and `*_namespace_patterns`
-are intended as globs, `kube_context_patterns` as regexes, env-var
-patterns as substrings of the variable's value.
+Pattern match semantics per signal kind, as implemented by the Phase 7
+#4 resolver:
+
+- `branch_patterns` and `kube_namespace_patterns`: `*`-globs (only `*`
+  is special, e.g. `release/*`). Matched against the envelope's git
+  branch and the current kube namespace.
+- `kube_context_patterns`: regexes (e.g. `.*prod.*`). Matched against
+  the current kube context name.
+- `env_var_patterns`: substrings of the named variable's value (e.g.
+  `DATABASE_URL` containing `prod`).
+
+Signals within a resolver are OR-ed: a resolver fires when any one
+signal matches. When several resolvers fire and disagree, the
+most-dangerous environment wins (`production > staging > dev > local`).
+Branch comes from the Action Envelope; env vars and the kube
+context/namespace are ambient inputs the `resolve-env` wrapper resolves
+(`~/.kube/config` is read best-effort).
+
+`kube_context_patterns` are operator-authored regexes compiled at
+resolution time. As with `risk.classifiers[].patterns`, harness does
+not screen them for catastrophic backtracking: a manifest is operator-
+trusted config, so a pathological pattern is a self-inflicted hazard.
 
 ### Risk-aware match clauses (`policy.when:`)
 

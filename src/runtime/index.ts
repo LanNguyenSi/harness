@@ -38,6 +38,17 @@ export {
   type RiskProfile,
 } from "./risk-classifier.js";
 export {
+  resolveKubeContext,
+  type KubeContext,
+  type ResolveKubeContextOptions,
+} from "./kube-context.js";
+export {
+  resolveEnvironment,
+  type EnvironmentConfidence,
+  type EnvironmentResolution,
+  type SignalInputs,
+} from "./environment-resolver.js";
+export {
   addLedgerFact,
   type AddLedgerFactOptions,
   type AddLedgerFactResult,
