@@ -48,6 +48,7 @@ import type { DoctorTarget } from "./doctor/types.js";
 import { EX_FAIL, EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { explain } from "./explain.js";
 import { explainAction } from "./explain-action.js";
+import { testRisk } from "./test-risk.js";
 import { detect as detectInit } from "./init/detect.js";
 import { init, isTemplate, KNOWN_TEMPLATES } from "./init/index.js";
 import { runInteractive } from "./init/interactive.js";
@@ -1400,6 +1401,29 @@ export function buildProgram(opts: RunOptions = {}): Command {
       stdout(result.output);
       if (!result.output.endsWith("\n")) stdout("\n");
     });
+
+  program
+    .command("test-risk <event.json>")
+    .description(
+      "Risk Gate debug verb (Phase 7): read a tool-event JSON file, build its Action Envelope, and classify it " +
+        "against the manifest's risk.classifiers[]. Prints the risk profile (severity, categories, reversibility, " +
+        "confidence, reasons). An action no pattern matches reports as unclassified, not as safe.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option("--json", "emit the risk profile as JSON instead of YAML")
+    .action(
+      (eventPath: string, options: { config?: string; project?: string; json?: boolean }) => {
+        const result = testRisk({
+          eventPath,
+          ...(options.config !== undefined && { configPath: options.config }),
+          ...(options.project !== undefined && { project: options.project }),
+          ...(options.json === true && { json: true }),
+        });
+        stdout(result.output);
+        if (!result.output.endsWith("\n")) stdout("\n");
+      },
+    );
 
   program
     .command("audit")

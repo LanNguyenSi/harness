@@ -1,0 +1,182 @@
+import { describe, expect, it } from "vitest";
+import {
+  buildActionEnvelope,
+  classifyRisk,
+} from "../../src/runtime/index.js";
+import type { ActionEnvelope, EnvelopeContext } from "../../src/runtime/index.js";
+import type { ToolEvent } from "../../src/runtime/intercept.js";
+import type { RiskClassifier } from "../../src/schema/index.js";
+
+const CTX: EnvelopeContext = {
+  cwd: "/work/repo",
+  git: { repo: "repo", branch: "main", sha: "" },
+  user: "agent",
+  host: "host",
+  now: new Date("2026-05-22T12:00:00.000Z"),
+};
+
+/** Build an envelope for a Bash command. */
+function bashEnvelope(command: string): ActionEnvelope {
+  const event: ToolEvent = {
+    hook_event_name: "PreToolUse",
+    tool_name: "Bash",
+    tool_input: { command },
+  };
+  return buildActionEnvelope(event, CTX);
+}
+
+const SHELL: RiskClassifier = {
+  name: "dangerous-shell",
+  tool: "Bash",
+  patterns: [
+    {
+      pattern: "rm\\s+-rf\\s+/",
+      categories: ["destructive", "data_loss"],
+      severity: "critical",
+    },
+    {
+      pattern: "DROP\\s+TABLE",
+      categories: ["destructive", "data_loss"],
+      severity: "high",
+    },
+    {
+      pattern: "kubectl\\s+delete",
+      categories: ["infrastructure_change"],
+      severity: "medium",
+    },
+  ],
+};
+
+describe("classifyRisk — matching", () => {
+  it("classifies a single-pattern hit", () => {
+    const p = classifyRisk(bashEnvelope("rm -rf /var"), [SHELL]);
+    expect(p.classified).toBe(true);
+    expect(p.severity).toBe("critical");
+    expect(p.categories).toEqual(["data_loss", "destructive"]);
+    expect(p.confidence).toBe("high");
+    expect(p.reasons).toHaveLength(1);
+    // The reason line is operator-facing; pin its format against drift.
+    expect(p.reasons[0]).toMatch(
+      /^classifier "dangerous-shell" pattern \/.+\/ matched: severity critical, categories \[/,
+    );
+  });
+
+  it("skips a pattern whose regex does not compile (defensive guard)", () => {
+    // A manifest that bypassed `harness validate` could carry an
+    // unparseable pattern; the classifier must skip it, not throw.
+    const broken: RiskClassifier = {
+      name: "broken",
+      tool: "Bash",
+      patterns: [
+        { pattern: "([unclosed", categories: ["destructive"], severity: "high" },
+      ],
+    };
+    const p = classifyRisk(bashEnvelope("rm -rf /"), [broken]);
+    expect(p.classified).toBe(false);
+  });
+
+  it("composes multiple matched patterns: highest severity wins, categories union", () => {
+    // Matches both `rm -rf /` (critical) and `kubectl delete` (medium).
+    const p = classifyRisk(
+      bashEnvelope("rm -rf / && kubectl delete pod x"),
+      [SHELL],
+    );
+    expect(p.severity).toBe("critical");
+    expect(p.categories).toEqual([
+      "data_loss",
+      "destructive",
+      "infrastructure_change",
+    ]);
+    expect(p.reasons).toHaveLength(2);
+  });
+
+  it("composes across multiple classifiers", () => {
+    const extra: RiskClassifier = {
+      name: "secrets",
+      tool: "Bash",
+      patterns: [
+        { pattern: "cat .*\\.env", categories: ["credential_access"], severity: "high" },
+      ],
+    };
+    const p = classifyRisk(bashEnvelope("cat prod.env && DROP TABLE x"), [
+      SHELL,
+      extra,
+    ]);
+    expect(p.severity).toBe("high");
+    expect(p.categories).toEqual([
+      "credential_access",
+      "data_loss",
+      "destructive",
+    ]);
+    expect(p.reasons).toHaveLength(2);
+  });
+});
+
+describe("classifyRisk — reversibility", () => {
+  it("is false when a matched category marks the action irreversible", () => {
+    expect(classifyRisk(bashEnvelope("rm -rf /"), [SHELL]).reversible).toBe(false);
+  });
+
+  it("is true when classified but no category implies irreversibility", () => {
+    const p = classifyRisk(bashEnvelope("kubectl delete pod x"), [SHELL]);
+    expect(p.classified).toBe(true);
+    expect(p.categories).toEqual(["infrastructure_change"]);
+    expect(p.reversible).toBe(true);
+  });
+
+  it("is null when unclassified (reversibility unknown, not assumed)", () => {
+    expect(classifyRisk(bashEnvelope("ls -la"), [SHELL]).reversible).toBeNull();
+  });
+});
+
+describe("classifyRisk — unknown is not safe", () => {
+  it("yields an unclassified profile, not a low/zero-risk one, on no match", () => {
+    const p = classifyRisk(bashEnvelope("echo hello"), [SHELL]);
+    expect(p.classified).toBe(false);
+    expect(p.severity).toBeNull();
+    expect(p.categories).toEqual([]);
+    expect(p.confidence).toBe("low");
+    expect(p.reasons[0]).toMatch(/no classifier pattern matched/);
+  });
+
+  it("reports when no classifier is declared for the tool at all", () => {
+    const p = classifyRisk(bashEnvelope("rm -rf /"), []);
+    expect(p.classified).toBe(false);
+    expect(p.reasons[0]).toMatch(/no risk classifier is declared for tool "Bash"/);
+  });
+
+  it("does not apply a classifier whose tool does not match the envelope", () => {
+    const writeClassifier: RiskClassifier = {
+      name: "writes",
+      tool: "Write",
+      patterns: [{ pattern: ".*", categories: ["destructive"], severity: "high" }],
+    };
+    expect(classifyRisk(bashEnvelope("rm -rf /"), [writeClassifier]).classified).toBe(
+      false,
+    );
+  });
+});
+
+describe("classifyRisk — subject extraction", () => {
+  it("matches a shell alias tool against the command", () => {
+    const event = {
+      hook_event_name: "PreToolUse",
+      tool_name: "shell",
+      tool_input: { command: "rm -rf /" },
+    } as ToolEvent;
+    const p = classifyRisk(buildActionEnvelope(event, CTX), [SHELL]);
+    expect(p.classified).toBe(true);
+    expect(p.severity).toBe("critical");
+  });
+
+  it("falls back to the serialized raw input for a non-command tool", () => {
+    const event = {
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { script: "DROP TABLE orders" },
+    } as ToolEvent;
+    const p = classifyRisk(buildActionEnvelope(event, CTX), [SHELL]);
+    expect(p.classified).toBe(true);
+    expect(p.severity).toBe("high");
+  });
+});

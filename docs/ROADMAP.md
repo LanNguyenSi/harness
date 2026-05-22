@@ -373,11 +373,11 @@ The architectural split is settled: the Risk Gate lives entirely inside harness,
 - `harness explain-action <event.json>` debug verb prints the envelope (YAML or `--json`).
 - Existing hook behaviour unchanged; the envelope is built but not yet classified.
 
-#### Phase 7 #3, Static risk classification
+#### Phase 7 #3, Static risk classification *(shipped)*
 
-- Risk Classifier consumes `risk.classifiers[]`: regex-match the envelope, emit `{ severity, categories, reversible, confidence, reasons }` (design phase B).
+- Risk Classifier consumes `risk.classifiers[]`: regex-match the envelope, emit `{ classified, severity, categories, reversible, confidence, reasons }` (design phase B).
 - `harness test-risk <event.json>` debug verb shows the classification.
-- "Unknown is not safe": an unclassified command is not implicitly low-risk.
+- "Unknown is not safe": an unclassified command is not implicitly low-risk; it reports `classified: false` / `severity: null`.
 
 #### Phase 7 #4, Environment resolution
 
