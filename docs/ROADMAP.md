@@ -379,10 +379,10 @@ The architectural split is settled: the Risk Gate lives entirely inside harness,
 - `harness test-risk <event.json>` debug verb shows the classification.
 - "Unknown is not safe": an unclassified command is not implicitly low-risk; it reports `classified: false` / `severity: null`.
 
-#### Phase 7 #4, Environment resolution
+#### Phase 7 #4, Environment resolution *(shipped)*
 
-- Context Resolver consumes `environments.resolvers[]`: branch + env-vars + kube-context + namespace signals produce `{ environment.name, environment.confidence, environment.signals }` (design phase C).
-- Unresolved context resolves to `unknown`, matchable by `when.environment.name`.
+- Context Resolver consumes `environments.resolvers[]`: branch + env-vars + kube-context + namespace signals produce `{ name, confidence, signals, resolver }` (design phase C). `harness resolve-env <event.json>` debug verb shows the resolution.
+- Unresolved context resolves to `unknown`, matchable by `when.environment.name`. When resolvers disagree, the most-dangerous environment wins.
 
 #### Phase 7 #5, Policy evaluation over the enriched envelope
 
