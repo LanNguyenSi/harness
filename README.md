@@ -192,10 +192,10 @@ inventory + recommended order in [`docs/uninstall.md`](docs/uninstall.md).
 
 ## Status
 
-harness ships in phases. Phases 1 through 6 are released: read-only
-inventory → managed edits → declarative truth → policy layer → polish
-and dogfood lessons → the Understanding Gate Policy Pack. Phase 7, the
-Risk Gate, is next. The current release is `v0.20.0`.
+harness ships in phases. All seven are released: read-only inventory →
+managed edits → declarative truth → policy layer → polish and dogfood
+lessons → the Understanding Gate Policy Pack → the Risk Gate. The
+current release is `v0.27.0`.
 
 The phase-by-phase plan with acceptance criteria lives in
 [`docs/ROADMAP.md`](docs/ROADMAP.md); what shipped in each version is
@@ -226,14 +226,19 @@ contract).
 
 ## What's next
 
-**Phase 7, Risk Gate.** Today's policy model returns a binary
-block/allow per matching trigger. Phase 7 lets harness reason about
-the action itself (Action Envelope → Context Resolver → Risk
-Classifier) and extends the decision space to `allow / warn /
-require_approval / deny`. Motivating use case: block `DROP TABLE
-users`, `kubectl delete namespace prod`, `terraform destroy` against
-unverified production targets. Full plan in
-[`docs/ROADMAP.md#phase-7--risk-gate`](docs/ROADMAP.md#phase-7--risk-gate).
+The seven-phase roadmap is complete. The Risk Gate (Phase 7) shipped in
+`v0.27.0`: `harness policy intercept` reasons about the action itself
+(Action Envelope → Context Resolver → Risk Classifier), evaluates each
+policy's `when:` clauses, and enforces a four-way `allow / warn /
+require_approval / deny` decision, so `DROP TABLE users`, `kubectl
+delete namespace prod`, and `terraform destroy` against an unverified
+production target are blocked before the runtime fires them. See
+[`docs/risk-gate.md`](docs/risk-gate.md).
+
+Capability beyond the seven phases is not a quiet roadmap expansion: it
+lands as an explicit follow-up design doc or a separate sibling
+project, per [`docs/ROADMAP.md`](docs/ROADMAP.md) ("Out of scope across
+all phases").
 
 > Bring your favorite agent harness. Add governance.
 
