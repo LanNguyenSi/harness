@@ -64,7 +64,8 @@ same requires-evaluator the Phase 4 policies already use.
 ### Risk classifiers (`risk:`)
 
 *Status: parsed and validated (Phase 7 #1). Consumed by the Risk
-Classifier in Phase 7 #3.*
+Classifier as of Phase 7 #3, inspectable with `harness test-risk`. Wired
+into `harness policy intercept` in Phase 7 #5.*
 
 ```yaml
 risk:

@@ -33,6 +33,11 @@ export {
   type EnvelopeContext,
 } from "./action-envelope.js";
 export {
+  classifyRisk,
+  type RiskConfidence,
+  type RiskProfile,
+} from "./risk-classifier.js";
+export {
   addLedgerFact,
   type AddLedgerFactOptions,
   type AddLedgerFactResult,
