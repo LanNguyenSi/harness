@@ -50,7 +50,7 @@ import {
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { z } from "zod";
 import { loadManifest, type LoaderOptions } from "../loader.js";
-import { checkPauseFromLoader } from "./pause-check.js";
+import { checkPauseFromLoader } from "../pause-check.js";
 import { renderReportSchemaHint } from "./understanding-report-schema-hint.js";
 
 const PACK_NAME = "understanding-before-execution";
