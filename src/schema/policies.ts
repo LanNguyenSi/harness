@@ -1,7 +1,9 @@
 import { z } from "zod";
+import { MatchableEnvironmentSchema } from "./environments.js";
 import { ExtractMapSchema } from "./extract.js";
 import { HookEventSchema } from "./hooks.js";
 import { RequiresSchema, isBuiltinVariable, referencedVariables } from "./requires.js";
+import { RiskCategorySchema, RiskSeveritySchema } from "./risk.js";
 
 export const PolicyTriggerSchema = z
   .object({
@@ -84,6 +86,44 @@ export const PolicyUxSchema = z
   })
   .strict();
 
+// `when:` — Phase 7 #1 anchor. The risk/environment-aware match layer.
+//
+// STATUS: schema vocabulary only. `harness policy intercept` does NOT
+// evaluate `when:` yet — a policy's `trigger:` remains the sole match
+// surface at runtime. The Phase 7 #5 evaluator will AND a declared
+// `when:` onto the trigger match, reading the enriched Action Envelope
+// (see docs/ROADMAP.md and docs/risk-gate.md). A `when:` block today is
+// parsed, validated, and otherwise inert.
+//
+// Each clause is optional and keyed by the envelope path it tests:
+//   risk.severity_at_least — envelope risk severity at or above this
+//                            rung of the ordered scale.
+//   risk.category_in       — envelope risk carries any of these
+//                            categories.
+//   environment.name       — resolved environment equals this name
+//                            (`unknown` is matchable: unknown is not
+//                            safe).
+//   action.reversible      — envelope action reversibility flag.
+// An empty `when: {}` is rejected: it would be a silent no-op.
+export const PolicyWhenSchema = z
+  .object({
+    "risk.severity_at_least": RiskSeveritySchema.optional(),
+    "risk.category_in": z.array(RiskCategorySchema).min(1).optional(),
+    "environment.name": MatchableEnvironmentSchema.optional(),
+    "action.reversible": z.boolean().optional(),
+  })
+  .strict()
+  .superRefine((when, ctx) => {
+    if (Object.keys(when).length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [],
+        message:
+          "policy.when must declare at least one clause; an empty when: {} is a silent no-op",
+      });
+    }
+  });
+
 export const PolicySchema = z
   .object({
     name: z.string().min(1),
@@ -94,6 +134,7 @@ export const PolicySchema = z
     enforcement: PolicyEnforcementSchema,
     producers: z.array(ProducerSchema).min(1).optional(),
     ux: PolicyUxSchema.optional(),
+    when: PolicyWhenSchema.optional(),
   })
   .strict()
   .superRefine((policy, ctx) => {
@@ -139,3 +180,4 @@ export const PoliciesSchema = z.array(PolicySchema).superRefine((policies, ctx) 
 export type Policy = z.infer<typeof PolicySchema>;
 export type Producer = z.infer<typeof ProducerSchema>;
 export type PolicyUx = z.infer<typeof PolicyUxSchema>;
+export type PolicyWhen = z.infer<typeof PolicyWhenSchema>;

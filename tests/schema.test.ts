@@ -99,6 +99,8 @@ describe("parseManifest — happy path", () => {
     expect(m.hooks).toEqual([]);
     expect(m.policies).toEqual([]);
     expect(m.policy_packs).toEqual([]);
+    expect(m.risk.classifiers).toEqual([]);
+    expect(m.environments.resolvers).toEqual([]);
   });
 
   it("accepts a string command for tools.mcp[].command", () => {
@@ -207,6 +209,20 @@ describe("parseManifest — invalid fixtures", () => {
       pattern: /duplicate policy_pack name/i,
     },
     { file: "18-policy-pack-unknown-key.yaml", pattern: /unrecognized key|bogus_field/i },
+    {
+      file: "19-risk-classifier-duplicate-name.yaml",
+      pattern: /duplicate risk classifier name/i,
+    },
+    { file: "20-risk-pattern-bad-regex.yaml", pattern: /invalid regex/i },
+    { file: "21-risk-unknown-category.yaml", pattern: /data-loss|invalid enum/i },
+    {
+      file: "22-environment-resolver-no-signals.yaml",
+      pattern: /at least one of/i,
+    },
+    {
+      file: "23-policy-when-empty.yaml",
+      pattern: /when must declare at least one clause/i,
+    },
   ];
 
   for (const c of cases) {
@@ -768,5 +784,172 @@ describe("parseManifest — permission_profiles (Phase 6 #5)", () => {
     expect(m.permission_profiles.gated?.actions.edit?.requires?.ledger_tag).toBe(
       "understanding-approved:${SESSION_ID}",
     );
+  });
+});
+
+describe("parseManifest — Phase 7 risk-gate vocabulary", () => {
+  it("parses the risk + environments blocks in the full reference manifest", () => {
+    const raw = loadYaml(path.join(EXAMPLES_DIR, "full-manifest.yaml"));
+    const manifest = parseManifest(raw);
+
+    expect(manifest.risk.classifiers).toHaveLength(1);
+    const classifier = manifest.risk.classifiers[0];
+    expect(classifier?.name).toBe("dangerous-shell");
+    expect(classifier?.tool).toBe("Bash");
+    expect(classifier?.patterns).toHaveLength(4);
+    expect(classifier?.patterns[0]?.severity).toBe("critical");
+    expect(classifier?.patterns[0]?.categories).toEqual(["destructive", "data_loss"]);
+
+    expect(manifest.environments.resolvers).toHaveLength(1);
+    const resolver = manifest.environments.resolvers[0];
+    expect(resolver?.name).toBe("production-signals");
+    expect(resolver?.environment).toBe("production");
+    expect(resolver?.signals.branch_patterns).toEqual(["main", "release/*"]);
+    expect(resolver?.signals.env_var_patterns?.[0]?.var).toBe("DATABASE_URL");
+  });
+
+  it("rejects a risk severity outside the closed scale", () => {
+    expect(() =>
+      parseManifest({
+        version: 1,
+        risk: {
+          classifiers: [
+            {
+              name: "c",
+              tool: "Bash",
+              patterns: [{ pattern: "rm", categories: ["destructive"], severity: "catastrophic" }],
+            },
+          ],
+        },
+      }),
+    ).toThrow(/severity|enum/i);
+  });
+
+  it("rejects an unknown key inside a risk classifier (.strict)", () => {
+    expect(() =>
+      parseManifest({
+        version: 1,
+        risk: {
+          classifiers: [
+            {
+              name: "c",
+              tool: "Bash",
+              patterns: [{ pattern: "rm", categories: ["destructive"], severity: "high" }],
+              bogus: true,
+            },
+          ],
+        },
+      }),
+    ).toThrow(/unrecognized key|bogus/i);
+  });
+
+  it("rejects an environment resolver asserting the unmatchable `unknown` name", () => {
+    // `unknown` is the implicit no-resolver-matched fallback; a resolver
+    // that asserts it is a contradiction the enum rejects.
+    expect(() =>
+      parseManifest({
+        version: 1,
+        environments: {
+          resolvers: [
+            { name: "r", environment: "unknown", signals: { branch_patterns: ["main"] } },
+          ],
+        },
+      }),
+    ).toThrow(/environment|enum/i);
+  });
+
+  it("rejects two environment resolvers sharing a name", () => {
+    expect(() =>
+      parseManifest({
+        version: 1,
+        environments: {
+          resolvers: [
+            { name: "r", environment: "production", signals: { branch_patterns: ["main"] } },
+            { name: "r", environment: "staging", signals: { branch_patterns: ["develop"] } },
+          ],
+        },
+      }),
+    ).toThrow(/duplicate environment resolver name/i);
+  });
+
+  it("rejects an env_var_patterns entry missing its var", () => {
+    expect(() =>
+      parseManifest({
+        version: 1,
+        environments: {
+          resolvers: [
+            {
+              name: "r",
+              environment: "production",
+              signals: { env_var_patterns: [{ patterns: ["prod"] }] },
+            },
+          ],
+        },
+      }),
+    ).toThrow(/var|required/i);
+  });
+
+  it("accepts a policy with a populated when: block", () => {
+    const m = parseManifest({
+      version: 1,
+      hooks: [{ name: "h", event: "PreToolUse", command: "/bin/true", blocking: false }],
+      policies: [
+        {
+          name: "gate-prod-destructive",
+          description: "d",
+          trigger: { event: "PreToolUse", match: "Bash" },
+          requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
+          hook: "h",
+          enforcement: "block",
+          when: {
+            "risk.severity_at_least": "high",
+            "risk.category_in": ["destructive", "data_loss"],
+            "environment.name": "production",
+            "action.reversible": false,
+          },
+        },
+      ],
+    });
+    expect(m.policies[0]?.when?.["risk.severity_at_least"]).toBe("high");
+    expect(m.policies[0]?.when?.["environment.name"]).toBe("production");
+  });
+
+  it("accepts when.environment.name = unknown (unknown is matchable)", () => {
+    const m = parseManifest({
+      version: 1,
+      hooks: [{ name: "h", event: "PreToolUse", command: "/bin/true", blocking: false }],
+      policies: [
+        {
+          name: "p",
+          description: "d",
+          trigger: { event: "PreToolUse" },
+          requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
+          hook: "h",
+          enforcement: "block",
+          when: { "environment.name": "unknown" },
+        },
+      ],
+    });
+    expect(m.policies[0]?.when?.["environment.name"]).toBe("unknown");
+  });
+
+  it("rejects an unknown clause key inside when: (.strict)", () => {
+    expect(() =>
+      parseManifest({
+        version: 1,
+        hooks: [{ name: "h", event: "PreToolUse", command: "/bin/true", blocking: false }],
+        policies: [
+          {
+            name: "p",
+            description: "d",
+            trigger: { event: "PreToolUse" },
+            requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
+            hook: "h",
+            enforcement: "block",
+            when: { "risk.bogus_clause": "high" },
+          },
+        ],
+      }),
+    ).toThrow(/unrecognized key|bogus_clause/i);
   });
 });

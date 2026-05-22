@@ -1,0 +1,11 @@
+# A classifier pattern is not a valid regular expression; the
+# RiskPatternSchema superRefine should reject (Phase 7 #1).
+version: 1
+risk:
+  classifiers:
+    - name: dangerous-shell
+      tool: Bash
+      patterns:
+        - pattern: '([unclosed'
+          categories: [destructive]
+          severity: high

@@ -454,6 +454,42 @@ policy_packs:
           - "git checkout -b feat/<your-task>"
           - "harness session-start branch-check"
 
+# Phase 7 Risk Gate vocabulary (harness/9f7ce9e4). SCHEMA-ONLY in this
+# release: `risk.classifiers[]` and `environments.resolvers[]` are
+# parsed and validated, but no runtime surface reads them yet. The Risk
+# Classifier (Phase 7 #3) and Context Resolver (Phase 7 #4) consume them
+# later; `harness policy intercept` is unchanged. Full design and the
+# sub-task decomposition: docs/risk-gate.md + docs/ROADMAP.md Phase 7.
+risk:
+  classifiers:
+    - name: dangerous-shell
+      tool: Bash
+      patterns:
+        - pattern: 'rm\s+-rf\s+(/|/var|/data|/mnt|~)'
+          categories: [destructive, data_loss]
+          severity: critical
+        - pattern: 'DROP\s+TABLE|TRUNCATE\s+TABLE|DELETE\s+FROM'
+          categories: [destructive, data_loss]
+          severity: high
+        - pattern: 'kubectl\s+delete\s+(namespace|deployment|statefulset|pvc)'
+          categories: [destructive, infrastructure_change]
+          severity: high
+        - pattern: 'terraform\s+destroy'
+          categories: [destructive, infrastructure_change]
+          severity: critical
+
+environments:
+  resolvers:
+    - name: production-signals
+      environment: production
+      signals:
+        branch_patterns: [main, "release/*"]
+        env_var_patterns:
+          - var: DATABASE_URL
+            patterns: [prod, production]
+        kube_context_patterns: [".*prod.*"]
+        kube_namespace_patterns: [prod, production]
+
 workflows:
   - name: feature-pr
     when:

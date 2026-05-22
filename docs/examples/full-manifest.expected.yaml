@@ -359,6 +359,49 @@ policy_packs:
         run:
           - git checkout -b feat/<your-task>
           - harness session-start branch-check
+risk:
+  classifiers:
+    - name: dangerous-shell
+      tool: Bash
+      patterns:
+        - pattern: rm\s+-rf\s+(/|/var|/data|/mnt|~)
+          categories:
+            - destructive
+            - data_loss
+          severity: critical
+        - pattern: DROP\s+TABLE|TRUNCATE\s+TABLE|DELETE\s+FROM
+          categories:
+            - destructive
+            - data_loss
+          severity: high
+        - pattern: kubectl\s+delete\s+(namespace|deployment|statefulset|pvc)
+          categories:
+            - destructive
+            - infrastructure_change
+          severity: high
+        - pattern: terraform\s+destroy
+          categories:
+            - destructive
+            - infrastructure_change
+          severity: critical
+environments:
+  resolvers:
+    - name: production-signals
+      environment: production
+      signals:
+        branch_patterns:
+          - main
+          - release/*
+        env_var_patterns:
+          - var: DATABASE_URL
+            patterns:
+              - prod
+              - production
+        kube_context_patterns:
+          - .*prod.*
+        kube_namespace_patterns:
+          - prod
+          - production
 permission_profiles: {}
 workflows:
   - name: feature-pr
