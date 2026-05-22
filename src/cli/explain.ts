@@ -54,6 +54,15 @@ interface TraceProjection {
   ledgerTag: string;
   evaluatedAt: string;
   triggerMatched: { event: string; match?: string; bashMatch?: string };
+  /**
+   * Risk Classifier verdict recorded with the decision (Phase 7 #5):
+   * the classification the policy's `when:` match was made against.
+   * Absent on decisions recorded before #5, or by a manifest with no
+   * `when:`-bearing policy (the Risk Gate was inactive for the event).
+   */
+  classifier?: PolicyDecisionPayload["risk"];
+  /** Context Resolver verdict, present under the same condition as `classifier`. */
+  environment?: PolicyDecisionPayload["environment"];
   extract: Record<string, string>;
   requiresEval?: PolicyDecisionPayload["requiresEval"];
   /**
@@ -231,6 +240,10 @@ function renderTrace(
       ...(trigger?.match !== undefined && { match: trigger.match }),
       ...(trigger?.bash_match !== undefined && { bashMatch: trigger.bash_match }),
     },
+    ...(latest.payload.risk && { classifier: latest.payload.risk }),
+    ...(latest.payload.environment && {
+      environment: latest.payload.environment,
+    }),
     extract: latest.payload.extractValues,
     ...(latest.payload.requiresEval && { requiresEval: latest.payload.requiresEval }),
     ...(policy && {

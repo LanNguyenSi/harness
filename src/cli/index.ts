@@ -48,6 +48,7 @@ import type { DoctorTarget } from "./doctor/types.js";
 import { EX_FAIL, EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { explain } from "./explain.js";
 import { explainAction } from "./explain-action.js";
+import { explainPolicy } from "./explain-policy.js";
 import { testRisk } from "./test-risk.js";
 import { resolveEnv } from "./resolve-env.js";
 import { detect as detectInit } from "./init/detect.js";
@@ -1325,7 +1326,13 @@ export function buildProgram(opts: RunOptions = {}): Command {
       },
     );
 
-  const VALID_DECISION_FILTERS = ["allow", "deny", "warn-degraded"] as const;
+  const VALID_DECISION_FILTERS = [
+    "allow",
+    "warn",
+    "require_approval",
+    "deny",
+    "warn-degraded",
+  ] as const;
   type DecisionFilter = (typeof VALID_DECISION_FILTERS)[number];
   const isDecisionFilter = (v: string): v is DecisionFilter =>
     (VALID_DECISION_FILTERS as readonly string[]).includes(v);
@@ -1338,7 +1345,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .option("--json", "emit JSON instead of YAML")
     .option("--trace", "include the full decision trail from the most recent evaluation")
     .option("--last", "trace the most recent policy decision in the ledger (any policy); mutually exclusive with <policy>")
-    .option("--decision <outcome>", "with --last, restrict to decisions of this outcome (allow / deny / warn-degraded)")
+    .option("--decision <outcome>", `with --last, restrict to decisions of this outcome (${VALID_DECISION_FILTERS.join(" / ")})`)
     .option("--session <id>", "grounding session whose audit log to read (default: $CLAUDE_SESSION_ID, then 'default')")
     .action(
       async (
@@ -1367,7 +1374,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         }
         if (options.decision !== undefined && !isDecisionFilter(options.decision)) {
           throw new HarnessExitError(
-            `explain: --decision must be one of allow, deny, warn-degraded (got "${options.decision}")`,
+            `explain: --decision must be one of ${VALID_DECISION_FILTERS.join(", ")} (got "${options.decision}")`,
             EX_USAGE,
           );
         }
@@ -1450,6 +1457,40 @@ export function buildProgram(opts: RunOptions = {}): Command {
     );
 
   program
+    .command("explain-policy <policy>")
+    .description(
+      "Risk Gate debug verb (Phase 7): explain whether <policy> would APPLY to a tool event. " +
+        "Reads the event from --event, builds and enriches the Action Envelope, and shows the " +
+        "trigger match, the risk classification, the resolved environment, and a per-clause " +
+        "`when:` breakdown. Evaluates a hypothetical event live and reads nothing from the " +
+        "ledger (use `harness explain <policy> --trace` for the last recorded decision).",
+    )
+    .requiredOption("--event <event.json>", "path to the tool-event JSON file")
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option("--json", "emit the explanation as JSON instead of YAML")
+    .action(
+      (
+        policyName: string,
+        options: {
+          event: string;
+          config?: string;
+          project?: string;
+          json?: boolean;
+        },
+      ) => {
+        const result = explainPolicy(policyName, {
+          eventPath: options.event,
+          ...(options.config !== undefined && { configPath: options.config }),
+          ...(options.project !== undefined && { project: options.project }),
+          ...(options.json === true && { json: true }),
+        });
+        stdout(result.output);
+        if (!result.output.endsWith("\n")) stdout("\n");
+      },
+    );
+
+  program
     .command("audit")
     .description(
       "Replay policy decisions from the evidence ledger for a time window",
@@ -1458,7 +1499,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .option("--policy <name>", "filter to a single policy by name")
     .option(
       "--outcome <outcome>",
-      "filter by decision outcome (allow / deny / warn-degraded)",
+      "filter by decision outcome (allow / warn / require_approval / deny / warn-degraded)",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")

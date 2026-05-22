@@ -197,7 +197,9 @@ describe("CLI program — list + explain commands", () => {
   it("explain --last --decision with an invalid outcome is rejected as EX_USAGE", async () => {
     const r = await exec(["explain", "--last", "--decision", "bogus", "--config", FULL_MANIFEST]);
     expect(r.code).toBe(64);
-    expect(r.stderr).toMatch(/--decision must be one of allow, deny, warn-degraded/);
+    expect(r.stderr).toMatch(
+      /--decision must be one of allow, warn, require_approval, deny, warn-degraded/,
+    );
   });
 });
 

@@ -1,12 +1,16 @@
 # Risk Gate
 
-> **Status (Phase 7 #1 anchor):** vocabulary only. The `risk:`,
-> `environments:`, and `policy.when:` manifest keys parse and validate,
-> but nothing in `harness apply`, `harness doctor`, `harness policy
-> intercept`, or runtime enforcement reads them yet. Sub-tasks #2
-> through #6 in [`ROADMAP.md`](ROADMAP.md#phase-7--risk-gate) wire those
-> surfaces in. Until they ship, this doc describes the **target shape**,
-> with the implementation status of each piece called out inline.
+> **Status (through Phase 7 #5):** the Risk Gate runs at the live
+> `harness policy intercept` gate. The interceptor builds the Action
+> Envelope (#2), classifies risk (#3), resolves the environment (#4),
+> and evaluates `policy.when:` (#5) — `risk:`, `environments:`, and
+> `policy.when:` are no longer inert. The decision space is the full
+> `allow / warn / require_approval / deny`. One piece is still pending:
+> `require_approval` is *returned* by the evaluator but does not yet
+> *block* — making it block until approval evidence exists, plus the
+> built-in `dangerous-shell` classifier and `harness doctor` wiring
+> health, is Phase 7 #6 ([`ROADMAP.md`](ROADMAP.md#phase-7--risk-gate)).
+> Each piece's status is called out inline below.
 
 ## What the Risk Gate is
 
@@ -65,7 +69,7 @@ same requires-evaluator the Phase 4 policies already use.
 
 *Status: parsed and validated (Phase 7 #1). Consumed by the Risk
 Classifier as of Phase 7 #3, inspectable with `harness test-risk`. Wired
-into `harness policy intercept` in Phase 7 #5.*
+into `harness policy intercept` as of Phase 7 #5.*
 
 ```yaml
 risk:
@@ -107,7 +111,7 @@ categories are a possible v2 escape hatch, noted but not committed.
 
 *Status: parsed and validated (Phase 7 #1). Consumed by the Context
 Resolver as of Phase 7 #4, inspectable with `harness resolve-env`.
-Wired into `harness policy intercept` in Phase 7 #5.*
+Wired into `harness policy intercept` as of Phase 7 #5.*
 
 ```yaml
 environments:
@@ -159,12 +163,16 @@ trusted config, so a pathological pattern is a self-inflicted hazard.
 ### Risk-aware match clauses (`policy.when:`)
 
 *Status: parsed and validated (Phase 7 #1). Evaluated by `harness
-policy intercept` in Phase 7 #5.*
+policy intercept` as of Phase 7 #5, inspectable with `harness
+explain-policy <policy> --event <event.json>` (the trigger match, risk
+classification, resolved environment, and a per-clause `when:`
+breakdown for a hypothetical event).*
 
-A policy may carry an optional `when:` block. Today it is parsed and
-inert: `harness policy intercept` still matches on `trigger:` alone. In
-Phase 7 #5 a declared `when:` is ANDed onto the trigger match and
-evaluated against the enriched envelope.
+A policy may carry an optional `when:` block. As of Phase 7 #5 a
+declared `when:` is ANDed onto the policy's `trigger:` match and
+evaluated against the enriched Action Envelope: the policy fires only
+when `trigger:` AND every `when:` clause hold. A policy with no `when:`
+matches on `trigger:` alone, exactly as in Phase 4.
 
 ```yaml
 policies:
@@ -188,23 +196,31 @@ Every clause is optional; an empty `when: {}` is rejected as a silent
 no-op. `when.environment.name` may test `unknown`, the only place the
 unmatched-environment case is addressable.
 
-In Phase 7 #1 a `when:`-bearing policy still carries the Phase 4
-`requires:`, `hook:`, and `enforcement:` fields, all of them required by
-the schema today. Relaxing those (a pure risk policy that decides from
-`when:` alone, without ledger evidence) is a structural change to the
-policy model with runtime implications, and is deferred to Phase 7 #5
-where the evaluator that needs it lands.
+A `when:`-bearing policy still carries the Phase 4 `requires:`,
+`hook:`, and `enforcement:` fields, all of them required by the schema.
+Phase 7 #5 kept them mandatory: a `require_approval` policy expresses
+its approval gate through `requires:` — the `risk-approved:${SESSION_ID}`
+ledger tag — so the Phase 4 requires-evaluator is reused unchanged. A
+pure risk policy that decides from `when:` alone, without ledger
+evidence, would be a structural change to the policy model and is not
+Phase 7 scope; it remains a possible future relaxation.
 
-## Decision model (target, Phase 7 #5/#6)
+## Decision model
+
+*Status: the four outcomes are all RETURNED by the Phase 7 #5
+evaluator. `allow` / `warn` / `deny` are enforced as in Phase 4;
+`require_approval` is returned but does not block yet — making it block
+until approval evidence exists is Phase 7 #6.*
 
 The Phase 4 decision space is `allow` / `deny`, selected by
-`enforcement: block | warn`. Phase 7 extends it to four outcomes:
+`enforcement: block | warn`. Phase 7 extends it to four outcomes, with
+`require_approval` added as a third `enforcement` value:
 
 | Decision | Meaning |
 |---|---|
 | `allow` | Action may proceed. |
 | `warn` | Action proceeds; a warning is recorded and surfaced. |
-| `require_approval` | Action is blocked until matching approval evidence exists in the ledger. |
+| `require_approval` | Action is blocked until matching approval evidence exists in the ledger. (Phase 7 #5 returns this outcome; Phase 7 #6 makes it block.) |
 | `deny` | Action is blocked. |
 
 `require_approval` reuses the Phase 6 approval mechanism unchanged: a

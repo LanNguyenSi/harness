@@ -1,0 +1,202 @@
+// Phase 7 #5 — `policy.when:` evaluator unit tests.
+//
+// Covers each of the four clause kinds (match + no-match), the AND
+// semantics across clauses, and the load-bearing "unknown is not safe"
+// rule: an unclassified risk profile satisfies every risk-derived clause.
+
+import { describe, expect, it } from "vitest";
+import type { EnvironmentResolution } from "../../src/runtime/environment-resolver.js";
+import type { RiskProfile } from "../../src/runtime/risk-classifier.js";
+import { evaluateWhen } from "../../src/runtime/when-eval.js";
+import type { PolicyWhen } from "../../src/schema/index.js";
+
+const classified = (over: Partial<RiskProfile> = {}): RiskProfile => ({
+  classified: true,
+  severity: "high",
+  categories: ["destructive"],
+  reversible: false,
+  confidence: "high",
+  reasons: ["test pattern matched"],
+  ...over,
+});
+
+const UNCLASSIFIED: RiskProfile = {
+  classified: false,
+  severity: null,
+  categories: [],
+  reversible: null,
+  confidence: "low",
+  reasons: ["no classifier pattern matched the action"],
+};
+
+const env = (name: EnvironmentResolution["name"]): EnvironmentResolution => ({
+  name,
+  confidence: name === "unknown" ? "low" : "medium",
+  signals: name === "unknown" ? [] : [`signal for ${name}`],
+  resolver: name === "unknown" ? null : `${name}-resolver`,
+});
+
+const when = (w: PolicyWhen): PolicyWhen => w;
+
+describe("evaluateWhen — risk.severity_at_least", () => {
+  it("matches when classified severity is at or above the threshold", () => {
+    for (const sev of ["high", "critical"] as const) {
+      const r = evaluateWhen(when({ "risk.severity_at_least": "high" }), {
+        risk: classified({ severity: sev }),
+        environment: env("production"),
+      });
+      expect(r.matched).toBe(true);
+    }
+  });
+
+  it("does not match when classified severity is below the threshold", () => {
+    const r = evaluateWhen(when({ "risk.severity_at_least": "high" }), {
+      risk: classified({ severity: "medium" }),
+      environment: env("production"),
+    });
+    expect(r.matched).toBe(false);
+    expect(r.clauses[0]?.actual).toBe("medium");
+  });
+
+  it("matches an UNCLASSIFIED profile against any threshold (unknown is not safe)", () => {
+    const r = evaluateWhen(when({ "risk.severity_at_least": "critical" }), {
+      risk: UNCLASSIFIED,
+      environment: env("production"),
+    });
+    expect(r.matched).toBe(true);
+    expect(r.unclassifiedFallback).toBe(true);
+    expect(r.clauses[0]?.actual).toContain("unclassified");
+  });
+});
+
+describe("evaluateWhen — risk.category_in", () => {
+  it("matches when the profile carries any listed category", () => {
+    const r = evaluateWhen(
+      when({ "risk.category_in": ["destructive", "data_loss"] }),
+      { risk: classified({ categories: ["destructive"] }), environment: env("dev") },
+    );
+    expect(r.matched).toBe(true);
+  });
+
+  it("does not match when no category overlaps", () => {
+    const r = evaluateWhen(when({ "risk.category_in": ["destructive"] }), {
+      risk: classified({ categories: ["mass_update"] }),
+      environment: env("dev"),
+    });
+    expect(r.matched).toBe(false);
+  });
+
+  it("matches an UNCLASSIFIED profile (empty categories treated as risk-bearing)", () => {
+    const r = evaluateWhen(when({ "risk.category_in": ["destructive"] }), {
+      risk: UNCLASSIFIED,
+      environment: env("dev"),
+    });
+    expect(r.matched).toBe(true);
+    expect(r.unclassifiedFallback).toBe(true);
+  });
+});
+
+describe("evaluateWhen — environment.name", () => {
+  it("matches on exact environment equality", () => {
+    const r = evaluateWhen(when({ "environment.name": "production" }), {
+      risk: classified(),
+      environment: env("production"),
+    });
+    expect(r.matched).toBe(true);
+  });
+
+  it("does not match a different environment", () => {
+    const r = evaluateWhen(when({ "environment.name": "production" }), {
+      risk: classified(),
+      environment: env("dev"),
+    });
+    expect(r.matched).toBe(false);
+  });
+
+  it("matches `unknown` — the no-resolver-fired case is addressable", () => {
+    const r = evaluateWhen(when({ "environment.name": "unknown" }), {
+      risk: classified(),
+      environment: env("unknown"),
+    });
+    expect(r.matched).toBe(true);
+  });
+
+  it("environment.name is NOT subject to the unclassified-risk fallback", () => {
+    // An unclassified RISK profile must not flip an environment clause:
+    // the resolver always returns a concrete environment.
+    const r = evaluateWhen(when({ "environment.name": "production" }), {
+      risk: UNCLASSIFIED,
+      environment: env("dev"),
+    });
+    expect(r.matched).toBe(false);
+    expect(r.unclassifiedFallback).toBe(false);
+  });
+});
+
+describe("evaluateWhen — action.reversible", () => {
+  it("matches when classified reversibility equals the clause", () => {
+    const r = evaluateWhen(when({ "action.reversible": false }), {
+      risk: classified({ reversible: false }),
+      environment: env("production"),
+    });
+    expect(r.matched).toBe(true);
+  });
+
+  it("does not match when classified reversibility differs", () => {
+    const r = evaluateWhen(when({ "action.reversible": false }), {
+      risk: classified({ reversible: true }),
+      environment: env("production"),
+    });
+    expect(r.matched).toBe(false);
+  });
+
+  it("matches an UNCLASSIFIED profile on either branch (reversibility unknown)", () => {
+    for (const branch of [true, false]) {
+      const r = evaluateWhen(when({ "action.reversible": branch }), {
+        risk: UNCLASSIFIED,
+        environment: env("production"),
+      });
+      expect(r.matched).toBe(true);
+      expect(r.unclassifiedFallback).toBe(true);
+    }
+  });
+});
+
+describe("evaluateWhen — AND semantics across clauses", () => {
+  it("requires every declared clause to hold", () => {
+    const block = when({
+      "risk.severity_at_least": "high",
+      "environment.name": "production",
+    });
+    const allHold = evaluateWhen(block, {
+      risk: classified({ severity: "critical" }),
+      environment: env("production"),
+    });
+    expect(allHold.matched).toBe(true);
+    expect(allHold.clauses).toHaveLength(2);
+
+    const oneFails = evaluateWhen(block, {
+      risk: classified({ severity: "critical" }),
+      environment: env("staging"),
+    });
+    expect(oneFails.matched).toBe(false);
+  });
+
+  it("reports one clause result per declared clause, in key order", () => {
+    const r = evaluateWhen(
+      when({
+        "risk.severity_at_least": "high",
+        "risk.category_in": ["destructive"],
+        "environment.name": "production",
+        "action.reversible": false,
+      }),
+      { risk: classified(), environment: env("production") },
+    );
+    expect(r.clauses.map((c) => c.clause)).toEqual([
+      "risk.severity_at_least",
+      "risk.category_in",
+      "environment.name",
+      "action.reversible",
+    ]);
+  });
+});
