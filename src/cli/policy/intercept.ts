@@ -19,6 +19,7 @@ import {
 } from "../../runtime/index.js";
 import type { Manifest, McpServer } from "../../schema/index.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
+import { checkPauseFromLoader } from "../pack/pause-check.js";
 
 export interface InterceptCliOptions extends LoaderOptions {
   /** Defaults to process.stdin. */
@@ -35,6 +36,11 @@ export interface InterceptCliOptions extends LoaderOptions {
   ledger?: LedgerClient;
   /** Inject the resolved manifest (tests). */
   manifest?: Manifest;
+  /**
+   * Test-injected generatedDir for the pause-sentinel lookup; bypasses
+   * path resolution when supplied. Mirrors the pack hooks' option.
+   */
+  generatedDir?: string;
   /**
    * When true (or `HARNESS_POLICY_VERBOSE` env is truthy), emit a
    * human-readable diagnostic block to stderr for each non-allow
@@ -172,6 +178,25 @@ export async function runInterceptCli(
       `harness policy intercept: malformed event JSON: ${(err as Error).message}\n`,
     );
     return { exitCode: 0, decisions: [], blocked: false };
+  }
+
+  // Pause sentinel — operator-only kill switch. Honoured BEFORE manifest
+  // load so the lockout-recovery flow (where the manifest is exactly what
+  // is broken) still respects an active pause. Mirrors the pack PreToolUse
+  // hook: without this the policy gates kept firing while paused, i.e. the
+  // very gates the kill switch most needs to silence (a wedged preflight /
+  // grounding gate is the canonical reason an operator pauses at all).
+  {
+    const pauseOpts: Parameters<typeof checkPauseFromLoader>[0] = {
+      loaderOpts: opts,
+      hookLabel: "policy intercept",
+      stderr,
+    };
+    if (opts.generatedDir !== undefined) pauseOpts.generatedDir = opts.generatedDir;
+    if (opts.now !== undefined) pauseOpts.now = opts.now;
+    if (checkPauseFromLoader(pauseOpts).paused) {
+      return { exitCode: 0, decisions: [], blocked: false };
+    }
   }
 
   let manifest: Manifest;
