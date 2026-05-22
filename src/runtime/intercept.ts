@@ -20,13 +20,21 @@ import {
 } from "../policies/index.js";
 import { renderProducers } from "../policies/producers.js";
 import type { Manifest, Policy } from "../schema/index.js";
+import { buildActionEnvelope } from "./action-envelope.js";
 import { renderAgentFacing } from "./agent-facing.js";
+import {
+  resolveEnvironment,
+  type EnvironmentResolution,
+} from "./environment-resolver.js";
+import type { GitRepoContext } from "./git-context.js";
 import { POLICY_DECISION_TYPE } from "./ledger-record.js";
+import { classifyRisk, type RiskProfile } from "./risk-classifier.js";
 import { resolveSessionId } from "./session-id.js";
 import {
   expandToolNameAliases,
   extractShellCommand,
 } from "./tool-name-aliases.js";
+import { evaluateWhen } from "./when-eval.js";
 
 export interface ToolEvent {
   hook_event_name?: string;
@@ -37,16 +45,46 @@ export interface ToolEvent {
   [key: string]: unknown;
 }
 
-export type PolicyOutcome = "allow" | "deny" | "warn-degraded";
+// The Risk Gate decision space (Phase 7 #5). `allow` / `deny` are the
+// Phase 4 outcomes; `warn` and `require_approval` are added here.
+//   allow            — `requires` satisfied (or the policy did not apply).
+//   warn             — `requires` failed, the policy's enforcement is
+//                      `warn`: the call proceeds, the warning is recorded.
+//   require_approval  — `requires` failed, enforcement is `require_approval`:
+//                      a first-class outcome the evaluator RETURNS;
+//                      Phase 7 #6 makes it block until approval evidence
+//                      exists. In Phase 7 #5 it does not block.
+//   deny             — `requires` failed, enforcement is `block`.
+//   warn-degraded    — `requires` could not be evaluated (ledger
+//                      unreachable, unresolved template, bad `within`);
+//                      never blocks. Distinct from `warn`: `warn` is a
+//                      real verdict, `warn-degraded` is "could not decide".
+export type PolicyOutcome =
+  | "allow"
+  | "warn"
+  | "require_approval"
+  | "deny"
+  | "warn-degraded";
 
 export interface PolicyDecision {
   policyName: string;
-  enforcement: "block" | "warn";
+  enforcement: Policy["enforcement"];
   outcome: PolicyOutcome;
   reason: string;
   extractValues: Record<string, string>;
   ledgerTag: string;
   requiresEval?: { matchedCount: number; reason: string };
+  /**
+   * Risk Classifier verdict for the action this decision was made
+   * about. Present only when the Risk Gate was active for the event
+   * (the manifest declared at least one `when:`-bearing policy); absent
+   * for a pure Phase-4 manifest, keeping its decisions byte-identical.
+   * Recorded to the audit ledger so `harness explain --trace` can
+   * replay the classification.
+   */
+  risk?: RiskProfile;
+  /** Context Resolver verdict, present under the same condition as `risk`. */
+  environment?: EnvironmentResolution;
   /**
    * One-line "to satisfy" hint synthesised from the policy's `requires`
    * spec. Carried on the live decision so the deny-envelope formatter
@@ -119,9 +157,91 @@ export interface InterceptOptions {
    * branch falls through to the standard time-window check.
    */
   currentHeadSha?: string;
+  /**
+   * Ambient context for the Risk Gate stages — the Action Envelope
+   * build (#2) and the environment resolution (#4). Resolved by the CLI
+   * wrapper (git / user / host / kube-config / env reads) and threaded
+   * in, keeping `intercept()` itself I/O-free, the same
+   * resolved-by-the-wrapper pattern as `currentHeadSha` and `builtins`.
+   *
+   * Optional: omitted by Phase-4-era callers and by unit tests that do
+   * not exercise `when:`. When omitted, the envelope is built from the
+   * event alone — risk then classifies as unclassified and the
+   * environment resolves to `unknown`. A manifest with no `when:`
+   * policy never reads any of this regardless (see `intercept`).
+   */
+  riskContext?: RiskGateContext;
 }
 
-function policyMatchesEvent(policy: Policy, event: ToolEvent): boolean {
+/**
+ * Ambient inputs the Risk Gate needs that the CLI wrapper resolves from
+ * the host (filesystem + process). Mirrors the `EnvelopeContext` /
+ * `SignalInputs` split the debug verbs already use.
+ */
+export interface RiskGateContext {
+  /** Git context resolved against the event's cwd. */
+  git: GitRepoContext;
+  /** Working directory the action runs in. */
+  cwd: string;
+  /** OS user, or "" when unavailable. */
+  user: string;
+  /** Host name, or "" when unavailable. */
+  host: string;
+  /** Environment variables, for resolver `env_var_patterns`. */
+  env: Record<string, string | undefined>;
+  /** Current kube context name, or "" when unknown. */
+  kubeContext: string;
+  /** Current kube namespace, or "" when unknown. */
+  kubeNamespace: string;
+}
+
+/** The Action Envelope plus the Risk Gate verdicts derived from it. */
+interface EnrichedEnvelope {
+  risk: RiskProfile;
+  environment: EnvironmentResolution;
+}
+
+/**
+ * Build the Action Envelope for an event and run it through the Risk
+ * Classifier (#3) and Context Resolver (#4). Pure: every host fact
+ * arrives via `riskContext`; when it is absent the envelope is built
+ * from the event alone (unclassified risk, `unknown` environment).
+ */
+function enrichEnvelope(
+  manifest: Manifest,
+  event: ToolEvent,
+  riskContext: RiskGateContext | undefined,
+  now: Date | undefined,
+): EnrichedEnvelope {
+  const rc = riskContext;
+  const envelope = buildActionEnvelope(event, {
+    cwd: rc?.cwd ?? (typeof event.cwd === "string" ? event.cwd : ""),
+    git: rc?.git ?? { repo: "", branch: "", sha: "" },
+    user: rc?.user ?? "",
+    host: rc?.host ?? "",
+    now: now ?? new Date(),
+  });
+  const risk = classifyRisk(envelope, manifest.risk.classifiers);
+  const environment = resolveEnvironment(
+    envelope,
+    manifest.environments.resolvers,
+    {
+      env: rc?.env ?? {},
+      kubeContext: rc?.kubeContext ?? "",
+      kubeNamespace: rc?.kubeNamespace ?? "",
+    },
+  );
+  return { risk, environment };
+}
+
+/**
+ * Does a policy's `trigger:` match this event? This is the WHICH-tool-
+ * calls filter; the WHETHER-it-applies filter is `policy.when:`,
+ * evaluated separately (`evaluateWhen`). A policy fires only when both
+ * hold. Exported so `harness explain-policy` can report the trigger
+ * verdict on its own.
+ */
+export function policyMatchesEvent(policy: Policy, event: ToolEvent): boolean {
   if (policy.trigger.event !== event.hook_event_name) return false;
   if (policy.trigger.match !== undefined) {
     if (typeof event.tool_name !== "string") return false;
@@ -153,6 +273,20 @@ function buildEventContext(event: ToolEvent): ExtractEventContext {
     session: { id: event.session_id ?? "" },
     git: {},
   };
+}
+
+/** Map a failed-`requires` policy to its decision outcome by enforcement. */
+function outcomeForFailedRequires(
+  enforcement: Policy["enforcement"],
+): PolicyOutcome {
+  switch (enforcement) {
+    case "block":
+      return "deny";
+    case "warn":
+      return "warn";
+    case "require_approval":
+      return "require_approval";
+  }
 }
 
 async function evaluateOnePolicy(
@@ -257,7 +391,14 @@ async function evaluateOnePolicy(
     };
   }
 
-  const outcome: PolicyOutcome = evaluation.allowed ? "allow" : "deny";
+  // Four-way decision (Phase 7 #5). A satisfied `requires` always
+  // `allow`s; a failed one is mapped by the policy's enforcement —
+  // `block` → `deny`, `warn` → `warn`, `require_approval` →
+  // `require_approval`. The evaluator only RETURNS `require_approval`
+  // here; Phase 7 #6 makes it block.
+  const outcome: PolicyOutcome = evaluation.allowed
+    ? "allow"
+    : outcomeForFailedRequires(policy.enforcement);
   return {
     policyName: policy.name,
     enforcement: policy.enforcement,
@@ -305,17 +446,41 @@ function filterEntriesByTag(
 export async function intercept(
   options: InterceptOptions,
 ): Promise<InterceptResult> {
-  const matching = options.manifest.policies.filter((p) =>
-    policyMatchesEvent(p, options.event),
-  );
+  const { manifest, event } = options;
+
+  // The Risk Gate is active only when some policy declares a `when:`
+  // block. A manifest with none — every Phase 4 / 5 / 6 manifest — skips
+  // envelope enrichment entirely: no `buildActionEnvelope`, no
+  // classifier, no resolver, and decisions carry no `risk` / `environment`.
+  // That keeps such manifests byte-for-byte identical to pre-Phase-7-#5.
+  const riskGateActive = manifest.policies.some((p) => p.when !== undefined);
+  const enriched: EnrichedEnvelope | undefined = riskGateActive
+    ? enrichEnvelope(manifest, event, options.riskContext, options.now)
+    : undefined;
+
+  // A policy fires only when its `trigger:` matches AND — when declared
+  // — every `when:` clause holds against the enriched envelope.
+  const matching = manifest.policies.filter((p) => {
+    if (!policyMatchesEvent(p, event)) return false;
+    if (p.when === undefined) return true;
+    // `enriched` is defined here: a policy with `when:` set `riskGateActive`.
+    return evaluateWhen(p.when, enriched!).matched;
+  });
+
   const decisions: PolicyDecision[] = [];
   for (const policy of matching) {
-    const decision = await evaluateOnePolicy(policy, options);
+    const base = await evaluateOnePolicy(policy, options);
+    // Attach the per-event Risk Gate verdicts so `harness audit` /
+    // `explain --trace` can replay the classification + environment
+    // that the `when:` match was made against.
+    const decision: PolicyDecision = enriched
+      ? { ...base, risk: enriched.risk, environment: enriched.environment }
+      : base;
     decisions.push(decision);
     try {
       await options.ledger.record(
         decision,
-        resolveSessionId(options.event.session_id),
+        resolveSessionId(event.session_id),
       );
     } catch {
       /* audit-write failure must not block; the decision is still applied. */

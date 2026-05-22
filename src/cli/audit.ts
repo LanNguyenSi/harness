@@ -63,7 +63,13 @@ export interface AuditResult {
   decisions: AuditDecisionRow[];
 }
 
-const VALID_OUTCOMES: AuditOutcome[] = ["allow", "deny", "warn-degraded"];
+const VALID_OUTCOMES: AuditOutcome[] = [
+  "allow",
+  "warn",
+  "require_approval",
+  "deny",
+  "warn-degraded",
+];
 
 function isValidOutcome(v: string): v is AuditOutcome {
   return (VALID_OUTCOMES as string[]).includes(v);
@@ -153,7 +159,7 @@ export async function audit(opts: AuditOptions = {}): Promise<AuditResult> {
   }
   if (opts.outcome !== undefined && !isValidOutcome(opts.outcome)) {
     throw new HarnessExitError(
-      `--outcome: must be one of allow, deny, warn-degraded (got "${opts.outcome}")`,
+      `--outcome: must be one of ${VALID_OUTCOMES.join(", ")} (got "${opts.outcome}")`,
       EX_USAGE,
     );
   }

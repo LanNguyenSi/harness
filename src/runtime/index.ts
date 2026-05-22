@@ -1,13 +1,22 @@
 export {
   intercept,
+  policyMatchesEvent,
   type ClaudeDenyJson,
   type InterceptOptions,
   type InterceptResult,
   type LedgerClient,
   type PolicyDecision,
   type PolicyOutcome,
+  type RiskGateContext,
   type ToolEvent,
 } from "./intercept.js";
+export {
+  evaluateWhen,
+  type WhenClauseKey,
+  type WhenClauseResult,
+  type WhenContext,
+  type WhenEvaluation,
+} from "./when-eval.js";
 export {
   recordPolicyDecision,
   payloadFromDecision,

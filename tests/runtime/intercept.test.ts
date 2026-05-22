@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   intercept,
   type LedgerClient,
+  type RiskGateContext,
   type ToolEvent,
 } from "../../src/runtime/index.js";
 import type {
@@ -9,7 +10,11 @@ import type {
   LedgerEntry,
   LedgerQueryResult,
 } from "../../src/policies/index.js";
-import type { Policy } from "../../src/schema/index.js";
+import type {
+  EnvironmentResolver,
+  Policy,
+  RiskClassifier,
+} from "../../src/schema/index.js";
 import { makeManifest, makePolicy as policy } from "../_helpers/manifest.js";
 
 const NOW = new Date("2026-04-30T12:00:00.000Z");
@@ -549,7 +554,10 @@ describe("intercept — multiple policies, deny if any", () => {
     expect(result.blockJson?.reason).toContain("1 of required 2");
   });
 
-  it("warn enforcement does not block even on deny", async () => {
+  it("warn enforcement yields a `warn` outcome and does not block", async () => {
+    // Phase 7 #5 four-way decision: a `warn`-enforcement policy whose
+    // requires fails resolves to outcome `warn` (was `deny` in the
+    // Phase 4 binary model). It still never blocks.
     const warnPolicy: Policy = { ...REVIEW_POLICY, enforcement: "warn" };
     const ledger = makeLedger({ kind: "ok", entries: [] });
     const result = await intercept({
@@ -559,7 +567,7 @@ describe("intercept — multiple policies, deny if any", () => {
       builtins: BUILTINS,
       now: NOW,
     });
-    expect(result.decisions[0]?.outcome).toBe("deny");
+    expect(result.decisions[0]?.outcome).toBe("warn");
     expect(result.blockJson).toBeNull();
   });
 });
@@ -968,5 +976,203 @@ describe("intercept — audit log", () => {
         now: NOW,
       }),
     ).resolves.toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 7 #5 — `policy.when:` evaluation + the four-way decision space.
+// ---------------------------------------------------------------------------
+
+const BASH_DESTROY_EVENT: ToolEvent = {
+  hook_event_name: "PreToolUse",
+  tool_name: "Bash",
+  tool_input: { command: "terraform destroy" },
+  session_id: "sess-1",
+  cwd: "/tmp/proj",
+};
+
+const DESTROY_CLASSIFIER: RiskClassifier = {
+  name: "dangerous-shell",
+  tool: "Bash",
+  patterns: [
+    {
+      pattern: "terraform\\s+destroy",
+      categories: ["destructive", "infrastructure_change"],
+      severity: "critical",
+    },
+  ],
+};
+
+const PROD_RESOLVER: EnvironmentResolver = {
+  name: "production-signals",
+  environment: "production",
+  signals: { branch_patterns: ["main"] },
+};
+
+// gate-prod-destructive — the canonical risk policy shape from
+// docs/risk-gate.md. `enforcement: require_approval` so a failed
+// `requires` resolves to the new `require_approval` outcome.
+const RISK_POLICY: Policy = {
+  name: "gate-prod-destructive",
+  description: "require approval for destructive production actions",
+  trigger: { event: "PreToolUse", match: "Bash" },
+  when: {
+    "risk.severity_at_least": "high",
+    "environment.name": "production",
+  },
+  requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
+  hook: "h",
+  enforcement: "require_approval",
+} as Policy;
+
+const riskCtx = (branch: string): RiskGateContext => ({
+  git: { repo: "proj", branch, sha: "" },
+  cwd: "/tmp/proj",
+  user: "tester",
+  host: "testhost",
+  env: {},
+  kubeContext: "",
+  kubeNamespace: "",
+});
+
+describe("intercept — Phase 7 #5 when: evaluation", () => {
+  it("fires a when: policy only when trigger AND when both hold", async () => {
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: makeManifest({
+        policies: [RISK_POLICY],
+        classifiers: [DESTROY_CLASSIFIER],
+        resolvers: [PROD_RESOLVER],
+      }),
+      event: BASH_DESTROY_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+      riskContext: riskCtx("main"),
+    });
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.policyName).toBe("gate-prod-destructive");
+    // Risk Gate verdicts ride along on the decision for the audit trail.
+    expect(result.decisions[0]?.risk?.severity).toBe("critical");
+    expect(result.decisions[0]?.environment?.name).toBe("production");
+  });
+
+  it("does NOT fire when the when: environment clause fails", async () => {
+    // Branch `feature/x` matches no resolver → environment `unknown` →
+    // the `environment.name: production` clause fails → policy is not in
+    // the matching set at all, so it records no decision.
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: makeManifest({
+        policies: [RISK_POLICY],
+        classifiers: [DESTROY_CLASSIFIER],
+        resolvers: [PROD_RESOLVER],
+      }),
+      event: BASH_DESTROY_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+      riskContext: riskCtx("feature/x"),
+    });
+    expect(result.decisions).toHaveLength(0);
+    expect(result.blockJson).toBeNull();
+  });
+
+  it("fires fail-closed when the manifest declares no classifiers (unknown is not safe)", async () => {
+    // No classifier → action is unclassified → `severity_at_least`
+    // matches by the unknown-is-not-safe rule; the environment clause
+    // still holds (branch `main`), so the policy fires.
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: makeManifest({
+        policies: [RISK_POLICY],
+        resolvers: [PROD_RESOLVER],
+      }),
+      event: BASH_DESTROY_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+      riskContext: riskCtx("main"),
+    });
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.risk?.classified).toBe(false);
+  });
+
+  it("a no-when: policy is unaffected and carries no risk/environment", async () => {
+    // The manifest has no `when:`-bearing policy → the Risk Gate is
+    // inactive → decisions are byte-identical to Phase 4 (no `risk` /
+    // `environment` fields).
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([REVIEW_POLICY]),
+      event: MERGE_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.risk).toBeUndefined();
+    expect(result.decisions[0]?.environment).toBeUndefined();
+  });
+});
+
+describe("intercept — Phase 7 #5 four-way decision", () => {
+  const fullManifest = () =>
+    makeManifest({
+      policies: [RISK_POLICY],
+      classifiers: [DESTROY_CLASSIFIER],
+      resolvers: [PROD_RESOLVER],
+    });
+
+  it("require_approval enforcement yields a require_approval outcome and does not block in #5", async () => {
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: fullManifest(),
+      event: BASH_DESTROY_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+      riskContext: riskCtx("main"),
+    });
+    expect(result.decisions[0]?.outcome).toBe("require_approval");
+    // Enforcement of `require_approval` (the actual block) is Phase 7 #6.
+    expect(result.blockJson).toBeNull();
+  });
+
+  it("require_approval resolves to allow once the approval tag is on record", async () => {
+    const approval: LedgerEntry = {
+      id: "a1",
+      content: "risk-approved:sess-1",
+      createdAt: NOW.toISOString(),
+    };
+    const ledger = makeLedger({ kind: "ok", entries: [approval] });
+    const result = await intercept({
+      manifest: fullManifest(),
+      event: BASH_DESTROY_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+      riskContext: riskCtx("main"),
+    });
+    expect(result.decisions[0]?.outcome).toBe("allow");
+    expect(result.blockJson).toBeNull();
+  });
+
+  it("block enforcement still denies and blocks when a when: policy's requires fails", async () => {
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: makeManifest({
+        policies: [{ ...RISK_POLICY, enforcement: "block" } as Policy],
+        classifiers: [DESTROY_CLASSIFIER],
+        resolvers: [PROD_RESOLVER],
+      }),
+      event: BASH_DESTROY_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+      riskContext: riskCtx("main"),
+    });
+    expect(result.decisions[0]?.outcome).toBe("deny");
+    expect(result.blockJson?.decision).toBe("block");
   });
 });

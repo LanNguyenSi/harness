@@ -15,7 +15,19 @@ export const PolicyTriggerSchema = z
   })
   .strict();
 
-export const PolicyEnforcementSchema = z.enum(["block", "warn"]);
+// How a policy acts when its `requires:` evidence is absent:
+//   block            — deny the tool call.
+//   warn             — let the call proceed, record + surface a warning.
+//   require_approval  — Phase 7 #5. The evaluator returns a first-class
+//                       `require_approval` outcome, distinct from `deny`
+//                       and `warn`; Phase 7 #6 makes it actually block
+//                       until matching approval evidence exists in the
+//                       ledger. A `block` / `warn` policy is unchanged.
+export const PolicyEnforcementSchema = z.enum([
+  "block",
+  "warn",
+  "require_approval",
+]);
 
 // `producers:` is the structured remediation hint the policy engine
 // appends to the deny envelope. Each entry tells the agent ONE concrete
@@ -86,14 +98,14 @@ export const PolicyUxSchema = z
   })
   .strict();
 
-// `when:` — Phase 7 #1 anchor. The risk/environment-aware match layer.
+// `when:` — the risk/environment-aware match layer.
 //
-// STATUS: schema vocabulary only. `harness policy intercept` does NOT
-// evaluate `when:` yet — a policy's `trigger:` remains the sole match
-// surface at runtime. The Phase 7 #5 evaluator will AND a declared
-// `when:` onto the trigger match, reading the enriched Action Envelope
-// (see docs/ROADMAP.md and docs/risk-gate.md). A `when:` block today is
-// parsed, validated, and otherwise inert.
+// STATUS: live as of Phase 7 #5. `harness policy intercept` ANDs a
+// declared `when:` onto the policy's `trigger:` match, evaluating it
+// against the Action Envelope enriched by the Risk Classifier (#3) and
+// Context Resolver (#4). A policy with no `when:` matches on `trigger:`
+// alone, exactly as in Phase 4. See src/runtime/when-eval.ts for the
+// evaluator and docs/risk-gate.md for the clause semantics.
 //
 // Each clause is optional and keyed by the envelope path it tests:
 //   risk.severity_at_least — envelope risk severity at or above this

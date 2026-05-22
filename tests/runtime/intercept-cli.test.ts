@@ -5,7 +5,12 @@ import { Readable, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realLedgerClient, runInterceptCli } from "../../src/cli/policy/intercept.js";
 import type { LedgerClient } from "../../src/runtime/intercept.js";
-import type { McpServer, Policy } from "../../src/schema/index.js";
+import type {
+  EnvironmentResolver,
+  McpServer,
+  Policy,
+  RiskClassifier,
+} from "../../src/schema/index.js";
 import { makeDecision } from "../_helpers/decision.js";
 import { makeManifest } from "../_helpers/manifest.js";
 
@@ -541,5 +546,92 @@ describe("runInterceptCli — REPO / BRANCH builtins resolve from event.cwd", ()
       if (savedBranch === undefined) delete process.env.HARNESS_BRANCH;
       else process.env.HARNESS_BRANCH = savedBranch;
     }
+  });
+});
+
+describe("runInterceptCli — Phase 7 #5: when: evaluation wiring", () => {
+  const DESTROY_CLASSIFIER: RiskClassifier = {
+    name: "dangerous-shell",
+    tool: "Bash",
+    patterns: [
+      {
+        pattern: "terraform\\s+destroy",
+        categories: ["destructive", "infrastructure_change"],
+        severity: "critical",
+      },
+    ],
+  };
+
+  // Resolves `production` from a DATABASE_URL env-var signal — exercised
+  // through the `env` seam so the test never touches the real process env.
+  const PROD_RESOLVER: EnvironmentResolver = {
+    name: "production-signals",
+    environment: "production",
+    signals: { env_var_patterns: [{ var: "DATABASE_URL", patterns: ["prod"] }] },
+  };
+
+  const RISK_POLICY: Policy = {
+    name: "gate-prod-destructive",
+    description: "require approval for destructive production actions",
+    trigger: { event: "PreToolUse", match: "Bash" },
+    when: { "environment.name": "production" },
+    requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
+    hook: "h",
+    enforcement: "require_approval",
+  } as Policy;
+
+  const riskManifest = () =>
+    makeManifest({
+      policies: [RISK_POLICY],
+      classifiers: [DESTROY_CLASSIFIER],
+      resolvers: [PROD_RESOLVER],
+    });
+
+  const emptyLedger: LedgerClient = {
+    async query() {
+      return { kind: "ok", entries: [] };
+    },
+    async record() {
+      /* no-op */
+    },
+  };
+
+  const destroyEvent = JSON.stringify({
+    hook_event_name: "PreToolUse",
+    tool_name: "Bash",
+    tool_input: { command: "terraform destroy" },
+    session_id: "sess-1",
+  });
+
+  it("fires a when: policy when the resolved environment matches (env seam)", async () => {
+    const { stream } = captureStdout();
+    const result = await runInterceptCli({
+      stdin: streamFrom(destroyEvent),
+      stdout: stream,
+      manifest: riskManifest(),
+      ledger: emptyLedger,
+      env: { DATABASE_URL: "postgres://prod-db/app" },
+      kubeContext: "",
+      kubeNamespace: "",
+    });
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.outcome).toBe("require_approval");
+    // Phase 7 #5 returns require_approval; #6 makes it block.
+    expect(result.blocked).toBe(false);
+  });
+
+  it("does NOT fire the when: policy when the environment does not match", async () => {
+    const { stream } = captureStdout();
+    const result = await runInterceptCli({
+      stdin: streamFrom(destroyEvent),
+      stdout: stream,
+      manifest: riskManifest(),
+      ledger: emptyLedger,
+      env: {},
+      kubeContext: "",
+      kubeNamespace: "",
+    });
+    expect(result.decisions).toHaveLength(0);
+    expect(result.blocked).toBe(false);
   });
 });

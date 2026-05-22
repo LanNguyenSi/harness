@@ -384,7 +384,7 @@ The architectural split is settled: the Risk Gate lives entirely inside harness,
 - Context Resolver consumes `environments.resolvers[]`: branch + env-vars + kube-context + namespace signals produce `{ name, confidence, signals, resolver }` (design phase C). `harness resolve-env <event.json>` debug verb shows the resolution.
 - Unresolved context resolves to `unknown`, matchable by `when.environment.name`. When resolvers disagree, the most-dangerous environment wins.
 
-#### Phase 7 #5, Policy evaluation over the enriched envelope
+#### Phase 7 #5, Policy evaluation over the enriched envelope *(shipped)*
 
 - `harness policy intercept` ANDs a policy's `when:` clauses onto its `trigger:` match, evaluating against the enriched envelope (design phase D).
 - Decision space extends to `allow / warn / require_approval / deny`; `require_approval` is plumbed through the decision model.

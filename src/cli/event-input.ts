@@ -1,11 +1,12 @@
-// Shared tool-event input handling for the Risk Gate debug verbs
-// (`harness explain-action`, `harness test-risk`).
+// Shared tool-event input handling for the Risk Gate verbs that take a
+// tool-event JSON file: `harness explain-action`, `harness test-risk`,
+// `harness resolve-env`, and `harness explain-policy`.
 //
-// Both verbs take a tool-event JSON file path, apply the same
-// not-found / malformed / non-object guards, resolve the same ambient
-// `EnvelopeContext` (git, host, user, now), and build the Action
-// Envelope. This module is that shared front end so the two verbs stay
-// byte-identical in how they read and normalize their input.
+// Each applies the same not-found / malformed / non-object guards,
+// resolves the same ambient `EnvelopeContext` (git, host, user, now),
+// and builds the Action Envelope. This module is that shared front end
+// so every verb stays byte-identical in how it reads and normalizes
+// its input.
 
 import * as fs from "node:fs";
 import * as os from "node:os";

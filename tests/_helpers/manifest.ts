@@ -7,14 +7,25 @@
 //
 // `makeManifest({ policies })` returns the smallest manifest that
 // makes the runtime + audit + explain consumers happy. Override
-// `hooks` / `mcps` when a test needs more.
+// `hooks` / `mcps` / `classifiers` / `resolvers` when a test needs more.
 
-import type { Hook, Manifest, McpServer, Policy } from "../../src/schema/index.js";
+import type {
+  EnvironmentResolver,
+  Hook,
+  Manifest,
+  McpServer,
+  Policy,
+  RiskClassifier,
+} from "../../src/schema/index.js";
 
 export interface MakeManifestOptions {
   policies?: Policy[];
   hooks?: Hook[];
   mcps?: McpServer[];
+  /** Risk Gate classifiers — `risk.classifiers[]` (Phase 7 #3/#5). */
+  classifiers?: RiskClassifier[];
+  /** Risk Gate environment resolvers — `environments.resolvers[]` (Phase 7 #4/#5). */
+  resolvers?: EnvironmentResolver[];
 }
 
 const DEFAULT_HOOK = {
@@ -36,6 +47,8 @@ export function makeManifest(opts: MakeManifestOptions = {}): Manifest {
     memory: {} as Manifest["memory"],
     hooks: opts.hooks ?? [DEFAULT_HOOK],
     policies: opts.policies ?? [],
+    risk: { classifiers: opts.classifiers ?? [] },
+    environments: { resolvers: opts.resolvers ?? [] },
   } as Manifest;
 }
 

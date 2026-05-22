@@ -9,12 +9,15 @@ import {
   type LedgerEntry,
   type LedgerQueryResult,
 } from "../../policies/index.js";
+import * as os from "node:os";
 import {
   intercept,
   recordPolicyDecision,
   resolveGitContext,
+  resolveKubeContext,
   type LedgerClient,
   type PolicyDecision,
+  type RiskGateContext,
   type ToolEvent,
 } from "../../runtime/index.js";
 import type { Manifest, McpServer } from "../../schema/index.js";
@@ -48,6 +51,16 @@ export interface InterceptCliOptions extends LoaderOptions {
    * is preserved. Phase 5 #3 — opt-in only.
    */
   verbose?: boolean;
+  /**
+   * Risk Gate seams (Phase 7 #5). Override the ambient inputs the
+   * Context Resolver matches `environments.resolvers[]` signals
+   * against, so a test exercising a `when:` policy stays hermetic.
+   * `env` defaults to `process.env`; the kube seams bypass the
+   * `~/.kube/config` read when either is supplied.
+   */
+  env?: Record<string, string | undefined>;
+  kubeContext?: string;
+  kubeNamespace?: string;
 }
 
 export interface InterceptCliResult {
@@ -70,6 +83,15 @@ async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
 
 function findGroundingMcp(manifest: Manifest): McpServer | null {
   return manifest.tools.mcp.find((m) => m.name === "grounding-mcp") ?? null;
+}
+
+/** Resolve an `os` fact, returning "" on the (rare) lookup failure. */
+function safeOs(fn: () => string): string {
+  try {
+    return fn();
+  } catch {
+    return "";
+  }
 }
 
 /**
@@ -252,6 +274,30 @@ export async function runInterceptCli(
     CWD: cwd,
   };
 
+  // Risk Gate ambient context — resolved only when the manifest
+  // declares a `when:`-bearing policy, so a pure Phase-4 manifest pays
+  // no kube-config read. `intercept()` applies the same gate; this just
+  // avoids the host I/O when nothing would consume it.
+  let riskContext: RiskGateContext | undefined;
+  if (manifest.policies.some((p) => p.when !== undefined)) {
+    const kube =
+      opts.kubeContext !== undefined || opts.kubeNamespace !== undefined
+        ? {
+            context: opts.kubeContext ?? "",
+            namespace: opts.kubeNamespace ?? "",
+          }
+        : resolveKubeContext();
+    riskContext = {
+      git: gitContext,
+      cwd,
+      user: safeOs(() => os.userInfo().username),
+      host: safeOs(() => os.hostname()),
+      env: opts.env ?? process.env,
+      kubeContext: kube.context,
+      kubeNamespace: kube.namespace,
+    };
+  }
+
   const result = await intercept({
     manifest,
     event,
@@ -260,6 +306,7 @@ export async function runInterceptCli(
     ...(opts.ledgerTimeoutMs !== undefined && { ledgerTimeoutMs: opts.ledgerTimeoutMs }),
     ...(opts.now && { now: opts.now }),
     ...(gitContext.sha.length > 0 && { currentHeadSha: gitContext.sha }),
+    ...(riskContext && { riskContext }),
   });
 
   if (result.blockJson) {

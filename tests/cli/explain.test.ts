@@ -159,6 +159,65 @@ describe("explain --trace", () => {
     expect(parsed.evaluatedAt).toBe("2026-04-30T12:00:00.000Z");
   });
 
+  it("Phase 7 #5: --trace surfaces the recorded classifier + environment", async () => {
+    const result = await explain("review-before-merge", {
+      configPath: FULL_MANIFEST,
+      trace: true,
+      json: true,
+      sessionId: "sess-1",
+      fetchLedger: async () => ({
+        kind: "ok",
+        entries: [
+          decisionEntry(
+            {
+              policyName: "review-before-merge",
+              risk: {
+                classified: true,
+                severity: "critical",
+                categories: ["destructive", "infrastructure_change"],
+                reversible: false,
+                confidence: "high",
+                reasons: ['classifier "dangerous-shell" matched'],
+              },
+              environment: {
+                name: "production",
+                confidence: "medium",
+                signals: ["branch:main ~ main"],
+                resolver: "production-signals",
+              },
+            },
+            "2026-04-30T12:00:00.000Z",
+          ),
+        ],
+      }),
+    });
+    const parsed = JSON.parse(result.output);
+    expect(parsed.classifier.severity).toBe("critical");
+    expect(parsed.classifier.categories).toContain("destructive");
+    expect(parsed.environment.name).toBe("production");
+    expect(parsed.environment.resolver).toBe("production-signals");
+  });
+
+  it("Phase 7 #5: --trace omits classifier/environment for a pre-#5 decision", async () => {
+    // A decision recorded before #5 (or by a no-`when:` manifest) carries
+    // no `risk` / `environment` payload — the trace simply omits them.
+    const result = await explain("review-before-merge", {
+      configPath: FULL_MANIFEST,
+      trace: true,
+      json: true,
+      sessionId: "sess-1",
+      fetchLedger: async () => ({
+        kind: "ok",
+        entries: [
+          decisionEntry({ policyName: "review-before-merge" }, "2026-04-30T12:00:00.000Z"),
+        ],
+      }),
+    });
+    const parsed = JSON.parse(result.output);
+    expect(parsed.classifier).toBeUndefined();
+    expect(parsed.environment).toBeUndefined();
+  });
+
   it("silently skips malformed policy_decision content and uses the latest valid entry", async () => {
     const result = await explain("review-before-merge", {
       configPath: FULL_MANIFEST,
