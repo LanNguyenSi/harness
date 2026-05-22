@@ -138,6 +138,12 @@ hooks:
     bash_match: (^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*git( -C \S+)* push\b
     blocking: hard
     budget_ms: 1000
+  - name: risk-gate
+    event: PreToolUse
+    command: harness policy intercept
+    match: Bash
+    blocking: hard
+    budget_ms: 2000
 policies:
   - name: review-before-merge
     description: Block PR merges unless a ledger entry tagged review:<pr-number> exists for this session.
@@ -316,6 +322,43 @@ policies:
         - a preflight for ${BRANCH} at the current HEAD (any age) OR any preflight within the last 10 minutes. Re-run `harness preflight` if you committed since the last preflight AND it has been more than 10 minutes.
       run:
         - harness preflight
+  - name: gate-prod-destructive
+    description: Deny critical-severity destructive shell actions against a production target.
+    trigger:
+      event: PreToolUse
+      match: Bash
+    requires:
+      ledger_tag: risk-override:${SESSION_ID}
+    hook: risk-gate
+    enforcement: block
+    ux:
+      cannot: You cannot run this critical destructive action against production.
+      required:
+        - "a deliberate operator override: a critical production mutation has no benign reading"
+      run:
+        - Choose a non-destructive alternative, or run the command yourself outside the agent.
+        - "Operator override (deliberate): record a risk-override:${SESSION_ID} entry in the evidence ledger."
+    when:
+      risk.severity_at_least: critical
+      environment.name: production
+  - name: gate-prod-destructive-approval
+    description: Require operator approval for high-severity destructive shell actions against a production target.
+    trigger:
+      event: PreToolUse
+      match: Bash
+    requires:
+      ledger_tag: risk-approved:${SESSION_ID}
+    hook: risk-gate
+    enforcement: require_approval
+    ux:
+      cannot: You cannot run this destructive production action yet.
+      required:
+        - operator approval of this Risk Gate decision
+      run:
+        - harness approve risk
+    when:
+      risk.severity_at_least: high
+      environment.name: production
 policy_packs:
   - name: understanding-before-execution
     source: builtin

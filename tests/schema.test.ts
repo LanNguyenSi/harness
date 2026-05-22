@@ -30,8 +30,8 @@ describe("parseManifest — happy path", () => {
     expect(manifest.tools.mcp).toHaveLength(3);
     expect(manifest.tools.mcp[0]?.name).toBe("codebase-oracle");
     expect(manifest.tools.mcp[2]?.name).toBe("grounding-mcp");
-    expect(manifest.hooks).toHaveLength(8);
-    expect(manifest.policies).toHaveLength(8);
+    expect(manifest.hooks).toHaveLength(9);
+    expect(manifest.policies).toHaveLength(10);
     const reviewPolicy = manifest.policies.find((p) => p.name === "review-before-merge");
     expect(reviewPolicy?.requires.ledger_tag).toBe("review:${PR_NUMBER}");
     expect(reviewPolicy?.trigger.extract?.PR_NUMBER).toBe("toolArgs.prNumber");

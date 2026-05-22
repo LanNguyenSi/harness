@@ -1,16 +1,16 @@
 # Risk Gate
 
-> **Status (through Phase 7 #5):** the Risk Gate runs at the live
-> `harness policy intercept` gate. The interceptor builds the Action
-> Envelope (#2), classifies risk (#3), resolves the environment (#4),
-> and evaluates `policy.when:` (#5) — `risk:`, `environments:`, and
-> `policy.when:` are no longer inert. The decision space is the full
-> `allow / warn / require_approval / deny`. One piece is still pending:
-> `require_approval` is *returned* by the evaluator but does not yet
-> *block* — making it block until approval evidence exists, plus the
-> built-in `dangerous-shell` classifier and `harness doctor` wiring
-> health, is Phase 7 #6 ([`ROADMAP.md`](ROADMAP.md#phase-7--risk-gate)).
-> Each piece's status is called out inline below.
+> **Status: complete (Phase 7 #1 through #6).** The Risk Gate is live
+> and authoritative at the `harness policy intercept` boundary. The
+> interceptor builds the Action Envelope (#2), classifies risk (#3),
+> resolves the environment (#4), evaluates `policy.when:` (#5), and
+> enforces the four-way `allow / warn / require_approval / deny`
+> decision (#6): `deny` and `require_approval` abort the tool call,
+> `require_approval` clears once a `risk-approved:${SESSION_ID}` ledger
+> tag exists (written by `harness approve risk`). The built-in
+> `dangerous-shell` classifier + `gate-prod-destructive` policies ship
+> in `harness init --template full`, and `harness doctor` reports Risk
+> Gate wiring health. See [`ROADMAP.md`](ROADMAP.md#phase-7--risk-gate).
 
 ## What the Risk Gate is
 
@@ -207,10 +207,9 @@ Phase 7 scope; it remains a possible future relaxation.
 
 ## Decision model
 
-*Status: the four outcomes are all RETURNED by the Phase 7 #5
-evaluator. `allow` / `warn` / `deny` are enforced as in Phase 4;
-`require_approval` is returned but does not block yet — making it block
-until approval evidence exists is Phase 7 #6.*
+*Status: all four outcomes are evaluated and enforced as of Phase 7 #6.
+`deny` and `require_approval` abort the tool call; `allow` and `warn`
+let it proceed.*
 
 The Phase 4 decision space is `allow` / `deny`, selected by
 `enforcement: block | warn`. Phase 7 extends it to four outcomes, with
@@ -220,8 +219,17 @@ The Phase 4 decision space is `allow` / `deny`, selected by
 |---|---|
 | `allow` | Action may proceed. |
 | `warn` | Action proceeds; a warning is recorded and surfaced. |
-| `require_approval` | Action is blocked until matching approval evidence exists in the ledger. (Phase 7 #5 returns this outcome; Phase 7 #6 makes it block.) |
+| `require_approval` | Action is blocked until matching approval evidence exists in the ledger. |
 | `deny` | Action is blocked. |
+
+**Degraded mode.** When the evidence ledger is unreachable (grounding-mcp
+absent or unresponsive), a `require_approval` / `deny` policy cannot be
+evaluated and the decision degrades to a non-blocking `warn-degraded`:
+the tool call proceeds and the un-evaluated policy is recorded. This is
+the same fail-open contract Phase 4 already applies to `block` policies
+(`ROADMAP.md` Phase 4) — the Risk Gate does not invent a stricter one.
+An operator who needs the gate to fail closed must keep grounding-mcp
+healthy; `harness doctor` surfaces an unreachable ledger.
 
 `require_approval` reuses the Phase 6 approval mechanism unchanged: a
 ledger tag (working name `risk-approved:${SESSION_ID}`) written by a

@@ -37,6 +37,7 @@ import { runPackHookCodexPreToolUseCli } from "./pack/hook-codex-pre-tool-use.js
 import { runPackHookCodexStopCli } from "./pack/hook-codex-stop.js";
 import { runPackHookCodexUserPromptSubmitCli } from "./pack/hook-codex-user-prompt-submit.js";
 import { isRuntime, KNOWN_RUNTIMES, type Runtime } from "../policy-packs/index.js";
+import { approveRisk } from "./approve/risk.js";
 import { approveUnderstanding } from "./approve/understanding.js";
 import { describe, isPillar, type Pillar } from "./describe.js";
 import { diff as diffRun } from "./diff/index.js";
@@ -1321,6 +1322,51 @@ export function buildProgram(opts: RunOptions = {}): Command {
           );
         } else {
           lines.push(`report:  ⚠ skipped (${result.persistedReport.reason})`);
+        }
+        stdout(`${lines.join("\n")}\n`);
+      },
+    );
+
+  approveCmd
+    .command("risk")
+    .description(
+      "Grant a Risk Gate require_approval decision: write the " +
+        "risk-approved:${SESSION_ID} evidence-ledger tag the blocked policy's " +
+        "requires consults. Operator action — run it after reviewing the blocked action.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option(
+      "--session <id>",
+      "explicit session id (default: $CLAUDE_SESSION_ID, then $CODEX_SESSION_ID, then staged .pending-approval)",
+    )
+    .action(
+      async (options: { config?: string; project?: string; session?: string }) => {
+        const cliOpts: Parameters<typeof approveRisk>[0] = {};
+        if (options.config) cliOpts.configPath = options.config;
+        if (options.project) cliOpts.project = options.project;
+        if (options.session) cliOpts.session = options.session;
+        const result = await approveRisk(cliOpts);
+        const lines: string[] = [];
+        const sourceNote =
+          result.sessionSource === "pending-approval"
+            ? " (resolved from .pending-approval staged by the gate hook)"
+            : result.sessionSource === "env-claude"
+              ? " (from $CLAUDE_SESSION_ID)"
+              : result.sessionSource === "env-codex"
+                ? " (from $CODEX_SESSION_ID)"
+                : "";
+        lines.push(`session: ${result.sessionId}${sourceNote}`);
+        if (result.ledger.ok) {
+          lines.push(`ledger:  ✓ wrote ${result.ledger.tag}`);
+          lines.push(
+            "  the Risk Gate require_approval policy now passes for this session.",
+          );
+        } else {
+          lines.push(`ledger:  ✗ FAILED (${result.ledger.reason ?? "unknown"})`);
+          lines.push(
+            "  the require_approval gate stays blocked until the tag is recorded.",
+          );
         }
         stdout(`${lines.join("\n")}\n`);
       },

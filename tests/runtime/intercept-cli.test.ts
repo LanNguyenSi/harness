@@ -616,8 +616,8 @@ describe("runInterceptCli — Phase 7 #5: when: evaluation wiring", () => {
     });
     expect(result.decisions).toHaveLength(1);
     expect(result.decisions[0]?.outcome).toBe("require_approval");
-    // Phase 7 #5 returns require_approval; #6 makes it block.
-    expect(result.blocked).toBe(false);
+    // Phase 7 #6: require_approval is authoritative — it blocks.
+    expect(result.blocked).toBe(true);
   });
 
   it("does NOT fire the when: policy when the environment does not match", async () => {

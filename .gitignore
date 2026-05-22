@@ -22,3 +22,6 @@ coverage/
 .harness/
 harness.generated/
 ~
+
+# Dogfood smoke run artefacts — per-run transcripts, not committed
+dogfood/*/transcript/

@@ -231,6 +231,19 @@ hooks:
     blocking: hard
     budget_ms: 1000
 
+  # risk-gate (Phase 7 #6): the Risk Gate enforcement hook. The
+  # gate-prod-destructive policies below reference it. Same generic
+  # \`harness policy intercept\` entrypoint as every other policy hook;
+  # the interceptor builds the Action Envelope, classifies risk against
+  # \`risk.classifiers[]\`, resolves the environment against
+  # \`environments.resolvers[]\`, and evaluates the policies' \`when:\`.
+  - name: risk-gate
+    event: PreToolUse
+    match: "Bash"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 2000
+
 policies:
   - name: review-before-merge
     description: Block PR merges unless a ledger entry tagged review:<pr-number> exists for this session.
@@ -439,6 +452,54 @@ policies:
       run:
         - "harness preflight"
 
+  # Phase 7 Risk Gate — the canonical built-in worked example. These two
+  # policies, with the dangerous-shell classifier and production-signals
+  # resolver below, are the Risk Gate's default stance: a destructive
+  # shell action whose target environment resolves to production is
+  # gated before the runtime fires it. Both fire ONLY when the
+  # environment resolves to production (a main / release branch, a
+  # prod-looking DATABASE_URL, or a prod kube context); on an ordinary
+  # feature branch the environment is unknown and neither fires. Ordered
+  # deny-first so a critical action (which also matches the high
+  # threshold) gets the hard-deny envelope. See docs/risk-gate.md.
+  - name: gate-prod-destructive
+    description: Deny critical-severity destructive shell actions against a production target.
+    trigger:
+      event: PreToolUse
+      match: "Bash"
+    when:
+      risk.severity_at_least: critical
+      environment.name: production
+    requires:
+      ledger_tag: "risk-override:\${SESSION_ID}"
+    hook: risk-gate
+    enforcement: block
+    ux:
+      cannot: "You cannot run this critical destructive action against production."
+      required:
+        - "a deliberate operator override: a critical production mutation has no benign reading"
+      run:
+        - "Choose a non-destructive alternative, or run the command yourself outside the agent."
+        - "Operator override (deliberate): record a risk-override:\${SESSION_ID} entry in the evidence ledger."
+  - name: gate-prod-destructive-approval
+    description: Require operator approval for high-severity destructive shell actions against a production target.
+    trigger:
+      event: PreToolUse
+      match: "Bash"
+    when:
+      risk.severity_at_least: high
+      environment.name: production
+    requires:
+      ledger_tag: "risk-approved:\${SESSION_ID}"
+    hook: risk-gate
+    enforcement: require_approval
+    ux:
+      cannot: "You cannot run this destructive production action yet."
+      required:
+        - "operator approval of this Risk Gate decision"
+      run:
+        - "harness approve risk"
+
 # Full inherits the Solo/Team understanding-gate stack: the Stop hook
 # persists each Understanding Report and the PreToolUse pre-tool-use
 # blocker refuses Edit/Write/Bash until the report is approved. Drop
@@ -535,6 +596,43 @@ policy_packs:
         run:
           - "git checkout -b feat/<your-task>"
           - "harness session-start branch-check"
+
+# Phase 7 Risk Gate vocabulary. The dangerous-shell classifier and
+# production-signals resolver feed the gate-prod-destructive policies
+# above: \`harness policy intercept\` builds the Action Envelope,
+# classifies the action against \`risk.classifiers[]\`, resolves the
+# target environment against \`environments.resolvers[]\`, and evaluates
+# each policy's \`when:\` clauses against the result. Full design and the
+# decision model: docs/risk-gate.md.
+risk:
+  classifiers:
+    - name: dangerous-shell
+      tool: Bash
+      patterns:
+        - pattern: 'rm\\s+-rf\\s+(/|/var|/data|/mnt|~)'
+          categories: [destructive, data_loss]
+          severity: critical
+        - pattern: 'DROP\\s+TABLE|TRUNCATE\\s+TABLE|DELETE\\s+FROM'
+          categories: [destructive, data_loss]
+          severity: high
+        - pattern: 'kubectl\\s+delete\\s+(namespace|deployment|statefulset|pvc)'
+          categories: [destructive, infrastructure_change]
+          severity: high
+        - pattern: 'terraform\\s+destroy'
+          categories: [destructive, infrastructure_change]
+          severity: critical
+
+environments:
+  resolvers:
+    - name: production-signals
+      environment: production
+      signals:
+        branch_patterns: [main, "release/*"]
+        env_var_patterns:
+          - var: DATABASE_URL
+            patterns: [prod, production]
+        kube_context_patterns: [".*prod.*"]
+        kube_namespace_patterns: [prod, production]
 `;
 
 import { SOLO_TEMPLATE, TEAM_TEMPLATE } from "./profiles.js";
