@@ -1069,6 +1069,7 @@ policies:
     expect(report.riskGate.whenPolicies).toBe(2);
     const formatted = format(report);
     expect(formatted).toContain("1 classifier, 1 environment resolver, 2 policies with when:");
+    expect(formatted).toContain("✓ wiring coherent");
     expect(formatted).not.toContain("policy policies");
     expect(formatted).not.toContain("policys");
   });
