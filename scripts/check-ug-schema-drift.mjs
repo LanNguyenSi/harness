@@ -78,12 +78,22 @@ export function extractUpstreamSectionKeys(parserSource) {
  * boundaries. Returns the index of the matching `]`, or -1 if not
  * closed before EOF.
  *
- * Comment handling matters because the source comments inside the
- * SECTIONS slice carry apostrophes (e.g. "Section 10's numbering") that
- * a naive walker would mistake for the opening of a single-quoted
- * string, swallowing the closing `]` and reporting a false "layout
- * changed" error. Hit during the v0.4.0 publish (harness task
- * 798d7173) when the new Section 10 comment landed.
+ * Comment handling matters in both directions:
+ *   - A string-opener glyph (`'`, `"`, `` ` ``) inside a comment is
+ *     opaque to the walker (comment-mode wins). This was the v0.4.0
+ *     trigger: `Section 10's numbering` in a `//` comment.
+ *   - A `//` or `/*` inside a string literal is opaque to the walker
+ *     (string-mode wins). The check order in the loop body enforces
+ *     this: inComment > inString > opener-detect > bracket-depth.
+ *
+ * Template-literal `${...}` substitutions are NOT tracked: a `[` or
+ * `]` inside `${...}` would erroneously affect depth. parser.js does
+ * not use substitutions inside the SECTIONS slice today; keeping the
+ * walker structural and opaque-to-string-contents is the safer
+ * behaviour even if substitutions appear later.
+ *
+ * Hit during the v0.4.0 publish (harness task 798d7173) when the new
+ * Section 10 comment landed.
  */
 export function walkSectionsArray(parserSource, openIdx) {
   let depth = 0;

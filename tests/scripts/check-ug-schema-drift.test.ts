@@ -154,6 +154,27 @@ const FAST_CONFIRM_PREFIXES = [
 ];`;
     expect(extractUpstreamSectionKeys(fixture)).toEqual(["a", "b"]);
   });
+
+  it("does NOT treat a `]` inside a // line comment as the array closer", () => {
+    // Generalised bug class: a walker-significant token (`]`) inside a
+    // comment must be opaque. The apostrophe / backtick cases above pin
+    // the string-opener side; this pins the bracket-depth side.
+    const fixture = `const SECTIONS = [
+  // aliases would close here: ] (but they shouldn't)
+  { key: "a", aliases: ["foo"] },
+  { key: "b" },
+];`;
+    expect(extractUpstreamSectionKeys(fixture)).toEqual(["a", "b"]);
+  });
+
+  it("does NOT treat a `]` inside a /* block comment */ as the array closer", () => {
+    const fixture = `const SECTIONS = [
+  /* a stray ] in here would be ignored */
+  { key: "a" },
+  { key: "b" },
+];`;
+    expect(extractUpstreamSectionKeys(fixture)).toEqual(["a", "b"]);
+  });
 });
 
 describe("diffKeys", () => {
