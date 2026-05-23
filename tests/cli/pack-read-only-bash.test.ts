@@ -11,6 +11,8 @@ describe("read-only Bash classifier", () => {
       "pwd",
       "which node",
       "find . -name '*.ts'",
+      "find . -type f -size +1k",
+      "find src -maxdepth 2",
       "grep -r foo src/",
       "rg foo",
       "wc -l src/index.ts",
@@ -156,6 +158,24 @@ describe("read-only Bash classifier", () => {
       "cat `rm file`",
       "ls\nrm file",
     ])("blocks %s (chaining/redirection/substitution)", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+  });
+
+  describe("find write-flag rejection (the only SIMPLE bin with mutating own flags)", () => {
+    it.each([
+      "find . -delete",
+      "find . -name '*.tmp' -delete",
+      "find . -exec rm {} +",
+      "find . -name x -exec rm {} ;",
+      "find . -execdir touch foo {} +",
+      "find . -ok rm {} ;",
+      "find . -okdir rm {} ;",
+      "find . -fprint /tmp/out",
+      "find . -fprintf /tmp/out '%p\\n'",
+      "find . -fprint0 /tmp/out",
+      "find . -fls /tmp/out",
+    ])("blocks %s", (cmd) => {
       expect(isReadOnlyBashCommand(cmd)).toBe(false);
     });
   });

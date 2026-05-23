@@ -37,7 +37,7 @@
  */
 const SIMPLE_READ_ONLY_BINS: ReadonlySet<string> = new Set([
   "ls", "cat", "pwd", "which", "type", "command",
-  "find", "grep", "rg", "wc",
+  "grep", "rg", "wc",
   "head", "tail", "file", "stat", "tree", "du", "df",
   "ps", "whoami", "id", "date", "echo", "env", "printenv",
   "true", "false", "uptime", "hostname", "uname", "tty",
@@ -45,6 +45,30 @@ const SIMPLE_READ_ONLY_BINS: ReadonlySet<string> = new Set([
   "less", "more", "cmp", "diff", "comm",
   "sort", "uniq", "cut", "tr", "tac", "rev",
 ]);
+
+/**
+ * `find` flags that make `find` itself a write tool, regardless of
+ * shell metacharacters. `find` is the one binary in the canonical
+ * read-only set whose own arguments can mutate the filesystem
+ * (`-delete`) or shell out to a write command (`-exec`, `-execdir`,
+ * `-ok`, `-okdir`). It also has output-write flags (`-fprint`,
+ * `-fprintf`, `-fprint0`, `-fls`) that would land outside any
+ * redirection guard. Any of these tokens anywhere in the argv
+ * forfeits the read-only classification, so `find` is treated as a
+ * special case rather than included in `SIMPLE_READ_ONLY_BINS`.
+ */
+const FIND_WRITE_FLAGS: ReadonlySet<string> = new Set([
+  "-delete",
+  "-exec", "-execdir", "-ok", "-okdir",
+  "-fprint", "-fprintf", "-fprint0", "-fls",
+]);
+
+/**
+ * `less` and `more` can shell out via interactive `!cmd`. The agent
+ * shell is non-interactive, so the escape is not reachable in
+ * practice today; the entry stays in the simple-read-only set with
+ * a documented caveat in case a future runtime PTYs the agent.
+ */
 
 /**
  * `git` subcommands that do not mutate the working tree, index, or
@@ -126,6 +150,15 @@ export function isReadOnlyBashCommand(command: string): boolean {
   const sub = tokens[1] ?? "";
 
   if (SIMPLE_READ_ONLY_BINS.has(bin)) return true;
+
+  // `find` is read-only ONLY when none of its argv tokens are write
+  // flags. Scan the whole argv: `-delete` / `-exec` / `-execdir` /
+  // `-ok` / `-okdir` mutate the filesystem; `-fprint*` and `-fls`
+  // write to operator-supplied paths without going through shell
+  // redirection. If any such flag appears, fall through to block.
+  if (bin === "find") {
+    return !tokens.slice(1).some((t) => FIND_WRITE_FLAGS.has(t));
+  }
 
   // `<bin> --version` / `<bin> --help` shape. Checked BEFORE the
   // per-binary branches so that `git --version`, `gh --version`,
