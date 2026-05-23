@@ -27,6 +27,12 @@ export const UNDERSTANDING_REPORT_REQUIRED_SECTIONS = [
   "Out Of Scope (list)",
   "Risks (list)",
   "Verification Plan (list)",
+  // Section 10 (agent-grounding 0.4.0): state what was searched for an
+  // existing solution and what was found, with an explicit
+  // adopt-or-build judgment. Required by the Stop-capture parser in
+  // grill_me / full mode; relaxed in fast_confirm. See harness task
+  // 798d7173 / agent-grounding PR #85.
+  "Prior Art (list)",
 ] as const;
 
 /**
@@ -50,7 +56,7 @@ export function renderReportSchemaHint(): string {
   // names; the parser's alias-tolerance is a quiet bonus, not something
   // the agent needs to choose between.
   const intro =
-    "Report format (parsed by `@lannguyensi/understanding-gate`): markdown with these nine sections, any heading level (#, ##, ###), names case-insensitive. Missing any section produces a parse-error under `.understanding-gate/parse-errors/` and the audit trail is empty even though the gate-approval marker still gets written.";
+    "Report format (parsed by `@lannguyensi/understanding-gate`): markdown with these ten sections, any heading level (#, ##, ###), names case-insensitive. Missing any section produces a parse-error under `.understanding-gate/parse-errors/` and the audit trail is empty even though the gate-approval marker still gets written.";
   const bullets = UNDERSTANDING_REPORT_REQUIRED_SECTIONS.map((s) => `  - ${s}`).join("\n");
   return `${intro}\n${bullets}`;
 }

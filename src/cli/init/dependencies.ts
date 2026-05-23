@@ -63,20 +63,21 @@ export const PROFILE_DEPENDENCIES: Record<Exclude<ProfileChoice, "custom">, Prof
       binary: "understanding-gate-claude-hook",
       npmPackage: "@lannguyensi/understanding-gate",
       description: "understanding gate (UserPromptSubmit injector)",
-      // 0.3.0 added parser-side bullet-to-section mapping so
-      // fast_confirm reports actually persist end-to-end (agent-grounding
-      // PR #78). 0.3.1 made `understanding-gate --version` honest so the
-      // matching `min_version` floor on the pack's hooks (agent-tasks
-      // 6af1727f) does not false-positive on every install. Pin to 0.3.1
-      // so the wizard does not suggest an install version that then
-      // immediately trips the floor.
-      minVersion: "0.3.1",
+      // 0.4.0 added the required "Prior Art" 10th section of the
+      // Understanding Report (agent-grounding PR #85, harness task
+      // 798d7173). The matching hook-level floor in
+      // `understanding-before-execution.ts` is also 0.4.0; pin the
+      // wizard's suggested install version to the same floor so a fresh
+      // install never trips the floor mid-doctor. Prior history: 0.3.1
+      // was the cli-version-fix floor (agent-grounding PRs #80 + #81);
+      // 0.3.0 added parser-side fast_confirm support (#78).
+      minVersion: "0.4.0",
     },
     {
       binary: "understanding-gate-claude-stop",
       npmPackage: "@lannguyensi/understanding-gate",
       description: "understanding gate (Stop capture)",
-      minVersion: "0.3.1",
+      minVersion: "0.4.0",
     },
   ],
   team: [

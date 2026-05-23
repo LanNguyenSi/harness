@@ -5,8 +5,8 @@ import {
 } from "../../src/cli/pack/understanding-report-schema-hint.js";
 
 describe("renderReportSchemaHint", () => {
-  it("enumerates all nine sections the @lannguyensi/understanding-gate parser requires", () => {
-    expect(UNDERSTANDING_REPORT_REQUIRED_SECTIONS).toHaveLength(9);
+  it("enumerates all ten sections the @lannguyensi/understanding-gate parser requires", () => {
+    expect(UNDERSTANDING_REPORT_REQUIRED_SECTIONS).toHaveLength(10);
     const hint = renderReportSchemaHint();
     for (const section of UNDERSTANDING_REPORT_REQUIRED_SECTIONS) {
       expect(hint).toContain(section);
@@ -23,7 +23,7 @@ describe("renderReportSchemaHint", () => {
   it("formats bullets one per line so a JSON-stringified gate envelope reads cleanly", () => {
     const hint = renderReportSchemaHint();
     const bulletLines = hint.split("\n").filter((l) => l.startsWith("  - "));
-    expect(bulletLines).toHaveLength(9);
+    expect(bulletLines).toHaveLength(10);
   });
 
   it("does not imply single-alias exhaustiveness in the intro (task e9967501)", () => {
@@ -43,5 +43,6 @@ describe("renderReportSchemaHint", () => {
     expect(UNDERSTANDING_REPORT_REQUIRED_SECTIONS[0]).toMatch(/^Current Understanding/);
     expect(UNDERSTANDING_REPORT_REQUIRED_SECTIONS[1]).toMatch(/^Intended Outcome/);
     expect(UNDERSTANDING_REPORT_REQUIRED_SECTIONS[8]).toMatch(/^Verification Plan/);
+    expect(UNDERSTANDING_REPORT_REQUIRED_SECTIONS[9]).toMatch(/^Prior Art/);
   });
 });

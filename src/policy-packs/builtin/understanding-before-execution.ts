@@ -315,16 +315,17 @@ function buildHooks(
       },
     ];
   }
-  // `min_version` floor on the npm-backed bins: 0.3.1 is the first release
-  // whose published `understanding-gate --version` reports the actual
-  // installed version rather than a stale literal (agent-grounding PRs
-  // #80 + #81). 0.3.0 shipped the parser-side fast_confirm fix but the
-  // dist cli.js hardcoded "0.2.3" so every install looked stale to
-  // doctor; without this floor, an operator on 0.2.x would silently get
-  // the no_marker_fast_confirm_attempt parse-error noise documented in
-  // harness PR #169. The PreToolUse blocker below is the harness CLI
-  // itself, not an npm-backed bin, so it does not carry a floor here.
-  const UG_MIN_VERSION = "0.3.1";
+  // `min_version` floor on the npm-backed bins: 0.4.0 ships the
+  // required "Prior Art" 10th section of the Understanding Report
+  // (agent-grounding PR #85, harness task 798d7173). Operators below
+  // this floor would silently miss the section because the Stop-capture
+  // parser doesn't yet enforce it. The prior floor was 0.3.1 (first
+  // release whose `understanding-gate --version` reported the actual
+  // installed version rather than a stale literal; agent-grounding PRs
+  // #80 + #81); 0.4.0 supersedes it. The PreToolUse blocker below is
+  // the harness CLI itself, not an npm-backed bin, so it does not carry
+  // a floor here.
+  const UG_MIN_VERSION = "0.4.0";
   const UG_VERSION_COMMAND: [string, string] = [
     "understanding-gate",
     "--version",

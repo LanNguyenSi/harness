@@ -52,41 +52,13 @@ export function extractUpstreamSectionKeys(parserSource) {
   if (start === -1) {
     throw new Error("parser.js layout changed: no `const SECTIONS = [` declaration found");
   }
-  // Walk brackets from the start of the array literal until the matching
-  // `]`. Bracket-balance (not a regex) since SECTIONS entries can contain
-  // nested arrays (`aliases: [...]`). String-aware so brackets inside a
-  // string literal (`aliases: ["foo ] bar"`) don't truncate the slice
-  // and produce false-positive drift. Honors `\` escapes inside strings.
+  // Bracket-balance (not a regex) since SECTIONS entries can contain
+  // nested arrays (`aliases: [...]`). String-, template-, AND comment-
+  // aware so brackets / apostrophes / backticks inside string literals
+  // or JS comments don't truncate the slice and produce false-positive
+  // drift. See `walkSectionsArray` for the state machine.
   const openIdx = parserSource.indexOf("[", start);
-  let depth = 0;
-  let endIdx = -1;
-  let inString = null; // null | '"' | "'" | "`"
-  let escape = false;
-  for (let i = openIdx; i < parserSource.length; i++) {
-    const ch = parserSource[i];
-    if (inString !== null) {
-      if (escape) {
-        escape = false;
-      } else if (ch === "\\") {
-        escape = true;
-      } else if (ch === inString) {
-        inString = null;
-      }
-      continue;
-    }
-    if (ch === '"' || ch === "'" || ch === "`") {
-      inString = ch;
-      continue;
-    }
-    if (ch === "[") depth++;
-    else if (ch === "]") {
-      depth--;
-      if (depth === 0) {
-        endIdx = i;
-        break;
-      }
-    }
-  }
+  const endIdx = walkSectionsArray(parserSource, openIdx);
   if (endIdx === -1) {
     throw new Error("parser.js layout changed: SECTIONS array not closed");
   }
@@ -98,6 +70,83 @@ export function extractUpstreamSectionKeys(parserSource) {
     keys.push(m[1]);
   }
   return keys;
+}
+
+/**
+ * Walk the SECTIONS array literal in the published parser.js with
+ * bracket balance, honoring string/template-literal and JS comment
+ * boundaries. Returns the index of the matching `]`, or -1 if not
+ * closed before EOF.
+ *
+ * Comment handling matters in both directions:
+ *   - A string-opener glyph (`'`, `"`, `` ` ``) inside a comment is
+ *     opaque to the walker (comment-mode wins). This was the v0.4.0
+ *     trigger: `Section 10's numbering` in a `//` comment.
+ *   - A `//` or `/*` inside a string literal is opaque to the walker
+ *     (string-mode wins). The check order in the loop body enforces
+ *     this: inComment > inString > opener-detect > bracket-depth.
+ *
+ * Template-literal `${...}` substitutions are NOT tracked: a `[` or
+ * `]` inside `${...}` would erroneously affect depth. parser.js does
+ * not use substitutions inside the SECTIONS slice today; keeping the
+ * walker structural and opaque-to-string-contents is the safer
+ * behaviour even if substitutions appear later.
+ *
+ * Hit during the v0.4.0 publish (harness task 798d7173) when the new
+ * Section 10 comment landed.
+ */
+export function walkSectionsArray(parserSource, openIdx) {
+  let depth = 0;
+  let inString = null; // null | '"' | "'" | "`"
+  let escape = false;
+  let inComment = null; // null | 'line' | 'block'
+  for (let i = openIdx; i < parserSource.length; i++) {
+    const ch = parserSource[i];
+    const next = parserSource[i + 1];
+    if (inComment === "line") {
+      if (ch === "\n") inComment = null;
+      continue;
+    }
+    if (inComment === "block") {
+      if (ch === "*" && next === "/") {
+        inComment = null;
+        i++; // skip the '/'
+      }
+      continue;
+    }
+    if (inString !== null) {
+      if (escape) {
+        escape = false;
+      } else if (ch === "\\") {
+        escape = true;
+      } else if (ch === inString) {
+        inString = null;
+      }
+      continue;
+    }
+    if (ch === "/" && next === "/") {
+      inComment = "line";
+      i++;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      inComment = "block";
+      i++;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      inString = ch;
+      continue;
+    }
+    if (ch === "[") depth++;
+    else if (ch === "]") {
+      depth--;
+      if (depth === 0) {
+        return i;
+      }
+    }
+  }
+  return -1;
 }
 
 function fetchUpstreamParserSource() {
