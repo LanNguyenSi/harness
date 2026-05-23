@@ -59,6 +59,26 @@ function writeReport(dir: string, name: string, body: Record<string, unknown>): 
 }
 
 describe("pack hook pre-tool-use blocker", () => {
+  it("emits a loud stderr diagnostic when stdin is malformed JSON (fail-loud, not silent-allow)", async () => {
+    // Failure mode is still "allow" — a runtime that can't even parse
+    // the hook envelope shouldn't brick the session — but it MUST be
+    // visible to the operator. A silent allow on a broken contract is
+    // the canonical false-confidence failure for a governance hook.
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString("{this-is-not-json"),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(stderr.read()).toMatch(/malformed event JSON on stdin/);
+  });
+
   it("allows when active-claim names an approved task, even from a different session id (harness/1ee26e77 + PR #198 scope)", async () => {
     // Operator approved via `harness approve understanding --task <id>`
     // from a previous session; the task marker is keyed by task id, not

@@ -304,13 +304,20 @@ export async function runPackHookPreToolUseCli(
   const packName = opts.pack ?? PACK_NAME;
 
   // Read stdin defensively. Bad JSON falls through to allow (matches
-  // policy intercept's failure mode).
+  // policy intercept's failure mode) but emits a stderr diagnostic so
+  // the degradation is loud — a silently-allowing gate manufactures
+  // false confidence, which is the worst direction for a governance
+  // hook to fail in.
   const raw = await readStdin(stdin);
   let event: ToolEventLite = {};
   try {
     event = JSON.parse(raw.trim() || "{}") as ToolEventLite;
-  } catch {
-    /* allow on malformed input */
+  } catch (err) {
+    stderr.write(
+      `harness pack hook: malformed event JSON on stdin (${
+        (err as Error).message
+      }), allowing.\n`,
+    );
   }
 
   const sessionId =
