@@ -53,9 +53,14 @@ import { unifiedDiff } from "../../io/patch.js";
 import { emitRestartHints } from "../../io/restart-hints.js";
 import { compare, type ThreeStateVerdict } from "../../io/three-state.js";
 import { reportsDirForManifest } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
-import { expandPolicyPacks, DEFAULT_RUNTIME, type Runtime } from "../../policy-packs/index.js";
+import {
+  checkPolicyPackSources,
+  expandPolicyPacks,
+  DEFAULT_RUNTIME,
+  type Runtime,
+} from "../../policy-packs/index.js";
 import { parseManifest, type Manifest } from "../../schema/index.js";
-import { EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
+import { EX_FAIL, EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
 import { loadManifest } from "../loader.js";
 import { GENERATED_DIRNAME, resolveGeneratedDir } from "../../io/generated-dir.js";
 import { resolveHomeDir } from "../../runtime/home-dir.js";
@@ -472,6 +477,24 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   if (opts.homeDir !== undefined) loaderOpts.homeDir = opts.homeDir;
   if (opts.project !== undefined) loaderOpts.project = opts.project;
   const { manifest } = loadManifest(loaderOpts);
+
+  // Fail loud on unknown pack source / builtin name BEFORE expansion.
+  // Without this, `expandPolicyPacks` silently skips the bad entry and
+  // apply reports success, masking the misconfigured pack until
+  // someone runs `harness validate` or `doctor`. See
+  // policy-packs/source-check.ts for the shared check shared with validate.
+  const packSourceIssues = checkPolicyPackSources(manifest);
+  if (packSourceIssues.length > 0) {
+    const lines = packSourceIssues.map(
+      (i) => `policy_packs[${i.packIndex}] (${i.packName}).${i.field}: ${i.message}`,
+    );
+    throw new HarnessExitError(
+      `harness apply: ${lines.length} policy pack issue${
+        lines.length === 1 ? "" : "s"
+      }; run \`harness validate\` for the full report\n${lines.join("\n")}`,
+      EX_FAIL,
+    );
+  }
 
   const { files: expected, warnings } = buildExpectedFiles(manifest, opts, manifestPath);
   const lastApply = readLastApply(generatedDir);

@@ -1,8 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isBuiltinPackName } from "../../policy-packs/index.js";
-import { parsePackSource } from "../../policy-packs/source.js";
+import { checkPolicyPackSources } from "../../policy-packs/index.js";
 import { expandHome } from "../../runtime/expand-home.js";
 import type { Manifest } from "../../schema/index.js";
 import type { Diagnostic } from "./types.js";
@@ -240,36 +239,16 @@ function checkPolicyGroundingMcp(manifest: Manifest): Diagnostic[] {
 }
 
 // Phase 6 #2: surface pack-resolution problems at lint time, not at
-// `harness apply` time. `enabled: false` packs are skipped on the
-// pipeline side and skipped here too: an operator who's intentionally
-// stashed an unfinished pack reference shouldn't have their `validate`
-// red until they re-enable it.
+// `harness apply` time. Delegates to the shared `checkPolicyPackSources`
+// so the apply path (which now also fails loudly on these conditions)
+// stays bit-identical with validate. `enabled: false` packs are skipped
+// on both sides.
 function checkPolicyPacks(manifest: Manifest): Diagnostic[] {
-  const diags: Diagnostic[] = [];
-  manifest.policy_packs.forEach((pack, i) => {
-    if (!pack.enabled) return;
-    const sourceParsed = parsePackSource(pack.source);
-    if (sourceParsed.kind === "unknown") {
-      diags.push({
-        severity: "error",
-        path: `policy_packs[${i}].source`,
-        message: `unknown source ${JSON.stringify(
-          pack.source,
-        )}: only "builtin" resolves in v1; see docs/policy-packs/`,
-      });
-      return;
-    }
-    if (!isBuiltinPackName(pack.name)) {
-      diags.push({
-        severity: "error",
-        path: `policy_packs[${i}].name`,
-        message: `not a known builtin pack: ${JSON.stringify(
-          pack.name,
-        )}. See docs/policy-packs/ for supported names.`,
-      });
-    }
-  });
-  return diags;
+  return checkPolicyPackSources(manifest).map((issue) => ({
+    severity: "error",
+    path: `policy_packs[${issue.packIndex}].${issue.field}`,
+    message: issue.message,
+  }));
 }
 
 export function runAssetChecks(

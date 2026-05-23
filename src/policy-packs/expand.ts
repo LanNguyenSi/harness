@@ -2,10 +2,11 @@
 //
 // Walks the manifest's enabled packs, parses each `source:` string,
 // resolves builtin packs through the registry, and aggregates their
-// contributions (hooks + files). Unrecognised sources or unknown builtin
-// names produce non-fatal warnings here; `harness validate` is the
-// place that turns the same conditions into hard errors so the user
-// sees them at lint time, not silently at apply time.
+// contributions (hooks + files). Unrecognised sources / unknown builtin
+// names are caught up front by `checkPolicyPackSources` (called from
+// both `harness apply` and `harness validate`), so the warning + skip
+// branches below are belt-and-braces: they only trigger if a caller
+// invokes `expandPolicyPacks` directly without the pre-check.
 //
 // Hook-name collision handling: pack hooks are namespaced
 // (`policy-pack:<name>:<role>`) by the builtin definitions, so a user
