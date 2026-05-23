@@ -563,6 +563,104 @@ policies:
 });
 
 
+describe("doctor — policy pack declared-but-not-live check", () => {
+  // expandPolicyPacks silently skips a pack whose `source:` is
+  // unrecognised or whose builtin name doesn't resolve — its hooks
+  // never reach the runtime, so the gate is inert. The operator
+  // believes the pack is wired (it's in `policy_packs[]`) but it's a
+  // no-op. Doctor must flag the gap as an error so the misconfig is
+  // impossible to miss.
+
+  it("flags a pack with an unknown source as declared-but-not-live", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: understanding-before-execution
+    source: marketplace-that-does-not-exist-yet
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.policyPacks.unresolved).toHaveLength(1);
+    expect(report.policyPacks.unresolved[0]).toMatchObject({
+      name: "understanding-before-execution",
+      reason: "unknown_source",
+      source: "marketplace-that-does-not-exist-yet",
+    });
+    expect(report.errorCount).toBeGreaterThanOrEqual(1);
+    const text = format(report);
+    expect(text).toContain("Policy Packs");
+    expect(text).toContain("✗ understanding-before-execution");
+    expect(text).toContain('source "marketplace-that-does-not-exist-yet" is not recognised');
+    expect(text).toContain("declared but not live");
+  });
+
+  it("flags a builtin pack whose name doesn't resolve", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: understanding-before-executon
+    source: builtin
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.policyPacks.unresolved).toHaveLength(1);
+    expect(report.policyPacks.unresolved[0]).toMatchObject({
+      name: "understanding-before-executon",
+      reason: "unknown_builtin_name",
+    });
+    expect(report.errorCount).toBeGreaterThanOrEqual(1);
+    const text = format(report);
+    expect(text).toContain("✗ understanding-before-executon");
+    expect(text).toContain("not a known builtin pack name");
+  });
+
+  it("stays silent when every declared pack resolves", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.policyPacks.unresolved).toHaveLength(0);
+    expect(format(report)).not.toContain("Policy Packs");
+  });
+
+  it("ignores disabled packs — they aren't expected to be live", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: understanding-before-executon
+    source: builtin
+    enabled: false
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.policyPacks.unresolved).toHaveLength(0);
+  });
+});
+
 describe("doctor — npm global-bin PATH check (task 4ddd78ed)", () => {
   const MIN_MANIFEST = `version: 1
 hooks: []

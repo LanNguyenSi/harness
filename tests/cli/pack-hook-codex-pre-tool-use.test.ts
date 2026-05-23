@@ -230,7 +230,10 @@ describe("pack hook codex-pre-tool-use blocker", () => {
     expect(stderr.read()).toMatch(/no session_id/);
   });
 
-  it("allows with diagnostic when stdin is malformed JSON", async () => {
+  it("allows with a LOUD diagnostic when stdin is malformed JSON (not silent-allow)", async () => {
+    // The previous behavior swallowed the parse error and allowed
+    // silently — exactly the false-confidence failure mode a
+    // governance hook must avoid. Allow is fine, silent is not.
     const stderr = bufferStream();
     const result = await runPackHookCodexPreToolUseCli({
       manifest: manifestWithPack(),
@@ -240,6 +243,7 @@ describe("pack hook codex-pre-tool-use blocker", () => {
     });
     expect(result.blocked).toBe(false);
     expect(result.exitCode).toBe(0);
+    expect(stderr.read()).toMatch(/malformed event JSON on stdin/);
   });
 });
 

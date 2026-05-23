@@ -101,6 +101,26 @@ export interface PolicyEntryReport {
   producerGap?: PolicyProducerGap;
 }
 
+/**
+ * A declared policy pack whose `source` or builtin name does not
+ * resolve. The pack appears in `manifest.policy_packs[]` (so the
+ * operator believes it is active) but `expandPolicyPacks` silently
+ * skips it at apply time — its hooks never reach `settings.json`, so
+ * none of its policies actually fire. The founding silent-allow class:
+ * the harness reports green while the gate is inert. Doctor surfaces
+ * the gap as an error so the misconfig is impossible to miss.
+ */
+export interface PolicyPackUnresolved {
+  name: string;
+  reason: "unknown_source" | "unknown_builtin_name";
+  source: string;
+  detail: string;
+}
+
+export interface PolicyPacksSection {
+  unresolved: PolicyPackUnresolved[];
+}
+
 export interface WorkflowEntryReport {
   name: string;
   steps: number;
@@ -156,6 +176,13 @@ export interface DoctorReport {
   memory: MemoryReport;
   hooks: HookEntryReport[];
   policies: PolicyEntryReport[];
+  /**
+   * Declared-but-not-live policy packs. Each entry is a pack the
+   * operator listed in `policy_packs[]` whose `source` or builtin
+   * name doesn't resolve at apply time — silently skipped today,
+   * surfaced loudly here. Errors count toward `errorCount`.
+   */
+  policyPacks: PolicyPacksSection;
   workflows: WorkflowsSectionReport;
   /** Phase 7 #6 — Risk Gate wiring health (classifiers / resolvers / `when:`). */
   riskGate: RiskGateSection;

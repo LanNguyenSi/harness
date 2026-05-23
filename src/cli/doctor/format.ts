@@ -178,6 +178,25 @@ function formatPoliciesSection(report: DoctorReport): string[] {
   return out;
 }
 
+// Policy Packs section: declared-but-not-live check. A pack the
+// operator lists in `policy_packs[]` whose `source` or builtin name
+// doesn't resolve gets silently skipped by `expandPolicyPacks` — its
+// hooks never reach the runtime, so its policies are inert. The
+// section renders ✗ for each gap and stays silent otherwise (the
+// healthy case is the common one and a noisy ✓ would dilute the
+// doctor's signal).
+function formatPolicyPacksSection(report: DoctorReport): string[] {
+  if (report.policyPacks.unresolved.length === 0) return [];
+  const out: string[] = ["", "Policy Packs"];
+  for (const u of report.policyPacks.unresolved) {
+    out.push(`  ✗ ${u.name}  ${u.detail}`);
+    out.push(
+      `      the pack is declared but not live; its hooks will not fire at runtime. Fix \`source:\` or the pack \`name:\`, then re-run \`harness apply\`.`,
+    );
+  }
+  return out;
+}
+
 function formatWorkflowsSection(report: DoctorReport): string[] {
   const w = report.workflows;
   if (w.declared === 0 && w.templates === 0) return [];
@@ -275,6 +294,7 @@ export function format(report: DoctorReport): string {
   lines.push(...formatMemorySection(report));
   lines.push(...formatHooksSection(report));
   lines.push(...formatPoliciesSection(report));
+  lines.push(...formatPolicyPacksSection(report));
   lines.push(...formatWorkflowsSection(report));
   lines.push(...formatRiskGateSection(report));
   lines.push(...formatCodexTargetSection(report));

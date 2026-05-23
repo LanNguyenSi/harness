@@ -10,6 +10,9 @@ import {
   type McpProbeResult,
 } from "../../probes/mcp.js";
 import type { Manifest, Policy } from "../../schema/index.js";
+import { parsePackSource } from "../../policy-packs/source.js";
+import { resolveBuiltin } from "../../policy-packs/registry.js";
+import { DEFAULT_RUNTIME } from "../../policy-packs/runtime.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import {
   countCodexDiagnostics,
@@ -28,6 +31,8 @@ import {
   type ManifestSection,
   type McpVersionReport,
   type PolicyEntryReport,
+  type PolicyPackUnresolved,
+  type PolicyPacksSection,
   type RiskGateSection,
   type ToolsSection,
 } from "./types.js";
@@ -389,6 +394,43 @@ function buildPolicies(manifest: Manifest): PolicyEntryReport[] {
   });
 }
 
+/**
+ * Declared-but-not-live policy pack check. `expandPolicyPacks` silently
+ * skips a pack whose `source:` token is unrecognised or whose builtin
+ * `name:` doesn't resolve in the registry — its hooks never reach
+ * `settings.json`, so the operator's gate is inert. Surface each gap
+ * as a doctor error so the misconfig is impossible to miss.
+ *
+ * Skipped (`enabled: false`) packs are NOT checked: they're not
+ * expected to be live, and flagging them would flood the report.
+ */
+function buildPolicyPacks(manifest: Manifest): PolicyPacksSection {
+  const unresolved: PolicyPackUnresolved[] = [];
+  for (const pack of manifest.policy_packs) {
+    if (!pack.enabled) continue;
+    const sourceParsed = parsePackSource(pack.source);
+    if (sourceParsed.kind === "unknown") {
+      unresolved.push({
+        name: pack.name,
+        reason: "unknown_source",
+        source: pack.source,
+        detail: `source ${JSON.stringify(pack.source)} is not recognised (only "builtin" resolves in v1)`,
+      });
+      continue;
+    }
+    const resolved = resolveBuiltin(pack, DEFAULT_RUNTIME);
+    if (!resolved) {
+      unresolved.push({
+        name: pack.name,
+        reason: "unknown_builtin_name",
+        source: pack.source,
+        detail: `not a known builtin pack name (see docs/policy-packs/ for supported names)`,
+      });
+    }
+  }
+  return { unresolved };
+}
+
 function buildWorkflows(manifest: Manifest): import("./types.js").WorkflowsSectionReport {
   const entries = manifest.workflows.map((wf) => {
     const review = wf.steps.find((s) => s.kind === "review_subagent");
@@ -496,6 +538,7 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   for (const p of report.policies) {
     if (p.producerGap) warningCount++;
   }
+  errorCount += report.policyPacks.unresolved.length;
   warningCount += report.riskGate.warnings.length;
   if (report.npmGlobalBin?.status === "warn") warningCount++;
   if (report.memory.routerExecutable && !report.memory.routerExecutable.exists) errorCount++;
@@ -564,6 +607,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
 
   const hooks = checkHooks(manifest, home, opts);
   const policies = buildPolicies(manifest);
+  const policyPacks = buildPolicyPacks(manifest);
   const workflows = buildWorkflows(manifest);
   const riskGate = buildRiskGate(manifest);
   const manifestSec = manifestSection(manifest);
@@ -596,6 +640,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     memory,
     hooks,
     policies,
+    policyPacks,
     workflows,
     riskGate,
     rogueLedgerDbs,
