@@ -735,6 +735,101 @@ policy_packs:
     expect(report.policyPacks.configIssues).toHaveLength(0);
     expect(format(report)).not.toContain("Policy Packs");
   });
+
+  // Per-pack min_version floor (task bd154095). Mirrors the hook-level
+  // version-probe contract: warn-not-error, counts toward warningCount.
+
+  it("flags a pack-level min_version above the installed bin (below_floor)", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+    min_version: 0.99.0
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+      versionProbe: () => "understanding-gate 0.3.1",
+    });
+    expect(report.policyPacks.versionGaps).toHaveLength(1);
+    expect(report.policyPacks.versionGaps[0]).toMatchObject({
+      name: "understanding-before-execution",
+      declaredMinVersion: "0.99.0",
+      actualVersion: "0.3.1",
+    });
+    expect(report.warningCount).toBeGreaterThanOrEqual(1);
+    expect(report.errorCount).toBe(0);
+    const text = format(report);
+    expect(text).toContain("Policy Packs");
+    expect(text).toContain("⚠ understanding-before-execution.min_version");
+    expect(text).toContain("0.3.1");
+    expect(text).toContain("0.99.0");
+    expect(text).toContain("degraded mode");
+  });
+
+  it("stays silent when the installed bin meets the declared floor", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+    min_version: 0.3.0
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+      versionProbe: () => "understanding-gate 0.3.1",
+    });
+    expect(report.policyPacks.versionGaps).toHaveLength(0);
+    expect(format(report)).not.toContain("Policy Packs");
+  });
+
+  it("missing min_version stays silent regardless of probe", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+      versionProbe: () => null,
+    });
+    expect(report.policyPacks.versionGaps).toHaveLength(0);
+  });
+
+  it("flags no_probe_registered when an operator declares a floor for a probe-less pack", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: branch-protection
+    source: builtin
+    min_version: 1.0.0
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.policyPacks.versionGaps).toHaveLength(1);
+    expect(report.policyPacks.versionGaps[0]?.message).toMatch(
+      /no version probe registered/,
+    );
+    expect(report.warningCount).toBeGreaterThanOrEqual(1);
+  });
 });
 
 describe("doctor — npm global-bin PATH check (task 4ddd78ed)", () => {

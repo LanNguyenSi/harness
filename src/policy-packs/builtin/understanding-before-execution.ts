@@ -30,6 +30,17 @@ import { REPORTS_DIR_ENV } from "./understanding-before-execution-runtime.js";
 
 export const PACK_NAME = "understanding-before-execution";
 
+// Canonical version probe for the pack's package-side bin. Consumed by
+// `harness doctor` when the operator declares a pack-level `min_version`
+// floor. Mirrors the hook-level UG_VERSION_COMMAND (which is scoped to
+// individual hooks); a pack-level floor exists so a `config:` key only
+// the newer package honours (e.g. the v0.25.0 `--task` variadic flag)
+// can be caught at health-check time independent of any one hook.
+export const VERSION_COMMAND: readonly [string, string] = [
+  "understanding-gate",
+  "--version",
+];
+
 export type Mode = "fast_confirm" | "grill_me" | "strict";
 
 const MODES: readonly Mode[] = ["fast_confirm", "grill_me", "strict"];

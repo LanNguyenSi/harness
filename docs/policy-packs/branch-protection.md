@@ -88,6 +88,10 @@ Since task `d78fb3c7`, the pack's `config:` block is validated by `harness valid
 
 Any other top-level key is rejected as a typo.
 
+### Pack-level `min_version` (task `bd154095`)
+
+`policy_packs[].min_version` is an optional floor on the canonical package-side bin. The `branch-protection` blocker is harness itself, not a separate binary; this pack therefore has no version probe registered, and declaring `min_version` on it surfaces a `no version probe registered` warning at `harness doctor` time so the operator's expectation is visible. Leave the field unset on this pack.
+
 ### `config.ux` (v0.17.3+)
 
 The blocker reads `config.ux` and renders the plain-language `{ cannot, required, run }` shape via `renderAgentFacing` (`src/runtime/agent-facing.ts`) on every block. `${BRANCH}` substitutes from the resolved git context, so on a Write attempt against master the agent sees:

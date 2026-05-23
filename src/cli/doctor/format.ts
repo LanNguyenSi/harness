@@ -186,8 +186,14 @@ function formatPoliciesSection(report: DoctorReport): string[] {
 // Both render ✗ here. Section stays silent when both lists are empty
 // (the healthy case is common; a noisy ✓ would dilute doctor's signal).
 function formatPolicyPacksSection(report: DoctorReport): string[] {
-  const { unresolved, configIssues } = report.policyPacks;
-  if (unresolved.length === 0 && configIssues.length === 0) return [];
+  const { unresolved, configIssues, versionGaps } = report.policyPacks;
+  if (
+    unresolved.length === 0 &&
+    configIssues.length === 0 &&
+    versionGaps.length === 0
+  ) {
+    return [];
+  }
   const out: string[] = ["", "Policy Packs"];
   for (const u of unresolved) {
     out.push(`  ✗ ${u.name}  ${u.detail}`);
@@ -201,6 +207,12 @@ function formatPolicyPacksSection(report: DoctorReport): string[] {
     out.push(`  ✗ ${issue.name}${where}  ${issue.message}`);
     out.push(
       `      the value is rejected by the pack's config schema; the runtime would fall back to a default and the misconfig would only surface when the hook fires.`,
+    );
+  }
+  for (const gap of versionGaps) {
+    out.push(`  ⚠ ${gap.name}.min_version  ${gap.message}`);
+    out.push(
+      `      the pack runs in degraded mode; any \`config:\` key that requires the newer release is silently ignored. Upgrade the package-side bin or lower the declared \`min_version\`.`,
     );
   }
   return out;
