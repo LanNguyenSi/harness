@@ -1045,7 +1045,33 @@ policies:
       warnings: [],
     });
     expect(format(report)).toContain("Risk Gate");
+    expect(format(report)).toContain("1 classifier, 1 environment resolver, 1 policy with when:");
     expect(format(report)).toContain("✓ wiring coherent");
+  });
+
+  it("pluralizes the Risk Gate count line when 2+ policies declare when:", async () => {
+    const twoWhenPolicies = RISK_GATE_MANIFEST.replace(
+      "policies:\n  - name: gate-prod-destructive\n",
+      "policies:\n  - name: gate-prod-destructive-2\n" +
+        "    description: second when-policy to exercise plural rendering\n" +
+        "    trigger: { event: PreToolUse, match: \"Bash\" }\n" +
+        "    when: { environment.name: production }\n" +
+        "    requires: { ledger_tag: \"risk-approved:${SESSION_ID}\" }\n" +
+        "    hook: risk-gate\n" +
+        "    enforcement: require_approval\n" +
+        "  - name: gate-prod-destructive\n",
+    );
+    const home = makeFixture({ "harness.yaml": twoWhenPolicies });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.riskGate.whenPolicies).toBe(2);
+    const formatted = format(report);
+    expect(formatted).toContain("1 classifier, 1 environment resolver, 2 policies with when:");
+    expect(formatted).toContain("✓ wiring coherent");
+    expect(formatted).not.toContain("policy policies");
+    expect(formatted).not.toContain("policys");
   });
 
   it("warns when a when: policy is declared but no classifier exists", async () => {
