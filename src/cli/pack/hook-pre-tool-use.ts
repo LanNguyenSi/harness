@@ -39,6 +39,7 @@ import {
   resolveGeneratedDir,
   writePendingApproval,
 } from "../../runtime/pending-approval.js";
+import { isReadOnlyBashCommand } from "./read-only-bash.js";
 import {
   PolicyUxSchema,
   ProducerSchema,
@@ -522,6 +523,27 @@ export async function runPackHookPreToolUseCli(
     } catch {
       /* best-effort; the ask / block below proceeds regardless */
     }
+  }
+
+  // Exception: read-only Bash commands. The pack hook matcher
+  // necessarily covers `Bash` as a whole, but commands like
+  // `git status`, `gh pr view`, `ls`, `cat` mutate nothing. Blocking
+  // them behind a full Understanding Report cycle trains the agent
+  // and operator to experience the gate as noise, which erodes its
+  // credibility on the writes that actually matter. Pass the
+  // classifier on Bash commands only; Edit and Write stay
+  // hard-blocked regardless (the matcher's other arms reach the
+  // same final block path below). Unclassifiable Bash falls through
+  // to the block (fail-closed).
+  if (toolName === "Bash" && isReadOnlyBashCommand(commandStr)) {
+    const diagnostic = `harness pack hook: read-only Bash command, allowing without an approved report (\`${commandStr.trim()}\`)`;
+    stderr.write(`${diagnostic}\n`);
+    return {
+      exitCode: 0,
+      blocked: false,
+      approvalCheck: { approved: true, source: "none", detail: diagnostic },
+      diagnostic,
+    };
   }
 
   // Exception: the operator-approval command itself. Hard-denying

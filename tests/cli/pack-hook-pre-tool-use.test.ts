@@ -59,6 +59,106 @@ function writeReport(dir: string, name: string, body: Record<string, unknown>): 
 }
 
 describe("pack hook pre-tool-use blocker", () => {
+  it("allows a read-only Bash command without an approved Understanding Report", async () => {
+    // `git status` mutates nothing. Hard-blocking it behind a full
+    // Understanding Report cycle trains the agent and operator to
+    // experience the gate as noise, which erodes its credibility on
+    // the writes that actually matter.
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "Bash",
+          tool_input: { command: "git status" },
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.approvalCheck.source).toBe("none");
+    expect(stdout.read()).toBe("");
+    expect(stderr.read()).toMatch(/read-only Bash command, allowing/);
+  });
+
+  it("blocks a mutating Bash command even with the classifier in place", async () => {
+    // `git push` is a write. The classifier must not authorize it
+    // just because `git` appears at the front — only explicit
+    // read-only subcommands pass.
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "Bash",
+          tool_input: { command: "git push origin master" },
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(stderr.read()).toMatch(/BLOCK/);
+  });
+
+  it("blocks a Bash command with shell chaining (fail-closed)", async () => {
+    // The classifier rejects any shell metachar that could hide a
+    // write. `git status; rm -rf /` would otherwise look read-only at
+    // its first token.
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "Bash",
+          tool_input: { command: "git status; rm -rf /tmp/foo" },
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+  });
+
+  it("blocks Edit even if the classifier would allow a parallel Bash command", async () => {
+    // Edit is hard-blocked regardless. The classifier only fires on
+    // tool_name === "Bash".
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "Edit",
+          tool_input: { command: "git status" },
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+  });
+
   it("emits a loud stderr diagnostic when stdin is malformed JSON (fail-loud, not silent-allow)", async () => {
     // Failure mode is still "allow" — a runtime that can't even parse
     // the hook envelope shouldn't brick the session — but it MUST be
@@ -688,6 +788,12 @@ describe("pack hook pre-tool-use blocker — operator-approval escape commands (
   });
 
   it("hard-denies a command that merely mentions an escape command", async () => {
+    // The escape exception (isEscapeCommand) is deliberately strict
+    // about *what* the command is. A mutating command that happens
+    // to contain the literal string "harness approve" in an argument
+    // must still hard-block. `npm install` is the mutating shape
+    // here (previously `echo "..."` was used, but `echo` is now on
+    // the read-only allowlist).
     const stdout = bufferStream();
     const stderr = bufferStream();
     const result = await runPackHookPreToolUseCli({
@@ -695,7 +801,9 @@ describe("pack hook pre-tool-use blocker — operator-approval escape commands (
       stdin: readableFromString(
         event({
           tool_name: "Bash",
-          tool_input: { command: 'echo "run harness approve understanding"' },
+          tool_input: {
+            command: 'npm install --save "harness-approve-understanding-pkg"',
+          },
         }),
       ),
       stdout: stdout.stream,
@@ -707,13 +815,17 @@ describe("pack hook pre-tool-use blocker — operator-approval escape commands (
     expect(result.asked).toBeFalsy();
   });
 
-  it("still hard-denies a normal Bash command when no source approves", async () => {
+  it("still hard-denies a mutating Bash command when no source approves", async () => {
+    // Originally used `git status` as the "normal" Bash command, but
+    // the read-only classifier (task 7146694c) now allows that. A
+    // mutating command (`git push`) is the right shape to assert
+    // the hard-block path on.
     const stdout = bufferStream();
     const stderr = bufferStream();
     const result = await runPackHookPreToolUseCli({
       manifest: manifestWithPack(),
       stdin: readableFromString(
-        event({ tool_name: "Bash", tool_input: { command: "git status" } }),
+        event({ tool_name: "Bash", tool_input: { command: "git push origin master" } }),
       ),
       stdout: stdout.stream,
       stderr: stderr.stream,
