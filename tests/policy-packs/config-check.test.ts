@@ -110,6 +110,79 @@ describe("checkPolicyPackConfigs — understanding-before-execution", () => {
     expect(issues[0]?.code).toBe("unrecognized_keys");
     expect(issues[0]?.configPath).toBe("approval_lifecycle");
   });
+
+  it("rejects an empty entry inside expire_on_tool_match (nested array path)", () => {
+    const m = manifestWith([
+      {
+        name: "understanding-before-execution",
+        config: { approval_lifecycle: { expire_on_tool_match: [""] } },
+      },
+    ]);
+    const issues = checkPolicyPackConfigs(m);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.configPath).toBe("approval_lifecycle.expire_on_tool_match[0]");
+  });
+
+  it("accepts a well-formed ux block and rejects an ux block missing `cannot`", () => {
+    const goodM = manifestWith([
+      {
+        name: "understanding-before-execution",
+        config: {
+          ux: {
+            cannot: "You cannot do that.",
+            required: ["context"],
+            run: ["harness approve understanding"],
+          },
+        },
+      },
+    ]);
+    expect(checkPolicyPackConfigs(goodM)).toEqual([]);
+
+    const badM = manifestWith([
+      {
+        name: "understanding-before-execution",
+        config: {
+          ux: { required: ["context"], run: ["harness approve understanding"] },
+        },
+      },
+    ]);
+    const issues = checkPolicyPackConfigs(badM);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.configPath).toBe("ux.cannot");
+  });
+
+  it("accepts a well-formed kind:mcp producer", () => {
+    const m = manifestWith([
+      {
+        name: "understanding-before-execution",
+        config: {
+          producers: [
+            {
+              kind: "mcp",
+              verb: "mcp__agent-grounding__ledger_add",
+              example: "ledger_add({ type: 'fact', content: 'ok' })",
+              description: "record an evidence-ledger fact",
+            },
+          ],
+        },
+      },
+    ]);
+    expect(checkPolicyPackConfigs(m)).toEqual([]);
+  });
+
+  it("rejects a producer with a missing required field (the description on a kind:bash entry)", () => {
+    const m = manifestWith([
+      {
+        name: "understanding-before-execution",
+        config: {
+          producers: [{ kind: "bash", command: "echo hi" }],
+        },
+      },
+    ]);
+    const issues = checkPolicyPackConfigs(m);
+    expect(issues.length).toBeGreaterThanOrEqual(1);
+    expect(issues[0]?.configPath).toMatch(/^producers\[0\]/);
+  });
 });
 
 describe("checkPolicyPackConfigs — branch-protection", () => {
