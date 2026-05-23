@@ -178,20 +178,29 @@ function formatPoliciesSection(report: DoctorReport): string[] {
   return out;
 }
 
-// Policy Packs section: declared-but-not-live check. A pack the
-// operator lists in `policy_packs[]` whose `source` or builtin name
-// doesn't resolve gets silently skipped by `expandPolicyPacks` — its
-// hooks never reach the runtime, so its policies are inert. The
-// section renders ✗ for each gap and stays silent otherwise (the
-// healthy case is the common one and a noisy ✓ would dilute the
-// doctor's signal).
+// Policy Packs section: declared-but-not-live + per-pack `config:`
+// shape gaps. A pack whose `source` or builtin `name` doesn't resolve
+// gets silently skipped by `expandPolicyPacks`; a pack whose `config:`
+// keys typo (`permision_profile`, `mode: "fastConfirm"`) falls through
+// to runtime fallbacks and only surfaces when the hook finally fires.
+// Both render ✗ here. Section stays silent when both lists are empty
+// (the healthy case is common; a noisy ✓ would dilute doctor's signal).
 function formatPolicyPacksSection(report: DoctorReport): string[] {
-  if (report.policyPacks.unresolved.length === 0) return [];
+  const { unresolved, configIssues } = report.policyPacks;
+  if (unresolved.length === 0 && configIssues.length === 0) return [];
   const out: string[] = ["", "Policy Packs"];
-  for (const u of report.policyPacks.unresolved) {
+  for (const u of unresolved) {
     out.push(`  ✗ ${u.name}  ${u.detail}`);
     out.push(
       `      the pack is declared but not live; its hooks will not fire at runtime. Fix \`source:\` or the pack \`name:\`, then re-run \`harness apply\`.`,
+    );
+  }
+  for (const issue of configIssues) {
+    const where =
+      issue.configPath.length > 0 ? `.config.${issue.configPath}` : `.config`;
+    out.push(`  ✗ ${issue.name}${where}  ${issue.message}`);
+    out.push(
+      `      the value is rejected by the pack's config schema; the runtime would fall back to a default and the misconfig would only surface when the hook fires.`,
     );
   }
   return out;

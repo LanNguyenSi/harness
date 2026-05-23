@@ -11,6 +11,8 @@
 // (which the package's own drift detection would handle on a future
 // `understanding-gate init` reinstall).
 
+import { z } from "zod";
+import { PolicyUxSchema, ProducerSchema } from "../../schema/policies.js";
 import type { Hook, PolicyPack } from "../../schema/index.js";
 import { profileToSettingsPermissions } from "../permission-translator.js";
 import { DEFAULT_RUNTIME, type Runtime } from "../runtime.js";
@@ -86,6 +88,56 @@ export function isMode(value: unknown): value is Mode {
     typeof value === "string" && (MODES as readonly string[]).includes(value)
   );
 }
+
+/**
+ * Zod schema for this pack's `config:` block. Surfaced via
+ * `resolveBuiltinConfigSchema()` and consumed by `harness validate` /
+ * `harness doctor` so typo'd keys (e.g. `permision_profile`) or values
+ * (e.g. `mode: fastConfirm`) fail loud at lint time instead of falling
+ * through to the runtime fallback. Each shape mirrors what the pack's
+ * own resolvers (`resolveMode`, `resolveExpireOnToolMatch`,
+ * `resolvePermissionProfile`) accept — the schema is a typo guard, not
+ * a replacement parser; the resolvers still own defaults + warnings for
+ * borderline cases the schema lets through.
+ *
+ * `.strict()` is intentional: this pack already documents every
+ * supported key, and an unknown key in the operator's manifest is far
+ * more likely to be a typo than forward-compat. New keys added in a
+ * future harness version land in this schema first, then in the pack.
+ */
+export const configSchema = z
+  .object({
+    mode: z.enum(MODES as readonly [Mode, ...Mode[]]).optional(),
+    permission_profile: z
+      .enum(KNOWN_PROFILE_NAMES as readonly [string, ...string[]])
+      .optional(),
+    approval_lifecycle: z
+      .object({
+        // `mode: session` opts out of the PostToolUse marker-expiry hook
+        // entirely (legacy "one approval per session" UX).
+        mode: z.literal("session").optional(),
+        // Tool-name boundaries: clear the marker after one of these
+        // agent-tasks (or operator-overridden) MCP tools fires.
+        expire_on_tool_match: z.array(z.string().min(1)).optional(),
+        // Bash-command boundaries: clear the marker when a Bash call
+        // matches any of these regexes (e.g. `^gh pr (merge|close)\b`).
+        // Operators on gh-cli workflows use this in place of MCP tools.
+        expire_on_bash_match: z.array(z.string().min(1)).optional(),
+        // Safety net for sessions that never hit a listed tool/Bash
+        // boundary. Duration strings like `1h`, `4h`, `30m` are parsed
+        // by the post-tool-use hook; format validation lives there.
+        max_age: z.string().min(1).optional(),
+      })
+      .strict()
+      .optional(),
+    // `ux` + `producers` are consumed by the PreToolUse blocker
+    // (`src/cli/pack/hook-pre-tool-use.ts`) to render an agent-facing
+    // remediation block when the gate trips. Same shape as the
+    // policy-layer `ux:` / `producers:` keys.
+    ux: PolicyUxSchema.optional(),
+    producers: z.array(ProducerSchema).min(1).optional(),
+  })
+  .strict();
 
 export interface ResolvePackOptions {
   /**

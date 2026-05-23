@@ -3,9 +3,14 @@ export {
   KNOWN_BUILTIN_PACKS,
   isBuiltinPackName,
   resolveBuiltin,
+  resolveBuiltinConfigSchema,
   type BuiltinPackName,
   type ResolveBuiltinResult,
 } from "./registry.js";
+export {
+  checkPolicyPackConfigs,
+  type PolicyPackConfigIssue,
+} from "./config-check.js";
 export {
   KNOWN_RUNTIMES,
   DEFAULT_RUNTIME,

@@ -117,8 +117,26 @@ export interface PolicyPackUnresolved {
   detail: string;
 }
 
+/**
+ * A `config:` key/value that this pack's registered `configSchema`
+ * rejects. The pack itself resolves (`source:` and `name:` are fine),
+ * but a key is typo'd or carries the wrong shape; the runtime would
+ * silently fall back to a default, masking the misconfig. Doctor
+ * surfaces each rejection so the operator sees the gap at health-
+ * check time instead of at the first hook firing. See
+ * `src/policy-packs/config-check.ts` for the shared check shared with
+ * `harness validate`.
+ */
+export interface PolicyPackConfigIssue {
+  name: string;
+  /** Dotted path inside `pack.config`, e.g. `mode`, `approval_lifecycle.mode`. */
+  configPath: string;
+  message: string;
+}
+
 export interface PolicyPacksSection {
   unresolved: PolicyPackUnresolved[];
+  configIssues: PolicyPackConfigIssue[];
 }
 
 export interface WorkflowEntryReport {

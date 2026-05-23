@@ -659,6 +659,82 @@ policy_packs:
     });
     expect(report.policyPacks.unresolved).toHaveLength(0);
   });
+
+  // Per-pack config schema (task d78fb3c7). Doctor mirrors validate's
+  // per-pack `configSchema` check so the gap is caught at health-check
+  // time even when an operator skips `harness validate` between edits.
+
+  it("flags a config key/value rejected by the pack's schema", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+    config:
+      mode: fastConfirm
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.policyPacks.configIssues).toHaveLength(1);
+    expect(report.policyPacks.configIssues[0]).toMatchObject({
+      name: "understanding-before-execution",
+      configPath: "mode",
+    });
+    expect(report.errorCount).toBeGreaterThanOrEqual(1);
+    const text = format(report);
+    expect(text).toContain("Policy Packs");
+    expect(text).toContain("✗ understanding-before-execution.config.mode");
+    expect(text).toContain("rejected by the pack's config schema");
+  });
+
+  it("flags a typo'd top-level config key (strict mode)", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+    config:
+      permision_profile: safe-start
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.policyPacks.configIssues).toHaveLength(1);
+    expect(report.policyPacks.configIssues[0]?.message).toMatch(
+      /permision_profile/,
+    );
+  });
+
+  it("stays silent when every declared pack's config is clean", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+    config:
+      mode: fast_confirm
+      permission_profile: safe-start
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.policyPacks.unresolved).toHaveLength(0);
+    expect(report.policyPacks.configIssues).toHaveLength(0);
+    expect(format(report)).not.toContain("Policy Packs");
+  });
 });
 
 describe("doctor — npm global-bin PATH check (task 4ddd78ed)", () => {

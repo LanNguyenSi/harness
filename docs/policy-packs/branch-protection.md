@@ -77,6 +77,17 @@ A malformed `protected_branches` value (not an array, empty, all
 non-string entries) falls back to the default list with a warning
 surfaced at `harness apply` time.
 
+### Config schema
+
+Since task `d78fb3c7`, the pack's `config:` block is validated by `harness validate` and `harness doctor` against a strict zod schema. Typo'd keys (`protected_brnches`) now fail at lint time. The accepted keys are:
+
+| Key | Type | Notes |
+|---|---|---|
+| `protected_branches` | array of non-empty strings | optional; default `["master", "main", "develop"]` |
+| `ux` | `PolicyUxSchema` (`cannot` + `required[]` + `run[]`) | optional; agent-facing remediation render, see below |
+
+Any other top-level key is rejected as a typo.
+
 ### `config.ux` (v0.17.3+)
 
 The blocker reads `config.ux` and renders the plain-language `{ cannot, required, run }` shape via `renderAgentFacing` (`src/runtime/agent-facing.ts`) on every block. `${BRANCH}` substitutes from the resolved git context, so on a Write attempt against master the agent sees:
