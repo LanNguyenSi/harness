@@ -1385,14 +1385,56 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
     expect(Object.keys(settings.hooks)).toEqual([]);
   });
 
-  it("a pack with an unknown source skips with a warning, not an apply failure", async () => {
+  // Fail-loud follow-up (PR #241 task 33616d49): apply used to skip
+  // unrecognised pack sources / unknown builtin names silently. That
+  // behaviour masked broken manifests until someone ran `validate` or
+  // `doctor`. Both branches now throw HarnessExitError with EX_FAIL
+  // before expansion runs, parallel to `harness validate`.
+  it("a pack with an unknown source fails apply with a non-zero exit naming the pack", async () => {
     writePolicyPackManifest([
       { name: "understanding-before-execution", source: "path:./somewhere" },
     ]);
+    const err = await apply({ homeDir: tmpHome }).then(
+      () => null,
+      (e: unknown) => e as HarnessExitError,
+    );
+    expect(err).toBeInstanceOf(HarnessExitError);
+    expect(err?.exitCode).toBe(1);
+    expect(err?.message).toMatch(/understanding-before-execution/);
+    expect(err?.message).toMatch(/only "builtin" resolves/);
+    expect(fs.existsSync(instructionsPath("understanding-before-execution"))).toBe(false);
+  });
+
+  it("a pack with an unknown builtin name fails apply with a non-zero exit naming the pack", async () => {
+    writePolicyPackManifest([{ name: "no-such-pack" }]);
+    const err = await apply({ homeDir: tmpHome }).then(
+      () => null,
+      (e: unknown) => e as HarnessExitError,
+    );
+    expect(err).toBeInstanceOf(HarnessExitError);
+    expect(err?.exitCode).toBe(1);
+    expect(err?.message).toMatch(/no-such-pack/);
+    expect(err?.message).toMatch(/not a known builtin pack/);
+  });
+
+  it("does not flag an enabled:false pack with a bogus source or name", async () => {
+    writePolicyPackManifest([
+      { name: "no-such-pack", source: "git:https://x.git", enabled: false },
+    ]);
     const r = await apply({ homeDir: tmpHome });
     expect(r.outcome).toBe("applied");
-    expect(fs.existsSync(instructionsPath("understanding-before-execution"))).toBe(false);
-    expect(r.warnings.some((w) => w.includes("not recognised"))).toBe(true);
+  });
+
+  it("aggregates multiple pack source issues into one HarnessExitError", async () => {
+    writePolicyPackManifest([
+      { name: "understanding-before-execution", source: "path:./somewhere" },
+      { name: "no-such-pack" },
+    ]);
+    await expect(apply({ homeDir: tmpHome })).rejects.toMatchObject({
+      name: "HarnessExitError",
+      exitCode: 1,
+      message: expect.stringMatching(/2 policy pack issues/),
+    });
   });
 
   it("emits a permissions block when config.permission_profile is set", async () => {

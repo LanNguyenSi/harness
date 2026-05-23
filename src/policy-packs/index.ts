@@ -14,6 +14,11 @@ export {
   type Runtime,
 } from "./runtime.js";
 export { parsePackSource, type PackSourceKind, type PackSourceParseResult } from "./source.js";
+export {
+  checkPolicyPackSources,
+  type PolicyPackSourceIssue,
+  type PolicyPackSourceIssueKind,
+} from "./source-check.js";
 export type {
   PackContribution,
   PackContributionFile,
