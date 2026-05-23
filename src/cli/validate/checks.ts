@@ -1,7 +1,10 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { checkPolicyPackSources } from "../../policy-packs/index.js";
+import {
+  checkPolicyPackConfigs,
+  checkPolicyPackSources,
+} from "../../policy-packs/index.js";
 import { expandHome } from "../../runtime/expand-home.js";
 import type { Manifest } from "../../schema/index.js";
 import type { Diagnostic } from "./types.js";
@@ -251,6 +254,29 @@ function checkPolicyPacks(manifest: Manifest): Diagnostic[] {
   }));
 }
 
+// Phase 6 follow-up (task d78fb3c7): per-pack `config:` shape check.
+// Each builtin pack registers a zod `configSchema` consumed via
+// `checkPolicyPackConfigs`; this turns the strict-mode issues into
+// validate Diagnostics so typo'd keys (`permision_profile`) and bad
+// enum values (`mode: "fastConfirm"`) fail loud at lint time. Runs
+// AFTER the source / name check above; an unknown pack name has no
+// registered schema and would be skipped silently here even without
+// the source check, but emitting both diagnostics in one run is the
+// point — the operator should see every issue per `validate` invocation.
+function checkPolicyPackConfigsAsDiagnostics(manifest: Manifest): Diagnostic[] {
+  return checkPolicyPackConfigs(manifest).map((issue) => {
+    const path =
+      issue.configPath.length > 0
+        ? `policy_packs[${issue.packIndex}].config.${issue.configPath}`
+        : `policy_packs[${issue.packIndex}].config`;
+    return {
+      severity: "error",
+      path,
+      message: issue.message,
+    };
+  });
+}
+
 export function runAssetChecks(
   manifest: Manifest,
   opts: CheckOptions = {},
@@ -264,6 +290,7 @@ export function runAssetChecks(
     ...checkBuiltinDrift(manifest, opts),
     ...checkPolicyGroundingMcp(manifest),
     ...checkPolicyPacks(manifest),
+    ...checkPolicyPackConfigsAsDiagnostics(manifest),
   ];
 }
 

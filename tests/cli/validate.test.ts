@@ -807,6 +807,85 @@ describe("validate — policy_packs (Phase 6 #2)", () => {
     const packDiags = result.diagnostics.filter((d) => d.path.startsWith("policy_packs["));
     expect(packDiags).toEqual([]);
   });
+
+  // Per-pack config schema validation (task d78fb3c7). Validate runs each
+  // builtin pack's registered `configSchema` and turns rejections into
+  // Diagnostics. The shared helper in `src/policy-packs/config-check.ts`
+  // has its own unit tests; this section is the validate-CLI contract:
+  // are the diagnostics surfaced with the right `path` and severity?
+
+  it("rejects a typo'd `mode` value on understanding-before-execution", () => {
+    const home = fixtureWithPacks([
+      { name: "understanding-before-execution", config: { mode: "fastConfirm" } },
+    ]);
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const modeError = result.diagnostics.find(
+      (d) =>
+        d.path === "policy_packs[0].config.mode" && d.severity === "error",
+    );
+    expect(modeError).toBeDefined();
+  });
+
+  it("rejects a typo'd config key (strict mode)", () => {
+    const home = fixtureWithPacks([
+      {
+        name: "understanding-before-execution",
+        config: { permision_profile: "safe-start" },
+      },
+    ]);
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const error = result.diagnostics.find(
+      (d) =>
+        d.path === "policy_packs[0].config" &&
+        d.severity === "error" &&
+        /permision_profile/.test(d.message),
+    );
+    expect(error).toBeDefined();
+  });
+
+  it("missing config keys are silent (no diagnostic)", () => {
+    const home = fixtureWithPacks([{ name: "understanding-before-execution" }]);
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const configDiags = result.diagnostics.filter((d) =>
+      d.path.startsWith("policy_packs[0].config"),
+    );
+    expect(configDiags).toEqual([]);
+  });
+
+  it("emits both source and config diagnostics in one run", () => {
+    const home = fixtureWithPacks([
+      {
+        name: "understanding-before-execution",
+        config: { mode: "fastConfirm" },
+      },
+      { name: "no-such-pack" },
+    ]);
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const configError = result.diagnostics.find(
+      (d) => d.path === "policy_packs[0].config.mode" && d.severity === "error",
+    );
+    const sourceError = result.diagnostics.find(
+      (d) => d.path === "policy_packs[1].name" && d.severity === "error",
+    );
+    expect(configError).toBeDefined();
+    expect(sourceError).toBeDefined();
+  });
 });
 
 describe("validate — internal helpers", () => {

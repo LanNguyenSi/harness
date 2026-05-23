@@ -12,6 +12,7 @@ import {
 import type { Manifest, Policy } from "../../schema/index.js";
 import { parsePackSource } from "../../policy-packs/source.js";
 import { resolveBuiltin } from "../../policy-packs/registry.js";
+import { checkPolicyPackConfigs } from "../../policy-packs/config-check.js";
 import { DEFAULT_RUNTIME } from "../../policy-packs/runtime.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import {
@@ -428,7 +429,12 @@ function buildPolicyPacks(manifest: Manifest): PolicyPacksSection {
       });
     }
   }
-  return { unresolved };
+  const configIssues = checkPolicyPackConfigs(manifest).map((issue) => ({
+    name: issue.packName,
+    configPath: issue.configPath,
+    message: issue.message,
+  }));
+  return { unresolved, configIssues };
 }
 
 function buildWorkflows(manifest: Manifest): import("./types.js").WorkflowsSectionReport {
@@ -539,6 +545,7 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
     if (p.producerGap) warningCount++;
   }
   errorCount += report.policyPacks.unresolved.length;
+  errorCount += report.policyPacks.configIssues.length;
   warningCount += report.riskGate.warnings.length;
   if (report.npmGlobalBin?.status === "warn") warningCount++;
   if (report.memory.routerExecutable && !report.memory.routerExecutable.exists) errorCount++;

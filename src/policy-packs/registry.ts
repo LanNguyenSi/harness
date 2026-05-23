@@ -5,12 +5,15 @@
 // arm in `resolveBuiltin()`. Non-builtin sources (path/npm/git) are
 // out of scope for v1; their resolution lands in a later sub-task.
 
+import type { z } from "zod";
 import type { PolicyPack } from "../schema/index.js";
 import {
+  configSchema as branchProtectionConfigSchema,
   PACK_NAME as BRANCH_PROTECTION,
   resolve as resolveBranchProtection,
 } from "./builtin/branch-protection.js";
 import {
+  configSchema as understandingBeforeExecutionConfigSchema,
   PACK_NAME as UNDERSTANDING_BEFORE_EXECUTION,
   resolve as resolveUnderstandingBeforeExecution,
   type ResolvePackOptions,
@@ -44,5 +47,24 @@ export function resolveBuiltin(
       return resolveUnderstandingBeforeExecution(pack, runtime, opts);
     case BRANCH_PROTECTION:
       return resolveBranchProtection(pack, runtime);
+  }
+}
+
+/**
+ * Per-builtin `config:` schema lookup. Returns null when the pack name
+ * is not a builtin (caller should already have flagged that via
+ * `checkPolicyPackSources`), and a schema when one is registered.
+ * Consumed by `checkPolicyPackConfigs` so `harness validate` /
+ * `harness doctor` catch typo'd keys at lint time.
+ */
+export function resolveBuiltinConfigSchema(
+  packName: string,
+): z.ZodTypeAny | null {
+  if (!isBuiltinPackName(packName)) return null;
+  switch (packName as BuiltinPackName) {
+    case UNDERSTANDING_BEFORE_EXECUTION:
+      return understandingBeforeExecutionConfigSchema;
+    case BRANCH_PROTECTION:
+      return branchProtectionConfigSchema;
   }
 }

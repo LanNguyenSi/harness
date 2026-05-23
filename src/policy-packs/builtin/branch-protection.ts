@@ -29,6 +29,8 @@
 // `harness pack add branch-protection`. The `full` init template does
 // NOT wire it (revisit after one cycle of operator feedback).
 
+import { z } from "zod";
+import { PolicyUxSchema } from "../../schema/policies.js";
 import type { Hook, PolicyPack } from "../../schema/index.js";
 import { DEFAULT_RUNTIME, type Runtime } from "../runtime.js";
 import type { PackContribution, PackContributionFile } from "../types.js";
@@ -42,6 +44,22 @@ import {
 } from "./branch-protection-runtime.js";
 
 export { PACK_NAME };
+
+/**
+ * Zod schema for this pack's `config:` block. See sibling pack
+ * `understanding-before-execution.configSchema` for rationale: strict
+ * by design so typo'd keys fail loud at lint time. `protected_branches`
+ * is the only operator-tunable key today; new keys land here first,
+ * then in `resolveProtectedBranches`.
+ */
+export const configSchema = z
+  .object({
+    protected_branches: z.array(z.string().min(1)).optional(),
+    // `ux` is consumed by the PreToolUse blocker to render an
+    // agent-facing remediation block when the gate trips.
+    ux: PolicyUxSchema.optional(),
+  })
+  .strict();
 
 const HOOK_NAME_PREFIX = `policy-pack:${PACK_NAME}`;
 

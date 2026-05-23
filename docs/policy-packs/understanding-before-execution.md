@@ -86,6 +86,23 @@ The mode lives under `config:` rather than at the top level because it is pack-s
 
 `source: builtin` resolves to the pack definition that ships with harness itself. Future values (`path:./packs/foo`, `npm:@scope/pack@1.2.3`, `git:https://...`) are reserved for community-authored packs and are **not** part of the v1 vocabulary; they parse as an opaque string today and will gain dedicated resolution in Phase 6 #3 (the `harness pack add` validate-on-write step) or later.
 
+### Config schema
+
+Since task `d78fb3c7`, the pack's `config:` block is validated by `harness validate` and `harness doctor` against a strict zod schema. Typo'd keys (`permision_profile` instead of `permission_profile`) and bad enum values (`mode: fastConfirm` instead of `mode: fast_confirm`) now fail at lint time instead of silently falling back to the default at runtime. The accepted keys are:
+
+| Key | Type | Notes |
+|---|---|---|
+| `mode` | enum `fast_confirm` / `grill_me` / `strict` | default `grill_me` |
+| `permission_profile` | enum `safe-start` / `implementation-after-approval` / `high-risk-grill-me` | optional; see the table above |
+| `approval_lifecycle.mode` | literal `session` | optional; opts out of the PostToolUse marker-expiry hook |
+| `approval_lifecycle.expire_on_tool_match` | array of tool-name strings | optional override for the default agent-tasks tool list |
+| `approval_lifecycle.expire_on_bash_match` | array of regex strings | optional; clear the marker when a Bash call matches any of these (gh-cli workflows) |
+| `approval_lifecycle.max_age` | duration string (`1h`, `30m`, ...) | optional safety net for sessions that never hit a listed tool / Bash boundary |
+| `ux` | `PolicyUxSchema` (`cannot` + `required[]` + `run[]`) | optional; renders agent-facing remediation when the PreToolUse blocker fires |
+| `producers` | array of `ProducerSchema` (`kind` + recipe) | optional; companion to `ux:` for the same blocker render path |
+
+Any other top-level key is rejected as a typo. New keys land in this schema (`src/policy-packs/builtin/understanding-before-execution.ts`) first, then in the pack's runtime resolver.
+
 ## Suggested permission profiles (Phase 6 #5)
 
 Three reference profiles ship as Phase 6 #5 builtins. Select one via the pack's `config.permission_profile`:
