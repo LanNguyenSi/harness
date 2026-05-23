@@ -118,6 +118,42 @@ const FAST_CONFIRM_PREFIXES = [
 ];`;
     expect(extractUpstreamSectionKeys(fixture)).toEqual(["a", "b", "c"]);
   });
+
+  it("does NOT mistake an apostrophe in a // line comment for a string opener (task 798d7173)", () => {
+    // Regression: the published 0.4.0 parser.js carries a JSDoc-ish //
+    // comment inside the SECTIONS slice with the apostrophe in "Section
+    // 10's numbering". A walker that did not honor JS comments treated
+    // the apostrophe as a single-quoted string opener, swallowed the
+    // closing `]`, and reported a false "layout changed" error,
+    // blocking the harness-side bump PR until the walker was fixed.
+    const fixture = `const SECTIONS = [
+  // Section 10's numbering aligns with the prompt's structure.
+  { key: "a", aliases: ["foo"] },
+  { key: "b" },
+];`;
+    expect(extractUpstreamSectionKeys(fixture)).toEqual(["a", "b"]);
+  });
+
+  it("does NOT mistake a backtick in a // line comment for a template-literal opener", () => {
+    // Companion to the apostrophe case: the upstream comment also uses
+    // backticks around code spans (e.g. `# Understanding Report`). Same
+    // class of failure as the apostrophe case.
+    const fixture = `const SECTIONS = [
+  // The \`# Understanding Report\` heading is required.
+  { key: "a" },
+  { key: "b" },
+];`;
+    expect(extractUpstreamSectionKeys(fixture)).toEqual(["a", "b"]);
+  });
+
+  it("does NOT mistake a quote in a /* block comment */ for a string opener", () => {
+    const fixture = `const SECTIONS = [
+  /* The agent's report should be precise. */
+  { key: "a" },
+  { key: "b" },
+];`;
+    expect(extractUpstreamSectionKeys(fixture)).toEqual(["a", "b"]);
+  });
 });
 
 describe("diffKeys", () => {
