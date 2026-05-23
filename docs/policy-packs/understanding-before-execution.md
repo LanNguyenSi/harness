@@ -103,6 +103,19 @@ Since task `d78fb3c7`, the pack's `config:` block is validated by `harness valid
 
 Any other top-level key is rejected as a typo. New keys land in this schema (`src/policy-packs/builtin/understanding-before-execution.ts`) first, then in the pack's runtime resolver.
 
+### Pack-level `min_version` (task `bd154095`)
+
+`policy_packs[].min_version` is an optional floor on the canonical package-side bin (`understanding-gate --version`). `harness doctor` probes that version and renders a warning when the installed binary is below the floor: the pack still runs in degraded mode; only `config:` keys that require the newer release are silently ignored. The hook-level `min_version` on the pack-emitted Hook entries covers each individual hook command; this pack-level floor catches a `config:`-schema-vs-runtime gap that no single hook can express.
+
+```yaml
+policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+    min_version: 0.25.0    # require the --task variadic flag (v0.25.0+)
+```
+
+Missing `min_version` is silent (legacy manifest). Warn-not-error: doctor's `warningCount` increments, `errorCount` does not.
+
 ## Suggested permission profiles (Phase 6 #5)
 
 Three reference profiles ship as Phase 6 #5 builtins. Select one via the pack's `config.permission_profile`:

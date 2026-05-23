@@ -134,9 +134,24 @@ export interface PolicyPackConfigIssue {
   message: string;
 }
 
+/**
+ * Doctor surface for the pack-level `min_version` floor. Mirrors the
+ * hook-level `HookEntryReport.version` shape so operators see a
+ * consistent warning vocabulary regardless of which layer raised the
+ * gap. Always warn-not-error: a below-floor pack still runs in degraded
+ * mode; the operator just loses any feature gated on the newer release.
+ */
+export interface PolicyPackVersionGapReport {
+  name: string;
+  declaredMinVersion: string;
+  actualVersion: string | null;
+  message: string;
+}
+
 export interface PolicyPacksSection {
   unresolved: PolicyPackUnresolved[];
   configIssues: PolicyPackConfigIssue[];
+  versionGaps: PolicyPackVersionGapReport[];
 }
 
 export interface WorkflowEntryReport {

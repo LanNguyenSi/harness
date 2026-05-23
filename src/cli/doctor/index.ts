@@ -13,6 +13,7 @@ import type { Manifest, Policy } from "../../schema/index.js";
 import { parsePackSource } from "../../policy-packs/source.js";
 import { resolveBuiltin } from "../../policy-packs/registry.js";
 import { checkPolicyPackConfigs } from "../../policy-packs/config-check.js";
+import { checkPolicyPackVersions } from "../../policy-packs/version-check.js";
 import { DEFAULT_RUNTIME } from "../../policy-packs/runtime.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import {
@@ -405,7 +406,10 @@ function buildPolicies(manifest: Manifest): PolicyEntryReport[] {
  * Skipped (`enabled: false`) packs are NOT checked: they're not
  * expected to be live, and flagging them would flood the report.
  */
-function buildPolicyPacks(manifest: Manifest): PolicyPacksSection {
+function buildPolicyPacks(
+  manifest: Manifest,
+  versionProbe: (cmd: readonly string[]) => string | null,
+): PolicyPacksSection {
   const unresolved: PolicyPackUnresolved[] = [];
   for (const pack of manifest.policy_packs) {
     if (!pack.enabled) continue;
@@ -434,7 +438,15 @@ function buildPolicyPacks(manifest: Manifest): PolicyPacksSection {
     configPath: issue.configPath,
     message: issue.message,
   }));
-  return { unresolved, configIssues };
+  const versionGaps = checkPolicyPackVersions(manifest, versionProbe).map(
+    (gap) => ({
+      name: gap.packName,
+      declaredMinVersion: gap.declaredMinVersion,
+      actualVersion: gap.actualVersion,
+      message: gap.message,
+    }),
+  );
+  return { unresolved, configIssues, versionGaps };
 }
 
 function buildWorkflows(manifest: Manifest): import("./types.js").WorkflowsSectionReport {
@@ -546,6 +558,11 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   }
   errorCount += report.policyPacks.unresolved.length;
   errorCount += report.policyPacks.configIssues.length;
+  // Pack-level min_version gaps are warn-not-error: the pack still
+  // functions in degraded mode; only features gated on the newer
+  // release are lost. Parallel to the hook-level version probe's
+  // `status: warn`.
+  warningCount += report.policyPacks.versionGaps.length;
   warningCount += report.riskGate.warnings.length;
   if (report.npmGlobalBin?.status === "warn") warningCount++;
   if (report.memory.routerExecutable && !report.memory.routerExecutable.exists) errorCount++;
@@ -614,7 +631,10 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
 
   const hooks = checkHooks(manifest, home, opts);
   const policies = buildPolicies(manifest);
-  const policyPacks = buildPolicyPacks(manifest);
+  const policyPacksVersionProbe = opts.versionProbe ?? (() => null);
+  const policyPacks = buildPolicyPacks(manifest, (cmd) =>
+    policyPacksVersionProbe([...cmd]),
+  );
   const workflows = buildWorkflows(manifest);
   const riskGate = buildRiskGate(manifest);
   const manifestSec = manifestSection(manifest);

@@ -22,6 +22,18 @@ export const PolicyPackSchema = z
     enabled: z.boolean().default(true),
     description: z.string().min(1).optional(),
     config: z.record(z.string().min(1), z.unknown()).default({}),
+    // Optional version floor on the pack's canonical package-side bin.
+    // The hook-level `min_version` (carried by each pack-emitted Hook
+    // entry) covers each individual hook command; this pack-level floor
+    // catches a config-schema mismatch between the harness-side pack
+    // definition and the package-side runtime: e.g. a `config:` key
+    // that only the newer release honours. `harness doctor` probes the
+    // version command registered per builtin in the policy-pack
+    // registry and warns when the installed binary is below this floor.
+    // The pack still functions in degraded mode; only features gated on
+    // the newer version are lost. Optional: legacy manifests without
+    // the field stay silent.
+    min_version: z.string().min(1).optional(),
   })
   .strict();
 

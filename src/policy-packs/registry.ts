@@ -16,6 +16,7 @@ import {
   configSchema as understandingBeforeExecutionConfigSchema,
   PACK_NAME as UNDERSTANDING_BEFORE_EXECUTION,
   resolve as resolveUnderstandingBeforeExecution,
+  VERSION_COMMAND as UNDERSTANDING_BEFORE_EXECUTION_VERSION_COMMAND,
   type ResolvePackOptions,
 } from "./builtin/understanding-before-execution.js";
 import { DEFAULT_RUNTIME, type Runtime } from "./runtime.js";
@@ -66,5 +67,27 @@ export function resolveBuiltinConfigSchema(
       return understandingBeforeExecutionConfigSchema;
     case BRANCH_PROTECTION:
       return branchProtectionConfigSchema;
+  }
+}
+
+/**
+ * Canonical version-probe command for a builtin pack's package-side bin.
+ * Returns `null` when the pack name is not a builtin (caller should
+ * already have flagged that via `checkPolicyPackSources`), or when the
+ * pack has no separate package-side bin (e.g. `branch-protection`'s
+ * blocker is harness itself, no external binary to probe). Consumed by
+ * `checkPolicyPackVersions` so `harness doctor` can compare the
+ * installed version against an operator-declared pack-level
+ * `min_version` floor.
+ */
+export function resolveBuiltinVersionCommand(
+  packName: string,
+): readonly [string, string] | null {
+  if (!isBuiltinPackName(packName)) return null;
+  switch (packName as BuiltinPackName) {
+    case UNDERSTANDING_BEFORE_EXECUTION:
+      return UNDERSTANDING_BEFORE_EXECUTION_VERSION_COMMAND;
+    case BRANCH_PROTECTION:
+      return null;
   }
 }

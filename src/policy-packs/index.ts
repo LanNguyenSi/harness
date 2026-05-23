@@ -4,6 +4,7 @@ export {
   isBuiltinPackName,
   resolveBuiltin,
   resolveBuiltinConfigSchema,
+  resolveBuiltinVersionCommand,
   type BuiltinPackName,
   type ResolveBuiltinResult,
 } from "./registry.js";
@@ -11,6 +12,11 @@ export {
   checkPolicyPackConfigs,
   type PolicyPackConfigIssue,
 } from "./config-check.js";
+export {
+  checkPolicyPackVersions,
+  type PolicyPackVersionGap,
+  type PolicyPackVersionGapKind,
+} from "./version-check.js";
 export {
   KNOWN_RUNTIMES,
   DEFAULT_RUNTIME,
