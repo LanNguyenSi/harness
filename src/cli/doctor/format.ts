@@ -209,7 +209,7 @@ function formatRiskGateSection(report: DoctorReport): string[] {
   out.push(
     `  ${rg.classifiers} classifier${rg.classifiers === 1 ? "" : "s"}, ` +
       `${rg.resolvers} environment resolver${rg.resolvers === 1 ? "" : "s"}, ` +
-      `${rg.whenPolicies} policy${rg.whenPolicies === 1 ? "" : " policies"} with when:`,
+      `${rg.whenPolicies} ${rg.whenPolicies === 1 ? "policy" : "policies"} with when:`,
   );
   if (rg.warnings.length === 0) {
     out.push(`  ✓ wiring coherent`);
