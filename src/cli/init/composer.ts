@@ -551,7 +551,7 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
               cannot: "You cannot use write-capable tools yet.",
               required: ["an approved Understanding Report for this session"],
               run: [
-                "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan",
+                "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan, Prior Art (state what you searched for an existing solution and what you found, with an explicit adopt-or-build judgment)",
                 "Run `harness approve understanding` and approve the prompt",
               ],
             },

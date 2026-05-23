@@ -58,7 +58,7 @@ policy_packs:
         required:
           - "an approved Understanding Report for this session"
         run:
-          - "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan"
+          - "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan, Prior Art (state what you searched for an existing solution and what you found, with an explicit adopt-or-build judgment)"
           - "Run `harness approve understanding` and approve the prompt"
 ```
 
@@ -115,6 +115,16 @@ policy_packs:
 ```
 
 Missing `min_version` is silent (legacy manifest). Warn-not-error: doctor's `warningCount` increments, `errorCount` does not.
+
+### Prior Art is required by the Stop-capture parser (`@lannguyensi/understanding-gate@0.4.0+`)
+
+`@lannguyensi/understanding-gate@0.4.0` (filed from harness task `798d7173`, agent-grounding PR #85) adds a required 10th section, "Prior Art", to the Understanding Report contract:
+
+- In `grill_me` / full mode: a report missing or with an empty Prior Art section is rejected by the Stop-capture parser with `schema_violation` / `missing: ["priorArt"]`. The agent must state what channels were checked for an existing solution (web, package registries, MCP directories, the org's own repos, the project's existing modules), the closest existing tool or pattern found, and an explicit "adopt" / "extend" / "build new" judgment with a reason.
+- In `fast_confirm` mode: Prior Art is NOT required. The five-bullet shape (currentUnderstanding, intendedOutcome, outOfScope, verificationPlan, assumptions) does not carry it. The failure class this section guards against (multi-turn build of an unnecessary tool) is intrinsically a grill_me / full situation.
+- Origin: `pattern-scout` 2026-05-22, a ~5000-line agent-dx package that shipped before anyone noticed `opensrc-mcp` already solved the problem better. The existing nine sections all framed the task as given; none forced the question "should this be built at all?".
+
+The pack's hook-level `min_version` floor on the npm-backed bins (`UG_MIN_VERSION` in the pack source) is bumped to `0.4.0` so `harness doctor` flags installs below it. Operators on 0.3.x produce reports that pre-0.4.0 parsers accept silently; on 0.4.0+ the section is enforced.
 
 ## Suggested permission profiles (Phase 6 #5)
 
