@@ -1394,27 +1394,27 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
     writePolicyPackManifest([
       { name: "understanding-before-execution", source: "path:./somewhere" },
     ]);
-    await expect(apply({ homeDir: tmpHome })).rejects.toMatchObject({
-      name: "HarnessExitError",
-      exitCode: 1,
-      message: expect.stringMatching(/understanding-before-execution/),
-    });
-    await expect(apply({ homeDir: tmpHome })).rejects.toMatchObject({
-      message: expect.stringMatching(/only "builtin" resolves/),
-    });
+    const err = await apply({ homeDir: tmpHome }).then(
+      () => null,
+      (e: unknown) => e as HarnessExitError,
+    );
+    expect(err).toBeInstanceOf(HarnessExitError);
+    expect(err?.exitCode).toBe(1);
+    expect(err?.message).toMatch(/understanding-before-execution/);
+    expect(err?.message).toMatch(/only "builtin" resolves/);
     expect(fs.existsSync(instructionsPath("understanding-before-execution"))).toBe(false);
   });
 
   it("a pack with an unknown builtin name fails apply with a non-zero exit naming the pack", async () => {
     writePolicyPackManifest([{ name: "no-such-pack" }]);
-    await expect(apply({ homeDir: tmpHome })).rejects.toMatchObject({
-      name: "HarnessExitError",
-      exitCode: 1,
-      message: expect.stringMatching(/no-such-pack/),
-    });
-    await expect(apply({ homeDir: tmpHome })).rejects.toMatchObject({
-      message: expect.stringMatching(/not a known builtin pack/),
-    });
+    const err = await apply({ homeDir: tmpHome }).then(
+      () => null,
+      (e: unknown) => e as HarnessExitError,
+    );
+    expect(err).toBeInstanceOf(HarnessExitError);
+    expect(err?.exitCode).toBe(1);
+    expect(err?.message).toMatch(/no-such-pack/);
+    expect(err?.message).toMatch(/not a known builtin pack/);
   });
 
   it("does not flag an enabled:false pack with a bogus source or name", async () => {
