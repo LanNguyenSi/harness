@@ -1377,4 +1377,73 @@ policies:
     });
     expect(format(report)).not.toContain("Risk Gate");
   });
+
+  // Task f1df7c2d Bug B: per Phase 7 #5's "unknown is not safe" rule, an
+  // unclassified envelope satisfies every risk-derived clause, so a
+  // policy that gates on `risk.*` without `environment.name` fires on
+  // EVERY Bash command. Warn the operator so the misconfiguration is
+  // visible at doctor-time rather than at first-block-time.
+  const RISK_UNSCOPED_MANIFEST = `version: 1
+hooks:
+  - name: risk-gate
+    event: PreToolUse
+    command: /bin/true
+    blocking: false
+risk:
+  classifiers:
+    - name: dangerous-shell
+      tool: Bash
+      patterns:
+        - { pattern: 'terraform destroy', categories: [destructive], severity: critical }
+environments:
+  resolvers:
+    - name: prod
+      environment: production
+      signals: { branch_patterns: [main] }
+policies:
+  - name: gate-high-risk
+    description: missing environment.name scope
+    trigger: { event: PreToolUse, match: "Bash" }
+    when: { risk.severity_at_least: high }
+    requires: { ledger_tag: "risk-approved:\${SESSION_ID}" }
+    hook: risk-gate
+    enforcement: require_approval
+`;
+
+  it("warns when a policy gates on risk.* without an environment.name scope", async () => {
+    const home = makeFixture({ "harness.yaml": RISK_UNSCOPED_MANIFEST });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.riskGate.warnings.some((w) => w.includes("gate-high-risk"))).toBe(true);
+    expect(report.riskGate.warnings.some((w) => w.includes("environment.name"))).toBe(true);
+    expect(report.warningCount).toBeGreaterThan(0);
+  });
+
+  it("does not warn when the same policy also carries environment.name", async () => {
+    const scoped = RISK_UNSCOPED_MANIFEST.replace(
+      "when: { risk.severity_at_least: high }",
+      "when: { risk.severity_at_least: high, environment.name: production }",
+    );
+    const home = makeFixture({ "harness.yaml": scoped });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.riskGate.warnings.filter((w) => w.includes("gate-high-risk"))).toHaveLength(0);
+  });
+
+  it("warns when a policy gates on risk.category_in without an environment.name scope", async () => {
+    const categoryUnscoped = RISK_UNSCOPED_MANIFEST.replace(
+      "when: { risk.severity_at_least: high }",
+      "when: { risk.category_in: [destructive] }",
+    );
+    const home = makeFixture({ "harness.yaml": categoryUnscoped });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.riskGate.warnings.some((w) => w.includes("gate-high-risk"))).toBe(true);
+  });
 });
