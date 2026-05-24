@@ -787,6 +787,108 @@ describe("parseManifest — permission_profiles (Phase 6 #5)", () => {
   });
 });
 
+describe("parseManifest — min_version numeric pattern", () => {
+  // Five schema fields feed `compareNumericVersions`: hooks[].min_version,
+  // policy_packs[].min_version, tools.mcp[].min_version,
+  // tools.cli[].min_version, memory.router.min_version. Without a schema
+  // pattern, a malformed value (`"latest"`, `"v1.0"`, `"1.0.0-alpha"`)
+  // parses to NaN inside the comparator, which maps NaN to 0 (equality)
+  // and silently swallows the version floor. Lock the schema rejection
+  // explicitly per field so a future refactor that loosens any of the
+  // five surfaces breaks loud.
+  const REJECTED = ["latest", "v1.0", "1.0.0-alpha", "1.2.3+meta", "1..2", "."];
+  const ACCEPTED = ["1", "1.0", "1.0.0", "1.0.0.0", "0.2.0"];
+
+  function withHookMinVersion(value: string): unknown {
+    return {
+      version: 1,
+      hooks: [
+        {
+          name: "h",
+          event: "PreToolUse",
+          command: "/bin/true",
+          blocking: false,
+          min_version: value,
+          version_command: ["/bin/true", "--version"],
+        },
+      ],
+    };
+  }
+
+  function withPolicyPackMinVersion(value: string): unknown {
+    return {
+      version: 1,
+      policy_packs: [{ name: "understanding-before-execution", min_version: value }],
+    };
+  }
+
+  function withMcpMinVersion(value: string): unknown {
+    return {
+      version: 1,
+      tools: {
+        mcp: [
+          {
+            name: "x",
+            command: "node /tmp/x.js",
+            min_version: value,
+            version_command: ["node", "--version"],
+          },
+        ],
+      },
+    };
+  }
+
+  function withCliMinVersion(value: string): unknown {
+    return {
+      version: 1,
+      tools: {
+        cli: [
+          {
+            name: "x",
+            binary: "x",
+            min_version: value,
+            version_command: ["x", "--version"],
+          },
+        ],
+      },
+    };
+  }
+
+  function withMemoryRouterMinVersion(value: string): unknown {
+    return {
+      version: 1,
+      memory: {
+        router: {
+          command: ["node", "/tmp/router.js"],
+          min_version: value,
+          version_command: ["node", "/tmp/router.js", "--version"],
+        },
+      },
+    };
+  }
+
+  const surfaces: Array<{ name: string; build: (v: string) => unknown }> = [
+    { name: "hooks[]", build: withHookMinVersion },
+    { name: "policy_packs[]", build: withPolicyPackMinVersion },
+    { name: "tools.mcp[]", build: withMcpMinVersion },
+    { name: "tools.cli[]", build: withCliMinVersion },
+    { name: "memory.router", build: withMemoryRouterMinVersion },
+  ];
+
+  for (const { name, build } of surfaces) {
+    for (const bad of REJECTED) {
+      it(`rejects ${name}.min_version = ${JSON.stringify(bad)}`, () => {
+        expect(() => parseManifest(build(bad))).toThrow(/min_version must be numeric semver/i);
+      });
+    }
+    for (const good of ACCEPTED) {
+      it(`accepts ${name}.min_version = ${JSON.stringify(good)}`, () => {
+        expect(() => parseManifest(build(good))).not.toThrow();
+      });
+    }
+  }
+});
+
 describe("parseManifest — Phase 7 risk-gate vocabulary", () => {
   it("parses the risk + environments blocks in the full reference manifest", () => {
     const raw = loadYaml(path.join(EXAMPLES_DIR, "full-manifest.yaml"));

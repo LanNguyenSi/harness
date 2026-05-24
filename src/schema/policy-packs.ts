@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { NUMERIC_VERSION_MESSAGE, NUMERIC_VERSION_PATTERN } from "../io/version-compare.js";
+
 // Pack `name` is consumed as a path component when `harness pack remove
 // --force` cleans up `harness.generated/policy-packs/<name>/`, so it must
 // not contain `/`, `..`, or anything else that would escape the policy-
@@ -33,7 +35,11 @@ export const PolicyPackSchema = z
     // The pack still functions in degraded mode; only features gated on
     // the newer version are lost. Optional: legacy manifests without
     // the field stay silent.
-    min_version: z.string().min(1).optional(),
+    min_version: z
+      .string()
+      .min(1)
+      .regex(NUMERIC_VERSION_PATTERN, NUMERIC_VERSION_MESSAGE)
+      .optional(),
   })
   .strict();
 

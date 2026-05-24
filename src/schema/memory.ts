@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { NUMERIC_VERSION_MESSAGE, NUMERIC_VERSION_PATTERN } from "../io/version-compare.js";
+
 export const MemoryScopeSchema = z.enum(["project", "user"]);
 
 export const MemoryDirectorySchema = z
@@ -13,7 +15,11 @@ export const MemoryRouterSchema = z
   .object({
     command: z.array(z.string().min(1)).min(1),
     enabled: z.boolean().default(true),
-    min_version: z.string().min(1).optional(),
+    min_version: z
+      .string()
+      .min(1)
+      .regex(NUMERIC_VERSION_PATTERN, NUMERIC_VERSION_MESSAGE)
+      .optional(),
     version_command: z.array(z.string().min(1)).min(1).optional(),
   })
   .strict();
