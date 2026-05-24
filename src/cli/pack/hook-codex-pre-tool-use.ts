@@ -32,10 +32,12 @@ import {
   resolveGeneratedDir,
   writePendingApproval,
 } from "../../runtime/pending-approval.js";
+import { extractShellCommand } from "../../runtime/tool-name-aliases.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { PolicyUxSchema, type Manifest, type McpServer, type PolicyUx } from "../../schema/index.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import { checkPauseFromLoader } from "../pause-check.js";
+import { isReadOnlyBashCommand } from "./read-only-bash.js";
 import { renderReportSchemaHint } from "./understanding-report-schema-hint.js";
 
 const PACK_NAME = "understanding-before-execution";
@@ -71,6 +73,7 @@ export interface PackHookCodexPreToolUseResult {
 interface CodexEventEnvelope {
   session_id?: unknown;
   tool_name?: unknown;
+  raw_input?: unknown;
   // One Codex-native synonym tolerated: some integrations pass
   // `tool` instead of `tool_name`. We deliberately do NOT alias
   // `event.id` to session_id — `id` in most event-bus shapes is the
@@ -118,6 +121,29 @@ function pickString(...candidates: unknown[]): string | undefined {
 
 function findGroundingMcp(manifest: Manifest): McpServer | null {
   return manifest.tools.mcp.find((m) => m.name === "grounding-mcp") ?? null;
+}
+
+const CODEX_SHELL_TOOLS: ReadonlySet<string> = new Set([
+  "Bash",
+  "shell",
+  "exec_command",
+  "functions.exec_command",
+]);
+
+function extractCodexShellCommand(rawInput: unknown): string | null {
+  if (rawInput && typeof rawInput === "object") {
+    const args = rawInput as { command?: unknown; cmd?: unknown };
+    if (
+      typeof args.command === "string" &&
+      typeof args.cmd === "string" &&
+      args.command.trim() !== args.cmd.trim()
+    ) {
+      return null;
+    }
+  }
+  const command = extractShellCommand({ raw_input: rawInput });
+  if (command !== null) return command;
+  return typeof rawInput === "string" ? rawInput : null;
 }
 
 async function checkLedger(
@@ -280,6 +306,25 @@ export async function runPackHookCodexPreToolUseCli(
 
   // Audit-only ledger probe.
   const ledger = await checkLedger(manifest, sessionId, opts);
+
+  // Exception: read-only shell commands. Codex's documented hook
+  // envelope carries tool args in `raw_input`; if that field is absent
+  // or unclassifiable, fall through to the block path (fail-closed).
+  const commandStr = extractCodexShellCommand(event.raw_input);
+  if (
+    commandStr !== null &&
+    CODEX_SHELL_TOOLS.has(toolName) &&
+    isReadOnlyBashCommand(commandStr)
+  ) {
+    const diagnostic = `harness pack hook codex: read-only Bash command, allowing without an approved report (\`${commandStr.trim()}\`)`;
+    stderr.write(`${diagnostic}\n`);
+    return {
+      exitCode: 0,
+      blocked: false,
+      approvalCheck: { approved: true, source: "none", detail: diagnostic },
+      diagnostic,
+    };
+  }
 
   // Stage the session id so `harness approve understanding`, run from
   // the operator's shell where neither $CODEX_SESSION_ID nor
