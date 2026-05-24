@@ -1339,7 +1339,16 @@ export function buildProgram(opts: RunOptions = {}): Command {
         //   - skipped: no report loaded; nothing to validate.
         const v = result.validation;
         if ("ok" in v && v.ok) {
-          lines.push(`validation: ✓ ${v.mode ?? "(no mode)"} report passed structural checks`);
+          // mode === null is the legacy / pre-v0.4.0 case the validator
+          // waives by design (the schema bump must not retroactively
+          // reject historical reports). Distinguish it from a positive
+          // check so the operator does not read "passed" and assume the
+          // grill_me priorArt rule actually fired.
+          if (v.mode === null) {
+            lines.push("validation: ⓘ legacy report (no mode field) — priorArt rule waived");
+          } else {
+            lines.push(`validation: ✓ ${v.mode} report passed structural checks`);
+          }
         } else if ("ok" in v && v.ok === false) {
           if (v.enforced) {
             lines.push(

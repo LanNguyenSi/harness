@@ -609,6 +609,12 @@ export async function approveUnderstanding(
   // approval. The CLI surfaces this as a hard failure so the operator
   // does not believe they approved when they didn't.
   if ("ok" in validation && validation.ok === false && validation.enforced) {
+    // Any --task / --tasks ids the operator passed are dropped on the
+    // floor: pre-approving a batch alongside a session whose own report
+    // failed validation would write task markers for a session that the
+    // gate is still going to refuse. The CLI surfaces this empty array
+    // alongside the rejection so an operator who batched several tasks
+    // can see the batch was NOT pre-approved.
     return {
       sessionId,
       sessionSource,
