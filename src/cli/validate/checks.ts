@@ -13,7 +13,7 @@ export interface CheckOptions {
   homeDir?: string;
   pathEnv?: string;
   builtinRuntimeProbe?: () => string[];
-  versionProbe?: (cmd: string[]) => string | null;
+  versionProbe?: (cmd: readonly string[]) => string | null;
 }
 
 const DEFAULT_RUNTIME_BUILTINS = [

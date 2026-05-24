@@ -43,7 +43,7 @@ export interface DoctorOptions extends LoaderOptions {
   shallow?: boolean;
   mcpProbe?: McpProbe;
   pathEnv?: string;
-  versionProbe?: (cmd: string[]) => string | null;
+  versionProbe?: (cmd: readonly string[]) => string | null;
   now?: Date;
   homeOverride?: string;
   /**
@@ -255,7 +255,7 @@ function checkSkills(manifest: Manifest, home: string): { enabled: string[]; mis
 
 function checkHookVersion(
   hook: Manifest["hooks"][number],
-  versionProbe: (cmd: string[]) => string | null,
+  versionProbe: (cmd: readonly string[]) => string | null,
 ): HookEntryReport["version"] | undefined {
   // The schema enforces min_version + version_command both present; this
   // is the safety belt that lets the runtime stay narrowly typed without
@@ -632,9 +632,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const hooks = checkHooks(manifest, home, opts);
   const policies = buildPolicies(manifest);
   const policyPacksVersionProbe = opts.versionProbe ?? (() => null);
-  const policyPacks = buildPolicyPacks(manifest, (cmd) =>
-    policyPacksVersionProbe([...cmd]),
-  );
+  const policyPacks = buildPolicyPacks(manifest, policyPacksVersionProbe);
   const workflows = buildWorkflows(manifest);
   const riskGate = buildRiskGate(manifest);
   const manifestSec = manifestSection(manifest);
