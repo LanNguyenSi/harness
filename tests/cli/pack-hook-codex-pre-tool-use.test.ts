@@ -53,6 +53,100 @@ function writeReport(dir: string, name: string, body: Record<string, unknown>): 
 }
 
 describe("pack hook codex-pre-tool-use blocker", () => {
+  it("allows a read-only Bash command without an approved Understanding Report", async () => {
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        event({ tool_name: "Bash", raw_input: { command: "git status" } }),
+      ),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.approvalCheck.source).toBe("none");
+    expect(stderr.read()).toMatch(/read-only Bash command, allowing/);
+  });
+
+  it("allows read-only Codex shell aliases using command/cmd input shapes", async () => {
+    for (const [toolName, rawInput] of [
+      ["shell", { command: "ls -la" }],
+      ["exec_command", { cmd: "gh pr view 240" }],
+      ["functions.exec_command", "git log --oneline -3"],
+    ] as const) {
+      const stderr = bufferStream();
+      const result = await runPackHookCodexPreToolUseCli({
+        manifest: manifestWithPack(),
+        stdin: readableFromString(
+          event({ tool_name: toolName, raw_input: rawInput }),
+        ),
+        stderr: stderr.stream,
+        reportsDir: path.join(tmp, "no-reports"),
+        generatedDir: path.join(tmp, `harness.generated-${toolName}`),
+        ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+      });
+      expect(result.blocked).toBe(false);
+      expect(result.exitCode).toBe(0);
+      expect(stderr.read()).toMatch(/read-only Bash command, allowing/);
+    }
+  });
+
+  it("blocks a mutating Codex shell command even with the classifier in place", async () => {
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        event({ tool_name: "exec_command", raw_input: { cmd: "git push origin master" } }),
+      ),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.exitCode).toBe(2);
+    expect(stderr.read()).toMatch(/BLOCK: no approval marker/);
+  });
+
+  it("fails closed when raw_input has conflicting command aliases", async () => {
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        event({
+          tool_name: "exec_command",
+          raw_input: { command: "git status", cmd: "git push origin master" },
+        }),
+      ),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.exitCode).toBe(2);
+    expect(stderr.read()).toMatch(/BLOCK: no approval marker/);
+  });
+
+  it("does not apply the Bash classifier to apply_patch", async () => {
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        event({ tool_name: "apply_patch", raw_input: { command: "git status" } }),
+      ),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.exitCode).toBe(2);
+  });
+
   it("blocks with exit 2 + stderr reason when no source approves", async () => {
     const stderr = bufferStream();
     const generatedDir = path.join(tmp, "harness.generated");
