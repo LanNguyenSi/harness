@@ -50,7 +50,7 @@ export interface MemoryOptions {
    * spawnSync probe at CLI invocation. Returning `null` is treated as
    * "version probe failed" and emits a warn line.
    */
-  versionProbe?: (cmd: string[]) => string | null;
+  versionProbe?: (cmd: readonly string[]) => string | null;
 }
 
 function expandHome(p: string, home: string): string {
