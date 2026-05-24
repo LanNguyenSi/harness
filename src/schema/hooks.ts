@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { NUMERIC_VERSION_MESSAGE, NUMERIC_VERSION_PATTERN } from "../io/version-compare.js";
+
 export const HookEventSchema = z.enum([
   "SessionStart",
   "UserPromptSubmit",
@@ -34,7 +36,11 @@ export const HookSchema = z
     // `~/.claude/hooks/foo.sh`), so there is no useful default for
     // `version_command` and a min_version-without-command is treated as a
     // config error.
-    min_version: z.string().min(1).optional(),
+    min_version: z
+      .string()
+      .min(1)
+      .regex(NUMERIC_VERSION_PATTERN, NUMERIC_VERSION_MESSAGE)
+      .optional(),
     version_command: z.array(z.string().min(1)).min(1).optional(),
   })
   .strict()

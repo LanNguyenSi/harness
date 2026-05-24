@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { NUMERIC_VERSION_MESSAGE, NUMERIC_VERSION_PATTERN } from "../io/version-compare.js";
+
 const CommandSchema = z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]);
 
 export const McpHealthSchema = z
@@ -16,7 +18,11 @@ export const McpServerSchema = z
     env: z.record(z.string()).optional(),
     health: McpHealthSchema.optional(),
     enabled: z.boolean().default(true),
-    min_version: z.string().min(1).optional(),
+    min_version: z
+      .string()
+      .min(1)
+      .regex(NUMERIC_VERSION_PATTERN, NUMERIC_VERSION_MESSAGE)
+      .optional(),
     version_command: z.array(z.string().min(1)).min(1).optional(),
   })
   .strict();
@@ -25,7 +31,11 @@ export const CliToolSchema = z
   .object({
     name: z.string().min(1),
     binary: z.string().min(1),
-    min_version: z.string().min(1).optional(),
+    min_version: z
+      .string()
+      .min(1)
+      .regex(NUMERIC_VERSION_PATTERN, NUMERIC_VERSION_MESSAGE)
+      .optional(),
     version_command: z.array(z.string().min(1)).min(1).optional(),
     required: z.boolean().default(false),
   })
