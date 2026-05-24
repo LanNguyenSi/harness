@@ -24,7 +24,7 @@ import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
 import { loadManifest, resolvePaths, type LoaderOptions } from "../loader.js";
 
 export interface ApproveRiskOptions extends LoaderOptions {
-  /** Explicit session id (overrides $CLAUDE_SESSION_ID / $CODEX_SESSION_ID). */
+  /** Explicit session id (overrides $CLAUDE_CODE_SESSION_ID / $CLAUDE_SESSION_ID / $CODEX_SESSION_ID). */
   session?: string;
   /** Override the harness.generated/ directory (test injection). */
   generatedDir?: string;
@@ -40,7 +40,12 @@ export interface ApproveRiskOptions extends LoaderOptions {
 export interface ApproveRiskResult {
   sessionId: string;
   /** Where `sessionId` came from — surfaced so the operator can sanity-check it. */
-  sessionSource: "flag" | "env-claude" | "env-codex" | "pending-approval";
+  sessionSource:
+    | "flag"
+    | "env-claude-code"
+    | "env-claude"
+    | "env-codex"
+    | "pending-approval";
   ledger: { ok: boolean; tag: string; reason?: string };
 }
 
@@ -84,10 +89,12 @@ async function writeLedgerTag(
 /**
  * Resolve the target session id and write its `risk-approved:` ledger
  * tag. Session id precedence mirrors `harness approve understanding`
- * tiers 1-4: explicit `--session`, then `$CLAUDE_SESSION_ID`, then
- * `$CODEX_SESSION_ID`, then the `.pending-approval` file the gate hook
- * staged on its last block. There is no persisted-report tier-5 guess:
- * the Risk Gate produces no persisted reports.
+ * tiers 1-4: explicit `--session`, then `$CLAUDE_CODE_SESSION_ID`
+ * (the var Claude Code itself sets), then `$CLAUDE_SESSION_ID` (legacy
+ * / docs name), then `$CODEX_SESSION_ID`, then the `.pending-approval`
+ * file the gate hook staged on its last block. There is no
+ * persisted-report tier-5 guess: the Risk Gate produces no persisted
+ * reports.
  *
  * Throws `HarnessExitError(EX_FAIL)` when no session id can be resolved.
  * A degraded ledger (grounding-mcp absent / unreachable) is surfaced in
@@ -109,6 +116,16 @@ export async function approveRisk(
   if (typeof opts.session === "string" && opts.session.length > 0) {
     sessionId = opts.session;
     sessionSource = "flag";
+  } else if (
+    typeof process.env.CLAUDE_CODE_SESSION_ID === "string" &&
+    process.env.CLAUDE_CODE_SESSION_ID.length > 0
+  ) {
+    // Canonical: the var Claude Code actually exports into the agent
+    // shell. Read before the legacy $CLAUDE_SESSION_ID so an operator
+    // who has both set (e.g. a manual export plus the runtime export)
+    // gets the runtime's id, not whatever they typed by hand.
+    sessionId = process.env.CLAUDE_CODE_SESSION_ID;
+    sessionSource = "env-claude-code";
   } else if (
     typeof process.env.CLAUDE_SESSION_ID === "string" &&
     process.env.CLAUDE_SESSION_ID.length > 0
@@ -132,7 +149,9 @@ export async function approveRisk(
   if (sessionId === "") {
     throw new HarnessExitError(
       [
-        "no session id available. Pass --session <id>, or set $CLAUDE_SESSION_ID / $CODEX_SESSION_ID.",
+        "no session id available. Pass --session <id>, or set one of",
+        "$CLAUDE_CODE_SESSION_ID (Claude Code) / $CLAUDE_SESSION_ID (legacy) /",
+        "$CODEX_SESSION_ID (Codex).",
         "",
         "The understanding-gate PreToolUse hook and `harness preflight` both stage the",
         `session id in ${generatedDir}/.pending-approval, so an arg-less`,
@@ -140,7 +159,7 @@ export async function approveRisk(
         "neither has run for the current session yet.",
         "",
         "From inside the running agent you can also read the id directly:",
-        "Claude Code exposes $CLAUDE_SESSION_ID; Codex exposes $CODEX_SESSION_ID.",
+        "Claude Code exposes $CLAUDE_CODE_SESSION_ID; Codex exposes $CODEX_SESSION_ID.",
       ].join("\n"),
       EX_FAIL,
     );

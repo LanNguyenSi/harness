@@ -1216,7 +1216,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .option("--project <name>", "apply per-project overrides")
     .option(
       "--session <id>",
-      "explicit session id (default: $CLAUDE_SESSION_ID)",
+      "explicit session id (default: $CLAUDE_CODE_SESSION_ID, then $CLAUDE_SESSION_ID, then $CODEX_SESSION_ID, then staged .pending-approval, then newest pending Understanding Report)",
     )
     .option(
       "--task <ids...>",
@@ -1249,13 +1249,15 @@ export function buildProgram(opts: RunOptions = {}): Command {
         const sourceNote =
           result.sessionSource === "pending-approval"
             ? " (resolved from .pending-approval staged by the gate hook)"
-            : result.sessionSource === "env-claude"
-              ? " (from $CLAUDE_SESSION_ID)"
-              : result.sessionSource === "env-codex"
-                ? " (from $CODEX_SESSION_ID)"
-                : result.sessionSource === "newest-report"
-                  ? " (GUESSED from the newest pending Understanding Report)"
-                  : "";
+            : result.sessionSource === "env-claude-code"
+              ? " (from $CLAUDE_CODE_SESSION_ID)"
+              : result.sessionSource === "env-claude"
+                ? " (from $CLAUDE_SESSION_ID)"
+                : result.sessionSource === "env-codex"
+                  ? " (from $CODEX_SESSION_ID)"
+                  : result.sessionSource === "newest-report"
+                    ? " (GUESSED from the newest pending Understanding Report)"
+                    : "";
         lines.push(`session: ${result.sessionId}${sourceNote}`);
         if (result.sessionSource === "newest-report") {
           // Tier-5 is a guess: no --session, no env var, no gate-staged
@@ -1266,7 +1268,8 @@ export function buildProgram(opts: RunOptions = {}): Command {
           // trusting a marker that may approve the wrong session.
           lines.push("");
           lines.push("⚠ WARNING: the session id was GUESSED, not confirmed. There was no");
-          lines.push("  --session flag, no $CLAUDE_SESSION_ID / $CODEX_SESSION_ID, and no");
+          lines.push("  --session flag, no $CLAUDE_CODE_SESSION_ID / $CLAUDE_SESSION_ID /");
+          lines.push("  $CODEX_SESSION_ID, and no");
           lines.push("  gate-staged .pending-approval, so it was read from the newest pending");
           lines.push("  Understanding Report:");
           if (result.newestReportPath) {
@@ -1274,7 +1277,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
           }
           lines.push("  If that is not your live session, the marker above approves the wrong");
           lines.push("  session and the gate stays blocked. Confirm the id matches the running");
-          lines.push("  agent ($CLAUDE_SESSION_ID / $CODEX_SESSION_ID); if it differs, re-run");
+          lines.push("  agent ($CLAUDE_CODE_SESSION_ID / $CLAUDE_SESSION_ID / $CODEX_SESSION_ID); if it differs, re-run");
           lines.push("  with --session <live-id>.");
         }
         if (result.marker.ok) {
@@ -1338,7 +1341,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .option("--project <name>", "apply per-project overrides")
     .option(
       "--session <id>",
-      "explicit session id (default: $CLAUDE_SESSION_ID, then $CODEX_SESSION_ID, then staged .pending-approval)",
+      "explicit session id (default: $CLAUDE_CODE_SESSION_ID, then $CLAUDE_SESSION_ID, then $CODEX_SESSION_ID, then staged .pending-approval)",
     )
     .action(
       async (options: { config?: string; project?: string; session?: string }) => {
@@ -1351,11 +1354,13 @@ export function buildProgram(opts: RunOptions = {}): Command {
         const sourceNote =
           result.sessionSource === "pending-approval"
             ? " (resolved from .pending-approval staged by the gate hook)"
-            : result.sessionSource === "env-claude"
-              ? " (from $CLAUDE_SESSION_ID)"
-              : result.sessionSource === "env-codex"
-                ? " (from $CODEX_SESSION_ID)"
-                : "";
+            : result.sessionSource === "env-claude-code"
+              ? " (from $CLAUDE_CODE_SESSION_ID)"
+              : result.sessionSource === "env-claude"
+                ? " (from $CLAUDE_SESSION_ID)"
+                : result.sessionSource === "env-codex"
+                  ? " (from $CODEX_SESSION_ID)"
+                  : "";
         lines.push(`session: ${result.sessionId}${sourceNote}`);
         if (result.ledger.ok) {
           lines.push(`ledger:  ✓ wrote ${result.ledger.tag}`);
