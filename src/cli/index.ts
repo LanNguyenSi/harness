@@ -1224,6 +1224,10 @@ export function buildProgram(opts: RunOptions = {}): Command {
     )
     .option("--reports-dir <path>", "override the persisted-report directory (default: ./.understanding-gate/reports)")
     .option("--approved-by <actor>", "actor to record on the persisted report (default: harness-approve-cli)")
+    .option(
+      "--force",
+      "bypass approve-time report validation (priorArt enforcement on grill_me reports). Writes the marker / ledger / report-flip anyway and stamps the ledger tag with `:forced:<field>` so audit can distinguish forced approvals from clean ones. Emergency-unblock path: default refuses the marker when a grill_me report fails validation.",
+    )
     .action(
       async (options: {
         config?: string;
@@ -1232,6 +1236,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         task?: string[];
         reportsDir?: string;
         approvedBy?: string;
+        force?: boolean;
       }) => {
         const cliOpts: Parameters<typeof approveUnderstanding>[0] = {};
         if (options.config) cliOpts.configPath = options.config;
@@ -1242,6 +1247,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         if (options.task && options.task.length > 0) cliOpts.tasks = options.task;
         if (options.reportsDir) cliOpts.reportsDir = options.reportsDir;
         if (options.approvedBy) cliOpts.approvedBy = options.approvedBy;
+        if (options.force) cliOpts.force = true;
         const result = await approveUnderstanding(cliOpts);
         const lines: string[] = [];
         // Annotate non-explicit session sources so the operator can spot
@@ -1326,7 +1332,46 @@ export function buildProgram(opts: RunOptions = {}): Command {
         } else {
           lines.push(`report:  ⚠ skipped (${result.persistedReport.reason})`);
         }
+        // Surface the validation outcome explicitly. Three cases:
+        //   - ok: report was loaded and structurally compliant for its mode.
+        //   - failure-enforced: short-circuited, no writes ran. Hard error.
+        //   - failure-forced: writes ran, ledger tag carries `:forced:`.
+        //   - skipped: no report loaded; nothing to validate.
+        const v = result.validation;
+        if ("ok" in v && v.ok) {
+          lines.push(`validation: ✓ ${v.mode ?? "(no mode)"} report passed structural checks`);
+        } else if ("ok" in v && v.ok === false) {
+          if (v.enforced) {
+            lines.push(
+              `validation: ✗ ${v.field} FAILED: ${v.reason}`,
+            );
+            lines.push("  the marker was NOT written; the gate stays closed.");
+            lines.push(
+              "  pass --force to bypass this check (the ledger tag will be stamped `:forced:<field>` for audit).",
+            );
+          } else {
+            lines.push(
+              `validation: ⚠ ${v.field} failed but --force bypassed (${v.reason})`,
+            );
+            lines.push(
+              "  the marker IS written; the ledger tag carries a `:forced:` suffix for audit.",
+            );
+          }
+        }
         stdout(`${lines.join("\n")}\n`);
+
+        // Non-zero exit when validation refused the approval. Throwing
+        // HarnessExitError reaches the CLI entrypoint's catch-all and
+        // surfaces both the lines above and the chosen exit code so the
+        // operator sees the rejection and shell pipelines (`&&`,
+        // CI guards) can react.
+        if ("ok" in v && v.ok === false && v.enforced) {
+          throw new HarnessExitError(
+            `approve refused: ${v.field} validation failed. ` +
+              `Run with --force to bypass (the ledger tag will be stamped \`:forced:${v.field}\` for audit).`,
+            EX_FAIL,
+          );
+        }
       },
     );
 

@@ -1189,6 +1189,274 @@ describe("harness approve understanding — CLI --task option", () => {
     expect(taskOpt, "--task option should be registered").toBeDefined();
     expect(taskOpt?.variadic, "--task should be variadic for batch pre-approval").toBe(true);
   });
+
+  it("declares --force as a non-variadic boolean option", () => {
+    const program = buildProgram();
+    const approve = program.commands.find((c) => c.name() === "approve");
+    const understanding = approve?.commands.find((c) => c.name() === "understanding");
+    const forceOpt = understanding?.options.find((o) => o.long === "--force");
+    expect(forceOpt, "--force option should be registered").toBeDefined();
+    expect(forceOpt?.variadic).toBeFalsy();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Approve-time content validation: priorArt enforcement on grill_me reports.
+// The dogfood loop (2026-05-24, session eff67763-…) found that the approve
+// CLI was writing the marker without re-checking the report against any
+// structural rule. v1 enforces the one rule the dogfood made concrete:
+// a `grill_me` report must declare a non-empty priorArt list with no
+// literal `- None`. `fast_confirm` reports are exempt (the relaxed schema
+// drops priorArt from `required`). `--force` bypasses with audit.
+// ─────────────────────────────────────────────────────────────────────
+
+describe("approveUnderstanding — approve-time validation (priorArt on grill_me)", () => {
+  function generatedDirFor(): string {
+    return path.join(tmp, "harness.generated");
+  }
+
+  function approvalMarkerPath(sessionId: string): string {
+    return path.join(generatedDirFor(), ".approvals", sessionId);
+  }
+
+  it("rejects a grill_me report whose priorArt field is missing", async () => {
+    const filePath = writeReport("rpt.json", {
+      sessionId: "sess-1",
+      mode: "grill_me",
+      approvalStatus: "pending",
+      // NO priorArt field.
+    });
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-1",
+      reportsDir: tmp,
+      generatedDir: generatedDirFor(),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+
+    expect(result.marker.ok).toBe(false);
+    if (result.marker.ok) return;
+    expect(result.marker.reason).toMatch(/priorArt/);
+    expect(result.ledger.ok).toBe(false);
+    expect(result.persistedReport.ok).toBe(false);
+    // The validation field carries the structured failure.
+    expect("ok" in result.validation && result.validation.ok).toBe(false);
+    if ("ok" in result.validation && result.validation.ok === false) {
+      expect(result.validation.field).toBe("priorArt");
+      expect(result.validation.enforced).toBe(true);
+    }
+    // No marker file on disk.
+    expect(fs.existsSync(approvalMarkerPath("sess-1"))).toBe(false);
+    // Report NOT flipped to approved.
+    const after = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+    expect(after.approvalStatus).toBe("pending");
+  });
+
+  it("rejects a grill_me report whose priorArt is an empty array", async () => {
+    writeReport("rpt.json", {
+      sessionId: "sess-1",
+      mode: "grill_me",
+      priorArt: [],
+      approvalStatus: "pending",
+    });
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-1",
+      reportsDir: tmp,
+      generatedDir: generatedDirFor(),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+
+    expect(result.marker.ok).toBe(false);
+    if (result.marker.ok) return;
+    expect(result.marker.reason).toMatch(/priorArt/);
+    expect(fs.existsSync(approvalMarkerPath("sess-1"))).toBe(false);
+  });
+
+  it("rejects a grill_me report whose priorArt is entirely literal `- None`", async () => {
+    writeReport("rpt.json", {
+      sessionId: "sess-1",
+      mode: "grill_me",
+      priorArt: ["- None"],
+      approvalStatus: "pending",
+    });
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-1",
+      reportsDir: tmp,
+      generatedDir: generatedDirFor(),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+
+    expect(result.marker.ok).toBe(false);
+    if (result.marker.ok) return;
+    expect(result.marker.reason).toMatch(/None/i);
+  });
+
+  it("accepts a grill_me report with a mixed priorArt list (some None, some real entries)", async () => {
+    // Mixed signal — there is substance, so v1 lets it through. Only
+    // a list that is ENTIRELY the None placeholder is rejected.
+    writeReport("rpt.json", {
+      sessionId: "sess-1",
+      mode: "grill_me",
+      priorArt: ["checked npm: nothing matches", "None"],
+      approvalStatus: "pending",
+    });
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-1",
+      reportsDir: tmp,
+      generatedDir: generatedDirFor(),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.marker.ok).toBe(true);
+    expect("ok" in result.validation && result.validation.ok).toBe(true);
+  });
+
+  it("rejects a grill_me report with an empty-string priorArt item", async () => {
+    writeReport("rpt.json", {
+      sessionId: "sess-1",
+      mode: "grill_me",
+      priorArt: ["a real entry", "   "],
+      approvalStatus: "pending",
+    });
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-1",
+      reportsDir: tmp,
+      generatedDir: generatedDirFor(),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.marker.ok).toBe(false);
+  });
+
+  it("approves cleanly when grill_me priorArt is a non-empty list of real entries", async () => {
+    const filePath = writeReport("rpt.json", {
+      sessionId: "sess-1",
+      mode: "grill_me",
+      priorArt: [
+        "Channels checked: npm, MCP directory, local repos",
+        "Closest existing: none — first iteration",
+        "Judgment: build new",
+      ],
+      approvalStatus: "pending",
+    });
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-1",
+      reportsDir: tmp,
+      generatedDir: generatedDirFor(),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+
+    expect(result.marker.ok).toBe(true);
+    expect(result.persistedReport.ok).toBe(true);
+    expect("ok" in result.validation && result.validation.ok).toBe(true);
+    if ("ok" in result.validation && result.validation.ok) {
+      expect(result.validation.mode).toBe("grill_me");
+    }
+    // Marker file present, ledger tag intact (no `:forced:` suffix).
+    expect(fs.existsSync(approvalMarkerPath("sess-1"))).toBe(true);
+    expect(result.ledger.tag).toBe("understanding-approved:sess-1");
+    const after = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+    expect(after.approvalStatus).toBe("approved");
+  });
+
+  it("approves a fast_confirm report without priorArt (no regression)", async () => {
+    writeReport("rpt.json", {
+      sessionId: "sess-1",
+      mode: "fast_confirm",
+      approvalStatus: "pending",
+      // NO priorArt — fast_confirm schema does not require it.
+    });
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-1",
+      reportsDir: tmp,
+      generatedDir: generatedDirFor(),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.marker.ok).toBe(true);
+    expect(result.persistedReport.ok).toBe(true);
+    expect("ok" in result.validation && result.validation.ok).toBe(true);
+    if ("ok" in result.validation && result.validation.ok) {
+      expect(result.validation.mode).toBe("fast_confirm");
+    }
+  });
+
+  it("approves a legacy report without `mode` field (lenient on pre-v0.4.0 reports)", async () => {
+    // Reports written before the mode field was introduced get a null
+    // mode at parse time; validation must waive enforcement so the
+    // schema bump does not retroactively reject historical reports.
+    writeReport("rpt.json", {
+      sessionId: "sess-1",
+      // NO mode field, NO priorArt.
+      approvalStatus: "pending",
+    });
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-1",
+      reportsDir: tmp,
+      generatedDir: generatedDirFor(),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.marker.ok).toBe(true);
+    expect("ok" in result.validation && result.validation.ok).toBe(true);
+  });
+
+  it("--force bypasses validation, writes the marker, and stamps the ledger tag with `:forced:<field>`", async () => {
+    const filePath = writeReport("rpt.json", {
+      sessionId: "sess-1",
+      mode: "grill_me",
+      approvalStatus: "pending",
+      // NO priorArt.
+    });
+    const ledgerCalls: Array<{ sessionId: string; content: string }> = [];
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-1",
+      force: true,
+      reportsDir: tmp,
+      generatedDir: generatedDirFor(),
+      ledgerAdd: async (sessionId, content) => {
+        ledgerCalls.push({ sessionId, content });
+        return { ok: true };
+      },
+    });
+
+    expect(result.marker.ok).toBe(true);
+    expect(result.persistedReport.ok).toBe(true);
+    // Validation is NOT-ok but `enforced: false` because --force was set.
+    expect("ok" in result.validation && result.validation.ok).toBe(false);
+    if ("ok" in result.validation && result.validation.ok === false) {
+      expect(result.validation.enforced).toBe(false);
+      expect(result.validation.field).toBe("priorArt");
+    }
+    // Ledger tag carries the audit suffix.
+    expect(result.ledger.tag).toBe("understanding-approved:sess-1:forced:priorArt");
+    expect(ledgerCalls).toEqual([
+      {
+        sessionId: "sess-1",
+        content: "understanding-approved:sess-1:forced:priorArt",
+      },
+    ]);
+    // Marker file present + report flipped to approved.
+    expect(fs.existsSync(approvalMarkerPath("sess-1"))).toBe(true);
+    const after = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+    expect(after.approvalStatus).toBe("approved");
+  });
+
+  it("marks validation as skipped when no report is loaded (ledger-only path)", async () => {
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-1",
+      reportsDir: tmp,
+      generatedDir: generatedDirFor(),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.marker.ok).toBe(true);
+    expect("skipped" in result.validation && result.validation.skipped).toBe(true);
+  });
 });
 
 describe("approveUnderstanding — report sessionId binding (harness/0dce3880 friction #1)", () => {
