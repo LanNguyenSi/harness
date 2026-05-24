@@ -38,7 +38,7 @@ import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
 import { loadManifest, resolvePaths, type LoaderOptions } from "../loader.js";
 
 export interface ApproveUnderstandingOptions extends LoaderOptions {
-  /** Explicit session id (overrides $CLAUDE_SESSION_ID). */
+  /** Explicit session id (overrides $CLAUDE_CODE_SESSION_ID / $CLAUDE_SESSION_ID / $CODEX_SESSION_ID). */
   session?: string;
   /**
    * Optional agent-tasks task id (harness/1ee26e77). When set, an
@@ -100,6 +100,7 @@ export interface ApproveUnderstandingResult {
    */
   sessionSource:
     | "flag"
+    | "env-claude-code"
     | "env-claude"
     | "env-codex"
     | "pending-approval"
@@ -331,13 +332,19 @@ export async function approveUnderstanding(
 
   // Session id resolution, in precedence order:
   //   1. explicit --session flag
-  //   2. $CLAUDE_SESSION_ID (set inside a live Claude Code session)
-  //   3. $CODEX_SESSION_ID (set inside a live Codex session — symmetric
-  //      with the Codex pre-tool-use hook's own env fallback)
-  //   4. the `.pending-approval` file the gate hook staged on its last
+  //   2. $CLAUDE_CODE_SESSION_ID — the canonical Claude Code env, the
+  //      variable Claude Code itself exports into the agent shell. Read
+  //      first so the runtime's id wins over a manually exported legacy
+  //      $CLAUDE_SESSION_ID that may not match.
+  //   3. $CLAUDE_SESSION_ID — legacy / docs-name peer, kept for the
+  //      Codex pre-tool-use hook's own fallback chain and for operators
+  //      who set it by hand in older `!`-shell recipes.
+  //   4. $CODEX_SESSION_ID (set inside a live Codex session — symmetric
+  //      with the Codex pre-tool-use hook's own env fallback).
+  //   5. the `.pending-approval` file the gate hook staged on its last
   //      block — this is what makes an arg-less `harness approve` work
   //      from the operator's `!`-shell, where neither of the above is set.
-  //   5. the freshest persisted Understanding Report under <reportsDir>
+  //   6. the freshest persisted Understanding Report under <reportsDir>
   //      whose JSON `sessionId` field is non-null. Runtime-neutral
   //      fallback when the gate has not blocked yet (e.g. arg-less
   //      approval right after the agent produced an Understanding Report,
@@ -359,6 +366,12 @@ export async function approveUnderstanding(
   if (typeof opts.session === "string" && opts.session.length > 0) {
     sessionId = opts.session;
     sessionSource = "flag";
+  } else if (
+    typeof process.env.CLAUDE_CODE_SESSION_ID === "string" &&
+    process.env.CLAUDE_CODE_SESSION_ID.length > 0
+  ) {
+    sessionId = process.env.CLAUDE_CODE_SESSION_ID;
+    sessionSource = "env-claude-code";
   } else if (
     typeof process.env.CLAUDE_SESSION_ID === "string" &&
     process.env.CLAUDE_SESSION_ID.length > 0
@@ -402,17 +415,20 @@ export async function approveUnderstanding(
   }
 
   if (sessionId === "") {
-    // Reaching here means: no --session flag, no $CLAUDE_SESSION_ID /
-    // $CODEX_SESSION_ID env, no staged `.pending-approval`, AND no
-    // `pending` persisted Understanding Report under <reportsDir>
-    // carries a sessionId field. Either the gate has never blocked this
-    // session and the agent never produced a report, or every report is
-    // already approved/expired or sessionId-null (tier 5 only adopts a
-    // fresh `pending` report). Spell out the retrieval paths so the
-    // operator does not have to dig through docs.
+    // Reaching here means: no --session flag, no $CLAUDE_CODE_SESSION_ID
+    // / $CLAUDE_SESSION_ID / $CODEX_SESSION_ID env, no staged
+    // `.pending-approval`, AND no `pending` persisted Understanding
+    // Report under <reportsDir> carries a sessionId field. Either the
+    // gate has never blocked this session and the agent never produced a
+    // report, or every report is already approved/expired or
+    // sessionId-null (tier 6 only adopts a fresh `pending` report).
+    // Spell out the retrieval paths so the operator does not have to
+    // dig through docs.
     throw new HarnessExitError(
       [
-        "no session id available. Pass --session <id>, or set $CLAUDE_SESSION_ID / $CODEX_SESSION_ID.",
+        "no session id available. Pass --session <id>, or set one of",
+        "$CLAUDE_CODE_SESSION_ID (Claude Code) / $CLAUDE_SESSION_ID (legacy) /",
+        "$CODEX_SESSION_ID (Codex).",
         "",
         `Both the understanding-gate PreToolUse hook AND \`harness session-start preflight\``,
         "stage the session id in",
@@ -431,7 +447,7 @@ export async function approveUnderstanding(
         "    so this is the canonical session-id source for both Claude Code",
         "    and Codex runtimes regardless of cwd.",
         "  • From inside the running agent: ask it to print its session id",
-        "    (Claude Code exposes $CLAUDE_SESSION_ID; Codex exposes",
+        "    (Claude Code exposes $CLAUDE_CODE_SESSION_ID; Codex exposes",
         "    $CODEX_SESSION_ID and also prints it in `codex doctor --json`).",
         "",
         "If approve writes the tag but the gate still blocks, the running",

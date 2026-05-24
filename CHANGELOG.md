@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`harness approve` now reads `$CLAUDE_CODE_SESSION_ID`, the variable Claude Code actually exports** (task 058b31a3). Before this change the env-var fallback chain on both `harness approve risk` and `harness approve understanding` only checked `$CLAUDE_SESSION_ID` and `$CODEX_SESSION_ID`. Claude Code exports its session id as `$CLAUDE_CODE_SESSION_ID` (not `$CLAUDE_SESSION_ID`), so an arg-less `harness approve` invoked from inside a Claude Code session never resolved via the env tier: it only worked via `--session` or the hook-staged `.pending-approval` marker. The resolver now reads `$CLAUDE_CODE_SESSION_ID` first (canonical, runtime-exported), then `$CLAUDE_SESSION_ID` (legacy / docs-name peer, back-compat), then `$CODEX_SESSION_ID`, before falling through to `.pending-approval` and (for understanding) the newest pending Understanding Report. The no-session-id error message and the `--session` option help text are rewritten to name the full chain. A new `sessionSource: "env-claude-code"` variant lets the CLI annotate `(from $CLAUDE_CODE_SESSION_ID)` in stdout so a wrong env pick is visible before it lands. Tests in `tests/cli/approve-risk.test.ts` and `tests/cli/approve-understanding.test.ts` cover each env-var path independently and assert documented precedence; hermetic env hygiene additions clear all three vars in beforeEach so an external shell's exports cannot leak into a test run.
+
 ## [0.28.1] - 2026-05-24
 
 **Hotfix: arg-less `harness approve risk` now actually works after a Risk Gate block, and `harness doctor` warns on the misconfiguration that caused the original lockout.** Surfaced during the 0.28.0 release-cut session: a Risk Gate block fired against a routine read-only Bash probe (`--version`), and recovery via `harness approve risk` failed arg-less because the session id was never staged where the operator could read it. Two complementary fixes ship together.

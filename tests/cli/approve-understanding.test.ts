@@ -10,13 +10,36 @@ import { readPendingApproval, writePendingApproval } from "../../src/runtime/pen
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
 let tmp: string;
+// Top-level env hygiene: a global beforeEach clears all three session-id
+// env vars so describe blocks that don't carry their own save/restore
+// (the first one, plus any future block) cannot inherit an export from
+// the operator's interactive shell or the harness CI shell. Describes
+// that DO carry save/restore (the .pending-approval, runtime-neutral,
+// and tier-5 blocks) layer on top: their beforeEach saves whatever this
+// hook just cleared (`undefined`), runs the test, and restores to
+// `undefined` — net effect identical.
+let savedClaudeCodeTop: string | undefined;
+let savedClaudeTop: string | undefined;
+let savedCodexTop: string | undefined;
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ug-approve-"));
+  savedClaudeCodeTop = process.env.CLAUDE_CODE_SESSION_ID;
+  savedClaudeTop = process.env.CLAUDE_SESSION_ID;
+  savedCodexTop = process.env.CODEX_SESSION_ID;
+  delete process.env.CLAUDE_CODE_SESSION_ID;
+  delete process.env.CLAUDE_SESSION_ID;
+  delete process.env.CODEX_SESSION_ID;
 });
 
 afterEach(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
+  if (savedClaudeCodeTop === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+  else process.env.CLAUDE_CODE_SESSION_ID = savedClaudeCodeTop;
+  if (savedClaudeTop === undefined) delete process.env.CLAUDE_SESSION_ID;
+  else process.env.CLAUDE_SESSION_ID = savedClaudeTop;
+  if (savedCodexTop === undefined) delete process.env.CODEX_SESSION_ID;
+  else process.env.CODEX_SESSION_ID = savedCodexTop;
 });
 
 function manifest(): Manifest {
@@ -260,8 +283,12 @@ describe("approveUnderstanding", () => {
   });
 
   it("rejects when no session id is available", async () => {
-    const before = process.env.CLAUDE_SESSION_ID;
+    const beforeClaudeCode = process.env.CLAUDE_CODE_SESSION_ID;
+    const beforeClaude = process.env.CLAUDE_SESSION_ID;
+    const beforeCodex = process.env.CODEX_SESSION_ID;
+    delete process.env.CLAUDE_CODE_SESSION_ID;
     delete process.env.CLAUDE_SESSION_ID;
+    delete process.env.CODEX_SESSION_ID;
     try {
       let caught: unknown;
       try {
@@ -280,7 +307,10 @@ describe("approveUnderstanding", () => {
       expect(caught).toBeInstanceOf(HarnessExitError);
       expect((caught as Error).message).toMatch(/no session id available/);
     } finally {
-      if (before !== undefined) process.env.CLAUDE_SESSION_ID = before;
+      if (beforeClaudeCode !== undefined)
+        process.env.CLAUDE_CODE_SESSION_ID = beforeClaudeCode;
+      if (beforeClaude !== undefined) process.env.CLAUDE_SESSION_ID = beforeClaude;
+      if (beforeCodex !== undefined) process.env.CODEX_SESSION_ID = beforeCodex;
     }
   });
 
@@ -309,16 +339,26 @@ describe("approveUnderstanding", () => {
 });
 
 describe("approveUnderstanding — .pending-approval session resolution (task 33abc147)", () => {
+  let savedClaudeCode: string | undefined;
   let savedEnv: string | undefined;
+  let savedCodex: string | undefined;
 
   beforeEach(() => {
+    savedClaudeCode = process.env.CLAUDE_CODE_SESSION_ID;
     savedEnv = process.env.CLAUDE_SESSION_ID;
+    savedCodex = process.env.CODEX_SESSION_ID;
+    delete process.env.CLAUDE_CODE_SESSION_ID;
     delete process.env.CLAUDE_SESSION_ID;
+    delete process.env.CODEX_SESSION_ID;
   });
 
   afterEach(() => {
+    if (savedClaudeCode === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+    else process.env.CLAUDE_CODE_SESSION_ID = savedClaudeCode;
     if (savedEnv === undefined) delete process.env.CLAUDE_SESSION_ID;
     else process.env.CLAUDE_SESSION_ID = savedEnv;
+    if (savedCodex === undefined) delete process.env.CODEX_SESSION_ID;
+    else process.env.CODEX_SESSION_ID = savedCodex;
   });
 
   it("resolves the session id from .pending-approval when no flag/env is set", async () => {
@@ -463,21 +503,68 @@ describe("approveUnderstanding — runtime-neutral session-id resolution (task f
   // peer of $CLAUDE_SESSION_ID in the env-tier, (b) the freshest
   // persisted report's sessionId field is a tier-5 fallback so the
   // post-Understanding-Report-pre-block window also resolves cleanly.
+  let savedClaudeCode: string | undefined;
   let savedClaude: string | undefined;
   let savedCodex: string | undefined;
 
   beforeEach(() => {
+    savedClaudeCode = process.env.CLAUDE_CODE_SESSION_ID;
     savedClaude = process.env.CLAUDE_SESSION_ID;
     savedCodex = process.env.CODEX_SESSION_ID;
+    delete process.env.CLAUDE_CODE_SESSION_ID;
     delete process.env.CLAUDE_SESSION_ID;
     delete process.env.CODEX_SESSION_ID;
   });
 
   afterEach(() => {
+    if (savedClaudeCode === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+    else process.env.CLAUDE_CODE_SESSION_ID = savedClaudeCode;
     if (savedClaude === undefined) delete process.env.CLAUDE_SESSION_ID;
     else process.env.CLAUDE_SESSION_ID = savedClaude;
     if (savedCodex === undefined) delete process.env.CODEX_SESSION_ID;
     else process.env.CODEX_SESSION_ID = savedCodex;
+  });
+
+  it("resolves $CLAUDE_CODE_SESSION_ID when only the canonical Claude Code var is set", async () => {
+    // Task 058b31a3: Claude Code exports CLAUDE_CODE_SESSION_ID (not
+    // CLAUDE_SESSION_ID) into the agent shell. Resolve it first so an
+    // arg-less `harness approve understanding` from inside Claude Code
+    // never silently falls through to the report-guess tier.
+    process.env.CLAUDE_CODE_SESSION_ID = "sess-claude-code-env";
+    writeReport("rpt.json", {
+      sessionId: "sess-claude-code-env",
+      approvalStatus: "pending",
+    });
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      reportsDir: tmp,
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.sessionId).toBe("sess-claude-code-env");
+    expect(result.sessionSource).toBe("env-claude-code");
+  });
+
+  it("prefers $CLAUDE_CODE_SESSION_ID over $CLAUDE_SESSION_ID when both are set", async () => {
+    // Documented precedence: an operator inside a Claude Code session
+    // who has ALSO manually exported the legacy CLAUDE_SESSION_ID
+    // (e.g. as a workaround for the pre-058b31a3 bug) gets the runtime
+    // value, not their hand-typed one. Prevents the workaround from
+    // shadowing the runtime export after the fix lands.
+    process.env.CLAUDE_CODE_SESSION_ID = "sess-claude-code-env";
+    process.env.CLAUDE_SESSION_ID = "sess-claude-legacy-env";
+    writeReport("rpt.json", {
+      sessionId: "sess-claude-code-env",
+      approvalStatus: "pending",
+    });
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      reportsDir: tmp,
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.sessionId).toBe("sess-claude-code-env");
+    expect(result.sessionSource).toBe("env-claude-code");
   });
 
   it("resolves $CODEX_SESSION_ID when $CLAUDE_SESSION_ID is unset", async () => {
@@ -595,7 +682,7 @@ describe("approveUnderstanding — runtime-neutral session-id resolution (task f
     expect(result.sessionSource).toBe("pending-approval");
   });
 
-  it("no-session error message mentions $CODEX_SESSION_ID and the reports dir, not Claude's transcript path", async () => {
+  it("no-session error message names every accepted env var and the reports dir, not Claude's transcript path", async () => {
     let caught: unknown;
     try {
       await approveUnderstanding({
@@ -609,9 +696,11 @@ describe("approveUnderstanding — runtime-neutral session-id resolution (task f
     }
     expect(caught).toBeInstanceOf(HarnessExitError);
     const msg = (caught as Error).message;
-    // Codex-friendly env hint.
-    expect(msg).toContain("$CODEX_SESSION_ID");
+    // Every accepted env var is named so an operator inside any runtime
+    // can fix the call themselves.
+    expect(msg).toContain("$CLAUDE_CODE_SESSION_ID");
     expect(msg).toContain("$CLAUDE_SESSION_ID");
+    expect(msg).toContain("$CODEX_SESSION_ID");
     // Runtime-neutral discovery: the reports dir + sessionId JSON field.
     expect(msg).toContain("sessionId");
     expect(msg).toContain(path.join(tmp, "no-reports"));
@@ -632,17 +721,22 @@ describe("approveUnderstanding — tier-5 only adopts a pending report (harness/
   // unrelated Codex session and approved THAT session; the live
   // session stayed gated. Tier 5 now only adopts a `pending` report (a
   // fresh, not-yet-consumed gate cycle).
+  let savedClaudeCode: string | undefined;
   let savedClaude: string | undefined;
   let savedCodex: string | undefined;
 
   beforeEach(() => {
+    savedClaudeCode = process.env.CLAUDE_CODE_SESSION_ID;
     savedClaude = process.env.CLAUDE_SESSION_ID;
     savedCodex = process.env.CODEX_SESSION_ID;
+    delete process.env.CLAUDE_CODE_SESSION_ID;
     delete process.env.CLAUDE_SESSION_ID;
     delete process.env.CODEX_SESSION_ID;
   });
 
   afterEach(() => {
+    if (savedClaudeCode === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+    else process.env.CLAUDE_CODE_SESSION_ID = savedClaudeCode;
     if (savedClaude === undefined) delete process.env.CLAUDE_SESSION_ID;
     else process.env.CLAUDE_SESSION_ID = savedClaude;
     if (savedCodex === undefined) delete process.env.CODEX_SESSION_ID;
