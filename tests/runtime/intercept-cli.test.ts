@@ -635,3 +635,149 @@ describe("runInterceptCli — Phase 7 #5: when: evaluation wiring", () => {
     expect(result.blocked).toBe(false);
   });
 });
+
+describe("runInterceptCli — task f1df7c2d: stage .pending-approval on require_approval block", () => {
+  // The Risk Gate sister to the Understanding Gate's pending-approval
+  // staging (hook-pre-tool-use.ts:520-526). Pre-fix, `harness policy
+  // intercept` returned the block JSON for a `require_approval` decision
+  // but never wrote the session id to <generatedDir>/.pending-approval,
+  // so a subsequent arg-less `harness approve risk` failed to resolve
+  // the session id — even though the gate that just fired knew it.
+  // Post-fix, the marker is staged before the block JSON write so an
+  // operator running `harness approve risk` in their `!`-shell picks it
+  // up without `--session=<id>`.
+
+  const DESTROY_CLASSIFIER: RiskClassifier = {
+    name: "dangerous-shell",
+    tool: "Bash",
+    patterns: [
+      {
+        pattern: "terraform\\s+destroy",
+        categories: ["destructive", "infrastructure_change"],
+        severity: "critical",
+      },
+    ],
+  };
+
+  const PROD_RESOLVER: EnvironmentResolver = {
+    name: "production-signals",
+    environment: "production",
+    signals: { env_var_patterns: [{ var: "DATABASE_URL", patterns: ["prod"] }] },
+  };
+
+  const RISK_POLICY: Policy = {
+    name: "gate-prod-destructive",
+    description: "require approval for destructive production actions",
+    trigger: { event: "PreToolUse", match: "Bash" },
+    when: { "environment.name": "production" },
+    requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
+    hook: "h",
+    enforcement: "require_approval",
+  } as Policy;
+
+  const emptyLedger: LedgerClient = {
+    async query() {
+      return { kind: "ok", entries: [] };
+    },
+    async record() {
+      /* no-op */
+    },
+  };
+
+  const destroyEvent = (sessionId: string) =>
+    JSON.stringify({
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "terraform destroy" },
+      session_id: sessionId,
+    });
+
+  let tmpDir: string;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "intercept-staging-"));
+  });
+  afterEach(() => {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
+
+  it("stages .pending-approval with the event session_id on require_approval", async () => {
+    const { stream } = captureStdout();
+    const sessionId = "sess-staging-1";
+    const result = await runInterceptCli({
+      stdin: streamFrom(destroyEvent(sessionId)),
+      stdout: stream,
+      manifest: makeManifest({
+        policies: [RISK_POLICY],
+        classifiers: [DESTROY_CLASSIFIER],
+        resolvers: [PROD_RESOLVER],
+      }),
+      ledger: emptyLedger,
+      env: { DATABASE_URL: "postgres://prod-db/app" },
+      kubeContext: "",
+      kubeNamespace: "",
+      generatedDir: tmpDir,
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.decisions[0]?.outcome).toBe("require_approval");
+    const marker = path.join(tmpDir, ".pending-approval");
+    expect(fs.existsSync(marker)).toBe(true);
+    expect(fs.readFileSync(marker, "utf8").trim()).toBe(sessionId);
+  });
+
+  it("does not stage .pending-approval when no decision is require_approval", async () => {
+    // A deny-only manifest (the Phase 4 review-policy fixture) blocks
+    // but is not recoverable via `harness approve risk`, so the marker
+    // would be a lie. Confirm we skip the write.
+    const { stream } = captureStdout();
+    const mergeEvent = JSON.stringify({
+      hook_event_name: "PreToolUse",
+      tool_name: "mcp__agent-tasks__pull_requests_merge",
+      tool_input: { prNumber: 42 },
+      session_id: "sess-deny-1",
+    });
+    const result = await runInterceptCli({
+      stdin: streamFrom(mergeEvent),
+      stdout: stream,
+      manifest: fakeManifest([REVIEW_POLICY]),
+      ledger: emptyLedger,
+      generatedDir: tmpDir,
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.decisions[0]?.outcome).toBe("deny");
+    const marker = path.join(tmpDir, ".pending-approval");
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it("does not stage when event has no session_id (test/probe path)", async () => {
+    const { stream } = captureStdout();
+    const eventWithoutSession = JSON.stringify({
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "terraform destroy" },
+    });
+    const result = await runInterceptCli({
+      stdin: streamFrom(eventWithoutSession),
+      stdout: stream,
+      manifest: makeManifest({
+        policies: [RISK_POLICY],
+        classifiers: [DESTROY_CLASSIFIER],
+        resolvers: [PROD_RESOLVER],
+      }),
+      ledger: emptyLedger,
+      env: { DATABASE_URL: "postgres://prod-db/app" },
+      kubeContext: "",
+      kubeNamespace: "",
+      generatedDir: tmpDir,
+    });
+
+    expect(result.blocked).toBe(true);
+    const marker = path.join(tmpDir, ".pending-approval");
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+});
