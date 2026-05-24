@@ -102,11 +102,11 @@ describe("resolveGitContext", () => {
     });
   });
 
-  it("resolves repo but empty branch + sha when HEAD is missing", () => {
+  it("returns empty strings when a directory-form .git has no HEAD", () => {
     const root = tmpDir();
     const repo = path.join(root, "no-head");
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
-    expect(resolveGitContext(repo)).toEqual({ repo: "no-head", branch: "", sha: "" });
+    expect(resolveGitContext(repo)).toEqual({ repo: "", branch: "", sha: "" });
   });
 
   it("resolves branch but empty sha when neither loose ref nor packed-refs has it", () => {

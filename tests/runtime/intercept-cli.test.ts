@@ -453,6 +453,20 @@ describe("runInterceptCli — REPO / BRANCH builtins resolve from event.cwd", ()
     enforcement: "block",
   } as Policy;
 
+  const PREFLIGHT_PUSH_POLICY: Policy = {
+    name: "preflight-before-push",
+    description: "gate pushes on a per-branch preflight tag",
+    trigger: { event: "PreToolUse", match: "Bash", bash_match: "git\\s+push" },
+    requires: { ledger_tag: "preflight:${BRANCH}" },
+    hook: "h",
+    enforcement: "block",
+    ux: {
+      cannot: "You cannot push branch ${BRANCH} yet.",
+      required: ["a preflight for ${BRANCH} at the current HEAD"],
+      run: ["harness preflight"],
+    },
+  } as Policy;
+
   const emptyLedger: LedgerClient = {
     async query() {
       return { kind: "ok", entries: [] };
@@ -546,6 +560,172 @@ describe("runInterceptCli — REPO / BRANCH builtins resolve from event.cwd", ()
       if (savedBranch === undefined) delete process.env.HARNESS_BRANCH;
       else process.env.HARNESS_BRANCH = savedBranch;
     }
+  });
+
+  it("uses Codex exec_command raw_input.workdir when event.cwd is absent", async () => {
+    const repo = makeRepoFixture("codex-repo", "feat/codex-workdir");
+    const { stream: out } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "exec_command",
+          raw_input: {
+            cmd: "git push origin feat/codex-workdir",
+            workdir: repo,
+          },
+          session_id: "sess-1",
+        }),
+      ),
+      stdout: out,
+      manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+      ledger: emptyLedger,
+    });
+
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]!.extractValues.CWD).toBe(repo);
+    expect(result.decisions[0]!.extractValues.REPO).toBe("codex-repo");
+    expect(result.decisions[0]!.extractValues.BRANCH).toBe("feat/codex-workdir");
+    expect(result.decisions[0]!.ledgerTag).toBe("preflight:feat/codex-workdir");
+    expect(result.blocked).toBe(true);
+  });
+
+  it("uses Codex functions.exec_command tool_input.workdir when event.cwd is absent", async () => {
+    const repo = makeRepoFixture("codex-functions", "fix/push-gate");
+    const { stream: out } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "functions.exec_command",
+          tool_input: {
+            cmd: "git push origin fix/push-gate",
+            workdir: repo,
+          },
+          session_id: "sess-1",
+        }),
+      ),
+      stdout: out,
+      manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+      ledger: emptyLedger,
+    });
+
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]!.extractValues.CWD).toBe(repo);
+    expect(result.decisions[0]!.extractValues.REPO).toBe("codex-functions");
+    expect(result.decisions[0]!.extractValues.BRANCH).toBe("fix/push-gate");
+    expect(result.decisions[0]!.ledgerTag).toBe("preflight:fix/push-gate");
+    expect(result.blocked).toBe(true);
+  });
+
+  it("uses Codex shell raw_input.workdir when event.cwd is absent", async () => {
+    const repo = makeRepoFixture("codex-shell", "fix/shell-workdir");
+    const { stream: out } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "shell",
+          raw_input: {
+            cmd: "git push origin fix/shell-workdir",
+            workdir: repo,
+          },
+          session_id: "sess-1",
+        }),
+      ),
+      stdout: out,
+      manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+      ledger: emptyLedger,
+    });
+
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]!.extractValues.CWD).toBe(repo);
+    expect(result.decisions[0]!.extractValues.REPO).toBe("codex-shell");
+    expect(result.decisions[0]!.extractValues.BRANCH).toBe("fix/shell-workdir");
+    expect(result.decisions[0]!.ledgerTag).toBe("preflight:fix/shell-workdir");
+    expect(result.blocked).toBe(true);
+  });
+
+  it("uses Bash raw_input.workdir when a Codex adapter reports the shell alias as Bash", async () => {
+    const repo = makeRepoFixture("codex-bash", "fix/bash-workdir");
+    const { stream: out } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          raw_input: {
+            cmd: "git push origin fix/bash-workdir",
+            workdir: repo,
+          },
+          session_id: "sess-1",
+        }),
+      ),
+      stdout: out,
+      manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+      ledger: emptyLedger,
+    });
+
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]!.extractValues.CWD).toBe(repo);
+    expect(result.decisions[0]!.extractValues.REPO).toBe("codex-bash");
+    expect(result.decisions[0]!.extractValues.BRANCH).toBe("fix/bash-workdir");
+    expect(result.decisions[0]!.ledgerTag).toBe("preflight:fix/bash-workdir");
+    expect(result.blocked).toBe(true);
+  });
+
+  it("falls back to Codex sandbox command cwd when the event omits cwd/workdir", async () => {
+    const repo = makeRepoFixture("codex-proc-cwd", "fix/proc-cwd");
+    const { stream: out } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "git push origin fix/proc-cwd" },
+          session_id: "sess-1",
+        }),
+      ),
+      stdout: out,
+      manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+      ledger: emptyLedger,
+      codexCommandCwd: repo,
+    });
+
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]!.extractValues.CWD).toBe(repo);
+    expect(result.decisions[0]!.extractValues.REPO).toBe("codex-proc-cwd");
+    expect(result.decisions[0]!.extractValues.BRANCH).toBe("fix/proc-cwd");
+    expect(result.decisions[0]!.ledgerTag).toBe("preflight:fix/proc-cwd");
+  });
+
+  it("keeps top-level event.cwd ahead of Codex per-call workdir", async () => {
+    const sessionRepo = makeRepoFixture("session-repo", "main");
+    const perCallRepo = makeRepoFixture("per-call-repo", "feat/ignored");
+    const { stream: out } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "exec_command",
+          raw_input: {
+            cmd: "git push origin feat/ignored",
+            workdir: perCallRepo,
+          },
+          session_id: "sess-1",
+          cwd: sessionRepo,
+        }),
+      ),
+      stdout: out,
+      manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+      ledger: emptyLedger,
+    });
+
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]!.extractValues.CWD).toBe(sessionRepo);
+    expect(result.decisions[0]!.extractValues.REPO).toBe("session-repo");
+    expect(result.decisions[0]!.extractValues.BRANCH).toBe("main");
+    expect(result.decisions[0]!.ledgerTag).toBe("preflight:main");
   });
 });
 

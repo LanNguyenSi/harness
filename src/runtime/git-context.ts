@@ -78,6 +78,11 @@ function findGitEntry(startDir: string): GitEntry | null {
       stat = undefined;
     }
     if (stat?.isDirectory()) {
+      try {
+        if (!fs.statSync(path.join(dotGit, "HEAD")).isFile()) return null;
+      } catch {
+        return null;
+      }
       return { worktreeRoot: dir, gitDir: dotGit };
     }
     if (stat?.isFile()) {
