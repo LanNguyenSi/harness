@@ -41,6 +41,15 @@ export interface ApproveUnderstandingOptions extends LoaderOptions {
   /** Explicit session id (overrides $CLAUDE_CODE_SESSION_ID / $CLAUDE_SESSION_ID / $CODEX_SESSION_ID). */
   session?: string;
   /**
+   * Override the approve-time report validation (priorArt enforcement for
+   * `grill_me` reports). Writes the marker / ledger / report-flip anyway
+   * and stamps the ledger tag content with a `:forced:<field>-<reason>`
+   * suffix so the audit trail records the bypass. Emergency-unblock path:
+   * the default refuses the marker when validation fails so an agent
+   * cannot ship a hollow Understanding Report and still get the gate open.
+   */
+  force?: boolean;
+  /**
    * Optional agent-tasks task id (harness/1ee26e77). When set, an
    * additional task-scoped marker file is written at
    * `<generatedDir>/.approvals/task-<taskId>`, in addition to the
@@ -144,6 +153,26 @@ export interface ApproveUnderstandingResult {
         sessionIdStamped: boolean;
       }
     | { ok: false; reason: string };
+  /**
+   * Approve-time content validation of the persisted report. `mode` is
+   * the report's stamped mode field (the schema variant the report is
+   * judged against). `ok: false` means a structural rule the prompt
+   * already declared was violated (today: `grill_me` reports must have
+   * a non-empty priorArt list with no literal `- None`).
+   *
+   * `enforced: false` means the failure was bypassed via `--force`; the
+   * marker / ledger / report-flip still ran, and `ledger.tag` carries a
+   * `:forced:<field>-<reason>` suffix so audit can distinguish forced
+   * approvals from clean ones.
+   *
+   * `skipped: true` means no report was loaded to validate (no `latest`
+   * matched the session, ledger-only path); validation is silently
+   * waived because there is nothing to enforce.
+   */
+  validation:
+    | { ok: true; mode: string | null }
+    | { ok: false; field: string; reason: string; enforced: boolean }
+    | { skipped: true };
 }
 
 const DEFAULT_APPROVED_BY = "harness-approve-cli";
@@ -263,6 +292,83 @@ function findLatestParseError(dir: string, sessionId: string): ParseErrorSummary
     return { filePath: cand.filePath, summary };
   }
   return null;
+}
+
+/**
+ * Approve-time content validation. v1 enforces the one rule the dogfood
+ * loop discovered today (2026-05-24): a `grill_me` Report must declare a
+ * non-empty `priorArt` list with no literal `- None`. The structural
+ * parser in `@lannguyensi/understanding-gate` intentionally stays loose
+ * here (`CHANGELOG.md:18` documents the design: the prompt is the
+ * contract, the parser is structural). The approve CLI is the right
+ * boundary to flip that loose acceptance into hard refusal, so an agent
+ * cannot ship a hollow Understanding Report and still get the gate open.
+ *
+ * Modes that skip validation:
+ *   - `fast_confirm`: schema-relaxed variant (`UNDERSTANDING_REPORT_SCHEMA_FAST_CONFIRM`)
+ *     drops priorArt from `required`, on purpose: fast_confirm is for
+ *     low-stakes prompts where the gate barely fires.
+ *   - missing/unknown mode: legacy reports pre-date the mode field;
+ *     enforcing on them would retroactively invalidate every historical
+ *     report.
+ *
+ * v1 limits the enforced list to `priorArt` because that is the
+ * concrete failure observed in dogfood. Broader schema enforcement
+ * (e.g. empty `derivedTodos`) is a follow-up if the same class of
+ * "agent skipped a required section" failure recurs.
+ */
+type ValidationResult =
+  | { ok: true; mode: string | null }
+  | { ok: false; field: string; reason: string };
+
+function validatePersistedReport(parsed: Record<string, unknown>): ValidationResult {
+  const mode = typeof parsed["mode"] === "string" ? (parsed["mode"] as string) : null;
+  if (mode !== "grill_me") return { ok: true, mode };
+
+  const priorArt = parsed["priorArt"];
+  if (!Array.isArray(priorArt) || priorArt.length === 0) {
+    return {
+      ok: false,
+      field: "priorArt",
+      reason:
+        "grill_me report is missing required Section 10 (Prior Art). " +
+        "The schema requires a non-empty list naming the channels searched " +
+        "and the closest existing solution.",
+    };
+  }
+
+  // Mirror the schema's `items: { type: "string", minLength: 1 }`.
+  for (const item of priorArt) {
+    if (typeof item !== "string" || item.trim().length === 0) {
+      return {
+        ok: false,
+        field: "priorArt",
+        reason:
+          "grill_me report's priorArt contains a non-string or empty item; " +
+          "every entry must be a non-empty string.",
+      };
+    }
+  }
+
+  // Deterrent for the literal `- None` / `None` placeholder. The parser
+  // intentionally accepts these structurally; approve-time is where the
+  // prompt's "do not write `- None`" rule turns into a hard refusal.
+  // Only blocks when EVERY item is the None literal; a mixed list with
+  // real content is accepted.
+  const isNone = (x: unknown): boolean =>
+    typeof x === "string" && ["none", "- none"].includes(x.trim().toLowerCase());
+  if (priorArt.every(isNone)) {
+    return {
+      ok: false,
+      field: "priorArt",
+      reason:
+        "grill_me report's priorArt is entirely literal `None` / `- None`. " +
+        "The section exists to force a written answer to 'should this be " +
+        "built at all'; name the channels searched and the closest existing tool.",
+    };
+  }
+
+  return { ok: true, mode };
 }
 
 function rewriteReportApproved(
@@ -468,6 +574,69 @@ export async function approveUnderstanding(
     /* swallow; ledger write becomes a degraded-ok */
   }
 
+  // Approve-time validation. Resolve the report we would flip BEFORE
+  // writing the marker, so a validation failure can short-circuit every
+  // downstream write. The `latest` + `reports` values are reused later;
+  // we do not list / find twice.
+  const reports = listPersistedReports(reportsDir);
+  const latest = findLatestReportForSession(reports, sessionId, {
+    tolerantFallback: "uncompleted",
+  });
+  let validation: ApproveUnderstandingResult["validation"];
+  if (!latest) {
+    validation = { skipped: true };
+  } else {
+    let parsed: Record<string, unknown> | null = null;
+    try {
+      parsed = JSON.parse(fs.readFileSync(latest.filePath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+    } catch {
+      parsed = null;
+    }
+    if (!parsed) {
+      validation = { skipped: true };
+    } else {
+      const v = validatePersistedReport(parsed);
+      validation = v.ok ? v : { ...v, enforced: !opts.force };
+    }
+  }
+
+  // Short-circuit before any side effect if validation rejects and the
+  // operator did not pass --force. No marker, no ledger tag, no report
+  // flip — the gate stays closed and the audit trail records no
+  // approval. The CLI surfaces this as a hard failure so the operator
+  // does not believe they approved when they didn't.
+  if ("ok" in validation && validation.ok === false && validation.enforced) {
+    // Any --task / --tasks ids the operator passed are dropped on the
+    // floor: pre-approving a batch alongside a session whose own report
+    // failed validation would write task markers for a session that the
+    // gate is still going to refuse. The CLI surfaces this empty array
+    // alongside the rejection so an operator who batched several tasks
+    // can see the batch was NOT pre-approved.
+    return {
+      sessionId,
+      sessionSource,
+      ...(newestReportPath !== undefined ? { newestReportPath } : {}),
+      marker: {
+        ok: false,
+        reason: `validation failed (${validation.field}): ${validation.reason}`,
+      },
+      taskMarkers: [],
+      ledger: {
+        ok: false,
+        tag: approvedLedgerTagFor(sessionId),
+        reason: `skipped: ${validation.field} validation failed`,
+      },
+      persistedReport: {
+        ok: false,
+        reason: `skipped: ${validation.field} validation failed`,
+      },
+      validation,
+    };
+  }
+
   // Write the canonical approval marker first. The gate consults this
   // file (not the ledger) since agent-tasks/88ca4bb3 closed the self-
   // approval backdoor: the agent has direct MCP access to the ledger,
@@ -536,23 +705,23 @@ export async function approveUnderstanding(
     }
   }
 
-  const tag = approvedLedgerTagFor(sessionId);
+  // Ledger tag content: a `--force`-bypass of a validation failure
+  // stamps the bypass into the tag so audit can distinguish a clean
+  // approval from one that overrode a structural rule. The base tag
+  // shape (`understanding-approved:<session>`) stays intact so the gate
+  // matcher still recognises it; the `:forced:<field>` suffix is
+  // additive metadata.
+  const tag =
+    "ok" in validation && validation.ok === false
+      ? `${approvedLedgerTagFor(sessionId)}:forced:${validation.field}`
+      : approvedLedgerTagFor(sessionId);
   const ledgerResult = manifest
     ? await writeLedgerTag(manifest, sessionId, tag, opts)
     : { ok: false as const, reason: "manifest unreadable; skipped ledger write" };
 
-  // Persisted report: flip the latest matching one. `reportsDir` was
-  // resolved up front (alongside session-id tier-5 lookup) so both
-  // paths agree on the same directory.
-  const reports = listPersistedReports(reportsDir);
-  // `tolerantFallback: "uncompleted"` — never adopt a sessionId-null
-  // report that is already `approved` / `expired`. Such a report is
-  // from a prior, finished cycle (often a different task days ago);
-  // flipping it would bind the live session to a stale, unrelated
-  // Understanding Report (harness/0dce3880 friction #1).
-  const latest = findLatestReportForSession(reports, sessionId, {
-    tolerantFallback: "uncompleted",
-  });
+  // Persisted report: flip the latest matching one. `reports` + `latest`
+  // were resolved up front (alongside validation) so both paths agree
+  // on the same artefact.
 
   let persistedReport: ApproveUnderstandingResult["persistedReport"];
   if (!latest) {
@@ -618,5 +787,6 @@ export async function approveUnderstanding(
       ? { ok: true, tag }
       : { ok: false, tag, reason: ledgerResult.reason },
     persistedReport,
+    validation,
   };
 }
