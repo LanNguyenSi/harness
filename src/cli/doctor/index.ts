@@ -512,6 +512,15 @@ function buildRiskGate(manifest: Manifest): RiskGateSection {
   // not error: an operator with an always-on safety net may have
   // declared this on purpose, but the default-template intent is to
   // scope per environment.
+  //
+  // `action.reversible` is intentionally NOT included in the scope-check
+  // below. Its clause semantics differ: `runtime/when-eval.ts` returns
+  // `matched=false` on a null reversibility (the unknown-is-not-safe
+  // branch short-circuits to non-match for that arm specifically), so a
+  // policy with only `action.reversible: false` does NOT fire on every
+  // unclassified command — the clause filters them out. Do not "complete"
+  // this walker by adding `action.reversible`; it would warn on a safe
+  // configuration.
   for (const policy of manifest.policies) {
     if (policy.when === undefined) continue;
     const hasRiskClause =

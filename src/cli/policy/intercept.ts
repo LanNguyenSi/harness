@@ -318,14 +318,19 @@ export async function runInterceptCli(
   });
 
   // Stage the session id for a later arg-less `harness approve risk`
-  // whenever a `require_approval` decision is the reason for the block.
-  // Mirrors the Understanding Gate hook (src/cli/pack/hook-pre-tool-use.ts):
+  // whenever the FIRST blocking decision is `require_approval`. Mirrors
+  // the Understanding Gate hook (src/cli/pack/hook-pre-tool-use.ts):
   // the producer side knows the live session id (it just received it on
   // the hook event), but `harness approve risk` runs from the operator's
   // `!`-shell where `$CLAUDE_SESSION_ID` is unset, so it has to read the
   // marker. `deny` decisions are deliberately not staged: `harness approve
   // risk` cannot unblock a `deny`, and writing a marker the verb cannot
-  // act on would just lie about the recoverability of the block.
+  // act on would just lie about the recoverability of the block. The
+  // "first blocking decision" check (rather than `.some()`) matters when
+  // two `when:`-bearing policies fire on the same event: the runtime's
+  // `intercept()` picks the first blocking decision (`runtime/intercept.ts:511`),
+  // so a `deny`-first / `require_approval`-second order produces an
+  // unrecoverable block; we mustn't stage in that case either.
   //
   // Best-effort: a staging-write failure must never escalate a gate block
   // into a thrown hook error. `resolveGeneratedDir` is skipped (along
@@ -333,11 +338,16 @@ export async function runInterceptCli(
   // exercise the policy logic with injected manifests and no on-disk
   // path, and the test path is also the only place an empty
   // `eventSessionId` is interesting.
+  const firstBlocking = result.decisions.find(
+    (d) =>
+      (d.outcome === "deny" && d.enforcement === "block") ||
+      d.outcome === "require_approval",
+  );
   if (
     result.blockJson &&
     eventSessionId !== undefined &&
     eventSessionId.length > 0 &&
-    result.decisions.some((d) => d.outcome === "require_approval")
+    firstBlocking?.outcome === "require_approval"
   ) {
     const generatedDir = opts.generatedDir
       ?? (manifestPath !== undefined
