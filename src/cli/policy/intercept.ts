@@ -9,6 +9,7 @@ import {
   type LedgerEntry,
   type LedgerQueryResult,
 } from "../../policies/index.js";
+import * as fs from "node:fs";
 import * as os from "node:os";
 import {
   intercept,
@@ -62,6 +63,12 @@ export interface InterceptCliOptions extends LoaderOptions {
   env?: Record<string, string | undefined>;
   kubeContext?: string;
   kubeNamespace?: string;
+  /**
+   * Test seam for Codex's sandbox `--command-cwd` process argument.
+   * Production resolves it from `/proc/1/cmdline` when Codex does not
+   * include a cwd/workdir in the hook event payload.
+   */
+  codexCommandCwd?: string;
 }
 
 export interface InterceptCliResult {
@@ -128,6 +135,52 @@ function isVerboseEnabled(opts: InterceptCliOptions): boolean {
   if (env.length === 0) return false;
   // Accept anything truthy except literal disable-words (case-insensitive).
   return !/^(0|false|no|off)$/i.test(env.trim());
+}
+
+function isCodexShellTool(toolName: unknown): boolean {
+  return (
+    toolName === "Bash" ||
+    toolName === "shell" ||
+    toolName === "exec_command" ||
+    toolName === "functions.exec_command"
+  );
+}
+
+function extractPerCallCwd(input: unknown): string | null {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  const args = input as { cwd?: unknown; workdir?: unknown };
+  for (const candidate of [args.workdir, args.cwd]) {
+    if (typeof candidate === "string" && candidate.length > 0) return candidate;
+  }
+  return null;
+}
+
+function readCodexCommandCwdFromProc(): string | null {
+  let argv: string[];
+  try {
+    argv = fs.readFileSync("/proc/1/cmdline", "utf8").split("\0");
+  } catch {
+    return null;
+  }
+  const idx = argv.indexOf("--command-cwd");
+  const cwd = idx >= 0 ? argv[idx + 1] : undefined;
+  return typeof cwd === "string" && cwd.length > 0 ? cwd : null;
+}
+
+function resolvePolicyCwd(event: ToolEvent, codexCommandCwd?: string): string {
+  if (typeof event.cwd === "string" && event.cwd.length > 0) return event.cwd;
+  if (isCodexShellTool(event.tool_name)) {
+    for (const input of [event.raw_input, event.tool_input, event.input]) {
+      const cwd = extractPerCallCwd(input);
+      if (cwd) return cwd;
+    }
+    if (codexCommandCwd !== undefined && codexCommandCwd.length > 0) {
+      return codexCommandCwd;
+    }
+    const procCwd = readCodexCommandCwdFromProc();
+    if (procCwd) return procCwd;
+  }
+  return process.cwd();
 }
 
 /**
@@ -272,7 +325,7 @@ export async function runInterceptCli(
   // HARNESS_BRANCH env vars that nothing sets, collapsing every tag to the
   // literal `preflight:`. An explicit env var still wins: it is the
   // operator's deliberate override of the derived value.
-  const cwd = typeof event.cwd === "string" ? event.cwd : process.cwd();
+  const cwd = resolvePolicyCwd(event, opts.codexCommandCwd);
   const gitContext = resolveGitContext(cwd);
   const builtins = {
     SESSION_ID: builtinSessionId,
