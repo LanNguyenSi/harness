@@ -135,8 +135,83 @@ describe("generateCodexConfig", () => {
       "# harness hook: policy-intercept-shell (budget_ms=1000)",
     );
     expect(content).toContain(
+      'hooks = [{ type = "command", command = "harness policy intercept --hook policy-intercept-shell", timeout = 2 }]',
+    );
+    expect(content).toContain(
+      'hooks = [{ type = "command", command = "harness policy intercept --hook policy-intercept-agent-tasks", timeout = 2 }]',
+    );
+  });
+
+  it("keeps the 2s policy-intercept floor when budget_ms ceil already meets it", () => {
+    // Guards against a regression where the timeout floor would shadow
+    // (rather than coexist with) a legitimate >=2000ms budget. The
+    // intercept hooks at 2000ms must still surface as timeout=2, not be
+    // floored back down to 2 by accident (Math.max picks the larger).
+    const { content } = generateCodexConfig(
+      parseManifest({
+        version: 1,
+        hooks: [
+          {
+            name: "policy-intercept-shell",
+            event: "PreToolUse",
+            match: "Bash",
+            command: "harness policy intercept",
+            blocking: "hard",
+            budget_ms: 2000,
+          },
+        ],
+      }),
+    );
+    expect(content).toContain(
+      'hooks = [{ type = "command", command = "harness policy intercept --hook policy-intercept-shell", timeout = 2 }]',
+    );
+  });
+
+  it("does NOT append --hook to non-policy-intercept commands", () => {
+    const { content } = generateCodexConfig(
+      parseManifest({
+        version: 1,
+        hooks: [
+          {
+            name: "memory-router-style",
+            event: "UserPromptSubmit",
+            command: "memory-router-user-prompt-submit",
+            blocking: false,
+            budget_ms: 5000,
+          },
+        ],
+      }),
+    );
+    expect(content).toContain(
+      'hooks = [{ type = "command", command = "memory-router-user-prompt-submit", timeout = 5 }]',
+    );
+    expect(content).not.toContain("--hook");
+  });
+
+  it("skips --hook injection when the hook name contains unsafe characters", () => {
+    // Defence: Hook.name schema is z.string().min(1); an exotic value
+    // ("space in name", "weird;name") would otherwise slip into the
+    // emitted command literal and break shell parsing. The fallback is
+    // the un-tagged emission; the preceding TOML comment still names it.
+    const { content } = generateCodexConfig(
+      parseManifest({
+        version: 1,
+        hooks: [
+          {
+            name: "weird;name with space",
+            event: "PreToolUse",
+            match: "Bash",
+            command: "harness policy intercept",
+            blocking: "hard",
+            budget_ms: 1000,
+          },
+        ],
+      }),
+    );
+    expect(content).toContain(
       'hooks = [{ type = "command", command = "harness policy intercept", timeout = 2 }]',
     );
+    expect(content).not.toContain("--hook");
   });
 
   it("converts manifest millisecond budgets to Codex timeout seconds", () => {

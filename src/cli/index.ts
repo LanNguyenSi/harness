@@ -2265,11 +2265,16 @@ export function buildProgram(opts: RunOptions = {}): Command {
       "--verbose",
       "emit a stderr diagnostic block for each non-allow decision (also enabled by HARNESS_POLICY_VERBOSE=1)",
     )
+    .option(
+      "--hook <name>",
+      "manifest hook name (injected by `harness apply` for the Codex projection so failure logs identify which hook fired)",
+    )
     .action(async (options: {
       config?: string;
       project?: string;
       ledgerTimeout?: string;
       verbose?: boolean;
+      hook?: string;
     }) => {
       const cliOpts: Parameters<typeof runInterceptCli>[0] = {};
       if (options.config) cliOpts.configPath = options.config;
@@ -2279,6 +2284,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
       }
       if (options.verbose) cliOpts.verbose = options.verbose;
+      if (options.hook) cliOpts.hookName = options.hook;
       await runInterceptCli(cliOpts);
     });
 

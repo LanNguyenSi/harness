@@ -961,3 +961,146 @@ describe("runInterceptCli — task f1df7c2d: stage .pending-approval on require_
     expect(fs.existsSync(marker)).toBe(false);
   });
 });
+
+describe("runInterceptCli — hookName self-identification", () => {
+  // Codex spawns one process per [[hooks.*]] block and surfaces only a
+  // generic "PreToolUse hook (failed)" string when a process is killed
+  // for timing out. The Codex generator now injects `--hook <name>` into
+  // the command literal so the failing process is identifiable via ps /
+  // audit, AND so the intercept entrypoint can tag every stderr line it
+  // emits with the same name. These tests pin the stderr-prefix contract
+  // for the wire-format and for back-compat (no flag → un-tagged).
+
+  it("tags the no-match hint with [hook=<name>] when hookName is set", async () => {
+    const { stream: out } = captureStream();
+    const { stream: err, output: errOutput } = captureStream();
+    await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "mcp__agent-tasks__pull_requests_merge",
+          tool_input: { prNumber: 42 },
+        }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([REVIEW_POLICY]),
+      hookName: "require-preflight-evidence",
+    });
+    expect(errOutput()).toContain(
+      "harness policy intercept [hook=require-preflight-evidence]: no policy matched event",
+    );
+  });
+
+  it("tags the verbose decision diagnostic with [hook=<name>]", async () => {
+    const denyLedgerLocal: LedgerClient = {
+      async query() {
+        return { kind: "ok", entries: [] };
+      },
+      async record() {
+        /* no-op */
+      },
+    };
+    const { stream: out } = captureStream();
+    const { stream: err, output: errOutput } = captureStream();
+    await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "mcp__agent-tasks__pull_requests_merge",
+          tool_input: { prNumber: 42 },
+          session_id: "sess-1",
+        }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([REVIEW_POLICY]),
+      ledger: denyLedgerLocal,
+      verbose: true,
+      hookName: "require-review-evidence",
+    });
+    expect(errOutput()).toContain(
+      "harness policy intercept [hook=require-review-evidence]: review-before-merge: deny",
+    );
+  });
+
+  it("leaves stderr un-tagged when hookName is absent (back-compat)", async () => {
+    const { stream: out } = captureStream();
+    const { stream: err, output: errOutput } = captureStream();
+    await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "mcp__agent-tasks__pull_requests_merge",
+          tool_input: { prNumber: 42 },
+        }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([REVIEW_POLICY]),
+    });
+    const errText = errOutput();
+    expect(errText).toContain("harness policy intercept: no policy matched event");
+    expect(errText).not.toContain("[hook=");
+  });
+
+  it("tags the malformed-event-JSON stderr with [hook=<name>]", async () => {
+    const { stream: out } = captureStream();
+    const { stream: err, output: errOutput } = captureStream();
+    await runInterceptCli({
+      stdin: streamFrom("{not json"),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([REVIEW_POLICY]),
+      hookName: "require-preflight-push-evidence",
+    });
+    expect(errOutput()).toContain(
+      "harness policy intercept [hook=require-preflight-push-evidence]: malformed event JSON:",
+    );
+  });
+
+  it("tags the manifest-load-failed stderr with [hook=<name>]", async () => {
+    // No `manifest` opt + a bogus configPath forces the loader to throw,
+    // exercising the catch branch in runInterceptCli.
+    const { stream: out } = captureStream();
+    const { stream: err, output: errOutput } = captureStream();
+    await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          session_id: "sess-1",
+        }),
+      ),
+      stdout: out,
+      stderr: err,
+      configPath: "/nonexistent/harness/manifest-xyz.yaml",
+      hookName: "require-preflight-evidence",
+    });
+    expect(errOutput()).toContain(
+      "harness policy intercept [hook=require-preflight-evidence]: manifest load failed:",
+    );
+  });
+
+  it("tags the realLedgerClient audit-write failure with [hook=<name>]", async () => {
+    // Mirror the existing audit-write coverage but pin the hook suffix.
+    const badServer = {
+      name: "grounding-mcp",
+      command: ["/nonexistent-harness-test-binary-xyz"],
+      enabled: true,
+    } as unknown as McpServer;
+    const { stream: err, output: errOutput } = captureStream();
+    const client = realLedgerClient(badServer, {
+      stderr: err,
+      ledgerTimeoutMs: 2000,
+      hookName: "require-review-evidence",
+    });
+    await client.record(
+      makeDecision({ policyName: "review-before-merge" }),
+      "sess-err",
+    );
+    expect(errOutput()).toContain(
+      "harness policy intercept [hook=require-review-evidence]: audit-write failed for review-before-merge",
+    );
+  });
+});
