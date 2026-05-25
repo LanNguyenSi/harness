@@ -409,7 +409,8 @@ policies:
         - "a deliberate operator override: a critical production mutation has no benign reading"
       run:
         - "Choose a non-destructive alternative, or run the command yourself outside the agent."
-        - "Operator override (deliberate): record a risk-override:${SESSION_ID} entry in the evidence ledger."
+        - "Operator override (deliberate): run `harness approve risk --force <reason>` from your own shell (`! ` prefix in Claude Code, with --i-am-the-operator to acknowledge a non-TTY invocation)."
+        - "Session-wide kill switch: run `harness pause --for <duration>` instead (every gate silences until the sentinel expires or `harness resume` runs)."
   - name: gate-prod-destructive-approval
     description: Require operator approval for high-severity destructive shell actions against a production target.
     trigger:

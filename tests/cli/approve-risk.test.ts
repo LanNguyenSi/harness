@@ -211,3 +211,172 @@ describe("approveRisk — degraded + error paths", () => {
     expect(msg).toContain("$CODEX_SESSION_ID");
   });
 });
+
+describe("approveRisk — --force deny-tier override", () => {
+  // The built-in `gate-prod-destructive` policy (templates.ts:465-483) is
+  // deny-tier and requires `risk-override:${SESSION_ID}`. `harness approve
+  // risk` without --force writes `risk-approved:` and therefore cannot
+  // clear that gate (the v0.29.0 release-cut session 2026-05-25 hit this).
+  // --force writes the override tag, gated behind a TTY check + the
+  // --i-am-the-operator escape, so the agent cannot self-override.
+
+  it("writes risk-override:<session>:forced:<reason> under TTY", async () => {
+    const calls: Array<{ sessionId: string; content: string }> = [];
+    const result = await approveRisk({
+      session: "sess-deny",
+      generatedDir: tmpGeneratedDir(),
+      manifest: manifestWithGrounding(),
+      force: { reason: "release-cut node-version probe" },
+      stdinIsTTY: true,
+      ledgerAdd: async (sessionId, content) => {
+        calls.push({ sessionId, content });
+        return { ok: true };
+      },
+    });
+    expect(result.forced).toBe(true);
+    expect(result.ledger).toEqual({
+      ok: true,
+      tag: "risk-override:sess-deny:forced:release-cut-node-version-probe",
+    });
+    expect(calls).toEqual([
+      {
+        sessionId: "sess-deny",
+        content: "risk-override:sess-deny:forced:release-cut-node-version-probe",
+      },
+    ]);
+  });
+
+  it("refuses --force with non-TTY stdin and no --i-am-the-operator", async () => {
+    let caught: unknown;
+    try {
+      await approveRisk({
+        session: "sess-deny",
+        generatedDir: tmpGeneratedDir(),
+        manifest: manifestWithGrounding(),
+        force: { reason: "scripted" },
+        stdinIsTTY: false,
+        ledgerAdd: async () => ({ ok: true }),
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(HarnessExitError);
+    const err = caught as HarnessExitError;
+    // EX_USAGE = 64
+    expect(err.exitCode).toBe(64);
+    expect(err.message).toMatch(/non-TTY stdin/);
+    expect(err.message).toContain("--i-am-the-operator");
+  });
+
+  it("allows --force with non-TTY stdin when --i-am-the-operator is set", async () => {
+    const result = await approveRisk({
+      session: "sess-deny",
+      generatedDir: tmpGeneratedDir(),
+      manifest: manifestWithGrounding(),
+      force: { reason: "scripted recovery" },
+      stdinIsTTY: false,
+      iAmTheOperator: true,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.forced).toBe(true);
+    expect(result.ledger.tag).toBe(
+      "risk-override:sess-deny:forced:scripted-recovery",
+    );
+  });
+
+  it("sanitises an exotic reason into a tag-safe slug", async () => {
+    const result = await approveRisk({
+      session: "sess",
+      generatedDir: tmpGeneratedDir(),
+      manifest: manifestWithGrounding(),
+      // Mixed whitespace, punctuation, capitalisation, semicolons.
+      force: { reason: "Production DB migration; rollback REJECTED!" },
+      stdinIsTTY: true,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.ledger.tag).toBe(
+      "risk-override:sess:forced:production-db-migration-rollback-rejected",
+    );
+  });
+
+  it("falls back to a placeholder slug when reason is only punctuation", async () => {
+    const result = await approveRisk({
+      session: "sess",
+      generatedDir: tmpGeneratedDir(),
+      manifest: manifestWithGrounding(),
+      force: { reason: ";;;!!!" },
+      stdinIsTTY: true,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.ledger.tag).toBe("risk-override:sess:forced:operator-override");
+  });
+
+  it("caps the reason slug at 64 chars", async () => {
+    const longReason = "x".repeat(200);
+    const result = await approveRisk({
+      session: "sess",
+      generatedDir: tmpGeneratedDir(),
+      manifest: manifestWithGrounding(),
+      force: { reason: longReason },
+      stdinIsTTY: true,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    const slug = result.ledger.tag.split(":forced:")[1] ?? "";
+    expect(slug.length).toBe(64);
+    expect(slug).toBe("x".repeat(64));
+  });
+
+  it("default (no --force) keeps writing risk-approved: tag", async () => {
+    // Back-compat guard: the existing require_approval path is unchanged
+    // by the --force addition. forced: false is the load-bearing assertion.
+    const result = await approveRisk({
+      session: "sess-rq",
+      generatedDir: tmpGeneratedDir(),
+      manifest: manifestWithGrounding(),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.forced).toBe(false);
+    expect(result.ledger.tag).toBe("risk-approved:sess-rq");
+  });
+
+  it("--force combined with .pending-approval session source still writes risk-override", async () => {
+    // Pins that the TTY guard fires BEFORE session-id resolution drains the
+    // staged file, AND that the staged-id path still works once unblocked.
+    const dir = tmpGeneratedDir();
+    fs.writeFileSync(path.join(dir, ".pending-approval"), "sess-staged");
+    const result = await approveRisk({
+      generatedDir: dir,
+      manifest: manifestWithGrounding(),
+      force: { reason: "scripted recovery" },
+      stdinIsTTY: false,
+      iAmTheOperator: true,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.sessionId).toBe("sess-staged");
+    expect(result.sessionSource).toBe("pending-approval");
+    expect(result.forced).toBe(true);
+    expect(result.ledger.tag).toBe(
+      "risk-override:sess-staged:forced:scripted-recovery",
+    );
+  });
+
+  it("--force surfaces a degraded ledger writer's failure reason", async () => {
+    // The CLI prints a different stderr branch for "deny-tier override
+    // stays unrecorded" vs the require_approval failure; this pins the
+    // upstream `forced + !ledger.ok` shape the CLI branches on.
+    const result = await approveRisk({
+      session: "sess",
+      generatedDir: tmpGeneratedDir(),
+      manifest: manifestWithGrounding(),
+      force: { reason: "manual" },
+      stdinIsTTY: true,
+      ledgerAdd: async () => ({ ok: false, reason: "grounding-mcp unreachable" }),
+    });
+    expect(result.forced).toBe(true);
+    expect(result.ledger).toEqual({
+      ok: false,
+      tag: "risk-override:sess:forced:manual",
+      reason: "grounding-mcp unreachable",
+    });
+  });
+});

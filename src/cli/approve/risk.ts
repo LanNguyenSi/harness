@@ -20,12 +20,34 @@ import {
   resolveGeneratedDir,
 } from "../../runtime/pending-approval.js";
 import type { Manifest, McpServer } from "../../schema/index.js";
-import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
+import { EX_FAIL, EX_USAGE, HarnessExitError } from "../exit-codes.js";
 import { loadManifest, resolvePaths, type LoaderOptions } from "../loader.js";
 
 export interface ApproveRiskOptions extends LoaderOptions {
   /** Explicit session id (overrides $CLAUDE_CODE_SESSION_ID / $CLAUDE_SESSION_ID / $CODEX_SESSION_ID). */
   session?: string;
+  /**
+   * Operator-deliberate override of a Risk Gate `deny` decision. Writes
+   * `risk-override:${SESSION_ID}:forced:<reason-slug>` instead of the
+   * default `risk-approved:${SESSION_ID}` tag, so the built-in
+   * `gate-prod-destructive` policy (which gates on `risk-override:`,
+   * see `src/cli/init/templates.ts`) clears. `deny` is by design not
+   * approvable, so this path is hard-gated behind operator-only checks:
+   * a TTY stdin OR explicit `iAmTheOperator` acknowledgement is
+   * required, mirroring `harness pause`. The reason becomes part of the
+   * audit trail and is sanitised to a tag-safe slug.
+   */
+  force?: { reason: string };
+  /**
+   * Acknowledge a non-TTY / scripted invocation of `--force`. Without
+   * this flag a non-TTY `--force` refuses with a usage error.
+   */
+  iAmTheOperator?: boolean;
+  /**
+   * Override `process.stdin.isTTY` for tests; mirrors the pause/resume
+   * seam so the non-TTY refusal can be exercised hermetically.
+   */
+  stdinIsTTY?: boolean;
   /** Override the harness.generated/ directory (test injection). */
   generatedDir?: string;
   /** Inject a manifest (test); bypasses `loadManifest`. */
@@ -46,14 +68,75 @@ export interface ApproveRiskResult {
     | "env-claude"
     | "env-codex"
     | "pending-approval";
+  /**
+   * True when the verb wrote a `risk-override:` tag via `--force`
+   * instead of the default `risk-approved:`. The CLI surfaces this so
+   * the operator can see at a glance that they exercised the deny-tier
+   * override, not a clean require_approval approval.
+   */
+  forced: boolean;
   ledger: { ok: boolean; tag: string; reason?: string };
 }
 
 const RISK_APPROVED_PREFIX = "risk-approved";
+const RISK_OVERRIDE_PREFIX = "risk-override";
 
 /** The evidence-ledger tag a Risk Gate `require_approval` policy consults. */
 export function riskApprovedTagFor(sessionId: string): string {
   return `${RISK_APPROVED_PREFIX}:${sessionId}`;
+}
+
+/**
+ * The evidence-ledger tag a Risk Gate `deny`-tier policy with
+ * `requires.ledger_tag: risk-override:${SESSION_ID}` consults. The
+ * `:forced:<reason>` suffix is additive metadata: the built-in
+ * policy's matcher pins the `risk-override:<session>` substring, so the
+ * suffix never affects whether the gate clears. It exists for the
+ * audit trail (`harness audit` can grep `:forced:` to surface every
+ * operator-deliberate override).
+ */
+export function riskOverrideTagFor(sessionId: string, reason: string): string {
+  return `${RISK_OVERRIDE_PREFIX}:${sessionId}:forced:${sanitiseReasonSlug(reason)}`;
+}
+
+/**
+ * Reduce an operator-supplied free-form reason to a tag-safe slug. Keeps
+ * `[A-Za-z0-9._-]`, collapses any other run to a single `-`, trims
+ * leading / trailing `-`, lowercases, caps at 64 chars. An empty result
+ * (e.g. the operator passed only punctuation) is rejected upstream.
+ */
+function sanitiseReasonSlug(reason: string): string {
+  const slug = reason
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+  return slug.length > 0 ? slug : "operator-override";
+}
+
+function refuseForcedIfNonTTY(opts: ApproveRiskOptions): void {
+  if (!opts.force) return;
+  if (opts.iAmTheOperator === true) return;
+  // Deliberate divergence from `harness pause`'s twin guard
+  // (`src/cli/pause/index.ts`'s `refuseIfAgentShell`): this verb is
+  // designed to be runnable from inside `!`-prefixed Claude Code shells
+  // where `$CLAUDE_SESSION_ID` is set (the session-id resolver below
+  // reads it as a fallback tier). Refusing on that env var would gut
+  // the `! ` UX. Operator intent is gated by the non-empty `<reason>`
+  // and the TTY / `--i-am-the-operator` check; that is sufficient.
+  const tty = opts.stdinIsTTY !== undefined ? opts.stdinIsTTY : process.stdin.isTTY === true;
+  if (tty) return;
+  throw new HarnessExitError(
+    [
+      "harness approve risk --force refuses to run with non-TTY stdin (looks scripted).",
+      "",
+      "This is the load-bearing guardrail against `--force` becoming an agent-driven",
+      "bypass of a deny-tier Risk Gate decision. Run the verb from your own operator",
+      "shell (in Claude Code: prefix the command with `! `), or pass --i-am-the-operator",
+      "to acknowledge a one-off recovery script.",
+    ].join("\n"),
+    EX_USAGE,
+  );
 }
 
 function findGroundingMcp(manifest: Manifest): McpServer | null {
@@ -104,6 +187,13 @@ async function writeLedgerTag(
 export async function approveRisk(
   opts: ApproveRiskOptions = {},
 ): Promise<ApproveRiskResult> {
+  // --force is operator-deliberate; guard before any side effect. The
+  // session-id resolution below intentionally still runs the agent-shell
+  // env tier (CLAUDE_CODE_SESSION_ID etc.), since the operator may be
+  // running from `!` with --i-am-the-operator and the session id has to
+  // come from somewhere.
+  refuseForcedIfNonTTY(opts);
+
   const generatedDir =
     opts.generatedDir ??
     resolveGeneratedDir({
@@ -175,7 +265,15 @@ export async function approveRisk(
     /* swallow; ledger write becomes a degraded-ok */
   }
 
-  const tag = riskApprovedTagFor(sessionId);
+  // Forced override writes a different tag prefix (`risk-override:`)
+  // that the deny-tier `gate-prod-destructive` policy template consults.
+  // The audit-only `:forced:<reason>` suffix lets `harness audit` and
+  // `harness explain --trace` distinguish a clean require_approval
+  // approval from a deliberate deny override.
+  const forced = opts.force !== undefined;
+  const tag = forced
+    ? riskOverrideTagFor(sessionId, opts.force!.reason)
+    : riskApprovedTagFor(sessionId);
   const ledgerResult = manifest
     ? await writeLedgerTag(manifest, sessionId, tag, opts)
     : { ok: false as const, reason: "manifest unreadable; skipped ledger write" };
@@ -183,6 +281,7 @@ export async function approveRisk(
   return {
     sessionId,
     sessionSource,
+    forced,
     ledger: ledgerResult.ok
       ? { ok: true, tag }
       : { ok: false, tag, reason: ledgerResult.reason },
