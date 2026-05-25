@@ -131,10 +131,25 @@ function codexTimeoutSeconds(h: Hook): number {
   return Math.max(minimumSeconds, Math.ceil(h.budget_ms / 1000));
 }
 
+// Hook names safe to splice into the emitted command literal as
+// `--hook <name>`. Restricted to a quote/space/metachar-free charset so
+// the projection never produces a shell-broken command, even though the
+// underlying `Hook.name` schema (z.string().min(1)) accepts anything.
+// All policy-pack hook names ship within this charset; an exotic name
+// silently skips the flag and falls back to the un-tagged emission, with
+// the preceding `# harness hook: <name>` TOML comment still naming it.
+const SAFE_HOOK_NAME_RE = /^[A-Za-z0-9._:-]+$/;
+
+function commandWithHookTag(h: Hook): string {
+  if (h.command.trim() !== "harness policy intercept") return h.command;
+  if (!SAFE_HOOK_NAME_RE.test(h.name)) return h.command;
+  return `${h.command} --hook ${h.name}`;
+}
+
 function emitCommandHook(h: Hook): string {
   const fields = [
     `type = "command"`,
-    `command = ${tomlString(h.command)}`,
+    `command = ${tomlString(commandWithHookTag(h))}`,
     `timeout = ${codexTimeoutSeconds(h)}`,
   ];
   return `{ ${fields.join(", ")} }`;

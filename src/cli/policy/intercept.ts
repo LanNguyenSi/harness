@@ -69,6 +69,18 @@ export interface InterceptCliOptions extends LoaderOptions {
    * include a cwd/workdir in the hook event payload.
    */
   codexCommandCwd?: string;
+  /**
+   * Name of the manifest hook that fired this intercept invocation. Set
+   * by the Codex generator (`generate-codex-config.ts`) as the argv flag
+   * `--hook <name>` so every spawned process self-identifies. Used as a
+   * stderr-line prefix and a tag in the no-match hint; when absent the
+   * existing back-compat behaviour (un-tagged stderr) holds. Codex emits
+   * one `[[hooks.*]]` block per manifest hook so the per-hook tag is
+   * unambiguous; the Claude Code generator dedupes by `(command, timeout)`
+   * within a matcher group, so this flag is NOT injected there (it would
+   * defeat the dedupe and N-multiply audit-writes per tool event).
+   */
+  hookName?: string;
 }
 
 export interface InterceptCliResult {
@@ -103,12 +115,22 @@ function safeOs(fn: () => string): string {
 }
 
 /**
+ * Render the hook-identity suffix for a stderr diagnostic. Returns the
+ * empty string when no `--hook` flag was supplied, so an operator
+ * invoking `harness policy intercept` by hand (and tests that don't
+ * inject hookName) see the original prefix verbatim.
+ */
+function hookSuffix(hookName: string | undefined): string {
+  return hookName !== undefined && hookName.length > 0 ? ` [hook=${hookName}]` : "";
+}
+
+/**
  * Phase 5 #3 — render a deny / warn-degraded decision as a stderr
  * diagnostic block. Multiline, indented; each block is bounded by the
  * policy name so concurrent fires (rare but possible) stay readable.
  */
-function formatDecisionDiagnostic(decision: PolicyDecision): string {
-  const header = `harness policy intercept: ${decision.policyName}: ${decision.outcome}${
+function formatDecisionDiagnostic(decision: PolicyDecision, hookName?: string): string {
+  const header = `harness policy intercept${hookSuffix(hookName)}: ${decision.policyName}: ${decision.outcome}${
     decision.outcome === "warn-degraded" ? " (ledger unreachable)" : ""
   }`;
   const lines: string[] = [header];
@@ -219,7 +241,7 @@ export function realLedgerClient(
       // Goes to stderr so Claude Code's stdout deny-JSON contract holds.
       if (!result.ok) {
         stderr.write(
-          `harness policy intercept: audit-write failed for ` +
+          `harness policy intercept${hookSuffix(opts.hookName)}: audit-write failed for ` +
             `${decision.policyName}: ${result.reason ?? "unknown error"}\n`,
         );
       }
@@ -250,8 +272,8 @@ export async function runInterceptCli(
   try {
     event = JSON.parse(raw.trim() || "{}") as ToolEvent;
   } catch (err) {
-    process.stderr.write(
-      `harness policy intercept: malformed event JSON: ${(err as Error).message}\n`,
+    stderr.write(
+      `harness policy intercept${hookSuffix(opts.hookName)}: malformed event JSON: ${(err as Error).message}\n`,
     );
     return { exitCode: 0, decisions: [], blocked: false };
   }
@@ -286,8 +308,8 @@ export async function runInterceptCli(
       manifestPath = loaded.resolved.base;
     }
   } catch (err) {
-    process.stderr.write(
-      `harness policy intercept: manifest load failed: ${(err as Error).message}\n`,
+    stderr.write(
+      `harness policy intercept${hookSuffix(opts.hookName)}: manifest load failed: ${(err as Error).message}\n`,
     );
     return { exitCode: 0, decisions: [], blocked: false };
   }
@@ -431,13 +453,13 @@ export async function runInterceptCli(
   // simply rejected the input. Emits to stderr so the Claude Code
   // hook contract on stdout is preserved.
   if (result.decisions.length === 0 && manifest.policies.length > 0) {
-    stderr.write(formatNoMatchHint(event, manifest));
+    stderr.write(formatNoMatchHint(event, manifest, opts.hookName));
   }
 
   if (verbose) {
     for (const decision of result.decisions) {
       if (decision.outcome === "allow") continue;
-      stderr.write(formatDecisionDiagnostic(decision));
+      stderr.write(formatDecisionDiagnostic(decision, opts.hookName));
     }
   }
 
@@ -448,7 +470,7 @@ export async function runInterceptCli(
   };
 }
 
-function formatNoMatchHint(event: ToolEvent, manifest: Manifest): string {
+function formatNoMatchHint(event: ToolEvent, manifest: Manifest, hookName?: string): string {
   const observedEvent =
     typeof event.hook_event_name === "string" && event.hook_event_name.length > 0
       ? `"${event.hook_event_name}"`
@@ -461,7 +483,7 @@ function formatNoMatchHint(event: ToolEvent, manifest: Manifest): string {
     new Set(manifest.policies.map((p) => p.trigger.event)),
   ).sort();
   return (
-    `harness policy intercept: no policy matched event ` +
+    `harness policy intercept${hookSuffix(hookName)}: no policy matched event ` +
     `hook_event_name=${observedEvent} tool_name=${observedTool} ` +
     `(registered policy events: ${registeredEvents.join(", ")}). ` +
     `If probing by hand, ensure stdin includes hook_event_name (e.g. "PreToolUse" for tool gates).\n`
