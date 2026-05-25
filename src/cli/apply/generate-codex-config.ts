@@ -126,21 +126,27 @@ function eventKey(event: string): string {
   }
 }
 
-function codexTimeoutSeconds(budgetMs: number): number {
-  return Math.max(1, Math.ceil(budgetMs / 1000));
+function codexTimeoutSeconds(h: Hook): number {
+  const minimumSeconds = h.command.trim() === "harness policy intercept" ? 2 : 1;
+  return Math.max(minimumSeconds, Math.ceil(h.budget_ms / 1000));
 }
 
 function emitCommandHook(h: Hook): string {
   const fields = [
     `type = "command"`,
     `command = ${tomlString(h.command)}`,
-    `timeout = ${codexTimeoutSeconds(h.budget_ms)}`,
+    `timeout = ${codexTimeoutSeconds(h)}`,
   ];
   return `{ ${fields.join(", ")} }`;
 }
 
+function tomlCommentText(s: string): string {
+  return s.replace(CONTROL_CHAR_RE, " ").replace(/\s+/g, " ").trim();
+}
+
 function emitHook(h: Hook): string {
   const lines: string[] = [];
+  lines.push(`# harness hook: ${tomlCommentText(h.name)} (budget_ms=${h.budget_ms})`);
   lines.push(`[[hooks.${eventKey(h.event)}]]`);
   if (h.match !== undefined) {
     lines.push(`matcher = ${tomlString(expandCodexHookMatchPattern(h.match))}`);

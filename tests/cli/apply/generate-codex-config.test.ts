@@ -49,6 +49,9 @@ describe("generateCodexConfig", () => {
     expect(content).toContain("[[hooks.PreToolUse]]");
     expect(content).toContain("[[hooks.UserPromptSubmit]]");
     expect(content).toContain(
+      "# harness hook: policy-pack:understanding-before-execution:codex:pre-tool-use (budget_ms=5000)",
+    );
+    expect(content).toContain(
       'hooks = [{ type = "command", command = "harness pack hook codex-pre-tool-use", timeout = 5 }]',
     );
     expect(content).toContain(
@@ -128,6 +131,12 @@ describe("generateCodexConfig", () => {
     expect(content).toContain(
       'matcher = "mcp__agent-tasks__pull_requests_create|mcp__agent-tasks__.pull_requests_create|mcp__agent_tasks__pull_requests_create|mcp__agent_tasks__.pull_requests_create"',
     );
+    expect(content).toContain(
+      "# harness hook: policy-intercept-shell (budget_ms=1000)",
+    );
+    expect(content).toContain(
+      'hooks = [{ type = "command", command = "harness policy intercept", timeout = 2 }]',
+    );
   });
 
   it("converts manifest millisecond budgets to Codex timeout seconds", () => {
@@ -146,6 +155,24 @@ describe("generateCodexConfig", () => {
       }),
     );
     expect(content).toContain('command = "/bin/true", timeout = 2');
+  });
+
+  it("keeps non-policy 1000ms hooks at Codex's 1s minimum", () => {
+    const { content } = generateCodexConfig(
+      parseManifest({
+        version: 1,
+        hooks: [
+          {
+            name: "fast-non-policy",
+            event: "PreToolUse",
+            command: "/bin/true",
+            blocking: false,
+            budget_ms: 1000,
+          },
+        ],
+      }),
+    );
+    expect(content).toContain('command = "/bin/true", timeout = 1');
   });
 
   it("is byte-stable for a given manifest (regenerable on no-op apply)", () => {
