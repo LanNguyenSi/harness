@@ -1387,9 +1387,11 @@ export function buildProgram(opts: RunOptions = {}): Command {
   approveCmd
     .command("risk")
     .description(
-      "Grant a Risk Gate require_approval decision: write the " +
-        "risk-approved:${SESSION_ID} evidence-ledger tag the blocked policy's " +
-        "requires consults. Operator action — run it after reviewing the blocked action.",
+      "Grant a Risk Gate require_approval decision (default), or deliberately override " +
+        "a deny-tier block with --force <reason>. The default path writes the " +
+        "risk-approved:${SESSION_ID} ledger tag the require_approval policy's requires " +
+        "consults; --force writes risk-override:${SESSION_ID}:forced:<reason> for the " +
+        "deny-tier policy. Operator action.",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
@@ -1397,12 +1399,37 @@ export function buildProgram(opts: RunOptions = {}): Command {
       "--session <id>",
       "explicit session id (default: $CLAUDE_CODE_SESSION_ID, then $CLAUDE_SESSION_ID, then $CODEX_SESSION_ID, then staged .pending-approval)",
     )
+    .option(
+      "--force <reason>",
+      "operator-deliberate override of a deny-tier Risk Gate block; writes the risk-override tag with the reason stamped into the audit trail",
+    )
+    .option(
+      "--i-am-the-operator",
+      "acknowledge a scripted / non-TTY --force invocation (otherwise refused)",
+    )
     .action(
-      async (options: { config?: string; project?: string; session?: string }) => {
+      async (options: {
+        config?: string;
+        project?: string;
+        session?: string;
+        force?: string;
+        iAmTheOperator?: boolean;
+      }) => {
         const cliOpts: Parameters<typeof approveRisk>[0] = {};
         if (options.config) cliOpts.configPath = options.config;
         if (options.project) cliOpts.project = options.project;
         if (options.session) cliOpts.session = options.session;
+        if (typeof options.force === "string") {
+          const reason = options.force.trim();
+          if (reason.length === 0) {
+            throw new HarnessExitError(
+              "--force requires a non-empty <reason>; the reason is recorded in the audit trail.",
+              EX_USAGE,
+            );
+          }
+          cliOpts.force = { reason };
+        }
+        if (options.iAmTheOperator) cliOpts.iAmTheOperator = true;
         const result = await approveRisk(cliOpts);
         const lines: string[] = [];
         const sourceNote =
@@ -1418,14 +1445,26 @@ export function buildProgram(opts: RunOptions = {}): Command {
         lines.push(`session: ${result.sessionId}${sourceNote}`);
         if (result.ledger.ok) {
           lines.push(`ledger:  ✓ wrote ${result.ledger.tag}`);
-          lines.push(
-            "  the Risk Gate require_approval policy now passes for this session.",
-          );
+          if (result.forced) {
+            lines.push(
+              "  deny-tier override recorded; the deny-tier Risk Gate policy now passes for this session.",
+            );
+          } else {
+            lines.push(
+              "  the Risk Gate require_approval policy now passes for this session.",
+            );
+          }
         } else {
           lines.push(`ledger:  ✗ FAILED (${result.ledger.reason ?? "unknown"})`);
-          lines.push(
-            "  the require_approval gate stays blocked until the tag is recorded.",
-          );
+          if (result.forced) {
+            lines.push(
+              "  the deny-tier override stays unrecorded; the gate keeps blocking.",
+            );
+          } else {
+            lines.push(
+              "  the require_approval gate stays blocked until the tag is recorded.",
+            );
+          }
         }
         stdout(`${lines.join("\n")}\n`);
       },
