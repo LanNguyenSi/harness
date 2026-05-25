@@ -194,8 +194,12 @@ inventory + recommended order in [`docs/uninstall.md`](docs/uninstall.md).
 
 harness ships in phases. All seven are released: read-only inventory →
 managed edits → declarative truth → policy layer → polish and dogfood
-lessons → the Understanding Gate Policy Pack → the Risk Gate. The
-current release is `v0.27.0`.
+lessons → the Understanding Gate Policy Pack → the Risk Gate. Phase 7
+(the Risk Gate) landed in `v0.27.0`; releases since then tighten the
+operator surface around it (`harness pause/resume` in `v0.22.0`,
+`migrate-home` in `v0.24.0`, Codex-runtime adapter polish in `v0.28.x`
+and `v0.29.0`, `approve risk --force` in `v0.30.0`). The current
+release is `v0.30.0`.
 
 The phase-by-phase plan with acceptance criteria lives in
 [`docs/ROADMAP.md`](docs/ROADMAP.md); what shipped in each version is
