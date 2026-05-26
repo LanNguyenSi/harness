@@ -225,6 +225,16 @@ const TRACK_ACTIVE_CLAIM_COMMAND_CLAUDE =
 const TRACK_ACTIVE_CLAIM_MATCH =
   "^(?:mcp__agent-tasks__task_start|mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__tasks_transition)$";
 
+// Hardcoded matcher for the stay-in-scope reminder (harness/2ba06030).
+// Fires on the three task-mutation verbs that can carry labels and
+// description fields. tasks_update is included so a label added
+// post-hoc (e.g. `tasks_update { labels: ["from-review"] }`) still
+// surfaces the reminder.
+const STAY_IN_SCOPE_MATCH =
+  "^(?:mcp__agent-tasks__task_create|mcp__agent-tasks__tasks_create|mcp__agent-tasks__tasks_update)$";
+
+const STAY_IN_SCOPE_COMMAND_CLAUDE = "harness pack hook stay-in-scope";
+
 /**
  * Compose the PostToolUse `match` regex from the configured tool list.
  * Each tool name is regex-escaped and joined with `|` so settings.json
@@ -406,6 +416,26 @@ function buildHooks(
       budget_ms: 2000,
       description:
         "Track the active agent-tasks claim by writing/clearing <generatedDir>/active-claim on task_start / task_finish / task_abandon. Lets `harness approve understanding` auto-resolve the task id (harness/494fd1e5).",
+    },
+    // Stay-in-scope reminder (harness/2ba06030). PostToolUse hook on
+    // agent-tasks task_create / tasks_create / tasks_update. Emits a
+    // one-line stderr reminder + JSONL audit row when the new task's
+    // labels or description suggest it was carved out of a review
+    // finding that may have been inline-fixable. Soft (no block);
+    // enforces user-memory feedback_reviewer_findings_stay_in_scope.
+    // Bundled with this pack for operational convenience — operators
+    // on non-agent-tasks tasking systems are unaffected (matcher
+    // won't fire). Disable via STAY_IN_SCOPE_DISABLED=1 in the hook's
+    // env; override audit log path via STAY_IN_SCOPE_LOG.
+    {
+      name: `${HOOK_NAME_PREFIX}:stay-in-scope`,
+      event: "PostToolUse",
+      match: STAY_IN_SCOPE_MATCH,
+      command: STAY_IN_SCOPE_COMMAND_CLAUDE,
+      blocking: false,
+      budget_ms: 2000,
+      description:
+        "Emit a soft reminder + audit row when a review-derived follow-up task gets created. Surfaces user-memory feedback_reviewer_findings_stay_in_scope. Disable: STAY_IN_SCOPE_DISABLED=1.",
     },
   ];
 }

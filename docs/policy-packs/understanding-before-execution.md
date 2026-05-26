@@ -294,10 +294,13 @@ After capture, `harness approve understanding --session <id>` flips `approvalSta
 
 `harness apply` against a manifest with this pack enabled writes:
 
-- Three hooks in the harness-managed `settings.json`:
+- Six hooks in the harness-managed `settings.json`:
   - `UserPromptSubmit` injector: bare bin `understanding-gate-claude-hook` (from the npm package; user must `npm i -g`).
   - `Stop` capture: bare bin `understanding-gate-claude-stop` (same).
   - `PreToolUse` blocker on `Edit|Write|Bash`: `harness pack hook pre-tool-use` (Phase 6 #4). The harness-side blocker consults the approval marker file `harness.generated/.approvals/${SESSION_ID}` (canonical for harnessed sessions, agent-tasks/88ca4bb3) and the persisted JSON report under `.understanding-gate/reports/` (fallback for solo users). Either source approves. The npm package's standalone `understanding-gate-claude-pre-tool-use` blocker remains available for solo users; the harness blocker is the superset (it covers the marker file and persisted-report cases). The blocker also probes the evidence ledger for the historic `understanding-approved:${SESSION_ID}` tag as forensics; that probe never grants approval but surfaces in the diagnostic so an operator can see the audit trail. On every block or ask it stages the session id to `harness.generated/.pending-approval` so `harness approve` can resolve it without a flag (see [Session-id resolution](#session-id-resolution)).
+  - `PostToolUse` marker-expiry: `harness pack hook post-tool-use` clears the approval marker (and expires the persisted report) after a configurable task-boundary tool fires (default: agent-tasks `task_finish` / `task_abandon` / `pull_requests_merge` / `tasks_transition`).
+  - `PostToolUse` active-claim tracker: `harness pack hook track-active-claim` writes `harness.generated/active-claim` on `task_start` and clears it on `task_finish` / `task_abandon` (harness/494fd1e5). Lets `harness approve understanding` auto-resolve the current task id without `--task`.
+  - `PostToolUse` stay-in-scope reminder: `harness pack hook stay-in-scope` emits a one-line stderr reminder + JSONL audit row when a `task_create` / `tasks_create` / `tasks_update` payload looks like a review-derived follow-up. Soft (does not block); surfaces the rule that small reviewer findings should be fixed inline in the parent PR rather than carved out as separate tasks. See [Stay-in-scope reminder](#stay-in-scope-reminder).
   - Hook names are namespaced (`policy-pack:understanding-before-execution:<role>`) to avoid collisions with operator-authored hooks.
 - An operator audit copy at `harness.generated/policy-packs/understanding-before-execution/instructions.md`. This file documents what the pack is doing in the operator's voice (mode, hook list, approval flow); the agent-facing prompt is injected at runtime by the `UserPromptSubmit` hook and lives in the npm package, not here. Drift on the audit copy means an operator edited something they shouldn't have, and `harness diff --since-apply` flags it.
 
@@ -333,6 +336,54 @@ The blocker on the next tool call sees the new approval from whichever operator-
 The CLI prints which tier supplied the id (e.g. `session: <id> (resolved from .pending-approval ...)`, `(from $CLAUDE_CODE_SESSION_ID)`, `(from $CODEX_SESSION_ID)`, `(resolved from sessionId field of the newest persisted Understanding Report)`), so a wrong id is visible before it lands. After a successful resolve from `.pending-approval` with the marker write landed, the staging file is deleted so a later arg-less call cannot revive a stale id; a failed marker write keeps it for a retry. When all six tiers come up empty, the command exits with the retrieval-path hint instead of a guess.
 
 Phase 6 #2 follow-ups still queued: an automatically-injected stanza into the per-project `CLAUDE.md` for human discoverability, and a `harness doctor` wiring check that validates the package binaries are on `$PATH`.
+
+## Stay-in-scope reminder
+
+A small soft hook bundled with this pack (harness/2ba06030). When the agent creates or updates a task whose payload looks like a follow-up carved out of a code review, the hook writes one stderr line and appends one JSONL row to an audit log. It does not block, decline, or alter the task in any way.
+
+The intent: surface the rule that small reviewer findings should be fixed inline in the parent PR, while leaving the agent (and the operator) to judge whether a given follow-up is genuinely scope-out (trigger-bound work, larger refactors, hypotheticals waiting for data). The audit log answers, after a few weeks of dogfood, whether the reminder ever changes behaviour or whether the rule needs a harder enforcement layer.
+
+**When it fires.** PostToolUse on one of `mcp__agent-tasks__task_create`, `mcp__agent-tasks__tasks_create`, `mcp__agent-tasks__tasks_update`, when EITHER:
+
+1. `tool_input.labels` contains a token matching `/(from-review|followup|reviewer-finding|review-finding)/i`, OR
+2. `tool_input.description` contains an explicit marker (`Vorgaenger-PR:`, `Vorgänger-PR:`, `Review-Subagent`), OR
+3. `tool_input.description` contains `## Hintergrund` with `Review` mentioned inside the next 200 characters.
+
+**Second-order escalation.** When both a review-shaped label AND a `Vorgaenger-PR.*#<n>` reference are present, the stderr prefix upgrades to `[stay-in-scope: SECOND-ORDER]`. A follow-up that traces back to another follow-up violates the explicit rule that follow-ups must not spawn further follow-ups.
+
+**Audit log.** One JSONL row per fire, default location `~/.harness/reminders/stay-in-scope.log`. Schema:
+
+```json
+{
+  "ts": "2026-05-26T11:55:07.820Z",
+  "taskId": "44269f36-...",
+  "title": "fix cosmetic phase_status thing",
+  "labels": ["from-review", "cosmetic"],
+  "parentPrUrl": "https://github.com/owner/repo/pull/91",
+  "secondOrder": false,
+  "matchedRule": "label"
+}
+```
+
+`parentPrUrl` is best-effort: a fully qualified GitHub PR URL when present in the description, otherwise the `#<n>` shorthand pulled from a `Vorgaenger-PR` line, otherwise `null`.
+
+**Knobs.**
+
+- `STAY_IN_SCOPE_DISABLED=1` in the hook's env short-circuits to no-op after the pause sentinel is evaluated. Use this if the reminder noise is unhelpful in a specific run; the operator pause path (`harness pause`) silences it the same way it silences every other hook.
+- `STAY_IN_SCOPE_LOG=/path/to/audit.jsonl` overrides the log path. Use for separating per-project logs.
+
+**Analyzing the log.**
+
+```sh
+# Hit profile by match rule.
+jq -s 'group_by(.matchedRule) | map({rule: .[0].matchedRule, count: length})' \
+  ~/.harness/reminders/stay-in-scope.log
+
+# Second-order hits only (the ones that violate the no-cascade rule).
+jq -c 'select(.secondOrder)' ~/.harness/reminders/stay-in-scope.log
+```
+
+To act on a hit: cross-reference the logged `taskId` against agent-tasks to see whether the task was later abandoned (suggesting the reminder worked) or completed (suggesting the follow-up was legitimately scope-out, OR the agent ignored the reminder; the description body answers which).
 
 ## See also
 
