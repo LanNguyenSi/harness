@@ -32,9 +32,10 @@ describe("expandPolicyPacks", () => {
     // (covered by a dedicated test below).
     const m = buildManifest([{ name: "understanding-before-execution" }]);
     const r = expandPolicyPacks(m);
-    expect(r.hooks).toHaveLength(5);
+    expect(r.hooks).toHaveLength(6);
     const events = r.hooks.map((h) => h.event).sort();
     expect(events).toEqual([
+      "PostToolUse",
       "PostToolUse",
       "PostToolUse",
       "PreToolUse",
@@ -45,6 +46,7 @@ describe("expandPolicyPacks", () => {
     expect(names).toEqual([
       "policy-pack:understanding-before-execution:post-tool-use",
       "policy-pack:understanding-before-execution:pre-tool-use",
+      "policy-pack:understanding-before-execution:stay-in-scope",
       "policy-pack:understanding-before-execution:stop",
       "policy-pack:understanding-before-execution:track-active-claim",
       "policy-pack:understanding-before-execution:user-prompt-submit",
@@ -87,11 +89,16 @@ describe("expandPolicyPacks", () => {
     ]);
     const r = expandPolicyPacks(m);
     const postToolUseHooks = r.hooks.filter((h) => h.event === "PostToolUse");
-    expect(postToolUseHooks).toHaveLength(1);
-    expect(postToolUseHooks[0]?.name).toBe(
+    // 2 emit unconditionally (track-active-claim + stay-in-scope); the
+    // marker-expiry post-tool-use is the only one suppressed by the
+    // session-mode opt-out.
+    expect(postToolUseHooks).toHaveLength(2);
+    const postToolUseNames = postToolUseHooks.map((h) => h.name).sort();
+    expect(postToolUseNames).toEqual([
+      "policy-pack:understanding-before-execution:stay-in-scope",
       "policy-pack:understanding-before-execution:track-active-claim",
-    );
-    expect(r.hooks).toHaveLength(4);
+    ]);
+    expect(r.hooks).toHaveLength(5);
   });
 
   it("PostToolUse hook match pattern reflects custom expire_on_tool_match list", () => {
@@ -284,7 +291,7 @@ describe("expandPolicyPacks", () => {
       { name: "no-such-pack" },
     ]);
     const r = expandPolicyPacks(m);
-    expect(r.hooks).toHaveLength(5); // v0.18: 3 legacy + 1 PostToolUse expiry; v2 (494fd1e5): +1 track-active-claim
+    expect(r.hooks).toHaveLength(6); // v0.18: 3 legacy + 1 PostToolUse expiry; v2 (494fd1e5): +1 track-active-claim; 2ba06030: +1 stay-in-scope
     expect(r.files).toHaveLength(1);
     expect(r.warnings.some((w) => w.includes("not a known builtin pack"))).toBe(
       true,
@@ -352,7 +359,7 @@ describe("expandPolicyPacks", () => {
       ],
     );
     const r = expandPolicyPacks(m);
-    expect(r.hooks).toHaveLength(4); // 5 contributions - 1 dropped collision (Stop)
+    expect(r.hooks).toHaveLength(5); // 6 contributions - 1 dropped collision (Stop)
     expect(r.hooks.find((h) => h.event === "Stop")).toBeUndefined();
     expect(
       r.warnings.some((w) => w.includes("collides with a manifest hooks")),

@@ -33,6 +33,7 @@ import { packAdd, packList, packRemove } from "./pack/index.js";
 import { runPackHookPreToolUseCli } from "./pack/hook-pre-tool-use.js";
 import { runPackHookPostToolUseCli } from "./pack/hook-post-tool-use.js";
 import { runPackHookTrackActiveClaimCli } from "./pack/hook-track-active-claim.js";
+import { runPackHookStayInScopeCli } from "./pack/hook-stay-in-scope.js";
 import { runPackHookCodexPreToolUseCli } from "./pack/hook-codex-pre-tool-use.js";
 import { runPackHookCodexStopCli } from "./pack/hook-codex-stop.js";
 import { runPackHookCodexUserPromptSubmitCli } from "./pack/hook-codex-user-prompt-submit.js";
@@ -1053,6 +1054,22 @@ export function buildProgram(opts: RunOptions = {}): Command {
         if (options.project) cliOpts.project = options.project;
         if (options.pack) cliOpts.pack = options.pack;
         await runPackHookTrackActiveClaimCli(cliOpts);
+      },
+    );
+
+  packHookCmd
+    .command("stay-in-scope")
+    .description(
+      "PostToolUse: read tool-event JSON from stdin, emit a one-line stderr reminder and JSONL audit row when an agent-tasks task_create / tasks_create / tasks_update payload looks like a review-derived follow-up. Soft reminder (does not block); enforces user-memory feedback_reviewer_findings_stay_in_scope. Disable via STAY_IN_SCOPE_DISABLED=1; override log path via STAY_IN_SCOPE_LOG.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .action(
+      async (options: { config?: string; project?: string }) => {
+        const cliOpts: Parameters<typeof runPackHookStayInScopeCli>[0] = {};
+        if (options.config) cliOpts.configPath = options.config;
+        if (options.project) cliOpts.project = options.project;
+        await runPackHookStayInScopeCli(cliOpts);
       },
     );
 
