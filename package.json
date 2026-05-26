@@ -1,6 +1,6 @@
 {
   "name": "@lannguyensi/harness",
-  "version": "0.30.0",
+  "version": "0.30.1",
   "description": "Declarative control plane for agent harnesses — one YAML for grounding, tools, memory, and hooks.",
   "license": "MIT",
   "homepage": "https://github.com/LanNguyenSi/harness",

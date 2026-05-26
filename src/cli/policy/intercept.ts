@@ -11,6 +11,7 @@ import {
 } from "../../policies/index.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
+import * as path from "node:path";
 import {
   intercept,
   recordPolicyDecision,
@@ -23,6 +24,7 @@ import {
 } from "../../runtime/index.js";
 import type { Manifest, McpServer } from "../../schema/index.js";
 import { resolveGeneratedDir, writePendingApproval } from "../../runtime/pending-approval.js";
+import { parseBashPrefix } from "../../runtime/bash-prefix-parse.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import { checkPauseFromLoader } from "../pause-check.js";
 
@@ -157,6 +159,18 @@ function isVerboseEnabled(opts: InterceptCliOptions): boolean {
   if (env.length === 0) return false;
   // Accept anything truthy except literal disable-words (case-insensitive).
   return !/^(0|false|no|off)$/i.test(env.trim());
+}
+
+/**
+ * Read the command string out of a Bash tool's `tool_input.command`,
+ * returning null when the shape is wrong (defensive — production input
+ * comes from Claude Code, but tests and Codex bridges have varied
+ * payload shapes).
+ */
+function readBashCommand(input: unknown): string | null {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  const cmd = (input as { command?: unknown }).command;
+  return typeof cmd === "string" && cmd.length > 0 ? cmd : null;
 }
 
 function isCodexShellTool(toolName: unknown): boolean {
@@ -370,12 +384,44 @@ export async function runInterceptCli(
             namespace: opts.kubeNamespace ?? "",
           }
         : resolveKubeContext();
+    // Two POSIX Bash idioms (`VAR=value command`, `cd <path> && command`)
+    // were invisible to the resolver before: the env resolver read
+    // `process.env` and the branch resolver read `.git/HEAD` under the
+    // hook's starting cwd, so a prod signal smuggled through either
+    // idiom silently passed the gate. Parse the leading prefix once
+    // from the Bash command and merge the result into the resolver
+    // inputs only — builtin `${REPO}` / `${BRANCH}` / `${CWD}` keep the
+    // hook's cwd so policy-template namespacing is not affected.
+    const bashPrefix =
+      event.tool_name === "Bash"
+        ? (() => {
+            const cmd = readBashCommand(event.tool_input);
+            return cmd === null ? null : parseBashPrefix(cmd);
+          })()
+        : null;
+    const resolverGit = (() => {
+      if (bashPrefix === null || bashPrefix.cdTarget === null) return gitContext;
+      const effective = path.isAbsolute(bashPrefix.cdTarget)
+        ? bashPrefix.cdTarget
+        : path.resolve(cwd, bashPrefix.cdTarget);
+      // resolveGitContext returns empty strings for non-git paths;
+      // an empty repo means cd-target was bogus, fall through.
+      const candidate = resolveGitContext(effective);
+      return candidate.repo.length > 0 ? candidate : gitContext;
+    })();
+    const resolverEnv = (() => {
+      const base = opts.env ?? process.env;
+      if (bashPrefix === null || Object.keys(bashPrefix.inlineEnv).length === 0) return base;
+      // Inline assignments are the operator's explicit override; they
+      // win over process.env (matches POSIX `VAR=value cmd` semantics).
+      return { ...base, ...bashPrefix.inlineEnv };
+    })();
     riskContext = {
-      git: gitContext,
+      git: resolverGit,
       cwd,
       user: safeOs(() => os.userInfo().username),
       host: safeOs(() => os.hostname()),
-      env: opts.env ?? process.env,
+      env: resolverEnv,
       kubeContext: kube.context,
       kubeNamespace: kube.namespace,
     };
