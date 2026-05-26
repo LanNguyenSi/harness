@@ -388,17 +388,22 @@ export async function runInterceptCli(
     // were invisible to the resolver before: the env resolver read
     // `process.env` and the branch resolver read `.git/HEAD` under the
     // hook's starting cwd, so a prod signal smuggled through either
-    // idiom silently passed the gate. Parse the leading prefix from the
-    // Bash command and merge the result into the resolver inputs only —
-    // builtin `${REPO}` / `${BRANCH}` / `${CWD}` keep the hook's cwd so
-    // policy-template namespacing is not affected by the parse.
+    // idiom silently passed the gate. Parse the leading prefix once
+    // from the Bash command and merge the result into the resolver
+    // inputs only — builtin `${REPO}` / `${BRANCH}` / `${CWD}` keep the
+    // hook's cwd so policy-template namespacing is not affected.
+    const bashPrefix =
+      event.tool_name === "Bash"
+        ? (() => {
+            const cmd = readBashCommand(event.tool_input);
+            return cmd === null ? null : parseBashPrefix(cmd);
+          })()
+        : null;
     const resolverGit = (() => {
-      if (event.tool_name !== "Bash") return gitContext;
-      const cmd = readBashCommand(event.tool_input);
-      if (cmd === null) return gitContext;
-      const { cdTarget } = parseBashPrefix(cmd);
-      if (cdTarget === null) return gitContext;
-      const effective = path.isAbsolute(cdTarget) ? cdTarget : path.resolve(cwd, cdTarget);
+      if (bashPrefix === null || bashPrefix.cdTarget === null) return gitContext;
+      const effective = path.isAbsolute(bashPrefix.cdTarget)
+        ? bashPrefix.cdTarget
+        : path.resolve(cwd, bashPrefix.cdTarget);
       // resolveGitContext returns empty strings for non-git paths;
       // an empty repo means cd-target was bogus, fall through.
       const candidate = resolveGitContext(effective);
@@ -406,14 +411,10 @@ export async function runInterceptCli(
     })();
     const resolverEnv = (() => {
       const base = opts.env ?? process.env;
-      if (event.tool_name !== "Bash") return base;
-      const cmd = readBashCommand(event.tool_input);
-      if (cmd === null) return base;
-      const { inlineEnv } = parseBashPrefix(cmd);
-      if (Object.keys(inlineEnv).length === 0) return base;
+      if (bashPrefix === null || Object.keys(bashPrefix.inlineEnv).length === 0) return base;
       // Inline assignments are the operator's explicit override; they
       // win over process.env (matches POSIX `VAR=value cmd` semantics).
-      return { ...base, ...inlineEnv };
+      return { ...base, ...bashPrefix.inlineEnv };
     })();
     riskContext = {
       git: resolverGit,

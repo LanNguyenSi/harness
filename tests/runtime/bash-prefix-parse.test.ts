@@ -33,6 +33,11 @@ describe("parseBashPrefix", () => {
       const r = parseBashPrefix("URL='unterminated terraform destroy");
       expect(r.inlineEnv).toEqual({});
     });
+
+    it("accepts tab-separated assignments and empty values", () => {
+      const r = parseBashPrefix("A=\tB= C=v\tcmd");
+      expect(r.inlineEnv).toEqual({ A: "", B: "", C: "v" });
+    });
   });
 
   describe("cd prefix", () => {
