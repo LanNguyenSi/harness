@@ -256,6 +256,10 @@ function formatRiskGateSection(report: DoctorReport): string[] {
   } else {
     for (const w of rg.warnings) out.push(`  ⚠ ${w}`);
   }
+  // Bash command-prefix parsing is unconditionally on since v0.30.1; the
+  // stat line is informational so the next "why didn't the gate fire?"
+  // debugging session does not have to grep the source for it.
+  out.push(`  ℹ resolver reads inline \`VAR=value\` env + leading \`cd <path> &&\` from Bash commands`);
   out.push(
     `  ℹ recent Risk Gate decisions: \`harness audit\` (filter with --outcome require_approval / deny)`,
   );

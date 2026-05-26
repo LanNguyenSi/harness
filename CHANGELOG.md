@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.30.1] - 2026-05-26
+
+**Headline: hotfix, Risk Gate environment resolver now sees inline `VAR=value` env and leading `cd <path> &&` prefixes in Bash commands, so two common POSIX idioms no longer silently bypass production signals.** Dogfood on 2026-05-26 reproduced the leak: `DATABASE_URL=postgres://prod-host/x terraform destroy` and `cd /repos/prod-infra && terraform destroy` both ran through the gate without firing, even though either signal should have resolved `environment.name: production`. The hook intercept read `process.env` and the hook's starting cwd, neither of which reflects what the operator actually typed. v0.30.1 parses the leading command prefix and merges the result into the resolver's view of env + git context; the rest of the harness (`${REPO}`, `${BRANCH}`, `${CWD}` builtins, audit, the four-way decision matrix) is untouched. **Operator action**: none required; back-compat. Existing manifests, classifiers, and resolvers keep working byte-for-byte. Re-run `npm i -g @lannguyensi/harness` to upgrade.
+
+### Fixed
+
+- **Risk Gate resolver now sees inline `VAR=value` env in Bash commands** (task 1a8a103d). The intercept parses leading `\w+=value` tokens from `tool_input.command` (unquoted, single-quoted, and double-quoted values supported; no `$` interpolation in v1) and merges them over `process.env` for the environment resolver's `env_var_patterns` check. POSIX semantics, inline-env wins over process-env, matching how a real Bash subshell would set them. Closes the leak where `DATABASE_URL=postgres://prod-host/db terraform destroy` smuggled a prod signal past the gate.
+
+- **Risk Gate resolver now sees a leading `cd <path> &&` prefix in Bash commands** (task 1a8a103d). The intercept parses a single leading `cd <path> [&&|;] ...` from `tool_input.command` and re-resolves the git context against the cd target so the branch resolver's `branch_patterns` check evaluates the destination repo, not the hook's starting cwd. Absolute and relative paths are supported, a non-existent or non-git target falls through silently to the hook's cwd. `pushd`, subshell `(cd X && ...)`, and `bash -c "..."` are intentionally out of scope in v1. Closes the leak where `cd /repos/prod-infra && terraform destroy` was evaluated against an unrelated feature branch.
+
+### Added
+
+- **`harness doctor` Risk Gate section names the new resolver behavior** so the next "why didn't the gate fire?" debugging session does not have to grep the source: `ℹ resolver reads inline VAR=value env + leading cd <path> && from Bash commands`.
+
 ## [0.30.0] - 2026-05-25
 
 **Headline: `harness approve risk` grows a `--force <reason>` flag so the operator can clear a deny-tier Risk Gate block without ever touching the ledger directly.** Closes the operator-UX leak surfaced during the v0.29.0 release-cut: the built-in `gate-prod-destructive` policy is `deny`-tier and requires the `risk-override:${SESSION_ID}` ledger tag, but no CLI verb wrote that tag. Its `ux.run` instruction told operators to "record a risk-override entry in the evidence ledger", leaking the ledger as an implementation detail. The new flag mirrors the `approve understanding --force` pattern PR #253 shipped: a one-line operator command with an audit-trail suffix. The built-in policy template's `ux.run` now names the verb, not the tag. **Operator action**: none required; back-compat. The default `harness approve risk` (no flag) is byte-for-byte unchanged. Re-run `npm i -g @lannguyensi/harness` to upgrade.
