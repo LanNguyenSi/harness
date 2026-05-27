@@ -323,6 +323,7 @@ export async function runPackHookPreToolUseCli(
 
   const sessionId =
     (typeof event.session_id === "string" ? event.session_id : undefined) ??
+    process.env.CLAUDE_CODE_SESSION_ID ??
     process.env.CLAUDE_SESSION_ID ??
     "";
   const toolName = typeof event.tool_name === "string" ? event.tool_name : "(unknown)";
@@ -409,7 +410,7 @@ export async function runPackHookPreToolUseCli(
 
   if (sessionId === "") {
     const diagnostic =
-      'harness pack hook: no session_id resolvable from input or $CLAUDE_SESSION_ID, allowing.';
+      'harness pack hook: no session_id resolvable from input or $CLAUDE_CODE_SESSION_ID/$CLAUDE_SESSION_ID, allowing.';
     stderr.write(`${diagnostic}\n`);
     return {
       exitCode: 0,
@@ -513,7 +514,7 @@ export async function runPackHookPreToolUseCli(
     : `generatedDir not resolvable (test/injection path); ${report.detail}; ${ledger.detail}`;
 
   // Stage the session id so `harness approve`, run from the operator's
-  // shell where $CLAUDE_SESSION_ID is unset, can resolve it without
+  // shell where $CLAUDE_CODE_SESSION_ID / $CLAUDE_SESSION_ID is unset, can resolve it without
   // guessing from transcript filenames. Covers both the ask and the
   // block branches below. Best-effort: a staging-write failure must not
   // escalate a gate block into a hook error.

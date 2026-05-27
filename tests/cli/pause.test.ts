@@ -12,13 +12,31 @@ import {
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
 let tmp: string;
+let savedClaude: string | undefined;
+let savedClaudeCode: string | undefined;
+let savedCodex: string | undefined;
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pause-cli-"));
+  // The refuseIfAgentShell guard reads three env vars; clear all so the
+  // dev-host's $CLAUDE_CODE_SESSION_ID (set inside a Claude Code shell)
+  // doesn't bleed into tests that pass only claudeSessionIdEnv overrides.
+  savedClaude = process.env.CLAUDE_SESSION_ID;
+  savedClaudeCode = process.env.CLAUDE_CODE_SESSION_ID;
+  savedCodex = process.env.CODEX_SESSION_ID;
+  delete process.env.CLAUDE_SESSION_ID;
+  delete process.env.CLAUDE_CODE_SESSION_ID;
+  delete process.env.CODEX_SESSION_ID;
 });
 
 afterEach(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
+  if (savedClaude === undefined) delete process.env.CLAUDE_SESSION_ID;
+  else process.env.CLAUDE_SESSION_ID = savedClaude;
+  if (savedClaudeCode === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+  else process.env.CLAUDE_CODE_SESSION_ID = savedClaudeCode;
+  if (savedCodex === undefined) delete process.env.CODEX_SESSION_ID;
+  else process.env.CODEX_SESSION_ID = savedCodex;
 });
 
 function manifest(): Manifest {
@@ -125,6 +143,45 @@ describe("pause", () => {
       }),
     ).rejects.toThrow(/agent shell/i);
     expect(fs.existsSync(sentinelPath(tmp))).toBe(false);
+  });
+
+  it("refuses to run when CLAUDE_CODE_SESSION_ID is set (the var Claude Code exports)", async () => {
+    await expect(
+      pause({
+        manifest: manifest(),
+        generatedDir: tmp,
+        stdinIsTTY: true,
+        claudeCodeSessionIdEnv: "code-sess-abc",
+        ledgerAdd: async () => ({ ok: true }),
+      }),
+    ).rejects.toThrow(/agent shell.*CLAUDE_CODE_SESSION_ID/is);
+    expect(fs.existsSync(sentinelPath(tmp))).toBe(false);
+  });
+
+  it("refuses to run when CODEX_SESSION_ID is set (Codex agent shell)", async () => {
+    await expect(
+      pause({
+        manifest: manifest(),
+        generatedDir: tmp,
+        stdinIsTTY: true,
+        codexSessionIdEnv: "codex-sess-abc",
+        ledgerAdd: async () => ({ ok: true }),
+      }),
+    ).rejects.toThrow(/agent shell.*CODEX_SESSION_ID/is);
+    expect(fs.existsSync(sentinelPath(tmp))).toBe(false);
+  });
+
+  it("allows pause when all three agent-session env vars are empty/absent", async () => {
+    await pause({
+      manifest: manifest(),
+      generatedDir: tmp,
+      stdinIsTTY: true,
+      claudeSessionIdEnv: "",
+      claudeCodeSessionIdEnv: "",
+      codexSessionIdEnv: "",
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(fs.existsSync(sentinelPath(tmp))).toBe(true);
   });
 
   it("refuses non-TTY stdin without --i-am-the-operator", async () => {
@@ -253,6 +310,30 @@ describe("resume", () => {
         ledgerAdd: async () => ({ ok: true }),
       }),
     ).rejects.toThrow(/agent shell/i);
+  });
+
+  it("refuses to run when CLAUDE_CODE_SESSION_ID is set", async () => {
+    await expect(
+      resume({
+        manifest: manifest(),
+        generatedDir: tmp,
+        stdinIsTTY: true,
+        claudeCodeSessionIdEnv: "code-sess-abc",
+        ledgerAdd: async () => ({ ok: true }),
+      }),
+    ).rejects.toThrow(/agent shell.*CLAUDE_CODE_SESSION_ID/is);
+  });
+
+  it("refuses to run when CODEX_SESSION_ID is set", async () => {
+    await expect(
+      resume({
+        manifest: manifest(),
+        generatedDir: tmp,
+        stdinIsTTY: true,
+        codexSessionIdEnv: "codex-sess-abc",
+        ledgerAdd: async () => ({ ok: true }),
+      }),
+    ).rejects.toThrow(/agent shell.*CODEX_SESSION_ID/is);
   });
 
   it("resumes an expired pause (deletes the stale sentinel)", async () => {

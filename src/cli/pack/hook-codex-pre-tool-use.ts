@@ -221,6 +221,7 @@ export async function runPackHookCodexPreToolUseCli(
   const sessionId =
     pickString(event.session_id) ??
     process.env["CODEX_SESSION_ID"] ??
+    process.env["CLAUDE_CODE_SESSION_ID"] ??
     process.env["CLAUDE_SESSION_ID"] ??
     "";
   const toolName = pickString(event.tool_name, event.tool) ?? "(unknown)";
@@ -270,7 +271,7 @@ export async function runPackHookCodexPreToolUseCli(
 
   if (sessionId === "") {
     return allowResult(
-      "no session_id resolvable from input or $CODEX_SESSION_ID/$CLAUDE_SESSION_ID",
+      "no session_id resolvable from input or $CODEX_SESSION_ID/$CLAUDE_CODE_SESSION_ID/$CLAUDE_SESSION_ID",
       "none",
       stderr,
     );
@@ -327,8 +328,8 @@ export async function runPackHookCodexPreToolUseCli(
   }
 
   // Stage the session id so `harness approve understanding`, run from
-  // the operator's shell where neither $CODEX_SESSION_ID nor
-  // $CLAUDE_SESSION_ID is set, can resolve it without scraping logs or
+  // the operator's shell where none of $CODEX_SESSION_ID,
+  // $CLAUDE_CODE_SESSION_ID or $CLAUDE_SESSION_ID is set, can resolve it without scraping logs or
   // grepping transcript dirs. Mirrors the Claude blocker's symmetric
   // staging (hook-pre-tool-use.ts) so arg-less approval after a Codex
   // PreToolUse block has the same shape. Best-effort: a staging-write

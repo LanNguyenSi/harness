@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { explain } from "../../src/cli/explain.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
 import { makeDecisionEntry } from "../_helpers/decision.js";
@@ -12,9 +12,24 @@ const REPO_ROOT = path.resolve(path.dirname(__filename), "..", "..");
 const FULL_MANIFEST = path.join(REPO_ROOT, "docs", "examples", "full-manifest.yaml");
 
 let cleanups: Array<() => void> = [];
+// The session-id resolver reads $CLAUDE_CODE_SESSION_ID ahead of the
+// legacy $CLAUDE_SESSION_ID (task 6562b9f6); clear both so the dev
+// host's exported canonical var doesn't shadow per-test env reads.
+let savedClaude: string | undefined;
+let savedClaudeCode: string | undefined;
+beforeEach(() => {
+  savedClaude = process.env.CLAUDE_SESSION_ID;
+  savedClaudeCode = process.env.CLAUDE_CODE_SESSION_ID;
+  delete process.env.CLAUDE_SESSION_ID;
+  delete process.env.CLAUDE_CODE_SESSION_ID;
+});
 afterEach(() => {
   for (const c of cleanups) c();
   cleanups = [];
+  if (savedClaude === undefined) delete process.env.CLAUDE_SESSION_ID;
+  else process.env.CLAUDE_SESSION_ID = savedClaude;
+  if (savedClaudeCode === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+  else process.env.CLAUDE_CODE_SESSION_ID = savedClaudeCode;
 });
 
 describe("explain — happy path", () => {
@@ -376,6 +391,30 @@ describe("explain --trace", () => {
       if (saved === undefined) delete process.env.CLAUDE_SESSION_ID;
       else process.env.CLAUDE_SESSION_ID = saved;
     }
+  });
+
+  it("Phase 5 #2: --trace prefers $CLAUDE_CODE_SESSION_ID over legacy $CLAUDE_SESSION_ID (task 6562b9f6)", async () => {
+    process.env.CLAUDE_CODE_SESSION_ID = "code-env-sess-trace";
+    process.env.CLAUDE_SESSION_ID = "legacy-env-sess-trace";
+    let observedSessionId: string | undefined;
+    await explain("review-before-merge", {
+      configPath: FULL_MANIFEST,
+      trace: true,
+      json: true,
+      fetchLedger: async (sid) => {
+        observedSessionId = sid;
+        return {
+          kind: "ok",
+          entries: [
+            makeDecisionEntry(
+              { policyName: "review-before-merge" },
+              "2026-04-30T10:00:00.000Z",
+            ),
+          ],
+        };
+      },
+    });
+    expect(observedSessionId).toBe("code-env-sess-trace");
   });
 
   it("--trace discovers the live session from the newest transcript when no env or flag", async () => {

@@ -1,7 +1,25 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { audit } from "../../src/cli/audit.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
 import { makeDecisionEntry as decisionEntry } from "../_helpers/decision.js";
+
+// The session-id resolver reads $CLAUDE_CODE_SESSION_ID ahead of the
+// legacy $CLAUDE_SESSION_ID (task 6562b9f6); clear both so the dev
+// host's exported canonical var doesn't shadow per-test legacy-env reads.
+let savedClaude: string | undefined;
+let savedClaudeCode: string | undefined;
+beforeEach(() => {
+  savedClaude = process.env.CLAUDE_SESSION_ID;
+  savedClaudeCode = process.env.CLAUDE_CODE_SESSION_ID;
+  delete process.env.CLAUDE_SESSION_ID;
+  delete process.env.CLAUDE_CODE_SESSION_ID;
+});
+afterEach(() => {
+  if (savedClaude === undefined) delete process.env.CLAUDE_SESSION_ID;
+  else process.env.CLAUDE_SESSION_ID = savedClaude;
+  if (savedClaudeCode === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+  else process.env.CLAUDE_CODE_SESSION_ID = savedClaudeCode;
+});
 
 const NOW = new Date("2026-04-30T12:00:00.000Z");
 
@@ -273,6 +291,21 @@ describe("audit — Phase 5 #2: sessionId env fallback", () => {
     } finally {
       if (saved !== undefined) process.env.CLAUDE_SESSION_ID = saved;
     }
+  });
+
+  it("prefers $CLAUDE_CODE_SESSION_ID over legacy $CLAUDE_SESSION_ID (task 6562b9f6)", async () => {
+    process.env.CLAUDE_CODE_SESSION_ID = "code-env-sess";
+    process.env.CLAUDE_SESSION_ID = "legacy-env-sess";
+    let observedSessionId: string | undefined;
+    await audit({
+      configPath: MANIFEST_PATH,
+      now: NOW,
+      fetchLedger: async (sid) => {
+        observedSessionId = sid;
+        return { kind: "ok", entries: [] };
+      },
+    });
+    expect(observedSessionId).toBe("code-env-sess");
   });
 
   it("discovers the live session from the newest transcript when no env or flag", async () => {

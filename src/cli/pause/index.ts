@@ -5,11 +5,17 @@
 // in `src/runtime/pause-sentinel.ts`.
 //
 // The verbs are intentionally not a debugging convenience: they exist
-// for three narrow flows and the guardrails (refuse-when-CLAUDE_SESSION_ID,
+// for three narrow flows and the guardrails (refuse-when-agent-session-env,
 // refuse-non-TTY, `--indefinite` requires a verbose accept-flag) push
 // back against any other use. See the task description on agent-tasks
 // `07850f73-511b-44dc-b5aa-f8564fd15fff` for the design rationale and
 // the slippery-slope analysis.
+//
+// Agent-shell detection looks at three env vars (any one set is enough
+// to refuse): `$CLAUDE_CODE_SESSION_ID` (what Claude Code actually
+// exports), legacy `$CLAUDE_SESSION_ID`, and `$CODEX_SESSION_ID` for
+// the Codex runtime. The legacy `$CLAUDE_SESSION_ID` is kept for
+// back-compat with hand-rolled wrappers that export it manually.
 
 import * as os from "node:os";
 import { parseDurationSeconds, InvalidDurationError } from "../../policies/index.js";
@@ -64,10 +70,20 @@ export interface PauseOptions extends LoaderOptions {
   /** Override the harness.generated/ directory (test injection). */
   generatedDir?: string;
   /**
-   * Override the inherited `$CLAUDE_SESSION_ID` (test injection). When
-   * set to a non-empty string, the verb refuses to run.
+   * Override the inherited legacy `$CLAUDE_SESSION_ID` (test injection).
+   * When set to a non-empty string, the verb refuses to run.
    */
   claudeSessionIdEnv?: string;
+  /**
+   * Override the inherited canonical `$CLAUDE_CODE_SESSION_ID` (test
+   * injection). When set to a non-empty string, the verb refuses to run.
+   */
+  claudeCodeSessionIdEnv?: string;
+  /**
+   * Override the inherited `$CODEX_SESSION_ID` (test injection). When
+   * set to a non-empty string, the verb refuses to run.
+   */
+  codexSessionIdEnv?: string;
   /** Override stdin TTY detection (test injection). */
   stdinIsTTY?: boolean;
   /** Override the recorded `pausedBy` identity (test injection). */
@@ -90,8 +106,12 @@ export interface ResumeOptions extends LoaderOptions {
   now?: Date;
   /** Override the harness.generated/ directory (test injection). */
   generatedDir?: string;
-  /** Override the inherited `$CLAUDE_SESSION_ID` (test injection). */
+  /** Override the inherited legacy `$CLAUDE_SESSION_ID` (test injection). */
   claudeSessionIdEnv?: string;
+  /** Override the inherited canonical `$CLAUDE_CODE_SESSION_ID` (test injection). */
+  claudeCodeSessionIdEnv?: string;
+  /** Override the inherited `$CODEX_SESSION_ID` (test injection). */
+  codexSessionIdEnv?: string;
   /** Override stdin TTY detection (test injection). */
   stdinIsTTY?: boolean;
   /** Acknowledges the non-TTY stdin escape hatch (mirror of pause). */
@@ -149,15 +169,45 @@ function resolveGeneratedDirForVerb(opts: PauseOptions | ResumeOptions): string 
   });
 }
 
-function refuseIfAgentShell(opts: { claudeSessionIdEnv?: string }): void {
-  const env =
-    opts.claudeSessionIdEnv !== undefined
-      ? opts.claudeSessionIdEnv
-      : process.env.CLAUDE_SESSION_ID;
-  if (typeof env === "string" && env.length > 0) {
+function refuseIfAgentShell(opts: {
+  claudeSessionIdEnv?: string;
+  claudeCodeSessionIdEnv?: string;
+  codexSessionIdEnv?: string;
+}): void {
+  // Any of the three agent-session env vars triggers the refusal. The
+  // canonical $CLAUDE_CODE_SESSION_ID is what Claude Code actually
+  // exports today; legacy $CLAUDE_SESSION_ID is kept for hand-rolled
+  // wrappers that set it manually; $CODEX_SESSION_ID covers the Codex
+  // runtime. Test overrides take precedence per-slot.
+  type Slot = { name: string; value: string | undefined };
+  const slots: Slot[] = [
+    {
+      name: "$CLAUDE_CODE_SESSION_ID",
+      value:
+        opts.claudeCodeSessionIdEnv !== undefined
+          ? opts.claudeCodeSessionIdEnv
+          : process.env.CLAUDE_CODE_SESSION_ID,
+    },
+    {
+      name: "$CLAUDE_SESSION_ID",
+      value:
+        opts.claudeSessionIdEnv !== undefined
+          ? opts.claudeSessionIdEnv
+          : process.env.CLAUDE_SESSION_ID,
+    },
+    {
+      name: "$CODEX_SESSION_ID",
+      value:
+        opts.codexSessionIdEnv !== undefined
+          ? opts.codexSessionIdEnv
+          : process.env.CODEX_SESSION_ID,
+    },
+  ];
+  const hit = slots.find((s) => typeof s.value === "string" && s.value.length > 0);
+  if (hit !== undefined) {
     throw new HarnessExitError(
       [
-        "harness pause/resume refuses to run inside an agent shell ($CLAUDE_SESSION_ID is set).",
+        `harness pause/resume refuses to run inside an agent shell (${hit.name} is set).`,
         "",
         "This is the load-bearing guardrail against `harness pause` becoming an",
         "agent-driven bypass of the gates harness exists to enforce. Run the verb",

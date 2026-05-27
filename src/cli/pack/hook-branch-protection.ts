@@ -339,6 +339,7 @@ export async function runPackHookBranchProtectionCli(
 
   const sessionId =
     (typeof event.session_id === "string" ? event.session_id : undefined) ??
+    process.env.CLAUDE_CODE_SESSION_ID ??
     process.env.CLAUDE_SESSION_ID ??
     "";
   const toolName = typeof event.tool_name === "string" ? event.tool_name : "(unknown)";
@@ -432,7 +433,7 @@ export async function runPackHookBranchProtectionCli(
 
   // On a protected branch: probe the ledger for either gate path.
   if (sessionId === "") {
-    const reason = `no session_id resolvable from stdin or $CLAUDE_SESSION_ID; cannot consult ledger`;
+    const reason = `no session_id resolvable from stdin or $CLAUDE_CODE_SESSION_ID/$CLAUDE_SESSION_ID; cannot consult ledger`;
     const diagnostic = `BLOCK — ${reason}`;
     note(diagnostic);
     stdout.write(`${blockJson(toolName, branch, reason, protectedList, configUx, sessionId)}\n`);

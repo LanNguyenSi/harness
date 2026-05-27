@@ -13,13 +13,25 @@ import {
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
 let tmp: string;
+let savedClaude: string | undefined;
+let savedClaudeCode: string | undefined;
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ug-post-"));
+  // The hook reads both env vars as session-id fallbacks; clear them so
+  // the dev host's $CLAUDE_CODE_SESSION_ID doesn't bleed into tests.
+  savedClaude = process.env.CLAUDE_SESSION_ID;
+  savedClaudeCode = process.env.CLAUDE_CODE_SESSION_ID;
+  delete process.env.CLAUDE_SESSION_ID;
+  delete process.env.CLAUDE_CODE_SESSION_ID;
 });
 
 afterEach(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
+  if (savedClaude === undefined) delete process.env.CLAUDE_SESSION_ID;
+  else process.env.CLAUDE_SESSION_ID = savedClaude;
+  if (savedClaudeCode === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+  else process.env.CLAUDE_CODE_SESSION_ID = savedClaudeCode;
 });
 
 function manifestWithPack(
@@ -190,6 +202,27 @@ describe("pack hook post-tool-use marker-expiry (agent-tasks/d8ee60ca)", () => {
     });
     expect(result.matchedExpiry).toBe(false);
     expect(stderr.read()).toMatch(/missing session_id/);
+  });
+
+  it("resolves session_id from $CLAUDE_CODE_SESSION_ID when event omits it (task 6562b9f6)", async () => {
+    process.env.CLAUDE_CODE_SESSION_ID = "code-env-sess-post";
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "code-env-sess-post", {
+      approvedAt: "2026-05-17T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const stderr = bufferStream();
+    const result = await runPackHookPostToolUseCli({
+      manifest: manifestWithPack({ approval_lifecycle: DEFAULT_LIFECYCLE }),
+      stdin: readableFromString(
+        JSON.stringify({ tool_name: "mcp__agent-tasks__task_finish" }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+    // The "missing session_id" early-return must NOT fire — env fallback supplied id.
+    expect(stderr.read()).not.toMatch(/missing session_id/);
+    expect(result.matchedExpiry).toBeDefined();
   });
 });
 

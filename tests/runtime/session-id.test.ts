@@ -10,16 +10,18 @@ import {
 
 describe("resolveSessionId", () => {
   let savedEnv: string | undefined;
+  let savedCodeEnv: string | undefined;
   beforeEach(() => {
     savedEnv = process.env.CLAUDE_SESSION_ID;
+    savedCodeEnv = process.env.CLAUDE_CODE_SESSION_ID;
     delete process.env.CLAUDE_SESSION_ID;
+    delete process.env.CLAUDE_CODE_SESSION_ID;
   });
   afterEach(() => {
-    if (savedEnv === undefined) {
-      delete process.env.CLAUDE_SESSION_ID;
-    } else {
-      process.env.CLAUDE_SESSION_ID = savedEnv;
-    }
+    if (savedEnv === undefined) delete process.env.CLAUDE_SESSION_ID;
+    else process.env.CLAUDE_SESSION_ID = savedEnv;
+    if (savedCodeEnv === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+    else process.env.CLAUDE_CODE_SESSION_ID = savedCodeEnv;
   });
 
   it("returns the explicit argument when given", () => {
@@ -30,6 +32,23 @@ describe("resolveSessionId", () => {
   it("falls back to CLAUDE_SESSION_ID when no explicit argument is given", () => {
     process.env.CLAUDE_SESSION_ID = "env-id";
     expect(resolveSessionId()).toBe("env-id");
+  });
+
+  it("prefers CLAUDE_CODE_SESSION_ID over legacy CLAUDE_SESSION_ID", () => {
+    process.env.CLAUDE_CODE_SESSION_ID = "code-id";
+    process.env.CLAUDE_SESSION_ID = "legacy-id";
+    expect(resolveSessionId()).toBe("code-id");
+  });
+
+  it("falls back to CLAUDE_SESSION_ID when CLAUDE_CODE_SESSION_ID is unset", () => {
+    process.env.CLAUDE_SESSION_ID = "legacy-id";
+    expect(resolveSessionId()).toBe("legacy-id");
+  });
+
+  it("treats an empty CLAUDE_CODE_SESSION_ID as not provided", () => {
+    process.env.CLAUDE_CODE_SESSION_ID = "";
+    process.env.CLAUDE_SESSION_ID = "legacy-id";
+    expect(resolveSessionId()).toBe("legacy-id");
   });
 
   it("returns 'default' when neither explicit nor env is set", () => {
@@ -141,16 +160,18 @@ describe("discoverNewestSessionId", () => {
 
 describe("resolveReadSessionId", () => {
   let savedEnv: string | undefined;
+  let savedCodeEnv: string | undefined;
   beforeEach(() => {
     savedEnv = process.env.CLAUDE_SESSION_ID;
+    savedCodeEnv = process.env.CLAUDE_CODE_SESSION_ID;
     delete process.env.CLAUDE_SESSION_ID;
+    delete process.env.CLAUDE_CODE_SESSION_ID;
   });
   afterEach(() => {
-    if (savedEnv === undefined) {
-      delete process.env.CLAUDE_SESSION_ID;
-    } else {
-      process.env.CLAUDE_SESSION_ID = savedEnv;
-    }
+    if (savedEnv === undefined) delete process.env.CLAUDE_SESSION_ID;
+    else process.env.CLAUDE_SESSION_ID = savedEnv;
+    if (savedCodeEnv === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+    else process.env.CLAUDE_CODE_SESSION_ID = savedCodeEnv;
   });
 
   it("returns the explicit argument ahead of env and discovery", () => {
@@ -160,10 +181,26 @@ describe("resolveReadSessionId", () => {
     ).toBe("explicit-id");
   });
 
-  it("uses $CLAUDE_SESSION_ID ahead of discovery", () => {
+  it("uses $CLAUDE_CODE_SESSION_ID ahead of legacy env and discovery", () => {
+    process.env.CLAUDE_CODE_SESSION_ID = "code-id";
+    process.env.CLAUDE_SESSION_ID = "legacy-id";
+    expect(resolveReadSessionId(undefined, { discover: () => "discovered-id" })).toBe(
+      "code-id",
+    );
+  });
+
+  it("uses $CLAUDE_SESSION_ID ahead of discovery when canonical is unset", () => {
     process.env.CLAUDE_SESSION_ID = "env-id";
     expect(resolveReadSessionId(undefined, { discover: () => "discovered-id" })).toBe(
       "env-id",
+    );
+  });
+
+  it("treats an empty CLAUDE_CODE_SESSION_ID as not provided", () => {
+    process.env.CLAUDE_CODE_SESSION_ID = "";
+    process.env.CLAUDE_SESSION_ID = "legacy-id";
+    expect(resolveReadSessionId(undefined, { discover: () => "discovered-id" })).toBe(
+      "legacy-id",
     );
   });
 
