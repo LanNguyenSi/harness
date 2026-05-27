@@ -14,13 +14,26 @@ import { readPendingApproval } from "../../src/runtime/pending-approval.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
 let tmp: string;
+let savedClaude: string | undefined;
+let savedClaudeCode: string | undefined;
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ug-blocker-"));
+  // The hook reads both env vars as session-id fallbacks; clear them so
+  // the dev host's $CLAUDE_CODE_SESSION_ID doesn't make tests that
+  // expect "no session_id" path fall into the env-fallback branch.
+  savedClaude = process.env.CLAUDE_SESSION_ID;
+  savedClaudeCode = process.env.CLAUDE_CODE_SESSION_ID;
+  delete process.env.CLAUDE_SESSION_ID;
+  delete process.env.CLAUDE_CODE_SESSION_ID;
 });
 
 afterEach(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
+  if (savedClaude === undefined) delete process.env.CLAUDE_SESSION_ID;
+  else process.env.CLAUDE_SESSION_ID = savedClaude;
+  if (savedClaudeCode === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+  else process.env.CLAUDE_CODE_SESSION_ID = savedClaudeCode;
 });
 
 function manifestWithPack(enabled = true): Manifest {
@@ -682,7 +695,9 @@ describe("pack hook pre-tool-use blocker", () => {
     const stdout = bufferStream();
     const stderr = bufferStream();
     const before = process.env.CLAUDE_SESSION_ID;
+    const beforeCode = process.env.CLAUDE_CODE_SESSION_ID;
     delete process.env.CLAUDE_SESSION_ID;
+    delete process.env.CLAUDE_CODE_SESSION_ID;
     try {
       const result = await runPackHookPreToolUseCli({
         manifest: manifestWithPack(),
@@ -695,6 +710,37 @@ describe("pack hook pre-tool-use blocker", () => {
       expect(stderr.read()).toMatch(/no session_id resolvable/);
     } finally {
       if (before !== undefined) process.env.CLAUDE_SESSION_ID = before;
+      if (beforeCode !== undefined) process.env.CLAUDE_CODE_SESSION_ID = beforeCode;
+    }
+  });
+
+  it("resolves session_id from $CLAUDE_CODE_SESSION_ID when the event omits it", async () => {
+    // Regression for task 6562b9f6: pre-fix this hook only fell back to
+    // $CLAUDE_SESSION_ID, the var Claude Code does NOT export.
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const before = process.env.CLAUDE_SESSION_ID;
+    const beforeCode = process.env.CLAUDE_CODE_SESSION_ID;
+    delete process.env.CLAUDE_SESSION_ID;
+    process.env.CLAUDE_CODE_SESSION_ID = "code-env-sess";
+    try {
+      const result = await runPackHookPreToolUseCli({
+        manifest: manifestWithPack(),
+        // No session_id in the event envelope.
+        stdin: readableFromString(JSON.stringify({ tool_name: "Bash", tool_input: { command: "ls" } })),
+        stdout: stdout.stream,
+        stderr: stderr.stream,
+        reportsDir: path.join(tmp, "no-reports"),
+      });
+      // The "no session_id resolvable" branch must NOT fire — the env
+      // fallback supplied the id.
+      expect(stderr.read()).not.toMatch(/no session_id resolvable/);
+      expect(result.blocked).toBeDefined();
+    } finally {
+      if (before !== undefined) process.env.CLAUDE_SESSION_ID = before;
+      else delete process.env.CLAUDE_SESSION_ID;
+      if (beforeCode !== undefined) process.env.CLAUDE_CODE_SESSION_ID = beforeCode;
+      else delete process.env.CLAUDE_CODE_SESSION_ID;
     }
   });
 

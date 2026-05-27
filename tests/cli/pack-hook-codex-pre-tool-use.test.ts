@@ -10,13 +10,31 @@ import { readPendingApproval } from "../../src/runtime/pending-approval.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
 let tmp: string;
+let savedClaude: string | undefined;
+let savedClaudeCode: string | undefined;
+let savedCodex: string | undefined;
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ug-codex-blocker-"));
+  // The hook reads three env vars as session-id fallbacks; clear them
+  // so the dev host's $CLAUDE_CODE_SESSION_ID doesn't make tests that
+  // expect "no session_id" pass an unexpected env-resolved id.
+  savedClaude = process.env.CLAUDE_SESSION_ID;
+  savedClaudeCode = process.env.CLAUDE_CODE_SESSION_ID;
+  savedCodex = process.env.CODEX_SESSION_ID;
+  delete process.env.CLAUDE_SESSION_ID;
+  delete process.env.CLAUDE_CODE_SESSION_ID;
+  delete process.env.CODEX_SESSION_ID;
 });
 
 afterEach(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
+  if (savedClaude === undefined) delete process.env.CLAUDE_SESSION_ID;
+  else process.env.CLAUDE_SESSION_ID = savedClaude;
+  if (savedClaudeCode === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+  else process.env.CLAUDE_CODE_SESSION_ID = savedClaudeCode;
+  if (savedCodex === undefined) delete process.env.CODEX_SESSION_ID;
+  else process.env.CODEX_SESSION_ID = savedCodex;
 });
 
 function manifestWithPack(enabled = true): Manifest {
@@ -286,6 +304,35 @@ describe("pack hook codex-pre-tool-use blocker", () => {
     expect(result.blocked).toBe(false);
     expect(result.exitCode).toBe(0);
     expect(stderr.read()).toMatch(/no session_id/);
+  });
+
+  it("resolves session_id from $CLAUDE_CODE_SESSION_ID when CODEX_SESSION_ID is unset (task 6562b9f6)", async () => {
+    process.env.CLAUDE_CODE_SESSION_ID = "code-env-sess-codex";
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(JSON.stringify({ tool_name: "apply_patch" })),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+    });
+    // The "no session_id" allow-branch must NOT fire — env fallback supplied the id.
+    expect(stderr.read()).not.toMatch(/no session_id/);
+    expect(result.blocked).toBeDefined();
+  });
+
+  it("prefers $CODEX_SESSION_ID over $CLAUDE_CODE_SESSION_ID and $CLAUDE_SESSION_ID", async () => {
+    process.env.CODEX_SESSION_ID = "codex-env-wins";
+    process.env.CLAUDE_CODE_SESSION_ID = "code-env-loses";
+    process.env.CLAUDE_SESSION_ID = "legacy-env-loses";
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(JSON.stringify({ tool_name: "apply_patch" })),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+    });
+    expect(stderr.read()).not.toMatch(/no session_id/);
+    expect(result.blocked).toBeDefined();
   });
 
   it("tolerates the Codex-native `tool` synonym in the envelope", async () => {

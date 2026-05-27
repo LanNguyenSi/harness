@@ -318,9 +318,10 @@ auto-resumes in 7m. Run \`harness resume\` to re-enable.`) and allows
 the tool call without evaluating. After the window expires, the next
 hook fire silently deletes the sentinel and resumes normal gating.
 
-**Operator-only by design.** `harness pause` refuses to run when
-`$CLAUDE_SESSION_ID` is set (the variable is always set inside an
-agent shell) and refuses non-TTY stdin without `--i-am-the-operator`.
+**Operator-only by design.** `harness pause` refuses to run when any of
+`$CLAUDE_CODE_SESSION_ID` (what Claude Code actually exports),
+`$CLAUDE_SESSION_ID` (legacy), or `$CODEX_SESSION_ID` is set, and
+refuses non-TTY stdin without `--i-am-the-operator`.
 This is the guardrail against pause becoming an agent-driven bypass
 of the gates harness exists to enforce. From inside Claude Code,
 prefix the command with `! ` so it runs in your own shell.

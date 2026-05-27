@@ -12,13 +12,28 @@ import { approveUnderstanding } from "../../src/cli/approve/understanding.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
 let tmp: string;
+let savedClaude: string | undefined;
+let savedClaudeCode: string | undefined;
+let savedCodex: string | undefined;
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ug-codex-stop-"));
+  savedClaude = process.env.CLAUDE_SESSION_ID;
+  savedClaudeCode = process.env.CLAUDE_CODE_SESSION_ID;
+  savedCodex = process.env.CODEX_SESSION_ID;
+  delete process.env.CLAUDE_SESSION_ID;
+  delete process.env.CLAUDE_CODE_SESSION_ID;
+  delete process.env.CODEX_SESSION_ID;
 });
 
 afterEach(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
+  if (savedClaude === undefined) delete process.env.CLAUDE_SESSION_ID;
+  else process.env.CLAUDE_SESSION_ID = savedClaude;
+  if (savedClaudeCode === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+  else process.env.CLAUDE_CODE_SESSION_ID = savedClaudeCode;
+  if (savedCodex === undefined) delete process.env.CODEX_SESSION_ID;
+  else process.env.CODEX_SESSION_ID = savedCodex;
 });
 
 function manifestWithPack(enabled = true): Manifest {
@@ -287,6 +302,24 @@ describe("runPackHookCodexStopCli", () => {
     });
     expect(result.parsed).toBe(false);
     expect(stderr.read()).toMatch(/no session_id/);
+  });
+
+  it("resolves session_id from $CLAUDE_CODE_SESSION_ID when envelope and CODEX_SESSION_ID are absent (task 6562b9f6)", async () => {
+    process.env.CLAUDE_CODE_SESSION_ID = "code-env-sess-codex-stop";
+    const reportsDir = path.join(tmp, "reports");
+    const stderr = bufferStream();
+    const result = await runPackHookCodexStopCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        JSON.stringify({ last_assistant_message: FULL_REPORT }),
+      ),
+      stderr: stderr.stream,
+      reportsDir,
+    });
+    // The "no session_id" allow-branch must NOT fire — env fallback supplied id.
+    expect(stderr.read()).not.toMatch(/no session_id/);
+    // Capture proceeded to attempt a parse using the env-resolved id.
+    expect(result.parsed).toBeDefined();
   });
 
   it("fails open (exit 0) when stdin emits a stream error", async () => {

@@ -186,8 +186,10 @@ export async function runSessionStartBranchCheck(
         ? "stdin"
         : sessionId === FALLBACK_SESSION
           ? "default"
-          : typeof process.env.CLAUDE_SESSION_ID === "string" &&
-              process.env.CLAUDE_SESSION_ID === sessionId
+          : (typeof process.env.CLAUDE_CODE_SESSION_ID === "string" &&
+              process.env.CLAUDE_CODE_SESSION_ID === sessionId) ||
+              (typeof process.env.CLAUDE_SESSION_ID === "string" &&
+                process.env.CLAUDE_SESSION_ID === sessionId)
             ? "env"
             : "transcript";
 

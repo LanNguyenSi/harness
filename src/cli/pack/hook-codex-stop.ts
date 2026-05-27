@@ -367,6 +367,7 @@ export async function runPackHookCodexStopCli(
   const sessionId =
     pickString(envelope.session_id) ??
     process.env["CODEX_SESSION_ID"] ??
+    process.env["CLAUDE_CODE_SESSION_ID"] ??
     process.env["CLAUDE_SESSION_ID"] ??
     "";
   if (sessionId === "") {

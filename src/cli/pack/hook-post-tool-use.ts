@@ -218,6 +218,7 @@ export async function runPackHookPostToolUseCli(
 
   const sessionId =
     (typeof event.session_id === "string" ? event.session_id : undefined) ??
+    process.env.CLAUDE_CODE_SESSION_ID ??
     process.env.CLAUDE_SESSION_ID ??
     "";
   const toolName = typeof event.tool_name === "string" ? event.tool_name : "";

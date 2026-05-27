@@ -329,10 +329,14 @@ describe("runPackHookBranchProtectionCli — block paths", () => {
   it("blocks when stdin yields no resolvable session_id on a protected branch", async () => {
     const repo = makeRepoFixture("svc", "master");
     const savedEnv = process.env.CLAUDE_SESSION_ID;
+    const savedCodeEnv = process.env.CLAUDE_CODE_SESSION_ID;
     delete process.env.CLAUDE_SESSION_ID;
+    delete process.env.CLAUDE_CODE_SESSION_ID;
     cleanups.push(() => {
       if (savedEnv === undefined) delete process.env.CLAUDE_SESSION_ID;
       else process.env.CLAUDE_SESSION_ID = savedEnv;
+      if (savedCodeEnv === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+      else process.env.CLAUDE_CODE_SESSION_ID = savedCodeEnv;
     });
     const { stream: out, output: outBuf } = captureStream();
     const { stream: err } = captureStream();
@@ -347,6 +351,34 @@ describe("runPackHookBranchProtectionCli — block paths", () => {
     expect(result.blocked).toBe(true);
     const envelope = JSON.parse(outBuf());
     expect(envelope.reason).toMatch(/no session_id resolvable/);
+  });
+
+  it("resolves session_id from $CLAUDE_CODE_SESSION_ID when stdin omits it (task 6562b9f6)", async () => {
+    const repo = makeRepoFixture("svc", "master");
+    const savedEnv = process.env.CLAUDE_SESSION_ID;
+    const savedCodeEnv = process.env.CLAUDE_CODE_SESSION_ID;
+    delete process.env.CLAUDE_SESSION_ID;
+    process.env.CLAUDE_CODE_SESSION_ID = "code-env-sess-bp";
+    cleanups.push(() => {
+      if (savedEnv === undefined) delete process.env.CLAUDE_SESSION_ID;
+      else process.env.CLAUDE_SESSION_ID = savedEnv;
+      if (savedCodeEnv === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+      else process.env.CLAUDE_CODE_SESSION_ID = savedCodeEnv;
+    });
+    const { stream: out, output: outBuf } = captureStream();
+    const { stream: err } = captureStream();
+    const result = await runPackHookBranchProtectionCli({
+      stdin: streamFrom(JSON.stringify({ tool_name: "Write", cwd: repo })),
+      stdout: out,
+      stderr: err,
+      manifest: manifestWithPack(),
+      ledgerQuery: async () => [],
+    });
+    // The "no session_id resolvable" branch must NOT fire — env fallback supplied it.
+    if (result.blocked) {
+      const envelope = JSON.parse(outBuf());
+      expect(envelope.reason).not.toMatch(/no session_id resolvable/);
+    }
   });
 });
 

@@ -23,15 +23,33 @@ import { makeManifest, makePolicy } from "../_helpers/manifest.js";
 
 let tmp: string;
 let generatedDir: string;
+let savedClaude: string | undefined;
+let savedClaudeCode: string | undefined;
+let savedCodex: string | undefined;
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pause-hook-int-"));
   generatedDir = path.join(tmp, "harness.generated");
   fs.mkdirSync(generatedDir, { recursive: true });
+  // Mirror tests/cli/pause.test.ts: clear all three agent-session env
+  // vars so the dev host's $CLAUDE_CODE_SESSION_ID doesn't make pause
+  // refuse to run when only claudeSessionIdEnv is overridden.
+  savedClaude = process.env.CLAUDE_SESSION_ID;
+  savedClaudeCode = process.env.CLAUDE_CODE_SESSION_ID;
+  savedCodex = process.env.CODEX_SESSION_ID;
+  delete process.env.CLAUDE_SESSION_ID;
+  delete process.env.CLAUDE_CODE_SESSION_ID;
+  delete process.env.CODEX_SESSION_ID;
 });
 
 afterEach(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
+  if (savedClaude === undefined) delete process.env.CLAUDE_SESSION_ID;
+  else process.env.CLAUDE_SESSION_ID = savedClaude;
+  if (savedClaudeCode === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+  else process.env.CLAUDE_CODE_SESSION_ID = savedClaudeCode;
+  if (savedCodex === undefined) delete process.env.CODEX_SESSION_ID;
+  else process.env.CODEX_SESSION_ID = savedCodex;
 });
 
 function manifestWithPack(): Manifest {

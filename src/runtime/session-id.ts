@@ -13,8 +13,9 @@
 // WRITE path (`policy intercept`), which always carries a concrete
 // `event.session_id`:
 //   1. explicit value (the runtime's `event.session_id`)
-//   2. `$CLAUDE_SESSION_ID` env
-//   3. literal `"default"`
+//   2. `$CLAUDE_CODE_SESSION_ID` env (the var Claude Code actually exports)
+//   3. `$CLAUDE_SESSION_ID` env (legacy fallback)
+//   4. literal `"default"`
 //
 // The READ path (`audit`, `explain --trace/--last`) needs more. The
 // Phase 5 #2 fix assumed `$CLAUDE_SESSION_ID` is exported into the
@@ -25,6 +26,10 @@
 // the active session id off the newest Claude Code transcript JSONL.
 // That is the programmatic form of the heuristic `harness approve`'s
 // own help text recommends to humans.
+//
+// Both resolvers also accept `$CLAUDE_CODE_SESSION_ID` as a higher-priority
+// env tier than the legacy `$CLAUDE_SESSION_ID`, mirroring the
+// `harness approve` verbs (`src/cli/approve/{risk,understanding}.ts`).
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -43,6 +48,8 @@ const FALLBACK = "default";
  */
 export function resolveSessionId(explicit?: string): string {
   if (typeof explicit === "string" && explicit.length > 0) return explicit;
+  const envCode = process.env.CLAUDE_CODE_SESSION_ID;
+  if (typeof envCode === "string" && envCode.length > 0) return envCode;
   const env = process.env.CLAUDE_SESSION_ID;
   if (typeof env === "string" && env.length > 0) return env;
   return FALLBACK;
@@ -122,9 +129,10 @@ export interface ResolveReadSessionOptions extends DiscoverSessionOptions {
  *
  * Precedence:
  *   1. explicit value (the `--session` flag)
- *   2. `$CLAUDE_SESSION_ID` env
- *   3. newest Claude Code transcript (the live session)
- *   4. literal `"default"`
+ *   2. `$CLAUDE_CODE_SESSION_ID` env (the var Claude Code actually exports)
+ *   3. `$CLAUDE_SESSION_ID` env (legacy fallback)
+ *   4. newest Claude Code transcript (the live session)
+ *   5. literal `"default"`
  *
  * The WRITE path keeps `resolveSessionId`: it always has
  * `event.session_id`, so it never reaches the discovery tier, and a
@@ -135,6 +143,8 @@ export function resolveReadSessionId(
   opts: ResolveReadSessionOptions = {},
 ): string {
   if (typeof explicit === "string" && explicit.length > 0) return explicit;
+  const envCode = process.env.CLAUDE_CODE_SESSION_ID;
+  if (typeof envCode === "string" && envCode.length > 0) return envCode;
   const env = process.env.CLAUDE_SESSION_ID;
   if (typeof env === "string" && env.length > 0) return env;
   const discover = opts.discover ?? discoverNewestSessionId;

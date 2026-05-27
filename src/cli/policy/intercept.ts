@@ -354,7 +354,14 @@ export async function runInterceptCli(
   // The env fallback is still applied so a Claude-Code-driven hook with
   // a stripped event can pick up the active session.
   const eventSessionId = typeof event.session_id === "string" ? event.session_id : undefined;
-  const builtinSessionId = eventSessionId ?? process.env.CLAUDE_SESSION_ID ?? "";
+  // Env-var fallback chain: $CLAUDE_CODE_SESSION_ID first (the var Claude
+  // Code actually exports), then legacy $CLAUDE_SESSION_ID. Matches the
+  // resolver precedence in src/runtime/session-id.ts.
+  const builtinSessionId =
+    eventSessionId ??
+    process.env.CLAUDE_CODE_SESSION_ID ??
+    process.env.CLAUDE_SESSION_ID ??
+    "";
   // REPO / BRANCH are derived from the tool event's cwd so that per-repo
   // and per-branch ledger tags (`preflight:${REPO}`, `preflight:${BRANCH}`)
   // actually namespace — they were previously read from HARNESS_REPO /
