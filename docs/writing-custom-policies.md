@@ -99,10 +99,12 @@ decisions (deny then allow) land in `harness audit` as
 
 The same shape works for any check that produces a per-branch ledger
 tag. The example below uses [`slop-detector`](https://github.com/LanNguyenSi/agent-dx/tree/master/packages/slop-detector)
-(a content linter from `agent-dx`) as the producer, but the policy
-itself does not name that tool: substitute your own check (linter,
-typechecker, fuzzer, secrets-scan, `harness preflight`) by changing
-the producer command in `ux.run` and the ledger tag.
+(a multi-pack slop linter from `agent-dx`, shipping `agent-tics`,
+`prose-slop`, `comment-slop`, `code-slop`, and `ui-slop`) as the
+producer, but the policy itself does not name that tool: substitute
+your own check (linter, typechecker, fuzzer, secrets-scan,
+`harness preflight`) by changing the producer command in `ux.run`
+and the ledger tag.
 
 Full file: [`docs/examples/policies/02-clean-check-before-push.yaml`](examples/policies/02-clean-check-before-push.yaml).
 Core:
@@ -124,8 +126,11 @@ policies:
       cannot: "You cannot push branch ${BRANCH} without a recent clean check."
       required: ["a clean-check:${BRANCH} ledger entry from the last 10 minutes"]
       run:
-        - "slop-detector check . && mcp__agent-grounding__ledger_add { tag: clean-check:${BRANCH} }"
+        - "slop-detector check . --pack ui-slop,code-slop && mcp__agent-grounding__ledger_add { tag: clean-check:${BRANCH} }"
 ```
+
+`--pack` filters slop-detector to a subset of its packs; omit the
+flag to run all five.
 
 What this recipe adds over Recipe A:
 

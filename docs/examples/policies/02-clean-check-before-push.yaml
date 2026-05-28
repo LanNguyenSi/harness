@@ -1,9 +1,11 @@
 # Recipe B: gate `git push` on a custom clean-check (real-world example)
 #
 # Pattern: any check that produces a per-branch ledger tag can gate the
-# push. The example below uses slop-detector (a content linter from
-# agent-dx); substitute your own check (linter / typechecker / fuzzer /
-# preflight) by changing the run: producer and the ledger tag.
+# push. The example below uses slop-detector (a multi-pack slop linter
+# from agent-dx, shipping agent-tics / prose-slop / comment-slop /
+# code-slop / ui-slop); substitute your own check (linter / typechecker
+# / fuzzer / preflight) by changing the run: producer and the ledger
+# tag.
 #
 # Demonstrates: bash_match on `git push`, ${BRANCH} builtin (no
 # explicit extract needed), within: freshness window, ux: with
@@ -54,4 +56,7 @@ policies:
       required:
         - "a clean-check:${BRANCH} ledger entry from the last 10 minutes"
       run:
-        - "slop-detector check . && mcp__agent-grounding__ledger_add { tag: clean-check:${BRANCH} }"
+        # `--pack` filters slop-detector to a subset of its packs; drop
+        # the flag to run all five (agent-tics, prose-slop,
+        # comment-slop, code-slop, ui-slop).
+        - "slop-detector check . --pack ui-slop,code-slop && mcp__agent-grounding__ledger_add { tag: clean-check:${BRANCH} }"
