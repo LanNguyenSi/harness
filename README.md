@@ -118,6 +118,7 @@ what actually happened.
 - **Operator?** [`docs/for-humans.md`](docs/for-humans.md): install through first `apply`, first real policy, diagnostics cheat sheet.
 - **Agent (or onboarding one)?** [`docs/for-agents.md`](docs/for-agents.md): workflow lifecycle, policy / ledger sequence, CLI cheat sheet by side-effect class, the audit triumvirate.
 - **Writing your own policy?** [`docs/writing-custom-policies.md`](docs/writing-custom-policies.md): three tripwires, four worked recipes (each validated in CI), author loop, field reference.
+- **Guarding destructive runtime commands?** [`docs/runtime-reality-hook.md`](docs/runtime-reality-hook.md): block compose/systemctl/kill/deploy calls when the live process state has drifted from what the docs expect.
 - **Looking up a CLI verb?** [`docs/CLI.md`](docs/CLI.md): every command the `harness` binary exposes, grouped by purpose (manifest, runtime, hooks, approvals, gates, preflight).
 
 ## Install
