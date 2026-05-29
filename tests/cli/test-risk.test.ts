@@ -90,6 +90,17 @@ describe("testRisk — classification", () => {
     expect(result.profile.severity).toBeNull();
   });
 
+  it("surfaces the built-in benign-harness floor (consistent with the runtime)", () => {
+    // The debug verb must report the same classification the gate uses,
+    // including the built-in floor for harness's own meta-commands —
+    // even when the manifest declares no classifiers.
+    const file = writeEvent(bashEvent("harness preflight"));
+    const result = testRisk({ ...SEAMS, eventPath: file, manifest: EMPTY_MANIFEST });
+    expect(result.profile.classified).toBe(true);
+    expect(result.profile.severity).toBe("low");
+    expect(result.profile.reasons[0]).toMatch(/built-in: benign harness meta-command/);
+  });
+
   it("treats every action as unclassified when the manifest has no classifiers", () => {
     const file = writeEvent(bashEvent("rm -rf /"));
     const result = testRisk({

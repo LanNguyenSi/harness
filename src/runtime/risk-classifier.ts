@@ -16,6 +16,11 @@
 // default; this module's job is only to report the unclassified state
 // honestly.
 //
+// The one built-in exception is harness's own benign meta-commands (see
+// BENIGN_HARNESS_COMMAND below): leaving them unclassified would let the
+// fail-close gate deny `harness preflight` — a command other harness
+// gates require — so they get a recognized `low`-severity floor.
+//
 // Design source: lava-ice-logs/2026-04-30/harness-risk-gate-extension.md
 // (design phase B).
 
@@ -42,6 +47,54 @@ const SEVERITY_ORDER: readonly RiskSeverity[] = RiskSeveritySchema.options;
 // not be tagged `destructive` by its classifier author.
 const IRREVERSIBLE_CATEGORIES: ReadonlySet<RiskCategory> = new Set<RiskCategory>(
   ["irreversible_action", "data_loss", "destructive"],
+);
+
+// Built-in benign-harness-command floor.
+//
+// harness's own read-only and gate-producer subcommands are benign: they
+// read state, record evidence, or print diagnostics, and several
+// (`harness preflight`, `harness session-start`) are REQUIRED by other
+// harness gates (require-preflight-evidence et al). Leaving them
+// unclassified lets the "unknown is not safe" fail-close treat them as
+// risk-bearing, so a `when: { risk.severity_at_least: critical,
+// environment.name: production }` policy HARD-DENIES `harness preflight`
+// the moment a session resolves to production (a main / release branch)
+// — deadlocking against the very gate that demands it. So we recognize
+// these as a `low`-severity floor.
+//
+// Floor, not override: the contribution composes with operator
+// classifiers under the same highest-severity-wins rule, so
+// `harness preflight && rm -rf /var` still classifies `critical` (the
+// dangerous-shell tail wins) and an operator pattern can only RAISE the
+// severity, never sink below this floor. Mutating subcommands (`apply`,
+// `init`, `add`, `adopt`, `remove`, `pack`, `uninstall`, `migrate-home`,
+// `smoke`, `gate`, `pause`, `resume`) are deliberately excluded — they
+// stay classifiable. Anchored at the command head, so `cd /x && harness
+// preflight` does NOT match and stays unclassified (fail-safe = denied):
+// a benign prefix must not launder a non-harness command.
+const BENIGN_HARNESS_SUBCOMMANDS: readonly string[] = [
+  "preflight",
+  "session-start",
+  "approve",
+  "doctor",
+  "validate",
+  "describe",
+  "list",
+  "diff",
+  "explain",
+  "explain-action",
+  "explain-policy",
+  "test-risk",
+  "resolve-env",
+  "audit",
+  "session-export",
+  "dry-run",
+  "export",
+  "help",
+];
+
+const BENIGN_HARNESS_COMMAND = new RegExp(
+  `^\\s*harness\\s+(?:${BENIGN_HARNESS_SUBCOMMANDS.join("|")})\\b`,
 );
 
 export type RiskConfidence = "high" | "low";
@@ -165,6 +218,24 @@ export function classifyRisk(
       reasons.push(
         `classifier "${classifier.name}" pattern /${pat.pattern}/ matched: ` +
           `severity ${pat.severity}, categories [${pat.categories.join(", ")}]`,
+      );
+    }
+  }
+
+  // Built-in benign-harness floor (see BENIGN_HARNESS_COMMAND above).
+  // Folded in AFTER the operator loop so it composes by the same
+  // highest-severity-wins rule: it only raises an otherwise-unclassified
+  // action up to `low`, and never sinks an operator match (a dangerous
+  // tail in `harness preflight && rm -rf /var` keeps the higher
+  // severity). Gated on a real shell command so a non-shell tool whose
+  // serialized input happens to start with "harness" cannot match.
+  const shellCommand = extractShellCommand({ raw_input: envelope.raw_input });
+  if (shellCommand !== null && BENIGN_HARNESS_COMMAND.test(subject)) {
+    const lowIdx = SEVERITY_ORDER.indexOf("low");
+    if (lowIdx > severityIdx) {
+      severityIdx = lowIdx;
+      reasons.push(
+        "built-in: benign harness meta-command recognized (severity low)",
       );
     }
   }
