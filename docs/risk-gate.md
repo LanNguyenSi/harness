@@ -107,6 +107,39 @@ needs a category outside this set, that is a signal to extend the enum
 in a PR, not a reason to make the field free-form. Operator-defined
 categories are a possible v2 escape hatch, noted but not committed.
 
+#### Built-in benign harness commands
+
+Before any operator classifier runs, the Risk Classifier recognizes
+harness's own read-only and gate-producer subcommands as a `low`-severity
+floor. Without it, those commands would be unclassified, and the
+"unknown is not safe" rule (below) would let a
+`when: { risk.severity_at_least: critical, environment.name: production }`
+policy HARD-DENY `harness preflight` the moment a session resolves to
+production (a `main` / `release` branch), deadlocking against the
+`require-preflight-evidence` gate that demands that very command.
+
+The recognized commands are: `preflight`, `session-start`, `approve`,
+`doctor`, `validate`, `describe`, `list`, `diff`, `explain`,
+`explain-action`, `explain-policy`, `test-risk`, `resolve-env`, `audit`,
+`session-export`, `dry-run`, `export`, `help`. Mutating subcommands
+(`apply`, `init`, `add`, `adopt`, `remove`, `pack`, `uninstall`,
+`migrate-home`, `smoke`, `gate`, `pause`, `resume`) are deliberately
+excluded and stay classifiable.
+
+It is a floor, not an override:
+
+- It composes under the same highest-severity-wins rule, so
+  `harness preflight && rm -rf /var` still classifies `critical`: the
+  dangerous tail wins and the command stays blocked.
+- An operator classifier can only *raise* severity above the floor (a
+  `critical` pattern on a harness command wins); it cannot sink below it.
+- The match is anchored at the command head. `cd /repo && harness preflight`
+  is *not* recognized and stays unclassified (fail-safe = denied): a
+  benign prefix must not launder a non-harness command.
+
+Inspect it with `harness test-risk`: the debug verb reports the same
+classification the runtime gate uses.
+
 ### Environment resolvers (`environments:`)
 
 *Status: parsed and validated (Phase 7 #1). Consumed by the Context

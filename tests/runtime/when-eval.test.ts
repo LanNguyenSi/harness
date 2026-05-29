@@ -8,6 +8,9 @@ import { describe, expect, it } from "vitest";
 import type { EnvironmentResolution } from "../../src/runtime/environment-resolver.js";
 import type { RiskProfile } from "../../src/runtime/risk-classifier.js";
 import { evaluateWhen } from "../../src/runtime/when-eval.js";
+import { buildActionEnvelope, classifyRisk } from "../../src/runtime/index.js";
+import type { EnvelopeContext } from "../../src/runtime/index.js";
+import type { ToolEvent } from "../../src/runtime/intercept.js";
 import type { PolicyWhen } from "../../src/schema/index.js";
 
 const classified = (over: Partial<RiskProfile> = {}): RiskProfile => ({
@@ -198,5 +201,50 @@ describe("evaluateWhen — AND semantics across clauses", () => {
       "environment.name",
       "action.reversible",
     ]);
+  });
+});
+
+describe("evaluateWhen — Friction-log #35 regression (benign harness floor defeats fail-close)", () => {
+  // The bug: `harness preflight` was unclassified, so the fail-close
+  // satisfied `risk.severity_at_least: critical` and a prod-scoped
+  // gate-prod-destructive policy HARD-DENIED it. With the built-in floor
+  // it classifies `low`, so the severity clause no longer matches even
+  // when the environment genuinely resolves to production.
+  const ENVELOPE_CTX: EnvelopeContext = {
+    cwd: "/work/repo",
+    git: { repo: "repo", branch: "main", sha: "" },
+    user: "agent",
+    host: "host",
+    now: new Date("2026-05-29T12:00:00.000Z"),
+  };
+  const bashEnvelope = (command: string) =>
+    buildActionEnvelope(
+      { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } } as ToolEvent,
+      ENVELOPE_CTX,
+    );
+  const GATE_PROD_DESTRUCTIVE: PolicyWhen = {
+    "risk.severity_at_least": "critical",
+    "environment.name": "production",
+  };
+
+  it("does NOT match gate-prod-destructive for `harness preflight` in production", () => {
+    const risk = classifyRisk(bashEnvelope("harness preflight"), []);
+    const result = evaluateWhen(GATE_PROD_DESTRUCTIVE, { risk, environment: env("production") });
+    expect(result.matched).toBe(false);
+    // Crucial: the non-match is a real low-severity classification, not a
+    // fail-close that happened to be ANDed out by the environment clause.
+    expect(result.unclassifiedFallback).toBe(false);
+    const sevClause = result.clauses.find((c) => c.clause === "risk.severity_at_least");
+    expect(sevClause).toMatchObject({ actual: "low", matched: false });
+  });
+
+  it("STILL matches gate-prod-destructive for a genuinely destructive command in production", () => {
+    // Negative control: the floor must not weaken the gate for real danger.
+    const danger: RiskProfile = classified({ severity: "critical" });
+    const result = evaluateWhen(GATE_PROD_DESTRUCTIVE, {
+      risk: danger,
+      environment: env("production"),
+    });
+    expect(result.matched).toBe(true);
   });
 });
