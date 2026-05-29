@@ -65,6 +65,7 @@ import { runSessionStartPreflight } from "./session-start/index.js";
 import { writePendingApproval } from "../runtime/pending-approval.js";
 import { runSessionStartBranchCheck } from "./session-start/branch-check.js";
 import { runPackHookBranchProtectionCli } from "./pack/hook-branch-protection.js";
+import { runPackHookRuntimeRealityCli } from "./pack/hook-runtime-reality.js";
 import { gateDisable, GateDisableError } from "./gate/disable.js";
 import { gateEnable, GateEnableError } from "./gate/enable.js";
 import { uninstall, UninstallError } from "./uninstall/index.js";
@@ -1154,6 +1155,21 @@ export function buildProgram(opts: RunOptions = {}): Command {
         if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
       }
       const result = await runPackHookBranchProtectionCli(cliOpts);
+      if (result.exitCode !== 0) {
+        throw new HarnessExitError("", result.exitCode);
+      }
+    });
+
+  packHookCmd
+    .command("runtime-reality")
+    .description(
+      "PreToolUse drift gate: read tool-event JSON from stdin, run the operator-configured " +
+        "RUNTIME_REALITY_PROBE_CMD to capture actual runtime state, compare against the " +
+        "RUNTIME_REALITY_KEYWORD expectations file, and emit a deny envelope on critical drift. " +
+        "Env-driven (no manifest options); fail-open on any probe / load error.",
+    )
+    .action(async () => {
+      const result = await runPackHookRuntimeRealityCli();
       if (result.exitCode !== 0) {
         throw new HarnessExitError("", result.exitCode);
       }
