@@ -272,11 +272,25 @@ export function isInsideDir(target: string, dir: string, cwd?: string): boolean 
 /**
  * Does a Bash command TEXTUALLY reference the verdict dir? Catches the
  * enumerated spellings without shell-evaluating (same contract as
- * read-only-bash): the literal absolute dir, the `$SOLUTION_VERDICT_DIR`
- * env token, and the stable tail `agent-grounding/solution-verdicts` (which
- * covers `~/...`, `$HOME/...`, `$XDG_STATE_HOME/...`, and the absolute
- * spellings of the default location). A `chmod`/`chattr` that targets the
- * dir is caught the same way, so the FS-perm-loosening attack is covered.
+ * read-only-bash):
+ *   - the literal absolute dir,
+ *   - the `$SOLUTION_VERDICT_DIR` env token,
+ *   - the stable tail `agent-grounding/solution-verdicts` (covers `~/...`,
+ *     `$HOME/...`, `$XDG_STATE_HOME/...`, and absolute spellings), and
+ *   - the dir's LEAF segment (`solution-verdicts` for the default).
+ *
+ * The leaf segment closes the `cd <parent> && write <relative-into-dir>`
+ * descent (where the parent path and the child redirect never form the
+ * contiguous tail): ANY relative write into the dir from a cwd that is not
+ * the dir itself must name the leaf somewhere in the command, and a
+ * `cd <…/leaf>` to first make cwd==dir would itself contain the leaf. The
+ * write-guard's cwd-inside check covers the only remaining case (cwd already
+ * inside the dir). The leaf needle is length-guarded so a short custom
+ * basename does not over-block; the default leaf is distinctive, and a
+ * non-default dir already warns at validate time.
+ *
+ * `chmod`/`chattr` that target the dir are caught the same way, so the
+ * FS-perm-loosening attack is covered.
  *
  * Honest residual: a path constructed at runtime inside an interpreter with
  * no textual reference (e.g. base64-decoded inside `python3 -c`) is NOT
@@ -284,9 +298,11 @@ export function isInsideDir(target: string, dir: string, cwd?: string): boolean 
  */
 export function bashReferencesVerdictDir(command: string, dir: string): boolean {
   if (typeof command !== "string" || command.length === 0) return false;
+  const leaf = path.basename(dir);
   return (
     command.includes(dir) ||
     command.includes(VERDICT_DIR_ENV) ||
-    command.includes(VERDICT_DIR_TAIL)
+    command.includes(VERDICT_DIR_TAIL) ||
+    (leaf.length >= 6 && command.includes(leaf))
   );
 }

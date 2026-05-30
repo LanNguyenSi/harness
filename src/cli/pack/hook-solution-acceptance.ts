@@ -203,12 +203,19 @@ export async function runPackHookSolutionAcceptanceCli(
 
   // Load manifest to resolve the pack config. A load failure forces BLOCK
   // only if this turns out to be a completion action; resolve it first.
+  // `manifestPath` (the resolved manifest base) feeds the harness.generated/
+  // lookup below — it is populated whether the operator passed --config or
+  // the default (~/.harness/harness.yaml) was resolved, so the bare
+  // production hook command still resolves the active-claim id.
   let manifest: Manifest | null = null;
+  let manifestPath: string | undefined;
   if (opts.manifest) {
     manifest = opts.manifest;
   } else {
     try {
-      manifest = loadManifest(opts).manifest;
+      const loaded = loadManifest(opts);
+      manifest = loaded.manifest;
+      manifestPath = loaded.resolved.base;
     } catch (err) {
       // We cannot tell if this is a gated action without the config, but a
       // manifest load failure should not block unrelated tool calls. Only
@@ -259,8 +266,11 @@ export async function runPackHookSolutionAcceptanceCli(
   // there is no claim (sessionId fallback would reopen the wrong-scope bug).
   const generatedDir =
     opts.generatedDir ??
-    (opts.configPath !== undefined
-      ? resolveGeneratedDir({ manifestPath: opts.configPath })
+    (manifestPath !== undefined
+      ? resolveGeneratedDir({
+          ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
+          manifestPath,
+        })
       : undefined);
   const taskId =
     opts.activeClaim !== undefined

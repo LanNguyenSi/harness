@@ -165,6 +165,61 @@ describe("completion-gate — decision matrix", () => {
   });
 });
 
+describe("completion-gate — production resolution path (no injected manifest/claim)", () => {
+  // Regression guard: in production the hook command is the bare
+  // `harness pack hook solution-acceptance` (no --config), so generatedDir
+  // and the active-claim id must resolve from the loaded manifest base, not
+  // from opts.configPath. This test injects NEITHER manifest, generatedDir,
+  // nor activeClaim — only a homeDir whose harness.generated/active-claim and
+  // harness.yaml are on disk, exactly as `harness apply` would leave them.
+  function makeHome(activeClaim: string | null): string {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "sa-home-"));
+    cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      "version: 1\npolicy_packs:\n  - name: solution-acceptance\n    source: builtin\n    enabled: true\n",
+    );
+    const gen = path.join(home, "harness.generated");
+    fs.mkdirSync(gen, { recursive: true });
+    if (activeClaim !== null) fs.writeFileSync(path.join(gen, "active-claim"), `${activeClaim}\n`);
+    return home;
+  }
+
+  async function runProd(home: string, verdictDir: string, cwd: string) {
+    const stdout = captureStream();
+    const stderr = captureStream();
+    const res = await runPackHookSolutionAcceptanceCli({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", tool_name: TASK_FINISH, cwd })),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      cwd,
+      verdictDir,
+      homeDir: home,
+    });
+    return { res, out: stdout.output() };
+  }
+
+  it("ALLOWS when active-claim + a ready verdict resolve purely from the manifest base", async () => {
+    const { res, out } = await runProd(
+      makeHome(TASK),
+      verdictDirWith(TASK, { head: HEAD, ready: true }),
+      repoAtHead(HEAD),
+    );
+    expect(res.blocked).toBe(false);
+    expect(out).toBe("");
+  });
+
+  it("BLOCKS (fail-closed) when the manifest base resolves but no active-claim file exists", async () => {
+    const { res, out } = await runProd(
+      makeHome(null),
+      verdictDirWith(TASK, { head: HEAD }),
+      repoAtHead(HEAD),
+    );
+    expect(res.blocked).toBe(true);
+    expect(JSON.parse(out).reason).toMatch(/no active-claim/);
+  });
+});
+
 describe("completion-gate — scoping", () => {
   it("ALLOWS when the pack is disabled", async () => {
     const { res } = await run({

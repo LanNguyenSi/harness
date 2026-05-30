@@ -63,9 +63,25 @@ describe("write-guard — forge-attempt matrix (the load-bearing anti-forgery pr
     expect(bash(`chmod 0700 ${DIR}`).blocked).toBe(true);
   });
 
-  it("blocks a non-read-only Bash whose shell cwd is inside the dir (relative-after-cd)", () => {
+  it("blocks a non-read-only Bash whose shell cwd is inside the dir (cwd-relative)", () => {
     expect(bash("echo x > task-42.json", DIR).blocked).toBe(true);
     expect(bash("echo x > task-42.json", `${DIR}/sub`).blocked).toBe(true);
+  });
+
+  it("blocks `cd <parent> && write <relative-into-dir>` (the leaf-segment descent)", () => {
+    // cwd is the repo (NOT inside the dir), and the parent path + child
+    // redirect never form the contiguous tail — only the leaf segment
+    // `solution-verdicts` appears, in the redirect target. Must still block.
+    const parent = "/home/u/.local/state/agent-grounding";
+    expect(bash(`cd ${parent} && echo '{"ready":true}' > solution-verdicts/task-42.json`).blocked).toBe(
+      true,
+    );
+    expect(bash(`cd /home/u/.local/state && cp /tmp/forged.json agent-grounding/solution-verdicts/x.json`).blocked).toBe(
+      true,
+    );
+    // first `cd` into the dir would itself name the leaf -> blocked, so the
+    // agent cannot establish cwd==dir for a later bare relative write.
+    expect(bash(`cd ${DIR}`).blocked).toBe(true);
   });
 
   it("blocks an apply_patch that references the verdict dir (codex arm)", () => {
