@@ -173,8 +173,21 @@ describe("bashReferencesVerdictDir — write-guard reference detection", () => {
       true,
     );
   });
-  it("does not match unrelated commands", () => {
+  it("catches glob-obscured leaf spellings (overwrite forge)", () => {
+    expect(bashReferencesVerdictDir(`echo x > ${dir.replace("solution-verdicts", "solution-ver*")}/t.json`, dir)).toBe(
+      true,
+    );
+    expect(bashReferencesVerdictDir(`cp /tmp/f ${dir.replace("solution-verdicts", "solu*verdicts")}/t.json`, dir)).toBe(
+      true,
+    );
+    expect(bashReferencesVerdictDir("cd /home/u/.local/state/agent-grounding && echo x > solution-v?rdicts/t.json", dir)).toBe(
+      true,
+    );
+  });
+  it("does not match unrelated commands (incl. globbed ones)", () => {
     expect(bashReferencesVerdictDir("echo hi > /tmp/x", dir)).toBe(false);
+    expect(bashReferencesVerdictDir("cp src/*.ts dist/", dir)).toBe(false);
+    expect(bashReferencesVerdictDir("rm /tmp/agent-relay/*.log", dir)).toBe(false);
   });
 });
 

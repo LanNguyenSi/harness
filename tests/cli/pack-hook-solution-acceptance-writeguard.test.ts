@@ -84,6 +84,23 @@ describe("write-guard — forge-attempt matrix (the load-bearing anti-forgery pr
     expect(bash(`cd ${DIR}`).blocked).toBe(true);
   });
 
+  it("blocks shell-glob redirect targets that obscure the leaf (overwrite forge)", () => {
+    // bash expands the glob to the real dir at runtime; the literal leaf
+    // never appears, but a distinctive leaf word survives the single glob.
+    const ag = "/home/u/.local/state/agent-grounding";
+    expect(bash(`echo '{"ready":true}' > ${ag}/solution-ver*/task-42.json`).blocked).toBe(true);
+    expect(bash(`echo '{"ready":true}' > ${ag}/solu*verdicts/task-42.json`).blocked).toBe(true);
+    expect(bash(`printf x > ${ag}/solution-v?rdicts/task-42.json`).blocked).toBe(true);
+    expect(bash(`cp /tmp/forged.json ${ag}/s*verdicts/task-42.json`).blocked).toBe(true);
+    expect(bash(`cd ${ag} && echo x > solution-ver*/task-42.json`).blocked).toBe(true);
+  });
+
+  it("does NOT over-block a globbed command that is unrelated to the verdict dir", () => {
+    expect(bash("cp src/*.ts dist/").blocked).toBe(false);
+    expect(bash("rm -f /tmp/agent-relay/*.log").blocked).toBe(false); // 'agent-' prefix, not the leaf
+    expect(bash("git add tests/cli/*.test.ts").blocked).toBe(false);
+  });
+
   it("blocks an apply_patch that references the verdict dir (codex arm)", () => {
     expect(
       evaluateWriteGuard("apply_patch", { patch: `*** Add File: ${MARKER}\n+{}` }, DIR, "/repo")

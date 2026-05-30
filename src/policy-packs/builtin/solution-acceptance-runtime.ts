@@ -299,10 +299,31 @@ export function isInsideDir(target: string, dir: string, cwd?: string): boolean 
 export function bashReferencesVerdictDir(command: string, dir: string): boolean {
   if (typeof command !== "string" || command.length === 0) return false;
   const leaf = path.basename(dir);
-  return (
+  // Direct literal references + the distinctive leaf segment.
+  if (
     command.includes(dir) ||
     command.includes(VERDICT_DIR_ENV) ||
     command.includes(VERDICT_DIR_TAIL) ||
     (leaf.length >= 6 && command.includes(leaf))
-  );
+  ) {
+    return true;
+  }
+  // Glob-obscured references. bash expands `*?[` against EXISTING paths at
+  // runtime, so a glob like `solution-ver*/<id>.json` reaches the dir
+  // without the literal leaf ever appearing in the command text, and a
+  // matching glob can OVERWRITE an existing marker (flipping ready:false ->
+  // true). We cannot safely expand globs (that is the shell-eval surface
+  // read-only-bash refuses), so when a glob metachar is present we match the
+  // leaf's distinctive sub-words: a single glob can split the hyphenated
+  // leaf but not erase every >=6-char word of it (`solution-ver*` keeps
+  // "solution"; `solu*verdicts` keeps "verdicts"). The leaf words, not the
+  // parent segment, are used on purpose: the parent here is `agent-grounding`,
+  // which is also a repo name and would over-block legitimate work. A command
+  // that globs EVERY path segment is the residual the marker-signing
+  // follow-up closes.
+  if (/[*?[]/.test(command)) {
+    const leafWords = leaf.split(/[^A-Za-z0-9]+/).filter((w) => w.length >= 6);
+    if (leafWords.some((w) => command.includes(w))) return true;
+  }
+  return false;
 }
