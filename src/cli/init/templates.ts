@@ -598,6 +598,21 @@ policy_packs:
           - "git checkout -b feat/<your-task>"
           - "harness session-start branch-check"
 
+  # solution-acceptance (harness cc43c7a4): Verifier-gated Done. Gates the
+  # task-finishing tools (agent-tasks completion verbs + git push / gh pr
+  # merge) on a ready, HEAD-pinned verdict that the grounding-mcp producer
+  # (solution_evaluate) derives from a real preflight run, plus an
+  # anti-forgery write-guard on the verdict marker. DISABLED by default: it
+  # is a hard completion-gate and needs grounding-mcp (>= 0.3.2) under
+  # tools.mcp plus the preflight binary on PATH. Flip enabled: true once the
+  # producer is wired and you want completion earned, not claimed. The pack
+  # emits its own instructions.md on apply; harness validate warns if you
+  # enable it without the producer.
+  - name: solution-acceptance
+    source: builtin
+    enabled: false
+    description: Gate task completion on a ready, HEAD-pinned solution-acceptance verdict earned from a real preflight run.
+
 # Phase 7 Risk Gate vocabulary. The dangerous-shell classifier and
 # production-signals resolver feed the gate-prod-destructive policies
 # above: \`harness policy intercept\` builds the Action Envelope,
