@@ -403,6 +403,11 @@ policy_packs:
         run:
           - git checkout -b feat/<your-task>
           - harness session-start branch-check
+  - name: solution-acceptance
+    source: builtin
+    enabled: false
+    description: Gate task completion on a ready, HEAD-pinned solution-acceptance verdict earned from a real preflight run.
+    config: {}
 risk:
   classifiers:
     - name: dangerous-shell

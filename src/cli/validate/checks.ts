@@ -241,6 +241,45 @@ function checkPolicyGroundingMcp(manifest: Manifest): Diagnostic[] {
   ];
 }
 
+// solution-acceptance is a pure CONSUMER: it reads the verdict marker the
+// grounding-mcp producer writes. Two misconfigurations silently turn the
+// completion-gate into a permanent deny (a No-Op that LOOKS protective):
+//   1. grounding-mcp absent from tools.mcp -> the producer (solution_evaluate)
+//      is unreachable, so no verdict can ever be written -> deadlock.
+//   2. grounding-mcp declares a non-default SOLUTION_VERDICT_DIR env -> the
+//      consumer reads the producer DEFAULT dir and does not see the override
+//      (harness does not project tools.mcp env into the hook), so the gate
+//      always denies.
+// Warning-tier in v1; escalation to error is a tracked follow-up.
+function checkSolutionAcceptanceProducer(manifest: Manifest): Diagnostic[] {
+  const pack = manifest.policy_packs.find((p) => p.name === "solution-acceptance");
+  if (!pack || !pack.enabled) return [];
+  const grounding = manifest.tools.mcp.find((m) => m.name === "grounding-mcp");
+  if (!grounding) {
+    return [
+      {
+        severity: "warning",
+        path: "policy_packs",
+        message:
+          "solution-acceptance is enabled but grounding-mcp is not wired under tools.mcp: the producer (solution_evaluate) is unreachable, so the completion-gate can never see a verdict and will deadlock on a permanent deny. Add grounding-mcp (>= 0.3.2) to tools.mcp.",
+      },
+    ];
+  }
+  const env = (grounding.env ?? {}) as Record<string, unknown>;
+  const dir = env["SOLUTION_VERDICT_DIR"];
+  if (typeof dir === "string" && dir.trim().length > 0) {
+    return [
+      {
+        severity: "warning",
+        path: "tools.mcp",
+        message:
+          "solution-acceptance: grounding-mcp declares a non-default SOLUTION_VERDICT_DIR; the harness completion-gate reads the producer default location and does not see this override, so the gate would always deny. Unset it or mirror the same value into the hook environment.",
+      },
+    ];
+  }
+  return [];
+}
+
 // Phase 6 #2: surface pack-resolution problems at lint time, not at
 // `harness apply` time. Delegates to the shared `checkPolicyPackSources`
 // so the apply path (which now also fails loudly on these conditions)
@@ -289,6 +328,7 @@ export function runAssetChecks(
     ...checkHooks(manifest, home),
     ...checkBuiltinDrift(manifest, opts),
     ...checkPolicyGroundingMcp(manifest),
+    ...checkSolutionAcceptanceProducer(manifest),
     ...checkPolicyPacks(manifest),
     ...checkPolicyPackConfigsAsDiagnostics(manifest),
   ];

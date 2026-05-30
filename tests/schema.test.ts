@@ -54,13 +54,18 @@ describe("parseManifest — happy path", () => {
     );
     expect(preflightPushPolicy?.requires.ledger_tag).toBe("preflight:${BRANCH}");
     expect(preflightPushPolicy?.requires.within).toBe("10m");
-    expect(manifest.policy_packs).toHaveLength(2);
+    expect(manifest.policy_packs).toHaveLength(3);
     expect(manifest.policy_packs[0]?.name).toBe("understanding-before-execution");
     expect(manifest.policy_packs[0]?.source).toBe("builtin");
     expect(manifest.policy_packs[0]?.enabled).toBe(true);
     expect(manifest.policy_packs[1]?.name).toBe("branch-protection");
     expect(manifest.policy_packs[1]?.source).toBe("builtin");
     expect(manifest.policy_packs[1]?.enabled).toBe(true);
+    // solution-acceptance ships as a disabled discoverable exemplar (hard
+    // completion-gate; operator opts in once the producer is wired).
+    expect(manifest.policy_packs[2]?.name).toBe("solution-acceptance");
+    expect(manifest.policy_packs[2]?.source).toBe("builtin");
+    expect(manifest.policy_packs[2]?.enabled).toBe(false);
     // config carries the gate mode + the producers list extension
     // (agent-tasks/25bced52). Assert on keys rather than deep-equality
     // so further config additions don't churn this test.

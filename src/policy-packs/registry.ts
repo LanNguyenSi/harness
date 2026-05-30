@@ -19,12 +19,18 @@ import {
   VERSION_COMMAND as UNDERSTANDING_BEFORE_EXECUTION_VERSION_COMMAND,
   type ResolvePackOptions,
 } from "./builtin/understanding-before-execution.js";
+import {
+  configSchema as solutionAcceptanceConfigSchema,
+  PACK_NAME as SOLUTION_ACCEPTANCE,
+  resolve as resolveSolutionAcceptance,
+} from "./builtin/solution-acceptance.js";
 import { DEFAULT_RUNTIME, type Runtime } from "./runtime.js";
 import type { PackContribution } from "./types.js";
 
 export const KNOWN_BUILTIN_PACKS = [
   UNDERSTANDING_BEFORE_EXECUTION,
   BRANCH_PROTECTION,
+  SOLUTION_ACCEPTANCE,
 ] as const;
 export type BuiltinPackName = (typeof KNOWN_BUILTIN_PACKS)[number];
 
@@ -48,6 +54,8 @@ export function resolveBuiltin(
       return resolveUnderstandingBeforeExecution(pack, runtime, opts);
     case BRANCH_PROTECTION:
       return resolveBranchProtection(pack, runtime);
+    case SOLUTION_ACCEPTANCE:
+      return resolveSolutionAcceptance(pack, runtime);
   }
 }
 
@@ -67,6 +75,8 @@ export function resolveBuiltinConfigSchema(
       return understandingBeforeExecutionConfigSchema;
     case BRANCH_PROTECTION:
       return branchProtectionConfigSchema;
+    case SOLUTION_ACCEPTANCE:
+      return solutionAcceptanceConfigSchema;
   }
 }
 
@@ -88,6 +98,10 @@ export function resolveBuiltinVersionCommand(
     case UNDERSTANDING_BEFORE_EXECUTION:
       return UNDERSTANDING_BEFORE_EXECUTION_VERSION_COMMAND;
     case BRANCH_PROTECTION:
+      return null;
+    case SOLUTION_ACCEPTANCE:
+      // Blocker is harness itself; the producer (grounding-mcp) is probed
+      // via its tools.mcp min_version, not a pack-side bin.
       return null;
   }
 }

@@ -1,0 +1,9 @@
+{
+  "id": "fixture-task",
+  "head": "f30767afdc14013a48cd0c024a82213f2f63855a",
+  "ready": true,
+  "confidence": 0.48666666666666675,
+  "blockers": [],
+  "timestamp": "2026-05-30T18:23:03.040Z",
+  "source": "preflight"
+}

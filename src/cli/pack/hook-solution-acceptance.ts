@@ -1,0 +1,308 @@
+// `harness pack hook solution-acceptance` — PreToolUse completion-gate for
+// the `solution-acceptance` policy pack.
+//
+// Receives Claude Code's PreToolUse event JSON on stdin and emits a
+// `{ decision: "block" }` envelope when the agent is about to FINISH a task
+// (agent-tasks completion verb, or a `git push` / `gh pr merge` bash
+// command) without a READY solution-acceptance verdict at the current git
+// HEAD.
+//
+// The verdict id is the active-claim task id (the same `active-claim` file
+// `harness approve understanding` consumes). With no active claim the gate
+// fails CLOSED — a sessionId fallback would reopen the wrong-scope bug class
+// understanding-gate already fixed.
+//
+// Failure mode: any error in load / parse / HEAD-resolution / verdict-read
+// resolves to BLOCK (branch-protection's fail-closed posture, not
+// understanding-gate's fail-open). The gate's whole job is to prevent
+// completion without earned acceptance, so a bug that silently allowed a
+// finish through would defeat the purpose. The block envelope always names
+// `solution_evaluate` as the recovery path so the operator is never wedged;
+// `harness pause` (honored first) is the operator's hard override.
+
+import {
+  readActiveClaim,
+} from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
+import {
+  DEFAULT_PUSH_BASH_RE,
+  evaluateGate,
+  PACK_NAME,
+  readVerdict,
+  resolveProtectedCompletionTools,
+  verdictDir as resolveVerdictDir,
+} from "../../policy-packs/builtin/solution-acceptance-runtime.js";
+import { resolveGeneratedDir } from "../../io/generated-dir.js";
+import { resolveGitContext } from "../../runtime/git-context.js";
+import { renderAgentFacing } from "../../runtime/agent-facing.js";
+import { PolicyUxSchema, type Manifest, type PolicyUx } from "../../schema/index.js";
+import { loadManifest, type LoaderOptions } from "../loader.js";
+import { checkPauseFromLoader } from "../pause-check.js";
+
+const MCP_AGENT_TASKS_PREFIX = "mcp__agent-tasks__";
+
+export interface PackHookSolutionAcceptanceOptions extends LoaderOptions {
+  /** Defaults to process.stdin. */
+  stdin?: NodeJS.ReadableStream;
+  /** Defaults to process.stdout. */
+  stdout?: NodeJS.WritableStream;
+  /** Defaults to process.stderr. */
+  stderr?: NodeJS.WritableStream;
+  /** Override cwd resolution (test injection). */
+  cwd?: string;
+  /** Inject a manifest (test). */
+  manifest?: Manifest;
+  /** Override the harness.generated/ directory (test injection). */
+  generatedDir?: string;
+  /** Override the verdict directory (test injection; default = producer default). */
+  verdictDir?: string;
+  /** Override the active-claim resolution (test injection). */
+  activeClaim?: string | null;
+}
+
+export interface PackHookSolutionAcceptanceResult {
+  exitCode: number;
+  blocked: boolean;
+  diagnostic: string;
+}
+
+interface ToolEventLite {
+  session_id?: unknown;
+  tool_name?: unknown;
+  cwd?: unknown;
+  tool_input?: unknown;
+}
+
+async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    stream.setEncoding("utf8");
+    stream.on("data", (chunk: string) => {
+      data += chunk;
+    });
+    stream.on("end", () => resolve(data));
+    stream.on("error", (err) => reject(err));
+  });
+}
+
+function bashCommandOf(toolInput: unknown): string {
+  if (typeof toolInput !== "object" || toolInput === null) return "";
+  const cmd = (toolInput as Record<string, unknown>)["command"];
+  return typeof cmd === "string" ? cmd : "";
+}
+
+/**
+ * Decide whether this PreToolUse call is a gated completion action. Returns
+ * the human label of the action when gated, or null when this call should
+ * pass through (the hook matches all Bash, but only push/merge bash commands
+ * are completion actions).
+ */
+function completionActionLabel(
+  toolName: string,
+  toolInput: unknown,
+  protectedVerbs: readonly string[],
+): string | null {
+  if (toolName.startsWith(MCP_AGENT_TASKS_PREFIX)) {
+    const verb = toolName.slice(MCP_AGENT_TASKS_PREFIX.length);
+    if (protectedVerbs.includes(verb)) return `agent-tasks ${verb}`;
+    return null;
+  }
+  if (toolName === "Bash") {
+    const command = bashCommandOf(toolInput);
+    if (command && DEFAULT_PUSH_BASH_RE.test(command)) return "git push / gh pr merge";
+    return null;
+  }
+  return null;
+}
+
+function parseConfigUx(raw: unknown, stderr: NodeJS.WritableStream): PolicyUx | undefined {
+  if (raw === undefined) return undefined;
+  const result = PolicyUxSchema.safeParse(raw);
+  if (!result.success) {
+    stderr.write(
+      `harness pack hook solution-acceptance: config.ux ignored (${result.error.issues
+        .map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`)
+        .join("; ")})\n`,
+    );
+    return undefined;
+  }
+  return result.data;
+}
+
+function blockJson(
+  actionLabel: string,
+  toolName: string,
+  taskId: string,
+  detail: string,
+  ux: PolicyUx | undefined,
+  sessionId: string,
+): string {
+  let reasonText: string;
+  if (ux) {
+    reasonText = renderAgentFacing(ux, {
+      TOOL_NAME: toolName,
+      SESSION_ID: sessionId,
+    });
+  } else {
+    reasonText =
+      `solution-acceptance: refusing ${actionLabel} (${toolName}). ${detail}\n` +
+      `Completion must be EARNED from a real preflight run, not claimed.\n` +
+      `Run the producer for this task, then retry:\n` +
+      `  mcp__agent-grounding__solution_evaluate({ id: "${taskId}" })\n` +
+      `It runs \`preflight run --json\` (lint/typecheck/test/audit/secret) and records a HEAD-pinned verdict. ` +
+      `A clean run at the current HEAD unblocks this tool; a failing run lists the blockers to fix.\n` +
+      `\n` +
+      `Operator override: \`harness pause\` (yields this and every other gate).`;
+  }
+  return JSON.stringify({
+    decision: "block",
+    reason: reasonText,
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: reasonText,
+    },
+  });
+}
+
+export async function runPackHookSolutionAcceptanceCli(
+  opts: PackHookSolutionAcceptanceOptions = {},
+): Promise<PackHookSolutionAcceptanceResult> {
+  const stdin = opts.stdin ?? process.stdin;
+  const stdout = opts.stdout ?? process.stdout;
+  const stderr = opts.stderr ?? process.stderr;
+  const note = (msg: string): void => {
+    stderr.write(`harness pack hook solution-acceptance: ${msg}\n`);
+  };
+
+  const raw = await readStdin(stdin);
+  let event: ToolEventLite = {};
+  try {
+    event = JSON.parse(raw.trim() || "{}") as ToolEventLite;
+  } catch {
+    /* event stays {} */
+  }
+
+  // Operator pause yields even this gate.
+  if (checkPauseFromLoader({ loaderOpts: opts, hookLabel: PACK_NAME, stderr }).paused) {
+    const diagnostic = "harness paused; solution-acceptance allowing without evaluating.";
+    return { exitCode: 0, blocked: false, diagnostic };
+  }
+
+  const sessionId =
+    (typeof event.session_id === "string" ? event.session_id : undefined) ??
+    process.env["CLAUDE_CODE_SESSION_ID"] ??
+    process.env["CLAUDE_SESSION_ID"] ??
+    "";
+  const toolName = typeof event.tool_name === "string" ? event.tool_name : "(unknown)";
+  const cwd =
+    typeof opts.cwd === "string" && opts.cwd.length > 0
+      ? opts.cwd
+      : typeof event.cwd === "string" && event.cwd.length > 0
+        ? event.cwd
+        : process.cwd();
+
+  // Load manifest to resolve the pack config. A load failure forces BLOCK
+  // only if this turns out to be a completion action; resolve it first.
+  // `manifestPath` (the resolved manifest base) feeds the harness.generated/
+  // lookup below — it is populated whether the operator passed --config or
+  // the default (~/.harness/harness.yaml) was resolved, so the bare
+  // production hook command still resolves the active-claim id.
+  let manifest: Manifest | null = null;
+  let manifestPath: string | undefined;
+  if (opts.manifest) {
+    manifest = opts.manifest;
+  } else {
+    try {
+      const loaded = loadManifest(opts);
+      manifest = loaded.manifest;
+      manifestPath = loaded.resolved.base;
+    } catch (err) {
+      // We cannot tell if this is a gated action without the config, but a
+      // manifest load failure should not block unrelated tool calls. Only
+      // the completion verbs / push commands are ever gated, so classify
+      // by tool name with the DEFAULT verb set as a failsafe.
+      const label = completionActionLabel(toolName, event.tool_input, [
+        "task_finish",
+        "task_submit_pr",
+        "task_merge",
+        "pull_requests_merge",
+      ]);
+      if (label === null) {
+        const diagnostic = `manifest load failed (${(err as Error).message}) but ${toolName} is not a completion action; allowing`;
+        note(diagnostic);
+        return { exitCode: 0, blocked: false, diagnostic };
+      }
+      const reason = `manifest load failed (${(err as Error).message}); refusing ${label} on failsafe`;
+      const diagnostic = `BLOCK — ${reason}`;
+      note(diagnostic);
+      stdout.write(`${blockJson(label, toolName, "<unknown>", reason, undefined, sessionId)}\n`);
+      return { exitCode: 0, blocked: true, diagnostic };
+    }
+  }
+
+  const pack = manifest.policy_packs.find((p) => p.name === PACK_NAME);
+  if (!pack) {
+    const diagnostic = `pack "${PACK_NAME}" not declared in manifest, allowing`;
+    note(diagnostic);
+    return { exitCode: 0, blocked: false, diagnostic };
+  }
+  if (!pack.enabled) {
+    const diagnostic = `pack "${PACK_NAME}" is enabled:false, allowing`;
+    note(diagnostic);
+    return { exitCode: 0, blocked: false, diagnostic };
+  }
+
+  const protectedVerbs = resolveProtectedCompletionTools(pack);
+  const actionLabel = completionActionLabel(toolName, event.tool_input, protectedVerbs);
+  if (actionLabel === null) {
+    const diagnostic = `${toolName} is not a gated completion action; allowing`;
+    note(diagnostic);
+    return { exitCode: 0, blocked: false, diagnostic };
+  }
+
+  const configUx = parseConfigUx((pack.config as Record<string, unknown>)["ux"], stderr);
+
+  // Resolve the verdict id from the active-claim task id. Fail CLOSED when
+  // there is no claim (sessionId fallback would reopen the wrong-scope bug).
+  const generatedDir =
+    opts.generatedDir ??
+    (manifestPath !== undefined
+      ? resolveGeneratedDir({
+          ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
+          manifestPath,
+        })
+      : undefined);
+  const taskId =
+    opts.activeClaim !== undefined
+      ? opts.activeClaim
+      : generatedDir !== undefined
+        ? readActiveClaim(generatedDir)
+        : null;
+  if (!taskId) {
+    const detail =
+      opts.activeClaim === undefined && generatedDir === undefined
+        ? " (could not resolve harness.generated/; pass --config)"
+        : "";
+    const reason = `no active-claim task id recorded${detail}; call mcp__agent-tasks__task_start first (the verdict id is the active task)`;
+    const diagnostic = `BLOCK — ${reason}`;
+    note(diagnostic);
+    stdout.write(`${blockJson(actionLabel, toolName, "<no-active-claim>", reason, configUx, sessionId)}\n`);
+    return { exitCode: 0, blocked: true, diagnostic };
+  }
+
+  const dir = opts.verdictDir ?? resolveVerdictDir();
+  const currentHead = resolveGitContext(cwd).sha || null;
+  const verdict = readVerdict(dir, taskId);
+  const gate = evaluateGate(verdict, currentHead, taskId);
+
+  if (gate.allowed) {
+    const diagnostic = `${gate.reason}; allowing ${actionLabel}`;
+    note(diagnostic);
+    return { exitCode: 0, blocked: false, diagnostic };
+  }
+
+  const diagnostic = `BLOCK — ${gate.reason}`;
+  note(diagnostic);
+  stdout.write(`${blockJson(actionLabel, toolName, taskId, gate.reason, configUx, sessionId)}\n`);
+  return { exitCode: 0, blocked: true, diagnostic };
+}
