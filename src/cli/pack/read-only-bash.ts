@@ -36,10 +36,10 @@
  * changing classification: `ls -la /tmp` is still read-only.
  */
 const SIMPLE_READ_ONLY_BINS: ReadonlySet<string> = new Set([
-  "ls", "cat", "pwd", "which", "type", "command",
+  "ls", "cat", "pwd", "which", "type",
   "grep", "rg", "wc",
   "head", "tail", "file", "stat", "tree", "du", "df",
-  "ps", "whoami", "id", "date", "echo", "env", "printenv",
+  "ps", "whoami", "id", "date", "echo", "printenv",
   "true", "false", "uptime", "hostname", "uname", "tty",
   "basename", "dirname", "realpath", "readlink",
   "less", "more", "cmp", "diff", "comm",
@@ -62,6 +62,44 @@ const FIND_WRITE_FLAGS: ReadonlySet<string> = new Set([
   "-exec", "-execdir", "-ok", "-okdir",
   "-fprint", "-fprintf", "-fprint0", "-fls",
 ]);
+
+/**
+ * Command-runner binaries: their argv is itself a nested command to
+ * execute, so the "each accepts arguments without changing
+ * classification" rule does NOT hold for them. `command rm -rf /tmp/x`
+ * runs `rm`, and `env FOO=bar rm -rf /tmp/x` runs `rm` too. Including
+ * them in `SIMPLE_READ_ONLY_BINS` would classify the WRAPPER as
+ * read-only while the wrapped command does the write, a hard gate
+ * bypass. Each runner gets a `find`-style special case below that
+ * strips the runner's own leading flags/assignments and recurse-
+ * classifies the residual underlying command. Bare `env` /
+ * `command` (no underlying command) stay read-only: they only print
+ * the environment or resolve a name.
+ *
+ * `env` leading flags that take no command and do not change the fact
+ * that what follows is still a command to run. `-i` / `--ignore-
+ * environment` and `-u NAME` / `--unset=NAME` scrub the environment
+ * but still execute the residual command; `-` is the historical
+ * synonym for `-i`. `--` ends option parsing. We skip these (and any
+ * `NAME=VALUE` assignment tokens) to find the real underlying command.
+ */
+const ENV_LEADING_FLAGS: ReadonlySet<string> = new Set([
+  "-i", "--ignore-environment", "-", "--",
+]);
+/** `env` flags that consume the following token as their value. */
+const ENV_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "-u", "--unset",
+  "-C", "--chdir",
+]);
+
+/**
+ * `env -S` / `--split-string` re-parses its single string argument
+ * into a fresh argv, which defeats our whitespace tokenization: the
+ * write would live inside one quoted token. Any appearance of the
+ * split-string flag (bare, glued, or long-form) forfeits the
+ * read-only classification. Fail closed.
+ */
+const ENV_SPLIT_STRING_FLAGS = /^(-S.*|--split-string(=.*)?)$/;
 
 /**
  * `less` and `more` can shell out via interactive `!cmd`. The agent
@@ -139,17 +177,81 @@ export function isReadOnlyBashCommand(command: string): boolean {
 
   // Reject any shell chaining, redirection, or command substitution.
   // These make the command unclassifiable even when every visible
-  // piece would otherwise be read-only.
+  // piece would otherwise be read-only. Applied once to the whole
+  // string, so it also covers any residual command a runner
+  // (`env` / `command`) wraps: those are classified from the same
+  // token slice, never from a re-read of the shell.
   if (/[;&|<>]/.test(trimmed)) return false;
   if (trimmed.includes("\n")) return false;
   if (trimmed.includes("`")) return false;
   if (trimmed.includes("$(")) return false;
 
-  const tokens = trimmed.split(/\s+/);
+  return classifyTokens(trimmed.split(/\s+/));
+}
+
+/**
+ * Classify an already-tokenized, metachar-cleared argv. Factored out
+ * of `isReadOnlyBashCommand` so the command-runner special cases
+ * (`command` / `env`) can recurse on the residual underlying command
+ * without re-parsing a reconstructed string.
+ */
+function classifyTokens(tokens: readonly string[]): boolean {
   const bin = tokens[0] ?? "";
   const sub = tokens[1] ?? "";
 
   if (SIMPLE_READ_ONLY_BINS.has(bin)) return true;
+
+  // `command <cmd> ...` runs <cmd>, bypassing shell functions/aliases.
+  // It is read-only ONLY if the command it wraps is read-only. Strip
+  // `command`'s own option flags (`-p`, `-v`, `-V`, and any combined
+  // short flags like `-pv`), then recurse-classify the residual argv.
+  // Bare `command` (no residual) and the lookup-only forms `command
+  // -v <name>` / `command -V <name>` (which print where a name
+  // resolves without executing it) stay read-only.
+  if (bin === "command") {
+    let i = 1;
+    let lookupOnly = false;
+    for (; i < tokens.length; i += 1) {
+      const t = tokens[i];
+      if (t === undefined || !t.startsWith("-") || t === "--") break;
+      if (/[vV]/.test(t)) lookupOnly = true;
+    }
+    if (i < tokens.length && tokens[i] === "--") i += 1;
+    if (lookupOnly) return true;
+    if (i >= tokens.length) return true; // bare `command`
+    return classifyTokens(tokens.slice(i));
+  }
+
+  // `env [NAME=VALUE...] [flags] <cmd> ...` runs <cmd> in a modified
+  // environment. It is read-only ONLY if the command it wraps is
+  // read-only. Skip leading env-assignment tokens (`FOO=bar`) and
+  // env's own flags, then recurse-classify the residual command. Bare
+  // `env`, `env -u X`, `env FOO=bar` (no residual command, just prints
+  // the environment) stay read-only.
+  if (bin === "env") {
+    let i = 1;
+    while (i < tokens.length) {
+      const t = tokens[i];
+      if (t === undefined) break;
+      // `env -S` / `--split-string` re-parses a string into a command:
+      // forfeit read-only classification (fail closed).
+      if (ENV_SPLIT_STRING_FLAGS.test(t)) return false;
+      if (t === "--") { i += 1; break; }
+      if (ENV_VALUE_FLAGS.has(t)) { i += 2; continue; }
+      if (ENV_LEADING_FLAGS.has(t)) { i += 1; continue; }
+      // Long flag with a glued value (`--unset=NAME`, `--chdir=DIR`):
+      // single token, skip it.
+      if (t.startsWith("--") && t.includes("=")) { i += 1; continue; }
+      // Short flag with a glued value (`-uNAME`, `-CDIR`): single
+      // token, skip it.
+      if (/^-[uC]./.test(t)) { i += 1; continue; }
+      // `NAME=VALUE` environment assignment (no leading dash): skip.
+      if (!t.startsWith("-") && /^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) { i += 1; continue; }
+      break;
+    }
+    if (i >= tokens.length) return true; // bare `env` / only assignments
+    return classifyTokens(tokens.slice(i));
+  }
 
   // `find` is read-only ONLY when none of its argv tokens are write
   // flags. Scan the whole argv: `-delete` / `-exec` / `-execdir` /

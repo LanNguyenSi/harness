@@ -180,6 +180,52 @@ describe("read-only Bash classifier", () => {
     });
   });
 
+  describe("command-runner binaries classify the wrapped command", () => {
+    it.each([
+      // Bare / lookup-only forms stay read-only.
+      "env",
+      "env -u FOO",
+      "env -i",
+      "env FOO=bar",
+      "env FOO=bar BAZ=qux",
+      "command",
+      "command -v node",
+      "command -V node",
+      // Runner wrapping a read-only command stays read-only.
+      "env ls -la",
+      "env FOO=bar ls /tmp",
+      "env -u PATH cat /etc/hosts",
+      "env -i grep foo src/",
+      "command ls -la",
+      "command cat /etc/hosts",
+      "command git status",
+    ])("allows %s", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(true);
+    });
+
+    it.each([
+      // The exact bypass forms from the audit finding.
+      "command rm -rf /tmp/x",
+      "env rm /tmp/x",
+      "env FOO=bar rm -rf /",
+      // More runner-wrapped writes.
+      "env -u FOO rm /tmp/x",
+      "env -i sh -c true",
+      "env FOO=bar npm install",
+      "command npm ci",
+      "command touch foo",
+      "command mkdir bar",
+      "env PATH=/x command rm file",
+      "command env rm file",
+      // split-string re-parses a command string: always block.
+      "env -S rm -rf /",
+      "env --split-string=rm",
+      "env -Srm",
+    ])("blocks %s", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+  });
+
   describe("unclassifiable defaults to block (conservative allowlist)", () => {
     it.each([
       "rm /tmp/foo",
