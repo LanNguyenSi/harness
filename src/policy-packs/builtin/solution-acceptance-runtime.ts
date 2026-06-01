@@ -100,6 +100,16 @@ export interface Verdict {
 export const VERDICT_DIR_ENV = "SOLUTION_VERDICT_DIR";
 
 /**
+ * Env knob that supplies the verdict id for SOLO / non-agent-tasks sessions.
+ * The completion-gate consults it ONLY when no agent-tasks `active-claim` is
+ * recorded (resolution order: active-claim first, then this env, then
+ * fail-closed), so a claimed session's id stays authoritative and cannot be
+ * redirected by an env var. A sessionId fallback is intentionally still NOT a
+ * source (the wrong-scope bug class understanding-gate closed).
+ */
+export const VERDICT_ID_ENV = "SOLUTION_VERDICT_ID";
+
+/**
  * Stable tail of the default verdict dir. The write-guard's reference
  * detection matches on this so ANY spelling of the home prefix is caught
  * (`~/.local/state/...`, `$HOME/...`, `$XDG_STATE_HOME/...`, the literal
@@ -145,6 +155,29 @@ export function sanitizeVerdictId(id: string): string {
 
 export function verdictPathFor(dir: string, id: string): string {
   return path.join(dir, `${sanitizeVerdictId(id)}.json`);
+}
+
+/**
+ * Resolve the explicit verdict id from `SOLUTION_VERDICT_ID`, or null when it
+ * is unset, blank, or not a safe single path segment. Validated through
+ * `sanitizeVerdictId` so a traversal-y or empty value fails closed here
+ * (returns null -> the gate denies) rather than reaching the marker read. This
+ * is the solo / non-agent-tasks fallback the completion-gate uses only when no
+ * active-claim is present.
+ */
+export function resolveExplicitVerdictId(
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const raw = env[VERDICT_ID_ENV];
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return null;
+  try {
+    sanitizeVerdictId(trimmed);
+  } catch {
+    return null;
+  }
+  return trimmed;
 }
 
 /**

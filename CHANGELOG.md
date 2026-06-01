@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`solution-acceptance`: `SOLUTION_VERDICT_ID` env knob for solo / non-agent-tasks sessions** (task 01435583): the completion-gate derived the verdict id solely from the agent-tasks `active-claim`, so a session that never calls `task_start` was permanently blocked with "no active-claim". It now falls back to a `SOLUTION_VERDICT_ID` env var when no claim is present. Resolution order is active-claim first, then `SOLUTION_VERDICT_ID`, then fail-closed, so a claimed session's id stays authoritative and cannot be redirected by the env (a sessionId fallback is still intentionally absent). The env value is validated as a safe single path segment; a malformed value fails closed. Set it to the same id you pass to `mcp__agent-grounding__solution_evaluate({ id })`.
+
 ## [0.32.0] - 2026-05-30
 
 **Headline: harness ships a new opt-in `solution-acceptance` policy pack that makes task completion EARNED from a real preflight run rather than self-attested.** The producer (`@lannguyensi/grounding-mcp` >= 0.3.2 `solution_evaluate`) records a HEAD-pinned verdict from a real `preflight run --json`; this pack gates the task-finishing tools (agent-tasks completion verbs + `git push` / `gh pr merge`) on a ready verdict at the current HEAD, and adds an anti-forgery write-guard so the agent cannot hand-write the verdict marker. **Operator action**: none required, back-compat. The pack is opt-in (`harness pack add solution-acceptance`, or flip the disabled exemplar in the full template); it needs `grounding-mcp` under `tools.mcp` and the `preflight` binary on PATH, and `harness validate` warns if you enable it without the producer. Re-run `npm i -g @lannguyensi/harness` to upgrade.
