@@ -8,8 +8,12 @@
 // HEAD.
 //
 // The verdict id is the active-claim task id (the same `active-claim` file
-// `harness approve understanding` consumes). With no active claim the gate
-// fails CLOSED — a sessionId fallback would reopen the wrong-scope bug class
+// `harness approve understanding` consumes). For solo / non-agent-tasks
+// sessions that never call `task_start`, the `SOLUTION_VERDICT_ID` env knob
+// supplies the id instead; it is consulted only when no active claim is
+// present, so a claimed session's id stays authoritative (an env var cannot
+// redirect a claimed task's verdict). With neither source the gate fails
+// CLOSED — a sessionId fallback would reopen the wrong-scope bug class
 // understanding-gate already fixed.
 //
 // Failure mode: any error in load / parse / HEAD-resolution / verdict-read
@@ -28,7 +32,9 @@ import {
   evaluateGate,
   PACK_NAME,
   readVerdict,
+  resolveExplicitVerdictId,
   resolveProtectedCompletionTools,
+  VERDICT_ID_ENV,
   verdictDir as resolveVerdictDir,
 } from "../../policy-packs/builtin/solution-acceptance-runtime.js";
 import { resolveGeneratedDir } from "../../io/generated-dir.js";
@@ -57,6 +63,8 @@ export interface PackHookSolutionAcceptanceOptions extends LoaderOptions {
   verdictDir?: string;
   /** Override the active-claim resolution (test injection). */
   activeClaim?: string | null;
+  /** Override process.env (test injection); defaults to process.env. */
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface PackHookSolutionAcceptanceResult {
@@ -173,6 +181,7 @@ export async function runPackHookSolutionAcceptanceCli(
   const note = (msg: string): void => {
     stderr.write(`harness pack hook solution-acceptance: ${msg}\n`);
   };
+  const env = opts.env ?? process.env;
 
   const raw = await readStdin(stdin);
   let event: ToolEventLite = {};
@@ -190,8 +199,8 @@ export async function runPackHookSolutionAcceptanceCli(
 
   const sessionId =
     (typeof event.session_id === "string" ? event.session_id : undefined) ??
-    process.env["CLAUDE_CODE_SESSION_ID"] ??
-    process.env["CLAUDE_SESSION_ID"] ??
+    env["CLAUDE_CODE_SESSION_ID"] ??
+    env["CLAUDE_SESSION_ID"] ??
     "";
   const toolName = typeof event.tool_name === "string" ? event.tool_name : "(unknown)";
   const cwd =
@@ -262,8 +271,11 @@ export async function runPackHookSolutionAcceptanceCli(
 
   const configUx = parseConfigUx((pack.config as Record<string, unknown>)["ux"], stderr);
 
-  // Resolve the verdict id from the active-claim task id. Fail CLOSED when
-  // there is no claim (sessionId fallback would reopen the wrong-scope bug).
+  // Resolve the verdict id. Precedence: the agent-tasks active-claim task id
+  // first (authoritative for claimed sessions — an env var must not redirect a
+  // claimed task's verdict), then the SOLUTION_VERDICT_ID env knob for solo /
+  // non-agent-tasks sessions, then fail CLOSED. A sessionId fallback is
+  // intentionally NOT a source (it would reopen the wrong-scope bug class).
   const generatedDir =
     opts.generatedDir ??
     (manifestPath !== undefined
@@ -272,24 +284,31 @@ export async function runPackHookSolutionAcceptanceCli(
           manifestPath,
         })
       : undefined);
-  const taskId =
+  const activeClaim =
     opts.activeClaim !== undefined
       ? opts.activeClaim
       : generatedDir !== undefined
         ? readActiveClaim(generatedDir)
         : null;
+  const taskId = activeClaim ?? resolveExplicitVerdictId(env);
   if (!taskId) {
     const detail =
       opts.activeClaim === undefined && generatedDir === undefined
         ? " (could not resolve harness.generated/; pass --config)"
         : "";
-    const reason = `no active-claim task id recorded${detail}; call mcp__agent-tasks__task_start first (the verdict id is the active task)`;
+    const reason =
+      `no verdict id: no active-claim task id recorded${detail} and ${VERDICT_ID_ENV} is unset or invalid. ` +
+      `Call mcp__agent-tasks__task_start first (agent-tasks workflow; the verdict id is the active task), ` +
+      `or set ${VERDICT_ID_ENV} to the verdict id for a solo / non-agent-tasks session.`;
     const diagnostic = `BLOCK — ${reason}`;
     note(diagnostic);
-    stdout.write(`${blockJson(actionLabel, toolName, "<no-active-claim>", reason, configUx, sessionId)}\n`);
+    stdout.write(`${blockJson(actionLabel, toolName, "<no-verdict-id>", reason, configUx, sessionId)}\n`);
     return { exitCode: 0, blocked: true, diagnostic };
   }
 
+  // The verdict DIR still resolves SOLUTION_VERDICT_DIR from process.env (the
+  // `env` seam above covers the verdict id + sessionId, not the dir); in
+  // production both see the same process.env, and tests inject opts.verdictDir.
   const dir = opts.verdictDir ?? resolveVerdictDir();
   const currentHead = resolveGitContext(cwd).sha || null;
   const verdict = readVerdict(dir, taskId);

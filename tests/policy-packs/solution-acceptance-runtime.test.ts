@@ -9,10 +9,12 @@ import {
   evaluateGate,
   isInsideDir,
   readVerdict,
+  resolveExplicitVerdictId,
   resolveProtectedCompletionTools,
   sanitizeVerdictId,
   VERDICT_DIR_ENV,
   VERDICT_DIR_TAIL,
+  VERDICT_ID_ENV,
   verdictDir,
   verdictPathFor,
   type Verdict,
@@ -80,6 +82,22 @@ describe("sanitizeVerdictId — path-traversal guard (mirror of producer)", () =
   it("rejects empty / dot-only ids", () => {
     expect(() => sanitizeVerdictId("")).toThrow();
     expect(() => sanitizeVerdictId("..")).toThrow();
+  });
+});
+
+describe("resolveExplicitVerdictId — solo / non-agent-tasks fallback source", () => {
+  it("returns the trimmed value when SOLUTION_VERDICT_ID is a safe id", () => {
+    expect(resolveExplicitVerdictId({ [VERDICT_ID_ENV]: "solo-verdict" })).toBe("solo-verdict");
+    expect(resolveExplicitVerdictId({ [VERDICT_ID_ENV]: "  solo-verdict  " })).toBe("solo-verdict");
+  });
+  it("returns null when unset or blank", () => {
+    expect(resolveExplicitVerdictId({})).toBeNull();
+    expect(resolveExplicitVerdictId({ [VERDICT_ID_ENV]: "" })).toBeNull();
+    expect(resolveExplicitVerdictId({ [VERDICT_ID_ENV]: "   " })).toBeNull();
+  });
+  it("fails closed (null) on a dot-only / traversal-only id that sanitize rejects", () => {
+    expect(resolveExplicitVerdictId({ [VERDICT_ID_ENV]: ".." })).toBeNull();
+    expect(resolveExplicitVerdictId({ [VERDICT_ID_ENV]: "." })).toBeNull();
   });
 });
 

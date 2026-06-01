@@ -78,6 +78,7 @@ async function run(over: {
   verdictDir: string;
   activeClaim?: string | null;
   manifest?: Manifest;
+  env?: NodeJS.ProcessEnv;
 }) {
   const stdout = captureStream();
   const stderr = captureStream();
@@ -96,6 +97,9 @@ async function run(over: {
     verdictDir: over.verdictDir,
     activeClaim: over.activeClaim !== undefined ? over.activeClaim : TASK,
     manifest: over.manifest ?? manifest(),
+    // Hermetic: no SOLUTION_VERDICT_ID unless a case opts in, so the env knob
+    // never leaks in from the runner's real environment.
+    env: over.env ?? {},
   });
   return { res, out: stdout.output(), err: stderr.output() };
 }
@@ -195,6 +199,7 @@ describe("completion-gate — production resolution path (no injected manifest/c
       cwd,
       verdictDir,
       homeDir: home,
+      env: {},
     });
     return { res, out: stdout.output() };
   }
@@ -268,5 +273,83 @@ describe("completion-gate — scoping", () => {
       toolInput: { command: "gh pr merge 7 --squash" },
     });
     expect(allowed.res.blocked).toBe(false);
+  });
+});
+
+describe("completion-gate — solo / non-agent-tasks verdict id (SOLUTION_VERDICT_ID)", () => {
+  const SOLO = "solo-verdict";
+
+  it("ALLOWS via SOLUTION_VERDICT_ID when no active-claim but a ready verdict exists at HEAD", async () => {
+    const { res, out } = await run({
+      cwd: repoAtHead(HEAD),
+      verdictDir: verdictDirWith(SOLO, { head: HEAD, ready: true }),
+      activeClaim: null,
+      env: { SOLUTION_VERDICT_ID: SOLO },
+    });
+    expect(res.blocked).toBe(false);
+    expect(out).toBe("");
+  });
+
+  it("HEAD-gates the env id: BLOCKS a stale verdict for the SOLUTION_VERDICT_ID", async () => {
+    const { res, out } = await run({
+      cwd: repoAtHead(HEAD),
+      verdictDir: verdictDirWith(SOLO, { head: OTHER, ready: true }),
+      activeClaim: null,
+      env: { SOLUTION_VERDICT_ID: SOLO },
+    });
+    expect(res.blocked).toBe(true);
+    expect(JSON.parse(out).reason).toMatch(/stale/);
+  });
+
+  it("active-claim takes precedence over SOLUTION_VERDICT_ID (env cannot redirect a claimed task)", async () => {
+    // The only verdict on disk is for the env id; the active claim is TASK.
+    // Claim-first means the gate looks up TASK (finds nothing) and BLOCKS,
+    // proving the env did NOT override the claim.
+    const { res } = await run({
+      cwd: repoAtHead(HEAD),
+      verdictDir: verdictDirWith(SOLO, { head: HEAD, ready: true }),
+      activeClaim: TASK,
+      env: { SOLUTION_VERDICT_ID: SOLO },
+    });
+    expect(res.blocked).toBe(true);
+  });
+
+  it("ALLOWS on the active-claim verdict even when SOLUTION_VERDICT_ID points elsewhere (env ignored when a claim resolves)", async () => {
+    // Positive proof of claim-first: the claimed task TASK has a ready verdict
+    // at HEAD; SOLUTION_VERDICT_ID names SOLO, which has NO verdict on disk. If
+    // the env participated, the gate would block; it ALLOWS, so the claim won.
+    const { res, out } = await run({
+      cwd: repoAtHead(HEAD),
+      verdictDir: verdictDirWith(TASK, { head: HEAD, ready: true }),
+      activeClaim: TASK,
+      env: { SOLUTION_VERDICT_ID: SOLO },
+    });
+    expect(res.blocked).toBe(false);
+    expect(out).toBe("");
+  });
+
+  it("BLOCKS (fail-closed) when SOLUTION_VERDICT_ID is malformed and there is no active-claim", async () => {
+    const { res, out } = await run({
+      cwd: repoAtHead(HEAD),
+      verdictDir: verdictDirWith(SOLO, { head: HEAD, ready: true }),
+      activeClaim: null,
+      env: { SOLUTION_VERDICT_ID: ".." },
+    });
+    expect(res.blocked).toBe(true);
+    expect(JSON.parse(out).reason).toMatch(/SOLUTION_VERDICT_ID/);
+  });
+
+  it("fail-closed message names both task_start and SOLUTION_VERDICT_ID when neither source resolves", async () => {
+    const { res, out } = await run({
+      cwd: repoAtHead(HEAD),
+      verdictDir: verdictDirWith(null),
+      activeClaim: null,
+      env: {},
+    });
+    expect(res.blocked).toBe(true);
+    const reason = JSON.parse(out).reason as string;
+    expect(reason).toMatch(/no active-claim/);
+    expect(reason).toMatch(/SOLUTION_VERDICT_ID/);
+    expect(reason).toMatch(/task_start/);
   });
 });
