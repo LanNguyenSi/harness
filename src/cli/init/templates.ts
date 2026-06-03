@@ -366,6 +366,7 @@ policies:
       cannot: "You cannot investigate this repository yet."
       required:
         - "verified repository preflight"
+        - "an approved Understanding Report, if the Understanding Gate is still active (it blocks \`harness preflight\` itself)"
       run:
         - "harness preflight"
 
@@ -449,6 +450,7 @@ policies:
       cannot: "You cannot push branch \${BRANCH} yet."
       required:
         - "a preflight for \${BRANCH} at the current HEAD (any age) OR any preflight within the last 10 minutes. Re-run \`harness preflight\` if you committed since the last preflight AND it has been more than 10 minutes."
+        - "an approved Understanding Report, if the Understanding Gate is still active (it blocks \`harness preflight\` itself)"
       run:
         - "harness preflight"
 
@@ -537,7 +539,7 @@ policy_packs:
           - "an approved Understanding Report for this session"
         run:
           - "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan, Prior Art (state what you searched for an existing solution and what you found, with an explicit adopt-or-build judgment)"
-          - "Run \`harness approve understanding\` and approve the prompt"
+          - "Run \`harness approve understanding\` (bare, no pipes, chaining, or redirection) and approve the prompt"
       # approval_lifecycle (agent-tasks/d8ee60ca + harness/f54e0ecb,
       # v0.18.0+): expire the approval marker on task-completion
       # boundaries so a multi-task session re-prompts for an

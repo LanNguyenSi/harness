@@ -833,6 +833,48 @@ describe("pack hook pre-tool-use blocker — operator-approval escape commands (
     expect(decision.hookSpecificOutput?.permissionDecision).toBe("deny");
   });
 
+  it("appends a re-run-bare hint when an approve-like command is blocked for shell metacharacters", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        event({
+          tool_name: "Bash",
+          tool_input: { command: "harness approve understanding | tee /tmp/log" },
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    const decision = JSON.parse(stdout.read().trim()) as { reason: string };
+    expect(decision.reason).toContain("looks like a `harness approve` command");
+    expect(decision.reason).toContain(
+      "Re-run it exactly as `harness approve understanding`",
+    );
+  });
+
+  it("does NOT append the approve hint when a non-approve command is blocked", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        event({ tool_name: "Bash", tool_input: { command: "rm -rf /tmp/x" } }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    const decision = JSON.parse(stdout.read().trim()) as { reason: string };
+    expect(decision.reason).not.toContain("looks like a `harness approve` command");
+  });
+
   it("hard-denies a command that merely mentions an escape command", async () => {
     // The escape exception (isEscapeCommand) is deliberately strict
     // about *what* the command is. A mutating command that happens

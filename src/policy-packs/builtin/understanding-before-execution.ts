@@ -47,6 +47,22 @@ const MODES: readonly Mode[] = ["fast_confirm", "grill_me", "strict"];
 
 export const DEFAULT_MODE: Mode = "grill_me";
 
+/**
+ * The agent-facing `required:` phrase for the understanding-gate deny
+ * envelope, derived from the configured mode. Only `strict` forces
+ * `requiresHumanApproval` (see {@link modeFriction}); in `fast_confirm`
+ * and `grill_me` the agent self-attests and a structural validator
+ * checks the report, so naming it "human-approved" there would overstate
+ * what the gate actually enforces. Generation surfaces (the Custom
+ * composer, the init templates) call this so the wording can never drift
+ * from the mode it is paired with.
+ */
+export function understandingApprovalRequirement(mode: Mode): string {
+  return mode === "strict"
+    ? "a human-approved Understanding Report for this session"
+    : "an approved Understanding Report for this session";
+}
+
 const HOOK_NAME_PREFIX = `policy-pack:${PACK_NAME}`;
 
 // Per-runtime hook surface. Claude Code keys on tool name (Edit|Write|Bash);

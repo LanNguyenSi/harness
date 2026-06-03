@@ -192,6 +192,7 @@ function blockJson(
   producers: Producer[] | undefined,
   ux: PolicyUx | undefined,
   sessionId: string,
+  escapeHint?: string | null,
 ): string {
   // When the pack config declares `ux:`, the agent-facing surface
   // becomes the plain-language `{ cannot, required, run }` shape, and
@@ -219,6 +220,12 @@ function blockJson(
     const producersBlock = renderProducers(producers, { SESSION_ID: sessionId });
     reasonText = `Understanding Gate: ${reason}. Tool: ${toolName}. ${suffix}\n${schemaHint}${producersBlock}`;
   }
+  // A targeted remediation hint for an approve-like command that tripped the
+  // escape matcher's metachar guard. Appended last so it reads after the
+  // structured recipe regardless of which envelope (ux vs legacy) rendered.
+  if (escapeHint) {
+    reasonText = `${reasonText}\n\n${escapeHint}`;
+  }
   return JSON.stringify({
     decision: "block",
     reason: reasonText,
@@ -242,6 +249,28 @@ function isEscapeCommand(command: string): boolean {
   if (/[;&|\n<>]/.test(trimmed)) return false;
   if (trimmed.includes("`") || trimmed.includes("$(")) return false;
   return /^harness\s+approve\b/.test(trimmed);
+}
+
+// When a blocked Bash command clearly INTENDS to be the operator-approval
+// escape (`harness approve ...`) but trips the deliberately strict
+// isEscapeCommand matcher because it carries shell metacharacters (a pipe,
+// chaining, redirection, or substitution), it lands in the generic hard
+// block with no clue that the command itself was almost the way out. The
+// strictness is intentional (chaining could smuggle other work past the
+// gate), so the fix is discoverability, not relaxation: surface a targeted
+// hint telling the agent to re-run it bare. Returns null when the command
+// is not approve-like or already qualifies as a clean escape.
+function approveEscapeHint(toolName: string, command: string): string | null {
+  if (toolName !== "Bash") return null;
+  const trimmed = command.trim();
+  if (!/^harness\s+approve\b/.test(trimmed)) return null;
+  if (isEscapeCommand(trimmed)) return null;
+  return (
+    "This looks like a `harness approve` command, but it was blocked because it carries shell " +
+    "metacharacters (a pipe, `;`/`&&`/`||` chaining, `<`/`>` redirection, or command substitution). " +
+    "The approval escape only fires for a bare invocation. Re-run it exactly as `harness approve understanding`, " +
+    "with no pipes, chaining, redirection, or substitution, then approve the prompt."
+  );
 }
 
 // The Claude Code PreToolUse "ask" envelope: surface the normal interactive
@@ -576,8 +605,9 @@ export async function runPackHookPreToolUseCli(
     (declared.config as Record<string, unknown>)["ux"],
     stderr,
   );
+  const escapeHint = approveEscapeHint(toolName, commandStr);
   stdout.write(
-    `${blockJson(toolName, "no approved Understanding Report for this session", configProducers, configUx, sessionId)}\n`,
+    `${blockJson(toolName, "no approved Understanding Report for this session", configProducers, configUx, sessionId, escapeHint)}\n`,
   );
   return {
     exitCode: 0,

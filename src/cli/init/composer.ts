@@ -20,6 +20,10 @@
 // solo/team/full.
 
 import { stringify } from "yaml";
+import {
+  understandingApprovalRequirement,
+  type Mode,
+} from "../../policy-packs/builtin/understanding-before-execution.js";
 
 export type CustomPackKey = "understanding-before-execution" | "branch-protection";
 export type CustomMcpKey =
@@ -269,7 +273,10 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
     enforcement: "block",
     ux: {
       cannot: "You cannot investigate this repository yet.",
-      required: ["verified repository preflight"],
+      required: [
+        "verified repository preflight",
+        "an approved Understanding Report, if the Understanding Gate is still active (it blocks `harness preflight` itself)",
+      ],
       run: ["harness preflight"],
     },
   },
@@ -316,6 +323,7 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
       cannot: "You cannot push branch ${BRANCH} yet.",
       required: [
         "a preflight for ${BRANCH} at the current HEAD (any age) OR any preflight within the last 10 minutes. Re-run `harness preflight` if you committed since the last preflight AND it has been more than 10 minutes.",
+        "an approved Understanding Report, if the Understanding Gate is still active (it blocks `harness preflight` itself)",
       ],
       run: ["harness preflight"],
     },
@@ -525,6 +533,7 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
     manifest.policy_packs = sel.packs.map((k) => {
       // Single-pack switch today; expand when the pack surface grows.
       if (k === "understanding-before-execution") {
+        const understandingMode: Mode = "grill_me";
         return {
           name: "understanding-before-execution",
           source: "builtin",
@@ -532,7 +541,7 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
           description:
             "Force agents to expose their task interpretation and wait for explicit human approval before any write-capable tool fires.",
           config: {
-            mode: "grill_me",
+            mode: understandingMode,
             producers: [
               {
                 kind: "ask",
@@ -549,10 +558,10 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
             ],
             ux: {
               cannot: "You cannot use write-capable tools yet.",
-              required: ["an approved Understanding Report for this session"],
+              required: [understandingApprovalRequirement(understandingMode)],
               run: [
                 "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan, Prior Art (state what you searched for an existing solution and what you found, with an explicit adopt-or-build judgment)",
-                "Run `harness approve understanding` and approve the prompt",
+                "Run `harness approve understanding` (bare, no pipes, chaining, or redirection) and approve the prompt",
               ],
             },
             // agent-tasks/d8ee60ca: expire the approval marker on
