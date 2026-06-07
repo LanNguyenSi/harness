@@ -56,7 +56,7 @@ export const COMPOSABLE_PACKS: ReadonlyArray<ComposableOption<CustomPackKey>> = 
     key: "branch-protection",
     label: "branch-protection",
     description:
-      "Block Write/Edit (claude-code) or apply_patch (codex) on protected branches (master, main, develop) at the first source mutation. Complements preflight-before-push at the LAST step. Two satisfying signals: a SessionStart `branch-check` tag, or an operator-written `branch-protection-ack` override.",
+      "Block Write/Edit (claude-code) or apply_patch (codex) on protected branches (master, main, develop) at the first source mutation. Complements preflight-before-push at the LAST step. Two satisfying signals: a SessionStart `branch-check` tag, or the operator-only override marker written by `harness approve branch-protection`.",
   },
 ];
 

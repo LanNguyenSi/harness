@@ -12,12 +12,19 @@
 //      `harness session-start branch-check` when the session opened on
 //      a non-protected branch).
 //
-//   2. **Override path** — a `branch-protection-ack:` tag exists in the
-//      ledger (any age). The operator writes this from outside the
-//      gated shell via `mcp__agent-grounding__ledger_add` to bless a
-//      deliberate protected-branch edit (version bumps, CI workflow
-//      patches, hotfixes). The `:<reason>` suffix is free-form so the
-//      audit log can read WHY the override fired.
+//   2. **Override path** — an operator-only approval marker file exists
+//      at `harness.generated/.approvals/branch-protection-<sessionId>`,
+//      written by `harness approve branch-protection` from outside the
+//      gated shell to bless a deliberate protected-branch edit (version
+//      bumps, CI workflow patches, hotfixes). The legacy
+//      `branch-protection-ack:` LEDGER tag is NO LONGER trusted as an
+//      override (audit finding #39): the agent has direct
+//      `mcp__agent-grounding__ledger_add` access and could self-write the
+//      tag to bless its own edit. The marker lives under
+//      `harness.generated/`, which Edit / Write / Bash are all gated from
+//      writing, so only a process the operator launched can produce it.
+//      The ack ledger row is still recorded for audit and surfaced in the
+//      diagnostics, but its presence alone never satisfies the gate.
 //
 // Failure mode: any error in load / parse / ledger query resolves to
 // BLOCK. This is the inverse of understanding-before-execution's
@@ -37,8 +44,10 @@ import {
   NON_PROTECTED_TAG_PREFIX,
   PACK_NAME,
   PRODUCER_FRESHNESS_MS,
+  checkBranchProtectionMarker,
   resolveProtectedBranches,
 } from "../../policy-packs/builtin/branch-protection-runtime.js";
+import { resolveGeneratedDir } from "../../io/generated-dir.js";
 import { resolveGitContext } from "../../runtime/git-context.js";
 import { POLICY_DECISION_TYPE } from "../../runtime/ledger-record.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
@@ -61,6 +70,14 @@ export interface PackHookBranchProtectionOptions extends LoaderOptions {
   ledgerTimeoutMs?: number;
   /** Inject a manifest (test). */
   manifest?: Manifest;
+  /**
+   * Override the `harness.generated/` directory used to resolve the
+   * operator-only override marker (test injection). When the real binary
+   * loads the manifest from disk this is derived from the resolved
+   * manifest path; an injected `manifest` has no on-disk path, so tests
+   * that exercise the marker override path supply this directly.
+   */
+  generatedDir?: string;
   /** Inject a fake ledger query (test). */
   ledgerQuery?: (sessionId: string) => Promise<LedgerEntry[] | { degraded: string }>;
 }
@@ -286,8 +303,11 @@ function blockJson(
       `  harness session-start branch-check\n` +
       `Once the gate sees a fresh ${NON_PROTECTED_TAG_PREFIX} tag (within ${minutes}m), this tool call will succeed.\n` +
       `\n` +
-      `Override (use sparingly): write \`${ACK_TAG_PREFIX}:<reason>\` to the ledger via mcp__agent-grounding__ledger_add. ` +
-      `The override survives the session and bypasses this gate.\n` +
+      `Override (operator only): the operator runs, from an un-hooked shell:\n` +
+      `  harness approve branch-protection --session ${sessionId}\n` +
+      `which writes the canonical approval marker the gate consults. ` +
+      `A \`${ACK_TAG_PREFIX}:<reason>\` ledger tag is no longer a sufficient override on its own ` +
+      `(it is agent-writable); the marker file under harness.generated/ is the trusted signal.\n` +
       `\n` +
       `Protected branches: ${protectedList.join(", ")}.`;
   }
@@ -355,11 +375,17 @@ export async function runPackHookBranchProtectionCli(
   // clear hint — we can't know if the gate should fire if we can't
   // read its config.
   let manifest: Manifest | null = null;
+  // Resolved manifest path feeds the harness.generated/ lookup below (the
+  // override-marker directory). An injected manifest (tests) has no
+  // on-disk path, so `generatedDir` falls back to opts.generatedDir.
+  let manifestPath: string | undefined;
   if (opts.manifest) {
     manifest = opts.manifest;
   } else {
     try {
-      manifest = loadManifest(opts).manifest;
+      const loaded = loadManifest(opts);
+      manifest = loaded.manifest;
+      manifestPath = loaded.resolved.base;
     } catch (err) {
       const reason = `manifest load failed (${(err as Error).message}); refusing on failsafe`;
       const diagnostic = `BLOCK — ${reason}`;
@@ -441,10 +467,39 @@ export async function runPackHookBranchProtectionCli(
   }
 
   const check = await probeLedger(manifest, sessionId, opts);
-  if (check.hasAck) {
-    const diagnostic = `ACK override active (${check.ackContent ?? ACK_TAG_PREFIX}); allowing`;
-    note(diagnostic);
-    return { exitCode: 0, blocked: false, diagnostic };
+
+  // Override path (operator-only). The canonical override signal is a
+  // marker file under harness.generated/.approvals/ that only a process
+  // the operator launched can write — NOT the `branch-protection-ack`
+  // ledger tag, which the agent can self-write via its own ledger_add MCP
+  // access (audit finding #39; the understanding gate closed the identical
+  // backdoor in agent-tasks/88ca4bb3). The ledger ack, if present, is
+  // surfaced as a best-effort audit echo only. `generatedDir` is
+  // unresolvable only on the test-injection path (an injected manifest has
+  // no on-disk path and no opts.generatedDir); there the override is
+  // simply unavailable and the gate falls through to the producer check.
+  const generatedDir =
+    opts.generatedDir ??
+    (manifestPath !== undefined
+      ? resolveGeneratedDir({
+          ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
+          manifestPath,
+        })
+      : undefined);
+  // Best-effort audit echo of the now-untrusted ledger ack, appended to
+  // diagnostics so an operator chasing the gate can see the historic tag
+  // without it being mistaken for the thing that opened (or failed to
+  // open) the gate.
+  const ackEcho = check.hasAck
+    ? ` [audit: ledger ${check.ackContent ?? ACK_TAG_PREFIX} present, no longer satisfies the gate]`
+    : "";
+  if (generatedDir !== undefined) {
+    const markerCheck = checkBranchProtectionMarker(generatedDir, sessionId);
+    if (markerCheck.matched) {
+      const diagnostic = `branch-protection override marker active (${markerCheck.detail}); allowing${ackEcho}`;
+      note(diagnostic);
+      return { exitCode: 0, blocked: false, diagnostic };
+    }
   }
   if (check.hasFreshProducer) {
     const diagnostic = `fresh producer tag (${check.freshProducerContent ?? NON_PROTECTED_TAG_PREFIX}); allowing`;
@@ -455,7 +510,7 @@ export async function runPackHookBranchProtectionCli(
   const why =
     check.degraded !== null
       ? `ledger degraded (${check.degraded}); refusing on failsafe`
-      : `no fresh ${NON_PROTECTED_TAG_PREFIX} tag (${check.totalEntries} entries scanned) and no ${ACK_TAG_PREFIX} override`;
+      : `no fresh ${NON_PROTECTED_TAG_PREFIX} tag (${check.totalEntries} entries scanned) and no operator override marker${ackEcho}`;
   const diagnostic = `BLOCK — ${why}`;
   note(diagnostic);
   stdout.write(`${blockJson(toolName, branch, why, protectedList, configUx, sessionId)}\n`);

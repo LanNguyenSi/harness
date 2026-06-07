@@ -16,9 +16,14 @@
 //      consults the ledger on every Write/Edit (or `apply_patch`) and
 //      emits a Claude Code deny envelope unless either:
 //        - a fresh (<5m) `branch:non-protected` tag exists, OR
-//        - a `branch-protection-ack:` override tag exists (any age,
-//          written by the operator via `mcp__agent-grounding__ledger_add`
-//          since Bash is gated by this same pack).
+//        - the operator-only override marker exists at
+//          `harness.generated/.approvals/branch-protection-<sessionId>`,
+//          written by `harness approve branch-protection`. The legacy
+//          `branch-protection-ack:` ledger tag is no longer trusted as an
+//          override (audit finding #39): it is agent-writable via
+//          `mcp__agent-grounding__ledger_add`, so it could self-bless an
+//          edit. The marker lives under `harness.generated/`, which Edit /
+//          Write / Bash are all gated from writing.
 //
 // The producer is also runnable on-demand from the operator's `!` shell
 // — same CLI verb, no SessionStart event piped on stdin — so an agent
@@ -89,7 +94,7 @@ function buildHooks(runtime: Runtime): Hook[] {
       command: BLOCKER_COMMAND,
       blocking: "hard",
       budget_ms: 5000,
-      description: `Blocker: deny ${blockerMatch} on protected branches unless a fresh branch:non-protected tag or a branch-protection-ack override exists in the ledger.`,
+      description: `Blocker: deny ${blockerMatch} on protected branches unless a fresh branch:non-protected tag exists in the ledger or the operator-only override marker (harness approve branch-protection) is present.`,
     },
   ];
 }
@@ -131,7 +136,8 @@ While this pack is enabled, hooks are wired into the ${settingsArtefact}:
    \`${blockerMatch}\`: refuses the tool call unless EITHER
    - a \`${NON_PROTECTED_TAG_PREFIX}\` tag exists in the ledger from
      within the last ${minutes} minutes, OR
-   - a \`${ACK_TAG_PREFIX}:<reason>\` override tag exists (any age).
+   - the operator-only override marker exists at
+     \`harness.generated/.approvals/branch-protection-<sessionId>\`.
 
 ## Escape hatches
 
@@ -140,12 +146,16 @@ While this pack is enabled, hooks are wired into the ${settingsArtefact}:
   is gated by the Understanding Gate but the producer command is itself
   a \`harness ...\` invocation that the gate's allowlist accepts.
 
-- **Explicit override** (any age, lasts the session): write the ack tag
-  via \`mcp__agent-grounding__ledger_add\` with
-  \`content: "${ACK_TAG_PREFIX}:<reason>"\`. Use this when you have a
-  deliberate reason to edit a protected branch — version bumps, CI
-  workflow patches, etc. The override survives session restarts only as
-  long as the ledger row does.
+- **Explicit override** (operator only): from an un-hooked shell run
+  \`harness approve branch-protection --session <sessionId>\`. This writes
+  the canonical approval marker the blocker consults. Use it when you have
+  a deliberate reason to edit a protected branch (version bumps, CI
+  workflow patches, hotfixes). SECURITY (audit finding #39): a
+  \`${ACK_TAG_PREFIX}:<reason>\` ledger tag is NO LONGER sufficient on its
+  own — it is agent-writable via \`mcp__agent-grounding__ledger_add\`, so
+  the gate would otherwise be self-approvable. The approve verb still
+  records that ledger tag for audit, but only the marker file (which the
+  agent cannot write) opens the gate.
 
 ## Out of scope (v1)
 

@@ -35,7 +35,9 @@ The pack contributes two hooks to `settings.json`:
    EITHER
    - a `branch:non-protected` tag exists from within the last
      5 minutes, OR
-   - a `branch-protection-ack:<reason>` override tag exists (any age).
+   - the operator-only override marker exists at
+     `harness.generated/.approvals/branch-protection-<sessionId>`
+     (written by `harness approve branch-protection`).
 
 The 5-minute freshness window lets a single branch-check satisfy a
 whole edit batch without re-running for every Write. Longer than that
@@ -126,24 +128,29 @@ under the Understanding Gate:
 
 The next `Write` / `Edit` will succeed within the 5-minute window.
 
-### Explicit override
+### Explicit override (operator only)
 
 When you have a deliberate reason to edit a protected branch (version
-bumps, CI workflow patches, hotfixes), write the override tag via
-`mcp__agent-grounding__ledger_add`:
+bumps, CI workflow patches, hotfixes), run, from an un-hooked operator
+shell (in Claude Code: prefix with `! `):
 
 ```text
-mcp__agent-grounding__ledger_add(
-  sessionId="<your session id>",
-  type="fact",
-  content="branch-protection-ack:CI hotfix for broken workflow",
-  source="manual"
-)
+harness approve branch-protection --session <your session id> --reason "CI hotfix for broken workflow"
 ```
 
-The override survives the session and bypasses this gate for as long
-as the ledger row exists. The `:<reason>` suffix is free-form so a
-later audit can read WHY the override fired.
+This writes the canonical approval marker at
+`harness.generated/.approvals/branch-protection-<sessionId>`, which the
+blocker consults. Only a process the operator launched can write under
+`harness.generated/` (Edit / Write / Bash are all gated, and no
+configured MCP server exposes a filesystem write), so the marker is the
+trusted override signal.
+
+> **Security (audit finding #39).** A `branch-protection-ack:<reason>`
+> ledger tag is NO LONGER a sufficient override on its own. The agent has
+> direct `mcp__agent-grounding__ledger_add` access, so it could self-write
+> that tag and bless its own protected-branch edit. The approve verb still
+> records the ledger tag for audit (`--reason` becomes its `:<reason>`
+> suffix), but only the marker file opens the gate.
 
 ## Detached HEAD
 

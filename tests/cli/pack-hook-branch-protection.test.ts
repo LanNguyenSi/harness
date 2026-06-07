@@ -4,8 +4,15 @@ import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { runPackHookBranchProtectionCli } from "../../src/cli/pack/hook-branch-protection.js";
+import { writeBranchProtectionMarker } from "../../src/policy-packs/builtin/branch-protection-runtime.js";
 import type { LedgerEntry } from "../../src/policies/index.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
+
+function makeGeneratedDir(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-bp-gen-"));
+  cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
 
 let cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -105,24 +112,80 @@ describe("runPackHookBranchProtectionCli — allow paths", () => {
     expect(result.diagnostic).toMatch(/fresh producer tag/);
   });
 
-  it("allows on a protected branch when an explicit branch-protection-ack override exists (any age)", async () => {
+  it("allows on a protected branch when the operator-only override MARKER exists (audit finding #39)", async () => {
     const repo = makeRepoFixture("svc", "master");
+    const generatedDir = makeGeneratedDir();
+    // Operator-written marker (canonical override signal). Mirrors what
+    // `harness approve branch-protection --session sess-1` writes.
+    writeBranchProtectionMarker(generatedDir, "sess-1", {
+      approvedAt: NOW.toISOString(),
+      approvedBy: "operator",
+    });
     const { stream: out, output: outBuf } = captureStream();
     const { stream: err } = captureStream();
     const result = await runPackHookBranchProtectionCli({
-      stdin: streamFrom(eventJson({ cwd: repo })),
+      stdin: streamFrom(eventJson({ cwd: repo, session_id: "sess-1" })),
       stdout: out,
       stderr: err,
       manifest: manifestWithPack(),
+      generatedDir,
       now: NOW,
-      // The ack tag was written 8 hours ago — irrelevant to the override path.
-      ledgerQuery: async () => [
-        ledgerAt("branch-protection-ack:hotfix prod", 60 * 8, "ack-1"),
-      ],
+      ledgerQuery: async () => [],
     });
     expect(result.blocked).toBe(false);
     expect(outBuf()).toBe("");
-    expect(result.diagnostic).toMatch(/ACK override active/);
+    expect(result.diagnostic).toMatch(/override marker active/);
+  });
+
+  it("BLOCKS on a protected branch when only an agent-writable branch-protection-ack ledger tag exists (no marker) — audit finding #39", async () => {
+    // The ledger tag is reachable by the agent via its own ledger_add MCP
+    // access, so it is no longer a trusted override. Without the
+    // operator-only marker the gate must still refuse.
+    const repo = makeRepoFixture("svc", "master");
+    const generatedDir = makeGeneratedDir();
+    const { stream: out, output: outBuf } = captureStream();
+    const { stream: err } = captureStream();
+    const result = await runPackHookBranchProtectionCli({
+      stdin: streamFrom(eventJson({ cwd: repo, session_id: "sess-1" })),
+      stdout: out,
+      stderr: err,
+      manifest: manifestWithPack(),
+      generatedDir,
+      now: NOW,
+      // A fresh ack tag — would have satisfied the pre-#39 override path.
+      ledgerQuery: async () => [
+        ledgerAt("branch-protection-ack:hotfix prod", 1, "ack-1"),
+      ],
+    });
+    expect(result.blocked).toBe(true);
+    const envelope = JSON.parse(outBuf());
+    expect(envelope.decision).toBe("block");
+    // The now-untrusted ledger ack is echoed in the diagnostic for audit,
+    // but did not open the gate.
+    expect(result.diagnostic).toMatch(/no longer satisfies the gate/);
+  });
+
+  it("does not let one session's override marker unblock a different session", async () => {
+    const repo = makeRepoFixture("svc", "master");
+    const generatedDir = makeGeneratedDir();
+    // Marker written for sess-OTHER, but the event is sess-1.
+    writeBranchProtectionMarker(generatedDir, "sess-OTHER", {
+      approvedAt: NOW.toISOString(),
+      approvedBy: "operator",
+    });
+    const { stream: out, output: outBuf } = captureStream();
+    const { stream: err } = captureStream();
+    const result = await runPackHookBranchProtectionCli({
+      stdin: streamFrom(eventJson({ cwd: repo, session_id: "sess-1" })),
+      stdout: out,
+      stderr: err,
+      manifest: manifestWithPack(),
+      generatedDir,
+      now: NOW,
+      ledgerQuery: async () => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(JSON.parse(outBuf()).decision).toBe("block");
   });
 
   it("allows a Write whose target path is outside any git repo, even from a protected-branch cwd", async () => {
