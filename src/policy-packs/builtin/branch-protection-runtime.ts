@@ -8,6 +8,13 @@
 // protected list, config parsing.
 
 import type { PolicyPack } from "../../schema/index.js";
+import {
+  checkApprovalMarker,
+  writeApprovalMarker,
+  type ApprovalMarker,
+  type CheckApprovalMarkerOptions,
+  type MarkerCheck,
+} from "./understanding-before-execution-runtime.js";
 
 export const PACK_NAME = "branch-protection";
 
@@ -20,14 +27,72 @@ export const PACK_NAME = "branch-protection";
 export const NON_PROTECTED_TAG_PREFIX = "branch:non-protected";
 
 /**
- * Operator escape-hatch tag. Set via `mcp__agent-grounding__ledger_add`
- * (Bash is gated by this very pack, so a shell-based override would be
- * unreachable). The blocker substring-matches this prefix; the trailing
- * `:<reason>` is a free-form note the operator types so a later audit
- * can read WHY the override fired (e.g. `branch-protection-ack:hotfix
- * for prod`).
+ * Operator escape-hatch tag, kept as a best-effort AUDIT echo only.
+ *
+ * SECURITY (audit finding #39): this tag is NO LONGER a trusted override
+ * signal. The agent has direct `mcp__agent-grounding__ledger_add` access,
+ * so it could self-write `branch-protection-ack:<anything>` and bless its
+ * own protected-branch edit — exactly the self-approval backdoor the
+ * understanding gate closed in agent-tasks/88ca4bb3 by moving the
+ * canonical approval to a filesystem marker. The blocker now consults the
+ * operator-only marker file (see `checkBranchProtectionMarker` below); the
+ * `harness approve branch-protection` verb still records this ledger tag
+ * so `harness audit` / forensics keep a trail, but its presence alone
+ * never satisfies the gate. The trailing `:<reason>` stays free-form.
  */
 export const ACK_TAG_PREFIX = "branch-protection-ack";
+
+/**
+ * Marker-name namespace for an operator-written branch-protection
+ * override. The marker lives in the shared `.approvals/` directory under
+ * `harness.generated/` (the same directory the understanding gate uses),
+ * prefixed so it can never be confused with an understanding-gate session
+ * marker (`.approvals/<sessionId>`) or a task marker (`.approvals/task-<id>`):
+ * Claude Code / Codex session ids are UUIDs and never start with this
+ * literal, so the three namespaces stay disjoint.
+ *
+ * Why a marker and not the `branch-protection-ack` ledger tag: only a
+ * process the operator launched (their `!`-shell or any un-hooked
+ * terminal) can write under `harness.generated/` — Edit / Write / Bash
+ * are all gated, and the configured MCP servers expose no filesystem
+ * write. So the marker is the canonical override signal; the ledger row
+ * is a best-effort audit echo only.
+ */
+export const BRANCH_PROTECTION_MARKER_PREFIX = "branch-protection-";
+
+/** Marker filename (inside `.approvals/`) for a session's branch-protection override. */
+export function branchProtectionMarkerName(sessionId: string): string {
+  return `${BRANCH_PROTECTION_MARKER_PREFIX}${sessionId}`;
+}
+
+/**
+ * Operator-side: write the canonical branch-protection override marker for
+ * `sessionId`. Atomic (delegates to `writeApprovalMarker`). Caller is
+ * `harness approve branch-protection`, run from the operator's un-hooked
+ * shell; if the agent could reach this path the gate's value would
+ * collapse, so it lives behind the approve CLI.
+ */
+export function writeBranchProtectionMarker(
+  generatedDir: string,
+  sessionId: string,
+  marker: ApprovalMarker,
+): string {
+  return writeApprovalMarker(generatedDir, branchProtectionMarkerName(sessionId), marker);
+}
+
+/**
+ * Gate-side: is the operator's branch-protection override marker present
+ * for `sessionId`? Inherits `checkApprovalMarker`'s contract
+ * (existence-is-enough, symlink rejection, optional freshness via
+ * `maxAgeMs`); only the namespaced filename differs.
+ */
+export function checkBranchProtectionMarker(
+  generatedDir: string,
+  sessionId: string,
+  opts: CheckApprovalMarkerOptions = {},
+): MarkerCheck {
+  return checkApprovalMarker(generatedDir, branchProtectionMarkerName(sessionId), opts);
+}
 
 /**
  * Freshness window for the producer tag. Five minutes lets a single

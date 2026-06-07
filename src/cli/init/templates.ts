@@ -573,9 +573,11 @@ policy_packs:
   #
   # Two satisfying signals: a fresh \`branch:non-protected:<branch>\` tag
   # from the SessionStart producer (\`harness session-start branch-check\`),
-  # or a \`branch-protection-ack:<reason>\` override the operator writes
-  # via mcp__agent-grounding__ledger_add for deliberate protected-branch
-  # edits (version bumps, CI workflow patches, hotfixes).
+  # or the operator-only override marker written by
+  # \`harness approve branch-protection --session <id>\` for deliberate
+  # protected-branch edits (version bumps, CI workflow patches, hotfixes).
+  # A branch-protection-ack ledger tag is no longer a sufficient override
+  # on its own (it is agent-writable); the marker file is the trusted signal.
   #
   # Fails closed (any load / parse / ledger error refuses). Disable by
   # setting \`enabled: false\` or removing this entry if your workflow

@@ -38,6 +38,7 @@ import { runPackHookCodexPreToolUseCli } from "./pack/hook-codex-pre-tool-use.js
 import { runPackHookCodexStopCli } from "./pack/hook-codex-stop.js";
 import { runPackHookCodexUserPromptSubmitCli } from "./pack/hook-codex-user-prompt-submit.js";
 import { isRuntime, KNOWN_RUNTIMES, type Runtime } from "../policy-packs/index.js";
+import { approveBranchProtection } from "./approve/branch-protection.js";
 import { approveRisk } from "./approve/risk.js";
 import { approveUnderstanding } from "./approve/understanding.js";
 import { describe, isPillar, type Pillar } from "./describe.js";
@@ -1136,7 +1137,8 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .description(
       "PreToolUse blocker for the branch-protection pack: read tool-event JSON from stdin, consult the " +
         "evidence ledger, emit a deny envelope on protected branches unless either a fresh " +
-        "`branch:non-protected` tag (within 5m) or a `branch-protection-ack` override is present.",
+        "`branch:non-protected` tag (within 5m) or the operator-only override marker " +
+        "(written by `harness approve branch-protection`) is present.",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
@@ -1544,6 +1546,73 @@ export function buildProgram(opts: RunOptions = {}): Command {
               "  the require_approval gate stays blocked until the tag is recorded.",
             );
           }
+        }
+        stdout(`${lines.join("\n")}\n`);
+      },
+    );
+
+  approveCmd
+    .command("branch-protection")
+    .description(
+      "Bless a deliberate protected-branch edit for one session. Writes the canonical " +
+        "operator-only approval marker under harness.generated/.approvals/ that the " +
+        "branch-protection blocker consults, plus a best-effort branch-protection-ack " +
+        "ledger row for audit. Operator action: the marker (not the ledger tag) is the " +
+        "trusted override, because the ledger is agent-writable.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option(
+      "--session <id>",
+      "explicit session id (default: $CLAUDE_CODE_SESSION_ID, then $CLAUDE_SESSION_ID, then $CODEX_SESSION_ID, then staged .pending-approval)",
+    )
+    .option(
+      "--reason <text>",
+      "free-form note recorded in the audit ledger tag (why the override fired)",
+    )
+    .option("--approved-by <actor>", "actor to record on the marker (default: harness-approve-cli)")
+    .action(
+      async (options: {
+        config?: string;
+        project?: string;
+        session?: string;
+        reason?: string;
+        approvedBy?: string;
+      }) => {
+        const cliOpts: Parameters<typeof approveBranchProtection>[0] = {};
+        if (options.config) cliOpts.configPath = options.config;
+        if (options.project) cliOpts.project = options.project;
+        if (options.session) cliOpts.session = options.session;
+        if (options.reason) cliOpts.reason = options.reason;
+        if (options.approvedBy) cliOpts.approvedBy = options.approvedBy;
+        const result = await approveBranchProtection(cliOpts);
+        const lines: string[] = [];
+        const sourceNote =
+          result.sessionSource === "pending-approval"
+            ? " (resolved from .pending-approval staged by the gate hook)"
+            : result.sessionSource === "env-claude-code"
+              ? " (from $CLAUDE_CODE_SESSION_ID)"
+              : result.sessionSource === "env-claude"
+                ? " (from $CLAUDE_SESSION_ID)"
+                : result.sessionSource === "env-codex"
+                  ? " (from $CODEX_SESSION_ID)"
+                  : "";
+        lines.push(`session: ${result.sessionId}${sourceNote}`);
+        if (result.marker.ok) {
+          lines.push(`marker:  ✓ ${result.marker.filePath} (canonical gate signal)`);
+          lines.push(
+            "  the branch-protection gate now allows protected-branch edits for this session.",
+          );
+        } else {
+          lines.push(`marker:  ✗ FAILED (${result.marker.reason})`);
+          lines.push(
+            "  the gate WILL keep blocking the next tool call until the marker exists.",
+          );
+        }
+        if (result.ledger.ok) {
+          lines.push(`ledger:  ✓ wrote ${result.ledger.tag} (audit only)`);
+        } else {
+          lines.push(`ledger:  ⚠ skipped (${result.ledger.reason ?? "unknown"}) (audit only)`);
         }
         stdout(`${lines.join("\n")}\n`);
       },
