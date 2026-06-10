@@ -1,6 +1,6 @@
 # harness CLI reference
 
-Tracks the verbs available on the `harness` binary as of `v0.30.0`. For policy semantics see [`docs/policy-packs/`](policy-packs/); for the risk gate specifically see [`docs/risk-gate.md`](risk-gate.md).
+Tracks the verbs available on the `harness` binary as of `v0.33.0`; changes that shipped on master after that tag are listed under Notes. For policy semantics see [`docs/policy-packs/`](policy-packs/); for the risk gate specifically see [`docs/risk-gate.md`](risk-gate.md).
 
 The CLI is grouped by purpose below. Run any verb with `--help` for flags and examples.
 
@@ -17,7 +17,7 @@ The CLI is grouped by purpose below. Run any verb with `--help` for flags and ex
 | `harness add mcp\|cli\|skill\|hook <name> [opts]` | Insert a new managed entry into `harness.yaml`. Subcommands cover the four entry kinds. |
 | `harness remove <type> <name>` | Inverse of `add`. |
 | `harness export` | Dump the active manifest to stdout (e.g. for sharing or PRs). |
-| `harness pack add <name>` / `harness pack remove <name>` / `harness pack list` | Manage `policy_packs[]` entries (`list` takes no name). The same `pack` namespace also carries the runtime hook entrypoints under `harness pack hook ...`, duplicating `harness hook ...` below; both paths resolve to the same handlers. |
+| `harness pack add <name>` / `harness pack remove <name>` / `harness pack list` | Manage `policy_packs[]` entries (`list` takes no name). The same `pack` namespace also carries the runtime hook entrypoints under `harness pack hook ...` (see below); there is no separate top-level `harness hook` runtime namespace. |
 | `harness uninstall` | One-command teardown. Dry-run by default; pass `--apply` to commit. |
 | `harness migrate-home` | Move state from `~/.claude/` to `~/.harness/` (introduced in `v0.24.0`, legacy fallback still live). Dry-run by default; pass `--apply` to commit. |
 
@@ -46,18 +46,22 @@ The CLI is grouped by purpose below. Run any verb with `--help` for flags and ex
 
 ## Hook entrypoints
 
-These are called by Claude Code via `settings.json`; you usually do not run them yourself. They are documented here for operators reading their settings files.
+These are called by Claude Code via `settings.json`; you usually do not run them yourself. They are documented here for operators reading their settings files. All runtime hook entrypoints live under the `harness pack hook ...` namespace (the table previously showed a `harness hook ...` spelling that does not exist; `harness add hook <name>` is the unrelated manifest mutation).
 
 | Verb | Called from |
 |------|-------------|
-| `harness hook pre-tool-use` | `PreToolUse` matcher. |
-| `harness hook post-tool-use` | `PostToolUse` matcher. |
-| `harness hook track-active-claim` | `PostToolUse` companion that tracks the active understanding-gate task scope (v2 gate, PR #185). |
-| `harness hook branch-protection` | `PreToolUse` branch-guard for the `master`/`main` protection policy. |
-| `harness hook codex-pre-tool-use` | Codex variant of `pre-tool-use`. The generator that emits its `settings.json` entry pins a 2s timeout floor as of v0.29.0. |
-| `harness hook codex-user-prompt-submit` | Codex `UserPromptSubmit` entry. |
-| `harness hook codex-stop` | Codex `Stop` entry. |
-| `harness session-start preflight` | `SessionStart` companion: emits the per-repo `preflight:` ledger tag the Risk Gate's preflight policy looks for. |
+| `harness pack hook pre-tool-use` | `PreToolUse` matcher. |
+| `harness pack hook post-tool-use` | `PostToolUse` matcher. |
+| `harness pack hook track-active-claim` | `PostToolUse` companion that tracks the active understanding-gate task scope (v2 gate, PR #185). |
+| `harness pack hook stay-in-scope` | `PostToolUse` soft reminder (non-blocking): flags agent-tasks task payloads that look like review-derived follow-ups. Disable via `STAY_IN_SCOPE_DISABLED=1`; log path via `STAY_IN_SCOPE_LOG`. |
+| `harness pack hook branch-protection` | `PreToolUse` branch-guard for the `master`/`main` protection policy. Denies protected-branch edits unless a fresh `branch:non-protected` tag (5m window) or the operator-only override marker from `harness approve branch-protection` is present (v0.33.0). |
+| `harness pack hook solution-acceptance` | `PreToolUse` completion-gate (v0.32.0, opt-in pack): denies task-finishing tools (agent-tasks completion verbs, `git push`, `gh pr merge`) unless a ready solution-acceptance verdict exists at the current git HEAD for the active-claim task (or, without a claim, the `SOLUTION_VERDICT_ID` env id). Fail-closed. See [`docs/policy-packs/solution-acceptance.md`](policy-packs/solution-acceptance.md). |
+| `harness pack hook solution-acceptance-writeguard` | `PreToolUse` anti-forgery companion (v0.32.0): denies agent writes into the solution-verdict dir; the producer (`grounding-mcp`) is the only legitimate writer. |
+| `harness pack hook runtime-reality` | `PreToolUse` drift gate (v0.31.0, opt-in): before destructive runtime commands, probes live process state and denies on critical drift against the expectations file. Fail-open on probe errors. See [`docs/runtime-reality-hook.md`](runtime-reality-hook.md). |
+| `harness pack hook codex-pre-tool-use` | Codex variant of `pre-tool-use`. The generator that emits its `settings.json` entry pins a 2s timeout floor as of v0.29.0. |
+| `harness pack hook codex-user-prompt-submit` | Codex `UserPromptSubmit` entry. |
+| `harness pack hook codex-stop` | Codex `Stop` entry. |
+| `harness session-start preflight` | `SessionStart` companion: emits the per-repo `preflight:` ledger tag the Risk Gate's preflight policy looks for. Also exposed as the top-level alias `harness preflight`. |
 | `harness session-start branch-check` | `SessionStart` companion: emits a one-shot warning if the current branch already has work that should be a fresh task branch (per `feedback-one-branch-per-task`). |
 
 ## Operator approvals
@@ -68,6 +72,7 @@ These are called by Claude Code via `settings.json`; you usually do not run them
 |------|-----------|
 | `harness approve understanding [--session <id>] [--force]` | Drop the `understanding-approved:<sessionId>` marker so the Understanding Gate releases the session. `--session` is required when multiple sessions share `~/.harness/` (see `feedback-harness-approve-session-flag`). `--force` overrides parser-failed Understanding Reports with an audit suffix (harness PR #253). |
 | `harness approve risk [--force <reason>] [--i-am-the-operator]` | Write `risk-approved:` to clear the current Risk Gate `require_approval` tier. `--force <reason>` only unblocks `deny`-tier (writes `risk-override:`) and requires a non-empty reason; from `!`-shell calls add `--i-am-the-operator`. |
+| `harness approve branch-protection [--session <id>] [--reason <text>] [--approved-by <actor>]` | Bless a deliberate protected-branch edit for one session (v0.33.0). Writes the canonical operator-only marker under `harness.generated/.approvals/` that the branch-protection blocker consults; the `branch-protection-ack` ledger row is a best-effort audit echo only (the ledger is agent-writable and no longer opens the gate). |
 
 ## Gate kill-switches
 
@@ -87,6 +92,7 @@ These are called by Claude Code via `settings.json`; you usually do not run them
 
 ## Notes
 
+- Unreleased on master (post-`v0.33.0`): `apply --yes` (skip the `--overwrite-drift` confirmation), non-TTY guards on the `apply`/`adopt` confirmation prompts (they refuse instead of hanging; piped `echo yes |` confirmations no longer work), `validate --json`, and the `approve understanding` stale-report hardening (sessionId-less fallback candidates older than 15m are rejected; fallback adoptions print createdAt + age).
 - `harness policy intercept --hook <name>` and the 2s timeout floor pinned by the Codex-hook generator both shipped in `v0.29.0`; see [CHANGELOG.md](../CHANGELOG.md).
 - The `full` profile pins `@lannguyensi/agent-preflight` and `@lannguyensi/understanding-gate@0.4.0+` as transitive dependencies of the wired packs; mismatched versions surface in `harness doctor`.
 - Ledger tag vocabulary used by gate-mode policies: `review:`, `risk-override:`, `risk-approved:`, `understanding-approved:`, `preflight:`. The Risk and Understanding gates both consume their tags scoped to a Claude session id (not the agent-tasks task UUID, see `feedback-agent-grounding-merge-gate-ledger`).
