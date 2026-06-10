@@ -202,8 +202,9 @@ the way: `harness pause/resume` in `v0.22.0`, `migrate-home` in
 `v0.24.0`, Codex-runtime adapter polish in `v0.28.x` and `v0.29.0`,
 `approve risk --force` in `v0.30.0`, the opt-in `runtime-reality`
 drift gate in `v0.31.0`, the opt-in `solution-acceptance` pack in
-`v0.32.0`, and the operator-only `approve branch-protection` marker in
-`v0.33.0`. The current release is `v0.33.0`.
+`v0.32.0`, the operator-only `approve branch-protection` marker in
+`v0.33.0`, and the `harness gc` retention cleanup plus non-TTY-safe
+confirmations in `v0.34.0`. The current release is `v0.34.0`.
 
 The phase-by-phase plan with acceptance criteria lives in
 [`docs/ROADMAP.md`](docs/ROADMAP.md); what shipped in each version is
