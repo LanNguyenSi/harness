@@ -1416,8 +1416,9 @@ export function buildProgram(opts: RunOptions = {}): Command {
               `  ⚠ adopted via sessionId-less fallback: created ${fb.createdAt ?? "<unknown>"} (${fb.ageMinutes}m ago).`,
             );
             lines.push(
-              "  The live session's own report was never persisted; verify this is the",
-              "  report you just read before trusting the approval.",
+              "  The live session's report was never persisted, or an older producer",
+              "  wrote it without a sessionId. Verify this is the report you just read",
+              "  before trusting the approval.",
             );
           }
         } else {

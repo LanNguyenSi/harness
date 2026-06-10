@@ -178,6 +178,33 @@ describe("selectReportForSession", () => {
     expect(sel.staleRejected).toEqual([]);
   });
 
+  it("rejects a sessionId-less candidate created in the future beyond the skew tolerance", () => {
+    const future = mkReport({
+      filePath: "/future",
+      createdAtMs: NOW.getTime() + 10 * 60_000,
+    });
+    const sel = selectReportForSession([future], "fresh-session", {
+      tolerantFallback: "uncompleted",
+      maxFallbackAgeMs: TOLERANT_FALLBACK_MAX_AGE_MS,
+      now: NOW,
+    });
+    expect(sel.report).toBeNull();
+    expect(sel.staleRejected.map((r) => r.filePath)).toEqual(["/future"]);
+  });
+
+  it("tolerates small clock skew on a sessionId-less candidate", () => {
+    const slightlyAhead = mkReport({
+      filePath: "/ahead",
+      createdAtMs: NOW.getTime() + 60_000,
+    });
+    const sel = selectReportForSession([slightlyAhead], "fresh-session", {
+      tolerantFallback: "uncompleted",
+      maxFallbackAgeMs: TOLERANT_FALLBACK_MAX_AGE_MS,
+      now: NOW,
+    });
+    expect(sel.report?.filePath).toBe("/ahead");
+  });
+
   it("never age-limits a strict sessionId match", () => {
     const exact = mkReport({
       filePath: "/exact",

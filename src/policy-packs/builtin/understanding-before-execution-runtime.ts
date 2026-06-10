@@ -210,6 +210,16 @@ export function listPersistedReports(dir: string): PersistedReport[] {
  */
 export const TOLERANT_FALLBACK_MAX_AGE_MS = 15 * 60_000;
 
+/**
+ * Tolerance for a sessionId-less candidate whose `createdAt` lies in
+ * the FUTURE relative to the approve-time clock. A future creation
+ * time is suspect either way: a forged `createdAt` (the producer's
+ * Metadata block lets the agent author it) or serious clock skew.
+ * Beyond this skew the fallback rejects the candidate just like a
+ * stale one rather than trusting a timestamp that cannot be right.
+ */
+export const TOLERANT_FALLBACK_FUTURE_SKEW_MS = 5 * 60_000;
+
 export interface FindReportOptions {
   /**
    * Behaviour of the sessionId-null tolerant fallback (older Stop-hook
@@ -301,9 +311,12 @@ export function selectReportForSession(
       // the live session to a stale, unrelated report.
       continue;
     }
-    if (opts.maxFallbackAgeMs !== undefined && nowMs - r.createdAtMs > opts.maxFallbackAgeMs) {
-      staleRejected.push(r);
-      continue;
+    if (opts.maxFallbackAgeMs !== undefined) {
+      const ageMs = nowMs - r.createdAtMs;
+      if (ageMs > opts.maxFallbackAgeMs || ageMs < -TOLERANT_FALLBACK_FUTURE_SKEW_MS) {
+        staleRejected.push(r);
+        continue;
+      }
     }
     return { report: r, fallbackAdopted: true, staleRejected };
   }

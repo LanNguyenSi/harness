@@ -101,6 +101,19 @@ export type TaskMarkerOutcome =
   | { ok: true; taskId: string; filePath: string; approvedAt: string; source: "flag" | "active-claim" }
   | { ok: false; taskId: string; reason: string; source: "flag" | "active-claim" };
 
+/**
+ * Human-scale age for operator messages: minutes up to two hours,
+ * hours up to two days, then days. A 17-day-old report should read
+ * "17d", not "24893m" (review finding on harness-discovery C1).
+ */
+function formatAge(ms: number): string {
+  const min = Math.round(ms / 60_000);
+  if (Math.abs(min) < 120) return `${min}m`;
+  const hours = Math.round(min / 60);
+  if (Math.abs(hours) < 48) return `${hours}h`;
+  return `${Math.round(hours / 24)}d`;
+}
+
 export interface ApproveUnderstandingResult {
   sessionId: string;
   /**
@@ -763,16 +776,16 @@ export async function approveUnderstanding(
       // never persisted and only an unrelated leftover was on disk —
       // exactly the artefact the limit refuses to bind (C1).
       const newest = selection.staleRejected[0]!;
-      const ageMin = Math.round(
-        ((opts.now ?? new Date()).getTime() - newest.createdAtMs) / 60_000,
+      const age = formatAge(
+        (opts.now ?? new Date()).getTime() - newest.createdAtMs,
       );
       const maxMin = Math.round(TOLERANT_FALLBACK_MAX_AGE_MS / 60_000);
       reason =
         `no report matched session_id=${sessionId}; rejected ${selection.staleRejected.length} ` +
         `stale sessionId-less candidate(s) for age (newest: ${newest.filePath}, ` +
-        `created ${newest.createdAt ?? "<unknown>"}, age ${ageMin}m > max ${maxMin}m). ` +
-        `If the agent just wrote an Understanding Report, the Stop hook failed to persist it — ` +
-        `check ${parseErrorsDir}`;
+        `created ${newest.createdAt ?? "<unknown>"}, age ${age} > max ${maxMin}m). ` +
+        `If the agent just wrote an Understanding Report, the Stop hook likely failed to ` +
+        `persist it; check ${parseErrorsDir}`;
       if (latestParseError) {
         reason += `; latest parse-error at ${latestParseError.filePath}: ${latestParseError.summary}`;
       }

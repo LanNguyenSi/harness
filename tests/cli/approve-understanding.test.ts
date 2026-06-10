@@ -115,8 +115,8 @@ describe("approveUnderstanding", () => {
     expect(result.persistedReport.ok).toBe(false);
     if (result.persistedReport.ok) return;
     expect(result.persistedReport.reason).toMatch(/rejected 1 stale sessionId-less candidate/);
-    expect(result.persistedReport.reason).toMatch(/created 2026-05-24T06:16:39\.388Z/);
-    expect(result.persistedReport.reason).toMatch(/Stop hook failed to persist/);
+    expect(result.persistedReport.reason).toMatch(/created 2026-05-24T06:16:39\.388Z, age 17d > max 15m/);
+    expect(result.persistedReport.reason).toMatch(/Stop hook likely failed to persist/);
     const after = JSON.parse(
       fs.readFileSync(path.join(tmp, staleName), "utf8"),
     ) as Record<string, unknown>;
