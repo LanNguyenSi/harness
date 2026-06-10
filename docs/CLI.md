@@ -1,6 +1,6 @@
 # harness CLI reference
 
-Tracks the verbs available on the `harness` binary as of `v0.33.0`; changes that shipped on master after that tag are listed under Notes. For policy semantics see [`docs/policy-packs/`](policy-packs/); for the risk gate specifically see [`docs/risk-gate.md`](risk-gate.md).
+Tracks the verbs available on the `harness` binary as of `v0.34.0`; changes that ship on master after that tag are listed under Notes. For policy semantics see [`docs/policy-packs/`](policy-packs/); for the risk gate specifically see [`docs/risk-gate.md`](risk-gate.md).
 
 The CLI is grouped by purpose below. Run any verb with `--help` for flags and examples.
 
@@ -71,7 +71,7 @@ These are called by Claude Code via `settings.json`; you usually do not run them
 
 | Verb | One-liner |
 |------|-----------|
-| `harness approve understanding [--session <id>] [--force]` | Drop the `understanding-approved:<sessionId>` marker so the Understanding Gate releases the session. `--session` is required when multiple sessions share `~/.harness/` (see `feedback-harness-approve-session-flag`). `--force` overrides parser-failed Understanding Reports with an audit suffix (harness PR #253). |
+| `harness approve understanding [--session <id>] [--force]` | Drop the `understanding-approved:<sessionId>` marker so the Understanding Gate releases the session. `--session` is required when multiple sessions share `~/.harness/` (see `feedback-harness-approve-session-flag`). `--force` overrides parser-failed Understanding Reports with an audit suffix (harness PR #253). Since `v0.34.0` the sessionId-less report fallback rejects candidates older than 15 minutes and prints createdAt + age when it adopts one. |
 | `harness approve risk [--force <reason>] [--i-am-the-operator]` | Write `risk-approved:` to clear the current Risk Gate `require_approval` tier. `--force <reason>` only unblocks `deny`-tier (writes `risk-override:`) and requires a non-empty reason; from `!`-shell calls add `--i-am-the-operator`. |
 | `harness approve branch-protection [--session <id>] [--reason <text>] [--approved-by <actor>]` | Bless a deliberate protected-branch edit for one session (v0.33.0). Writes the canonical operator-only marker under `harness.generated/.approvals/` that the branch-protection blocker consults; the `branch-protection-ack` ledger row is a best-effort audit echo only (the ledger is agent-writable and no longer opens the gate). |
 
@@ -93,7 +93,7 @@ These are called by Claude Code via `settings.json`; you usually do not run them
 
 ## Notes
 
-- Unreleased on master (post-`v0.33.0`): `apply --yes` (skip the `--overwrite-drift` confirmation), non-TTY guards on the `apply`/`adopt` confirmation prompts (they refuse instead of hanging; piped `echo yes |` confirmations no longer work), `validate --json`, the `approve understanding` stale-report hardening (sessionId-less fallback candidates older than 15m are rejected; fallback adoptions print createdAt + age), the `harness gc` verb, and the `uninstall` state-root fix (it previously only looked under `~/.claude/` and missed migrated installs entirely).
+- Since `v0.34.0`: `apply --yes` (skip the `--overwrite-drift` confirmation) and non-TTY guards on the `apply`/`adopt` confirmation prompts (they refuse instead of hanging; piped `echo yes |` confirmations no longer work, use `--yes`).
 - `harness policy intercept --hook <name>` and the 2s timeout floor pinned by the Codex-hook generator both shipped in `v0.29.0`; see [CHANGELOG.md](../CHANGELOG.md).
 - The `full` profile pins `@lannguyensi/agent-preflight` and `@lannguyensi/understanding-gate@0.4.0+` as transitive dependencies of the wired packs; mismatched versions surface in `harness doctor`.
 - Ledger tag vocabulary used by gate-mode policies: `review:`, `risk-override:`, `risk-approved:`, `understanding-approved:`, `preflight:`. The Risk and Understanding gates both consume their tags scoped to a Claude session id (not the agent-tasks task UUID, see `feedback-agent-grounding-merge-gate-ledger`).
