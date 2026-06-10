@@ -1,5 +1,10 @@
-// Read-only Bash command classifier for the understanding-gate
-// PreToolUse blocker.
+// Read-only Bash command classifier, shared by two gates that must not
+// fail-close on a command that mutates nothing: the understanding-gate
+// PreToolUse blocker (allows a provably read-only Bash command without
+// an approved report) and the Risk Classifier's read-only floor
+// (classifies one as `low` instead of fail-closed unclassified). Lives
+// in runtime/ so both the cli/pack hooks and the runtime classifier
+// import it without a cli -> runtime layering inversion.
 //
 // The pack's hook matcher `Edit|Write|Bash` is too broad on its own:
 // `Bash` covers commands like `git status`, `gh pr view`, `ls`, `cat`
@@ -25,25 +30,39 @@
 //   are how a write would be smuggled into a "read-only" command in
 //   the first place).
 //
-// This module is the canonical home for the classification. The
-// harness pack hook is the superset blocker today, so the classifier
-// lives here rather than in the @lannguyensi/understanding-gate
-// package. If the package adds a parallel classifier in the future,
-// it should mirror this allowlist verbatim, not diverge.
+// This module is the canonical home for the classification within
+// harness. If the @lannguyensi/understanding-gate package adds a
+// parallel classifier in the future, it should mirror this allowlist
+// verbatim, not diverge.
 
 /**
  * Single-token read-only binaries. Each accepts arguments without
  * changing classification: `ls -la /tmp` is still read-only.
+ *
+ * Deliberately EXCLUDED, even though they are commonly read-only:
+ * `sort` (`-o FILE` writes the result), `uniq` (a second file operand
+ * is its output), `tree` (`-o FILE` writes the listing), `file` (`-C`
+ * compiles a `<name>.mgc` magic cache), `date` (`-s` sets the system
+ * clock), and `hostname` (`hostname NAME` sets it). Each can mutate a
+ * file or system state through its own flags or operands with no shell
+ * metacharacter, so — like `find` below — they cannot be classified
+ * read-only unconditionally. Per the conservative allowlist contract we
+ * drop them entirely rather than enumerate every getopt cluster
+ * (`sort -rno`, `date -us`, glued `--output=`) that turns them into a
+ * write. A follow-up could re-admit the common reads (`sort FILE`,
+ * `file FILE`, `tree DIR`) behind precise output-flag guards; their
+ * read forms are otherwise usually piped (`sort x | uniq`), which a
+ * metacharacter already blocks.
  */
 const SIMPLE_READ_ONLY_BINS: ReadonlySet<string> = new Set([
   "ls", "cat", "pwd", "which", "type",
   "grep", "rg", "wc",
-  "head", "tail", "file", "stat", "tree", "du", "df",
-  "ps", "whoami", "id", "date", "echo", "printenv",
-  "true", "false", "uptime", "hostname", "uname", "tty",
+  "head", "tail", "stat", "du", "df",
+  "ps", "whoami", "id", "echo", "printenv",
+  "true", "false", "uptime", "uname", "tty",
   "basename", "dirname", "realpath", "readlink",
   "less", "more", "cmp", "diff", "comm",
-  "sort", "uniq", "cut", "tr", "tac", "rev",
+  "cut", "tr", "tac", "rev",
 ]);
 
 /**

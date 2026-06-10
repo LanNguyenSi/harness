@@ -38,7 +38,7 @@ import {
   PACK_NAME,
   verdictDir as resolveVerdictDir,
 } from "../../policy-packs/builtin/solution-acceptance-runtime.js";
-import { isReadOnlyBashCommand } from "./read-only-bash.js";
+import { isReadOnlyBashCommand } from "../../runtime/read-only-bash.js";
 import type { LoaderOptions } from "../loader.js";
 import { checkPauseFromLoader } from "../pause-check.js";
 

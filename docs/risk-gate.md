@@ -140,6 +140,37 @@ It is a floor, not an override:
 Inspect it with `harness test-risk`: the debug verb reports the same
 classification the runtime gate uses.
 
+#### Built-in read-only commands
+
+A second `low`-severity floor recognizes any *provably read-only* Bash
+command (`git status`, `git diff`, `grep`, `cat`, `ls`, `head`, ...),
+reusing the same metachar-hardened classifier the understanding gate uses
+to allow reads without an approved report
+(`src/runtime/read-only-bash.ts`). It exists for the same reason as the
+harness-command floor: without it, a release cut on a `main` / `release/*`
+branch resolves to production and the "unknown is not safe" fail-close
+lets a prod-scoped `risk.severity_at_least` policy deny harmless reads
+(`git diff`, `grep version package.json`) mid-release. The recurring
+workaround was `harness pause`, which silences *every* gate during the
+most sensitive flow; this floor removes that incentive (friction-log
+#38/#40/#43/#50).
+
+The same guarantees hold:
+
+- It is a floor, not an override: an operator classifier that flags a
+  read-only command still wins, and a dangerous tail
+  (`git diff && rm -rf /var`) keeps the higher severity.
+- It only floors *read-only* commands. Mutations stay classifiable:
+  `git commit` / `git push` / `git tag` / `npm version` are not floored,
+  so gating the actual release mutations behind an operator override is
+  unchanged.
+- Any shell chaining, redirection, or command substitution forfeits the
+  classification, so a write cannot be laundered behind a read-only head
+  (`cat x > /etc/y`, `git diff | sh`, `$(...)` all stay unclassified and
+  gated). The classifier inspects the full, uncapped command for this
+  reason, so a write hidden past the 16 KiB subject cap cannot slip
+  through either.
+
 ### Environment resolvers (`environments:`)
 
 *Status: parsed and validated (Phase 7 #1). Consumed by the Context

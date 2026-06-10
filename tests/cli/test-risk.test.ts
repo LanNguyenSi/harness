@@ -84,7 +84,9 @@ describe("testRisk — classification", () => {
   });
 
   it("reports an unmatched action as unclassified, not safe", () => {
-    const file = writeEvent(bashEvent("ls -la"));
+    // `npm install` matches no classifier and is not a benign-floor
+    // command (a read-only `ls -la` now hits the read-only floor).
+    const file = writeEvent(bashEvent("npm install"));
     const result = testRisk({ ...SEAMS, eventPath: file, manifest: MANIFEST });
     expect(result.profile.classified).toBe(false);
     expect(result.profile.severity).toBeNull();
@@ -99,6 +101,17 @@ describe("testRisk — classification", () => {
     expect(result.profile.classified).toBe(true);
     expect(result.profile.severity).toBe("low");
     expect(result.profile.reasons[0]).toMatch(/built-in: benign harness meta-command/);
+  });
+
+  it("surfaces the built-in read-only floor (consistent with the runtime)", () => {
+    // The debug verb must report the read-only floor too, so an operator
+    // can confirm a release-cut read (`git status`) classifies low rather
+    // than fail-closed, even when no classifiers are declared.
+    const file = writeEvent(bashEvent("git status"));
+    const result = testRisk({ ...SEAMS, eventPath: file, manifest: EMPTY_MANIFEST });
+    expect(result.profile.classified).toBe(true);
+    expect(result.profile.severity).toBe("low");
+    expect(result.profile.reasons[0]).toMatch(/built-in: provably read-only command/);
   });
 
   it("treats every action as unclassified when the manifest has no classifiers", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isReadOnlyBashCommand } from "../../src/cli/pack/read-only-bash.js";
+import { isReadOnlyBashCommand } from "../../src/runtime/read-only-bash.js";
 
 describe("read-only Bash classifier", () => {
   describe("simple read-only binaries", () => {
@@ -18,12 +18,10 @@ describe("read-only Bash classifier", () => {
       "wc -l src/index.ts",
       "head -20 README.md",
       "tail -f /var/log/app.log",
-      "file src/index.ts",
       "stat src/index.ts",
       "ps aux",
       "whoami",
       "id",
-      "date",
       "env",
       "uname -a",
     ])("allows %s", (cmd) => {
@@ -252,6 +250,33 @@ describe("read-only Bash classifier", () => {
       "",
       "   ",
       "some-binary-we-have-never-heard-of",
+    ])("blocks %s", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+  });
+
+  describe("write-capable bins excluded from the allowlist (own flags/operands write)", () => {
+    // `sort -o` / `tree -o` write a file, `file -C` compiles a .mgc,
+    // `uniq`'s second operand is its output, `date -s` sets the clock,
+    // `hostname NAME` sets the hostname, all with no shell metacharacter.
+    // They are dropped from SIMPLE_READ_ONLY_BINS entirely, so even their
+    // bare read forms are unclassified rather than risk laundering a write
+    // through them.
+    it.each([
+      "sort -o out.txt in.txt",
+      "sort --output=out.txt in.txt",
+      "sort in.txt",
+      "uniq in.txt out.txt",
+      "uniq in.txt",
+      "tree -o listing.txt",
+      "tree /some/dir",
+      "file -C -m mymagic",
+      "file --compile",
+      "file src/index.ts",
+      "date -s 2020-01-01T00:00:00",
+      "date",
+      "hostname newname",
+      "hostname",
     ])("blocks %s", (cmd) => {
       expect(isReadOnlyBashCommand(cmd)).toBe(false);
     });
