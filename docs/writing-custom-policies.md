@@ -285,6 +285,6 @@ Acceptance criteria for each `requires` shape:
 
 - [`for-agents.md`](for-agents.md): how agents read the policy/ledger contract, the audit triumvirate, the `ux:` rendering spec.
 - [`for-humans.md`](for-humans.md): operator path from install to first `apply`.
-- [`policy-packs/understanding-before-execution.md`](policy-packs/understanding-before-execution.md), [`policy-packs/branch-protection.md`](policy-packs/branch-protection.md): the two builtin packs, plus the future contract for custom-pack sources.
+- [`policy-packs/understanding-before-execution.md`](policy-packs/understanding-before-execution.md), [`policy-packs/branch-protection.md`](policy-packs/branch-protection.md), [`policy-packs/solution-acceptance.md`](policy-packs/solution-acceptance.md): the three builtin packs, plus the future contract for custom-pack sources.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) Appendix A: full reference manifest.
 - [`examples/pandora-bootstrap.md`](examples/pandora-bootstrap.md): walkthrough of an end-to-end real harness setup.

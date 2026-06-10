@@ -30,9 +30,9 @@
 // that just branched can refresh the gate without restarting the
 // session.
 //
-// Pack is OFF by default: it must be enabled per-installation via
-// `harness pack add branch-protection`. The `full` init template does
-// NOT wire it (revisit after one cycle of operator feedback).
+// Enabled per-installation via `harness pack add branch-protection`.
+// The `full` init template wires it with `enabled: true` (see
+// src/cli/init/templates.ts); the `solo` / `team` templates do not.
 
 import { z } from "zod";
 import { PolicyUxSchema } from "../../schema/policies.js";
