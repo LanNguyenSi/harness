@@ -911,3 +911,42 @@ describe("validate — internal helpers", () => {
     expect(__testables.isRootedPath("./relative")).toBe(false);
   });
 });
+
+describe("validate — --json", () => {
+  it("registers the --json flag on the validate command", async () => {
+    const { buildProgram } = await import("../../src/cli/index.js");
+    const program = buildProgram();
+    const cmd = program.commands.find((c) => c.name() === "validate");
+    expect(cmd?.options.map((o) => o.long)).toContain("--json");
+  });
+
+  it("emits a parseable JSON report with diagnostics + counts on stdout", async () => {
+    const { buildProgram } = await import("../../src/cli/index.js");
+    const home = writeFixture({ "harness.yaml": "version: 1\n" });
+    let out = "";
+    let err = "";
+    const program = buildProgram({
+      stdout: (s: string) => {
+        out += s;
+      },
+      stderr: (s: string) => {
+        err += s;
+      },
+    });
+    await program.parseAsync(
+      ["validate", "--config", path.join(home, "harness.yaml"), "--json"],
+      { from: "user" },
+    );
+    const parsed = JSON.parse(out) as {
+      diagnostics: unknown[];
+      errorCount: number;
+      warningCount: number;
+    };
+    expect(Array.isArray(parsed.diagnostics)).toBe(true);
+    expect(parsed.errorCount).toBe(0);
+    expect(typeof parsed.warningCount).toBe("number");
+    // No prose mixed into the machine-readable stream.
+    expect(out.trim().startsWith("{")).toBe(true);
+    expect(err).toBe("");
+  });
+});

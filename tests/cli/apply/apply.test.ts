@@ -319,6 +319,64 @@ describe("apply — drift detection", () => {
     expect(r.outcome).toBe("applied");
   });
 
+  it("--overwrite-drift with yes:true skips the prompt and overwrites", async () => {
+    writeManifest({
+      hooks: [
+        {
+          name: "h",
+          event: "SessionStart",
+          command: "/h.sh",
+          blocking: false,
+          budget_ms: 30000,
+        },
+      ],
+    });
+    await apply({ homeDir: tmpHome });
+    fs.writeFileSync(settingsPath(), '{"hand_edited": true}\n');
+
+    const mustNotPrompt = async (): Promise<string> => {
+      throw new Error("prompt must not be called when yes is set");
+    };
+    const r = await apply({
+      homeDir: tmpHome,
+      overwriteDrift: true,
+      yes: true,
+      prompt: mustNotPrompt,
+    });
+    expect(r.outcome).toBe("applied");
+    expect(r.written).toBe(true);
+    expect(fs.readFileSync(settingsPath(), "utf8")).not.toContain("hand_edited");
+  });
+
+  it("--overwrite-drift without an injected prompt refuses under non-TTY stdin instead of hanging", async () => {
+    writeManifest({
+      hooks: [
+        {
+          name: "h",
+          event: "SessionStart",
+          command: "/h.sh",
+          blocking: false,
+          budget_ms: 30000,
+        },
+      ],
+    });
+    await apply({ homeDir: tmpHome });
+    fs.writeFileSync(settingsPath(), '{"hand_edited": true}\n');
+
+    const stdin = process.stdin as unknown as { isTTY: boolean | undefined };
+    const savedIsTTY = stdin.isTTY;
+    stdin.isTTY = false;
+    try {
+      await expect(apply({ homeDir: tmpHome, overwriteDrift: true })).rejects.toThrow(
+        /stdin is not a TTY.*--yes/,
+      );
+    } finally {
+      stdin.isTTY = savedIsTTY;
+    }
+    // The refusal happened before any write phase.
+    expect(fs.readFileSync(settingsPath(), "utf8")).toBe('{"hand_edited": true}\n');
+  });
+
   it("--overwrite-drift on a fresh install (no drift to discard) writes without prompting", async () => {
     writeManifest({
       hooks: [

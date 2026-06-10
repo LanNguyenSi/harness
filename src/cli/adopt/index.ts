@@ -65,7 +65,17 @@ function resolveManifestPath(opts: AdoptOptions): string {
   );
 }
 
+// Non-TTY stdin (CI, agent-driven shells) cannot answer a readline
+// question; without the guard the process would block forever waiting
+// for input that never comes (harness-discovery H4). Refuse loudly and
+// name the escape hatch instead.
 async function defaultPrompt(message: string): Promise<string> {
+  if (!process.stdin.isTTY) {
+    throw new HarnessExitError(
+      "confirmation required but stdin is not a TTY; re-run with --yes to confirm non-interactively",
+      EX_FAIL,
+    );
+  }
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
   try {
     return await rl.question(message);

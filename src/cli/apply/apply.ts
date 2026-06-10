@@ -90,6 +90,13 @@ export interface ApplyOptions {
   dryRun?: boolean;
   overwriteDrift?: boolean;
   /**
+   * `--yes`: skip the `--overwrite-drift` confirmation prompt, as if the
+   * operator had typed `yes`. The non-interactive escape hatch: without
+   * it, a triggered confirmation under a non-TTY stdin (CI, agent
+   * shells) refuses instead of prompting.
+   */
+  yes?: boolean;
+  /**
    * Phase 3 follow-up: when set, any non-empty `lockDrift` causes apply
    * to refuse with the `lock-drift-refuse` outcome before writing,
    * prompting, or regenerating the lock (no on-disk side effects). The
@@ -291,7 +298,18 @@ function codexInstallOutcome(
 // Prompts must survive `harness apply | tee log` (the user still needs to
 // see the question even when stdout is piped), so we write to stderr and
 // read from stdin. Don't "fix" this back to stdout.
+//
+// Non-TTY stdin (CI, agent-driven shells) cannot answer a readline
+// question; without the guard the process would block forever waiting
+// for input that never comes (harness-discovery H4). Refuse loudly and
+// name the escape hatch instead.
 async function readlinePrompt(message: string): Promise<string> {
+  if (!process.stdin.isTTY) {
+    throw new HarnessExitError(
+      "confirmation required but stdin is not a TTY; re-run with --yes to confirm non-interactively",
+      EX_FAIL,
+    );
+  }
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
   try {
     return await rl.question(message);
@@ -716,13 +734,18 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   }
 
   if (anyDriftRefuse && opts.overwriteDrift) {
-    const promptFn = opts.prompt ?? readlinePrompt;
-    const answer = await promptFn(
-      "Type 'yes' to discard on-disk hand-edits and overwrite with manifest-expected content: ",
-    );
-    // Case-insensitive comparison: a user typing `YES` or `Yes` is clearly
-    // confirming. We still reject `y` per spec ("literal yes, not y").
-    if (answer.trim().toLowerCase() !== "yes") {
+    // `--yes` stands in for the typed confirmation (non-interactive runs).
+    let confirmed = opts.yes === true;
+    if (!confirmed) {
+      const promptFn = opts.prompt ?? readlinePrompt;
+      const answer = await promptFn(
+        "Type 'yes' to discard on-disk hand-edits and overwrite with manifest-expected content: ",
+      );
+      // Case-insensitive comparison: a user typing `YES` or `Yes` is clearly
+      // confirming. We still reject `y` per spec ("literal yes, not y").
+      confirmed = answer.trim().toLowerCase() === "yes";
+    }
+    if (!confirmed) {
       const result: ApplyResult = {
         manifestPath,
         generatedDir,

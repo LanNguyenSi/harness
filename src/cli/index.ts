@@ -156,20 +156,45 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .option("--project <name>", "apply per-project overrides for this project name")
     .option("--strict", "promote warnings to errors")
     .option("--check-lock", "surface harness.lock asset-content drift as warnings (or errors with --strict)")
-    .action((options: { config?: string; project?: string; strict?: boolean; checkLock?: boolean }) => {
-      const result = validate({
-        configPath: options.config,
-        project: options.project,
-        strict: options.strict,
-        checkLock: options.checkLock,
-      });
-      const report = formatReport(result);
-      if (result.diagnostics.length > 0) stderr(report);
-      else stdout(report);
-      if (result.errorCount > 0) {
-        throw new HarnessExitError("", EX_FAIL);
-      }
-    });
+    .option("--json", "emit a structured JSON report ({ diagnostics, errorCount, warningCount }) instead of prose")
+    .action(
+      (options: {
+        config?: string;
+        project?: string;
+        strict?: boolean;
+        checkLock?: boolean;
+        json?: boolean;
+      }) => {
+        const result = validate({
+          configPath: options.config,
+          project: options.project,
+          strict: options.strict,
+          checkLock: options.checkLock,
+        });
+        if (options.json) {
+          // JSON goes to stdout regardless of outcome so pipelines can
+          // always parse it; the exit code still carries pass/fail.
+          stdout(
+            `${JSON.stringify(
+              {
+                diagnostics: result.diagnostics,
+                errorCount: result.errorCount,
+                warningCount: result.warningCount,
+              },
+              null,
+              2,
+            )}\n`,
+          );
+        } else {
+          const report = formatReport(result);
+          if (result.diagnostics.length > 0) stderr(report);
+          else stdout(report);
+        }
+        if (result.errorCount > 0) {
+          throw new HarnessExitError("", EX_FAIL);
+        }
+      },
+    );
 
   program
     .command("doctor")
@@ -652,7 +677,11 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .option("--dry-run", "print the would-be diff + restart hints; do not write")
     .option(
       "--overwrite-drift",
-      "discard any on-disk hand-edits to harness.generated/ files (prompts for `yes`)",
+      "discard any on-disk hand-edits to harness.generated/ files (prompts for `yes`; pair with --yes for non-interactive runs)",
+    )
+    .option(
+      "--yes",
+      "with --overwrite-drift, skip the confirmation prompt (for non-interactive use)",
     )
     .option(
       "--strict-lock",
@@ -689,6 +718,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         project?: string;
         dryRun?: boolean;
         overwriteDrift?: boolean;
+        yes?: boolean;
         strictLock?: boolean;
         target?: string;
         merge?: boolean;
@@ -719,6 +749,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
           ...(options.project !== undefined ? { project: options.project } : {}),
           ...(options.dryRun ? { dryRun: true } : {}),
           ...(options.overwriteDrift ? { overwriteDrift: true } : {}),
+          ...(options.yes ? { yes: true } : {}),
           ...(options.strictLock ? { strictLock: true } : {}),
           ...(options.target !== undefined ? { target: options.target } : {}),
           ...(options.merge ? { merge: true } : {}),

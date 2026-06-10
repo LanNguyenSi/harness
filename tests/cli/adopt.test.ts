@@ -131,6 +131,28 @@ describe("adopt — drift-and-accept (write-and-confirm y)", () => {
   });
 });
 
+describe("adopt — non-TTY guard", () => {
+  it("refuses with a clear error when a confirmation is needed and stdin is not a TTY", async () => {
+    writeSettings({
+      SessionStart: [
+        { matcher: "", hooks: [{ type: "command", command: "/tmp/extra.sh" }] },
+      ],
+    });
+    const before = fs.readFileSync(manifestPath, "utf8");
+    const stdin = process.stdin as unknown as { isTTY: boolean | undefined };
+    const savedIsTTY = stdin.isTTY;
+    stdin.isTTY = false;
+    try {
+      await expect(adopt(settingsPath, { configPath: manifestPath })).rejects.toThrow(
+        /stdin is not a TTY.*--yes/,
+      );
+    } finally {
+      stdin.isTTY = savedIsTTY;
+    }
+    expect(fs.readFileSync(manifestPath, "utf8")).toBe(before);
+  });
+});
+
 describe("adopt — drift-and-decline", () => {
   it("on `N`: file is unchanged, outcome is declined", async () => {
     writeSettings({
