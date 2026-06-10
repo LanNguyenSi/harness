@@ -363,16 +363,9 @@ describe("apply — drift detection", () => {
     await apply({ homeDir: tmpHome });
     fs.writeFileSync(settingsPath(), '{"hand_edited": true}\n');
 
-    const stdin = process.stdin as unknown as { isTTY: boolean | undefined };
-    const savedIsTTY = stdin.isTTY;
-    stdin.isTTY = false;
-    try {
-      await expect(apply({ homeDir: tmpHome, overwriteDrift: true })).rejects.toThrow(
-        /stdin is not a TTY.*--yes/,
-      );
-    } finally {
-      stdin.isTTY = savedIsTTY;
-    }
+    await expect(
+      apply({ homeDir: tmpHome, overwriteDrift: true, stdinIsTTY: false }),
+    ).rejects.toThrow(/stdin is not a TTY.*--yes/);
     // The refusal happened before any write phase.
     expect(fs.readFileSync(settingsPath(), "utf8")).toBe('{"hand_edited": true}\n');
   });

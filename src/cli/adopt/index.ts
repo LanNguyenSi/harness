@@ -31,6 +31,13 @@ export interface AdoptOptions {
   yes?: boolean;
   /** Optional injection point for tests; defaults to readline against stdin. */
   prompt?: (message: string) => Promise<string>;
+  /**
+   * Test seam mirroring `approve risk` / `pause`: overrides the
+   * `process.stdin.isTTY` read that decides whether the default
+   * confirmation prompt may run, so the non-TTY refusal can be
+   * exercised hermetically.
+   */
+  stdinIsTTY?: boolean;
 }
 
 export interface AdoptResult {
@@ -65,17 +72,10 @@ function resolveManifestPath(opts: AdoptOptions): string {
   );
 }
 
-// Non-TTY stdin (CI, agent-driven shells) cannot answer a readline
-// question; without the guard the process would block forever waiting
-// for input that never comes (harness-discovery H4). Refuse loudly and
-// name the escape hatch instead.
+// Callers must guard non-TTY stdin BEFORE invoking this (see the
+// confirmation block in `adopt`): readline on a non-TTY stdin blocks
+// forever waiting for input that never comes.
 async function defaultPrompt(message: string): Promise<string> {
-  if (!process.stdin.isTTY) {
-    throw new HarnessExitError(
-      "confirmation required but stdin is not a TTY; re-run with --yes to confirm non-interactively",
-      EX_FAIL,
-    );
-  }
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
   try {
     return await rl.question(message);
@@ -193,6 +193,16 @@ export async function adopt(
   }
 
   if (!opts.yes) {
+    // Non-TTY stdin (CI, agent-driven shells) cannot answer the default
+    // readline prompt; refuse loudly and name the escape hatch instead
+    // of blocking forever (harness-discovery H4). Injected prompts are
+    // exempt: they answer without stdin.
+    if (opts.prompt === undefined && !(opts.stdinIsTTY ?? process.stdin.isTTY)) {
+      throw new HarnessExitError(
+        "confirmation required but stdin is not a TTY; re-run with --yes to confirm non-interactively",
+        EX_FAIL,
+      );
+    }
     const promptFn = opts.prompt ?? defaultPrompt;
     const answer = (await promptFn(`${diff}\nApply (y/N)? `)).trim().toLowerCase();
     if (answer !== "y" && answer !== "yes") {

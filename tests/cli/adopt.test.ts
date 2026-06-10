@@ -139,16 +139,9 @@ describe("adopt — non-TTY guard", () => {
       ],
     });
     const before = fs.readFileSync(manifestPath, "utf8");
-    const stdin = process.stdin as unknown as { isTTY: boolean | undefined };
-    const savedIsTTY = stdin.isTTY;
-    stdin.isTTY = false;
-    try {
-      await expect(adopt(settingsPath, { configPath: manifestPath })).rejects.toThrow(
-        /stdin is not a TTY.*--yes/,
-      );
-    } finally {
-      stdin.isTTY = savedIsTTY;
-    }
+    await expect(
+      adopt(settingsPath, { configPath: manifestPath, stdinIsTTY: false }),
+    ).rejects.toThrow(/stdin is not a TTY.*--yes/);
     expect(fs.readFileSync(manifestPath, "utf8")).toBe(before);
   });
 });

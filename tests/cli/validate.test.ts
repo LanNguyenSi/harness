@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { buildProgram } from "../../src/cli/index.js";
 import { validate } from "../../src/cli/validate/index.js";
 import { __testables } from "../../src/cli/validate/checks.js";
 import { writeLock, type LockEntry } from "../../src/io/harness-lock.js";
@@ -913,15 +914,13 @@ describe("validate — internal helpers", () => {
 });
 
 describe("validate — --json", () => {
-  it("registers the --json flag on the validate command", async () => {
-    const { buildProgram } = await import("../../src/cli/index.js");
+  it("registers the --json flag on the validate command", () => {
     const program = buildProgram();
     const cmd = program.commands.find((c) => c.name() === "validate");
     expect(cmd?.options.map((o) => o.long)).toContain("--json");
   });
 
   it("emits a parseable JSON report with diagnostics + counts on stdout", async () => {
-    const { buildProgram } = await import("../../src/cli/index.js");
     const home = writeFixture({ "harness.yaml": "version: 1\n" });
     let out = "";
     let err = "";
