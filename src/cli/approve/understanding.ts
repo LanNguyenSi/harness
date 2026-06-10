@@ -21,9 +21,10 @@ import { atomicWriteFile } from "../../io/atomic-write.js";
 import {
   approvedLedgerTagFor,
   defaultReportsDir,
-  findLatestReportForSession,
   listPersistedReports,
   readActiveClaim,
+  selectReportForSession,
+  TOLERANT_FALLBACK_MAX_AGE_MS,
   writeApprovalMarker,
   writeTaskApprovalMarker,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
@@ -151,6 +152,15 @@ export interface ApproveUnderstandingResult {
         approvedAt: string;
         /** True when this approval stamped a missing `sessionId` onto the report. */
         sessionIdStamped: boolean;
+        /**
+         * Present when the report was adopted via the sessionId-less
+         * tolerant fallback rather than a strict sessionId match. The
+         * CLI prints it loudly: the operator must verify the adopted
+         * report is the one they just read, because a fallback adoption
+         * means the live session's own report was never persisted
+         * (harness-discovery C1).
+         */
+        fallbackAdopted?: { createdAt: string | null; ageMinutes: number };
       }
     | { ok: false; reason: string };
   /**
@@ -577,11 +587,17 @@ export async function approveUnderstanding(
   // Approve-time validation. Resolve the report we would flip BEFORE
   // writing the marker, so a validation failure can short-circuit every
   // downstream write. The `latest` + `reports` values are reused later;
-  // we do not list / find twice.
+  // we do not list / find twice. The fallback age limit is what stops a
+  // weeks-old sessionId-less leftover from being adopted, validated,
+  // and stamped as if it were the live session's report when the
+  // producer Stop hook silently failed (harness-discovery C1).
   const reports = listPersistedReports(reportsDir);
-  const latest = findLatestReportForSession(reports, sessionId, {
+  const selection = selectReportForSession(reports, sessionId, {
     tolerantFallback: "uncompleted",
+    maxFallbackAgeMs: TOLERANT_FALLBACK_MAX_AGE_MS,
+    now: opts.now,
   });
+  const latest = selection.report;
   let validation: ApproveUnderstandingResult["validation"];
   if (!latest) {
     validation = { skipped: true };
@@ -740,6 +756,26 @@ export async function approveUnderstanding(
       if (latestParseError) {
         reason += `; latest parse-error at ${latestParseError.filePath}: ${latestParseError.summary}`;
       }
+    } else if (selection.staleRejected.length > 0) {
+      // A sessionId-less pending report existed but exceeded the
+      // fallback age limit. This is its own failure mode, distinct from
+      // "no report": it usually means the live session's report was
+      // never persisted and only an unrelated leftover was on disk —
+      // exactly the artefact the limit refuses to bind (C1).
+      const newest = selection.staleRejected[0]!;
+      const ageMin = Math.round(
+        ((opts.now ?? new Date()).getTime() - newest.createdAtMs) / 60_000,
+      );
+      const maxMin = Math.round(TOLERANT_FALLBACK_MAX_AGE_MS / 60_000);
+      reason =
+        `no report matched session_id=${sessionId}; rejected ${selection.staleRejected.length} ` +
+        `stale sessionId-less candidate(s) for age (newest: ${newest.filePath}, ` +
+        `created ${newest.createdAt ?? "<unknown>"}, age ${ageMin}m > max ${maxMin}m). ` +
+        `If the agent just wrote an Understanding Report, the Stop hook failed to persist it — ` +
+        `check ${parseErrorsDir}`;
+      if (latestParseError) {
+        reason += `; latest parse-error at ${latestParseError.filePath}: ${latestParseError.summary}`;
+      }
     } else {
       reason = `no report matched session_id=${sessionId} (${reports.length} report(s) for other sessions)`;
     }
@@ -760,6 +796,16 @@ export async function approveUnderstanding(
         previousStatus,
         approvedAt,
         sessionIdStamped,
+        ...(selection.fallbackAdopted
+          ? {
+              fallbackAdopted: {
+                createdAt: latest.createdAt,
+                ageMinutes: Math.round(
+                  ((opts.now ?? new Date()).getTime() - latest.createdAtMs) / 60_000,
+                ),
+              },
+            }
+          : {}),
       };
     } catch (err) {
       persistedReport = {

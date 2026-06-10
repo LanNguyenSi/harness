@@ -1410,6 +1410,16 @@ export function buildProgram(opts: RunOptions = {}): Command {
           lines.push(
             `report:  ✓ ${result.persistedReport.filePath} (approvalStatus: ${prev} → approved${stampNote})`,
           );
+          const fb = result.persistedReport.fallbackAdopted;
+          if (fb) {
+            lines.push(
+              `  ⚠ adopted via sessionId-less fallback: created ${fb.createdAt ?? "<unknown>"} (${fb.ageMinutes}m ago).`,
+            );
+            lines.push(
+              "  The live session's own report was never persisted; verify this is the",
+              "  report you just read before trusting the approval.",
+            );
+          }
         } else {
           lines.push(`report:  ⚠ skipped (${result.persistedReport.reason})`);
         }

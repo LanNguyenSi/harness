@@ -53,6 +53,18 @@ export interface PersistedReport {
   sessionId: string | null;
   approvalStatus: string | null;
   approvedAt: string | null;
+  /**
+   * ISO timestamp the producer stamped when it wrote the report; null
+   * for legacy reports without the field.
+   */
+  createdAt: string | null;
+  /**
+   * Effective creation time in epoch ms, resolved `createdAt` →
+   * filename ISO prefix → file mtime. Unlike mtime alone this survives
+   * the approval rewrite (which bumps mtime and would otherwise make a
+   * weeks-old report sort as the freshest, harness-discovery C1).
+   */
+  createdAtMs: number;
 }
 
 const DEFAULT_REPORTS_DIRNAME = ".understanding-gate";
@@ -108,7 +120,20 @@ function safeJsonParse(text: string): unknown {
   }
 }
 
-function readPersistedReport(filePath: string): PersistedReport | null {
+/**
+ * Parse the ISO prefix of a producer filename
+ * (`2026-05-24T06-16-39-409Z-<slug>-<hash>.json`) into epoch ms. The
+ * producer flattens `:` and `.` to `-` for filesystem safety; undo that
+ * before `Date.parse`. null when the name does not carry the prefix.
+ */
+function parseFilenameIsoMs(name: string): number | null {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z/.exec(name);
+  if (!m) return null;
+  const ms = Date.parse(`${m[1]}T${m[2]}:${m[3]}:${m[4]}.${m[5]}Z`);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+function readPersistedReport(filePath: string, mtimeMs: number): PersistedReport | null {
   let raw: string;
   try {
     raw = fs.readFileSync(filePath, "utf8");
@@ -118,22 +143,34 @@ function readPersistedReport(filePath: string): PersistedReport | null {
   const parsed = safeJsonParse(raw);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
   const obj = parsed as Record<string, unknown>;
+  const createdAt = typeof obj["createdAt"] === "string" ? (obj["createdAt"] as string) : null;
+  const createdAtJsonMs = createdAt !== null ? Date.parse(createdAt) : Number.NaN;
+  const createdAtMs = !Number.isNaN(createdAtJsonMs)
+    ? createdAtJsonMs
+    : (parseFilenameIsoMs(path.basename(filePath)) ?? mtimeMs);
   return {
     filePath,
     sessionId: typeof obj["sessionId"] === "string" ? (obj["sessionId"] as string) : null,
     approvalStatus:
       typeof obj["approvalStatus"] === "string" ? (obj["approvalStatus"] as string) : null,
     approvedAt: typeof obj["approvedAt"] === "string" ? (obj["approvedAt"] as string) : null,
+    createdAt,
+    createdAtMs,
   };
 }
 
 /**
- * List persisted reports under `dir`, newest-first by mtime. Missing
- * directory returns []. Any I/O error on a single file is silently
- * skipped; the caller falls through to the ledger result. The package
- * writes filenames as `<iso>-<slug>-<hash>.json` so the alphabetical
- * sort would also work for ISO prefixes, but mtime is robust against
- * the package changing its naming convention later.
+ * List persisted reports under `dir`, newest-first by creation time
+ * (JSON `createdAt`, falling back to the filename ISO prefix, falling
+ * back to mtime). Missing directory returns []. Any I/O error on a
+ * single file is silently skipped; the caller falls through to the
+ * ledger result.
+ *
+ * Creation time, NOT mtime, is the sort key: `harness approve
+ * understanding` rewrites the report it flips, which bumps mtime and
+ * made an old just-approved report sort as the freshest
+ * (harness-discovery C1). mtime survives only as the last-resort
+ * fallback for files that carry neither timestamp.
  */
 export function listPersistedReports(dir: string): PersistedReport[] {
   let names: string[];
@@ -142,7 +179,7 @@ export function listPersistedReports(dir: string): PersistedReport[] {
   } catch {
     return [];
   }
-  const reports: Array<{ report: PersistedReport; mtimeMs: number }> = [];
+  const reports: PersistedReport[] = [];
   for (const name of names) {
     if (!name.endsWith(".json")) continue;
     const full = path.join(dir, name);
@@ -153,13 +190,25 @@ export function listPersistedReports(dir: string): PersistedReport[] {
       continue;
     }
     if (!stat.isFile()) continue;
-    const report = readPersistedReport(full);
+    const report = readPersistedReport(full, stat.mtimeMs);
     if (!report) continue;
-    reports.push({ report, mtimeMs: stat.mtimeMs });
+    reports.push(report);
   }
-  reports.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  return reports.map((r) => r.report);
+  reports.sort((a, b) => b.createdAtMs - a.createdAtMs);
+  return reports;
 }
+
+/**
+ * Maximum age a sessionId-null report may have for the tolerant
+ * fallback to adopt it on the `harness approve understanding` path.
+ * Sized for the real flow (Stop hook persists at turn end, operator
+ * approves within minutes) with slack for a slow read-through. Live
+ * repro that motivated it: a 17-day-old pending report got adopted,
+ * validated, and stamped for a fresh session because the producer had
+ * silently failed to persist the fresh report (harness-discovery C1,
+ * friction-log #67).
+ */
+export const TOLERANT_FALLBACK_MAX_AGE_MS = 15 * 60_000;
 
 export interface FindReportOptions {
   /**
@@ -179,31 +228,68 @@ export interface FindReportOptions {
    *    report into the live session (harness/0dce3880 friction #1).
    */
   tolerantFallback?: "any" | "uncompleted";
+  /**
+   * Maximum age (relative to `now`) of a sessionId-null candidate the
+   * tolerant fallback may adopt; older candidates are skipped and
+   * surfaced via `FindReportSelection.staleRejected`. Strict sessionId
+   * matches are never age-limited. Unset means no limit (the legacy
+   * gate-read / expiry contract).
+   */
+  maxFallbackAgeMs?: number;
+  /** Clock anchor for the age computation; defaults to the wall clock. */
+  now?: Date;
+}
+
+export interface FindReportSelection {
+  report: PersistedReport | null;
+  /**
+   * True when `report` was adopted via the sessionId-null tolerant
+   * fallback rather than a strict sessionId match. Callers that bind
+   * the report to a session (the approve flow) surface this loudly so
+   * the operator can verify the adoption.
+   */
+  fallbackAdopted: boolean;
+  /**
+   * sessionId-null candidates skipped for exceeding `maxFallbackAgeMs`,
+   * newest first. Lets the caller distinguish "no report at all" from
+   * "only stale candidates existed", which are different failures: the
+   * latter usually means the producer failed to persist the fresh
+   * report (harness-discovery C1).
+   */
+  staleRejected: PersistedReport[];
 }
 
 /**
- * Return the freshest report for a given session_id, or the freshest
+ * Select the freshest report for a given session_id, or the freshest
  * applicable report when the persisted file lacks a sessionId field
- * (older package versions). null when nothing matches.
+ * (older package versions). `report: null` when nothing matches.
  *
  * The strict (sessionId-equals) match always wins. The tolerant
- * fallback's appetite is controlled by `opts.tolerantFallback` — see
- * `FindReportOptions`.
+ * fallback's appetite is controlled by `opts.tolerantFallback` and
+ * `opts.maxFallbackAgeMs` — see `FindReportOptions`. The selection
+ * result carries enough context (`fallbackAdopted`, `staleRejected`)
+ * for the caller to be loud about non-strict adoptions.
  */
-export function findLatestReportForSession(
+export function selectReportForSession(
   reports: PersistedReport[],
   sessionId: string,
   opts: FindReportOptions = {},
-): PersistedReport | null {
+): FindReportSelection {
   // Strict match first.
   for (const r of reports) {
-    if (r.sessionId === sessionId) return r;
+    if (r.sessionId === sessionId) {
+      return { report: r, fallbackAdopted: false, staleRejected: [] };
+    }
   }
   // Tolerant fallback: a report without sessionId is treated as
   // applicable to whichever session is asking. Only kicks in when no
-  // sessionId-tagged report exists, so harnessed sessions with proper
-  // tagging never hit this path.
+  // matching sessionId-tagged report exists — which includes the case
+  // where the producer Stop hook silently failed to persist the live
+  // session's report, so the candidates here may be entirely unrelated
+  // leftovers. `maxFallbackAgeMs` is the guard against adopting those.
   const mode = opts.tolerantFallback ?? "any";
+  const nowMs = (opts.now ?? new Date()).getTime();
+  const staleRejected: PersistedReport[] = [];
   for (const r of reports) {
     if (r.sessionId !== null) continue;
     if (
@@ -215,9 +301,25 @@ export function findLatestReportForSession(
       // the live session to a stale, unrelated report.
       continue;
     }
-    return r;
+    if (opts.maxFallbackAgeMs !== undefined && nowMs - r.createdAtMs > opts.maxFallbackAgeMs) {
+      staleRejected.push(r);
+      continue;
+    }
+    return { report: r, fallbackAdopted: true, staleRejected };
   }
-  return null;
+  return { report: null, fallbackAdopted: false, staleRejected };
+}
+
+/**
+ * Back-compat wrapper around `selectReportForSession` for callers that
+ * only need the report (the gate read and expiry paths).
+ */
+export function findLatestReportForSession(
+  reports: PersistedReport[],
+  sessionId: string,
+  opts: FindReportOptions = {},
+): PersistedReport | null {
+  return selectReportForSession(reports, sessionId, opts).report;
 }
 
 export interface PersistedReportApprovalCheck {
