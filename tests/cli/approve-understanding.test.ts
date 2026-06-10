@@ -88,6 +88,64 @@ describe("approveUnderstanding", () => {
     expect(after.approvedBy).toBe("test-suite");
   });
 
+  it("refuses to adopt a stale sessionId-less pending report and says why (C1)", async () => {
+    // Live-repro shape (harness-discovery C1, friction-log #67): the
+    // only report on disk is a 17-day-old sessionId-less pending
+    // leftover; the live session's own report was never persisted.
+    const staleName = "2026-05-24T06-16-39-409Z-old-task-abcd1234.json";
+    writeReport(staleName, {
+      approvalStatus: "pending",
+      createdAt: "2026-05-24T06:16:39.388Z",
+    });
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-fresh",
+      reportsDir: tmp,
+      generatedDir: path.join(tmp, "harness.generated"),
+      now: new Date("2026-06-10T12:00:00Z"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+
+    // The operator's explicit approval still writes the canonical
+    // marker (their authority is not the bug)…
+    expect(result.marker.ok).toBe(true);
+    // …but the stale leftover is not adopted: not validated, not
+    // flipped, not stamped — and the reason names the rejection.
+    expect(result.validation).toEqual({ skipped: true });
+    expect(result.persistedReport.ok).toBe(false);
+    if (result.persistedReport.ok) return;
+    expect(result.persistedReport.reason).toMatch(/rejected 1 stale sessionId-less candidate/);
+    expect(result.persistedReport.reason).toMatch(/created 2026-05-24T06:16:39\.388Z, age 17d > max 15m/);
+    expect(result.persistedReport.reason).toMatch(/Stop hook likely failed to persist/);
+    const after = JSON.parse(
+      fs.readFileSync(path.join(tmp, staleName), "utf8"),
+    ) as Record<string, unknown>;
+    expect(after.approvalStatus).toBe("pending");
+    expect(after.sessionId).toBeUndefined();
+  });
+
+  it("adopts a fresh sessionId-less report and surfaces the adoption", async () => {
+    writeReport("fresh.json", {
+      approvalStatus: "pending",
+      createdAt: "2026-06-10T11:55:00.000Z",
+    });
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-fresh",
+      reportsDir: tmp,
+      generatedDir: path.join(tmp, "harness.generated"),
+      now: new Date("2026-06-10T12:00:00Z"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.persistedReport.ok).toBe(true);
+    if (!result.persistedReport.ok) return;
+    expect(result.persistedReport.sessionIdStamped).toBe(true);
+    expect(result.persistedReport.fallbackAdopted).toEqual({
+      createdAt: "2026-06-10T11:55:00.000Z",
+      ageMinutes: 5,
+    });
+  });
+
   it("succeeds when no persisted report exists (ledger-only path)", async () => {
     const result = await approveUnderstanding({
       manifest: manifest(),

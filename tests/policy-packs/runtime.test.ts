@@ -13,7 +13,10 @@ import {
   listPersistedReports,
   REPORTS_DIR_ENV,
   reportsDirForManifest,
+  selectReportForSession,
+  TOLERANT_FALLBACK_MAX_AGE_MS,
   writeApprovalMarker,
+  type PersistedReport,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 
 let tmp: string;
@@ -30,6 +33,19 @@ function writeReport(name: string, body: Record<string, unknown>): string {
   const full = path.join(tmp, name);
   fs.writeFileSync(full, `${JSON.stringify(body, null, 2)}\n`);
   return full;
+}
+
+/** In-memory PersistedReport with neutral creation-time defaults. */
+function mkReport(over: Partial<PersistedReport>): PersistedReport {
+  return {
+    filePath: "/r",
+    sessionId: null,
+    approvalStatus: "pending",
+    approvedAt: null,
+    createdAt: null,
+    createdAtMs: Date.parse("2026-06-10T12:00:00.000Z"),
+    ...over,
+  };
 }
 
 describe("approvedLedgerTagFor", () => {
@@ -89,7 +105,7 @@ describe("listPersistedReports", () => {
     expect(reports[0]?.sessionId).toBe("s1");
   });
 
-  it("orders results by mtime newest-first", () => {
+  it("orders results by mtime newest-first when no createdAt is available", () => {
     const a = writeReport("a.json", { sessionId: "old", approvalStatus: "pending" });
     writeReport("b.json", { sessionId: "new", approvalStatus: "pending" });
     const past = new Date(Date.now() - 60_000);
@@ -97,13 +113,126 @@ describe("listPersistedReports", () => {
     const reports = listPersistedReports(tmp);
     expect(reports.map((r) => r.sessionId)).toEqual(["new", "old"]);
   });
+
+  it("orders by JSON createdAt over mtime (approval rewrites bump mtime, C1)", () => {
+    const older = writeReport("older.json", {
+      sessionId: "older",
+      approvalStatus: "pending",
+      createdAt: "2026-06-01T00:00:00.000Z",
+    });
+    writeReport("newer.json", {
+      sessionId: "newer",
+      approvalStatus: "pending",
+      createdAt: "2026-06-02T00:00:00.000Z",
+    });
+    // Simulate an approval rewrite: the OLDER-created report gets the
+    // NEWEST mtime. mtime ordering would now misreport it as freshest.
+    const future = new Date(Date.now() + 60_000);
+    fs.utimesSync(older, future, future);
+    const reports = listPersistedReports(tmp);
+    expect(reports.map((r) => r.sessionId)).toEqual(["newer", "older"]);
+  });
+
+  it("falls back to the filename ISO prefix when the JSON lacks createdAt", () => {
+    writeReport("2026-05-24T06-16-39-409Z-slug-abcd1234.json", {
+      sessionId: "s1",
+      approvalStatus: "pending",
+    });
+    const reports = listPersistedReports(tmp);
+    expect(reports[0]?.createdAt).toBeNull();
+    expect(reports[0]?.createdAtMs).toBe(Date.parse("2026-05-24T06:16:39.409Z"));
+  });
+});
+
+describe("selectReportForSession", () => {
+  const NOW = new Date("2026-06-10T12:00:00.000Z");
+
+  it("rejects a sessionId-less candidate older than maxFallbackAgeMs (C1 live repro)", () => {
+    const stale = mkReport({
+      filePath: "/stale",
+      createdAt: "2026-05-24T06:16:39.388Z",
+      createdAtMs: Date.parse("2026-05-24T06:16:39.388Z"),
+    });
+    const sel = selectReportForSession([stale], "fresh-session", {
+      tolerantFallback: "uncompleted",
+      maxFallbackAgeMs: TOLERANT_FALLBACK_MAX_AGE_MS,
+      now: NOW,
+    });
+    expect(sel.report).toBeNull();
+    expect(sel.fallbackAdopted).toBe(false);
+    expect(sel.staleRejected.map((r) => r.filePath)).toEqual(["/stale"]);
+  });
+
+  it("adopts a fresh sessionId-less candidate within the window and flags the adoption", () => {
+    const fresh = mkReport({
+      filePath: "/fresh",
+      createdAtMs: NOW.getTime() - 60_000,
+    });
+    const sel = selectReportForSession([fresh], "fresh-session", {
+      tolerantFallback: "uncompleted",
+      maxFallbackAgeMs: TOLERANT_FALLBACK_MAX_AGE_MS,
+      now: NOW,
+    });
+    expect(sel.report?.filePath).toBe("/fresh");
+    expect(sel.fallbackAdopted).toBe(true);
+    expect(sel.staleRejected).toEqual([]);
+  });
+
+  it("rejects a sessionId-less candidate created in the future beyond the skew tolerance", () => {
+    const future = mkReport({
+      filePath: "/future",
+      createdAtMs: NOW.getTime() + 10 * 60_000,
+    });
+    const sel = selectReportForSession([future], "fresh-session", {
+      tolerantFallback: "uncompleted",
+      maxFallbackAgeMs: TOLERANT_FALLBACK_MAX_AGE_MS,
+      now: NOW,
+    });
+    expect(sel.report).toBeNull();
+    expect(sel.staleRejected.map((r) => r.filePath)).toEqual(["/future"]);
+  });
+
+  it("tolerates small clock skew on a sessionId-less candidate", () => {
+    const slightlyAhead = mkReport({
+      filePath: "/ahead",
+      createdAtMs: NOW.getTime() + 60_000,
+    });
+    const sel = selectReportForSession([slightlyAhead], "fresh-session", {
+      tolerantFallback: "uncompleted",
+      maxFallbackAgeMs: TOLERANT_FALLBACK_MAX_AGE_MS,
+      now: NOW,
+    });
+    expect(sel.report?.filePath).toBe("/ahead");
+  });
+
+  it("never age-limits a strict sessionId match", () => {
+    const exact = mkReport({
+      filePath: "/exact",
+      sessionId: "wanted",
+      createdAtMs: Date.parse("2026-01-01T00:00:00.000Z"),
+    });
+    const sel = selectReportForSession([exact], "wanted", {
+      maxFallbackAgeMs: 1,
+      now: NOW,
+    });
+    expect(sel.report?.filePath).toBe("/exact");
+    expect(sel.fallbackAdopted).toBe(false);
+  });
+
+  it("applies no age limit when maxFallbackAgeMs is unset (gate-read back-compat)", () => {
+    const old = mkReport({
+      filePath: "/old",
+      createdAtMs: Date.parse("2026-01-01T00:00:00.000Z"),
+    });
+    expect(findLatestReportForSession([old], "wanted")?.filePath).toBe("/old");
+  });
 });
 
 describe("findLatestReportForSession", () => {
   it("returns the matching session, ignoring others", () => {
     const reports = [
-      { filePath: "/a", sessionId: "other", approvalStatus: "approved", approvedAt: null },
-      { filePath: "/b", sessionId: "wanted", approvalStatus: "pending", approvedAt: null },
+      mkReport({ filePath: "/a", sessionId: "other", approvalStatus: "approved" }),
+      mkReport({ filePath: "/b", sessionId: "wanted" }),
     ];
     const r = findLatestReportForSession(reports, "wanted");
     expect(r?.filePath).toBe("/b");
@@ -111,8 +240,8 @@ describe("findLatestReportForSession", () => {
 
   it("falls back to a sessionless report when no exact match exists", () => {
     const reports = [
-      { filePath: "/a", sessionId: "other", approvalStatus: "approved", approvedAt: null },
-      { filePath: "/b", sessionId: null, approvalStatus: "pending", approvedAt: null },
+      mkReport({ filePath: "/a", sessionId: "other", approvalStatus: "approved" }),
+      mkReport({ filePath: "/b" }),
     ];
     const r = findLatestReportForSession(reports, "wanted");
     expect(r?.filePath).toBe("/b");
@@ -120,7 +249,7 @@ describe("findLatestReportForSession", () => {
 
   it("returns null when no match nor sessionless fallback exists", () => {
     const reports = [
-      { filePath: "/a", sessionId: "other", approvalStatus: "approved", approvedAt: null },
+      mkReport({ filePath: "/a", sessionId: "other", approvalStatus: "approved" }),
     ];
     expect(findLatestReportForSession(reports, "wanted")).toBeNull();
   });
@@ -128,9 +257,7 @@ describe("findLatestReportForSession", () => {
   it('tolerantFallback "uncompleted" skips a completed sessionless report (harness/0dce3880)', () => {
     // A stale, finished report (no sessionId, already expired) must not
     // be re-adopted for a fresh session.
-    const reports = [
-      { filePath: "/stale", sessionId: null, approvalStatus: "expired", approvedAt: null },
-    ];
+    const reports = [mkReport({ filePath: "/stale", approvalStatus: "expired" })];
     expect(
       findLatestReportForSession(reports, "wanted", { tolerantFallback: "uncompleted" }),
     ).toBeNull();
@@ -142,8 +269,8 @@ describe("findLatestReportForSession", () => {
 
   it('tolerantFallback "uncompleted" still adopts a fresh pending sessionless report', () => {
     const reports = [
-      { filePath: "/expired", sessionId: null, approvalStatus: "expired", approvedAt: null },
-      { filePath: "/pending", sessionId: null, approvalStatus: "pending", approvedAt: null },
+      mkReport({ filePath: "/expired", approvalStatus: "expired" }),
+      mkReport({ filePath: "/pending" }),
     ];
     expect(
       findLatestReportForSession(reports, "wanted", { tolerantFallback: "uncompleted" })
@@ -153,8 +280,8 @@ describe("findLatestReportForSession", () => {
 
   it('tolerantFallback "uncompleted" never overrides a strict sessionId match', () => {
     const reports = [
-      { filePath: "/exact", sessionId: "wanted", approvalStatus: "approved", approvedAt: null },
-      { filePath: "/pending", sessionId: null, approvalStatus: "pending", approvedAt: null },
+      mkReport({ filePath: "/exact", sessionId: "wanted", approvalStatus: "approved" }),
+      mkReport({ filePath: "/pending" }),
     ];
     expect(
       findLatestReportForSession(reports, "wanted", { tolerantFallback: "uncompleted" })
