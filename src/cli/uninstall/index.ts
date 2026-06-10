@@ -47,6 +47,7 @@ import * as path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { atomicWriteFile } from "../../io/atomic-write.js";
 import { GENERATED_DIRNAME } from "../../io/generated-dir.js";
+import { resolveHomeDir as resolveHarnessStateRoot } from "../../runtime/home-dir.js";
 import {
   backupPath,
   type RemovedHookGroup,
@@ -61,6 +62,13 @@ const MANIFEST_BASENAME = "harness.yaml";
 const LOCK_BASENAME = "harness.lock";
 const SETTINGS_BASENAME = "settings.json";
 const PRE_HARNESS_BACKUP_PREFIX = "settings.json.pre-harness-";
+/**
+ * Understanding-gate state planted next to the manifest: persisted
+ * reports, parse-error logs, hypotheses.json. Written by the
+ * understanding-gate Stop hook and `harness approve understanding`;
+ * harness-owned, so uninstall removes it (harness-discovery M2).
+ */
+const UNDERSTANDING_GATE_DIRNAME = ".understanding-gate";
 /**
  * MCP servers harness wires by default across its bundled templates
  * (see `src/cli/init/templates.ts` + `src/cli/init/composer.ts`). Used
@@ -91,8 +99,23 @@ export class UninstallError extends Error {
 }
 
 export interface UninstallOptions {
-  /** Override for `~/.claude/`. Falls back to `os.homedir()/.claude`. */
+  /**
+   * Override for the settings home `~/.claude/` (Claude Code's own
+   * config dir; settings.json lives here). When set WITHOUT `stateDir`,
+   * it also overrides the harness state root, preserving the historic
+   * "one directory holds everything" contract tests and non-default
+   * installs rely on. Falls back to `os.homedir()/.claude`.
+   */
   homeDir?: string;
+  /**
+   * Override for the harness state root holding harness.yaml,
+   * harness.lock, harness.generated/, and .understanding-gate/. Defaults
+   * to the shared resolver (`~/.harness/`, legacy fallback `~/.claude/`,
+   * `HARNESS_HOME` env honored). Before this option existed, uninstall
+   * hardcoded `~/.claude/` and silently missed everything under
+   * `~/.harness/` on migrated installs (harness-discovery M2).
+   */
+  stateDir?: string;
   /** Override settings.json path (test injection / non-default install). */
   settingsPath?: string;
   /** Mutate when true; pure listing otherwise. */
@@ -116,16 +139,20 @@ export interface HookGroupRef {
 }
 
 export interface UninstallInventory {
-  /** Resolved `~/.claude/` (or override). */
+  /** Resolved settings home `~/.claude/` (or override). */
   homeDir: string;
+  /** Resolved harness state root (default `~/.harness/`, legacy `~/.claude/`). */
+  stateDir: string;
   /** Resolved settings.json path (or override). */
   settingsPath: string;
-  /** `~/.claude/harness.yaml` when present, else null. */
+  /** `<stateDir>/harness.yaml` when present, else null. */
   manifestPath: string | null;
-  /** `~/.claude/harness.lock` when present, else null. */
+  /** `<stateDir>/harness.lock` when present, else null. */
   lockPath: string | null;
-  /** `~/.claude/harness.generated/` when present, else null. */
+  /** `<stateDir>/harness.generated/` when present, else null. */
   generatedDir: string | null;
+  /** `<stateDir>/.understanding-gate/` when present, else null. */
+  gateStateDir: string | null;
   /** Harness-owned hook groups currently in settings.json. */
   hookGroups: HookGroupRef[];
   /** Harness-owned mcpServers keys currently in settings.json. */
@@ -163,6 +190,29 @@ export type UninstallResult =
 
 function resolveHomeDir(opts: UninstallOptions): string {
   return opts.homeDir ?? path.join(os.homedir(), ".claude");
+}
+
+/**
+ * Harness state root: explicit `stateDir` > explicit `homeDir` (the
+ * historic single-directory contract) > the shared resolver
+ * (`~/.harness/`, legacy fallback, `HARNESS_HOME` env).
+ *
+ * The resolver tier carries the same seatbelt as `resolvePaths`
+ * (loader.ts): uninstall is the most destructive verb in the CLI, and
+ * without the guard a test (or library consumer) omitting both
+ * overrides would `rmSync` the developer's real `~/.harness/` state.
+ * The harness binary sets the env var before `run()`; tests don't.
+ */
+function resolveStateDir(opts: UninstallOptions): string {
+  if (opts.stateDir !== undefined) return opts.stateDir;
+  if (opts.homeDir !== undefined) return opts.homeDir;
+  if (process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"] !== "1") {
+    throw new UninstallError(
+      "uninstall refused to fall back to the real harness state root; pass { stateDir } or { homeDir } " +
+        "(--state / --home on the CLI), or (for the real harness binary) set HARNESS_ALLOW_REAL_GENERATED_DIR=1",
+    );
+  }
+  return resolveHarnessStateRoot().path;
 }
 
 function resolveSettingsPath(opts: UninstallOptions, homeDir: string): string {
@@ -457,14 +507,42 @@ function buildInventory(opts: UninstallOptions): {
   parsed: ParsedSettings | null;
 } {
   const homeDir = resolveHomeDir(opts);
+  const stateDir = resolveStateDir(opts);
   const settingsPath = resolveSettingsPath(opts, homeDir);
 
-  const manifestPath = existsOrNull(path.join(homeDir, MANIFEST_BASENAME));
-  const lockPath = existsOrNull(path.join(homeDir, LOCK_BASENAME));
-  const generatedDir = existsOrNull(path.join(homeDir, GENERATED_DIRNAME));
+  const manifestPath = existsOrNull(path.join(stateDir, MANIFEST_BASENAME));
+  const lockPath = existsOrNull(path.join(stateDir, LOCK_BASENAME));
+  const generatedDir = existsOrNull(path.join(stateDir, GENERATED_DIRNAME));
+  const gateStateDir = existsOrNull(path.join(stateDir, UNDERSTANDING_GATE_DIRNAME));
+
+  const warningsEarly: string[] = [];
+  // When the state root came from the shared resolver (real-binary path:
+  // both overrides absent), probe the non-selected default root too. A
+  // half-migrated install carries residue in the other root (e.g.
+  // `~/.claude/.understanding-gate/` next to an active `~/.harness/`),
+  // and silently tearing down only one root is how the M2 blindness
+  // recurs in mirrored form.
+  if (opts.stateDir === undefined && opts.homeDir === undefined) {
+    const userHome = os.homedir();
+    for (const otherRoot of [path.join(userHome, ".harness"), path.join(userHome, ".claude")]) {
+      if (path.resolve(otherRoot) === path.resolve(stateDir)) continue;
+      const residue = [
+        MANIFEST_BASENAME,
+        LOCK_BASENAME,
+        GENERATED_DIRNAME,
+        UNDERSTANDING_GATE_DIRNAME,
+      ].filter((name) => fs.existsSync(path.join(otherRoot, name)));
+      if (residue.length > 0) {
+        warningsEarly.push(
+          `harness state also present under ${otherRoot} (${residue.join(", ")}); ` +
+            `this run only tears down ${stateDir}. Re-run with --state ${otherRoot} to clean it too.`,
+        );
+      }
+    }
+  }
 
   const parsed = readSettings(settingsPath);
-  const warnings: string[] = [];
+  const warnings: string[] = [...warningsEarly];
   const hookGroups = collectOwnedHookGroups(parsed?.hooks ?? null, warnings);
   const mcpServers = ownedMcpServerNames(parsed?.mcpServers ?? null, manifestPath);
   const preHarnessBackups = listPreHarnessBackups(path.dirname(settingsPath));
@@ -474,10 +552,12 @@ function buildInventory(opts: UninstallOptions): {
   return {
     inventory: {
       homeDir,
+      stateDir,
       settingsPath,
       manifestPath,
       lockPath,
       generatedDir,
+      gateStateDir,
       hookGroups,
       mcpServers,
       preHarnessBackups,
@@ -508,6 +588,16 @@ function removeFilesystemArtefacts(inventory: UninstallInventory): string[] {
       );
     }
   }
+  if (inventory.gateStateDir !== null) {
+    try {
+      fs.rmSync(inventory.gateStateDir, { recursive: true, force: true });
+      removed.push(inventory.gateStateDir);
+    } catch (err) {
+      throw new UninstallError(
+        `failed to remove ${inventory.gateStateDir}: ${(err as Error).message}`,
+      );
+    }
+  }
   return removed;
 }
 
@@ -525,7 +615,7 @@ function writeSettingsWithRemovals(
   const keptHooks: Record<string, unknown[]> = {};
 
   const ownedRefs = new Set(
-    inventory.hookGroups.map((g) => `${g.event} ${g.index}`),
+    inventory.hookGroups.map((g) => `${g.event}\u0000${g.index}`),
   );
 
   if (parsed.hooks !== null) {
@@ -533,7 +623,7 @@ function writeSettingsWithRemovals(
       const groups = parsed.hooks[event] ?? [];
       const kept: unknown[] = [];
       groups.forEach((group, index) => {
-        if (ownedRefs.has(`${event} ${index}`)) {
+        if (ownedRefs.has(`${event}\u0000${index}`)) {
           removedHookGroups.push({ event, index, group });
         } else {
           kept.push(group);

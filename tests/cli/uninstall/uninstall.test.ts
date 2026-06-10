@@ -335,3 +335,66 @@ describe("uninstall — --restore-from", () => {
     );
   });
 });
+
+describe("uninstall — gate state + state root (harness-discovery M2)", () => {
+  it("inventories and removes .understanding-gate/ under the state root", () => {
+    fs.writeFileSync(path.join(homeDir, "harness.yaml"), "version: 1\n");
+    const gateDir = path.join(homeDir, ".understanding-gate");
+    fs.mkdirSync(path.join(gateDir, "reports"), { recursive: true });
+    fs.writeFileSync(path.join(gateDir, "reports", "r.json"), "{}\n");
+    fs.mkdirSync(path.join(gateDir, "parse-errors"), { recursive: true });
+
+    const listed = uninstall({ homeDir, settingsPath });
+    expect(listed.mode).toBe("list");
+    if (listed.mode !== "list") return;
+    expect(listed.inventory.gateStateDir).toBe(gateDir);
+    // Dry-run leaves it on disk.
+    expect(fs.existsSync(gateDir)).toBe(true);
+
+    const r = uninstall({ homeDir, settingsPath, apply: true });
+    expect(r.mode).toBe("apply");
+    if (r.mode !== "apply") return;
+    expect(r.removedFiles).toContain(gateDir);
+    expect(fs.existsSync(gateDir)).toBe(false);
+  });
+
+  it("resolves manifest/lock/generated/gate-state from a split state root (migrated installs)", () => {
+    const stateDir = path.join(tmp, ".harness");
+    fs.mkdirSync(path.join(stateDir, "harness.generated"), { recursive: true });
+    fs.writeFileSync(path.join(stateDir, "harness.yaml"), "version: 1\n");
+    fs.mkdirSync(path.join(stateDir, ".understanding-gate"), { recursive: true });
+    writeSettings({});
+
+    const r = uninstall({ homeDir, settingsPath, stateDir, apply: true });
+    expect(r.mode).toBe("apply");
+    if (r.mode !== "apply") return;
+    expect(r.inventory.stateDir).toBe(stateDir);
+    expect(r.inventory.homeDir).toBe(homeDir);
+    expect(r.removedFiles).toContain(path.join(stateDir, "harness.yaml"));
+    expect(fs.existsSync(path.join(stateDir, "harness.generated"))).toBe(false);
+    expect(fs.existsSync(path.join(stateDir, ".understanding-gate"))).toBe(false);
+  });
+
+  it("explicit homeDir without stateDir keeps the historic single-root contract", () => {
+    fs.writeFileSync(path.join(homeDir, "harness.yaml"), "version: 1\n");
+    const r = uninstall({ homeDir, settingsPath });
+    expect(r.mode).toBe("list");
+    if (r.mode !== "list") return;
+    expect(r.inventory.stateDir).toBe(homeDir);
+    expect(r.inventory.manifestPath).toBe(path.join(homeDir, "harness.yaml"));
+  });
+});
+
+describe("uninstall — real-state-root seatbelt", () => {
+  it("refuses to resolve the real state root without explicit overrides (test-leak guard)", () => {
+    const saved = process.env.HARNESS_ALLOW_REAL_GENERATED_DIR;
+    delete process.env.HARNESS_ALLOW_REAL_GENERATED_DIR;
+    try {
+      expect(() => uninstall({ settingsPath })).toThrow(UninstallError);
+      expect(() => uninstall({ settingsPath })).toThrow(/refused to fall back/);
+    } finally {
+      if (saved === undefined) delete process.env.HARNESS_ALLOW_REAL_GENERATED_DIR;
+      else process.env.HARNESS_ALLOW_REAL_GENERATED_DIR = saved;
+    }
+  });
+});

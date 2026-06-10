@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { Command } from "commander";
 
@@ -71,6 +72,7 @@ import { runPackHookSolutionAcceptanceWriteguardCli } from "./pack/hook-solution
 import { runPackHookRuntimeRealityCli } from "./pack/hook-runtime-reality.js";
 import { gateDisable, GateDisableError } from "./gate/disable.js";
 import { gateEnable, GateEnableError } from "./gate/enable.js";
+import { DEFAULT_RETENTION_DAYS, gc } from "./gc/index.js";
 import { uninstall, UninstallError } from "./uninstall/index.js";
 import { migrateHome } from "./migrate-home/index.js";
 import { pause as pauseHarness, resume as resumeHarness } from "./pause/index.js";
@@ -2239,12 +2241,83 @@ export function buildProgram(opts: RunOptions = {}): Command {
     });
 
   program
+    .command("gc")
+    .description(
+      "Retention-based cleanup of harness-owned gate state: terminal " +
+        "(approved/expired) understanding-gate reports, parse-error logs, and " +
+        "approval markers older than the retention window. Pending reports and " +
+        "anything outside the enumerated harness-owned dirs are never touched " +
+        "(the evidence ledger and solution-acceptance verdict dirs are owned by " +
+        "their producers). Dry-run by default; pass --apply to delete.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
+    .option(
+      "--retention-days <n>",
+      `delete artifacts older than this many days (default: ${DEFAULT_RETENTION_DAYS})`,
+    )
+    .option("--apply", "delete the listed artifacts (default: dry-run listing only)")
+    .action((options: { config?: string; retentionDays?: string; apply?: boolean }) => {
+      const cliOpts: Parameters<typeof gc>[0] = {};
+      if (options.config) cliOpts.configPath = options.config;
+      if (options.apply) cliOpts.apply = true;
+      if (options.retentionDays !== undefined) {
+        const parsed = Number(options.retentionDays);
+        if (!Number.isFinite(parsed) || parsed < 1) {
+          stderr(`--retention-days must be a positive number, got ${JSON.stringify(options.retentionDays)}\n`);
+          throw new HarnessExitError("", EX_USAGE);
+        }
+        cliOpts.retentionDays = parsed;
+      }
+      const result = gc(cliOpts);
+      const sweptDirs = [
+        result.reportsDir,
+        ...(result.parseErrorsDir !== null ? [result.parseErrorsDir] : []),
+        result.approvalsDir,
+      ];
+      if (result.parseErrorsDir === null) {
+        stderr(
+          "gc: skipping the parse-errors sweep (reports dir does not have the conventional .understanding-gate/reports shape)\n",
+        );
+      }
+      if (result.candidates.length === 0) {
+        stdout(
+          `gc: nothing older than ${result.retentionDays}d (cutoff ${result.cutoffIso}) under\n` +
+            sweptDirs.map((d) => `  ${d}\n`).join("") +
+            `${result.keptCount} artifact(s) inspected and kept.\n`,
+        );
+        return;
+      }
+      const verb = result.applied ? "removing" : "would remove";
+      stdout(
+        `gc: ${verb} ${result.candidates.length} artifact(s) older than ${result.retentionDays}d (cutoff ${result.cutoffIso}); keeping ${result.keptCount}:\n`,
+      );
+      for (const c of result.candidates) {
+        stdout(`  [${c.category}] ${c.filePath} (${c.reason})\n`);
+      }
+      if (!result.applied) {
+        stdout(`\nDry-run; pass --apply to delete.\n`);
+        return;
+      }
+      stdout(`removed ${result.removed.length} file(s).\n`);
+      if (result.failures.length > 0) {
+        for (const f of result.failures) {
+          stderr(`gc: failed to remove ${f.filePath}: ${f.reason}\n`);
+        }
+        throw new HarnessExitError(
+          `${result.failures.length} deletion(s) failed`,
+          EX_FAIL,
+        );
+      }
+    });
+
+  program
     .command("uninstall")
     .description(
       "Clean teardown of a harness installation. Inventories harness-owned " +
-        "entries in ~/.claude/ (manifest, lock, harness.generated/, hook groups " +
-        "and mcpServers in settings.json) and prints them. With --apply, removes " +
-        "them after writing a reversible settings.json backup + snapshot. " +
+        "state (manifest, lock, harness.generated/, .understanding-gate/ under " +
+        "the state root; hook groups and mcpServers in ~/.claude/settings.json) " +
+        "and prints it. With --apply, removes it after writing a reversible " +
+        "settings.json backup + snapshot. " +
         "settings.json.pre-harness-<TS> backups are listed but never deleted, " +
         "so the operator can hand them to --restore-from <path> (atomic restore " +
         "from that file) or `rm` them manually.",
@@ -2254,13 +2327,21 @@ export function buildProgram(opts: RunOptions = {}): Command {
       "--restore-from <path>",
       "atomic restore: copy this file over settings.json instead of selective removal (implies --apply)",
     )
-    .option("--home <path>", "override ~/.claude/ root (for tests / non-default installs)")
+    .option(
+      "--home <path>",
+      "override ~/.claude/ (settings home; without --state it also overrides the state root, for tests / non-default installs)",
+    )
+    .option(
+      "--state <path>",
+      "override the harness state root (default: ~/.harness/, legacy fallback ~/.claude/)",
+    )
     .option("--settings <path>", "override ~/.claude/settings.json")
-    .action(async (options: { apply?: boolean; restoreFrom?: string; home?: string; settings?: string }) => {
+    .action(async (options: { apply?: boolean; restoreFrom?: string; home?: string; state?: string; settings?: string }) => {
       const cliOpts: Parameters<typeof uninstall>[0] = {};
       if (options.apply) cliOpts.apply = true;
       if (options.restoreFrom) cliOpts.restoreFrom = options.restoreFrom;
       if (options.home) cliOpts.homeDir = options.home;
+      if (options.state) cliOpts.stateDir = options.state;
       if (options.settings) cliOpts.settingsPath = options.settings;
       try {
         const result = uninstall(cliOpts);
@@ -2270,18 +2351,24 @@ export function buildProgram(opts: RunOptions = {}): Command {
             inv.manifestPath === null &&
             inv.lockPath === null &&
             inv.generatedDir === null &&
+            inv.gateStateDir === null &&
             inv.hookGroups.length === 0 &&
             inv.mcpServers.length === 0 &&
             inv.preHarnessBackups.length === 0;
+          const rootsLabel =
+            inv.stateDir === inv.homeDir
+              ? inv.homeDir
+              : `${inv.stateDir} (state) + ${inv.homeDir} (settings)`;
           if (nothing) {
-            stdout(`no harness install found under ${inv.homeDir}; nothing to do.\n`);
+            stdout(`no harness install found under ${rootsLabel}; nothing to do.\n`);
             for (const w of inv.warnings) stderr(`warning: ${w}\n`);
             return;
           }
-          stdout(`harness install under ${inv.homeDir}:\n`);
+          stdout(`harness install under ${rootsLabel}:\n`);
           if (inv.manifestPath) stdout(`  manifest:  ${inv.manifestPath}\n`);
           if (inv.lockPath) stdout(`  lock:      ${inv.lockPath}\n`);
           if (inv.generatedDir) stdout(`  generated: ${inv.generatedDir}/\n`);
+          if (inv.gateStateDir) stdout(`  gate:      ${inv.gateStateDir}/ (understanding-gate state)\n`);
           if (inv.hookGroups.length > 0) {
             stdout(`  hook groups in ${inv.settingsPath}:\n`);
             for (const g of inv.hookGroups) {
@@ -2334,13 +2421,33 @@ export function buildProgram(opts: RunOptions = {}): Command {
         if (result.removedFiles.length > 0) {
           stdout(`removed from disk:\n`);
           for (const f of result.removedFiles) stdout(`  ${f}\n`);
+          // Explicit kept-list: name whatever survives under the state
+          // root (machines/ + projects/ override layers are
+          // operator-authored; foreign files are not ours to judge) so
+          // the operator never has to discover residue by accident.
+          try {
+            const residue = fs
+              .readdirSync(inv.stateDir)
+              .filter((name) => !name.startsWith("settings.json"));
+            if (residue.length > 0) {
+              stdout(
+                `kept under ${inv.stateDir}: ${residue.join(", ")} (not removed; operator-authored or out of scope)\n`,
+              );
+            }
+          } catch {
+            /* state root itself may be gone or unreadable; nothing to report */
+          }
         }
         if (
           result.backupPath === null &&
           result.snapshotPath === null &&
           result.removedFiles.length === 0
         ) {
-          stdout(`no harness install found under ${inv.homeDir}; nothing to remove.\n`);
+          const rootsLabel =
+            inv.stateDir === inv.homeDir
+              ? inv.homeDir
+              : `${inv.stateDir} (state) + ${inv.homeDir} (settings)`;
+          stdout(`no harness install found under ${rootsLabel}; nothing to remove.\n`);
         } else {
           stdout(
             `\nTo finish: \`npm uninstall -g @lannguyensi/harness\` (uninstall does not touch the npm install).\n`,
