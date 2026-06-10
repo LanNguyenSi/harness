@@ -5,9 +5,9 @@
 // Gate stage that reads the `risk:` schema vocabulary shipped in
 // Phase 7 #1.
 //
-// STATUS: invoked by `harness test-risk` (Phase 7 #3). NOT yet consumed
-// by `harness policy intercept` — wiring the runtime through the
-// classifier is Phase 7 #5. See docs/risk-gate.md and docs/ROADMAP.md.
+// STATUS: consumed by `harness policy intercept` (Phase 7 #5) and by the
+// `harness test-risk` debug verb (Phase 7 #3). See docs/risk-gate.md and
+// docs/ROADMAP.md.
 //
 // "Unknown is not safe": an envelope no pattern matches yields a
 // profile with `classified: false` and `severity: null`, deliberately
@@ -32,6 +32,7 @@ import type {
 import { RiskSeveritySchema } from "../schema/index.js";
 import type { ActionEnvelope } from "./action-envelope.js";
 import { expandToolNameAliases, extractShellCommand } from "./tool-name-aliases.js";
+import { isReadOnlyBashCommand } from "./read-only-bash.js";
 
 // Ordered severity scale: a value's index here is the comparison key
 // for "highest matched severity wins". Sourced from the schema enum so
@@ -222,21 +223,48 @@ export function classifyRisk(
     }
   }
 
-  // Built-in benign-harness floor (see BENIGN_HARNESS_COMMAND above).
-  // Folded in AFTER the operator loop so it composes by the same
-  // highest-severity-wins rule: it only raises an otherwise-unclassified
-  // action up to `low`, and never sinks an operator match (a dangerous
-  // tail in `harness preflight && rm -rf /var` keeps the higher
-  // severity). Gated on a real shell command so a non-shell tool whose
-  // serialized input happens to start with "harness" cannot match.
+  // Built-in benign floors (the harness meta-command floor and the
+  // read-only-command floor). Folded in AFTER the operator loop so they
+  // compose by the same highest-severity-wins rule: each only raises an
+  // otherwise-unclassified action up to `low`, and never sinks an
+  // operator match (a dangerous tail in `harness preflight && rm -rf
+  // /var` keeps the higher severity, and a chained command is not
+  // read-only). Both are gated on a real shell command so a non-shell
+  // tool whose serialized input happens to look benign cannot match.
   const shellCommand = extractShellCommand({ raw_input: envelope.raw_input });
-  if (shellCommand !== null && BENIGN_HARNESS_COMMAND.test(subject)) {
+  if (shellCommand !== null) {
     const lowIdx = SEVERITY_ORDER.indexOf("low");
     if (lowIdx > severityIdx) {
-      severityIdx = lowIdx;
-      reasons.push(
-        "built-in: benign harness meta-command recognized (severity low)",
-      );
+      if (BENIGN_HARNESS_COMMAND.test(subject)) {
+        // harness's own benign meta-commands (head-anchored; see
+        // BENIGN_HARNESS_COMMAND). Broader than the read-only floor: it
+        // also floors gate-PRODUCER commands like `harness preflight`
+        // and `harness approve`, which the understanding-gate read-only
+        // classifier deliberately excludes.
+        severityIdx = lowIdx;
+        reasons.push(
+          "built-in: benign harness meta-command recognized (severity low)",
+        );
+      } else if (isReadOnlyBashCommand(shellCommand)) {
+        // Any provably read-only command (`git status`, `grep`, `cat`,
+        // ...). Without this floor, "unknown is not safe" treats it as
+        // risk-bearing and a prod-scoped `risk.severity_at_least` policy
+        // denies harmless reads on a main / release branch (the recurring
+        // release-cut false-positive). The shared classifier already
+        // rejects any chaining / redirection / substitution, so a metachar
+        // command can never reach this floor.
+        //
+        // Pass the UNCAPPED shellCommand, not the 16 KiB-capped `subject`:
+        // isReadOnlyBashCommand scans the whole string for write
+        // metacharacters, so a tail truncated by the cap (e.g. a hidden
+        // `; rm -rf /` past 16 KiB) must not be able to launder a write
+        // behind a read-only head. The classifier's checks are linear-time,
+        // so the uncapped scan carries no ReDoS risk.
+        severityIdx = lowIdx;
+        reasons.push(
+          "built-in: provably read-only command recognized (severity low)",
+        );
+      }
     }
   }
 

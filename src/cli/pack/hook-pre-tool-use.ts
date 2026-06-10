@@ -39,7 +39,7 @@ import {
   resolveGeneratedDir,
   writePendingApproval,
 } from "../../runtime/pending-approval.js";
-import { isReadOnlyBashCommand } from "./read-only-bash.js";
+import { isReadOnlyBashCommand } from "../../runtime/read-only-bash.js";
 import {
   PolicyUxSchema,
   ProducerSchema,

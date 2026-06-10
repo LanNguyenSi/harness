@@ -248,3 +248,54 @@ describe("evaluateWhen — Friction-log #35 regression (benign harness floor def
     expect(result.matched).toBe(true);
   });
 });
+
+describe("evaluateWhen — Friction-log #38/#40/#43/#50 regression (read-only floor defeats the prod-branch fail-close)", () => {
+  // The bug: on a `main` / `release/*` branch the env resolves to
+  // production, and an unclassified read-only command (`git diff`,
+  // `grep version package.json`) fail-closed into the prod-scoped
+  // gate-prod-destructive policy, denying harmless reads during a release
+  // cut. The universal workaround was `harness pause`, which silences
+  // every gate. With the read-only floor these classify `low`, so the
+  // severity clause no longer matches even in production.
+  const ENVELOPE_CTX: EnvelopeContext = {
+    cwd: "/work/repo",
+    git: { repo: "repo", branch: "release/v0.34.0", sha: "" },
+    user: "agent",
+    host: "host",
+    now: new Date("2026-06-10T12:00:00.000Z"),
+  };
+  const bashEnvelope = (command: string) =>
+    buildActionEnvelope(
+      { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } } as ToolEvent,
+      ENVELOPE_CTX,
+    );
+  const GATE_PROD_DESTRUCTIVE: PolicyWhen = {
+    "risk.severity_at_least": "critical",
+    "environment.name": "production",
+  };
+
+  it.each(["git diff", "grep version package.json", "git status -uno"])(
+    "does NOT deny the read-only command %j in production",
+    (command) => {
+      const risk = classifyRisk(bashEnvelope(command), []);
+      const result = evaluateWhen(GATE_PROD_DESTRUCTIVE, {
+        risk,
+        environment: env("production"),
+      });
+      expect(result.matched).toBe(false);
+      // A real low-severity classification, not a fail-close that the
+      // environment clause merely ANDed out.
+      expect(result.unclassifiedFallback).toBe(false);
+      const sevClause = result.clauses.find((c) => c.clause === "risk.severity_at_least");
+      expect(sevClause).toMatchObject({ actual: "low", matched: false });
+    },
+  );
+
+  it("STILL denies a genuinely destructive command in production (floor does not weaken the gate)", () => {
+    const result = evaluateWhen(GATE_PROD_DESTRUCTIVE, {
+      risk: classified({ severity: "critical" }),
+      environment: env("production"),
+    });
+    expect(result.matched).toBe(true);
+  });
+});
