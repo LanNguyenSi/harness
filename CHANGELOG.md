@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-06-10
+
+**Headline: the discovery release.** A live-reproduced gate-integrity bug is closed: `harness approve understanding` could silently bind a fresh session to a weeks-old leftover report when the producer Stop hook failed (finding C1 of the 2026-06-10 discovery audit); the tolerant fallback now rejects stale sessionId-less candidates, prints loud adoption warnings, and orders reports by creation time instead of mtime. Around it: non-TTY-safe confirmations (`apply --yes`), `validate --json`, a new `harness gc` retention cleanup, an `uninstall` that finally sees the `~/.harness/` state root (it was blind to migrated installs), and docs synced to reality. **Operator action**: none required, back-compat; note that piped `echo yes | harness apply --overwrite-drift` confirmations now refuse (use `--yes`). Re-run `npm i -g @lannguyensi/harness` to upgrade.
+
 ### Added
 
 - **`harness gc`: retention-based cleanup of gate state** (task 38943a05, harness-discovery M3). Nothing ever deleted terminal understanding-gate reports, parse-error logs, or approval markers of dead sessions; the reports dir on the originating install accumulated 103 files in under a month, and stale leftovers were the raw material of the C1 stale-adoption bug. The new verb ages out artifacts older than a retention window (default 30 days, `--retention-days <n>`): terminal-status (approved/expired) reports by their createdAt, parse-error logs and approval markers by mtime. Pending reports are never touched regardless of age, and only the enumerated harness-owned dirs are considered; the evidence ledger and solution-acceptance verdict dirs stay producer-owned. Dry-run by default, `--apply` deletes; per-file deletion failures are surfaced loudly and fail the command.
