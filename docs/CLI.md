@@ -1,6 +1,6 @@
 # harness CLI reference
 
-Tracks the verbs available on the `harness` binary as of `v0.33.0`; rows marked "(unreleased)" shipped on master after that tag. For policy semantics see [`docs/policy-packs/`](policy-packs/); for the risk gate specifically see [`docs/risk-gate.md`](risk-gate.md).
+Tracks the verbs available on the `harness` binary as of `v0.33.0`; changes that shipped on master after that tag are listed under Notes. For policy semantics see [`docs/policy-packs/`](policy-packs/); for the risk gate specifically see [`docs/risk-gate.md`](risk-gate.md).
 
 The CLI is grouped by purpose below. Run any verb with `--help` for flags and examples.
 
@@ -55,7 +55,7 @@ These are called by Claude Code via `settings.json`; you usually do not run them
 | `harness pack hook track-active-claim` | `PostToolUse` companion that tracks the active understanding-gate task scope (v2 gate, PR #185). |
 | `harness pack hook stay-in-scope` | `PostToolUse` soft reminder (non-blocking): flags agent-tasks task payloads that look like review-derived follow-ups. Disable via `STAY_IN_SCOPE_DISABLED=1`; log path via `STAY_IN_SCOPE_LOG`. |
 | `harness pack hook branch-protection` | `PreToolUse` branch-guard for the `master`/`main` protection policy. Denies protected-branch edits unless a fresh `branch:non-protected` tag (5m window) or the operator-only override marker from `harness approve branch-protection` is present (v0.33.0). |
-| `harness pack hook solution-acceptance` | `PreToolUse` completion-gate (v0.32.0, opt-in pack): denies task-finishing tools (agent-tasks completion verbs, `git push`, `gh pr merge`) unless a ready solution-acceptance verdict exists at the current git HEAD for the active-claim task. Fail-closed. See [`docs/policy-packs/solution-acceptance.md`](policy-packs/solution-acceptance.md). |
+| `harness pack hook solution-acceptance` | `PreToolUse` completion-gate (v0.32.0, opt-in pack): denies task-finishing tools (agent-tasks completion verbs, `git push`, `gh pr merge`) unless a ready solution-acceptance verdict exists at the current git HEAD for the active-claim task (or, without a claim, the `SOLUTION_VERDICT_ID` env id). Fail-closed. See [`docs/policy-packs/solution-acceptance.md`](policy-packs/solution-acceptance.md). |
 | `harness pack hook solution-acceptance-writeguard` | `PreToolUse` anti-forgery companion (v0.32.0): denies agent writes into the solution-verdict dir; the producer (`grounding-mcp`) is the only legitimate writer. |
 | `harness pack hook runtime-reality` | `PreToolUse` drift gate (v0.31.0, opt-in): before destructive runtime commands, probes live process state and denies on critical drift against the expectations file. Fail-open on probe errors. See [`docs/runtime-reality-hook.md`](runtime-reality-hook.md). |
 | `harness pack hook codex-pre-tool-use` | Codex variant of `pre-tool-use`. The generator that emits its `settings.json` entry pins a 2s timeout floor as of v0.29.0. |
@@ -92,7 +92,7 @@ These are called by Claude Code via `settings.json`; you usually do not run them
 
 ## Notes
 
-- Unreleased on master (post-`v0.33.0`): `apply --yes` (skip the `--overwrite-drift` confirmation), non-TTY guards on the `apply`/`adopt` confirmation prompts (they refuse instead of hanging; piped `echo yes |` confirmations no longer work), and `validate --json`.
+- Unreleased on master (post-`v0.33.0`): `apply --yes` (skip the `--overwrite-drift` confirmation), non-TTY guards on the `apply`/`adopt` confirmation prompts (they refuse instead of hanging; piped `echo yes |` confirmations no longer work), `validate --json`, and the `approve understanding` stale-report hardening (sessionId-less fallback candidates older than 15m are rejected; fallback adoptions print createdAt + age).
 - `harness policy intercept --hook <name>` and the 2s timeout floor pinned by the Codex-hook generator both shipped in `v0.29.0`; see [CHANGELOG.md](../CHANGELOG.md).
 - The `full` profile pins `@lannguyensi/agent-preflight` and `@lannguyensi/understanding-gate@0.4.0+` as transitive dependencies of the wired packs; mismatched versions surface in `harness doctor`.
 - Ledger tag vocabulary used by gate-mode policies: `review:`, `risk-override:`, `risk-approved:`, `understanding-approved:`, `preflight:`. The Risk and Understanding gates both consume their tags scoped to a Claude session id (not the agent-tasks task UUID, see `feedback-agent-grounding-merge-gate-ledger`).

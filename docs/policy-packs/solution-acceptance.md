@@ -21,10 +21,10 @@ gate that silently can't fire). Requirements:
 - `grounding-mcp` (>= 0.3.2) declared under `tools.mcp` (the producer).
 - The `preflight` binary on PATH (the producer shells out to it).
 
-`harness validate` and `harness doctor` warn when the pack is enabled
-but one of the two deadlock misconfigurations is present (see Failure
-mode). Warning-tier in v1; escalation to a hard error is a tracked
-follow-up.
+`harness validate` warns when the pack is enabled but one of the two
+deadlock misconfigurations is present (see Failure mode). Warning-tier
+in v1; escalation to a hard error, and surfacing the same finding in
+`harness doctor`, are tracked follow-ups.
 
 ## How it works
 
@@ -62,11 +62,12 @@ The completion-gate is only as trustworthy as the verdict marker, and
 the understanding gate allows all Bash post-approval, so this companion
 denies the agent's enumerated write paths into the verdict directory:
 
-- Bash redirects, `tee`, `mv` / `cp` / `ln`, interpreter one-liners that
-  reference the dir, including glob-obscured spellings, plus `chmod` /
-  `chattr` on the dir itself;
+- Bash redirects, `tee`, `mv` / `cp` / `ln` / `install`, interpreter
+  one-liners that reference the dir, including glob-obscured spellings,
+  plus `chmod` / `chattr` on the dir itself, and non-read-only Bash
+  whose working directory is inside the dir;
 - `Write` / `Edit` / `MultiEdit` / `NotebookEdit` whose target lands
-  inside it.
+  inside it, and Codex `apply_patch` whose patch body references it.
 
 Reference detection matches on the stable dir tail
 (`agent-grounding/solution-verdicts`), so any spelling of the home
