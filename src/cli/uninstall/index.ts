@@ -196,10 +196,22 @@ function resolveHomeDir(opts: UninstallOptions): string {
  * Harness state root: explicit `stateDir` > explicit `homeDir` (the
  * historic single-directory contract) > the shared resolver
  * (`~/.harness/`, legacy fallback, `HARNESS_HOME` env).
+ *
+ * The resolver tier carries the same seatbelt as `resolvePaths`
+ * (loader.ts): uninstall is the most destructive verb in the CLI, and
+ * without the guard a test (or library consumer) omitting both
+ * overrides would `rmSync` the developer's real `~/.harness/` state.
+ * The harness binary sets the env var before `run()`; tests don't.
  */
 function resolveStateDir(opts: UninstallOptions): string {
   if (opts.stateDir !== undefined) return opts.stateDir;
   if (opts.homeDir !== undefined) return opts.homeDir;
+  if (process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"] !== "1") {
+    throw new UninstallError(
+      "uninstall refused to fall back to the real harness state root; pass { stateDir } or { homeDir } " +
+        "(--state / --home on the CLI), or (for the real harness binary) set HARNESS_ALLOW_REAL_GENERATED_DIR=1",
+    );
+  }
   return resolveHarnessStateRoot().path;
 }
 
@@ -503,8 +515,34 @@ function buildInventory(opts: UninstallOptions): {
   const generatedDir = existsOrNull(path.join(stateDir, GENERATED_DIRNAME));
   const gateStateDir = existsOrNull(path.join(stateDir, UNDERSTANDING_GATE_DIRNAME));
 
+  const warningsEarly: string[] = [];
+  // When the state root came from the shared resolver (real-binary path:
+  // both overrides absent), probe the non-selected default root too. A
+  // half-migrated install carries residue in the other root (e.g.
+  // `~/.claude/.understanding-gate/` next to an active `~/.harness/`),
+  // and silently tearing down only one root is how the M2 blindness
+  // recurs in mirrored form.
+  if (opts.stateDir === undefined && opts.homeDir === undefined) {
+    const userHome = os.homedir();
+    for (const otherRoot of [path.join(userHome, ".harness"), path.join(userHome, ".claude")]) {
+      if (path.resolve(otherRoot) === path.resolve(stateDir)) continue;
+      const residue = [
+        MANIFEST_BASENAME,
+        LOCK_BASENAME,
+        GENERATED_DIRNAME,
+        UNDERSTANDING_GATE_DIRNAME,
+      ].filter((name) => fs.existsSync(path.join(otherRoot, name)));
+      if (residue.length > 0) {
+        warningsEarly.push(
+          `harness state also present under ${otherRoot} (${residue.join(", ")}); ` +
+            `this run only tears down ${stateDir}. Re-run with --state ${otherRoot} to clean it too.`,
+        );
+      }
+    }
+  }
+
   const parsed = readSettings(settingsPath);
-  const warnings: string[] = [];
+  const warnings: string[] = [...warningsEarly];
   const hookGroups = collectOwnedHookGroups(parsed?.hooks ?? null, warnings);
   const mcpServers = ownedMcpServerNames(parsed?.mcpServers ?? null, manifestPath);
   const preHarnessBackups = listPreHarnessBackups(path.dirname(settingsPath));

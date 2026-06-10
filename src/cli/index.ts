@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { Command } from "commander";
 
@@ -2268,10 +2269,20 @@ export function buildProgram(opts: RunOptions = {}): Command {
         cliOpts.retentionDays = parsed;
       }
       const result = gc(cliOpts);
+      const sweptDirs = [
+        result.reportsDir,
+        ...(result.parseErrorsDir !== null ? [result.parseErrorsDir] : []),
+        result.approvalsDir,
+      ];
+      if (result.parseErrorsDir === null) {
+        stderr(
+          "gc: skipping the parse-errors sweep (reports dir does not have the conventional .understanding-gate/reports shape)\n",
+        );
+      }
       if (result.candidates.length === 0) {
         stdout(
           `gc: nothing older than ${result.retentionDays}d (cutoff ${result.cutoffIso}) under\n` +
-            `  ${result.reportsDir}\n  ${result.parseErrorsDir}\n  ${result.approvalsDir}\n` +
+            sweptDirs.map((d) => `  ${d}\n`).join("") +
             `${result.keptCount} artifact(s) inspected and kept.\n`,
         );
         return;
@@ -2357,7 +2368,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
           if (inv.manifestPath) stdout(`  manifest:  ${inv.manifestPath}\n`);
           if (inv.lockPath) stdout(`  lock:      ${inv.lockPath}\n`);
           if (inv.generatedDir) stdout(`  generated: ${inv.generatedDir}/\n`);
-          if (inv.gateStateDir) stdout(`  gate state: ${inv.gateStateDir}/\n`);
+          if (inv.gateStateDir) stdout(`  gate:      ${inv.gateStateDir}/ (understanding-gate state)\n`);
           if (inv.hookGroups.length > 0) {
             stdout(`  hook groups in ${inv.settingsPath}:\n`);
             for (const g of inv.hookGroups) {
@@ -2410,6 +2421,22 @@ export function buildProgram(opts: RunOptions = {}): Command {
         if (result.removedFiles.length > 0) {
           stdout(`removed from disk:\n`);
           for (const f of result.removedFiles) stdout(`  ${f}\n`);
+          // Explicit kept-list: name whatever survives under the state
+          // root (machines/ + projects/ override layers are
+          // operator-authored; foreign files are not ours to judge) so
+          // the operator never has to discover residue by accident.
+          try {
+            const residue = fs
+              .readdirSync(inv.stateDir)
+              .filter((name) => !name.startsWith("settings.json"));
+            if (residue.length > 0) {
+              stdout(
+                `kept under ${inv.stateDir}: ${residue.join(", ")} (not removed; operator-authored or out of scope)\n`,
+              );
+            }
+          } catch {
+            /* state root itself may be gone or unreadable; nothing to report */
+          }
         }
         if (
           result.backupPath === null &&

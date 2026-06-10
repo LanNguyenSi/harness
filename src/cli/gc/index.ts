@@ -21,6 +21,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
+  APPROVAL_MARKER_DIRNAME,
   defaultReportsDir,
   listPersistedReports,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
@@ -29,7 +30,8 @@ import { resolvePaths, type LoaderOptions } from "../loader.js";
 
 export const DEFAULT_RETENTION_DAYS = 30;
 
-const APPROVALS_DIRNAME = ".approvals";
+// Same literal `harness approve understanding` uses for its parse-error
+// diagnostics lookup (approve/understanding.ts).
 const PARSE_ERRORS_DIRNAME = "parse-errors";
 
 export interface GcOptions extends LoaderOptions {
@@ -58,7 +60,14 @@ export interface GcResult {
   retentionDays: number;
   cutoffIso: string;
   reportsDir: string;
-  parseErrorsDir: string;
+  /**
+   * null when the parse-errors sweep was skipped because `reportsDir`
+   * does not have the conventional `.understanding-gate/reports` shape
+   * (a custom `UNDERSTANDING_GATE_REPORT_DIR` pointing elsewhere would
+   * otherwise make "the sibling named parse-errors" an unrelated
+   * directory and gc would age out a stranger's files).
+   */
+  parseErrorsDir: string | null;
   approvalsDir: string;
   candidates: GcCandidate[];
   /** Files actually deleted (apply mode only). */
@@ -125,17 +134,25 @@ export function gc(opts: GcOptions = {}): GcResult {
 
   // Path resolution mirrors `approve understanding`: explicit opts win
   // (test injection), then env / manifest-anchored defaults. resolvePaths
-  // is evaluated lazily so injected dirs don't drag the loader in.
+  // is evaluated lazily (and once) so injected dirs don't drag the
+  // loader in.
+  let resolvedBase: string | undefined;
+  const manifestBase = (): string => (resolvedBase ??= resolvePaths(opts).base);
   const reportsDir =
-    opts.reportsDir ?? defaultReportsDir(path.dirname(resolvePaths(opts).base));
-  const parseErrorsDir = path.join(path.dirname(reportsDir), PARSE_ERRORS_DIRNAME);
+    opts.reportsDir ?? defaultReportsDir(path.dirname(manifestBase()));
+  const conventionalLayout =
+    path.basename(reportsDir) === "reports" &&
+    path.basename(path.dirname(reportsDir)) === ".understanding-gate";
+  const parseErrorsDir = conventionalLayout
+    ? path.join(path.dirname(reportsDir), PARSE_ERRORS_DIRNAME)
+    : null;
   const generatedDir =
     opts.generatedDir ??
     resolveGeneratedDir({
       ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
-      manifestPath: resolvePaths(opts).base,
+      manifestPath: manifestBase(),
     });
-  const approvalsDir = path.join(generatedDir, APPROVALS_DIRNAME);
+  const approvalsDir = path.join(generatedDir, APPROVAL_MARKER_DIRNAME);
 
   const candidates: GcCandidate[] = [];
   let keptCount = 0;
@@ -158,9 +175,11 @@ export function gc(opts: GcOptions = {}): GcResult {
     }
   }
 
-  const parseErrors = staleFilesByMtime(parseErrorsDir, cutoffMs, nowMs, "parse-error");
-  candidates.push(...parseErrors.candidates);
-  keptCount += parseErrors.kept;
+  if (parseErrorsDir !== null) {
+    const parseErrors = staleFilesByMtime(parseErrorsDir, cutoffMs, nowMs, "parse-error");
+    candidates.push(...parseErrors.candidates);
+    keptCount += parseErrors.kept;
+  }
 
   const markers = staleFilesByMtime(approvalsDir, cutoffMs, nowMs, "approval-marker");
   candidates.push(...markers.candidates);

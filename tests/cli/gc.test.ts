@@ -143,6 +143,8 @@ describe("gc — apply", () => {
   });
 
   it("surfaces per-file deletion failures instead of swallowing them", () => {
+    // chmod does not stop root (repo precedent: init-detect.test.ts).
+    if (process.getuid?.() === 0) return;
     const oldApproved = writeReport("old.json", {
       approvalStatus: "approved",
       createdAt: isoDaysAgo(40),
@@ -165,5 +167,64 @@ describe("gc — defaults", () => {
     expect(DEFAULT_RETENTION_DAYS).toBe(30);
     const r = run();
     expect(r.retentionDays).toBe(30);
+  });
+});
+
+describe("gc — non-conventional reports dir", () => {
+  it("skips the parse-errors sweep when reportsDir is not .understanding-gate/reports", () => {
+    // A custom UNDERSTANDING_GATE_REPORT_DIR can point anywhere; the
+    // sibling named parse-errors would then be an unrelated directory.
+    const customReports = path.join(tmp, "custom-reports");
+    const sibling = path.join(tmp, "parse-errors");
+    fs.mkdirSync(customReports, { recursive: true });
+    fs.mkdirSync(sibling, { recursive: true });
+    const innocent = writeAged(sibling, "not-ours.txt", 400);
+
+    const r = gc({ reportsDir: customReports, generatedDir, now: NOW, apply: true });
+    expect(r.parseErrorsDir).toBeNull();
+    expect(r.candidates.filter((c) => c.category === "parse-error")).toEqual([]);
+    expect(fs.existsSync(innocent)).toBe(true);
+  });
+});
+
+describe("gc — CLI wiring", () => {
+  it("rejects a malformed --retention-days with a usage error", async () => {
+    const { buildProgram } = await import("../../src/cli/index.js");
+    const { HarnessExitError } = await import("../../src/cli/exit-codes.js");
+    let err = "";
+    const program = buildProgram({
+      stdout: () => {},
+      stderr: (s: string) => {
+        err += s;
+      },
+    });
+    await expect(
+      program.parseAsync(["gc", "--retention-days", "7d"], { from: "user" }),
+    ).rejects.toThrow(HarnessExitError);
+    expect(err).toMatch(/--retention-days must be a positive number/);
+  });
+
+  it("prints a dry-run listing and deletes nothing", async () => {
+    const { buildProgram } = await import("../../src/cli/index.js");
+    const old = writeReport("old.json", {
+      approvalStatus: "approved",
+      createdAt: isoDaysAgo(4000),
+    });
+    let out = "";
+    const program = buildProgram({
+      stdout: (s: string) => {
+        out += s;
+      },
+      stderr: () => {},
+    });
+    // The action only takes --config; anchor the manifest next to the
+    // fixture dirs so reports/generated resolve inside the temp tree.
+    fs.writeFileSync(path.join(tmp, "harness.yaml"), "version: 1\n");
+    await program.parseAsync(["gc", "--config", path.join(tmp, "harness.yaml")], {
+      from: "user",
+    });
+    expect(out).toMatch(/would remove 1 artifact/);
+    expect(out).toMatch(/Dry-run; pass --apply to delete/);
+    expect(fs.existsSync(old)).toBe(true);
   });
 });

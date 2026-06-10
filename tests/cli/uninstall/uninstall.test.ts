@@ -384,3 +384,17 @@ describe("uninstall — gate state + state root (harness-discovery M2)", () => {
     expect(r.inventory.manifestPath).toBe(path.join(homeDir, "harness.yaml"));
   });
 });
+
+describe("uninstall — real-state-root seatbelt", () => {
+  it("refuses to resolve the real state root without explicit overrides (test-leak guard)", () => {
+    const saved = process.env.HARNESS_ALLOW_REAL_GENERATED_DIR;
+    delete process.env.HARNESS_ALLOW_REAL_GENERATED_DIR;
+    try {
+      expect(() => uninstall({ settingsPath })).toThrow(UninstallError);
+      expect(() => uninstall({ settingsPath })).toThrow(/refused to fall back/);
+    } finally {
+      if (saved === undefined) delete process.env.HARNESS_ALLOW_REAL_GENERATED_DIR;
+      else process.env.HARNESS_ALLOW_REAL_GENERATED_DIR = saved;
+    }
+  });
+});

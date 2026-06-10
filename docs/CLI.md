@@ -19,7 +19,7 @@ The CLI is grouped by purpose below. Run any verb with `--help` for flags and ex
 | `harness export` | Dump the active manifest to stdout (e.g. for sharing or PRs). |
 | `harness pack add <name>` / `harness pack remove <name>` / `harness pack list` | Manage `policy_packs[]` entries (`list` takes no name). The same `pack` namespace also carries the runtime hook entrypoints under `harness pack hook ...` (see below); there is no separate top-level `harness hook` runtime namespace. |
 | `harness uninstall` | One-command teardown across the state root (`~/.harness/`, legacy `~/.claude/`) and `~/.claude/settings.json`. Dry-run by default; pass `--apply` to commit. |
-| `harness gc [--retention-days <n>] [--apply]` | Retention-based cleanup (unreleased): ages out terminal understanding-gate reports, parse-error logs, and approval markers older than the window (default 30d). Pending reports are never touched. Dry-run by default. |
+| `harness gc [--retention-days <n>] [--apply]` | Retention-based cleanup: ages out terminal understanding-gate reports, parse-error logs, and approval markers older than the window (default 30d). Pending reports are never touched. Dry-run by default. |
 | `harness migrate-home` | Move state from `~/.claude/` to `~/.harness/` (introduced in `v0.24.0`, legacy fallback still live). Dry-run by default; pass `--apply` to commit. |
 
 ## Health, audit, and observability
@@ -93,7 +93,7 @@ These are called by Claude Code via `settings.json`; you usually do not run them
 
 ## Notes
 
-- Unreleased on master (post-`v0.33.0`): `apply --yes` (skip the `--overwrite-drift` confirmation), non-TTY guards on the `apply`/`adopt` confirmation prompts (they refuse instead of hanging; piped `echo yes |` confirmations no longer work), `validate --json`, and the `approve understanding` stale-report hardening (sessionId-less fallback candidates older than 15m are rejected; fallback adoptions print createdAt + age).
+- Unreleased on master (post-`v0.33.0`): `apply --yes` (skip the `--overwrite-drift` confirmation), non-TTY guards on the `apply`/`adopt` confirmation prompts (they refuse instead of hanging; piped `echo yes |` confirmations no longer work), `validate --json`, the `approve understanding` stale-report hardening (sessionId-less fallback candidates older than 15m are rejected; fallback adoptions print createdAt + age), the `harness gc` verb, and the `uninstall` state-root fix (it previously only looked under `~/.claude/` and missed migrated installs entirely).
 - `harness policy intercept --hook <name>` and the 2s timeout floor pinned by the Codex-hook generator both shipped in `v0.29.0`; see [CHANGELOG.md](../CHANGELOG.md).
 - The `full` profile pins `@lannguyensi/agent-preflight` and `@lannguyensi/understanding-gate@0.4.0+` as transitive dependencies of the wired packs; mismatched versions surface in `harness doctor`.
 - Ledger tag vocabulary used by gate-mode policies: `review:`, `risk-override:`, `risk-approved:`, `understanding-approved:`, `preflight:`. The Risk and Understanding gates both consume their tags scoped to a Claude session id (not the agent-tasks task UUID, see `feedback-agent-grounding-merge-gate-ledger`).
