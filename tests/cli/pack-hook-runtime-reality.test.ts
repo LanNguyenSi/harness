@@ -12,6 +12,10 @@ import {
   runRuntimeRealityHook,
   type RuntimeRealityHookDeps,
 } from "../../src/cli/pack/hook-runtime-reality.js";
+import {
+  writeSentinel,
+  type PauseSentinel,
+} from "../../src/runtime/pause-sentinel.js";
 
 function readableFromString(s: string): Readable {
   const r = new Readable();
@@ -339,5 +343,108 @@ describe("runPackHookRuntimeRealityCli (entrypoint, real env + probe)", () => {
     });
     expect(result.exitCode).toBe(0);
     expect(stdout.read()).toBe("");
+  });
+
+  describe("pause sentinel", () => {
+    // generatedDir lives inside the outer `tmp` so it is cleaned up by the
+    // outer afterEach without a separate rmSync here.
+    let generatedDir: string;
+
+    const ACTIVE_SENTINEL: PauseSentinel = {
+      pausedAt: new Date().toISOString(),
+      expiresAt: null, // indefinite — never auto-expires during test
+      reason: "operator recovery",
+      pausedBy: "test",
+    };
+
+    beforeEach(() => {
+      generatedDir = path.join(tmp, "harness.generated");
+      fs.mkdirSync(generatedDir, { recursive: true });
+    });
+
+    it("allows + emits PAUSED notice when pause sentinel is active, even on critical drift", async () => {
+      // Write an active sentinel: panel-frontend is missing from the probe
+      // below, which would normally trigger a critical-tier deny.
+      writeSentinel(generatedDir, ACTIVE_SENTINEL);
+
+      // Probe returns only panel-api running; panel-frontend is absent
+      // (critical drift under normal evaluation).
+      process.env.RUNTIME_REALITY_PROBE_CMD = writeProbe(
+        `printf '[{"name":"panel-api","running":true,"startup_mode":"docker","port":3001}]'`,
+      );
+
+      const stdout = bufferStream();
+      const stderr = bufferStream();
+      const result = await runPackHookRuntimeRealityCli({
+        stdin: readableFromString(TRIGGER_PAYLOAD),
+        stdout: stdout.stream,
+        stderr: stderr.stream,
+        generatedDir,
+      });
+
+      // Pause overrides the drift gate: allow (skip), no deny envelope.
+      expect(result.exitCode).toBe(0);
+      expect(result.decision.kind).toBe("skip");
+      expect(stdout.read()).toBe(""); // no deny envelope written
+      // The pause notice must carry the canonical "PAUSED" marker and the
+      // operator's reason so the agent and the audit log both surface it.
+      expect(stderr.read()).toContain("PAUSED");
+      expect(stderr.read()).toContain("operator recovery");
+    });
+
+    it("still denies on critical drift when no sentinel is present (unchanged behavior)", async () => {
+      // No sentinel written to generatedDir: normal evaluation must run.
+      process.env.RUNTIME_REALITY_PROBE_CMD = writeProbe(
+        `printf '[{"name":"panel-api","running":true,"startup_mode":"docker","port":3001}]'`,
+      );
+
+      const stdout = bufferStream();
+      const result = await runPackHookRuntimeRealityCli({
+        stdin: readableFromString(TRIGGER_PAYLOAD),
+        stdout: stdout.stream,
+        stderr: bufferStream().stream,
+        generatedDir,
+      });
+
+      // Critical drift: panel-frontend missing → block.
+      expect(result.exitCode).toBe(2);
+      expect(result.decision.kind).toBe("block");
+      const envelope = JSON.parse(stdout.read());
+      expect(envelope.hookSpecificOutput.permissionDecision).toBe("deny");
+      expect(envelope.hookSpecificOutput.permissionDecisionReason).toContain("panel-frontend");
+    });
+
+    it("resumes normal evaluation after the pause sentinel expires (deny on critical drift)", async () => {
+      // Sentinel expired one hour before the injected `now`: the hook must
+      // auto-resume and fall through to normal drift evaluation, denying on
+      // the critical-tier panel-frontend gap (task scope: "after expiry, deny again").
+      const now = new Date("2026-01-01T01:00:00.000Z");
+      writeSentinel(generatedDir, {
+        pausedAt: "2025-12-31T23:00:00.000Z",
+        expiresAt: "2026-01-01T00:00:00.000Z", // one hour before `now`
+        reason: "operator recovery",
+        pausedBy: "test",
+      });
+
+      process.env.RUNTIME_REALITY_PROBE_CMD = writeProbe(
+        `printf '[{"name":"panel-api","running":true,"startup_mode":"docker","port":3001}]'`,
+      );
+
+      const stdout = bufferStream();
+      const result = await runPackHookRuntimeRealityCli({
+        stdin: readableFromString(TRIGGER_PAYLOAD),
+        stdout: stdout.stream,
+        stderr: bufferStream().stream,
+        generatedDir,
+        now,
+      });
+
+      // Expired pause does not shield drift: normal critical-tier deny.
+      expect(result.exitCode).toBe(2);
+      expect(result.decision.kind).toBe("block");
+      const envelope = JSON.parse(stdout.read());
+      expect(envelope.hookSpecificOutput.permissionDecision).toBe("deny");
+      expect(envelope.hookSpecificOutput.permissionDecisionReason).toContain("panel-frontend");
+    });
   });
 });
