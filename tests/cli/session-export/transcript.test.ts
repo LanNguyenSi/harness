@@ -96,3 +96,17 @@ describe("locateTranscript", () => {
     expect(locateTranscript("missing", { homeDir: root })).toBeNull();
   });
 });
+
+describe("locateTranscript sessionId validation", () => {
+  it("throws on a traversal-shaped sessionId before any filesystem access", () => {
+    expect(() => locateTranscript("../evil", { projectsRoot: "/nonexistent/path/zzz" })).toThrow();
+  });
+
+  it("returns null for a valid sessionId when the projects root does not exist", () => {
+    expect(
+      locateTranscript("0f8e1c2a-1111-2222-3333-444455556666", {
+        projectsRoot: "/nonexistent/path/zzz",
+      }),
+    ).toBeNull();
+  });
+});

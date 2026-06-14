@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { rejectMalformedSessionId } from "../../runtime/reject-malformed-session-id.js";
 
 export type TranscriptEventKind =
   | "user_prompt"
@@ -182,6 +183,7 @@ export function locateTranscript(
   sessionId: string,
   opts: LocateTranscriptOptions = {},
 ): string | null {
+  rejectMalformedSessionId(sessionId);
   const projectsRoot =
     opts.projectsRoot ?? path.join(opts.homeDir ?? os.homedir(), ".claude", "projects");
   if (!fs.existsSync(projectsRoot)) return null;
