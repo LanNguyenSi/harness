@@ -188,6 +188,111 @@ describe("add hook — +x gate", () => {
   });
 });
 
+describe("add — asset gate baseline diff", () => {
+  it("Scenario A: pre-existing required-binary error does not block an unrelated hook add", async () => {
+    // Write a manifest that already has a pre-existing required-binary error.
+    fs.writeFileSync(
+      manifestPath,
+      [
+        "version: 1",
+        "tools:",
+        "  cli:",
+        "    - name: definitely-not-installed-xyz",
+        "      binary: definitely-not-installed-xyz",
+        "      required: true",
+      ].join("\n") + "\n",
+    );
+
+    const script = path.join(hooksDir, "clean-hook.sh");
+    fs.writeFileSync(script, "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(script, 0o755);
+
+    const result = await add(
+      {
+        type: "hook",
+        entry: { name: "clean-hook", event: "SessionStart", command: script, blocking: false },
+      },
+      { configPath: manifestPath, homeDir: tmpHome },
+    );
+
+    expect(result.applied).toBe(true);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain("1 pre-existing asset error");
+    expect(result.warnings[0]).toContain("definitely-not-installed-xyz");
+    expect(result.warnings[0]).toContain("harness validate");
+  });
+
+  it("Scenario B: a new asset error introduced by the add still blocks", async () => {
+    await expect(
+      add(
+        {
+          type: "hook",
+          entry: {
+            name: "bad-hook",
+            event: "SessionStart",
+            command: "/nonexistent/completely-missing-hook.sh",
+            blocking: false,
+          },
+        },
+        { configPath: manifestPath, homeDir: tmpHome },
+      ),
+    ).rejects.toMatchObject({
+      name: "HarnessExitError",
+      exitCode: 1,
+      message: expect.stringMatching(/proposed manifest fails asset validation/),
+    });
+  });
+
+  it("mixed: a co-occurring pre-existing error does not grandfather a new one", async () => {
+    // Base already has the required-binary error AND the add introduces its own
+    // asset error. The new error must still block, and the thrown message must
+    // name only the new entry, not the grandfathered pre-existing one.
+    fs.writeFileSync(
+      manifestPath,
+      [
+        "version: 1",
+        "tools:",
+        "  cli:",
+        "    - name: definitely-not-installed-xyz",
+        "      binary: definitely-not-installed-xyz",
+        "      required: true",
+      ].join("\n") + "\n",
+    );
+
+    const err = await add(
+      {
+        type: "hook",
+        entry: {
+          name: "bad-hook",
+          event: "SessionStart",
+          command: "/nonexistent/completely-missing-hook.sh",
+          blocking: false,
+        },
+      },
+      { configPath: manifestPath, homeDir: tmpHome },
+    ).then(
+      () => null,
+      (e: Error) => e,
+    );
+
+    expect(err).toMatchObject({
+      name: "HarnessExitError",
+      message: expect.stringMatching(/proposed manifest fails asset validation/),
+    });
+    expect(err?.message).toContain("bad-hook");
+    expect(err?.message).not.toContain("definitely-not-installed-xyz");
+  });
+
+  it("control: clean add to a clean manifest produces no warnings", async () => {
+    const result = await add(
+      { type: "skill", entry: "review" },
+      { configPath: manifestPath, homeDir: tmpHome },
+    );
+    expect(result.applied).toBe(true);
+    expect(result.warnings).toEqual([]);
+  });
+});
+
 describe("add — manifest must exist", () => {
   it("EX_NOINPUT (66) when target is missing", async () => {
     fs.unlinkSync(manifestPath);

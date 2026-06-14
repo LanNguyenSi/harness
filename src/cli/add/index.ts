@@ -27,6 +27,7 @@ export interface AddResult {
   name: string;
   diff: string;
   applied: boolean;
+  warnings: string[];
 }
 
 const DEFAULT_BASENAME = "harness.yaml";
@@ -76,19 +77,53 @@ export async function add(action: AddEntry, opts: AddOptions = {}): Promise<AddR
   // We use parseManifest (not the result of validateBeforeWrite) so we have a
   // typed Manifest for runAssetChecks. defaults flow through.
   const manifest = parseManifest(parseYaml(proposed));
-  const assetDiagnostics = runAssetChecks(manifest, { homeDir: opts.homeDir }).filter(
+  const proposedErrors = runAssetChecks(manifest, { homeDir: opts.homeDir }).filter(
     (d) => d.severity === "error",
   );
-  if (assetDiagnostics.length > 0) {
-    const lines = assetDiagnostics.map(fmtDiagnostic).join("\n");
+
+  // Compute a baseline error set from the original manifest so that
+  // pre-existing asset problems unrelated to this add do not block it.
+  // If the original manifest cannot be parsed (broken base), fall back to
+  // blocking on all proposed errors so the gate never weakens on a broken base.
+  let baselineKeys = new Set<string>();
+  try {
+    const baselineManifest = parseManifest(parseYaml(original));
+    const baselineErrors = runAssetChecks(baselineManifest, { homeDir: opts.homeDir }).filter(
+      (d) => d.severity === "error",
+    );
+    baselineKeys = new Set(baselineErrors.map((d) => `${d.severity}|${d.path}|${d.message}`));
+  } catch {
+    // Defensive backstop: a base manifest that cannot be parsed is normally
+    // caught earlier (applyAdd / the proposed schema gate throw first), so this
+    // branch is rarely reached. If it is, baselineKeys stays empty and every
+    // proposed error is treated as new, i.e. the gate fails closed.
+  }
+
+  const newErrors = proposedErrors.filter(
+    (d) => !baselineKeys.has(`${d.severity}|${d.path}|${d.message}`),
+  );
+  const preExistingErrors = proposedErrors.filter((d) =>
+    baselineKeys.has(`${d.severity}|${d.path}|${d.message}`),
+  );
+
+  if (newErrors.length > 0) {
+    const lines = newErrors.map(fmtDiagnostic).join("\n");
     throw new HarnessExitError(
       `proposed manifest fails asset validation:\n${lines}`,
       EX_FAIL,
     );
   }
 
+  const warnings: string[] = [];
+  if (preExistingErrors.length > 0) {
+    const lines = preExistingErrors.map(fmtDiagnostic).join("\n");
+    warnings.push(
+      `harness manifest has ${preExistingErrors.length} pre-existing asset error(s) unrelated to this add; run \`harness validate\` to see them:\n${lines}`,
+    );
+  }
+
   if (opts.dryRun) {
-    return { path: target, type: action.type, name: entryName(action), diff, applied: false };
+    return { path: target, type: action.type, name: entryName(action), diff, applied: false, warnings };
   }
 
   const lockPath = path.join(path.dirname(target), LOCK_BASENAME);
@@ -109,5 +144,5 @@ export async function add(action: AddEntry, opts: AddOptions = {}): Promise<AddR
     atomicWriteFile(target, next);
   });
 
-  return { path: target, type: action.type, name: entryName(action), diff, applied: true };
+  return { path: target, type: action.type, name: entryName(action), diff, applied: true, warnings };
 }

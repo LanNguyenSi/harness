@@ -445,6 +445,9 @@ export function buildProgram(opts: RunOptions = {}): Command {
 
   async function runAdd(action: AddEntry, opts: { config?: string; dryRun?: boolean }): Promise<void> {
     const result = await add(action, { configPath: opts.config, dryRun: opts.dryRun });
+    for (const w of result.warnings) {
+      stderr(`warning: ${w}\n`);
+    }
     if (opts.dryRun) {
       stdout(result.diff);
       return;
