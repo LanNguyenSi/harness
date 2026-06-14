@@ -143,7 +143,8 @@ classification the runtime gate uses.
 #### Built-in read-only commands
 
 A second `low`-severity floor recognizes any *provably read-only* Bash
-command (`git status`, `git diff`, `grep`, `cat`, `ls`, `head`, ...),
+command (`git status`, `git diff`, `grep`, `cat`, `ls`, `head`, `sort
+FILE`, `tree DIR`, `file FILE`, ...),
 reusing the same metachar-hardened classifier the understanding gate uses
 to allow reads without an approved report
 (`src/runtime/read-only-bash.ts`). It exists for the same reason as the
@@ -154,6 +155,33 @@ lets a prod-scoped `risk.severity_at_least` policy deny harmless reads
 workaround was `harness pause`, which silences *every* gate during the
 most sensitive flow; this floor removes that incentive (friction-log
 #38/#40/#43/#50).
+
+Some bins are classified read-only only when their write flags are absent
+(per-bin guards, analogous to `find`):
+
+- `sort`: read-only when none of its write or exec flags appear: `-o` /
+  `--output` (output file), `--compress-program=PROG` (runs an arbitrary
+  program on spill temp files, an exec vector), or `-T` /
+  `--temporary-directory` (scratch write to a caller-chosen path). Output
+  is also caught in a short-flag cluster containing `o`, and the temp-dir
+  flag in a cluster containing uppercase `T`. The guard enumerates every
+  write/exec vector, not just output redirection.
+- `tree`: read-only when neither `-o` / `--output` (separate, glued, or
+  long-with-equals) nor a short-flag cluster containing `o` appears. tree
+  has no exec or temp-dir flag.
+- `file`: read-only when neither `-C` / `--compile` nor a short-flag
+  cluster containing uppercase `C` appears. Lowercase `-c` (magic-file
+  check) is benign and is not blocked.
+
+Bins excluded entirely from the floor (no per-bin guard possible):
+
+- `uniq`: its output file is a positional operand, not a flag; detecting
+  a write would require operand counting rather than flag scanning.
+- `date`: the write flag `-s` (set clock) is ambiguous inside getopt
+  clusters shared with benign flags (e.g. `-Iseconds` is `date -I
+  FMT=seconds`, not `-I -s econds`).
+- `hostname`: `hostname NAME` sets the hostname via a positional operand,
+  not a flag.
 
 The same guarantees hold:
 
