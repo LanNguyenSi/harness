@@ -99,7 +99,7 @@ describe("locateTranscript", () => {
 
 describe("locateTranscript sessionId validation", () => {
   it("throws on a traversal-shaped sessionId before any filesystem access", () => {
-    expect(() => locateTranscript("../evil")).toThrow();
+    expect(() => locateTranscript("../evil", { projectsRoot: "/nonexistent/path/zzz" })).toThrow();
   });
 
   it("returns null for a valid sessionId when the projects root does not exist", () => {
