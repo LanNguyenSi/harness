@@ -889,6 +889,90 @@ describe("validate — policy_packs (Phase 6 #2)", () => {
   });
 });
 
+describe("validate — checkSolutionAcceptanceProducer", () => {
+  function fixtureWithSolutionAcceptance(opts: {
+    withGroundingMcp: boolean;
+    verdictDirOverride?: string;
+  }): string {
+    let mcpBlock = "";
+    if (opts.withGroundingMcp) {
+      const envBlock = opts.verdictDirOverride
+        ? `\n      env:\n        SOLUTION_VERDICT_DIR: "${opts.verdictDirOverride}"`
+        : "";
+      mcpBlock = `tools:\n  mcp:\n    - name: grounding-mcp\n      command: ["/usr/bin/true"]${envBlock}\n`;
+    }
+    const yaml = `version: 1\n${mcpBlock}policy_packs:\n  - name: solution-acceptance\n    source: builtin\n    enabled: true\n`;
+    return writeFixture({ "harness.yaml": yaml });
+  }
+
+  it("warns (condition #1) when solution-acceptance enabled but grounding-mcp absent", () => {
+    const home = fixtureWithSolutionAcceptance({ withGroundingMcp: false });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(result.errorCount).toBe(0);
+    const hit = result.diagnostics.find(
+      (d) =>
+        d.severity === "warning" &&
+        /grounding-mcp is not wired/.test(d.message),
+    );
+    expect(hit).toBeDefined();
+    expect(hit?.path).toBe("policy_packs");
+  });
+
+  it("emits no warning when grounding-mcp is wired with no SOLUTION_VERDICT_DIR override", () => {
+    const home = fixtureWithSolutionAcceptance({ withGroundingMcp: true });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const solutionWarning = result.diagnostics.find(
+      (d) =>
+        /SOLUTION_VERDICT_DIR|gate would always deny|verdict.*dir/i.test(d.message),
+    );
+    expect(solutionWarning).toBeUndefined();
+  });
+
+  it("emits NO warning when grounding-mcp has a non-default SOLUTION_VERDICT_DIR (apply now projects it)", () => {
+    const home = fixtureWithSolutionAcceptance({
+      withGroundingMcp: true,
+      verdictDirOverride: "/custom/verdict/dir",
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const splitDirWarning = result.diagnostics.find(
+      (d) =>
+        /SOLUTION_VERDICT_DIR|gate would always deny|verdict.*dir/i.test(d.message),
+    );
+    expect(splitDirWarning).toBeUndefined();
+  });
+
+  it("warns when grounding-mcp has a RELATIVE SOLUTION_VERDICT_DIR (projection cannot reconcile cwd)", () => {
+    const home = fixtureWithSolutionAcceptance({
+      withGroundingMcp: true,
+      verdictDirOverride: "relative/verdict/dir",
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(result.errorCount).toBe(0);
+    const hit = result.diagnostics.find(
+      (d) =>
+        d.severity === "warning" && /relative SOLUTION_VERDICT_DIR/.test(d.message),
+    );
+    expect(hit).toBeDefined();
+    expect(hit?.path).toBe("tools.mcp");
+  });
+});
+
 describe("validate — internal helpers", () => {
   it("compareVersions handles dotted numeric versions", () => {
     expect(__testables.compareVersions("1.2.3", "1.2.0")).toBe(1);

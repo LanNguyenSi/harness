@@ -180,6 +180,19 @@ export interface ResolvePackOptions {
    * precedence.
    */
   reportsDir?: string;
+  /**
+   * Path to the solution-verdict directory the solution-acceptance
+   * completion-gate hook should read; should be absolute (a relative value is
+   * flagged by `harness validate` because it resolves against each process's
+   * cwd and cannot be reconciled). When provided, the pack prefixes each
+   * contributed hook command with `SOLUTION_VERDICT_DIR=<path>` so the
+   * hook (consumer) and the grounding-mcp server (producer) resolve the same
+   * directory regardless of each process's cwd. Apply sets this to the value
+   * declared in `tools.mcp[grounding-mcp].env.SOLUTION_VERDICT_DIR` when
+   * present; when absent the env var is not injected and the runtime
+   * `verdictDir()` falls back to the env-var-or-XDG precedence.
+   */
+  solutionVerdictDir?: string;
 }
 
 /**
@@ -188,7 +201,7 @@ export interface ResolvePackOptions {
  * derived from `path.dirname()` may contain spaces or other shell
  * metacharacters, and a plain `VAR=$path` would split on whitespace.
  */
-function shellQuoteSingle(s: string): string {
+export function shellQuoteSingle(s: string): string {
   return `'${s.replace(/'/g, "'\\''")}'`;
 }
 

@@ -46,7 +46,12 @@ import type { PackContribution, PackContributionFile } from "../types.js";
 import {
   PACK_NAME,
   resolveProtectedCompletionTools,
+  VERDICT_DIR_ENV,
 } from "./solution-acceptance-runtime.js";
+import {
+  shellQuoteSingle,
+  type ResolvePackOptions,
+} from "./understanding-before-execution.js";
 
 export { PACK_NAME };
 
@@ -70,6 +75,18 @@ const HOOK_NAME_PREFIX = `policy-pack:${PACK_NAME}`;
 const COMPLETION_BLOCKER_COMMAND = "harness pack hook solution-acceptance";
 const WRITEGUARD_BLOCKER_COMMAND = "harness pack hook solution-acceptance-writeguard";
 
+// Mirrors the REPORTS_DIR_ENV pattern in understanding-before-execution.ts:
+// imported from the runtime so the const is defined in exactly one place.
+const SOLUTION_VERDICT_DIR_ENV = VERDICT_DIR_ENV;
+
+function prefixCommandWithVerdictDir(
+  command: string,
+  verdictDir: string | undefined,
+): string {
+  if (!verdictDir) return command;
+  return `${SOLUTION_VERDICT_DIR_ENV}=${shellQuoteSingle(verdictDir)} ${command}`;
+}
+
 const WRITEGUARD_MATCH_CLAUDE = "Edit|Write|MultiEdit|NotebookEdit|Bash";
 const WRITEGUARD_MATCH_CODEX = "apply_patch|Bash";
 
@@ -86,15 +103,25 @@ function completionMatch(runtime: Runtime, tools: readonly string[]): string {
   return `Bash|${mcp}`;
 }
 
-function buildHooks(runtime: Runtime, tools: readonly string[]): Hook[] {
+function buildHooks(
+  runtime: Runtime,
+  tools: readonly string[],
+  opts: ResolvePackOptions = {},
+): Hook[] {
   const writeGuardMatch =
     runtime === "codex" ? WRITEGUARD_MATCH_CODEX : WRITEGUARD_MATCH_CLAUDE;
+  // When `opts.solutionVerdictDir` is set (the apply path), each command is
+  // prefixed with `SOLUTION_VERDICT_DIR=<absolute>` so the completion-gate
+  // hook reads from the same directory the producer (grounding-mcp) writes to,
+  // regardless of each process's cwd.
+  const wrap = (cmd: string): string =>
+    prefixCommandWithVerdictDir(cmd, opts.solutionVerdictDir);
   return [
     {
       name: `${HOOK_NAME_PREFIX}:completion-gate`,
       event: "PreToolUse",
       match: completionMatch(runtime, tools),
-      command: COMPLETION_BLOCKER_COMMAND,
+      command: wrap(COMPLETION_BLOCKER_COMMAND),
       blocking: "hard",
       budget_ms: 5000,
       description:
@@ -104,7 +131,7 @@ function buildHooks(runtime: Runtime, tools: readonly string[]): Hook[] {
       name: `${HOOK_NAME_PREFIX}:write-guard`,
       event: "PreToolUse",
       match: writeGuardMatch,
-      command: WRITEGUARD_BLOCKER_COMMAND,
+      command: wrap(WRITEGUARD_BLOCKER_COMMAND),
       blocking: "hard",
       budget_ms: 5000,
       description:
@@ -195,9 +222,10 @@ ${description ? `\n> ${description.replace(/\n/g, "\n> ")}\n` : ""}
 export function resolve(
   pack: PolicyPack,
   runtime: Runtime = DEFAULT_RUNTIME,
+  opts: ResolvePackOptions = {},
 ): { contribution: PackContribution; warnings: string[] } {
   const tools = resolveProtectedCompletionTools(pack);
-  const hooks = buildHooks(runtime, tools);
+  const hooks = buildHooks(runtime, tools, opts);
   const files: PackContributionFile[] = [
     {
       relativePath: `policy-packs/${PACK_NAME}/instructions.md`,

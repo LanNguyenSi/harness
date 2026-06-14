@@ -71,6 +71,60 @@ describe("solution-acceptance pack — hook expansion", () => {
   });
 });
 
+describe("solution-acceptance pack — solutionVerdictDir opt (SOLUTION_VERDICT_DIR projection)", () => {
+  it("prefixes both hook commands with SOLUTION_VERDICT_DIR=<path> when solutionVerdictDir is set", () => {
+    const { contribution } = resolve(pack(), "claude-code", {
+      solutionVerdictDir: "/custom/verdict/dir",
+    });
+    const gate = contribution.hooks.find((h) => h.name.endsWith(":completion-gate"))!;
+    const wg = contribution.hooks.find((h) => h.name.endsWith(":write-guard"))!;
+    expect(gate.command).toBe(
+      "SOLUTION_VERDICT_DIR='/custom/verdict/dir' harness pack hook solution-acceptance",
+    );
+    expect(wg.command).toBe(
+      "SOLUTION_VERDICT_DIR='/custom/verdict/dir' harness pack hook solution-acceptance-writeguard",
+    );
+  });
+
+  it("emits no prefix when solutionVerdictDir is not set (commands unchanged)", () => {
+    const { contribution } = resolve(pack(), "claude-code");
+    const gate = contribution.hooks.find((h) => h.name.endsWith(":completion-gate"))!;
+    const wg = contribution.hooks.find((h) => h.name.endsWith(":write-guard"))!;
+    expect(gate.command).toBe("harness pack hook solution-acceptance");
+    expect(wg.command).toBe("harness pack hook solution-acceptance-writeguard");
+  });
+
+  it("shell-quotes a path containing a space", () => {
+    const { contribution } = resolve(pack(), "claude-code", {
+      solutionVerdictDir: "/home/user/my verdicts/dir",
+    });
+    const gate = contribution.hooks.find((h) => h.name.endsWith(":completion-gate"))!;
+    expect(gate.command).toBe(
+      "SOLUTION_VERDICT_DIR='/home/user/my verdicts/dir' harness pack hook solution-acceptance",
+    );
+  });
+
+  it("shell-quotes a path containing a single quote", () => {
+    const { contribution } = resolve(pack(), "claude-code", {
+      solutionVerdictDir: "/tmp/it's/a/path",
+    });
+    const gate = contribution.hooks.find((h) => h.name.endsWith(":completion-gate"))!;
+    expect(gate.command).toBe(
+      "SOLUTION_VERDICT_DIR='/tmp/it'\\''s/a/path' harness pack hook solution-acceptance",
+    );
+  });
+
+  it("applies solutionVerdictDir on the codex runtime too", () => {
+    const { contribution } = resolve(pack(), "codex", {
+      solutionVerdictDir: "/custom/verdict/dir",
+    });
+    const gate = contribution.hooks.find((h) => h.name.endsWith(":completion-gate"))!;
+    expect(gate.command).toBe(
+      "SOLUTION_VERDICT_DIR='/custom/verdict/dir' harness pack hook solution-acceptance",
+    );
+  });
+});
+
 describe("solution-acceptance pack — strict config schema", () => {
   it("accepts the known keys", () => {
     expect(configSchema.safeParse({}).success).toBe(true);

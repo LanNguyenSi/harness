@@ -242,15 +242,19 @@ function checkPolicyGroundingMcp(manifest: Manifest): Diagnostic[] {
 }
 
 // solution-acceptance is a pure CONSUMER: it reads the verdict marker the
-// grounding-mcp producer writes. Two misconfigurations silently turn the
+// grounding-mcp producer writes. Misconfigurations can silently turn the
 // completion-gate into a permanent deny (a No-Op that LOOKS protective):
 //   1. grounding-mcp absent from tools.mcp -> the producer (solution_evaluate)
 //      is unreachable, so no verdict can ever be written -> deadlock.
-//   2. grounding-mcp declares a non-default SOLUTION_VERDICT_DIR env -> the
-//      consumer reads the producer DEFAULT dir and does not see the override
-//      (harness does not project tools.mcp env into the hook), so the gate
-//      always denies.
-// Warning-tier in v1; escalation to error is a tracked follow-up.
+//   2. grounding-mcp declares a RELATIVE SOLUTION_VERDICT_DIR -> harness now
+//      projects the value into the hook command, but a relative path resolves
+//      against each process's cwd, which harness cannot reconcile (the
+//      producer's cwd is unknown), so producer and consumer can still diverge.
+// An ABSOLUTE non-default SOLUTION_VERDICT_DIR previously also denied (harness
+// did not project the env override into the hook); `harness apply` now projects
+// it (see `buildExpectedFiles` in apply.ts), so the absolute case is handled
+// correctly and no longer warn-worthy. Warning-to-error escalation is a tracked
+// follow-up (task e3af6388, condition #1 only).
 function checkSolutionAcceptanceProducer(manifest: Manifest): Diagnostic[] {
   const pack = manifest.policy_packs.find((p) => p.name === "solution-acceptance");
   if (!pack || !pack.enabled) return [];
@@ -265,15 +269,19 @@ function checkSolutionAcceptanceProducer(manifest: Manifest): Diagnostic[] {
       },
     ];
   }
+  // Condition #2: an absolute non-default SOLUTION_VERDICT_DIR is now projected
+  // into the hook at apply time, so it is handled and silent. A relative
+  // override cannot be reconciled (cwd divergence between producer and hook),
+  // so warn only for that unfixable case.
   const env = (grounding.env ?? {}) as Record<string, unknown>;
   const dir = env["SOLUTION_VERDICT_DIR"];
-  if (typeof dir === "string" && dir.trim().length > 0) {
+  if (typeof dir === "string" && dir.trim().length > 0 && !path.isAbsolute(dir.trim())) {
     return [
       {
         severity: "warning",
         path: "tools.mcp",
         message:
-          "solution-acceptance: grounding-mcp declares a non-default SOLUTION_VERDICT_DIR; the harness completion-gate reads the producer default location and does not see this override, so the gate would always deny. Unset it or mirror the same value into the hook environment.",
+          "solution-acceptance: grounding-mcp declares a relative SOLUTION_VERDICT_DIR; harness projects this value into the completion-gate hook, but a relative path resolves against each process's working directory, so the producer (grounding-mcp) and the hook can still land on different dirs and the gate would deny. Use an absolute path.",
       },
     ];
   }

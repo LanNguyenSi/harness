@@ -342,7 +342,18 @@ function buildExpectedFiles(
   // terminal) silently diverge.
   const runtime: Runtime = opts.runtime ?? DEFAULT_RUNTIME;
   const reportsDir = reportsDirForManifest(manifestPath);
-  const packExpansion = expandPolicyPacks(manifest, runtime, { reportsDir });
+  // Project SOLUTION_VERDICT_DIR from grounding-mcp's env into the
+  // solution-acceptance hook command so producer and consumer agree on the
+  // verdict directory. Without this, a manifest-declared override splits them
+  // onto different dirs and the completion-gate can never see a verdict.
+  const groundingMcp = manifest.tools.mcp.find((m) => m.name === "grounding-mcp");
+  const groundingEnv = (groundingMcp?.env ?? {}) as Record<string, unknown>;
+  const verdictDirOverride = groundingEnv["SOLUTION_VERDICT_DIR"];
+  const solutionVerdictDir =
+    typeof verdictDirOverride === "string" && verdictDirOverride.trim().length > 0
+      ? verdictDirOverride
+      : undefined;
+  const packExpansion = expandPolicyPacks(manifest, runtime, { reportsDir, solutionVerdictDir });
   const augmentedManifest: Manifest =
     packExpansion.hooks.length === 0
       ? manifest

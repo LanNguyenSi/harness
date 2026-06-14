@@ -1388,6 +1388,77 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
     expect(preToolUseGroup?.matcher).toBe("Edit|Write|Bash");
   });
 
+  it("projects an absolute SOLUTION_VERDICT_DIR from grounding-mcp env onto both solution-acceptance hook commands", async () => {
+    const manifest = {
+      version: 1,
+      tools: {
+        mcp: [
+          {
+            name: "grounding-mcp",
+            command: ["/usr/bin/true"],
+            env: { SOLUTION_VERDICT_DIR: "/abs/verdict/dir" },
+          },
+        ],
+        cli: [],
+        skills: { enabled: [], source_dirs: [] },
+        builtin: { known: [] },
+      },
+      memory: { directories: [] },
+      hooks: [],
+      policies: [],
+      policy_packs: [{ name: "solution-acceptance" }],
+    };
+    fs.writeFileSync(path.join(tmpHome, "harness.yaml"), yamlStringify(manifest));
+    const r = await apply({ homeDir: tmpHome });
+    expect(r.outcome).toBe("applied");
+
+    const settings = JSON.parse(fs.readFileSync(settingsPath(), "utf8")) as {
+      hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>>;
+    };
+    const allCommands: string[] = [];
+    for (const groups of Object.values(settings.hooks)) {
+      for (const g of groups) for (const h of g.hooks) allCommands.push(h.command);
+    }
+    const gate = allCommands.find((c) => c.endsWith("harness pack hook solution-acceptance"));
+    const writeGuard = allCommands.find((c) =>
+      c.endsWith("harness pack hook solution-acceptance-writeguard"),
+    );
+    expect(gate).toBe(
+      "SOLUTION_VERDICT_DIR='/abs/verdict/dir' harness pack hook solution-acceptance",
+    );
+    expect(writeGuard).toBe(
+      "SOLUTION_VERDICT_DIR='/abs/verdict/dir' harness pack hook solution-acceptance-writeguard",
+    );
+  });
+
+  it("does not prefix solution-acceptance hook commands when grounding-mcp has no SOLUTION_VERDICT_DIR", async () => {
+    const manifest = {
+      version: 1,
+      tools: {
+        mcp: [{ name: "grounding-mcp", command: ["/usr/bin/true"] }],
+        cli: [],
+        skills: { enabled: [], source_dirs: [] },
+        builtin: { known: [] },
+      },
+      memory: { directories: [] },
+      hooks: [],
+      policies: [],
+      policy_packs: [{ name: "solution-acceptance" }],
+    };
+    fs.writeFileSync(path.join(tmpHome, "harness.yaml"), yamlStringify(manifest));
+    await apply({ homeDir: tmpHome });
+
+    const settings = JSON.parse(fs.readFileSync(settingsPath(), "utf8")) as {
+      hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>>;
+    };
+    const allCommands: string[] = [];
+    for (const groups of Object.values(settings.hooks)) {
+      for (const g of groups) for (const h of g.hooks) allCommands.push(h.command);
+    }
+    const gate = allCommands.find((c) => c.endsWith("harness pack hook solution-acceptance"));
+    expect(gate).toBe("harness pack hook solution-acceptance");
+  });
+
   it("threads explicit mode into the operator audit copy", async () => {
     writePolicyPackManifest([
       { name: "understanding-before-execution", config: { mode: "strict" } },

@@ -55,7 +55,7 @@ export function resolveBuiltin(
     case BRANCH_PROTECTION:
       return resolveBranchProtection(pack, runtime);
     case SOLUTION_ACCEPTANCE:
-      return resolveSolutionAcceptance(pack, runtime);
+      return resolveSolutionAcceptance(pack, runtime, opts);
   }
 }
 
