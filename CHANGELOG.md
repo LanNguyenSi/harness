@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-06-14
+
+**Headline: the Tier-1 discovery follow-up.** The five HIGH findings from the 2026-06-10 discovery audit are fixed: a defense-in-depth gap in the approval-marker path, the long-standing `harness add` whole-manifest footgun, a solution-acceptance verdict-dir mismatch, a policy-degradation footgun that `apply` did not catch, and an integration suite that never ran in CI. **Operator action**: `harness apply` now refuses a manifest that declares `policies:` without wiring grounding-mcp under `tools.mcp` (previously it applied and the policies silently degraded to warn-mode at runtime); wire grounding-mcp or remove the policies. Re-run `npm i -g @lannguyensi/harness` to upgrade.
+
+### Security
+
+- **Validate `sessionId` before joining it into approval-marker paths** (task 96178e12, discovery H5, PR #284). `approvalMarkerPathFor` joined `sessionId` into the `.approvals/` path with no validation, unlike the task-marker twin. A new `rejectMalformedSessionId` guard (rejecting blank, path separators, and `..`) is applied at the single path-construction choke point, and the gate read path (`checkApprovalMarker`) fails closed (blocks, returns no match) instead of throwing out of the hook on a malformed value.
+
+### Changed
+
+- **`harness add` asset gate is scoped to the entry being added** (task 57ea5f5b, discovery H1, recurring footgun). `add` ran `runAssetChecks` over the whole proposed manifest and blocked on any error, so an unrelated pre-existing problem (for example a missing required CLI from `init --template full`) sank an otherwise-fine hooks-only add. The gate now blocks only on asset errors introduced or newly caused by the added entry (a baseline diff against the original manifest); pre-existing unrelated errors are surfaced as a non-blocking warning pointing at `harness validate`. `harness validate` stays whole-manifest.
+- **`harness apply` fails loud on policies without grounding-mcp** (task 09120efb, discovery H3, PR #288). `checkPolicyGroundingMcp` ran only in `validate` (a warning). An operator who ran `apply` without `validate` could deploy policies that silently degrade to warn-mode at runtime. `apply` now runs the same check in its gate phase and fails closed with a message naming the degradation and the fix. See the operator action above.
+- **CI runs the integration suite** (task 6791ba98, discovery H7, PR #286). `tests/integration/operator-state-isolation.test.ts` was gated behind `HARNESS_INTEGRATION_TESTS=1` that CI never set, so the operator-state-isolation acceptance ran nowhere. A dedicated CI step now runs `npm run test:integration` on push and PR.
+
+### Fixed
+
+- **Project `SOLUTION_VERDICT_DIR` into the solution-acceptance hook** (task d4395979, discovery H2, PR #287). The completion-gate hook (consumer) read the verdict marker the grounding-mcp server (producer) writes, but harness did not project a manifest-declared `tools.mcp[grounding-mcp].env.SOLUTION_VERDICT_DIR` into the hook, so a non-default override split producer and consumer onto different dirs and the gate could never see a verdict. `apply` now projects the override onto both solution-acceptance hook commands, mirroring the `UNDERSTANDING_GATE_REPORT_DIR` pattern. The `validate` warning is corrected: an absolute override is now handled silently, and only a relative override (which cannot be reconciled across working directories) warns.
+
 ## [0.34.0] - 2026-06-10
 
 **Headline: the discovery release.** A live-reproduced gate-integrity bug is closed: `harness approve understanding` could silently bind a fresh session to a weeks-old leftover report when the producer Stop hook failed (finding C1 of the 2026-06-10 discovery audit); the tolerant fallback now rejects stale sessionId-less candidates, prints loud adoption warnings, and orders reports by creation time instead of mtime. Around it: non-TTY-safe confirmations on `apply` and `adopt` (with `apply --yes`), `validate --json`, a new `harness gc` retention cleanup, an `uninstall` that finally sees the `~/.harness/` state root and now removes migrated state it previously left behind, and docs synced to reality. **Operator action**: none required unless you piped confirmation prompts (`echo yes | harness apply --overwrite-drift` now refuses; use `--yes`). Re-run `npm i -g @lannguyensi/harness` to upgrade.
