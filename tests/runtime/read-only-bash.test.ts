@@ -256,29 +256,106 @@ describe("read-only Bash classifier", () => {
   });
 
   describe("write-capable bins excluded from the allowlist (own flags/operands write)", () => {
-    // `sort -o` / `tree -o` write a file, `file -C` compiles a .mgc,
-    // `uniq`'s second operand is its output, `date -s` sets the clock,
-    // `hostname NAME` sets the hostname, all with no shell metacharacter.
-    // They are dropped from SIMPLE_READ_ONLY_BINS entirely, so even their
-    // bare read forms are unclassified rather than risk laundering a write
-    // through them.
+    // `uniq`'s second positional operand is its output file (no clean
+    // flag to match), `date -s` sets the clock but `-s` is
+    // cluster-ambiguous with benign flags, and `hostname NAME` sets the
+    // hostname via a positional operand. All three stay fully excluded.
+    // `sort`, `tree`, and `file` write forms are listed here too; their
+    // read forms are tested in the guarded-output-flag suite below.
     it.each([
       "sort -o out.txt in.txt",
       "sort --output=out.txt in.txt",
-      "sort in.txt",
       "uniq in.txt out.txt",
       "uniq in.txt",
       "tree -o listing.txt",
-      "tree /some/dir",
       "file -C -m mymagic",
       "file --compile",
-      "file src/index.ts",
       "date -s 2020-01-01T00:00:00",
       "date",
       "hostname newname",
       "hostname",
     ])("blocks %s", (cmd) => {
       expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+  });
+
+  describe("guarded-output-flag bins: sort, tree, file (re-admitted with write-flag guards)", () => {
+    describe("read forms classify as read-only", () => {
+      it.each([
+        // sort: no -o / --output flag
+        "sort FILE",
+        "sort -n FILE",
+        "sort -nu FILE",
+        "sort -r src/index.ts",
+        "sort -k1,1 -t: /etc/passwd",
+        // sort reads via long flags that are not write/exec vectors:
+        // --files0-from reads a file list; a separate -S size arg whose
+        // value contains 'T' (2T) is not the temp-dir flag.
+        "sort --files0-from=list FILE",
+        "sort -S 2T FILE",
+        // tree: no -o / --output flag
+        "tree DIR",
+        "tree /some/dir",
+        "tree -L 2 src/",
+        // file: no -C / --compile flag; lowercase -c is benign
+        "file FILE",
+        "file src/index.ts",
+        "file -i foo.txt",
+        "file -b foo.txt",
+        "file -c foo.txt",
+      ])("allows %s", (cmd) => {
+        expect(isReadOnlyBashCommand(cmd)).toBe(true);
+      });
+    });
+
+    describe("write forms classify as NOT read-only", () => {
+      it.each([
+        // sort -o: separate flag
+        "sort -o out in",
+        "sort -o out.txt in.txt",
+        // sort --output: long separate
+        "sort --output out in",
+        // sort --output=FILE: long with equals
+        "sort --output=out in",
+        "sort --output=out.txt in.txt",
+        // sort cluster containing 'o': -no, -rno, -rnofoo (glued value)
+        "sort -no out in",
+        "sort -rno out in",
+        "sort -rnofoo in",
+        // sort -oFILE: glued value (lowercase 'o' at position 1 in cluster)
+        "sort -oFILE in",
+        // sort exec vector: --compress-program runs an arbitrary program on
+        // spill temp files (arbitrary code execution, no shell metachar).
+        "sort --compress-program=/tmp/evil in",
+        "sort --compress-program /tmp/evil in",
+        "sort -S 1k --compress-program=/tmp/evil bigfile",
+        // sort temp-dir write: -T / --temporary-directory writes scratch
+        // files to a caller-chosen path.
+        "sort -T /tmp in",
+        "sort -T/tmp in",
+        "sort --temporary-directory=/tmp in",
+        "sort --temporary-directory /tmp in",
+        // tree -o: separate flag
+        "tree -o list",
+        "tree -o listing.txt",
+        // tree --output: long separate
+        "tree --output list.txt /dir",
+        // tree --output=FILE: long with equals
+        "tree --output=list.txt",
+        // tree cluster containing 'o'
+        "tree -no list",
+        // file -C: separate flag
+        "file -C",
+        "file -C -m mymagic",
+        // file --compile: long form
+        "file --compile",
+        "file --compile -m magic",
+        // file cluster containing uppercase 'C'
+        "file -bC x",
+        "file -Cb x",
+      ])("blocks %s", (cmd) => {
+        expect(isReadOnlyBashCommand(cmd)).toBe(false);
+      });
     });
   });
 });

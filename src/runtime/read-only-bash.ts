@@ -29,6 +29,15 @@
 //   this without a separate write-binary deny list (the meta-chars
 //   are how a write would be smuggled into a "read-only" command in
 //   the first place).
+// - Some bins are not admitted to the simple unconditional allowlist
+//   because they can write via their own flags or operands without any
+//   shell metacharacter. `find` is the canonical example (guarded by
+//   `FIND_WRITE_FLAGS`). `sort`, `tree`, and `file` receive the same
+//   per-bin write-flag guard: their read forms are classified read-only
+//   when none of their write flags appear in the token list. `uniq`,
+//   `date`, and `hostname` are excluded entirely because their write
+//   vectors are positional operands or cluster-ambiguous flag chars
+//   that cannot be detected cleanly (see `SIMPLE_READ_ONLY_BINS`).
 //
 // This module is the canonical home for the classification within
 // harness. If the @lannguyensi/understanding-gate package adds a
@@ -39,20 +48,29 @@
  * Single-token read-only binaries. Each accepts arguments without
  * changing classification: `ls -la /tmp` is still read-only.
  *
- * Deliberately EXCLUDED, even though they are commonly read-only:
- * `sort` (`-o FILE` writes the result), `uniq` (a second file operand
- * is its output), `tree` (`-o FILE` writes the listing), `file` (`-C`
- * compiles a `<name>.mgc` magic cache), `date` (`-s` sets the system
- * clock), and `hostname` (`hostname NAME` sets it). Each can mutate a
- * file or system state through its own flags or operands with no shell
- * metacharacter, so — like `find` below — they cannot be classified
- * read-only unconditionally. Per the conservative allowlist contract we
- * drop them entirely rather than enumerate every getopt cluster
- * (`sort -rno`, `date -us`, glued `--output=`) that turns them into a
- * write. A follow-up could re-admit the common reads (`sort FILE`,
- * `file FILE`, `tree DIR`) behind precise output-flag guards; their
- * read forms are otherwise usually piped (`sort x | uniq`), which a
- * metacharacter already blocks.
+ * Deliberately EXCLUDED because their write vector is not a clean flag:
+ *
+ * `uniq`: a second positional operand is the output file. Detecting a
+ * write requires positional-operand counting, which is out of scope for
+ * a token-scan classifier.
+ *
+ * `date`: `-s` sets the system clock, but the `-s` character appears
+ * inside getopt clusters shared with benign flags (`-Iseconds` is parsed
+ * by GNU date as `-I FMT=seconds`, not `-I -s econds`). A char-in-
+ * cluster check would produce false positives on read-only date forms,
+ * and false negatives on combined forms like `-us`.
+ *
+ * `hostname`: `hostname NAME` sets the hostname via a positional operand,
+ * not a flag. Detecting the write requires positional-operand counting.
+ *
+ * `sort`, `tree`, and `file` are NOT in this set but each gets a per-bin
+ * write-flag guard below (like `find`): each has an enumerable set of
+ * write/exec flags detectable by scanning tokens without counting
+ * positional operands. The guard must cover EVERY write/exec vector, not
+ * just output redirection: sort guards `-o` / `--output` (output),
+ * `--compress-program` (runs an arbitrary program on spill files), and
+ * `-T` / `--temporary-directory` (scratch write); tree guards `-o` /
+ * `--output`; file guards `-C` / `--compile`.
  */
 const SIMPLE_READ_ONLY_BINS: ReadonlySet<string> = new Set([
   "ls", "cat", "pwd", "which", "type",
@@ -209,6 +227,71 @@ export function isReadOnlyBashCommand(command: string): boolean {
 }
 
 /**
+ * Returns true when a token is the output-redirect write flag shared by
+ * `sort` and `tree`: `-o` / `--output`. Cluster detection: in a cluster
+ * like `-rno`, getopt assigns the cluster remainder (or the next argv
+ * token when nothing follows within the cluster) as the output-file
+ * path, so any short cluster containing lowercase `o` after the leading
+ * dash is a write vector. Conservative: a filename token like `foo.txt`
+ * does not start with `-` and is therefore never matched.
+ */
+function isOutputWriteToken(t: string): boolean {
+  if (t === "--output" || t.startsWith("--output=")) return true;
+  // Short flag or cluster: single leading '-' (not '--'), containing
+  // lowercase 'o'. Catches -o, -oFILE, -no, -rno, -rnofoo, etc.
+  return t.startsWith("-") && !t.startsWith("--") && t.slice(1).includes("o");
+}
+
+/**
+ * Returns true when a token is a write flag for `tree`. tree's only
+ * file-writing vector is the output redirect `-o` / `--output`; it has
+ * no exec or temp-dir flags, so this delegates to `isOutputWriteToken`.
+ */
+function isTreeWriteToken(t: string): boolean {
+  return isOutputWriteToken(t);
+}
+
+/**
+ * Returns true when a token is a write OR exec flag for `sort`.
+ *
+ * sort's write surface is larger than output redirection, and the guard
+ * MUST enumerate all of it, not just `-o`. An output-only guard silently
+ * laundered `--compress-program`, which makes sort spawn an arbitrary
+ * program on its spill temp files (an arbitrary-code-execution vector
+ * with no shell metacharacter). The vectors:
+ *   - output:     `-o` / `--output` (see `isOutputWriteToken`).
+ *   - exec:       `--compress-program=PROG` runs PROG on spill files.
+ *   - temp write: `--temporary-directory=DIR` / `-T DIR` writes scratch
+ *                 files to a caller-chosen path.
+ * Short `-T` is detected like `-o`: any short cluster containing `o`
+ * (output) or uppercase `T` (temp dir) is a write vector. This can
+ * over-block a few benign size values (e.g. `-S2T`); over-blocking a
+ * read is acceptable, under-blocking a write is not.
+ */
+function isSortWriteToken(t: string): boolean {
+  if (t === "--compress-program" || t.startsWith("--compress-program=")) return true;
+  if (t === "--temporary-directory" || t.startsWith("--temporary-directory=")) return true;
+  if (t === "--output" || t.startsWith("--output=")) return true;
+  // Short flag or cluster: '-' (not '--') containing 'o' (output) or
+  // uppercase 'T' (temp dir).
+  return t.startsWith("-") && !t.startsWith("--") && /[oT]/.test(t.slice(1));
+}
+
+/**
+ * Returns true when a token is a write flag for `file`.
+ * `-C` / `--compile` writes a compiled magic-cache file (`<name>.mgc`).
+ * Lowercase `-c` checks the magic file without writing; only uppercase
+ * `C` triggers a write. Cluster detection: `-bC`, `-Cb`, and `-bCx`
+ * all contain uppercase `C` after the leading dash and are write vectors.
+ */
+function isFileWriteToken(t: string): boolean {
+  if (t === "--compile" || t.startsWith("--compile=")) return true;
+  // Short flag or cluster: single leading '-' (not '--'), containing
+  // uppercase 'C'. Lowercase 'c' is intentionally not matched.
+  return t.startsWith("-") && !t.startsWith("--") && t.slice(1).includes("C");
+}
+
+/**
  * Classify an already-tokenized, metachar-cleared argv. Factored out
  * of `isReadOnlyBashCommand` so the command-runner special cases
  * (`command` / `env`) can recurse on the residual underlying command
@@ -279,6 +362,33 @@ function classifyTokens(tokens: readonly string[]): boolean {
   // redirection. If any such flag appears, fall through to block.
   if (bin === "find") {
     return !tokens.slice(1).some((t) => FIND_WRITE_FLAGS.has(t));
+  }
+
+  // `sort` is read-only ONLY when none of its argv tokens are write or
+  // exec flags: `-o`/`--output` (file output), `--compress-program`
+  // (runs an arbitrary program on spill files), and
+  // `-T`/`--temporary-directory` (scratch write). See `isSortWriteToken`
+  // for the exact detection rules and why the enumeration must cover the
+  // exec vector, not just output redirection.
+  if (bin === "sort") {
+    return !tokens.slice(1).some(isSortWriteToken);
+  }
+
+  // `tree` is read-only ONLY when none of its argv tokens are output
+  // write flags: `-o FILE` / `--output=FILE` / `--output FILE`, or a
+  // short-flag cluster containing lowercase `o` (e.g. `-rno`). tree has
+  // no exec or temp-dir flags. See `isTreeWriteToken`.
+  if (bin === "tree") {
+    return !tokens.slice(1).some(isTreeWriteToken);
+  }
+
+  // `file` is read-only ONLY when none of its argv tokens are compile
+  // flags. `-C` / `--compile` writes a compiled magic-cache file;
+  // lowercase `-c` is benign (magic-file check). Any short cluster
+  // containing uppercase `C` (e.g. `-bC`) is a write vector. See
+  // `isFileWriteToken` for the exact detection rules.
+  if (bin === "file") {
+    return !tokens.slice(1).some(isFileWriteToken);
   }
 
   // `<bin> --version` / `<bin> --help` shape. Checked BEFORE the
