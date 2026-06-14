@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   discoverNewestSessionId,
+  resolveApprovalSessionId,
   resolveReadSessionId,
   resolveSessionId,
 } from "../../src/runtime/session-id.js";
@@ -239,5 +240,177 @@ describe("resolveReadSessionId", () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("resolveApprovalSessionId", () => {
+  let savedClaudeCode: string | undefined;
+  let savedClaude: string | undefined;
+  let savedCodex: string | undefined;
+
+  beforeEach(() => {
+    savedClaudeCode = process.env.CLAUDE_CODE_SESSION_ID;
+    savedClaude = process.env.CLAUDE_SESSION_ID;
+    savedCodex = process.env.CODEX_SESSION_ID;
+    delete process.env.CLAUDE_CODE_SESSION_ID;
+    delete process.env.CLAUDE_SESSION_ID;
+    delete process.env.CODEX_SESSION_ID;
+  });
+
+  afterEach(() => {
+    if (savedClaudeCode === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+    else process.env.CLAUDE_CODE_SESSION_ID = savedClaudeCode;
+    if (savedClaude === undefined) delete process.env.CLAUDE_SESSION_ID;
+    else process.env.CLAUDE_SESSION_ID = savedClaude;
+    if (savedCodex === undefined) delete process.env.CODEX_SESSION_ID;
+    else process.env.CODEX_SESSION_ID = savedCodex;
+  });
+
+  // Helper: a no-op readPending that always returns null (no staging file).
+  const noPending = (): string | null => null;
+
+  it("tier 1: --session flag wins over everything", () => {
+    process.env.CLAUDE_CODE_SESSION_ID = "env-code";
+    process.env.CLAUDE_SESSION_ID = "env-legacy";
+    process.env.CODEX_SESSION_ID = "env-codex";
+    const result = resolveApprovalSessionId({
+      session: "flag-id",
+      generatedDir: "/unused",
+      readPending: () => "staged-id",
+      newestReportFallback: () => ({ sessionId: "report-id", filePath: "/rpt.json" }),
+    });
+    expect(result).toEqual({ sessionId: "flag-id", sessionSource: "flag" });
+  });
+
+  it("tier 1: empty string flag is treated as absent and falls through", () => {
+    process.env.CLAUDE_CODE_SESSION_ID = "env-code";
+    const result = resolveApprovalSessionId({
+      session: "",
+      generatedDir: "/unused",
+      readPending: noPending,
+    });
+    expect(result.sessionId).toBe("env-code");
+    expect(result.sessionSource).toBe("env-claude-code");
+  });
+
+  it("tier 2: $CLAUDE_CODE_SESSION_ID wins over lower tiers", () => {
+    process.env.CLAUDE_CODE_SESSION_ID = "code-id";
+    process.env.CLAUDE_SESSION_ID = "legacy-id";
+    process.env.CODEX_SESSION_ID = "codex-id";
+    const result = resolveApprovalSessionId({
+      generatedDir: "/unused",
+      readPending: () => "staged-id",
+    });
+    expect(result).toEqual({ sessionId: "code-id", sessionSource: "env-claude-code" });
+  });
+
+  it("tier 3: $CLAUDE_SESSION_ID wins over $CODEX_SESSION_ID and lower tiers", () => {
+    process.env.CLAUDE_SESSION_ID = "legacy-id";
+    process.env.CODEX_SESSION_ID = "codex-id";
+    const result = resolveApprovalSessionId({
+      generatedDir: "/unused",
+      readPending: () => "staged-id",
+    });
+    expect(result).toEqual({ sessionId: "legacy-id", sessionSource: "env-claude" });
+  });
+
+  it("tier 4: $CODEX_SESSION_ID wins over pending-approval and lower tiers", () => {
+    process.env.CODEX_SESSION_ID = "codex-id";
+    const result = resolveApprovalSessionId({
+      generatedDir: "/unused",
+      readPending: () => "staged-id",
+    });
+    expect(result).toEqual({ sessionId: "codex-id", sessionSource: "env-codex" });
+  });
+
+  it("tier 5: .pending-approval wins over newestReportFallback", () => {
+    const result = resolveApprovalSessionId({
+      generatedDir: "/unused",
+      readPending: () => "staged-id",
+      newestReportFallback: () => ({ sessionId: "report-id", filePath: "/rpt.json" }),
+    });
+    expect(result).toEqual({ sessionId: "staged-id", sessionSource: "pending-approval" });
+  });
+
+  it("tier 5: reads .pending-approval from the real filesystem when no readPending seam", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-approval-sess-"));
+    try {
+      fs.writeFileSync(path.join(tmpDir, ".pending-approval"), "real-staged-id\n", "utf8");
+      const result = resolveApprovalSessionId({ generatedDir: tmpDir });
+      expect(result).toEqual({ sessionId: "real-staged-id", sessionSource: "pending-approval" });
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tier 6: newestReportFallback is used when all other tiers miss", () => {
+    const result = resolveApprovalSessionId({
+      generatedDir: "/unused",
+      readPending: noPending,
+      newestReportFallback: () => ({ sessionId: "report-id", filePath: "/reports/rpt.json" }),
+    });
+    expect(result).toEqual({
+      sessionId: "report-id",
+      sessionSource: "newest-report",
+      newestReportPath: "/reports/rpt.json",
+    });
+  });
+
+  it("tier 6: returning null from newestReportFallback falls through to empty result", () => {
+    const result = resolveApprovalSessionId({
+      generatedDir: "/unused",
+      readPending: noPending,
+      newestReportFallback: () => null,
+    });
+    expect(result.sessionId).toBe("");
+  });
+
+  it("returns empty sessionId when no tier resolves and no newestReportFallback given", () => {
+    const result = resolveApprovalSessionId({
+      generatedDir: "/unused",
+      readPending: noPending,
+    });
+    expect(result.sessionId).toBe("");
+  });
+
+  it("newestReportFallback is NOT called when an earlier tier resolves", () => {
+    let called = false;
+    process.env.CLAUDE_SESSION_ID = "env-id";
+    resolveApprovalSessionId({
+      generatedDir: "/unused",
+      readPending: noPending,
+      newestReportFallback: () => {
+        called = true;
+        return { sessionId: "report-id", filePath: "/rpt.json" };
+      },
+    });
+    expect(called).toBe(false);
+  });
+
+  it("empty env vars are skipped (not treated as valid session ids)", () => {
+    process.env.CLAUDE_CODE_SESSION_ID = "";
+    process.env.CLAUDE_SESSION_ID = "";
+    process.env.CODEX_SESSION_ID = "";
+    const result = resolveApprovalSessionId({
+      generatedDir: "/unused",
+      readPending: () => "staged-id",
+    });
+    expect(result).toEqual({ sessionId: "staged-id", sessionSource: "pending-approval" });
+  });
+
+  it("env precedence: CLAUDE_CODE_SESSION_ID > CLAUDE_SESSION_ID > CODEX_SESSION_ID", () => {
+    process.env.CLAUDE_CODE_SESSION_ID = "code";
+    process.env.CLAUDE_SESSION_ID = "legacy";
+    process.env.CODEX_SESSION_ID = "codex";
+    const r1 = resolveApprovalSessionId({ generatedDir: "/unused", readPending: noPending });
+    expect(r1).toEqual({ sessionId: "code", sessionSource: "env-claude-code" });
+
+    delete process.env.CLAUDE_CODE_SESSION_ID;
+    const r2 = resolveApprovalSessionId({ generatedDir: "/unused", readPending: noPending });
+    expect(r2).toEqual({ sessionId: "legacy", sessionSource: "env-claude" });
+
+    delete process.env.CLAUDE_SESSION_ID;
+    const r3 = resolveApprovalSessionId({ generatedDir: "/unused", readPending: noPending });
+    expect(r3).toEqual({ sessionId: "codex", sessionSource: "env-codex" });
   });
 });

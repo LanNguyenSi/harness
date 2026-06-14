@@ -31,9 +31,9 @@ import {
 import { addLedgerFact } from "../../runtime/ledger-add.js";
 import {
   clearPendingApproval,
-  readPendingApproval,
   resolveGeneratedDir,
 } from "../../runtime/pending-approval.js";
+import { resolveApprovalSessionId } from "../../runtime/session-id.js";
 import type { Manifest, McpServer } from "../../schema/index.js";
 import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
 import { loadManifest, resolvePaths, type LoaderOptions } from "../loader.js";
@@ -489,59 +489,35 @@ export async function approveUnderstanding(
   const reportsDir =
     opts.reportsDir ??
     defaultReportsDir(path.dirname(resolvePaths(opts).base));
-  let sessionId = "";
-  let sessionSource: ApproveUnderstandingResult["sessionSource"] = "flag";
-  let newestReportPath: string | undefined;
-  if (typeof opts.session === "string" && opts.session.length > 0) {
-    sessionId = opts.session;
-    sessionSource = "flag";
-  } else if (
-    typeof process.env.CLAUDE_CODE_SESSION_ID === "string" &&
-    process.env.CLAUDE_CODE_SESSION_ID.length > 0
-  ) {
-    sessionId = process.env.CLAUDE_CODE_SESSION_ID;
-    sessionSource = "env-claude-code";
-  } else if (
-    typeof process.env.CLAUDE_SESSION_ID === "string" &&
-    process.env.CLAUDE_SESSION_ID.length > 0
-  ) {
-    sessionId = process.env.CLAUDE_SESSION_ID;
-    sessionSource = "env-claude";
-  } else if (
-    typeof process.env.CODEX_SESSION_ID === "string" &&
-    process.env.CODEX_SESSION_ID.length > 0
-  ) {
-    sessionId = process.env.CODEX_SESSION_ID;
-    sessionSource = "env-codex";
-  } else {
-    const staged = readPendingApproval(generatedDir);
-    if (staged !== null) {
-      sessionId = staged;
-      sessionSource = "pending-approval";
-    } else {
-      // Tier 5: guess the session from the freshest persisted report.
-      // Restricted to `pending` reports. An `approved` / `expired`
-      // report belongs to a finished gate cycle (often a different
-      // session days ago); adopting its sessionId silently approves an
-      // unrelated session while the live one stays gated
-      // (harness/56f51f2b). A `pending` report is one the Stop hook
-      // just produced that no approval has consumed yet, so it is far
-      // more likely to be the current session's. This mirrors the
-      // `tolerantFallback: "uncompleted"` restriction PR #218 applied
-      // to the report-flip path below. The residual case — a stale
-      // session left a never-approved `pending` report — is caught by
-      // the loud tier-5 warning the CLI prints, which names the report
-      // file so the operator can verify before trusting the marker.
+  const resolved = resolveApprovalSessionId({
+    session: opts.session,
+    generatedDir,
+    // Tier 6: guess the session from the freshest persisted report.
+    // Restricted to `pending` reports. An `approved` / `expired`
+    // report belongs to a finished gate cycle (often a different
+    // session days ago); adopting its sessionId silently approves an
+    // unrelated session while the live one stays gated
+    // (harness/56f51f2b). A `pending` report is one the Stop hook
+    // just produced that no approval has consumed yet, so it is far
+    // more likely to be the current session's. This mirrors the
+    // `tolerantFallback: "uncompleted"` restriction PR #218 applied
+    // to the report-flip path below. The residual case — a stale
+    // session left a never-approved `pending` report — is caught by
+    // the loud newest-report warning the CLI prints, which names the report
+    // file so the operator can verify before trusting the marker.
+    newestReportFallback: () => {
       const newest = listPersistedReports(reportsDir).find(
         (r) => r.sessionId !== null && r.approvalStatus === "pending",
       );
       if (newest && newest.sessionId !== null) {
-        sessionId = newest.sessionId;
-        sessionSource = "newest-report";
-        newestReportPath = newest.filePath;
+        return { sessionId: newest.sessionId, filePath: newest.filePath };
       }
-    }
-  }
+      return null;
+    },
+  });
+  const sessionId = resolved.sessionId;
+  const sessionSource = resolved.sessionSource;
+  const newestReportPath = resolved.newestReportPath;
 
   if (sessionId === "") {
     // Reaching here means: no --session flag, no $CLAUDE_CODE_SESSION_ID

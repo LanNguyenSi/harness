@@ -34,6 +34,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { readPendingApproval } from "./pending-approval.js";
 
 const FALLBACK = "default";
 
@@ -154,4 +155,136 @@ export function resolveReadSessionId(
   });
   if (typeof discovered === "string" && discovered.length > 0) return discovered;
   return FALLBACK;
+}
+
+// ---------------------------------------------------------------------------
+// Shared session-id resolver for the `harness approve` verbs.
+// ---------------------------------------------------------------------------
+//
+// All three approve verbs (understanding, risk, branch-protection) resolve
+// the target session id through the same 5-tier precedence chain; only
+// `approve understanding` adds a 6th tier (newest pending persisted report).
+// This section lifts that chain into one place to remove the copy-paste.
+//
+// The callers retain their own error-throw blocks because the error messages
+// are intentionally verb-specific (they name the gate hook, the approve
+// subcommand, and the recovery steps that are relevant to that verb).
+
+/** Session-id source for the `harness approve` verbs. */
+export type ApprovalSessionSource =
+  | "flag"
+  | "env-claude-code"
+  | "env-claude"
+  | "env-codex"
+  | "pending-approval"
+  | "newest-report";
+
+export interface ResolveApprovalSessionIdOptions {
+  /** Explicit --session flag value. Empty string is treated as absent. */
+  session?: string;
+  /** Path to the harness.generated/ directory; used to read .pending-approval. */
+  generatedDir: string;
+  /**
+   * Optional 6th-tier callback. When provided and reached, it is called
+   * once and should return the session id plus the file path of the
+   * freshest qualifying persisted report, or null when none qualifies.
+   * Only `approve understanding` supplies this; `approve risk` and
+   * `approve branch-protection` omit it (they produce no persisted reports).
+   */
+  newestReportFallback?: () => { sessionId: string; filePath: string } | null;
+  /**
+   * Test seam: override the .pending-approval reader. Defaults to
+   * `readPendingApproval` from pending-approval.ts. Verb-level tests use
+   * real tmp directories and do not need this; unit tests for the resolver
+   * itself use it to avoid creating directories.
+   */
+  readPending?: (dir: string) => string | null;
+}
+
+export interface ResolveApprovalSessionIdResult {
+  /**
+   * The resolved session id, or an empty string when no tier matched.
+   * Callers MUST check for the empty string and throw a verb-specific
+   * error. The empty-string path is intentional: it lets callers produce
+   * messages that name their own gate hook, approve subcommand, and
+   * recovery steps without the resolver needing to know about them.
+   */
+  sessionId: string;
+  /**
+   * Where the session id came from. When `sessionId` is empty this field
+   * is meaningless (callers throw before returning it to the operator).
+   */
+  sessionSource: ApprovalSessionSource;
+  /**
+   * Set only when `sessionSource === "newest-report"`. The absolute path
+   * of the persisted report whose `sessionId` field was adopted. Surfaced
+   * in the `approve understanding` CLI warning so the operator can verify
+   * the report belongs to their live session.
+   */
+  newestReportPath?: string;
+}
+
+/**
+ * Shared session-id resolver for the `harness approve` verbs.
+ *
+ * Precedence:
+ *   1. explicit --session flag
+ *   2. $CLAUDE_CODE_SESSION_ID (the var Claude Code exports into the agent shell)
+ *   3. $CLAUDE_SESSION_ID (legacy / docs name; kept for older operator recipes)
+ *   4. $CODEX_SESSION_ID (set inside a live Codex session)
+ *   5. .pending-approval staging file (written by the gate hook or preflight)
+ *   6. newestReportFallback() result -- only understanding.ts uses this tier
+ *
+ * Returns `{ sessionId: "" }` when no tier resolves. The caller is
+ * responsible for throwing a verb-specific HarnessExitError in that case.
+ */
+export function resolveApprovalSessionId(
+  opts: ResolveApprovalSessionIdOptions,
+): ResolveApprovalSessionIdResult {
+  const readPending = opts.readPending ?? readPendingApproval;
+
+  if (typeof opts.session === "string" && opts.session.length > 0) {
+    return { sessionId: opts.session, sessionSource: "flag" };
+  }
+  if (
+    typeof process.env.CLAUDE_CODE_SESSION_ID === "string" &&
+    process.env.CLAUDE_CODE_SESSION_ID.length > 0
+  ) {
+    return {
+      sessionId: process.env.CLAUDE_CODE_SESSION_ID,
+      sessionSource: "env-claude-code",
+    };
+  }
+  if (
+    typeof process.env.CLAUDE_SESSION_ID === "string" &&
+    process.env.CLAUDE_SESSION_ID.length > 0
+  ) {
+    return { sessionId: process.env.CLAUDE_SESSION_ID, sessionSource: "env-claude" };
+  }
+  if (
+    typeof process.env.CODEX_SESSION_ID === "string" &&
+    process.env.CODEX_SESSION_ID.length > 0
+  ) {
+    return { sessionId: process.env.CODEX_SESSION_ID, sessionSource: "env-codex" };
+  }
+
+  const staged = readPending(opts.generatedDir);
+  if (staged !== null) {
+    return { sessionId: staged, sessionSource: "pending-approval" };
+  }
+
+  if (opts.newestReportFallback !== undefined) {
+    const newest = opts.newestReportFallback();
+    if (newest !== null) {
+      return {
+        sessionId: newest.sessionId,
+        sessionSource: "newest-report",
+        newestReportPath: newest.filePath,
+      };
+    }
+  }
+
+  // Nothing resolved. Callers check sessionId === "" and throw their own
+  // verb-specific error messages.
+  return { sessionId: "", sessionSource: "flag" };
 }
