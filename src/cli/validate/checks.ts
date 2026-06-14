@@ -227,7 +227,7 @@ function checkBuiltinDrift(manifest: Manifest, opts: CheckOptions): Diagnostic[]
   return diags;
 }
 
-function checkPolicyGroundingMcp(manifest: Manifest): Diagnostic[] {
+export function checkPolicyGroundingMcp(manifest: Manifest): Diagnostic[] {
   if (manifest.policies.length === 0) return [];
   const wired = manifest.tools.mcp.some((m) => m.name === "grounding-mcp");
   if (wired) return [];

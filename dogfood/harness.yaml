@@ -7,6 +7,11 @@
 #
 # Paths use the in-repo dogfood/ tree. The broken-mcp entry is intentionally
 # wired so `harness doctor` surfaces the "✗ FAILED: ..." case from Appendix D.
+#
+# This fixture declares policies without grounding-mcp on purpose, to exercise
+# the validate/doctor warnings. `harness apply` deliberately REJECTS that
+# combination (policies would degrade to warn-mode at runtime), so run this
+# manifest through `harness validate` / `harness doctor`, not `harness apply`.
 
 version: 1
 
