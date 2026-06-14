@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  approvalMarkerPathFor,
   checkApprovalMarker,
   parseApprovalLifecycle,
   writeApprovalMarker,
@@ -189,5 +190,51 @@ describe("parseApprovalLifecycle (agent-tasks/d8ee60ca)", () => {
     expect(lc.legacyMode).toBe(true);
     expect(lc.expireOnToolMatch).toEqual([]);
     expect(lc.expireOnBashMatch).toEqual([]);
+  });
+});
+
+describe("approvalMarkerPathFor — sessionId validation (H5)", () => {
+  it("rejects a traversal-shaped sessionId (../../etc)", () => {
+    expect(() => approvalMarkerPathFor("/tmp/gen", "../../etc")).toThrow(
+      /path-separator or traversal/,
+    );
+  });
+
+  it("rejects a sessionId with a forward slash (a/b)", () => {
+    expect(() => approvalMarkerPathFor("/tmp/gen", "a/b")).toThrow(
+      /path-separator or traversal/,
+    );
+  });
+
+  it("rejects a sessionId that is only (..)", () => {
+    expect(() => approvalMarkerPathFor("/tmp/gen", "..")).toThrow(
+      /path-separator or traversal/,
+    );
+  });
+
+  it("rejects an empty sessionId", () => {
+    expect(() => approvalMarkerPathFor("/tmp/gen", "")).toThrow(/empty or blank/);
+  });
+
+  it("rejects a whitespace-only sessionId", () => {
+    expect(() => approvalMarkerPathFor("/tmp/gen", "   ")).toThrow(/empty or blank/);
+  });
+
+  it("passes a valid UUID-style sessionId and returns the expected path", () => {
+    const result = approvalMarkerPathFor(
+      "/tmp/gen",
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    );
+    expect(result).toBe("/tmp/gen/.approvals/a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+  });
+
+  it("gate read path fails CLOSED on a malformed sessionId (returns matched:false, does not throw)", () => {
+    // The gate must block (matched:false), not throw out of the hook, which
+    // the top-level handler would turn into a non-blocking exit that lets the
+    // gated tool proceed. Regression guard for the read-path fail-open.
+    expect(() => checkApprovalMarker("/tmp/gen", "../../etc")).not.toThrow();
+    const result = checkApprovalMarker("/tmp/gen", "../../etc");
+    expect(result.matched).toBe(false);
+    expect(result.detail).toMatch(/invalid sessionId/);
   });
 });
