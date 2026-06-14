@@ -348,8 +348,8 @@ alongside policy decisions.
 
 **Trust boundary.** The sentinel file is plain JSON at
 `<generatedDir>/.harness-paused` with no signature. The operator-only
-CLI guardrails (agent-session env-var refusal — any of
-`$CLAUDE_CODE_SESSION_ID`, `$CLAUDE_SESSION_ID`, `$CODEX_SESSION_ID` — and non-TTY refusal) keep
+CLI guardrails (agent-session env-var refusal (any of
+`$CLAUDE_CODE_SESSION_ID`, `$CLAUDE_SESSION_ID`, `$CODEX_SESSION_ID`) and non-TTY refusal) keep
 agents from invoking `harness pause` against you, but they do not
 stop an agent that already has `Write` access to anywhere under
 `harness.generated/` from dropping a forged sentinel. If you wire

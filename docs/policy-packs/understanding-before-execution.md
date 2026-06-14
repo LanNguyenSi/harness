@@ -320,7 +320,7 @@ The blocker on the next tool call sees the new approval from whichever operator-
 
 ### Pre-approving a batch of tasks
 
-`--task` is variadic. Passing several ids (`--task a b c`, or comma-joined `--task a,b,c`) writes one task-scoped marker per id in a single operator action. The understanding gate is task-scoped — its `expire_on_tool_match` hook expires the approval on every `task_finish` — so without this a multi-task session needs one `harness approve understanding` per task. Pre-approving the batch up front means each `task_start` finds its marker already present. This does not weaken the gate: the operator's Understanding Report still has to enumerate every task it covers; only the round-trip count collapses. With no `--task` flag the active-claim file is auto-resolved as before (single task).
+`--task` is variadic. Passing several ids (`--task a b c`, or comma-joined `--task a,b,c`) writes one task-scoped marker per id in a single operator action. The understanding gate is task-scoped (its `expire_on_tool_match` hook expires the approval on every `task_finish`), so without this a multi-task session needs one `harness approve understanding` per task. Pre-approving the batch up front means each `task_start` finds its marker already present. This does not weaken the gate: the operator's Understanding Report still has to enumerate every task it covers; only the round-trip count collapses. With no `--task` flag the active-claim file is auto-resolved as before (single task).
 
 ### Session-id resolution
 

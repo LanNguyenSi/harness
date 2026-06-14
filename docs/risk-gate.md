@@ -263,8 +263,8 @@ unmatched-environment case is addressable.
 A `when:`-bearing policy still carries the Phase 4 `requires:`,
 `hook:`, and `enforcement:` fields, all of them required by the schema.
 Phase 7 #5 kept them mandatory: a `require_approval` policy expresses
-its approval gate through `requires:` — the `risk-approved:${SESSION_ID}`
-ledger tag — so the Phase 4 requires-evaluator is reused unchanged. A
+its approval gate through `requires:` (the `risk-approved:${SESSION_ID}`
+ledger tag), so the Phase 4 requires-evaluator is reused unchanged. A
 pure risk policy that decides from `when:` alone, without ledger
 evidence, would be a structural change to the policy model and is not
 Phase 7 scope; it remains a possible future relaxation.
@@ -291,7 +291,7 @@ absent or unresponsive), a `require_approval` / `deny` policy cannot be
 evaluated and the decision degrades to a non-blocking `warn-degraded`:
 the tool call proceeds and the un-evaluated policy is recorded. This is
 the same fail-open contract Phase 4 already applies to `block` policies
-(`ROADMAP.md` Phase 4) — the Risk Gate does not invent a stricter one.
+(`ROADMAP.md` Phase 4), the Risk Gate does not invent a stricter one.
 An operator who needs the gate to fail closed must keep grounding-mcp
 healthy; `harness doctor` surfaces an unreachable ledger.
 
