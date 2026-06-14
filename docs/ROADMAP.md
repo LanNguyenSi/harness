@@ -4,32 +4,32 @@ This document turns the phases summarised in [`README.md`](../README.md)'s statu
 
 Each phase below ships in this shape:
 
-- **Scope** — what this phase delivers, in plain English.
-- **Deliverables** — concrete artefacts: CLI verbs, schema fields, file outputs.
-- **Acceptance criteria** — testable bullets that answer "how do I know this phase is done?". Each is either scriptable or human-verifiable from a single command's output.
-- **Non-goals** — what is explicitly *not* in this phase, especially items a reader might expect.
-- **Exit gate** — the one-line statement of when this phase is releasable.
+- **Scope**: what this phase delivers, in plain English.
+- **Deliverables**: concrete artefacts: CLI verbs, schema fields, file outputs.
+- **Acceptance criteria**: testable bullets that answer "how do I know this phase is done?". Each is either scriptable or human-verifiable from a single command's output.
+- **Non-goals**: what is explicitly *not* in this phase, especially items a reader might expect.
+- **Exit gate**: the one-line statement of when this phase is releasable.
 
 ## Phase ordering rationale
 
 The order is deliberate: read-only inventory → managed edits → declarative truth → policy layer. The full justification lives in [`VISION.md` §8](VISION.md#8-why-introspection-comes-before-enforcement) ("Why introspection comes before enforcement"). In short: you cannot enforce policies on a configuration surface you cannot read, and Phase 1's `harness doctor` already delivers user-visible value (worked demo in [`ARCHITECTURE.md` Appendix D](ARCHITECTURE.md#appendix-d--phase-1-value-demonstration)). Inverting the order would make every false-positive policy fire its own debugging incident.
 
-## Phase 1 — Read-only inventory
+## Phase 1: Read-only inventory
 
 ### Scope
 
-Build the floor. Phase 1 ships every read-only capability needed to answer "what is this harness configured to do, right now, comprehensively?" — across the manifest, MCP servers, CLI tools, skills, memory directories, hooks, and policies. Nothing in Phase 1 writes to disk or executes a hook. Schema validation happens; behaviour does not. The killer-test value-demo from `ARCHITECTURE.md` Appendix D is the user-visible outcome.
+Build the floor. Phase 1 ships every read-only capability needed to answer "what is this harness configured to do, right now, comprehensively?", across the manifest, MCP servers, CLI tools, skills, memory directories, hooks, and policies. Nothing in Phase 1 writes to disk or executes a hook. Schema validation happens; behaviour does not. The killer-test value-demo from `ARCHITECTURE.md` Appendix D is the user-visible outcome.
 
 ### Deliverables
 
 CLI verbs (per `ARCHITECTURE.md` §9 "Read-only"):
 
-- `harness describe [--project <name>] [--pillar <p>] [--json]` — print the effective merged manifest.
-- `harness validate [--project <name>] [--strict]` — schema lint plus referenced-asset checks; exit 1 on error.
-- `harness doctor [--project <name>] [--shallow]` — human-readable health summary across all pillars. Default mode invokes each `mcp[].health.verb` for real (catches the runtime-broken case that motivated Appendix D); `--shallow` skips network/process probes and reports manifest-reference status only, for fast iteration in interactive sessions where the user is invoking `doctor` repeatedly.
-- `harness list <mcp|cli|skills|memories|hooks|policies> [--filter <s>] [--json]` — denormalised flat listing per category, pipe-friendly. Categories match `ARCHITECTURE.md` §9.
-- `harness explain <policy-name>` — surface what a named policy *would* evaluate to (schema-only; full trace including last-evaluation result lands in Phase 4 once policies actually fire).
-- `harness diff [--since <ref>]` — manifest-layer diff against a git ref. (`--since-apply` is Phase 3.)
+- `harness describe [--project <name>] [--pillar <p>] [--json]`: print the effective merged manifest.
+- `harness validate [--project <name>] [--strict]`: schema lint plus referenced-asset checks; exit 1 on error.
+- `harness doctor [--project <name>] [--shallow]`: human-readable health summary across all pillars. Default mode invokes each `mcp[].health.verb` for real (catches the runtime-broken case that motivated Appendix D); `--shallow` skips network/process probes and reports manifest-reference status only, for fast iteration in interactive sessions where the user is invoking `doctor` repeatedly.
+- `harness list <mcp|cli|skills|memories|hooks|policies> [--filter <s>] [--json]`: denormalised flat listing per category, pipe-friendly. Categories match `ARCHITECTURE.md` §9.
+- `harness explain <policy-name>`: surface what a named policy *would* evaluate to (schema-only; full trace including last-evaluation result lands in Phase 4 once policies actually fire).
+- `harness diff [--since <ref>]`: manifest-layer diff against a git ref. (`--since-apply` is Phase 3.)
 
 Library-side:
 
@@ -43,10 +43,10 @@ Library-side:
 - [ ] `harness describe` reproduces the merged manifest for a real test fixture (`docs/examples/full-manifest.yaml`) byte-equivalent to the hand-merged expected output.
 - [ ] `harness validate` exits 1 on every malformed manifest under `docs/examples/invalid/*` and 0 on `docs/examples/full-manifest.yaml`. Each invalid fixture has a one-line comment explaining what is wrong.
 - [ ] `harness validate --strict` rejects unknown keys per `ARCHITECTURE.md` §11 (Phase 1 strict default).
-- [ ] `harness validate` rejects a `policies[].requires` entry that references `${PR_NUMBER}` without a matching `trigger.extract:` entry. (Schema-level rejection — the policy never fires in Phase 1, but malformed policies are caught at lint time.)
+- [ ] `harness validate` rejects a `policies[].requires` entry that references `${PR_NUMBER}` without a matching `trigger.extract:` entry. (Schema-level rejection; the policy never fires in Phase 1, but malformed policies are caught at lint time.)
 - [ ] `harness doctor` against the test fixture reproduces the structure shown in `ARCHITECTURE.md` Appendix D: a section per pillar (Manifest / Tools / Memory / Hooks / Policies / Summary), each with `✓ / ⚠ / ✗` status markers. The Policies section in Phase 1 reports "schema valid; last-evaluated tracking ships in Phase 4" rather than the timestamps shown in Appendix D's illustrative output (which assumes Phase 4 is also live).
 - [ ] `harness doctor` (default mode) issues a real MCP health-verb call against each declared `mcp[]` entry; a server that exited 1 surfaces with the actual error message in the output, not a generic "unhealthy".
-- [ ] `harness doctor` for an `mcp[]` entry whose `health` block is absent reports `? unknown — no health verb declared` for that server (does not skip silently, does not fail).
+- [ ] `harness doctor` for an `mcp[]` entry whose `health` block is absent reports `? unknown: no health verb declared` for that server (does not skip silently, does not fail).
 - [ ] `harness doctor --shallow` skips MCP probes entirely and completes in under 100ms against a fixture with 8 MCP servers, reporting manifest-reference state only.
 - [ ] `harness validate` warns when `tools.builtin.known` diverges from the runtime's currently-advertised built-in tool list (one-sided per `ARCHITECTURE.md` §3: a built-in present in the manifest but missing from the runtime is noise; a runtime built-in missing from the manifest is a warning).
 - [ ] `harness doctor` flags memories untouched for more than `retention.staleness_days` with their last-touched date.
@@ -59,7 +59,7 @@ Library-side:
 ### Non-goals
 
 - **Hook execution.** `harness doctor` reports that a hook is wired but does not execute it. The hook actually firing on its event is Phase 4.
-- **Policy evaluation.** `harness validate` lints `policies[]` for schema and reference correctness — including the three v1 `requires` shapes (`ledger_tag`, `+ within`, `+ count`) and `trigger.extract:` grammar. It does **not** evaluate whether the requirements are satisfied against the ledger, and policies do not fire on hook events. The shapes are *parsed and structurally validated* in Phase 1; the *evaluator* that checks the ledger and gates tool calls ships in Phase 4. This split is deliberate per the 2026-04-27 design conversation: shipping the schema without behaviour creates the "I wrote a policy, why does nothing happen?" failure mode if rolled out alone.
+- **Policy evaluation.** `harness validate` lints `policies[]` for schema and reference correctness, including the three v1 `requires` shapes (`ledger_tag`, `+ within`, `+ count`) and `trigger.extract:` grammar. It does **not** evaluate whether the requirements are satisfied against the ledger, and policies do not fire on hook events. The shapes are *parsed and structurally validated* in Phase 1; the *evaluator* that checks the ledger and gates tool calls ships in Phase 4. This split is deliberate per the 2026-04-27 design conversation: shipping the schema without behaviour creates the "I wrote a policy, why does nothing happen?" failure mode if rolled out alone.
 - **Writing files.** Phase 1 reads `~/.claude/harness.yaml` and asset files; it never writes. `harness add`, `harness apply`, `harness adopt` are Phase 2 / 3 verbs.
 - **Lock file.** `harness.lock` is a Phase 3 artefact; Phase 1's "single source of truth" claim applies at the manifest layer only, per `VISION.md` §4.
 - **Asset-content drift detection.** `harness diff` shows manifest-level changes; "the SHA of `git-preflight.sh` changed under your feet" is a Phase 3 capability that needs the lock file.
@@ -68,24 +68,24 @@ Library-side:
 
 `harness doctor` against my real `~/.claude/harness.yaml` (≥ 3 MCP servers, ≥ 2 CLI tools, ≥ 4 skills, ≥ 2 hooks, ≥ 2 policies) reproduces a structurally-equivalent output to `ARCHITECTURE.md` Appendix D, with at least one ✗ surfaced when an MCP server is intentionally broken. Tag `v0.1.0`.
 
-## Phase 2 — Managed edits
+## Phase 2: Managed edits
 
 ### Scope
 
-Add the write-side verbs that mutate `~/.claude/harness.yaml` safely: bootstrap a manifest, add or remove entries by name with schema validation, capture hand-edits from runtime files into the manifest. Concurrent-edit safety via a lock file. No regeneration of runtime files yet — that's Phase 3.
+Add the write-side verbs that mutate `~/.claude/harness.yaml` safely: bootstrap a manifest, add or remove entries by name with schema validation, capture hand-edits from runtime files into the manifest. Concurrent-edit safety via a lock file. No regeneration of runtime files yet; that's Phase 3.
 
 ### Deliverables
 
 CLI verbs:
 
-- `harness init [--template minimal|full] [--force]` — bootstrap `~/.claude/harness.yaml` from a template.
-- `harness add mcp <name> [--command <cmd>] [--health-verb <v>] ...` — managed insert into `tools.mcp[]`.
-- `harness add cli <name> --binary <b> [--required]` — managed insert into `tools.cli[]`.
-- `harness add skill <name>` — managed enable in `tools.skills.enabled`.
-- `harness add hook <name> --event <e> --command <c> [--match <r>] [--blocking <m>]` — managed insert into `hooks[]`.
-- `harness remove <type> <name>` — remove by name with reference-check (refuses if a policy references a hook being removed; user must `--force` or remove the policy first).
-- `harness adopt <file>` — capture hand-edits from a runtime file (today: `~/.claude/settings.json`) back into the manifest. Implementation: write-and-confirm (see "Open decisions resolved here" below).
-- `harness export [--sanitize] [-o <file>]` — emit the effective manifest as a single self-contained YAML.
+- `harness init [--template minimal|full] [--force]`: bootstrap `~/.claude/harness.yaml` from a template.
+- `harness add mcp <name> [--command <cmd>] [--health-verb <v>] ...`: managed insert into `tools.mcp[]`.
+- `harness add cli <name> --binary <b> [--required]`: managed insert into `tools.cli[]`.
+- `harness add skill <name>`: managed enable in `tools.skills.enabled`.
+- `harness add hook <name> --event <e> --command <c> [--match <r>] [--blocking <m>]`: managed insert into `hooks[]`.
+- `harness remove <type> <name>`: remove by name with reference-check (refuses if a policy references a hook being removed; user must `--force` or remove the policy first).
+- `harness adopt <file>`: capture hand-edits from a runtime file (today: `~/.claude/settings.json`) back into the manifest. Implementation: write-and-confirm (see "Open decisions resolved here" below).
+- `harness export [--sanitize] [-o <file>]`: emit the effective manifest as a single self-contained YAML.
 
 Library-side:
 
@@ -120,7 +120,7 @@ Library-side:
 
 I can bootstrap a fresh harness install (`harness init --template full`), add a new MCP server, capture a hand-edited `settings.json` change into the manifest, and have `harness validate` pass at every step. Tag `v0.2.0`.
 
-## Phase 3 — Declarative truth
+## Phase 3: Declarative truth
 
 ### Scope
 
@@ -130,8 +130,8 @@ Make the manifest the source of truth at the runtime layer too. `harness apply` 
 
 CLI verbs:
 
-- `harness apply [--dry-run] [--overwrite-drift]` — regenerate `harness.generated/settings.json` and `harness.generated/MEMORY.md` index from the manifest, with drift-detection per `ARCHITECTURE.md` §7. `--dry-run` prints the would-be diff; `--overwrite-drift` discards on-disk changes after a confirmation.
-- `harness diff --since-apply [--memory-detail]` — diff against the last applied state recorded in `harness.generated/.last-apply`. `--memory-detail` expands per-directory Merkle entries back to per-file SHA changes for memories.
+- `harness apply [--dry-run] [--overwrite-drift]`: regenerate `harness.generated/settings.json` and `harness.generated/MEMORY.md` index from the manifest, with drift-detection per `ARCHITECTURE.md` §7. `--dry-run` prints the would-be diff; `--overwrite-drift` discards on-disk changes after a confirmation.
+- `harness diff --since-apply [--memory-detail]`: diff against the last applied state recorded in `harness.generated/.last-apply`. `--memory-detail` expands per-directory Merkle entries back to per-file SHA changes for memories.
 
 Library-side:
 
@@ -168,26 +168,26 @@ Library-side:
 
 `harness apply` regenerates `~/.claude/settings.json` from my real manifest, the lock file catches an externally-edited hook script on the next apply with a helpful diff, and `harness adopt` round-trips a hand-edit cleanly. Tag `v0.3.0`.
 
-## Phase 4 — Policy layer
+## Phase 4: Policy layer
 
 ### Scope
 
-Make policies *fire*. The `requires` schema (`ledger_tag`, `+ within`, `+ count` from `ARCHITECTURE.md` §6) becomes evaluatable at the actual hook event. `PreToolUse mcp__agent-tasks__pull_requests_merge` triggers `review-before-merge`, which queries the evidence ledger via `${PR_NUMBER}` extracted through `trigger.extract:`, and blocks the tool call if the evidence is missing. The killer-test from the founding incident is fully answered by the `preflight-before-investigation` policy in `ARCHITECTURE.md` Appendix A: a `SessionStart` hook runs `preflight run --json` (from [`agent-preflight`](https://github.com/LanNguyenSi/agent-preflight)) and writes a `preflight:${REPO}` ledger entry with `ready` + confidence; the policy gates `PreToolUse Bash` matching `git (status|log|diff|branch)` on `requires: { ledger_tag: "preflight:${REPO}", within: 1h }`. The agent that tried to call `agent-grounding` tasks "stale" against a 16-commit-behind checkout would be blocked by that policy until `preflight run` had executed cleanly against the repo within the last hour — concretely wired via agent-preflight on the write side and [`grounding-mcp`](https://github.com/LanNguyenSi/agent-grounding/tree/master/packages/grounding-mcp) on the read side (the requires-evaluator queries the ledger through grounding-mcp's `ledger_summary` verb), not "or similar".
+Make policies *fire*. The `requires` schema (`ledger_tag`, `+ within`, `+ count` from `ARCHITECTURE.md` §6) becomes evaluatable at the actual hook event. `PreToolUse mcp__agent-tasks__pull_requests_merge` triggers `review-before-merge`, which queries the evidence ledger via `${PR_NUMBER}` extracted through `trigger.extract:`, and blocks the tool call if the evidence is missing. The killer-test from the founding incident is fully answered by the `preflight-before-investigation` policy in `ARCHITECTURE.md` Appendix A: a `SessionStart` hook runs `preflight run --json` (from [`agent-preflight`](https://github.com/LanNguyenSi/agent-preflight)) and writes a `preflight:${REPO}` ledger entry with `ready` + confidence; the policy gates `PreToolUse Bash` matching `git (status|log|diff|branch)` on `requires: { ledger_tag: "preflight:${REPO}", within: 1h }`. The agent that tried to call `agent-grounding` tasks "stale" against a 16-commit-behind checkout would be blocked by that policy until `preflight run` had executed cleanly against the repo within the last hour, concretely wired via agent-preflight on the write side and [`grounding-mcp`](https://github.com/LanNguyenSi/agent-grounding/tree/master/packages/grounding-mcp) on the read side (the requires-evaluator queries the ledger through grounding-mcp's `ledger_summary` verb), not "or similar".
 
 ### Deliverables
 
 CLI verbs:
 
-- `harness explain <policy-name> --trace` — full trace of the last evaluation: trigger match result, `extract` substitution trail, ledger query, requires-shape evaluation, final enforcement decision. Essential for diagnosing "why did my merge get blocked".
-- `harness audit [--since <when>]` — replay the evidence ledger for a window and cross-reference with harness policy decisions.
-- `harness dry-run "<prompt>"` — simulate which hooks fire, which policies match, which memories route for a given user prompt. Requires runtime cooperation; first-pass implementation may be limited to "static prediction without invoking the LLM".
+- `harness explain <policy-name> --trace`: full trace of the last evaluation: trigger match result, `extract` substitution trail, ledger query, requires-shape evaluation, final enforcement decision. Essential for diagnosing "why did my merge get blocked".
+- `harness audit [--since <when>]`: replay the evidence ledger for a window and cross-reference with harness policy decisions.
+- `harness dry-run "<prompt>"`: simulate which hooks fire, which policies match, which memories route for a given user prompt. Requires runtime cooperation; first-pass implementation may be limited to "static prediction without invoking the LLM".
 
 Library-side:
 
-- `requires` evaluator covering all three v1 shapes. The evaluator queries the evidence ledger through [`grounding-mcp`](https://github.com/LanNguyenSi/agent-grounding/tree/master/packages/grounding-mcp) — specifically `ledger_summary` (for tag presence + count) and `claim_evaluate_from_session` (for richer policy contexts). The MCP wrapper is the canonical client surface; harness does not re-open the SQLite ledger directly. grounding-mcp must be registered under `tools.mcp[]` for `requires` evaluation to work; `validate` warns when policies are declared but no grounding-mcp entry is wired.
-  - `ledger_tag: "review:${PR_NUMBER}"` — substring/regex match against ledger entries' content/source columns.
-  - `+ within: 24h` — time-window filter on `created_at`.
-  - `+ count: { min: 2 }` — minimum count of matching entries.
+- `requires` evaluator covering all three v1 shapes. The evaluator queries the evidence ledger through [`grounding-mcp`](https://github.com/LanNguyenSi/agent-grounding/tree/master/packages/grounding-mcp), specifically `ledger_summary` (for tag presence + count) and `claim_evaluate_from_session` (for richer policy contexts). The MCP wrapper is the canonical client surface; harness does not re-open the SQLite ledger directly. grounding-mcp must be registered under `tools.mcp[]` for `requires` evaluation to work; `validate` warns when policies are declared but no grounding-mcp entry is wired.
+  - `ledger_tag: "review:${PR_NUMBER}"`: substring/regex match against ledger entries' content/source columns.
+  - `+ within: 24h`: time-window filter on `created_at`.
+  - `+ count: { min: 2 }`: minimum count of matching entries.
 - `trigger.extract:` JSONPath-restricted evaluator with `validate`-time grammar check.
 - Policy-firing wiring at the runtime hook layer: when a hook bound to a policy fires, harness intercepts, evaluates `requires`, and either lets the hook proceed (allow) or returns the `decision: deny` shape that the runtime understands as a hard block.
 - Policy-decision audit log: every fire writes to the evidence ledger as a `policy_decision` entry with `name`, `outcome`, `requires_eval`, `extract_values`. This makes `audit` and `explain --trace` possible.
@@ -198,10 +198,10 @@ Library-side:
   - [ ] `ledger_tag: "review:42"` against a ledger containing `{content: "review:42:approved", ...}` matches.
   - [ ] `ledger_tag: "dogfood:gs-pandora-abc" + within: 24h` against an entry created 23h ago matches; same shape against an entry created 25h ago does not match.
   - [ ] `ledger_tag: "review:${PR_NUMBER}" + count: {min: 2}` with two matching ledger entries passes; with one entry fails with the message: `1 of required 2 entries found`.
-- [ ] `harness explain review-before-merge --trace` produces a structured trace including: trigger event matched, `extract` substitutions resolved, ledger-query identifier (the SQL string if the implementation is SQL-shelled, or the equivalent function call's signature otherwise — the implementation picks one and sticks with it), entry-count returned, decision (`block`/`allow`), and timestamp. Reproducible against a fixture session.
+- [ ] `harness explain review-before-merge --trace` produces a structured trace including: trigger event matched, `extract` substitutions resolved, ledger-query identifier (the SQL string if the implementation is SQL-shelled, or the equivalent function call's signature otherwise; the implementation picks one and sticks with it), entry-count returned, decision (`block`/`allow`), and timestamp. Reproducible against a fixture session.
 - [ ] A real `mcp__agent-tasks__pull_requests_merge` invocation against a session *without* a `review:42` ledger entry is blocked by harness with the policy's `enforcement: block` semantics; the user sees a one-line error referencing the policy name and the missing requires.
 - [ ] The same invocation *with* a matching ledger entry passes; the policy decision is logged in the ledger as a `policy_decision` entry visible in `harness audit`.
-- [ ] `harness dry-run "merge PR 42"` against the test-fixture session statically reports the exact set of matching policies — for the example fixture this is `[review-before-merge]` and nothing else — without actually invoking the tool call or the LLM.
+- [ ] `harness dry-run "merge PR 42"` against the test-fixture session statically reports the exact set of matching policies (for the example fixture this is `[review-before-merge]` and nothing else) without actually invoking the tool call or the LLM.
 - [ ] `validate` rejects a manifest with a policy `requires.within` value that is not a valid duration (e.g. `within: yesterday` fails; `within: 24h`, `within: PT1H`, `within: 86400s` all pass).
 - [ ] `requires.count.min` of 0 is rejected at `validate` time as a no-op shape (the user should remove the field or use a different policy).
 - [ ] When the evidence ledger is unreachable (e.g. database file missing), policy evaluation defaults to `enforcement: warn`-equivalent behaviour: the policy is logged as un-evaluated but does not block the tool call. This degraded-mode contract is documented and tested.
@@ -221,7 +221,7 @@ Library-side:
 
 A self-merge attempt is blocked end-to-end on my real harness installation: `mcp__agent-tasks__pull_requests_merge` against a PR without a `review:${PR_NUMBER}` ledger entry refuses, `harness explain review-before-merge --trace` shows the full decision trail, and the same invocation succeeds after `ledger record review:42 ...`. Tag `v0.4.0`.
 
-## Phase 5 — Polish + dogfood lessons
+## Phase 5: Polish + dogfood lessons
 
 ### Scope
 
@@ -231,15 +231,15 @@ Phase 4 shipped policies that *fire*. Phase 5 ran them end-to-end against the re
 
 CLI ergonomics:
 
-- **`harness policy intercept --verbose`** — opt-in stderr diagnostics for non-allow decisions (policy name, ledger_tag, matched count, reason, sorted extract values). Default off; v0.4.0 byte-equivalent. Also enabled via `HARNESS_POLICY_VERBOSE=1` (case-insensitive disable: `0` / `false` / `no` / `off`).
-- **`$CLAUDE_SESSION_ID` env fallback** — `audit` / `explain --trace` / `policy intercept` resolve `--session` via the chain `explicit > $CLAUDE_SESSION_ID > "default"` so reads inside a real Claude Code session find what writes landed under the actual UUID.
+- **`harness policy intercept --verbose`**: opt-in stderr diagnostics for non-allow decisions (policy name, ledger_tag, matched count, reason, sorted extract values). Default off; v0.4.0 byte-equivalent. Also enabled via `HARNESS_POLICY_VERBOSE=1` (case-insensitive disable: `0` / `false` / `no` / `off`).
+- **`$CLAUDE_SESSION_ID` env fallback**: `audit` / `explain --trace` / `policy intercept` resolve `--session` via the chain `explicit > $CLAUDE_SESSION_ID > "default"` so reads inside a real Claude Code session find what writes landed under the actual UUID.
 
 Correctness fixes (live evidence in PR #39 dogfood):
 
-- **`audit --since` UTC parse** — SQLite `datetime('now')` writes UTC `YYYY-MM-DD HH:MM:SS`; `Date.parse` of the space form is local, so non-UTC hosts silently filtered out fresh entries. New `parseLedgerTimestamp` coerces to ISO-with-Z. Applied at all four call sites (audit row sort + cutoff filter, explain `selectLatestForPolicy`, `requires.entryTime`).
-- **`explain --trace` ms-precision sort** — sub-second collisions used to tie at `bt - at = 0` because the sort keyed on ledger `createdAt` (1-second precision) and V8's stable sort returned the earliest fire. New `decisionSortKey` prefers the decoded payload's `evaluatedAt` (ms precision); fallback to `createdAt`. Same fix in `audit` row order.
-- **`policy_decision` first-class entry type** — was encoded as `type: "fact"` with a `policy_decision:` content prefix, so past audit payloads' serialised `"ledgerTag":"review:42"` substring-matched the same tag the decision was about and inflated `matchedCount`. Promoted to a first-class `EntryType` in `@lannguyensi/evidence-ledger@0.2.0`; harness writes with the new type and a retry-fallback to legacy `fact` for old servers; reader tags rows with the bucket-derived type so the requires evaluator can drop them. Legacy `policy_decision:`-prefixed `fact` rows are also dropped via a content-prefix backstop.
-- **Server-side `audit` filter pushdown** — `audit` derives `sinceIso` from the existing `--since` cutoff and unconditionally requests `contentPrefix: "policy_decision:"` on `ledger_summary`. Capability detection via `tools/list` keeps it back-compatible with old servers (filter args are dropped silently when not advertised). Hot path (no filter requested) skips `tools/list` entirely.
+- **`audit --since` UTC parse**: SQLite `datetime('now')` writes UTC `YYYY-MM-DD HH:MM:SS`; `Date.parse` of the space form is local, so non-UTC hosts silently filtered out fresh entries. New `parseLedgerTimestamp` coerces to ISO-with-Z. Applied at all four call sites (audit row sort + cutoff filter, explain `selectLatestForPolicy`, `requires.entryTime`).
+- **`explain --trace` ms-precision sort**: sub-second collisions used to tie at `bt - at = 0` because the sort keyed on ledger `createdAt` (1-second precision) and V8's stable sort returned the earliest fire. New `decisionSortKey` prefers the decoded payload's `evaluatedAt` (ms precision); fallback to `createdAt`. Same fix in `audit` row order.
+- **`policy_decision` first-class entry type**: was encoded as `type: "fact"` with a `policy_decision:` content prefix, so past audit payloads' serialised `"ledgerTag":"review:42"` substring-matched the same tag the decision was about and inflated `matchedCount`. Promoted to a first-class `EntryType` in `@lannguyensi/evidence-ledger@0.2.0`; harness writes with the new type and a retry-fallback to legacy `fact` for old servers; reader tags rows with the bucket-derived type so the requires evaluator can drop them. Legacy `policy_decision:`-prefixed `fact` rows are also dropped via a content-prefix backstop.
+- **Server-side `audit` filter pushdown**: `audit` derives `sinceIso` from the existing `--since` cutoff and unconditionally requests `contentPrefix: "policy_decision:"` on `ledger_summary`. Capability detection via `tools/list` keeps it back-compatible with old servers (filter args are dropped silently when not advertised). Hot path (no filter requested) skips `tools/list` entirely.
 
 Distribution:
 
@@ -247,7 +247,7 @@ Distribution:
 
 Test + reproducibility:
 
-- `dogfood/phase5/run-smoke.sh` — reproducible end-to-end smoke against real grounding-mcp + live SQLite ledger, with five fail-closed gates (deny, ledger_add, silent allow, 5m audit, 24h audit, explain --trace). First-run baseline transcripts committed for review of the live wiring.
+- `dogfood/phase5/run-smoke.sh`: reproducible end-to-end smoke against real grounding-mcp + live SQLite ledger, with five fail-closed gates (deny, ledger_add, silent allow, 5m audit, 24h audit, explain --trace). First-run baseline transcripts committed for review of the live wiring.
 - Shared `tests/_helpers/` builders (`makeManifest`, `makePolicy`, `makeDecision`, `makeDecisionEntry`) collapsed ~80 lines of duplicated test boilerplate.
 
 ### Acceptance criteria
@@ -272,7 +272,7 @@ Test + reproducibility:
 
 `@lannguyensi/harness@0.5.0` published to npm; `dogfood/phase5/run-smoke.sh` re-runs end-to-end with all five gates green; `audit --since 5m` returns rows on a non-UTC host within seconds of a policy fire; `matchedCount` no longer inflates after a same-session deny followed by allow. Tag `v0.5.0`.
 
-## Phase 6 — Understanding Gate Policy Pack
+## Phase 6: Understanding Gate Policy Pack
 
 ### Scope
 
@@ -344,7 +344,7 @@ A fresh agent on a clean repo refuses to call write-capable tools until an Under
 - New `harness migrate-home` command: dry-run by default, `--apply` to atomically move `harness.yaml`, `harness.generated/`, `.understanding-gate/`, `harness.lock` into the new root. Idempotent; refuses to overwrite. Operator guide at `docs/migration/v0.24.0-home-dir.md`.
 - Backed by agent-tasks/e65decef, surfaced during the Codex approval-UX dogfood (f608b4ee). Legacy fallback still supported; deletion targeted for a future release.
 
-## Phase 7 — Risk Gate
+## Phase 7: Risk Gate
 
 ### Scope
 
@@ -405,7 +405,7 @@ The architectural split is settled: the Risk Gate lives entirely inside harness,
 
 ### Exit gate
 
-`harness policy intercept` blocks a `kubectl delete namespace prod` invocation against a manifest that ships the built-in `dangerous-shell` classifier + `gate-prod-destructive` policy, and only allows it after a `require_approval` round-trip. Tag `v0.27.0` (the phase-numbered `v0.7.0` in the original plan predates the project's diverged release line — Phase 7 #1-#4 shipped under `v0.26.0`, and the Phase 7 completion release is the next minor, `v0.27.0`).
+`harness policy intercept` blocks a `kubectl delete namespace prod` invocation against a manifest that ships the built-in `dangerous-shell` classifier + `gate-prod-destructive` policy, and only allows it after a `require_approval` round-trip. Tag `v0.27.0` (the phase-numbered `v0.7.0` in the original plan predates the project's diverged release line; Phase 7 #1-#4 shipped under `v0.26.0`, and the Phase 7 completion release is the next minor, `v0.27.0`).
 
 ## Open decisions resolved here
 
@@ -415,7 +415,7 @@ The four design questions flagged in this task's brief, each with a defended pos
 
 **Decision: real call by default, `--shallow` flag in Phase 1.**
 
-The default mode invokes each `mcp[].health.verb` with the configured `timeout_ms` (default 5000) — reference-only would miss exactly the failure mode `ARCHITECTURE.md` Appendix D demonstrates: `codebase-oracle` exited 1 because of a missing native dep, a state invisible to "the path exists" checks. The 5s × N (parallelisable) latency cost is acceptable for an on-demand command.
+The default mode invokes each `mcp[].health.verb` with the configured `timeout_ms` (default 5000); reference-only would miss exactly the failure mode `ARCHITECTURE.md` Appendix D demonstrates: `codebase-oracle` exited 1 because of a missing native dep, a state invisible to "the path exists" checks. The 5s × N (parallelisable) latency cost is acceptable for an on-demand command.
 
 But the original draft of this decision deferred `--shallow` to v2, and the Phase-0 review pushed back: a user (or AI agent) running `harness doctor` repeatedly during interactive iteration shouldn't pay full-probe latency every time. So `--shallow` ships in Phase 1, with the explicit acceptance that it completes in < 100ms against an 8-MCP-server fixture (line 49 above). The default stays `real call`, so users immediately learn the diagnostic value; `--shallow` is the explicit fast-path opt-in. Both modes are first-class, neither is hidden.
 
@@ -423,7 +423,7 @@ But the original draft of this decision deferred `--shallow` to v2, and the Phas
 
 **Decision: write-and-confirm.**
 
-`harness adopt <file>` reads the on-disk file, computes the manifest patch, prints a unified diff to stdout, and prompts `Apply (y/N)?`. On `y` it commits the patch to `harness.yaml`; on anything else it exits 0 with no changes. Editor-mode burdens users who want a one-shot capture; patch-output requires manual `patch` invocation that breaks under whitespace differences; write-and-confirm is what humans and AI agents both want — show me what you'd do, let me say yes. The `--yes` flag bypasses the prompt for non-interactive use (CI, agent driver scripts).
+`harness adopt <file>` reads the on-disk file, computes the manifest patch, prints a unified diff to stdout, and prompts `Apply (y/N)?`. On `y` it commits the patch to `harness.yaml`; on anything else it exits 0 with no changes. Editor-mode burdens users who want a one-shot capture; patch-output requires manual `patch` invocation that breaks under whitespace differences; write-and-confirm is what humans and AI agents both want: show me what you'd do, let me say yes. The `--yes` flag bypasses the prompt for non-interactive use (CI, agent driver scripts).
 
 ### 3. Phase 3 lock-file granularity: every path, but memory dirs hashed Merkle-style
 
@@ -431,18 +431,18 @@ But the original draft of this decision deferred `--shallow` to v2, and the Phas
 
 `harness.lock` records SHA-256 of every file path the effective manifest references: hook scripts, MCP entrypoints, skill `SKILL.md` files, `.env.example`, etc. Narrower-net would miss memory drift (which the user often cares about more than hook drift) and would require an "is this executable?" classifier that gets policy-arguments wrong. The wide-net cost is small (microseconds per file) and the diagnostic value is large.
 
-**The Phase-0 review caught a real signal-to-noise issue here:** memory directories under `~/.claude/projects/*/memory/` realistically have 30-100+ files per project, and a multi-project install crosses 1000+ memory files easily. Per-file SHA-256 in the main lock would produce a 1000-line JSON document that diffs noisily on every memory edit — perf is fine, signal is destroyed.
+**The Phase-0 review caught a real signal-to-noise issue here:** memory directories under `~/.claude/projects/*/memory/` realistically have 30-100+ files per project, and a multi-project install crosses 1000+ memory files easily. Per-file SHA-256 in the main lock would produce a 1000-line JSON document that diffs noisily on every memory edit; perf is fine, signal is destroyed.
 
-The fix: memory directories are hashed Merkle-style — one entry per directory in `harness.lock`, where the directory's hash is `sha256(sorted(filename: filehash for each .md))`. A new memory file or a content change in any memory file produces exactly one diff line per affected directory. The per-file detail is recoverable on demand via `harness diff --since-apply --memory-detail` (Phase 3 deliverable, optional flag).
+The fix: memory directories are hashed Merkle-style: one entry per directory in `harness.lock`, where the directory's hash is `sha256(sorted(filename: filehash for each .md))`. A new memory file or a content change in any memory file produces exactly one diff line per affected directory. The per-file detail is recoverable on demand via `harness diff --since-apply --memory-detail` (Phase 3 deliverable, optional flag).
 
-Tool-asset files (hook scripts, MCP entrypoints, skill SKILL.md) stay one-entry-per-file in the main lock — those are exactly the files where per-file content drift matters individually.
+Tool-asset files (hook scripts, MCP entrypoints, skill SKILL.md) stay one-entry-per-file in the main lock; those are exactly the files where per-file content drift matters individually.
 
 ### 4. Phase 4 policy storage: inline / imported / both
 
 **Decision: both, with clear separation.**
 
 - **Inline** (`harness.yaml policies:`): the runtime-firing policies. These are tightly coupled to the `hooks:` block (each policy references a hook by name), and inlining keeps the wiring legible at a glance.
-- **Imported** (`harness.d/policies/<name>.yaml` via explicit `policies_source:` keys): library-style definitions for a *different DSL* — today, `agent-grounding`'s claim-gate policies via `grounding.policies_source`. The harness `policies:` top-level key does NOT support a `policies_source:` indirection in v1; if cross-manifest policy sharing becomes a real need, it lands as a v2 schema addition.
+- **Imported** (`harness.d/policies/<name>.yaml` via explicit `policies_source:` keys): library-style definitions for a *different DSL*: today, `agent-grounding`'s claim-gate policies via `grounding.policies_source`. The harness `policies:` top-level key does NOT support a `policies_source:` indirection in v1; if cross-manifest policy sharing becomes a real need, it lands as a v2 schema addition.
 
 The reasoning is the one already encoded in `ARCHITECTURE.md` §2: claim-gate policies are their own opinionated DSL with their own evolution; they belong in their own file. Harness runtime policies are wiring, not data; they belong inline next to the hooks they reference.
 
@@ -456,4 +456,4 @@ For one final pass of expectation-setting:
 - **Cloud sync.** No team-shared manifests, no upstream policy bundles, no remote ledger.
 - **Auto-restart of Claude Code or MCP servers.** `apply` and `add` print restart hints; the user (or agent) does the actual restart.
 
-If a future capability does not fit one of the seven phases above, that is the signal for either an explicit follow-up design doc (Phase 8+) or a separate sibling project — not a quiet expansion of this roadmap.
+If a future capability does not fit one of the seven phases above, that is the signal for either an explicit follow-up design doc (Phase 8+) or a separate sibling project, not a quiet expansion of this roadmap.

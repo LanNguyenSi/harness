@@ -4,11 +4,11 @@ This document makes the shape of `harness` concrete. It follows [`VISION.md`](VI
 
 It is prescriptive but not final. Anything here is open to revision before Phase 1 begins, and explicitly versioned (`version: 1`) so future breaking changes stay visible. Once Phase 1 lands, changes to this shape require a minor-version bump on the manifest plus a migration note.
 
-The phase-by-phase plan is deliberately *not* here — it belongs in [`ROADMAP.md`](ROADMAP.md), which follows this document. Likewise, concrete hook scripts belong in Phase 2, not here.
+The phase-by-phase plan is deliberately *not* here; it belongs in [`ROADMAP.md`](ROADMAP.md), which follows this document. Likewise, concrete hook scripts belong in Phase 2, not here.
 
 ---
 
-## 1. Manifest — top-level shape
+## 1. Manifest: top-level shape
 
 A harness configuration is a single YAML file. Five top-level keys, one required header:
 
@@ -22,7 +22,7 @@ hooks: […]                 # cross-cutting: event-bound shell commands
 policies: […]              # cross-cutting: named rules that bind hooks to triggers
 ```
 
-`grounding`, `tools`, `memory` map to the three pillars from VISION §3. `hooks` and `policies` are the cross-cutting layer that wires them to the runtime — they sit at the top level because multiple pillars reference them. Every other piece of config either lives under a pillar or is derived from the pillars.
+`grounding`, `tools`, `memory` map to the three pillars from VISION §3. `hooks` and `policies` are the cross-cutting layer that wires them to the runtime; they sit at the top level because multiple pillars reference them. Every other piece of config either lives under a pillar or is derived from the pillars.
 
 There is no other top-level key. If a future concept (e.g. credentials, observability) does not fit under these five, that is the signal for an architecture revision, not a sixth sibling key added casually.
 
@@ -59,7 +59,7 @@ Field defaults:
 
 ## 3. `tools:` section
 
-Tool registrations, explicitly typed by subsection. Four sub-blocks — `mcp`, `cli`, `skills`, `builtin` — each with its own schema. Explicit typing beats a generic `tools: [ … ]` list because validation is sharper and each tool class has different health-check semantics.
+Tool registrations, explicitly typed by subsection. Four sub-blocks (`mcp`, `cli`, `skills`, `builtin`), each with its own schema. Explicit typing beats a generic `tools: [ … ]` list because validation is sharper and each tool class has different health-check semantics.
 
 ```yaml
 tools:
@@ -145,13 +145,13 @@ Per-type schemas:
 |---|---|---|
 | `enabled` | `string[]` | list of skill names currently wired |
 | `required` | `string[]` | subset of `enabled`; `validate` fails (exit 1) if any are missing on disk. Unlike `tools.cli.required`, this applies per-name rather than per-entry because skills are identified only by name. |
-| `source_dirs` | `string[]` | where to scan for SKILL.md — first match wins |
+| `source_dirs` | `string[]` | where to scan for SKILL.md; first match wins |
 
 ### `tools.builtin`
 
-Inventory only — listed so `harness describe` reports which built-ins the manifest recognises. No `enabled:` flag (built-ins can't be disabled by harness today); the field exists to make drift against runtime-available built-ins detectable.
+Inventory only: listed so `harness describe` reports which built-ins the manifest recognises. No `enabled:` flag (built-ins can't be disabled by harness today); the field exists to make drift against runtime-available built-ins detectable.
 
-`validate` compares `builtin.known` against the runtime's currently-advertised built-in tool list (queried via the Claude Code protocol where possible) and warns when they diverge. The warning is one-sided — a built-in listed in the manifest but not in the runtime is noise, but a runtime built-in missing from the manifest means the user hasn't acknowledged a new tool and downstream policies may not cover it.
+`validate` compares `builtin.known` against the runtime's currently-advertised built-in tool list (queried via the Claude Code protocol where possible) and warns when they diverge. The warning is one-sided: a built-in listed in the manifest but not in the runtime is noise, but a runtime built-in missing from the manifest means the user hasn't acknowledged a new tool and downstream policies may not cover it.
 
 The four tool sub-blocks (`mcp`, `cli`, `skills`, `builtin`) deliberately do not share a parent schema. Their health-check semantics, lifecycle, and registration surfaces differ enough that forcing a common shape would be abstraction for its own sake.
 
@@ -179,11 +179,11 @@ memory:
 
 Notes:
 
-- **`directories`** is a list of `{path, scope}` — `{project}` is a placeholder that `harness describe --project <name>` substitutes. For user-scope, the path is literal.
+- **`directories`** is a list of `{path, scope}`; `{project}` is a placeholder that `harness describe --project <name>` substitutes. For user-scope, the path is literal.
 - **`router.command`** wires the existing `memory-router` hook; the manifest does not re-implement routing. In Phase 3 the `settings.json` hook section is regenerated from this value.
 - **`router.min_version`** (optional, string) and **`router.version_command`** (optional, `string[]`) follow the same contract as `tools.mcp[]`: `harness doctor` runs `version_command` (defaults to `[<resolved router path>, --version]`) and emits a `⚠ outdated` line when the parsed version is below the floor. The check skips when the router is disabled or its executable was not located.
 - **`retention.broken_refs`** decides how `validate` treats memories that reference functions/files that no longer exist. `warn` is the safe default; `error` is for projects that want a hard gate.
-- **`scopes.allowed`** bounds future growth — adding `team` or `public` scope is a manifest-version bump, not a silent extension.
+- **`scopes.allowed`** bounds future growth: adding `team` or `public` scope is a manifest-version bump, not a silent extension.
 
 ## 5. `hooks:` section
 
@@ -235,7 +235,7 @@ Blocking semantics, three levels:
 
 - **`false`** (non-blocking): hook may inject `additionalContext` via stdout-JSON but the tool call always proceeds. Default choice when the hook's job is to inform.
 - **`soft`**: hook may warn; agent sees the warning but the tool call still proceeds. For patterns like "you probably shouldn't `rm -rf` here" that have legitimate exceptions.
-- **`hard`**: hook's non-zero exit or explicit `decision: "block"` (with `hookSpecificOutput.permissionDecision: "deny"` for PreToolUse, per Claude Code 2.1+) aborts the tool call. Reserved for cases where false positives are tolerable — e.g. review-evidence-gate, dogfood-trace-gate.
+- **`hard`**: hook's non-zero exit or explicit `decision: "block"` (with `hookSpecificOutput.permissionDecision: "deny"` for PreToolUse, per Claude Code 2.1+) aborts the tool call. Reserved for cases where false positives are tolerable, e.g., review-evidence-gate, dogfood-trace-gate.
 
 Pick the softest level that solves the problem. Hard-blocking is a commitment that false positives will not happen under reasonable inputs; if you're not sure, start at `soft` and promote.
 
@@ -245,7 +245,7 @@ Hooks are referenced by `command:` and execute as opaque shell. `harness validat
 
 The trade-off this makes explicit: VISION §4's "diff-over-time" capability tells you "this hook is wired to a different event than yesterday" or "this hook now has `blocking: hard` where it had `soft`", but it does not tell you "this hook now `rm -rf`s your home directory where yesterday it ran `git status`". That latter question is a code-review question against the script's git history, not a manifest-diff question. Trying to re-invent shell as a YAML DSL is its own swamp; we don't.
 
-In practice, "hook content is shell" does not mean "hook content is a bespoke script written from scratch every time". The realistic shape of `~/.claude/hooks/git-preflight.sh` is a thin wrapper around an existing tool — typically [`agent-preflight`](https://github.com/LanNguyenSi/agent-preflight), which already runs the check the founding-incident needed:
+In practice, "hook content is shell" does not mean "hook content is a bespoke script written from scratch every time". The realistic shape of `~/.claude/hooks/git-preflight.sh` is a thin wrapper around an existing tool, typically [`agent-preflight`](https://github.com/LanNguyenSi/agent-preflight), which already runs the check the founding-incident needed:
 
 ```bash
 #!/usr/bin/env bash
@@ -261,13 +261,13 @@ ledger record "preflight:${REPO:-$(basename "$PWD")}" \
 [ "$ready" = "true" ]
 ```
 
-That's the canonical shape: harness wires the hook, the hook calls a named tool (`preflight`, `ledger`, `gh`, `git-batch`), the tool does the work. Bespoke shell logic shows up only when no existing tool fits. The hook-opacity trade-off above is unchanged; what's sharpened is the expectation that hook scripts should *look thin* — if a script grows substantial logic, that logic belongs in a named tool with its own repo and tests, not buried in `~/.claude/hooks/`.
+That's the canonical shape: harness wires the hook, the hook calls a named tool (`preflight`, `ledger`, `gh`, `git-batch`), the tool does the work. Bespoke shell logic shows up only when no existing tool fits. The hook-opacity trade-off above is unchanged; what's sharpened is the expectation that hook scripts should *look thin*: if a script grows substantial logic, that logic belongs in a named tool with its own repo and tests, not buried in `~/.claude/hooks/`.
 
 A v2 schema may add a higher-level `command_pattern:` field for the most common shapes ("script-exit-zero", "command-on-PATH", "file-exists") that compiles down to shell. v1 keeps the surface small: write the shell script, reference it by path, version it in git like everything else.
 
 ## 6. `policies:` section
 
-Named rules. Each policy names a trigger (matching the same event/match shape as `hooks`) and declares what the trigger *requires* — typically an evidence-ledger entry of a given tag. Policies reference hooks by name; the hook is the machinery, the policy is the rule.
+Named rules. Each policy names a trigger (matching the same event/match shape as `hooks`) and declares what the trigger *requires*, typically an evidence-ledger entry of a given tag. Policies reference hooks by name; the hook is the machinery, the policy is the rule.
 
 ```yaml
 policies:
@@ -305,7 +305,7 @@ Schema:
 | `trigger` | object | yes | `event`, `match`, optional `path_match` / `bash_match`, optional `extract` (see below) |
 | `requires` | object | yes | evidence shape; discriminated union, see below |
 | `hook` | string | yes | must reference a `hooks[].name` |
-| `enforcement` | enum | yes | `block` / `warn` — higher level than hook's `blocking` flag |
+| `enforcement` | enum | yes | `block` / `warn`; higher level than hook's `blocking` flag |
 | `producers` | array | no | structured remediation hints rendered into the deny envelope; discriminated union of `bash` / `mcp` / `ask` kinds. At least one `mcp` producer is required when set (the ungated recovery path when Bash is locked down). |
 | `ux` | object | no | agent-facing block message; `{ cannot, required[], run[] }`. When set, replaces the engine-vocabulary text on the agent surface (`permissionDecisionReason`) with a plain-language three-section form; the operator-facing reason and audit ledger are unchanged. `${VAR}` references resolve against the same extract map the `ledger_tag` was substituted with, plus builtins (`SESSION_ID` / `REPO` / `BRANCH` / `TOOL_NAME` / `CWD`). Suppresses `producers:` rendering on the agent surface to avoid two competing remedy lists. See [`for-agents.md`](for-agents.md#agent-facing-block-messages-ux-block) for the verbatim form. |
 
@@ -335,12 +335,12 @@ The three shapes compose orthogonally: shape 2 + shape 3 (`ledger_tag` + `within
 
 The earlier draft of this document shipped only shape 1. The 2026-04-27 design review surfaced four real policies that shape 1 alone cannot express:
 
-- "review subagent must have run with confidence ≥ 0.7" — needs a confidence-floor predicate (deferred to v2; see migration table).
-- "at least 2 distinct reviewers" — needs shape 3 (`count`).
-- "last dogfood run within 24h" — needs shape 2 (`within`).
-- "no merge if open security findings tagged HIGH+" — needs negation + tag-filter on the ledger; deferred to v2.
+- "review subagent must have run with confidence ≥ 0.7": needs a confidence-floor predicate (deferred to v2; see migration table).
+- "at least 2 distinct reviewers": needs shape 3 (`count`).
+- "last dogfood run within 24h": needs shape 2 (`within`).
+- "no merge if open security findings tagged HIGH+": needs negation + tag-filter on the ledger; deferred to v2.
 
-Shape 2 and shape 3 land in v1 because they are the minimum that prevents the most obvious workaround ("just put it in a shell hook"). Without `within`, "dogfood-before-release" would be expressed as a shell script that `grep`s the ledger and reasons about timestamps — exactly the prose-rule-in-shell pattern VISION §4 promises to eliminate.
+Shape 2 and shape 3 land in v1 because they are the minimum that prevents the most obvious workaround ("just put it in a shell hook"). Without `within`, "dogfood-before-release" would be expressed as a shell script that `grep`s the ledger and reasons about timestamps, exactly the prose-rule-in-shell pattern VISION §4 promises to eliminate.
 
 ### Migration to v2 `requires` shapes
 
@@ -355,7 +355,7 @@ For the four predicates not shipping in v1, the v2 schema is sketched here so to
 
 The promise is: v1 manifests with shape 1/2/3 keep working under the v2 CLI. Adding any v2 shape to a v1 manifest is a bumping action (`version: 2`).
 
-### `trigger.extract:` — generic variable extraction
+### `trigger.extract:`: generic variable extraction
 
 Template variables used in `requires` (`${PR_NUMBER}`, `${BRANCH}`, etc.) need to be sourced from somewhere. The earlier draft hardcoded `${PR_NUMBER}` to extract `toolArgs.prNumber` for one specific MCP tool. That doesn't scale: every new variable would need bespoke extraction logic.
 
@@ -376,12 +376,12 @@ policies:
 
 The expression is a JSONPath-like dotted accessor against a fixed event-context object: `toolArgs.*`, `event.*`, `session.*`, `git.*`. The full grammar is restricted (no function calls, no array slicing) so `validate` can statically check that every `${VAR}` referenced in `requires` either has an `extract` entry or is one of the seven built-in variables (§6 template variables table below).
 
-The five built-in variables (`SESSION_ID`, `REPO`, `BRANCH`, `TOOL_NAME`, `CWD`) keep working without an `extract` block; they are convenience defaults. `PR_NUMBER` was special-cased in the previous draft and is now uniformly handled through `extract` — the per-tool-special-case is gone. The example policies in this document use `extract:` accordingly.
+The five built-in variables (`SESSION_ID`, `REPO`, `BRANCH`, `TOOL_NAME`, `CWD`) keep working without an `extract` block; they are convenience defaults. `PR_NUMBER` was special-cased in the previous draft and is now uniformly handled through `extract`; the per-tool-special-case is gone. The example policies in this document use `extract:` accordingly.
 
 ### Policy ↔ hook binding
 
 - **Dangling `policy.hook` reference** (names a non-existent hook): `harness validate` fails with exit 1.
-- **Hooks without a referencing policy**: still fire on their event. They are the plain hook path — not every hook needs a policy, but every policy needs a hook. This lets a user keep simple informational hooks (e.g. `git-preflight`) as plain hooks without inventing a policy wrapper.
+- **Hooks without a referencing policy**: still fire on their event. They are the plain hook path; not every hook needs a policy, but every policy needs a hook. This lets a user keep simple informational hooks (e.g. `git-preflight`) as plain hooks without inventing a policy wrapper.
 
 ### Template variables
 
@@ -430,7 +430,7 @@ Variables appear in `requires.ledger_tag` and are substituted at policy-evaluati
 Rules:
 
 - **`harness.yaml` is the source of truth.** If `harness.generated/settings.json` differs from what the manifest would produce, `harness apply` regenerates it. `describe` detects drift.
-- **`harness.lock`** is a Phase-3 artefact. It pins resolved paths/SHAs of hook scripts, MCP commands, etc. so drift between "what the manifest referenced" and "what was actually applied" is deterministic. The exact schema (fields per category, hash algorithm, version pinning rules) is decided when Phase 3 starts, not here. Phase 1–2 implementations do not produce or consume it. Phase 1's "single source of truth" claim therefore applies at the **manifest** layer only — asset-content drift (a hook script edited under your feet) is detectable only after the lock ships in Phase 3. VISION §4's "diff-over-time" is layered for the same reason: manifest diffs in Phase 1, asset diffs in Phase 3. This is documented as a known limitation, not a hidden one.
+- **`harness.lock`** is a Phase-3 artefact. It pins resolved paths/SHAs of hook scripts, MCP commands, etc. so drift between "what the manifest referenced" and "what was actually applied" is deterministic. The exact schema (fields per category, hash algorithm, version pinning rules) is decided when Phase 3 starts, not here. Phase 1–2 implementations do not produce or consume it. Phase 1's "single source of truth" claim therefore applies at the **manifest** layer only; asset-content drift (a hook script edited under your feet) is detectable only after the lock ships in Phase 3. VISION §4's "diff-over-time" is layered for the same reason: manifest diffs in Phase 1, asset diffs in Phase 3. This is documented as a known limitation, not a hidden one.
 - **`harness.d/`** is for fragments imported into the main manifest. Used by `claim-gate.yaml` per §2 `policies_source`, and optionally by `hooks:` / `policies:` extension files. Imports are explicit (`policies_source: …`, not auto-scanned).
 - **`harness.generated/`** is treated as a build artefact. It is `.gitignore`d and regenerated; hand-edits are overwritten on next `apply` *after the drift handling rules below run*.
 - **`projects/<proj>/harness.overrides.yaml`** is optional. Present only when a project needs to deviate from user-level defaults.
@@ -441,9 +441,9 @@ Generated runtime files (today: `~/.claude/settings.json`, `~/.claude/MEMORY.md`
 
 `harness apply` therefore runs a three-state comparison before writing each generated file:
 
-1. **manifest-expected** — what the file *should* look like, derived from the current manifest.
-2. **last-applied** — what harness wrote on the previous `apply`, recorded in `harness.generated/.last-apply` (a hash + a copy of the file).
-3. **on-disk-current** — what the file actually contains right now.
+1. **manifest-expected**: what the file *should* look like, derived from the current manifest.
+2. **last-applied**: what harness wrote on the previous `apply`, recorded in `harness.generated/.last-apply` (a hash + a copy of the file).
+3. **on-disk-current**: what the file actually contains right now.
 
 The decision tree:
 
@@ -457,7 +457,7 @@ The decision tree:
 
 The combination of last-applied tracking + adopt is what makes the slogan "additive at the manifest layer; generative at the runtime layer" true in practice. Without it, the slogan would be marketing.
 
-For files that harness does *not* generate (`CLAUDE.md`, memory markdown files under `projects/*/memory/`, hook scripts under `~/.claude/hooks/`), drift handling does not apply — those files stay user-owned. Harness reads them, validates them, and warns about staleness, but does not write them.
+For files that harness does *not* generate (`CLAUDE.md`, memory markdown files under `projects/*/memory/`, hook scripts under `~/.claude/hooks/`), drift handling does not apply; those files stay user-owned. Harness reads them, validates them, and warns about staleness, but does not write them.
 
 ## 8. Override precedence
 
@@ -470,7 +470,7 @@ Project overrides merge into user-level settings with three rules, depending on 
 | **List of entries with `name`** | Merge by `name`; project entries update matching user entries (by key), non-matching entries are appended | `tools.mcp[]` with `name: codebase-oracle` in project overrides patches just that MCP entry; other MCP entries survive unchanged |
 | **List without `name`** | Replace wholesale | `memory.directories[]` in project overrides replaces the entire list |
 
-The name-keyed merge is the critical rule — it lets projects say "disable this one MCP server" without re-listing every other MCP server. Example:
+The name-keyed merge is the critical rule: it lets projects say "disable this one MCP server" without re-listing every other MCP server. Example:
 
 ```yaml
 # user: ~/.claude/harness.yaml
@@ -503,14 +503,14 @@ Effective manifest for that project has `codebase-oracle` with `enabled: false` 
 | **Empty list `[]`** | Clears the list in the effective manifest. `tools.mcp: []` disables all MCP servers; same for any other list-valued key. This is the explicit way to say "no entries here". |
 | **New name-keyed entry not in user** | Appended, in project-declaration order, after user entries. Two projects adding the same `name` to their overrides is a no-op conflict (each project overrides only its own effective manifest). |
 | **Mixed-shape list (some entries with `name`, some without)** | `validate` error. A list is either name-keyed or not; mixing is not supported. |
-| **Removing a user entry** | Use `_delete: true` on a name-keyed entry (e.g. `- name: codebase-oracle\n  _delete: true`) to drop that entry from the effective manifest. This is the only supported removal syntax — omitting an entry does *not* remove it; it inherits unchanged. |
+| **Removing a user entry** | Use `_delete: true` on a name-keyed entry (e.g. `- name: codebase-oracle\n  _delete: true`) to drop that entry from the effective manifest. This is the only supported removal syntax; omitting an entry does *not* remove it; it inherits unchanged. |
 | **Project override sets key that user omitted entirely** | Added. Inheriting a "nothing" from user and introducing a "something" in project is fine. |
 
 **Override files must have `version:` matching the user-level manifest.** `harness validate` flags mismatched versions.
 
 ### Per-machine overrides
 
-The user-level manifest at `~/.claude/harness.yaml` lives in `$HOME` and is therefore single-machine by default. Real harness configurations are not — the same human runs harness on a WSL2 host, a native Linux laptop, and one or more deployment VPS, and the absolute paths differ on each. `~/git/pandora/codebase-oracle/src/mcp-server.ts` exists on the developer machine but not on a VPS; an MCP-server `command` referencing that path must therefore vary per machine.
+The user-level manifest at `~/.claude/harness.yaml` lives in `$HOME` and is therefore single-machine by default. Real harness configurations are not; the same human runs harness on a WSL2 host, a native Linux laptop, and one or more deployment VPS, and the absolute paths differ on each. `~/git/pandora/codebase-oracle/src/mcp-server.ts` exists on the developer machine but not on a VPS; an MCP-server `command` referencing that path must therefore vary per machine.
 
 Per-machine overrides live in `~/.claude/machines/<discriminator>.harness.overrides.yaml`. The discriminator is one of: `<hostname>` (most specific), `<os>` (`linux` / `darwin` / `wsl2`), or the literal `default`. Discovery and merge order:
 
@@ -543,7 +543,7 @@ tools:
 
 This keeps the user-level manifest portable (no absolute paths) while still allowing each machine to inject its own truth. The user-level manifest can use placeholders (`{{HARNESS_HOME}}/codebase-oracle/...`) that the machine layer resolves; placeholder semantics are deferred to Phase 2 since the per-machine layer alone is enough to express variation today.
 
-**Versioning the manifest itself.** `~/.claude/harness.yaml` and `~/.claude/machines/*.harness.overrides.yaml` are intended to be checked into a git repo (typically a personal dotfiles repo) so the same configuration replicates across machines. `harness.generated/` and `harness.lock` (Phase 3) are gitignored — they are the local resolution artefacts. This is the supported multi-machine workflow and is documented in `harness init`'s output once it ships.
+**Versioning the manifest itself.** `~/.claude/harness.yaml` and `~/.claude/machines/*.harness.overrides.yaml` are intended to be checked into a git repo (typically a personal dotfiles repo) so the same configuration replicates across machines. `harness.generated/` and `harness.lock` (Phase 3) are gitignored; they are the local resolution artefacts. This is the supported multi-machine workflow and is documented in `harness init`'s output once it ships.
 
 ## 9. CLI surface
 
@@ -645,8 +645,8 @@ Follows BSD `sysexits.h` where applicable, extended only where a generic code (`
 
 | Code | Symbol | Meaning |
 |---|---|---|
-| 0 | — | success |
-| 1 | — | validation / lint error; a user-facing assertion failed |
+| 0 | - | success |
+| 1 | - | validation / lint error; a user-facing assertion failed |
 | 64 | `EX_USAGE` | bad CLI arguments |
 | 66 | `EX_NOINPUT` | configuration file not found or unreadable |
 | 69 | `EX_UNAVAILABLE` | an external tool/process failed (MCP unreachable, required CLI missing, git call failed) |
@@ -676,8 +676,8 @@ Dependencies (pinned in Phase 1):
 Language-service dependencies:
 
 - `typescript` (dev)
-- `tsx` (dev) — fast TS execution without build for local iteration
-- `vitest` (dev) — test framework matching existing repos
+- `tsx` (dev): fast TS execution without build for local iteration
+- `vitest` (dev): test framework matching existing repos
 
 Package layout: single package `harness` in Phase 1 (single source tree, single binary). If `harness` grows a library surface for external tools to consume (e.g. agent-tasks wants to read the effective manifest programmatically), it becomes a monorepo at Phase 3+ boundary. Deferred until concrete consumer exists.
 
@@ -685,7 +685,7 @@ Build:
 
 - `tsc` produces `dist/cli.js`
 - `bin` entry in `package.json` points at compiled output
-- `npm run build` / `npm test` / `npm run typecheck` — standard scripts matching existing repos
+- `npm run build` / `npm test` / `npm run typecheck`: standard scripts matching existing repos
 
 ## 11. Versioning and backwards compatibility
 
@@ -694,13 +694,13 @@ Manifest version is an integer in the top-level `version:` key. Semver does not 
 Rules:
 
 - **`version: 1`** is the shape defined in this document. `harness` CLI 0.x targets manifest `version: 1`.
-- **Adding new optional fields** is backwards-compatible — does not bump `version`.
-- **Adding new sub-blocks under an existing pillar** (e.g. `tools.containers`) is backwards-compatible — does not bump `version`.
-- **Adding a new enum value** (e.g. a new `blocking` level, a new `event` type) is backwards-compatible — does not bump `version`.
-- **Removing a field, removing an enum value, changing a default semantically, or changing merge rules** is a breaking change — bumps `version` to `2`. `harness validate` on `version: 1` manifests still works (read-compatible) for at least one major CLI version.
+- **Adding new optional fields** is backwards-compatible; does not bump `version`.
+- **Adding new sub-blocks under an existing pillar** (e.g. `tools.containers`) is backwards-compatible; does not bump `version`.
+- **Adding a new enum value** (e.g. a new `blocking` level, a new `event` type) is backwards-compatible; does not bump `version`.
+- **Removing a field, removing an enum value, changing a default semantically, or changing merge rules** is a breaking change; bumps `version` to `2`. `harness validate` on `version: 1` manifests still works (read-compatible) for at least one major CLI version.
 - **`harness apply` on a `version: 1` manifest after CLI upgrade** migrates in-place if possible; otherwise fails with a specific migration guide.
-- **Unknown keys inside a known version**: `harness validate` rejects them with exit 1 in Phase 1. This is the strict default — typos should surface loud, not silently ignore. Once the manifest schema is stable (post Phase 3), a `--lenient` mode may accept and warn instead.
-- **Unknown `version:` value** (e.g. the CLI is `version: 1`-only but the manifest declares `version: 2`): `harness validate` exits 66 (`EX_NOINPUT`) with a message pointing at the CLI upgrade. No partial parsing is attempted — forward-compatibility in the other direction is not a promise.
+- **Unknown keys inside a known version**: `harness validate` rejects them with exit 1 in Phase 1. This is the strict default; typos should surface loud, not silently ignore. Once the manifest schema is stable (post Phase 3), a `--lenient` mode may accept and warn instead.
+- **Unknown `version:` value** (e.g. the CLI is `version: 1`-only but the manifest declares `version: 2`): `harness validate` exits 66 (`EX_NOINPUT`) with a message pointing at the CLI upgrade. No partial parsing is attempted; forward-compatibility in the other direction is not a promise.
 
 The intent is that a user's `harness.yaml` written against `version: 1` keeps working for as long as practical without editing. That promise is load-bearing because this file is the human-facing surface of the whole project.
 
@@ -720,7 +720,7 @@ Explicitly deferred:
 
 ---
 
-## Appendix A — Full example manifest
+## Appendix A: Full example manifest
 
 ```yaml
 # ~/.claude/harness.yaml
@@ -884,7 +884,7 @@ policies:
     enforcement: block
 ```
 
-## Appendix B — Full override example
+## Appendix B: Full override example
 
 ```yaml
 # ~/.claude/projects/agent-grounding/harness.overrides.yaml
@@ -912,25 +912,25 @@ policies:
     enforcement: block        # same as user default; listed for clarity
 ```
 
-## Appendix C — Design decisions from the 2026-04-27 review
+## Appendix C: Design decisions from the 2026-04-27 review
 
 A discussion-mode review on 2026-04-27 surfaced six structural weaknesses plus a smaller bonus item. This appendix maps each to its resolution in the current document so the design intent is auditable post hoc. Future reviewers should challenge specific resolutions here; the table below is the contract.
 
 | # | Weakness | Resolution | Where in this doc |
 |---|---|---|---|
-| 1 | Founding incident is in Phase 4 (enforcement), Phase 1 ships introspection — perceived gap between problem statement and first deliverable | **Defended.** Introspection is a precondition for enforcement; Phase 1 has independent value via `harness doctor`. Worked example walks through what Phase 1's user-visible value looks like. | VISION §8 (new); ARCHITECTURE Appendix D |
-| 2 | `requires` schema shipped only `ledger_tag` — too narrow for real policies (recency, count, confidence floor, negation) | **Partially fixed, partially deferred.** v1 ships three discriminated shapes (`ledger_tag`, `+ within`, `+ count`) covering the common patterns. Four further shapes (confidence floor, not-present, tag-filter, aggregate) named with v2 migration path and explicit Phase 1 workarounds for each. | ARCHITECTURE §6 — "`requires` shapes shipped in v1", "Migration to v2 `requires` shapes" |
-| 3 | `apply` regenerating `settings.json` contradicted "additive, not replacing" promise — no story for hand-edits | **Fixed.** VISION §5 reworded ("additive at the manifest layer; generative at the runtime layer for surfaces it owns"). ARCHITECTURE §7 adds three-state drift detection (manifest-expected / last-applied / on-disk-current) with explicit decision tree. New `harness adopt` verb (Phase 2) is the supported path from hand-edits to manifest. | VISION §5; ARCHITECTURE §7 — "Drift handling on `apply`" |
-| 4 | Hook scripts opaque shell — `validate`/`doctor` can't reason about behaviour, undermining "diff-over-time" | **Defended explicitly.** Harness owns wiring, not content. v1 keeps shell. v2 may add `command_pattern:` for common shapes that compile to shell. Trade-off named in writing. | ARCHITECTURE §5 — "Hook content is shell, by design" |
-| 5 | Single-machine assumption — manifest in `$HOME`, no per-machine overrides, no story for multi-machine workflow | **Fixed.** Per-machine override layer added at `~/.claude/machines/<discriminator>.harness.overrides.yaml`. Three discriminator types: `hostname`, `os` (linux/darwin/wsl2), `default`. Merge order spelled out. Multi-machine git workflow documented. | ARCHITECTURE §8 — "Per-machine overrides" |
-| 6 | `harness.lock` deferred to Phase 3 — Phase 1 "single source of truth" claim half-true, asset-content drift undetectable | **Defended with explicit scoping.** Phase 1 source-of-truth is at the manifest layer; asset drift is a Phase 3 concern. VISION §4 and ARCHITECTURE §7 both made this layering explicit instead of leaving it implicit. | VISION §4; ARCHITECTURE §7 — `harness.lock` bullet |
-| Bonus | `${PR_NUMBER}` hardcoded to extract `toolArgs.prNumber` for one MCP tool — doesn't scale | **Fixed.** Generic `trigger.extract:` field added. Five auto-resolved built-ins (SESSION_ID, REPO, BRANCH, TOOL_NAME, CWD) keep working without `extract`; `PR_NUMBER` and any other custom variable goes through `extract`. `validate` rejects references that lack an extraction source. | ARCHITECTURE §6 — "`trigger.extract:` — generic variable extraction"; updated examples + variables table |
+| 1 | Founding incident is in Phase 4 (enforcement), Phase 1 ships introspection (perceived gap between problem statement and first deliverable) | **Defended.** Introspection is a precondition for enforcement; Phase 1 has independent value via `harness doctor`. Worked example walks through what Phase 1's user-visible value looks like. | VISION §8 (new); ARCHITECTURE Appendix D |
+| 2 | `requires` schema shipped only `ledger_tag`: too narrow for real policies (recency, count, confidence floor, negation) | **Partially fixed, partially deferred.** v1 ships three discriminated shapes (`ledger_tag`, `+ within`, `+ count`) covering the common patterns. Four further shapes (confidence floor, not-present, tag-filter, aggregate) named with v2 migration path and explicit Phase 1 workarounds for each. | ARCHITECTURE §6: "`requires` shapes shipped in v1", "Migration to v2 `requires` shapes" |
+| 3 | `apply` regenerating `settings.json` contradicted "additive, not replacing" promise: no story for hand-edits | **Fixed.** VISION §5 reworded ("additive at the manifest layer; generative at the runtime layer for surfaces it owns"). ARCHITECTURE §7 adds three-state drift detection (manifest-expected / last-applied / on-disk-current) with explicit decision tree. New `harness adopt` verb (Phase 2) is the supported path from hand-edits to manifest. | VISION §5; ARCHITECTURE §7: "Drift handling on `apply`" |
+| 4 | Hook scripts opaque shell: `validate`/`doctor` can't reason about behaviour, undermining "diff-over-time" | **Defended explicitly.** Harness owns wiring, not content. v1 keeps shell. v2 may add `command_pattern:` for common shapes that compile to shell. Trade-off named in writing. | ARCHITECTURE §5: "Hook content is shell, by design" |
+| 5 | Single-machine assumption: manifest in `$HOME`, no per-machine overrides, no story for multi-machine workflow | **Fixed.** Per-machine override layer added at `~/.claude/machines/<discriminator>.harness.overrides.yaml`. Three discriminator types: `hostname`, `os` (linux/darwin/wsl2), `default`. Merge order spelled out. Multi-machine git workflow documented. | ARCHITECTURE §8: "Per-machine overrides" |
+| 6 | `harness.lock` deferred to Phase 3: Phase 1 "single source of truth" claim half-true, asset-content drift undetectable | **Defended with explicit scoping.** Phase 1 source-of-truth is at the manifest layer; asset drift is a Phase 3 concern. VISION §4 and ARCHITECTURE §7 both made this layering explicit instead of leaving it implicit. | VISION §4; ARCHITECTURE §7: `harness.lock` bullet |
+| Bonus | `${PR_NUMBER}` hardcoded to extract `toolArgs.prNumber` for one MCP tool: doesn't scale | **Fixed.** Generic `trigger.extract:` field added. Five auto-resolved built-ins (SESSION_ID, REPO, BRANCH, TOOL_NAME, CWD) keep working without `extract`; `PR_NUMBER` and any other custom variable goes through `extract`. `validate` rejects references that lack an extraction source. | ARCHITECTURE §6: "`trigger.extract:`: generic variable extraction"; updated examples + variables table |
 
-The pattern across the seven items: **fix where the cost is bounded** (drift handling, machine layer, extract field — all small additions), **defend with explicit trade-off** where the alternative is worse than the cost (introspection-first, hook opacity, lock-file scoping), **partially fix and migrate the rest** where v1 needs movement but v2 will need to do more (`requires` shapes).
+The pattern across the seven items: **fix where the cost is bounded** (drift handling, machine layer, extract field: all small additions), **defend with explicit trade-off** where the alternative is worse than the cost (introspection-first, hook opacity, lock-file scoping), **partially fix and migrate the rest** where v1 needs movement but v2 will need to do more (`requires` shapes).
 
-If a future reviewer disagrees with a specific resolution, the right venue is a follow-up ADR that names this appendix and argues for the alternative — not a silent rewrite of the affected section.
+If a future reviewer disagrees with a specific resolution, the right venue is a follow-up ADR that names this appendix and argues for the alternative, not a silent rewrite of the affected section.
 
-## Appendix D — Phase 1 value demonstration
+## Appendix D: Phase 1 value demonstration
 
 This appendix answers the killer-test challenge: *can `harness` solve a real problem in 20 lines without policy enforcement?* The answer is `harness doctor` plus `validate`. Below is a worked walkthrough of what these commands deliver in Phase 1, against the actual configuration patterns seen in this ecosystem.
 
@@ -938,11 +938,11 @@ This appendix answers the killer-test challenge: *can `harness` solve a real pro
 
 The user has a `~/.claude/harness.yaml` declaring three MCP servers (`agent-tasks`, `codebase-oracle`, `grounding-mcp`), two CLIs, four enabled skills, two memory directories, four hooks, and four policies (matching Appendix A). Yesterday everything was healthy. Overnight someone (or the user, last week, then forgot) edited `git-preflight.sh` and the `codebase-oracle` MCP server crashed. The user starts a fresh session.
 
-### Without harness — today
+### Without harness: today
 
 The agent tries `oracle_search` mid-investigation. The MCP call fails. The agent logs an error, moves on, falls back to grep. Two hours later the user notices "why are oracle answers empty?" and starts debugging the MCP layer. The drift in `git-preflight.sh` is invisible until something it was supposed to catch slips through.
 
-### With harness Phase 1 — `harness doctor` output
+### With harness Phase 1: `harness doctor` output
 
 ```
 $ harness doctor
@@ -992,10 +992,10 @@ Summary
 
 In ~25 lines of CLI output, the user learns:
 
-1. **codebase-oracle is broken** — surfaced the moment they ran `harness doctor`, not two hours into a session. The cause (missing native dep) is in the error message.
-2. **Three memories are stale** — flagged by retention rule, candidates for review or deletion.
-3. **Policy enforcement history** — last fire times for both policies; if a policy hasn't fired in months it's a hint that the trigger isn't matching anymore.
-4. **No claim about asset content** — the doctor does not say "git-preflight.sh hasn't changed". That capability requires `harness.lock` and ships in Phase 3. The user knows this is a known gap, not an oversight.
+1. **codebase-oracle is broken**, surfaced the moment they ran `harness doctor`, not two hours into a session. The cause (missing native dep) is in the error message.
+2. **Three memories are stale**, flagged by retention rule, candidates for review or deletion.
+3. **Policy enforcement history**: last fire times for both policies; if a policy hasn't fired in months it's a hint that the trigger isn't matching anymore.
+4. **No claim about asset content**: the doctor does not say "git-preflight.sh hasn't changed". That capability requires `harness.lock` and ships in Phase 3. The user knows this is a known gap, not an oversight.
 
 This is what Phase 1 ships against the killer-test: a single command that answers "what is broken right now and is anything stale". The 20-line bar is met. The enforcement layer comes later, but the floor is laid here. Without this floor, an enforcement layer would fire policies against a configuration nobody can fully read.
 
@@ -1013,4 +1013,4 @@ WARN   memory.retention.staleness_days threshold passed by 3 memories (run `harn
 3 errors, 1 warning. Exiting 1.
 ```
 
-This is what gets wired into a pre-session hook in Phase 4 — but as a standalone Phase 1 capability, it already lets a CI pipeline fail loud when a manifest goes stale on a fresh checkout.
+This is what gets wired into a pre-session hook in Phase 4, but as a standalone Phase 1 capability, it already lets a CI pipeline fail loud when a manifest goes stale on a fresh checkout.

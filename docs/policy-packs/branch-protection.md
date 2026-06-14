@@ -156,7 +156,7 @@ trusted override signal.
 
 A detached HEAD is treated as **protected** by the producer (it
 declines to write the tag) and as **safe** by the blocker (it allows,
-since git detached-HEAD edits don't auto-push to a protected ref —
+since git detached-HEAD edits don't auto-push to a protected ref;
 the downstream `preflight-before-push` gate still catches the
 push). This asymmetry is intentional: the producer is conservative;
 the blocker is pragmatic (alternative would block every Write in
