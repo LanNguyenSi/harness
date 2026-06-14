@@ -31,6 +31,16 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Integration tests
+        # Runs the HARNESS_INTEGRATION_TESTS-gated suite that `npm test`
+        # skips (operator-state-isolation: the full suite must stay green
+        # even with an operator pause sentinel planted). Keeps that
+        # operator-recovery-critical behavior from rotting unverified.
+        # ~6s locally; the runner's HOME is ephemeral, and the test
+        # snapshots and restores any real sentinel in try/finally anyway.
+        timeout-minutes: 10
+        run: npm run test:integration
+
       - name: Understanding-gate schema drift check
         # Fetches @lannguyensi/understanding-gate@latest and compares its
         # parser SECTIONS array against the local mirror in
