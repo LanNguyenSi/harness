@@ -1687,3 +1687,61 @@ describe("apply: preserves sibling state under harness.generated/ (agent-tasks/b
     expect(fs.readFileSync(stagingPath, "utf8")).toBe("sess-staged\n");
   });
 });
+
+describe("apply — grounding-mcp policy-degradation gate (discovery H3)", () => {
+  function writePolicyManifest(withGroundingMcp: boolean): void {
+    const manifest = {
+      version: 1,
+      tools: {
+        mcp: withGroundingMcp ? [{ name: "grounding-mcp", command: ["/usr/bin/true"] }] : [],
+        cli: [],
+        skills: { enabled: [], source_dirs: [] },
+        builtin: { known: [] },
+      },
+      memory: { directories: [] },
+      hooks: [
+        {
+          name: "h",
+          event: "PreToolUse",
+          command: path.join(tmpHome, "hooks", "h.sh"),
+          blocking: false,
+        },
+      ],
+      policies: [
+        {
+          name: "p",
+          description: "test",
+          trigger: { event: "PreToolUse" },
+          requires: { ledger_tag: "review:${SESSION_ID}" },
+          hook: "h",
+          enforcement: "block",
+        },
+      ],
+    };
+    fs.writeFileSync(path.join(tmpHome, "harness.yaml"), yamlStringify(manifest));
+  }
+
+  it("fails apply when policies are declared but grounding-mcp is not wired", async () => {
+    writePolicyManifest(false);
+    await expect(apply({ homeDir: tmpHome })).rejects.toMatchObject({
+      name: "HarnessExitError",
+      exitCode: 1,
+      // Name the degradation AND the actionable fix AND point at validate.
+      message: expect.stringMatching(
+        /grounding-mcp not wired.*degraded warn-mode.*Wire grounding-mcp under tools\.mcp.*harness validate/s,
+      ),
+    });
+  });
+
+  it("does not write settings.json when the degradation gate fails (fail-closed)", async () => {
+    writePolicyManifest(false);
+    await apply({ homeDir: tmpHome }).catch(() => undefined);
+    expect(fs.existsSync(settingsPath())).toBe(false);
+  });
+
+  it("succeeds when policies are declared and grounding-mcp is wired", async () => {
+    writePolicyManifest(true);
+    const r = await apply({ homeDir: tmpHome });
+    expect(r.outcome).toBe("applied");
+  });
+});

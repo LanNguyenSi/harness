@@ -60,6 +60,7 @@ import {
   type Runtime,
 } from "../../policy-packs/index.js";
 import { parseManifest, type Manifest } from "../../schema/index.js";
+import { checkPolicyGroundingMcp } from "../validate/checks.js";
 import { EX_FAIL, EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
 import { loadManifest } from "../loader.js";
 import { GENERATED_DIRNAME, resolveGeneratedDir } from "../../io/generated-dir.js";
@@ -520,6 +521,23 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
       `harness apply: ${lines.length} policy pack issue${
         lines.length === 1 ? "" : "s"
       }; run \`harness validate\` for the full report\n${lines.join("\n")}`,
+      EX_FAIL,
+    );
+  }
+
+  // grounding-mcp policy-degradation gate (discovery H3): a manifest with
+  // policies but no grounding-mcp under tools.mcp would deploy policies that
+  // silently degrade to warn-mode at runtime (the allow-everything footgun).
+  // validate only WARNS on this; apply must fail loud so an operator who runs
+  // apply without validate cannot ship the degraded config.
+  const groundingIssues = checkPolicyGroundingMcp(manifest);
+  if (groundingIssues.length > 0) {
+    throw new HarnessExitError(
+      `harness apply: ${groundingIssues
+        .map((d) => d.message)
+        .join(
+          "; ",
+        )}. Wire grounding-mcp under tools.mcp, or remove the policies. Run \`harness validate\` for the full report.`,
       EX_FAIL,
     );
   }
