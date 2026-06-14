@@ -15,10 +15,8 @@
 // needs no change: it already stores arbitrary tags through `ledger_add`.
 
 import { addLedgerFact } from "../../runtime/ledger-add.js";
-import {
-  readPendingApproval,
-  resolveGeneratedDir,
-} from "../../runtime/pending-approval.js";
+import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
+import { resolveApprovalSessionId } from "../../runtime/session-id.js";
 import type { Manifest, McpServer } from "../../schema/index.js";
 import { EX_FAIL, EX_USAGE, HarnessExitError } from "../exit-codes.js";
 import { loadManifest, resolvePaths, type LoaderOptions } from "../loader.js";
@@ -201,40 +199,19 @@ export async function approveRisk(
       manifestPath: resolvePaths(opts).base,
     });
 
-  let sessionId = "";
-  let sessionSource: ApproveRiskResult["sessionSource"] = "flag";
-  if (typeof opts.session === "string" && opts.session.length > 0) {
-    sessionId = opts.session;
-    sessionSource = "flag";
-  } else if (
-    typeof process.env.CLAUDE_CODE_SESSION_ID === "string" &&
-    process.env.CLAUDE_CODE_SESSION_ID.length > 0
-  ) {
-    // Canonical: the var Claude Code actually exports into the agent
-    // shell. Read before the legacy $CLAUDE_SESSION_ID so an operator
-    // who has both set (e.g. a manual export plus the runtime export)
-    // gets the runtime's id, not whatever they typed by hand.
-    sessionId = process.env.CLAUDE_CODE_SESSION_ID;
-    sessionSource = "env-claude-code";
-  } else if (
-    typeof process.env.CLAUDE_SESSION_ID === "string" &&
-    process.env.CLAUDE_SESSION_ID.length > 0
-  ) {
-    sessionId = process.env.CLAUDE_SESSION_ID;
-    sessionSource = "env-claude";
-  } else if (
-    typeof process.env.CODEX_SESSION_ID === "string" &&
-    process.env.CODEX_SESSION_ID.length > 0
-  ) {
-    sessionId = process.env.CODEX_SESSION_ID;
-    sessionSource = "env-codex";
-  } else {
-    const staged = readPendingApproval(generatedDir);
-    if (staged !== null) {
-      sessionId = staged;
-      sessionSource = "pending-approval";
-    }
-  }
+  // Session id precedence mirrors `harness approve understanding` tiers 1-5:
+  // explicit --session, then $CLAUDE_CODE_SESSION_ID (canonical Claude Code
+  // var), then $CLAUDE_SESSION_ID (legacy), then $CODEX_SESSION_ID, then the
+  // .pending-approval file staged by the gate hook or preflight. No
+  // persisted-report tier: the Risk Gate produces no persisted reports.
+  const { sessionId, sessionSource: rawSessionSource } = resolveApprovalSessionId({
+    session: opts.session,
+    generatedDir,
+  });
+  // Cast is safe: no newestReportFallback passed, so "newest-report" is
+  // unreachable at runtime. The wider return type of resolveApprovalSessionId
+  // requires the cast for TypeScript.
+  const sessionSource = rawSessionSource as ApproveRiskResult["sessionSource"];
 
   if (sessionId === "") {
     throw new HarnessExitError(
