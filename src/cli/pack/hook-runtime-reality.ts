@@ -30,6 +30,7 @@ import {
   type Probe,
 } from "@lannguyensi/runtime-reality-checker/policy";
 import type { ActualProcessState } from "@lannguyensi/runtime-reality-checker";
+import { checkPauseFromLoader } from "../pause-check.js";
 
 /** Hard ceiling on a single probe invocation. The hook's own budget_ms
  *  (default 30s) is the outer bound; keep the probe well inside it so a
@@ -146,6 +147,17 @@ export interface RuntimeRealityCliOptions {
   stdout?: NodeJS.WritableStream;
   /** Defaults to process.stderr. */
   stderr?: NodeJS.WritableStream;
+  /**
+   * Test-injected harness.generated/ directory for the pause sentinel lookup.
+   * In production this is resolved automatically from the manifest path; tests
+   * supply it directly so a real manifest install is not required.
+   */
+  generatedDir?: string;
+  /**
+   * Override "now" for deterministic pause-expiry tests. Forwarded to
+   * `checkPauseFromLoader` / `maybeAnnouncePause`.
+   */
+  now?: Date;
 }
 
 function allowResult(reason: string): HandlerResult {
@@ -175,6 +187,24 @@ export async function runPackHookRuntimeRealityCli(
     raw = await readStdin(stdin);
   } catch {
     return allowResult("stdin read failed, degraded to allow");
+  }
+
+  // Pause sentinel — operator-only kill switch. Honoured BEFORE the probe
+  // and drift evaluation so an active pause always allows, matching the
+  // universal contract of every other gate hook in the harness. This verb
+  // is env-driven and exposes no --config/--project flags, so the sentinel
+  // resolves from the default generated dir rather than forwarded
+  // loaderOpts; that is intentional, not an omission.
+  {
+    const pauseOpts: Parameters<typeof checkPauseFromLoader>[0] = {
+      hookLabel: "runtime-reality",
+      stderr,
+    };
+    if (opts.generatedDir !== undefined) pauseOpts.generatedDir = opts.generatedDir;
+    if (opts.now !== undefined) pauseOpts.now = opts.now;
+    if (checkPauseFromLoader(pauseOpts).paused) {
+      return allowResult("harness paused; runtime-reality allowing without evaluating.");
+    }
   }
 
   let result: HandlerResult;
