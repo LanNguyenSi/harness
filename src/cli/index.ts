@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { Command } from "commander";
 
@@ -49,6 +50,10 @@ import { exportManifest } from "./export.js";
 import { doctor, isDoctorTarget, KNOWN_DOCTOR_TARGETS } from "./doctor/index.js";
 import { format as formatDoctor } from "./doctor/format.js";
 import type { DoctorTarget } from "./doctor/types.js";
+import {
+  deleteRogueLedgers,
+  scanForRogueLedgers,
+} from "./doctor/rogue-ledger.js";
 import { EX_FAIL, EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { explain } from "./explain.js";
 import { explainAction } from "./explain-action.js";
@@ -209,6 +214,11 @@ export function buildProgram(opts: RunOptions = {}): Command {
       `additionally evaluate the harness-side adapter health for a runtime (allowed: ${KNOWN_DOCTOR_TARGETS.join(", ")})`,
     )
     .option("--json", "emit a structured JSON DoctorReport instead of prose")
+    .option(
+      "--rm-rogue-ledgers",
+      "after reporting, delete each rogue evidence-ledger directory found (prompts per hit; combine with --yes to skip prompts)",
+    )
+    .option("--yes", "with --rm-rogue-ledgers, skip per-hit confirmation prompts")
     .action(
       async (options: {
         config?: string;
@@ -216,6 +226,8 @@ export function buildProgram(opts: RunOptions = {}): Command {
         shallow?: boolean;
         target?: string;
         json?: boolean;
+        rmRogueLedgers?: boolean;
+        yes?: boolean;
       }) => {
         let target: DoctorTarget | undefined;
         if (options.target !== undefined) {
@@ -239,6 +251,33 @@ export function buildProgram(opts: RunOptions = {}): Command {
           return;
         }
         stdout(formatDoctor(report));
+
+        if (!options.rmRogueLedgers) return;
+
+        const hits = report.rogueLedgerDbs;
+        if (hits.length === 0) {
+          stdout("no rogue evidence-ledger DBs found; nothing to delete\n");
+          return;
+        }
+
+        const result = await deleteRogueLedgers(hits, { yes: options.yes });
+
+        for (const hit of result.deleted) {
+          stdout(`deleted: ${hit.rogueDir}\n`);
+        }
+        for (const hit of result.skipped) {
+          stdout(`skipped: ${hit.rogueDir}\n`);
+        }
+
+        // Re-scan and print clean delta so the operator can confirm the
+        // on-disk state after deletion.
+        const afterScan = scanForRogueLedgers({
+          homeDir: os.homedir(),
+          cwd: process.cwd(),
+        });
+        stdout(
+          `rogue evidence-ledger DBs remaining: ${afterScan.length}\n`,
+        );
       },
     );
 

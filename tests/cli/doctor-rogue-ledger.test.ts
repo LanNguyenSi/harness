@@ -1,10 +1,14 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { doctor } from "../../src/cli/doctor/index.js";
 import { format } from "../../src/cli/doctor/format.js";
-import { scanForRogueLedgers } from "../../src/cli/doctor/rogue-ledger.js";
+import {
+  deleteRogueLedgers,
+  scanForRogueLedgers,
+  type RogueLedgerDb,
+} from "../../src/cli/doctor/rogue-ledger.js";
 import type { McpProbe, McpProbeResult } from "../../src/probes/mcp.js";
 import type { McpServer } from "../../src/schema/index.js";
 
@@ -309,5 +313,114 @@ describe("scanForRogueLedgers — symlink semantics (task 44f66fa4 polish)", () 
     const hits = scanForRogueLedgers({ homeDir: home, cwd: repoDir });
 
     expect(hits).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// deleteRogueLedgers
+// ---------------------------------------------------------------------------
+
+describe("deleteRogueLedgers", () => {
+  it("--yes: deletes the rogueDir and a follow-up scan returns empty", async () => {
+    const home = tempHome();
+    const { rogueDir } = plantRogueLedger(home);
+
+    const hits = scanForRogueLedgers({ homeDir: home, cwd: home });
+    expect(hits).toHaveLength(1);
+
+    const result = await deleteRogueLedgers(hits, { yes: true });
+
+    expect(result.deleted).toHaveLength(1);
+    expect(result.skipped).toHaveLength(0);
+    expect(fs.existsSync(rogueDir)).toBe(false);
+
+    // Follow-up scan must return empty.
+    const afterScan = scanForRogueLedgers({ homeDir: home, cwd: home });
+    expect(afterScan).toHaveLength(0);
+  });
+
+  it("--yes: parent directory is NOT deleted, only the rogueDir itself", async () => {
+    const home = tempHome();
+    plantRogueLedger(home);
+
+    const hits = scanForRogueLedgers({ homeDir: home, cwd: home });
+    await deleteRogueLedgers(hits, { yes: true });
+
+    // The parent (home) must still exist.
+    expect(fs.existsSync(home)).toBe(true);
+  });
+
+  it("injected promptFn returning true deletes the rogueDir", async () => {
+    const home = tempHome();
+    const { rogueDir } = plantRogueLedger(home);
+
+    const hits = scanForRogueLedgers({ homeDir: home, cwd: home });
+    const promptFn = vi.fn().mockResolvedValue(true);
+    const result = await deleteRogueLedgers(hits, { promptFn });
+
+    expect(promptFn).toHaveBeenCalledOnce();
+    expect(promptFn).toHaveBeenCalledWith(rogueDir);
+    expect(result.deleted).toHaveLength(1);
+    expect(fs.existsSync(rogueDir)).toBe(false);
+  });
+
+  it("injected promptFn returning false skips deletion and leaves the rogueDir intact", async () => {
+    const home = tempHome();
+    const { rogueDir } = plantRogueLedger(home);
+
+    const hits = scanForRogueLedgers({ homeDir: home, cwd: home });
+    const promptFn = vi.fn().mockResolvedValue(false);
+    const result = await deleteRogueLedgers(hits, { promptFn });
+
+    expect(promptFn).toHaveBeenCalledOnce();
+    expect(result.deleted).toHaveLength(0);
+    expect(result.skipped).toHaveLength(1);
+    expect(fs.existsSync(rogueDir)).toBe(true);
+  });
+
+  it("does nothing when the hits list is empty", async () => {
+    const result = await deleteRogueLedgers([], { yes: true });
+    expect(result.deleted).toHaveLength(0);
+    expect(result.skipped).toHaveLength(0);
+  });
+
+  it("skips a hit whose rogueDir basename is not '~' (safety guard)", async () => {
+    const home = tempHome();
+    // Fabricate a hit that bypasses the scan filter to test the
+    // basename safety check inside deleteRogueLedgers directly.
+    const fakeHit: RogueLedgerDb = {
+      rogueDir: path.join(home, "not-a-tilde"),
+      path: path.join(home, "not-a-tilde", ".evidence-ledger", "ledger.db"),
+    };
+    const promptFn = vi.fn().mockResolvedValue(true);
+    const result = await deleteRogueLedgers([fakeHit], { promptFn });
+
+    // The hit is skipped without calling the prompt.
+    expect(promptFn).not.toHaveBeenCalled();
+    expect(result.skipped).toHaveLength(1);
+    expect(result.deleted).toHaveLength(0);
+  });
+
+  it("prompts per hit when multiple rogue dirs exist (--yes skips all)", async () => {
+    const home = tempHome();
+    // Plant two rogue dirs: one under $HOME and one under $HOME/git/repo.
+    const repoDir = path.join(home, "git", "my-repo");
+    fs.mkdirSync(repoDir, { recursive: true });
+    plantRogueLedger(home);
+    plantRogueLedger(repoDir);
+
+    const hits = scanForRogueLedgers({ homeDir: home, cwd: home });
+    expect(hits).toHaveLength(2);
+
+    const promptFn = vi.fn().mockResolvedValue(true);
+    const result = await deleteRogueLedgers(hits, { promptFn });
+
+    // One prompt call per hit.
+    expect(promptFn).toHaveBeenCalledTimes(2);
+    expect(result.deleted).toHaveLength(2);
+    expect(result.skipped).toHaveLength(0);
+
+    const afterScan = scanForRogueLedgers({ homeDir: home, cwd: home });
+    expect(afterScan).toHaveLength(0);
   });
 });
