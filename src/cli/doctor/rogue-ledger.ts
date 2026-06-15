@@ -185,7 +185,7 @@ export async function deleteRogueLedgers(
     }
 
     if (confirmed) {
-      fs.rmSync(hit.rogueDir, { recursive: true });
+      fs.rmSync(hit.rogueDir, { recursive: true, force: true });
       deleted.push(hit);
     } else {
       skipped.push(hit);
