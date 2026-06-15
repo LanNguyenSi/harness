@@ -35,6 +35,7 @@ import * as path from "node:path";
 import { atomicWriteFile } from "../../io/atomic-write.js";
 import { InvalidDurationError, parseDurationSeconds, type LedgerEntry } from "../../policies/index.js";
 import { POLICY_DECISION_TYPE } from "../../runtime/ledger-record.js";
+import { rejectMalformedSessionId } from "../../runtime/reject-malformed-session-id.js";
 
 export const APPROVED_LEDGER_TAG_PREFIX = "understanding-approved:";
 
@@ -385,25 +386,6 @@ export function matchLedgerEntries(
     matched: false,
     detail: `no ledger entry matched ${wanted} (scanned ${scanned} non-policy_decision row(s))`,
   };
-}
-
-/**
- * Reject sessionIds that would escape the approvals/ namespace via path
- * traversal or directory separators. The session-id value lands in
- * approvalMarkerPathFor verbatim; an accidental shell-expanded `..` or `/`
- * would otherwise write to a sibling directory. This is defensive (session
- * ids come from the Claude Code runtime, not from direct user input) but
- * pins the trust boundary.
- */
-function rejectMalformedSessionId(sessionId: string): void {
-  if (sessionId.trim().length === 0) {
-    throw new Error("sessionId is empty or blank");
-  }
-  if (sessionId.includes("/") || sessionId.includes("\\") || sessionId.includes("..")) {
-    throw new Error(
-      `sessionId contains path-separator or traversal characters: ${JSON.stringify(sessionId)}`,
-    );
-  }
 }
 
 /** Filesystem path of the per-session approval marker. */
