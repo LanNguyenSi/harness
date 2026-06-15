@@ -327,6 +327,20 @@ describe("approvalMarkerPathFor", () => {
   it("composes the canonical marker path under <generatedDir>/.approvals/<sid>", () => {
     expect(approvalMarkerPathFor("/g", "sess-1")).toBe("/g/.approvals/sess-1");
   });
+
+  // Pins the gate-critical path-traversal guard at the call site (the
+  // rejection runs BEFORE path.join), independent of the shared helper's own
+  // unit tests. Guards against the guard call being silently dropped.
+  it("rejects a sessionId with path-separator or traversal characters", () => {
+    expect(() => approvalMarkerPathFor("/g", "../escape")).toThrow(/path-separator or traversal/);
+    expect(() => approvalMarkerPathFor("/g", "a/b")).toThrow(/path-separator or traversal/);
+    expect(() => approvalMarkerPathFor("/g", "a\\b")).toThrow(/path-separator or traversal/);
+  });
+
+  it("rejects an empty or blank sessionId", () => {
+    expect(() => approvalMarkerPathFor("/g", "")).toThrow(/empty or blank/);
+    expect(() => approvalMarkerPathFor("/g", "   ")).toThrow(/empty or blank/);
+  });
 });
 
 describe("writeApprovalMarker / checkApprovalMarker / clearApprovalMarker (agent-tasks/88ca4bb3)", () => {
