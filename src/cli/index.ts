@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { Command } from "commander";
 
@@ -49,6 +50,11 @@ import { exportManifest } from "./export.js";
 import { doctor, isDoctorTarget, KNOWN_DOCTOR_TARGETS } from "./doctor/index.js";
 import { format as formatDoctor } from "./doctor/format.js";
 import type { DoctorTarget } from "./doctor/types.js";
+import {
+  deleteRogueLedgers,
+  scanForRogueLedgers,
+  type RogueLedgerScanOptions,
+} from "./doctor/rogue-ledger.js";
 import { EX_FAIL, EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { explain } from "./explain.js";
 import { explainAction } from "./explain-action.js";
@@ -90,6 +96,14 @@ export interface RunOptions {
   argv?: string[];
   stdout?: (s: string) => void;
   stderr?: (s: string) => void;
+  /**
+   * Test-injection knob for `harness doctor --rm-rogue-ledgers`. When set,
+   * both the initial scan (forwarded to `doctor()`) and the post-deletion
+   * re-scan use these options instead of the runtime `os.homedir()` /
+   * `process.cwd()` defaults. This makes the re-scan fully hermetic in unit
+   * tests without spawning real filesystem side-effects.
+   */
+  rogueLedgerScanOptions?: Partial<RogueLedgerScanOptions>;
 }
 
 export function buildProgram(opts: RunOptions = {}): Command {
@@ -208,7 +222,12 @@ export function buildProgram(opts: RunOptions = {}): Command {
       "--target <runtime>",
       `additionally evaluate the harness-side adapter health for a runtime (allowed: ${KNOWN_DOCTOR_TARGETS.join(", ")})`,
     )
-    .option("--json", "emit a structured JSON DoctorReport instead of prose")
+    .option("--json", "emit a structured JSON DoctorReport instead of prose (--rm-rogue-ledgers is ignored with --json)")
+    .option(
+      "--rm-rogue-ledgers",
+      "after reporting, delete each rogue evidence-ledger directory found (prompts per hit; combine with --yes to skip prompts)",
+    )
+    .option("--yes", "with --rm-rogue-ledgers, skip per-hit confirmation prompts")
     .action(
       async (options: {
         config?: string;
@@ -216,6 +235,8 @@ export function buildProgram(opts: RunOptions = {}): Command {
         shallow?: boolean;
         target?: string;
         json?: boolean;
+        rmRogueLedgers?: boolean;
+        yes?: boolean;
       }) => {
         let target: DoctorTarget | undefined;
         if (options.target !== undefined) {
@@ -233,12 +254,47 @@ export function buildProgram(opts: RunOptions = {}): Command {
           shallow: options.shallow,
           versionProbe: defaultVersionProbe,
           ...(target !== undefined ? { target } : {}),
+          ...(opts.rogueLedgerScanOptions !== undefined
+            ? { rogueLedgerScanOptions: opts.rogueLedgerScanOptions }
+            : {}),
         });
         if (options.json) {
           stdout(`${JSON.stringify(report, null, 2)}\n`);
           return;
         }
         stdout(formatDoctor(report));
+
+        if (!options.rmRogueLedgers) return;
+
+        const hits = report.rogueLedgerDbs;
+        if (hits.length === 0) {
+          stdout("no rogue evidence-ledger DBs found; nothing to delete\n");
+          return;
+        }
+
+        const result = await deleteRogueLedgers(hits, { yes: options.yes });
+
+        for (const hit of result.deleted) {
+          stdout(`deleted: ${hit.rogueDir}\n`);
+        }
+        for (const hit of result.skipped) {
+          stdout(`skipped: ${hit.rogueDir}\n`);
+        }
+
+        // Re-scan and print clean delta so the operator can confirm the
+        // on-disk state after deletion. Uses the same scan options as the
+        // initial scan (injectable via RunOptions.rogueLedgerScanOptions for
+        // tests; production falls back to os.homedir() / process.cwd()).
+        const afterScan = scanForRogueLedgers({
+          homeDir: opts.rogueLedgerScanOptions?.homeDir ?? os.homedir(),
+          cwd: opts.rogueLedgerScanOptions?.cwd ?? process.cwd(),
+          ...(opts.rogueLedgerScanOptions?.fsInterface !== undefined
+            ? { fsInterface: opts.rogueLedgerScanOptions.fsInterface }
+            : {}),
+        });
+        stdout(
+          `rogue evidence-ledger DBs remaining: ${afterScan.length}\n`,
+        );
       },
     );
 

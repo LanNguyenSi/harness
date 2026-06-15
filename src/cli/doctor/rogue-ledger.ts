@@ -18,6 +18,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as readline from "node:readline/promises";
 
 export interface RogueLedgerDb {
   /** Absolute path to the rogue ledger.db file. */
@@ -125,4 +126,81 @@ export function scanForRogueLedgers(opts: RogueLedgerScanOptions): RogueLedgerDb
 
   out.sort((a, b) => a.path.localeCompare(b.path));
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Cleanup: deleteRogueLedgers
+// ---------------------------------------------------------------------------
+
+export interface DeleteRogueLedgersOptions {
+  /**
+   * When true, skip per-hit confirmation prompts and delete immediately.
+   * Maps to `harness doctor --rm-rogue-ledgers --yes`.
+   */
+  yes?: boolean;
+  /**
+   * Test injection: called per hit with the rogueDir path; returns true to
+   * confirm deletion, false to skip. When omitted and `yes` is false,
+   * production code prompts via readline on stdin.
+   * Same knob pattern as `mcpProbe` / `fsInterface` elsewhere in doctor.
+   */
+  promptFn?: (rogueDir: string) => Promise<boolean>;
+}
+
+export interface DeleteRogueLedgersResult {
+  /** Hits that were confirmed and whose rogueDir was removed. */
+  deleted: RogueLedgerDb[];
+  /** Hits that were skipped (operator declined or safety check failed). */
+  skipped: RogueLedgerDb[];
+}
+
+/**
+ * Delete confirmed rogue ledger directories.
+ *
+ * Safety invariant: only deletes `hit.rogueDir` (the literal-tilde `~`
+ * directory), never its parent. Any hit whose rogueDir basename is not
+ * exactly `~` is silently skipped as a belt-and-suspenders guard.
+ */
+export async function deleteRogueLedgers(
+  hits: RogueLedgerDb[],
+  opts: DeleteRogueLedgersOptions = {},
+): Promise<DeleteRogueLedgersResult> {
+  const deleted: RogueLedgerDb[] = [];
+  const skipped: RogueLedgerDb[] = [];
+
+  for (const hit of hits) {
+    // Safety: only ever remove a directory whose basename is the literal `~`.
+    if (path.basename(hit.rogueDir) !== "~") {
+      skipped.push(hit);
+      continue;
+    }
+
+    let confirmed: boolean;
+    if (opts.yes) {
+      confirmed = true;
+    } else if (opts.promptFn) {
+      confirmed = await opts.promptFn(hit.rogueDir);
+    } else {
+      confirmed = await defaultDeletePrompt(hit.rogueDir);
+    }
+
+    if (confirmed) {
+      fs.rmSync(hit.rogueDir, { recursive: true, force: true });
+      deleted.push(hit);
+    } else {
+      skipped.push(hit);
+    }
+  }
+
+  return { deleted, skipped };
+}
+
+async function defaultDeletePrompt(rogueDir: string): Promise<boolean> {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    const answer = await rl.question(`Delete rogue directory ${rogueDir}? (y/N) `);
+    return answer.trim().toLowerCase() === "y";
+  } finally {
+    rl.close();
+  }
 }
