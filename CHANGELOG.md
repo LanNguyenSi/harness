@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-06-16
+
+**Headline: a doctor cleanup mode for rogue ledgers, plus gate-admission and pause-sentinel fixes.** `harness doctor` gains an opt-in `--rm-rogue-ledgers` mode, the read-only Bash classifier re-admits `sort`, `tree`, and `file` behind precise write-flag guards (they were over-blocked), and the runtime-reality gate now honors the pause sentinel like every other gate. Re-run `npm i -g @lannguyensi/harness` to upgrade.
+
+### Added
+
+- **`harness doctor --rm-rogue-ledgers` opt-in cleanup mode** (PR #296). Doctor can now remove rogue evidence ledgers it finds, gated behind an explicit flag so a bare `doctor` run stays read-only.
+
+### Security
+
+- **Validate `sessionId` before joining it into the session-export transcript path** (PR #294). `session-export` joined `sessionId` into the transcript path with no validation; a `rejectMalformedSessionId` guard (rejecting blank values, path separators, and `..`) now runs at the path-construction choke point.
+
+### Fixed
+
+- **Re-admit `sort`, `tree`, and `file` in the read-only Bash classifier behind precise write-flag guards** (PR #292). These commands were over-blocked; they are now admitted unless invoked with a write-producing flag (for example `sort -o`).
+- **Honor the pause sentinel in the runtime-reality gate** (PR #291). The runtime-reality checker now respects the pause sentinel like every other gate instead of firing while the harness is paused.
+
+### Changed
+
+- **Dedupe `rejectMalformedSessionId` to the shared runtime helper** (PR #295) and **extract a shared `resolveApprovalSessionId`** (PR #293, discovery M5). Internal refactors consolidating session-id handling, with no behavior change.
+- **Remove em dashes from prose** per the org style rule (PR #290).
+
 ## [0.35.0] - 2026-06-14
 
 **Headline: the Tier-1 discovery follow-up.** The five HIGH findings from the 2026-06-10 discovery audit are fixed: a defense-in-depth gap in the approval-marker path, the long-standing `harness add` whole-manifest footgun, a solution-acceptance verdict-dir mismatch, a policy-degradation footgun that `apply` did not catch, and an integration suite that never ran in CI. **Operator action**: `harness apply` now refuses a manifest that declares `policies:` without wiring grounding-mcp under `tools.mcp` (previously it applied and the policies silently degraded to warn-mode at runtime); wire grounding-mcp or remove the policies. Re-run `npm i -g @lannguyensi/harness` to upgrade.
