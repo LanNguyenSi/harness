@@ -253,8 +253,11 @@ export function checkPolicyGroundingMcp(manifest: Manifest): Diagnostic[] {
 // An ABSOLUTE non-default SOLUTION_VERDICT_DIR previously also denied (harness
 // did not project the env override into the hook); `harness apply` now projects
 // it (see `buildExpectedFiles` in apply.ts), so the absolute case is handled
-// correctly and no longer warn-worthy. Warning-to-error escalation is a tracked
-// follow-up (task e3af6388, condition #1 only).
+// correctly and no longer warn-worthy. Condition #1 (grounding-mcp not wired)
+// is an ERROR: solution-acceptance without a reachable producer deadlocks the
+// completion-gate on a permanent deny, so it is a hard misconfiguration rather
+// than a warning (task e3af6388). Condition #2 (a relative SOLUTION_VERDICT_DIR)
+// stays a warning: it only bites on cwd divergence between producer and hook.
 function checkSolutionAcceptanceProducer(manifest: Manifest): Diagnostic[] {
   const pack = manifest.policy_packs.find((p) => p.name === "solution-acceptance");
   if (!pack || !pack.enabled) return [];
@@ -262,7 +265,7 @@ function checkSolutionAcceptanceProducer(manifest: Manifest): Diagnostic[] {
   if (!grounding) {
     return [
       {
-        severity: "warning",
+        severity: "error",
         path: "policy_packs",
         message:
           "solution-acceptance is enabled but grounding-mcp is not wired under tools.mcp: the producer (solution_evaluate) is unreachable, so the completion-gate can never see a verdict and will deadlock on a permanent deny. Add grounding-mcp (>= 0.3.2) to tools.mcp.",

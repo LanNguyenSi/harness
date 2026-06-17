@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **`harness validate` now errors (was a warning) when the `solution-acceptance` policy pack is enabled but `grounding-mcp` is not wired under `tools.mcp`** (task e3af6388). Without a reachable `solution_evaluate` producer the completion-gate can never see a verdict and deadlocks on a permanent deny, so this is a hard misconfiguration rather than a soft warning. A relative `SOLUTION_VERDICT_DIR` (the other producer condition) stays a warning. Operator impact: a manifest with `solution-acceptance` enabled but `grounding-mcp` absent now makes `harness validate` exit 1 where it previously exited 0.
+
 ## [0.36.0] - 2026-06-16
 
 **Headline: a doctor cleanup mode for rogue ledgers, plus gate-admission and pause-sentinel fixes.** `harness doctor` gains an opt-in `--rm-rogue-ledgers` mode, the read-only Bash classifier re-admits `sort`, `tree`, and `file` behind precise write-flag guards (they were over-blocked), and the runtime-reality gate now honors the pause sentinel like every other gate. Re-run `npm i -g @lannguyensi/harness` to upgrade.
