@@ -439,6 +439,7 @@ export async function runInterceptCli(
     event,
     ledger,
     builtins,
+    stderr,
     ...(opts.ledgerTimeoutMs !== undefined && { ledgerTimeoutMs: opts.ledgerTimeoutMs }),
     ...(opts.now && { now: opts.now }),
     ...(gitContext.sha.length > 0 && { currentHeadSha: gitContext.sha }),

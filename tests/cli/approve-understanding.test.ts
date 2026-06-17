@@ -340,6 +340,30 @@ describe("approveUnderstanding", () => {
     expect(result.persistedReport.ok).toBe(true);
   });
 
+  it("names the manifest-load cause in the degraded ledger result (M8)", async () => {
+    // No `manifest` injected -> loadManifest(opts) runs and throws on the
+    // malformed config. The catch must capture the cause and surface it in
+    // the degraded-ok ledger result instead of leaving a bare `ok: false`.
+    writeReport("rpt.json", { sessionId: "sess-1", approvalStatus: "pending" });
+    const badConfig = path.join(tmp, "broken-harness.yaml");
+    fs.writeFileSync(badConfig, "version: 1\nbroken: [unclosed\n");
+    const result = await approveUnderstanding({
+      session: "sess-1",
+      reportsDir: tmp,
+      generatedDir: path.join(tmp, "harness.generated"),
+      configPath: badConfig,
+    });
+    expect(result.ledger.ok).toBe(false);
+    // Degraded result NAMES the cause (the loader error is interpolated
+    // into the parenthetical), not a bare "manifest unreadable". The
+    // loader message can span multiple lines, so assert structurally.
+    expect(result.ledger.reason).toContain("manifest unreadable (");
+    expect(result.ledger.reason).toContain("); skipped ledger write");
+    expect(result.ledger.reason).toMatch(/broken-harness\.yaml|not valid YAML/);
+    // Fail-open: the report flip still happens despite the manifest failure.
+    expect(result.persistedReport.ok).toBe(true);
+  });
+
   it("rejects when no session id is available", async () => {
     const beforeClaudeCode = process.env.CLAUDE_CODE_SESSION_ID;
     const beforeClaude = process.env.CLAUDE_SESSION_ID;

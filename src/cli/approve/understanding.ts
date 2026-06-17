@@ -567,10 +567,15 @@ export async function approveUnderstanding(
   // Manifest is required for the ledger write path; if it can't load,
   // we still try to flip the persisted report so a solo user benefits.
   let manifest: Manifest | null = null;
+  let manifestLoadError: string | null = null;
   try {
     manifest = opts.manifest ?? loadManifest(opts).manifest;
-  } catch {
-    /* swallow; ledger write becomes a degraded-ok */
+  } catch (err) {
+    // Not blocking: a solo user still benefits from the report flip below
+    // even with no manifest. But capture the cause so the degraded-ok
+    // ledger result names WHY the write was skipped instead of leaving the
+    // operator with a bare `ledger: ok false` (no-silent-errors, M8).
+    manifestLoadError = err instanceof Error ? err.message : String(err);
   }
 
   // Approve-time validation. Resolve the report we would flip BEFORE
@@ -722,7 +727,12 @@ export async function approveUnderstanding(
       : approvedLedgerTagFor(sessionId);
   const ledgerResult = manifest
     ? await writeLedgerTag(manifest, sessionId, tag, opts)
-    : { ok: false as const, reason: "manifest unreadable; skipped ledger write" };
+    : {
+        ok: false as const,
+        reason: manifestLoadError
+          ? `manifest unreadable (${manifestLoadError}); skipped ledger write`
+          : "manifest unreadable; skipped ledger write",
+      };
 
   // Persisted report: flip the latest matching one. `reports` + `latest`
   // were resolved up front (alongside validation) so both paths agree
