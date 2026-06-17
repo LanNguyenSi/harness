@@ -265,6 +265,19 @@ export function dependenciesForCustom(sel: CustomSelection): ProfileDependency[]
       extraDeps.find((d) => d.binary === targetBin);
     if (dep) push(dep);
   }
+  // grounding-mcp auto-add mirror: composeCustom auto-wires grounding-mcp
+  // into tools.mcp whenever policies are selected without it (H3 gate
+  // auto-repair, see composer.ts). Mirror the exact same predicate here so
+  // the dependency-install prompt also covers the binary — without it,
+  // policies land in BLOCK mode with a possibly-absent producer binary,
+  // causing a fail-closed deadlock the operator was never warned about.
+  // The `push` helper's `seen` set prevents a double-add if grounding-mcp
+  // was already processed via sel.mcps; the `!sel.mcps.includes` predicate
+  // mirrors composeCustom 1:1 so compose and dep-install always agree.
+  if (sel.policies.length > 0 && !sel.mcps.includes("grounding-mcp")) {
+    const groundingMcpDep = PROFILE_DEPENDENCIES.team.find((d) => d.binary === "grounding-mcp");
+    if (groundingMcpDep) push(groundingMcpDep);
+  }
   // preflight-* policies need agent-preflight on PATH (the
   // SessionStart hook FULL_TEMPLATE wires; mirrors PROFILE_DEPENDENCIES.full).
   // Even though the Custom surface does not expose the SessionStart hook

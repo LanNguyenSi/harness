@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   checkDependencies,
+  dependenciesForCustom,
   dependenciesForProfile,
   formatDependencyTable,
   installPackagesGlobally,
@@ -142,5 +143,42 @@ describe("installPackagesGlobally — runner contract", () => {
     expect(result.ok).toBe(false);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("404");
+  });
+});
+
+describe("dependenciesForCustom — grounding-mcp auto-add mirror", () => {
+  it("includes grounding-mcp dep when policies are non-empty and grounding-mcp is not in sel.mcps (mirrors composeCustom H3 auto-add predicate)", () => {
+    const deps = dependenciesForCustom({
+      packs: [],
+      mcps: [],
+      policies: ["review-before-merge"],
+      memoryDir: "~/.claude/projects/{project}/memory",
+    });
+    const bins = deps.map((d) => d.binary);
+    expect(bins).toContain("grounding-mcp");
+    const gmDep = deps.find((d) => d.binary === "grounding-mcp");
+    expect(gmDep?.npmPackage).toBe("@lannguyensi/grounding-mcp");
+  });
+
+  it("does NOT double-add grounding-mcp when it is already in sel.mcps", () => {
+    const deps = dependenciesForCustom({
+      packs: [],
+      mcps: ["grounding-mcp"],
+      policies: ["review-before-merge"],
+      memoryDir: "~/.claude/projects/{project}/memory",
+    });
+    const gmEntries = deps.filter((d) => d.binary === "grounding-mcp");
+    expect(gmEntries).toHaveLength(1);
+  });
+
+  it("does NOT include grounding-mcp dep when policies array is empty (no auto-add needed)", () => {
+    const deps = dependenciesForCustom({
+      packs: ["understanding-before-execution"],
+      mcps: [],
+      policies: [],
+      memoryDir: "~/.claude/projects/{project}/memory",
+    });
+    const bins = deps.map((d) => d.binary);
+    expect(bins).not.toContain("grounding-mcp");
   });
 });

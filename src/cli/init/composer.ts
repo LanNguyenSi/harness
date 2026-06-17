@@ -432,7 +432,7 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
     mcpSet.add("grounding-mcp");
     autoAddedGroundingMcp = true;
     warnings.push(
-      "added grounding-mcp to tools.mcp (required by the selected policies: without it harness apply rejects the manifest and policies degrade to warn-mode at runtime).",
+      "auto-wired grounding-mcp to tools.mcp (required by the selected policies: without it harness apply rejects the manifest and policies degrade to warn-mode at runtime).",
     );
   }
 
