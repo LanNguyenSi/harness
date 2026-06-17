@@ -905,17 +905,17 @@ describe("validate — checkSolutionAcceptanceProducer", () => {
     return writeFixture({ "harness.yaml": yaml });
   }
 
-  it("warns (condition #1) when solution-acceptance enabled but grounding-mcp absent", () => {
+  it("errors (condition #1) when solution-acceptance enabled but grounding-mcp absent", () => {
     const home = fixtureWithSolutionAcceptance({ withGroundingMcp: false });
     const result = validate({
       homeDir: home,
       configPath: path.join(home, "harness.yaml"),
       ...NOOP_PROBES,
     });
-    expect(result.errorCount).toBe(0);
+    expect(result.errorCount).toBe(1);
     const hit = result.diagnostics.find(
       (d) =>
-        d.severity === "warning" &&
+        d.severity === "error" &&
         /grounding-mcp is not wired/.test(d.message),
     );
     expect(hit).toBeDefined();
