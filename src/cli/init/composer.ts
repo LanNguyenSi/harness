@@ -419,6 +419,23 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
   const warnings: string[] = [];
   const mcpSet = new Set(sel.mcps);
 
+  // H3 gate auto-repair: `harness apply` hard-fails (checkPolicyGroundingMcp)
+  // when manifest.policies.length > 0 AND grounding-mcp is absent from
+  // tools.mcp — policies would silently degrade to warn-mode (allow-everything
+  // footgun). Mirror the exact same predicate here: if the Custom selection
+  // carries any policy and the operator did not pick grounding-mcp explicitly,
+  // auto-wire it so the emitted manifest passes apply without a HarnessExitError.
+  // An informational advisory replaces the per-policy "requires a producer"
+  // warnings that would otherwise fire for the grounding-mcp–coupled policies.
+  let autoAddedGroundingMcp = false;
+  if (sel.policies.length > 0 && !mcpSet.has("grounding-mcp")) {
+    mcpSet.add("grounding-mcp");
+    autoAddedGroundingMcp = true;
+    warnings.push(
+      "added grounding-mcp to tools.mcp (required by the selected policies: without it harness apply rejects the manifest and policies degrade to warn-mode at runtime).",
+    );
+  }
+
   // Producer-consistency advisories: each policy's `requires.ledger_tag`
   // implies some producer must populate that tag. agent-tasks-coupled
   // policies need the agent-tasks MCP wired; preflight-coupled policies
@@ -499,6 +516,11 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
   const mcpEntries = sel.mcps
     .filter((m): m is Exclude<CustomMcpKey, "memory-router"> => m !== "memory-router")
     .map((k) => MCP_ENTRY[k]);
+  // If grounding-mcp was auto-added (H3 gate auto-repair), inject the same
+  // entry shape the PRESET/FULL_TEMPLATE emits so apply and validate agree.
+  if (autoAddedGroundingMcp) {
+    mcpEntries.push(MCP_ENTRY["grounding-mcp"]);
+  }
   if (mcpEntries.length > 0) {
     (manifest.tools as Record<string, unknown>).mcp = mcpEntries;
   }

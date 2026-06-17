@@ -8,6 +8,7 @@ import {
   COMPOSABLE_POLICIES,
 } from "../../src/cli/init/composer.js";
 import { parseManifest } from "../../src/schema/index.js";
+import { checkPolicyGroundingMcp } from "../../src/cli/validate/checks.js";
 
 function compose(sel: Partial<CustomSelection>): { manifest: ReturnType<typeof parseManifest>; warnings: string[]; yaml: string } {
   const full: CustomSelection = {
@@ -229,21 +230,22 @@ describe("composeCustom — producer-coupling warnings", () => {
     expect(warnings.some((w) => /review-before-merge/.test(w) && /agent-tasks/.test(w))).toBe(true);
   });
 
-  it("warns when preflight-before-investigation has no producer (no grounding-mcp, no pack)", () => {
-    const { warnings } = compose({ policies: ["preflight-before-investigation"] });
-    expect(
-      warnings.some((w) => /preflight-before-investigation/.test(w) && /producer/.test(w)),
-    ).toBe(true);
+  it("auto-adds grounding-mcp and emits informational note when preflight-before-investigation is selected without it (H3 gate auto-repair)", () => {
+    const { manifest, warnings } = compose({ policies: ["preflight-before-investigation"] });
+    // grounding-mcp must be auto-wired so apply accepts the manifest
+    expect(manifest.tools.mcp.some((m) => m.name === "grounding-mcp")).toBe(true);
+    // the per-policy "requires a producer" warning is replaced by the auto-add note
+    expect(warnings.some((w) => /added grounding-mcp/.test(w))).toBe(true);
+    expect(warnings.some((w) => /preflight-before-investigation/.test(w) && /producer/.test(w))).toBe(false);
   });
 
-  it("still warns when the only thing selected alongside preflight-before-investigation is the understanding-before-execution pack (the pack does NOT produce preflight tags)", () => {
-    const { warnings } = compose({
+  it("auto-adds grounding-mcp even when understanding-before-execution pack is selected alongside preflight-before-investigation (pack does NOT produce preflight tags, grounding-mcp still required)", () => {
+    const { manifest, warnings } = compose({
       packs: ["understanding-before-execution"],
       policies: ["preflight-before-investigation"],
     });
-    expect(
-      warnings.some((w) => /preflight-before-investigation/.test(w) && /producer/.test(w)),
-    ).toBe(true);
+    expect(manifest.tools.mcp.some((m) => m.name === "grounding-mcp")).toBe(true);
+    expect(warnings.some((w) => /added grounding-mcp/.test(w))).toBe(true);
   });
 
   it("does NOT warn when policy producers are satisfied (full pick, sans codebase-oracle)", () => {
@@ -262,18 +264,18 @@ describe("composeCustom — producer-coupling warnings", () => {
     expect(warnings).toEqual([]);
   });
 
-  it("warns when preflight-before-push is selected without grounding-mcp", () => {
-    const { warnings } = compose({ policies: ["preflight-before-push"] });
-    expect(
-      warnings.some((w) => /preflight-before-push/.test(w) && /producer/.test(w)),
-    ).toBe(true);
+  it("auto-adds grounding-mcp and emits informational note when preflight-before-push is selected without it (H3 gate auto-repair)", () => {
+    const { manifest, warnings } = compose({ policies: ["preflight-before-push"] });
+    expect(manifest.tools.mcp.some((m) => m.name === "grounding-mcp")).toBe(true);
+    expect(warnings.some((w) => /added grounding-mcp/.test(w))).toBe(true);
+    expect(warnings.some((w) => /preflight-before-push/.test(w) && /producer/.test(w))).toBe(false);
   });
 
-  it("warns when dogfood-before-release is selected without grounding-mcp (every npm publish would block)", () => {
-    const { warnings } = compose({ policies: ["dogfood-before-release"] });
-    expect(
-      warnings.some((w) => /dogfood-before-release/.test(w) && /every npm publish/.test(w)),
-    ).toBe(true);
+  it("auto-adds grounding-mcp and emits informational note when dogfood-before-release is selected without it (H3 gate auto-repair)", () => {
+    const { manifest, warnings } = compose({ policies: ["dogfood-before-release"] });
+    expect(manifest.tools.mcp.some((m) => m.name === "grounding-mcp")).toBe(true);
+    expect(warnings.some((w) => /added grounding-mcp/.test(w))).toBe(true);
+    expect(warnings.some((w) => /dogfood-before-release/.test(w) && /every npm publish/.test(w))).toBe(false);
   });
 
   it("warns when two-reviewers-required is selected without agent-tasks (no merge events to evaluate)", () => {
@@ -311,5 +313,62 @@ describe("composer surface (catalogues)", () => {
       "dogfood-before-release",
       "two-reviewers-required",
     ]);
+  });
+});
+
+describe("composeCustom — H3 gate auto-repair: grounding-mcp auto-add", () => {
+  it("auto-wires grounding-mcp with the canonical entry shape when any policy is selected without it", () => {
+    // Trigger: policies present, grounding-mcp not explicitly picked.
+    const { manifest, warnings } = compose({
+      policies: ["review-before-merge"],
+      mcps: ["agent-tasks"],
+    });
+    const gm = manifest.tools.mcp.find((m) => m.name === "grounding-mcp");
+    expect(gm).toBeDefined();
+    // Entry shape must match MCP_ENTRY["grounding-mcp"] (same as PRESET/FULL_TEMPLATE).
+    expect(gm?.command).toEqual(["grounding-mcp"]);
+    expect(gm?.min_version).toBe("0.2.0");
+    // Informational advisory emitted so the operator knows what was auto-wired.
+    expect(warnings.some((w) => /added grounding-mcp/.test(w))).toBe(true);
+    // The H3 gate (checkPolicyGroundingMcp) must accept the manifest — no diagnostics.
+    const diags = checkPolicyGroundingMcp(manifest);
+    expect(diags).toHaveLength(0);
+  });
+
+  it("does NOT auto-add (and does NOT emit the informational note) when grounding-mcp is already explicitly selected", () => {
+    const { manifest, warnings } = compose({
+      policies: ["review-before-merge"],
+      mcps: ["agent-tasks", "grounding-mcp"],
+    });
+    // grounding-mcp is present (explicitly selected, not auto-added)
+    expect(manifest.tools.mcp.some((m) => m.name === "grounding-mcp")).toBe(true);
+    // no auto-add advisory
+    expect(warnings.some((w) => /added grounding-mcp/.test(w))).toBe(false);
+  });
+
+  it("does NOT auto-add grounding-mcp when no policies are selected (empty policies, no grounding-mcp needed)", () => {
+    const { manifest, warnings } = compose({ packs: ["understanding-before-execution"] });
+    // grounding-mcp should not appear since no policies were selected
+    expect(manifest.tools.mcp.some((m) => m.name === "grounding-mcp")).toBe(false);
+    expect(warnings.some((w) => /added grounding-mcp/.test(w))).toBe(false);
+  });
+
+  it("auto-add covers all six policies at once; grounding-mcp appears exactly once in tools.mcp", () => {
+    const { manifest, warnings } = compose({
+      policies: [
+        "review-before-merge",
+        "preflight-before-investigation",
+        "review-subagent-before-pr-create",
+        "preflight-before-push",
+        "dogfood-before-release",
+        "two-reviewers-required",
+      ],
+      mcps: ["agent-tasks"],
+    });
+    const gmEntries = manifest.tools.mcp.filter((m) => m.name === "grounding-mcp");
+    expect(gmEntries).toHaveLength(1);
+    expect(warnings.some((w) => /added grounding-mcp/.test(w))).toBe(true);
+    // H3 gate must accept the manifest
+    expect(checkPolicyGroundingMcp(manifest)).toHaveLength(0);
   });
 });
