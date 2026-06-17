@@ -171,6 +171,15 @@ export interface InterceptOptions {
    * policy never reads any of this regardless (see `intercept`).
    */
   riskContext?: RiskGateContext;
+  /**
+   * Destination for audit-write failure diagnostics. Defaults to
+   * `process.stderr` when omitted. Goes to stderr so Claude Code's
+   * stdout deny-JSON contract is unaffected.
+   *
+   * Injected by callers (tests, CLI wrapper) so the function stays
+   * deterministic and testable without capturing process.stderr.
+   */
+  stderr?: NodeJS.WritableStream;
 }
 
 /**
@@ -500,8 +509,14 @@ export async function intercept(
         decision,
         resolveSessionId(event.session_id),
       );
-    } catch {
-      /* audit-write failure must not block; the decision is still applied. */
+    } catch (err) {
+      // Audit-write failure must not block; the decision is still applied.
+      // Surface the failure to stderr so a persistently-failing recorder
+      // does not silently leave `harness audit` / `explain --trace` blind.
+      // Goes to stderr to keep the stdout deny-JSON contract intact.
+      (options.stderr ?? process.stderr).write(
+        `harness runtime intercept: audit-write failed for ${decision.policyName}: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
     }
   }
 

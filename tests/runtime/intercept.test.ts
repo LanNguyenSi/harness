@@ -1,3 +1,4 @@
+import { Writable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import {
   intercept,
@@ -958,7 +959,14 @@ describe("intercept — audit log", () => {
     expect(ledger.recordCalls[1]?.decisionName).toBe("second");
   });
 
-  it("does not crash if audit-write throws", async () => {
+  it("emits a stderr diagnostic and does not crash if audit-write throws", async () => {
+    const chunks: string[] = [];
+    const err = new Writable({
+      write(chunk, _enc, cb) {
+        chunks.push(chunk.toString("utf8"));
+        cb();
+      },
+    });
     const ledger: LedgerClient = {
       async query() {
         return { kind: "ok", entries: [] };
@@ -967,15 +975,22 @@ describe("intercept — audit log", () => {
         throw new Error("ledger_add failed");
       },
     };
-    await expect(
-      intercept({
-        manifest: manifest([REVIEW_POLICY]),
-        event: MERGE_EVENT,
-        ledger,
-        builtins: BUILTINS,
-        now: NOW,
-      }),
-    ).resolves.toBeDefined();
+    const result = await intercept({
+      manifest: manifest([REVIEW_POLICY]),
+      event: MERGE_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+      stderr: err,
+    });
+    // Fail-open: the decision is still applied even though the write failed.
+    expect(result).toBeDefined();
+    // The failure must now be loud: a diagnostic goes to stderr.
+    const text = chunks.join("");
+    expect(text).toContain(
+      "harness runtime intercept: audit-write failed for review-before-merge",
+    );
+    expect(text).toContain("ledger_add failed");
   });
 });
 
@@ -1175,5 +1190,66 @@ describe("intercept — Phase 7 #5 four-way decision", () => {
     });
     expect(result.decisions[0]?.outcome).toBe("deny");
     expect(result.blockJson?.decision).toBe("block");
+  });
+});
+
+describe("intercept — audit-write failure is surfaced, not swallowed", () => {
+  // A ledger whose record() throws simulates a persistently-failing
+  // grounding-mcp writer. The decision must still be applied (fail-open
+  // invariant) and the error must appear on the injected stderr stream
+  // so operators can diagnose a silently-broken audit trail.
+
+  function captureStream(): { stream: NodeJS.WritableStream; output: () => string } {
+    const chunks: string[] = [];
+    const stream = new Writable({
+      write(chunk, _enc, cb) {
+        chunks.push(chunk.toString("utf8"));
+        cb();
+      },
+    });
+    return { stream, output: () => chunks.join("") };
+  }
+
+  const throwingLedger: LedgerClient = {
+    async query() {
+      return { kind: "ok", entries: [] };
+    },
+    async record() {
+      throw new Error("grounding-mcp: connection refused");
+    },
+  };
+
+  it("emits a stderr diagnostic when ledger.record() throws", async () => {
+    const { stream: err, output: errOutput } = captureStream();
+    await intercept({
+      manifest: manifest([REVIEW_POLICY]),
+      event: MERGE_EVENT,
+      ledger: throwingLedger,
+      builtins: BUILTINS,
+      now: NOW,
+      stderr: err,
+    });
+    const text = errOutput();
+    expect(text).toContain(
+      "harness runtime intercept: audit-write failed for review-before-merge",
+    );
+    expect(text).toContain("grounding-mcp: connection refused");
+  });
+
+  it("still applies the decision (fail-open) when ledger.record() throws", async () => {
+    const { stream: err } = captureStream();
+    const result = await intercept({
+      manifest: manifest([REVIEW_POLICY]),
+      event: MERGE_EVENT,
+      ledger: throwingLedger,
+      builtins: BUILTINS,
+      now: NOW,
+      stderr: err,
+    });
+    // The deny decision must still be present: the gate decision is
+    // unaffected by the audit-write failure.
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.outcome).toBe("deny");
+    expect(result.blockJson).not.toBeNull();
   });
 });
