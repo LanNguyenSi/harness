@@ -140,7 +140,7 @@ harness init --interactive
 
 Guided wizard. Detects `~/.claude/` and `~/.codex/`, MCP servers
 already wired in `settings.json`, harness binary version. Picks a
-profile (`solo` / `team` / `custom`) and writes a starting
+profile (`solo` / `team` / `full` / `custom`) and writes a starting
 `harness.yaml`. Ctrl-C aborts cleanly. Walkthrough +
 limitations: [`docs/init-interactive.md`](docs/init-interactive.md).
 
@@ -203,8 +203,12 @@ the way: `harness pause/resume` in `v0.22.0`, `migrate-home` in
 `approve risk --force` in `v0.30.0`, the opt-in `runtime-reality`
 drift gate in `v0.31.0`, the opt-in `solution-acceptance` pack in
 `v0.32.0`, the operator-only `approve branch-protection` marker in
-`v0.33.0`, and the `harness gc` retention cleanup plus non-TTY-safe
-confirmations in `v0.34.0`. The current release is `v0.34.0`.
+`v0.33.0`, the `harness gc` retention cleanup plus non-TTY-safe
+confirmations in `v0.34.0`, `apply` failing loud when policies are
+declared without `grounding-mcp` wired in `v0.35.0`, and the
+`harness doctor --rm-rogue-ledgers` cleanup mode plus the read-only
+Bash classifier re-admitting `sort` / `tree` / `file` in `v0.36.0`.
+The current release is `v0.36.0`.
 
 The phase-by-phase plan with acceptance criteria lives in
 [`docs/ROADMAP.md`](docs/ROADMAP.md); what shipped in each version is
@@ -224,12 +228,15 @@ policy_packs:
       permission_profile: safe-start  # safe-start | implementation-after-approval | high-risk-grill-me
 ```
 
-Manage packs with `harness pack add / remove / list`. Two packs ship
+Manage packs with `harness pack add / remove / list`. Three packs ship
 today: [`understanding-before-execution`](docs/policy-packs/understanding-before-execution.md)
-(forces an Understanding Report before any write-capable tool fires)
-and [`branch-protection`](docs/policy-packs/branch-protection.md)
+(forces an Understanding Report before any write-capable tool fires),
+[`branch-protection`](docs/policy-packs/branch-protection.md)
 (blocks source mutations on protected branches without an explicit
-override). Custom packs from `path:`, `npm:`, or `git:` sources are
+override), and the opt-in
+[`solution-acceptance`](docs/policy-packs/solution-acceptance.md)
+completion gate (added in `v0.32.0`; holds a task done until an
+accepted solution verdict is logged). Custom packs from `path:`, `npm:`, or `git:` sources are
 out of scope for v1 (see the pack docs for the future-vocabulary
 contract).
 

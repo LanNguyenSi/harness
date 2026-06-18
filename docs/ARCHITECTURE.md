@@ -1,5 +1,7 @@
 # Architecture
 
+> **Historical design document.** This captures the Phase-1 design intent, so some of its CLI surface and file-layout examples (for example the `~/.claude/` state root and the early `harness init [--template minimal|full]` shape) predate the shipped tool. For the authoritative current command reference see [`CLI.md`](CLI.md); for the `~/.harness/` state-root move see [`migration/v0.24.0-home-dir.md`](migration/v0.24.0-home-dir.md).
+
 This document makes the shape of `harness` concrete. It follows [`VISION.md`](VISION.md), which established *why* a declarative control plane exists; this document decides *what* it looks like: the manifest schema, file layout, CLI surface, override rules, and implementation stack.
 
 It is prescriptive but not final. Anything here is open to revision before Phase 1 begins, and explicitly versioned (`version: 1`) so future breaking changes stay visible. Once Phase 1 lands, changes to this shape require a minor-version bump on the manifest plus a migration note.

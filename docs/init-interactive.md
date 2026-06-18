@@ -14,7 +14,7 @@ The wizard is one of three ways to bootstrap a manifest:
 
 1. **Environment probe.** The wizard runs the same detection as `--probe` and prints a summary to stderr (existing Claude Code / Codex config homes, existing manifest, MCP servers already wired in `~/.claude/settings.json`, harness binary version). The probe never blocks the flow, it just reports.
 
-2. **Overwrite guard.** If `~/.claude/harness.yaml` already exists, the wizard asks before overwriting. Default is `false`, so a stray return key never blows away a hand-edited manifest. Decline and the wizard exits with no write.
+2. **Overwrite guard.** If the resolved manifest (`~/.harness/harness.yaml` by default, legacy `~/.claude/harness.yaml` on a pre-`v0.24.0` install) already exists, the wizard asks before overwriting. Default is `false`, so a stray return key never blows away a hand-edited manifest. Decline and the wizard exits with no write.
 
 3. **Profile selection.** Four choices, with different external-account assumptions:
 
@@ -42,7 +42,7 @@ The wizard is one of three ways to bootstrap a manifest:
    - Unchecking everything skips wiring entirely; both manual fallback commands print so the operator can wire later by hand.
    - Selecting both runtimes runs the two applies sequentially. `harness.lock` then reflects the **last-applied** runtime; a follow-up `harness apply --runtime <name>` per runtime refreshes its drift baseline. The wizard surfaces this caveat to stderr.
 
-   Since v0.17.4, the `claude-code` wire-now branch passes `overwriteDrift: true` (auto-confirmed) to `apply`. This is the deliberate "start from scratch" intent of `init --interactive`: any pre-existing `~/.claude/harness.generated/settings.json` that drifted out of the last-apply snapshot is overwritten by the freshly-rendered settings rather than refused with `outcome: "drift-refuse"`. Ad-hoc `harness apply` (outside the wizard) keeps the strict drift safeguard unchanged. If `targetWritten` still ends up false for any other reason, the wizard now prints a clear stderr message and a `recoveryHint` instead of leaving the operator with a "wired into …" line that never landed.
+   Since v0.17.4, the `claude-code` wire-now branch passes `overwriteDrift: true` (auto-confirmed) to `apply`. This is the deliberate "start from scratch" intent of `init --interactive`: any pre-existing `~/.harness/harness.generated/settings.json` (legacy `~/.claude/harness.generated/settings.json`) that drifted out of the last-apply snapshot is overwritten by the freshly-rendered settings rather than refused with `outcome: "drift-refuse"`. Ad-hoc `harness apply` (outside the wizard) keeps the strict drift safeguard unchanged. If `targetWritten` still ends up false for any other reason, the wizard now prints a clear stderr message and a `recoveryHint` instead of leaving the operator with a "wired into …" line that never landed.
 
 ## Custom flow
 
@@ -65,8 +65,8 @@ Pressing Ctrl-C at any prompt surfaces an `ExitPromptError` from `@inquirer/prom
 ## Acceptance test
 
 ```bash
-# Fresh ~/.claude/ → solo manifest → validate clean
-rm -rf ~/.claude/harness.yaml
+# Fresh ~/.harness/ → solo manifest → validate clean
+rm -rf ~/.harness/harness.yaml
 harness init --interactive  # answer: Solo, accept default memory dir, write
 harness validate            # expect: no validation findings
 ```

@@ -17,8 +17,9 @@ These three things bite people who skip ahead to the YAML:
 
 1. **Custom *policies* are supported; custom policy *packs* are not (yet).**
    Anything you put in `policies:` is first-class: any name, any
-   trigger, any `requires`. Only `policy_packs:` is gated to the two
-   builtins (`understanding-before-execution`, `branch-protection`).
+   trigger, any `requires`. Only `policy_packs:` is gated to the three
+   builtins (`understanding-before-execution`, `branch-protection`,
+   `solution-acceptance`).
    `source: path:` / `npm:` / `git:` for packs is reserved vocabulary
    in v1, see [`policy-packs/understanding-before-execution.md`](policy-packs/understanding-before-execution.md)
    for the future contract.

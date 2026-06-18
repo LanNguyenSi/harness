@@ -7,13 +7,20 @@ so any step on this page can be reversed with `--restore-from`.
 
 ## What gets removed
 
-`harness uninstall` inventories everything harness planted under
-`~/.claude/`:
+`harness uninstall` inventories two roots. Most of the state lives under
+the harness state root (`~/.harness/` by default, legacy `~/.claude/`
+for pre-`v0.24.0` installs; `HARNESS_HOME` and `--state` override it):
 
 - `harness.yaml` (the manifest itself).
 - `harness.lock` (the post-`apply` content-hash record).
 - `harness.generated/` (the rendered tree: `settings.json` overlays,
   hook scripts, policy-pack assets, `.approvals/` markers).
+- `.understanding-gate/` (the persisted understanding-gate reports and
+  parse-error logs).
+
+The remaining items live under the Claude Code config dir `~/.claude/`,
+where `settings.json` itself lives:
+
 - Harness-owned hook groups inside `settings.json` (identified by the
   `# harness:owned` marker block).
 - Harness-owned `mcpServers` entries inside `settings.json`
@@ -21,8 +28,10 @@ so any step on this page can be reversed with `--restore-from`.
 - Any leftover `settings.json.pre-harness-<TS>` backups from prior
   `apply` runs.
 
-Nothing outside `~/.claude/` is touched. Your own hook groups, your own
-MCP entries, your own memory notes are left alone.
+Nothing else is touched. Your own hook groups, your own MCP entries,
+your own memory notes are left alone. See
+[`migration/v0.24.0-home-dir.md`](migration/v0.24.0-home-dir.md) for the
+state-root move that split these two locations.
 
 ## Commands
 

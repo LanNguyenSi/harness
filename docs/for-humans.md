@@ -67,7 +67,9 @@ harness init --interactive
 It probes your environment (existing `~/.claude/` and `~/.codex/`, MCP
 servers wired in `settings.json`, harness binary version), asks you to
 pick a profile (`solo` / `team` / `full` / `custom`; `team` and `full` assume an agent-tasks account, `solo` is standalone), and writes a
-validate-clean starting `harness.yaml` to `~/.claude/harness.yaml`.
+validate-clean starting `harness.yaml` to `~/.harness/harness.yaml`
+(legacy `~/.claude/harness.yaml` only when a pre-`v0.24.0` install is
+already there).
 Ctrl-C at any prompt aborts with no partial write. The wizard prints
 the suggested `harness apply --runtime claude-code` follow-up but does
 not run it, so you can review the manifest first. Full walkthrough and
