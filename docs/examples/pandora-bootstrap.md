@@ -27,7 +27,7 @@ cp ~/.claude/settings.json ~/.claude/settings.json.pre-harness-2026-05-11
 npm i -g @lannguyensi/harness
 
 # 3. Bootstrap a minimal manifest, then adopt the existing hooks
-harness init --template minimal --config ~/.claude/harness.yaml
+harness init --template minimal --config ~/.harness/harness.yaml
 harness adopt ~/.claude/settings.json --yes
 # → adopted 3 hooks: memory-router-user-prompt-submit, understanding-gate-claude-hook, memory-router-pre-tool-use
 ```
@@ -41,7 +41,7 @@ Two things the bare `adopt` does not yet handle:
 
    > policies declared but grounding-mcp not wired: every policy will fire in degraded warn-mode at runtime
 
-The final manifest at `~/.claude/harness.yaml`:
+The final manifest at `~/.harness/harness.yaml`:
 
 ```yaml
 version: 1
@@ -116,7 +116,7 @@ Stdout against a fresh target (the apply is idempotent, so re-applying after thi
 ```
 applied 0 file(s):
 merged into ~/.claude/settings.json: replaced 1 owned key (hooks), added 1 (mcpServers), preserved 6 other keys
-harness.lock written to ~/.claude/harness.lock
+harness.lock written to ~/.harness/harness.lock
 
 wired into ~/.claude/settings.json
 verify: claude -p "say hi" --settings ~/.claude/settings.json --output-format stream-json --include-hook-events
@@ -124,8 +124,8 @@ verify: claude -p "say hi" --settings ~/.claude/settings.json --output-format st
 
 `permissions`, `enabledPlugins`, `effortLevel`, `skipDangerousModePermissionPrompt`, `bypassPermissions`, and `env` were preserved verbatim. `hooks` was rewritten wholesale, `mcpServers` was added. Two further files were written next to the manifest as the rendered baseline, useful for `harness diff --since-apply` later:
 
-- `~/.claude/harness.generated/settings.json`
-- `~/.claude/harness.generated/MEMORY.md`
+- `~/.harness/harness.generated/settings.json`
+- `~/.harness/harness.generated/MEMORY.md`
 
 When subsequent applies change which MCP servers are declared, harness prints a `restart hint: mcp servers changed; /mcp reconnect required` line to stderr. The first apply on a clean target does not emit that hint.
 

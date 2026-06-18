@@ -13,10 +13,11 @@ npm i -g @lannguyensi/harness   # Node 20 or newer
 ## 2. Generate a manifest
 
 ```bash
-harness init --template team --config ~/.claude/harness.yaml
+harness init --template team
 ```
 
-The `team` template ships a `review-before-merge` policy: no PR merge
+Writes to the default state root (`~/.harness/harness.yaml`). The
+`team` template ships a `review-before-merge` policy: no PR merge
 without a logged review. (`--template solo` drops the agent-tasks
 wiring; `harness init --interactive` walks you through the choices
 instead.)
@@ -24,7 +25,7 @@ instead.)
 ## 3. Check it
 
 ```bash
-harness validate --config ~/.claude/harness.yaml
+harness validate
 ```
 
 Expect `no validation findings`.
@@ -34,8 +35,7 @@ Expect `no validation findings`.
 ```bash
 harness dry-run "merge PR 42" \
   --tool mcp__agent-tasks__pull_requests_merge \
-  --tool-args '{"prNumber":42}' \
-  --config ~/.claude/harness.yaml
+  --tool-args '{"prNumber":42}'
 ```
 
 ```

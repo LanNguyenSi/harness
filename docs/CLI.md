@@ -1,6 +1,6 @@
 # harness CLI reference
 
-Tracks the verbs available on the `harness` binary as of `v0.34.0`; changes that ship on master after that tag are listed under Notes. For policy semantics see [`docs/policy-packs/`](policy-packs/); for the risk gate specifically see [`docs/risk-gate.md`](risk-gate.md).
+Tracks the verbs available on the `harness` binary as of `v0.36.0`; changes that ship on master after that tag are listed under Notes. For policy semantics see [`docs/policy-packs/`](policy-packs/); for the risk gate specifically see [`docs/risk-gate.md`](risk-gate.md).
 
 The CLI is grouped by purpose below. Run any verb with `--help` for flags and examples.
 
@@ -26,7 +26,7 @@ The CLI is grouped by purpose below. Run any verb with `--help` for flags and ex
 
 | Verb | One-liner |
 |------|-----------|
-| `harness doctor` | Health summary across hooks, packs, MCP registrations, runtime detection, and binary version. |
+| `harness doctor [--rm-rogue-ledgers] [--yes]` | Health summary across hooks, packs, MCP registrations, runtime detection, and binary version. A bare run is read-only; `--rm-rogue-ledgers` opts into deleting each rogue evidence-ledger directory it finds (prompts per hit; add `--yes` to skip the prompts). |
 | `harness list <category>` | Print one category's entries as a flat table or JSON. Valid categories: `mcp`, `cli`, `skills`, `memories`, `hooks`, `policies`, `workflows`. |
 | `harness audit [--since 1h] [--policy <name>]` | Replay recorded policy decisions from the evidence-ledger. |
 | `harness session-export [sessionId]` | Export the full evidence-ledger for a Claude Code session as JSON, suitable for archival or attaching to a PR. |
@@ -93,6 +93,8 @@ These are called by Claude Code via `settings.json`; you usually do not run them
 
 ## Notes
 
+- Since `v0.36.0`: `harness doctor --rm-rogue-ledgers` (with `--yes` to skip the per-hit prompt) opts into deleting rogue evidence-ledger directories that doctor reports, and the read-only Bash classifier re-admits `sort`, `tree`, and `file` behind precise write-flag guards (for example `sort -o` is still treated as write-producing).
+- Since `v0.35.0`: `harness apply` fails loud (refuses) when the manifest declares `policies:` without `grounding-mcp` wired under `tools.mcp` (previously it applied and the policies silently degraded to warn-mode at runtime); wire `grounding-mcp` or drop the policies.
 - Since `v0.34.0`: `apply --yes` (skip the `--overwrite-drift` confirmation) and non-TTY guards on the `apply`/`adopt` confirmation prompts (they refuse instead of hanging; piped `echo yes |` confirmations no longer work, use `--yes`).
 - `harness policy intercept --hook <name>` and the 2s timeout floor pinned by the Codex-hook generator both shipped in `v0.29.0`; see [CHANGELOG.md](../CHANGELOG.md).
 - The `full` profile pins `@lannguyensi/agent-preflight` and `@lannguyensi/understanding-gate@0.4.0+` as transitive dependencies of the wired packs; mismatched versions surface in `harness doctor`.
