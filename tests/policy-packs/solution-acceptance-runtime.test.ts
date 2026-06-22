@@ -147,6 +147,21 @@ describe("evaluateGate — mirror of grounding-mcp solution_gate", () => {
     expect(r.allowed).toBe(false);
     expect(r.reason).toMatch(/not ready: lint failed; 1 test failing/);
   });
+  it("blocks: an orchestrator-workflow process blocker reaches the agent via the existing blockers path", () => {
+    // grounding-mcp >= 0.5.0 folds orchestrator-workflow (OW) process-
+    // completeness into `ready` and surfaces the reason through the EXISTING
+    // blockers[] (each prefixed `orchestrator-workflow: `). No new Verdict
+    // field is added, so the consumer needs no gate-logic change. Pin head to
+    // the CURRENT HEAD so this is the not-ready arm (not a stale-verdict
+    // denial): a ready:false verdict at HEAD must still deny, and the OW
+    // reason must flow through into the deny message unchanged.
+    const dir = tmpDir();
+    const owBlocker = "orchestrator-workflow: handoff final-status is 'blocked'";
+    writeMarker(dir, "t", { head: HEAD, ready: false, blockers: [owBlocker] });
+    const r = evaluateGate(readVerdict(dir, "t"), HEAD, "t");
+    expect(r.allowed).toBe(false);
+    expect(r.reason).toContain(owBlocker);
+  });
   it("blocks: HEAD drift (stale verdict)", () => {
     const dir = tmpDir();
     writeMarker(dir, "t", { head: OTHER_HEAD, ready: true });
