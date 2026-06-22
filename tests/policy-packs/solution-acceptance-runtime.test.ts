@@ -286,3 +286,41 @@ describe("golden fixture — drift guard against the real producer", () => {
     expect(evaluateGate(v, OTHER_HEAD, raw.id).allowed).toBe(false);
   });
 });
+
+describe("golden fixture 0.5.0 — pins the orchestrator-workflow blocker contract", () => {
+  // Captured VERBATIM from @lannguyensi/grounding-mcp@0.5.0 `evaluateSolution`
+  // (the 0.5.0 producer that folds the OW process arm into ready + blockers).
+  // It was produced by the REAL built producer against a scratch repo whose
+  // active OW run carries a blocked handoff, with preflight stubbed green via
+  // SOLUTION_PREFLIGHT_BIN — so the not-ready arm here comes from the OW
+  // process check, not from a technical preflight failure. This pins TWO things
+  // the 0.3.2 fixture cannot: that the 0.5.0 producer still emits exactly the
+  // 7-key shape (drift guard), and that an OW blocker really arrives prefixed
+  // `orchestrator-workflow: `. If grounding-mcp changes the Verdict shape or the
+  // blocker prefix, regenerate from the 0.5.0 producer and update this fixture.
+  const PRODUCER_KEYS = ["id", "head", "ready", "confidence", "blockers", "timestamp", "source"];
+  const fixturePath = path.join(
+    __dirname,
+    "..",
+    "fixtures",
+    "solution-acceptance",
+    "golden-verdict-0.5.0.json",
+  );
+  const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as Verdict;
+
+  it("the real 0.5.0 marker carries exactly the 7 producer keys (drift guard)", () => {
+    expect(Object.keys(fixture).sort()).toEqual([...PRODUCER_KEYS].sort());
+  });
+
+  it("at least one blocker carries the orchestrator-workflow: prefix", () => {
+    expect(fixture.blockers.some((b) => /^orchestrator-workflow: /.test(b))).toBe(true);
+  });
+
+  it("the consumer gate denies the not-ready OW verdict and surfaces the OW blocker", () => {
+    const r = evaluateGate(fixture, fixture.head, fixture.id);
+    expect(r.allowed).toBe(false);
+    const owBlocker = fixture.blockers.find((b) => /^orchestrator-workflow: /.test(b));
+    expect(owBlocker).toBeDefined();
+    expect(r.reason).toContain(owBlocker as string);
+  });
+});

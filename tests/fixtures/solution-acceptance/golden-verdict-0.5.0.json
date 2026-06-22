@@ -1,0 +1,11 @@
+{
+  "id": "ow-fixture",
+  "head": "931df5226996b0bd192038918722228720d8353f",
+  "ready": false,
+  "confidence": 1,
+  "blockers": [
+    "orchestrator-workflow: handoff final-status is 'blocked'"
+  ],
+  "timestamp": "2026-06-22T19:49:36.886Z",
+  "source": "preflight"
+}
