@@ -23,6 +23,7 @@
 
 import { select, confirm, input, checkbox } from "@inquirer/prompts";
 import * as path from "node:path";
+import { spawn } from "node:child_process";
 import { resolveHomeDir } from "../../runtime/home-dir.js";
 import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
 import {
@@ -107,6 +108,19 @@ export interface RunInteractiveOptions {
   authProbeSpawn?: ProbeSpawn;
   /** Override the agent-tasks-mcp-bridge `login` runner (tests). */
   authLoginSpawn?: LoginSpawn;
+  /**
+   * Repo directory the orchestrator-workflow co-install offer scaffolds
+   * into when the operator accepts. Defaults to `process.cwd()` — the repo
+   * where `harness init` was invoked. Tests inject a tmp path and assert
+   * it reaches the spawn.
+   */
+  repoDir?: string;
+  /**
+   * Override the `npx orchestrator-workflow init` runner. Mirrors
+   * `installSpawn` / `installPackagesGlobally`'s injectable spawn so tests
+   * can fake success / non-zero exit / throw without touching the network.
+   */
+  owInitSpawn?: InstallOptions["spawn"];
 }
 
 export interface InteractiveResult {
@@ -453,6 +467,150 @@ async function ensureAgentTasksAuth(
   return { aborted: false };
 }
 
+/**
+ * Default runner for the orchestrator-workflow co-install. Mirrors
+ * `dependencies.ts`'s `realSpawn`: streams the child's stderr to the
+ * operator's terminal and resolves a structured `{ code, stderr }`
+ * instead of rejecting. A spawn `error` (e.g. `npx`/node missing on
+ * PATH) resolves `code: 1` rather than throwing, so the caller's
+ * graceful-failure path handles a missing toolchain the same as a
+ * non-zero exit.
+ */
+function realOwInitSpawn(cmd: string, args: string[]): Promise<{ code: number; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, { stdio: ["ignore", "inherit", "pipe"] });
+    let stderr = "";
+    child.stderr?.on("data", (chunk: Buffer) => {
+      const text = chunk.toString("utf8");
+      stderr += text;
+      process.stderr.write(text);
+    });
+    child.on("error", (err) => {
+      resolve({ code: 1, stderr: `${stderr}\n${(err as Error).message}` });
+    });
+    child.on("exit", (code) => {
+      resolve({ code: code ?? 1, stderr });
+    });
+  });
+}
+
+interface OfferOrchestratorWorkflowOpts {
+  prompts: InteractivePrompts;
+  stderr: (s: string) => void;
+  /** Repo to scaffold orchestrator-workflow into (the `init` target dir). */
+  repoDir: string;
+  /** Test-injectable runner; defaults to a real `npx` spawn. */
+  owInitSpawn?: InstallOptions["spawn"];
+}
+
+/**
+ * Offer to co-install orchestrator-workflow (OW) into the repo after the
+ * harness manifest is written. This is harness's install-coupling: the
+ * solution-acceptance run-gate reads OW's `.ai/runs/` run files, so a
+ * fresh harness works best when OW is scaffolded into the same repo.
+ *
+ * Trade-off — why `npx orchestrator-workflow init --yes <repoDir>` rather
+ * than the alternatives:
+ *   - vs. `npm i -g orchestrator-workflow`: OW is a one-shot scaffolder,
+ *     not a binary the manifest's hooks shell out to (contrast the
+ *     PROFILE_DEPENDENCIES in dependencies.ts, which MUST stay on PATH).
+ *     A global install would leave a stale package the operator has to
+ *     remember to update; `npx` resolves and runs the LATEST published
+ *     kit on demand, so the `.ai/runs/` layout always matches what the
+ *     run-gate expects.
+ *   - vs. requiring OW to be already present: that would make a fresh
+ *     `harness init` fail or nag. OW is OPTIONAL — harness offers it but
+ *     never depends on it.
+ *
+ * Graceful by construction: a declined offer, a missing `npx`, no
+ * network, or a non-zero exit only prints a warning plus the manual
+ * command. harness init still succeeds — this function never aborts and
+ * never mutates the wizard's result.
+ */
+async function offerOrchestratorWorkflow(o: OfferOrchestratorWorkflowOpts): Promise<void> {
+  // Shared decline/skip warning. Used both when the operator explicitly
+  // declines the offer AND when they Ctrl-C at it (graceful skip below),
+  // so the two read identically. Leads with the same `⚠` glyph and
+  // 2-space continuation indent as the failure blocks further down, so
+  // all three OW operator-facing warnings are visually consistent.
+  const printDeclineWarning = (): void => {
+    o.stderr(
+      [
+        "",
+        "⚠ harness works best with orchestrator-workflow: the solution-acceptance run-gate reads its .ai/runs/ run files.",
+        "  You can add it later with `npx orchestrator-workflow init`.",
+        "",
+      ].join("\n"),
+    );
+  };
+
+  let accept: boolean;
+  try {
+    accept = await o.prompts.confirm({
+      message:
+        "Set up orchestrator-workflow in this repo too? Its run files (.ai/runs/) are what the solution-acceptance run-gate reads. (recommended)",
+      default: true,
+    });
+  } catch (err) {
+    // This confirm is the LAST prompt of the wizard and sits AFTER the
+    // manifest has been written + wired, inside runInteractive's shared
+    // try/catch. A Ctrl-C here must NOT propagate to that outer handler:
+    // doing so would print the FALSE "no manifest written" abort and
+    // return `{aborted:true}`, discarding the already-successful
+    // tailResult (validateClean and all). OW is OPTIONAL, so treat a
+    // Ctrl-C / ExitPromptError at this trailing offer as a graceful skip:
+    // print the same decline warning and return normally, leaving
+    // runInteractive to return the unchanged successful tailResult. A
+    // non-abort throw still propagates (genuine bug, not an operator
+    // cancel).
+    if (isAbortError(err)) {
+      printDeclineWarning();
+      return;
+    }
+    throw err;
+  }
+  if (!accept) {
+    printDeclineWarning();
+    return;
+  }
+
+  o.stderr(`\nSetting up orchestrator-workflow: npx orchestrator-workflow init --yes ${o.repoDir}\n`);
+  const run = o.owInitSpawn ?? realOwInitSpawn;
+  let result: { code: number; stderr: string };
+  try {
+    result = await run("npx", ["orchestrator-workflow", "init", "--yes", o.repoDir]);
+  } catch (err) {
+    // A thrown runner (an injected spawn that rejects, or an unexpected
+    // throw) is treated exactly like a non-zero exit: OW is optional, so
+    // we warn and continue rather than failing harness init.
+    const message = err instanceof Error ? err.message : String(err);
+    o.stderr(
+      [
+        "",
+        `⚠ Could not run orchestrator-workflow init (${message}).`,
+        "  harness init succeeded; orchestrator-workflow is optional. Add it later with:",
+        "  npx orchestrator-workflow init",
+        "",
+      ].join("\n"),
+    );
+    return;
+  }
+
+  if (result.code === 0) {
+    o.stderr("✓ orchestrator-workflow set up; its .ai/ run files are in place.\n");
+    return;
+  }
+  o.stderr(
+    [
+      "",
+      `⚠ orchestrator-workflow init exited ${result.code}.`,
+      "  harness init succeeded; orchestrator-workflow is optional. Add it later with:",
+      "  npx orchestrator-workflow init",
+      "",
+    ].join("\n"),
+  );
+}
+
 export async function runInteractive(
   opts: RunInteractiveOptions = {},
 ): Promise<InteractiveResult> {
@@ -637,7 +795,7 @@ export async function runInteractive(
     const initResult = await init(initOpts);
     stdout(initResult.stdout);
 
-    return await runPostInitTail({
+    const tailResult = await runPostInitTail({
       initResult,
       profile,
       detection,
@@ -645,6 +803,23 @@ export async function runInteractive(
       stderr,
       opts,
     });
+
+    // orchestrator-workflow co-install offer. Only the NON-custom
+    // profiles reach here — the custom path returned via
+    // runCustomProfile() above — which is intentional: this is the
+    // install-coupling for the standard profiles. It runs after the
+    // manifest write + wire-now so the harness side is fully set up
+    // before we offer its companion run-file scaffolder. OW is OPTIONAL:
+    // offerOrchestratorWorkflow() never aborts and never mutates
+    // tailResult (see its trade-off + graceful-failure doc).
+    await offerOrchestratorWorkflow({
+      prompts,
+      stderr,
+      repoDir: opts.repoDir ?? process.cwd(),
+      ...(opts.owInitSpawn ? { owInitSpawn: opts.owInitSpawn } : {}),
+    });
+
+    return tailResult;
   } catch (err) {
     if (isAbortError(err)) {
       stderr("Aborted: Ctrl-C received during prompt; no manifest written.\n");
