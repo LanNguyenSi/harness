@@ -79,6 +79,48 @@ Anti-forgery scope is v1-honest: it closes the enumerated-write-path
 residual, not arbitrary same-uid forgery. Cryptographic marker signing
 is a tracked follow-up.
 
+## Orchestrator-workflow process arm
+
+From `grounding-mcp` >= 0.5.0 the producer folds orchestrator-workflow
+(OW) process-completeness into the same verdict. When a run is present,
+`solution_evaluate` checks the run's process state (for example a handoff
+whose final status is not `done`) on TOP of the preflight floor and, on
+failure, records a not-ready verdict whose reasons land in the EXISTING
+`blockers`, each prefixed `orchestrator-workflow: `. No new verdict field
+is added, so this consumer is unchanged: a not-ready verdict still denies
+the completion verbs and the OW reasons reach the agent through the same
+deny message.
+
+Markers from older producers (< 0.5.0) stay shape-compatible and remain
+preflight-only. There is no hard incompatibility; an older producer
+simply records no OW blockers.
+
+### Producer-side knob
+
+The arm is controlled on the PRODUCER side via
+`.ai/solution-acceptance.json`:
+
+| Key | Values | Meaning |
+|-----|--------|---------|
+| `orchestratorWorkflow` | `auto` (default) \| `on` \| `off` | `auto` enforces the OW arm iff a run is present under `.ai/runs/`; `on` always enforces; `off` disables the OW arm. An unreadable or malformed file fails SAFE to `auto`. |
+
+Resolution is marker-first (the structured run files), with a prose
+fallback when the structured signal is absent. When `.ai/runs/` is absent
+entirely the OW arm auto-skips, so a repo that does not use the
+orchestrator workflow is never gated on it.
+
+This knob is agent-writable, so it is a BOUNDED residual: setting it to
+`off` (or having no run present) only drops the OW arm; it does NOT
+disable the preflight floor, which still gates every completion. The
+same-uid forgery honesty from the write-guard above applies here too.
+
+> Contract note: the producer-side behavior above (the knob, marker-first
+> resolution, fail-safe to `auto`, and the `orchestrator-workflow: ` blocker
+> prefix) is exercised by `grounding-mcp`'s own tests, not here. This consumer
+> pins only the verdict shape (the 7-key drift guard) and that `blockers` reach
+> the deny message; pinning the exact prefix against a real 0.5.0 marker is a
+> follow-up once that producer version is published.
+
 ## Failure mode
 
 The pack is a pure consumer: it reimplements the marker read locally

@@ -10,6 +10,16 @@
 // golden-fixture test against a real 0.3.2 marker; if grounding-mcp changes
 // the Verdict shape, that test fails loudly.
 //
+// grounding-mcp >= 0.5.0 additionally folds orchestrator-workflow (OW)
+// process-completeness into the verdict's `ready`, surfacing any failure
+// reasons through the EXISTING `blockers[]` (each prefixed
+// `orchestrator-workflow: `). It adds NO new Verdict field — the seven keys
+// in `Verdict` below are unchanged — so the consumer needs NO gate-logic
+// change: `evaluateGate` already denies a not-ready verdict and already joins
+// `blockers` into the deny reason, so OW reasons reach the agent for free.
+// Markers from older producers (< 0.5.0) stay SHAPE-compatible and remain
+// preflight-only (no OW arm); there is no hard incompatibility.
+//
 // Two enforcement surfaces are built on top of these helpers (see the pack
 // definition + the two hook verbs):
 //

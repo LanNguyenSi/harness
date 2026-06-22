@@ -195,6 +195,17 @@ not-ready run (failing checks, dirty tree) records a not-ready verdict; any
 commit after a green run shifts HEAD and invalidates it, so re-run after
 every change.
 
+## Orchestrator-workflow process arm (grounding-mcp >= 0.5.0)
+
+From grounding-mcp >= 0.5.0, \`solution_evaluate\` also folds
+orchestrator-workflow process-completeness into \`ready\` and surfaces any
+failure reasons through the EXISTING \`blockers\` (each prefixed
+\`orchestrator-workflow: \`). No new verdict field is added, so this consumer
+is unchanged: a not-ready verdict still denies the completion verbs and the
+OW reasons appear in the deny message. Markers from older producers
+(< 0.5.0) stay shape-compatible and remain preflight-only (no OW arm); there
+is no hard incompatibility.
+
 ## Anti-forgery scope (v1)
 
 v1 closes the ENUMERATED-WRITE-PATH residual: the write-guard blocks the
