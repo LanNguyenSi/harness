@@ -39,7 +39,7 @@ import {
   resolveGeneratedDir,
   writePendingApproval,
 } from "../../runtime/pending-approval.js";
-import { isReadOnlyBashCommand } from "../../runtime/read-only-bash.js";
+import { isReadOnlyBashPipeline } from "../../runtime/read-only-bash.js";
 import {
   PolicyUxSchema,
   ProducerSchema,
@@ -565,7 +565,7 @@ export async function runPackHookPreToolUseCli(
   // hard-blocked regardless (the matcher's other arms reach the
   // same final block path below). Unclassifiable Bash falls through
   // to the block (fail-closed).
-  if (toolName === "Bash" && isReadOnlyBashCommand(commandStr)) {
+  if (toolName === "Bash" && isReadOnlyBashPipeline(commandStr)) {
     const diagnostic = `harness pack hook: read-only Bash command, allowing without an approved report (\`${commandStr.trim()}\`)`;
     stderr.write(`${diagnostic}\n`);
     return {
