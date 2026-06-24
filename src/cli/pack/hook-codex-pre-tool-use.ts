@@ -37,7 +37,7 @@ import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { PolicyUxSchema, type Manifest, type McpServer, type PolicyUx } from "../../schema/index.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import { checkPauseFromLoader } from "../pause-check.js";
-import { isReadOnlyBashCommand } from "../../runtime/read-only-bash.js";
+import { isReadOnlyBashPipeline } from "../../runtime/read-only-bash.js";
 import { renderReportSchemaHint } from "./understanding-report-schema-hint.js";
 
 const PACK_NAME = "understanding-before-execution";
@@ -315,7 +315,7 @@ export async function runPackHookCodexPreToolUseCli(
   if (
     commandStr !== null &&
     CODEX_SHELL_TOOLS.has(toolName) &&
-    isReadOnlyBashCommand(commandStr)
+    isReadOnlyBashPipeline(commandStr)
   ) {
     const diagnostic = `harness pack hook codex: read-only Bash command, allowing without an approved report (\`${commandStr.trim()}\`)`;
     stderr.write(`${diagnostic}\n`);

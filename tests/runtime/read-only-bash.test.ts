@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { isReadOnlyBashCommand } from "../../src/runtime/read-only-bash.js";
+import {
+  isReadOnlyBashCommand,
+  isReadOnlyBashPipeline,
+} from "../../src/runtime/read-only-bash.js";
 
 describe("read-only Bash classifier", () => {
   describe("simple read-only binaries", () => {
@@ -357,5 +360,59 @@ describe("read-only Bash classifier", () => {
         expect(isReadOnlyBashCommand(cmd)).toBe(false);
       });
     });
+  });
+});
+
+describe("read-only Bash pipeline classifier (isReadOnlyBashPipeline)", () => {
+  describe("allows a `|` pipeline whose every stage is read-only", () => {
+    it.each([
+      "gh pr checks 123 | head",
+      "gh pr checks 123 | head -5",
+      "gh run list | head -20",
+      "git log | grep fix",
+      "git diff | cat",
+      "cat file | wc -l",
+      "ls -la | grep ts",
+      "cat a | grep x | head",
+      "ls|head",
+      // A single command (no pipe) classifies exactly like the strict fn.
+      "gh pr checks 123",
+      "ls -la",
+    ])("allows %s", (cmd) => {
+      expect(isReadOnlyBashPipeline(cmd)).toBe(true);
+    });
+  });
+
+  describe("blocks a pipeline if any stage writes, or a non-pipe metachar appears", () => {
+    it.each([
+      "ls | tee out", // tee writes
+      "cat a | tee b | head", // write in the middle stage
+      "cat f | sh", // sh not on the allowlist
+      "ls | rm x", // rm not on the allowlist
+      "grep x | xargs rm", // xargs not on the allowlist
+      "find . -delete | cat", // find write flag
+      "sort -o out f | head", // sort write flag
+      "cat a || rm b", // || surfaces as an empty stage
+      "ls && rm x", // && contains &
+      "cat a |& grep x", // |& contains &
+      "ls & ", // background &
+      "echo hi > out | cat", // redirection
+      "echo $(rm x) | cat", // command substitution
+      "cat `rm x` | head", // backtick substitution
+      "| head", // leading pipe -> empty stage
+      "ls |", // trailing pipe -> empty stage
+      "ls | | head", // doubled pipe -> empty stage
+      "", // empty
+    ])("blocks %s", (cmd) => {
+      expect(isReadOnlyBashPipeline(cmd)).toBe(false);
+    });
+  });
+
+  it("only the pipeline variant admits a pipe; the strict classifier is unchanged", () => {
+    // isReadOnlyBashCommand must keep refusing all chaining for its other
+    // consumers (Risk Classifier read-only floor, solution-acceptance
+    // write-guard); only isReadOnlyBashPipeline admits a read-only `|`.
+    expect(isReadOnlyBashPipeline("gh pr checks 123 | head")).toBe(true);
+    expect(isReadOnlyBashCommand("gh pr checks 123 | head")).toBe(false);
   });
 });

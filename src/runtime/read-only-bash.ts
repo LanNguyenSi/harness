@@ -23,6 +23,18 @@
 //   whole composition unclassifiable. Even if every individual piece
 //   would be read-only, a chained or substituted command can hide
 //   writes inside its construction. Refuse the whole thing.
+// - `isReadOnlyBashPipeline` is a narrower exception used ONLY by the
+//   understanding-gate PreToolUse hooks: it admits a single-`|` pipeline
+//   when EVERY stage independently classifies read-only, while still
+//   refusing `;`, `&` (and therefore `&&`, `|&`, background `&`), `||`,
+//   redirection, and substitution. A pipeline whose every stage is on
+//   the conservative read-only allowlist cannot write (writing needs a
+//   write-bin, a redirect, or a substitution, all still refused), so
+//   allowing it does not widen what the gate permits — it only stops the
+//   gate from blocking a read-only poll like `gh pr checks 123 | head`.
+//   `isReadOnlyBashCommand` itself stays strict (refuses all chaining)
+//   for the Risk Classifier read-only floor and the solution-acceptance
+//   write-guard, which must not treat any chaining as read-only.
 // - The classifier never short-circuits write detection: if a command
 //   is on the allowlist but a write indicator is also present, the
 //   write indicator wins. The shell-metachar check above accomplishes
@@ -224,6 +236,49 @@ export function isReadOnlyBashCommand(command: string): boolean {
   if (trimmed.includes("$(")) return false;
 
   return classifyTokens(trimmed.split(/\s+/));
+}
+
+/**
+ * Classify a Bash command that MAY be a `|` pipeline. `true` means every
+ * stage is provably read-only, so the whole pipeline reads without
+ * writing and the understanding-gate can allow it without an approved
+ * report. This is the pipeline-aware companion to `isReadOnlyBashCommand`,
+ * used ONLY by the understanding-gate PreToolUse hooks so a post-task
+ * read-only poll like `gh pr checks 123 | head` is not blocked.
+ *
+ * Safety: a pipe between provably read-only stages authorizes no writes —
+ * writing requires a write-bin (not on the conservative allowlist), a
+ * redirection, or a command substitution, all of which are still refused
+ * before the split. Everything except a single `|` is rejected up front:
+ * `;`, `&` (and thus `&&`, `|&`, background `&`), `<`, `>`, backtick, and
+ * `$(`. `||` (logical OR) and a leading/trailing/doubled pipe surface as
+ * an empty stage and are refused. Each stage is then handed to the strict
+ * `isReadOnlyBashCommand`, so the per-bin write-flag guards (`find`,
+ * `sort`, `tree`, `file`) and the `command`/`env` runner recursion all
+ * still apply per stage.
+ */
+export function isReadOnlyBashPipeline(command: string): boolean {
+  const trimmed = command.trim();
+  if (trimmed === "") return false;
+
+  // Reject everything the single-command classifier rejects EXCEPT a
+  // single `|`. Keeping `&` in the reject set also kills `&&`, `|&`, and a
+  // backgrounding `&`; redirection and substitution stay refused. After
+  // this, the only metacharacter that can remain is `|`.
+  if (/[;&<>]/.test(trimmed)) return false;
+  if (trimmed.includes("\n")) return false;
+  if (trimmed.includes("`")) return false;
+  if (trimmed.includes("$(")) return false;
+
+  // Split on the pipe and require every stage to be a non-empty, provably
+  // read-only command. An empty stage means `||`, a leading/trailing pipe,
+  // or `| |` — all refused. A single command (no pipe) yields one stage and
+  // is classified exactly as `isReadOnlyBashCommand` would.
+  return trimmed.split("|").every((stage) => {
+    const s = stage.trim();
+    if (s === "") return false;
+    return isReadOnlyBashCommand(s);
+  });
 }
 
 /**

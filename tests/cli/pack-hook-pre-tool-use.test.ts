@@ -100,6 +100,57 @@ describe("pack hook pre-tool-use blocker", () => {
     expect(stderr.read()).toMatch(/read-only Bash command, allowing/);
   });
 
+  it("allows a read-only Bash PIPELINE without an approved report (#72: post-task CI poll)", async () => {
+    // `gh pr checks 123 | head` is the read-only poll an agent runs right
+    // after task_finish to confirm CI. Every stage is read-only, so the
+    // pipeline writes nothing; the gate must not force a fresh Understanding
+    // Report. There is NO approval marker and NO persisted report here, so
+    // it is the read-only branch — not a surviving approval — that allows it.
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "Bash",
+          tool_input: { command: "gh pr checks 123 | head" },
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.approvalCheck.source).toBe("none");
+    expect(stderr.read()).toMatch(/read-only Bash command, allowing/);
+  });
+
+  it("still blocks a Bash pipeline whose stage writes (gate stays armed)", async () => {
+    // `git status | tee out` pipes a read-only command into a writer. The
+    // pipeline classifier must reject it: the write hides in `tee`.
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "Bash",
+          tool_input: { command: "git status | tee out" },
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+  });
+
   it("blocks a mutating Bash command even with the classifier in place", async () => {
     // `git push` is a write. The classifier must not authorize it
     // just because `git` appears at the front — only explicit
