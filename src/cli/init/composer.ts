@@ -323,6 +323,7 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
       cannot: "You cannot push branch ${BRANCH} yet.",
       required: [
         "a preflight for ${BRANCH} at the current HEAD (any age) OR any preflight within the last 10 minutes. Re-run `harness preflight` if you committed since the last preflight AND it has been more than 10 minutes.",
+        "if solution-acceptance is enabled, a ready HEAD-pinned verdict at the SAME commit too (run `solution_evaluate`). `git push` trips both gates, so commit first if the tree is dirty, then satisfy both at one HEAD.",
         "an approved Understanding Report, if the Understanding Gate is still active (it blocks `harness preflight` itself)",
       ],
       run: ["harness preflight"],
