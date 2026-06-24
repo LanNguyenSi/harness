@@ -153,11 +153,11 @@ function blockJson(
   } else {
     reasonText =
       `solution-acceptance: refusing ${actionLabel} (${toolName}). ${detail}\n` +
-      `Completion must be EARNED from a real preflight run, not claimed.\n` +
-      `Run the producer for this task, then retry:\n` +
-      `  mcp__agent-grounding__solution_evaluate({ id: "${taskId}" })\n` +
-      `It runs \`preflight run --json\` (lint/typecheck/test/audit/secret) and records a HEAD-pinned verdict. ` +
-      `A clean run at the current HEAD unblocks this tool; a failing run lists the blockers to fix.\n` +
+      `Completion must be EARNED from a real preflight run at the CURRENT HEAD, not claimed.\n` +
+      `Converge in this order, all at one commit:\n` +
+      `  1. If the working tree is dirty, COMMIT first. The verdict is pinned to the HEAD it was evaluated at, so any commit you make afterward makes it stale; commit the change before evaluating so the verdict pins to the final HEAD.\n` +
+      `  2. mcp__agent-grounding__solution_evaluate({ id: "${taskId}" }) — runs \`preflight run --json\` (lint/typecheck/test/audit/secret) and records a HEAD-pinned verdict. A clean run at the current HEAD unblocks this tool; a failing run lists the blockers to fix (then back to step 1).\n` +
+      `  3. For \`git push\` / \`gh pr merge\`: the separate preflight-before-push gate is satisfied by a preflight at the current HEAD (its \`at_head\` rule), so refresh it at this same commit with \`harness preflight\` before retrying. Satisfy both push-gates at one HEAD.\n` +
       `\n` +
       `Operator override: \`harness pause\` (yields this and every other gate).`;
   }

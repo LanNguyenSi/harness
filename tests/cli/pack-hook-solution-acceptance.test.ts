@@ -140,6 +140,24 @@ describe("completion-gate — decision matrix", () => {
     expect(JSON.parse(out).reason).toMatch(/stale/);
   });
 
+  it("the deny names the full convergence recipe (commit-first + both push-gates)", async () => {
+    // Regression for the #2/#9/#58/#71 livelock: after a reviewer amendment the
+    // agent commits (HEAD moves), the verdict goes stale, and the deny must
+    // name the WHOLE recipe — commit if dirty, then run solution_evaluate AND
+    // refresh `harness preflight` at the same HEAD — not just one step. A deny
+    // that names only `solution_evaluate` is what made the agent satisfy one
+    // push-gate, retry, hit the other, and churn.
+    const { res, out } = await run({
+      cwd: repoAtHead(HEAD),
+      verdictDir: verdictDirWith(TASK, { head: OTHER, ready: true }),
+    });
+    expect(res.blocked).toBe(true);
+    const { reason } = JSON.parse(out) as { reason: string };
+    expect(reason).toMatch(/COMMIT first/);
+    expect(reason).toMatch(/solution_evaluate/);
+    expect(reason).toMatch(/harness preflight/);
+  });
+
   it("BLOCKS when the current HEAD is unresolvable (not a git work tree)", async () => {
     const nonRepo = fs.mkdtempSync(path.join(os.tmpdir(), "sa-nonrepo-"));
     cleanups.push(() => fs.rmSync(nonRepo, { recursive: true, force: true }));
