@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-06-25
+
+**Headline: `harness doctor` learns the solution-acceptance deadlock checks, plus a sessionId-namespace fix to ledger-deny hints and clearer intercept / approve-understanding diagnostics.** `harness doctor` now reports the two solution-acceptance misconfigurations that deadlock the completion-gate (parity with `harness validate`), ledger-gate deny hints name which sessionId namespace to record the unblocking entry under, the understanding-gate admits read-only Bash pipelines for post-task CI polls, and `harness validate` now hard-errors on a solution-acceptance pack with no reachable producer. Re-run `npm i -g @lannguyensi/harness` to upgrade.
+
 ### Added
 
 - **`harness doctor` now surfaces the solution-acceptance producer/dir deadlock findings** (task 08ccfe87). The two misconfigurations that `harness validate` already catches are now also reported by `harness doctor` in the Policy Packs section: condition #1 (grounding-mcp absent from `tools.mcp`) is reported as an error, condition #2 (relative `SOLUTION_VERDICT_DIR` in grounding-mcp env) as a warning. `checkSolutionAcceptanceProducer` is the single source of truth for both checks; no logic is duplicated.
