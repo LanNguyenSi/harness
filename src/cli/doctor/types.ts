@@ -1,6 +1,7 @@
 import type { McpProbeResult } from "../../probes/mcp.js";
 import type { MemoryReport, StaleMemory } from "../../probes/memory.js";
 import type { Manifest } from "../../schema/index.js";
+import type { Diagnostic } from "../validate/types.js";
 import type { CodexTargetReport } from "./codex.js";
 import type { NpmBinReport } from "./npm-bin-path.js";
 import type { RogueLedgerDb } from "./rogue-ledger.js";
@@ -152,6 +153,7 @@ export interface PolicyPacksSection {
   unresolved: PolicyPackUnresolved[];
   configIssues: PolicyPackConfigIssue[];
   versionGaps: PolicyPackVersionGapReport[];
+  solutionAcceptance: Diagnostic[];
 }
 
 export interface WorkflowEntryReport {

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`harness doctor` now surfaces the solution-acceptance producer/dir deadlock findings** (task 08ccfe87). The two misconfigurations that `harness validate` already catches are now also reported by `harness doctor` in the Policy Packs section: condition #1 (grounding-mcp absent from `tools.mcp`) is reported as an error, condition #2 (relative `SOLUTION_VERDICT_DIR` in grounding-mcp env) as a warning. `checkSolutionAcceptanceProducer` is the single source of truth for both checks; no logic is duplicated.
+
 ### Changed
 
 - **Ledger-gate deny "to satisfy" hints now name the sessionId namespace** (task cdc60d56, discovery 2026-06-24). The hint previously showed the session id value but not which namespace it is; an entry written under the agent-tasks task UUID never satisfies a harness runtime gate, which keys off the runtime session id (the 2026-05-17 incident on PRs #174/#175: a first attempt wrote under the task UUID and was rejected, the second under the session id and passed). The format is now `... To satisfy: record an evidence-ledger entry containing \`<tag>\`, under this runtime session's id \`<id>\` (not the agent-tasks task UUID).` Naming an identity is not a producer verb, so the deny path stays neutral on producer (agent-tasks/88ca4bb3).
