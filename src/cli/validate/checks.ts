@@ -258,7 +258,7 @@ export function checkPolicyGroundingMcp(manifest: Manifest): Diagnostic[] {
 // completion-gate on a permanent deny, so it is a hard misconfiguration rather
 // than a warning (task e3af6388). Condition #2 (a relative SOLUTION_VERDICT_DIR)
 // stays a warning: it only bites on cwd divergence between producer and hook.
-function checkSolutionAcceptanceProducer(manifest: Manifest): Diagnostic[] {
+export function checkSolutionAcceptanceProducer(manifest: Manifest): Diagnostic[] {
   const pack = manifest.policy_packs.find((p) => p.name === "solution-acceptance");
   if (!pack || !pack.enabled) return [];
   const grounding = manifest.tools.mcp.find((m) => m.name === "grounding-mcp");

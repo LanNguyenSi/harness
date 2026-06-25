@@ -21,10 +21,10 @@ gate that silently can't fire). Requirements:
 - `grounding-mcp` (>= 0.3.2) declared under `tools.mcp` (the producer).
 - The `preflight` binary on PATH (the producer shells out to it).
 
-`harness validate` warns when the pack is enabled but one of the two
-deadlock misconfigurations is present (see Failure mode). Warning-tier
-in v1; escalation to a hard error, and surfacing the same finding in
-`harness doctor`, are tracked follow-ups.
+`harness validate` and `harness doctor` both surface the two deadlock
+misconfigurations when the pack is enabled (see Failure mode).
+Condition #1 (grounding-mcp absent) is a hard error in both; condition
+#2 (relative `SOLUTION_VERDICT_DIR`) is a warning in both.
 
 ## How it works
 
@@ -136,13 +136,16 @@ turn the gate into a permanent deny that LOOKS protective
 1. **`grounding-mcp` absent from `tools.mcp`**: the producer is
    unreachable, no verdict can ever be written, every completion verb
    deadlocks on deny.
-2. **`grounding-mcp` declares a non-default `SOLUTION_VERDICT_DIR`**:
-   harness does not project `tools.mcp` env into the hook context, so
-   the consumer keeps reading the producer-default location and never
-   sees the override. Unset it, or mirror the same value into the hook
-   environment.
+2. **`grounding-mcp` declares a RELATIVE `SOLUTION_VERDICT_DIR`**:
+   `harness apply` now projects an absolute non-default
+   `SOLUTION_VERDICT_DIR` into the hook at apply time (see
+   `buildExpectedFiles` in apply.ts), so an absolute override is handled
+   silently. A relative path cannot be reconciled: it resolves against
+   each process's working directory, so the producer (grounding-mcp) and
+   the hook can land on different dirs and the gate would deny.
 
-Both are surfaced as `harness validate` warnings when the pack is
+Condition #1 is a hard error; condition #2 is a warning. Both are
+surfaced by `harness validate` and `harness doctor` when the pack is
 enabled.
 
 ## Env knobs

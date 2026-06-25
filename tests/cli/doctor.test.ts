@@ -832,6 +832,176 @@ policy_packs:
   });
 });
 
+describe("doctor — solution-acceptance producer checks", () => {
+  // These tests verify that doctor surfaces the same two deadlock
+  // misconfigurations that `harness validate` already surfaces via
+  // `checkSolutionAcceptanceProducer` (single source of truth).
+
+  it("errors when solution-acceptance is enabled but grounding-mcp is absent", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: solution-acceptance
+    source: builtin
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+    });
+    expect(report.policyPacks.solutionAcceptance).toHaveLength(1);
+    expect(report.policyPacks.solutionAcceptance[0]).toMatchObject({
+      severity: "error",
+      path: "policy_packs",
+    });
+    expect(report.errorCount).toBeGreaterThanOrEqual(1);
+    const text = format(report);
+    expect(text).toContain("Policy Packs");
+    expect(text).toContain("✗ policy_packs");
+    expect(text).toContain("grounding-mcp");
+  });
+
+  it("warns when grounding-mcp has a relative SOLUTION_VERDICT_DIR", async () => {
+    // Baseline: an identical fixture but with an ABSOLUTE dir, which emits
+    // no solution-acceptance warning. The minimal fixture independently
+    // emits other warnings (e.g. a missing memory router), so a bare
+    // `warningCount >= 1` would pass even if the countDiagnostics warning
+    // tally were dropped. Assert the +1 delta against the baseline instead
+    // so removing that tally turns this test red.
+    const baselineHome = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: solution-acceptance
+    source: builtin
+tools:
+  mcp:
+    - name: grounding-mcp
+      command: [/usr/bin/true]
+      env:
+        SOLUTION_VERDICT_DIR: /absolute/path/to/verdicts
+      enabled: true
+`,
+    });
+    const baseline = await doctor({
+      configPath: path.join(baselineHome, "harness.yaml"),
+      homeOverride: baselineHome,
+      shallow: true,
+    });
+    expect(baseline.policyPacks.solutionAcceptance).toHaveLength(0);
+
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: solution-acceptance
+    source: builtin
+tools:
+  mcp:
+    - name: grounding-mcp
+      command: [/usr/bin/true]
+      env:
+        SOLUTION_VERDICT_DIR: ./relative/path
+      enabled: true
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+    });
+    expect(report.policyPacks.solutionAcceptance).toHaveLength(1);
+    expect(report.policyPacks.solutionAcceptance[0]).toMatchObject({
+      severity: "warning",
+      path: "tools.mcp",
+    });
+    // The relative-dir variant differs from the absolute-dir baseline by
+    // exactly the one solution-acceptance warning; the home-derived and
+    // cwd-derived warnings are identical across both runs, so the tally
+    // contributes exactly +1.
+    expect(report.warningCount).toBe(baseline.warningCount + 1);
+    expect(report.errorCount).toBe(0);
+    const text = format(report);
+    expect(text).toContain("Policy Packs");
+    expect(text).toContain("⚠ tools.mcp");
+    expect(text).toContain("SOLUTION_VERDICT_DIR");
+  });
+
+  it("is silent when the pack is disabled", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: solution-acceptance
+    source: builtin
+    enabled: false
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+    });
+    expect(report.policyPacks.solutionAcceptance).toHaveLength(0);
+  });
+
+  it("is silent when grounding-mcp is present with no SOLUTION_VERDICT_DIR override", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: solution-acceptance
+    source: builtin
+tools:
+  mcp:
+    - name: grounding-mcp
+      command: [/usr/bin/true]
+      enabled: true
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+    });
+    expect(report.policyPacks.solutionAcceptance).toHaveLength(0);
+    expect(format(report)).not.toContain("Policy Packs");
+  });
+
+  it("is silent when grounding-mcp has an absolute SOLUTION_VERDICT_DIR", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: solution-acceptance
+    source: builtin
+tools:
+  mcp:
+    - name: grounding-mcp
+      command: [/usr/bin/true]
+      env:
+        SOLUTION_VERDICT_DIR: /absolute/path/to/verdicts
+      enabled: true
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+    });
+    expect(report.policyPacks.solutionAcceptance).toHaveLength(0);
+    expect(format(report)).not.toContain("Policy Packs");
+  });
+});
+
 describe("doctor — npm global-bin PATH check (task 4ddd78ed)", () => {
   const MIN_MANIFEST = `version: 1
 hooks: []
@@ -1068,7 +1238,7 @@ ${mcpBlock}
       min_version: "1.0.0"
       version_command: [custom-bin, "--print-version"]`),
     });
-    let received: string[] | null = null;
+    let received: readonly string[] | null = null;
     const report = await doctor({
       configPath: path.join(home, "harness.yaml"),
       homeOverride: home,
@@ -1122,7 +1292,7 @@ tools:
     min_version: "0.5.0"
     version_command: [my-hook-bin, "--version"]`),
     });
-    let received: string[] | null = null;
+    let received: readonly string[] | null = null;
     const report = await doctor({
       configPath: path.join(home, "harness.yaml"),
       homeOverride: home,

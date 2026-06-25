@@ -15,6 +15,7 @@ import { resolveBuiltin } from "../../policy-packs/registry.js";
 import { checkPolicyPackConfigs } from "../../policy-packs/config-check.js";
 import { checkPolicyPackVersions } from "../../policy-packs/version-check.js";
 import { DEFAULT_RUNTIME } from "../../policy-packs/runtime.js";
+import { checkSolutionAcceptanceProducer } from "../validate/checks.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import {
   countCodexDiagnostics,
@@ -446,7 +447,8 @@ function buildPolicyPacks(
       message: gap.message,
     }),
   );
-  return { unresolved, configIssues, versionGaps };
+  const solutionAcceptance = checkSolutionAcceptanceProducer(manifest);
+  return { unresolved, configIssues, versionGaps, solutionAcceptance };
 }
 
 function buildWorkflows(manifest: Manifest): import("./types.js").WorkflowsSectionReport {
@@ -597,6 +599,10 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // release are lost. Parallel to the hook-level version probe's
   // `status: warn`.
   warningCount += report.policyPacks.versionGaps.length;
+  for (const d of report.policyPacks.solutionAcceptance) {
+    if (d.severity === "error") errorCount++;
+    else if (d.severity === "warning") warningCount++;
+  }
   warningCount += report.riskGate.warnings.length;
   if (report.npmGlobalBin?.status === "warn") warningCount++;
   if (report.memory.routerExecutable && !report.memory.routerExecutable.exists) errorCount++;
