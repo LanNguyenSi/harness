@@ -533,8 +533,18 @@ export async function intercept(
     // recording verb so the deny path stays neutral on producer (see
     // agent-tasks/88ca4bb3 for why "use mcp__..." would be the wrong
     // suggestion when the engine is the source of that suggestion).
+    //
+    // It DOES name the sessionId namespace the entry must be written
+    // under — this runtime session's id (the value shown), not the
+    // agent-tasks task UUID. Naming an identity is not a producer
+    // verb, so this stays compatible with the producer-neutrality above.
+    // The two namespaces are a known production footgun: an entry written
+    // under the agent-tasks task UUID never satisfies a harness runtime
+    // gate, which keys off the runtime session id (2026-05-17 incident,
+    // harness PRs #174/#175 — first attempt used the task UUID and was
+    // rejected, second used the session id and passed).
     const hintSuffix = blocking.recordHint
-      ? ` To satisfy: ${blocking.recordHint} (session \`${sessionId}\`).`
+      ? ` To satisfy: ${blocking.recordHint}, under this runtime session's id \`${sessionId}\` (not the agent-tasks task UUID).`
       : "";
     // Opt-in producer block: when the policy declares `producers:` in
     // the manifest, render the structured remediation list (bash / mcp

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Ledger-gate deny "to satisfy" hints now name the sessionId namespace** (task cdc60d56, discovery 2026-06-24). The hint previously showed the session id value but not which namespace it is; an entry written under the agent-tasks task UUID never satisfies a harness runtime gate, which keys off the runtime session id (the 2026-05-17 incident on PRs #174/#175: a first attempt wrote under the task UUID and was rejected, the second under the session id and passed). The format is now `... To satisfy: record an evidence-ledger entry containing \`<tag>\`, under this runtime session's id \`<id>\` (not the agent-tasks task UUID).` Naming an identity is not a producer verb, so the deny path stays neutral on producer (agent-tasks/88ca4bb3).
 - **`harness validate` now errors (was a warning) when the `solution-acceptance` policy pack is enabled but `grounding-mcp` is not wired under `tools.mcp`** (task e3af6388). Without a reachable `solution_evaluate` producer the completion-gate can never see a verdict and deadlocks on a permanent deny, so this is a hard misconfiguration rather than a soft warning. A relative `SOLUTION_VERDICT_DIR` (the other producer condition) stays a warning. Operator impact: a manifest with `solution-acceptance` enabled but `grounding-mcp` absent now makes `harness validate` exit 1 where it previously exited 0.
 
 ### Fixed
