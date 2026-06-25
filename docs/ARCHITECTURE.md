@@ -10,6 +10,54 @@ The phase-by-phase plan is deliberately *not* here; it belongs in [`ROADMAP.md`]
 
 ---
 
+## Architecture overview
+
+The harness operates across two planes: an authoring plane that merges YAML config files into an effective manifest and runs `harness apply` to emit Claude Code runtime artifacts, and a runtime plane where Claude Code PreToolUse hook events are intercepted, risk-classified, and gate-checked against the grounding-mcp evidence ledger before being allowed or denied.
+
+```mermaid
+flowchart TD
+  subgraph AUTH ["Authoring plane"]
+    HY[("harness.yaml")]
+    OV[("machines/ + projects/<br/>harness.overrides.yaml")]
+    LM["loader + merge<br/>src/cli/loader.ts"]
+    APL["harness apply<br/>src/cli/apply/"]
+    OUT[("apply outputs<br/>settings.json · MEMORY.md · harness.lock")]
+
+    HY --> LM
+    OV --> LM
+    LM --> APL
+    APL --> OUT
+  end
+
+  subgraph RUN ["Runtime plane"]
+    EVT["Claude Code<br/>PreToolUse event"]
+    CLI["hook entrypoint<br/>src/cli/policy/intercept.ts"]
+    INT["intercept()<br/>src/runtime/intercept.ts"]
+    AE["action-envelope<br/>src/runtime/action-envelope.ts"]
+    RC["risk-classifier<br/>src/runtime/risk-classifier.ts"]
+    WE["when-eval<br/>src/runtime/when-eval.ts"]
+    PE{"policy evaluator<br/>requires check"}
+    LC["ledger-client<br/>src/policies/ledger-client.ts"]
+    GR[("grounding-mcp")]
+
+    EVT --> CLI
+    CLI --> INT
+    INT --> AE
+    AE --> RC
+    AE --> WE
+    RC --> PE
+    WE --> PE
+    PE --> LC
+    LC --> GR
+    GR -->|entries| LC
+    LC --> PE
+    PE -->|allow| EVT
+    PE -->|block| CLI
+  end
+
+  OUT -.->|wires hook| EVT
+```
+
 ## 1. Manifest: top-level shape
 
 A harness configuration is a single YAML file. Five top-level keys, one required header:
