@@ -131,7 +131,8 @@ describe("intercept — match + deny", () => {
     });
     const expectedReason =
       "review-before-merge: no matching ledger entry for tag `review:42`. " +
-      "To satisfy: record an evidence-ledger entry containing `review:42` (session `sess-1`).";
+      "To satisfy: record an evidence-ledger entry containing `review:42`, " +
+      "under this runtime session's id `sess-1` (not the agent-tasks task UUID).";
     expect(result.blockJson).toEqual({
       decision: "block",
       reason: expectedReason,
@@ -145,6 +146,27 @@ describe("intercept — match + deny", () => {
     expect(result.decisions[0]?.recordHint).toBe(
       "record an evidence-ledger entry containing `review:42`",
     );
+  });
+
+  it("names the sessionId namespace (runtime session, not the task UUID)", async () => {
+    // A ledger gate keys off the runtime session id; an entry written
+    // under the agent-tasks task UUID never satisfies it (2026-05-17
+    // incident). The deny hint must name BOTH the required tag and the
+    // namespace to write it under, so the agent does not guess the wrong
+    // identity. Mutation guard: drop the namespace clause from intercept's
+    // hintSuffix and this test goes red.
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([REVIEW_POLICY]),
+      event: MERGE_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    const reason = result.blockJson?.reason ?? "";
+    expect(reason).toContain("`review:42`");
+    expect(reason).toContain("under this runtime session's id `sess-1`");
+    expect(reason).toContain("not the agent-tasks task UUID");
   });
 });
 
@@ -527,7 +549,8 @@ describe("intercept — non-PreToolUse deny shape", () => {
       decision: "block",
       reason:
         "block-bare-prompt: no matching ledger entry for tag `review:7`. " +
-        "To satisfy: record an evidence-ledger entry containing `review:7` (session `sess-1`).",
+        "To satisfy: record an evidence-ledger entry containing `review:7`, " +
+        "under this runtime session's id `sess-1` (not the agent-tasks task UUID).",
     });
     expect(result.blockJson?.hookSpecificOutput).toBeUndefined();
   });
