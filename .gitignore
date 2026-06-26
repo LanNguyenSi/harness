@@ -23,5 +23,8 @@ coverage/
 harness.generated/
 ~
 
+# Orchestrator-workflow run state (run files under .ai/runs/, .ai/workflow/)
+.ai/
+
 # Dogfood smoke run artefacts — per-run transcripts, not committed
 dogfood/*/transcript/
