@@ -23,7 +23,8 @@
 
 import { type Mode, resolveMode } from "../../policy-packs/builtin/understanding-before-execution.js";
 import type { Manifest } from "../../schema/index.js";
-import { loadManifest, type LoaderOptions } from "../loader.js";
+import { type LoaderOptions } from "../loader.js";
+import { loadManifestOrInjected, readStdin } from "./hook-bootstrap.js";
 
 const PACK_NAME = "understanding-before-execution";
 
@@ -40,18 +41,6 @@ export interface PackHookCodexUserPromptSubmitResult {
   emitted: boolean;
   /** The exact text written to stdout (empty when not emitted). */
   text: string;
-}
-
-async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    stream.setEncoding("utf8");
-    stream.on("data", (chunk: string) => {
-      data += chunk;
-    });
-    stream.on("end", () => resolve(data));
-    stream.on("error", (err) => reject(err));
-  });
 }
 
 export function buildInstructionBlock(mode: Mode): string {
@@ -96,7 +85,7 @@ export async function runPackHookCodexUserPromptSubmitCli(
 
   let manifest: Manifest;
   try {
-    manifest = opts.manifest ?? loadManifest(opts).manifest;
+    ({ manifest } = loadManifestOrInjected(opts, opts.manifest));
   } catch (err) {
     stderr.write(
       `harness pack hook codex-user-prompt-submit: manifest load failed (${

@@ -33,8 +33,12 @@ import {
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
 import type { Manifest } from "../../schema/index.js";
-import { loadManifest, type LoaderOptions } from "../loader.js";
-import { checkPauseFromLoader } from "../pause-check.js";
+import { type LoaderOptions } from "../loader.js";
+import {
+  checkHookPause,
+  loadManifestOrInjected,
+  readStdin,
+} from "./hook-bootstrap.js";
 
 const PACK_NAME = "understanding-before-execution";
 
@@ -84,18 +88,6 @@ interface ToolEventLite {
   session_id?: unknown;
   tool_name?: unknown;
   tool_input?: unknown;
-}
-
-async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    stream.setEncoding("utf8");
-    stream.on("data", (chunk: string) => {
-      data += chunk;
-    });
-    stream.on("end", () => resolve(data));
-    stream.on("error", reject);
-  });
 }
 
 // Match a tool name against one of the patterns. The pattern is a plain
@@ -201,19 +193,11 @@ export async function runPackHookPostToolUseCli(
 
   // Pause sentinel — skip marker expiry while paused so a debug A/B-test
   // doesn't silently invalidate the operator's approval state.
-  {
-    const pauseOpts: Parameters<typeof checkPauseFromLoader>[0] = {
-      loaderOpts: opts,
-      hookLabel: "post-tool-use",
+  if (checkHookPause("post-tool-use", stderr, opts, opts.generatedDir).paused) {
+    return noop(
+      "harness paused; post-tool-use skipping marker expiry without evaluating.",
       stderr,
-    };
-    if (opts.generatedDir !== undefined) pauseOpts.generatedDir = opts.generatedDir;
-    if (checkPauseFromLoader(pauseOpts).paused) {
-      return noop(
-        "harness paused; post-tool-use skipping marker expiry without evaluating.",
-        stderr,
-      );
-    }
+    );
   }
 
   const sessionId =
@@ -232,13 +216,7 @@ export async function runPackHookPostToolUseCli(
   let manifest: Manifest;
   let manifestPath: string | undefined;
   try {
-    if (opts.manifest) {
-      manifest = opts.manifest;
-    } else {
-      const loaded = loadManifest(opts);
-      manifest = loaded.manifest;
-      manifestPath = loaded.resolved.base;
-    }
+    ({ manifest, manifestPath } = loadManifestOrInjected(opts, opts.manifest));
   } catch (err) {
     return noop(
       `harness pack hook post-tool-use: manifest load failed (${(err as Error).message}), skipping`,

@@ -40,7 +40,7 @@ import {
 } from "../../policy-packs/builtin/solution-acceptance-runtime.js";
 import { isReadOnlyBashCommand } from "../../runtime/read-only-bash.js";
 import type { LoaderOptions } from "../loader.js";
-import { checkPauseFromLoader } from "../pause-check.js";
+import { checkHookPause, readStdin } from "./hook-bootstrap.js";
 
 export interface PackHookSolutionAcceptanceWriteguardOptions extends LoaderOptions {
   stdin?: NodeJS.ReadableStream;
@@ -62,18 +62,6 @@ interface ToolEventLite {
   tool_name?: unknown;
   cwd?: unknown;
   tool_input?: unknown;
-}
-
-async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    stream.setEncoding("utf8");
-    stream.on("data", (chunk: string) => {
-      data += chunk;
-    });
-    stream.on("end", () => resolve(data));
-    stream.on("error", (err) => reject(err));
-  });
 }
 
 /** Single-file target for path-mutating tools, or null when not applicable. */
@@ -213,7 +201,7 @@ export async function runPackHookSolutionAcceptanceWriteguardCli(
     /* event stays {} -> not a guarded surface -> allow */
   }
 
-  if (checkPauseFromLoader({ loaderOpts: opts, hookLabel: `${PACK_NAME}-writeguard`, stderr }).paused) {
+  if (checkHookPause(`${PACK_NAME}-writeguard`, stderr, opts).paused) {
     const diagnostic = "harness paused; write-guard allowing without evaluating.";
     return { exitCode: 0, blocked: false, diagnostic };
   }

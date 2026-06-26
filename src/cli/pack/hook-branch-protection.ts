@@ -52,8 +52,12 @@ import { resolveGitContext } from "../../runtime/git-context.js";
 import { POLICY_DECISION_TYPE } from "../../runtime/ledger-record.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { PolicyUxSchema, type Manifest, type McpServer, type PolicyUx } from "../../schema/index.js";
-import { loadManifest, type LoaderOptions } from "../loader.js";
-import { checkPauseFromLoader } from "../pause-check.js";
+import { type LoaderOptions } from "../loader.js";
+import {
+  checkHookPause,
+  loadManifestOrInjected,
+  readStdin,
+} from "./hook-bootstrap.js";
 
 export interface PackHookBranchProtectionOptions extends LoaderOptions {
   /** Defaults to process.stdin. */
@@ -121,18 +125,6 @@ function extractTargetPath(toolName: string, toolInput: unknown): string | null 
     default:
       return null;
   }
-}
-
-async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    stream.setEncoding("utf8");
-    stream.on("data", (chunk: string) => {
-      data += chunk;
-    });
-    stream.on("end", () => resolve(data));
-    stream.on("error", (err) => reject(err));
-  });
 }
 
 function findGroundingMcp(manifest: Manifest): McpServer | null {
@@ -348,11 +340,7 @@ export async function runPackHookBranchProtectionCli(
   // to an operator pause. The whole point of the incident-mode flow is
   // pushing a hotfix to a protected branch when normal gates are in the
   // way.
-  if (checkPauseFromLoader({
-    loaderOpts: opts,
-    hookLabel: "branch-protection",
-    stderr,
-  }).paused) {
+  if (checkHookPause("branch-protection", stderr, opts).paused) {
     const diagnostic = "harness paused; branch-protection allowing without evaluating.";
     return { exitCode: 0, blocked: false, diagnostic };
   }
@@ -374,29 +362,23 @@ export async function runPackHookBranchProtectionCli(
   // grounding-mcp wiring. A manifest load failure forces BLOCK with a
   // clear hint — we can't know if the gate should fire if we can't
   // read its config.
-  let manifest: Manifest | null = null;
   // Resolved manifest path feeds the harness.generated/ lookup below (the
   // override-marker directory). An injected manifest (tests) has no
   // on-disk path, so `generatedDir` falls back to opts.generatedDir.
+  let manifest: Manifest;
   let manifestPath: string | undefined;
-  if (opts.manifest) {
-    manifest = opts.manifest;
-  } else {
-    try {
-      const loaded = loadManifest(opts);
-      manifest = loaded.manifest;
-      manifestPath = loaded.resolved.base;
-    } catch (err) {
-      const reason = `manifest load failed (${(err as Error).message}); refusing on failsafe`;
-      const diagnostic = `BLOCK — ${reason}`;
-      note(diagnostic);
-      // Manifest didn't load, so no ux config to honour; legacy
-      // envelope is the only available surface here.
-      stdout.write(
-        `${blockJson(toolName, "(unresolvable)", reason, DEFAULT_PROTECTED_BRANCHES, undefined, sessionId)}\n`,
-      );
-      return { exitCode: 0, blocked: true, diagnostic };
-    }
+  try {
+    ({ manifest, manifestPath } = loadManifestOrInjected(opts, opts.manifest));
+  } catch (err) {
+    const reason = `manifest load failed (${(err as Error).message}); refusing on failsafe`;
+    const diagnostic = `BLOCK — ${reason}`;
+    note(diagnostic);
+    // Manifest didn't load, so no ux config to honour; legacy
+    // envelope is the only available surface here.
+    stdout.write(
+      `${blockJson(toolName, "(unresolvable)", reason, DEFAULT_PROTECTED_BRANCHES, undefined, sessionId)}\n`,
+    );
+    return { exitCode: 0, blocked: true, diagnostic };
   }
 
   const pack = manifest.policy_packs.find((p) => p.name === PACK_NAME);

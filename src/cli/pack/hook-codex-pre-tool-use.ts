@@ -35,10 +35,14 @@ import {
 import { extractShellCommand } from "../../runtime/tool-name-aliases.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { PolicyUxSchema, type Manifest, type McpServer, type PolicyUx } from "../../schema/index.js";
-import { loadManifest, type LoaderOptions } from "../loader.js";
-import { checkPauseFromLoader } from "../pause-check.js";
+import { type LoaderOptions } from "../loader.js";
 import { isReadOnlyBashPipeline } from "../../runtime/read-only-bash.js";
 import { renderReportSchemaHint } from "./understanding-report-schema-hint.js";
+import {
+  checkHookPause,
+  loadManifestOrInjected,
+  readStdin,
+} from "./hook-bootstrap.js";
 
 const PACK_NAME = "understanding-before-execution";
 const EXIT_BLOCK = 2;
@@ -81,18 +85,6 @@ interface CodexEventEnvelope {
   // the wrong identifier would only show up as a misleading
   // diagnostic on a fail-block path.
   tool?: unknown;
-}
-
-async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    stream.setEncoding("utf8");
-    stream.on("data", (chunk: string) => {
-      data += chunk;
-    });
-    stream.on("end", () => resolve(data));
-    stream.on("error", (err) => reject(err));
-  });
 }
 
 function parseConfigUx(
@@ -228,16 +220,8 @@ export async function runPackHookCodexPreToolUseCli(
 
   // Pause sentinel — honoured BEFORE manifest load so the lockout-recovery
   // flow (broken install) still respects an active pause.
-  {
-    const pauseOpts: Parameters<typeof checkPauseFromLoader>[0] = {
-      loaderOpts: opts,
-      hookLabel: "codex-pre-tool-use",
-      stderr,
-    };
-    if (opts.generatedDir !== undefined) pauseOpts.generatedDir = opts.generatedDir;
-    if (checkPauseFromLoader(pauseOpts).paused) {
-      return allowResult("harness paused", "none", stderr);
-    }
+  if (checkHookPause("codex-pre-tool-use", stderr, opts, opts.generatedDir).paused) {
+    return allowResult("harness paused", "none", stderr);
   }
 
   // Load manifest (or use injection). Bail to allow on any failure so a
@@ -245,13 +229,7 @@ export async function runPackHookCodexPreToolUseCli(
   let manifest: Manifest;
   let manifestPath: string | undefined;
   try {
-    if (opts.manifest) {
-      manifest = opts.manifest;
-    } else {
-      const loaded = loadManifest(opts);
-      manifest = loaded.manifest;
-      manifestPath = loaded.resolved.base;
-    }
+    ({ manifest, manifestPath } = loadManifestOrInjected(opts, opts.manifest));
   } catch (err) {
     return allowResult(
       `manifest load failed (${(err as Error).message})`,

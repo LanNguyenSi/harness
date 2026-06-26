@@ -33,7 +33,8 @@ import * as path from "node:path";
 import { atomicWriteFile } from "../../io/atomic-write.js";
 import { defaultReportsDir } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import type { Manifest } from "../../schema/index.js";
-import { loadManifest, type LoaderOptions } from "../loader.js";
+import { type LoaderOptions } from "../loader.js";
+import { loadManifestOrInjected, readStdin } from "./hook-bootstrap.js";
 
 const PACK_NAME = "understanding-before-execution";
 const RUNTIME_TAG = "codex";
@@ -76,18 +77,6 @@ interface StopEnvelope {
 interface MessageRow {
   role?: unknown;
   content?: unknown;
-}
-
-async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    stream.setEncoding("utf8");
-    stream.on("data", (chunk: string) => {
-      data += chunk;
-    });
-    stream.on("end", () => resolve(data));
-    stream.on("error", (err) => reject(err));
-  });
 }
 
 function pickString(...candidates: unknown[]): string | undefined {
@@ -348,7 +337,7 @@ export async function runPackHookCodexStopCli(
 
   let manifest: Manifest;
   try {
-    manifest = opts.manifest ?? loadManifest(opts).manifest;
+    ({ manifest } = loadManifestOrInjected(opts, opts.manifest));
   } catch (err) {
     return allowResult(
       `harness pack hook codex-stop: manifest load failed (${(err as Error).message}), skipping capture.`,

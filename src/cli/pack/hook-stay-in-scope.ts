@@ -47,7 +47,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { resolveHomeDir } from "../../runtime/home-dir.js";
-import { checkPauseFromLoader } from "../pause-check.js";
+import { checkHookPause, readStdin } from "./hook-bootstrap.js";
 import type { LoaderOptions } from "../loader.js";
 
 export const TOOL_NAME_TASK_CREATE = "mcp__agent-tasks__task_create";
@@ -142,18 +142,6 @@ interface ToolEventLite {
   tool_name?: unknown;
   tool_input?: unknown;
   tool_response?: unknown;
-}
-
-async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    stream.setEncoding("utf8");
-    stream.on("data", (chunk: string) => {
-      data += chunk;
-    });
-    stream.on("end", () => resolve(data));
-    stream.on("error", reject);
-  });
 }
 
 function noop(
@@ -338,19 +326,11 @@ export async function runPackHookStayInScopeCli(
   // Pause sentinel — operator pause silences this reminder so a debug
   // A/B-test doesn't fan out reminder noise the operator already knows
   // about.
-  {
-    const pauseOpts: Parameters<typeof checkPauseFromLoader>[0] = {
-      loaderOpts: opts,
-      hookLabel: "stay-in-scope",
+  if (checkHookPause("stay-in-scope", stderr, opts, opts.generatedDir).paused) {
+    return noop(
+      "harness paused; stay-in-scope skipping without evaluating.",
       stderr,
-    };
-    if (opts.generatedDir !== undefined) pauseOpts.generatedDir = opts.generatedDir;
-    if (checkPauseFromLoader(pauseOpts).paused) {
-      return noop(
-        "harness paused; stay-in-scope skipping without evaluating.",
-        stderr,
-      );
-    }
+    );
   }
 
   // Operator opt-out via env. Evaluated AFTER pause so a paused harness
