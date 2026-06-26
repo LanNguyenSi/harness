@@ -37,8 +37,12 @@ import {
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
 import type { Manifest } from "../../schema/index.js";
-import { loadManifest, type LoaderOptions } from "../loader.js";
-import { checkPauseFromLoader } from "../pause-check.js";
+import { type LoaderOptions } from "../loader.js";
+import {
+  checkHookPause,
+  loadManifestOrInjected,
+  readStdin,
+} from "./hook-bootstrap.js";
 
 const PACK_NAME = "understanding-before-execution";
 
@@ -102,18 +106,6 @@ interface ToolEventLite {
   tool_input?: unknown;
 }
 
-async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    stream.setEncoding("utf8");
-    stream.on("data", (chunk: string) => {
-      data += chunk;
-    });
-    stream.on("end", () => resolve(data));
-    stream.on("error", reject);
-  });
-}
-
 function extractTaskId(toolInput: unknown): string {
   if (
     typeof toolInput !== "object" ||
@@ -159,19 +151,11 @@ export async function runPackHookTrackActiveClaimCli(
   }
 
   // Pause sentinel — skip claim-file mutations while paused.
-  {
-    const pauseOpts: Parameters<typeof checkPauseFromLoader>[0] = {
-      loaderOpts: opts,
-      hookLabel: "track-active-claim",
+  if (checkHookPause("track-active-claim", stderr, opts, opts.generatedDir).paused) {
+    return noop(
+      "harness paused; track-active-claim skipping without evaluating.",
       stderr,
-    };
-    if (opts.generatedDir !== undefined) pauseOpts.generatedDir = opts.generatedDir;
-    if (checkPauseFromLoader(pauseOpts).paused) {
-      return noop(
-        "harness paused; track-active-claim skipping without evaluating.",
-        stderr,
-      );
-    }
+    );
   }
 
   const toolName = typeof event.tool_name === "string" ? event.tool_name : "";
@@ -188,13 +172,7 @@ export async function runPackHookTrackActiveClaimCli(
   let manifest: Manifest;
   let manifestPath: string | undefined;
   try {
-    if (opts.manifest) {
-      manifest = opts.manifest;
-    } else {
-      const loaded = loadManifest(opts);
-      manifest = loaded.manifest;
-      manifestPath = loaded.resolved.base;
-    }
+    ({ manifest, manifestPath } = loadManifestOrInjected(opts, opts.manifest));
   } catch (err) {
     return noop(
       `harness pack hook track-active-claim: manifest load failed (${(err as Error).message}), skipping`,

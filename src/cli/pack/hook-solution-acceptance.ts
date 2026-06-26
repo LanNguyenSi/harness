@@ -41,8 +41,12 @@ import { resolveGeneratedDir } from "../../io/generated-dir.js";
 import { resolveGitContext } from "../../runtime/git-context.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { PolicyUxSchema, type Manifest, type PolicyUx } from "../../schema/index.js";
-import { loadManifest, type LoaderOptions } from "../loader.js";
-import { checkPauseFromLoader } from "../pause-check.js";
+import { type LoaderOptions } from "../loader.js";
+import {
+  checkHookPause,
+  loadManifestOrInjected,
+  readStdin,
+} from "./hook-bootstrap.js";
 
 const MCP_AGENT_TASKS_PREFIX = "mcp__agent-tasks__";
 
@@ -78,18 +82,6 @@ interface ToolEventLite {
   tool_name?: unknown;
   cwd?: unknown;
   tool_input?: unknown;
-}
-
-async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    stream.setEncoding("utf8");
-    stream.on("data", (chunk: string) => {
-      data += chunk;
-    });
-    stream.on("end", () => resolve(data));
-    stream.on("error", (err) => reject(err));
-  });
 }
 
 function bashCommandOf(toolInput: unknown): string {
@@ -192,7 +184,7 @@ export async function runPackHookSolutionAcceptanceCli(
   }
 
   // Operator pause yields even this gate.
-  if (checkPauseFromLoader({ loaderOpts: opts, hookLabel: PACK_NAME, stderr }).paused) {
+  if (checkHookPause(PACK_NAME, stderr, opts).paused) {
     const diagnostic = "harness paused; solution-acceptance allowing without evaluating.";
     return { exitCode: 0, blocked: false, diagnostic };
   }
@@ -216,37 +208,31 @@ export async function runPackHookSolutionAcceptanceCli(
   // lookup below — it is populated whether the operator passed --config or
   // the default (~/.harness/harness.yaml) was resolved, so the bare
   // production hook command still resolves the active-claim id.
-  let manifest: Manifest | null = null;
+  let manifest: Manifest;
   let manifestPath: string | undefined;
-  if (opts.manifest) {
-    manifest = opts.manifest;
-  } else {
-    try {
-      const loaded = loadManifest(opts);
-      manifest = loaded.manifest;
-      manifestPath = loaded.resolved.base;
-    } catch (err) {
-      // We cannot tell if this is a gated action without the config, but a
-      // manifest load failure should not block unrelated tool calls. Only
-      // the completion verbs / push commands are ever gated, so classify
-      // by tool name with the DEFAULT verb set as a failsafe.
-      const label = completionActionLabel(toolName, event.tool_input, [
-        "task_finish",
-        "task_submit_pr",
-        "task_merge",
-        "pull_requests_merge",
-      ]);
-      if (label === null) {
-        const diagnostic = `manifest load failed (${(err as Error).message}) but ${toolName} is not a completion action; allowing`;
-        note(diagnostic);
-        return { exitCode: 0, blocked: false, diagnostic };
-      }
-      const reason = `manifest load failed (${(err as Error).message}); refusing ${label} on failsafe`;
-      const diagnostic = `BLOCK — ${reason}`;
+  try {
+    ({ manifest, manifestPath } = loadManifestOrInjected(opts, opts.manifest));
+  } catch (err) {
+    // We cannot tell if this is a gated action without the config, but a
+    // manifest load failure should not block unrelated tool calls. Only
+    // the completion verbs / push commands are ever gated, so classify
+    // by tool name with the DEFAULT verb set as a failsafe.
+    const label = completionActionLabel(toolName, event.tool_input, [
+      "task_finish",
+      "task_submit_pr",
+      "task_merge",
+      "pull_requests_merge",
+    ]);
+    if (label === null) {
+      const diagnostic = `manifest load failed (${(err as Error).message}) but ${toolName} is not a completion action; allowing`;
       note(diagnostic);
-      stdout.write(`${blockJson(label, toolName, "<unknown>", reason, undefined, sessionId)}\n`);
-      return { exitCode: 0, blocked: true, diagnostic };
+      return { exitCode: 0, blocked: false, diagnostic };
     }
+    const reason = `manifest load failed (${(err as Error).message}); refusing ${label} on failsafe`;
+    const diagnostic = `BLOCK — ${reason}`;
+    note(diagnostic);
+    stdout.write(`${blockJson(label, toolName, "<unknown>", reason, undefined, sessionId)}\n`);
+    return { exitCode: 0, blocked: true, diagnostic };
   }
 
   const pack = manifest.policy_packs.find((p) => p.name === PACK_NAME);

@@ -30,7 +30,7 @@ import {
   type Probe,
 } from "@lannguyensi/runtime-reality-checker/policy";
 import type { ActualProcessState } from "@lannguyensi/runtime-reality-checker";
-import { checkPauseFromLoader } from "../pause-check.js";
+import { checkHookPause } from "./hook-bootstrap.js";
 
 /** Hard ceiling on a single probe invocation. The hook's own budget_ms
  *  (default 30s) is the outer bound; keep the probe well inside it so a
@@ -195,16 +195,8 @@ export async function runPackHookRuntimeRealityCli(
   // is env-driven and exposes no --config/--project flags, so the sentinel
   // resolves from the default generated dir rather than forwarded
   // loaderOpts; that is intentional, not an omission.
-  {
-    const pauseOpts: Parameters<typeof checkPauseFromLoader>[0] = {
-      hookLabel: "runtime-reality",
-      stderr,
-    };
-    if (opts.generatedDir !== undefined) pauseOpts.generatedDir = opts.generatedDir;
-    if (opts.now !== undefined) pauseOpts.now = opts.now;
-    if (checkPauseFromLoader(pauseOpts).paused) {
-      return allowResult("harness paused; runtime-reality allowing without evaluating.");
-    }
+  if (checkHookPause("runtime-reality", stderr, undefined, opts.generatedDir, opts.now).paused) {
+    return allowResult("harness paused; runtime-reality allowing without evaluating.");
   }
 
   let result: HandlerResult;

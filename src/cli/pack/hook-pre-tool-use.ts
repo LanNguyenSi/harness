@@ -50,8 +50,12 @@ import {
 } from "../../schema/index.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { z } from "zod";
-import { loadManifest, type LoaderOptions } from "../loader.js";
-import { checkPauseFromLoader } from "../pause-check.js";
+import { type LoaderOptions } from "../loader.js";
+import {
+  checkHookPause,
+  loadManifestOrInjected,
+  readStdin,
+} from "./hook-bootstrap.js";
 import { renderReportSchemaHint } from "./understanding-report-schema-hint.js";
 
 const PACK_NAME = "understanding-before-execution";
@@ -104,18 +108,6 @@ interface ToolEventLite {
   session_id?: unknown;
   tool_name?: unknown;
   tool_input?: unknown;
-}
-
-async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    stream.setEncoding("utf8");
-    stream.on("data", (chunk: string) => {
-      data += chunk;
-    });
-    stream.on("end", () => resolve(data));
-    stream.on("error", (err) => reject(err));
-  });
 }
 
 function findGroundingMcp(manifest: Manifest): McpServer | null {
@@ -365,23 +357,14 @@ export async function runPackHookPreToolUseCli(
   // Pause sentinel — operator-only kill switch. Honoured BEFORE manifest
   // load so the lockout-recovery flow (where the manifest is exactly
   // what's broken) still respects an active pause.
-  {
-    const pauseOpts: Parameters<typeof checkPauseFromLoader>[0] = {
-      loaderOpts: opts,
-      hookLabel: "pre-tool-use",
-      stderr,
+  if (checkHookPause("pre-tool-use", stderr, opts, opts.generatedDir, opts.now).paused) {
+    const diagnostic = "harness paused; pre-tool-use allowing without evaluating.";
+    return {
+      exitCode: 0,
+      blocked: false,
+      approvalCheck: { approved: true, source: "none", detail: diagnostic },
+      diagnostic,
     };
-    if (opts.generatedDir !== undefined) pauseOpts.generatedDir = opts.generatedDir;
-    if (opts.now !== undefined) pauseOpts.now = opts.now;
-    if (checkPauseFromLoader(pauseOpts).paused) {
-      const diagnostic = "harness paused; pre-tool-use allowing without evaluating.";
-      return {
-        exitCode: 0,
-        blocked: false,
-        approvalCheck: { approved: true, source: "none", detail: diagnostic },
-        diagnostic,
-      };
-    }
   }
 
   // Load manifest (or use injection). Bail to allow on any failure so a
@@ -392,13 +375,7 @@ export async function runPackHookPreToolUseCli(
   let manifest: Manifest;
   let manifestPath: string | undefined;
   try {
-    if (opts.manifest) {
-      manifest = opts.manifest;
-    } else {
-      const loaded = loadManifest(opts);
-      manifest = loaded.manifest;
-      manifestPath = loaded.resolved.base;
-    }
+    ({ manifest, manifestPath } = loadManifestOrInjected(opts, opts.manifest));
   } catch (err) {
     const diagnostic = `harness pack hook: manifest load failed (${
       (err as Error).message
