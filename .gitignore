@@ -26,5 +26,10 @@ harness.generated/
 # Orchestrator-workflow run state (run files under .ai/runs/, .ai/workflow/)
 .ai/
 
+# Locally-installed agent tooling (orchestrator-workflow kit, not part of this repo)
+.claude/
+AGENTS.md
+CLAUDE.md
+
 # Dogfood smoke run artefacts — per-run transcripts, not committed
 dogfood/*/transcript/
