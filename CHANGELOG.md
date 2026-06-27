@@ -5,7 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.38.0] - 2026-06-27
+
+**Headline: the Risk Gate now flags fail-closed unclassified matches across the audit trail, and `validate` / `doctor` lint risk policies that forgot to scope by `environment.name`.** When a risk-gate policy fires only because the action was unclassified (the "unknown is not safe" rule), `harness audit` (table and `--json`) and `harness explain --trace` now mark the decision, so an operator reviewing a deny can tell a real critical-severity match from a fail-closed one. A new lint, shared by `harness validate` and `harness doctor`, warns when a `when:` block gates on `risk.severity_at_least` / `risk.category_in` / `action.reversible` without an `environment.name` scope (those clauses match every unclassified command in every environment). Re-run `npm i -g @lannguyensi/harness` to upgrade.
 
 ### Added
 
