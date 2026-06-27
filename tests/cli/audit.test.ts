@@ -72,6 +72,62 @@ describe("audit — happy path", () => {
   });
 });
 
+describe("audit — M7 whenUnclassifiedFallback render", () => {
+  // One fail-closed (unclassified) deny carrying the flag, one ordinary
+  // classified deny without it. Both timestamps sit inside NOW's 24h window.
+  const M7_FIXTURE = [
+    decisionEntry(
+      {
+        policyName: "gate-risk-unscoped",
+        outcome: "deny",
+        reason: "unclassified action",
+        whenUnclassifiedFallback: true,
+      },
+      "2026-04-30T10:00:00.000Z",
+    ),
+    decisionEntry(
+      { policyName: "review-before-merge", outcome: "deny", reason: "missing review" },
+      "2026-04-30T11:00:00.000Z",
+    ),
+  ];
+
+  it("--json carries whenUnclassifiedFallback on a fail-closed row and omits it on a classified row", async () => {
+    // Mutation guard: removing the rowsFromEntries spread in audit.ts makes the
+    // flagged assertion go red (the field is absent after decode); injecting it
+    // unconditionally makes the classified (negative-control) assertion go red.
+    const result = await audit({
+      configPath: MANIFEST_PATH,
+      json: true,
+      now: NOW,
+      fetchLedger: async () => ({ kind: "ok", entries: M7_FIXTURE }),
+    });
+    const parsed = JSON.parse(result.output);
+    const flagged = parsed.decisions.find(
+      (d: { name: string }) => d.name === "gate-risk-unscoped",
+    );
+    const classified = parsed.decisions.find(
+      (d: { name: string }) => d.name === "review-before-merge",
+    );
+    expect(flagged.whenUnclassifiedFallback).toBe(true);
+    expect(classified.whenUnclassifiedFallback).toBeUndefined();
+  });
+
+  it("table output annotates the reason cell with [unclassified-fallback] only for a fail-closed row", async () => {
+    // Mutation guard: removing the formatTable annotation in audit.ts makes the
+    // first assertion go red; annotating unconditionally makes the second red.
+    const result = await audit({
+      configPath: MANIFEST_PATH,
+      now: NOW,
+      fetchLedger: async () => ({ kind: "ok", entries: M7_FIXTURE }),
+    });
+    const lines = result.output.split("\n");
+    const flaggedLine = lines.find((l) => l.includes("gate-risk-unscoped"))!;
+    const classifiedLine = lines.find((l) => l.includes("review-before-merge"))!;
+    expect(flaggedLine).toContain("[unclassified-fallback]");
+    expect(classifiedLine).not.toContain("[unclassified-fallback]");
+  });
+});
+
 describe("audit — filters", () => {
   it("--since 1h drops entries older than 1h before now", async () => {
     const result = await audit({

@@ -1276,3 +1276,145 @@ describe("intercept — audit-write failure is surfaced, not swallowed", () => {
     expect(result.blockJson).not.toBeNull();
   });
 });
+
+// M7: whenUnclassifiedFallback — audit record + block-message distinction.
+// ---------------------------------------------------------------------------
+//
+// Verifies that:
+//   1. An unclassified action against a risk-gating policy yields
+//      `whenUnclassifiedFallback === true` on the decision and the
+//      unclassified clause in the deny message.
+//   2. A classified action that genuinely matches has the field absent
+//      and the clause absent from the deny message.
+//   3. A no-when: policy (Phase 4 shape) is unaffected regardless.
+//
+// Mutation guards are noted per test.
+
+describe("intercept — M7 whenUnclassifiedFallback flag", () => {
+  // A minimal policy with a risk.severity_at_least clause but no
+  // environment.name scope. For these tests we use `block` enforcement
+  // so the deny message is the neutral (non-ux) path we want to inspect.
+  const RISK_BLOCK_POLICY: Policy = {
+    name: "gate-risk-unscoped",
+    description: "test policy for unclassified fallback coverage",
+    trigger: { event: "PreToolUse", match: "Bash" },
+    when: {
+      "risk.severity_at_least": "high",
+    },
+    requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
+    hook: "h",
+    enforcement: "block",
+  } as Policy;
+
+  const BASH_UNKNOWN_EVENT: ToolEvent = {
+    hook_event_name: "PreToolUse",
+    tool_name: "Bash",
+    tool_input: { command: "some-unknown-command --flag" },
+    session_id: "sess-1",
+    cwd: "/tmp/proj",
+  };
+
+  it("sets whenUnclassifiedFallback=true and inserts the clause (before hintSuffix) when the action is unclassified", async () => {
+    // No classifiers → action is unclassified → fail-close rule fires.
+    // Mutation guard: remove the `whenFallbackMap.set` call in intercept.ts
+    // or the `whenUnclassifiedFallback: true` spread and this test goes red
+    // (the field will be absent and the message will not contain the clause).
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: makeManifest({ policies: [RISK_BLOCK_POLICY] }),
+      event: BASH_UNKNOWN_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+      riskContext: riskCtx("main"),
+    });
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.whenUnclassifiedFallback).toBe(true);
+    // The deny message must contain the unclassified clause.
+    expect(result.blockJson?.reason).toContain(
+      "(matched via the fail-closed unclassified rule, not a real risk classification)",
+    );
+  });
+
+  it("does NOT set whenUnclassifiedFallback and does NOT append the clause for a real classification hit", async () => {
+    // The DESTROY_CLASSIFIER matches `terraform destroy` with critical
+    // severity, so the risk clause matches on a genuine classification,
+    // not the fail-closed rule.
+    // Mutation guard: removing the `...base` spread from the decision
+    // build (so the field is always absent) would pass this test, but the
+    // previous test would fail because the decision would then lack the
+    // field for the unclassified case too.
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: makeManifest({
+        policies: [RISK_BLOCK_POLICY],
+        classifiers: [DESTROY_CLASSIFIER],
+      }),
+      event: BASH_DESTROY_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+      riskContext: riskCtx("main"),
+    });
+    expect(result.decisions).toHaveLength(1);
+    // A real classification hit: field must be absent (not false, absent).
+    expect(result.decisions[0]?.whenUnclassifiedFallback).toBeUndefined();
+    // The deny message must NOT contain the unclassified clause.
+    expect(result.blockJson?.reason).not.toContain(
+      "matched via the fail-closed unclassified rule",
+    );
+  });
+
+  it("does not set whenUnclassifiedFallback on a no-when: policy (Phase 4 shape stays byte-identical)", async () => {
+    // Mutation guard: adding an unconditional `whenUnclassifiedFallback: false`
+    // to every decision would break this test (field would be present).
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([REVIEW_POLICY]),
+      event: MERGE_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.whenUnclassifiedFallback).toBeUndefined();
+  });
+
+  it("ux-path carve-out: records whenUnclassifiedFallback=true on the audit decision but does NOT append the clause to the ux agent-facing reason", async () => {
+    // A policy with `ux:` uses the operator-curated plain-language surface.
+    // The unclassifiedFallback flag must still be on the decision record
+    // (audit + explain --trace can replay it), but the block message must
+    // not be altered — the operator chose its exact wording.
+    // Mutation guard: removing the `if (blockingPolicy?.ux)` guard (so the
+    // ux path falls into the neutral-deny branch) would append the clause to
+    // the agent-facing text, making the second assertion go red.
+    const uxPolicy: Policy = {
+      ...RISK_BLOCK_POLICY,
+      name: "gate-risk-unscoped-ux",
+      ux: {
+        cannot: "You cannot run unrecognised commands here.",
+        required: ["explicit operator approval"],
+        run: ["harness approve risk"],
+      },
+    } as Policy;
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: makeManifest({ policies: [uxPolicy] }),
+      event: BASH_UNKNOWN_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+      riskContext: riskCtx("main"),
+    });
+    // The decision record must carry the flag.
+    expect(result.decisions[0]?.whenUnclassifiedFallback).toBe(true);
+    // The agent-facing reason must NOT contain the unclassified clause.
+    expect(result.blockJson?.reason).not.toContain(
+      "matched via the fail-closed unclassified rule",
+    );
+    // The ux text is verbatim from the policy.
+    expect(result.blockJson?.reason).toContain(
+      "You cannot run unrecognised commands here.",
+    );
+  });
+});
