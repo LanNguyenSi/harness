@@ -297,6 +297,69 @@ pure risk policy that decides from `when:` alone, without ledger
 evidence, would be a structural change to the policy model and is not
 Phase 7 scope; it remains a possible future relaxation.
 
+### Unclassified actions and the fail-close rule
+
+The "unknown is not safe" rule means that any action the Risk Classifier
+does not recognise (no classifier pattern matched) satisfies every
+`risk.severity_at_least`, `risk.category_in`, and `action.reversible`
+clause automatically. The `environment.name` clause is exempt: the
+Context Resolver always returns a concrete environment (the no-match case
+resolves to the matchable name `unknown`), so it is always a real
+equality test.
+
+**The footgun:** a policy that gates on `risk.*` or `action.reversible`
+clauses WITHOUT an `environment.name` scope fires on every unclassified
+command in every environment. A command the classifier does not recognise
+satisfies the risk clause by fail-close, and with no environment scope
+the policy never gets to exclude non-production sessions.
+
+**The correct pattern** is to pair any risk clause with an
+`environment.name` scope:
+
+```yaml
+policies:
+  - name: deny-unclassified-in-production
+    description: >
+      Block unrecognised commands in production. Without environment.name,
+      this policy would fire on every unclassified command in every
+      environment because the fail-closed unclassified rule makes
+      risk.severity_at_least match anything the classifier did not
+      recognise. The environment.name clause restricts the gate to the
+      session that actually resolves to production.
+    trigger:
+      event: PreToolUse
+      match: Bash
+    when:
+      risk.severity_at_least: high          # also fires fail-closed on unclassified
+      environment.name: production          # REQUIRED: scopes to production only
+    requires:
+      ledger_tag: "risk-approved:${SESSION_ID}"
+    hook: risk-gate
+    enforcement: block
+```
+
+Without `environment.name: production`, the policy above would fire on
+every Bash call the classifier does not recognise, in every environment,
+including local development sessions on non-production branches.
+
+**`harness validate` warns on the footgun.** A policy with any of
+`risk.severity_at_least`, `risk.category_in`, or `action.reversible` in
+its `when:` block but no `environment.name` clause produces a
+`severity: "warning"` diagnostic pointing at this section.
+
+**The audit record and block-time deny message now flag the footgun.** When
+a policy fires because the action was unclassified (not because the
+classifier returned a real match), the `PolicyDecision` record carries
+`whenUnclassifiedFallback: true`. This field is serialised into the
+`policy_decision` ledger row so `harness audit` and `explain --trace` can
+surface it. The non-ux block-time deny message appends the note
+`(matched via the fail-closed unclassified rule, not a real risk
+classification)` so an operator reviewing a deny can tell a real
+critical-severity hit from a fail-closed unclassified command at a glance.
+Policies that declare a `ux:` block are not altered: the operator chose
+the exact wording of the agent-facing surface; the flag still rides the
+audit record.
+
 ## Decision model
 
 *Status: all four outcomes are evaluated and enforced as of Phase 7 #6.

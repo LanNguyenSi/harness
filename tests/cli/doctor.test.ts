@@ -1616,4 +1616,41 @@ policies:
     });
     expect(report.riskGate.warnings.some((w) => w.includes("gate-high-risk"))).toBe(true);
   });
+
+  it("warns when a policy gates on action.reversible without an environment.name scope", async () => {
+    // action.reversible also fails-closed to matched=true for an unclassified
+    // action (when-eval.ts sets unclassifiedFallback=true on the reversible
+    // arm, exactly like severity/category). Mutation guard: removing
+    // action.reversible from the checkPolicyRiskWithoutEnvScope check would
+    // make this test go red (no warning emitted).
+    const reversibleUnscoped = RISK_UNSCOPED_MANIFEST.replace(
+      "when: { risk.severity_at_least: high }",
+      "when: { action.reversible: false }",
+    );
+    const home = makeFixture({ "harness.yaml": reversibleUnscoped });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.riskGate.warnings.some((w) => w.includes("gate-high-risk"))).toBe(true);
+    expect(report.riskGate.warnings.some((w) => w.includes("environment.name"))).toBe(true);
+  });
+
+  it("does not warn on action.reversible when environment.name is also present (negative control)", async () => {
+    // Mutation guard: removing the hasEnvNameScope guard from
+    // checkPolicyRiskWithoutEnvScope would make this test go red (warning
+    // would fire even with environment.name present).
+    const reversibleScoped = RISK_UNSCOPED_MANIFEST.replace(
+      "when: { risk.severity_at_least: high }",
+      "when: { action.reversible: false, environment.name: production }",
+    );
+    const home = makeFixture({ "harness.yaml": reversibleScoped });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(
+      report.riskGate.warnings.filter((w) => w.includes("gate-high-risk")),
+    ).toHaveLength(0);
+  });
 });

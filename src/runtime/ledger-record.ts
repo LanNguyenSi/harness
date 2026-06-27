@@ -49,6 +49,12 @@ export interface PolicyDecisionPayload {
    */
   risk?: PolicyDecision["risk"];
   environment?: PolicyDecision["environment"];
+  /**
+   * See `PolicyDecision.whenUnclassifiedFallback`. Present only when
+   * the match was a fail-closed unclassified hit (M7). Absent on rows
+   * recorded before M7 or on rows where the action was classified.
+   */
+  whenUnclassifiedFallback?: boolean;
   evaluatedAt: string;
 }
 
@@ -65,6 +71,13 @@ export function payloadFromDecision(
     ...(decision.requiresEval && { requiresEval: decision.requiresEval }),
     ...(decision.risk && { risk: decision.risk }),
     ...(decision.environment && { environment: decision.environment }),
+    // M7: carry the fail-closed unclassified flag into the serialised
+    // audit row so `harness audit` / `explain --trace` can surface it.
+    // Absent (not `false`) when the action was classified or the policy
+    // had no `when:` block, keeping pre-M7 rows byte-identical.
+    ...(decision.whenUnclassifiedFallback === true && {
+      whenUnclassifiedFallback: true,
+    }),
     evaluatedAt: decision.evaluatedAt,
   };
 }

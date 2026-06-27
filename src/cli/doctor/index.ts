@@ -15,7 +15,10 @@ import { resolveBuiltin } from "../../policy-packs/registry.js";
 import { checkPolicyPackConfigs } from "../../policy-packs/config-check.js";
 import { checkPolicyPackVersions } from "../../policy-packs/version-check.js";
 import { DEFAULT_RUNTIME } from "../../policy-packs/runtime.js";
-import { checkSolutionAcceptanceProducer } from "../validate/checks.js";
+import {
+  checkPolicyRiskWithoutEnvScope,
+  checkSolutionAcceptanceProducer,
+} from "../validate/checks.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import {
   countCodexDiagnostics,
@@ -501,39 +504,15 @@ function buildRiskGate(manifest: Manifest): RiskGateSection {
       "risk classifiers / environment resolvers are declared but no policy consumes them via `when:` — the Risk Gate is inert",
     );
   }
-  // Risk-clause policies that forgot to scope via `environment.name`. Per
-  // Phase 7 #5's "unknown is not safe" rule, an unclassified envelope
-  // satisfies every risk-derived clause (severity, category), so a
-  // policy that gates on `risk.severity_at_least` / `risk.category_in`
-  // without an `environment.name` clause fires on EVERY Bash command
-  // (including read-only ones like `git status` or `--version` probes)
-  // rather than only the risk-bearing actions it was authored to catch.
-  // `environment.name` is the only `when:` clause exempt from the
-  // unknown-is-not-safe rule (resolvers always produce a concrete name,
-  // defaulting to `unknown`, which fails the equality match). Warn, do
-  // not error: an operator with an always-on safety net may have
-  // declared this on purpose, but the default-template intent is to
-  // scope per environment.
-  //
-  // `action.reversible` is intentionally NOT included in the scope-check
-  // below. Its clause semantics differ: `runtime/when-eval.ts` returns
-  // `matched=false` on a null reversibility (the unknown-is-not-safe
-  // branch short-circuits to non-match for that arm specifically), so a
-  // policy with only `action.reversible: false` does NOT fire on every
-  // unclassified command — the clause filters them out. Do not "complete"
-  // this walker by adding `action.reversible`; it would warn on a safe
-  // configuration.
-  for (const policy of manifest.policies) {
-    if (policy.when === undefined) continue;
-    const hasRiskClause =
-      policy.when["risk.severity_at_least"] !== undefined ||
-      policy.when["risk.category_in"] !== undefined;
-    const hasEnvScope = policy.when["environment.name"] !== undefined;
-    if (hasRiskClause && !hasEnvScope) {
-      warnings.push(
-        `policy \`${policy.name}\` gates on \`risk.*\` without an \`environment.name\` scope; per "unknown is not safe" an unclassified Bash command satisfies the risk clauses, so this fires on EVERY command. Add \`when.environment.name: production\` (or similar), or drop the \`risk.*\` clauses.`,
-      );
-    }
+  // Risk-clause policies that forgot to scope via `environment.name`.
+  // Delegate to the shared validate check so doctor and `harness validate`
+  // stay in parity (same logic, same clauses, same thresholds). The check
+  // covers risk.severity_at_least, risk.category_in, AND action.reversible:
+  // all three clauses fail-closed to matched=true on an unclassified action
+  // per `runtime/when-eval.ts`. Map each Diagnostic message into a warning
+  // string, mirroring the checkSolutionAcceptanceProducer pattern above.
+  for (const diag of checkPolicyRiskWithoutEnvScope(manifest)) {
+    warnings.push(diag.message);
   }
   return { classifiers, resolvers, whenPolicies, warnings };
 }

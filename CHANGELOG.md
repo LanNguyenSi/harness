@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`harness validate` now warns on risk-gate policies without an `environment.name` scope** (M7). A policy with `risk.severity_at_least`, `risk.category_in`, or `action.reversible` in its `when:` block but no `environment.name` clause fires on every unclassified command in every environment (the "unknown is not safe" fail-close rule). `validate` emits a `severity: "warning"` diagnostic at `policies[<index>]` pointing at `docs/risk-gate.md`. The negative control (same clauses plus `environment.name`) produces no warning.
+- **Audit record and block-time deny message now flag a fail-closed unclassified match** (M7). When a risk-gate policy fires because the action was unclassified rather than a genuine classification hit, `PolicyDecision.whenUnclassifiedFallback` is set to `true`. The field is serialised into the `policy_decision` ledger row so `harness audit` / `explain --trace` can surface it. The non-ux block-time deny message appends `(matched via the fail-closed unclassified rule, not a real risk classification)` to let an operator distinguish a real critical-severity deny from a fail-closed unclassified one. Policies with a `ux:` block are not altered at the agent-facing surface; the flag still rides the audit record.
+
 ## [0.37.0] - 2026-06-25
 
 **Headline: `harness doctor` learns the solution-acceptance deadlock checks, plus a sessionId-namespace fix to ledger-deny hints and clearer intercept / approve-understanding diagnostics.** `harness doctor` now reports the two solution-acceptance misconfigurations that deadlock the completion-gate (parity with `harness validate`), ledger-gate deny hints name which sessionId namespace to record the unblocking entry under, the understanding-gate admits read-only Bash pipelines for post-task CI polls, and `harness validate` now hard-errors on a solution-acceptance pack with no reachable producer. Re-run `npm i -g @lannguyensi/harness` to upgrade.

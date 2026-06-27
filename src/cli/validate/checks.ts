@@ -291,6 +291,44 @@ export function checkSolutionAcceptanceProducer(manifest: Manifest): Diagnostic[
   return [];
 }
 
+// M7 validate lint: a policy that gates on risk.* / action.reversible clauses
+// WITHOUT an environment.name clause fires on EVERY unclassified command in
+// EVERY environment because those three clauses fail-closed to matched=true
+// when the action is unclassified ("unknown is not safe"). This is almost
+// never what the operator intends: an unscoped risk policy becomes a blanket
+// gate on any command the classifier does not recognise. See docs/risk-gate.md.
+export function checkPolicyRiskWithoutEnvScope(manifest: Manifest): Diagnostic[] {
+  const diags: Diagnostic[] = [];
+  for (let i = 0; i < manifest.policies.length; i++) {
+    const p = manifest.policies[i];
+    if (!p?.when) continue;
+    const when = p.when;
+    // The three clauses that fail-closed to matched=true for an unclassified
+    // action. An environment.name clause constrains the scope, so we only
+    // warn when it is absent.
+    const hasUnclassifiedFallbackClause =
+      when["risk.severity_at_least"] !== undefined ||
+      when["risk.category_in"] !== undefined ||
+      when["action.reversible"] !== undefined;
+    const hasEnvNameScope = when["environment.name"] !== undefined;
+    if (hasUnclassifiedFallbackClause && !hasEnvNameScope) {
+      diags.push({
+        severity: "warning",
+        path: `policies[${i}]`,
+        message:
+          `policy "${p.name}" declares a when: block with ` +
+          `risk.severity_at_least / risk.category_in / action.reversible ` +
+          `but no environment.name scope: those clauses fail-closed to ` +
+          `matched=true for any unclassified command, so this policy fires ` +
+          `on every unclassified action in every environment. ` +
+          `Add an environment.name clause to scope the policy to a specific ` +
+          `environment. See docs/risk-gate.md.`,
+      });
+    }
+  }
+  return diags;
+}
+
 // Phase 6 #2: surface pack-resolution problems at lint time, not at
 // `harness apply` time. Delegates to the shared `checkPolicyPackSources`
 // so the apply path (which now also fails loudly on these conditions)
@@ -342,6 +380,7 @@ export function runAssetChecks(
     ...checkSolutionAcceptanceProducer(manifest),
     ...checkPolicyPacks(manifest),
     ...checkPolicyPackConfigsAsDiagnostics(manifest),
+    ...checkPolicyRiskWithoutEnvScope(manifest),
   ];
 }
 
