@@ -351,14 +351,25 @@ its `when:` block but no `environment.name` clause produces a
 a policy fires because the action was unclassified (not because the
 classifier returned a real match), the `PolicyDecision` record carries
 `whenUnclassifiedFallback: true`. This field is serialised into the
-`policy_decision` ledger row so `harness audit` and `explain --trace` can
-surface it. The non-ux block-time deny message appends the note
-`(matched via the fail-closed unclassified rule, not a real risk
-classification)` so an operator reviewing a deny can tell a real
-critical-severity hit from a fail-closed unclassified command at a glance.
+`policy_decision` ledger row and surfaces as follows:
+
+- **`harness audit` (table):** the `reason` column is annotated with
+  `[unclassified-fallback]` so a fail-closed match is immediately visible
+  in the human-readable table.
+- **`harness audit --json`:** the `whenUnclassifiedFallback: true` field
+  appears on the JSON decision object, enabling programmatic inspection.
+- **`harness explain <policy> --trace --json`:** the `whenUnclassifiedFallback`
+  field appears in the JSON trace projection, letting an operator or
+  script distinguish a fail-closed unclassified deny from a real
+  critical-severity match.
+- **Block-time deny message (non-`ux:` policies):** the deny reason
+  appends `(matched via the fail-closed unclassified rule, not a real risk
+  classification)` before the hint suffix so the agent-facing message
+  identifies the cause at a glance.
+
 Policies that declare a `ux:` block are not altered: the operator chose
 the exact wording of the agent-facing surface; the flag still rides the
-audit record.
+audit record and is still visible in `harness audit` and `explain --trace`.
 
 ## Decision model
 

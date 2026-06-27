@@ -1314,7 +1314,7 @@ describe("intercept — M7 whenUnclassifiedFallback flag", () => {
     cwd: "/tmp/proj",
   };
 
-  it("sets whenUnclassifiedFallback=true and appends the clause when the action is unclassified", async () => {
+  it("sets whenUnclassifiedFallback=true and inserts the clause (before hintSuffix) when the action is unclassified", async () => {
     // No classifiers → action is unclassified → fail-close rule fires.
     // Mutation guard: remove the `whenFallbackMap.set` call in intercept.ts
     // or the `whenUnclassifiedFallback: true` spread and this test goes red
@@ -1378,5 +1378,43 @@ describe("intercept — M7 whenUnclassifiedFallback flag", () => {
     });
     expect(result.decisions).toHaveLength(1);
     expect(result.decisions[0]?.whenUnclassifiedFallback).toBeUndefined();
+  });
+
+  it("ux-path carve-out: records whenUnclassifiedFallback=true on the audit decision but does NOT append the clause to the ux agent-facing reason", async () => {
+    // A policy with `ux:` uses the operator-curated plain-language surface.
+    // The unclassifiedFallback flag must still be on the decision record
+    // (audit + explain --trace can replay it), but the block message must
+    // not be altered — the operator chose its exact wording.
+    // Mutation guard: removing the `if (blockingPolicy?.ux)` guard (so the
+    // ux path falls into the neutral-deny branch) would append the clause to
+    // the agent-facing text, making the second assertion go red.
+    const uxPolicy: Policy = {
+      ...RISK_BLOCK_POLICY,
+      name: "gate-risk-unscoped-ux",
+      ux: {
+        cannot: "You cannot run unrecognised commands here.",
+        required: ["explicit operator approval"],
+        run: ["harness approve risk"],
+      },
+    } as Policy;
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: makeManifest({ policies: [uxPolicy] }),
+      event: BASH_UNKNOWN_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+      riskContext: riskCtx("main"),
+    });
+    // The decision record must carry the flag.
+    expect(result.decisions[0]?.whenUnclassifiedFallback).toBe(true);
+    // The agent-facing reason must NOT contain the unclassified clause.
+    expect(result.blockJson?.reason).not.toContain(
+      "matched via the fail-closed unclassified rule",
+    );
+    // The ux text is verbatim from the policy.
+    expect(result.blockJson?.reason).toContain(
+      "You cannot run unrecognised commands here.",
+    );
   });
 });

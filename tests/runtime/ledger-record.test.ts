@@ -120,6 +120,31 @@ describe("policy_decision encoding", () => {
     const decoded = decodeLedgerContent(encodeLedgerContent(payload));
     expect(decoded?.requiresEval).toBeUndefined();
   });
+
+  it("M7 round-trip: whenUnclassifiedFallback=true is preserved through payloadFromDecision→encodeLedgerContent→decodeLedgerContent", () => {
+    // Verifies the serialisation path for the audit flag. Mutation guard:
+    // removing the `...(decision.whenUnclassifiedFallback === true && {...})`
+    // spread from payloadFromDecision makes this test red (the field will be
+    // absent after decode, so `decoded?.whenUnclassifiedFallback` is undefined).
+    const unclassifiedDecision: PolicyDecision = {
+      ...decision,
+      whenUnclassifiedFallback: true,
+    };
+    const payload = payloadFromDecision(unclassifiedDecision);
+    expect(payload.whenUnclassifiedFallback).toBe(true);
+    const decoded = decodeLedgerContent(encodeLedgerContent(payload));
+    expect(decoded?.whenUnclassifiedFallback).toBe(true);
+  });
+
+  it("M7 round-trip: whenUnclassifiedFallback is absent from payload when not set (no false field injected)", () => {
+    // Decisions from policies without a `when:` block must stay byte-identical.
+    // Mutation guard: setting whenUnclassifiedFallback unconditionally (even to
+    // false) in payloadFromDecision would make this test red.
+    const payload = payloadFromDecision(decision);
+    expect(payload.whenUnclassifiedFallback).toBeUndefined();
+    const decoded = decodeLedgerContent(encodeLedgerContent(payload));
+    expect(decoded?.whenUnclassifiedFallback).toBeUndefined();
+  });
 });
 
 describe("recordPolicyDecision writer fallback", () => {

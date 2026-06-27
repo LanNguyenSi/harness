@@ -507,6 +507,52 @@ describe("explain --trace", () => {
     expect(err.exitCode).toBe(1);
     expect(err.message).toMatch(/cannot read audit log: grounding-mcp not reachable/);
   });
+
+  it("M7: --trace --json surfaces whenUnclassifiedFallback=true for a fail-closed deny", async () => {
+    // Regression guard for the MEDIUM fix: when the ledger row carries
+    // `whenUnclassifiedFallback=true` the JSON projection must include
+    // the field so operators can distinguish a fail-closed deny from a
+    // real classification hit. Mutation guard: removing the conditional
+    // spread from renderTrace makes parsed.whenUnclassifiedFallback undefined.
+    const result = await explain("review-before-merge", {
+      configPath: FULL_MANIFEST,
+      trace: true,
+      json: true,
+      sessionId: "sess-1",
+      fetchLedger: async () => ({
+        kind: "ok",
+        entries: [
+          decisionEntry(
+            { policyName: "review-before-merge", whenUnclassifiedFallback: true },
+            "2026-04-30T12:00:00.000Z",
+          ),
+        ],
+      }),
+    });
+    const parsed = JSON.parse(result.output);
+    expect(parsed.whenUnclassifiedFallback).toBe(true);
+  });
+
+  it("M7: --trace --json omits whenUnclassifiedFallback for a classified hit (negative control)", async () => {
+    // A decision recorded without whenUnclassifiedFallback (classified
+    // action, pre-M7 row, or no-when policy) must NOT have the field in
+    // the JSON projection. Mutation guard: unconditionally emitting the
+    // field in renderTrace makes this test red.
+    const result = await explain("review-before-merge", {
+      configPath: FULL_MANIFEST,
+      trace: true,
+      json: true,
+      sessionId: "sess-1",
+      fetchLedger: async () => ({
+        kind: "ok",
+        entries: [
+          decisionEntry({ policyName: "review-before-merge" }, "2026-04-30T12:00:00.000Z"),
+        ],
+      }),
+    });
+    const parsed = JSON.parse(result.output);
+    expect(parsed.whenUnclassifiedFallback).toBeUndefined();
+  });
 });
 
 describe("explain --last", () => {

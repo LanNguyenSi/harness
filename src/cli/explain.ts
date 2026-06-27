@@ -72,6 +72,15 @@ interface TraceProjection {
    * manifest (the trace already flags that case via `triggerMatched.event`).
    */
   toSatisfy?: string;
+  /**
+   * True when the policy's `when:` block matched only because the action
+   * was unclassified (the "unknown is not safe" fail-close rule). Absent
+   * when the action was genuinely classified, when the policy had no
+   * `when:` block, or when the row was recorded before M7. Surfaced here
+   * so `explain --trace` and `explain --trace --json` let an operator
+   * distinguish a fail-closed deny from a real critical-severity match.
+   */
+  whenUnclassifiedFallback?: boolean;
   ledgerQuery: { verb: "ledger_summary"; sessionId: string };
 }
 
@@ -248,6 +257,13 @@ function renderTrace(
     ...(latest.payload.requiresEval && { requiresEval: latest.payload.requiresEval }),
     ...(policy && {
       toSatisfy: buildRecordHint(policy.requires, latest.payload.ledgerTag),
+    }),
+    // M7: surface the fail-closed unclassified flag in the trace so an
+    // operator can distinguish a real critical-severity deny from a
+    // fail-closed unclassified one via `explain --trace [--json]`.
+    // Absent when the payload lacks the field (pre-M7 rows or genuine hits).
+    ...(latest.payload.whenUnclassifiedFallback === true && {
+      whenUnclassifiedFallback: true,
     }),
     ledgerQuery: { verb: "ledger_summary", sessionId },
   };

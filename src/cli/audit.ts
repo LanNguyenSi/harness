@@ -56,6 +56,13 @@ export interface AuditDecisionRow {
   reason: string;
   ledgerTag: string;
   extractValues: Record<string, string>;
+  /**
+   * True when the policy's `when:` matched only via the fail-closed
+   * unclassified rule (M7). Absent when the action was classified or the
+   * policy had no `when:` block, or on rows recorded before M7.
+   * Appears in JSON output and annotates the reason column in table output.
+   */
+  whenUnclassifiedFallback?: boolean;
 }
 
 export interface AuditResult {
@@ -124,6 +131,11 @@ function rowsFromEntries(entries: LedgerEntry[]): AuditDecisionRow[] {
     reason: payload.reason,
     ledgerTag: payload.ledgerTag,
     extractValues: payload.extractValues,
+    // M7: carry the fail-closed flag through to the row so both the JSON
+    // and table surfaces can surface it (field in JSON, annotation in table).
+    ...(payload.whenUnclassifiedFallback === true && {
+      whenUnclassifiedFallback: true,
+    }),
   }));
 }
 
@@ -132,8 +144,14 @@ function formatTable(rows: AuditDecisionRow[]): string {
   const header = ["timestamp", "policy", "outcome", "reason"];
   // Reasons are normally single-line; flatten just in case so the column
   // alignment doesn't break on a newline buried in a future policy's reason.
+  // M7: annotate with [unclassified-fallback] when the fail-closed flag is
+  // set, so the human table reflects the same information the JSON field does.
   const flatten = (s: string): string => s.replace(/\s+/g, " ").trim();
-  const data = rows.map((r) => [r.timestamp, r.name, r.outcome, flatten(r.reason)]);
+  const data = rows.map((r) => {
+    const reasonCell =
+      flatten(r.reason) + (r.whenUnclassifiedFallback ? " [unclassified-fallback]" : "");
+    return [r.timestamp, r.name, r.outcome, reasonCell];
+  });
   const widths = header.map((h, i) =>
     Math.max(h.length, ...data.map((row) => row[i]!.length)),
   );

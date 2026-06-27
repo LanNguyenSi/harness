@@ -504,17 +504,26 @@ export async function intercept(
   // unclassified command (M7: runtime audit + block message). Policies
   // that have no `when:` block are not inserted into the map, so a
   // later `whenFallbackMap.get(name) === true` test is unambiguous.
+  //
+  // Explicit loop rather than Array.filter() so the map is built as a
+  // first-class step: a filter predicate is expected to be pure, and a
+  // future refactor that parallelises the filter would silently break the
+  // audit flag if the mutation were still hiding inside the predicate.
   const whenFallbackMap = new Map<string, boolean>();
-  const matching = manifest.policies.filter((p) => {
-    if (!policyMatchesEvent(p, event)) return false;
-    if (p.when === undefined) return true;
+  const matching: Policy[] = [];
+  for (const p of manifest.policies) {
+    if (!policyMatchesEvent(p, event)) continue;
+    if (p.when === undefined) {
+      matching.push(p);
+      continue;
+    }
     // `enriched` is defined here: a policy with `when:` set `riskGateActive`.
     const whenEval = evaluateWhen(p.when, enriched!);
     if (whenEval.matched) {
       whenFallbackMap.set(p.name, whenEval.unclassifiedFallback);
+      matching.push(p);
     }
-    return whenEval.matched;
-  });
+  }
 
   const decisions: PolicyDecision[] = [];
   for (const policy of matching) {
@@ -596,10 +605,11 @@ export async function intercept(
     // give the agent two different command suggestions.
     let reasonText: string;
     if (blockingPolicy?.ux) {
-      // The ux surface is operator-curated plain language; the
-      // unclassifiedFallback flag still rides the audit record (recorded
-      // above) so `harness audit` can replay it, but the agent-facing
-      // text is not altered — the operator chose its exact wording.
+      // The ux surface is operator-curated plain language. The
+      // unclassifiedFallback flag rides the audit record (recorded above
+      // and surfaced by `harness audit` and `explain --trace`) so operators
+      // can identify a fail-closed match without altering the agent-facing
+      // text the operator intentionally worded.
       reasonText = renderAgentFacing(blockingPolicy.ux, {
         ...blocking.extractValues,
         SESSION_ID: sessionId,
@@ -610,14 +620,16 @@ export async function intercept(
         blocking.extractValues,
       );
       // M7: when the policy matched only because the action was
-      // unclassified (fail-closed), append an operator-facing note so a
+      // unclassified (fail-closed), insert an operator-facing note so a
       // deny caused by an unknown command is distinguishable from a deny
       // caused by a genuine critical-severity classification. The note is
-      // appended to the neutral deny envelope only (not the ux path above).
+      // placed after the base reason but BEFORE hintSuffix so the cause
+      // precedes the remedy ("why this fired" before "how to unblock").
+      // Neutral deny envelope only (not the ux path above).
       const unclassifiedClause = blocking.whenUnclassifiedFallback
         ? " (matched via the fail-closed unclassified rule, not a real risk classification)"
         : "";
-      reasonText = `${blocking.policyName}: ${blocking.reason}.${hintSuffix}${unclassifiedClause}${producersBlock}`;
+      reasonText = `${blocking.policyName}: ${blocking.reason}.${unclassifiedClause}${hintSuffix}${producersBlock}`;
     }
     const block: ClaudeDenyJson = {
       decision: "block",
