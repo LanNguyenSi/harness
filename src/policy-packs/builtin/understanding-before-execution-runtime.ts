@@ -33,6 +33,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { atomicWriteFile } from "../../io/atomic-write.js";
+import { readRegularFileRejectingSymlink } from "../../io/read-regular-file.js";
 import { InvalidDurationError, parseDurationSeconds, type LedgerEntry } from "../../policies/index.js";
 import { POLICY_DECISION_TYPE } from "../../runtime/ledger-record.js";
 import { rejectMalformedSessionId } from "../../runtime/reject-malformed-session-id.js";
@@ -482,31 +483,25 @@ export function checkApprovalMarker(
       marker: null,
     };
   }
-  let stat: fs.Stats;
-  try {
-    // lstatSync (NOT statSync): defense-in-depth against a symlink at
-    // the marker path pointing at an arbitrary target the agent
-    // controls. In today's threat model the agent has no Edit / Write
-    // / Bash path to plant such a symlink (the same PreToolUse hook
-    // gates all three), but the gate's contract is to assume the
-    // agent is hostile, so the lstat reject is cheap insurance
-    // (agent-tasks/d39f160e).
-    stat = fs.lstatSync(filePath);
-  } catch {
+  // Shared symlink-rejecting read (src/io/read-regular-file.ts): the lstat
+  // reject is defense-in-depth against a planted symlink
+  // (agent-tasks/d39f160e); each failure mode keeps its distinct detail.
+  const read = readRegularFileRejectingSymlink(filePath);
+  if (read.kind === "missing") {
     return {
       matched: false,
       detail: `no approval marker at ${filePath}`,
       marker: null,
     };
   }
-  if (stat.isSymbolicLink()) {
+  if (read.kind === "symlink") {
     return {
       matched: false,
       detail: `approval marker is a symlink, refusing for safety: ${filePath}`,
       marker: null,
     };
   }
-  if (!stat.isFile()) {
+  if (read.kind === "not-regular") {
     return {
       matched: false,
       detail: `approval marker path is not a regular file: ${filePath}`,
@@ -514,9 +509,8 @@ export function checkApprovalMarker(
     };
   }
   let marker: ApprovalMarker | null = null;
-  try {
-    const raw = fs.readFileSync(filePath, "utf8");
-    const parsed = safeJsonParse(raw);
+  if (read.kind === "ok") {
+    const parsed = safeJsonParse(read.content);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const obj = parsed as Record<string, unknown>;
       const approvedAt = typeof obj["approvedAt"] === "string" ? obj["approvedAt"] : "";
@@ -525,9 +519,9 @@ export function checkApprovalMarker(
         marker = { approvedAt, approvedBy };
       }
     }
-  } catch {
-    /* keep marker:null; existence already satisfied the gate */
   }
+  // read.kind === "unreadable" keeps marker:null; existence already
+  // satisfied the gate.
   if (opts.maxAgeMs !== undefined && marker !== null) {
     const approvedAtMs = Date.parse(marker.approvedAt);
     if (Number.isFinite(approvedAtMs)) {
