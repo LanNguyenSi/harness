@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import * as fs from "node:fs";
 
 /**
  * Result of a symlink-rejecting regular-file read. The kinds are deliberately
