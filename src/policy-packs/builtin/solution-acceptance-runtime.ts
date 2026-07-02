@@ -43,9 +43,9 @@
 // already touches the producer. This module must NOT claim the residual is
 // fully closed.
 
-import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { readRegularFileRejectingSymlink } from "../../io/read-regular-file.js";
 import type { PolicyPack } from "../../schema/index.js";
 
 export const PACK_NAME = "solution-acceptance";
@@ -192,9 +192,10 @@ export function resolveExplicitVerdictId(
 
 /**
  * Read + validate the verdict marker for `id`, or null when it is absent,
- * unparseable, a symlink, or not a regular file. The lstat + symlink reject
- * mirrors `checkApprovalMarker`: defense-in-depth against a symlink planted
- * at the marker path pointing at agent-controlled content.
+ * unparseable, a symlink, or not a regular file. The symlink-rejecting read
+ * is the shared `src/io/read-regular-file.ts` helper (same defense-in-depth
+ * as `checkApprovalMarker` against a symlink planted at the marker path
+ * pointing at agent-controlled content).
  */
 export function readVerdict(dir: string, id: string): Verdict | null {
   let p: string;
@@ -203,21 +204,13 @@ export function readVerdict(dir: string, id: string): Verdict | null {
   } catch {
     return null; // invalid id
   }
-  let stat: fs.Stats;
+  // Shared symlink-rejecting read (src/io/read-regular-file.ts); every
+  // non-ok kind (missing / symlink / not-regular / unreadable) closes the
+  // gate via null, matching the pre-extraction behavior.
+  const read = readRegularFileRejectingSymlink(p);
+  if (read.kind !== "ok") return null;
   try {
-    stat = fs.lstatSync(p);
-  } catch {
-    return null;
-  }
-  if (stat.isSymbolicLink() || !stat.isFile()) return null;
-  let raw: string;
-  try {
-    raw = fs.readFileSync(p, "utf8");
-  } catch {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(raw) as Partial<Verdict>;
+    const parsed = JSON.parse(read.content) as Partial<Verdict>;
     if (
       typeof parsed.id !== "string" ||
       typeof parsed.head !== "string" ||
