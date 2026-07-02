@@ -815,7 +815,10 @@ describe("generateSettings — grounding: projection (task 129e1b94)", () => {
     );
     // Absolute after expansion — the literal-tilde child-process footgun
     // (agent-tasks/42d224a6) must not re-enter through the projection.
-    expect(warnings.filter((w) => w.includes("literal ~"))).toEqual([]);
+    expect(
+      root.mcpServers?.["grounding-mcp"]?.env?.EVIDENCE_LEDGER_DB?.startsWith("~"),
+    ).toBe(false);
+    void warnings;
   });
 
   it("projects the schema default even when the manifest omits grounding: entirely", () => {
@@ -843,6 +846,16 @@ describe("generateSettings — grounding: projection (task 129e1b94)", () => {
     const out = generateSettingsWithWarnings(m, { homeDir: "/home/op" }).root;
     expect(out.mcpServers?.["agent-tasks"]?.env).toBeUndefined();
     expect(out.mcpServers?.["grounding-mcp"]).toBeUndefined();
+  });
+
+  it("treats an empty-string operator override as absent (projection replaces it)", () => {
+    const m = manifestOf([], [
+      { ...GROUNDING_MCP, env: { EVIDENCE_LEDGER_DB: "" } },
+    ]);
+    const out = generateSettingsWithWarnings(m, { homeDir: "/home/op" }).root;
+    expect(out.mcpServers?.["grounding-mcp"]?.env?.EVIDENCE_LEDGER_DB).toBe(
+      "/home/op/.evidence-ledger/ledger.db",
+    );
   });
 
   it("keeps a custom absolute path verbatim", () => {

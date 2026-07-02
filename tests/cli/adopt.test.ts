@@ -6,10 +6,14 @@ import { parse as parseYaml } from "yaml";
 import { adopt } from "../../src/cli/adopt/index.js";
 import {
   computeDrift,
+  computeMcpDrift,
+  manifestMcpProjection,
   manifestProjection,
   parseSettingsHooks,
+  parseSettingsMcpServers,
   synthesizeName,
 } from "../../src/cli/adopt/derive.js";
+import { generateSettingsWithWarnings } from "../../src/cli/apply/generate-settings.js";
 import { init } from "../../src/cli/init/index.js";
 import { parseManifest } from "../../src/schema/index.js";
 
@@ -654,5 +658,48 @@ describe("adopt — multi-hook drift", () => {
     expect(result.adoptedNames).toEqual(["foo", "foo-2", "bar"]);
     const m = readManifest() as { hooks: { name: string }[] };
     expect(m.hooks.map((h) => h.name).sort()).toEqual(["bar", "foo", "foo-2"]);
+  });
+});
+
+// task 129e1b94 review (MED): apply projects EVIDENCE_LEDGER_DB onto the
+// grounding-mcp settings entry; the manifest-side projection must mirror it
+// or every apply->adopt cycle reports phantom drift and, if applied, bakes
+// a machine-specific absolute path into the shared manifest.
+describe("apply -> adopt round-trip for the grounding projection", () => {
+  const GROUNDING_MANIFEST = parseManifest({
+    version: 1,
+    tools: {
+      mcp: [
+        { name: "grounding-mcp", command: ["node", "/opt/g/server.js"], enabled: true },
+      ],
+      cli: [],
+      skills: { enabled: [], source_dirs: [] },
+      builtin: { known: [] },
+    },
+    memory: { directories: [] },
+    hooks: [],
+    policies: [],
+  });
+
+  it("reports zero MCP drift after an apply-generated settings.json", () => {
+    const settings = generateSettingsWithWarnings(GROUNDING_MANIFEST, {
+      homeDir: "/home/op",
+    }).root;
+    const settingsMcp = parseSettingsMcpServers(settings);
+    const projection = manifestMcpProjection(GROUNDING_MANIFEST, "/home/op");
+    expect(computeMcpDrift(settingsMcp, projection)).toEqual([]);
+  });
+
+  it("still reports drift for a genuinely different env value", () => {
+    const settings = generateSettingsWithWarnings(GROUNDING_MANIFEST, {
+      homeDir: "/home/op",
+    }).root;
+    // Simulate an out-of-band edit to the generated settings.
+    settings.mcpServers!["grounding-mcp"]!.env!.EVIDENCE_LEDGER_DB = "/elsewhere/l.db";
+    const settingsMcp = parseSettingsMcpServers(settings);
+    const projection = manifestMcpProjection(GROUNDING_MANIFEST, "/home/op");
+    const drift = computeMcpDrift(settingsMcp, projection);
+    expect(drift).toHaveLength(1);
+    expect(drift[0]?.reason).toBe("modified");
   });
 });

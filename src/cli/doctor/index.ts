@@ -541,7 +541,14 @@ function buildGrounding(
   const declaredExpanded = expandHome(declaredPath, home);
   const warnings: string[] = [];
 
-  const envOverride = server.env?.[EVIDENCE_LEDGER_DB_ENV] ?? null;
+  // Empty/whitespace "overrides" are treated as absent, matching apply's
+  // projection guard: such a value would point the ledger at "" and the
+  // projection replaces it with the manifest path anyway.
+  const rawOverride = server.env?.[EVIDENCE_LEDGER_DB_ENV];
+  const envOverride =
+    rawOverride !== undefined && rawOverride.trim().length > 0
+      ? rawOverride
+      : null;
   const overrideExpanded =
     envOverride !== null ? expandHome(envOverride, home) : null;
   // The override is what apply preserves, so it is the EFFECTIVE path —

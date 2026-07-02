@@ -1737,6 +1737,36 @@ policies: []
     expect(report.warningCount).toBeGreaterThanOrEqual(1);
   });
 
+  it("grounding warnings increment warningCount by exactly their own length", async () => {
+    const home = makeFixture({});
+    const declared = path.join(home, "a", "ledger.db");
+    const override = path.join(home, "b", "other.db");
+    const clean = await doctor({
+      configPath: path.join(
+        makeFixture({ "harness.yaml": groundingManifest({ ledgerPath: declared }) }),
+        "harness.yaml",
+      ),
+      shallow: true,
+    });
+    const drifted = await doctor({
+      configPath: path.join(
+        makeFixture({
+          "harness.yaml": groundingManifest({ ledgerPath: declared, env: override }),
+        }),
+        "harness.yaml",
+      ),
+      shallow: true,
+    });
+    expect(clean.grounding?.warnings).toEqual([]);
+    expect(drifted.grounding?.warnings).toHaveLength(1);
+    // Identical manifests except for the override, so the count delta IS
+    // the grounding contribution — deleting the rollup in countDiagnostics
+    // turns this red (reviewer mutation-coverage finding).
+    expect(drifted.warningCount - clean.warningCount).toBe(
+      drifted.grounding!.warnings.length,
+    );
+  });
+
   it("flags an unwritable ledger location (negative control)", async () => {
     // Skipped for root (root passes W_OK on read-only dirs).
     if (typeof process.geteuid === "function" && process.geteuid() === 0) return;

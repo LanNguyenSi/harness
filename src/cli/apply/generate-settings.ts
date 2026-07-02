@@ -257,13 +257,26 @@ export function projectGroundingEnv(
   const server = mcp[GROUNDING_MCP_SERVER_NAME];
   if (!server) return;
   const env = server.env ?? {};
-  if (env[EVIDENCE_LEDGER_DB_ENV] === undefined) {
-    env[EVIDENCE_LEDGER_DB_ENV] = expandHome(
-      manifest.grounding.evidence_ledger.path,
-      homeDir,
-    );
+  // Truthiness (not `=== undefined`) on purpose: an empty-string operator
+  // "override" would project an empty ledger path, which guarantees a
+  // broken ledger — treat it as absent and let the manifest value apply.
+  if (!env[EVIDENCE_LEDGER_DB_ENV]) {
+    env[EVIDENCE_LEDGER_DB_ENV] = groundingLedgerEnvValue(manifest, homeDir);
     server.env = env;
   }
+}
+
+/**
+ * The value apply projects for `EVIDENCE_LEDGER_DB`: the manifest's
+ * `grounding.evidence_ledger.path`, `~`-expanded to an absolute path.
+ * Shared with adopt's manifest→settings projection so the apply→adopt
+ * round-trip stays drift-free by construction.
+ */
+export function groundingLedgerEnvValue(
+  manifest: Manifest,
+  homeDir?: string,
+): string {
+  return expandHome(manifest.grounding.evidence_ledger.path, homeDir);
 }
 
 // Translate manifest `memory.router` into a synthetic UserPromptSubmit
