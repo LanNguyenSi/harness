@@ -129,10 +129,16 @@ harness apply --target ~/.claude/settings.json --merge
 ```
 
 `--merge` does a 3-way merge: harness-owned top-level keys (today
-`hooks` and `mcpServers`) get replaced wholesale; everything else in
-the existing target file is preserved verbatim. Re-applying is
-idempotent: running twice produces the same target, and the second run
-reports `no changes`.
+`hooks` and `mcpServers`) come from the generated output; everything
+else in the existing target file is preserved verbatim. Within
+`mcpServers` the merge is per server name: every name the manifest
+declares is taken from the generated output, and a server you
+hand-added directly to the target file survives (the apply summary
+names it as `kept ... operator-added`). `hooks` has no stable per-entry
+identity in the settings shape, so it stays wholesale-replaced —
+hand-added hooks belong in the manifest (`harness adopt` pulls them
+in). Re-applying is idempotent: running twice produces the same
+target, and the second run reports `no changes`.
 
 If the target exists and you pass neither `--merge` nor `--force`,
 `apply` refuses with a clear hint instead of clobbering. `--force`
