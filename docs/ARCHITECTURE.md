@@ -93,9 +93,21 @@ grounding:
 
 Notes:
 
-- **`auto_start: true`** is the default because per VISION §3 Grounding the current "sessions must be started manually" mode is a sharp edge. Setting it to `false` disables auto-start for users who want to script it themselves.
-- **`policies_source`** points to a file, not inline policies. Claim-gate policies are opinionated data structures (claim types × required evidence), arguably their own DSL. Keeping them out of the top-level manifest prevents the manifest from bloating and lets policy libraries be shared or versioned independently.
-- **`retention_days`** is a hint, not an enforcement. It is passed to `ledger prune` by a scheduled or hook-triggered invocation; `harness` itself does not run prune.
+- **Wiring status (as of task 129e1b94):** `evidence_ledger.path` is WIRED —
+  `harness apply` projects it (`~`-expanded to an absolute path) as the
+  `EVIDENCE_LEDGER_DB` env on the `tools.mcp[grounding-mcp]` entry, which is
+  the variable grounding-mcp's ledger-bridge reads. An operator-declared
+  `env.EVIDENCE_LEDGER_DB` on that entry wins; `harness doctor` checks the
+  effective path is writable and flags a divergent override. The remaining
+  subkeys (`session.*`, `retention_days`, `policies_source`) are RESERVED:
+  validated and round-tripped, but no consumer reads them yet (see the
+  status comment in `src/schema/grounding.ts`). Runtime grounding
+  ENFORCEMENT keys off the `tools.mcp[]` entry named `grounding-mcp`
+  (validate + session-start); `grounding:` is the section that CONFIGURES
+  that entry, not a separate enforcement switch.
+- **`auto_start: true`** is the default because per VISION §3 Grounding the current "sessions must be started manually" mode is a sharp edge. Setting it to `false` disables auto-start for users who want to script it themselves. (RESERVED — not consumed yet.)
+- **`policies_source`** points to a file, not inline policies. Claim-gate policies are opinionated data structures (claim types × required evidence), arguably their own DSL. Keeping them out of the top-level manifest prevents the manifest from bloating and lets policy libraries be shared or versioned independently. (RESERVED — not consumed yet.)
+- **`retention_days`** is a hint, not an enforcement. It is passed to `ledger prune` by a scheduled or hook-triggered invocation; `harness` itself does not run prune. (RESERVED — evidence-ledger implements no prune yet.)
 
 Field defaults:
 

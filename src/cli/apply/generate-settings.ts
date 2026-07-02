@@ -45,8 +45,14 @@
 //     and is sorted by command for the same reason.
 
 import type { Hook, Manifest, McpServer } from "../../schema/index.js";
+import { expandHome } from "../../runtime/expand-home.js";
 
 export const DEFAULT_BUDGET_MS = 30_000;
+
+/** The manifest `tools.mcp[]` entry name that grounding enforcement keys off. */
+export const GROUNDING_MCP_SERVER_NAME = "grounding-mcp";
+/** The env var grounding-mcp's ledger-bridge reads for the evidence-ledger DB path. */
+export const EVIDENCE_LEDGER_DB_ENV = "EVIDENCE_LEDGER_DB";
 
 export interface SettingsHookCommand {
   type: "command";
@@ -93,6 +99,12 @@ export interface GenerateSettingsExtras {
    * the output so a no-op contribution doesn't pollute the JSON.
    */
   packPermissions?: SettingsPermissions;
+  /**
+   * Home directory used to expand `~/` in projected values (the
+   * grounding evidence-ledger path). Defaults to `os.homedir()`;
+   * injected by tests for determinism.
+   */
+  homeDir?: string;
 }
 
 export function generateSettings(manifest: Manifest): SettingsRoot {
@@ -133,6 +145,7 @@ export function generateSettingsWithWarnings(
   }
 
   const mcp = buildMcpServers(manifest.tools.mcp, warnings);
+  projectGroundingEnv(manifest, mcp, extras.homeDir);
   if (Object.keys(mcp).length > 0) out.mcpServers = mcp;
 
   const permissions = compactPermissions(extras.packPermissions);
@@ -209,6 +222,61 @@ export function buildMcpServers(
     out[e.name] = spec;
   }
   return out;
+}
+
+/**
+ * Wire the manifest's `grounding:` section into the grounding-mcp server
+ * entry (task 129e1b94, harness-review-2026-07-01/grounding-decorative).
+ *
+ * `grounding.evidence_ledger.path` becomes the `EVIDENCE_LEDGER_DB` env on
+ * the `tools.mcp[grounding-mcp]` entry — the exact variable grounding-mcp's
+ * ledger-bridge reads (agent-grounding
+ * packages/grounding-mcp/src/ledger-bridge.ts). This makes `grounding:` the
+ * section that CONFIGURES the grounding-mcp entry instead of a decorative
+ * namesake, resolving the naming collision the 2026-07-01 review flagged.
+ *
+ * Rules:
+ * - Projection only fires when a grounding-mcp entry exists; without one
+ *   there is no consumer (doctor surfaces that inertness separately).
+ * - An operator-declared `env.EVIDENCE_LEDGER_DB` on the entry wins — an
+ *   explicit override is never clobbered (doctor warns when it diverges
+ *   from `grounding.evidence_ledger.path`).
+ * - The projected value is `~`-expanded to an absolute path, so the
+ *   literal-tilde child-process footgun (agent-tasks/42d224a6, the very
+ *   warning above in buildMcpServers) cannot re-enter via this path.
+ * - `retention_days`, `policies_source`, and `session.*` stay RESERVED:
+ *   nothing consumes them yet (evidence-ledger has no retention pruning),
+ *   and projecting an env no server reads would be decorative again. See
+ *   the status comments in src/schema/grounding.ts.
+ */
+export function projectGroundingEnv(
+  manifest: Manifest,
+  mcp: Record<string, SettingsMcpServer>,
+  homeDir?: string,
+): void {
+  const server = mcp[GROUNDING_MCP_SERVER_NAME];
+  if (!server) return;
+  const env = server.env ?? {};
+  // Truthiness (not `=== undefined`) on purpose: an empty-string operator
+  // "override" would project an empty ledger path, which guarantees a
+  // broken ledger — treat it as absent and let the manifest value apply.
+  if (!env[EVIDENCE_LEDGER_DB_ENV]) {
+    env[EVIDENCE_LEDGER_DB_ENV] = groundingLedgerEnvValue(manifest, homeDir);
+    server.env = env;
+  }
+}
+
+/**
+ * The value apply projects for `EVIDENCE_LEDGER_DB`: the manifest's
+ * `grounding.evidence_ledger.path`, `~`-expanded to an absolute path.
+ * Shared with adopt's manifest→settings projection so the apply→adopt
+ * round-trip stays drift-free by construction.
+ */
+export function groundingLedgerEnvValue(
+  manifest: Manifest,
+  homeDir?: string,
+): string {
+  return expandHome(manifest.grounding.evidence_ledger.path, homeDir);
 }
 
 // Translate manifest `memory.router` into a synthetic UserPromptSubmit

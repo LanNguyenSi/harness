@@ -1,4 +1,9 @@
 import type { Manifest, McpServer } from "../../schema/index.js";
+import {
+  EVIDENCE_LEDGER_DB_ENV,
+  GROUNDING_MCP_SERVER_NAME,
+  groundingLedgerEnvValue,
+} from "../apply/generate-settings.js";
 
 const KNOWN_EVENTS = new Set([
   "SessionStart",
@@ -161,8 +166,33 @@ export function parseSettingsMcpServers(raw: unknown): DerivedMcp[] {
   return out;
 }
 
-export function manifestMcpProjection(manifest: Manifest): DerivedMcp[] {
-  return manifest.tools.mcp.map(toDerivedMcp);
+export function manifestMcpProjection(
+  manifest: Manifest,
+  homeDir?: string,
+): DerivedMcp[] {
+  const out = manifest.tools.mcp.map(toDerivedMcp);
+  // Mirror apply's grounding projection (generate-settings.ts,
+  // projectGroundingEnv): apply synthesizes EVIDENCE_LEDGER_DB onto the
+  // enabled grounding-mcp entry, so the manifest-side projection must
+  // carry the same key — otherwise every adopt after an apply reports
+  // phantom "modified" drift on grounding-mcp and, if applied, bakes the
+  // machine-specific absolute path into the shared manifest (task
+  // 129e1b94 review, MED finding).
+  const groundingManifestEntry = manifest.tools.mcp.find(
+    (m) => m.name === GROUNDING_MCP_SERVER_NAME,
+  );
+  const grounding = out.find((m) => m.name === GROUNDING_MCP_SERVER_NAME);
+  if (
+    grounding !== undefined &&
+    groundingManifestEntry?.enabled !== false &&
+    !grounding.env?.[EVIDENCE_LEDGER_DB_ENV]
+  ) {
+    grounding.env = {
+      ...(grounding.env ?? {}),
+      [EVIDENCE_LEDGER_DB_ENV]: groundingLedgerEnvValue(manifest, homeDir),
+    };
+  }
+  return out;
 }
 
 function toDerivedMcp(m: McpServer): DerivedMcp {

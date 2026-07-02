@@ -70,7 +70,10 @@ import {
   generateCodexConfig,
 } from "./generate-codex-config.js";
 import { generateMemoryIndex } from "./generate-memory-index.js";
-import { generateSettingsWithWarnings } from "./generate-settings.js";
+import {
+  GROUNDING_MCP_SERVER_NAME,
+  generateSettingsWithWarnings,
+} from "./generate-settings.js";
 import {
   planCodexConfigInstall,
   writeCodexConfigInstall,
@@ -347,7 +350,7 @@ function buildExpectedFiles(
   // solution-acceptance hook command so producer and consumer agree on the
   // verdict directory. Without this, a manifest-declared override splits them
   // onto different dirs and the completion-gate can never see a verdict.
-  const groundingMcp = manifest.tools.mcp.find((m) => m.name === "grounding-mcp");
+  const groundingMcp = manifest.tools.mcp.find((m) => m.name === GROUNDING_MCP_SERVER_NAME);
   const groundingEnv = (groundingMcp?.env ?? {}) as Record<string, unknown>;
   const verdictDirOverride = groundingEnv["SOLUTION_VERDICT_DIR"];
   const solutionVerdictDir =

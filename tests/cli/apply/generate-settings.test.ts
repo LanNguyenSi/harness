@@ -620,11 +620,14 @@ describe("generateSettings + mcpServers integration", () => {
         { name: "search-mcp", command: ["python", "-m", "search.server"], enabled: false },
       ],
     );
-    const out = generateSettings(m);
+    const out = generateSettingsWithWarnings(m, { homeDir: "/home/op" }).root;
     expect(out.mcpServers).toBeDefined();
     expect(out.mcpServers?.["grounding-mcp"]).toEqual({
       command: "node",
       args: ["/opt/grounding/server.js"],
+      // task 129e1b94: grounding.evidence_ledger.path (schema default here)
+      // is projected as the env grounding-mcp's ledger-bridge reads.
+      env: { EVIDENCE_LEDGER_DB: "/home/op/.evidence-ledger/ledger.db" },
     });
     expect(out.mcpServers?.["search-mcp"]).toBeUndefined();
   });
@@ -781,5 +784,92 @@ describe("generateSettings — memory.router projection (PR #203)", () => {
     const out = generateSettings(m);
     const inner = out.hooks.UserPromptSubmit?.[0]?.hooks[0];
     expect(inner?.command).toBe("node /opt/router/dist/cli.js --mode augment");
+  });
+});
+
+// task 129e1b94 (harness-review-2026-07-01/grounding-decorative): the
+// `grounding:` section CONFIGURES the grounding-mcp entry instead of being
+// a decorative namesake. `evidence_ledger.path` is projected as the
+// EVIDENCE_LEDGER_DB env — the variable grounding-mcp's ledger-bridge
+// actually reads. These tests are the removal-pin the task's acceptance
+// criteria demand: deleting projectGroundingEnv turns them red.
+describe("generateSettings — grounding: projection (task 129e1b94)", () => {
+  const GROUNDING_MCP = {
+    name: "grounding-mcp",
+    command: ["node", "/opt/grounding-mcp/dist/server.js"],
+    enabled: true,
+  };
+
+  it("projects grounding.evidence_ledger.path as EVIDENCE_LEDGER_DB, ~-expanded", () => {
+    const m = parseManifest({
+      version: 1,
+      grounding: { evidence_ledger: { path: "~/.evidence-ledger/ledger.db" } },
+      tools: { mcp: [GROUNDING_MCP], cli: [], skills: { enabled: [], source_dirs: [] }, builtin: { known: [] } },
+      memory: { directories: [] },
+      hooks: [],
+      policies: [],
+    });
+    const { root, warnings } = generateSettingsWithWarnings(m, { homeDir: "/home/op" });
+    expect(root.mcpServers?.["grounding-mcp"]?.env?.EVIDENCE_LEDGER_DB).toBe(
+      "/home/op/.evidence-ledger/ledger.db",
+    );
+    // Absolute after expansion — the literal-tilde child-process footgun
+    // (agent-tasks/42d224a6) must not re-enter through the projection.
+    expect(
+      root.mcpServers?.["grounding-mcp"]?.env?.EVIDENCE_LEDGER_DB?.startsWith("~"),
+    ).toBe(false);
+    void warnings;
+  });
+
+  it("projects the schema default even when the manifest omits grounding: entirely", () => {
+    const m = manifestOf([], [GROUNDING_MCP]);
+    const out = generateSettingsWithWarnings(m, { homeDir: "/home/op" }).root;
+    expect(out.mcpServers?.["grounding-mcp"]?.env?.EVIDENCE_LEDGER_DB).toBe(
+      "/home/op/.evidence-ledger/ledger.db",
+    );
+  });
+
+  it("an operator env override on the entry wins over the manifest path", () => {
+    const m = manifestOf([], [
+      { ...GROUNDING_MCP, env: { EVIDENCE_LEDGER_DB: "/custom/ledger.db" } },
+    ]);
+    const out = generateSettingsWithWarnings(m, { homeDir: "/home/op" }).root;
+    expect(out.mcpServers?.["grounding-mcp"]?.env?.EVIDENCE_LEDGER_DB).toBe(
+      "/custom/ledger.db",
+    );
+  });
+
+  it("does not project onto other servers or invent a grounding-mcp entry", () => {
+    const m = manifestOf([], [
+      { name: "agent-tasks", command: ["node", "/opt/agent-tasks/mcp.js"], enabled: true },
+    ]);
+    const out = generateSettingsWithWarnings(m, { homeDir: "/home/op" }).root;
+    expect(out.mcpServers?.["agent-tasks"]?.env).toBeUndefined();
+    expect(out.mcpServers?.["grounding-mcp"]).toBeUndefined();
+  });
+
+  it("treats an empty-string operator override as absent (projection replaces it)", () => {
+    const m = manifestOf([], [
+      { ...GROUNDING_MCP, env: { EVIDENCE_LEDGER_DB: "" } },
+    ]);
+    const out = generateSettingsWithWarnings(m, { homeDir: "/home/op" }).root;
+    expect(out.mcpServers?.["grounding-mcp"]?.env?.EVIDENCE_LEDGER_DB).toBe(
+      "/home/op/.evidence-ledger/ledger.db",
+    );
+  });
+
+  it("keeps a custom absolute path verbatim", () => {
+    const m = parseManifest({
+      version: 1,
+      grounding: { evidence_ledger: { path: "/var/lib/ledger/ledger.db" } },
+      tools: { mcp: [GROUNDING_MCP], cli: [], skills: { enabled: [], source_dirs: [] }, builtin: { known: [] } },
+      memory: { directories: [] },
+      hooks: [],
+      policies: [],
+    });
+    const out = generateSettingsWithWarnings(m, { homeDir: "/home/op" }).root;
+    expect(out.mcpServers?.["grounding-mcp"]?.env?.EVIDENCE_LEDGER_DB).toBe(
+      "/var/lib/ledger/ledger.db",
+    );
   });
 });

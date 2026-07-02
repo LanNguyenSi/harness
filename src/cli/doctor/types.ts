@@ -193,6 +193,25 @@ export interface RiskGateSection {
   warnings: string[];
 }
 
+/**
+ * Grounding wiring health (task 129e1b94). Present only when the manifest
+ * declares an enabled `tools.mcp[grounding-mcp]` entry — without one there
+ * is no consumer to check (validate's checkPolicyGroundingMcp owns the
+ * "policies without grounding-mcp" warning). Doctor verifies the projected
+ * evidence-ledger path is usable and that an operator env override does
+ * not silently diverge from `grounding.evidence_ledger.path`.
+ */
+export interface GroundingSection {
+  /** `grounding.evidence_ledger.path` after `~` expansion. */
+  ledgerPath: string;
+  /** False when neither the DB file nor its nearest existing ancestor is writable. */
+  ledgerPathWritable: boolean;
+  /** Operator-declared env override on the grounding-mcp entry, when set. */
+  envOverride: string | null;
+  /** Wiring warnings; each rolls into the doctor `warningCount`. */
+  warnings: string[];
+}
+
 export interface DoctorReport {
   manifestPath: string;
   manifestVersion: number;
@@ -221,6 +240,11 @@ export interface DoctorReport {
   workflows: WorkflowsSectionReport;
   /** Phase 7 #6 — Risk Gate wiring health (classifiers / resolvers / `when:`). */
   riskGate: RiskGateSection;
+  /**
+   * Grounding wiring health (task 129e1b94). Absent when no enabled
+   * grounding-mcp entry is declared.
+   */
+  grounding?: GroundingSection;
   /**
    * Phase 6 #6 follow-up: present when `--target codex` is passed.
    * Aggregates harness-side codex adapter health checks (binary
