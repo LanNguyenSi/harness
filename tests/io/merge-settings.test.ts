@@ -62,8 +62,91 @@ describe("mergeSettings — mcpServers deep merge (task 059b669c)", () => {
         "operator-own": { command: "my-server", args: ["--port", "9"] },
       },
     });
-    expect(r.replacedKeys).toEqual(["mcpServers"]);
+    expect(r.replacedKeys).toEqual([]);
+    expect(r.deepMergedKeys).toEqual(["mcpServers"]);
     expect(r.preservedMcpServers).toEqual(["operator-own"]);
+  });
+
+  it("drops a previously harness-written server the manifest no longer emits (kill-switch pin)", () => {
+    const r = mergeSettings(
+      {
+        mcpServers: {
+          "was-harness": { command: "old" },
+          "operator-own": { command: "mine" },
+        },
+      },
+      { mcpServers: { "still-declared": { command: "s" } } },
+      { previouslyGeneratedMcpNames: new Set(["was-harness", "still-declared"]) },
+    );
+    expect(r.merged["mcpServers"]).toEqual({
+      "operator-own": { command: "mine" },
+      "still-declared": { command: "s" },
+    });
+    expect(r.removedMcpServers).toEqual(["was-harness"]);
+    expect(r.preservedMcpServers).toEqual(["operator-own"]);
+  });
+
+  it("preserves unknown names when no provenance is available (first merge)", () => {
+    const r = mergeSettings(
+      { mcpServers: { unknown: { command: "u" } } },
+      { mcpServers: { declared: { command: "d" } } },
+    );
+    expect(r.merged["mcpServers"]).toEqual({
+      unknown: { command: "u" },
+      declared: { command: "d" },
+    });
+    expect(r.removedMcpServers).toEqual([]);
+  });
+
+  it("round-trips a server literally named __proto__ as an own property", () => {
+    const r = mergeSettings(
+      { mcpServers: { ["__proto__"]: { command: "weird" } } },
+      { mcpServers: { declared: { command: "d" } } },
+    );
+    const mcp = r.merged["mcpServers"] as Record<string, unknown>;
+    expect(Object.keys(mcp)).toEqual(["__proto__", "declared"]);
+    expect(JSON.stringify(r.merged)).toContain('"__proto__":{"command":"weird"}');
+    expect(Object.getPrototypeOf({})).toBe(Object.prototype);
+  });
+
+  it("drops harness-written leftovers even when the manifest emits NO servers (all disabled)", () => {
+    // generateSettings omits the mcpServers key entirely when every
+    // declared server is disabled — the provenance-based drop must still
+    // fire on that shape.
+    const r = mergeSettings(
+      {
+        mcpServers: {
+          "was-harness": { command: "old" },
+          "operator-own": { command: "mine" },
+        },
+      },
+      { hooks: {} },
+      { previouslyGeneratedMcpNames: new Set(["was-harness"]) },
+    );
+    expect(r.merged["mcpServers"]).toEqual({ "operator-own": { command: "mine" } });
+    expect(r.removedMcpServers).toEqual(["was-harness"]);
+    expect(r.deepMergedKeys).toEqual(["mcpServers"]);
+  });
+
+  it("omits the mcpServers key when everything harness-written is dropped and nothing remains", () => {
+    const r = mergeSettings(
+      { mcpServers: { "was-harness": { command: "old" } }, env: { KEEP: "1" } },
+      { hooks: {} },
+      { previouslyGeneratedMcpNames: new Set(["was-harness"]) },
+    );
+    expect("mcpServers" in r.merged).toBe(false);
+    expect(r.merged["env"]).toEqual({ KEEP: "1" });
+    expect(r.removedMcpServers).toEqual(["was-harness"]);
+  });
+
+  it("leaves an existing mcpServers untouched when the manifest emits none and no provenance exists", () => {
+    const r = mergeSettings(
+      { mcpServers: { unknown: { command: "u" } } },
+      { hooks: {} },
+    );
+    expect(r.merged["mcpServers"]).toEqual({ unknown: { command: "u" } });
+    expect(r.preservedKeys).toContain("mcpServers");
+    expect(r.deepMergedKeys).toEqual([]);
   });
 
   it("keeps existing server order and appends new generated names", () => {
@@ -126,6 +209,18 @@ describe("summarizeMerge", () => {
     );
     const s = summarizeMerge("/tmp/x.json", r);
     expect(s).toContain("kept 1 operator-added mcpServer (own)");
+    expect(s).toContain("deep-merged mcpServers");
+  });
+
+  it("names dropped manifest-removed mcpServers", () => {
+    const r = mergeSettings(
+      { mcpServers: { gone: { command: "g" }, declared: { command: "x" } } },
+      { mcpServers: { declared: { command: "y" } } },
+      { previouslyGeneratedMcpNames: new Set(["gone", "declared"]) },
+    );
+    expect(summarizeMerge("/tmp/x.json", r)).toContain(
+      "dropped 1 manifest-removed mcpServer (gone)",
+    );
   });
 
   it("omits the mcpServers fragment when nothing was kept", () => {

@@ -154,12 +154,9 @@ export async function adopt(
 
   const adoptedMcpNames: string[] = [];
   const replacedMcpNames: string[] = [];
-  // Preserve manifest-only fields (`health`, `enabled: false`) when
-  // replacing an existing entry. The settings.json projection only
-  // carries `command` + `env`; without this merge, hand-edits to those
-  // fields would silently wipe `health` (load-bearing for the audit /
-  // doctor / probe paths) and `enabled: false` (which would re-enable a
-  // server the user explicitly turned off).
+  // Preserve manifest-only fields when replacing an existing entry —
+  // `buildMcpEntry` is the single source of truth for exactly which
+  // fields are carried forward and why.
   const manifestByName = new Map(manifest.tools.mcp.map((m) => [m.name, m]));
   for (const m of mcpDrift) {
     if (m.reason === "modified") replacedMcpNames.push(m.entry.name);

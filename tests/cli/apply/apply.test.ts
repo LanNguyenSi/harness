@@ -1115,6 +1115,44 @@ describe("apply --target / --merge", () => {
     ).rejects.toBeInstanceOf(HarnessExitError);
   });
 
+  it("--target --merge: operator-added mcpServer survives; disabling a manifest server removes it (task 059b669c)", async () => {
+    // Apply #1: manifest declares server `a`; target has an operator
+    // hand-add. `a` lands in the target, the hand-add survives.
+    writeManifest({
+      hooks: [basicHook()],
+      mcp: [{ name: "a", command: ["node", "/a.js"] }],
+    });
+    const target = path.join(tmpHome, "settings.local.json");
+    fs.writeFileSync(
+      target,
+      JSON.stringify({ mcpServers: { own: { command: "mine" } } }, null, 2),
+    );
+    const r1 = await apply({ homeDir: tmpHome, target, merge: true });
+    expect(r1.outcome).toBe("applied");
+    const merged1 = JSON.parse(fs.readFileSync(target, "utf8"));
+    expect(Object.keys(merged1.mcpServers).sort()).toEqual(["a", "own"]);
+    expect(r1.targetMergeSummary).toContain("kept 1 operator-added mcpServer (own)");
+
+    // Apply #2: the operator disables `a` in the manifest. The merge
+    // must remove it from the target (enabled:false stays a kill
+    // switch) while the operator hand-add still survives.
+    writeManifest({
+      hooks: [basicHook()],
+      mcp: [{ name: "a", command: ["node", "/a.js"], enabled: false }],
+    });
+    const r2 = await apply({ homeDir: tmpHome, target, merge: true });
+    expect(r2.outcome).toBe("applied");
+    const merged2 = JSON.parse(fs.readFileSync(target, "utf8"));
+    expect(Object.keys(merged2.mcpServers)).toEqual(["own"]);
+    expect(r2.targetMergeSummary).toContain("dropped 1 manifest-removed mcpServer (a)");
+
+    // Apply #3: unchanged manifest — the merge is stable (no churn).
+    const r3 = await apply({ homeDir: tmpHome, target, merge: true });
+    const merged3 = JSON.parse(fs.readFileSync(target, "utf8"));
+    expect(merged3).toEqual(merged2);
+    expect(r3.targetWritten).toBe(false);
+  });
+
   it("re-applying with --target --merge is idempotent", async () => {
     writeManifest({ hooks: [basicHook()] });
     const target = path.join(tmpHome, "settings.local.json");

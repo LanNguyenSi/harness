@@ -743,6 +743,40 @@ describe("adopt — round-trip fidelity (task 059b669c)", () => {
     expect(fs.readFileSync(manifestPath, "utf8")).not.toContain("budget_ms");
   });
 
+  it("a timeout-only difference on a declared hook is NOT drift (no duplicate adoption)", async () => {
+    // Pins the deliberate keyOf exclusion: hooks adopt add-only, so if
+    // `timeout` ever joined the drift key, a timeout-only hand-edit
+    // would adopt a DUPLICATE hook entry. This test fails if that
+    // regression is introduced.
+    fs.writeFileSync(
+      manifestPath,
+      `version: 1
+tools:
+  mcp: []
+  cli: []
+  skills: { enabled: [], source_dirs: [] }
+  builtin: { known: [] }
+memory: { directories: [] }
+hooks:
+  - { name: declared, event: SessionStart, command: /tmp/declared.sh, blocking: false, budget_ms: 30000 }
+policies: []
+`,
+    );
+    writeSettings({
+      SessionStart: [
+        {
+          matcher: "",
+          hooks: [{ type: "command", command: "/tmp/declared.sh", timeout: 99000 }],
+        },
+      ],
+    });
+    const before = fs.readFileSync(manifestPath, "utf8");
+    const r = await adopt(settingsPath, { configPath: manifestPath, yes: true });
+    expect(r.outcome).toBe("no-drift");
+    expect(r.hookDriftCount).toBe(0);
+    expect(fs.readFileSync(manifestPath, "utf8")).toBe(before);
+  });
+
   it("preserves manifest-only min_version + version_command on replace-modified", async () => {
     fs.writeFileSync(
       manifestPath,
