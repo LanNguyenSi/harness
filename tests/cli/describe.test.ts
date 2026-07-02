@@ -249,6 +249,10 @@ describeBlock("describe — error handling", () => {
     expect(caught).toBeInstanceOf(HarnessExitError);
     expect((caught as HarnessExitError).exitCode).toBe(66);
     expect((caught as HarnessExitError).message).toMatch(/manifest not found/);
+    // First-run DX (task 24ec07a6): the base-manifest miss points at init.
+    expect((caught as HarnessExitError).message).toMatch(
+      /run `harness init --interactive`/,
+    );
   });
 
   it("throws HarnessExitError with EX_NOINPUT when YAML is malformed", () => {

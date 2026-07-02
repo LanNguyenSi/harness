@@ -96,8 +96,17 @@ function readYamlFile(filePath: string, label: string): unknown {
     raw = fs.readFileSync(filePath, "utf8");
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      // First-run DX (task 24ec07a6): a fresh machine's first command is
+      // often a read verb (doctor/describe/validate), which previously
+      // dead-ended here with no pointer to init. Only the BASE manifest
+      // gets the hint; a missing override layer mid-read is a race, not
+      // a first-run, and "run init" would be wrong advice for it.
+      const hint =
+        label === "manifest"
+          ? ". No harness.yaml on this machine yet: run `harness init --interactive` (or `harness init --template solo`) to create one"
+          : "";
       throw new HarnessExitError(
-        `${label} not found: ${filePath}`,
+        `${label} not found: ${filePath}${hint}`,
         EX_NOINPUT,
       );
     }
