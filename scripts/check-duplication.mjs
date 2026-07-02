@@ -26,8 +26,9 @@ import * as path from "node:path";
 
 const MAX_CLONES = 82; // baseline 2026-07-02, post parseConfigUx extraction
 
-const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-jscpd-"));
-try {
+// Sets process.exitCode instead of calling process.exit so the caller's
+// finally-cleanup runs on every path (process.exit skips stack unwinding).
+function main(outDir) {
   const result = spawnSync(
     "npx",
     [
@@ -49,7 +50,8 @@ try {
   );
   if (result.error) {
     console.error(`check-duplication: jscpd failed to spawn: ${result.error.message}`);
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
   const reportPath = path.join(outDir, "jscpd-report.json");
   if (!fs.existsSync(reportPath)) {
@@ -57,13 +59,15 @@ try {
       `check-duplication: jscpd produced no report at ${reportPath}` +
         `${result.stderr ? `; stderr: ${result.stderr.slice(0, 500)}` : ""}`,
     );
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
   const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
   const clones = Array.isArray(report.duplicates) ? report.duplicates.length : NaN;
   if (Number.isNaN(clones)) {
     console.error("check-duplication: unexpected report shape (no duplicates[])");
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
   if (clones > MAX_CLONES) {
     console.error(
@@ -71,13 +75,13 @@ try {
         ` Extract the new duplication (see the newest entries in the jscpd output),` +
         ` or raise MAX_CLONES in scripts/check-duplication.mjs with a justification.`,
     );
-    const newest = report.duplicates.slice(-3);
-    for (const d of newest) {
+    for (const d of report.duplicates.slice(-3)) {
       console.error(
         `  clone: ${d.firstFile?.name}:${d.firstFile?.start} <-> ${d.secondFile?.name}:${d.secondFile?.start} (${d.lines} lines)`,
       );
     }
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
   const slack = MAX_CLONES - clones;
   console.log(
@@ -85,6 +89,11 @@ try {
       slack > 0 ? `; consider lowering the pin by ${slack}` : ""
     })`,
   );
+}
+
+const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-jscpd-"));
+try {
+  main(outDir);
 } finally {
   fs.rmSync(outDir, { recursive: true, force: true });
 }

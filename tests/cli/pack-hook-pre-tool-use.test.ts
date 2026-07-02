@@ -1226,7 +1226,8 @@ describe("pack hook pre-tool-use blocker — agent-facing ux (agent-tasks/e48e3b
       reportsDir: path.join(tmp, "no-reports"),
       ledgerQuery: async (): Promise<LedgerEntry[]> => [],
     });
-    expect(stderr.read()).toMatch(/config\.ux ignored/);
+    // Full prefix pins the label->hook binding (task 19e293c6 review).
+    expect(stderr.read()).toContain("harness pack hook: config.ux ignored (");
     const decision = JSON.parse(stdout.read().trim()) as { reason: string };
     expect(decision.reason).toContain("Understanding Gate:");
   });

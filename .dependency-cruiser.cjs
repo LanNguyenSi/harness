@@ -16,6 +16,11 @@
 // belongs to the structural-concentration follow-up (task f86b2425), not
 // this gate. The exemptions are per-target-file, so ANY OTHER upward
 // import still fails.
+//
+// DELIBERATELY UNCONSTRAINED: src/io, src/probes, and src/overrides are
+// utility/leaf directories with no assigned position in the layer chain;
+// only the floors above forbid importing probes/. Assign them a layer
+// (and rules) if/when f86b2425 sorts the shared utilities.
 /** @type {import('dependency-cruiser').IConfiguration} */
 module.exports = {
   forbidden: [

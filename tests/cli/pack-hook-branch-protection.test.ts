@@ -650,7 +650,8 @@ describe("runPackHookBranchProtectionCli — agent-facing ux (agent-tasks/9806d4
       manifest: manifestWithPack({ ux: { cannot: "x", required: [], run: ["y"] } }),
       ledgerQuery: async () => [],
     });
-    expect(errOut()).toMatch(/config\.ux ignored/);
+    // Full prefix pins the label->hook binding (task 19e293c6 review).
+    expect(errOut()).toContain("harness pack hook branch-protection: config.ux ignored (");
     const envelope = JSON.parse(outBuf());
     expect(envelope.reason).toContain("branch-protection: refusing");
   });

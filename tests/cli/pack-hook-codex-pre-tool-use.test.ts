@@ -691,3 +691,32 @@ describe("pack hook codex-pre-tool-use blocker — approval_lifecycle parity (ta
     );
   });
 });
+
+describe("pack hook codex-pre-tool-use blocker — malformed config.ux (task 19e293c6)", () => {
+  it("warns with the codex-prefixed line and falls back to the legacy envelope", async () => {
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: parseManifest({
+        version: 1,
+        policy_packs: [
+          {
+            name: "understanding-before-execution",
+            enabled: true,
+            config: { ux: { cannot: 42 } },
+          },
+        ],
+      }),
+      stdin: readableFromString(event()),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    const out = stderr.read();
+    // Full prefix pins the label->hook binding (task 19e293c6 review).
+    expect(out).toContain("harness pack hook codex: config.ux ignored (");
+    expect(out).toMatch(/BLOCK: no approval marker/);
+  });
+});

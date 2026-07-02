@@ -371,3 +371,21 @@ describe("completion-gate — solo / non-agent-tasks verdict id (SOLUTION_VERDIC
     expect(reason).toMatch(/task_start/);
   });
 });
+
+describe("completion-gate — malformed config.ux (task 19e293c6)", () => {
+  it("warns with the solution-acceptance-prefixed line and still blocks", async () => {
+    const { res, err } = await run({
+      cwd: repoAtHead(HEAD),
+      verdictDir: verdictDirWith(null),
+      manifest: parseManifest({
+        version: 1,
+        policy_packs: [
+          { name: "solution-acceptance", enabled: true, config: { ux: { cannot: 42 } } },
+        ],
+      }),
+    });
+    expect(res.blocked).toBe(true);
+    // Full prefix pins the label->hook binding (task 19e293c6 review).
+    expect(err).toContain("harness pack hook solution-acceptance: config.ux ignored (");
+  });
+});

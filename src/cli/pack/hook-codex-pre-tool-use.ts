@@ -34,7 +34,7 @@ import {
 } from "../../runtime/pending-approval.js";
 import { extractShellCommand } from "../../runtime/tool-name-aliases.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
-import { type Manifest, type McpServer, type PolicyUx } from "../../schema/index.js";
+import { type Manifest, type McpServer } from "../../schema/index.js";
 import { type LoaderOptions } from "../loader.js";
 import { isReadOnlyBashPipeline } from "../../runtime/read-only-bash.js";
 import { renderReportSchemaHint } from "./understanding-report-schema-hint.js";

@@ -1,7 +1,7 @@
 // Shared bootstrap helpers for Claude Code pack hooks.
 //
-// Extracts the three init-phase boilerplate pieces that all (or most) pack
-// hooks reimplemented independently:
+// Extracts the boilerplate pieces that all (or most) pack hooks
+// reimplemented independently:
 //
 //   1. stdin envelope read (the common event-stream pattern).
 //   2. pause-sentinel check with announcement (wrapping checkPauseFromLoader
@@ -9,6 +9,8 @@
 //   3. manifest load with injection support (the common if-injected / else
 //      loadManifest pattern; callers wrap the call in their own try/catch
 //      because error semantics differ per hook).
+//   4. pack `config.ux` parsing (label-parameterized; formerly four
+//      byte-identical copies, task 19e293c6).
 //
 // Not used by:
 //   - hook-runtime-reality.ts: its stdin reader uses async iteration + an
