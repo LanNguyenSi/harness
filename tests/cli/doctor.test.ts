@@ -1002,6 +1002,67 @@ tools:
   });
 });
 
+describe("doctor — solution-acceptance knob-ignored check (task 24f6ceb9)", () => {
+  // Parity with `harness validate`'s checkSolutionAcceptanceKnobIgnored
+  // (single source of truth); the diagnostic lands in the same
+  // `policyPacks.solutionAcceptance` array as the producer checks, so
+  // counting and rendering are inherited.
+  const PACK_WITH_PRODUCER = `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: solution-acceptance
+    source: builtin
+tools:
+  mcp:
+    - name: grounding-mcp
+      command: [/usr/bin/true]
+      enabled: true
+`;
+
+  it("warns when the knob path is git-ignored (explicit probe wins over shallow)", async () => {
+    const baselineHome = makeFixture({ "harness.yaml": PACK_WITH_PRODUCER });
+    const baseline = await doctor({
+      configPath: path.join(baselineHome, "harness.yaml"),
+      homeOverride: baselineHome,
+      shallow: true,
+      gitIgnoreProbe: () => false,
+    });
+    expect(baseline.policyPacks.solutionAcceptance).toHaveLength(0);
+
+    const home = makeFixture({ "harness.yaml": PACK_WITH_PRODUCER });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+      gitIgnoreProbe: () => true,
+    });
+    expect(report.policyPacks.solutionAcceptance).toHaveLength(1);
+    expect(report.policyPacks.solutionAcceptance[0]).toMatchObject({
+      severity: "warning",
+      path: "policy_packs",
+    });
+    // Probe-true differs from the probe-false baseline by exactly this
+    // one warning (same tally-delta pattern as the relative-dir test).
+    expect(report.warningCount).toBe(baseline.warningCount + 1);
+    expect(report.errorCount).toBe(0);
+    const text = format(report);
+    expect(text).toContain("Policy Packs");
+    expect(text).toContain("⚠ policy_packs");
+    expect(text).toContain("git-ignored");
+  });
+
+  it("skips the probe entirely in shallow runs without an explicit probe", async () => {
+    const home = makeFixture({ "harness.yaml": PACK_WITH_PRODUCER });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+    });
+    expect(report.policyPacks.solutionAcceptance).toHaveLength(0);
+  });
+});
+
 describe("doctor — npm global-bin PATH check (task 4ddd78ed)", () => {
   const MIN_MANIFEST = `version: 1
 hooks: []

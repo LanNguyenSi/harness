@@ -23,8 +23,12 @@ coverage/
 harness.generated/
 ~
 
-# Orchestrator-workflow run state (run files under .ai/runs/, .ai/workflow/)
-.ai/
+# Orchestrator-workflow RUN state stays local (auditable per-machine history).
+# .ai/workflow/ (kit templates + manifest) and .ai/solution-acceptance.json
+# (the OW enforcement knob) are deliberately COMMITTED so the enforcement
+# posture survives fresh clones and git worktrees — see
+# docs/policy-packs/solution-acceptance.md ("Repo state and gitignore").
+.ai/runs/
 
 # Locally-installed agent tooling (orchestrator-workflow kit, not part of this repo)
 .claude/

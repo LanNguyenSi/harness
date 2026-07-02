@@ -21,7 +21,10 @@ import { checkPolicyPackVersions } from "../../policy-packs/version-check.js";
 import { DEFAULT_RUNTIME } from "../../policy-packs/runtime.js";
 import {
   checkPolicyRiskWithoutEnvScope,
+  checkSolutionAcceptanceKnobIgnored,
   checkSolutionAcceptanceProducer,
+  createDefaultGitIgnoreProbe,
+  type GitIgnoreProbe,
 } from "../validate/checks.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import {
@@ -77,6 +80,14 @@ export interface DoctorOptions extends LoaderOptions {
    * this and the real `npm` is spawned.
    */
   npmBinExec?: NpmExec;
+  /**
+   * Test-injection knob for the solution-acceptance knob-ignored check
+   * (task 24f6ceb9). Defaults to a real `git check-ignore` probe against
+   * the process cwd; `shallow` runs degrade it to `() => null` (no spawn),
+   * mirroring how the version probe degrades. An explicit probe wins over
+   * `shallow` so tests can exercise the check without paying for spawns.
+   */
+  gitIgnoreProbe?: GitIgnoreProbe;
 }
 
 export { isDoctorTarget, KNOWN_DOCTOR_TARGETS };
@@ -417,6 +428,7 @@ function buildPolicies(manifest: Manifest): PolicyEntryReport[] {
 function buildPolicyPacks(
   manifest: Manifest,
   versionProbe: (cmd: readonly string[]) => string | null,
+  gitIgnoreProbe: GitIgnoreProbe,
 ): PolicyPacksSection {
   const unresolved: PolicyPackUnresolved[] = [];
   for (const pack of manifest.policy_packs) {
@@ -454,7 +466,14 @@ function buildPolicyPacks(
       message: gap.message,
     }),
   );
-  const solutionAcceptance = checkSolutionAcceptanceProducer(manifest);
+  // Same array as the producer check on purpose: countDiagnostics and the
+  // renderers already tally / print `solutionAcceptance` by severity, so
+  // the knob-ignored warning (task 24f6ceb9) inherits doctor parity with
+  // `harness validate` for free — the #308 pattern.
+  const solutionAcceptance = [
+    ...checkSolutionAcceptanceProducer(manifest),
+    ...checkSolutionAcceptanceKnobIgnored(manifest, gitIgnoreProbe),
+  ];
   return { unresolved, configIssues, versionGaps, solutionAcceptance };
 }
 
@@ -723,7 +742,16 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const hooks = checkHooks(manifest, home, opts);
   const policies = buildPolicies(manifest);
   const policyPacksVersionProbe = opts.versionProbe ?? (() => null);
-  const policyPacks = buildPolicyPacks(manifest, policyPacksVersionProbe);
+  // Shallow runs skip real spawns (`git check-ignore` included), mirroring
+  // the npm-bin probe below; an explicit test probe always wins.
+  const gitIgnoreProbe =
+    opts.gitIgnoreProbe ??
+    (opts.shallow ? () => null : createDefaultGitIgnoreProbe());
+  const policyPacks = buildPolicyPacks(
+    manifest,
+    policyPacksVersionProbe,
+    gitIgnoreProbe,
+  );
   const workflows = buildWorkflows(manifest);
   const riskGate = buildRiskGate(manifest);
   const groundingServer =

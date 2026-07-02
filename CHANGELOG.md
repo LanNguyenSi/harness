@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`harness validate` / `harness doctor` now warn when the solution-acceptance pack is enabled but the OW knob path is git-ignored** (task 24f6ceb9, ow-review-2026-07-01). The orchestrator-workflow arm reads repo state (`.ai/solution-acceptance.json` plus run completeness under `.ai/runs/`); a repo that ignores `.ai/` wholesale cannot commit its enforcement posture, so fresh clones and git worktrees silently skip the OW arm under the default `auto` knob. The shared check (`checkSolutionAcceptanceKnobIgnored`) probes `git check-ignore` against the process cwd, stays silent outside a git repository and in `doctor --shallow` runs (no spawns), and lands in the same Policy Packs section as the producer deadlock checks. Negative control: a repo that ignores only `.ai/runs/` produces no warning.
+
+### Changed
+
+- **The harness repo itself now commits its OW enforcement posture** (task 24f6ceb9; operator-approved revision of the earlier ".ai/ fully gitignored" decision, which was about run noise). `.gitignore` narrows `.ai/` to `.ai/runs/`; `.ai/workflow/` (kit templates + manifest) and `.ai/solution-acceptance.json` (committed as `"orchestratorWorkflow": "on"`) are now tracked, so the solution-acceptance OW arm enforces in every checkout, including fresh clones and worktrees. `docs/policy-packs/solution-acceptance.md` gains a "Repo state and gitignore" section documenting the convention and the honest residual (run-to-change binding is agent-grounding `067bede3`).
+
 ## [0.38.0] - 2026-06-27
 
 **Headline: the Risk Gate now flags fail-closed unclassified matches across the audit trail, and `validate` / `doctor` lint risk policies that forgot to scope by `environment.name`.** When a risk-gate policy fires only because the action was unclassified (the "unknown is not safe" rule), `harness audit` (table and `--json`) and `harness explain --trace` now mark the decision, so an operator reviewing a deny can tell a real critical-severity match from a fail-closed one. A new lint, shared by `harness validate` and `harness doctor`, warns when a `when:` block gates on `risk.severity_at_least` / `risk.category_in` / `action.reversible` without an `environment.name` scope (those clauses match every unclassified command in every environment). Re-run `npm i -g @lannguyensi/harness` to upgrade.

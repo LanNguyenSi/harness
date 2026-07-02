@@ -24,7 +24,10 @@ gate that silently can't fire). Requirements:
 `harness validate` and `harness doctor` both surface the two deadlock
 misconfigurations when the pack is enabled (see Failure mode).
 Condition #1 (grounding-mcp absent) is a hard error in both; condition
-#2 (relative `SOLUTION_VERDICT_DIR`) is a warning in both.
+#2 (relative `SOLUTION_VERDICT_DIR`) is a warning in both. Both also
+warn when the pack is enabled but the OW knob path
+`.ai/solution-acceptance.json` is git-ignored in the current repository
+(see "Repo state and gitignore" below).
 
 ## How it works
 
@@ -113,6 +116,42 @@ This knob is agent-writable, so it is a BOUNDED residual: setting it to
 `off` (or having no run present) only drops the OW arm; it does NOT
 disable the preflight floor, which still gates every completion. The
 same-uid forgery honesty from the write-guard above applies here too.
+
+### Repo state and gitignore
+
+The OW arm reads REPO state: the knob above plus run completeness under
+`.ai/runs/`. That state interacts with `.gitignore` in a way that can
+silently disarm the arm (ow-review-2026-07-01, finding 2):
+
+- `.ai/runs/` SHOULD stay ignored — run directories are per-machine
+  auditable history, not shared configuration.
+- The knob `.ai/solution-acceptance.json` (and `.ai/workflow/`, the kit
+  templates + manifest) SHOULD be committed. Ignoring `.ai/` wholesale
+  makes the enforcement posture per-machine by construction: the repo
+  cannot commit `"orchestratorWorkflow": "on"`, and the committed
+  workflow docs reference kit files that do not exist on other
+  checkouts.
+
+**Worktree / fresh-clone residual (honest limits).** `.ai/runs/` being
+local means a fresh clone or a git worktree starts with NO run present.
+Under the default `auto` knob the OW arm then auto-skips — the gate that
+exists to prevent process skipping is skipped exactly where process
+skipping happens (parallel worktree batch sessions, new machines). Two
+mitigations, both partial:
+
+- Commit `"orchestratorWorkflow": "on"`: the arm then enforces in every
+  checkout, and a fresh environment must produce a complete run before
+  its completions pass. This repo does exactly that.
+- `harness validate` / `harness doctor` warn when the pack is enabled
+  but the knob path is git-ignored, so the wholesale-ignore
+  misconfiguration is at least visible instead of silent. The check
+  probes `git check-ignore` in the current working directory and stays
+  quiet outside a git repository (validate remains usable for pure
+  home-config linting) and in `doctor --shallow` runs (no spawns).
+
+Neither mitigation binds a run to the CURRENT change; a stale accepted
+run keeping the arm green is a separate producer-side gap tracked as
+agent-grounding `067bede3` (ow-review-2026-07-01/run-binding).
 
 > Contract note: the producer contract this consumer depends on (the 7-key
 > verdict shape AND the `orchestrator-workflow: ` blocker prefix) is now PINNED
