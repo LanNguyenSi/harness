@@ -703,3 +703,120 @@ describe("apply -> adopt round-trip for the grounding projection", () => {
     expect(drift[0]?.reason).toBe("modified");
   });
 });
+
+describe("adopt — round-trip fidelity (task 059b669c)", () => {
+  it("captures a settings hook `timeout` into budget_ms and apply round-trips it", async () => {
+    writeSettings({
+      SessionStart: [
+        {
+          matcher: "",
+          hooks: [{ type: "command", command: "/tmp/extra.sh", timeout: 45000 }],
+        },
+      ],
+    });
+    const r = await adopt(settingsPath, { configPath: manifestPath, yes: true });
+    expect(r.outcome).toBe("applied");
+    const raw = readManifest() as { hooks: { name: string; budget_ms?: number }[] };
+    expect(raw.hooks[0]).toMatchObject({ name: "extra", budget_ms: 45000 });
+    // Full circle: re-projecting the adopted manifest emits the same
+    // timeout (apply's toSettingsCommand is 1:1 with budget_ms), so the
+    // adopt→apply round-trip is lossless for this field.
+    const manifest = parseManifest(raw);
+    const { root } = generateSettingsWithWarnings(manifest);
+    expect(root.hooks["SessionStart"]?.[0]?.hooks[0]).toMatchObject({
+      command: "/tmp/extra.sh",
+      timeout: 45000,
+    });
+  });
+
+  it("ignores a malformed settings `timeout` (must-pass control: no budget_ms captured)", async () => {
+    writeSettings({
+      SessionStart: [
+        {
+          matcher: "",
+          hooks: [{ type: "command", command: "/tmp/extra.sh", timeout: -5 }],
+        },
+      ],
+    });
+    const r = await adopt(settingsPath, { configPath: manifestPath, yes: true });
+    expect(r.outcome).toBe("applied");
+    expect(fs.readFileSync(manifestPath, "utf8")).not.toContain("budget_ms");
+  });
+
+  it("a timeout-only difference on a declared hook is NOT drift (no duplicate adoption)", async () => {
+    // Pins the deliberate keyOf exclusion: hooks adopt add-only, so if
+    // `timeout` ever joined the drift key, a timeout-only hand-edit
+    // would adopt a DUPLICATE hook entry. This test fails if that
+    // regression is introduced.
+    fs.writeFileSync(
+      manifestPath,
+      `version: 1
+tools:
+  mcp: []
+  cli: []
+  skills: { enabled: [], source_dirs: [] }
+  builtin: { known: [] }
+memory: { directories: [] }
+hooks:
+  - { name: declared, event: SessionStart, command: /tmp/declared.sh, blocking: false, budget_ms: 30000 }
+policies: []
+`,
+    );
+    writeSettings({
+      SessionStart: [
+        {
+          matcher: "",
+          hooks: [{ type: "command", command: "/tmp/declared.sh", timeout: 99000 }],
+        },
+      ],
+    });
+    const before = fs.readFileSync(manifestPath, "utf8");
+    const r = await adopt(settingsPath, { configPath: manifestPath, yes: true });
+    expect(r.outcome).toBe("no-drift");
+    expect(r.hookDriftCount).toBe(0);
+    expect(fs.readFileSync(manifestPath, "utf8")).toBe(before);
+  });
+
+  it("preserves manifest-only min_version + version_command on replace-modified", async () => {
+    fs.writeFileSync(
+      manifestPath,
+      `version: 1
+tools:
+  mcp:
+    - name: a
+      command: ["node", "/old.js"]
+      min_version: "1.2.0"
+      version_command: ["node", "/old.js", "--version"]
+  cli: []
+  skills: { enabled: [], source_dirs: [] }
+  builtin: { known: [] }
+memory: { directories: [] }
+hooks: []
+policies: []
+`,
+    );
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        hooks: {},
+        mcpServers: { a: { command: "node", args: ["/new.js"] } },
+      }),
+    );
+    const r = await adopt(settingsPath, { configPath: manifestPath, yes: true });
+    expect(r.outcome).toBe("applied");
+    const m = readManifest() as {
+      tools: {
+        mcp: {
+          name: string;
+          command: string[];
+          min_version?: string;
+          version_command?: string[];
+        }[];
+      };
+    };
+    const entry = m.tools.mcp.find((e) => e.name === "a");
+    expect(entry?.command).toEqual(["node", "/new.js"]);
+    expect(entry?.min_version).toBe("1.2.0");
+    expect(entry?.version_command).toEqual(["node", "/old.js", "--version"]);
+  });
+});

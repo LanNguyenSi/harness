@@ -651,7 +651,33 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
             EX_NOINPUT,
           );
         }
-        const mergeResult = mergeSettings(parsed, generatedSettings);
+        // Provenance for the mcpServers deep merge: the server names
+        // harness wrote on the PREVIOUS apply. A name that was
+        // harness-written then but is absent from the current generated
+        // output was removed / disabled in the manifest and must leave
+        // the target too (enabled:false stays a kill switch); a name
+        // never harness-written is an operator hand-add and survives.
+        let previouslyGeneratedMcpNames: ReadonlySet<string> | undefined;
+        const priorGenerated = lastApply?.files[SETTINGS_BASENAME]?.content;
+        if (priorGenerated !== undefined) {
+          try {
+            const prior = JSON.parse(priorGenerated) as Record<string, unknown>;
+            const mcp = prior["mcpServers"];
+            if (mcp !== null && typeof mcp === "object" && !Array.isArray(mcp)) {
+              previouslyGeneratedMcpNames = new Set(Object.keys(mcp));
+            } else {
+              previouslyGeneratedMcpNames = new Set();
+            }
+          } catch {
+            // Corrupt .last-apply record: provenance unknown, fall back
+            // to preserving unknown names (the conservative reading).
+          }
+        }
+        const mergeResult = mergeSettings(parsed, generatedSettings, {
+          ...(previouslyGeneratedMcpNames !== undefined
+            ? { previouslyGeneratedMcpNames }
+            : {}),
+        });
         targetContent = serializeJson(mergeResult.merged);
         targetMergeSummary = summarizeMerge(targetPath, mergeResult);
       } else if (opts.force) {

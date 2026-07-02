@@ -19,11 +19,20 @@ export interface DerivedHook {
   event: string;
   command: string;
   match?: string;
+  /**
+   * settings.json hook `timeout`, captured verbatim (task 059b669c).
+   * apply emits `timeout: budget_ms` 1:1 (generate-settings.ts,
+   * toSettingsCommand), so carrying it back into `budget_ms` keeps the
+   * adopt→apply round-trip drift-free by construction. Deliberately NOT
+   * part of the drift key (`keyOf`): a timeout-only edit must not turn
+   * into an add-only "new hook" adoption of a duplicate entry.
+   */
+  timeout?: number;
 }
 
 export interface SettingsHookGroup {
   matcher?: string;
-  hooks: { type?: string; command: string }[];
+  hooks: { type?: string; command: string; timeout?: number }[];
 }
 
 export interface SettingsRoot {
@@ -53,10 +62,18 @@ export function parseSettingsHooks(raw: unknown): DerivedHook[] {
       for (const h of inner) {
         if (!isRecord(h)) continue;
         if (typeof h.command !== "string" || h.command.length === 0) continue;
+        // Capture only values the manifest schema would accept
+        // (budget_ms: positive integer); anything else is ignored so a
+        // malformed hand-edit cannot poison the proposed manifest.
+        const timeout =
+          typeof h.timeout === "number" && Number.isInteger(h.timeout) && h.timeout > 0
+            ? h.timeout
+            : undefined;
         out.push({
           event,
           command: h.command,
           ...(matcher !== undefined ? { match: matcher } : {}),
+          ...(timeout !== undefined ? { timeout } : {}),
         });
       }
     }

@@ -8,6 +8,8 @@ export interface McpEntry {
   env?: Record<string, string>;
   health?: { verb: string; timeout_ms?: number };
   enabled?: boolean;
+  min_version?: string;
+  version_command?: string[];
 }
 
 export interface CliEntry {

@@ -11,7 +11,7 @@ import {
   validateBeforeWrite,
 } from "../../io/validate-before-write.js";
 import { parseManifest, type McpServer } from "../../schema/index.js";
-import { applyAdd } from "../add/mutate.js";
+import { applyAdd, type McpEntry as McpAddEntry } from "../add/mutate.js";
 import { EX_FAIL, EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
 import {
   computeDrift,
@@ -154,12 +154,9 @@ export async function adopt(
 
   const adoptedMcpNames: string[] = [];
   const replacedMcpNames: string[] = [];
-  // Preserve manifest-only fields (`health`, `enabled: false`) when
-  // replacing an existing entry. The settings.json projection only
-  // carries `command` + `env`; without this merge, hand-edits to those
-  // fields would silently wipe `health` (load-bearing for the audit /
-  // doctor / probe paths) and `enabled: false` (which would re-enable a
-  // server the user explicitly turned off).
+  // Preserve manifest-only fields when replacing an existing entry —
+  // `buildMcpEntry` is the single source of truth for exactly which
+  // fields are carried forward and why.
   const manifestByName = new Map(manifest.tools.mcp.map((m) => [m.name, m]));
   for (const m of mcpDrift) {
     if (m.reason === "modified") replacedMcpNames.push(m.entry.name);
@@ -284,33 +281,26 @@ export async function adopt(
 function buildMcpEntry(
   d: DerivedMcp,
   existing: McpServer | undefined,
-): {
-  name: string;
-  command: string[];
-  env?: Record<string, string>;
-  health?: { verb: string; timeout_ms?: number };
-  enabled?: boolean;
-} {
-  const entry: {
-    name: string;
-    command: string[];
-    env?: Record<string, string>;
-    health?: { verb: string; timeout_ms?: number };
-    enabled?: boolean;
-  } = {
+): McpAddEntry {
+  const entry: McpAddEntry = {
     name: d.name,
     command: [...d.command],
   };
   if (d.env && Object.keys(d.env).length > 0) entry.env = { ...d.env };
-  // Carry forward manifest-only fields. settings.json's mcpServers shape
-  // has no projection for `health` (used by doctor / probe / policy paths)
-  // or `enabled: false` (explicit opt-out the user chose to keep), so a
-  // pure replace from the projected drift would silently wipe them.
-  // `enabled: true` is the schema default and is omitted to keep the
-  // re-emitted YAML clean.
+  // Carry forward the manifest-only fields — exactly these four:
+  // `health` (doctor / probe / policy paths), `enabled: false` (explicit
+  // opt-out), `min_version` and `version_command` (doctor's version
+  // probe floor, task 059b669c). settings.json's mcpServers shape has no
+  // projection for any of them, so a pure replace from the projected
+  // drift would silently wipe them. `enabled: true` is the schema
+  // default and is omitted to keep the re-emitted YAML clean.
   if (existing) {
     if (existing.health) entry.health = { ...existing.health };
     if (existing.enabled === false) entry.enabled = false;
+    if (existing.min_version !== undefined) entry.min_version = existing.min_version;
+    if (existing.version_command !== undefined) {
+      entry.version_command = [...existing.version_command];
+    }
   }
   return entry;
 }
@@ -318,16 +308,34 @@ function buildMcpEntry(
 function buildHookEntry(
   name: string,
   d: DerivedHook,
-): { name: string; event: string; command: string; match?: string; blocking: false } {
+): {
+  name: string;
+  event: string;
+  command: string;
+  match?: string;
+  blocking: false;
+  budget_ms?: number;
+} {
   // Adopted hooks default to non-blocking so the captured entry doesn't
   // unexpectedly start gating tool calls. The user can promote to soft/hard
-  // explicitly if they want enforcement.
-  const entry: { name: string; event: string; command: string; match?: string; blocking: false } = {
+  // explicitly if they want enforcement. (Blocking is harness-internal —
+  // settings.json has no equivalent field — so it is genuinely not
+  // inferable from the adopted source; `timeout` IS captured and becomes
+  // `budget_ms`, matching apply's 1:1 projection, task 059b669c.)
+  const entry: {
+    name: string;
+    event: string;
+    command: string;
+    match?: string;
+    blocking: false;
+    budget_ms?: number;
+  } = {
     name,
     event: d.event,
     command: d.command,
     blocking: false,
   };
   if (d.match !== undefined) entry.match = d.match;
+  if (d.timeout !== undefined) entry.budget_ms = d.timeout;
   return entry;
 }
