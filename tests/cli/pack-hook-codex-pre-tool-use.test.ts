@@ -615,6 +615,11 @@ describe("pack hook codex-pre-tool-use blocker — approval_lifecycle parity (ta
     expect(result.blocked).toBe(false);
     expect(result.approvalCheck.source).toBe("marker");
     expect(stderr.read()).toMatch(/approved via marker sess-codex/);
+    // The task-scope trace line is emitted on the session-marker path too
+    // (mirrors the Claude hook's fall-through tracing).
+    expect(stderr.read()).toMatch(
+      /harness pack hook codex: task-scoped check: no active-claim recorded/,
+    );
   });
 
   it("allows via the task-scoped marker for the active claim, even from a different session id", async () => {
@@ -678,5 +683,11 @@ describe("pack hook codex-pre-tool-use blocker — approval_lifecycle parity (ta
     });
     expect(result.blocked).toBe(true);
     expect(result.approvalCheck.source).toBe("none");
+    // Pins that the TASK-scoped path (not merely an absent session marker)
+    // produced the miss — this assertion fails on pre-change code, which
+    // never consulted task markers at all.
+    expect(stderr.read()).toMatch(
+      /active-claim task-stale has no fresh task marker \(.*expired/,
+    );
   });
 });
