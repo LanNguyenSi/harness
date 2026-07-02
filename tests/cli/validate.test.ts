@@ -1152,6 +1152,115 @@ policies:
   });
 });
 
+describe("validate — checkPolicySelfAttestation (task 43b107f2)", () => {
+  // A block policy's requires.ledger_tag is satisfiable by any ledger
+  // writer, including the gated agent. The check warns ONLY when no
+  // producers: documents the intended evidence flow; a declared producer
+  // (even an agent-executable one — the process-gate pattern the templates
+  // ship) is a visible trust decision and stays warning-free.
+  function buildPolicyFixture(producersBlock: string, enforcement = "block"): string {
+    const yaml = `version: 1
+hooks:
+  - name: gate-hook
+    event: PreToolUse
+    command: /bin/true
+    blocking: false
+policies:
+  - name: gate-test
+    description: test policy
+    trigger:
+      event: PreToolUse
+      match: Bash
+    requires:
+      ledger_tag: "review:\${SESSION_ID}"
+    hook: gate-hook
+    enforcement: ${enforcement}
+${producersBlock}`;
+    return writeFixture({ "harness.yaml": yaml });
+  }
+
+  it("warns when a block policy declares no producers (undocumented evidence source)", () => {
+    // Mutation guard: removing checkPolicySelfAttestation from
+    // runAssetChecks turns this red.
+    const home = buildPolicyFixture("");
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const hit = result.diagnostics.find(
+      (d) => d.severity === "warning" && /any ledger writer/i.test(d.message),
+    );
+    expect(hit).toBeDefined();
+    expect(hit?.path).toBe("policies[0]");
+    expect(hit?.message).toContain("advisory against the agent");
+    expect(hit?.message).toContain("writing-custom-policies.md");
+  });
+
+  it("does not warn when the policy documents its flow with an agent producer (process gate)", () => {
+    const home = buildPolicyFixture(
+      "    producers:\n" +
+        "      - kind: mcp\n" +
+        "        verb: mcp__agent-grounding__ledger_add\n" +
+        "        example: '{sessionId:\"s\", type:\"fact\", content:\"review:x\"}'\n" +
+        "        description: process gate — agent records the review verdict\n",
+    );
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(
+      result.diagnostics.find((d) => /any ledger writer/i.test(d.message)),
+    ).toBeUndefined();
+  });
+
+  it("does not warn for an ask+mcp producer block policy (the enforcing pattern)", () => {
+    const home = buildPolicyFixture(
+      "    producers:\n" +
+        "      - kind: ask\n" +
+        "        command: harness approve risk\n" +
+        "        description: operator approves from their own shell\n" +
+        "      - kind: mcp\n" +
+        "        verb: mcp__agent-grounding__ledger_add\n" +
+        "        example: '{sessionId:\"s\", type:\"fact\", content:\"review:x\"}'\n" +
+        "        description: recovery path\n",
+    );
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(
+      result.diagnostics.find((d) => /any ledger writer/i.test(d.message)),
+    ).toBeUndefined();
+  });
+
+  it("does not warn for producer-less require_approval policies (operator verb is the canonical path)", () => {
+    const home = buildPolicyFixture("", "require_approval");
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(
+      result.diagnostics.find((d) => /any ledger writer/i.test(d.message)),
+    ).toBeUndefined();
+  });
+
+  it("does not warn for warn-enforcement policies (advisory by declaration)", () => {
+    const home = buildPolicyFixture("", "warn");
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(
+      result.diagnostics.find((d) => /any ledger writer/i.test(d.message)),
+    ).toBeUndefined();
+  });
+});
+
 describe("validate — --json", () => {
   it("registers the --json flag on the validate command", () => {
     const program = buildProgram();

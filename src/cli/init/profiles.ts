@@ -193,6 +193,15 @@ policies:
       ledger_tag: "review:\${PR_NUMBER}"
     hook: require-review-evidence
     enforcement: block
+    # producers: documents the intended evidence flow (see
+    # docs/writing-custom-policies.md, "The trust model"): this is a
+    # deliberate process gate — the agent records the review subagent's
+    # verdict itself, so against the agent the gate is advisory by design.
+    producers:
+      - kind: mcp
+        verb: mcp__agent-grounding__ledger_add
+        example: '{sessionId:"\${SESSION_ID}", type:"fact", content:"review:\${PR_NUMBER} — <verdict + key findings + nits>", source:"Agent(general-purpose) review"}'
+        description: Spawn a review subagent against the PR diff, capture its verdict, then persist a ledger entry tagged with the PR number.
     ux:
       cannot: "You cannot merge PR #\${PR_NUMBER} yet."
       required:
