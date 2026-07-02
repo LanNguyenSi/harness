@@ -19,6 +19,7 @@ export {
 } from "./when-eval.js";
 export {
   recordPolicyDecision,
+  recordPolicyDecisionOnSession,
   payloadFromDecision,
   encodeLedgerContent,
   decodeLedgerContent,

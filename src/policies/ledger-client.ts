@@ -11,7 +11,7 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { LedgerEntry } from "./requires.js";
-import { expandHome } from "../runtime/expand-home.js";
+import { expandHome, expandHomeInEnv } from "../runtime/expand-home.js";
 import { POLICY_DECISION_TYPE } from "../runtime/ledger-record.js";
 import { VERSION } from "../version.js";
 
@@ -174,7 +174,11 @@ function startSubprocess(
   try {
     child = spawn(exe, args, {
       cwd: opts.cwd,
-      env: { ...process.env, ...(opts.mcpEnv ?? {}) },
+      // Defense-in-depth parity with `recordPolicyDecision`
+      // (agent-tasks/973596d7): expand leading `~/` in env values so a
+      // manifest that bypassed validate cannot scatter cwd-relative
+      // `./~/…` paths through the query path either.
+      env: { ...process.env, ...(expandHomeInEnv(opts.mcpEnv) ?? {}) },
       stdio: ["pipe", "pipe", "pipe"],
     });
   } catch (err) {
@@ -340,10 +344,10 @@ function startSubprocess(
  */
 async function detectLedgerSummaryArgs(
   ctl: CallResult,
-  _timeoutMs: number,
+  requestId: number,
 ): Promise<Set<string>> {
   const fallback = new Set(["sessionId"]);
-  const result = await ctl.call(2, "tools/list", {});
+  const result = await ctl.call(requestId, "tools/list", {});
   if (result === "exit" || result === "timeout") return fallback;
   if (result.error) return fallback;
   const r = result.result as { tools?: unknown } | undefined;
@@ -391,101 +395,209 @@ function extractToolPayload(result: unknown): unknown {
   return null;
 }
 
+/** Arguments to `LedgerSession.querySummary` — per-call, unlike the
+ *  connection-scoped `LedgerClientOptions`. */
+export interface LedgerSessionQuery {
+  sessionId: string;
+  sinceIso?: string;
+  contentPrefix?: string;
+}
+
+/**
+ * Result of a generic `LedgerSession.callTool` round-trip. Three-way so a
+ * caller can distinguish a server-side JSON-RPC error (retryable with a
+ * different payload — the `policy_decision` → `fact` fallback) from a
+ * degraded transport (spawn failure / exit / timeout — nothing to retry).
+ */
+export type LedgerSessionCallResult =
+  | { status: "ok"; payload: unknown }
+  | { status: "error"; errorMessage: string }
+  | { status: "degraded"; reason: string };
+
+/**
+ * One grounding-mcp connection serving multiple calls.
+ *
+ * The PreToolUse runtime gate evaluates K policies per tool event, and each
+ * used to spawn its own subprocess for the query plus a second one for the
+ * audit record — 2K sequential spawns per event, the fail-open-under-load
+ * risk the 2026-07-01 review flagged against the 30s hook budget. A session
+ * spawns ONE subprocess lazily on first use, performs the initialize
+ * handshake once, and multiplexes every subsequent `ledger_summary` /
+ * `ledger_add` over the same stdio pipe. `dispose()` terminates the child;
+ * the owner (e.g. the intercept CLI wrapper) MUST call it when done.
+ */
+export interface LedgerSession {
+  querySummary(query: LedgerSessionQuery): Promise<LedgerQueryResult>;
+  callTool(
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<LedgerSessionCallResult>;
+  dispose(): void;
+}
+
+export function openLedgerSession(opts: LedgerClientOptions): LedgerSession {
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  let ctl: CallResult | null = null;
+  let startFailure: string | null = null;
+  // Resolves to null on success, or the degraded reason. Cached so the
+  // handshake happens exactly once per session; a failed init stays failed
+  // (retrying per call would reintroduce the very fan-out this removes).
+  let initPromise: Promise<string | null> | null = null;
+  let nextId = 1;
+
+  function ensureStarted(): CallResult | null {
+    if (ctl !== null || startFailure !== null) return ctl;
+    const start = startSubprocess(opts);
+    if (!start.ok) {
+      startFailure = start.reason;
+      return null;
+    }
+    ctl = start.ctl;
+    return ctl;
+  }
+
+  function ensureInitialized(): Promise<string | null> {
+    if (initPromise !== null) return initPromise;
+    initPromise = (async () => {
+      const c = ensureStarted();
+      if (c === null) return startFailure;
+      const initResult = await c.call(nextId++, "initialize", {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "harness-policies", version: VERSION },
+      });
+      if (initResult === "exit") return `grounding-mcp ${exitDiagnostic(c)}`;
+      if (initResult === "timeout") {
+        return `grounding-mcp timeout after ${timeoutMs}ms`;
+      }
+      if (initResult.error) {
+        return `grounding-mcp initialize error: ${initResult.error.message ?? "unknown"}`;
+      }
+      c.notify("notifications/initialized");
+      return null;
+    })();
+    return initPromise;
+  }
+
+  return {
+    async querySummary(query: LedgerSessionQuery): Promise<LedgerQueryResult> {
+      const initError = await ensureInitialized();
+      if (initError !== null) return { kind: "degraded", reason: initError };
+      const c = ctl!;
+
+      // Phase 5 #5 — capability detection only when we actually want to
+      // push a filter server-side. Older grounding-mcp builds accept only
+      // `sessionId` on `ledger_summary`; harness spawns a binary path
+      // chosen by the operator, so we cannot assume a version. Skipping
+      // tools/list when no filter is requested keeps the unfiltered hot
+      // path one round-trip fewer.
+      const wantsFilter =
+        query.sinceIso !== undefined || query.contentPrefix !== undefined;
+      const supportedArgs = wantsFilter
+        ? await detectLedgerSummaryArgs(c, nextId++)
+        : new Set(["sessionId"]);
+      const callArgs: Record<string, unknown> = { sessionId: query.sessionId };
+      if (query.sinceIso !== undefined && supportedArgs.has("sinceIso")) {
+        callArgs.sinceIso = query.sinceIso;
+      }
+      if (
+        query.contentPrefix !== undefined &&
+        supportedArgs.has("contentPrefix")
+      ) {
+        callArgs.contentPrefix = query.contentPrefix;
+      }
+
+      const callResult = await c.call(nextId++, "tools/call", {
+        name: "ledger_summary",
+        arguments: callArgs,
+      });
+      if (callResult === "exit") {
+        return {
+          kind: "degraded",
+          reason: `grounding-mcp ${exitDiagnostic(c)}`,
+        };
+      }
+      if (callResult === "timeout") {
+        return {
+          kind: "degraded",
+          reason: `grounding-mcp timeout after ${timeoutMs}ms`,
+        };
+      }
+      if (callResult.error) {
+        return {
+          kind: "degraded",
+          reason: `ledger_summary error: ${callResult.error.message ?? "unknown"}`,
+        };
+      }
+
+      const payload = extractToolPayload(callResult.result);
+      if (payload === null) {
+        return {
+          kind: "degraded",
+          reason: "ledger_summary returned no parseable payload",
+        };
+      }
+      const entries = flattenSummary(payload);
+      if (entries === null) {
+        return {
+          kind: "degraded",
+          reason: "ledger_summary payload missing `entries` shape",
+        };
+      }
+      return { kind: "ok", entries };
+    },
+
+    async callTool(
+      name: string,
+      args: Record<string, unknown>,
+    ): Promise<LedgerSessionCallResult> {
+      const initError = await ensureInitialized();
+      if (initError !== null) return { status: "degraded", reason: initError };
+      const c = ctl!;
+      const result = await c.call(nextId++, "tools/call", {
+        name,
+        arguments: args,
+      });
+      if (result === "exit") {
+        return { status: "degraded", reason: `grounding-mcp ${exitDiagnostic(c)}` };
+      }
+      if (result === "timeout") {
+        return {
+          status: "degraded",
+          reason: `grounding-mcp timeout after ${timeoutMs}ms`,
+        };
+      }
+      if (result.error) {
+        return {
+          status: "error",
+          errorMessage: result.error.message ?? "unknown",
+        };
+      }
+      return { status: "ok", payload: extractToolPayload(result.result) };
+    },
+
+    dispose(): void {
+      ctl?.cleanup();
+    },
+  };
+}
+
 export async function queryLedgerByTag(
   opts: QueryLedgerOptions,
 ): Promise<LedgerQueryResult> {
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const start = startSubprocess(opts);
-  if (!start.ok) return { kind: "degraded", reason: start.reason };
-
-  const ctl = start.ctl;
+  // One-shot convenience wrapper: open a session, run the single summary
+  // query, tear the subprocess down. Callers with more than one ledger
+  // round-trip per event (the runtime intercept) hold a session instead.
+  const session = openLedgerSession(opts);
   try {
-    const initResult = await ctl.call(1, "initialize", {
-      protocolVersion: "2024-11-05",
-      capabilities: {},
-      clientInfo: { name: "harness-policies", version: VERSION },
+    return await session.querySummary({
+      sessionId: opts.sessionId,
+      ...(opts.sinceIso !== undefined && { sinceIso: opts.sinceIso }),
+      ...(opts.contentPrefix !== undefined && {
+        contentPrefix: opts.contentPrefix,
+      }),
     });
-    if (initResult === "exit") {
-      return {
-        kind: "degraded",
-        reason: `grounding-mcp ${exitDiagnostic(ctl)}`,
-      };
-    }
-    if (initResult === "timeout") {
-      return {
-        kind: "degraded",
-        reason: `grounding-mcp timeout after ${timeoutMs}ms`,
-      };
-    }
-    if (initResult.error) {
-      return {
-        kind: "degraded",
-        reason: `grounding-mcp initialize error: ${
-          initResult.error.message ?? "unknown"
-        }`,
-      };
-    }
-
-    ctl.notify("notifications/initialized");
-
-    // Phase 5 #5 — capability detection only when we actually want to
-    // push a filter server-side. Older grounding-mcp builds accept only
-    // `sessionId` on `ledger_summary`; harness spawns a binary path
-    // chosen by the operator, so we cannot assume a version. Skipping
-    // tools/list when no filter is requested keeps the unfiltered hot
-    // path one round-trip fewer.
-    const wantsFilter =
-      opts.sinceIso !== undefined || opts.contentPrefix !== undefined;
-    const supportedArgs = wantsFilter
-      ? await detectLedgerSummaryArgs(ctl, timeoutMs)
-      : new Set(["sessionId"]);
-    const callArgs: Record<string, unknown> = { sessionId: opts.sessionId };
-    if (opts.sinceIso !== undefined && supportedArgs.has("sinceIso")) {
-      callArgs.sinceIso = opts.sinceIso;
-    }
-    if (opts.contentPrefix !== undefined && supportedArgs.has("contentPrefix")) {
-      callArgs.contentPrefix = opts.contentPrefix;
-    }
-
-    const callResult = await ctl.call(3, "tools/call", {
-      name: "ledger_summary",
-      arguments: callArgs,
-    });
-    if (callResult === "exit") {
-      return {
-        kind: "degraded",
-        reason: `grounding-mcp ${exitDiagnostic(ctl)}`,
-      };
-    }
-    if (callResult === "timeout") {
-      return {
-        kind: "degraded",
-        reason: `grounding-mcp timeout after ${timeoutMs}ms`,
-      };
-    }
-    if (callResult.error) {
-      return {
-        kind: "degraded",
-        reason: `ledger_summary error: ${callResult.error.message ?? "unknown"}`,
-      };
-    }
-
-    const payload = extractToolPayload(callResult.result);
-    if (payload === null) {
-      return {
-        kind: "degraded",
-        reason: "ledger_summary returned no parseable payload",
-      };
-    }
-    const entries = flattenSummary(payload);
-    if (entries === null) {
-      return {
-        kind: "degraded",
-        reason: "ledger_summary payload missing `entries` shape",
-      };
-    }
-    return { kind: "ok", entries };
   } finally {
-    ctl.cleanup();
+    session.dispose();
   }
 }

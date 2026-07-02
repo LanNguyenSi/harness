@@ -7,6 +7,12 @@
 // `harness explain --trace` (Phase 4 #6/#7) grep for.
 
 import { spawn } from "node:child_process";
+// Type-only on purpose: `policies/ledger-client.ts` value-imports
+// POLICY_DECISION_TYPE from this module, so a VALUE import back would
+// re-create the TDZ cycle pinned absent by
+// tests/runtime/ledger-record-no-cycle.test.ts. `import type` is erased
+// at compile time and adds no runtime edge.
+import type { LedgerSession } from "../policies/ledger-client.js";
 import type { LedgerEntry } from "../policies/requires.js";
 import { parseLedgerTimestamp } from "../policies/timestamp.js";
 import { expandHome, expandHomeInEnv } from "./expand-home.js";
@@ -120,6 +126,52 @@ export function decodeLedgerContent(content: string): PolicyDecisionPayload | nu
   } catch {
     return null;
   }
+}
+
+/**
+ * Record a `policy_decision` row over an already-open {@link LedgerSession}
+ * instead of spawning a dedicated grounding-mcp subprocess per decision.
+ * This is the runtime intercept's hot path: K matching policies per tool
+ * event share ONE connection for all their audit writes (plus the summary
+ * query), instead of the 2K sequential spawns the 2026-07-01 review flagged
+ * as a fail-open-under-load risk against the 30s hook budget.
+ *
+ * Same retry contract as {@link recordPolicyDecision}: a server-side error
+ * on `type: "policy_decision"` (old grounding-mcp without that enum value)
+ * retries once with the legacy `type: "fact"` prefix-encoded row. A degraded
+ * transport is terminal — the session's process is gone, nothing to retry.
+ */
+export async function recordPolicyDecisionOnSession(
+  session: LedgerSession,
+  decision: PolicyDecision,
+  sessionId: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  const payload = payloadFromDecision(decision);
+  const content = encodeLedgerContent(payload);
+  const first = await session.callTool("ledger_add", {
+    sessionId,
+    type: POLICY_DECISION_TYPE,
+    content,
+    source: SOURCE,
+  });
+  if (first.status === "ok") return { ok: true };
+  if (first.status === "degraded") return { ok: false, reason: first.reason };
+  // Likely an old grounding-mcp without the policy_decision enum value —
+  // retry once with the legacy fact-with-prefix encoding.
+  const fallback = await session.callTool("ledger_add", {
+    sessionId,
+    type: "fact",
+    content,
+    source: SOURCE,
+  });
+  if (fallback.status === "ok") return { ok: true };
+  return {
+    ok: false,
+    reason:
+      fallback.status === "error"
+        ? `ledger_add error: ${fallback.errorMessage}`
+        : fallback.reason,
+  };
 }
 
 export async function recordPolicyDecision(
