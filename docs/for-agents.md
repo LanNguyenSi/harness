@@ -172,8 +172,8 @@ which are available even when the policy declares no `trigger.extract`:
 | Variable | Source |
 |---|---|
 | `${SESSION_ID}` | Claude Code session id |
-| `${REPO}` | basename of `cwd` |
-| `${BRANCH}` | resolved git HEAD (or `(detached)`) |
+| `${REPO}` | basename of the git worktree root (`git rev-parse --show-toplevel`), so a subdirectory of a checkout still resolves to the repo name; `""` when not in a git repo |
+| `${BRANCH}` | branch name from git HEAD; `""` on a detached HEAD or outside a git worktree (there is no `(detached)` placeholder) |
 | `${TOOL_NAME}` | the tool the agent invoked |
 | `${CWD}` | the agent's working directory |
 | `${PR_NUMBER}`, `${TASK_ID}`, ... | per-policy `trigger.extract` keys |
