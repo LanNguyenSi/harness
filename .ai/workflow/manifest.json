@@ -1,0 +1,29 @@
+{
+  "kit": "orchestrator-workflow",
+  "version": "0.6.0",
+  "harnesses": [
+    "claude"
+  ],
+  "models": {
+    "explorer": "sonnet",
+    "task-slicer": "sonnet",
+    "implementer": "sonnet",
+    "reviewer": "opus"
+  },
+  "files": {
+    ".ai/workflow/templates/00-goal.md": "3824173810ff0150477b7a574533590d39397640d3f6262ca46fe6e5dc8ee1b7",
+    ".ai/workflow/templates/01-plan.md": "0b69aa09ccf24b3c7a09c209d30c09eb9814096ed18fb7fe18e67e4b8be42ad4",
+    ".ai/workflow/templates/02-tasks.md": "74d3572a5355c1f624d0d28ddc222a9a742ae3045c712c45555367d2f9be11dc",
+    ".ai/workflow/templates/03-decisions.md": "74af5ea8bed3990308a5a3e7fa0deb47634fbf6033694c1fa86b91839a1ef6a5",
+    ".ai/workflow/templates/04-implementation-summary.md": "3e4975102f576779d91e0b5a7e5776f054ed652a300b05089e606125c0de074f",
+    ".ai/workflow/templates/05-review-findings.md": "0a1ea53a84afed7837068b5ac83b98ded7933400a688fa072f2c6b55082da25d",
+    ".ai/workflow/templates/06-handoff.md": "1bc82ce48a675986be754b3b75e8a65edb4f19971ecb07ef57534a9f8110097a",
+    ".ai/runs/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    ".claude/skills/orchestrator-workflow/SKILL.md": "4f3388db96a48281d9e8c78555e9dae72ebc699e236474d7278e708b94c3874d",
+    ".claude/agents/explorer.md": "1ad638b3c57925354c63a15b8a3757e21606a12c20db8ac9953fc692faccc1ab",
+    ".claude/agents/task-slicer.md": "47ac151b0f39304bcaacf185e435247e5418b9b3182be55b2c18d5911f15e96b",
+    ".claude/agents/implementer.md": "f83526eb9f51c35dd8ab275fade8fc2ba585f4b6f13bfa22dd1e47a97f4157a9",
+    ".claude/agents/reviewer.md": "3e9623db02ab865942e3f5904eb7c4932a609633bd2841cca45927958c3e59ce"
+  },
+  "installedAt": "2026-06-22T19:21:24.768Z"
+}

@@ -2,7 +2,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { doctor } from "../../src/cli/doctor/index.js";
+import {
+  doctor,
+  NULL_GIT_IGNORE_PROBE,
+  resolveGitIgnoreProbe,
+} from "../../src/cli/doctor/index.js";
 import { format } from "../../src/cli/doctor/format.js";
 import { VERSION } from "../../src/version.js";
 import type { McpProbe, McpProbeResult } from "../../src/probes/mcp.js";
@@ -999,6 +1003,82 @@ tools:
     });
     expect(report.policyPacks.solutionAcceptance).toHaveLength(0);
     expect(format(report)).not.toContain("Policy Packs");
+  });
+});
+
+describe("doctor — solution-acceptance knob-ignored check (task 24f6ceb9)", () => {
+  // Parity with `harness validate`'s checkSolutionAcceptanceKnobIgnored
+  // (single source of truth); the diagnostic lands in the same
+  // `policyPacks.solutionAcceptance` array as the producer checks, so
+  // counting and rendering are inherited.
+  const PACK_WITH_PRODUCER = `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: solution-acceptance
+    source: builtin
+tools:
+  mcp:
+    - name: grounding-mcp
+      command: [/usr/bin/true]
+      enabled: true
+`;
+
+  it("warns when the knob path is git-ignored (explicit probe wins over shallow)", async () => {
+    const baselineHome = makeFixture({ "harness.yaml": PACK_WITH_PRODUCER });
+    const baseline = await doctor({
+      configPath: path.join(baselineHome, "harness.yaml"),
+      homeOverride: baselineHome,
+      shallow: true,
+      gitIgnoreProbe: () => false,
+    });
+    expect(baseline.policyPacks.solutionAcceptance).toHaveLength(0);
+
+    const home = makeFixture({ "harness.yaml": PACK_WITH_PRODUCER });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+      gitIgnoreProbe: () => true,
+    });
+    expect(report.policyPacks.solutionAcceptance).toHaveLength(1);
+    expect(report.policyPacks.solutionAcceptance[0]).toMatchObject({
+      severity: "warning",
+      path: "policy_packs",
+    });
+    // Probe-true differs from the probe-false baseline by exactly this
+    // one warning (same tally-delta pattern as the relative-dir test).
+    expect(report.warningCount).toBe(baseline.warningCount + 1);
+    expect(report.errorCount).toBe(0);
+    const text = format(report);
+    expect(text).toContain("Policy Packs");
+    expect(text).toContain("⚠ policy_packs");
+    expect(text).toContain("git-ignored");
+  });
+
+  it("skips the probe entirely in shallow runs without an explicit probe", async () => {
+    const home = makeFixture({ "harness.yaml": PACK_WITH_PRODUCER });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+    });
+    expect(report.policyPacks.solutionAcceptance).toHaveLength(0);
+  });
+
+  // The doctor-level shallow test above cannot distinguish "no spawn"
+  // from "spawned and answered false" (this repo does not ignore the
+  // knob), so the no-spawn contract is pinned by identity on the
+  // resolver instead of mocking node:child_process (review finding on
+  // task 24f6ceb9).
+  it("resolveGitIgnoreProbe: explicit probe > shallow sentinel > real probe", () => {
+    expect(resolveGitIgnoreProbe({ shallow: true })).toBe(NULL_GIT_IGNORE_PROBE);
+    expect(resolveGitIgnoreProbe({})).not.toBe(NULL_GIT_IGNORE_PROBE);
+    const explicit = () => true as const;
+    expect(resolveGitIgnoreProbe({ shallow: true, gitIgnoreProbe: explicit })).toBe(
+      explicit,
+    );
+    expect(NULL_GIT_IGNORE_PROBE(".ai/solution-acceptance.json")).toBe(null);
   });
 });
 

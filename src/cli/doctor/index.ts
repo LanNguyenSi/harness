@@ -21,7 +21,10 @@ import { checkPolicyPackVersions } from "../../policy-packs/version-check.js";
 import { DEFAULT_RUNTIME } from "../../policy-packs/runtime.js";
 import {
   checkPolicyRiskWithoutEnvScope,
+  checkSolutionAcceptanceKnobIgnored,
   checkSolutionAcceptanceProducer,
+  createDefaultGitIgnoreProbe,
+  type GitIgnoreProbe,
 } from "../validate/checks.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import {
@@ -77,6 +80,14 @@ export interface DoctorOptions extends LoaderOptions {
    * this and the real `npm` is spawned.
    */
   npmBinExec?: NpmExec;
+  /**
+   * Test-injection knob for the solution-acceptance knob-ignored check
+   * (task 24f6ceb9). Defaults to a real `git check-ignore` probe against
+   * the process cwd; `shallow` runs degrade it to `() => null` (no spawn),
+   * mirroring how the version probe degrades. An explicit probe wins over
+   * `shallow` so tests can exercise the check without paying for spawns.
+   */
+  gitIgnoreProbe?: GitIgnoreProbe;
 }
 
 export { isDoctorTarget, KNOWN_DOCTOR_TARGETS };
@@ -414,9 +425,32 @@ function buildPolicies(manifest: Manifest): PolicyEntryReport[] {
  * Skipped (`enabled: false`) packs are NOT checked: they're not
  * expected to be live, and flagging them would flood the report.
  */
+/**
+ * Sentinel "cannot tell" probe: shallow runs answer every ignoredness
+ * question with `null` instead of spawning `git check-ignore`. Exported
+ * (with the resolver below) so a test can pin the no-spawn contract by
+ * identity instead of mocking `node:child_process`.
+ */
+export const NULL_GIT_IGNORE_PROBE: GitIgnoreProbe = () => null;
+
+/**
+ * Probe resolution order: an explicit (test) probe always wins; `shallow`
+ * degrades to the no-spawn sentinel, mirroring how the npm-bin probe and
+ * MCP probes degrade; otherwise the real `git check-ignore` probe runs
+ * against the process cwd.
+ */
+export function resolveGitIgnoreProbe(
+  opts: Pick<DoctorOptions, "gitIgnoreProbe" | "shallow">,
+): GitIgnoreProbe {
+  if (opts.gitIgnoreProbe) return opts.gitIgnoreProbe;
+  if (opts.shallow) return NULL_GIT_IGNORE_PROBE;
+  return createDefaultGitIgnoreProbe();
+}
+
 function buildPolicyPacks(
   manifest: Manifest,
   versionProbe: (cmd: readonly string[]) => string | null,
+  gitIgnoreProbe: GitIgnoreProbe,
 ): PolicyPacksSection {
   const unresolved: PolicyPackUnresolved[] = [];
   for (const pack of manifest.policy_packs) {
@@ -454,7 +488,14 @@ function buildPolicyPacks(
       message: gap.message,
     }),
   );
-  const solutionAcceptance = checkSolutionAcceptanceProducer(manifest);
+  // Same array as the producer check on purpose: countDiagnostics and the
+  // renderers already tally / print `solutionAcceptance` by severity, so
+  // the knob-ignored warning (task 24f6ceb9) inherits doctor parity with
+  // `harness validate` for free — the #308 pattern.
+  const solutionAcceptance = [
+    ...checkSolutionAcceptanceProducer(manifest),
+    ...checkSolutionAcceptanceKnobIgnored(manifest, gitIgnoreProbe),
+  ];
   return { unresolved, configIssues, versionGaps, solutionAcceptance };
 }
 
@@ -723,7 +764,11 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const hooks = checkHooks(manifest, home, opts);
   const policies = buildPolicies(manifest);
   const policyPacksVersionProbe = opts.versionProbe ?? (() => null);
-  const policyPacks = buildPolicyPacks(manifest, policyPacksVersionProbe);
+  const policyPacks = buildPolicyPacks(
+    manifest,
+    policyPacksVersionProbe,
+    resolveGitIgnoreProbe(opts),
+  );
   const workflows = buildWorkflows(manifest);
   const riskGate = buildRiskGate(manifest);
   const groundingServer =

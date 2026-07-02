@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -14,6 +15,13 @@ export interface CheckOptions {
   pathEnv?: string;
   builtinRuntimeProbe?: () => string[];
   versionProbe?: (cmd: readonly string[]) => string | null;
+  /**
+   * Answers "is this repo-relative path git-ignored in the current working
+   * directory's repository?". `null` means "cannot tell" (not a git repo,
+   * git unavailable) and skips the dependent check. Injectable for tests;
+   * defaults to a real `git check-ignore` probe.
+   */
+  gitIgnoreProbe?: GitIgnoreProbe;
 }
 
 const DEFAULT_RUNTIME_BUILTINS = [
@@ -291,6 +299,67 @@ export function checkSolutionAcceptanceProducer(manifest: Manifest): Diagnostic[
   return [];
 }
 
+/**
+ * Answers "is `relPath` git-ignored here?": `true` / `false`, or `null`
+ * when the question has no answer (not a git repository, git not
+ * installed). See `createDefaultGitIgnoreProbe` for the real
+ * implementation; checks receive the probe so tests stay hermetic.
+ */
+export type GitIgnoreProbe = (relPath: string) => boolean | null;
+
+/**
+ * The orchestrator-workflow knob the grounding-mcp producer reads
+ * (`resolveOwKnob`). Repo-relative on purpose: the knob belongs to the
+ * repository whose completions the OW arm gates.
+ */
+export const OW_KNOB_REL_PATH = ".ai/solution-acceptance.json";
+
+export function createDefaultGitIgnoreProbe(cwd?: string): GitIgnoreProbe {
+  return (relPath) => {
+    const res = spawnSync("git", ["check-ignore", "-q", "--", relPath], {
+      cwd: cwd ?? process.cwd(),
+      stdio: "ignore",
+    });
+    if (res.error) return null;
+    if (res.status === 0) return true;
+    if (res.status === 1) return false;
+    return null; // 128: not a git repository (or another fatal git error)
+  };
+}
+
+// Knob-reachability lint (task 24f6ceb9, ow-review-2026-07-01). The OW arm
+// of solution-acceptance reads repo state: the knob above plus run
+// completeness under `.ai/runs/`. When the knob path is git-ignored the
+// repo CANNOT commit its enforcement posture, so in a fresh clone or a git
+// worktree `.ai/runs/` is absent, the default `auto` knob silently skips
+// the OW arm, and the gate that exists to prevent process skipping is
+// itself skipped exactly where process skipping happens. Warn (not error):
+// the preflight floor still gates every completion; only the OW arm is
+// affected. A `null` probe answer (non-repo cwd, git missing) skips the
+// check — validate must stay usable for pure home-config linting.
+export function checkSolutionAcceptanceKnobIgnored(
+  manifest: Manifest,
+  probe: GitIgnoreProbe,
+): Diagnostic[] {
+  const pack = manifest.policy_packs.find((p) => p.name === "solution-acceptance");
+  if (!pack || !pack.enabled) return [];
+  if (probe(OW_KNOB_REL_PATH) !== true) return [];
+  return [
+    {
+      severity: "warning",
+      path: "policy_packs",
+      message:
+        `solution-acceptance: the orchestrator-workflow knob ${OW_KNOB_REL_PATH} ` +
+        `is git-ignored in this repository, so the OW enforcement posture cannot ` +
+        `be committed. In a fresh clone or git worktree .ai/runs/ is absent and ` +
+        `the default "auto" knob silently skips the OW arm — exactly where ` +
+        `process skipping happens. Narrow the ignore to .ai/runs/ (run state ` +
+        `stays local) and commit ${OW_KNOB_REL_PATH}; see ` +
+        `docs/policy-packs/solution-acceptance.md ("Repo state and gitignore").`,
+    },
+  ];
+}
+
 // Self-attestation disclosure (task 43b107f2, harness-review-2026-07-01).
 // The generic `requires:`/`ledger_tag` engine matches substrings in ledger
 // content that the GATED AGENT can write directly via
@@ -425,6 +494,10 @@ export function runAssetChecks(
     ...checkBuiltinDrift(manifest, opts),
     ...checkPolicyGroundingMcp(manifest),
     ...checkSolutionAcceptanceProducer(manifest),
+    ...checkSolutionAcceptanceKnobIgnored(
+      manifest,
+      opts.gitIgnoreProbe ?? createDefaultGitIgnoreProbe(),
+    ),
     ...checkPolicyPacks(manifest),
     ...checkPolicyPackConfigsAsDiagnostics(manifest),
     ...checkPolicyRiskWithoutEnvScope(manifest),

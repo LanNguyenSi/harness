@@ -5,7 +5,11 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildProgram } from "../../src/cli/index.js";
 import { validate } from "../../src/cli/validate/index.js";
-import { __testables } from "../../src/cli/validate/checks.js";
+import {
+  __testables,
+  createDefaultGitIgnoreProbe,
+} from "../../src/cli/validate/checks.js";
+import { spawnSync } from "node:child_process";
 import { writeLock, type LockEntry } from "../../src/io/harness-lock.js";
 import * as crypto from "node:crypto";
 
@@ -34,6 +38,9 @@ function writeFixture(files: Record<string, string>): string {
 const NOOP_PROBES = {
   versionProbe: () => null,
   builtinRuntimeProbe: () => [] as string[],
+  // "cannot tell" — keeps unrelated tests hermetic: the knob-ignored check
+  // skips instead of probing the developer's real cwd with git.
+  gitIgnoreProbe: () => null,
 };
 
 describe("validate — schema-level diagnostics on invalid fixtures", () => {
@@ -970,6 +977,120 @@ describe("validate — checkSolutionAcceptanceProducer", () => {
     );
     expect(hit).toBeDefined();
     expect(hit?.path).toBe("tools.mcp");
+  });
+});
+
+describe("validate — checkSolutionAcceptanceKnobIgnored", () => {
+  // grounding-mcp is wired in every fixture so the producer check stays
+  // silent and the assertions isolate the knob-ignored diagnostic.
+  function fixtureWithPack(enabled: boolean): string {
+    const yaml =
+      `version: 1\n` +
+      `tools:\n  mcp:\n    - name: grounding-mcp\n      command: ["/usr/bin/true"]\n` +
+      `policy_packs:\n  - name: solution-acceptance\n    source: builtin\n    enabled: ${enabled}\n`;
+    return writeFixture({ "harness.yaml": yaml });
+  }
+
+  it("warns when the pack is enabled and the knob path is git-ignored", () => {
+    const home = fixtureWithPack(true);
+    const probed: string[] = [];
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+      gitIgnoreProbe: (relPath: string) => {
+        probed.push(relPath);
+        return true;
+      },
+    });
+    expect(probed).toEqual([".ai/solution-acceptance.json"]);
+    expect(result.errorCount).toBe(0);
+    const hit = result.diagnostics.find(
+      (d) => d.severity === "warning" && /knob .* is git-ignored/.test(d.message),
+    );
+    expect(hit).toBeDefined();
+    expect(hit?.path).toBe("policy_packs");
+    expect(hit?.message).toMatch(/fresh clone or git worktree/);
+    expect(hit?.message).toMatch(/Narrow the ignore to \.ai\/runs\//);
+  });
+
+  it("emits no warning when the knob path is not ignored (must-pass control)", () => {
+    const home = fixtureWithPack(true);
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+      gitIgnoreProbe: () => false,
+    });
+    expect(result.warningCount).toBe(0);
+    expect(result.errorCount).toBe(0);
+  });
+
+  it("skips when the probe cannot tell (non-repo cwd / git unavailable)", () => {
+    const home = fixtureWithPack(true);
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+      gitIgnoreProbe: () => null,
+    });
+    expect(result.warningCount).toBe(0);
+  });
+
+  it("skips when the pack is disabled even if the knob path is ignored", () => {
+    const home = fixtureWithPack(false);
+    const probed: string[] = [];
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+      gitIgnoreProbe: (relPath: string) => {
+        probed.push(relPath);
+        return true;
+      },
+    });
+    expect(probed).toEqual([]);
+    expect(result.warningCount).toBe(0);
+  });
+});
+
+describe("validate — createDefaultGitIgnoreProbe (real git)", () => {
+  function makeRepo(gitignore: string | null): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-checkignore-"));
+    cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+    spawnSync("git", ["init", "-q"], { cwd: dir });
+    if (gitignore !== null) {
+      fs.writeFileSync(path.join(dir, ".gitignore"), gitignore, "utf8");
+    }
+    return dir;
+  }
+
+  it("maps git check-ignore exit codes to true / false / null", () => {
+    const ignoringRepo = makeRepo(".ai/\n");
+    expect(
+      createDefaultGitIgnoreProbe(ignoringRepo)(".ai/solution-acceptance.json"),
+    ).toBe(true);
+
+    const cleanRepo = makeRepo(".ai/runs/\n");
+    expect(
+      createDefaultGitIgnoreProbe(cleanRepo)(".ai/solution-acceptance.json"),
+    ).toBe(false);
+
+    // GIT_CEILING_DIRECTORIES keeps the assertion hermetic: without it,
+    // git would walk up from tmpdir and could find an enclosing repo on
+    // machines whose TMPDIR sits inside a checkout.
+    const nonRepo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-nonrepo-"));
+    cleanups.push(() => fs.rmSync(nonRepo, { recursive: true, force: true }));
+    const savedCeiling = process.env.GIT_CEILING_DIRECTORIES;
+    process.env.GIT_CEILING_DIRECTORIES = path.dirname(nonRepo);
+    try {
+      expect(
+        createDefaultGitIgnoreProbe(nonRepo)(".ai/solution-acceptance.json"),
+      ).toBe(null);
+    } finally {
+      if (savedCeiling === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
+      else process.env.GIT_CEILING_DIRECTORIES = savedCeiling;
+    }
   });
 });
 
