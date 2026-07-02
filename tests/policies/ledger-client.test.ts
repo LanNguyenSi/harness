@@ -536,3 +536,220 @@ process.stdin.on("data", (d) => {
     }
   });
 });
+
+// task a2589fa3 (2026-07-01 review): one grounding-mcp connection serves
+// multiple calls. The single-init server responds with a JSON-RPC error to
+// any SECOND initialize, so both assertions below fail if the session ever
+// re-handshakes per call — the exact regression that would silently
+// reintroduce the per-policy subprocess fan-out.
+describe("openLedgerSession", () => {
+  const singleInitServer = (): string => `#!/usr/bin/env node
+let initCount = 0;
+let buf = "";
+process.stdin.on("data", (d) => {
+  buf += d.toString();
+  let nl = buf.indexOf("\\n");
+  while (nl !== -1) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    if (!line.trim()) { nl = buf.indexOf("\\n"); continue; }
+    let msg;
+    try { msg = JSON.parse(line); } catch { nl = buf.indexOf("\\n"); continue; }
+    if (msg.method === "initialize") {
+      initCount += 1;
+      if (initCount > 1) {
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, error: { code: -32600, message: "second initialize" } }) + "\\n");
+      } else {
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\\n");
+      }
+    } else if (msg.method === "tools/call" && msg.params && msg.params.name === "ledger_summary") {
+      const payload = { entries: { facts: [{ id: 1, content: "review:42 ok", createdAt: "2026-04-30T00:00:00Z" }], hypotheses: [], rejected: [], unknowns: [] } };
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: JSON.stringify(payload) }] } }) + "\\n");
+    } else if (msg.method === "tools/call") {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "unknown tool" } }) + "\\n");
+    }
+    nl = buf.indexOf("\\n");
+  }
+});
+`;
+
+  it("initializes once across multiple querySummary calls on the same session", async () => {
+    const { openLedgerSession } = await import("../../src/policies/ledger-client.js");
+    const script = makeScript(singleInitServer());
+    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 4000 });
+    try {
+      const first = await session.querySummary({ sessionId: "sess-1" });
+      const second = await session.querySummary({ sessionId: "sess-1" });
+      expect(first.kind).toBe("ok");
+      // A re-handshaking session would hit the single-init server's error
+      // branch and degrade here.
+      expect(second.kind).toBe("ok");
+    } finally {
+      session.dispose();
+    }
+  });
+
+  it("callTool surfaces a JSON-RPC error as status 'error' (drives the record fallback)", async () => {
+    const { openLedgerSession } = await import("../../src/policies/ledger-client.js");
+    const script = makeScript(singleInitServer());
+    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 4000 });
+    try {
+      const result = await session.callTool("ledger_add", { sessionId: "s" });
+      expect(result.status).toBe("error");
+      if (result.status === "error") {
+        expect(result.errorMessage).toBe("unknown tool");
+      }
+    } finally {
+      session.dispose();
+    }
+  });
+
+  it("degrades every call with the same reason after a failed spawn", async () => {
+    const { openLedgerSession } = await import("../../src/policies/ledger-client.js");
+    const session = openLedgerSession({
+      mcpCommand: ["/nonexistent/grounding-mcp"],
+      timeoutMs: 1000,
+    });
+    try {
+      const query = await session.querySummary({ sessionId: "s" });
+      const call = await session.callTool("ledger_add", { sessionId: "s" });
+      expect(query.kind).toBe("degraded");
+      expect(call.status).toBe("degraded");
+    } finally {
+      session.dispose();
+    }
+  });
+});
+
+// Reviewer follow-ups on the pooled session (task a2589fa3): the timeout
+// latch, mid-session death isolation, and dispose idempotence.
+describe("openLedgerSession — timeout latch and death isolation", () => {
+  // Answers init + ledger_summary promptly, then goes silent on every
+  // ledger_add: the first add times out, subsequent calls must be latched.
+  const slowAddServer = (): string => `#!/usr/bin/env node
+let buf = "";
+process.stdin.on("data", (d) => {
+  buf += d.toString();
+  let nl = buf.indexOf("\\n");
+  while (nl !== -1) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    if (!line.trim()) { nl = buf.indexOf("\\n"); continue; }
+    let msg;
+    try { msg = JSON.parse(line); } catch { nl = buf.indexOf("\\n"); continue; }
+    if (msg.method === "initialize") {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\\n");
+    } else if (msg.method === "tools/call" && msg.params && msg.params.name === "ledger_summary") {
+      const payload = { entries: { facts: [], hypotheses: [], rejected: [], unknowns: [] } };
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: JSON.stringify(payload) }] } }) + "\\n");
+    }
+    // ledger_add: never respond -> caller times out.
+    nl = buf.indexOf("\\n");
+  }
+});
+`;
+
+  // Answers init + the FIRST ledger_add, then exits the process.
+  const dieAfterFirstAddServer = (): string => `#!/usr/bin/env node
+let adds = 0;
+let buf = "";
+process.stdin.on("data", (d) => {
+  buf += d.toString();
+  let nl = buf.indexOf("\\n");
+  while (nl !== -1) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    if (!line.trim()) { nl = buf.indexOf("\\n"); continue; }
+    let msg;
+    try { msg = JSON.parse(line); } catch { nl = buf.indexOf("\\n"); continue; }
+    if (msg.method === "initialize") {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\\n");
+    } else if (msg.method === "tools/call" && msg.params && msg.params.name === "ledger_add") {
+      adds += 1;
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: '{"ok":true}' }] } }) + "\\n");
+      if (adds === 1) { setTimeout(() => process.exit(0), 10); }
+    }
+    nl = buf.indexOf("\\n");
+  }
+});
+`;
+
+  it("latches after one timeout: subsequent calls degrade immediately without a round-trip", async () => {
+    const { openLedgerSession } = await import("../../src/policies/ledger-client.js");
+    const script = makeScript(slowAddServer());
+    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 300 });
+    try {
+      const query = await session.querySummary({ sessionId: "s" });
+      expect(query.kind).toBe("ok");
+      const first = await session.callTool("ledger_add", { sessionId: "s" });
+      expect(first.status).toBe("degraded");
+      if (first.status === "degraded") {
+        expect(first.reason).toContain("timeout after 300ms");
+      }
+      // The latch: this must NOT wait another 300ms.
+      const t0 = performance.now();
+      const second = await session.callTool("ledger_add", { sessionId: "s" });
+      const elapsed = performance.now() - t0;
+      expect(second.status).toBe("degraded");
+      if (second.status === "degraded") {
+        expect(second.reason).toContain("timed out earlier in this session");
+      }
+      expect(elapsed).toBeLessThan(200);
+    } finally {
+      session.dispose();
+    }
+  });
+
+  it("isolates a mid-session death: later calls degrade, earlier results stand, nothing throws", async () => {
+    const { openLedgerSession } = await import("../../src/policies/ledger-client.js");
+    const script = makeScript(dieAfterFirstAddServer());
+    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 4000 });
+    try {
+      const first = await session.callTool("ledger_add", { sessionId: "s" });
+      expect(first.status).toBe("ok");
+      // Give the child a moment to exit.
+      await new Promise((r) => setTimeout(r, 100));
+      const second = await session.callTool("ledger_add", { sessionId: "s" });
+      expect(second.status).toBe("degraded");
+      if (second.status === "degraded") {
+        expect(second.reason).toContain("grounding-mcp");
+      }
+    } finally {
+      session.dispose();
+    }
+  });
+
+  it("dispose is a safe no-op when called twice", async () => {
+    const { openLedgerSession } = await import("../../src/policies/ledger-client.js");
+    const script = makeScript(singleUseHappyServer());
+    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 4000 });
+    const result = await session.querySummary({ sessionId: "s" });
+    expect(result.kind).toBe("ok");
+    session.dispose();
+    expect(() => session.dispose()).not.toThrow();
+  });
+
+  function singleUseHappyServer(): string {
+    return `#!/usr/bin/env node
+let buf = "";
+process.stdin.on("data", (d) => {
+  buf += d.toString();
+  let nl = buf.indexOf("\\n");
+  while (nl !== -1) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    if (!line.trim()) { nl = buf.indexOf("\\n"); continue; }
+    let msg;
+    try { msg = JSON.parse(line); } catch { nl = buf.indexOf("\\n"); continue; }
+    if (msg.method === "initialize") {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\\n");
+    } else if (msg.method === "tools/call") {
+      const payload = { entries: { facts: [], hypotheses: [], rejected: [], unknowns: [] } };
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: JSON.stringify(payload) }] } }) + "\\n");
+    }
+    nl = buf.indexOf("\\n");
+  }
+});
+`;
+  }
+});

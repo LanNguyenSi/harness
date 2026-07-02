@@ -5,16 +5,17 @@
 // interceptor, writes Claude Code's deny JSON to stdout on block.
 
 import {
-  queryLedgerByTag,
+  openLedgerSession,
   type LedgerEntry,
   type LedgerQueryResult,
+  type LedgerSession,
 } from "../../policies/index.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
   intercept,
-  recordPolicyDecision,
+  recordPolicyDecisionOnSession,
   resolveGitContext,
   resolveKubeContext,
   type LedgerClient,
@@ -223,6 +224,16 @@ function resolvePolicyCwd(event: ToolEvent, codexCommandCwd?: string): string {
  * Real grounding-mcp-backed ledger client. Exported for testing: the
  * `record` adapter's failure-surfacing path is exercised against a
  * bogus mcpCommand in tests/runtime/intercept-cli.test.ts.
+ *
+ * Connection discipline (2026-07-01 review, enforcement-subprocess-latency):
+ * ONE lazily-opened grounding-mcp session serves every query and audit
+ * record of the intercept invocation this client was constructed for,
+ * instead of 2 fresh subprocess spawns per matching policy. On top,
+ * `ledger_summary` returns the WHOLE session's entries (per-tag filtering
+ * happens client-side in `intercept()`), so the K per-policy queries are
+ * textually identical — they collapse into one cached round-trip per
+ * sessionId. `runInterceptCli` calls `dispose()` when the intercept
+ * completes; a caller constructing this client directly owns that call.
  */
 export function realLedgerClient(
   server: McpServer,
@@ -234,21 +245,40 @@ export function realLedgerClient(
   const env = server.env ?? undefined;
   const timeoutMs = opts.ledgerTimeoutMs ?? server.health?.timeout_ms ?? 5_000;
   const stderr = opts.stderr ?? process.stderr;
+  let session: LedgerSession | null = null;
+  const summaryCache = new Map<string, Promise<LedgerQueryResult>>();
+  const getSession = (): LedgerSession =>
+    (session ??= openLedgerSession({
+      mcpCommand: command,
+      ...(env && { mcpEnv: env }),
+      timeoutMs,
+    }));
   return {
     async query(_tag, sessionId): Promise<LedgerQueryResult> {
-      return queryLedgerByTag({
-        mcpCommand: command,
-        ...(env && { mcpEnv: env }),
-        sessionId,
-        timeoutMs,
-      });
+      // Cache the Promise (not the value) so concurrent queries for the
+      // same session dedupe onto one in-flight round-trip. A degraded
+      // result is cached too — deliberately: a first-query timeout
+      // degrades ALL K policies to warn-degraded (fail-open, matching the
+      // documented ledger-unreachable contract) instead of retrying per
+      // policy, which would reintroduce the fan-out. Staleness: our own
+      // `record` rows are filtered out by the evaluator by design; an
+      // EXTERNAL writer landing evidence mid-loop would make a later
+      // policy deny where a fresh query would allow — a fail-closed,
+      // ms-wide window resolved by the agent's retry (next intercept =
+      // fresh session + fresh snapshot).
+      let cached = summaryCache.get(sessionId);
+      if (cached === undefined) {
+        cached = getSession().querySummary({ sessionId });
+        summaryCache.set(sessionId, cached);
+      }
+      return cached;
     },
     async record(decision, sessionId): Promise<void> {
-      const result = await recordPolicyDecision(decision, sessionId, {
-        mcpCommand: command,
-        ...(env && { mcpEnv: env }),
-        timeoutMs,
-      });
+      const result = await recordPolicyDecisionOnSession(
+        getSession(),
+        decision,
+        sessionId,
+      );
       // A failed audit-write must not block the tool — the decision is
       // still applied — but it must not be silent either: an unrecorded
       // decision is invisible to `harness audit` / `explain --trace`.
@@ -259,6 +289,9 @@ export function realLedgerClient(
             `${decision.policyName}: ${result.reason ?? "unknown error"}\n`,
         );
       }
+    },
+    dispose(): void {
+      session?.dispose();
     },
   };
 }
@@ -434,17 +467,25 @@ export async function runInterceptCli(
     };
   }
 
-  const result = await intercept({
-    manifest,
-    event,
-    ledger,
-    builtins,
-    stderr,
-    ...(opts.ledgerTimeoutMs !== undefined && { ledgerTimeoutMs: opts.ledgerTimeoutMs }),
-    ...(opts.now && { now: opts.now }),
-    ...(gitContext.sha.length > 0 && { currentHeadSha: gitContext.sha }),
-    ...(riskContext && { riskContext }),
-  });
+  let result: Awaited<ReturnType<typeof intercept>>;
+  try {
+    result = await intercept({
+      manifest,
+      event,
+      ledger,
+      builtins,
+      stderr,
+      ...(opts.ledgerTimeoutMs !== undefined && { ledgerTimeoutMs: opts.ledgerTimeoutMs }),
+      ...(opts.now && { now: opts.now }),
+      ...(gitContext.sha.length > 0 && { currentHeadSha: gitContext.sha }),
+      ...(riskContext && { riskContext }),
+    });
+  } finally {
+    // Tear down the pooled grounding-mcp session (no-op for injected test
+    // doubles and the degraded client). All queries/records are awaited
+    // inside intercept(), so nothing is in flight here.
+    ledger.dispose?.();
+  }
 
   // Stage the session id for a later arg-less `harness approve risk`
   // whenever the FIRST blocking decision is `require_approval`. Mirrors

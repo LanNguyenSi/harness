@@ -7,7 +7,9 @@ import {
   encodeLedgerContent,
   payloadFromDecision,
   recordPolicyDecision,
+  recordPolicyDecisionOnSession,
 } from "../../src/runtime/ledger-record.js";
+import { openLedgerSession } from "../../src/policies/ledger-client.js";
 import type { PolicyDecision } from "../../src/runtime/intercept.js";
 
 const decision: PolicyDecision = {
@@ -239,5 +241,75 @@ describe("recordPolicyDecision writer fallback", () => {
     const calls = readLedgerAddCalls(logPath);
     expect(calls).toHaveLength(1);
     expect(calls[0]!.type).toBe("policy_decision");
+  });
+});
+
+// task a2589fa3 (2026-07-01 review): the runtime gate records every decision
+// over ONE pooled grounding-mcp session instead of spawning a subprocess per
+// decision. These tests pin the multiplexing contract and that the legacy
+// type='fact' fallback survived the move.
+describe("recordPolicyDecisionOnSession (pooled connection)", () => {
+  function readFrames(logPath: string): Array<{ method?: string; params?: { name?: string; arguments?: { type?: string; content?: string } } }> {
+    return fs
+      .readFileSync(logPath, "utf8")
+      .split("\n")
+      .filter((l) => l.trim())
+      .map((l) => JSON.parse(l));
+  }
+
+  it("multiplexes multiple decisions over one session: single initialize, one ledger_add each", async () => {
+    const { script, logPath } = makeCaptureServer({ behavior: "always-ok" });
+    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 4000 });
+    try {
+      const first = await recordPolicyDecisionOnSession(session, decision, "sess-1");
+      const second = await recordPolicyDecisionOnSession(
+        session,
+        { ...decision, policyName: "audit-before-merge" },
+        "sess-1",
+      );
+      expect(first).toEqual({ ok: true });
+      expect(second).toEqual({ ok: true });
+    } finally {
+      session.dispose();
+    }
+    const frames = readFrames(logPath);
+    expect(frames.filter((f) => f.method === "initialize")).toHaveLength(1);
+    const adds = frames.filter(
+      (f) => f.method === "tools/call" && f.params?.name === "ledger_add",
+    );
+    expect(adds).toHaveLength(2);
+    expect(adds[0]!.params!.arguments!.content).toContain("review-before-merge");
+    expect(adds[1]!.params!.arguments!.content).toContain("audit-before-merge");
+  });
+
+  it("keeps the type='fact' fallback for old servers on the shared session", async () => {
+    const { script, logPath } = makeCaptureServer({ behavior: "reject-policy-decision" });
+    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 4000 });
+    try {
+      const result = await recordPolicyDecisionOnSession(session, decision, "sess-1");
+      expect(result.ok).toBe(true);
+    } finally {
+      session.dispose();
+    }
+    const adds = readFrames(logPath).filter(
+      (f) => f.method === "tools/call" && f.params?.name === "ledger_add",
+    );
+    expect(adds).toHaveLength(2);
+    expect(adds[0]!.params!.arguments!.type).toBe("policy_decision");
+    expect(adds[1]!.params!.arguments!.type).toBe("fact");
+  });
+
+  it("reports a degraded transport without retrying (spawn failure)", async () => {
+    const session = openLedgerSession({
+      mcpCommand: ["/nonexistent/grounding-mcp-binary"],
+      timeoutMs: 1000,
+    });
+    try {
+      const result = await recordPolicyDecisionOnSession(session, decision, "sess-1");
+      expect(result.ok).toBe(false);
+      expect(result.reason).toMatch(/grounding-mcp/);
+    } finally {
+      session.dispose();
+    }
   });
 });

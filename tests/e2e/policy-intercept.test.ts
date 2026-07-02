@@ -80,6 +80,13 @@ interface FakeGroundingMcpOptions {
    * `tools/call` invocation. Useful for asserting invocation counts.
    */
   invocationLog?: string;
+  /**
+   * Path to a file the fake appends one line to at process startup.
+   * Line count == number of grounding-mcp subprocesses spawned, which is
+   * the connection-pooling contract under test (2026-07-01 review:
+   * O(1) connections per intercept, not 2 per matching policy).
+   */
+  startLog?: string;
 }
 
 /**
@@ -92,10 +99,15 @@ function makeFakeGroundingMcp(opts: FakeGroundingMcpOptions = {}): string {
   const file = path.join(dir, "fake-grounding-mcp.js");
   const facts = opts.entries ?? [];
   const invocationLog = opts.invocationLog ?? "";
+  const startLog = opts.startLog ?? "";
   const script = `#!/usr/bin/env node
 const fs = require("fs");
 const FACTS = ${JSON.stringify(facts)};
 const INVOCATION_LOG = ${JSON.stringify(invocationLog)};
+const START_LOG = ${JSON.stringify(startLog)};
+if (START_LOG) {
+  fs.appendFileSync(START_LOG, JSON.stringify({ pid: process.pid, ts: Date.now() }) + "\\n");
+}
 
 let buf = "";
 process.stdin.on("data", (d) => {
@@ -153,6 +165,13 @@ interface WriteManifestOptions {
   groundingMcpCommand: string[];
   /** Optional extra timeout for the ledger health probe (ms). */
   groundingTimeoutMs?: number;
+  /**
+   * Additional block-enforcement policies appended AFTER the base
+   * `review-before-merge` policy, matching the same PR-merge trigger but
+   * each requiring its own ledger tag. Used by the connection-pooling
+   * tests to drive K matching policies through one intercept invocation.
+   */
+  extraPolicies?: Array<{ name: string; tagPrefix: string }>;
 }
 
 function writeManifest(opts: WriteManifestOptions): string {
@@ -224,7 +243,24 @@ policies:
     hook: policy-intercept-pretooluse
     enforcement: block
 `;
-  fs.writeFileSync(manifestPath, yaml, "utf8");
+  const extras = (opts.extraPolicies ?? [])
+    .map(
+      (p) => `
+  - name: ${p.name}
+    description: Extra pooled-connection test policy requiring ${p.tagPrefix}:<pr-number>.
+    trigger:
+      event: PreToolUse
+      match: "mcp__agent-tasks__pull_requests_merge"
+      extract:
+        PR_NUMBER: "toolArgs.prNumber"
+    requires:
+      ledger_tag: "${p.tagPrefix}:\${PR_NUMBER}"
+    hook: policy-intercept-pretooluse
+    enforcement: block
+`,
+    )
+    .join("");
+  fs.writeFileSync(manifestPath, yaml + extras, "utf8");
   return manifestPath;
 }
 
@@ -420,5 +456,165 @@ describe("policy intercept: manifest-driven E2E flow", () => {
     // requires-eval-threw would still match outcome="warn-degraded";
     // the reason string is what pins us to the spawn-failure branch.
     expect(result.decisions[0]?.reason).toMatch(/grounding-mcp/);
+  });
+});
+
+// 2026-07-01 review, enforcement-subprocess-latency (task a2589fa3): the
+// PreToolUse gate used to spawn 2 grounding-mcp subprocesses per matching
+// policy (query + record), sequentially — K policies approached the 30s
+// hook budget under load and a hook timeout is conventionally fail-open.
+// realLedgerClient now holds ONE session per intercept invocation and the
+// per-policy summary queries collapse into one cached round-trip. These
+// tests pin the O(1)-connections contract and that pooling changed neither
+// the decision ordering nor audit-record completeness.
+describe("policy intercept: pooled grounding-mcp connection", () => {
+  const THREE_POLICY_EXTRAS = [
+    { name: "audit-before-merge", tagPrefix: "audit" },
+    { name: "signoff-before-merge", tagPrefix: "signoff" },
+  ];
+
+  it("spawns exactly ONE grounding-mcp for 3 matching policies (1 summary + 3 records)", async () => {
+    const logDir = makeTmpDir("harness-mcp-pool-log-");
+    const invocationLog = path.join(logDir, "calls.jsonl");
+    const startLog = path.join(logDir, "starts.jsonl");
+    const mcp = makeFakeGroundingMcp({ entries: [], invocationLog, startLog });
+    const manifestPath = writeManifest({
+      groundingMcpCommand: ["node", mcp],
+      extraPolicies: THREE_POLICY_EXTRAS,
+    });
+
+    const { stream: stdout } = captureStream();
+    const { stream: stderr, output: stderrOut } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(JSON.stringify(PR_MERGE_EVENT)),
+      stdout,
+      stderr,
+      configPath: manifestPath,
+    });
+
+    // All three policies evaluated and denied (empty ledger).
+    expect(result.decisions).toHaveLength(3);
+    expect(result.blocked).toBe(true);
+
+    // THE contract: one subprocess for the whole intercept invocation,
+    // not 2 per policy (the old behaviour would show 6 start lines).
+    const starts = fs.readFileSync(startLog, "utf8").trim().split("\n");
+    expect(starts).toHaveLength(1);
+
+    const calls = fs
+      .readFileSync(invocationLog, "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    // The 3 per-policy queries hit the same sessionId and dedupe into ONE
+    // ledger_summary round-trip (per-tag filtering is client-side).
+    const summaries = calls.filter((c) => c.tool === "ledger_summary");
+    expect(summaries).toHaveLength(1);
+    // Audit completeness: one ledger_add per decision, no dropped rows.
+    const adds = calls.filter((c) => c.tool === "ledger_add");
+    expect(adds).toHaveLength(3);
+    const recordedPolicies = adds.map(
+      (c) => JSON.parse(String(c.args.content).slice(String(c.args.content).indexOf(" ") + 1)).name,
+    );
+    expect(recordedPolicies).toEqual([
+      "review-before-merge",
+      "audit-before-merge",
+      "signoff-before-merge",
+    ]);
+    // No audit-write failures surfaced.
+    expect(stderrOut()).not.toContain("audit-write failed");
+  });
+
+  it("keeps first-blocking-decision-in-manifest-order semantics with two denying policies", async () => {
+    const mcp = makeFakeGroundingMcp({ entries: [] });
+    const manifestPath = writeManifest({
+      groundingMcpCommand: ["node", mcp],
+      extraPolicies: [{ name: "audit-before-merge", tagPrefix: "audit" }],
+    });
+
+    const { stream: stdout, output: stdoutOut } = captureStream();
+    const { stream: stderr } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(JSON.stringify(PR_MERGE_EVENT)),
+      stdout,
+      stderr,
+      configPath: manifestPath,
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.decisions.map((d) => d.outcome)).toEqual(["deny", "deny"]);
+    // The FIRST policy in manifest order owns the deny envelope.
+    const parsed = JSON.parse(stdoutOut().trim());
+    expect(parsed.reason).toContain("review-before-merge");
+    expect(parsed.reason).not.toContain("audit-before-merge");
+  });
+
+  it("hands the envelope to the second policy when the first allows (order, not name, decides)", async () => {
+    // Seed review:42 so the base policy allows; audit:42 is absent so the
+    // second policy denies. Proves the envelope owner is the first
+    // BLOCKING decision in manifest order, not simply the first policy.
+    const mcp = makeFakeGroundingMcp({
+      entries: [
+        {
+          id: 1,
+          content: "review:42 approved by reviewer",
+          createdAt: "2026-05-12T08:00:00.000Z",
+        },
+      ],
+    });
+    const manifestPath = writeManifest({
+      groundingMcpCommand: ["node", mcp],
+      extraPolicies: [{ name: "audit-before-merge", tagPrefix: "audit" }],
+    });
+
+    const { stream: stdout, output: stdoutOut } = captureStream();
+    const { stream: stderr } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(JSON.stringify(PR_MERGE_EVENT)),
+      stdout,
+      stderr,
+      configPath: manifestPath,
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.decisions.map((d) => d.outcome)).toEqual(["allow", "deny"]);
+    const parsed = JSON.parse(stdoutOut().trim());
+    expect(parsed.reason).toContain("audit-before-merge");
+  });
+
+  it("degrades ALL matching policies off one cached round-trip when the ledger is unreachable", async () => {
+    // Broken mcp + 2 matching policies: the cached degraded summary fans
+    // out to every policy as warn-degraded (fail-open by contract), and
+    // nothing blocks. Old behavior retried per policy; the pooled client
+    // deliberately does not.
+    const dir = makeTmpDir("harness-broken-mcp-pool-");
+    const brokenScript = path.join(dir, "broken-grounding-mcp.sh");
+    fs.writeFileSync(
+      brokenScript,
+      "#!/bin/sh\necho 'broken-mcp: simulated startup failure' >&2\nexit 1\n",
+      "utf8",
+    );
+    fs.chmodSync(brokenScript, 0o755);
+    const manifestPath = writeManifest({
+      groundingMcpCommand: [brokenScript],
+      extraPolicies: [{ name: "audit-before-merge", tagPrefix: "audit" }],
+    });
+
+    const { stream: stdout, output: stdoutOut } = captureStream();
+    const { stream: stderr } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(JSON.stringify(PR_MERGE_EVENT)),
+      stdout,
+      stderr,
+      configPath: manifestPath,
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(stdoutOut()).toBe("");
+    expect(result.decisions).toHaveLength(2);
+    expect(result.decisions.map((d) => d.outcome)).toEqual([
+      "warn-degraded",
+      "warn-degraded",
+    ]);
   });
 });

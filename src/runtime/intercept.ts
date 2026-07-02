@@ -148,6 +148,14 @@ export interface LedgerClient {
    * audit log doesn't itself block the tool call.
    */
   record(decision: PolicyDecision, sessionId: string): Promise<void>;
+  /**
+   * Release any pooled connection (the real client holds one grounding-mcp
+   * subprocess across all queries + records of an intercept invocation).
+   * Owned by the CLI wrapper that constructed the client — `intercept()`
+   * itself never calls it. Optional so injected test doubles and the
+   * degraded no-op client don't have to implement it.
+   */
+  dispose?(): void;
 }
 
 export interface InterceptOptions {

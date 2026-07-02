@@ -10,9 +10,13 @@ export {
 export { parseDurationSeconds, InvalidDurationError } from "./duration.js";
 export { parseLedgerTimestamp } from "./timestamp.js";
 export {
+  openLedgerSession,
   queryLedgerByTag,
   type LedgerClientOptions,
   type LedgerQueryResult,
+  type LedgerSession,
+  type LedgerSessionCallResult,
+  type LedgerSessionQuery,
   type QueryLedgerOptions,
 } from "./ledger-client.js";
 export {
