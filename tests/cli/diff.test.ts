@@ -280,4 +280,56 @@ tools:
     expect(r.before.grounding.evidence_ledger.retention_days).toBe(30);
     expect(r.after.grounding.evidence_ledger.retention_days).toBe(30);
   });
+
+  it("applies machine and project layers in loader order on BOTH sides (project wins)", () => {
+    const repo = newRepo();
+    writeAt(repo, "harness.yaml", plainBase);
+    writeAt(repo, "machines/h.harness.overrides.yaml", overrideLayer); // 30
+    writeAt(
+      repo,
+      "projects/p/harness.overrides.yaml",
+      "grounding:\n  evidence_ledger:\n    retention_days: 45\n",
+    );
+    gitCommit(repo, "base + both layers");
+    const r = diff({
+      configPath: path.join(repo, "harness.yaml"),
+      since: "master",
+      homeDir: repo,
+      project: "p",
+      discriminator: DISCRIMINATOR,
+    });
+    expect(r.changes).toEqual([]);
+    // Last-wins order (machine, then project) must match loadManifest on
+    // the ref side too — an order swap in buildRefManifest flips this to 30.
+    expect(r.before.grounding.evidence_ledger.retention_days).toBe(45);
+    expect(r.after.grounding.evidence_ledger.retention_days).toBe(45);
+  });
+
+  it("scopes a ref-side override merge conflict to the ref in a clean error", () => {
+    const repo = newRepo();
+    writeAt(repo, "harness.yaml", plainBase);
+    // Mixed named/plain list: OverrideMergeError at merge time. diff()
+    // builds the ref side FIRST, so the wrapper must label the failure as
+    // the historical merge and exit with a sysexits data error, not a bare
+    // exit-70 crash.
+    writeAt(
+      repo,
+      "machines/h.harness.overrides.yaml",
+      "hooks:\n  - name: a\n    event: Stop\n    command: /x\n    blocking: false\n  - command: /y\n",
+    );
+    gitCommit(repo, "base + conflicting layer");
+    try {
+      diff({
+        configPath: path.join(repo, "harness.yaml"),
+        since: "master",
+        homeDir: repo,
+        discriminator: DISCRIMINATOR,
+      });
+      expect.unreachable("diff should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(HarnessExitError);
+      expect((err as HarnessExitError).message).toContain('override merge at git ref "master"');
+      expect((err as HarnessExitError).exitCode).toBe(66);
+    }
+  });
 });

@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import { parse as parseYaml } from "yaml";
-import { applyLayers } from "../../overrides/merge.js";
+import { OverrideMergeError, applyLayers } from "../../overrides/merge.js";
 import { ManifestParseError, parseManifest, type Manifest } from "../../schema/index.js";
 import { EX_NOINPUT, EX_USAGE, HarnessExitError } from "../exit-codes.js";
 import { loadManifest, resolvePaths, type LoaderOptions } from "../loader.js";
@@ -72,6 +72,12 @@ function parseRefSchema(parsed: unknown): Manifest {
  *   change masked by such an override does not change effective config,
  *   so not reporting it is correct for an effective-config diff. Surfaced
  *   via `warnings` so the operator knows the layer has no history here.
+ *
+ * Known limitation: a versioned layer REMOVED since the ref is not
+ * detected — only layers resolvable on the current filesystem are
+ * enumerated, so the removed layer's keys do not show as effective-config
+ * changes. Closing it needs at-ref layer enumeration (git ls-tree) and is
+ * consciously out of scope here.
  */
 function buildRefManifest(
   ctx: ReturnType<typeof locateGitContext>,
@@ -88,9 +94,19 @@ function buildRefManifest(
         `override layer ${layerPath} is not versioned in this repo; ` +
           `treating its current content as constant on both sides of the comparison`,
       );
-      refLayerRaws.push(
-        parseRefYaml(fs.readFileSync(layerPath, "utf8"), `override layer ${layerPath}`),
-      );
+      let raw: string;
+      try {
+        raw = fs.readFileSync(layerPath, "utf8");
+      } catch (err) {
+        // Mirror the working-side loader's clean failure instead of a bare
+        // Node error: resolvePaths saw the file, but it can vanish or turn
+        // unreadable between that existsSync and this read.
+        throw new HarnessExitError(
+          `override layer could not be read: ${layerPath}: ${(err as Error).message}`,
+          EX_NOINPUT,
+        );
+      }
+      refLayerRaws.push(parseRefYaml(raw, `override layer ${layerPath}`));
       continue;
     }
     const atRef = readFileAtRefOrNull(ctx, since, rel);
@@ -99,7 +115,22 @@ function buildRefManifest(
   }
   const baseRaw = parseRefYaml(refRaw, "manifest at git ref");
   if (refLayerRaws.length === 0) return parseRefSchema(baseRaw);
-  return parseRefSchema(applyLayers(baseRaw, ...refLayerRaws));
+  try {
+    return parseRefSchema(applyLayers(baseRaw, ...refLayerRaws));
+  } catch (err) {
+    // A shape conflict between the REF-time base and a layer is a new
+    // error surface the override-naive ref path never had (e.g. the base's
+    // name-keyed list became plain since the ref). Scope the message to
+    // the ref so the operator knows it is the historical merge, not the
+    // working manifest, that failed.
+    if (err instanceof OverrideMergeError) {
+      throw new HarnessExitError(
+        `override merge at git ref "${since}" failed: ${err.message}`,
+        EX_NOINPUT,
+      );
+    }
+    throw err;
+  }
 }
 
 export function diff(opts: DiffOptions): DiffResult {
