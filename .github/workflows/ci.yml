@@ -16,7 +16,11 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 22 = active LTS, matching publish-npm.yml; node 20 went EOL
+          # 2026-04 and dependency-cruiser 18 (check:boundaries) requires
+          # ^22||^24||>=26. package.json engines stays >=20 for consumers;
+          # the runtime code carries no node-22-only usage.
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -24,6 +28,19 @@ jobs:
 
       - name: Type check
         run: npm run typecheck
+
+      - name: Import boundaries
+        # dependency-cruiser fitness function for the layering
+        # (schema -> policies -> runtime -> policy-packs -> cli); the
+        # grandfathered shared-util edges are documented in
+        # .dependency-cruiser.cjs. Fails on any NEW reverse import.
+        run: npm run check:boundaries
+
+      - name: Duplication scan
+        # jscpd clone-count pin (scripts/check-duplication.mjs) — the
+        # guard that would have caught the 4th parseConfigUx copy.
+        # Fails when src/ grows a clone beyond the pinned baseline.
+        run: npm run check:duplication
 
       - name: Build
         run: npm run build

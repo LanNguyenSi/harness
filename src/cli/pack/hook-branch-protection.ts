@@ -51,11 +51,12 @@ import { resolveGeneratedDir } from "../../io/generated-dir.js";
 import { resolveGitContext } from "../../runtime/git-context.js";
 import { POLICY_DECISION_TYPE } from "../../runtime/ledger-record.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
-import { PolicyUxSchema, type Manifest, type McpServer, type PolicyUx } from "../../schema/index.js";
+import { type Manifest, type McpServer, type PolicyUx } from "../../schema/index.js";
 import { type LoaderOptions } from "../loader.js";
 import {
   checkHookPause,
   loadManifestOrInjected,
+  parseConfigUx,
   readStdin,
 } from "./hook-bootstrap.js";
 
@@ -244,26 +245,6 @@ async function probeLedger(
   return evaluateEntries(result.entries, opts.now ?? new Date());
 }
 
-// Parse pack config.ux. Mirrors parseConfigUx in hook-pre-tool-use.ts
-// and hook-codex-pre-tool-use.ts; a follow-up cleanup will extract the
-// three copies into a shared helper once we have a fourth call site.
-function parseConfigUx(
-  raw: unknown,
-  stderr: NodeJS.WritableStream,
-): PolicyUx | undefined {
-  if (raw === undefined) return undefined;
-  const result = PolicyUxSchema.safeParse(raw);
-  if (!result.success) {
-    stderr.write(
-      `harness pack hook branch-protection: config.ux ignored (${result.error.issues
-        .map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`)
-        .join("; ")})\n`,
-    );
-    return undefined;
-  }
-  return result.data;
-}
-
 function blockJson(
   toolName: string,
   branch: string,
@@ -397,6 +378,7 @@ export async function runPackHookBranchProtectionCli(
   const configUx = parseConfigUx(
     (pack.config as Record<string, unknown>)["ux"],
     stderr,
+    "harness pack hook branch-protection",
   );
 
   // Resolve the branch context to gate against. For tools that target a

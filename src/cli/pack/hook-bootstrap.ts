@@ -1,7 +1,7 @@
 // Shared bootstrap helpers for Claude Code pack hooks.
 //
-// Extracts the three init-phase boilerplate pieces that all (or most) pack
-// hooks reimplemented independently:
+// Extracts the boilerplate pieces that all (or most) pack hooks
+// reimplemented independently:
 //
 //   1. stdin envelope read (the common event-stream pattern).
 //   2. pause-sentinel check with announcement (wrapping checkPauseFromLoader
@@ -9,6 +9,8 @@
 //   3. manifest load with injection support (the common if-injected / else
 //      loadManifest pattern; callers wrap the call in their own try/catch
 //      because error semantics differ per hook).
+//   4. pack `config.ux` parsing (label-parameterized; formerly four
+//      byte-identical copies, task 19e293c6).
 //
 // Not used by:
 //   - hook-runtime-reality.ts: its stdin reader uses async iteration + an
@@ -22,7 +24,7 @@
 
 import { checkPauseFromLoader } from "../pause-check.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
-import type { Manifest } from "../../schema/index.js";
+import { PolicyUxSchema, type Manifest, type PolicyUx } from "../../schema/index.js";
 
 // ---------------------------------------------------------------------------
 // 1. Standard stdin reader
@@ -111,4 +113,38 @@ export function loadManifestOrInjected(
   }
   const loaded = loadManifest(loaderOpts);
   return { manifest: loaded.manifest, manifestPath: loaded.resolved.base };
+}
+
+// ---------------------------------------------------------------------------
+// 4. Pack `config.ux` parser
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse the optional `ux:` block from a pack config (task 19e293c6). This
+ * body existed as four byte-identical copies (hook-pre-tool-use,
+ * hook-codex-pre-tool-use, hook-branch-protection, hook-solution-acceptance)
+ * whose only difference was the stderr prefix — the exact drift the
+ * CHANGELOG had flagged at copy #3 and that landed a 4th time anyway.
+ * `hookLabel` carries that prefix so the per-hook stderr warnings stay
+ * byte-identical to the pre-extraction output (pinned by a test).
+ *
+ * Best-effort: a malformed `ux:` is ignored with a one-line warning; the
+ * hook then falls back to its legacy message shape.
+ */
+export function parseConfigUx(
+  raw: unknown,
+  stderr: NodeJS.WritableStream,
+  hookLabel: string,
+): PolicyUx | undefined {
+  if (raw === undefined) return undefined;
+  const result = PolicyUxSchema.safeParse(raw);
+  if (!result.success) {
+    stderr.write(
+      `${hookLabel}: config.ux ignored (${result.error.issues
+        .map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`)
+        .join("; ")})\n`,
+    );
+    return undefined;
+  }
+  return result.data;
 }
