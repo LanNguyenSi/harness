@@ -1102,3 +1102,38 @@ describe("parseManifest — friendly version-mismatch message (task 50a94127)", 
     }
   });
 });
+
+describe("parseManifest — version-message variants for non-newer values (task 50a94127 review)", () => {
+  it("does not give upgrade advice for a LOWER numeric version", () => {
+    try {
+      parseManifest({ version: 0 });
+      expect.unreachable("version: 0 must not parse");
+    } catch (err) {
+      expectIssueMatching(err, /unsupported manifest version 0/);
+      const text = (err as ManifestParseError).issues.map((i) => i.message).join("\n");
+      expect(text).not.toMatch(/npm i -g/);
+    }
+  });
+
+  it("tells a quoted-string version to unquote, not to upgrade", () => {
+    try {
+      parseManifest({ version: "1" });
+      expect.unreachable('version: "1" must not parse');
+    } catch (err) {
+      expectIssueMatching(err, /unsupported manifest version "1"/);
+      expectIssueMatching(err, /unquoted/);
+      const text = (err as ManifestParseError).issues.map((i) => i.message).join("\n");
+      expect(text).not.toMatch(/npm i -g/);
+    }
+  });
+
+  it("leaves a non-object root's issues untouched (no version rewrite on scalars)", () => {
+    try {
+      parseManifest("just a string");
+      expect.unreachable("scalar root must not parse");
+    } catch (err) {
+      const text = (err as ManifestParseError).issues.map((i) => i.message).join("\n");
+      expect(text).not.toMatch(/supports manifest version/);
+    }
+  });
+});

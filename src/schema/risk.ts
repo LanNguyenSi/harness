@@ -6,10 +6,12 @@ import { z } from "zod";
 // previously still said "no runtime surface reads it yet" long after
 // that stopped being true). `risk.classifiers[]` is consumed by the
 // Risk Classifier (`classifyRisk`, runtime/risk-classifier.ts) invoked
-// from runtime/intercept.ts on every PreToolUse, and policies consume
-// the classification through `when.risk.*` clauses evaluated in
-// runtime/when-eval.ts (Phase 7 #5). A declared `risk:` block is
-// enforced configuration, not decoration. See docs/risk-gate.md.
+// from runtime/intercept.ts on every PreToolUse once the manifest
+// declares at least one `when:`-bearing policy (the riskGateActive
+// guard), and policies consume the classification through `when.risk.*`
+// clauses evaluated in runtime/when-eval.ts (Phase 7 #5). A declared
+// `risk:` block is enforced configuration, not decoration. See
+// docs/risk-gate.md.
 //
 // Design source: lava-ice-logs/2026-04-30/harness-risk-gate-extension.md.
 
