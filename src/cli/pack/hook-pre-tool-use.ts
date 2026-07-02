@@ -27,12 +27,10 @@ import {
 } from "../../policies/index.js";
 import { renderProducers } from "../../policies/producers.js";
 import {
-  checkActiveClaimApprovalMarker,
-  checkApprovalMarker,
+  checkOperatorApprovalMarkers,
   checkPersistedReport,
   defaultReportsDir,
   matchLedgerEntries,
-  parseApprovalLifecycle,
   type ApprovalCheckResult,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import {
@@ -445,46 +443,31 @@ export async function runPackHookPreToolUseCli(
   // ledger-as-audit only when generatedDir is unresolvable (injected
   // manifest without a resolved path: only happens in tests).
   if (generatedDir !== undefined) {
-    const lifecycle = parseApprovalLifecycle(
-      (declared.config as Record<string, unknown>)["approval_lifecycle"],
+    // Source 1a/1b: task-scoped marker for the currently-claimed task
+    // (harness/1ee26e77 + PR #198 correctness fix), then the
+    // session-scoped marker (legacy / fallback), both under the
+    // `approval_lifecycle` TTL. The resolution is shared with the Codex
+    // hook (`checkOperatorApprovalMarkers`, task e7c2ec3c) so the two
+    // runtimes cannot drift on lifecycle semantics again.
+    const markers = checkOperatorApprovalMarkers(
+      generatedDir,
+      sessionId,
+      declared.config,
       stderr,
     );
-    const ageOpts = lifecycle.maxAgeMs !== undefined
-      ? { maxAgeMs: lifecycle.maxAgeMs }
-      : {};
-    // Source 1a: task-scoped marker for the currently-claimed task
-    // (harness/1ee26e77 + PR #198 correctness fix). The check reads
-    // `<gen>/active-claim` and ONLY consults `.approvals/task-<claim>`.
-    // Pre-#198 this scan returned ANY existing task marker, which let
-    // a stale approval from a finished task silently auto-bypass the
-    // gate for any subsequent session/task. When `active-claim` is
-    // absent (legacy / solo workflows that never call `task_start`),
-    // this returns matched:false and the gate falls through to the
-    // session marker below.
-    const taskMarker = checkActiveClaimApprovalMarker(generatedDir, ageOpts);
-    if (taskMarker.matched) {
-      const diagnostic = `harness pack hook: ${taskMarker.detail}, allowing.`;
-      stderr.write(`${diagnostic}\n`);
-      return {
-        exitCode: 0,
-        blocked: false,
-        approvalCheck: { approved: true, source: "marker", detail: taskMarker.detail },
-        diagnostic,
-      };
+    if (markers.source !== "task") {
+      // Trace the task-marker miss to stderr so an operator chasing
+      // "why isn't my approval working?" sees the active-claim vs marker
+      // mismatch, not just the eventual generic session-marker miss.
+      stderr.write(`harness pack hook: task-scoped check: ${markers.taskCheckDetail}\n`);
     }
-    // Trace the task-marker miss to stderr so an operator chasing
-    // "why isn't my approval working?" sees the active-claim vs marker
-    // mismatch, not just the eventual generic session-marker miss.
-    stderr.write(`harness pack hook: task-scoped check: ${taskMarker.detail}\n`);
-    // Source 1b: session-scoped marker (legacy / fallback).
-    const marker = checkApprovalMarker(generatedDir, sessionId, ageOpts);
-    if (marker.matched) {
-      const diagnostic = `harness pack hook: ${marker.detail}, allowing.`;
+    if (markers.matched) {
+      const diagnostic = `harness pack hook: ${markers.detail}, allowing.`;
       stderr.write(`${diagnostic}\n`);
       return {
         exitCode: 0,
         blocked: false,
-        approvalCheck: { approved: true, source: "marker", detail: marker.detail },
+        approvalCheck: { approved: true, source: "marker", detail: markers.detail },
         diagnostic,
       };
     }

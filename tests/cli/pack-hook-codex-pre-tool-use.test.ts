@@ -5,7 +5,11 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runPackHookCodexPreToolUseCli } from "../../src/cli/pack/hook-codex-pre-tool-use.js";
 import type { LedgerEntry } from "../../src/policies/index.js";
-import { writeApprovalMarker } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
+import {
+  writeActiveClaim,
+  writeApprovalMarker,
+  writeTaskApprovalMarker,
+} from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 import { readPendingApproval } from "../../src/runtime/pending-approval.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
@@ -552,5 +556,127 @@ describe("pack hook codex-pre-tool-use blocker — agent-facing ux (agent-tasks/
     const out = stderr.read();
     expect(out).toContain("Run `harness approve understanding`");
     expect(out).toContain("Report format");
+  });
+});
+
+describe("pack hook codex-pre-tool-use blocker — approval_lifecycle parity (task e7c2ec3c)", () => {
+  // The Codex hook previously called the bare session-marker check, so
+  // `approval_lifecycle.max_age` and task-scoped (active-claim) markers
+  // silently applied only to Claude sessions. These tests mirror the
+  // Claude blocker's lifecycle block in pack-hook-pre-tool-use.test.ts.
+  function manifestWithMaxAge(): Manifest {
+    return parseManifest({
+      version: 1,
+      policy_packs: [
+        {
+          name: "understanding-before-execution",
+          enabled: true,
+          config: { approval_lifecycle: { max_age: "4h" } },
+        },
+      ],
+    });
+  }
+
+  it("blocks when the session approval marker is EXPIRED (max_age exceeded)", async () => {
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-codex", {
+      approvedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      approvedBy: "test-operator",
+    });
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(event()),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.exitCode).toBe(2);
+    expect(result.approvalCheck.source).toBe("none");
+  });
+
+  it("allows when the session approval marker is FRESH (must-pass control)", async () => {
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-codex", {
+      approvedAt: new Date(Date.now() - 60 * 1000).toISOString(),
+      approvedBy: "test-operator",
+    });
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(event()),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.approvalCheck.source).toBe("marker");
+    expect(stderr.read()).toMatch(/approved via marker sess-codex/);
+  });
+
+  it("allows via the task-scoped marker for the active claim, even from a different session id", async () => {
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-uuid-codex");
+    writeTaskApprovalMarker(generatedDir, "task-uuid-codex", {
+      approvedAt: new Date(Date.now() - 60 * 1000).toISOString(),
+      approvedBy: "test-operator",
+    });
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(event()),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.approvalCheck.source).toBe("marker");
+    expect(stderr.read()).toMatch(/task-scoped marker for active-claim task-uuid-codex/);
+  });
+
+  it("BLOCKS when a marker exists for a DIFFERENT task than the active-claim (PR #198 parity)", async () => {
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-current");
+    writeTaskApprovalMarker(generatedDir, "task-stale-from-yesterday", {
+      approvedAt: new Date(Date.now() - 60 * 1000).toISOString(),
+      approvedBy: "test-operator",
+    });
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(event()),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    const stderrText = stderr.read();
+    expect(stderrText).toMatch(/active-claim task-current has no fresh task marker/);
+    expect(stderrText).not.toMatch(/marker for active-claim task-stale-from-yesterday/);
+  });
+
+  it("blocks when the active-claim's task marker is STALE (max_age exceeded)", async () => {
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-stale");
+    writeTaskApprovalMarker(generatedDir, "task-stale", {
+      approvedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      approvedBy: "test-operator",
+    });
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(event()),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.approvalCheck.source).toBe("none");
   });
 });

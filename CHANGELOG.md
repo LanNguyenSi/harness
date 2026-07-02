@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Codex understanding-gate PreToolUse hook now honors `approval_lifecycle` and task-scoped markers** (task e7c2ec3c, harness-review-2026-07-01). The Codex hook previously called the bare session-marker check, so `approval_lifecycle.max_age` (expired approvals) and the active-claim task-scoped marker silently applied only to Claude Code sessions — a stale Codex approval still opened the gate, and a task-scoped `harness approve understanding --task` marker was invisible to Codex. Both hooks now resolve markers through one shared code path (`checkOperatorApprovalMarkers` in the understanding-before-execution runtime): task-scoped marker first, session marker second, both under the same TTL. The Claude hook's stderr/decision contract is unchanged; the Codex hook gains the same task-scope trace line on a miss. Pinned by five parity tests (expired blocks / fresh allows / task-scoped allows / different-task marker blocks / stale task marker blocks). Known residual: the pack wires no Codex PostToolUse hook, so `expire_on_tool_match` boundaries still do not fire in Codex sessions (tracked as a follow-up task).
+
 ### Added
 
 - **`harness validate` / `harness doctor` now warn when the solution-acceptance pack is enabled but the OW knob path is git-ignored** (task 24f6ceb9, ow-review-2026-07-01). The orchestrator-workflow arm reads repo state (`.ai/solution-acceptance.json` plus run completeness under `.ai/runs/`); a repo that ignores `.ai/` wholesale cannot commit its enforcement posture, so fresh clones and git worktrees silently skip the OW arm under the default `auto` knob. The shared check (`checkSolutionAcceptanceKnobIgnored`) probes `git check-ignore` against the process cwd, stays silent outside a git repository and in `doctor --shallow` runs (no spawns), and lands in the same Policy Packs section as the producer deadlock checks. Negative control: a repo that ignores only `.ai/runs/` produces no warning.

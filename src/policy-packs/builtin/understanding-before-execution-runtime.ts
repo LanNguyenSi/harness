@@ -851,6 +851,56 @@ export function checkActiveClaimApprovalMarker(
   };
 }
 
+export interface OperatorMarkerApproval {
+  matched: boolean;
+  /** Which marker satisfied the gate; null when neither matched. */
+  source: "task" | "session" | null;
+  /** Detail of the decisive check (the match, or the session-scoped miss). */
+  detail: string;
+  /** Task-scoped check detail, for callers that trace the fall-through. */
+  taskCheckDetail: string;
+}
+
+/**
+ * Shared marker resolution for the Claude and Codex understanding-gate
+ * PreToolUse hooks (task e7c2ec3c): parse `approval_lifecycle` from the
+ * pack config, consult the task-scoped (active-claim) marker first and
+ * the session-scoped marker second, both under the same TTL. One code
+ * path on purpose — the Codex hook previously called the bare session
+ * check, so `max_age` and task-scoping silently applied only to Claude
+ * sessions.
+ */
+export function checkOperatorApprovalMarkers(
+  generatedDir: string,
+  sessionId: string,
+  packConfig: unknown,
+  stderr?: { write: (s: string) => void } | null,
+): OperatorMarkerApproval {
+  const lifecycleRaw =
+    packConfig !== null && typeof packConfig === "object" && !Array.isArray(packConfig)
+      ? (packConfig as Record<string, unknown>)["approval_lifecycle"]
+      : undefined;
+  const lifecycle = parseApprovalLifecycle(lifecycleRaw, stderr);
+  const ageOpts =
+    lifecycle.maxAgeMs !== undefined ? { maxAgeMs: lifecycle.maxAgeMs } : {};
+  const taskMarker = checkActiveClaimApprovalMarker(generatedDir, ageOpts);
+  if (taskMarker.matched) {
+    return {
+      matched: true,
+      source: "task",
+      detail: taskMarker.detail,
+      taskCheckDetail: taskMarker.detail,
+    };
+  }
+  const sessionMarker = checkApprovalMarker(generatedDir, sessionId, ageOpts);
+  return {
+    matched: sessionMarker.matched,
+    source: sessionMarker.matched ? "session" : null,
+    detail: sessionMarker.detail,
+    taskCheckDetail: taskMarker.detail,
+  };
+}
+
 /** Clear a specific task-scoped marker. Used by the post-tool-use hook. */
 export function clearTaskApprovalMarker(generatedDir: string, taskId: string): void {
   try {
