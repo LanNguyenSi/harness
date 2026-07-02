@@ -16,7 +16,11 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 22 = active LTS, matching publish-npm.yml; node 20 went EOL
+          # 2026-04 and dependency-cruiser 18 (check:boundaries) requires
+          # ^22||^24||>=26. package.json engines stays >=20 for consumers;
+          # the runtime code carries no node-22-only usage.
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
