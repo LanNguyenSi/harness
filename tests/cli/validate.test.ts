@@ -1215,6 +1215,39 @@ ${producersBlock}`;
     ).toBeUndefined();
   });
 
+  it("does not warn for an ask+mcp producer block policy (the enforcing pattern)", () => {
+    const home = buildPolicyFixture(
+      "    producers:\n" +
+        "      - kind: ask\n" +
+        "        command: harness approve risk\n" +
+        "        description: operator approves from their own shell\n" +
+        "      - kind: mcp\n" +
+        "        verb: mcp__agent-grounding__ledger_add\n" +
+        "        example: '{sessionId:\"s\", type:\"fact\", content:\"review:x\"}'\n" +
+        "        description: recovery path\n",
+    );
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(
+      result.diagnostics.find((d) => /any ledger writer/i.test(d.message)),
+    ).toBeUndefined();
+  });
+
+  it("does not warn for producer-less require_approval policies (operator verb is the canonical path)", () => {
+    const home = buildPolicyFixture("", "require_approval");
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(
+      result.diagnostics.find((d) => /any ledger writer/i.test(d.message)),
+    ).toBeUndefined();
+  });
+
   it("does not warn for warn-enforcement policies (advisory by declaration)", () => {
     const home = buildPolicyFixture("", "warn");
     const result = validate({

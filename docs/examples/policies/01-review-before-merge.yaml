@@ -38,6 +38,15 @@ policies:
       ledger_tag: "review:${PR_NUMBER}"
     hook: require-review-evidence
     enforcement: block
+    # Process gate (writing-custom-policies.md, tripwire 4): the agent
+    # records the review verdict itself, so this gate is advisory against
+    # the agent — it forces the review STEP. producers: is the visible
+    # trust decision the validate lint checks for.
+    producers:
+      - kind: mcp
+        verb: mcp__agent-grounding__ledger_add
+        example: '{sessionId:"${SESSION_ID}", type:"fact", content:"review:${PR_NUMBER} — <verdict + key findings>", source:"review subagent"}'
+        description: Spawn a review subagent against the PR diff and persist its verdict tagged with the PR number.
     ux:
       cannot: "You cannot merge PR ${PR_NUMBER} yet."
       required:

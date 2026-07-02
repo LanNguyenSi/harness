@@ -42,6 +42,14 @@ policies:
       within: 1h
     hook: require-deploy-readiness
     enforcement: block
+    # Process gate (writing-custom-policies.md, tripwire 4): the readiness
+    # evidence is recorded by the agent after running the checks — advisory
+    # against the agent; the gate enforces the readiness STEP.
+    producers:
+      - kind: mcp
+        verb: mcp__agent-grounding__ledger_add
+        example: '{sessionId:"${SESSION_ID}", type:"fact", content:"deploy-ready:${SERVICE} — checks green", source:"readiness check"}'
+        description: Run the readiness checks for the service, then persist the result tagged with the service name.
     ux:
       cannot: "You cannot deploy ${SERVICE} without a fresh readiness signal."
       required:

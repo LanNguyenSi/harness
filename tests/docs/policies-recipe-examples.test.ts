@@ -39,6 +39,12 @@ describe("docs/examples/policies — recipe YAMLs validate cleanly", () => {
         throw new Error(`${file} produced ${result.errorCount} error(s):\n${messages}`);
       }
       expect(result.errorCount).toBe(0);
+      // The recipe files must model the trust-model pattern they document:
+      // a self-attestation warning on a shipped example means the doc's own
+      // YAML violates the lint tripwire 4 describes (task 43b107f2).
+      expect(
+        result.diagnostics.filter((d) => /any ledger writer/i.test(d.message)),
+      ).toEqual([]);
     });
   }
 });

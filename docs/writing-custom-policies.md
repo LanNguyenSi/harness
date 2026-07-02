@@ -11,6 +11,8 @@ If you have not yet installed harness or run your first `apply`,
 read [`for-humans.md`](for-humans.md) first; this doc assumes a
 working harness.
 
+<a id="the-trust-model"></a>
+
 ## Read this first (four tripwires)
 
 These four things bite people who skip ahead to the YAML:
@@ -46,8 +48,9 @@ These four things bite people who skip ahead to the YAML:
    deliberate step (record the review verdict, log the smoke result)
    but does not survive an agent that simply writes the tag. That is
    exactly right for *process gates* — the recipes below, including the
-   canonical review-before-merge, are process gates and say so in their
-   `producers:`. If your gate must *enforce* against the agent, the
+   canonical review-before-merge, are process gates and declare that
+   intent in their `producers:` blocks (see the example files). If your
+   gate must *enforce* against the agent, the
    evidence has to come from an actor the agent does not control: an
    `ask`-kind producer (the operator's "go" on the prompt is the
    approval), CI, or a distinct trusted process. The two builtin packs
@@ -57,8 +60,6 @@ These four things bite people who skip ahead to the YAML:
    `harness validate` warns when a `block` policy declares no
    `producers:` at all, because then the evidence source is
    undocumented and this trade-off was never made visibly.
-
-<a id="the-trust-model"></a>
 
 ## Anatomy of a custom policy
 
@@ -262,10 +263,14 @@ parallel definitions are a per-surface opt-in, not a coupled pair.
 
 `ux:` is what the agent reads. `producers:` is a structured
 remediation hint that gets appended to the engine-vocabulary deny
-envelope when `ux:` is *not* set. Set one or the other; if you set
-both, `producers:` is hidden from the agent (it still feeds
-`explain --trace` for operator-side debugging). Default to `ux:`
-for anything an agent will see.
+envelope when `ux:` is *not* set; when both are set, `ux:` wins the
+agent-facing surface and `producers:` still feeds `explain --trace`.
+
+Declare `producers:` on every `block` policy even when `ux:` is set:
+it is the operator-visible statement of the intended evidence flow
+(tripwire 4 — the trust model), and `harness validate` warns when a
+`block` policy has none. Use `ux:` for the agent-facing wording on
+top of it.
 
 ## Author loop
 

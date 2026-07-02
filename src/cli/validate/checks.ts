@@ -314,6 +314,10 @@ export function checkPolicySelfAttestation(manifest: Manifest): Diagnostic[] {
   const diags: Diagnostic[] = [];
   for (let i = 0; i < manifest.policies.length; i++) {
     const p = manifest.policies[i];
+    // block-only on purpose: a require_approval policy's canonical unblock
+    // path is the operator verb (`harness approve risk`), an ask-semantics
+    // flow that exists independent of producers:, so absence of producers
+    // there does not mean the evidence source is undocumented.
     if (p === undefined || p.enforcement !== "block") continue;
     if (p.producers !== undefined && p.producers.length > 0) continue;
     diags.push({
@@ -325,8 +329,9 @@ export function checkPolicySelfAttestation(manifest: Manifest): Diagnostic[] {
         `satisfied by ANY ledger writer, including the gated agent itself ` +
         `via mcp__agent-grounding__ledger_add (advisory against the agent ` +
         `it gates). Declare a producers: entry naming the intended evidence ` +
-        `flow — an ask-kind producer for operator-in-the-loop approval, or ` +
-        `an agent recipe if the gate is a deliberate process gate. See ` +
+        `flow — an ask-kind producer for operator-in-the-loop approval ` +
+        `(alongside the mcp recovery producer the schema requires), or an ` +
+        `agent recipe if the gate is a deliberate process gate. See ` +
         `docs/writing-custom-policies.md ("The trust model").`,
     });
   }

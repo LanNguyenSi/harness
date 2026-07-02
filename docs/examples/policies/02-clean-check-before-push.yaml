@@ -51,6 +51,14 @@ policies:
       within: 10m
     hook: require-clean-check
     enforcement: block
+    # Process gate (writing-custom-policies.md, tripwire 4): the agent runs
+    # the checker and records the result itself — advisory against the
+    # agent, enforcing the STEP. producers: documents that trust decision.
+    producers:
+      - kind: mcp
+        verb: mcp__agent-grounding__ledger_add
+        example: '{sessionId:"${SESSION_ID}", type:"fact", content:"clean-check:${BRANCH} — 0 findings", source:"slop-detector"}'
+        description: Run the clean-check tool, then persist the result tagged with the branch.
     ux:
       cannot: "You cannot push branch ${BRANCH} without a recent clean check."
       required:

@@ -477,6 +477,17 @@ policies:
       ledger_tag: "risk-override:\${SESSION_ID}"
     hook: risk-gate
     enforcement: block
+    # Operator-in-the-loop gate: the override tag is written by the
+    # operator verb (ask semantics), not by the agent. See
+    # writing-custom-policies.md, tripwire 4 (the trust model).
+    producers:
+      - kind: ask
+        command: harness approve risk --force <reason>
+        description: Deliberate operator override for a critical production mutation; run from the operator shell.
+      - kind: mcp
+        verb: mcp__agent-grounding__ledger_add
+        example: '{sessionId:"\${SESSION_ID}", type:"fact", content:"risk-override:\${SESSION_ID} — operator-authorized <reason>", source:"operator"}'
+        description: Recovery path if the approve verb is unavailable; only meaningful when the OPERATOR authorizes the content.
     ux:
       cannot: "You cannot run this critical destructive action against production."
       required:
@@ -497,6 +508,14 @@ policies:
       ledger_tag: "risk-approved:\${SESSION_ID}"
     hook: risk-gate
     enforcement: require_approval
+    producers:
+      - kind: ask
+        command: harness approve risk
+        description: Operator approves this Risk Gate decision from their own shell.
+      - kind: mcp
+        verb: mcp__agent-grounding__ledger_add
+        example: '{sessionId:"\${SESSION_ID}", type:"fact", content:"risk-approved:\${SESSION_ID} — operator-authorized", source:"operator"}'
+        description: Recovery path if the approve verb is unavailable; only meaningful when the OPERATOR authorizes the content.
     ux:
       cannot: "You cannot run this destructive production action yet."
       required:
