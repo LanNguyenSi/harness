@@ -41,3 +41,32 @@ export function readManifestAtRef(ctx: GitContext, ref: string): string {
     );
   }
 }
+
+/**
+ * Repo-relative path for `absPath` in git's forward-slash form, or null
+ * when the file lives outside the repo work tree (e.g. an override layer
+ * under a ~/.harness home that is not the manifest's repo).
+ */
+export function repoRelativePath(ctx: GitContext, absPath: string): string | null {
+  const rel = path.relative(ctx.root, path.resolve(absPath));
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return null;
+  return rel.split(path.sep).join("/");
+}
+
+/**
+ * Read a repo file at a git ref, or null when it does not exist at that
+ * ref. Callers must have validated the ref itself first (the base-manifest
+ * read via {@link readManifestAtRef} hard-errors on a bad ref), so a null
+ * here means "file absent at ref", not "bad ref".
+ */
+export function readFileAtRefOrNull(
+  ctx: GitContext,
+  ref: string,
+  relPath: string,
+): string | null {
+  try {
+    return runGit(["show", `${ref}:${relPath}`], ctx.root);
+  } catch {
+    return null;
+  }
+}
