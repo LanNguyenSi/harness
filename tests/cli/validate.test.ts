@@ -980,6 +980,24 @@ describe("validate — checkSolutionAcceptanceProducer", () => {
   });
 });
 
+describe("validate — friendly version-mismatch diagnostic (task 50a94127)", () => {
+  it("prints upgrade guidance instead of the bare zod literal error", () => {
+    const home = writeFixture({ "harness.yaml": "version: 2\n" });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(result.errorCount).toBeGreaterThan(0);
+    const hit = result.diagnostics.find(
+      (d) => d.path === "version" && /this CLI supports manifest version 1/.test(d.message),
+    );
+    expect(hit).toBeDefined();
+    expect(hit?.message).toMatch(/your manifest declares version 2/);
+    expect(hit?.message).not.toMatch(/Invalid literal/);
+  });
+});
+
 describe("validate — checkSolutionAcceptanceKnobIgnored", () => {
   // grounding-mcp is wired in every fixture so the producer check stays
   // silent and the assertions isolate the knob-ignored diagnostic.

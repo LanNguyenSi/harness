@@ -1060,3 +1060,45 @@ describe("parseManifest — Phase 7 risk-gate vocabulary", () => {
     ).toThrow(/unrecognized key|bogus_clause/i);
   });
 });
+
+describe("parseManifest — friendly version-mismatch message (task 50a94127)", () => {
+  it("replaces the bare literal error with upgrade guidance for version: 2", () => {
+    try {
+      parseManifest({ version: 2 });
+      expect.unreachable("version: 2 must not parse");
+    } catch (err) {
+      expectIssueMatching(err, /this CLI supports manifest version 1/);
+      expectIssueMatching(err, /your manifest declares version 2/);
+      expectIssueMatching(err, /npm i -g @lannguyensi\/harness/);
+      // Structure unchanged: still a version-pathed issue, so callers
+      // branching on issue paths (and the exit-code mapping) are
+      // unaffected.
+      const issue = (err as ManifestParseError).issues.find(
+        (i) => i.path.length === 1 && i.path[0] === "version",
+      );
+      expect(issue).toBeDefined();
+    }
+  });
+
+  it("names the missing-version case instead of suggesting an upgrade", () => {
+    try {
+      parseManifest({ hooks: [] });
+      expect.unreachable("missing version must not parse");
+    } catch (err) {
+      expectIssueMatching(err, /missing manifest version: add `version: 1`/);
+      const text = (err as ManifestParseError).issues.map((i) => i.message).join("\n");
+      expect(text).not.toMatch(/npm i -g/);
+    }
+  });
+
+  it("leaves non-version issues untouched (control)", () => {
+    try {
+      parseManifest({ version: 1, bogus_key: true });
+      expect.unreachable("unknown key must not parse");
+    } catch (err) {
+      expectIssueMatching(err, /bogus_key|unrecognized/i);
+      const text = (err as ManifestParseError).issues.map((i) => i.message).join("\n");
+      expect(text).not.toMatch(/supports manifest version/);
+    }
+  });
+});
