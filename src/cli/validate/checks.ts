@@ -291,6 +291,48 @@ export function checkSolutionAcceptanceProducer(manifest: Manifest): Diagnostic[
   return [];
 }
 
+// Self-attestation disclosure (task 43b107f2, harness-review-2026-07-01).
+// The generic `requires:`/`ledger_tag` engine matches substrings in ledger
+// content that the GATED AGENT can write directly via
+// `mcp__agent-grounding__ledger_add` — whoever can write the ledger can open
+// the gate. The two builtin packs were hardened to filesystem markers after
+// exactly this class of self-approval bug (docs/CLI.md, branch-protection),
+// but a custom block-policy is only as strong as its evidence producer.
+//
+// Heuristic: warn only when a `block` policy declares NO `producers:` at
+// all — the evidence source is then undocumented and the operator has made
+// no visible trust decision. A declared producer, even an agent-executable
+// `mcp`/`bash` one, IS the schema's way of stating the intended evidence
+// flow (same philosophy as the doctor producer-gap refinement, task
+// f97e152f): the full/team templates deliberately ship mcp-producer
+// process-gates whose purpose is forcing a review-subagent step, and
+// warning on every one of them would train operators to ignore warnings.
+// What an agent-executable producer MEANS for the trust model (advisory
+// against the gated agent) is taught by the tripwire in
+// docs/writing-custom-policies.md, which the producer docs link to.
+export function checkPolicySelfAttestation(manifest: Manifest): Diagnostic[] {
+  const diags: Diagnostic[] = [];
+  for (let i = 0; i < manifest.policies.length; i++) {
+    const p = manifest.policies[i];
+    if (p === undefined || p.enforcement !== "block") continue;
+    if (p.producers !== undefined && p.producers.length > 0) continue;
+    diags.push({
+      severity: "warning",
+      path: `policies[${i}]`,
+      message:
+        `policy "${p.name}" blocks on requires.ledger_tag but declares no ` +
+        `producers: — the evidence source is undocumented, and the tag is ` +
+        `satisfied by ANY ledger writer, including the gated agent itself ` +
+        `via mcp__agent-grounding__ledger_add (advisory against the agent ` +
+        `it gates). Declare a producers: entry naming the intended evidence ` +
+        `flow — an ask-kind producer for operator-in-the-loop approval, or ` +
+        `an agent recipe if the gate is a deliberate process gate. See ` +
+        `docs/writing-custom-policies.md ("The trust model").`,
+    });
+  }
+  return diags;
+}
+
 // M7 validate lint: a policy that gates on risk.* / action.reversible clauses
 // WITHOUT an environment.name clause fires on EVERY unclassified command in
 // EVERY environment because those three clauses fail-closed to matched=true
@@ -381,6 +423,7 @@ export function runAssetChecks(
     ...checkPolicyPacks(manifest),
     ...checkPolicyPackConfigsAsDiagnostics(manifest),
     ...checkPolicyRiskWithoutEnvScope(manifest),
+    ...checkPolicySelfAttestation(manifest),
   ];
 }
 

@@ -11,9 +11,9 @@ If you have not yet installed harness or run your first `apply`,
 read [`for-humans.md`](for-humans.md) first; this doc assumes a
 working harness.
 
-## Read this first (three tripwires)
+## Read this first (four tripwires)
 
-These three things bite people who skip ahead to the YAML:
+These four things bite people who skip ahead to the YAML:
 
 1. **Custom *policies* are supported; custom policy *packs* are not (yet).**
    Anything you put in `policies:` is first-class: any name, any
@@ -38,6 +38,28 @@ These three things bite people who skip ahead to the YAML:
    `match:` (or `bash_match:`) that fires on the same tool the
    policy's `trigger` is watching.
 
+4. **The trust model: whoever can write the ledger can open the gate.**
+   `requires.ledger_tag` is a substring match against evidence-ledger
+   entries, and the gated agent can write those entries directly via
+   `mcp__agent-grounding__ledger_add`. A custom `block` policy is
+   therefore **advisory against the agent it gates**: it forces a
+   deliberate step (record the review verdict, log the smoke result)
+   but does not survive an agent that simply writes the tag. That is
+   exactly right for *process gates* — the recipes below, including the
+   canonical review-before-merge, are process gates and say so in their
+   `producers:`. If your gate must *enforce* against the agent, the
+   evidence has to come from an actor the agent does not control: an
+   `ask`-kind producer (the operator's "go" on the prompt is the
+   approval), CI, or a distinct trusted process. The two builtin packs
+   were hardened to filesystem markers for exactly this reason after a
+   self-approval incident (see [`CLI.md`](CLI.md) on branch-protection:
+   "the ledger is agent-writable and no longer opens the gate").
+   `harness validate` warns when a `block` policy declares no
+   `producers:` at all, because then the evidence source is
+   undocumented and this trade-off was never made visibly.
+
+<a id="the-trust-model"></a>
+
 ## Anatomy of a custom policy
 
 Every block-enforcement policy is four parts:
@@ -60,6 +82,10 @@ Block an `agent-tasks` merge call unless a `review:${PR_NUMBER}`
 entry has been logged for this session. This is the smallest useful
 custom policy and covers most of the moving parts: MCP-tool match,
 extract from `toolArgs`, `${VAR}` substitution, and a `ux:` block.
+
+This is a **process gate** (tripwire 4): the agent records the review
+verdict itself, so the gate forces the review *step*, it does not
+defend against an agent that skips it and writes the tag directly.
 
 Full file: [`docs/examples/policies/01-review-before-merge.yaml`](examples/policies/01-review-before-merge.yaml).
 Core:
@@ -132,6 +158,9 @@ policies:
 
 `--pack` filters slop-detector to a subset of its packs; omit the
 flag to run all five.
+
+Like Recipe A this is a process gate (tripwire 4): the checker runs in
+the agent's own session, and the agent writes the evidence.
 
 What this recipe adds over Recipe A:
 
