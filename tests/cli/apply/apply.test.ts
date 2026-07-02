@@ -1153,6 +1153,40 @@ describe("apply --target / --merge", () => {
     expect(r3.targetWritten).toBe(false);
   });
 
+  it("--target --merge: a tampered .last-apply refuses BEFORE the merge (provenance fail-safe)", async () => {
+    // The provenance-undefined fallback in the merge block (corrupt or
+    // entry-less .last-apply -> conservative preserve) is unreachable at
+    // apply level BY CONSTRUCTION: the three-state comparator sees any
+    // tampering with the recorded settings.json as out-of-band drift and
+    // refuses before the merge runs. Pin that ordering — it is the
+    // stronger guarantee (no merge at all beats a conservative merge).
+    // The provenance-less preserve semantics themselves are pinned at
+    // the mergeSettings unit level, and the true no-.last-apply first
+    // merge is exercised by the survive/drop e2e above (its apply #1).
+    writeManifest({
+      hooks: [basicHook()],
+      mcp: [{ name: "a", command: ["node", "/a.js"] }],
+    });
+    const target = path.join(tmpHome, "settings.local.json");
+    fs.writeFileSync(target, JSON.stringify({ mcpServers: {} }, null, 2));
+    const r1 = await apply({ homeDir: tmpHome, target, merge: true });
+    expect(r1.outcome).toBe("applied");
+
+    const lastApplyPath = path.join(tmpHome, "harness.generated", ".last-apply");
+    const record = JSON.parse(fs.readFileSync(lastApplyPath, "utf8"));
+    delete record.files["settings.json"];
+    fs.writeFileSync(lastApplyPath, JSON.stringify(record, null, 2));
+
+    writeManifest({
+      hooks: [basicHook()],
+      mcp: [{ name: "a", command: ["node", "/a.js"], enabled: false }],
+    });
+    const before = fs.readFileSync(target, "utf8");
+    const r2 = await apply({ homeDir: tmpHome, target, merge: true });
+    expect(r2.outcome).toBe("drift-refuse");
+    expect(fs.readFileSync(target, "utf8")).toBe(before);
+  });
+
   it("re-applying with --target --merge is idempotent", async () => {
     writeManifest({ hooks: [basicHook()] });
     const target = path.join(tmpHome, "settings.local.json");

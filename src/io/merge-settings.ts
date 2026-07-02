@@ -14,9 +14,10 @@
 //     effective kill switch on --merge targets;
 //   - absent from both → operator hand-add, preserved verbatim.
 //
-// Without the provenance set (first merge, or a pre-provenance
-// `.last-apply`), unknown names are preserved — the conservative
-// reading, since dropping could destroy an operator hand-add.
+// Without the provenance set (no `.last-apply` yet, a record with no
+// settings.json entry, or a corrupt record), unknown names are
+// preserved — the conservative reading, since dropping could destroy
+// an operator hand-add.
 //
 // `hooks` stays wholesale-owned: its nested array-of-groups shape has
 // no stable identity key to merge on, so partial ownership would be
@@ -82,7 +83,7 @@ export function mergeSettings(
   if (existing) {
     for (const k of Object.keys(existing)) {
       if (k === "mcpServers" && isRecord(existing[k])) {
-        const inGenerated = k in generated;
+        const inGenerated = Object.prototype.hasOwnProperty.call(generated, k);
         if (inGenerated && !isRecord(generated[k])) {
           // Malformed generated side: wholesale, generated wins.
           out[k] = generated[k];
@@ -117,7 +118,7 @@ export function mergeSettings(
         deepMerged.push(k);
         continue;
       }
-      if (k in generated) {
+      if (Object.prototype.hasOwnProperty.call(generated, k)) {
         // Wholesale replace: harness owns the key. Also the fallback
         // when the existing mcpServers is not an object (malformed
         // target) — the generated shape wins rather than merging into
@@ -132,7 +133,7 @@ export function mergeSettings(
   }
 
   for (const k of Object.keys(generated)) {
-    if (existing && k in existing) continue;
+    if (existing && Object.prototype.hasOwnProperty.call(existing, k)) continue;
     out[k] = generated[k];
     added.push(k);
   }
