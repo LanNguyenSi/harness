@@ -9,7 +9,11 @@ import {
   type McpProbe,
   type McpProbeResult,
 } from "../../probes/mcp.js";
-import type { Manifest, Policy } from "../../schema/index.js";
+import type { Manifest, McpServer, Policy } from "../../schema/index.js";
+import {
+  EVIDENCE_LEDGER_DB_ENV,
+  GROUNDING_MCP_SERVER_NAME,
+} from "../apply/generate-settings.js";
 import { parsePackSource } from "../../policy-packs/source.js";
 import { resolveBuiltin } from "../../policy-packs/registry.js";
 import { checkPolicyPackConfigs } from "../../policy-packs/config-check.js";
@@ -517,6 +521,64 @@ function buildRiskGate(manifest: Manifest): RiskGateSection {
   return { classifiers, resolvers, whenPolicies, warnings };
 }
 
+/**
+ * Grounding wiring health (task 129e1b94). Only meaningful when an enabled
+ * `grounding-mcp` entry exists — callers skip the section otherwise. Checks:
+ *   1. The evidence-ledger path (the value `harness apply` projects as
+ *      `EVIDENCE_LEDGER_DB`) is writable, or creatable under its nearest
+ *      existing ancestor — an unwritable path means grounding-mcp cannot
+ *      persist evidence and every ledger-backed gate degrades.
+ *   2. An operator env override that diverges from
+ *      `grounding.evidence_ledger.path` is surfaced: the override wins at
+ *      apply time, so a stale override silently defeats the manifest value.
+ */
+function buildGrounding(
+  manifest: Manifest,
+  server: McpServer,
+  home: string,
+): import("./types.js").GroundingSection {
+  const declaredPath = manifest.grounding.evidence_ledger.path;
+  const declaredExpanded = expandHome(declaredPath, home);
+  const warnings: string[] = [];
+
+  const envOverride = server.env?.[EVIDENCE_LEDGER_DB_ENV] ?? null;
+  const overrideExpanded =
+    envOverride !== null ? expandHome(envOverride, home) : null;
+  // The override is what apply preserves, so it is the EFFECTIVE path —
+  // check writability against it, not against the shadowed manifest value.
+  const ledgerPath = overrideExpanded ?? declaredExpanded;
+  if (overrideExpanded !== null && overrideExpanded !== declaredExpanded) {
+    warnings.push(
+      `tools.mcp.grounding-mcp.env.${EVIDENCE_LEDGER_DB_ENV} ("${envOverride}") ` +
+        `overrides grounding.evidence_ledger.path ("${declaredPath}"); the env wins at apply, ` +
+        `so align the two or drop the env so the manifest value applies`,
+    );
+  }
+
+  let ledgerPathWritable = true;
+  try {
+    if (fs.existsSync(ledgerPath)) {
+      fs.accessSync(ledgerPath, fs.constants.W_OK);
+    } else {
+      let dir = path.dirname(ledgerPath);
+      while (!fs.existsSync(dir)) {
+        const parent = path.dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+      }
+      fs.accessSync(dir, fs.constants.W_OK);
+    }
+  } catch {
+    ledgerPathWritable = false;
+    warnings.push(
+      `evidence-ledger path ${ledgerPath} is not writable (and not creatable) — ` +
+        `grounding-mcp cannot persist evidence, so ledger-backed gates degrade to warn`,
+    );
+  }
+
+  return { ledgerPath, ledgerPathWritable, envOverride, warnings };
+}
+
 function manifestSection(manifest: Manifest): ManifestSection {
   const topLevelKeys = [
     "grounding",
@@ -583,6 +645,9 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
     else if (d.severity === "warning") warningCount++;
   }
   warningCount += report.riskGate.warnings.length;
+  if (report.grounding !== undefined) {
+    warningCount += report.grounding.warnings.length;
+  }
   if (report.npmGlobalBin?.status === "warn") warningCount++;
   if (report.memory.routerExecutable && !report.memory.routerExecutable.exists) errorCount++;
   if (!report.memory.routerExecutable) warningCount++;
@@ -654,6 +719,14 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const policyPacks = buildPolicyPacks(manifest, policyPacksVersionProbe);
   const workflows = buildWorkflows(manifest);
   const riskGate = buildRiskGate(manifest);
+  const groundingServer =
+    manifest.tools.mcp.find(
+      (m) => m.name === GROUNDING_MCP_SERVER_NAME && m.enabled !== false,
+    ) ?? null;
+  const grounding =
+    groundingServer !== null
+      ? buildGrounding(manifest, groundingServer, home)
+      : undefined;
   const manifestSec = manifestSection(manifest);
 
   const rogueLedgerDbs = scanForRogueLedgers({
@@ -687,6 +760,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     policyPacks,
     workflows,
     riskGate,
+    ...(grounding !== undefined ? { grounding } : {}),
     rogueLedgerDbs,
     ...(npmGlobalBin !== undefined ? { npmGlobalBin } : {}),
   };

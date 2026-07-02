@@ -1654,3 +1654,114 @@ policies:
     ).toHaveLength(0);
   });
 });
+
+// task 129e1b94: grounding wiring health. The section exists only when an
+// enabled grounding-mcp entry is declared; it checks the EFFECTIVE
+// evidence-ledger path (operator env override wins) for writability and
+// surfaces override drift against grounding.evidence_ledger.path.
+describe("doctor — grounding section (task 129e1b94)", () => {
+  function groundingManifest(opts: { ledgerPath: string; env?: string }): string {
+    const envLine = opts.env !== undefined ? `\n      env:\n        EVIDENCE_LEDGER_DB: ${opts.env}` : "";
+    return `version: 1
+grounding:
+  evidence_ledger:
+    path: ${opts.ledgerPath}
+tools:
+  mcp:
+    - name: grounding-mcp
+      command: [node, /opt/grounding-mcp/server.js]
+      enabled: true${envLine}
+  builtin:
+    known: [Read, Edit, Bash]
+hooks: []
+policies: []
+`;
+  }
+
+  it("reports a writable ledger path with no warnings", async () => {
+    const home = makeFixture({});
+    const ledgerPath = path.join(home, "ledger", "ledger.db");
+    const manifest = groundingManifest({ ledgerPath });
+    const fixture = makeFixture({ "harness.yaml": manifest });
+    const report = await doctor({
+      configPath: path.join(fixture, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.grounding).toBeDefined();
+    expect(report.grounding?.ledgerPath).toBe(ledgerPath);
+    expect(report.grounding?.ledgerPathWritable).toBe(true);
+    expect(report.grounding?.envOverride).toBeNull();
+    expect(report.grounding?.warnings).toEqual([]);
+    const formatted = format(report);
+    expect(formatted).toContain("Grounding");
+    expect(formatted).toContain("✓ ledger path writable");
+  });
+
+  it("omits the section entirely when no grounding-mcp entry is declared", async () => {
+    const fixture = makeFixture({
+      "harness.yaml": `version: 1
+tools:
+  builtin:
+    known: [Read]
+hooks: []
+policies: []
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(fixture, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.grounding).toBeUndefined();
+    expect(format(report)).not.toContain("Grounding");
+  });
+
+  it("warns when an operator env override diverges from grounding.evidence_ledger.path", async () => {
+    const home = makeFixture({});
+    const declared = path.join(home, "a", "ledger.db");
+    const override = path.join(home, "b", "other.db");
+    const fixture = makeFixture({
+      "harness.yaml": groundingManifest({ ledgerPath: declared, env: override }),
+    });
+    const report = await doctor({
+      configPath: path.join(fixture, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.grounding?.envOverride).toBe(override);
+    // The override is the effective path doctor checks.
+    expect(report.grounding?.ledgerPath).toBe(override);
+    expect(
+      report.grounding?.warnings.some((w) =>
+        w.includes("overrides grounding.evidence_ledger.path"),
+      ),
+    ).toBe(true);
+    expect(report.warningCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("flags an unwritable ledger location (negative control)", async () => {
+    // Skipped for root (root passes W_OK on read-only dirs).
+    if (typeof process.geteuid === "function" && process.geteuid() === 0) return;
+    const home = makeFixture({});
+    const lockedDir = path.join(home, "locked");
+    fs.mkdirSync(lockedDir);
+    fs.chmodSync(lockedDir, 0o555);
+    cleanups.push(() => {
+      try {
+        fs.chmodSync(lockedDir, 0o755);
+      } catch {
+        /* fixture dir already removed by an earlier cleanup */
+      }
+    });
+    const ledgerPath = path.join(lockedDir, "nested", "ledger.db");
+    const fixture = makeFixture({
+      "harness.yaml": groundingManifest({ ledgerPath }),
+    });
+    const report = await doctor({
+      configPath: path.join(fixture, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.grounding?.ledgerPathWritable).toBe(false);
+    expect(
+      report.grounding?.warnings.some((w) => w.includes("not writable")),
+    ).toBe(true);
+  });
+});

@@ -319,6 +319,24 @@ function formatSummary(report: DoctorReport): string[] {
   return out;
 }
 
+// Grounding wiring section (task 129e1b94): rendered only when the report
+// carries a grounding section, i.e. an enabled grounding-mcp entry exists.
+// Manifests that don't use grounding stay silent, same policy as the Risk
+// Gate section above.
+function formatGroundingSection(report: DoctorReport): string[] {
+  const g = report.grounding;
+  if (g === undefined) return [];
+  const out: string[] = ["", "Grounding"];
+  const source = g.envOverride !== null ? "operator env override" : "grounding.evidence_ledger.path";
+  out.push(`  evidence ledger: ${g.ledgerPath} (${source})`);
+  if (g.warnings.length === 0) {
+    out.push("  ✓ ledger path writable; grounding: projects EVIDENCE_LEDGER_DB onto grounding-mcp");
+  } else {
+    for (const w of g.warnings) out.push(`  ⚠ ${w}`);
+  }
+  return out;
+}
+
 export function format(report: DoctorReport): string {
   const lines: string[] = [formatHeader(report)];
   lines.push(...formatManifestSection(report));
@@ -330,6 +348,7 @@ export function format(report: DoctorReport): string {
   lines.push(...formatPolicyPacksSection(report));
   lines.push(...formatWorkflowsSection(report));
   lines.push(...formatRiskGateSection(report));
+  lines.push(...formatGroundingSection(report));
   lines.push(...formatCodexTargetSection(report));
   lines.push(...formatRogueLedgerSection(report));
   lines.push(...formatSummary(report));
