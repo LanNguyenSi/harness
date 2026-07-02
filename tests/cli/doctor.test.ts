@@ -2,7 +2,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { doctor } from "../../src/cli/doctor/index.js";
+import {
+  doctor,
+  NULL_GIT_IGNORE_PROBE,
+  resolveGitIgnoreProbe,
+} from "../../src/cli/doctor/index.js";
 import { format } from "../../src/cli/doctor/format.js";
 import { VERSION } from "../../src/version.js";
 import type { McpProbe, McpProbeResult } from "../../src/probes/mcp.js";
@@ -1060,6 +1064,21 @@ tools:
       shallow: true,
     });
     expect(report.policyPacks.solutionAcceptance).toHaveLength(0);
+  });
+
+  // The doctor-level shallow test above cannot distinguish "no spawn"
+  // from "spawned and answered false" (this repo does not ignore the
+  // knob), so the no-spawn contract is pinned by identity on the
+  // resolver instead of mocking node:child_process (review finding on
+  // task 24f6ceb9).
+  it("resolveGitIgnoreProbe: explicit probe > shallow sentinel > real probe", () => {
+    expect(resolveGitIgnoreProbe({ shallow: true })).toBe(NULL_GIT_IGNORE_PROBE);
+    expect(resolveGitIgnoreProbe({})).not.toBe(NULL_GIT_IGNORE_PROBE);
+    const explicit = () => true as const;
+    expect(resolveGitIgnoreProbe({ shallow: true, gitIgnoreProbe: explicit })).toBe(
+      explicit,
+    );
+    expect(NULL_GIT_IGNORE_PROBE(".ai/solution-acceptance.json")).toBe(null);
   });
 });
 

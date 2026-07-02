@@ -148,6 +148,11 @@ mitigations, both partial:
   probes `git check-ignore` in the current working directory and stays
   quiet outside a git repository (validate remains usable for pure
   home-config linting) and in `doctor --shallow` runs (no spawns).
+  Note the warning reflects the CURRENT WORKING DIRECTORY's repository,
+  not the manifest's location: linting a home-level manifest from
+  inside an unrelated repo that ignores `.ai/` reports that repo's
+  ignoredness (and `--strict` upgrades it to an error like every other
+  warning) — run from the repo whose completions the pack gates.
 
 Neither mitigation binds a run to the CURRENT change; a stale accepted
 run keeping the arm green is a separate producer-side gap tracked as

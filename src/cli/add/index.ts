@@ -77,9 +77,12 @@ export async function add(action: AddEntry, opts: AddOptions = {}): Promise<AddR
   // We use parseManifest (not the result of validateBeforeWrite) so we have a
   // typed Manifest for runAssetChecks. defaults flow through.
   const manifest = parseManifest(parseYaml(proposed));
-  const proposedErrors = runAssetChecks(manifest, { homeDir: opts.homeDir }).filter(
-    (d) => d.severity === "error",
-  );
+  // gitIgnoreProbe stays null: the knob-ignored check is warning-only and
+  // this gate consumes errors, so the git spawn would be wasted work.
+  const proposedErrors = runAssetChecks(manifest, {
+    homeDir: opts.homeDir,
+    gitIgnoreProbe: () => null,
+  }).filter((d) => d.severity === "error");
 
   // Compute a baseline error set from the original manifest so that
   // pre-existing asset problems unrelated to this add do not block it.
@@ -88,9 +91,10 @@ export async function add(action: AddEntry, opts: AddOptions = {}): Promise<AddR
   let baselineKeys = new Set<string>();
   try {
     const baselineManifest = parseManifest(parseYaml(original));
-    const baselineErrors = runAssetChecks(baselineManifest, { homeDir: opts.homeDir }).filter(
-      (d) => d.severity === "error",
-    );
+    const baselineErrors = runAssetChecks(baselineManifest, {
+      homeDir: opts.homeDir,
+      gitIgnoreProbe: () => null,
+    }).filter((d) => d.severity === "error");
     baselineKeys = new Set(baselineErrors.map((d) => `${d.severity}|${d.path}|${d.message}`));
   } catch {
     // Defensive backstop: a base manifest that cannot be parsed is normally

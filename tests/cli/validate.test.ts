@@ -1076,11 +1076,21 @@ describe("validate — createDefaultGitIgnoreProbe (real git)", () => {
       createDefaultGitIgnoreProbe(cleanRepo)(".ai/solution-acceptance.json"),
     ).toBe(false);
 
+    // GIT_CEILING_DIRECTORIES keeps the assertion hermetic: without it,
+    // git would walk up from tmpdir and could find an enclosing repo on
+    // machines whose TMPDIR sits inside a checkout.
     const nonRepo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-nonrepo-"));
     cleanups.push(() => fs.rmSync(nonRepo, { recursive: true, force: true }));
-    expect(
-      createDefaultGitIgnoreProbe(nonRepo)(".ai/solution-acceptance.json"),
-    ).toBe(null);
+    const savedCeiling = process.env.GIT_CEILING_DIRECTORIES;
+    process.env.GIT_CEILING_DIRECTORIES = path.dirname(nonRepo);
+    try {
+      expect(
+        createDefaultGitIgnoreProbe(nonRepo)(".ai/solution-acceptance.json"),
+      ).toBe(null);
+    } finally {
+      if (savedCeiling === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
+      else process.env.GIT_CEILING_DIRECTORIES = savedCeiling;
+    }
   });
 });
 

@@ -425,6 +425,28 @@ function buildPolicies(manifest: Manifest): PolicyEntryReport[] {
  * Skipped (`enabled: false`) packs are NOT checked: they're not
  * expected to be live, and flagging them would flood the report.
  */
+/**
+ * Sentinel "cannot tell" probe: shallow runs answer every ignoredness
+ * question with `null` instead of spawning `git check-ignore`. Exported
+ * (with the resolver below) so a test can pin the no-spawn contract by
+ * identity instead of mocking `node:child_process`.
+ */
+export const NULL_GIT_IGNORE_PROBE: GitIgnoreProbe = () => null;
+
+/**
+ * Probe resolution order: an explicit (test) probe always wins; `shallow`
+ * degrades to the no-spawn sentinel, mirroring how the npm-bin probe and
+ * MCP probes degrade; otherwise the real `git check-ignore` probe runs
+ * against the process cwd.
+ */
+export function resolveGitIgnoreProbe(
+  opts: Pick<DoctorOptions, "gitIgnoreProbe" | "shallow">,
+): GitIgnoreProbe {
+  if (opts.gitIgnoreProbe) return opts.gitIgnoreProbe;
+  if (opts.shallow) return NULL_GIT_IGNORE_PROBE;
+  return createDefaultGitIgnoreProbe();
+}
+
 function buildPolicyPacks(
   manifest: Manifest,
   versionProbe: (cmd: readonly string[]) => string | null,
@@ -742,15 +764,10 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const hooks = checkHooks(manifest, home, opts);
   const policies = buildPolicies(manifest);
   const policyPacksVersionProbe = opts.versionProbe ?? (() => null);
-  // Shallow runs skip real spawns (`git check-ignore` included), mirroring
-  // the npm-bin probe below; an explicit test probe always wins.
-  const gitIgnoreProbe =
-    opts.gitIgnoreProbe ??
-    (opts.shallow ? () => null : createDefaultGitIgnoreProbe());
   const policyPacks = buildPolicyPacks(
     manifest,
     policyPacksVersionProbe,
-    gitIgnoreProbe,
+    resolveGitIgnoreProbe(opts),
   );
   const workflows = buildWorkflows(manifest);
   const riskGate = buildRiskGate(manifest);
