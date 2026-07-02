@@ -258,15 +258,17 @@ function startSubprocess(
     child.once("error", done);
   });
 
-  function timeoutPromise(): Promise<"timeout"> {
-    return new Promise((resolve) => {
-      const t = setTimeout(() => {
-        timers.delete(t);
+  function timeoutPromise(): { promise: Promise<"timeout">; timer: NodeJS.Timeout } {
+    let timer!: NodeJS.Timeout;
+    const promise = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => {
+        timers.delete(timer);
         resolve("timeout");
       }, timeoutMs);
-      t.unref();
-      timers.add(t);
+      timer.unref();
+      timers.add(timer);
     });
+    return { promise, timer };
   }
 
   function send(
@@ -288,12 +290,26 @@ function startSubprocess(
     });
   }
 
-  function call(
+  async function call(
     id: number,
     method: string,
     params: Record<string, unknown>,
   ): Promise<JsonRpcResponse | "exit" | "timeout"> {
-    return Promise.race([send(id, method, params), exitPromise, timeoutPromise()]);
+    const timeout = timeoutPromise();
+    try {
+      return await Promise.race([
+        send(id, method, params),
+        exitPromise,
+        timeout.promise,
+      ]);
+    } finally {
+      // A pooled session issues many calls on one subprocess; without
+      // settling-time cleanup the timer set and pending map grow O(calls)
+      // until dispose. Keep both O(in-flight) instead.
+      clearTimeout(timeout.timer);
+      timers.delete(timeout.timer);
+      pending.delete(id);
+    }
   }
 
   function notify(method: string, params: Record<string, unknown> = {}): void {
@@ -443,6 +459,16 @@ export function openLedgerSession(opts: LedgerClientOptions): LedgerSession {
   // handshake happens exactly once per session; a failed init stays failed
   // (retrying per call would reintroduce the very fan-out this removes).
   let initPromise: Promise<string | null> | null = null;
+  // Session-level timeout latch: once ANY call times out, every subsequent
+  // call short-circuits to degraded without a new round-trip. Without this
+  // a slow-but-responsive server could cost timeoutMs PER call — with K
+  // policies each awaiting a record on the enforcement critical path,
+  // ~(K+1)×timeoutMs can still blow the 30s hook budget the pooling exists
+  // to protect. The latch bounds total session timeout cost at ~1×timeoutMs.
+  // Ledger calls are best-effort by contract (degraded never blocks), so
+  // giving up on a server that already blew one deadline is the intended
+  // fail-open direction, not a new failure mode.
+  let timedOut = false;
   let nextId = 1;
 
   function ensureStarted(): CallResult | null {
@@ -468,6 +494,7 @@ export function openLedgerSession(opts: LedgerClientOptions): LedgerSession {
       });
       if (initResult === "exit") return `grounding-mcp ${exitDiagnostic(c)}`;
       if (initResult === "timeout") {
+        timedOut = true;
         return `grounding-mcp timeout after ${timeoutMs}ms`;
       }
       if (initResult.error) {
@@ -479,8 +506,12 @@ export function openLedgerSession(opts: LedgerClientOptions): LedgerSession {
     return initPromise;
   }
 
+  const latchedReason = (): string =>
+    `grounding-mcp timed out earlier in this session (${timeoutMs}ms); skipping further ledger calls`;
+
   return {
     async querySummary(query: LedgerSessionQuery): Promise<LedgerQueryResult> {
+      if (timedOut) return { kind: "degraded", reason: latchedReason() };
       const initError = await ensureInitialized();
       if (initError !== null) return { kind: "degraded", reason: initError };
       const c = ctl!;
@@ -518,6 +549,7 @@ export function openLedgerSession(opts: LedgerClientOptions): LedgerSession {
         };
       }
       if (callResult === "timeout") {
+        timedOut = true;
         return {
           kind: "degraded",
           reason: `grounding-mcp timeout after ${timeoutMs}ms`,
@@ -551,6 +583,7 @@ export function openLedgerSession(opts: LedgerClientOptions): LedgerSession {
       name: string,
       args: Record<string, unknown>,
     ): Promise<LedgerSessionCallResult> {
+      if (timedOut) return { status: "degraded", reason: latchedReason() };
       const initError = await ensureInitialized();
       if (initError !== null) return { status: "degraded", reason: initError };
       const c = ctl!;
@@ -562,6 +595,7 @@ export function openLedgerSession(opts: LedgerClientOptions): LedgerSession {
         return { status: "degraded", reason: `grounding-mcp ${exitDiagnostic(c)}` };
       }
       if (result === "timeout") {
+        timedOut = true;
         return {
           status: "degraded",
           reason: `grounding-mcp timeout after ${timeoutMs}ms`,

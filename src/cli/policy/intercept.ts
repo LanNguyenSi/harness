@@ -257,11 +257,15 @@ export function realLedgerClient(
     async query(_tag, sessionId): Promise<LedgerQueryResult> {
       // Cache the Promise (not the value) so concurrent queries for the
       // same session dedupe onto one in-flight round-trip. A degraded
-      // result is cached too: retrying per policy would reintroduce the
-      // fan-out, and the caller's warn-degraded handling is per-decision
-      // anyway. Staleness within one intercept invocation is a non-issue —
-      // the only writer during the loop is our own `record`, whose
-      // policy_decision rows the evaluator filters out by design.
+      // result is cached too — deliberately: a first-query timeout
+      // degrades ALL K policies to warn-degraded (fail-open, matching the
+      // documented ledger-unreachable contract) instead of retrying per
+      // policy, which would reintroduce the fan-out. Staleness: our own
+      // `record` rows are filtered out by the evaluator by design; an
+      // EXTERNAL writer landing evidence mid-loop would make a later
+      // policy deny where a fresh query would allow — a fail-closed,
+      // ms-wide window resolved by the agent's retry (next intercept =
+      // fresh session + fresh snapshot).
       let cached = summaryCache.get(sessionId);
       if (cached === undefined) {
         cached = getSession().querySummary({ sessionId });

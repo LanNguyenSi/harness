@@ -620,3 +620,136 @@ process.stdin.on("data", (d) => {
     }
   });
 });
+
+// Reviewer follow-ups on the pooled session (task a2589fa3): the timeout
+// latch, mid-session death isolation, and dispose idempotence.
+describe("openLedgerSession — timeout latch and death isolation", () => {
+  // Answers init + ledger_summary promptly, then goes silent on every
+  // ledger_add: the first add times out, subsequent calls must be latched.
+  const slowAddServer = (): string => `#!/usr/bin/env node
+let buf = "";
+process.stdin.on("data", (d) => {
+  buf += d.toString();
+  let nl = buf.indexOf("\\n");
+  while (nl !== -1) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    if (!line.trim()) { nl = buf.indexOf("\\n"); continue; }
+    let msg;
+    try { msg = JSON.parse(line); } catch { nl = buf.indexOf("\\n"); continue; }
+    if (msg.method === "initialize") {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\\n");
+    } else if (msg.method === "tools/call" && msg.params && msg.params.name === "ledger_summary") {
+      const payload = { entries: { facts: [], hypotheses: [], rejected: [], unknowns: [] } };
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: JSON.stringify(payload) }] } }) + "\\n");
+    }
+    // ledger_add: never respond -> caller times out.
+    nl = buf.indexOf("\\n");
+  }
+});
+`;
+
+  // Answers init + the FIRST ledger_add, then exits the process.
+  const dieAfterFirstAddServer = (): string => `#!/usr/bin/env node
+let adds = 0;
+let buf = "";
+process.stdin.on("data", (d) => {
+  buf += d.toString();
+  let nl = buf.indexOf("\\n");
+  while (nl !== -1) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    if (!line.trim()) { nl = buf.indexOf("\\n"); continue; }
+    let msg;
+    try { msg = JSON.parse(line); } catch { nl = buf.indexOf("\\n"); continue; }
+    if (msg.method === "initialize") {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\\n");
+    } else if (msg.method === "tools/call" && msg.params && msg.params.name === "ledger_add") {
+      adds += 1;
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: '{"ok":true}' }] } }) + "\\n");
+      if (adds === 1) { setTimeout(() => process.exit(0), 10); }
+    }
+    nl = buf.indexOf("\\n");
+  }
+});
+`;
+
+  it("latches after one timeout: subsequent calls degrade immediately without a round-trip", async () => {
+    const { openLedgerSession } = await import("../../src/policies/ledger-client.js");
+    const script = makeScript(slowAddServer());
+    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 300 });
+    try {
+      const query = await session.querySummary({ sessionId: "s" });
+      expect(query.kind).toBe("ok");
+      const first = await session.callTool("ledger_add", { sessionId: "s" });
+      expect(first.status).toBe("degraded");
+      if (first.status === "degraded") {
+        expect(first.reason).toContain("timeout after 300ms");
+      }
+      // The latch: this must NOT wait another 300ms.
+      const t0 = performance.now();
+      const second = await session.callTool("ledger_add", { sessionId: "s" });
+      const elapsed = performance.now() - t0;
+      expect(second.status).toBe("degraded");
+      if (second.status === "degraded") {
+        expect(second.reason).toContain("timed out earlier in this session");
+      }
+      expect(elapsed).toBeLessThan(200);
+    } finally {
+      session.dispose();
+    }
+  });
+
+  it("isolates a mid-session death: later calls degrade, earlier results stand, nothing throws", async () => {
+    const { openLedgerSession } = await import("../../src/policies/ledger-client.js");
+    const script = makeScript(dieAfterFirstAddServer());
+    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 4000 });
+    try {
+      const first = await session.callTool("ledger_add", { sessionId: "s" });
+      expect(first.status).toBe("ok");
+      // Give the child a moment to exit.
+      await new Promise((r) => setTimeout(r, 100));
+      const second = await session.callTool("ledger_add", { sessionId: "s" });
+      expect(second.status).toBe("degraded");
+      if (second.status === "degraded") {
+        expect(second.reason).toContain("grounding-mcp");
+      }
+    } finally {
+      session.dispose();
+    }
+  });
+
+  it("dispose is a safe no-op when called twice", async () => {
+    const { openLedgerSession } = await import("../../src/policies/ledger-client.js");
+    const script = makeScript(singleUseHappyServer());
+    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 4000 });
+    const result = await session.querySummary({ sessionId: "s" });
+    expect(result.kind).toBe("ok");
+    session.dispose();
+    expect(() => session.dispose()).not.toThrow();
+  });
+
+  function singleUseHappyServer(): string {
+    return `#!/usr/bin/env node
+let buf = "";
+process.stdin.on("data", (d) => {
+  buf += d.toString();
+  let nl = buf.indexOf("\\n");
+  while (nl !== -1) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    if (!line.trim()) { nl = buf.indexOf("\\n"); continue; }
+    let msg;
+    try { msg = JSON.parse(line); } catch { nl = buf.indexOf("\\n"); continue; }
+    if (msg.method === "initialize") {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\\n");
+    } else if (msg.method === "tools/call") {
+      const payload = { entries: { facts: [], hypotheses: [], rejected: [], unknowns: [] } };
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: JSON.stringify(payload) }] } }) + "\\n");
+    }
+    nl = buf.indexOf("\\n");
+  }
+});
+`;
+  }
+});

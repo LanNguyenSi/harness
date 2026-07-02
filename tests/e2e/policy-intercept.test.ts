@@ -581,4 +581,40 @@ describe("policy intercept: pooled grounding-mcp connection", () => {
     const parsed = JSON.parse(stdoutOut().trim());
     expect(parsed.reason).toContain("audit-before-merge");
   });
+
+  it("degrades ALL matching policies off one cached round-trip when the ledger is unreachable", async () => {
+    // Broken mcp + 2 matching policies: the cached degraded summary fans
+    // out to every policy as warn-degraded (fail-open by contract), and
+    // nothing blocks. Old behavior retried per policy; the pooled client
+    // deliberately does not.
+    const dir = makeTmpDir("harness-broken-mcp-pool-");
+    const brokenScript = path.join(dir, "broken-grounding-mcp.sh");
+    fs.writeFileSync(
+      brokenScript,
+      "#!/bin/sh\necho 'broken-mcp: simulated startup failure' >&2\nexit 1\n",
+      "utf8",
+    );
+    fs.chmodSync(brokenScript, 0o755);
+    const manifestPath = writeManifest({
+      groundingMcpCommand: [brokenScript],
+      extraPolicies: [{ name: "audit-before-merge", tagPrefix: "audit" }],
+    });
+
+    const { stream: stdout, output: stdoutOut } = captureStream();
+    const { stream: stderr } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(JSON.stringify(PR_MERGE_EVENT)),
+      stdout,
+      stderr,
+      configPath: manifestPath,
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(stdoutOut()).toBe("");
+    expect(result.decisions).toHaveLength(2);
+    expect(result.decisions.map((d) => d.outcome)).toEqual([
+      "warn-degraded",
+      "warn-degraded",
+    ]);
+  });
 });
