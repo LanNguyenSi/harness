@@ -22,7 +22,7 @@
 
 import { queryLedgerByTag, type LedgerEntry } from "../../policies/index.js";
 import {
-  checkApprovalMarker,
+  checkOperatorApprovalMarkers,
   checkPersistedReport,
   defaultReportsDir,
   matchLedgerEntries,
@@ -269,10 +269,28 @@ export async function runPackHookCodexPreToolUseCli(
   // as the Claude blocker: operator-authored marker beats ledger
   // self-approval. Falls through to ledger-as-audit when generatedDir
   // is unresolvable (test injection without a manifest path).
+  // Task-scoped (active-claim) marker first, session marker second,
+  // both under the `approval_lifecycle` TTL — shared with the Claude
+  // hook via `checkOperatorApprovalMarkers` (task e7c2ec3c; the bare
+  // `checkApprovalMarker` call here previously ignored `max_age` and
+  // task-scoping, so those knobs silently applied only to Claude).
   if (generatedDir !== undefined) {
-    const marker = checkApprovalMarker(generatedDir, sessionId);
-    if (marker.matched) {
-      return allowResult(marker.detail, "marker", stderr);
+    const markers = checkOperatorApprovalMarkers(
+      generatedDir,
+      sessionId,
+      declared.config,
+      stderr,
+    );
+    if (markers.source !== "task") {
+      // Trace the task-marker miss, mirroring the Claude hook, so an
+      // operator debugging a Codex session sees the active-claim vs
+      // marker mismatch rather than only the generic session miss.
+      stderr.write(
+        `harness pack hook codex: task-scoped check: ${markers.taskCheckDetail}\n`,
+      );
+    }
+    if (markers.matched) {
+      return allowResult(markers.detail, "marker", stderr);
     }
   }
 
