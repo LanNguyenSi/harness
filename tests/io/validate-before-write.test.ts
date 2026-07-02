@@ -72,3 +72,16 @@ describe("validateBeforeWrite", () => {
     }
   });
 });
+
+describe("validateBeforeWrite — friendly version message propagation (task 50a94127)", () => {
+  it("surfaces the upgrade guidance on the write path (add/adopt/init consumers)", () => {
+    const r = validateBeforeWrite({ version: 2 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      const text = formatValidationErrors(r.errors);
+      expect(text).toMatch(/this CLI supports manifest version 1/);
+      expect(text).toMatch(/npm i -g @lannguyensi\/harness/);
+      expect(text).not.toMatch(/Invalid literal/);
+    }
+  });
+});

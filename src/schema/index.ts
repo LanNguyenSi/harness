@@ -22,8 +22,12 @@ export const ManifestSchema = z
     hooks: HooksSchema.default([]),
     policies: PoliciesSchema.default([]),
     policy_packs: PolicyPacksSchema.default([]),
-    // Phase 7 Risk Gate inputs — schema vocabulary only, no runtime
-    // surface reads them yet. See docs/risk-gate.md.
+    // Phase 7 Risk Gate inputs — LIVE since Phase 7 #3/#5:
+    // `risk.classifiers[]` feeds `classifyRisk` (runtime/intercept.ts)
+    // on every PreToolUse once the manifest declares at least one
+    // `when:`-bearing policy (the riskGateActive guard), and
+    // `when.risk.*` clauses consume the result in runtime/when-eval.ts.
+    // See docs/risk-gate.md.
     risk: RiskSchema.default({}),
     environments: EnvironmentsSchema.default({}),
     permission_profiles: PermissionProfilesSchema.default({}),
@@ -71,15 +75,47 @@ export class ManifestParseError extends Error {
   }
 }
 
+/**
+ * Replace the bare zod literal error on the `version` key with
+ * actionable guidance (task 50a94127; the message docs/ARCHITECTURE.md
+ * §"Versioning" promises). Three variants: a HIGHER numeric version
+ * most likely comes from a newer harness release, so the fix is
+ * upgrading the CLI; a missing key needs `version: 1` added; anything
+ * else (lower number, quoted string, wrong type) gets a neutral
+ * unsupported-version message, since upgrade advice would point the
+ * wrong way. Message wording only: issue codes, paths, and the thrown
+ * error type stay identical, so exit codes and callers that branch on
+ * issue structure are unaffected.
+ */
+function friendlyVersionIssues(issues: z.ZodIssue[], raw: unknown): z.ZodIssue[] {
+  const declared =
+    raw !== null && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)["version"]
+      : undefined;
+  return issues.map((i) => {
+    if (i.path.length !== 1 || i.path[0] !== "version") return i;
+    let message: string;
+    if (declared === undefined || declared === null) {
+      message = `missing manifest version: add \`version: ${SUPPORTED_MANIFEST_VERSION}\` (this CLI supports manifest version ${SUPPORTED_MANIFEST_VERSION})`;
+    } else if (typeof declared === "number" && declared > SUPPORTED_MANIFEST_VERSION) {
+      message = `this CLI supports manifest version ${SUPPORTED_MANIFEST_VERSION}; your manifest declares version ${JSON.stringify(declared)}. A newer manifest needs a newer CLI: re-run \`npm i -g @lannguyensi/harness\` and see the CHANGELOG for migration notes.`;
+    } else {
+      message = `unsupported manifest version ${JSON.stringify(declared)}: this CLI supports manifest version ${SUPPORTED_MANIFEST_VERSION} (use \`version: ${SUPPORTED_MANIFEST_VERSION}\`, unquoted)`;
+    }
+    return { ...i, message };
+  });
+}
+
 export function parseManifest(raw: unknown): Manifest {
   const result = ManifestSchema.safeParse(raw);
   if (!result.success) {
-    const summary = result.error.issues
+    const issues = friendlyVersionIssues(result.error.issues, raw);
+    const summary = issues
       .map((i) => `  ${i.path.join(".") || "<root>"}: ${i.message}`)
       .join("\n");
     throw new ManifestParseError(
       `harness manifest failed validation:\n${summary}`,
-      result.error.issues,
+      issues,
     );
   }
   return result.data;

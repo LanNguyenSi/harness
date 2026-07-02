@@ -2,12 +2,16 @@ import { z } from "zod";
 
 // Risk Gate vocabulary — Phase 7 #1 anchor.
 //
-// STATUS: schema vocabulary only. `harness validate` parses and
-// validates a `risk:` block, but no runtime surface reads it yet. The
-// Risk Classifier that consumes `risk.classifiers[]` to assign an
-// Action Envelope a severity + categories lands in Phase 7 #3 (see
-// docs/ROADMAP.md and docs/risk-gate.md). Until then a `risk:` block is
-// inert, validated config.
+// STATUS: LIVE (corrected 2026-07-02, task 50a94127; this header
+// previously still said "no runtime surface reads it yet" long after
+// that stopped being true). `risk.classifiers[]` is consumed by the
+// Risk Classifier (`classifyRisk`, runtime/risk-classifier.ts) invoked
+// from runtime/intercept.ts on every PreToolUse once the manifest
+// declares at least one `when:`-bearing policy (the riskGateActive
+// guard), and policies consume the classification through `when.risk.*`
+// clauses evaluated in runtime/when-eval.ts (Phase 7 #5). A declared
+// `risk:` block is enforced configuration, not decoration. See
+// docs/risk-gate.md.
 //
 // Design source: lava-ice-logs/2026-04-30/harness-risk-gate-extension.md.
 
