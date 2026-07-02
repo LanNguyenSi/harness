@@ -39,7 +39,6 @@ import {
 } from "../../runtime/pending-approval.js";
 import { isReadOnlyBashPipeline } from "../../runtime/read-only-bash.js";
 import {
-  PolicyUxSchema,
   ProducerSchema,
   type Manifest,
   type McpServer,
@@ -52,6 +51,7 @@ import { type LoaderOptions } from "../loader.js";
 import {
   checkHookPause,
   loadManifestOrInjected,
+  parseConfigUx,
   readStdin,
 } from "./hook-bootstrap.js";
 import { renderReportSchemaHint } from "./understanding-report-schema-hint.js";
@@ -152,29 +152,11 @@ function parseConfigProducers(
   return result.data;
 }
 
-// Agent-facing `ux:` block on the pack config (agent-tasks/e48e3b45).
-// Same shape as PolicyUxSchema, surfaced through the pack's separate
-// deny path. When present, the deny envelope the agent sees becomes
-// the plain-language `{ cannot, required, run }` shape and the legacy
-// "Understanding Gate: no approved..." + schemaHint + producers
-// vocabulary is suppressed. Malformed configs are logged to stderr
-// and fall back to the legacy envelope (mirrors parseConfigProducers).
-function parseConfigUx(
-  raw: unknown,
-  stderr: NodeJS.WritableStream,
-): PolicyUx | undefined {
-  if (raw === undefined) return undefined;
-  const result = PolicyUxSchema.safeParse(raw);
-  if (!result.success) {
-    stderr.write(
-      `harness pack hook: config.ux ignored (${result.error.issues
-        .map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`)
-        .join("; ")})\n`,
-    );
-    return undefined;
-  }
-  return result.data;
-}
+// Agent-facing `ux:` block on the pack config (agent-tasks/e48e3b45):
+// parsed via the shared `parseConfigUx` (hook-bootstrap.ts). When present,
+// the deny envelope the agent sees becomes the plain-language
+// `{ cannot, required, run }` shape and the legacy "Understanding Gate:
+// no approved..." + schemaHint + producers vocabulary is suppressed.
 
 function blockJson(
   toolName: string,
@@ -564,6 +546,7 @@ export async function runPackHookPreToolUseCli(
   const configUx = parseConfigUx(
     (declared.config as Record<string, unknown>)["ux"],
     stderr,
+    "harness pack hook",
   );
   const escapeHint = approveEscapeHint(toolName, commandStr);
   stdout.write(

@@ -40,11 +40,12 @@ import {
 import { resolveGeneratedDir } from "../../io/generated-dir.js";
 import { resolveGitContext } from "../../runtime/git-context.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
-import { PolicyUxSchema, type Manifest, type PolicyUx } from "../../schema/index.js";
+import { type Manifest, type PolicyUx } from "../../schema/index.js";
 import { type LoaderOptions } from "../loader.js";
 import {
   checkHookPause,
   loadManifestOrInjected,
+  parseConfigUx,
   readStdin,
 } from "./hook-bootstrap.js";
 
@@ -114,19 +115,6 @@ function completionActionLabel(
   return null;
 }
 
-function parseConfigUx(raw: unknown, stderr: NodeJS.WritableStream): PolicyUx | undefined {
-  if (raw === undefined) return undefined;
-  const result = PolicyUxSchema.safeParse(raw);
-  if (!result.success) {
-    stderr.write(
-      `harness pack hook solution-acceptance: config.ux ignored (${result.error.issues
-        .map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`)
-        .join("; ")})\n`,
-    );
-    return undefined;
-  }
-  return result.data;
-}
 
 function blockJson(
   actionLabel: string,
@@ -255,7 +243,11 @@ export async function runPackHookSolutionAcceptanceCli(
     return { exitCode: 0, blocked: false, diagnostic };
   }
 
-  const configUx = parseConfigUx((pack.config as Record<string, unknown>)["ux"], stderr);
+  const configUx = parseConfigUx(
+    (pack.config as Record<string, unknown>)["ux"],
+    stderr,
+    "harness pack hook solution-acceptance",
+  );
 
   // Resolve the verdict id. Precedence: the agent-tasks active-claim task id
   // first (authoritative for claimed sessions — an env var must not redirect a

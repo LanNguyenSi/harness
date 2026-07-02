@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Two architecture fitness functions now run in CI** (task 19e293c6, harness-review-2026-07-01). `npm run check:boundaries` (dependency-cruiser 18.0.0, `.dependency-cruiser.cjs`) pins the layering schema → policies → runtime → policy-packs → cli and fails on any new reverse import; running it for the first time surfaced four pre-existing shared-util edges (`policies/duration`, `policies/extract`, `runtime/ledger-record`, `runtime/expand-home` imported from below), which are grandfathered per target file and documented in the config with a pointer to the structural-concentration follow-up (f86b2425). `npm run check:duplication` (jscpd 5.0.11 via `scripts/check-duplication.mjs`) pins the clone count in `src/` at the post-extraction baseline of 82: a percentage threshold cannot see a single new ~16-line copy, an absolute count can — raising the pin requires an in-PR justification. Negative-control verified: a deliberate reverse import fails `check:boundaries` (exit 1), and the pre-extraction tree (85 clones) fails `check:duplication`.
+
+### Changed
+
+- **`parseConfigUx` exists once** (task 19e293c6). The four byte-identical copies in hook-pre-tool-use, hook-codex-pre-tool-use, hook-branch-protection, and hook-solution-acceptance (the CHANGELOG had flagged the third copy for extraction; the fourth landed anyway because no scan existed) are now one shared helper in `src/cli/pack/hook-bootstrap.ts`, parameterized by the hook's stderr label. The per-hook warning output is byte-identical to the pre-extraction strings, pinned by a test per label.
+
 ### Fixed
 
 - **First run on a fresh machine no longer dead-ends** (task 24ec07a6, harness-review-2026-07-01). Every read verb (`doctor`, `describe`, `validate`, `list`, `explain`, ...) previously failed with a bare `manifest not found: <path>` when no `harness.yaml` exists; the base-manifest miss now appends `No harness.yaml on this machine yet: run harness init --interactive (or harness init --template solo) to create one` (same message shape, same exit 66; a missing override LAYER keeps the old message, since "run init" would be wrong advice for a mid-read race). Also fixed two doc-drift items the same review flagged: docs/for-agents.md's `${REPO}` row claimed "basename of cwd" (the code resolves the basename of the git worktree ROOT) and its `${BRANCH}` row promised a `(detached)` placeholder that has never existed (detached HEAD substitutes the empty string); docs/init-interactive.md's Custom-flow pack list was missing `branch-protection` and now notes that `solution-acceptance` is deliberately not wizard-selectable.

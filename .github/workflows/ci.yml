@@ -25,6 +25,19 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
+      - name: Import boundaries
+        # dependency-cruiser fitness function for the layering
+        # (schema -> policies -> runtime -> policy-packs -> cli); the
+        # grandfathered shared-util edges are documented in
+        # .dependency-cruiser.cjs. Fails on any NEW reverse import.
+        run: npm run check:boundaries
+
+      - name: Duplication scan
+        # jscpd clone-count pin (scripts/check-duplication.mjs) — the
+        # guard that would have caught the 4th parseConfigUx copy.
+        # Fails when src/ grows a clone beyond the pinned baseline.
+        run: npm run check:duplication
+
       - name: Build
         run: npm run build
 

@@ -34,13 +34,14 @@ import {
 } from "../../runtime/pending-approval.js";
 import { extractShellCommand } from "../../runtime/tool-name-aliases.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
-import { PolicyUxSchema, type Manifest, type McpServer, type PolicyUx } from "../../schema/index.js";
+import { type Manifest, type McpServer, type PolicyUx } from "../../schema/index.js";
 import { type LoaderOptions } from "../loader.js";
 import { isReadOnlyBashPipeline } from "../../runtime/read-only-bash.js";
 import { renderReportSchemaHint } from "./understanding-report-schema-hint.js";
 import {
   checkHookPause,
   loadManifestOrInjected,
+  parseConfigUx,
   readStdin,
 } from "./hook-bootstrap.js";
 
@@ -87,22 +88,6 @@ interface CodexEventEnvelope {
   tool?: unknown;
 }
 
-function parseConfigUx(
-  raw: unknown,
-  stderr: NodeJS.WritableStream,
-): PolicyUx | undefined {
-  if (raw === undefined) return undefined;
-  const result = PolicyUxSchema.safeParse(raw);
-  if (!result.success) {
-    stderr.write(
-      `harness pack hook codex: config.ux ignored (${result.error.issues
-        .map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`)
-        .join("; ")})\n`,
-    );
-    return undefined;
-  }
-  return result.data;
-}
 
 function pickString(...candidates: unknown[]): string | undefined {
   for (const c of candidates) {
@@ -351,6 +336,7 @@ export async function runPackHookCodexPreToolUseCli(
   const configUx = parseConfigUx(
     (declared.config as Record<string, unknown>)["ux"],
     stderr,
+    "harness pack hook codex",
   );
   const agentFacing = configUx
     ? renderAgentFacing(configUx, { SESSION_ID: sessionId, TOOL_NAME: toolName })
