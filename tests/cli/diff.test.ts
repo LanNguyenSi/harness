@@ -173,3 +173,111 @@ tools:
     expect((caught as HarnessExitError).message).toMatch(/no-such-ref-xyz/);
   });
 });
+
+// task b2660f9e (harness-review-2026-07-01/diff-override-asymmetry): the ref
+// side of `diff --since` was override-naive while the working side was
+// override-merged, so active machine/project override layers showed up as
+// phantom diffs. The ref side now merges the SAME layers: read at the ref
+// when versioned in the repo, treated as constant (with a warning) when the
+// layer lives outside the repo. The pre-existing no-override tests above pin
+// that the plain path is unchanged.
+describe("diff — override-layer symmetry (--since)", () => {
+  const DISCRIMINATOR = { hostname: "h", platform: "linux", procVersionPath: "/nonexistent" };
+
+  const plainBase = `version: 1
+hooks: []
+policies: []
+tools:
+  mcp: []
+`;
+
+  const overrideLayer = `grounding:
+  evidence_ledger:
+    retention_days: 30
+`;
+
+  function writeAt(dir: string, rel: string, contents: string): void {
+    const full = path.join(dir, rel);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, contents, "utf8");
+  }
+
+  it("reports no phantom changes when a committed machine override is active and unchanged", () => {
+    const repo = newRepo();
+    writeAt(repo, "harness.yaml", plainBase);
+    writeAt(repo, "machines/h.harness.overrides.yaml", overrideLayer);
+    gitCommit(repo, "base + override");
+    const r = diff({
+      configPath: path.join(repo, "harness.yaml"),
+      since: "master",
+      homeDir: repo,
+      discriminator: DISCRIMINATOR,
+    });
+    expect(r.changes).toEqual([]);
+    expect(r.warnings).toEqual([]);
+    // Sanity: the override actually took effect on both sides.
+    expect(r.before.grounding.evidence_ledger.retention_days).toBe(30);
+    expect(r.after.grounding.evidence_ledger.retention_days).toBe(30);
+  });
+
+  it("still reports a genuine base change while an override layer is active", () => {
+    const repo = newRepo();
+    writeAt(repo, "harness.yaml", plainBase);
+    writeAt(repo, "machines/h.harness.overrides.yaml", overrideLayer);
+    gitCommit(repo, "base + override");
+    writeAt(
+      repo,
+      "harness.yaml",
+      plainBase.replace("mcp: []", `mcp:\n    - name: oracle\n      command: [node, /o.js]\n      enabled: true`),
+    );
+    const r = diff({
+      configPath: path.join(repo, "harness.yaml"),
+      since: "master",
+      homeDir: repo,
+      discriminator: DISCRIMINATOR,
+    });
+    // Engine granularity: an empty->non-empty mcp[] surfaces as one
+    // modified hunk on tools.mcp. The pin here is: exactly ONE change,
+    // and it is the base edit — no override-induced noise around it.
+    expect(r.changes).toHaveLength(1);
+    expect(r.changes[0]!.path).toBe("tools.mcp");
+    expect(r.output).toContain("oracle");
+  });
+
+  it("treats a layer added since the ref as a real change (ref side goes without it)", () => {
+    const repo = newRepo();
+    writeAt(repo, "harness.yaml", plainBase);
+    gitCommit(repo, "base only");
+    writeAt(repo, "machines/h.harness.overrides.yaml", overrideLayer);
+    const r = diff({
+      configPath: path.join(repo, "harness.yaml"),
+      since: "master",
+      homeDir: repo,
+      discriminator: DISCRIMINATOR,
+    });
+    expect(r.changes.map((c) => c.path)).toContain("grounding.evidence_ledger.retention_days");
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("treats an unversioned (outside-repo) layer as constant on both sides and warns", () => {
+    const repo = newRepo();
+    writeAt(repo, "harness.yaml", plainBase);
+    gitCommit(repo, "base only");
+    // Separate non-repo home holding the machine layer.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-diff-home-"));
+    cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+    writeAt(home, "machines/h.harness.overrides.yaml", overrideLayer);
+    const r = diff({
+      configPath: path.join(repo, "harness.yaml"),
+      since: "master",
+      homeDir: home,
+      discriminator: DISCRIMINATOR,
+    });
+    expect(r.changes).toEqual([]);
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toContain("not versioned in this repo");
+    // Constant on both sides: the override applies to before AND after.
+    expect(r.before.grounding.evidence_ledger.retention_days).toBe(30);
+    expect(r.after.grounding.evidence_ledger.retention_days).toBe(30);
+  });
+});

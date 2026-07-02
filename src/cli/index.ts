@@ -379,6 +379,9 @@ export function buildProgram(opts: RunOptions = {}): Command {
           project: options.project,
           since: options.since,
         });
+        // Override-layer diagnostics go to stderr so stdout stays a clean
+        // diff for piping (task b2660f9e).
+        for (const w of result.warnings) stderr(`harness diff: ${w}\n`);
         stdout(result.output);
       },
     );
