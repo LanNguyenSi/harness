@@ -144,12 +144,12 @@ describe("addLedgerFact — error paths", () => {
     });
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      // Stable invariant: the exit handler always reports "grounding-mcp exited:".
-      expect(result.reason).toMatch(/grounding-mcp exited:/);
-      // The stderr tail is best-effort — stderr "data" may or may not arrive
-      // before "exit" (documented race), so accept either the captured line or
-      // the "(no stderr)" fallback rather than flaking on the race.
-      expect(result.reason).toMatch(/connection refused|\(no stderr\)/);
+      // The stderr capture now happens on "close" (fires only after every
+      // stdio pipe has drained), not "exit" (race-prone: exit can fire
+      // before the stderr "data" event delivers the buffered chunk). That
+      // makes the captured tail deterministic, so assert the exact reason
+      // instead of tolerating the "(no stderr)" race fallback.
+      expect(result.reason).toBe("grounding-mcp exited: grounding-mcp connection refused");
     }
   });
 

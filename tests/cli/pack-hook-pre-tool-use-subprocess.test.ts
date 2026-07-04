@@ -43,6 +43,28 @@ tools:
     known: [Bash, Edit, Write]
 `;
 
+// Manifest that DECLARES + ENABLES the understanding-before-execution pack
+// with a `config.producers` kind:ask entry (mirrors the in-process unit
+// test's "renders config.producers into the deny envelope" case in
+// pack-hook-pre-tool-use.test.ts). No approval marker, persisted report, or
+// ledger entry exists anywhere under the isolated tmp dir, so the hook falls
+// through every allow source and reaches the hard BLOCK/deny path.
+const MANIFEST_WITH_PACK = `version: 1
+policy_packs:
+  - name: understanding-before-execution
+    enabled: true
+    config:
+      producers:
+        - kind: ask
+          command: harness approve understanding
+          description: Bare command. Operator approval IS the gate satisfaction.
+hooks: []
+policies: []
+tools:
+  builtin:
+    known: [Bash, Edit, Write]
+`;
+
 let tmpDir: string;
 
 beforeEach(() => {
@@ -66,6 +88,11 @@ function runHook(
   // Pin the harness home under the tmp dir so the machine/project override
   // layers cannot resolve against the operator's real ~/.harness/.
   childEnv["HARNESS_HOME"] = path.join(tmpDir, "home");
+  // Pin the persisted-report lookup under the tmp dir too, so the deny-path
+  // case below can never accidentally pick up a real
+  // `<cwd>/.understanding-gate/reports` directory (defaultReportsDir()
+  // falls back to cwd when this is unset).
+  childEnv["UNDERSTANDING_GATE_REPORT_DIR"] = path.join(tmpDir, "reports");
 
   const result = spawnSync(
     "node",
@@ -127,5 +154,43 @@ describe("pack hook pre-tool-use — subprocess E2E (allow path)", () => {
 
     expect(status).toBe(0);
     expect(stdout.trim()).toBe("");
+  });
+});
+
+describe("pack hook pre-tool-use — subprocess E2E (deny path)", () => {
+  it("emits the block/deny envelope when the pack is declared with a kind:ask producer and no approval marker exists", () => {
+    // Security-relevant path: a declared + enabled pack, no operator
+    // approval marker/report/ledger entry anywhere under the isolated tmp
+    // dir. A field-name regression in blockJson()'s envelope (e.g.
+    // "decision" or "permissionDecision" typo'd or dropped) would only be
+    // caught here — the allow-path cases above never reach blockJson() at
+    // all.
+    const configPath = path.join(tmpDir, "harness.yaml");
+    fs.writeFileSync(configPath, MANIFEST_WITH_PACK, "utf8");
+
+    const event = JSON.stringify({
+      session_id: "sess-hook-e2e-deny-1",
+      tool_name: "Edit",
+      tool_input: { file_path: "/some/file.ts", old_string: "x", new_string: "y" },
+    });
+
+    const { status, stdout, stderr } = runHook(configPath, event);
+
+    expect(status).toBe(0);
+    const decision = JSON.parse(stdout.trim()) as {
+      decision?: string;
+      reason?: string;
+      hookSpecificOutput?: {
+        hookEventName?: string;
+        permissionDecision?: string;
+        permissionDecisionReason?: string;
+      };
+    };
+    // The legacy top-level field (keeps 2.0.x CLIs blocking)...
+    expect(decision.decision).toBe("block");
+    // ...and the Claude Code 2.1+ documented PreToolUse contract.
+    expect(decision.hookSpecificOutput?.permissionDecision).toBe("deny");
+    expect(decision.hookSpecificOutput?.hookEventName).toBe("PreToolUse");
+    expect(stderr).toMatch(/BLOCK/);
   });
 });
