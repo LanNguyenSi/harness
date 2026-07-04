@@ -135,7 +135,11 @@ export async function addLedgerFact(
     child.on("error", (err: Error) => {
       settle({ ok: false, reason: `spawn failed: ${err.message}` });
     });
-    child.on("exit", () => {
+    child.on("close", () => {
+      // Node fires `close` only after every stdio pipe has drained. Racing
+      // on `exit` would surface `(no stderr)` whenever the kernel buffer
+      // hadn't been flushed yet (mirrors the `close`-based fix in
+      // ledger-client.ts's `startSubprocess`).
       const tail = stderrBuf.trim().split("\n").pop()?.trim() || "(no stderr)";
       settle({ ok: false, reason: `grounding-mcp exited: ${tail}` });
     });
