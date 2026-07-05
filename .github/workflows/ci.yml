@@ -46,7 +46,7 @@ jobs:
         run: npm run build
 
       - name: Test
-        run: npm test
+        run: npm run test:cov
 
       - name: Integration tests
         # Runs the HARNESS_INTEGRATION_TESTS-gated suite that `npm test`
