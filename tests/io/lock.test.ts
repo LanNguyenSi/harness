@@ -54,11 +54,14 @@ describe("withFileLock — basic", () => {
 describe("withFileLock — concurrency via fork", () => {
   it("serialises two concurrent invocations from separate processes", async () => {
     const workerPath = path.resolve(__dirname, "fixtures/lock-worker.cjs");
-    // A holds the lock for 300ms so the [A,B] order is stable even if B's fork() resolves
-    // before A finishes acquiring; A's hold is much longer than typical fork latency on
-    // CI runners. The 50ms lead-time is just a tiebreaker for the first-acquire race.
+    // Deterministic first-acquire ordering via a readiness handshake, not a fixed
+    // lead-time: worker A appends "A:lock-acquired" the instant lockfile.lock()
+    // resolves, so we fork B only once A is provably holding the lock. B then
+    // blocks on acquire until A releases, so the [A,B] order no longer depends on
+    // process-startup latency winning a 50ms window under CPU load (the same
+    // fixed-window flake class fixed in the smoke SIGKILL test, #330).
     const a = forkWorker(workerPath, { lockPath, dataPath, label: "A", holdMs: 300 });
-    await new Promise((r) => setTimeout(r, 50));
+    await waitForAcquired(dataPath, "A", 10_000);
     const b = forkWorker(workerPath, { lockPath, dataPath, label: "B", holdMs: 100 });
 
     const [ra, rb] = await Promise.all([a, b]);
@@ -74,6 +77,25 @@ describe("withFileLock — concurrency via fork", () => {
     ]);
   }, 15_000);
 });
+
+/**
+ * Poll (real time, no wall-clock budget) until `dataPath` shows that `label`
+ * has acquired the lock — the worker appends "<label>:lock-acquired" the moment
+ * lockfile.lock() resolves. Synchronizing on the child's own readiness signal
+ * instead of assuming it acquires within a fixed startup window is what makes
+ * the [A,B] ordering deterministic under CPU contention. The 10ms interval is a
+ * poll cadence, not an ordering tiebreaker. Mirrors the #330 smoke handshake.
+ */
+async function waitForAcquired(dataPath: string, label: string, timeoutMs: number): Promise<void> {
+  const marker = `${label}:lock-acquired`;
+  const start = Date.now();
+  while (!(fs.existsSync(dataPath) && fs.readFileSync(dataPath, "utf8").includes(marker))) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error(`timed out after ${timeoutMs}ms waiting for "${marker}" in ${dataPath}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
 
 interface WorkerArgs {
   lockPath: string;
