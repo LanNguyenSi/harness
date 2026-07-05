@@ -326,6 +326,12 @@ describe("runSmoke: timeout", () => {
   });
 
   it("escalates to SIGKILL when the child traps SIGTERM", async () => {
+    // Explicit per-test timeout: vitest's default testTimeout is 5000ms
+    // (unset in vitest.config.ts), which is below the 7000ms upper bound
+    // this test asserts on below. Without raising it here, a legitimate
+    // 5-7s escalation gets killed by vitest itself at 5000ms and reported
+    // as a generic timeout, never reaching (and never actually exercising)
+    // the `toBeLessThan(7000)` assertion.
     const outputDir = makeTmpDir("smoke-sigkill-");
     // Fake claude that explicitly ignores SIGTERM and sleeps long enough
     // that the runner's 2s grace before SIGKILL is exercised end-to-end.
@@ -403,7 +409,7 @@ setInterval(() => {}, 1000);
     // since SIGTERM is swallowed by design, the only way the OS process
     // can be dead here is that SIGKILL (which cannot be trapped) fired.
     expect(() => process.kill(child.pid!, 0)).toThrow();
-  });
+  }, 9000);
 });
 
 describe("runSmoke: implicit failure on claude crash without terminal result", () => {
