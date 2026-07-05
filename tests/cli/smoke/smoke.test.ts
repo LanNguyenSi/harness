@@ -4,6 +4,7 @@
 // passing, stream capture, parser hand-off, assertion evaluation,
 // forensic-file invariants.
 
+import { spawn as spawnChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -27,6 +28,23 @@ function makeTmpDir(prefix: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
   return dir;
+}
+
+/**
+ * Poll (real time, no wall-clock budget) until `filePath` exists. Used to
+ * synchronize with a child process's own readiness signal instead of
+ * assuming it starts up within some fixed window, which is what made the
+ * SIGKILL-escalation test flaky under CPU contention (see the comment at
+ * its call site).
+ */
+async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
+  const start = Date.now();
+  while (!fs.existsSync(filePath)) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error(`timed out after ${timeoutMs}ms waiting for ${filePath}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 /**
@@ -308,15 +326,25 @@ describe("runSmoke: timeout", () => {
   });
 
   it("escalates to SIGKILL when the child traps SIGTERM", async () => {
+    // Explicit per-test timeout: vitest's default testTimeout is 5000ms
+    // (unset in vitest.config.ts), which is below the 7000ms upper bound
+    // this test asserts on below. Without raising it here, a legitimate
+    // 5-7s escalation gets killed by vitest itself at 5000ms and reported
+    // as a generic timeout, never reaching (and never actually exercising)
+    // the `toBeLessThan(7000)` assertion.
     const outputDir = makeTmpDir("smoke-sigkill-");
     // Fake claude that explicitly ignores SIGTERM and sleeps long enough
     // that the runner's 2s grace before SIGKILL is exercised end-to-end.
     const dir = makeTmpDir("fake-trap-claude-");
     const claudePath = path.join(dir, "claude");
+    const readyPath = path.join(dir, "ready");
     fs.writeFileSync(
       claudePath,
       `#!/usr/bin/env node
 process.on("SIGTERM", () => { /* swallow on purpose */ });
+// Signal that the trap is installed (see the readiness handshake below)
+// before doing anything else.
+require("fs").writeFileSync(${JSON.stringify(readyPath)}, "ready");
 // Stay alive long past timeoutMs + SIGKILL grace so a missing SIGKILL
 // would hang the run far past the wall-clock budget we assert on.
 setInterval(() => {}, 1000);
@@ -325,6 +353,35 @@ setInterval(() => {}, 1000);
     );
     fs.chmodSync(claudePath, 0o755);
 
+    // Root cause of the flake (agent-tasks/8bd005cd): the runner arms its
+    // SIGTERM timer as soon as it spawns the child, but under CPU
+    // contention Node's own startup (module load + event-loop spin-up)
+    // can take longer than the runner's timeoutMs. When that happens the
+    // SIGTERM lands before `process.on("SIGTERM", ...)` above has run, so
+    // the untrapped default SIGTERM kills the child immediately and the
+    // observed wall-clock collapses well under the 2s grace window
+    // (observed: "expected 835 to be >= 2000"). That's a race between the
+    // runner's timer and the child's own startup, not a real bug in the
+    // escalation path.
+    //
+    // Close the race with an explicit handshake instead of hoping the
+    // child starts up in time: spawn it ourselves with no deadline
+    // pressure, wait (real time, no wall-clock budget) for it to confirm
+    // the trap is installed, then hand the already-armed child to
+    // runSmoke via the spawn-injection test seam. The runner's timeout
+    // window only starts once SIGTERM is guaranteed to be swallowed, so
+    // the only way the child can die is via the runner's own SIGKILL
+    // escalation.
+    const child = spawnChildProcess(claudePath, []) as ChildProcessWithoutNullStreams;
+    cleanups.push(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    });
+    await waitForFile(readyPath, 10_000);
+
     const start = Date.now();
     const result = await runSmoke({
       prompt: "x",
@@ -332,21 +389,27 @@ setInterval(() => {}, 1000);
       claudeBin: claudePath,
       applyImpl: stubApply(),
       timeoutMs: 200,
+      spawn: () => child,
     });
     const elapsed = Date.now() - start;
     expect(result.claudeTimedOut).toBe(true);
     expect(result.exitCode).toBe(1);
-    // 200ms budget + 2000ms grace + epsilon. Upper bound at 7000ms
-    // (was 4500ms): under CI load the wall-clock SIGKILL escalation
-    // was observed at ~4756ms (agent-tasks/595ba01e, PR #208), so the
-    // tighter 4500 ceiling flaked roughly once per ~20 full-suite runs.
-    // 7000 keeps the regression-detection floor (a real 6s+ cleanup
-    // bug still trips) while eliminating the flake. If a deterministic
-    // refactor lands (fake timers + stubbed SIGTERM), the bound can
-    // tighten back down.
+    // 200ms budget + 2000ms grace + epsilon. With the trap-installation
+    // race above closed, SIGTERM is deterministically swallowed, so this
+    // bound can only be met via the runner's SIGKILL escalation: Node's
+    // setTimeout never fires earlier than its delay, so 2000ms is a hard
+    // floor once SIGTERM is a no-op. Upper bound at 7000ms (was 4500ms):
+    // under CI load the wall-clock SIGKILL escalation was observed at
+    // ~4756ms (agent-tasks/595ba01e, PR #208); 7000 keeps the
+    // regression-detection floor (a real 6s+ cleanup bug still trips)
+    // while leaving headroom for scheduler jitter.
     expect(elapsed).toBeGreaterThanOrEqual(2000);
     expect(elapsed).toBeLessThan(7000);
-  });
+    // Integration-style confirmation that the child is actually gone:
+    // since SIGTERM is swallowed by design, the only way the OS process
+    // can be dead here is that SIGKILL (which cannot be trapped) fired.
+    expect(() => process.kill(child.pid!, 0)).toThrow();
+  }, 9000);
 });
 
 describe("runSmoke: implicit failure on claude crash without terminal result", () => {
