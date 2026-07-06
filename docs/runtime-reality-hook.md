@@ -32,6 +32,8 @@ hooks:
 
 `blocking: hard` is required so the hook's `deny` envelope actually blocks the tool call. Run `harness apply` to project this into your runtime config (`settings.json`), then `harness doctor` to confirm the hook is registered.
 
+> `harness init --template full` ships this exact entry **commented out** under `hooks:`, so you can discover and enable it in place rather than authoring it from scratch. It stays commented because an active entry without the three env values above would degrade to a silent allow (a no-op that looks like protection).
+
 Note: the trigger matching runs inside the hook binary, so the entry needs no `bash_match`. The hook self-filters to the destructive command set and short-circuits everything else.
 
 ## 2. Write the expectations file
