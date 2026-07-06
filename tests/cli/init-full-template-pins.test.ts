@@ -32,6 +32,27 @@ describe("FULL_TEMPLATE: npm-bin hook pins", () => {
   });
 });
 
+// AC2 regression guard (task 9f10267e, follow-up to PR #333): the
+// runtime-reality hook ships in FULL_TEMPLATE as a COMMENTED discovery
+// block, never as an active entry. An active `runtime-reality` hook
+// without RUNTIME_REALITY_KEYWORD + an expectations file +
+// RUNTIME_REALITY_PROBE_CMD degrades to a silent allow (a no-op that
+// looks like protection). A future edit that uncomments the block would
+// ship exactly that footgun; this guard turns such an edit red.
+describe("FULL_TEMPLATE: runtime-reality stays commented (no active no-op hook)", () => {
+  it("declares no active runtime-reality hook", () => {
+    const m = parseManifest(parseYaml(FULL_TEMPLATE));
+    expect(
+      m.hooks.find((h) => h.name === "runtime-reality"),
+      "FULL_TEMPLATE must keep runtime-reality commented out; an active entry without its RUNTIME_REALITY_* env degrades to silent-allow",
+    ).toBeUndefined();
+  });
+
+  it("still carries the commented discovery block (not silently deleted)", () => {
+    expect(FULL_TEMPLATE).toContain("runtime-reality drift gate (NOT enabled by default)");
+  });
+});
+
 // Regression guard for the YAML-render round-trip of the new
 // expire_on_bash_match defaults (task f54e0ecb). The unit tests in
 // pack-hook-post-tool-use.test.ts use direct JS string literals which
