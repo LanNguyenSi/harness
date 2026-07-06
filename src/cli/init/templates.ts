@@ -244,6 +244,26 @@ hooks:
     blocking: hard
     budget_ms: 2000
 
+  # Optional: runtime-reality drift gate (NOT enabled by default).
+  # Blocks destructive runtime commands (compose down/restart, systemctl,
+  # kill/pkill, ./deploy-*) when the live process state has drifted from what
+  # your expectations file says should be running. Left COMMENTED on purpose:
+  # the hook is host-coupled and, without RUNTIME_REALITY_KEYWORD + an
+  # expectations file + RUNTIME_REALITY_PROBE_CMD, degrades silently to allow,
+  # a no-op that looks like protection. To arm it, uncomment the entry and
+  # fill in the three env values. The expectations-file format and how to
+  # install the probe are documented in docs/runtime-reality-hook.md.
+  #
+  # - name: runtime-reality
+  #   event: PreToolUse
+  #   command: >-
+  #     RUNTIME_REALITY_KEYWORD=<your-stack>
+  #     RUNTIME_REALITY_EXPECTATIONS_DIR=$HOME/.runtime-reality/expectations
+  #     RUNTIME_REALITY_PROBE_CMD="node $HOME/.runtime-reality/probes/runtime-reality-docker-probe.mjs"
+  #     harness pack hook runtime-reality
+  #   blocking: hard
+  #   description: Block destructive runtime commands on critical process drift
+
 policies:
   - name: review-before-merge
     description: Block PR merges unless a ledger entry tagged review:<pr-number> exists for this session.
