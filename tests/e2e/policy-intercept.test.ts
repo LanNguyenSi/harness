@@ -226,7 +226,7 @@ hooks:
   - name: policy-intercept-pretooluse
     event: PreToolUse
     match: "mcp__agent-tasks__pull_requests_merge"
-    command: /bin/true
+    command: /usr/bin/true
     blocking: hard
     budget_ms: 10000
 

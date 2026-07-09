@@ -1145,7 +1145,7 @@ describe("validate — M7 checkPolicyRiskWithoutEnvScope", () => {
 hooks:
   - name: risk-gate
     event: PreToolUse
-    command: /bin/true
+    command: /usr/bin/true
     blocking: false
 policies:
   - name: gate-test
@@ -1263,7 +1263,7 @@ ${whenBlock}    requires:
 hooks:
   - name: h
     event: PreToolUse
-    command: /bin/true
+    command: /usr/bin/true
     blocking: false
 policies:
   - name: plain-policy
@@ -1302,7 +1302,7 @@ describe("validate — checkPolicySelfAttestation (task 43b107f2)", () => {
 hooks:
   - name: gate-hook
     event: PreToolUse
-    command: /bin/true
+    command: /usr/bin/true
     blocking: false
 policies:
   - name: gate-test

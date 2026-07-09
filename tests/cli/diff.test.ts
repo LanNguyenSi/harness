@@ -122,6 +122,28 @@ tools:
     expect(r.output).toMatch(/no changes/);
   });
 
+  it("resolves a symlinked manifest path before relativizing against git's physical root", () => {
+    const repo = newRepo();
+    writeManifest(repo, baseManifest);
+    gitCommit(repo, "initial");
+    // Mirrors macOS os.tmpdir(): /var/folders/… is a symlink into
+    // /private/var/folders/…, while `git rev-parse --show-toplevel`
+    // reports the physical root. Explicit symlink so Linux CI covers
+    // the same shape.
+    const linkParent = fs.mkdtempSync(path.join(os.tmpdir(), "harness-diff-link-"));
+    cleanups.push(() => fs.rmSync(linkParent, { recursive: true, force: true }));
+    const link = path.join(linkParent, "repo-link");
+    fs.symlinkSync(fs.realpathSync(repo), link, "dir");
+    const r = diff({
+      configPath: path.join(link, "harness.yaml"),
+      since: "master",
+      homeDir: link,
+      discriminator: { hostname: "h", platform: "linux", procVersionPath: "/nonexistent" },
+    });
+    expect(r.changes).toEqual([]);
+    expect(r.output).toMatch(/no changes/);
+  });
+
   it("exits 64 with a usage hint when --since is omitted", () => {
     let caught: unknown;
     try {

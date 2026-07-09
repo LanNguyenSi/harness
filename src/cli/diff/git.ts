@@ -1,10 +1,26 @@
 import { execFileSync } from "node:child_process";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { EX_UNAVAILABLE, EX_USAGE, HarnessExitError } from "../exit-codes.js";
 
 export interface GitContext {
   root: string;
   manifestRelPath: string;
+}
+
+// `git rev-parse --show-toplevel` reports the PHYSICAL work-tree path
+// (symlinks resolved), so every path we relativize against that root must
+// be resolved the same way, or `path.relative` climbs out of the repo.
+// Bites on macOS out of the box: os.tmpdir() is /var/folders/…, a symlink
+// to /private/var/folders/…. Nonexistent paths stay merely resolved; the
+// callers' existing not-found error paths own that case.
+function toPhysicalPath(p: string): string {
+  const resolved = path.resolve(p);
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
 }
 
 function runGit(args: string[], cwd: string): string {
@@ -16,7 +32,8 @@ function runGit(args: string[], cwd: string): string {
 }
 
 export function locateGitContext(manifestPath: string): GitContext {
-  const dir = path.dirname(path.resolve(manifestPath));
+  const physicalManifestPath = toPhysicalPath(manifestPath);
+  const dir = path.dirname(physicalManifestPath);
   let root: string;
   try {
     root = runGit(["rev-parse", "--show-toplevel"], dir).trim();
@@ -26,7 +43,7 @@ export function locateGitContext(manifestPath: string): GitContext {
       EX_UNAVAILABLE,
     );
   }
-  const relPath = path.relative(root, path.resolve(manifestPath));
+  const relPath = path.relative(root, physicalManifestPath);
   return { root, manifestRelPath: relPath };
 }
 
@@ -48,7 +65,7 @@ export function readManifestAtRef(ctx: GitContext, ref: string): string {
  * under a ~/.harness home that is not the manifest's repo).
  */
 export function repoRelativePath(ctx: GitContext, absPath: string): string | null {
-  const rel = path.relative(ctx.root, path.resolve(absPath));
+  const rel = path.relative(ctx.root, toPhysicalPath(absPath));
   if (rel.startsWith("..") || path.isAbsolute(rel)) return null;
   return rel.split(path.sep).join("/");
 }

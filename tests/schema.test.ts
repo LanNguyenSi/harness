@@ -123,7 +123,7 @@ describe("parseManifest — happy path", () => {
     expect(() =>
       parseManifest({
         version: 1,
-        hooks: [{ name: "h", event: "PreToolUse", command: "/bin/true", blocking: false }],
+        hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
         policies: [
           {
             name: "p",
@@ -144,7 +144,7 @@ describe("parseManifest — happy path", () => {
   it("accepts a policy with mixed-kind producers (bash + mcp)", () => {
     const m = parseManifest({
       version: 1,
-      hooks: [{ name: "h", event: "PreToolUse", command: "/bin/true", blocking: false }],
+      hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
       policies: [
         {
           name: "p",
@@ -168,7 +168,7 @@ describe("parseManifest — happy path", () => {
     for (const within of ["24h", "30m", "7d", "60s", "PT1H", "P1D"]) {
       const m = parseManifest({
         version: 1,
-        hooks: [{ name: "h", event: "PreToolUse", command: "/bin/true", blocking: false }],
+        hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
         policies: [
           {
             name: "p",
@@ -257,7 +257,7 @@ describe("parseManifest — built-in variables bypass trigger.extract", () => {
       expect(() =>
         parseManifest({
           version: 1,
-          hooks: [{ name: "h", event: "PreToolUse", command: "/bin/true", blocking: false }],
+          hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
           policies: [
             {
               name: "p",
@@ -277,7 +277,7 @@ describe("parseManifest — built-in variables bypass trigger.extract", () => {
     expect(() =>
       parseManifest({
         version: 1,
-        hooks: [{ name: "h", event: "PreToolUse", command: "/bin/true", blocking: false }],
+        hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
         policies: [
           {
             name: "p",
@@ -297,7 +297,7 @@ describe("parseManifest — requires shapes", () => {
   function buildPolicyManifest(requires: unknown): unknown {
     return {
       version: 1,
-      hooks: [{ name: "h", event: "PreToolUse", command: "/bin/true", blocking: false }],
+      hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
       policies: [
         {
           name: "p",
@@ -374,8 +374,8 @@ describe("parseManifest — uniqueness checks", () => {
       parseManifest({
         version: 1,
         hooks: [
-          { name: "h", event: "PreToolUse", command: "/bin/true", blocking: false },
-          { name: "h", event: "PostToolUse", command: "/bin/true", blocking: false },
+          { name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false },
+          { name: "h", event: "PostToolUse", command: "/usr/bin/true", blocking: false },
         ],
       }),
     ).toThrow(/duplicate hook/i);
@@ -393,7 +393,7 @@ describe("parseManifest — uniqueness checks", () => {
           {
             name: "memory:router",
             event: "UserPromptSubmit",
-            command: "/bin/true",
+            command: "/usr/bin/true",
             blocking: false,
           },
         ],
@@ -412,7 +412,7 @@ describe("parseManifest — uniqueness checks", () => {
           {
             name: "memory:my-custom-thing",
             event: "PreToolUse",
-            command: "/bin/true",
+            command: "/usr/bin/true",
             blocking: false,
           },
         ],
@@ -433,7 +433,7 @@ describe("parseManifest — uniqueness checks", () => {
           {
             name: "Memory:router",
             event: "UserPromptSubmit",
-            command: "/bin/true",
+            command: "/usr/bin/true",
             blocking: false,
           },
         ],
@@ -452,7 +452,7 @@ describe("parseManifest — uniqueness checks", () => {
           {
             name: "policy-pack:memory:router",
             event: "UserPromptSubmit",
-            command: "/bin/true",
+            command: "/usr/bin/true",
             blocking: false,
           },
         ],
@@ -464,7 +464,7 @@ describe("parseManifest — uniqueness checks", () => {
     expect(() =>
       parseManifest({
         version: 1,
-        hooks: [{ name: "h", event: "PreToolUse", command: "/bin/true", blocking: false }],
+        hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
         policies: [
           {
             name: "p",
@@ -811,10 +811,10 @@ describe("parseManifest — min_version numeric pattern", () => {
         {
           name: "h",
           event: "PreToolUse",
-          command: "/bin/true",
+          command: "/usr/bin/true",
           blocking: false,
           min_version: value,
-          version_command: ["/bin/true", "--version"],
+          version_command: ["/usr/bin/true", "--version"],
         },
       ],
     };
@@ -999,7 +999,7 @@ describe("parseManifest — Phase 7 risk-gate vocabulary", () => {
   it("accepts a policy with a populated when: block", () => {
     const m = parseManifest({
       version: 1,
-      hooks: [{ name: "h", event: "PreToolUse", command: "/bin/true", blocking: false }],
+      hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
       policies: [
         {
           name: "gate-prod-destructive",
@@ -1024,7 +1024,7 @@ describe("parseManifest — Phase 7 risk-gate vocabulary", () => {
   it("accepts when.environment.name = unknown (unknown is matchable)", () => {
     const m = parseManifest({
       version: 1,
-      hooks: [{ name: "h", event: "PreToolUse", command: "/bin/true", blocking: false }],
+      hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
       policies: [
         {
           name: "p",
@@ -1044,7 +1044,7 @@ describe("parseManifest — Phase 7 risk-gate vocabulary", () => {
     expect(() =>
       parseManifest({
         version: 1,
-        hooks: [{ name: "h", event: "PreToolUse", command: "/bin/true", blocking: false }],
+        hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
         policies: [
           {
             name: "p",

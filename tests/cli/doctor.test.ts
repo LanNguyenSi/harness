@@ -1350,7 +1350,7 @@ tools:
     const home = makeFixture({
       "harness.yaml": buildManifest(`  - name: bare-hook
     event: SessionStart
-    command: /bin/true
+    command: /usr/bin/true
     blocking: false`),
     });
     const report = await doctor({
@@ -1367,7 +1367,7 @@ tools:
     const home = makeFixture({
       "harness.yaml": buildManifest(`  - name: stale-hook
     event: SessionStart
-    command: /bin/true
+    command: /usr/bin/true
     blocking: false
     min_version: "0.5.0"
     version_command: [my-hook-bin, "--version"]`),
@@ -1397,7 +1397,7 @@ tools:
     const home = makeFixture({
       "harness.yaml": buildManifest(`  - name: ok-hook
     event: SessionStart
-    command: /bin/true
+    command: /usr/bin/true
     blocking: false
     min_version: "0.5.0"
     version_command: [my-hook-bin, "--version"]`),
@@ -1419,7 +1419,7 @@ tools:
     const home = makeFixture({
       "harness.yaml": buildManifest(`  - name: bad-hook
     event: SessionStart
-    command: /bin/true
+    command: /usr/bin/true
     blocking: false
     min_version: "0.5.0"`),
     });
@@ -1451,7 +1451,7 @@ ${routerBlock}
 
   it("emits no routerVersion entry when min_version is absent", async () => {
     const home = makeFixture({
-      "harness.yaml": buildManifest(`    command: [/bin/true]`),
+      "harness.yaml": buildManifest(`    command: [/usr/bin/true]`),
     });
     const report = await doctor({
       configPath: path.join(home, "harness.yaml"),
@@ -1465,9 +1465,9 @@ ${routerBlock}
 
   it("warns when the probed router version is below min_version", async () => {
     const home = makeFixture({
-      "harness.yaml": buildManifest(`    command: [/bin/true]
+      "harness.yaml": buildManifest(`    command: [/usr/bin/true]
     min_version: "0.5.0"
-    version_command: ["/bin/true", "--version"]`),
+    version_command: ["/usr/bin/true", "--version"]`),
     });
     const report = await doctor({
       configPath: path.join(home, "harness.yaml"),
@@ -1487,9 +1487,9 @@ ${routerBlock}
 
   it("emits ok when the probed router version meets min_version", async () => {
     const home = makeFixture({
-      "harness.yaml": buildManifest(`    command: [/bin/true]
+      "harness.yaml": buildManifest(`    command: [/usr/bin/true]
     min_version: "0.5.0"
-    version_command: ["/bin/true", "--version"]`),
+    version_command: ["/usr/bin/true", "--version"]`),
     });
     const report = await doctor({
       configPath: path.join(home, "harness.yaml"),
@@ -1528,7 +1528,7 @@ describe("doctor — Phase 7 #6 Risk Gate section", () => {
 hooks:
   - name: risk-gate
     event: PreToolUse
-    command: /bin/true
+    command: /usr/bin/true
     blocking: false
 risk:
   classifiers:
@@ -1637,7 +1637,7 @@ policies:
 hooks:
   - name: risk-gate
     event: PreToolUse
-    command: /bin/true
+    command: /usr/bin/true
     blocking: false
 risk:
   classifiers:

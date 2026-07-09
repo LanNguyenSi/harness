@@ -43,7 +43,7 @@ const NON_BASH_EVENT = JSON.stringify({
 const MANIFEST: Manifest = parseManifest({
   version: 1,
   hooks: [
-    { name: "risk-gate", event: "PreToolUse", command: "/bin/true", blocking: false },
+    { name: "risk-gate", event: "PreToolUse", command: "/usr/bin/true", blocking: false },
   ],
   policies: [
     {
