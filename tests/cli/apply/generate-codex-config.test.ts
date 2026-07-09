@@ -71,21 +71,21 @@ describe("generateCodexConfig", () => {
           {
             name: "stop-hook",
             event: "Stop",
-            command: "/bin/true",
+            command: "/usr/bin/true",
             blocking: false,
             budget_ms: 1000,
           },
           {
             name: "session-start-hook",
             event: "SessionStart",
-            command: "/bin/true",
+            command: "/usr/bin/true",
             blocking: false,
             budget_ms: 1000,
           },
           {
             name: "post-tool-hook",
             event: "PostToolUse",
-            command: "/bin/true",
+            command: "/usr/bin/true",
             blocking: false,
             budget_ms: 1000,
           },
@@ -222,14 +222,14 @@ describe("generateCodexConfig", () => {
           {
             name: "round-up",
             event: "SessionStart",
-            command: "/bin/true",
+            command: "/usr/bin/true",
             blocking: false,
             budget_ms: 1501,
           },
         ],
       }),
     );
-    expect(content).toContain('command = "/bin/true", timeout = 2');
+    expect(content).toContain('command = "/usr/bin/true", timeout = 2');
   });
 
   it("keeps non-policy 1000ms hooks at Codex's 1s minimum", () => {
@@ -240,14 +240,14 @@ describe("generateCodexConfig", () => {
           {
             name: "fast-non-policy",
             event: "PreToolUse",
-            command: "/bin/true",
+            command: "/usr/bin/true",
             blocking: false,
             budget_ms: 1000,
           },
         ],
       }),
     );
-    expect(content).toContain('command = "/bin/true", timeout = 1');
+    expect(content).toContain('command = "/usr/bin/true", timeout = 1');
   });
 
   it("is byte-stable for a given manifest (regenerable on no-op apply)", () => {
@@ -274,7 +274,7 @@ describe("generateCodexConfig", () => {
             name: "weird",
             event: "PreToolUse",
             match: 'has "quotes"',
-            command: "/bin/true",
+            command: "/usr/bin/true",
             blocking: false,
             budget_ms: 1000,
           },
@@ -293,7 +293,7 @@ describe("generateCodexConfig", () => {
           {
             name: "controls",
             event: "PreToolUse",
-            command: `/bin/true\n${SOH}`,
+            command: `/usr/bin/true\n${SOH}`,
             description: `line1\nline2${SOH}end`,
             blocking: false,
             budget_ms: 1000,
@@ -301,11 +301,11 @@ describe("generateCodexConfig", () => {
         ],
       }),
     );
-    expect(content).toContain('command = "/bin/true\\n\\u0001"');
+    expect(content).toContain('command = "/usr/bin/true\\n\\u0001"');
     // The emitted TOML basic-string carries no raw control chars.
     const commandLine = content
       .split("\n")
-      .find((l) => l.includes('command = "/bin/true'));
+      .find((l) => l.includes('command = "/usr/bin/true'));
     expect(commandLine).toBeDefined();
     const controlRe = new RegExp("[\\u0000-\\u001f\\u007f]");
     expect(controlRe.test(commandLine!)).toBe(false);
@@ -319,7 +319,7 @@ describe("generateCodexConfig", () => {
           {
             name: "with-filter",
             event: "PreToolUse",
-            command: "/bin/true",
+            command: "/usr/bin/true",
             blocking: false,
             budget_ms: 1000,
             path_match: "src/**/*.ts",

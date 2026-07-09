@@ -31,7 +31,7 @@ export interface MakeManifestOptions {
 const DEFAULT_HOOK = {
   name: "h",
   event: "PreToolUse",
-  command: "/bin/true",
+  command: "/usr/bin/true",
   blocking: false,
 } as Manifest["hooks"][number];
 

@@ -122,6 +122,28 @@ tools:
     expect(r.output).toMatch(/no changes/);
   });
 
+  it("resolves a symlinked manifest path before relativizing against git's physical root", () => {
+    const repo = newRepo();
+    writeManifest(repo, baseManifest);
+    gitCommit(repo, "initial");
+    // Mirrors macOS os.tmpdir(): /var/folders/… is a symlink into
+    // /private/var/folders/…, while `git rev-parse --show-toplevel`
+    // reports the physical root. Explicit symlink so Linux CI covers
+    // the same shape.
+    const linkParent = fs.mkdtempSync(path.join(os.tmpdir(), "harness-diff-link-"));
+    cleanups.push(() => fs.rmSync(linkParent, { recursive: true, force: true }));
+    const link = path.join(linkParent, "repo-link");
+    fs.symlinkSync(fs.realpathSync(repo), link, "dir");
+    const r = diff({
+      configPath: path.join(link, "harness.yaml"),
+      since: "master",
+      homeDir: link,
+      discriminator: { hostname: "h", platform: "linux", procVersionPath: "/nonexistent" },
+    });
+    expect(r.changes).toEqual([]);
+    expect(r.output).toMatch(/no changes/);
+  });
+
   it("exits 64 with a usage hint when --since is omitted", () => {
     let caught: unknown;
     try {
@@ -217,6 +239,31 @@ tools:
     expect(r.warnings).toEqual([]);
     // Sanity: the override actually took effect on both sides.
     expect(r.before.grounding.evidence_ledger.retention_days).toBe(30);
+    expect(r.after.grounding.evidence_ledger.retention_days).toBe(30);
+  });
+
+  it("recognizes a committed override layer through a symlinked home as versioned", () => {
+    const repo = newRepo();
+    writeAt(repo, "harness.yaml", plainBase);
+    writeAt(repo, "machines/h.harness.overrides.yaml", overrideLayer);
+    gitCommit(repo, "base + override");
+    // Same symlink shape as the manifest-path regression test above, but
+    // with a layer in play: without physical-path resolution in
+    // repoRelativePath the layer under the symlinked home relativizes to
+    // a climbing "..", reads as unversioned, and emits the outside-repo
+    // warning. The pin is versioned-layer behavior end-to-end.
+    const linkParent = fs.mkdtempSync(path.join(os.tmpdir(), "harness-diff-link-"));
+    cleanups.push(() => fs.rmSync(linkParent, { recursive: true, force: true }));
+    const link = path.join(linkParent, "repo-link");
+    fs.symlinkSync(fs.realpathSync(repo), link, "dir");
+    const r = diff({
+      configPath: path.join(link, "harness.yaml"),
+      since: "master",
+      homeDir: link,
+      discriminator: DISCRIMINATOR,
+    });
+    expect(r.changes).toEqual([]);
+    expect(r.warnings).toEqual([]);
     expect(r.after.grounding.evidence_ledger.retention_days).toBe(30);
   });
 

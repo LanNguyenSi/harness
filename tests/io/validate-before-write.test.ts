@@ -27,8 +27,8 @@ describe("validateBeforeWrite", () => {
       version: 1,
       tools: {
         mcp: [
-          { name: "codebase-oracle", command: "/bin/true" },
-          { name: "codebase-oracle", command: "/bin/true" },
+          { name: "codebase-oracle", command: "/usr/bin/true" },
+          { name: "codebase-oracle", command: "/usr/bin/true" },
         ],
       },
     });
@@ -39,8 +39,8 @@ describe("validateBeforeWrite", () => {
     const r = validateBeforeWrite({
       version: 1,
       hooks: [
-        { name: "h", event: "PreToolUse", command: "/bin/true", blocking: false },
-        { name: "h", event: "PreToolUse", command: "/bin/true", blocking: false },
+        { name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false },
+        { name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false },
       ],
     });
     expect(r.ok).toBe(false);
@@ -49,7 +49,7 @@ describe("validateBeforeWrite", () => {
   it("rejects a policy referencing a missing hook", () => {
     const r = validateBeforeWrite({
       version: 1,
-      hooks: [{ name: "h", event: "PreToolUse", command: "/bin/true", blocking: false }],
+      hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
       policies: [
         {
           name: "p",

@@ -55,7 +55,7 @@ describe("add mcp", () => {
         type: "mcp",
         entry: {
           name: "implicit-timeout",
-          command: "/bin/true",
+          command: "/usr/bin/true",
           health: { verb: "v", timeout_ms: 5000 },
         },
       },
@@ -72,7 +72,7 @@ describe("add mcp", () => {
     await add(
       {
         type: "mcp",
-        entry: { name: "x", command: "/bin/true", health: { verb: "v" } },
+        entry: { name: "x", command: "/usr/bin/true", health: { verb: "v" } },
       },
       { configPath: manifestPath },
     );
@@ -80,7 +80,7 @@ describe("add mcp", () => {
       add(
         {
           type: "mcp",
-          entry: { name: "x", command: "/bin/true", health: { verb: "v" } },
+          entry: { name: "x", command: "/usr/bin/true", health: { verb: "v" } },
         },
         { configPath: manifestPath },
       ),
@@ -92,7 +92,7 @@ describe("add mcp", () => {
     const r = await add(
       {
         type: "mcp",
-        entry: { name: "x", command: "/bin/true", health: { verb: "v" } },
+        entry: { name: "x", command: "/usr/bin/true", health: { verb: "v" } },
       },
       { configPath: manifestPath, dryRun: true },
     );
@@ -314,7 +314,7 @@ describe("applyAdd — defensive errors", () => {
     expect(() =>
       applyAdd(yaml, {
         type: "mcp",
-        entry: { name: "x", command: "/bin/true", health: { verb: "v" } },
+        entry: { name: "x", command: "/usr/bin/true", health: { verb: "v" } },
       }),
     ).toThrow(/expected a YAML sequence/);
   });

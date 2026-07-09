@@ -181,7 +181,7 @@ describe("planRemove — pure", () => {
       "hooks:",
       "  - name: h1",
       "    event: PreToolUse",
-      "    command: /bin/true",
+      "    command: /usr/bin/true",
       "    blocking: false",
       "policies:",
       "  - name: p1",

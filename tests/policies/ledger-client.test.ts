@@ -677,16 +677,20 @@ process.stdin.on("data", (d) => {
   it("latches after one timeout: subsequent calls degrade immediately without a round-trip", async () => {
     const { openLedgerSession } = await import("../../src/policies/ledger-client.js");
     const script = makeScript(slowAddServer());
-    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 300 });
+    // The budget must absorb a cold child spawn: the first querySummary
+    // pays process start + initialize, and on macOS a first-ever exec of
+    // a fresh temp script can alone eat several hundred ms. 300ms made
+    // the prompt-answering querySummary itself degrade on Darwin.
+    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 1500 });
     try {
       const query = await session.querySummary({ sessionId: "s" });
       expect(query.kind).toBe("ok");
       const first = await session.callTool("ledger_add", { sessionId: "s" });
       expect(first.status).toBe("degraded");
       if (first.status === "degraded") {
-        expect(first.reason).toContain("timeout after 300ms");
+        expect(first.reason).toContain("timeout after 1500ms");
       }
-      // The latch: this must NOT wait another 300ms.
+      // The latch: this must NOT wait another 1500ms.
       const t0 = performance.now();
       const second = await session.callTool("ledger_add", { sessionId: "s" });
       const elapsed = performance.now() - t0;
@@ -694,7 +698,7 @@ process.stdin.on("data", (d) => {
       if (second.status === "degraded") {
         expect(second.reason).toContain("timed out earlier in this session");
       }
-      expect(elapsed).toBeLessThan(200);
+      expect(elapsed).toBeLessThan(500);
     } finally {
       session.dispose();
     }
