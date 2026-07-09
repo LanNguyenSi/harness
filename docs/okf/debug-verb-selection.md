@@ -25,7 +25,7 @@ sources:
 
 # Debug verb selection — which harness verb answers which question
 
-The harness ships ten read-side debug verbs plus one end-to-end runner. They differ on three axes: **what they read** (the evidence ledger, a hand-crafted event JSON, or nothing but the manifest), **when they evaluate** (replaying a past decision vs. evaluating a hypothetical now vs. predicting statically), and **how much of the pipeline they exercise** (envelope only, one Risk-Gate stage, full policy evaluation, or a real `claude -p` session). Picking the wrong verb is the most common source of confusing answers, e.g. asking `explain --trace` about a policy that never fired, or trusting `dry-run` to prove a gate is wired when only `smoke` can.
+The harness ships nine read-side debug verbs plus one end-to-end runner. They differ on three axes: **what they read** (the evidence ledger, a hand-crafted event JSON, or nothing but the manifest), **when they evaluate** (replaying a past decision vs. evaluating a hypothetical now vs. predicting statically), and **how much of the pipeline they exercise** (envelope only, one Risk-Gate stage, full policy evaluation, or a real `claude -p` session). Picking the wrong verb is the most common source of confusing answers, e.g. asking `explain --trace` about a policy that never fired, or trusting `dry-run` to prove a gate is wired when only `smoke` can.
 
 ## Question → verb
 
