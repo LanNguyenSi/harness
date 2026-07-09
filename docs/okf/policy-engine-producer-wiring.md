@@ -1,0 +1,51 @@
+---
+type: invariant
+title: Policy engine needs its producers wired
+description: A `policies:` entry only ever blocks if grounding-mcp is wired under `tools.mcp[]`; since v0.35.0 `harness apply` hard-refuses the misconfig, and since v0.39.0 a pooled per-intercept ledger session stops hook-timeout fail-open under load.
+tags: [policies, grounding-mcp, warn-mode, footgun, versions]
+timestamp: 2026-07-09T02:50:30.125962Z
+sources:
+  - src/cli/validate/checks.ts
+  - src/cli/apply/apply.ts
+  - src/cli/policy/intercept.ts
+  - src/policies/ledger-client.ts
+  - src/runtime/intercept.ts
+  - src/runtime/when-eval.ts
+  - src/schema/tools.ts
+  - docs/writing-custom-policies.md
+  - docs/CLI.md
+  - CHANGELOG.md
+---
+
+# Policy engine needs its producers wired
+
+## The invariant
+
+A custom `policies:` entry enforces (can return `deny`) only if its evidence producer is reachable. The `requires:` evaluator answers "is the ledger evidence present?" by querying the evidence ledger through the grounding-mcp server, and the runtime finds that server by exact name in the manifest: `manifest.tools.mcp.find((m) => m.name === "grounding-mcp")` (`findGroundingMcp`, `src/cli/policy/intercept.ts:107-109`). If no such entry exists, `runInterceptCli` substitutes `degradedLedgerClient("grounding-mcp not declared in manifest")`, every `requires` evaluation lands on outcome `warn-degraded`, and `warn-degraded` never blocks (`src/runtime/intercept.ts`: "`warn` is a real verdict, `warn-degraded` is 'could not decide'"). The policies still fire and still record decisions; they just cannot deny anything. That is the allow-everything footgun.
+
+Evaluation order per PreToolUse event (all in `src/runtime/intercept.ts`): `trigger:` and `when:` are ANDed — a policy fires only when `policyMatchesEvent` (event name, `match` tool-name substring with alias expansion, `bash_match` regex) holds AND, when declared, every `when:` clause holds. `when:` is evaluated by `evaluateWhen` (`src/runtime/when-eval.ts`) against the *enriched* Action Envelope: `enrichEnvelope` runs `buildActionEnvelope` → `classifyRisk(envelope, manifest.risk.classifiers)` → `resolveEnvironment`, so `when.risk.*` / `when.environment.name` / `when.action.reversible` see post-classification values. Enrichment happens only when at least one policy declares `when:` (`riskGateActive`); an unclassified action satisfies every `risk.*` clause ("unknown is not safe", fail-closed, flagged `unclassifiedFallback`). Only after trigger+when does `requires:` — the part needing the producer — decide allow/warn/deny.
+
+## Where it's enforced
+
+- **`harness validate` — warning only.** `checkPolicyGroundingMcp` (`src/cli/validate/checks.ts:238-250`): if `manifest.policies.length > 0` and no `tools.mcp` entry named `grounding-mcp`, emits severity `warning`, message "policies declared but grounding-mcp not wired: every policy will fire in degraded warn-mode at runtime; see docs/ARCHITECTURE.md §6".
+- **`harness apply` — hard refusal (since v0.35.0).** `src/cli/apply/apply.ts:531-546` runs the same `checkPolicyGroundingMcp` in apply's gate phase and throws `HarnessExitError` (EX_FAIL): "Wire grounding-mcp under tools.mcp, or remove the policies." The code comment names the rationale (discovery H3): "validate only WARNS on this; apply must fail loud so an operator who runs apply without validate cannot ship the degraded config." Documented in `docs/CLI.md` Notes: "Since `v0.35.0`: `harness apply` fails loud (refuses) when the manifest declares `policies:` without `grounding-mcp` wired under `tools.mcp`".
+- **Adjacent, stricter check for the consumer pack:** `checkSolutionAcceptanceProducer` (`src/cli/validate/checks.ts:270-283`) makes solution-acceptance-enabled-without-grounding-mcp a validate **error**, because there the failure direction inverts: the producer (`solution_evaluate`) can never write a verdict, so the completion-gate deadlocks on a permanent deny (fail-closed), rather than fail-open.
+
+Name matching is by `name === "grounding-mcp"` only; neither the checks nor `findGroundingMcp` consult `enabled` (`enabled: z.boolean().default(true)` on MCP entries, `src/schema/tools.ts:20`). An `enabled: false` grounding-mcp entry therefore satisfies the apply gate while not being projected into the runtime's `mcpServers` — the agent-side producer verbs (`mcp__agent-grounding__ledger_add` etc.) are then unavailable even though the gate side can still spawn the server from the manifest command.
+
+## What breaks it
+
+Three distinct failure modes; do not conflate them:
+
+1. **Producer not wired at all.** `apply` refuses since 0.35.0, so on the apply path this can no longer ship. Residual routes to a deployed-but-degraded config: hand-editing `harness.yaml` to remove grounding-mcp *after* hooks are already deployed (`runInterceptCli` loads the manifest fresh on every intercept, and no apply runs to catch it), or relying on `harness validate` alone, which still only warns.
+2. **Producer wired but dead at runtime** (binary missing, initialize handshake fails, calls time out). `realLedgerClient` (`src/cli/policy/intercept.ts:239-298`) degrades per the documented contract: a degraded/failed query yields `warn-degraded` for the policy — fail-open for the `requires` engine — and the first degraded summary is deliberately cached so all K policies degrade together instead of retrying per policy. Fail direction differs per gate; see [gate-fail-posture-matrix.md](gate-fail-posture-matrix.md) (e.g. solution-acceptance's dead producer means permanent deny, not fail-open).
+3. **Producer wired and alive, but enforcement drowns under load (fixed in 0.39.0).** Before 0.39.0, `harness policy intercept` spawned grounding-mcp subprocesses sequentially — two per matching policy (query + audit record) — which under load approached the 30s hook budget; a hook timeout is conventionally fail-open, "so enforcement silently stopped exactly when contention was highest" (CHANGELOG [0.39.0], task a2589fa3). Since 0.39.0 `openLedgerSession` (`src/policies/ledger-client.ts:454`) lazily spawns ONE subprocess per intercept invocation, does the initialize handshake once, and multiplexes every `ledger_summary`/`ledger_add` over the same stdio pipe; a per-session summary cache collapses the K textually-identical per-policy queries into one round-trip, and a session-level timeout latch short-circuits all calls after the first timeout, bounding worst-case ledger time at ~1×timeoutMs (default 5000ms; the resolution chain `opts.ledgerTimeoutMs ?? server.health?.timeout_ms ?? 5_000` lives at the call site, `src/cli/policy/intercept.ts:246`). Decision semantics unchanged: serial evaluation, first blocking decision in manifest order owns the deny envelope, warn-degraded never blocks.
+
+Also remember (tripwire 3, `docs/writing-custom-policies.md`): the producer being wired is necessary but not sufficient — a custom policy additionally needs its own hand-written `hooks:` entry with `command: harness policy intercept`; `harness init` auto-generates hook wiring only for its named builtin patterns.
+
+## Version history that matters
+
+- **< 0.35.0:** the misconfig deployed silently. `checkPolicyGroundingMcp` existed only in `validate` (a warning); `apply` succeeded and every policy warn-degraded at runtime. Any doc, comment, or memory describing "apply succeeds and policies silently degrade" describes this era only.
+- **0.35.0 (2026-06-14):** `harness apply` fails loud on `policies:` without grounding-mcp (task 09120efb, discovery H3, PR #288). CHANGELOG operator action: "wire grounding-mcp or remove the policies."
+- **0.39.0 (2026-07-02, current — `package.json` `"version": "0.39.0"`):** PreToolUse gate pools one grounding-mcp session per intercept, replacing the K sequential spawn pairs and closing the hook-timeout fail-open under load (task a2589fa3, harness-review-2026-07-01). Same release wires `grounding.evidence_ledger.path` → projected as `EVIDENCE_LEDGER_DB` env on the grounding-mcp entry (task 129e1b94), so a wrong path there is now a live way to point the producer at the wrong ledger; and `validate` gains `checkPolicySelfAttestation`, warning on `block` policies that declare no `producers:` at all (task 43b107f2).
+
