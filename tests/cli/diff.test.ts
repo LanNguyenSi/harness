@@ -242,6 +242,31 @@ tools:
     expect(r.after.grounding.evidence_ledger.retention_days).toBe(30);
   });
 
+  it("recognizes a committed override layer through a symlinked home as versioned", () => {
+    const repo = newRepo();
+    writeAt(repo, "harness.yaml", plainBase);
+    writeAt(repo, "machines/h.harness.overrides.yaml", overrideLayer);
+    gitCommit(repo, "base + override");
+    // Same symlink shape as the manifest-path regression test above, but
+    // with a layer in play: without physical-path resolution in
+    // repoRelativePath the layer under the symlinked home relativizes to
+    // a climbing "..", reads as unversioned, and emits the outside-repo
+    // warning. The pin is versioned-layer behavior end-to-end.
+    const linkParent = fs.mkdtempSync(path.join(os.tmpdir(), "harness-diff-link-"));
+    cleanups.push(() => fs.rmSync(linkParent, { recursive: true, force: true }));
+    const link = path.join(linkParent, "repo-link");
+    fs.symlinkSync(fs.realpathSync(repo), link, "dir");
+    const r = diff({
+      configPath: path.join(link, "harness.yaml"),
+      since: "master",
+      homeDir: link,
+      discriminator: DISCRIMINATOR,
+    });
+    expect(r.changes).toEqual([]);
+    expect(r.warnings).toEqual([]);
+    expect(r.after.grounding.evidence_ledger.retention_days).toBe(30);
+  });
+
   it("still reports a genuine base change while an override layer is active", () => {
     const repo = newRepo();
     writeAt(repo, "harness.yaml", plainBase);

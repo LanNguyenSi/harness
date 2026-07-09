@@ -63,6 +63,11 @@ export function readManifestAtRef(ctx: GitContext, ref: string): string {
  * Repo-relative path for `absPath` in git's forward-slash form, or null
  * when the file lives outside the repo work tree (e.g. an override layer
  * under a ~/.harness home that is not the manifest's repo).
+ *
+ * Callers pass paths that exist on disk (layers are existsSync-gated at
+ * resolve time). A nonexistent path under a symlinked parent would skip
+ * realpath resolution and could misreport as outside-repo (null) — null
+ * stays the safe, non-crashing failure mode either way.
  */
 export function repoRelativePath(ctx: GitContext, absPath: string): string | null {
   const rel = path.relative(ctx.root, toPhysicalPath(absPath));
