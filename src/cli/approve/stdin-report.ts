@@ -56,31 +56,46 @@ function summarizeParseError(error: {
 /** Reports are a few KB; anything beyond this is not a report. */
 export const STDIN_REPORT_MAX_BYTES = 512 * 1024;
 
+export interface PipedStdinResult {
+  text: string;
+  /**
+   * True only when the stream ended cleanly within the size cap. A
+   * timeout with partial data, a stream error, or a size-cap hit all
+   * yield `complete: false` — the caller must NOT feed such text into
+   * the capture path, or a truncated-but-still-parseable report could
+   * be persisted and approved as if it were whole (review 2026-07-10).
+   */
+  complete: boolean;
+}
+
 /**
  * Read piped stdin fully, with a hang guard. The caller must already
  * have established that stdin is NOT a TTY. The timeout exists because
  * this read sits on the operator-approval path: if some harness wires
  * the CLI to an open-but-idle pipe, a blocked read here would brick
  * approvals — after `timeoutMs` we proceed with whatever arrived
- * (a real heredoc is delivered immediately by the shell). Bytes past
- * `maxBytes` are discarded.
+ * (a real heredoc is delivered immediately by the shell), flagged
+ * `complete: false`.
  */
 export function readPipedStdin(
   stream: NodeJS.ReadableStream,
   maxBytes: number = STDIN_REPORT_MAX_BYTES,
   timeoutMs = 2_000,
-): Promise<string> {
+): Promise<PipedStdinResult> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
     let length = 0;
     let done = false;
-    const finish = (): void => {
+    const finish = (complete: boolean): void => {
       if (done) return;
       done = true;
       clearTimeout(timer);
-      resolve(Buffer.concat(chunks).toString("utf8"));
+      resolve({
+        text: Buffer.concat(chunks).toString("utf8"),
+        complete: complete && length <= maxBytes,
+      });
     };
-    const timer = setTimeout(finish, timeoutMs);
+    const timer = setTimeout(() => finish(false), timeoutMs);
     // Let a finished CLI exit even if the timer is still pending.
     timer.unref?.();
     stream.on("data", (chunk: Buffer) => {
@@ -91,8 +106,8 @@ export function readPipedStdin(
       }
       length += chunk.length;
     });
-    stream.on("end", finish);
-    stream.on("error", finish);
+    stream.on("end", () => finish(true));
+    stream.on("error", () => finish(false));
   });
 }
 

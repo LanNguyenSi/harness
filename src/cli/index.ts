@@ -1429,9 +1429,16 @@ export function buildProgram(opts: RunOptions = {}): Command {
         // Understanding Report as a quoted heredoc on stdin. A TTY stdin
         // means an interactive operator shell with nothing piped — skip
         // the read entirely so the CLI never sits waiting for input.
+        // Incomplete input (timeout, error, size cap) is refused rather
+        // than captured: a truncated-but-parseable report must never be
+        // persisted and approved as if it were whole.
+        let stdinIncomplete = false;
         if (!process.stdin.isTTY) {
-          const raw = await readPipedStdin(process.stdin);
-          if (raw.trim().length > 0) cliOpts.reportMarkdown = raw;
+          const piped = await readPipedStdin(process.stdin);
+          if (piped.text.trim().length > 0) {
+            if (piped.complete) cliOpts.reportMarkdown = piped.text;
+            else stdinIncomplete = true;
+          }
         }
         const result = await approveUnderstanding(cliOpts);
         const lines: string[] = [];
@@ -1505,6 +1512,14 @@ export function buildProgram(opts: RunOptions = {}): Command {
           lines.push(`ledger:  ✓ wrote ${result.ledger.tag} (audit only)`);
         } else {
           lines.push(`ledger:  ⚠ skipped (${result.ledger.reason ?? "unknown"}) (audit only)`);
+        }
+        if (stdinIncomplete) {
+          lines.push(
+            "stdin:   ⚠ piped input arrived incomplete (timeout, stream error, or size cap) — report NOT captured.",
+          );
+          lines.push(
+            "  the approval itself proceeds below; re-run with the report as a quoted heredoc to persist the audit trail.",
+          );
         }
         if (result.stdinReport) {
           if (result.stdinReport.ok) {

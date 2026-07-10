@@ -1,4 +1,6 @@
+import { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
+import { readPipedStdin } from "../../src/cli/approve/stdin-report.js";
 import {
   isEscapeCommand,
   parseApproveReportHeredoc,
@@ -146,6 +148,63 @@ describe("isEscapeCommand — report heredoc (task 61fd36db)", () => {
     expect(isEscapeCommand("harness approve understanding\necho pwned")).toBe(false);
   });
 
+  // Review 2026-07-10 (HIGH). `\<` is a LITERAL `<` to bash, so
+  // `harness approve understanding \<<'UR'` is not a heredoc at all: it
+  // is a redirect from a file named UR, and the "body" lines run as
+  // ordinary shell commands. Verified live in bash (the intervening
+  // `echo SMUGGLED_EXECUTED` executed). The old blacklist accepted it
+  // because the heredoc regex consumed the `<` chars and `\` was not a
+  // rejected metachar. The command part is now whitelist-checked.
+  it("rejects a backslash-escaped redirect (shell would NOT open a heredoc — smuggle shape)", () => {
+    for (const command of [
+      `harness approve understanding \\<<'UR'\nrm -rf /tmp/x\nUR`,
+      `harness approve understanding foo\\<<'UR'\nrm -rf /tmp/x\nUR`,
+      `harness approve understanding \\\\<<'UR'\nrm -rf /tmp/x\nUR`,
+    ]) {
+      expect(isEscapeCommand(command), command).toBe(false);
+      expect(parseApproveReportHeredoc(command), command).toBeNull();
+    }
+  });
+
+  it("rejects a quote-obscured heredoc intro", () => {
+    expect(isEscapeCommand(`harness approve understanding '<<'UR'\nbody\nUR`)).toBe(false);
+    expect(isEscapeCommand(`harness approve understanding "<<"UR'\nbody\nUR`)).toBe(false);
+  });
+
+  it("rejects process substitution in the command part", () => {
+    expect(isEscapeCommand("harness approve understanding <(id)")).toBe(false);
+    expect(isEscapeCommand(`harness approve understanding <(id) <<'UR'\nbody\nUR`)).toBe(false);
+    expect(isEscapeCommand(`harness approve understanding >(cmd) <<'UR'\nbody\nUR`)).toBe(false);
+  });
+
+  it("rejects shell-special characters the whitelist excludes from the heredoc command part", () => {
+    for (const command of [
+      `harness approve understanding *\n<<'UR'\nbody\nUR`,
+      `harness approve understanding $HOME <<'UR'\nbody\nUR`,
+      `harness approve understanding "x" <<'UR'\nbody\nUR`,
+      `harness approve understanding 'x' <<'UR'\nbody\nUR`,
+      `harness approve understanding {a,b} <<'UR'\nbody\nUR`,
+      `harness approve understanding !! <<'UR'\nbody\nUR`,
+    ]) {
+      expect(isEscapeCommand(command), command).toBe(false);
+    }
+  });
+
+  it("still accepts the character classes a legitimate approve command part needs", () => {
+    for (const command of [
+      // flags, comma lists, uuids, paths, urls-ish, home-relative paths
+      heredoc("harness approve understanding --force"),
+      heredoc("harness approve understanding --task 61fd36db-2d54-4917-809b-07c683a7d6c2"),
+      heredoc("harness approve understanding --task a,b,c --session sess-1"),
+      heredoc("harness approve understanding --reports-dir /tmp/x/reports"),
+      heredoc("harness approve understanding --reports-dir ~/.harness/reports"),
+      heredoc("harness approve understanding --approved-by ops@example.com"),
+      heredoc("harness approve understanding --config=/etc/harness.yaml"),
+    ]) {
+      expect(isEscapeCommand(command), command).toBe(true);
+    }
+  });
+
   it("rejects carriage returns in the command line", () => {
     expect(isEscapeCommand(`harness approve understanding <<'UR'\r\nbody\nUR`)).toBe(false);
   });
@@ -168,5 +227,40 @@ describe("parseApproveReportHeredoc", () => {
     const parsed = parseApproveReportHeredoc(`harness approve understanding <<'UR'\nUR`);
     expect(parsed).not.toBeNull();
     expect(parsed?.body).toBe("");
+  });
+});
+
+describe("readPipedStdin — completeness signal (review 2026-07-10)", () => {
+  function slowStream(chunks: string[], endAfter: boolean): Readable {
+    const s = new Readable({ read() {} });
+    for (const c of chunks) s.push(c);
+    if (endAfter) s.push(null);
+    return s;
+  }
+
+  it("reports complete:true for a clean EOF", async () => {
+    const result = await readPipedStdin(slowStream(["## Understanding Report\n"], true));
+    expect(result.complete).toBe(true);
+    expect(result.text).toBe("## Understanding Report\n");
+  });
+
+  it("reports complete:false when the stream never ends (timeout with partial data)", async () => {
+    const result = await readPipedStdin(slowStream(["## Understanding Rep"], false), 1024, 25);
+    expect(result.complete).toBe(false);
+    expect(result.text).toBe("## Understanding Rep");
+  });
+
+  it("reports complete:false when the size cap truncates the input", async () => {
+    const result = await readPipedStdin(slowStream(["abcdefghij"], true), 4, 500);
+    expect(result.complete).toBe(false);
+    expect(result.text).toBe("abcd");
+  });
+
+  it("reports complete:false on a stream error", async () => {
+    const s = new Readable({ read() {} });
+    s.push("partial");
+    queueMicrotask(() => s.destroy(new Error("boom")));
+    const result = await readPipedStdin(s, 1024, 500);
+    expect(result.complete).toBe(false);
   });
 });

@@ -27,12 +27,15 @@
 //
 // Heredoc safety: the delimiter must be single-quoted (no parameter or
 // command substitution inside the body), the command part before `<<`
-// must pass the same metachar rules as the single-line shape, the
-// terminator is the FIRST line exactly equal to the delimiter (mirroring
-// shell semantics, so this parser and the shell can never disagree on
-// where the body ends), and nothing but whitespace may follow it. Any
-// deviation — unquoted delimiter, second redirect, trailing commands,
-// unterminated body — fails closed to the ordinary gate block.
+// must match a strict character WHITELIST (so no quoting/escaping trick
+// can change how the shell tokenizes the line — see
+// heredocCommandPartIsClean), the terminator is the FIRST line exactly
+// equal to the delimiter (mirroring shell semantics for a plain `<<'X'`
+// intro, which the whitelist guarantees is the only intro that can
+// reach it), and nothing but whitespace may follow it. Any deviation —
+// unquoted delimiter, second redirect, escaped/quote-obscured intro,
+// trailing commands, unterminated body — fails closed to the ordinary
+// gate block.
 
 /** Metacharacters rejected in the executable (non-heredoc-body) part. */
 const COMMAND_META_RE = /[;&|<>]/;
@@ -41,6 +44,24 @@ function commandPartIsClean(part: string): boolean {
   if (COMMAND_META_RE.test(part)) return false;
   if (part.includes("`") || part.includes("$(")) return false;
   return /^harness\s+approve\b/.test(part);
+}
+
+// The heredoc command part is held to a WHITELIST, not the blacklist
+// above (review 2026-07-10, HIGH): a backslash-escaped redirect
+// (`harness approve understanding \<<'UR'`) slipped the blacklist —
+// the `<` characters were consumed by the heredoc-intro regex and `\`
+// is not a rejected metachar — but bash reads `\<` as a literal `<`
+// plus a file redirect, so no heredoc exists and the "body" lines
+// execute as ordinary commands. A legitimate approve command part only
+// ever contains the binary name, subcommand, flags, ids, and paths;
+// everything else (backslashes, quotes, `$`, parens, globs) fails
+// closed. The single-line shape keeps the blacklist for back-compat:
+// it admits no `<` at all, so this divergence class cannot arise there.
+const HEREDOC_COMMAND_PART_ALLOWED_RE = /^[A-Za-z0-9_\s,./=:@~-]*$/;
+
+function heredocCommandPartIsClean(part: string): boolean {
+  if (!HEREDOC_COMMAND_PART_ALLOWED_RE.test(part)) return false;
+  return commandPartIsClean(part);
 }
 
 export interface ApproveReportHeredoc {
@@ -74,7 +95,7 @@ export function parseApproveReportHeredoc(
   if (!m) return null;
   const commandPart = m[1]!.trimEnd();
   const delimiter = m[2]!;
-  if (!commandPartIsClean(commandPart)) return null;
+  if (!heredocCommandPartIsClean(commandPart)) return null;
   const rest = trimmed.slice(nl + 1).split("\n");
   // First line EXACTLY equal to the delimiter terminates the body — the
   // same rule the shell applies — so a delimiter line smuggled early in
