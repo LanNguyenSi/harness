@@ -43,6 +43,7 @@ import { isRuntime, KNOWN_RUNTIMES, type Runtime } from "../policy-packs/index.j
 import { approveBranchProtection } from "./approve/branch-protection.js";
 import { approveRisk } from "./approve/risk.js";
 import { approveUnderstanding } from "./approve/understanding.js";
+import { readPipedStdin } from "./approve/stdin-report.js";
 import { describe, isPillar, type Pillar } from "./describe.js";
 import { diff as diffRun } from "./diff/index.js";
 import { diffSinceApply } from "./diff/since-apply.js";
@@ -1424,6 +1425,14 @@ export function buildProgram(opts: RunOptions = {}): Command {
         if (options.reportsDir) cliOpts.reportsDir = options.reportsDir;
         if (options.approvedBy) cliOpts.approvedBy = options.approvedBy;
         if (options.force) cliOpts.force = true;
+        // Report capture (task 61fd36db): the agent attaches the
+        // Understanding Report as a quoted heredoc on stdin. A TTY stdin
+        // means an interactive operator shell with nothing piped — skip
+        // the read entirely so the CLI never sits waiting for input.
+        if (!process.stdin.isTTY) {
+          const raw = await readPipedStdin(process.stdin);
+          if (raw.trim().length > 0) cliOpts.reportMarkdown = raw;
+        }
         const result = await approveUnderstanding(cliOpts);
         const lines: string[] = [];
         // Annotate non-explicit session sources so the operator can spot
@@ -1496,6 +1505,19 @@ export function buildProgram(opts: RunOptions = {}): Command {
           lines.push(`ledger:  ✓ wrote ${result.ledger.tag} (audit only)`);
         } else {
           lines.push(`ledger:  ⚠ skipped (${result.ledger.reason ?? "unknown"}) (audit only)`);
+        }
+        if (result.stdinReport) {
+          if (result.stdinReport.ok) {
+            lines.push(`stdin:   ✓ report captured from stdin → ${result.stdinReport.filePath}`);
+          } else {
+            lines.push(`stdin:   ⚠ report on stdin NOT captured (${result.stdinReport.reason})`);
+            if (result.stdinReport.parseErrorLogPath) {
+              lines.push(`  raw text + parser reasons kept at ${result.stdinReport.parseErrorLogPath}`);
+            }
+            lines.push(
+              "  the approval itself proceeds below; re-run with a schema-conform report to persist the audit trail.",
+            );
+          }
         }
         if (result.persistedReport.ok) {
           const prev = result.persistedReport.previousStatus ?? "<missing>";

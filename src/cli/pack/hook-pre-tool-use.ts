@@ -47,6 +47,7 @@ import {
 } from "../../schema/index.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { z } from "zod";
+import { isEscapeCommand } from "./approve-escape.js";
 import { type LoaderOptions } from "../loader.js";
 import {
   checkHookPause,
@@ -209,29 +210,16 @@ function blockJson(
   });
 }
 
-function isEscapeCommand(command: string): boolean {
-  // The operator-approval command `harness approve ...`. The Understanding
-  // Gate must not hard-deny it: a `deny` gives no interactive prompt, so
-  // denying the very command that records the operator's approval makes the
-  // gate un-recoverable from inside the session. Deliberately strict: the
-  // command must BE a `harness approve` invocation, with no shell chaining,
-  // substitution, or redirection, so the allowlist cannot be used to smuggle
-  // other work past the gate.
-  const trimmed = command.trim();
-  if (/[;&|\n<>]/.test(trimmed)) return false;
-  if (trimmed.includes("`") || trimmed.includes("$(")) return false;
-  return /^harness\s+approve\b/.test(trimmed);
-}
-
 // When a blocked Bash command clearly INTENDS to be the operator-approval
 // escape (`harness approve ...`) but trips the deliberately strict
 // isEscapeCommand matcher because it carries shell metacharacters (a pipe,
-// chaining, redirection, or substitution), it lands in the generic hard
-// block with no clue that the command itself was almost the way out. The
-// strictness is intentional (chaining could smuggle other work past the
-// gate), so the fix is discoverability, not relaxation: surface a targeted
-// hint telling the agent to re-run it bare. Returns null when the command
-// is not approve-like or already qualifies as a clean escape.
+// chaining, redirection, or substitution) or a malformed report heredoc,
+// it lands in the generic hard block with no clue that the command itself
+// was almost the way out. The strictness is intentional (chaining could
+// smuggle other work past the gate), so the fix is discoverability, not
+// relaxation: surface a targeted hint naming the two accepted shapes.
+// Returns null when the command is not approve-like or already qualifies
+// as a clean escape.
 function approveEscapeHint(toolName: string, command: string): string | null {
   if (toolName !== "Bash") return null;
   const trimmed = command.trim();
@@ -239,9 +227,13 @@ function approveEscapeHint(toolName: string, command: string): string | null {
   if (isEscapeCommand(trimmed)) return null;
   return (
     "This looks like a `harness approve` command, but it was blocked because it carries shell " +
-    "metacharacters (a pipe, `;`/`&&`/`||` chaining, `<`/`>` redirection, or command substitution). " +
-    "The approval escape only fires for a bare invocation. Re-run it exactly as `harness approve understanding`, " +
-    "with no pipes, chaining, redirection, or substitution, then approve the prompt."
+    "metacharacters (a pipe, `;`/`&&`/`||` chaining, `<`/`>` redirection, or command substitution) " +
+    "in the executable part, or a malformed report heredoc. Two shapes are accepted: " +
+    "(1) bare: `harness approve understanding` with nothing else; " +
+    "(2) with the Understanding Report attached for capture: " +
+    "`harness approve understanding <<'UNDERSTANDING_REPORT'` followed by the report markdown and a " +
+    "final line containing exactly `UNDERSTANDING_REPORT`, with nothing after it. " +
+    "Re-run in one of those shapes, then approve the prompt."
   );
 }
 

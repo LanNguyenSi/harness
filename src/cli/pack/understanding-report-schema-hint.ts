@@ -58,5 +58,17 @@ export function renderReportSchemaHint(): string {
   const intro =
     "Report format (parsed by `@lannguyensi/understanding-gate`): markdown with these ten sections, any heading level (#, ##, ###), names case-insensitive. Missing any section produces a parse-error under `.understanding-gate/parse-errors/` and the audit trail is empty even though the gate-approval marker still gets written.";
   const bullets = UNDERSTANDING_REPORT_REQUIRED_SECTIONS.map((s) => `  - ${s}`).join("\n");
-  return `${intro}\n${bullets}`;
+  // Submission recipe (task 61fd36db): the Stop-hook producer fires only
+  // at END of turn — after `harness approve understanding` already ran —
+  // so attaching the report to the approve command itself is the one
+  // path that reliably persists it. The gate's escape matcher accepts
+  // exactly this heredoc shape (see approve-escape.ts).
+  const submit =
+    "To persist the report for audit, attach it to the approval command as a quoted heredoc " +
+    "(the only extra shape the gate allows — no other pipes, chaining, or redirection):\n" +
+    "  harness approve understanding <<'UNDERSTANDING_REPORT'\n" +
+    "  ## Understanding Report\n" +
+    "  ...your report...\n" +
+    "  UNDERSTANDING_REPORT";
+  return `${intro}\n${bullets}\n${submit}`;
 }
