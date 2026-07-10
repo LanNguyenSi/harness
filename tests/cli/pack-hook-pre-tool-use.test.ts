@@ -904,7 +904,7 @@ describe("pack hook pre-tool-use blocker — operator-approval escape commands (
     const decision = JSON.parse(stdout.read().trim()) as { reason: string };
     expect(decision.reason).toContain("looks like a `harness approve` command");
     expect(decision.reason).toContain(
-      "Re-run it exactly as `harness approve understanding`",
+      "Two shapes are accepted",
     );
   });
 
@@ -1230,5 +1230,87 @@ describe("pack hook pre-tool-use blocker — agent-facing ux (agent-tasks/e48e3b
     expect(stderr.read()).toContain("harness pack hook: config.ux ignored (");
     const decision = JSON.parse(stdout.read().trim()) as { reason: string };
     expect(decision.reason).toContain("Understanding Gate:");
+  });
+});
+
+describe("pack hook pre-tool-use blocker — report-heredoc escape (task 61fd36db)", () => {
+  const HEREDOC_APPROVE = [
+    "harness approve understanding <<'UNDERSTANDING_REPORT'",
+    "## Understanding Report",
+    "",
+    "**Metadata**",
+    "",
+    "taskId: t-1",
+    "mode: grill_me",
+    "riskLevel: low",
+    "UNDERSTANDING_REPORT",
+  ].join("\n");
+
+  it("asks (not denies) for an approve command carrying the report heredoc", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        event({ tool_name: "Bash", tool_input: { command: HEREDOC_APPROVE } }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.asked).toBe(true);
+    const decision = JSON.parse(stdout.read().trim()) as {
+      decision?: string;
+      hookSpecificOutput?: { permissionDecision?: string };
+    };
+    expect(decision.decision).toBeUndefined();
+    expect(decision.hookSpecificOutput?.permissionDecision).toBe("ask");
+  });
+
+  it("hard-denies a report heredoc followed by smuggled commands", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        event({
+          tool_name: "Bash",
+          tool_input: { command: `${HEREDOC_APPROVE}\nrm -rf /tmp/x` },
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.asked).toBeFalsy();
+    // The near-miss hint names the two accepted shapes.
+    const decision = JSON.parse(stdout.read().trim()) as { reason: string };
+    expect(decision.reason).toContain("harness approve understanding <<'UNDERSTANDING_REPORT'");
+  });
+
+  it("hard-denies an unquoted-delimiter heredoc (expansion would be live)", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        event({
+          tool_name: "Bash",
+          tool_input: {
+            command: "harness approve understanding <<UR\n$(rm -rf /tmp/x)\nUR",
+          },
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.asked).toBeFalsy();
   });
 });

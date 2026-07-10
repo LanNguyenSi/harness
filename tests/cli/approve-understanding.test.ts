@@ -1625,3 +1625,178 @@ describe("approveUnderstanding — report sessionId binding (harness/0dce3880 fr
     expect(after.sessionId).toBe("fresh-session");
   });
 });
+
+describe("approveUnderstanding — report capture from stdin (task 61fd36db)", () => {
+  const VALID_GRILL_ME = [
+    "## Understanding Report",
+    "",
+    "**Metadata**",
+    "",
+    "taskId: t-61fd36db",
+    "mode: grill_me",
+    "riskLevel: low",
+    "",
+    "**Current Understanding**",
+    "",
+    "The Stop-hook producer fires after approve already ran.",
+    "",
+    "**Intended Outcome**",
+    "",
+    "approve captures the report from stdin and flips it in the same run.",
+    "",
+    "**Derived Todos**",
+    "",
+    "- capture on stdin",
+    "",
+    "**Acceptance Criteria**",
+    "",
+    "- report line shows the flip, not skipped",
+    "",
+    "**Assumptions**",
+    "",
+    "- heredoc reaches the CLI verbatim",
+    "",
+    "**Open Questions**",
+    "",
+    "- none",
+    "",
+    "**Out Of Scope**",
+    "",
+    "- gate policy changes",
+    "",
+    "**Risks**",
+    "",
+    "- escape matcher must stay strict",
+    "",
+    "**Verification Plan**",
+    "",
+    "- vitest + live dogfood",
+    "",
+    "**Prior Art**",
+    "",
+    "- searched harness + understanding-gate for an existing capture path; none works same-turn; extend approve",
+  ].join("\n");
+
+  function reportsDirIn(root: string): string {
+    const dir = path.join(root, "ug", "reports");
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  it("persists a parseable stdin report session-bound and flips it in the same run", async () => {
+    const reportsDir = reportsDirIn(tmp);
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-stdin-1",
+      reportsDir,
+      generatedDir: path.join(tmp, "harness.generated"),
+      reportMarkdown: VALID_GRILL_ME,
+      now: new Date("2026-07-10T10:00:00Z"),
+      approvedBy: "test-suite",
+      ledgerAdd: async () => ({ ok: true }),
+    });
+
+    expect(result.stdinReport?.ok).toBe(true);
+    expect(result.persistedReport.ok).toBe(true);
+    if (!result.persistedReport.ok || !result.stdinReport?.ok) return;
+    // The flipped report IS the stdin-captured file.
+    expect(result.persistedReport.filePath).toBe(result.stdinReport.filePath);
+    expect(result.persistedReport.previousStatus).toBe("pending");
+    const persisted = JSON.parse(fs.readFileSync(result.stdinReport.filePath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(persisted.sessionId).toBe("sess-stdin-1");
+    expect(persisted.approvalStatus).toBe("approved");
+    expect(persisted.taskId).toBe("t-61fd36db");
+    expect(persisted.mode).toBe("grill_me");
+    // Strict sessionId binding, not the tolerant fallback.
+    expect(result.persistedReport.fallbackAdopted).toBeUndefined();
+    expect(result.marker.ok).toBe(true);
+    const v = result.validation;
+    expect("ok" in v && v.ok).toBe(true);
+  });
+
+  it("beats a stale pending report of another session via the strict match", async () => {
+    const reportsDir = reportsDirIn(tmp);
+    fs.writeFileSync(
+      path.join(reportsDir, "other.json"),
+      `${JSON.stringify({ sessionId: "sess-other", approvalStatus: "pending", createdAt: "2026-07-10T09:59:00Z" })}\n`,
+    );
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-stdin-2",
+      reportsDir,
+      generatedDir: path.join(tmp, "harness.generated"),
+      reportMarkdown: VALID_GRILL_ME,
+      now: new Date("2026-07-10T10:00:00Z"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.stdinReport?.ok).toBe(true);
+    expect(result.persistedReport.ok).toBe(true);
+    if (!result.persistedReport.ok || !result.stdinReport?.ok) return;
+    expect(result.persistedReport.filePath).toBe(result.stdinReport.filePath);
+  });
+
+  it("degrades loudly on unparseable stdin: parse-error log + reason, approval still proceeds", async () => {
+    const reportsDir = reportsDirIn(tmp);
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-stdin-3",
+      reportsDir,
+      generatedDir: path.join(tmp, "harness.generated"),
+      reportMarkdown: "just some prose, not a report",
+      now: new Date("2026-07-10T10:00:00Z"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+
+    expect(result.stdinReport?.ok).toBe(false);
+    if (result.stdinReport?.ok !== false) return;
+    expect(result.stdinReport.reason).toMatch(/did not parse/);
+    expect(result.stdinReport.parseErrorLogPath).toBeDefined();
+    const log = fs.readFileSync(result.stdinReport.parseErrorLogPath!, "utf8");
+    expect(log).toContain('"sessionId": "sess-stdin-3"');
+    expect(log).toContain("--- raw ---");
+    // Marker (the approval itself) still lands.
+    expect(result.marker.ok).toBe(true);
+    // No report flip — and the reason names the fresh parse-error.
+    expect(result.persistedReport.ok).toBe(false);
+    if (result.persistedReport.ok) return;
+    expect(result.persistedReport.reason).toMatch(/parse-error/);
+  });
+
+  it("enforces grill_me validation on a stdin report (hollow priorArt refuses the marker)", async () => {
+    const reportsDir = reportsDirIn(tmp);
+    const hollow = VALID_GRILL_ME.replace(
+      /- searched harness.*$/m,
+      "- None",
+    );
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-stdin-4",
+      reportsDir,
+      generatedDir: path.join(tmp, "harness.generated"),
+      reportMarkdown: hollow,
+      now: new Date("2026-07-10T10:00:00Z"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.stdinReport?.ok).toBe(true);
+    expect(result.marker.ok).toBe(false);
+    const v = result.validation;
+    expect("ok" in v && v.ok === false && v.field === "priorArt").toBe(true);
+  });
+
+  it("blank stdin is treated as absent (no stdinReport in the result)", async () => {
+    const reportsDir = reportsDirIn(tmp);
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-stdin-5",
+      reportsDir,
+      generatedDir: path.join(tmp, "harness.generated"),
+      reportMarkdown: "   \n  ",
+      now: new Date("2026-07-10T10:00:00Z"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.stdinReport).toBeUndefined();
+  });
+});

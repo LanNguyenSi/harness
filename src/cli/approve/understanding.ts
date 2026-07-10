@@ -37,6 +37,7 @@ import { resolveApprovalSessionId } from "../../runtime/session-id.js";
 import type { Manifest, McpServer } from "../../schema/index.js";
 import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
 import { loadManifest, resolvePaths, type LoaderOptions } from "../loader.js";
+import { persistStdinReport, type StdinReportOutcome } from "./stdin-report.js";
 
 export interface ApproveUnderstandingOptions extends LoaderOptions {
   /** Explicit session id (overrides $CLAUDE_CODE_SESSION_ID / $CLAUDE_SESSION_ID / $CODEX_SESSION_ID). */
@@ -82,6 +83,16 @@ export interface ApproveUnderstandingOptions extends LoaderOptions {
    * entries are dropped and duplicates de-duplicated.
    */
   tasks?: string[];
+  /**
+   * Understanding Report markdown captured from the command's stdin
+   * (the report-heredoc shape, task 61fd36db). When set and non-blank,
+   * it is parsed and persisted as a pending, session-bound report BEFORE
+   * the report lookup below, so this very approve run validates and
+   * flips it. A parse failure degrades loudly (parse-error log + reason
+   * on the result) but does not abort the approval — the operator just
+   * approved interactively; a formatting nit must not brick that.
+   */
+  reportMarkdown?: string;
   /** Override the reports directory (test injection). */
   reportsDir?: string;
   /** Override the harness.generated/ directory (test injection). */
@@ -156,6 +167,15 @@ export interface ApproveUnderstandingResult {
    * a wrong claim file can be spotted before it lands in the marker.
    */
   taskMarkers: TaskMarkerOutcome[];
+  /**
+   * Outcome of capturing a report passed on stdin (`reportMarkdown`).
+   * Absent when no report was supplied. `ok: true` means the markdown
+   * parsed and was persisted pending + session-bound; the
+   * `persistedReport` result below then reports the flip of that same
+   * file. `ok: false` carries the parse/persist failure reason (and the
+   * parse-error log path when one was written).
+   */
+  stdinReport?: StdinReportOutcome;
   ledger: { ok: boolean; tag: string; reason?: string };
   persistedReport:
     | {
@@ -578,6 +598,20 @@ export async function approveUnderstanding(
     manifestLoadError = err instanceof Error ? err.message : String(err);
   }
 
+  // Report capture from stdin (task 61fd36db): persist BEFORE the
+  // lookup below so this very approve run selects, validates, and flips
+  // the report the agent just attached. Session-bound via the resolved
+  // sessionId, so the strict match wins over any stale leftovers.
+  let stdinReport: StdinReportOutcome | undefined;
+  if (typeof opts.reportMarkdown === "string" && opts.reportMarkdown.trim().length > 0) {
+    stdinReport = persistStdinReport({
+      markdown: opts.reportMarkdown,
+      reportsDir,
+      sessionId,
+      now: opts.now ?? new Date(),
+    });
+  }
+
   // Approve-time validation. Resolve the report we would flip BEFORE
   // writing the marker, so a validation failure can short-circuit every
   // downstream write. The `latest` + `reports` values are reused later;
@@ -634,6 +668,7 @@ export async function approveUnderstanding(
         reason: `validation failed (${validation.field}): ${validation.reason}`,
       },
       taskMarkers: [],
+      ...(stdinReport !== undefined ? { stdinReport } : {}),
       ledger: {
         ok: false,
         tag: approvedLedgerTagFor(sessionId),
@@ -828,6 +863,7 @@ export async function approveUnderstanding(
     ...(newestReportPath !== undefined ? { newestReportPath } : {}),
     marker: markerResult,
     taskMarkers,
+    ...(stdinReport !== undefined ? { stdinReport } : {}),
     ledger: ledgerResult.ok
       ? { ok: true, tag }
       : { ok: false, tag, reason: ledgerResult.reason },

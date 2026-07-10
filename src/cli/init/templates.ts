@@ -579,7 +579,7 @@ policy_packs:
           - "an approved Understanding Report for this session"
         run:
           - "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan, Prior Art (state what you searched for an existing solution and what you found, with an explicit adopt-or-build judgment)"
-          - "Run \`harness approve understanding\` (bare, no pipes, chaining, or redirection) and approve the prompt"
+          - "Run \`harness approve understanding\` with the report attached as a quoted heredoc (harness approve understanding <<'UNDERSTANDING_REPORT' ...report... UNDERSTANDING_REPORT) so it is persisted for audit, then approve the prompt; the heredoc is the only extra shell shape the gate allows (no pipes, chaining, or other redirection)"
       # approval_lifecycle (agent-tasks/d8ee60ca + harness/f54e0ecb,
       # v0.18.0+): expire the approval marker on task-completion
       # boundaries so a multi-task session re-prompts for an
