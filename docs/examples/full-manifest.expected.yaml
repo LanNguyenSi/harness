@@ -138,6 +138,27 @@ hooks:
     bash_match: (^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*git( -C \S+)* push\b
     blocking: hard
     budget_ms: 1000
+  - name: deny-kill-switch-bash
+    event: PreToolUse
+    command: ~/.claude/hooks/deny-kill-switch.sh
+    match: Bash
+    bash_match: (^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*harness\s+(pause|resume|gate\s+(disable|enable))(?![\w-])
+    blocking: hard
+    budget_ms: 1000
+  - name: deny-session-env-strip-bash
+    event: PreToolUse
+    command: ~/.claude/hooks/deny-session-env-strip.sh
+    match: Bash
+    bash_match: (^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*(env\b[^;\n|&]*-u\s+(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\b|unset\s+(\S+\s+)*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\b)
+    blocking: hard
+    budget_ms: 1000
+  - name: deny-sentinel-write-bash
+    event: PreToolUse
+    command: ~/.claude/hooks/deny-sentinel-write.sh
+    match: Bash
+    bash_match: ((^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*(tee|cp)\b[^;\n|&]*\.harness-paused\b)|(>{1,2}\s*\S*\.harness-paused\b)
+    blocking: hard
+    budget_ms: 1000
   - name: risk-gate
     event: PreToolUse
     command: harness policy intercept
@@ -347,9 +368,9 @@ policies:
       required:
         - "a deliberate operator override: a critical production mutation has no benign reading"
       run:
-        - Choose a non-destructive alternative, or run the command yourself outside the agent.
-        - "Operator override (deliberate): run `harness approve risk --force <reason>` from your own shell (`! ` prefix in Claude Code, with --i-am-the-operator to acknowledge a non-TTY invocation)."
-        - "Session-wide kill switch: run `harness pause --for <duration>` instead (every gate silences until the sentinel expires or `harness resume` runs)."
+        - Choose a non-destructive alternative, or ask the OPERATOR to run the command themselves, outside the agent.
+        - "Operator override (deliberate): the OPERATOR runs `harness approve risk --force <reason>` from their own shell (`! ` prefix in Claude Code, with --i-am-the-operator to acknowledge a non-TTY invocation)."
+        - "Session-wide kill switch: the OPERATOR runs `harness pause --for <duration>` instead, from a terminal outside this agent session (every gate silences until the sentinel expires or `harness resume` runs); you cannot run `harness pause`/`harness resume` yourself, that is denied at the Bash-tool level."
     when:
       risk.severity_at_least: critical
       environment.name: production
@@ -379,6 +400,54 @@ policies:
     when:
       risk.severity_at_least: high
       environment.name: production
+  - name: deny-kill-switch-bypass
+    description: Deny harness pause, harness resume, harness gate disable, and harness gate enable from the agent's Bash tool. These are operator-only kill switches.
+    trigger:
+      event: PreToolUse
+      match: Bash
+      bash_match: (^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*harness\s+(pause|resume|gate\s+(disable|enable))(?![\w-])
+    requires:
+      ledger_tag: operator-ran-this-outside-the-session:${SESSION_ID}
+    hook: deny-kill-switch-bash
+    enforcement: block
+    ux:
+      cannot: You cannot run `harness pause`, `harness resume`, `harness gate disable`, or `harness gate enable`.
+      required:
+        - the OPERATOR to run this from a terminal genuinely outside your agent session, not a `! `-prefixed Claude Code shell, which inherits this session's env and stdin and does not count
+      run:
+        - Stop. Explain to the operator what you were trying to do and why, and let THEM decide whether to pause/resume/toggle a gate from their own terminal. There is no ledger tag, MCP call, or flag you can use to satisfy this yourself.
+  - name: deny-session-env-strip
+    description: Deny Bash attempts to strip or unset the agent-session env vars that harness pause/resume check ($CLAUDE_CODE_SESSION_ID, $CLAUDE_SESSION_ID, $CODEX_SESSION_ID). Closes the one-liner that otherwise defeats refuseIfAgentShell.
+    trigger:
+      event: PreToolUse
+      match: Bash
+      bash_match: (^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*(env\b[^;\n|&]*-u\s+(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\b|unset\s+(\S+\s+)*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\b)
+    requires:
+      ledger_tag: operator-ran-this-outside-the-session:${SESSION_ID}
+    hook: deny-session-env-strip-bash
+    enforcement: block
+    ux:
+      cannot: You cannot strip or unset your own agent-session id env vars from Bash.
+      required:
+        - "no legitimate reason from inside this session: stripping $CLAUDE_CODE_SESSION_ID / $CLAUDE_SESSION_ID / $CODEX_SESSION_ID is recognised as an attempt to defeat the harness pause/resume agent-shell check"
+      run:
+        - Stop. If you believe you have a legitimate reason to run a command without one of these env vars set, ask the OPERATOR to do it from their own terminal instead.
+  - name: deny-pause-sentinel-forgery
+    description: Deny Bash writes (redirect, tee, cp) to the harness pause sentinel file (.harness-paused). The sentinel is unsigned JSON; a forged file silences every gate exactly like a real operator pause. Reads (cat, stat) are unaffected.
+    trigger:
+      event: PreToolUse
+      match: Bash
+      bash_match: ((^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*(tee|cp)\b[^;\n|&]*\.harness-paused\b)|(>{1,2}\s*\S*\.harness-paused\b)
+    requires:
+      ledger_tag: operator-ran-this-outside-the-session:${SESSION_ID}
+    hook: deny-sentinel-write-bash
+    enforcement: block
+    ux:
+      cannot: You cannot write to the harness pause sentinel file (.harness-paused).
+      required:
+        - the OPERATOR to run `harness pause`/`harness resume` themselves, from a terminal outside your agent session, never a direct write to the sentinel file
+      run:
+        - Stop. Do not write, redirect, tee, or copy anything to .harness-paused. Ask the OPERATOR to run harness pause / harness resume themselves if the session genuinely needs gates silenced.
 policy_packs:
   - name: understanding-before-execution
     source: builtin

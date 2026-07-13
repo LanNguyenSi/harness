@@ -168,6 +168,46 @@ hooks:
     blocking: hard
     budget_ms: 1000
 
+  # deny-kill-switch-bash / deny-session-env-strip-bash / deny-sentinel-write-bash
+  # (task cf1fde6d): `harness pause`/`harness resume` refuse to run inside an
+  # agent shell in CODE, but that CLI check is a speed bump, not a boundary: a
+  # Claude Code `! `-prefixed shell inherits this session's env AND its non-TTY
+  # stdin, so it is indistinguishable from an agent Bash call and trips the
+  # same check the agent would trip (verified live; see
+  # docs/okf/pause-vs-gate-kill-switch.md). The actual enforcement point that
+  # runs BEFORE the agent's Bash executes is this PreToolUse deny-policy layer.
+  - name: deny-kill-switch-bash
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '(^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*harness\s+(pause|resume|gate\s+(disable|enable))(?![\w-])'
+    command: ~/.claude/hooks/deny-kill-switch.sh
+    blocking: hard
+    budget_ms: 1000
+
+  - name: deny-session-env-strip-bash
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '(^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*(env\b[^;\n|&]*-u\s+(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\b|unset\s+(\S+\s+)*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\b)'
+    command: ~/.claude/hooks/deny-session-env-strip.sh
+    blocking: hard
+    budget_ms: 1000
+
+  # Known gap, deliberately not faked as coverage: this only catches the
+  # obvious shell shapes (`> .harness-paused`, `tee .harness-paused`,
+  # `cp ... .harness-paused`). A regex over the raw command string cannot
+  # see through a heredoc, `python -c`, base64-decoded payloads, an fs.write
+  # call inside a script file the agent creates and then executes, or a
+  # symlink swap. Closing that class needs either signing the sentinel
+  # (HMAC) or a filesystem-level write guard, neither in scope here; both
+  # are noted as follow-ups.
+  - name: deny-sentinel-write-bash
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '((^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*(tee|cp)\b[^;\n|&]*\.harness-paused\b)|(>{1,2}\s*\S*\.harness-paused\b)'
+    command: ~/.claude/hooks/deny-sentinel-write.sh
+    blocking: hard
+    budget_ms: 1000
+
   # risk-gate (Phase 7 #6): the Risk Gate enforcement hook for the
   # gate-prod-destructive policies. Uses the `harness policy intercept`
   # entrypoint directly — the interceptor classifies risk and resolves
@@ -423,9 +463,9 @@ policies:
       required:
         - "a deliberate operator override: a critical production mutation has no benign reading"
       run:
-        - "Choose a non-destructive alternative, or run the command yourself outside the agent."
-        - "Operator override (deliberate): run `harness approve risk --force <reason>` from your own shell (`! ` prefix in Claude Code, with --i-am-the-operator to acknowledge a non-TTY invocation)."
-        - "Session-wide kill switch: run `harness pause --for <duration>` instead (every gate silences until the sentinel expires or `harness resume` runs)."
+        - "Choose a non-destructive alternative, or ask the OPERATOR to run the command themselves, outside the agent."
+        - "Operator override (deliberate): the OPERATOR runs `harness approve risk --force <reason>` from their own shell (`! ` prefix in Claude Code, with --i-am-the-operator to acknowledge a non-TTY invocation)."
+        - "Session-wide kill switch: the OPERATOR runs `harness pause --for <duration>` instead, from a terminal outside this agent session (every gate silences until the sentinel expires or `harness resume` runs); you cannot run `harness pause`/`harness resume` yourself, that is denied at the Bash-tool level."
   - name: gate-prod-destructive-approval
     description: Require operator approval for high-severity destructive shell actions against a production target.
     trigger:
@@ -452,6 +492,68 @@ policies:
         - "operator approval of this Risk Gate decision"
       run:
         - "harness approve risk"
+
+  # deny-kill-switch-bypass / deny-session-env-strip / deny-pause-sentinel-forgery
+  # (task cf1fde6d): these three policies intentionally declare NO producers:.
+  # There is no legitimate way to satisfy any of them from inside the agent
+  # session: the only correct unblock is the OPERATOR running the verb from
+  # a terminal genuinely outside this session, which never trips these hooks
+  # at all. A producers: entry would just teach the agent a ledger_tag / MCP
+  # call that self-satisfies the gate, defeating the point
+  # (docs/writing-custom-policies.md tripwire 4, "whoever can write the
+  # ledger can open the gate"). `harness validate` will warn "declares no
+  # producers" on all three; that warning is correct and intentional here,
+  # not a gap to fill.
+  - name: deny-kill-switch-bypass
+    description: Deny harness pause, harness resume, harness gate disable, and harness gate enable from the agent's Bash tool. These are operator-only kill switches.
+    trigger:
+      event: PreToolUse
+      match: "Bash"
+      bash_match: '(^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*harness\s+(pause|resume|gate\s+(disable|enable))(?![\w-])'
+    requires:
+      ledger_tag: "operator-ran-this-outside-the-session:${SESSION_ID}"
+    hook: deny-kill-switch-bash
+    enforcement: block
+    ux:
+      cannot: "You cannot run `harness pause`, `harness resume`, `harness gate disable`, or `harness gate enable`."
+      required:
+        - "the OPERATOR to run this from a terminal genuinely outside your agent session, not a `! `-prefixed Claude Code shell, which inherits this session's env and stdin and does not count"
+      run:
+        - "Stop. Explain to the operator what you were trying to do and why, and let THEM decide whether to pause/resume/toggle a gate from their own terminal. There is no ledger tag, MCP call, or flag you can use to satisfy this yourself."
+
+  - name: deny-session-env-strip
+    description: Deny Bash attempts to strip or unset the agent-session env vars that harness pause/resume check ($CLAUDE_CODE_SESSION_ID, $CLAUDE_SESSION_ID, $CODEX_SESSION_ID). Closes the one-liner that otherwise defeats refuseIfAgentShell.
+    trigger:
+      event: PreToolUse
+      match: "Bash"
+      bash_match: '(^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*(env\b[^;\n|&]*-u\s+(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\b|unset\s+(\S+\s+)*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\b)'
+    requires:
+      ledger_tag: "operator-ran-this-outside-the-session:${SESSION_ID}"
+    hook: deny-session-env-strip-bash
+    enforcement: block
+    ux:
+      cannot: "You cannot strip or unset your own agent-session id env vars from Bash."
+      required:
+        - "no legitimate reason from inside this session: stripping $CLAUDE_CODE_SESSION_ID / $CLAUDE_SESSION_ID / $CODEX_SESSION_ID is recognised as an attempt to defeat the harness pause/resume agent-shell check"
+      run:
+        - "Stop. If you believe you have a legitimate reason to run a command without one of these env vars set, ask the OPERATOR to do it from their own terminal instead."
+
+  - name: deny-pause-sentinel-forgery
+    description: Deny Bash writes (redirect, tee, cp) to the harness pause sentinel file (.harness-paused). The sentinel is unsigned JSON; a forged file silences every gate exactly like a real operator pause. Reads (cat, stat) are unaffected.
+    trigger:
+      event: PreToolUse
+      match: "Bash"
+      bash_match: '((^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*(tee|cp)\b[^;\n|&]*\.harness-paused\b)|(>{1,2}\s*\S*\.harness-paused\b)'
+    requires:
+      ledger_tag: "operator-ran-this-outside-the-session:${SESSION_ID}"
+    hook: deny-sentinel-write-bash
+    enforcement: block
+    ux:
+      cannot: "You cannot write to the harness pause sentinel file (.harness-paused)."
+      required:
+        - "the OPERATOR to run `harness pause`/`harness resume` themselves, from a terminal outside your agent session, never a direct write to the sentinel file"
+      run:
+        - "Stop. Do not write, redirect, tee, or copy anything to .harness-paused. Ask the OPERATOR to run harness pause / harness resume themselves if the session genuinely needs gates silenced."
 
 policy_packs:
   - name: understanding-before-execution
