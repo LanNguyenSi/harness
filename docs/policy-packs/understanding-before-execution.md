@@ -246,7 +246,10 @@ Wire format for the Codex adapter scripts (stdin):
 
 ```jsonc
 {
-  "session_id": "<string>",   // also tolerated: "id"
+  "session_id": "<string>",   // no alias: "id" is deliberately NOT
+                               // accepted (it collides with the
+                               // event/message id in most event-bus
+                               // shapes; see hook-codex-pre-tool-use.ts)
   "tool_name":  "<string>",   // also tolerated: "tool"
   "raw_input":  {  /* tool args, opaque */  },
   "event":      "<string>"    // optional event name
