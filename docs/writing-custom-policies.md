@@ -29,8 +29,11 @@ These four things bite people who skip ahead to the YAML:
 2. **`grounding-mcp` must be wired in `tools.mcp[]`, or every policy
    silently degrades to warn-mode.** The `requires` evaluator queries
    the evidence ledger through grounding-mcp; without it, no policy
-   ever blocks. `harness validate` warns when this is missing, treat
-   the warning as load-bearing.
+   ever blocks. Since `v0.35.0`, `harness apply` refuses outright when
+   the manifest declares `policies:` without `grounding-mcp` wired
+   under `tools.mcp` (previously it applied and the policies silently
+   degraded to warn-mode at runtime, with only a `harness validate`
+   warning to catch it); wire `grounding-mcp` or drop the policies.
 
 3. **Hook wiring is not auto-generated for custom policies.** The
    `harness init` wizard only knows about its five named patterns

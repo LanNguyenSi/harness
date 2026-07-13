@@ -2588,9 +2588,10 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .command("pause")
     .description(
       "Temporarily make all harness hooks dormant by writing a sentinel under harness.generated/. " +
-        "Operator-only (refuses when $CLAUDE_SESSION_ID is set or stdin is non-TTY). Intended for " +
-        "lockout recovery, debug A/B-tests, and incident hotfixes. NOT for routine gate bypass: " +
-        "for permanent per-policy disable, edit `policies[].enabled` in the manifest.",
+        "Operator-only (refuses when $CLAUDE_CODE_SESSION_ID, $CLAUDE_SESSION_ID, or $CODEX_SESSION_ID " +
+        "is set, or stdin is non-TTY). Intended for lockout recovery, debug A/B-tests, and incident " +
+        "hotfixes. NOT for routine gate bypass: for permanent per-policy disable, edit " +
+        "`policies[].enabled` in the manifest.",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
