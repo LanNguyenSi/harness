@@ -263,3 +263,96 @@ describe("init — explicit configPath", () => {
     expect(fs.existsSync(target)).toBe(true);
   });
 });
+
+// Task 7f8fb4bc: `init` surfaces unresolved MCP/CLI binaries right after
+// writing the manifest, instead of leaving the operator to discover them
+// via a later `harness doctor` run (or worse, the old ENOENT crash).
+describe("init — bin-resolution check (task 7f8fb4bc)", () => {
+  it("surfaces an unresolved MCP binary on stderr without throwing, and reports a non-zero count", async () => {
+    const content = `version: 1
+hooks: []
+policies: []
+tools:
+  mcp:
+    - name: ghost-mcp
+      command: [definitely-not-a-real-binary-harness-7f8fb4bc]
+      health:
+        verb: ping
+      enabled: true
+  builtin:
+    known: []
+`;
+    const r = await init({
+      homeDir: tmpHome,
+      content,
+      contentLabel: "custom",
+      pathEnv: "/usr/bin",
+      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+    });
+    expect(r.binResolutionErrorCount).toBe(1);
+    expect(r.stderr).toContain("ghost-mcp");
+    expect(r.stderr).toContain("not found on PATH");
+  });
+
+  it("reports zero when every declared MCP binary resolves", async () => {
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-init-binres-"));
+    const bin = path.join(binDir, "present-mcp");
+    fs.writeFileSync(bin, "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(bin, 0o755);
+    const content = `version: 1
+hooks: []
+policies: []
+tools:
+  mcp:
+    - name: present-mcp
+      command: [present-mcp]
+      health:
+        verb: ping
+      enabled: true
+  builtin:
+    known: []
+`;
+    const r = await init({
+      homeDir: tmpHome,
+      content,
+      contentLabel: "custom",
+      pathEnv: binDir,
+      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+    });
+    expect(r.binResolutionErrorCount).toBe(0);
+    fs.rmSync(binDir, { recursive: true, force: true });
+  });
+
+  it("attaches a PATH-shadow hint when the binary exists under the npm global bin dir but is not on PATH", async () => {
+    const npmBinDirRoot = fs.mkdtempSync(path.join(os.tmpdir(), "harness-init-npmbin-"));
+    const npmBinDir = path.join(npmBinDirRoot, "bin");
+    fs.mkdirSync(npmBinDir);
+    const shadowed = path.join(npmBinDir, "grounding-mcp");
+    fs.writeFileSync(shadowed, "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(shadowed, 0o755);
+    const content = `version: 1
+hooks: []
+policies: []
+tools:
+  mcp:
+    - name: grounding-mcp
+      command: [grounding-mcp]
+      health:
+        verb: ping
+      enabled: true
+  builtin:
+    known: []
+`;
+    const r = await init({
+      homeDir: tmpHome,
+      content,
+      contentLabel: "custom",
+      pathEnv: "/usr/bin",
+      npmBinExec: async () => ({ code: 0, stdout: `${npmBinDirRoot}\n`, stderr: "" }),
+    });
+    expect(r.binResolutionErrorCount).toBe(1);
+    expect(r.stderr).toContain(npmBinDir);
+    expect(r.stderr).toContain(`export PATH="${npmBinDir}:$PATH"`);
+    fs.rmSync(npmBinDirRoot, { recursive: true, force: true });
+  });
+});

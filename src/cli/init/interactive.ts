@@ -133,6 +133,14 @@ export interface InteractiveResult {
   /** Whether `harness validate` reported zero errors after the write. */
   validateClean?: boolean;
   /**
+   * Whether every declared, enabled MCP binary and every REQUIRED CLI
+   * binary resolves on PATH (task 7f8fb4bc). `undefined` when this check
+   * did not run (validate itself failed first). False does not abort the
+   * wizard — the operator may still want to wire runtimes and fix PATH
+   * afterward — but the CLI layer surfaces it as a loud, non-zero exit.
+   */
+  binResolutionClean?: boolean;
+  /**
    * Per-runtime apply outcome from the wire-now step. Present when the
    * operator selected at least one runtime in the multiselect (default:
    * every detected runtime is pre-checked). Empty array means the
@@ -784,13 +792,24 @@ export async function runInteractive(
     // is honored from `--force` (forceOverwrite) as well as from a
     // detected existing manifest, so a re-run with `--force` overwrites
     // without the wizard re-prompting.
-    const initOpts: { template: "solo" | "team" | "full"; force: boolean; homeDir?: string } = {
+    const initOpts: {
+      template: "solo" | "team" | "full";
+      force: boolean;
+      homeDir?: string;
+      pathEnv?: string;
+    } = {
       template: profile,
       force: detection.manifest.exists || opts.forceOverwrite === true,
     };
     const homeArg = harnessHomeArg(opts);
     if (homeArg !== undefined) {
       initOpts.homeDir = homeArg;
+    }
+    // Task 7f8fb4bc: reuse the dependency-check PATH override (when a
+    // test supplies one) for `init()`'s own post-write bin-resolution
+    // check, so the two checks agree on what's "installed" for this run.
+    if (opts.dependencyPathEnv !== undefined) {
+      initOpts.pathEnv = opts.dependencyPathEnv;
     }
     const initResult = await init(initOpts);
     stdout(initResult.stdout);
@@ -860,6 +879,18 @@ async function runPostInitTail(t: PostInitTailOpts): Promise<InteractiveResult> 
     stderr(`\nValidate reported errors. Fix the manifest before running \`harness apply\`.\n`);
     return { aborted: false, profile, init: initResult, validateClean };
   }
+
+  // Bin-resolution check (task 7f8fb4bc): validate() only checks the
+  // manifest's shape, not whether the binaries it declares actually
+  // resolve. A binary that installed successfully but landed under a npm
+  // global bin dir NOT on PATH (the dogfood incident this task fixes)
+  // passes validate cleanly and only used to surface as an opaque
+  // `harness doctor` crash later. `init()` itself already ran this check
+  // against the just-written manifest (threaded through `pathEnv` above)
+  // and folded any findings into `initResult.stderr`, printed at the top
+  // of this function — read its verdict here rather than re-running the
+  // check a second time with different (test-injection) plumbing.
+  const binResolutionClean = initResult.binResolutionErrorCount === 0;
 
   if (profile === "team" || profile === "full") {
     // Reminder splits at the "Not using agent-tasks?" paragraph because
@@ -947,7 +978,7 @@ async function runPostInitTail(t: PostInitTailOpts): Promise<InteractiveResult> 
         "",
       ].join("\n"),
     );
-    return { aborted: false, profile, init: initResult, validateClean, applies: [] };
+    return { aborted: false, profile, init: initResult, validateClean, binResolutionClean, applies: [] };
   }
 
   if (selectedRuntimes.length > 1) {
@@ -977,6 +1008,7 @@ async function runPostInitTail(t: PostInitTailOpts): Promise<InteractiveResult> 
     profile,
     init: initResult,
     validateClean,
+    binResolutionClean,
     applies,
   };
   if (legacyApply !== undefined) result.apply = legacyApply;
@@ -1146,13 +1178,21 @@ async function runCustomProfile(rc: RunCustomOpts): Promise<InteractiveResult> {
     return { aborted: true, profile };
   }
 
-  const initOpts: { content: string; contentLabel: string; force: boolean; homeDir?: string } = {
+  const initOpts: {
+    content: string;
+    contentLabel: string;
+    force: boolean;
+    homeDir?: string;
+    pathEnv?: string;
+  } = {
     content: composed.yaml,
     contentLabel: "custom",
     force: detection.manifest.exists || opts.forceOverwrite === true,
   };
   const homeArg = harnessHomeArg(opts);
   if (homeArg !== undefined) initOpts.homeDir = homeArg;
+  // Task 7f8fb4bc: see the named-profile path above for rationale.
+  if (opts.dependencyPathEnv !== undefined) initOpts.pathEnv = opts.dependencyPathEnv;
   const initResult = await init(initOpts);
   stdout(initResult.stdout);
 

@@ -1,14 +1,19 @@
 import type { DoctorReport, McpProbeResult } from "./types.js";
 import { VERSION } from "../../version.js";
 
-function mcpLine(r: McpProbeResult, shallow: boolean): string {
+function mcpLines(r: McpProbeResult, shallow: boolean): string[] {
   switch (r.outcome.kind) {
     case "healthy":
-      return shallow
-        ? `    ~ ${r.name}  manifest-only (probe skipped)`
-        : `    ✓ ${r.name}  healthy in ${r.outcome.latencyMs}ms`;
-    case "error":
-      return `    ✗ ${r.name}  FAILED: ${r.outcome.message}`;
+      return [
+        shallow
+          ? `    ~ ${r.name}  manifest-only (probe skipped)`
+          : `    ✓ ${r.name}  healthy in ${r.outcome.latencyMs}ms`,
+      ];
+    case "error": {
+      const out = [`    ✗ ${r.name}  FAILED: ${r.outcome.message}`];
+      if (r.outcome.pathHint) out.push(`      ${r.outcome.pathHint}`);
+      return out;
+    }
     case "no-response": {
       // Render distinct from `error` so a clean exit-0 ("config issue")
       // is not framed as a process crash. The visual marker stays ✗
@@ -17,12 +22,12 @@ function mcpLine(r: McpProbeResult, shallow: boolean): string {
         r.outcome.phase === "initialize"
           ? "initialize"
           : `${r.outcome.verb ?? "verb"} call`;
-      return `    ✗ ${r.name}  no JSON-RPC response (process exited cleanly during ${phase})`;
+      return [`    ✗ ${r.name}  no JSON-RPC response (process exited cleanly during ${phase})`];
     }
     case "missing-verb":
-      return `    ? ${r.name}  unknown — no health verb declared`;
+      return [`    ? ${r.name}  unknown — no health verb declared`];
     case "disabled":
-      return `    ✓ ${r.name}  disabled (skipped)`;
+      return [`    ✓ ${r.name}  disabled (skipped)`];
   }
 }
 
@@ -74,7 +79,7 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
 function formatToolsSection(report: DoctorReport): string[] {
   const out: string[] = ["", "Tools"];
   out.push(`  MCP servers (${report.tools.mcp.length} declared)`);
-  for (const m of report.tools.mcp) out.push(mcpLine(m, report.shallow));
+  for (const m of report.tools.mcp) out.push(...mcpLines(m, report.shallow));
   // Only render the version-check sub-block when at least one MCP server
   // declared `min_version`; an empty list otherwise would be noise.
   if (report.tools.mcpVersions.length > 0) {
@@ -90,6 +95,7 @@ function formatToolsSection(report: DoctorReport): string[] {
   for (const c of report.tools.cli) {
     const marker = c.status === "ok" ? "✓" : c.status === "warn" ? "⚠" : "✗";
     out.push(`    ${marker} ${c.name}  ${c.message}`);
+    if (c.pathHint) out.push(`      ${c.pathHint}`);
   }
 
   const skillsLine = report.tools.skillsEnabled.join(", ") || "(none)";

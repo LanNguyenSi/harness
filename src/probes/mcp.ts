@@ -4,7 +4,24 @@ import { VERSION } from "../version.js";
 
 export type McpProbeOutcome =
   | { kind: "healthy"; latencyMs: number }
-  | { kind: "error"; latencyMs: number; message: string }
+  | {
+      kind: "error";
+      latencyMs: number;
+      message: string;
+      /**
+       * Set when the failure is a `spawn` `ENOENT` (the declared binary
+       * could not be resolved at all, as opposed to the process starting
+       * and then misbehaving). Doctor uses this to decide whether a
+       * PATH-shadow remediation hint applies (harness/7f8fb4bc).
+       */
+      enoent?: boolean;
+      /**
+       * One-line PATH-shadow remediation, populated by the doctor layer
+       * (which knows the resolved npm global bin dir) when an `enoent`
+       * binary is found to actually exist there, just not on PATH.
+       */
+      pathHint?: string;
+    }
   /**
    * Server exited with code 0 BEFORE the doctor received a JSON-RPC
    * response. Distinct from `error` because the process did not crash;
@@ -49,6 +66,34 @@ function commandToArgs(server: McpServer): { exe: string; args: string[] } {
   return { exe, args };
 }
 
+/**
+ * Build the `error` outcome for a spawn-time failure (as opposed to a
+ * failure after the process started). `ENOENT` — the binary is not
+ * resolvable at all — gets the "not found on PATH" wording the doctor
+ * summary and PATH-shadow hint (added by the doctor layer) key off of;
+ * any other errno (e.g. `EACCES`) still reports gracefully but without
+ * implying a PATH problem.
+ */
+function spawnErrorOutcome(
+  exe: string,
+  err: NodeJS.ErrnoException | null,
+  latencyMs: number,
+): McpProbeOutcome {
+  if (err?.code === "ENOENT") {
+    return {
+      kind: "error",
+      latencyMs,
+      message: `${exe} not found on PATH (spawn ENOENT)`,
+      enoent: true,
+    };
+  }
+  return {
+    kind: "error",
+    latencyMs,
+    message: `spawn ${exe} failed: ${err?.message ?? "unknown spawn error"}`,
+  };
+}
+
 async function runRealProbe(
   server: McpServer,
   opts: RealMcpProbeOptions,
@@ -87,6 +132,18 @@ async function runRealProbe(
   let processExited = false;
   let exitCode: number | null = null;
   let exitSignal: NodeJS.Signals | null = null;
+  // A declared MCP whose binary cannot be resolved (spawn ENOENT, or any
+  // other spawn-time failure such as EACCES) emits an 'error' event on
+  // `child` ASYNCHRONOUSLY, not a synchronous throw from `spawn()` above.
+  // Node's EventEmitter treats an 'error' event with zero listeners as an
+  // unhandled exception that crashes the whole process — this is exactly
+  // the "spawn grounding-mcp ENOENT ... emitted 'error' event on
+  // ChildProcess" dogfood crash (harness/7f8fb4bc). Listening here turns
+  // it into a normal, per-server doctor outcome instead.
+  let spawnErr: NodeJS.ErrnoException | null = null;
+  child.on("error", (err) => {
+    spawnErr = err as NodeJS.ErrnoException;
+  });
 
   child.stderr.on("data", (chunk: Buffer) => {
     stderrBuf += chunk.toString("utf8");
@@ -145,6 +202,13 @@ async function runRealProbe(
     });
   }
 
+  function waitForSpawnError(): Promise<"spawn-error"> {
+    return new Promise((resolve) => {
+      if (spawnErr) resolve("spawn-error");
+      else child.once("error", () => resolve("spawn-error"));
+    });
+  }
+
   const timers = new Set<NodeJS.Timeout>();
   function timeoutPromise(): Promise<"timeout"> {
     return new Promise((resolve) => {
@@ -170,7 +234,14 @@ async function runRealProbe(
       }),
       waitForExit(),
       timeoutPromise(),
+      waitForSpawnError(),
     ]);
+    if (initResult === "spawn-error") {
+      return {
+        name: server.name,
+        outcome: spawnErrorOutcome(exe, spawnErr, Date.now() - start),
+      };
+    }
     if (initResult === "exit") {
       const latencyMs = Date.now() - start;
       // Clean exit (code 0) before responding looks like a config issue
@@ -223,7 +294,14 @@ async function runRealProbe(
       }),
       waitForExit(),
       timeoutPromise(),
+      waitForSpawnError(),
     ]);
+    if (verbResult === "spawn-error") {
+      return {
+        name: server.name,
+        outcome: spawnErrorOutcome(exe, spawnErr, Date.now() - start),
+      };
+    }
     if (verbResult === "exit") {
       const latencyMs = Date.now() - start;
       if (exitCode === 0) {
