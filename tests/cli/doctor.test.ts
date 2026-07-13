@@ -184,6 +184,179 @@ tools:
     });
     expect(format(report)).toContain("✓ alpha  healthy in 89ms");
   });
+
+  // Mutation test for task 7f8fb4bc (dogfood 2026-07-06): a declared MCP
+  // whose binary is unresolvable used to crash the whole `doctor` run with
+  // an unhandled 'error' event on the spawned ChildProcess ("Error: spawn
+  // grounding-mcp ENOENT"). This exercises the REAL probe (no `mcpProbe`
+  // stub) end-to-end through `doctor()` so a regression would manifest as
+  // an unhandled rejection / process crash, not just a wrong assertion.
+  it("survives a declared MCP whose binary is unresolvable (spawn ENOENT) and keeps probing the rest", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+tools:
+  mcp:
+    - name: ghost-mcp
+      command: [definitely-not-a-real-binary-harness-7f8fb4bc]
+      health:
+        verb: ping
+        timeout_ms: 2000
+      enabled: true
+    - name: alpha
+      command: [/usr/bin/true]
+      health:
+        verb: ping
+      enabled: true
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new (class implements McpProbe {
+        async call(server: McpServer): Promise<McpProbeResult> {
+          if (server.name === "alpha") {
+            return { name: "alpha", outcome: { kind: "healthy", latencyMs: 5 } };
+          }
+          // Exercise the real spawn-ENOENT path only for ghost-mcp.
+          const { RealMcpProbe } = await import("../../src/probes/mcp.js");
+          return new RealMcpProbe().call(server);
+        }
+      })(),
+      pathEnv: "",
+      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+    });
+    const ghost = report.tools.mcp.find((m) => m.name === "ghost-mcp");
+    expect(ghost?.outcome.kind).toBe("error");
+    if (ghost?.outcome.kind === "error") {
+      expect(ghost.outcome.message).toMatch(/not found on PATH/);
+      expect(ghost.outcome.enoent).toBe(true);
+    }
+    // doctor kept going: the second declared server still probed cleanly.
+    const alpha = report.tools.mcp.find((m) => m.name === "alpha");
+    expect(alpha?.outcome.kind).toBe("healthy");
+    expect(report.errorCount).toBeGreaterThan(0);
+    const text = format(report);
+    expect(text).toMatch(/\d+ errors?\n/);
+    expect(text).not.toMatch(/at ChildProcess/); // no stack trace leaked into the report
+    expect(text).not.toMatch(/Unhandled/i);
+  });
+
+  it("attaches a PATH-shadow hint when the ENOENT binary exists under the npm global bin dir but is not on PATH", async () => {
+    const npmBinDirRoot = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-npmbin-"));
+    cleanups.push(() => fs.rmSync(npmBinDirRoot, { recursive: true, force: true }));
+    const npmBinDir = path.join(npmBinDirRoot, "bin");
+    fs.mkdirSync(npmBinDir);
+    const shadowed = path.join(npmBinDir, "grounding-mcp");
+    fs.writeFileSync(shadowed, "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(shadowed, 0o755);
+
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+tools:
+  mcp:
+    - name: grounding-mcp
+      command: [grounding-mcp]
+      health:
+        verb: ping
+      enabled: true
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({
+        "grounding-mcp": {
+          kind: "error",
+          latencyMs: 3,
+          message: "grounding-mcp not found on PATH (spawn ENOENT)",
+          enoent: true,
+        },
+      }),
+      pathEnv: "/usr/bin",
+      npmBinExec: async () => ({ code: 0, stdout: `${npmBinDirRoot}\n`, stderr: "" }),
+    });
+    const server = report.tools.mcp.find((m) => m.name === "grounding-mcp");
+    expect(server?.outcome.kind).toBe("error");
+    if (server?.outcome.kind === "error") {
+      expect(server.outcome.pathHint).toContain(npmBinDir);
+      expect(server.outcome.pathHint).toContain(`export PATH="${npmBinDir}:$PATH"`);
+    }
+    const text = format(report);
+    expect(text).toContain(npmBinDir);
+  });
+});
+
+describe("doctor — CLI PATH-shadow hint (task 7f8fb4bc)", () => {
+  it("attaches a PATH-shadow hint when a required CLI binary exists under the npm global bin dir but is not on PATH", async () => {
+    const npmBinDirRoot = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-npmbin-cli-"));
+    cleanups.push(() => fs.rmSync(npmBinDirRoot, { recursive: true, force: true }));
+    const npmBinDir = path.join(npmBinDirRoot, "bin");
+    fs.mkdirSync(npmBinDir);
+    const shadowed = path.join(npmBinDir, "agent-preflight");
+    fs.writeFileSync(shadowed, "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(shadowed, 0o755);
+
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+tools:
+  cli:
+    - name: agent-preflight
+      binary: agent-preflight
+      required: true
+  builtin:
+    known: []
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      pathEnv: "/usr/bin",
+      npmBinExec: async () => ({ code: 0, stdout: `${npmBinDirRoot}\n`, stderr: "" }),
+    });
+    const cli = report.tools.cli.find((c) => c.name === "agent-preflight");
+    expect(cli?.status).toBe("error");
+    expect(cli?.pathHint).toContain(npmBinDir);
+    expect(cli?.pathHint).toContain(`export PATH="${npmBinDir}:$PATH"`);
+    const text = format(report);
+    expect(text).toContain(npmBinDir);
+  });
+
+  it("does not attach a hint when the binary genuinely is not installed anywhere", async () => {
+    const npmBinDirRoot = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-npmbin-cli-empty-"));
+    cleanups.push(() => fs.rmSync(npmBinDirRoot, { recursive: true, force: true }));
+    fs.mkdirSync(path.join(npmBinDirRoot, "bin"));
+
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+tools:
+  cli:
+    - name: agent-preflight
+      binary: agent-preflight
+      required: true
+  builtin:
+    known: []
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      pathEnv: "/usr/bin",
+      npmBinExec: async () => ({ code: 0, stdout: `${npmBinDirRoot}\n`, stderr: "" }),
+    });
+    const cli = report.tools.cli.find((c) => c.name === "agent-preflight");
+    expect(cli?.status).toBe("error");
+    expect(cli?.pathHint).toBeUndefined();
+  });
 });
 
 describe("doctor — --shallow timing budget", () => {

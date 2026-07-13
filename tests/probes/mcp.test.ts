@@ -242,6 +242,27 @@ process.stdin.on("data", (d) => {
     }
   });
 
+  it("returns a graceful error (never an unhandled exception) when the binary is unresolvable (spawn ENOENT)", async () => {
+    // Dogfood regression (harness/7f8fb4bc): a declared MCP whose binary is
+    // not on PATH used to crash the whole `harness doctor` run with an
+    // unhandled 'error' event on the ChildProcess. If the fix regresses,
+    // this test process itself crashes (the exception is unhandled at the
+    // Node level), not just this one `it` block.
+    const probe = new RealMcpProbe();
+    const server: McpServer = {
+      name: "ghost-mcp",
+      command: ["definitely-not-a-real-binary-harness-7f8fb4bc"],
+      health: { verb: "ping", timeout_ms: 2000 },
+      enabled: true,
+    };
+    const result = await probe.call(server);
+    expect(result.outcome.kind).toBe("error");
+    if (result.outcome.kind === "error") {
+      expect(result.outcome.message).toMatch(/not found on PATH/);
+      expect(result.outcome.enoent).toBe(true);
+    }
+  });
+
   it("renders a clean verb-phase exit as no-response with phase=verb and the verb name", async () => {
     const script = makeScript(`#!/usr/bin/env node
 let buf = "";

@@ -136,6 +136,10 @@ describe("interactive wizard — Solo path", () => {
     expect(result.aborted).toBe(false);
     expect(result.profile).toBe("solo");
     expect(result.validateClean).toBe(true);
+    // Task 7f8fb4bc: Solo's tools.mcp/tools.cli are empty (memory-router
+    // lives under memory.router, outside this check's scope), so the
+    // bin-resolution check is clean regardless of PATH.
+    expect(result.binResolutionClean).toBe(true);
     expect(result.apply).toBeUndefined();
     expect(result.applies).toEqual([]);
     expect(fs.existsSync(path.join(tmpHome, ".harness", "harness.yaml"))).toBe(true);
@@ -377,6 +381,38 @@ describe("interactive wizard — Team path", () => {
     });
     expect(result.aborted).toBe(false);
     expect(result.profile).toBe("team");
+  });
+
+  it("reports binResolutionClean: false and a PATH-shadow-free hint when deps stay unresolved after a stubbed install (task 7f8fb4bc)", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      // No binaries actually exist here; the stubbed installSpawn below
+      // reports success without creating any files, so the wizard writes
+      // the manifest with grounding-mcp / agent-tasks-mcp-bridge declared
+      // but still unresolved on PATH — the scenario this task's doctor
+      // fix and this init-time check both target.
+      dependencyPathEnv: "/nonexistent-bin-dir-for-tests",
+      installSpawn: async () => ({ code: 0, stderr: "" }),
+      prompts: mockPrompts({
+        select: ["team"],
+        confirm: [
+          true, // proceed despite missing agent-tasks in settings.json
+          true, // accept the install prompt
+          true, // confirm write
+        ],
+        checkbox: [[]],
+        input: ["~/.claude/projects/{project}/memory"],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(false);
+    expect(result.validateClean).toBe(true);
+    expect(result.binResolutionClean).toBe(false);
+    expect(cap.stderr()).toContain("not found on PATH");
+    expect(cap.stderr()).toContain("grounding-mcp");
   });
 
   it("prints the agent-tasks coupling reminder after the manifest write", async () => {
@@ -948,6 +984,13 @@ describe("interactive wizard — dependency install", () => {
 describe("interactive wizard — Full profile", () => {
   it("writes a self-contained full manifest with no external hook scripts", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
+    // Task 7f8fb4bc: the post-write bin-resolution check also covers
+    // tools.cli[], and Full declares `gh` (required) there. `gh` is not
+    // one of the wizard's own installable deps (fakeDepsPath's normal
+    // contents), so stub it in separately for this test's cleanliness
+    // assertion.
+    fs.writeFileSync(path.join(fakeDepsPath, "gh"), "#!/bin/sh\n");
+    fs.chmodSync(path.join(fakeDepsPath, "gh"), 0o755);
     const cap = captureStreams();
     const result = await runInteractive({
       homeDir: tmpHome,
@@ -966,6 +1009,10 @@ describe("interactive wizard — Full profile", () => {
     });
     expect(result.aborted).toBe(false);
     expect(result.profile).toBe("full");
+    // Task 7f8fb4bc: Full declares grounding-mcp + agent-tasks-mcp-bridge
+    // under tools.mcp; fakeDepsPath stubs both as present, so the
+    // bin-resolution check is clean.
+    expect(result.binResolutionClean).toBe(true);
     expect(fs.existsSync(path.join(tmpHome, ".harness", "harness.yaml"))).toBe(true);
     const content = fs.readFileSync(path.join(tmpHome, ".harness", "harness.yaml"), "utf8");
     // Full template carries the additional reference policies that

@@ -30,6 +30,15 @@ export interface CliEntryReport {
   name: string;
   status: "ok" | "warn" | "error";
   message: string;
+  /**
+   * PATH-shadow remediation (task 7f8fb4bc): set when the binary is not
+   * resolvable on PATH but a file of the same name exists under the
+   * resolved npm global bin dir — the nvm-drift footgun the `npmGlobalBin`
+   * check (task 4ddd78ed) diagnoses independently. Names the directory and
+   * tells the operator to add it to PATH instead of leaving "not found" as
+   * the only signal.
+   */
+  pathHint?: string;
 }
 
 /**

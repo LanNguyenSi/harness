@@ -29,6 +29,7 @@ import {
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import {
   countCodexDiagnostics,
+  findOnPath,
   runCodexTargetChecks,
   type RunCodexCheckOptions,
 } from "./codex.js";
@@ -109,32 +110,43 @@ function isExecutable(filePath: string): boolean {
   }
 }
 
-function checkCli(manifest: Manifest, opts: DoctorOptions): CliEntryReport[] {
+/**
+ * PATH-shadow diagnosis (task 7f8fb4bc): a declared binary that resolves
+ * to "not found" might still exist under the resolved npm global bin dir
+ * (`npm prefix -g` + `/bin`), just not on the operator's PATH — the
+ * nvm-drift footgun the `npmGlobalBin` check (task 4ddd78ed) already
+ * detects independently. When that is the case, name the directory and
+ * tell the operator to add it, instead of leaving "not found" as the only
+ * signal (which reads as "not installed" and sends operators down the
+ * wrong remediation path — reinstalling a package that is already there).
+ * Returns undefined when `binaryToken` is already an absolute path (PATH
+ * is not the resolution mechanism for those) or when no candidate file
+ * exists under `npmBinDir`.
+ */
+function pathShadowHint(binaryToken: string, npmBinDir: string | undefined): string | undefined {
+  if (!npmBinDir || !binaryToken || path.isAbsolute(binaryToken)) return undefined;
+  const candidate = path.join(npmBinDir, path.basename(binaryToken));
+  if (fs.existsSync(candidate) && isExecutable(candidate)) {
+    return `found at ${candidate} but that directory is not on PATH — add it: export PATH="${npmBinDir}:$PATH"`;
+  }
+  return undefined;
+}
+
+function checkCli(manifest: Manifest, opts: DoctorOptions, npmBinDir: string | undefined): CliEntryReport[] {
   const out: CliEntryReport[] = [];
   const pathEnv = opts.pathEnv ?? process.env.PATH ?? "";
   const versionProbe = opts.versionProbe ?? (() => null);
   for (const cli of manifest.tools.cli) {
-    let resolved: string | null;
-    if (path.isAbsolute(cli.binary)) {
-      resolved = fs.existsSync(cli.binary) && isExecutable(cli.binary) ? cli.binary : null;
-    } else {
-      resolved = null;
-      for (const seg of pathEnv.split(path.delimiter)) {
-        if (!seg) continue;
-        const candidate = path.join(seg, cli.binary);
-        if (fs.existsSync(candidate) && isExecutable(candidate)) {
-          resolved = candidate;
-          break;
-        }
-      }
-    }
+    const resolved = findOnPath(cli.binary, pathEnv, isExecutable);
     if (!resolved) {
+      const hint = pathShadowHint(cli.binary, npmBinDir);
       out.push({
         name: cli.name,
         status: cli.required ? "error" : "warn",
         message: cli.required
           ? `required binary not found: ${cli.binary}`
           : `binary not found on PATH: ${cli.binary}`,
+        ...(hint !== undefined ? { pathHint: hint } : {}),
       });
       continue;
     }
@@ -253,6 +265,91 @@ function checkMcpVersions(manifest: Manifest, opts: DoctorOptions): McpVersionRe
 // `compareVersions` aliases the shared helper to avoid renaming every
 // existing call site in this file.
 const compareVersions = compareNumericVersions;
+
+/** One unresolved `tools.mcp[]` / `tools.cli[]` binary from `checkBinResolution`. */
+export interface BinResolutionIssue {
+  kind: "mcp" | "cli";
+  name: string;
+  binary: string;
+  message: string;
+  /** PATH-shadow remediation, see `pathShadowHint`. */
+  pathHint?: string;
+}
+
+export interface BinResolutionReport {
+  issues: BinResolutionIssue[];
+  errorCount: number;
+}
+
+export interface CheckBinResolutionOptions {
+  pathEnv?: string;
+  npmBinExec?: NpmExec;
+}
+
+/**
+ * Lightweight, spawn-free bin-resolution check for `tools.mcp[]` /
+ * `tools.cli[]` (task 7f8fb4bc). Resolves each declared, enabled MCP
+ * binary and each REQUIRED CLI binary against PATH — the same rule
+ * `checkCli` and `doctor`'s MCP decoration use — WITHOUT the live
+ * health-verb spawn `doctor()` does for MCP servers. `harness init` uses
+ * this at the end of a fresh write so an unresolvable binary (including
+ * the PATH-shadow case: installed, but under a dir not on PATH) surfaces
+ * immediately, without the cost or side effects of actually starting
+ * every declared MCP server just to write a manifest.
+ *
+ * Optional CLI tools are intentionally excluded — mirroring `checkCli`'s
+ * warn-not-error treatment, an unresolved optional binary is not the
+ * "fresh install fails loudly" case this check exists for.
+ */
+export async function checkBinResolution(
+  manifest: Manifest,
+  opts: CheckBinResolutionOptions = {},
+): Promise<BinResolutionReport> {
+  const pathEnv = opts.pathEnv ?? process.env.PATH ?? "";
+  const npmGlobalBin = await checkNpmBinPath({
+    ...(opts.npmBinExec !== undefined ? { exec: opts.npmBinExec } : {}),
+    pathEnv,
+  });
+  const npmBinDir = npmGlobalBin.binDir !== "" ? npmGlobalBin.binDir : undefined;
+
+  const issues: BinResolutionIssue[] = [];
+  for (const mcp of manifest.tools.mcp) {
+    if (mcp.enabled === false) continue;
+    const binary = mcpBinary(mcp.command);
+    if (!binary || findOnPath(binary, pathEnv, isExecutable)) continue;
+    const hint = pathShadowHint(binary, npmBinDir);
+    issues.push({
+      kind: "mcp",
+      name: mcp.name,
+      binary,
+      message: `binary not found on PATH: ${binary}`,
+      ...(hint !== undefined ? { pathHint: hint } : {}),
+    });
+  }
+  for (const cli of manifest.tools.cli) {
+    if (!cli.required || findOnPath(cli.binary, pathEnv, isExecutable)) continue;
+    const hint = pathShadowHint(cli.binary, npmBinDir);
+    issues.push({
+      kind: "cli",
+      name: cli.name,
+      binary: cli.binary,
+      message: `required binary not found: ${cli.binary}`,
+      ...(hint !== undefined ? { pathHint: hint } : {}),
+    });
+  }
+  return { issues, errorCount: issues.length };
+}
+
+/** Render `checkBinResolution`'s issues as human-readable lines for the `init` tail. */
+export function formatBinResolutionIssues(report: BinResolutionReport): string[] {
+  if (report.issues.length === 0) return [];
+  const out = ["", "Unresolved binaries (harness doctor bin-resolution check):"];
+  for (const issue of report.issues) {
+    out.push(`  ✗ [${issue.kind}] ${issue.name}  ${issue.message}`);
+    if (issue.pathHint) out.push(`      ${issue.pathHint}`);
+  }
+  return out;
+}
 
 function checkSkills(manifest: Manifest, home: string): { enabled: string[]; missing: string[] } {
   const enabled = manifest.tools.skills.enabled;
@@ -718,6 +815,18 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const home = opts.homeOverride ?? opts.homeDir ?? os.homedir();
   const probe = opts.mcpProbe ?? new RealMcpProbe();
 
+  // Resolved ahead of the MCP / CLI checks (moved up from its previous
+  // spot near the end of this function) so both can use it for the
+  // PATH-shadow hint (task 7f8fb4bc). Shallow mode still skips the real
+  // `npm prefix -g` spawn.
+  const npmGlobalBin = opts.shallow
+    ? undefined
+    : await checkNpmBinPath({
+        ...(opts.npmBinExec !== undefined ? { exec: opts.npmBinExec } : {}),
+        ...(opts.pathEnv !== undefined ? { pathEnv: opts.pathEnv } : {}),
+      });
+  const npmBinDir = npmGlobalBin && npmGlobalBin.binDir !== "" ? npmGlobalBin.binDir : undefined;
+
   const mcpResults: McpProbeResult[] = opts.shallow
     ? manifest.tools.mcp.map((s) => ({
         name: s.name,
@@ -742,7 +851,19 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
         );
       });
 
-  const cli = checkCli(manifest, opts);
+  // ENOENT-specific MCP failures get the same PATH-shadow diagnosis as
+  // CLI tools below: the declared binary may simply be installed
+  // somewhere not on PATH rather than genuinely missing.
+  for (const r of mcpResults) {
+    if (r.outcome.kind === "error" && r.outcome.enoent) {
+      const server = manifest.tools.mcp.find((s) => s.name === r.name);
+      const binary = server ? mcpBinary(server.command) : "";
+      const hint = pathShadowHint(binary, npmBinDir);
+      if (hint !== undefined) r.outcome.pathHint = hint;
+    }
+  }
+
+  const cli = checkCli(manifest, opts, npmBinDir);
   const mcpVersions = checkMcpVersions(manifest, opts);
   const skills = checkSkills(manifest, home);
   const tools: ToolsSection = {
@@ -788,16 +909,6 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
       ? { fsInterface: opts.rogueLedgerScanOptions.fsInterface }
       : {}),
   });
-
-  // Shallow mode skips real spawns: the npm-bin probe shells out to
-  // `npm prefix -g` which costs ~30ms and breaks the shallow timing
-  // budget. Mirrors how MCP probes degrade above.
-  const npmGlobalBin = opts.shallow
-    ? undefined
-    : await checkNpmBinPath({
-        ...(opts.npmBinExec !== undefined ? { exec: opts.npmBinExec } : {}),
-        ...(opts.pathEnv !== undefined ? { pathEnv: opts.pathEnv } : {}),
-      });
 
   const partial: Omit<DoctorReport, "errorCount" | "warningCount"> = {
     manifestPath: resolved.base,

@@ -458,6 +458,12 @@ export function buildProgram(opts: RunOptions = {}): Command {
               EX_FAIL,
             );
           }
+          if (r.binResolutionClean === false) {
+            throw new HarnessExitError(
+              `manifest written but one or more declared MCP/CLI binaries do not resolve on PATH; see stderr for diagnostics and remediation hints`,
+              EX_FAIL,
+            );
+          }
           return;
         }
         if (options.template !== undefined && !isTemplate(options.template)) {

@@ -69,7 +69,14 @@ function defaultIsExecutable(p: string): boolean {
   }
 }
 
-function findOnPath(
+/**
+ * Resolve `binary` against `pathEnv`: absolute paths resolve to themselves
+ * (when they exist and are executable), everything else scans each `PATH`
+ * segment. Exported (task 7f8fb4bc) so `doctor/index.ts`'s `checkCli` and
+ * the lighter-weight `checkBinResolution` reuse this instead of a second,
+ * near-identical copy (the check:duplication fitness function flags that).
+ */
+export function findOnPath(
   binary: string,
   pathEnv: string,
   isExecutable: (p: string) => boolean,

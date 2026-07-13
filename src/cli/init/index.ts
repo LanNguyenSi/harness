@@ -9,6 +9,9 @@ import {
 } from "../../io/validate-before-write.js";
 import { parse as parseYaml } from "yaml";
 import { EX_FAIL, EX_SOFTWARE, HarnessExitError } from "../exit-codes.js";
+import { parseManifest } from "../../schema/index.js";
+import { checkBinResolution, formatBinResolutionIssues } from "../doctor/index.js";
+import type { NpmExec } from "../doctor/npm-bin-path.js";
 import { getTemplate, type TemplateName } from "./templates.js";
 
 export interface InitOptions {
@@ -29,6 +32,13 @@ export interface InitOptions {
   force?: boolean;
   configPath?: string;
   homeDir?: string;
+  /**
+   * Test-injection knobs for the post-write bin-resolution check (task
+   * 7f8fb4bc). Production leaves both undefined and gets the real PATH /
+   * `npm prefix -g` spawn.
+   */
+  pathEnv?: string;
+  npmBinExec?: NpmExec;
 }
 
 export interface InitResult {
@@ -41,6 +51,16 @@ export interface InitResult {
   overwrote: boolean;
   stdout: string;
   stderr: string;
+  /**
+   * Count of declared, enabled MCP binaries and REQUIRED CLI binaries
+   * that do not resolve on PATH right after the write (task 7f8fb4bc).
+   * Non-interactive `init` deliberately does not throw on this — a bare
+   * `harness init --template full` is expected to be followed by a
+   * separate dependency install before `harness apply` / `harness
+   * doctor`, unlike the interactive wizard which already offers to
+   * install deps first. 0 when every binary resolves (or none declared).
+   */
+  binResolutionErrorCount: number;
 }
 
 const DEFAULT_BASENAME = "harness.yaml";
@@ -95,7 +115,25 @@ export async function init(opts: InitOptions = {}): Promise<InitResult> {
     atomicWriteFile(target, content);
   });
 
-  const stderr = exists ? `(overwriting existing manifest at ${target})\n` : "";
+  // Bin-resolution check (task 7f8fb4bc): validateBeforeWrite only checked
+  // the manifest's shape, not whether the binaries it declares actually
+  // resolve. Re-parsing here is cheap (validateBeforeWrite already proved
+  // it parses clean) and lets a fresh `harness init` surface an
+  // unresolvable MCP/CLI binary immediately — including the PATH-shadow
+  // case (installed, but under a dir not on PATH) that used to only show
+  // up later as an opaque `harness doctor` crash.
+  const manifest = parseManifest(parseYaml(content));
+  const binReport = await checkBinResolution(manifest, {
+    ...(opts.pathEnv !== undefined ? { pathEnv: opts.pathEnv } : {}),
+    ...(opts.npmBinExec !== undefined ? { npmBinExec: opts.npmBinExec } : {}),
+  });
+
+  let stderr = exists ? `(overwriting existing manifest at ${target})\n` : "";
+  if (binReport.errorCount > 0) {
+    stderr += `${formatBinResolutionIssues(binReport).join("\n")}\n`;
+    stderr +=
+      "\nSome declared binaries are not resolvable; install them or fix PATH, then re-run `harness doctor`.\n";
+  }
   const stdout = [
     `harness manifest written to ${target} (template: ${templateLabel})`,
     "",
@@ -106,7 +144,14 @@ export async function init(opts: InitOptions = {}): Promise<InitResult> {
     "",
   ].join("\n");
 
-  return { path: target, template: templateLabel, overwrote: exists, stdout, stderr };
+  return {
+    path: target,
+    template: templateLabel,
+    overwrote: exists,
+    stdout,
+    stderr,
+    binResolutionErrorCount: binReport.errorCount,
+  };
 }
 
 export const KNOWN_TEMPLATES: TemplateName[] = ["minimal", "solo", "team", "full"];
