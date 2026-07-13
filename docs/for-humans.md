@@ -356,6 +356,35 @@ CLAUDE_CODE_SESSION_ID ...`, `unset CLAUDE_SESSION_ID`, ...), and direct
 writes to the sentinel file, all from the agent's Bash tool: see
 `src/cli/init/templates.ts` and
 [`docs/okf/pause-vs-gate-kill-switch.md`](okf/pause-vs-gate-kill-switch.md).
+Even this layer is friction, not a hard boundary: like every
+`requires:`-based policy in this engine, the ledger tag it checks is
+satisfiable by the same agent it gates, so a deliberately adversarial
+agent that reads this doc or the manifest can still defeat it. The full
+technical detail (and why we ship it anyway) is in the "Enforcement
+layer" section of the OKF doc linked above.
+
+**Scope: `full` template only.** These three deny policies ship only in
+`harness init --template full`. The `solo` and `team` templates do not
+include them; a `solo`/`team` install has no policy-layer protection
+against the pause/resume/gate-disable bypasses at all, only the CLI
+checks above. If you are on `solo`/`team` and want this protection,
+re-run `harness init --template full` (or hand-add `deny-kill-switch-
+bypass`, `deny-session-env-strip`, and `deny-pause-sentinel-forgery`
+from `src/cli/init/templates.ts` to your manifest's `policies:`/`hooks:`
+sections). Existing `full`-template installs need to re-run `harness
+init --template full` (or hand-add the same three) to pick this up;
+`apply` does not retroactively add new default policies to an existing
+manifest.
+
+**Upgrade note for `harness validate --strict` in CI.** All three deny
+policies intentionally declare no `producers:` (see the "Enforcement
+layer" section of the OKF doc for why), so `harness validate` emits a
+`declares no producers` warning for each on a `full`-template manifest.
+Under `--strict`, warnings become errors: expect 3 new errors where
+`master` produced 0. This is intentional, not a bug; do not "fix" it by
+adding a producer, which would just document a forgery path as if it
+were sanctioned. If you gate CI on `validate --strict`, budget for this
+before upgrading.
 
 **Pause is not for routine gate bypass.** Three rules of thumb:
 

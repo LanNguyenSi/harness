@@ -245,7 +245,7 @@ hooks:
   - name: deny-kill-switch-bash
     event: PreToolUse
     match: "Bash"
-    bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*harness\\s+(pause|resume|gate\\s+(disable|enable))(?![\\w-])'
+    bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S*\\s+)*(?:npx\\s+|\\S*/)?harness\\s+(["\\x27]?)(?:pause|resume|gate\\s+(["\\x27]?)(?:disable|enable)\\4)\\3(?![\\w-])'
     command: harness policy intercept
     blocking: hard
     budget_ms: 1000
@@ -253,7 +253,7 @@ hooks:
   - name: deny-session-env-strip-bash
     event: PreToolUse
     match: "Bash"
-    bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*(env\\b[^;\\n|&]*-u\\s+(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b|unset\\s+(\\S+\\s+)*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b)'
+    bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S*\\s+)*(env\\b[^;\\n|&]*-u\\s*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b|env\\b[^;\\n|&]*--unset(?:=|\\s+)(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b|unset\\s+(\\S+\\s+)*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b|(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)=(?=\\s))'
     command: harness policy intercept
     blocking: hard
     budget_ms: 1000
@@ -261,15 +261,19 @@ hooks:
   # Known gap, deliberately not faked as coverage: this only catches the
   # obvious shell shapes (\`> .harness-paused\`, \`tee .harness-paused\`,
   # \`cp ... .harness-paused\`). A regex over the raw command string cannot
-  # see through a heredoc, \`python -c\`, base64-decoded payloads, an fs.
-  # write call inside a script file the agent creates and then executes, or
-  # a symlink swap. Closing that class needs either signing the sentinel
+  # see through a heredoc, \`sh -c '...'\`, \`bash -lc\`, \`eval\`,
+  # \`python -c\`, base64-decoded payloads, an fs.write call inside a script
+  # file the agent creates and then executes, a symlink swap, or the
+  # sentinel-write equivalents of \`cp\`/\`>\` done via \`mv\`, \`ln\`,
+  # \`install\`, or \`dd\`. These are NOT covered on purpose (regex whack-a-
+  # mole against every file-write-capable tool does not meaningfully close
+  # this class); closing it for real needs either signing the sentinel
   # (HMAC) or a filesystem-level write guard, neither of which is in scope
   # here; both are noted as follow-ups.
   - name: deny-sentinel-write-bash
     event: PreToolUse
     match: "Bash"
-    bash_match: '((^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*(tee|cp)\\b[^;\\n|&]*\\.harness-paused\\b)|(>{1,2}\\s*\\S*\\.harness-paused\\b)'
+    bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S*\\s+)*(tee|cp)\\b[^;\\n|&]*\\.harness-paused\\b|>{1,2}\\s*\\S*\\.harness-paused\\b'
     command: harness policy intercept
     blocking: hard
     budget_ms: 1000
@@ -587,29 +591,41 @@ policies:
         - "harness approve risk"
 
   # deny-kill-switch-bypass / deny-session-env-strip / deny-pause-sentinel-forgery
-  # (task cf1fde6d): these three policies intentionally declare NO producers:.
-  # \`harness pause\`/\`harness resume\` refuse to run inside an agent shell in
-  # CODE, but that CLI check (refuseIfAgentShell / refuseIfNonTTY in
-  # src/cli/pause/index.ts) is a speed bump, not a boundary: a Claude Code
+  # (task cf1fde6d): \`harness pause\`/\`harness resume\` refuse to run inside an
+  # agent shell in CODE, but that CLI check (refuseIfAgentShell / refuseIfNonTTY
+  # in src/cli/pause/index.ts) is a speed bump, not a boundary: a Claude Code
   # \`! \`-prefixed shell inherits this session's env AND its non-TTY stdin, so
   # it is indistinguishable from an agent Bash call and trips the same checks
   # (verified live; docs/okf/pause-vs-gate-kill-switch.md). This PreToolUse
   # layer is the enforcement point that actually runs BEFORE the agent's Bash
-  # executes. There is no legitimate way to satisfy any of the three below
-  # from inside the agent session: the only correct unblock is the OPERATOR
-  # running the verb from a terminal genuinely outside this session, which
-  # never trips these hooks at all. A producers: entry would just teach the
-  # agent a ledger_tag / MCP call that self-satisfies the gate, defeating the
-  # point (docs/writing-custom-policies.md tripwire 4, "whoever can write the
-  # ledger can open the gate"). \`harness validate\` will warn "declares no
-  # producers" on all three; that warning is correct and intentional here,
-  # not a gap to fill.
+  # executes.
+  #
+  # HONESTY NOTE (review finding, same task, cf1fde6d): the requires.ledger_tag
+  # these three declare is, like every requires:-based policy in this engine,
+  # satisfiable by the SAME agent it gates: nothing stops it from calling
+  # mcp__agent-grounding__ledger_add with content matching the tag for its own
+  # session before running the denied command, which flips deny to allow
+  # (src/runtime/intercept.ts, the satisfied-requires branch). See
+  # docs/writing-custom-policies.md tripwire 4, "whoever can write the ledger
+  # can open the gate". These three are therefore BEST-EFFORT FRICTION, not a
+  # hard boundary: they stop the literal one-liners this task found live; they
+  # do not stop an agent that deliberately sets out to defeat them. We still
+  # declare no producers: on purpose. Documenting a "legitimate" way to write
+  # this tag would misrepresent a forgery path as sanctioned, which is worse
+  # than the honest gap. \`harness validate\` warns "declares no producers" on
+  # all three (checkPolicySelfAttestation, src/cli/validate/checks.ts); that
+  # warning is the correct, honest signal here, not something to silence.
+  # A real fix needs a schema-level operator-only unconditional-deny
+  # expression (an enforcement mode that carries no requires: at all); that is
+  # a follow-up, not this task. See tests/cli/init-full-template-kill-switch-deny.test.ts
+  # for a test that drives intercept() and records this exact self-satisfy
+  # path as a known, asserted (not hidden) behaviour.
   - name: deny-kill-switch-bypass
     description: Deny harness pause, harness resume, harness gate disable, and harness gate enable from the agent's Bash tool. These are operator-only kill switches.
     trigger:
       event: PreToolUse
       match: "Bash"
-      bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*harness\\s+(pause|resume|gate\\s+(disable|enable))(?![\\w-])'
+      bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S*\\s+)*(?:npx\\s+|\\S*/)?harness\\s+(["\\x27]?)(?:pause|resume|gate\\s+(["\\x27]?)(?:disable|enable)\\4)\\3(?![\\w-])'
     requires:
       ledger_tag: "operator-ran-this-outside-the-session:\${SESSION_ID}"
     hook: deny-kill-switch-bash
@@ -619,14 +635,14 @@ policies:
       required:
         - "the OPERATOR to run this from a terminal genuinely outside your agent session, not a \`! \`-prefixed Claude Code shell, which inherits this session's env and stdin and does not count"
       run:
-        - "Stop. Explain to the operator what you were trying to do and why, and let THEM decide whether to pause/resume/toggle a gate from their own terminal. There is no ledger tag, MCP call, or flag you can use to satisfy this yourself."
+        - "Stop. Explain to the operator what you were trying to do and why, and let THEM decide whether to pause/resume/toggle a gate from their own terminal. This is the only INTENDED way to unblock this gate: it is friction against routine use, not an unbreakable boundary against a deliberately adversarial agent, the same honest limit that applies to the pause sentinel itself (see docs/okf/pause-vs-gate-kill-switch.md)."
 
   - name: deny-session-env-strip
     description: Deny Bash attempts to strip or unset the agent-session env vars that harness pause/resume check (\$CLAUDE_CODE_SESSION_ID, \$CLAUDE_SESSION_ID, \$CODEX_SESSION_ID). Closes the one-liner that otherwise defeats refuseIfAgentShell.
     trigger:
       event: PreToolUse
       match: "Bash"
-      bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*(env\\b[^;\\n|&]*-u\\s+(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b|unset\\s+(\\S+\\s+)*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b)'
+      bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S*\\s+)*(env\\b[^;\\n|&]*-u\\s*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b|env\\b[^;\\n|&]*--unset(?:=|\\s+)(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b|unset\\s+(\\S+\\s+)*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b|(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)=(?=\\s))'
     requires:
       ledger_tag: "operator-ran-this-outside-the-session:\${SESSION_ID}"
     hook: deny-session-env-strip-bash
@@ -636,14 +652,14 @@ policies:
       required:
         - "no legitimate reason from inside this session: stripping \$CLAUDE_CODE_SESSION_ID / \$CLAUDE_SESSION_ID / \$CODEX_SESSION_ID is recognised as an attempt to defeat the harness pause/resume agent-shell check"
       run:
-        - "Stop. If you believe you have a legitimate reason to run a command without one of these env vars set, ask the OPERATOR to do it from their own terminal instead."
+        - "Stop. If you believe you have a legitimate reason to run a command without one of these env vars set, ask the OPERATOR to do it from their own terminal instead. This gate is friction against routine use, not an unbreakable boundary; see docs/okf/pause-vs-gate-kill-switch.md for the honest trust model."
 
   - name: deny-pause-sentinel-forgery
     description: Deny Bash writes (redirect, tee, cp) to the harness pause sentinel file (.harness-paused). The sentinel is unsigned JSON; a forged file silences every gate exactly like a real operator pause. Reads (cat, stat) are unaffected.
     trigger:
       event: PreToolUse
       match: "Bash"
-      bash_match: '((^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*(tee|cp)\\b[^;\\n|&]*\\.harness-paused\\b)|(>{1,2}\\s*\\S*\\.harness-paused\\b)'
+      bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S*\\s+)*(tee|cp)\\b[^;\\n|&]*\\.harness-paused\\b|>{1,2}\\s*\\S*\\.harness-paused\\b'
     requires:
       ledger_tag: "operator-ran-this-outside-the-session:\${SESSION_ID}"
     hook: deny-sentinel-write-bash
@@ -653,7 +669,7 @@ policies:
       required:
         - "the OPERATOR to run \`harness pause\`/\`harness resume\` themselves, from a terminal outside your agent session, never a direct write to the sentinel file"
       run:
-        - "Stop. Do not write, redirect, tee, or copy anything to .harness-paused. Ask the OPERATOR to run harness pause / harness resume themselves if the session genuinely needs gates silenced."
+        - "Stop. Do not write, redirect, tee, or copy anything to .harness-paused. Ask the OPERATOR to run harness pause / harness resume themselves if the session genuinely needs gates silenced. This gate is friction against routine use, not an unbreakable boundary; see docs/okf/pause-vs-gate-kill-switch.md for the honest trust model."
 
 # Full inherits the Solo/Team understanding-gate stack: the Stop hook
 # persists each Understanding Report and the PreToolUse pre-tool-use
