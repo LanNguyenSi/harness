@@ -332,13 +332,59 @@ auto-resumes in 7m. Run \`harness resume\` to re-enable.`) and allows
 the tool call without evaluating. After the window expires, the next
 hook fire silently deletes the sentinel and resumes normal gating.
 
-**Operator-only by design.** `harness pause` refuses to run when any of
+**Operator-only by design, but the CLI check is a speed bump, not a
+boundary.** `harness pause` refuses to run when any of
 `$CLAUDE_CODE_SESSION_ID` (what Claude Code actually exports),
 `$CLAUDE_SESSION_ID` (legacy), or `$CODEX_SESSION_ID` is set, and
-refuses non-TTY stdin without `--i-am-the-operator`.
-This is the guardrail against pause becoming an agent-driven bypass
-of the gates harness exists to enforce. From inside Claude Code,
-prefix the command with `! ` so it runs in your own shell.
+refuses non-TTY stdin without `--i-am-the-operator`. Do **not** try to
+satisfy this by prefixing the command with `! ` in Claude Code: the `!
+`-prefixed shell inherits this same session's environment *and* its
+non-TTY stdin, so it is indistinguishable from an agent Bash call and
+trips the exact same checks (verified live). Run the verb from a
+terminal genuinely **outside** the agent session (a separate terminal
+window or tab, not spawned by or nested inside this one). If an agent
+ever asks you to pass `--i-am-the-operator` on its behalf, that request
+IS the attack this guard exists to stop: refuse it.
+
+Because the CLI check alone cannot tell a `! `-prefixed agent shell
+from a real operator terminal, the actual enforcement point is a
+PreToolUse deny-policy layer: `harness init --template full` ships
+default policies that deny `harness pause` / `harness resume` /
+`harness gate disable` / `harness gate enable`, the env-stripping
+wrappers that would otherwise defeat the checks above (`env -u
+CLAUDE_CODE_SESSION_ID ...`, `unset CLAUDE_SESSION_ID`, ...), and direct
+writes to the sentinel file, all from the agent's Bash tool: see
+`src/cli/init/templates.ts` and
+[`docs/okf/pause-vs-gate-kill-switch.md`](okf/pause-vs-gate-kill-switch.md).
+Even this layer is friction, not a hard boundary: like every
+`requires:`-based policy in this engine, the ledger tag it checks is
+satisfiable by the same agent it gates, so a deliberately adversarial
+agent that reads this doc or the manifest can still defeat it. The full
+technical detail (and why we ship it anyway) is in the "Enforcement
+layer" section of the OKF doc linked above.
+
+**Scope: `full` template only.** These three deny policies ship only in
+`harness init --template full`. The `solo` and `team` templates do not
+include them; a `solo`/`team` install has no policy-layer protection
+against the pause/resume/gate-disable bypasses at all, only the CLI
+checks above. If you are on `solo`/`team` and want this protection,
+re-run `harness init --template full` (or hand-add `deny-kill-switch-
+bypass`, `deny-session-env-strip`, and `deny-pause-sentinel-forgery`
+from `src/cli/init/templates.ts` to your manifest's `policies:`/`hooks:`
+sections). Existing `full`-template installs need to re-run `harness
+init --template full` (or hand-add the same three) to pick this up;
+`apply` does not retroactively add new default policies to an existing
+manifest.
+
+**Upgrade note for `harness validate --strict` in CI.** All three deny
+policies intentionally declare no `producers:` (see the "Enforcement
+layer" section of the OKF doc for why), so `harness validate` emits a
+`declares no producers` warning for each on a `full`-template manifest.
+Under `--strict`, warnings become errors: expect 3 new errors where
+`master` produced 0. This is intentional, not a bug; do not "fix" it by
+adding a producer, which would just document a forgery path as if it
+were sanctioned. If you gate CI on `validate --strict`, budget for this
+before upgrading.
 
 **Pause is not for routine gate bypass.** Three rules of thumb:
 
@@ -361,18 +407,22 @@ the evidence ledger. `harness audit --since 24h` surfaces them
 alongside policy decisions.
 
 **Trust boundary.** The sentinel file is plain JSON at
-`<generatedDir>/.harness-paused` with no signature. The operator-only
-CLI guardrails (agent-session env-var refusal (any of
-`$CLAUDE_CODE_SESSION_ID`, `$CLAUDE_SESSION_ID`, `$CODEX_SESSION_ID`) and non-TTY refusal) keep
-agents from invoking `harness pause` against you, but they do not
-stop an agent that already has `Write` access to anywhere under
-`harness.generated/` from dropping a forged sentinel. If you wire
-`Write` policies that block writes outside specific allowed paths,
-include `harness.generated/.harness-paused` in the block list. The
-default install does not auto-restrict this path; the agent surface
-typically does not need write access to `harness.generated/` for
-anything else, so a blanket deny on that directory is the simplest
-defence.
+`<generatedDir>/.harness-paused` with no signature. Neither the
+operator-only CLI checks (agent-session env-var refusal, any of
+`$CLAUDE_CODE_SESSION_ID`, `$CLAUDE_SESSION_ID`, `$CODEX_SESSION_ID`,
+plus non-TTY refusal) nor the PreToolUse deny-policy layer above is a
+true boundary against an agent that already has `Write` access to
+anywhere under `harness.generated/`: a bash_match regex cannot see
+through a heredoc, `python -c`, a base64-decoded payload, or a script
+file the agent creates and then executes, and none of this stops a
+direct filesystem write from a non-Bash tool. If you wire `Write`
+policies that block writes outside specific allowed paths, include
+`harness.generated/.harness-paused` in the block list. The default
+install does not auto-restrict this path; the agent surface typically
+does not need write access to `harness.generated/` for anything else,
+so a blanket deny on that directory is the simplest defence. Signing
+the sentinel (HMAC) would close this class properly but is not
+implemented; treat it as a follow-up if you need a hard guarantee here.
 
 ## Diagnostics cheat-sheet
 

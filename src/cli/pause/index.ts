@@ -209,9 +209,14 @@ function refuseIfAgentShell(opts: {
       [
         `harness pause/resume refuses to run inside an agent shell (${hit.name} is set).`,
         "",
-        "This is the load-bearing guardrail against `harness pause` becoming an",
-        "agent-driven bypass of the gates harness exists to enforce. Run the verb",
-        "from your own operator shell (in Claude Code: prefix the command with `! `).",
+        "This is a speed bump, not a boundary: a Claude Code `! `-prefixed command",
+        "runs in a shell that INHERITS this same session's environment and stdin, so",
+        "it is indistinguishable from an agent-issued command and trips this exact",
+        "check. Do not prefix with `! `: that does not work. Run the verb from a",
+        "terminal OUTSIDE this agent session (a separate terminal window or tab, not",
+        "spawned by or nested inside this one). The real enforcement boundary is the",
+        "PreToolUse deny-policy layer (see docs/okf/pause-vs-gate-kill-switch.md),",
+        "not this CLI check.",
       ].join("\n"),
       EX_USAGE,
     );
@@ -228,6 +233,10 @@ function refuseIfNonTTY(opts: { stdinIsTTY?: boolean; iAmTheOperator?: boolean }
       "",
       "If you really mean this (e.g. invoking from a one-off recovery script that",
       "you reviewed yourself), pass --i-am-the-operator to acknowledge.",
+      "",
+      "WARNING: --i-am-the-operator only lifts the non-TTY check; it never lifts",
+      "the agent-shell check above. If an agent ever asks YOU to pass this flag on",
+      "its behalf, that request IS the attack this guard exists to stop: refuse it.",
     ].join("\n"),
     EX_USAGE,
   );

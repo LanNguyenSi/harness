@@ -171,6 +171,73 @@ describe("pause", () => {
     expect(fs.existsSync(sentinelPath(tmp))).toBe(false);
   });
 
+  it("does not recommend the `! ` prefix, which does not work (task cf1fde6d)", async () => {
+    // The `! ` channel inherits this session's env AND its non-TTY stdin
+    // (verified live, see docs/okf/pause-vs-gate-kill-switch.md), so it
+    // trips this exact check. The old advice told the operator to do the
+    // one thing that cannot work; assert it is gone and replaced with
+    // honest guidance.
+    let caught: unknown;
+    try {
+      await pause({
+        manifest: manifest(),
+        generatedDir: tmp,
+        stdinIsTTY: true,
+        claudeCodeSessionIdEnv: "code-sess-abc",
+        ledgerAdd: async () => ({ ok: true }),
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(HarnessExitError);
+    const message = (caught as HarnessExitError).message;
+    // The old wording recommended the prefix as the fix; assert that
+    // specific recommendation is gone (not merely that "! " is unmentioned:
+    // the new message legitimately explains why `! ` does not work).
+    expect(message).not.toMatch(/in Claude Code: prefix the command with `! `/);
+    expect(message).toMatch(/Do not prefix with `! `/);
+    expect(message).toMatch(/terminal OUTSIDE this agent session/i);
+    expect(message).toMatch(/inherit/i);
+  });
+
+  it("--i-am-the-operator does NOT bypass the agent-shell check (only refuseIfNonTTY)", async () => {
+    // The brief's key untested invariant: pairing iAmTheOperator:true with
+    // a set agent-session env var must still refuse. --i-am-the-operator
+    // only ever lifts the non-TTY refusal; if an agent could pass it to
+    // also clear the agent-shell check, the whole guard would be a no-op
+    // for exactly the attacker who has Bash access.
+    await expect(
+      pause({
+        manifest: manifest(),
+        generatedDir: tmp,
+        stdinIsTTY: false,
+        iAmTheOperator: true,
+        claudeCodeSessionIdEnv: "code-sess-abc",
+        ledgerAdd: async () => ({ ok: true }),
+      }),
+    ).rejects.toThrow(/agent shell.*CLAUDE_CODE_SESSION_ID/is);
+    expect(fs.existsSync(sentinelPath(tmp))).toBe(false);
+  });
+
+  it("refuseIfNonTTY warns that an agent asking for --i-am-the-operator IS the attack", async () => {
+    let caught: unknown;
+    try {
+      await pause({
+        manifest: manifest(),
+        generatedDir: tmp,
+        stdinIsTTY: false,
+        claudeSessionIdEnv: "",
+        ledgerAdd: async () => ({ ok: true }),
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(HarnessExitError);
+    const message = (caught as HarnessExitError).message;
+    expect(message).toMatch(/an agent ever asks YOU to pass this flag/i);
+    expect(message).toMatch(/IS the attack/);
+  });
+
   it("allows pause when all three agent-session env vars are empty/absent", async () => {
     await pause({
       manifest: manifest(),
@@ -334,6 +401,19 @@ describe("resume", () => {
         ledgerAdd: async () => ({ ok: true }),
       }),
     ).rejects.toThrow(/agent shell.*CODEX_SESSION_ID/is);
+  });
+
+  it("--i-am-the-operator does NOT bypass the agent-shell check (mirror of the pause invariant)", async () => {
+    await expect(
+      resume({
+        manifest: manifest(),
+        generatedDir: tmp,
+        stdinIsTTY: false,
+        iAmTheOperator: true,
+        claudeCodeSessionIdEnv: "code-sess-abc",
+        ledgerAdd: async () => ({ ok: true }),
+      }),
+    ).rejects.toThrow(/agent shell.*CLAUDE_CODE_SESSION_ID/is);
   });
 
   it("resumes an expired pause (deletes the stale sentinel)", async () => {

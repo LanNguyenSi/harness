@@ -44,6 +44,9 @@ describe("list — categories", () => {
       "require-review-subagent-evidence",
       "require-review-subagent-evidence-bash",
       "require-preflight-push-evidence",
+      "deny-kill-switch-bash",
+      "deny-session-env-strip-bash",
+      "deny-sentinel-write-bash",
       "risk-gate",
     ]);
     const head = r.rows[0]!;
@@ -64,6 +67,9 @@ describe("list — categories", () => {
       "preflight-before-push",
       "gate-prod-destructive",
       "gate-prod-destructive-approval",
+      "deny-kill-switch-bypass",
+      "deny-session-env-strip",
+      "deny-pause-sentinel-forgery",
     ]);
     expect(r.rows[0]!.enforcement).toBe("block");
   });

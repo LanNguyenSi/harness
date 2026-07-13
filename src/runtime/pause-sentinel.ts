@@ -15,9 +15,20 @@
 //     ephemeral state.
 //
 // Operator-only design: the `harness pause` verb refuses to run inside an
-// agent shell (where `$CLAUDE_SESSION_ID` is set) and refuses non-TTY
-// stdin without an explicit `--i-am-the-operator` acknowledgement. This
-// is the load-bearing guardrail against pause becoming an agent bypass.
+// agent shell (where `$CLAUDE_CODE_SESSION_ID` / `$CLAUDE_SESSION_ID` /
+// `$CODEX_SESSION_ID` is set) and refuses non-TTY stdin without an explicit
+// `--i-am-the-operator` acknowledgement. These are a speed bump, not a
+// boundary: a Claude Code `! `-prefixed shell inherits the session's env
+// AND its non-TTY stdin, so it is indistinguishable from an agent-issued
+// command and trips both checks (verified live; see
+// docs/okf/pause-vs-gate-kill-switch.md). The real enforcement boundary is
+// the PreToolUse deny-policy layer (`harness pause` / `harness resume` /
+// `harness gate disable` / `harness gate enable` denied from Bash, see
+// `src/cli/init/templates.ts`) plus the operator running the verb from a
+// terminal genuinely outside the agent session. This sentinel is also
+// unsigned plain JSON (see `writeSentinel` below): any process with
+// filesystem write access under `harness.generated/` can forge it
+// regardless of what the CLI guards do.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
