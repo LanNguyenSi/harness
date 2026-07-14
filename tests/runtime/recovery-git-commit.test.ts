@@ -123,4 +123,45 @@ describe("isRecoveryGitCommit (task 6e888423)", () => {
       expect(isRecoveryGitCommit(cmd)).toBe(false);
     });
   });
+
+  describe("CRITICAL — backslash-escaped quote must not open a phantom quote span (found on re-review of commit 872c9a6)", () => {
+    // hasUnsafeMetachar/tokenize toggle quote state on every raw `"`/`'`
+    // character with no concept of backslash-escaping. Bash treats `\"`
+    // OUTSIDE a quote as a LITERAL `"` that does NOT open a quote
+    // context — so `a\"` is just the two characters `a"`, not the start
+    // of a quoted span. Before the backslash guard, the classifier
+    // "entered" a phantom double-quote span at the escaped `"`, which
+    // made it treat the live `;`/`||`/`|` that followed as literal text
+    // (the "safe inside quotes" rule), while bash itself never entered a
+    // quote at all and ran the injected command as a separate statement.
+    // Confirmed end-to-end (classifier ADMIT + a real shell actually
+    // executing the injected `echo`) for all three control operators
+    // below, reachable exactly at `markerExpired === true` — the state
+    // where the gate is supposed to hard-block everything.
+    it.each([
+      // The three payloads verified live to execute `echo INJECTED`
+      // against 872c9a6 (git commit -am a" ; echo INJECTED ; " et al.,
+      // written with escaped quotes so the JS string carries a literal
+      // backslash).
+      'git commit -am a\\" ; echo INJECTED ; \\"',
+      'git commit -am a\\" || echo INJECTED \\"',
+      'git commit -am a\\" | echo INJECTED \\"bar',
+      // Same class via a backslash-escaped SINGLE quote.
+      "git commit -am a\\' ; echo INJECTED ; \\'",
+      // A backslash anywhere at all — not just adjacent to a quote — is
+      // rejected outright, per the minimal fix (fail closed on any `\`
+      // rather than modeling bash's escape grammar).
+      'git commit -m "safe message with a literal \\\\ backslash"',
+    ])("rejects %s (would otherwise admit live shell injection)", (cmd) => {
+      expect(isRecoveryGitCommit(cmd)).toBe(false);
+    });
+
+    it("the real recovery-commit trailer (no backslash) still converges after the backslash guard", () => {
+      expect(
+        isRecoveryGitCommit(
+          `git commit -am "fix(understanding-gate): address reviewer feedback" -m "${REAL_TRAILER}"`,
+        ),
+      ).toBe(true);
+    });
+  });
 });

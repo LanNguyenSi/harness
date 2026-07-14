@@ -63,6 +63,21 @@
 //     entirely different, unrelated window) and `--no-verify` (skips
 //     local hooks, which this exemption has no mandate to waive — see
 //     AGENTS.md "no workarounds").
+//   - ANY backslash in the command rejects the whole thing outright, in
+//     `isRecoveryGitCommit` before the quote-aware scan even runs. The
+//     quote-toggling in `hasUnsafeMetachar`/`tokenize` has no concept of
+//     backslash-escaping, so a payload like `git commit -am a\" ; echo
+//     INJECTED ; \"` was, for one commit on this branch, misclassified
+//     as a single safely-quoted message — the classifier "entered" a
+//     phantom quote span at the escaped `"` and read the live `;` inside
+//     it as literal text, while bash itself never entered a quote at all
+//     and executed `echo INJECTED` as a separate command (confirmed
+//     end-to-end for `;`, `||`, and `|`). Rejecting every backslash
+//     up front closes the whole escape-based attack surface: without a
+//     backslash present, naive quote-toggling matches bash's real
+//     quoting exactly. A hand-rolled bash-accurate escape state machine
+//     is deliberately NOT built here — too risky for a security boundary
+//     to get subtly wrong twice.
 
 /** Flags that take no following value. */
 const FLAG_ONLY_TOKENS: ReadonlySet<string> = new Set(["-a", "--all", "--allow-empty"]);
@@ -196,6 +211,36 @@ export function isRecoveryGitCommit(command: string): boolean {
   const trimmed = command.trim();
   if (trimmed === "") return false;
   if (trimmed.includes("\n") || trimmed.includes("\r")) return false;
+  // CRITICAL (found on re-review of the quote-aware rewrite): reject ANY
+  // backslash before doing anything else. `hasUnsafeMetachar` and
+  // `tokenize` both toggle quote state on every `"`/`'` character with no
+  // concept of backslash-escaping, but bash does: `\"` outside a quote is
+  // a LITERAL `"` that does NOT open a quote context. Without this
+  // check, a payload like `git commit -am a\" ; echo INJECTED ; \"` gets
+  // classified as one big safely-quoted message (the classifier "enters"
+  // a phantom quote span at the escaped `"` and treats the live `;`
+  // inside it as literal), while bash itself never entered a quote at
+  // all and executes `echo INJECTED` as a separate command — confirmed
+  // end-to-end (classifier ADMIT + a live shell actually running the
+  // injected command) for `;`, `||`, and `|` riding this exact shape.
+  // Same bug class the 0.40.0 CHANGELOG already documents once for the
+  // `harness approve` heredoc matcher (a backslash-escaped redirect
+  // smuggled past a quote-blind check there too).
+  //
+  // The fix is deliberately blunt rather than a full escape-aware state
+  // machine: modeling bash's actual backslash rules (live outside
+  // quotes and inside double quotes for a few characters, entirely inert
+  // inside single quotes, `$'...'` ANSI-C quoting has its own escape
+  // grammar again) is exactly the kind of bash-parser-in-miniature this
+  // module's design explicitly avoids building for a security boundary.
+  // Without any backslash present, the naive quote-toggling in
+  // `hasUnsafeMetachar`/`tokenize` matches bash's real quoting exactly,
+  // so rejecting every backslash closes the whole escape-based attack
+  // surface at the cost of not admitting messages that happen to contain
+  // one — an acceptable narrowing (the documented main case, this repo's
+  // own `Co-Authored-By: ... <noreply@anthropic.com>` trailer, has no
+  // backslash) for a fail-closed exemption gate.
+  if (trimmed.includes("\\")) return false;
   if (hasUnsafeMetachar(trimmed)) return false;
 
   const m = /^git\s+commit\b/.exec(trimmed);

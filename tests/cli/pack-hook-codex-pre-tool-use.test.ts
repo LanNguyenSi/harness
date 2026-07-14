@@ -838,6 +838,37 @@ describe("pack hook codex-pre-tool-use blocker — recovery git-commit exemption
     expect(result.exitCode).toBe(2);
   });
 
+  describe("CRITICAL — backslash-escaped quote injection must not bypass the gate (found on re-review of commit 872c9a6)", () => {
+    // Codex parity: it shares isRecoveryGitCommit with the Claude hook,
+    // so it inherits the same bypass. See the Claude hook test suite's
+    // identical describe block for the full mechanism.
+    it.each([
+      'git commit -am a\\" ; echo INJECTED ; \\"',
+      'git commit -am a\\" || echo INJECTED \\"',
+      'git commit -am a\\" | echo INJECTED \\"bar',
+    ])("still hard-blocks %s even with an expired (previously-approved) marker", async (cmd) => {
+      const stderr = bufferStream();
+      const generatedDir = path.join(tmp, "harness.generated");
+      expireMarker(generatedDir, "sess-codex");
+      const result = await runPackHookCodexPreToolUseCli({
+        manifest: manifestWithMaxAge(),
+        stdin: readableFromString(
+          event({
+            tool_name: "shell",
+            raw_input: { command: cmd },
+          }),
+        ),
+        stderr: stderr.stream,
+        reportsDir: path.join(tmp, "no-reports"),
+        generatedDir,
+        ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+      });
+      expect(result.blocked).toBe(true);
+      expect(result.exitCode).toBe(2);
+      expect(result.approvalCheck.source).not.toBe("recovery-commit");
+    });
+  });
+
   it("does not widen: a chained `git commit && ...` is not exempted", async () => {
     const stderr = bufferStream();
     const generatedDir = path.join(tmp, "harness.generated");

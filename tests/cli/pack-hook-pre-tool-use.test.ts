@@ -1478,6 +1478,46 @@ describe("pack hook pre-tool-use blocker — recovery git-commit exemption after
     expect(result.blocked).toBe(true);
   });
 
+  describe("CRITICAL — backslash-escaped quote injection must not bypass the gate (found on re-review of commit 872c9a6)", () => {
+    // The quote-aware metachar scan toggled quote state on every raw
+    // `"`/`'` with no concept of backslash-escaping, so `a\"` (bash: the
+    // two literal characters `a"`, NOT a quote-open) was misread as
+    // opening a real quoted span — hiding a LIVE `;`/`||`/`|` from the
+    // classifier while bash executed it as a separate command. Verified
+    // end-to-end (a real shell actually running the injected `echo`)
+    // against 872c9a6 for all three payloads below. Reachable exactly at
+    // `markerExpired === true`, the state where the gate is supposed to
+    // hard-block everything — this is a full command-injection bypass of
+    // the Understanding Gate, not a cosmetic misclassification.
+    it.each([
+      'git commit -am a\\" ; echo INJECTED ; \\"',
+      'git commit -am a\\" || echo INJECTED \\"',
+      'git commit -am a\\" | echo INJECTED \\"bar',
+    ])("still hard-blocks %s even with an expired (previously-approved) marker", async (cmd) => {
+      const stdout = bufferStream();
+      const stderr = bufferStream();
+      const generatedDir = path.join(tmp, "harness.generated");
+      expireMarker(generatedDir, "sess-1");
+      const result = await runPackHookPreToolUseCli({
+        manifest: manifestWithMaxAge(),
+        stdin: readableFromString(
+          JSON.stringify({
+            session_id: "sess-1",
+            tool_name: "Bash",
+            tool_input: { command: cmd },
+          }),
+        ),
+        stdout: stdout.stream,
+        stderr: stderr.stream,
+        reportsDir: path.join(tmp, "no-reports"),
+        generatedDir,
+        ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+      });
+      expect(result.blocked).toBe(true);
+      expect(result.approvalCheck.source).not.toBe("recovery-commit");
+    });
+  });
+
   it("does not widen: a following Edit in the SAME session still hard-blocks after the recovery commit was allowed", async () => {
     // The exemption is a per-call pass-through, not a re-approval: it
     // never rewrites or refreshes the marker, so the very next gated
