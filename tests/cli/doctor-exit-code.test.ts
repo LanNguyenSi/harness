@@ -21,6 +21,17 @@ function tempHome(): string {
   return dir;
 }
 
+// Mirrors doctor-rm-rogue-ledgers.test.ts's plantRogueLedger: seeds a
+// leftover `<parent>/~/.evidence-ledger/ledger.db` so scanForRogueLedgers
+// (and therefore deleteRogueLedgers) has an actual hit to act on.
+function plantRogueLedger(parent: string): { rogueDir: string } {
+  const rogueDir = path.join(parent, "~");
+  const dir = path.join(rogueDir, ".evidence-ledger");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "ledger.db"), "");
+  return { rogueDir };
+}
+
 // No mcp/hooks/policies declared: errorCount 0. Still carries a
 // warningCount of 1 (no memory router configured), which is exactly the
 // fixture we want for "warnings alone keep exit 0" — this is not a
@@ -123,7 +134,7 @@ describe("harness doctor — exit code wired to report.errorCount (task a07b379a
     expect(parsed.warningCount).toBeGreaterThanOrEqual(1);
   });
 
-  it("--rm-rogue-ledgers: still exits 1 when the report has errors after the delete+rescan flow", async () => {
+  it("--rm-rogue-ledgers: still exits 1 on the no-hits branch when the report has errors", async () => {
     const home = tempHome();
     const configPath = writeErroringManifest(home);
     let stdout = "";
@@ -134,6 +145,29 @@ describe("harness doctor — exit code wired to report.errorCount (task a07b379a
       rogueLedgerScanOptions: { homeDir: home, cwd: home },
     });
     expect(code).toBe(1);
+    // No rogue ledger was planted, so this exercises the `hits.length === 0`
+    // early-return branch (src/cli/index.ts ~line 290), not the
+    // delete+rescan tail below.
     expect(stdout).toContain("nothing to delete");
+  });
+
+  it("--rm-rogue-ledgers: exits 1 after an actual delete+rescan when the report also has errors", async () => {
+    const home = tempHome();
+    const configPath = writeErroringManifest(home);
+    const { rogueDir } = plantRogueLedger(home);
+    let stdout = "";
+    const code = await run({
+      argv: ["doctor", "--config", configPath, "--shallow", "--rm-rogue-ledgers", "--yes"],
+      stdout: (s) => { stdout += s; },
+      stderr: () => {},
+      rogueLedgerScanOptions: { homeDir: home, cwd: home },
+    });
+    expect(code).toBe(1);
+    // Proves this run went through the actual deletion + rescan path
+    // (src/cli/index.ts ~line 317's failIfErrors), not the no-hits
+    // short-circuit above.
+    expect(stdout).toContain(`deleted: ${rogueDir}`);
+    expect(stdout).toContain("rogue evidence-ledger DBs remaining: 0");
+    expect(fs.existsSync(rogueDir)).toBe(false);
   });
 });
