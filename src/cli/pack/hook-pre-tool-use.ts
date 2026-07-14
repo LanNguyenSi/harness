@@ -38,6 +38,7 @@ import {
   writePendingApproval,
 } from "../../runtime/pending-approval.js";
 import { isReadOnlyBashPipeline } from "../../runtime/read-only-bash.js";
+import { isRecoveryGitCommit } from "../../runtime/recovery-git-commit.js";
 import {
   ProducerSchema,
   type Manifest,
@@ -416,6 +417,16 @@ export async function runPackHookPreToolUseCli(
   // which Edit / Write / Bash are all gated from writing to. Bail to
   // ledger-as-audit only when generatedDir is unresolvable (injected
   // manifest without a resolved path: only happens in tests).
+  //
+  // `markerExpired` is hoisted out of the block below so the
+  // recovery-git-commit exception (task 6e888423) further down can see
+  // it: it is true only when a REAL marker existed for this
+  // session/task and aged past `approval_lifecycle.max_age` — as
+  // opposed to no marker ever existing, or one cleared by a
+  // task-completion boundary tool. See understanding-before-execution-
+  // runtime.ts's `OperatorMarkerApproval.expired` doc for the full
+  // distinction.
+  let markerExpired = false;
   if (generatedDir !== undefined) {
     // Source 1a/1b: task-scoped marker for the currently-claimed task
     // (harness/1ee26e77 + PR #198 correctness fix), then the
@@ -429,6 +440,7 @@ export async function runPackHookPreToolUseCli(
       declared.config,
       stderr,
     );
+    markerExpired = markers.expired;
     if (markers.source !== "task") {
       // Trace the task-marker miss to stderr so an operator chasing
       // "why isn't my approval working?" sees the active-claim vs marker
@@ -506,6 +518,32 @@ export async function runPackHookPreToolUseCli(
       exitCode: 0,
       blocked: false,
       approvalCheck: { approved: true, source: "none", detail: diagnostic },
+      diagnostic,
+    };
+  }
+
+  // Exception: the narrow recovery-git-commit shape (task 6e888423,
+  // agent-grounding frictions #2/#9/#58/#71). `approval_lifecycle.max_age`
+  // can age out the marker mid-task — e.g. during a long reviewer-
+  // amendment loop — leaving the recovery `git commit` that consolidates
+  // ALREADY-approved Edit/Write output into a new HEAD hard-blocked
+  // behind an operator. Gated on BOTH conditions so this cannot become a
+  // generic bypass: `markerExpired` proves a real operator approval
+  // existed for this exact session/task and merely aged out (a marker
+  // that is simply absent, or one a task-completion boundary tool just
+  // cleared for a NEW task, leaves this false and the block below still
+  // applies), and `isRecoveryGitCommit` proves the command is a bare,
+  // unchained `git commit` that cannot smuggle other work or introduce
+  // new file content — see src/runtime/recovery-git-commit.ts for the
+  // full safety argument. Edit / Write / every other Bash shape remain
+  // hard-gated regardless.
+  if (toolName === "Bash" && markerExpired && isRecoveryGitCommit(commandStr)) {
+    const diagnostic = `harness pack hook: recovery-commit exemption — approval for session ${sessionId} had expired, but this session/task WAS previously approved; allowing the bare \`git commit\` to record already-approved work (\`${commandStr.trim()}\`). A fresh Understanding Report is still required for any new Edit/Write/Bash.`;
+    stderr.write(`${diagnostic}\n`);
+    return {
+      exitCode: 0,
+      blocked: false,
+      approvalCheck: { approved: true, source: "recovery-commit", detail: diagnostic },
       diagnostic,
     };
   }

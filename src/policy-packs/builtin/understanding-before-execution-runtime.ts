@@ -42,7 +42,12 @@ export const APPROVED_LEDGER_TAG_PREFIX = "understanding-approved:";
 
 export const APPROVAL_MARKER_DIRNAME = ".approvals";
 
-export type ApprovalSource = "marker" | "ledger" | "persisted-report" | "none";
+export type ApprovalSource =
+  | "marker"
+  | "ledger"
+  | "persisted-report"
+  | "none"
+  | "recovery-commit";
 
 export interface ApprovalCheckResult {
   approved: boolean;
@@ -422,6 +427,20 @@ export interface MarkerCheck {
   matched: boolean;
   detail: string;
   marker: ApprovalMarker | null;
+  /**
+   * True when `matched` is false SPECIFICALLY because a readable marker
+   * existed but its `approvedAt` exceeded `opts.maxAgeMs`
+   * (agent-tasks/d8ee60ca) — as opposed to the marker being absent
+   * (never approved, or cleared by a task-completion boundary tool via
+   * `clearApprovalMarker`), corrupted, or the session id malformed.
+   * False whenever `matched` is true. This is the signal task 6e888423's
+   * recovery-git-commit exemption keys off: "this session/task DID have
+   * a real operator approval and it merely aged out" is safe to treat
+   * differently from "this session/task was never approved" or "a task
+   * boundary just cleared it for a new task" — see
+   * src/runtime/recovery-git-commit.ts for the full argument.
+   */
+  expired: boolean;
 }
 
 export interface CheckApprovalMarkerOptions {
@@ -481,6 +500,7 @@ export function checkApprovalMarker(
         err instanceof Error ? err.message : String(err)
       }`,
       marker: null,
+      expired: false,
     };
   }
   // Shared symlink-rejecting read (src/io/read-regular-file.ts): the lstat
@@ -492,6 +512,7 @@ export function checkApprovalMarker(
       matched: false,
       detail: `no approval marker at ${filePath}`,
       marker: null,
+      expired: false,
     };
   }
   if (read.kind === "symlink") {
@@ -499,6 +520,7 @@ export function checkApprovalMarker(
       matched: false,
       detail: `approval marker is a symlink, refusing for safety: ${filePath}`,
       marker: null,
+      expired: false,
     };
   }
   if (read.kind === "not-regular") {
@@ -506,6 +528,7 @@ export function checkApprovalMarker(
       matched: false,
       detail: `approval marker path is not a regular file: ${filePath}`,
       marker: null,
+      expired: false,
     };
   }
   let marker: ApprovalMarker | null = null;
@@ -534,6 +557,7 @@ export function checkApprovalMarker(
           matched: false,
           detail: `approval marker ${path.basename(filePath)} expired: age ${ageMin}m > max ${maxMin}m (approved at ${marker.approvedAt})`,
           marker,
+          expired: true,
         };
       }
     }
@@ -545,6 +569,7 @@ export function checkApprovalMarker(
     matched: true,
     detail: `approved via marker ${path.basename(filePath)}: ${provenance}`,
     marker,
+    expired: false,
   };
 }
 
@@ -827,6 +852,7 @@ export function checkActiveClaimApprovalMarker(
       matched: false,
       detail: `no active-claim recorded; task-scoped check skipped`,
       marker: null,
+      expired: false,
     };
   }
   const markerName = `${APPROVAL_MARKER_TASK_PREFIX}${claim}`;
@@ -836,12 +862,14 @@ export function checkActiveClaimApprovalMarker(
       matched: true,
       detail: `task-scoped marker for active-claim ${claim}: ${check.detail}`,
       marker: check.marker,
+      expired: false,
     };
   }
   return {
     matched: false,
     detail: `active-claim ${claim} has no fresh task marker (${check.detail})`,
     marker: null,
+    expired: check.expired,
   };
 }
 
@@ -853,6 +881,19 @@ export interface OperatorMarkerApproval {
   detail: string;
   /** Task-scoped check detail, for callers that trace the fall-through. */
   taskCheckDetail: string;
+  /**
+   * True when EITHER the task-scoped or the session-scoped marker
+   * existed but aged past `approval_lifecycle.max_age` (task 6e888423).
+   * False when `matched` is true, and false when a marker was simply
+   * absent (never approved, or cleared by a task-completion boundary
+   * tool) — distinguishing "this identity had a real approval that
+   * merely expired" from "this identity was never approved" / "a new
+   * task just started". PreToolUse hooks use this (never on its own —
+   * always alongside `isRecoveryGitCommit`) to decide whether a bare
+   * recovery `git commit` may proceed without a fresh Understanding
+   * Report; see src/runtime/recovery-git-commit.ts.
+   */
+  expired: boolean;
 }
 
 /**
@@ -884,14 +925,34 @@ export function checkOperatorApprovalMarkers(
       source: "task",
       detail: taskMarker.detail,
       taskCheckDetail: taskMarker.detail,
+      expired: false,
     };
   }
   const sessionMarker = checkApprovalMarker(generatedDir, sessionId, ageOpts);
+  if (sessionMarker.matched) {
+    return {
+      matched: true,
+      source: "session",
+      detail: sessionMarker.detail,
+      taskCheckDetail: taskMarker.detail,
+      expired: false,
+    };
+  }
   return {
-    matched: sessionMarker.matched,
-    source: sessionMarker.matched ? "session" : null,
+    matched: false,
+    source: null,
     detail: sessionMarker.detail,
     taskCheckDetail: taskMarker.detail,
+    // `expired` is computed ONLY on this non-matched path, preserving the
+    // "false when matched is true" invariant (task 6e888423 review):
+    // e.g. a FRESH session marker (matched:true, returned above) must not
+    // read expired:true just because a STALE sibling task marker also
+    // exists — that sibling is irrelevant once the session marker itself
+    // satisfied the gate. Either marker aged out counts here: a
+    // task-scoped approval that expired (even though the session-scoped
+    // check may simply have never existed) is just as legitimate a "this
+    // had approval, it lapsed" signal as a session-scoped expiry.
+    expired: taskMarker.expired || sessionMarker.expired,
   };
 }
 

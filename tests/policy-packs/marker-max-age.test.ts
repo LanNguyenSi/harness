@@ -31,6 +31,7 @@ describe("checkApprovalMarker — max_age freshness (agent-tasks/d8ee60ca)", () 
       now: new Date("2026-05-17T10:00:00Z"), // 2h old
     });
     expect(result.matched).toBe(true);
+    expect(result.expired).toBe(false);
     expect(result.detail).toMatch(/approved via marker/);
   });
 
@@ -45,6 +46,9 @@ describe("checkApprovalMarker — max_age freshness (agent-tasks/d8ee60ca)", () 
       now: new Date("2026-05-17T13:00:00Z"), // 5h old
     });
     expect(result.matched).toBe(false);
+    // `expired:true` (as opposed to a missing/never-approved marker) is
+    // the signal task 6e888423's recovery-git-commit exemption keys off.
+    expect(result.expired).toBe(true);
     expect(result.detail).toMatch(/expired/);
     expect(result.detail).toMatch(/age 300m > max 240m/);
   });
@@ -62,6 +66,7 @@ describe("checkApprovalMarker — max_age freshness (agent-tasks/d8ee60ca)", () 
     // marker exists, approvedAt is non-empty string so marker is set,
     // but Date.parse returns NaN → freshness skipped, matched=true.
     expect(result.matched).toBe(true);
+    expect(result.expired).toBe(false);
   });
 
   it("returns matched=true with no max_age set (legacy contract)", () => {
@@ -73,6 +78,7 @@ describe("checkApprovalMarker — max_age freshness (agent-tasks/d8ee60ca)", () 
     // Ancient marker, no maxAgeMs option set: still matched.
     const result = checkApprovalMarker(generatedDir, "sess-1");
     expect(result.matched).toBe(true);
+    expect(result.expired).toBe(false);
   });
 });
 

@@ -37,6 +37,7 @@ import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { type Manifest, type McpServer } from "../../schema/index.js";
 import { type LoaderOptions } from "../loader.js";
 import { isReadOnlyBashPipeline } from "../../runtime/read-only-bash.js";
+import { isRecoveryGitCommit } from "../../runtime/recovery-git-commit.js";
 import { renderReportSchemaHint } from "./understanding-report-schema-hint.js";
 import {
   checkHookPause,
@@ -259,6 +260,14 @@ export async function runPackHookCodexPreToolUseCli(
   // hook via `checkOperatorApprovalMarkers` (task e7c2ec3c; the bare
   // `checkApprovalMarker` call here previously ignored `max_age` and
   // task-scoping, so those knobs silently applied only to Claude).
+  // `markerExpired` is hoisted so the recovery-git-commit exception
+  // (task 6e888423) below can see it: true only when a REAL marker
+  // existed for this session/task and aged past
+  // `approval_lifecycle.max_age`, not when one was simply never written
+  // or was cleared by a task-completion boundary tool. Mirrors the
+  // Claude hook (hook-pre-tool-use.ts) so the two runtimes stay in
+  // lockstep, same rationale as `checkOperatorApprovalMarkers` itself.
+  let markerExpired = false;
   if (generatedDir !== undefined) {
     const markers = checkOperatorApprovalMarkers(
       generatedDir,
@@ -266,6 +275,7 @@ export async function runPackHookCodexPreToolUseCli(
       declared.config,
       stderr,
     );
+    markerExpired = markers.expired;
     if (markers.source !== "task") {
       // Trace the task-marker miss, mirroring the Claude hook, so an
       // operator debugging a Codex session sees the active-claim vs
@@ -304,6 +314,29 @@ export async function runPackHookCodexPreToolUseCli(
       exitCode: 0,
       blocked: false,
       approvalCheck: { approved: true, source: "none", detail: diagnostic },
+      diagnostic,
+    };
+  }
+
+  // Exception: the narrow recovery-git-commit shape (task 6e888423).
+  // Mirrors the Claude hook's exemption exactly (see hook-pre-tool-use.ts
+  // for the full safety argument): gated on BOTH `markerExpired` (a real
+  // operator approval existed for this session/task and merely aged out
+  // — not "never approved", not "cleared by a task-completion boundary")
+  // and `isRecoveryGitCommit` (a bare, unchained `git commit` that
+  // cannot smuggle other work or new file content).
+  if (
+    commandStr !== null &&
+    CODEX_SHELL_TOOLS.has(toolName) &&
+    markerExpired &&
+    isRecoveryGitCommit(commandStr)
+  ) {
+    const diagnostic = `harness pack hook codex: recovery-commit exemption — approval for session ${sessionId} had expired, but this session/task WAS previously approved; allowing the bare \`git commit\` to record already-approved work (\`${commandStr.trim()}\`). A fresh Understanding Report is still required for any new Edit/Write/Bash.`;
+    stderr.write(`${diagnostic}\n`);
+    return {
+      exitCode: 0,
+      blocked: false,
+      approvalCheck: { approved: true, source: "recovery-commit", detail: diagnostic },
       diagnostic,
     };
   }

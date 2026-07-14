@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   approvalMarkerPathFor,
   approvedLedgerTagFor,
+  checkActiveClaimApprovalMarker,
   checkApprovalMarker,
+  checkOperatorApprovalMarkers,
   checkPersistedReport,
   clearApprovalMarker,
   defaultReportsDir,
@@ -15,7 +17,9 @@ import {
   reportsDirForManifest,
   selectReportForSession,
   TOLERANT_FALLBACK_MAX_AGE_MS,
+  writeActiveClaim,
   writeApprovalMarker,
+  writeTaskApprovalMarker,
   type PersistedReport,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 
@@ -352,6 +356,7 @@ describe("writeApprovalMarker / checkApprovalMarker / clearApprovalMarker (agent
     expect(filePath).toBe(path.join(tmp, ".approvals", "sess-1"));
     const r = checkApprovalMarker(tmp, "sess-1");
     expect(r.matched).toBe(true);
+    expect(r.expired).toBe(false);
     expect(r.marker).toEqual({
       approvedAt: "2026-05-15T20:00:00Z",
       approvedBy: "test-operator",
@@ -359,9 +364,15 @@ describe("writeApprovalMarker / checkApprovalMarker / clearApprovalMarker (agent
     expect(r.detail).toMatch(/approved at 2026-05-15T20:00:00Z by test-operator/);
   });
 
-  it("missing marker returns matched:false with the path in the detail", () => {
+  it("missing marker returns matched:false with the path in the detail, and expired:false (never approved, task 6e888423)", () => {
+    // `expired` distinguishes "this session never had an approval" from
+    // "it had one and it aged out" — see checkApprovalMarker's doc and
+    // src/runtime/recovery-git-commit.ts. A missing marker must read
+    // expired:false so the recovery-commit exemption never fires for a
+    // session that was never approved.
     const r = checkApprovalMarker(tmp, "sess-absent");
     expect(r.matched).toBe(false);
+    expect(r.expired).toBe(false);
     expect(r.detail).toMatch(/no approval marker at/);
     expect(r.detail).toMatch(/sess-absent/);
   });
@@ -414,5 +425,134 @@ describe("writeApprovalMarker / checkApprovalMarker / clearApprovalMarker (agent
     // No-op on already-missing.
     clearApprovalMarker(tmp, "sess-1");
     expect(checkApprovalMarker(tmp, "sess-1").matched).toBe(false);
+  });
+
+  it("a marker cleared by clearApprovalMarker reads as expired:false, not expired:true (task 6e888423)", () => {
+    // This is the boundary the recovery-git-commit exemption depends on:
+    // a task-completion boundary tool (task_finish etc.) clears the
+    // marker FILE outright (post-tool-use hook's clearApprovalMarker),
+    // which must read as "missing" so a fresh task's first commit still
+    // requires a fresh Understanding Report — not "expired", which would
+    // wrongly make it eligible for the recovery-commit exemption.
+    writeApprovalMarker(tmp, "sess-1", {
+      approvedAt: new Date().toISOString(),
+      approvedBy: "test-operator",
+    });
+    clearApprovalMarker(tmp, "sess-1");
+    const r = checkApprovalMarker(tmp, "sess-1", { maxAgeMs: 4 * 60 * 60 * 1000 });
+    expect(r.matched).toBe(false);
+    expect(r.expired).toBe(false);
+    expect(r.detail).toMatch(/no approval marker at/);
+  });
+});
+
+describe("checkOperatorApprovalMarkers — expired signal (task 6e888423)", () => {
+  it("expired:false when neither marker was ever written", () => {
+    const r = checkOperatorApprovalMarkers(tmp, "sess-1", {});
+    expect(r.matched).toBe(false);
+    expect(r.expired).toBe(false);
+  });
+
+  it("expired:true when the session marker aged past approval_lifecycle.max_age", () => {
+    writeApprovalMarker(tmp, "sess-1", {
+      approvedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      approvedBy: "test-operator",
+    });
+    const r = checkOperatorApprovalMarkers(tmp, "sess-1", {
+      approval_lifecycle: { max_age: "4h" },
+    });
+    expect(r.matched).toBe(false);
+    expect(r.expired).toBe(true);
+  });
+
+  it("expired:true when the active-claim's task marker aged out, even though no session marker ever existed", () => {
+    writeActiveClaim(tmp, "task-x");
+    writeTaskApprovalMarker(tmp, "task-x", {
+      approvedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      approvedBy: "test-operator",
+    });
+    const r = checkOperatorApprovalMarkers(tmp, "sess-1", {
+      approval_lifecycle: { max_age: "4h" },
+    });
+    expect(r.matched).toBe(false);
+    expect(r.expired).toBe(true);
+  });
+
+  it("expired:false on a fresh, matching marker", () => {
+    writeApprovalMarker(tmp, "sess-1", {
+      approvedAt: new Date().toISOString(),
+      approvedBy: "test-operator",
+    });
+    const r = checkOperatorApprovalMarkers(tmp, "sess-1", {
+      approval_lifecycle: { max_age: "4h" },
+    });
+    expect(r.matched).toBe(true);
+    expect(r.expired).toBe(false);
+  });
+
+  it("MIXED MARKERS (review LOW 1): the active-claim's own task marker is EXPIRED but the session marker is FRESH — matched:true must carry expired:false, not expired:true", () => {
+    // This is the exact scenario the review flagged: an active-claim IS
+    // recorded, its own task-scoped marker has aged past max_age (so the
+    // task-scoped check itself misses), but the gate still falls through
+    // to a FRESH session-scoped marker and matches there. Before the
+    // review fix, `expired` was computed unconditionally as
+    // `taskMarker.expired || sessionMarker.expired`, so this exact
+    // matched:true result would ALSO carry expired:true (violating the
+    // "false when matched is true" invariant the type's own doc
+    // comment promises) — which would have made a session with a
+    // perfectly fresh approval spuriously eligible for the
+    // recovery-git-commit exemption.
+    writeActiveClaim(tmp, "task-x");
+    writeTaskApprovalMarker(tmp, "task-x", {
+      approvedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      approvedBy: "test-operator",
+    });
+    writeApprovalMarker(tmp, "sess-1", {
+      approvedAt: new Date().toISOString(),
+      approvedBy: "test-operator",
+    });
+    const r = checkOperatorApprovalMarkers(tmp, "sess-1", {
+      approval_lifecycle: { max_age: "4h" },
+    });
+    expect(r.matched).toBe(true);
+    expect(r.source).toBe("session");
+    expect(r.expired).toBe(false);
+  });
+
+  it("MIXED MARKERS (review LOW 1): the active-claim's OWN task marker is fresh (matches) even though the session marker is separately stale — still expired:false", () => {
+    writeActiveClaim(tmp, "task-fresh");
+    writeTaskApprovalMarker(tmp, "task-fresh", {
+      approvedAt: new Date().toISOString(),
+      approvedBy: "test-operator",
+    });
+    writeApprovalMarker(tmp, "sess-1", {
+      approvedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      approvedBy: "test-operator",
+    });
+    const r = checkOperatorApprovalMarkers(tmp, "sess-1", {
+      approval_lifecycle: { max_age: "4h" },
+    });
+    expect(r.matched).toBe(true);
+    expect(r.source).toBe("task");
+    expect(r.expired).toBe(false);
+  });
+});
+
+describe("checkActiveClaimApprovalMarker — expired propagation", () => {
+  it("expired:false when no active-claim is recorded", () => {
+    const r = checkActiveClaimApprovalMarker(tmp, { maxAgeMs: 4 * 60 * 60 * 1000 });
+    expect(r.matched).toBe(false);
+    expect(r.expired).toBe(false);
+  });
+
+  it("expired:true when the active-claim's own task marker is stale", () => {
+    writeActiveClaim(tmp, "task-y");
+    writeTaskApprovalMarker(tmp, "task-y", {
+      approvedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      approvedBy: "test-operator",
+    });
+    const r = checkActiveClaimApprovalMarker(tmp, { maxAgeMs: 4 * 60 * 60 * 1000 });
+    expect(r.matched).toBe(false);
+    expect(r.expired).toBe(true);
   });
 });
