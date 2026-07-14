@@ -37,6 +37,7 @@ import { readRegularFileRejectingSymlink } from "../../io/read-regular-file.js";
 import { InvalidDurationError, parseDurationSeconds, type LedgerEntry } from "../../policies/index.js";
 import { POLICY_DECISION_TYPE } from "../../runtime/ledger-record.js";
 import { rejectMalformedSessionId } from "../../runtime/reject-malformed-session-id.js";
+import { expandToolNameAliases } from "../../runtime/tool-name-aliases.js";
 
 export const APPROVED_LEDGER_TAG_PREFIX = "understanding-approved:";
 
@@ -986,17 +987,44 @@ export function clearTaskApprovalMarker(generatedDir: string, taskId: string): v
  */
 export const DEFAULT_BASH_TOOL_NAMES: ReadonlySet<string> = new Set(["Bash"]);
 
-/** Exact tool-name membership test against `expire_on_tool_match`. No
+/** Canonical agent-tasks v1 tool name whose `tool_input.status` gates
+ * marker expiry (see `matchPostToolUseBoundary` below). Not imported
+ * from `hook-track-active-claim.ts`'s own `TOOL_NAME_TASKS_TRANSITION`
+ * constant: `policy-packs/` may not import from `cli/` (layering rule,
+ * `.dependency-cruiser.cjs`). */
+const TASKS_TRANSITION_TOOL_NAME = "mcp__agent-tasks__tasks_transition";
+
+/**
+ * Tool-name membership test against `expire_on_tool_match`. No GLOB
  * wildcard expansion by design (agent-tasks/d8ee60ca): operators write
- * what they mean. */
+ * the exact tool name they mean.
+ *
+ * It IS alias-aware, though: a tool name is compared against `patterns`
+ * after expanding it through `expandToolNameAliases` (shell-tool
+ * aliases `Bash`/`shell`/`exec_command`/`functions.exec_command`, and
+ * MCP tool-name variants — server hyphen/underscore swap, the
+ * `mcp__server__.tool` dotted form). This mirrors the normalization
+ * `harness policy intercept`'s `policyMatchesEvent` already applies to
+ * the incoming `event.tool_name` (`src/runtime/intercept.ts`, commit
+ * 9aacbcd "Fix Codex hook tool matching") — that fix exists precisely
+ * because Codex can emit an MCP tool name in one of these variant
+ * forms for the identical tool. Before this, a Codex session sending
+ * `mcp__agent-tasks__.task_finish` (dotted) or an underscore-server
+ * variant would silently never expire the marker: the Codex generator
+ * alias-expands the EMITTED TOML `matcher` (`expandCodexHookMatchPattern`
+ * in `generate-codex-config.ts`) so Codex's own dispatcher still
+ * invokes the hook command, but this function's comparison against the
+ * canonical `expire_on_tool_match` config list would reject the
+ * variant `tool_name` once inside the hook body — the boundary would
+ * silently never fire even though the hook ran (review finding on task
+ * a1348c89).
+ */
 export function toolNameMatchesAny(
   toolName: string,
   patterns: readonly string[],
 ): boolean {
-  for (const p of patterns) {
-    if (p === toolName) return true;
-  }
-  return false;
+  const patternSet = new Set(patterns);
+  return expandToolNameAliases(toolName).some((alias) => patternSet.has(alias));
 }
 
 /** First `expire_on_bash_match` regex the command satisfies, or
@@ -1074,11 +1102,18 @@ export function matchPostToolUseBoundary(
   // Legacy v1 `tasks_transition`: only `status=done` releases the work
   // claim (per task_finish docs: "The work claim is cleared when going
   // to done and kept when going to review"). open / in_progress /
-  // review / missing status keep the marker.
-  const tasksTransitionStatusOk =
-    toolName === "mcp__agent-tasks__tasks_transition"
-      ? extractTasksTransitionStatusFromToolInput(toolInput) === "done"
-      : true;
+  // review / missing status keep the marker. Detected via the same
+  // alias-aware `toolNameMatchesAny` as the general match above (not a
+  // raw `===`): a Codex dotted/server-variant `tasks_transition`
+  // tool_name must still get the status filter applied, otherwise it
+  // would fall through to the unconditional `true` branch below and
+  // clear the marker on ANY status — a worse bug than a missed match
+  // (review finding on task a1348c89).
+  const tasksTransitionStatusOk = toolNameMatchesAny(toolName, [
+    TASKS_TRANSITION_TOOL_NAME,
+  ])
+    ? extractTasksTransitionStatusFromToolInput(toolInput) === "done"
+    : true;
   const toolNameMatched = rawToolNameMatched && tasksTransitionStatusOk;
   // Bash check only runs when the event is actually a Bash(-alias) call;
   // an MCP tool whose name happens to match a regex is not a Bash

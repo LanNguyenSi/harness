@@ -416,6 +416,162 @@ describe("pack hook codex-post-tool-use: expire_on_bash_match across Codex shell
   });
 });
 
+describe("pack hook codex-post-tool-use: MCP tool-name variant matching (task a1348c89 review finding)", () => {
+  // Codex can emit an MCP tool_name in a variant form for the identical
+  // tool: server hyphen<->underscore swap, or the `mcp__server__.tool`
+  // dotted form. `harness policy intercept`'s `policyMatchesEvent`
+  // already alias-expands the INCOMING event.tool_name for exactly this
+  // reason (src/runtime/intercept.ts, commit 9aacbcd "Fix Codex hook
+  // tool matching"), and `generate-codex-config.ts` alias-expands the
+  // EMITTED TOML matcher so Codex's own dispatcher invokes the hook
+  // regardless of which variant it sends. Without alias-awareness
+  // INSIDE the hook body too, the hook would run (dispatcher matched)
+  // but its own `expire_on_tool_match` comparison against the raw
+  // config list would silently reject the variant tool_name — task
+  // a1348c89's whole purpose (Codex marker expiry) would quietly fail
+  // exactly on Codex's own native wire shape.
+  const LIFECYCLE = {
+    expire_on_tool_match: ["mcp__agent-tasks__task_finish"],
+    max_age: "4h",
+  };
+
+  it("clears the marker when Codex sends the dotted mcp__server__.tool variant", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-07-01T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPostToolUseCli({
+      manifest: manifestWithPack({ approval_lifecycle: LIFECYCLE }),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "mcp__agent-tasks__.task_finish",
+          tool_input: {},
+        }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+    expect(result.matchedExpiry).toBe(true);
+    expect(result.markerCleared).toBe(true);
+    expect(fs.existsSync(approvalMarkerPathFor(generatedDir, "sess-1"))).toBe(false);
+  });
+
+  it("clears the marker when Codex sends the underscore-server variant (mcp__agent_tasks__task_finish)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-07-01T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPostToolUseCli({
+      manifest: manifestWithPack({ approval_lifecycle: LIFECYCLE }),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "mcp__agent_tasks__task_finish",
+          tool_input: {},
+        }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+    expect(result.matchedExpiry).toBe(true);
+    expect(result.markerCleared).toBe(true);
+    expect(fs.existsSync(approvalMarkerPathFor(generatedDir, "sess-1"))).toBe(false);
+  });
+
+  it("must-pass control: a genuinely different MCP tool name still does not match (alias-awareness is not a wildcard)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-07-01T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPostToolUseCli({
+      manifest: manifestWithPack({ approval_lifecycle: LIFECYCLE }),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "mcp__agent-tasks__task_abandon",
+          tool_input: {},
+        }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+    expect(result.matchedExpiry).toBe(false);
+    expect(fs.existsSync(approvalMarkerPathFor(generatedDir, "sess-1"))).toBe(true);
+  });
+
+  it("must-pass control: tasks_transition sent in the dotted variant with status=review still keeps the marker (status filter survives alias expansion)", async () => {
+    // Regression guard for the sharper failure mode the alias-awareness
+    // fix itself could introduce: if the tasks_transition special-case
+    // check stayed a raw `===` while the general expire_on_tool_match
+    // check became alias-aware, a dotted/variant tasks_transition call
+    // would match generally (marker WOULD clear) but skip the v1
+    // status filter entirely (since `toolName === "...tasks_transition"`
+    // is false for the variant), degrading to "clear on ANY status" —
+    // worse than the original missed-match bug.
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-07-01T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPostToolUseCli({
+      manifest: manifestWithPack({
+        approval_lifecycle: {
+          expire_on_tool_match: ["mcp__agent-tasks__tasks_transition"],
+          max_age: "4h",
+        },
+      }),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "mcp__agent-tasks__.tasks_transition",
+          tool_input: { taskId: "task-uuid-abc", status: "review" },
+        }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+    expect(result.matchedExpiry).toBe(false);
+    expect(fs.existsSync(approvalMarkerPathFor(generatedDir, "sess-1"))).toBe(true);
+  });
+
+  it("clears the marker when tasks_transition is sent in the dotted variant WITH status=done", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-07-01T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPostToolUseCli({
+      manifest: manifestWithPack({
+        approval_lifecycle: {
+          expire_on_tool_match: ["mcp__agent-tasks__tasks_transition"],
+          max_age: "4h",
+        },
+      }),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "mcp__agent-tasks__.tasks_transition",
+          tool_input: { taskId: "task-uuid-abc", status: "done" },
+        }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+    expect(result.matchedExpiry).toBe(true);
+    expect(result.markerCleared).toBe(true);
+    expect(fs.existsSync(approvalMarkerPathFor(generatedDir, "sess-1"))).toBe(false);
+  });
+});
+
 describe("pack hook codex-post-tool-use — task-scoped marker cleanup (parity with harness/1ee26e77)", () => {
   it("clears a task-scoped marker when tool_input.taskId is present and a marker exists for it", async () => {
     const generatedDir = path.join(tmp, "harness.generated");
