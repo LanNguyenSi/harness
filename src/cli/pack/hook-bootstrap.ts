@@ -11,6 +11,9 @@
 //      because error semantics differ per hook).
 //   4. pack `config.ux` parsing (label-parameterized; formerly four
 //      byte-identical copies, task 19e293c6).
+//   5. `pickString` — first-defined-string-wins candidate picker (was three
+//      byte-identical copies across the Codex hook trio — pre-tool-use,
+//      stop, post-tool-use — before task a1348c89 extracted it here).
 //
 // Not used by:
 //   - hook-runtime-reality.ts: its stdin reader uses async iteration + an
@@ -116,7 +119,25 @@ export function loadManifestOrInjected(
 }
 
 // ---------------------------------------------------------------------------
-// 4. Pack `config.ux` parser
+// 4. First-defined-string-wins candidate picker
+// ---------------------------------------------------------------------------
+
+/**
+ * Return the first candidate that is a non-empty string, else `undefined`.
+ * Used to resolve a field that may arrive under one of several tolerated
+ * synonyms (e.g. Codex's `tool_name` vs `tool`, or `last_assistant_message`
+ * as a direct shortcut). Was three byte-identical private copies (the Codex
+ * pre-tool-use / stop / post-tool-use hooks) before task a1348c89.
+ */
+export function pickString(...candidates: unknown[]): string | undefined {
+  for (const c of candidates) {
+    if (typeof c === "string" && c.length > 0) return c;
+  }
+  return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// 5. Pack `config.ux` parser
 // ---------------------------------------------------------------------------
 
 /**

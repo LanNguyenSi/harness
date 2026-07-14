@@ -34,7 +34,7 @@ import { atomicWriteFile } from "../../io/atomic-write.js";
 import { defaultReportsDir } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import type { Manifest } from "../../schema/index.js";
 import { type LoaderOptions } from "../loader.js";
-import { loadManifestOrInjected, readStdin } from "./hook-bootstrap.js";
+import { loadManifestOrInjected, pickString, readStdin } from "./hook-bootstrap.js";
 
 const PACK_NAME = "understanding-before-execution";
 const RUNTIME_TAG = "codex";
@@ -77,13 +77,6 @@ interface StopEnvelope {
 interface MessageRow {
   role?: unknown;
   content?: unknown;
-}
-
-function pickString(...candidates: unknown[]): string | undefined {
-  for (const c of candidates) {
-    if (typeof c === "string" && c.length > 0) return c;
-  }
-  return undefined;
 }
 
 function extractLastAssistantText(env: StopEnvelope): string | null {

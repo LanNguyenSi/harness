@@ -21,15 +21,12 @@
 // persists past the intended boundary, which degrades to the legacy
 // per-session contract.
 
-import { existsSync } from "node:fs";
 import {
-  approvalMarkerPathFor,
-  clearApprovalMarker,
-  clearTaskApprovalMarker,
+  applyPostToolUseExpiry,
   defaultReportsDir,
-  expirePersistedReport,
+  describePostToolUseExpiry,
+  matchPostToolUseBoundary,
   parseApprovalLifecycle,
-  taskApprovalMarkerPathFor,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
 import type { Manifest } from "../../schema/index.js";
@@ -88,74 +85,6 @@ interface ToolEventLite {
   session_id?: unknown;
   tool_name?: unknown;
   tool_input?: unknown;
-}
-
-// Match a tool name against one of the patterns. The pattern is a plain
-// tool name like `mcp__agent-tasks__task_finish`; wildcard expansion is
-// deliberately not supported in v1 so operators write what they mean.
-function toolMatches(toolName: string, patterns: readonly string[]): boolean {
-  for (const p of patterns) {
-    if (p === toolName) return true;
-  }
-  return false;
-}
-
-// Match a Bash tool_input.command against the operator's regex list.
-// Patterns are pre-compiled by parseApprovalLifecycle, so invalid
-// regexes were dropped (with a warning) at parse time and we just
-// iterate here. Empty / missing command short-circuits to false.
-function bashCommandMatches(command: string, patterns: readonly RegExp[]): RegExp | undefined {
-  if (command === "") return undefined;
-  for (const re of patterns) {
-    if (re.test(command)) return re;
-  }
-  return undefined;
-}
-
-function extractBashCommand(toolInput: unknown): string {
-  if (
-    typeof toolInput !== "object" ||
-    toolInput === null ||
-    Array.isArray(toolInput)
-  ) {
-    return "";
-  }
-  const command = (toolInput as Record<string, unknown>)["command"];
-  return typeof command === "string" ? command : "";
-}
-
-// Pull `taskId` out of an MCP tool_input payload. agent-tasks verbs that
-// mark a task boundary (`task_finish`, `task_abandon`, etc.) carry the
-// taskId as a top-level string field. When present, the post-tool-use
-// hook also clears the corresponding task-scoped approval marker
-// (harness/1ee26e77). Returns "" when absent / malformed.
-function extractTaskId(toolInput: unknown): string {
-  if (
-    typeof toolInput !== "object" ||
-    toolInput === null ||
-    Array.isArray(toolInput)
-  ) {
-    return "";
-  }
-  const tid = (toolInput as Record<string, unknown>)["taskId"];
-  return typeof tid === "string" ? tid : "";
-}
-
-// `tasks_transition` (v1) carries `status: "open" | "in_progress" | "review" | "done"`.
-// Only "done" releases the work claim (per task_finish docs); other values
-// keep the marker so the agent's continued work on the same task remains
-// approved. Returns "" for malformed / missing status; the caller treats
-// any non-"done" return as keep-claim.
-function extractTasksTransitionStatus(toolInput: unknown): string {
-  if (
-    typeof toolInput !== "object" ||
-    toolInput === null ||
-    Array.isArray(toolInput)
-  ) {
-    return "";
-  }
-  const s = (toolInput as Record<string, unknown>)["status"];
-  return typeof s === "string" ? s : "";
 }
 
 function noop(
@@ -257,28 +186,13 @@ export async function runPackHookPostToolUseCli(
     );
   }
 
-  // tool-name match is the first filter; status-based refinement below
-  // catches the legacy v1 `tasks_transition` verb whose terminality
-  // depends on `tool_input.status` rather than on the tool name alone.
-  const rawToolNameMatched = toolMatches(toolName, lifecycle.expireOnToolMatch);
-  // Legacy v1 `tasks_transition`: only `status=done` releases the work
-  // claim (per task_finish docs: "The work claim is cleared when going
-  // to done and kept when going to review"). open / in_progress / review
-  // / missing status keep the marker so subsequent agent work on the
-  // same task continues to satisfy the gate.
-  const tasksTransitionStatusOk =
-    toolName === "mcp__agent-tasks__tasks_transition"
-      ? extractTasksTransitionStatus(event.tool_input) === "done"
-      : true;
-  const toolNameMatched = rawToolNameMatched && tasksTransitionStatusOk;
-  // Bash check only runs when the event is actually a Bash call; an MCP
-  // tool whose name happens to match a regex is not a Bash boundary.
-  const bashRegex =
-    toolName === "Bash"
-      ? bashCommandMatches(extractBashCommand(event.tool_input), lifecycle.expireOnBashMatch)
-      : undefined;
-  if (!toolNameMatched && bashRegex === undefined) {
-    const detail = !rawToolNameMatched
+  // tool-name / bash-command boundary match (shared with the Codex
+  // sibling hook via matchPostToolUseBoundary, task a1348c89). Bash
+  // check only runs when the event is actually a Bash call; an MCP tool
+  // whose name happens to match a regex is not a Bash boundary.
+  const boundary = matchPostToolUseBoundary(toolName, event.tool_input, lifecycle);
+  if (!boundary.matched) {
+    const detail = !boundary.rawToolNameMatched
       ? toolName === "Bash"
         ? `Bash command did not match any expire_on_bash_match regex`
         : `tool ${toolName} not in expire_on_tool_match`
@@ -304,63 +218,33 @@ export async function runPackHookPostToolUseCli(
     );
   }
 
-  // The marker may already be absent (operator revoked, prior expiry).
-  // Always log the attempt so the diagnostic trail names the boundary
-  // tool; the markerCleared flag distinguishes the two paths.
-  // clearApprovalMarker swallows errors and uses force:true, so we
-  // probe the marker path first to set markerCleared accurately.
-  const markerPath = approvalMarkerPathFor(generatedDir, sessionId);
-  const wasPresent = existsSync(markerPath);
-  clearApprovalMarker(generatedDir, sessionId);
-
-  // Task-scoped marker cleanup (harness/1ee26e77). Only when the
-  // matched tool is an MCP task-transition verb whose tool_input.taskId
-  // names a specific task; Bash regex boundaries don't carry a taskId
-  // by design.
-  let taskMarkerCleared = false;
-  let clearedTaskId = "";
-  if (toolNameMatched) {
-    const taskId = extractTaskId(event.tool_input);
-    if (taskId !== "") {
-      const taskMarkerPath = taskApprovalMarkerPathFor(generatedDir, taskId);
-      if (existsSync(taskMarkerPath)) {
-        clearTaskApprovalMarker(generatedDir, taskId);
-        taskMarkerCleared = true;
-        clearedTaskId = taskId;
-      }
-    }
-  }
-
-  // Persisted-report expiry (harness/1ee26e77 follow-up). Closes the
-  // silent bypass that existed since PR #172: marker-deletion alone
-  // did not invalidate the persisted-report fallback the gate consults
-  // when the marker is absent, so the next Edit/Write/Bash silently
-  // re-approved via the report even though the marker had just been
-  // expired. Best-effort; a missing reports dir or unrelated read
-  // failure is logged but does not break the hook.
+  // Clear the session marker, the task-scoped marker (when applicable),
+  // and expire the persisted report — same side effects the Codex
+  // sibling hook applies via the shared `applyPostToolUseExpiry`.
   const reportsDir = opts.reportsDir ?? defaultReportsDir();
-  const reportExpiry = expirePersistedReport(reportsDir, sessionId, opts.now);
-  const persistedReportExpired = reportExpiry.ok;
+  const expiry = applyPostToolUseExpiry(
+    generatedDir,
+    sessionId,
+    event.tool_input,
+    boundary.toolNameMatched,
+    reportsDir,
+    opts.now,
+  );
 
-  const matchSource = bashRegex !== undefined
-    ? `bash regex /${bashRegex.source}/`
-    : `tool name`;
-  const taskNote = taskMarkerCleared
-    ? `; also cleared task marker for task ${clearedTaskId}`
-    : "";
-  const reportNote = reportExpiry.ok
-    ? `; expired persisted report ${reportExpiry.filePath}`
-    : `; persisted-report expiry skipped (${reportExpiry.reason})`;
-  const diagnostic = wasPresent
-    ? `harness pack hook post-tool-use: expired approval marker for session ${sessionId} after ${toolName} (${matchSource})${taskNote}${reportNote}`
-    : `harness pack hook post-tool-use: ${toolName} matched ${matchSource} but no marker present for session ${sessionId}${taskNote}${reportNote}`;
+  const diagnostic = describePostToolUseExpiry(
+    "harness pack hook post-tool-use",
+    sessionId,
+    toolName,
+    boundary.bashRegex,
+    expiry,
+  );
   stderr.write(`${diagnostic}\n`);
   return {
     exitCode: 0,
     matchedExpiry: true,
-    markerCleared: wasPresent,
-    taskMarkerCleared,
-    persistedReportExpired,
+    markerCleared: expiry.wasMarkerPresent,
+    taskMarkerCleared: expiry.taskMarkerCleared,
+    persistedReportExpired: expiry.persistedReportExpired,
     diagnostic,
   };
 }

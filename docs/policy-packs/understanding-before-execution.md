@@ -240,7 +240,9 @@ Shipped in Phase 6 #6. Apply the pack with the Codex runtime selector:
 harness apply --runtime codex --install --config <path>/harness.yaml
 ```
 
-This emits `harness.generated/codex/config.toml` (instead of `settings.json`) with harness-managed Codex hook groups such as `[[hooks.UserPromptSubmit]]`, `[[hooks.Stop]]`, and `[[hooks.PreToolUse]]`. Each group contains a nested command hook entry (`hooks = [{ type = "command", command = "...", timeout = 5 }]`); the PreToolUse blocker uses the expanded matcher `apply_patch|Bash|shell|exec_command|functions.exec_command`. With `--install`, harness replaces only the marked harness-managed block under `~/.codex/config.toml`; harness owns hook wiring only, not the operator-owned model/auth/sandbox config.
+This emits `harness.generated/codex/config.toml` (instead of `settings.json`) with harness-managed Codex hook groups such as `[[hooks.UserPromptSubmit]]`, `[[hooks.Stop]]`, `[[hooks.PreToolUse]]`, and `[[hooks.PostToolUse]]`. Each group contains a nested command hook entry (`hooks = [{ type = "command", command = "...", timeout = 5 }]`); the PreToolUse blocker uses the expanded matcher `apply_patch|Bash|shell|exec_command|functions.exec_command`. With `--install`, harness replaces only the marked harness-managed block under `~/.codex/config.toml`; harness owns hook wiring only, not the operator-owned model/auth/sandbox config.
+
+The `PostToolUse` group (task a1348c89) is the Codex parity counterpart of the Claude `post-tool-use` marker-expiry hook (see "What the pack ships" below): `harness pack hook codex-post-tool-use` clears the approval marker (and expires the persisted report) once a configured task-boundary tool completes, so a Codex session's approval no longer only dies via `approval_lifecycle.max_age`. It shares its match/clear implementation with the Claude hook (`matchPostToolUseBoundary` / `applyPostToolUseExpiry` in `understanding-before-execution-runtime.ts`) and is emitted/suppressed under the exact same `approval_lifecycle` rules (default tool list, `mode: session` opt-out, custom `expire_on_tool_match` / `expire_on_bash_match`). Codex's shell-tool aliases (`Bash`/`shell`/`exec_command`/`functions.exec_command`) all count as "the Bash tool" for `expire_on_bash_match`, matching the PreToolUse blocker's own alias set. Unlike the Claude branch, Codex does not (yet) get the active-claim tracker or the stay-in-scope reminder — see "Out of scope for v1" below.
 
 Wire format for the Codex adapter scripts (stdin):
 
@@ -257,6 +259,8 @@ Wire format for the Codex adapter scripts (stdin):
 ```
 
 Block contract (PreToolUse): exit 2 + reason on stderr. Allow contract: exit 0, optional diagnostic on stderr. Injector contract (UserPromptSubmit): instruction template on stdout for Codex to prepend to `additional_instructions`.
+
+`codex-post-tool-use` reads the same envelope but prefers `tool_input` over `raw_input` when both are present (`tool_input` is the field name the published Codex `PostToolUse` payload actually sends, matching Claude Code's own convention; `raw_input` remains accepted for any shim built against harness's earlier portable wire format). It also resolves `session_id` from `$CODEX_SESSION_ID` ahead of `$CLAUDE_CODE_SESSION_ID` / `$CLAUDE_SESSION_ID` when the event omits it.
 
 `--target` and `--runtime codex` are mutually exclusive: `--target` wires the Claude-Code-shaped settings.json into a destination path, which the codex runtime does not produce. The two runtimes are mutually exclusive for v1; running apply against a single manifest under both runtimes requires two invocations into separate generated trees.
 
@@ -292,6 +296,7 @@ After capture, `harness approve understanding --session <id>` flips `approvalSta
 ### Out of scope for v1 (still tracked as follow-ups)
 
 - A Codex-side permission-profile translator. `harness apply --runtime codex` warns when `policy_packs[].config.permission_profile` is set; the codex generator does not yet emit a Codex sandbox stanza.
+- No Codex active-claim tracker or stay-in-scope reminder. The Claude branch additionally emits the `track-active-claim` and `stay-in-scope` `PostToolUse` hooks (see below); the Codex branch emits only the marker-expiry `PostToolUse` hook (task a1348c89). A Codex session honors an existing task-scoped marker but cannot itself produce the active-claim file `harness approve understanding` reads to auto-resolve `--task`.
 
 ## What the pack ships at apply time
 
@@ -305,6 +310,7 @@ After capture, `harness approve understanding --session <id>` flips `approvalSta
   - `PostToolUse` active-claim tracker: `harness pack hook track-active-claim` writes `harness.generated/active-claim` on `task_start` and clears it on `task_finish` / `task_abandon` (harness/494fd1e5). Lets `harness approve understanding` auto-resolve the current task id without `--task`.
   - `PostToolUse` stay-in-scope reminder: `harness pack hook stay-in-scope` emits a one-line stderr reminder + JSONL audit row when a `task_create` / `tasks_create` / `tasks_update` payload looks like a review-derived follow-up. Soft (does not block); surfaces the rule that small reviewer findings should be fixed inline in the parent PR rather than carved out as separate tasks. See [Stay-in-scope reminder](#stay-in-scope-reminder).
   - Hook names are namespaced (`policy-pack:understanding-before-execution:<role>`) to avoid collisions with operator-authored hooks.
+- Four hooks in the harness-managed `codex/config.toml` (`--runtime codex`): `UserPromptSubmit` injector, `Stop` capture, `PreToolUse` blocker, and the `PostToolUse` marker-expiry hook (`harness pack hook codex-post-tool-use`, task a1348c89) — same default task-boundary tool list and `approval_lifecycle` config surface as the Claude `post-tool-use` hook above, plus Codex's shell-tool aliases for `expire_on_bash_match`. No active-claim tracker or stay-in-scope reminder on Codex yet (see "Out of scope for v1").
 - An operator audit copy at `harness.generated/policy-packs/understanding-before-execution/instructions.md`. This file documents what the pack is doing in the operator's voice (mode, hook list, approval flow); the agent-facing prompt is injected at runtime by the `UserPromptSubmit` hook and lives in the npm package, not here. Drift on the audit copy means an operator edited something they shouldn't have, and `harness diff --since-apply` flags it.
 
 ## Approving an Understanding Report

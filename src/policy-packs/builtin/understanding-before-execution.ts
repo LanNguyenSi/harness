@@ -98,6 +98,13 @@ const PRE_TOOL_USE_COMMAND_CLAUDE = "harness pack hook pre-tool-use";
 //   - Stop-equivalent capture into `.understanding-gate/reports/`
 //     (Phase 6 #6 follow-up).
 //   - PreToolUse blocker on apply_patch plus Codex shell aliases (Phase 6 #6).
+//   - PostToolUse marker-expiry (task a1348c89): Codex's published hooks
+//     reference (developers.openai.com/codex/hooks) documents
+//     `PostToolUse` as a first-class event — `[[hooks.PostToolUse]]`
+//     with a `matcher` on `tool_name`, same allow/exit-0 or
+//     block/exit-2 contract as PreToolUse. Mirrors the Claude
+//     `post-tool-use` hook via the shared matching/clearing core in
+//     understanding-before-execution-runtime.ts.
 //
 // Cross-runtime sessions can still approve from a Claude Code report:
 // the ledger tag is the canonical source for harnessed sessions,
@@ -109,6 +116,7 @@ const COMMAND_USER_PROMPT_SUBMIT_CODEX =
   "harness pack hook codex-user-prompt-submit";
 const COMMAND_STOP_CODEX = "harness pack hook codex-stop";
 const COMMAND_PRE_TOOL_USE_CODEX = "harness pack hook codex-pre-tool-use";
+const COMMAND_POST_TOOL_USE_CODEX = "harness pack hook codex-post-tool-use";
 
 export function isMode(value: unknown): value is Mode {
   return (
@@ -352,6 +360,29 @@ function buildHooks(
         description:
           "Codex adapter: block apply_patch and Codex shell tools until an approved Understanding Report exists for the session. Consults both the evidence-ledger tag and the persisted JSON report.",
       },
+      // PostToolUse marker-expiry (task a1348c89). Same boundary-tool
+      // list + `match` computation as the Claude hook below
+      // (resolveExpireOnToolMatch / postToolUseMatchPattern) so Codex
+      // expires on the identical default set (agent-tasks task_finish /
+      // task_abandon / pull_requests_merge / tasks_transition), plus
+      // whatever `expire_on_bash_match` regexes the operator configured
+      // (the gh-cli-workflow boundary, most relevant on Codex where no
+      // agent-tasks MCP surface is assumed wired by default).
+      ...((): Hook[] => {
+        const { tools, emitHook } = resolveExpireOnToolMatch(pack);
+        if (!emitHook) return [];
+        const hook: Hook = {
+          name: `${HOOK_NAME_PREFIX}:codex:post-tool-use`,
+          event: "PostToolUse",
+          match: postToolUseMatchPattern(tools),
+          command: wrap(COMMAND_POST_TOOL_USE_CODEX),
+          blocking: false,
+          budget_ms: 2000,
+          description:
+            "Codex adapter: expire the approval marker AND the persisted report after a task-completion boundary tool (default: agent-tasks task_finish / task_abandon / pull_requests_merge) or an expire_on_bash_match command boundary. Forces a fresh Understanding Report on the next task.",
+        };
+        return [hook];
+      })(),
     ];
   }
   // `min_version` floor on the npm-backed bins: 0.4.0 ships the

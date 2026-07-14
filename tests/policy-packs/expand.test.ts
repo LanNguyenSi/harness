@@ -213,6 +213,61 @@ describe("expandPolicyPacks", () => {
     );
   });
 
+  it("Codex adapter contributes a PostToolUse marker-expiry hook (task a1348c89 — closes the parity gap)", () => {
+    // Before task a1348c89 the Codex branch of buildHooks emitted exactly
+    // 3 hooks (UserPromptSubmit + Stop + PreToolUse); approval_lifecycle
+    // boundaries never fired in Codex sessions. This pins the 4th hook.
+    const m = buildManifest([{ name: "understanding-before-execution" }]);
+    const r = expandPolicyPacks(m, "codex");
+    expect(r.hooks).toHaveLength(4);
+    const post = r.hooks.find((h) => h.event === "PostToolUse");
+    expect(post).toBeDefined();
+    expect(post?.command).toBe("harness pack hook codex-post-tool-use");
+    expect(post?.blocking).toBe(false);
+    // Same default match pattern as the Claude sibling — same
+    // resolveExpireOnToolMatch/postToolUseMatchPattern computation, so
+    // Codex expires on the identical default tool-boundary set.
+    expect(post?.match).toBe(
+      "^(?:mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__pull_requests_merge|mcp__agent-tasks__tasks_transition)$",
+    );
+  });
+
+  it("Codex PostToolUse hook is suppressed when approval_lifecycle.mode = session (parity with the Claude opt-out)", () => {
+    const m = buildManifest([
+      {
+        name: "understanding-before-execution",
+        config: { approval_lifecycle: { mode: "session" } },
+      },
+    ]);
+    const r = expandPolicyPacks(m, "codex");
+    expect(r.hooks).toHaveLength(3);
+    expect(r.hooks.some((h) => h.event === "PostToolUse")).toBe(false);
+  });
+
+  it("Codex PostToolUse hook match pattern reflects a custom expire_on_tool_match list", () => {
+    const m = buildManifest([
+      {
+        name: "understanding-before-execution",
+        config: {
+          approval_lifecycle: {
+            expire_on_tool_match: ["mcp__linear__issue_close", "Bash"],
+          },
+        },
+      },
+    ]);
+    const r = expandPolicyPacks(m, "codex");
+    const post = r.hooks.find((h) => h.event === "PostToolUse");
+    expect(post?.match).toBe("^(?:mcp__linear__issue_close|Bash)$");
+  });
+
+  it("prefixes the Codex PostToolUse command with UNDERSTANDING_GATE_REPORT_DIR when reportsDir is supplied", () => {
+    const m = buildManifest([{ name: "understanding-before-execution" }]);
+    const r = expandPolicyPacks(m, "codex", { reportsDir: "/tmp/reports" });
+    expect(r.hooks.find((h) => h.event === "PostToolUse")?.command).toBe(
+      "UNDERSTANDING_GATE_REPORT_DIR='/tmp/reports' harness pack hook codex-post-tool-use",
+    );
+  });
+
   it("uses default mode 'grill_me' when config omits mode", () => {
     const m = buildManifest([{ name: "understanding-before-execution" }]);
     const r = expandPolicyPacks(m);
