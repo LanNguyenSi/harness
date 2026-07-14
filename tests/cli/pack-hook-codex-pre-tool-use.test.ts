@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runPackHookCodexPreToolUseCli } from "../../src/cli/pack/hook-codex-pre-tool-use.js";
 import type { LedgerEntry } from "../../src/policies/index.js";
 import {
+  clearApprovalMarker,
   writeActiveClaim,
   writeApprovalMarker,
   writeTaskApprovalMarker,
@@ -718,5 +719,137 @@ describe("pack hook codex-pre-tool-use blocker — malformed config.ux (task 19e
     // Full prefix pins the label->hook binding (task 19e293c6 review).
     expect(out).toContain("harness pack hook codex: config.ux ignored (");
     expect(out).toMatch(/BLOCK: no approval marker/);
+  });
+});
+
+describe("pack hook codex-pre-tool-use blocker — recovery git-commit exemption after approval expiry (task 6e888423)", () => {
+  // Codex parity with the Claude hook's fix (pack-hook-pre-tool-use.test.ts).
+  // Both hooks share checkOperatorApprovalMarkers + isRecoveryGitCommit so
+  // this class of Claude/Codex drift (task e7c2ec3c precedent) cannot
+  // recur silently.
+  function manifestWithMaxAge(): Manifest {
+    return parseManifest({
+      version: 1,
+      policy_packs: [
+        {
+          name: "understanding-before-execution",
+          enabled: true,
+          config: { approval_lifecycle: { max_age: "4h" } },
+        },
+      ],
+    });
+  }
+
+  function expireMarker(generatedDir: string, sessionId: string): void {
+    writeApprovalMarker(generatedDir, sessionId, {
+      approvedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      approvedBy: "test-operator",
+    });
+  }
+
+  it("CONTROL — an expired marker still hard-blocks apply_patch (the wedge is real)", async () => {
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    expireMarker(generatedDir, "sess-codex");
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(event()), // tool_name: "apply_patch"
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.exitCode).toBe(2);
+    expect(result.approvalCheck.source).toBe("none");
+  });
+
+  it("FIX — an expired marker no longer blocks the bare recovery `git commit` over shell", async () => {
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    expireMarker(generatedDir, "sess-codex");
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(
+        event({
+          tool_name: "shell",
+          raw_input: { command: 'git commit -am "fix: address reviewer feedback"' },
+        }),
+      ),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.approvalCheck.source).toBe("recovery-commit");
+    expect(stderr.read()).toMatch(/recovery-commit exemption/);
+  });
+
+  it("does not widen: a chained `git commit && ...` is not exempted", async () => {
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    expireMarker(generatedDir, "sess-codex");
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(
+        event({
+          tool_name: "exec_command",
+          raw_input: { cmd: 'git commit -am "msg" && rm -rf /tmp/x' },
+        }),
+      ),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+  });
+
+  it("a session that was NEVER approved still hard-blocks the same git-commit shape", async () => {
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-codex-never-approved",
+          tool_name: "shell",
+          raw_input: { command: 'git commit -am "msg"' },
+        }),
+      ),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.approvalCheck.source).toBe("none");
+  });
+
+  it("RE-ARMS for a new task: a marker CLEARED by a task-completion boundary tool still hard-blocks the next task's first git commit", async () => {
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-codex", {
+      approvedAt: new Date().toISOString(),
+      approvedBy: "test-operator",
+    });
+    clearApprovalMarker(generatedDir, "sess-codex");
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(
+        event({
+          tool_name: "shell",
+          raw_input: { command: 'git commit -am "first commit of the new task"' },
+        }),
+      ),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.approvalCheck.source).toBe("none");
   });
 });

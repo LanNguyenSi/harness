@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runPackHookPreToolUseCli } from "../../src/cli/pack/hook-pre-tool-use.js";
 import type { LedgerEntry } from "../../src/policies/index.js";
 import {
+  clearApprovalMarker,
   writeActiveClaim,
   writeApprovalMarker,
   writeTaskApprovalMarker,
@@ -1312,5 +1313,253 @@ describe("pack hook pre-tool-use blocker — report-heredoc escape (task 61fd36d
     });
     expect(result.blocked).toBe(true);
     expect(result.asked).toBeFalsy();
+  });
+});
+
+describe("pack hook pre-tool-use blocker — recovery git-commit exemption after approval expiry (task 6e888423)", () => {
+  // Reproduces the real hard-wedge: approval_lifecycle.max_age (4h in the
+  // full template) expires the marker independently of any
+  // task-completion boundary, which can land mid-task during a long
+  // reviewer-amendment loop. Before this fix, the recovery `git commit`
+  // that consolidates already-approved Edit/Write output into a new HEAD
+  // was hard-blocked exactly like any other Bash call, and only the
+  // operator could unblock it via `harness approve understanding`.
+  function manifestWithMaxAge(): Manifest {
+    return parseManifest({
+      version: 1,
+      policy_packs: [
+        {
+          name: "understanding-before-execution",
+          enabled: true,
+          config: { approval_lifecycle: { max_age: "4h" } },
+        },
+      ],
+    });
+  }
+
+  function expireMarker(generatedDir: string, sessionId: string): void {
+    writeApprovalMarker(generatedDir, sessionId, {
+      approvedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      approvedBy: "test-operator",
+    });
+  }
+
+  it("CONTROL — an expired marker still hard-blocks Edit (the wedge is real, and the fix must not widen to Edit)", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    expireMarker(generatedDir, "sess-1");
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(event({ tool_name: "Edit" })),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.approvalCheck.source).toBe("none");
+  });
+
+  it("FIX — an expired marker no longer blocks the bare recovery `git commit`", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    // A real operator approval existed 24h ago; approval_lifecycle.max_age
+    // is 4h, so it has since aged out mid-task.
+    expireMarker(generatedDir, "sess-1");
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "Bash",
+          tool_input: { command: 'git commit -am "fix: address reviewer feedback"' },
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.approvalCheck.source).toBe("recovery-commit");
+    expect(stderr.read()).toMatch(/recovery-commit exemption/);
+  });
+
+  it("does not widen: a following Edit in the SAME session still hard-blocks after the recovery commit was allowed", async () => {
+    // The exemption is a per-call pass-through, not a re-approval: it
+    // never rewrites or refreshes the marker, so the very next gated
+    // call still sees the same expired state.
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    expireMarker(generatedDir, "sess-1");
+    const commitResult = await runPackHookPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "Bash",
+          tool_input: { command: 'git commit -am "fix: address reviewer feedback"' },
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(commitResult.blocked).toBe(false);
+
+    const editResult = await runPackHookPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(event({ tool_name: "Edit" })),
+      stdout: bufferStream().stream,
+      stderr: bufferStream().stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(editResult.blocked).toBe(true);
+  });
+
+  it("does not widen: an unrelated Bash write is not exempted, only the narrow git-commit shape is", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    expireMarker(generatedDir, "sess-1");
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "Bash",
+          tool_input: { command: "rm -rf /tmp/scratch" },
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+  });
+
+  it("does not widen: a chained `git commit && ...` is not exempted (would smuggle unapproved work)", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    expireMarker(generatedDir, "sess-1");
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "Bash",
+          tool_input: { command: 'git commit -am "msg" && rm -rf /tmp/x' },
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+  });
+
+  it("a session that was NEVER approved still hard-blocks the same git-commit shape (expired requires prior approval, not just any Bash git commit)", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    // No marker ever written for this session.
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-never-approved",
+          tool_name: "Bash",
+          tool_input: { command: 'git commit -am "msg"' },
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.approvalCheck.source).toBe("none");
+  });
+
+  it("RE-ARMS for a new task: a marker CLEARED by a task-completion boundary tool still hard-blocks the next task's first git commit", async () => {
+    // Requirement: the gate must re-arm for genuinely new work. A marker
+    // that a task_finish/pull_requests_merge-style PostToolUse hook
+    // cleared reads as "missing" (expired:false), not "expired" — so
+    // this must NOT get the recovery-commit exemption even though the
+    // command shape is identical to the FIX test above.
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: new Date().toISOString(),
+      approvedBy: "test-operator",
+    });
+    clearApprovalMarker(generatedDir, "sess-1");
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "Bash",
+          tool_input: { command: 'git commit -am "first commit of the new task"' },
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.approvalCheck.source).toBe("none");
+  });
+
+  it("a persisted-report source that is still approved wins BEFORE the recovery-commit check even with an expired marker", async () => {
+    // Source-precedence control: when the persisted report independently
+    // satisfies the gate, the ordinary "persisted-report" source allows
+    // it — the recovery-commit path is never consulted.
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    expireMarker(generatedDir, "sess-1");
+    writeReport(reportsDir, "r1.json", {
+      sessionId: "sess-1",
+      approvalStatus: "approved",
+      approvedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+    });
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "Bash",
+          tool_input: { command: 'git commit -am "msg"' },
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir,
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.approvalCheck.source).toBe("persisted-report");
   });
 });
