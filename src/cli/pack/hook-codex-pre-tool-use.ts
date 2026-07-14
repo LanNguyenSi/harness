@@ -43,6 +43,7 @@ import {
   checkHookPause,
   loadManifestOrInjected,
   parseConfigUx,
+  pickString,
   readStdin,
 } from "./hook-bootstrap.js";
 
@@ -90,18 +91,14 @@ interface CodexEventEnvelope {
 }
 
 
-function pickString(...candidates: unknown[]): string | undefined {
-  for (const c of candidates) {
-    if (typeof c === "string" && c.length > 0) return c;
-  }
-  return undefined;
-}
-
 function findGroundingMcp(manifest: Manifest): McpServer | null {
   return manifest.tools.mcp.find((m) => m.name === "grounding-mcp") ?? null;
 }
 
-const CODEX_SHELL_TOOLS: ReadonlySet<string> = new Set([
+// Exported so sibling Codex hooks (e.g. hook-codex-post-tool-use.ts) that
+// need the same "is this tool call shell-equivalent" test share one
+// definition instead of re-declaring the alias list (task a1348c89).
+export const CODEX_SHELL_TOOLS: ReadonlySet<string> = new Set([
   "Bash",
   "shell",
   "exec_command",

@@ -37,6 +37,7 @@ import { runPackHookPostToolUseCli } from "./pack/hook-post-tool-use.js";
 import { runPackHookTrackActiveClaimCli } from "./pack/hook-track-active-claim.js";
 import { runPackHookStayInScopeCli } from "./pack/hook-stay-in-scope.js";
 import { runPackHookCodexPreToolUseCli } from "./pack/hook-codex-pre-tool-use.js";
+import { runPackHookCodexPostToolUseCli } from "./pack/hook-codex-post-tool-use.js";
 import { runPackHookCodexStopCli } from "./pack/hook-codex-stop.js";
 import { runPackHookCodexUserPromptSubmitCli } from "./pack/hook-codex-user-prompt-submit.js";
 import { isRuntime, KNOWN_RUNTIMES, type Runtime } from "../policy-packs/index.js";
@@ -1232,6 +1233,31 @@ export function buildProgram(opts: RunOptions = {}): Command {
         if (result.exitCode !== 0) {
           throw new HarnessExitError("", result.exitCode);
         }
+      },
+    );
+
+  packHookCmd
+    .command("codex-post-tool-use")
+    .description(
+      "Codex PostToolUse marker-expiry: read tool-event JSON from stdin, delete the per-session (and, where applicable, per-task) approval marker and expire the persisted report when the just-completed tool matches config.approval_lifecycle.expire_on_tool_match / expire_on_bash_match (task a1348c89, mirrors the Claude `post-tool-use` hook).",
+    )
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option("--pack <name>", "pack name to evaluate (default: understanding-before-execution)")
+    .option("--reports-dir <path>", "override the persisted-report directory (default: ./.understanding-gate/reports)")
+    .action(
+      async (options: {
+        config?: string;
+        project?: string;
+        pack?: string;
+        reportsDir?: string;
+      }) => {
+        const cliOpts: Parameters<typeof runPackHookCodexPostToolUseCli>[0] = {};
+        if (options.config) cliOpts.configPath = options.config;
+        if (options.project) cliOpts.project = options.project;
+        if (options.pack) cliOpts.pack = options.pack;
+        if (options.reportsDir) cliOpts.reportsDir = options.reportsDir;
+        await runPackHookCodexPostToolUseCli(cliOpts);
       },
     );
 

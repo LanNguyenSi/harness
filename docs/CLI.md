@@ -62,6 +62,7 @@ These are called by Claude Code via `settings.json`; you usually do not run them
 | `harness pack hook codex-pre-tool-use` | Codex variant of `pre-tool-use`. The generator that emits its `settings.json` entry pins a 2s timeout floor as of v0.29.0. |
 | `harness pack hook codex-user-prompt-submit` | Codex `UserPromptSubmit` entry. |
 | `harness pack hook codex-stop` | Codex `Stop` entry. |
+| `harness pack hook codex-post-tool-use` | Codex variant of `post-tool-use` (task a1348c89): expires the approval marker (and the persisted report) after a task-boundary tool fires. Shares the match/clear logic with the Claude hook via `matchPostToolUseBoundary` / `applyPostToolUseExpiry`. |
 | `harness session-start preflight` | `SessionStart` companion: emits the per-repo `preflight:` ledger tag the Risk Gate's preflight policy looks for. Also exposed as the top-level alias `harness preflight`. |
 | `harness session-start branch-check` | `SessionStart` companion: emits a one-shot warning if the current branch already has work that should be a fresh task branch (per `feedback-one-branch-per-task`). |
 

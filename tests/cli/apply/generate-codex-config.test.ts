@@ -3,6 +3,7 @@ import {
   CODEX_GENERATED_HEADER_LINE,
   generateCodexConfig,
 } from "../../../src/cli/apply/generate-codex-config.js";
+import { expandPolicyPacks } from "../../../src/policy-packs/expand.js";
 import { parseManifest, type Manifest } from "../../../src/schema/index.js";
 
 function manifest(extra: Record<string, unknown> = {}): Manifest {
@@ -140,6 +141,36 @@ describe("generateCodexConfig", () => {
     expect(content).toContain(
       'hooks = [{ type = "command", command = "harness policy intercept --hook policy-intercept-agent-tasks", timeout = 2 }]',
     );
+  });
+
+  it("routes an MCP task_finish call (and its variant forms) through the real emitted understanding-before-execution PostToolUse matcher (task a1348c89 generator-layer pin)", () => {
+    // End-to-end through the real pack expansion (not a hand-authored
+    // hook object): `expandPolicyPacks` builds the understanding-gate
+    // pack's Codex hooks exactly as `harness apply --runtime codex`
+    // would, then `generateCodexConfig` renders them into TOML. This is
+    // the generator-layer control the task a1348c89 review asked for —
+    // positive: the real config.toml PostToolUse matcher, once compiled
+    // as a regex, matches a canonical `task_finish` call AND the
+    // server-hyphen/underscore + dotted MCP name variants Codex may
+    // send for the identical tool. Negative: an unrelated tool name
+    // does not match. This is the MCP tool-name side only —
+    // expire_on_bash_match Bash routing is a separate, still-open gap
+    // (agent-tasks bea04a03), deliberately not asserted here.
+    const m = parseManifest({
+      version: 1,
+      policy_packs: [{ name: "understanding-before-execution" }],
+    });
+    const { hooks } = expandPolicyPacks(m, "codex");
+    const { content } = generateCodexConfig(parseManifest({ version: 1, hooks }));
+
+    const matcher = content.match(/\[\[hooks\.PostToolUse\]\]\nmatcher = "([^"]+)"/)?.[1];
+    expect(matcher).toBeDefined();
+
+    const re = new RegExp(matcher!);
+    expect(re.test("mcp__agent-tasks__task_finish")).toBe(true); // canonical
+    expect(re.test("mcp__agent-tasks__.task_finish")).toBe(true); // dotted
+    expect(re.test("mcp__agent_tasks__task_finish")).toBe(true); // underscore-server
+    expect(re.test("Read")).toBe(false); // negative control: unrelated tool
   });
 
   it("keeps the 2s policy-intercept floor when budget_ms ceil already meets it", () => {

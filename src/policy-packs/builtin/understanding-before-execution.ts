@@ -98,6 +98,13 @@ const PRE_TOOL_USE_COMMAND_CLAUDE = "harness pack hook pre-tool-use";
 //   - Stop-equivalent capture into `.understanding-gate/reports/`
 //     (Phase 6 #6 follow-up).
 //   - PreToolUse blocker on apply_patch plus Codex shell aliases (Phase 6 #6).
+//   - PostToolUse marker-expiry (task a1348c89): Codex's published hooks
+//     reference (developers.openai.com/codex/hooks) documents
+//     `PostToolUse` as a first-class event — `[[hooks.PostToolUse]]`
+//     with a `matcher` on `tool_name`, same allow/exit-0 or
+//     block/exit-2 contract as PreToolUse. Mirrors the Claude
+//     `post-tool-use` hook via the shared matching/clearing core in
+//     understanding-before-execution-runtime.ts.
 //
 // Cross-runtime sessions can still approve from a Claude Code report:
 // the ledger tag is the canonical source for harnessed sessions,
@@ -109,6 +116,7 @@ const COMMAND_USER_PROMPT_SUBMIT_CODEX =
   "harness pack hook codex-user-prompt-submit";
 const COMMAND_STOP_CODEX = "harness pack hook codex-stop";
 const COMMAND_PRE_TOOL_USE_CODEX = "harness pack hook codex-pre-tool-use";
+const COMMAND_POST_TOOL_USE_CODEX = "harness pack hook codex-post-tool-use";
 
 export function isMode(value: unknown): value is Mode {
   return (
@@ -277,6 +285,41 @@ function postToolUseMatchPattern(tools: ReadonlyArray<string>): string {
   return `^(?:${escaped.join("|")})$`;
 }
 
+/**
+ * Compose the CODEX PostToolUse `match` field — deliberately NOT
+ * `postToolUseMatchPattern` above (review finding on task a1348c89,
+ * verified via a direct probe of `expandCodexHookMatchPattern`). The
+ * Claude builder anchors its output in `^(?:...)$` and regex-escapes
+ * every tool name; `expandCodexHookMatchPattern` in
+ * `generate-codex-config.ts` only alias-expands a match string whose
+ * `|`-split tokens are ALL "simple" (`isSimpleToolPatternToken`,
+ * `/^[A-Za-z0-9_.:-]+$/`) — the anchor characters `^`, `(`, `?` on the
+ * first/last token trip that guard, so an anchored match is passed
+ * through UNCHANGED at emit time. Concretely: a Codex session sending
+ * the dotted `mcp__agent-tasks__.task_finish` or an underscore-server
+ * `mcp__agent_tasks__task_finish` variant would never even reach the
+ * hook — Codex's own dispatcher tests `tool_name` against the emitted
+ * `matcher`, and the anchored form only contains the canonical forms.
+ * (`matchPostToolUseBoundary`'s alias-aware body-side fix, same task,
+ * only helps once the hook is actually invoked — it cannot compensate
+ * for a dispatcher that never calls it.)
+ *
+ * This builder instead emits a BARE, unescaped `|`-joined list — same
+ * shape as the existing `PRE_TOOL_USE_MATCH_CODEX` constant above —
+ * so every token stays "simple" and `expandCodexHookMatchPattern`
+ * expands each MCP tool name into its full alias set (server
+ * hyphen/underscore swap, the `mcp__server__.tool` dotted form) at
+ * `harness apply --runtime codex` time, exactly like the Codex
+ * PreToolUse blocker's own matcher already does. No anchoring is
+ * needed here: Codex's own hook dispatch (like the sibling PreToolUse
+ * matcher) is unanchored substring-style matching already, and this
+ * keeps the Codex and Claude builders independently tunable rather
+ * than smuggling a Codex-only branch into the shared Claude helper.
+ */
+function codexPostToolUseMatchPattern(tools: ReadonlyArray<string>): string {
+  return tools.join("|");
+}
+
 function resolveExpireOnToolMatch(pack: PolicyPack): {
   tools: string[];
   emitHook: boolean;
@@ -352,6 +395,39 @@ function buildHooks(
         description:
           "Codex adapter: block apply_patch and Codex shell tools until an approved Understanding Report exists for the session. Consults both the evidence-ledger tag and the persisted JSON report.",
       },
+      // PostToolUse marker-expiry (task a1348c89). Same boundary-tool
+      // list as the Claude hook below (resolveExpireOnToolMatch) so
+      // Codex expires on the identical default set (agent-tasks
+      // task_finish / task_abandon / pull_requests_merge /
+      // tasks_transition) — but a DIFFERENT `match` builder
+      // (`codexPostToolUseMatchPattern`, not `postToolUseMatchPattern`):
+      // see that function's own doc comment for why the Claude builder's
+      // anchored regex form silently defeats the Codex generator's MCP
+      // tool-name alias expansion (review finding on this same task).
+      // NOTE: `match` is built ONLY from `expire_on_tool_match` — it
+      // never includes "Bash" or any shell alias, on this runtime OR
+      // the Claude one below, so an `expire_on_bash_match` command
+      // boundary is evaluated by the hook body once invoked but is
+      // never actually ROUTED to it by this trigger today. Pre-existing
+      // limitation shared with Claude, not introduced by this task;
+      // tracked separately (agent-tasks bea04a03). Do not describe this
+      // hook as covering expire_on_bash_match until that follow-up
+      // lands.
+      ...((): Hook[] => {
+        const { tools, emitHook } = resolveExpireOnToolMatch(pack);
+        if (!emitHook) return [];
+        const hook: Hook = {
+          name: `${HOOK_NAME_PREFIX}:codex:post-tool-use`,
+          event: "PostToolUse",
+          match: codexPostToolUseMatchPattern(tools),
+          command: wrap(COMMAND_POST_TOOL_USE_CODEX),
+          blocking: false,
+          budget_ms: 2000,
+          description:
+            "Codex adapter: expire the approval marker AND the persisted report after a task-completion boundary tool (default: agent-tasks task_finish / task_abandon / pull_requests_merge). Forces a fresh Understanding Report on the next task.",
+        };
+        return [hook];
+      })(),
     ];
   }
   // `min_version` floor on the npm-backed bins: 0.4.0 ships the

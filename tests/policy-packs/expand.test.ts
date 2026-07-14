@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { expandPolicyPacks } from "../../src/policy-packs/expand.js";
 import { parseManifest } from "../../src/schema/index.js";
+import { expandCodexHookMatchPattern } from "../../src/runtime/tool-name-aliases.js";
 
 function buildManifest(
   packs: unknown[],
@@ -210,6 +211,90 @@ describe("expandPolicyPacks", () => {
     );
     expect(r.hooks.find((h) => h.event === "PreToolUse")?.match).toBe(
       "apply_patch|Bash|shell|exec_command|functions.exec_command",
+    );
+  });
+
+  it("Codex adapter contributes a PostToolUse marker-expiry hook (task a1348c89 — closes the parity gap)", () => {
+    // Before task a1348c89 the Codex branch of buildHooks emitted exactly
+    // 3 hooks (UserPromptSubmit + Stop + PreToolUse); approval_lifecycle
+    // boundaries never fired in Codex sessions. This pins the 4th hook.
+    const m = buildManifest([{ name: "understanding-before-execution" }]);
+    const r = expandPolicyPacks(m, "codex");
+    expect(r.hooks).toHaveLength(4);
+    const post = r.hooks.find((h) => h.event === "PostToolUse");
+    expect(post).toBeDefined();
+    expect(post?.command).toBe("harness pack hook codex-post-tool-use");
+    expect(post?.blocking).toBe(false);
+    // Same default tool-boundary set as the Claude sibling
+    // (resolveExpireOnToolMatch), but a BARE pipe list, not the Claude
+    // builder's anchored `^(?:...)$` form (review finding on task
+    // a1348c89, codexPostToolUseMatchPattern's own doc comment): the
+    // anchor characters trip `expandCodexHookMatchPattern`'s "simple
+    // token" guard in the generator and would silently skip the MCP
+    // tool-name alias expansion Codex needs.
+    expect(post?.match).toBe(
+      "mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__pull_requests_merge|mcp__agent-tasks__tasks_transition",
+    );
+  });
+
+  it("Codex PostToolUse hook is suppressed when approval_lifecycle.mode = session (parity with the Claude opt-out)", () => {
+    const m = buildManifest([
+      {
+        name: "understanding-before-execution",
+        config: { approval_lifecycle: { mode: "session" } },
+      },
+    ]);
+    const r = expandPolicyPacks(m, "codex");
+    expect(r.hooks).toHaveLength(3);
+    expect(r.hooks.some((h) => h.event === "PostToolUse")).toBe(false);
+  });
+
+  it("Codex PostToolUse hook match pattern reflects a custom expire_on_tool_match list", () => {
+    const m = buildManifest([
+      {
+        name: "understanding-before-execution",
+        config: {
+          approval_lifecycle: {
+            expire_on_tool_match: ["mcp__linear__issue_close", "Bash"],
+          },
+        },
+      },
+    ]);
+    const r = expandPolicyPacks(m, "codex");
+    const post = r.hooks.find((h) => h.event === "PostToolUse");
+    expect(post?.match).toBe("mcp__linear__issue_close|Bash");
+  });
+
+  it("the emitted Codex PostToolUse match string is alias-expandable and routes MCP tool-name variants (task a1348c89 review finding)", () => {
+    // The whole point of switching to a bare pipe list
+    // (codexPostToolUseMatchPattern) instead of the anchored Claude form:
+    // `expandCodexHookMatchPattern` — the exact function
+    // `generate-codex-config.ts` runs over every Codex hook's `match`
+    // field at `harness apply` time — must actually widen it. Positive
+    // control: the canonical and all three variant forms match once
+    // expanded. Negative control: an unrelated tool never matches.
+    const m = buildManifest([{ name: "understanding-before-execution" }]);
+    const r = expandPolicyPacks(m, "codex");
+    const post = r.hooks.find((h) => h.event === "PostToolUse");
+    const expanded = expandCodexHookMatchPattern(post?.match ?? "");
+    // Proves the anchored Claude form would NOT have expanded (that was
+    // the bug this test guards against): a raw split of the OLD
+    // "^(?:...)$" string trips the simple-token guard and comes back
+    // byte-identical to its input.
+    expect(expanded).not.toBe(post?.match);
+    const re = new RegExp(expanded);
+    expect(re.test("mcp__agent-tasks__task_finish")).toBe(true); // canonical
+    expect(re.test("mcp__agent-tasks__.task_finish")).toBe(true); // dotted
+    expect(re.test("mcp__agent_tasks__task_finish")).toBe(true); // underscore-server
+    expect(re.test("mcp__agent_tasks__.task_finish")).toBe(true); // both
+    expect(re.test("Read")).toBe(false); // negative control
+  });
+
+  it("prefixes the Codex PostToolUse command with UNDERSTANDING_GATE_REPORT_DIR when reportsDir is supplied", () => {
+    const m = buildManifest([{ name: "understanding-before-execution" }]);
+    const r = expandPolicyPacks(m, "codex", { reportsDir: "/tmp/reports" });
+    expect(r.hooks.find((h) => h.event === "PostToolUse")?.command).toBe(
+      "UNDERSTANDING_GATE_REPORT_DIR='/tmp/reports' harness pack hook codex-post-tool-use",
     );
   });
 
