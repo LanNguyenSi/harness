@@ -929,15 +929,29 @@ export function checkOperatorApprovalMarkers(
     };
   }
   const sessionMarker = checkApprovalMarker(generatedDir, sessionId, ageOpts);
+  if (sessionMarker.matched) {
+    return {
+      matched: true,
+      source: "session",
+      detail: sessionMarker.detail,
+      taskCheckDetail: taskMarker.detail,
+      expired: false,
+    };
+  }
   return {
-    matched: sessionMarker.matched,
-    source: sessionMarker.matched ? "session" : null,
+    matched: false,
+    source: null,
     detail: sessionMarker.detail,
     taskCheckDetail: taskMarker.detail,
-    // Either marker aged out counts: a task-scoped approval that expired
-    // (even though the session-scoped check below it may simply have
-    // never existed) is just as legitimate a "this had approval, it
-    // lapsed" signal as a session-scoped expiry.
+    // `expired` is computed ONLY on this non-matched path, preserving the
+    // "false when matched is true" invariant (task 6e888423 review):
+    // e.g. a FRESH session marker (matched:true, returned above) must not
+    // read expired:true just because a STALE sibling task marker also
+    // exists — that sibling is irrelevant once the session marker itself
+    // satisfied the gate. Either marker aged out counts here: a
+    // task-scoped approval that expired (even though the session-scoped
+    // check may simply have never existed) is just as legitimate a "this
+    // had approval, it lapsed" signal as a session-scoped expiry.
     expired: taskMarker.expired || sessionMarker.expired,
   };
 }

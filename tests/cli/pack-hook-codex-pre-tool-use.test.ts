@@ -787,6 +787,57 @@ describe("pack hook codex-pre-tool-use blocker — recovery git-commit exemption
     expect(stderr.read()).toMatch(/recovery-commit exemption/);
   });
 
+  it("CONVERGENCE (review HIGH) — the recovery commit carrying THIS REPO'S REAL commit trailer (with the <email> angle brackets) converges without operator intervention", async () => {
+    // Codex parity with the Claude hook's inert-test guard: fails against
+    // the pre-HIGH-fix metachar screen (which rejected `<`/`>`
+    // unconditionally, even inside a quoted -m value) and only passes
+    // once the scan is quote-aware.
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    expireMarker(generatedDir, "sess-codex");
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(
+        event({
+          tool_name: "shell",
+          raw_input: {
+            command:
+              'git commit -am "fix(understanding-gate): address reviewer feedback" ' +
+              '-m "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"',
+          },
+        }),
+      ),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.approvalCheck.source).toBe("recovery-commit");
+  });
+
+  it("does NOT converge: an unquoted `>` redirect after a safely-quoted message still hard-blocks (negative control for the HIGH relaxation)", async () => {
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    expireMarker(generatedDir, "sess-codex");
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(
+        event({
+          tool_name: "shell",
+          raw_input: { command: 'git commit -am "safe message" > /tmp/out' },
+        }),
+      ),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.exitCode).toBe(2);
+  });
+
   it("does not widen: a chained `git commit && ...` is not exempted", async () => {
     const stderr = bufferStream();
     const generatedDir = path.join(tmp, "harness.generated");

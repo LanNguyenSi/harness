@@ -40,31 +40,99 @@
 //   - Edit / Write and every other Bash shape stay hard-gated
 //     regardless of this exemption; only the exact `git commit`
 //     invocation classified below is admitted.
-//   - The matcher itself refuses chaining (`;`, `&`, `|`, `&&`, `||`),
-//     redirection (`<`, `>`), and command substitution (backticks,
-//     `$(...)`), so a compound command cannot ride a legitimate commit
-//     past the gate. It also fails closed on any flag it does not
-//     recognise, in particular `--amend` (rewrites a commit that may
-//     have been approved under an entirely different, unrelated
-//     window) and `--no-verify` (skips local hooks, which this
-//     exemption has no mandate to waive — see AGENTS.md "no
-//     workarounds").
-
-/** Metacharacters that make the whole command unclassifiable. */
-const COMMAND_META_RE = /[;&|<>]/;
+//   - The matcher refuses chaining (`;`, `&`, `|`, `&&`, `||`) and
+//     redirection (`<`, `>`) that appear OUTSIDE a quoted span, and
+//     command substitution (backtick, `$(...)`) that appears outside a
+//     quote OR inside a DOUBLE-quoted span (both are still expanded by
+//     bash there) — so a compound command cannot ride a legitimate
+//     commit past the gate. `;`/`&`/`|`/`<`/`>` are treated as literal
+//     when they appear inside a quoted span (single OR double), exactly
+//     as bash treats them: this is what lets a real commit-message
+//     trailer like `Co-Authored-By: Claude Fable 5
+//     <noreply@anthropic.com>` (this very repo's own commit convention)
+//     through a quoted `-m` value without opening a metachar hole,
+//     because git only ever sees the trailer as inert message text, not
+//     as shell syntax. A backtick or `$(` inside a SINGLE-quoted span is
+//     also literal (single quotes suppress all expansion) and therefore
+//     safe to admit. Newlines are rejected unconditionally regardless of
+//     quoting (see `isRecoveryGitCommit`): multiple `-m` flags are the
+//     supported shape for a multi-paragraph message, so no caller needs
+//     an embedded newline inside one quoted token. The matcher also
+//     fails closed on any flag it does not recognise, in particular
+//     `--amend` (rewrites a commit that may have been approved under an
+//     entirely different, unrelated window) and `--no-verify` (skips
+//     local hooks, which this exemption has no mandate to waive — see
+//     AGENTS.md "no workarounds").
 
 /** Flags that take no following value. */
 const FLAG_ONLY_TOKENS: ReadonlySet<string> = new Set(["-a", "--all", "--allow-empty"]);
 
 /**
- * Flags that consume the NEXT token as their value. `-am`/`-ma` are the
- * common combined `-a -m` shorthand; each still takes one message
- * argument. Multiple `-m`/`--message` occurrences are allowed (git
- * concatenates them as separate paragraphs — the idiomatic way to
- * express a subject line, a body, and a trailer such as
- * `Co-Authored-By:` without embedding a literal newline in one token).
+ * Flags that consume the NEXT token as their value. `-am` is the common
+ * combined `-a -m` shorthand — the LAST flag in a short-option cluster is
+ * the one that takes an argument, so `-am <value>` clusters to `-a` (no
+ * value) followed by `-m <value>` exactly like a real shell/getopt would
+ * parse it. `-ma` is deliberately NOT included: there `-m` is NOT last in
+ * the cluster, so getopt takes the cluster's OWN remainder ("a") as `-m`'s
+ * value and the flag `-a` is never set at all — the next token (the
+ * agent's intended message) would be consumed by git as a pathspec
+ * instead, silently restricting the commit to files matching that
+ * pathspec. Admitting `-ma` here would therefore misclassify a command
+ * whose ACTUAL git semantics differ from what this exemption assumes.
+ * Multiple `-m`/`--message` occurrences are allowed (git concatenates
+ * them as separate paragraphs — the idiomatic way to express a subject
+ * line, a body, and a trailer such as `Co-Authored-By:` without embedding
+ * a literal newline in one token).
  */
-const MESSAGE_FLAG_TOKENS: ReadonlySet<string> = new Set(["-m", "--message", "-am", "-ma"]);
+const MESSAGE_FLAG_TOKENS: ReadonlySet<string> = new Set(["-m", "--message", "-am"]);
+
+/**
+ * Quote-aware scan for shell metacharacters that are unsafe given WHERE
+ * they appear. Unlike a flat regex, this walks the string tracking
+ * whether we are inside a single-quoted span, a double-quoted span, or
+ * neither:
+ *   - Outside any quote: `;`, `&`, `|`, `<`, `>`, backtick, and `$(` are
+ *     all live shell syntax — any of them is unsafe.
+ *   - Inside a single-quoted span: everything is inert (bash disables
+ *     ALL expansion inside single quotes, including backtick and `$(`),
+ *     so nothing here is unsafe.
+ *   - Inside a double-quoted span: `;`, `&`, `|`, `<`, `>` are literal
+ *     characters (bash does NOT treat them specially inside double
+ *     quotes) and therefore safe, but backtick and `$(` are STILL
+ *     expanded by bash inside double quotes and therefore still unsafe.
+ * An unterminated quote (the scan ends still "inside" one) is itself
+ * unsafe: the caller's tokenizer performs the authoritative parse and
+ * would also reject it, but this scan must not silently pass through
+ * content it could not fully account for.
+ */
+function hasUnsafeMetachar(command: string): boolean {
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i]!;
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      continue; // single-quoted: fully inert, including ` and $(
+    }
+    if (quote === '"') {
+      if (ch === '"') {
+        quote = null;
+        continue;
+      }
+      if (ch === "`") return true;
+      if (ch === "$" && command[i + 1] === "(") return true;
+      continue; // ; & | < > are literal inside double quotes
+    }
+    // Outside any quote: every metacharacter is live.
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === ";" || ch === "&" || ch === "|" || ch === "<" || ch === ">") return true;
+    if (ch === "`") return true;
+    if (ch === "$" && command[i + 1] === "(") return true;
+  }
+  return quote !== null; // unterminated quote: unsafe/unparseable
+}
 
 /**
  * Quote-aware tokenizer for the residual argv after `git commit`, mimicking
@@ -106,25 +174,29 @@ function tokenize(rest: string): string[] | null {
 /**
  * Classify a Bash/shell command string as the narrow "recovery commit"
  * shape: a bare, unchained `git commit` invocation carrying only
- * `-a`/`--all`/`--allow-empty` and one or more `-m`/`--message`/`-am`/`-ma`
+ * `-a`/`--all`/`--allow-empty` and one or more `-m`/`--message`/`-am`
  * message flags. `true` means the understanding-gate PreToolUse hooks
  * may admit this ONE call without a fresh Understanding Report, provided
  * the caller has already established that this session/task had a real
  * (now-expired) operator approval — see module header for the full
  * safety argument and why that precondition is load-bearing.
  *
- * Anything not on this narrow shape — `--amend`, `--no-verify`, `-C
- * <dir>` (rejected implicitly: it does not appear directly after `git
- * commit`), a pathspec, chaining, redirection, substitution, an
- * unrecognised flag — fails closed (`false`) and the caller falls
- * through to the ordinary hard block.
+ * A properly single- or double-quoted `-m`/`--message` value may contain
+ * ANY text, including characters like `<`/`>`/`;`/`&`/`|` that would be
+ * dangerous unquoted — that is what lets a real trailer such as
+ * `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>` through (see
+ * `hasUnsafeMetachar`'s doc for the exact quote-aware rule). Anything
+ * outside this narrow shape — `--amend`, `--no-verify`, `-C <dir>`
+ * (rejected implicitly: it does not appear directly after `git commit`),
+ * a pathspec, UNQUOTED chaining/redirection, command substitution that
+ * is live where it appears, an unrecognised flag — fails closed
+ * (`false`) and the caller falls through to the ordinary hard block.
  */
 export function isRecoveryGitCommit(command: string): boolean {
   const trimmed = command.trim();
   if (trimmed === "") return false;
   if (trimmed.includes("\n") || trimmed.includes("\r")) return false;
-  if (COMMAND_META_RE.test(trimmed)) return false;
-  if (trimmed.includes("`") || trimmed.includes("$(")) return false;
+  if (hasUnsafeMetachar(trimmed)) return false;
 
   const m = /^git\s+commit\b/.exec(trimmed);
   if (!m) return false;
@@ -142,7 +214,7 @@ export function isRecoveryGitCommit(command: string): boolean {
     if (MESSAGE_FLAG_TOKENS.has(t)) {
       i += 1;
       if (i >= tokens.length) return false; // dangling flag, no message value
-      i += 1; // consume the message token (already metachar-screened above)
+      i += 1; // consume the message token (already quote-aware metachar-screened above)
       continue;
     }
     if (/^--message=.+/.test(t)) {

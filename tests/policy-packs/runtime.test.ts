@@ -489,6 +489,53 @@ describe("checkOperatorApprovalMarkers — expired signal (task 6e888423)", () =
     expect(r.matched).toBe(true);
     expect(r.expired).toBe(false);
   });
+
+  it("MIXED MARKERS (review LOW 1): the active-claim's own task marker is EXPIRED but the session marker is FRESH — matched:true must carry expired:false, not expired:true", () => {
+    // This is the exact scenario the review flagged: an active-claim IS
+    // recorded, its own task-scoped marker has aged past max_age (so the
+    // task-scoped check itself misses), but the gate still falls through
+    // to a FRESH session-scoped marker and matches there. Before the
+    // review fix, `expired` was computed unconditionally as
+    // `taskMarker.expired || sessionMarker.expired`, so this exact
+    // matched:true result would ALSO carry expired:true (violating the
+    // "false when matched is true" invariant the type's own doc
+    // comment promises) — which would have made a session with a
+    // perfectly fresh approval spuriously eligible for the
+    // recovery-git-commit exemption.
+    writeActiveClaim(tmp, "task-x");
+    writeTaskApprovalMarker(tmp, "task-x", {
+      approvedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      approvedBy: "test-operator",
+    });
+    writeApprovalMarker(tmp, "sess-1", {
+      approvedAt: new Date().toISOString(),
+      approvedBy: "test-operator",
+    });
+    const r = checkOperatorApprovalMarkers(tmp, "sess-1", {
+      approval_lifecycle: { max_age: "4h" },
+    });
+    expect(r.matched).toBe(true);
+    expect(r.source).toBe("session");
+    expect(r.expired).toBe(false);
+  });
+
+  it("MIXED MARKERS (review LOW 1): the active-claim's OWN task marker is fresh (matches) even though the session marker is separately stale — still expired:false", () => {
+    writeActiveClaim(tmp, "task-fresh");
+    writeTaskApprovalMarker(tmp, "task-fresh", {
+      approvedAt: new Date().toISOString(),
+      approvedBy: "test-operator",
+    });
+    writeApprovalMarker(tmp, "sess-1", {
+      approvedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      approvedBy: "test-operator",
+    });
+    const r = checkOperatorApprovalMarkers(tmp, "sess-1", {
+      approval_lifecycle: { max_age: "4h" },
+    });
+    expect(r.matched).toBe(true);
+    expect(r.source).toBe("task");
+    expect(r.expired).toBe(false);
+  });
 });
 
 describe("checkActiveClaimApprovalMarker — expired propagation", () => {

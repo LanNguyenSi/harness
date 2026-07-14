@@ -1389,6 +1389,95 @@ describe("pack hook pre-tool-use blocker — recovery git-commit exemption after
     expect(stderr.read()).toMatch(/recovery-commit exemption/);
   });
 
+  it("CONVERGENCE (review HIGH) — the recovery commit carrying THIS REPO'S REAL commit trailer (with the <email> angle brackets) converges without operator intervention", async () => {
+    // This is the documented main case, not an edge case: every commit
+    // this workflow makes ends with a Co-Authored-By trailer containing
+    // `<noreply@anthropic.com>`. A metachar screen that rejects `<`/`>`
+    // unconditionally (even inside a properly quoted -m value) would
+    // wedge on the exact scenario the fix exists for. This test is an
+    // inert-test guard: it fails against the pre-HIGH-fix implementation
+    // (which rejected `<`/`>` everywhere) and only passes once the
+    // metachar scan is quote-aware.
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    expireMarker(generatedDir, "sess-1");
+    // Multi -m paragraphs (subject, trailer) is the supported shape for a
+    // message that needs more than one paragraph: no literal newline
+    // lands inside either quoted token.
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "Bash",
+          tool_input: {
+            command:
+              'git commit -am "fix(understanding-gate): address reviewer feedback" ' +
+              '-m "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"',
+          },
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.approvalCheck.source).toBe("recovery-commit");
+  });
+
+  it("does NOT converge: the same trailer glued onto an UNQUOTED chained command still hard-blocks (negative control for the HIGH relaxation)", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    expireMarker(generatedDir, "sess-1");
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "Bash",
+          tool_input: {
+            command:
+              'git commit -am "fix: address reviewer feedback" ' +
+              '-m "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>" && rm -rf /tmp/x',
+          },
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+  });
+
+  it("does NOT converge: an unquoted `>` redirect after a safely-quoted message still hard-blocks (negative control for the HIGH relaxation)", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    expireMarker(generatedDir, "sess-1");
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "Bash",
+          tool_input: { command: 'git commit -am "safe message" > /tmp/out' },
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+  });
+
   it("does not widen: a following Edit in the SAME session still hard-blocks after the recovery commit was allowed", async () => {
     // The exemption is a per-call pass-through, not a re-approval: it
     // never rewrites or refreshes the marker, so the very next gated
