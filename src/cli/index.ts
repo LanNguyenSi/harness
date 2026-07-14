@@ -259,17 +259,35 @@ export function buildProgram(opts: RunOptions = {}): Command {
             ? { rogueLedgerScanOptions: opts.rogueLedgerScanOptions }
             : {}),
         });
+        // Non-zero exit when the report carries errors (task a07b379a):
+        // callers previously had no way to gate CI/scripts on doctor
+        // health, since this action always fell through to exit 0
+        // regardless of report.errorCount. Warnings alone still exit 0.
+        // Checked before every return below (json / no --rm-rogue-ledgers /
+        // no hits found / after the delete+rescan flow) so the exit code
+        // is consistent across all output modes.
+        const failIfErrors = (): void => {
+          if (report.errorCount > 0) {
+            throw new HarnessExitError("", EX_FAIL);
+          }
+        };
+
         if (options.json) {
           stdout(`${JSON.stringify(report, null, 2)}\n`);
+          failIfErrors();
           return;
         }
         stdout(formatDoctor(report));
 
-        if (!options.rmRogueLedgers) return;
+        if (!options.rmRogueLedgers) {
+          failIfErrors();
+          return;
+        }
 
         const hits = report.rogueLedgerDbs;
         if (hits.length === 0) {
           stdout("no rogue evidence-ledger DBs found; nothing to delete\n");
+          failIfErrors();
           return;
         }
 
@@ -296,6 +314,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         stdout(
           `rogue evidence-ledger DBs remaining: ${afterScan.length}\n`,
         );
+        failIfErrors();
       },
     );
 

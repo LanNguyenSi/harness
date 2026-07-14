@@ -26,7 +26,7 @@ The CLI is grouped by purpose below. Run any verb with `--help` for flags and ex
 
 | Verb | One-liner |
 |------|-----------|
-| `harness doctor [--rm-rogue-ledgers] [--yes]` | Health summary across hooks, packs, MCP registrations, runtime detection, and binary version. A bare run is read-only; `--rm-rogue-ledgers` opts into deleting each rogue evidence-ledger directory it finds (prompts per hit; add `--yes` to skip the prompts). |
+| `harness doctor [--rm-rogue-ledgers] [--yes]` | Health summary across hooks, packs, MCP registrations, runtime detection, and binary version. A bare run is read-only; `--rm-rogue-ledgers` opts into deleting each rogue evidence-ledger directory it finds (prompts per hit; add `--yes` to skip the prompts). Exits `1` when the report's `errorCount` is above zero (in both prose and `--json` mode) so CI/scripts can gate on doctor health; warnings alone (`warningCount`) still exit `0`. |
 | `harness list <category>` | Print one category's entries as a flat table or JSON. Valid categories: `mcp`, `cli`, `skills`, `memories`, `hooks`, `policies`, `workflows`. |
 | `harness audit [--since 1h] [--policy <name>]` | Replay recorded policy decisions from the evidence-ledger. |
 | `harness session-export [sessionId]` | Export the full evidence-ledger for a Claude Code session as JSON, suitable for archival or attaching to a PR. |
@@ -93,6 +93,7 @@ These are called by Claude Code via `settings.json`; you usually do not run them
 
 ## Notes
 
+- `harness doctor` now exits non-zero (`1`) whenever the report has `errorCount > 0`, in both prose and `--json` output; previously it always exited `0` regardless of errors, so CI/scripts had no way to gate on doctor health (task a07b379a). Warnings-only reports (`warningCount > 0`, `errorCount === 0`) are unaffected and still exit `0`; this pass intentionally does not add a `--strict` flag to promote warnings to errors. Non-interactive `harness init` is unrelated and unchanged: it keeps its existing loud-stderr-but-exit-0 contract.
 - Since `v0.36.0`: `harness doctor --rm-rogue-ledgers` (with `--yes` to skip the per-hit prompt) opts into deleting rogue evidence-ledger directories that doctor reports, and the read-only Bash classifier re-admits `sort`, `tree`, and `file` behind precise write-flag guards (for example `sort -o` is still treated as write-producing).
 - Since `v0.35.0`: `harness apply` fails loud (refuses) when the manifest declares `policies:` without `grounding-mcp` wired under `tools.mcp` (previously it applied and the policies silently degraded to warn-mode at runtime); wire `grounding-mcp` or drop the policies.
 - Since `v0.34.0`: `apply --yes` (skip the `--overwrite-drift` confirmation) and non-TTY guards on the `apply`/`adopt` confirmation prompts (they refuse instead of hanging; piped `echo yes |` confirmations no longer work, use `--yes`).
