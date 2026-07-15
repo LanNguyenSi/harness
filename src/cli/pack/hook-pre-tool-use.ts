@@ -427,6 +427,13 @@ export async function runPackHookPreToolUseCli(
   // runtime.ts's `OperatorMarkerApproval.expired` doc for the full
   // distinction.
   let markerExpired = false;
+  // True when checkOperatorApprovalMarkers found a marker FILE that failed
+  // signature verification (harness/f9485cc7) — missing/invalid signature,
+  // wrong alg, or tampered payload — for either the task-scoped or
+  // session-scoped check. Surfaced in the block reason below with a
+  // distinct phrase from "no approval marker" so an operator/auditor can
+  // tell a forgery attempt apart from the routine "never approved" case.
+  let markerForged = false;
   if (generatedDir !== undefined) {
     // Source 1a/1b: task-scoped marker for the currently-claimed task
     // (harness/1ee26e77 + PR #198 correctness fix), then the
@@ -441,6 +448,7 @@ export async function runPackHookPreToolUseCli(
       stderr,
     );
     markerExpired = markers.expired;
+    markerForged = markers.forged;
     if (markers.source !== "task") {
       // Trace the task-marker miss to stderr so an operator chasing
       // "why isn't my approval working?" sees the active-claim vs marker
@@ -483,9 +491,16 @@ export async function runPackHookPreToolUseCli(
   // allow/block decision.
   const ledger = await checkLedger(manifest, sessionId, opts);
 
-  // Neither operator source approved.
+  // Neither operator source approved. When a marker FILE existed but
+  // failed signature verification, use a distinct reason phrase
+  // ("forged/unsigned marker rejected") instead of the routine "no
+  // approval marker" — audit/operator surfaces can then tell an active
+  // forgery attempt (or a pre-signing legacy marker) apart from a session
+  // that simply never approved (harness/f9485cc7).
   const reason = generatedDir !== undefined
-    ? `no approval marker for session ${sessionId}; ${report.detail}; ${ledger.detail}`
+    ? markerForged
+      ? `forged/unsigned marker rejected for session ${sessionId}; ${report.detail}; ${ledger.detail}`
+      : `no approval marker for session ${sessionId}; ${report.detail}; ${ledger.detail}`
     : `generatedDir not resolvable (test/injection path); ${report.detail}; ${ledger.detail}`;
 
   // Stage the session id so `harness approve`, run from the operator's

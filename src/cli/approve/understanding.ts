@@ -28,6 +28,7 @@ import {
   writeApprovalMarker,
   writeTaskApprovalMarker,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
+import { sha256Hex } from "../../runtime/approval-signing.js";
 import { addLedgerFact } from "../../runtime/ledger-add.js";
 import {
   clearPendingApproval,
@@ -682,6 +683,31 @@ export async function approveUnderstanding(
     };
   }
 
+  // Report-content hash the marker's signature binds to (harness/f9485cc7):
+  // sha256 of the persisted report's raw bytes AT APPROVAL TIME, read
+  // BEFORE `rewriteReportApproved` below flips its status/approvedAt/
+  // approvedBy fields — this hashes what the operator actually reviewed,
+  // not the post-approval-flip artefact. null when no persisted report was
+  // resolved (ledger-only / --force paths have nothing to bind).
+  //
+  // This is GROUNDWORK ONLY, not yet enforced at gate-check time: nothing
+  // today cross-checks the hash carried in a signed marker against the
+  // CURRENTLY-selected persisted report, so on its own this does not stop
+  // a stale-report adoption. The live cross-check ("does this marker's
+  // reportContentHash match the report the gate is about to consult right
+  // now") is the C1 staleness follow-up (task fa423e9b), out of scope
+  // here; this just makes the binding exist and be forensically
+  // inspectable so that follow-up can add the comparison without a
+  // marker-format change.
+  let reportContentHash: string | null = null;
+  if (latest) {
+    try {
+      reportContentHash = sha256Hex(fs.readFileSync(latest.filePath, "utf8"));
+    } catch {
+      reportContentHash = null;
+    }
+  }
+
   // Write the canonical approval marker first. The gate consults this
   // file (not the ledger) since agent-tasks/88ca4bb3 closed the self-
   // approval backdoor: the agent has direct MCP access to the ledger,
@@ -693,6 +719,7 @@ export async function approveUnderstanding(
     const filePath = writeApprovalMarker(generatedDir, sessionId, {
       approvedAt: approvedAtMarker,
       approvedBy: approvedByMarker,
+      reportContentHash,
     });
     markerResult = { ok: true, filePath, approvedAt: approvedAtMarker };
   } catch (err) {
@@ -732,6 +759,7 @@ export async function approveUnderstanding(
       const filePath = writeTaskApprovalMarker(generatedDir, taskId, {
         approvedAt: approvedAtMarker,
         approvedBy: approvedByMarker,
+        reportContentHash,
       });
       taskMarkers.push({
         ok: true,

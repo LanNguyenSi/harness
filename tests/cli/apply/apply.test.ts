@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -27,6 +28,7 @@ import {
   RESTART_HINT_HOOKS,
   RESTART_HINT_MCP,
 } from "../../../src/io/restart-hints.js";
+import { signingKeyPathFor } from "../../../src/runtime/approval-signing.js";
 
 let tmpHome: string;
 
@@ -1757,6 +1759,36 @@ describe("apply: preserves sibling state under harness.generated/ (agent-tasks/b
 
     await apply({ homeDir: tmpHome });
     expect(fs.readFileSync(stagingPath, "utf8")).toBe("sess-staged\n");
+  });
+
+  it("the HMAC approval-signing key (.approval-signing.key) survives apply unchanged (harness/f9485cc7)", async () => {
+    // Regression guard for the marker-signing feature: the key is a
+    // sibling of .approvals/ directly under harness.generated/, written
+    // outside apply's own known-files set. Losing it on a re-apply would
+    // silently invalidate every previously-signed marker.
+    writeManifest({
+      hooks: [
+        {
+          name: "h",
+          event: "SessionStart",
+          command: "/h.sh",
+          blocking: false,
+          budget_ms: 30000,
+        },
+      ],
+    });
+    const generatedDir = path.join(tmpHome, GENERATED_DIRNAME);
+    const keyPath = signingKeyPathFor(generatedDir);
+    fs.mkdirSync(path.dirname(keyPath), { recursive: true });
+    const keyBytes = crypto.randomBytes(32);
+    fs.writeFileSync(keyPath, keyBytes, { mode: 0o600 });
+
+    const r = await apply({ homeDir: tmpHome });
+    expect(r.outcome).toBe("applied");
+    expect(fs.existsSync(keyPath)).toBe(true);
+    expect(fs.readFileSync(keyPath).equals(keyBytes)).toBe(true);
+    const mode = fs.statSync(keyPath).mode & 0o777;
+    expect(mode).toBe(0o600);
   });
 });
 
