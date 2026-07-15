@@ -13,7 +13,7 @@
 
 import { z } from "zod";
 import { PolicyUxSchema, ProducerSchema } from "../../schema/policies.js";
-import type { Hook, PolicyPack } from "../../schema/index.js";
+import type { Hook, PolicyPack, PolicyUx, Producer } from "../../schema/index.js";
 import { profileToSettingsPermissions } from "../permission-translator.js";
 import { DEFAULT_RUNTIME, type Runtime } from "../runtime.js";
 import type {
@@ -62,6 +62,57 @@ export function understandingApprovalRequirement(mode: Mode): string {
   return mode === "strict"
     ? "a human-approved Understanding Report for this session"
     : "an approved Understanding Report for this session";
+}
+
+/**
+ * Shipped default `config.producers` for this pack (agent-tasks/25bced52).
+ * Canonical source for the "golden path" recovery command: both `harness
+ * init` generation surfaces (Solo/Team/Full templates, the Custom
+ * composer) and `harness pack reseed` (task 68b9ad9c) read from here, so
+ * a future wording change to the producer descriptions only has to land
+ * in one place to reach every manifest-generating surface plus the
+ * reseed path used to backfill already-installed manifests.
+ */
+export function defaultProducers(): Producer[] {
+  return [
+    {
+      kind: "ask",
+      command: "harness approve understanding",
+      description:
+        "Bare command, no pipes or chaining. The hook recognises it via isEscapeCommand and emits permissionDecision:ask; the operator's go on that prompt IS the gate approval. Golden path.",
+    },
+    {
+      kind: "bash",
+      command: "harness approve understanding",
+      description:
+        "Same command from any un-hooked terminal (operator only, not reachable from inside the gated session). Writes the canonical marker at harness.generated/.approvals/${SESSION_ID}.",
+    },
+  ];
+}
+
+/**
+ * Shipped default `config.ux` for this pack, parameterised on the
+ * resolved mode (only the `required` line varies across modes — see
+ * `understandingApprovalRequirement` above). Canonical source consumed
+ * by the same generation surfaces as `defaultProducers()`, plus
+ * `harness doctor`'s divergence warning and `harness pack reseed` (task
+ * 68b9ad9c): the dogfood motivating that task found that a deny-message
+ * wording fix (e.g. the heredoc submission form, agent-tasks/e48e3b45)
+ * only reached NEW `harness init` manifests, because nothing propagated
+ * the improved text into an already-installed operator manifest whose
+ * `config.ux` still taught the old wording. Reading from one function
+ * here means a future wording fix is available to `pack reseed`
+ * automatically, with no separate update needed.
+ */
+export function defaultUx(mode: Mode): PolicyUx {
+  return {
+    cannot: "You cannot use write-capable tools yet.",
+    required: [understandingApprovalRequirement(mode)],
+    run: [
+      "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan, Prior Art (state what you searched for an existing solution and what you found, with an explicit adopt-or-build judgment)",
+      "Run `harness approve understanding` with the report attached as a quoted heredoc (harness approve understanding <<'UNDERSTANDING_REPORT' ...report... UNDERSTANDING_REPORT) so it is persisted for audit, then approve the prompt; the heredoc is the only extra shell shape the gate allows (no pipes, chaining, or other redirection)",
+    ],
+  };
 }
 
 const HOOK_NAME_PREFIX = `policy-pack:${PACK_NAME}`;

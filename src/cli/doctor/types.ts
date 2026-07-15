@@ -158,10 +158,28 @@ export interface PolicyPackVersionGapReport {
   message: string;
 }
 
+/**
+ * A pack's declared `config.ux` / `config.producers` that textually
+ * diverges from the shipped builtin template for that pack (task
+ * 68b9ad9c). Unlike `PolicyPackConfigIssue`, the value is still SCHEMA-
+ * valid — the gap is that it teaches stale wording (e.g. a pre-fix
+ * submission form) rather than an invalid shape. Always a warning:
+ * the pack still functions, the operator is just missing a wording
+ * improvement. See `src/policy-packs/ux-drift-check.ts` and
+ * `harness pack reseed` (the opt-in fix).
+ */
+export interface PolicyPackUxDriftReport {
+  name: string;
+  /** Which sub-field(s) diverge: `ux`, `producers`, or both. */
+  fields: string[];
+  message: string;
+}
+
 export interface PolicyPacksSection {
   unresolved: PolicyPackUnresolved[];
   configIssues: PolicyPackConfigIssue[];
   versionGaps: PolicyPackVersionGapReport[];
+  uxDrift: PolicyPackUxDriftReport[];
   solutionAcceptance: Diagnostic[];
 }
 

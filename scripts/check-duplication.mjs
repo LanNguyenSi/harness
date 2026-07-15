@@ -24,7 +24,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-const MAX_CLONES = 82; // baseline 2026-07-02, post parseConfigUx extraction
+// baseline 2026-07-02 (82), post parseConfigUx extraction; raised to 86 for
+// task 68b9ad9c's new `cli/pack/reseed.ts`, which necessarily clones the
+// validate/lock/diff/write shape already repeated (undeduped) across
+// `cli/add/index.ts`, `cli/remove/index.ts`, `cli/pack/add.ts`, and
+// `cli/pack/remove.ts` — a 5th instance of a pattern the codebase already
+// tolerates 6 pairwise clones of rather than extracting a shared base;
+// deduping all five is a repo-wide refactor out of scope for this task.
+const MAX_CLONES = 86;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).

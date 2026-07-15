@@ -6,16 +6,20 @@
 // out of scope for v1; their resolution lands in a later sub-task.
 
 import type { z } from "zod";
-import type { PolicyPack } from "../schema/index.js";
+import type { PolicyPack, PolicyUx, Producer } from "../schema/index.js";
 import {
   configSchema as branchProtectionConfigSchema,
+  defaultUx as branchProtectionDefaultUx,
   PACK_NAME as BRANCH_PROTECTION,
   resolve as resolveBranchProtection,
 } from "./builtin/branch-protection.js";
 import {
   configSchema as understandingBeforeExecutionConfigSchema,
+  defaultProducers as understandingBeforeExecutionDefaultProducers,
+  defaultUx as understandingBeforeExecutionDefaultUx,
   PACK_NAME as UNDERSTANDING_BEFORE_EXECUTION,
   resolve as resolveUnderstandingBeforeExecution,
+  resolveMode as resolveUnderstandingBeforeExecutionMode,
   VERSION_COMMAND as UNDERSTANDING_BEFORE_EXECUTION_VERSION_COMMAND,
   type ResolvePackOptions,
 } from "./builtin/understanding-before-execution.js";
@@ -102,6 +106,46 @@ export function resolveBuiltinVersionCommand(
     case SOLUTION_ACCEPTANCE:
       // Blocker is harness itself; the producer (grounding-mcp) is probed
       // via its tools.mcp min_version, not a pack-side bin.
+      return null;
+  }
+}
+
+/**
+ * The shipped-template `config.ux` / `config.producers` for a builtin pack,
+ * as the operator's OWN pack entry would resolve them today (e.g. `ux`'s
+ * `required:` line is derived from the pack's currently-configured `mode`,
+ * not a hardcoded default mode — an operator on `strict` should be
+ * compared against, and reseeded with, the `strict` wording, not
+ * `grill_me`'s).
+ *
+ * Returns `null` when the pack name is not a builtin, or when the pack
+ * has no canonical shipped default to compare/reseed against (e.g.
+ * `solution-acceptance`, which ships `enabled: false` with no `config:`
+ * block in any init template). Consumed by `checkPolicyPackUxDrift`
+ * (`harness doctor`'s divergence warning) and `harness pack reseed`
+ * (task 68b9ad9c) — the single source both read from so the two stay
+ * in lockstep by construction.
+ */
+export interface BuiltinDefaultConfig {
+  ux?: PolicyUx;
+  producers?: Producer[];
+}
+
+export function resolveBuiltinDefaultConfig(
+  pack: PolicyPack,
+): BuiltinDefaultConfig | null {
+  if (!isBuiltinPackName(pack.name)) return null;
+  switch (pack.name as BuiltinPackName) {
+    case UNDERSTANDING_BEFORE_EXECUTION: {
+      const { mode } = resolveUnderstandingBeforeExecutionMode(pack);
+      return {
+        ux: understandingBeforeExecutionDefaultUx(mode),
+        producers: understandingBeforeExecutionDefaultProducers(),
+      };
+    }
+    case BRANCH_PROTECTION:
+      return { ux: branchProtectionDefaultUx() };
+    case SOLUTION_ACCEPTANCE:
       return null;
   }
 }

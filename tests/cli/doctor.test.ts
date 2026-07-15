@@ -1009,6 +1009,189 @@ policy_packs:
   });
 });
 
+describe("doctor — policy pack ux/producers drift check (task 68b9ad9c)", () => {
+  // Motivation: the understanding-gate deny message is entirely driven by
+  // config.ux when the operator has declared one. The init templates
+  // taught a new heredoc submission form (agent-tasks/e48e3b45), but that
+  // fix only reaches manifests generated AFTER the fix — an
+  // already-installed manifest's config.ux stays on the old wording
+  // until something re-seeds it. This check is the "something noticed"
+  // half of the fix (harness pack reseed is the "something fixed it"
+  // half).
+
+  const STALE_UX_MANIFEST = `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+    config:
+      mode: grill_me
+      ux:
+        cannot: "You cannot use write-capable tools yet."
+        required:
+          - "an approved Understanding Report for this session"
+        run:
+          - "Run \`harness approve understanding\` once you have produced and confirmed an Understanding Report."
+`;
+
+  it("flags a manifest whose ux.run still teaches the pre-fix bare-command wording", async () => {
+    const home = makeFixture({ "harness.yaml": STALE_UX_MANIFEST });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.policyPacks.uxDrift).toHaveLength(1);
+    expect(report.policyPacks.uxDrift[0]).toMatchObject({
+      name: "understanding-before-execution",
+      fields: ["ux"],
+    });
+    expect(report.policyPacks.uxDrift[0]?.message).toMatch(/harness pack reseed/);
+    expect(report.warningCount).toBeGreaterThanOrEqual(1);
+    const text = format(report);
+    expect(text).toContain("Policy Packs");
+    expect(text).toContain("⚠ understanding-before-execution.config.ux");
+  });
+
+  it("stays silent when config.ux already matches the shipped template", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+    config:
+      mode: grill_me
+      ux:
+        cannot: "You cannot use write-capable tools yet."
+        required:
+          - "an approved Understanding Report for this session"
+        run:
+          - "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan, Prior Art (state what you searched for an existing solution and what you found, with an explicit adopt-or-build judgment)"
+          - "Run \`harness approve understanding\` with the report attached as a quoted heredoc (harness approve understanding <<'UNDERSTANDING_REPORT' ...report... UNDERSTANDING_REPORT) so it is persisted for audit, then approve the prompt; the heredoc is the only extra shell shape the gate allows (no pipes, chaining, or other redirection)"
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.policyPacks.uxDrift).toHaveLength(0);
+    expect(format(report)).not.toContain("Policy Packs");
+  });
+
+  it("compares against the mode-appropriate shipped default, not a hardcoded mode", async () => {
+    // `strict` mode's canonical `required:` line differs from
+    // `grill_me`'s (understandingApprovalRequirement). A manifest on
+    // strict mode with the strict-appropriate ux must NOT be flagged just
+    // because it differs from grill_me's wording.
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+    config:
+      mode: strict
+      ux:
+        cannot: "You cannot use write-capable tools yet."
+        required:
+          - "a human-approved Understanding Report for this session"
+        run:
+          - "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan, Prior Art (state what you searched for an existing solution and what you found, with an explicit adopt-or-build judgment)"
+          - "Run \`harness approve understanding\` with the report attached as a quoted heredoc (harness approve understanding <<'UNDERSTANDING_REPORT' ...report... UNDERSTANDING_REPORT) so it is persisted for audit, then approve the prompt; the heredoc is the only extra shell shape the gate allows (no pipes, chaining, or other redirection)"
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.policyPacks.uxDrift).toHaveLength(0);
+  });
+
+  it("does not flag a manifest with no config.ux at all (missing is a distinct, out-of-scope gap)", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+    config:
+      mode: grill_me
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.policyPacks.uxDrift).toHaveLength(0);
+  });
+
+  it("disabled packs are not checked", async () => {
+    const home = makeFixture({ "harness.yaml": STALE_UX_MANIFEST.replace(
+      "source: builtin\n",
+      "source: builtin\n    enabled: false\n",
+    ) });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.policyPacks.uxDrift).toHaveLength(0);
+  });
+
+  it("flags branch-protection's stale ux the same way", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: branch-protection
+    source: builtin
+    config:
+      ux:
+        cannot: "branch-protection: refusing edit on protected branch."
+        required:
+          - "a non-protected branch"
+        run:
+          - "git checkout -b feat/x"
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.policyPacks.uxDrift).toHaveLength(1);
+    expect(report.policyPacks.uxDrift[0]?.name).toBe("branch-protection");
+  });
+
+  it("solution-acceptance has no registered shipped default, so its ux is never flagged (even enabled)", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: solution-acceptance
+    source: builtin
+    enabled: true
+    config:
+      ux:
+        cannot: "whatever custom text"
+        required:
+          - "whatever"
+        run:
+          - "whatever"
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(report.policyPacks.uxDrift).toHaveLength(0);
+  });
+});
+
 describe("doctor — solution-acceptance producer checks", () => {
   // These tests verify that doctor surfaces the same two deadlock
   // misconfigurations that `harness validate` already surfaces via

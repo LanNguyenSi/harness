@@ -36,7 +36,7 @@
 
 import { z } from "zod";
 import { PolicyUxSchema } from "../../schema/policies.js";
-import type { Hook, PolicyPack } from "../../schema/index.js";
+import type { Hook, PolicyPack, PolicyUx } from "../../schema/index.js";
 import { DEFAULT_RUNTIME, type Runtime } from "../runtime.js";
 import type { PackContribution, PackContributionFile } from "../types.js";
 import {
@@ -65,6 +65,24 @@ export const configSchema = z
     ux: PolicyUxSchema.optional(),
   })
   .strict();
+
+/**
+ * Shipped default `config.ux` for this pack (agent-tasks/9806d4f8).
+ * Canonical source for the `full` init template and `harness pack
+ * reseed` (task 68b9ad9c): a future wording fix to the deny-message
+ * text lands here once and reaches both a fresh `harness init --template
+ * full` and an operator running `harness pack reseed branch-protection`
+ * against an already-installed manifest.
+ */
+export function defaultUx(): PolicyUx {
+  return {
+    cannot: "You cannot edit files on protected branch ${BRANCH} yet.",
+    required: [
+      "a checkout of a non-protected branch (current `${BRANCH}` is protected)",
+    ],
+    run: ["git checkout -b feat/<your-task>", "harness session-start branch-check"],
+  };
+}
 
 const HOOK_NAME_PREFIX = `policy-pack:${PACK_NAME}`;
 

@@ -31,7 +31,7 @@ import {
   type FileApplyOutcome,
 } from "./apply/index.js";
 import { isRemoveType, KNOWN_REMOVE_TYPES, remove } from "./remove/index.js";
-import { packAdd, packList, packRemove } from "./pack/index.js";
+import { packAdd, packList, packRemove, packReseed } from "./pack/index.js";
 import { runPackHookPreToolUseCli } from "./pack/hook-pre-tool-use.js";
 import { runPackHookPostToolUseCli } from "./pack/hook-post-tool-use.js";
 import { runPackHookTrackActiveClaimCli } from "./pack/hook-track-active-claim.js";
@@ -1031,7 +1031,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
   // `harness pack` subtree (Phase 6 #3): managed CRUD over policy_packs[].
   const packCmd = program
     .command("pack")
-    .description("Manage policy_packs[] entries (add / remove / list)");
+    .description("Manage policy_packs[] entries (add / remove / list / reseed)");
 
   packCmd
     .command("add <name>")
@@ -1105,6 +1105,43 @@ export function buildProgram(opts: RunOptions = {}): Command {
           return;
         }
         stdout(`removed policy_packs entry ${JSON.stringify(result.name)} from ${result.path}\n`);
+      },
+    );
+
+  // `harness pack reseed <name>` (task 68b9ad9c): pull the shipped
+  // builtin template's config.ux (and config.producers) into an already-
+  // installed manifest. Explicit-only, mirroring add/remove — never
+  // invoked by `apply`, so an upgrade never silently rewrites an
+  // operator's deliberate ux customisation. Paired with the `harness
+  // doctor` divergence warning (src/policy-packs/ux-drift-check.ts).
+  packCmd
+    .command("reseed <name>")
+    .description(
+      "Pull the shipped builtin template's config.ux (and config.producers) for <name> into " +
+        "the manifest, preserving other config keys (mode, approval_lifecycle, ...). No-op if " +
+        "already up to date. See `harness doctor` for a divergence warning.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
+    .option("--dry-run", "print the unified diff and exit without writing")
+    .action(
+      async (name: string, options: { config?: string; dryRun?: boolean }) => {
+        const result = await packReseed(name, {
+          configPath: options.config,
+          dryRun: options.dryRun,
+        });
+        if (result.fieldsChanged.length === 0) {
+          stdout(
+            `policy_packs entry ${JSON.stringify(result.name)} already matches the shipped template; nothing to reseed.\n`,
+          );
+          return;
+        }
+        if (options.dryRun) {
+          stdout(result.diff);
+          return;
+        }
+        stdout(
+          `reseeded ${result.fieldsChanged.map((f) => `config.${f}`).join(", ")} for policy_packs entry ${JSON.stringify(result.name)} in ${result.path}\n`,
+        );
       },
     );
 
