@@ -301,6 +301,229 @@ describe("pack hook track-active-claim — tasks_transition v1 verb (PR #200)", 
   });
 });
 
+describe("pack hook track-active-claim — Codex MCP tool-name alias variants (task cf4cdc93 parity)", () => {
+  // Codex can emit an MCP tool name in a variant form for the identical
+  // tool (server hyphen/underscore swap, the `mcp__server__.tool`
+  // dotted form) — the same class of variance task a1348c89 fixed for
+  // the marker-expiry PostToolUse hook. The generator's
+  // `expandCodexHookMatchPattern` already widens the emitted Codex
+  // matcher to include these variants, so Codex's own dispatcher DOES
+  // invoke this hook for them; these tests pin that the hook BODY
+  // recognizes them too (toolNameMatchesAny), not just the dispatcher.
+  it("writes active-claim on task_start with an underscore-server tool_name variant", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const stderr = bufferStream();
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBody("mcp__agent_tasks__task_start", { taskId: "task-uuid-abc" }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimWritten).toBe(true);
+    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+  });
+
+  it("writes active-claim on task_start with the dotted mcp__server__.tool form", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const stderr = bufferStream();
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBody("mcp__agent-tasks__.task_start", { taskId: "task-uuid-abc" }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimWritten).toBe(true);
+    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+  });
+
+  it("clears active-claim on an alias-variant task_finish tool_name", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-uuid-abc");
+    const stderr = bufferStream();
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBody("mcp__agent_tasks__task_finish", { taskId: "task-uuid-abc" }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(true);
+    expect(readActiveClaim(generatedDir)).toBeNull();
+  });
+
+  it("clears active-claim on an alias-variant tasks_transition status=done", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-uuid-abc");
+    const stderr = bufferStream();
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBody("mcp__agent-tasks__.tasks_transition", {
+          taskId: "task-uuid-abc",
+          status: "done",
+        }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(true);
+    expect(readActiveClaim(generatedDir)).toBeNull();
+  });
+
+  it("negative control: an alias-variant tasks_transition with status=in_progress still keeps the claim", async () => {
+    // Mirrors the a1348c89 review finding: an alias-aware general match
+    // that is NOT also alias-aware on the status-filter path would clear
+    // the marker on ANY status. Pin that this hook's status filter
+    // applies regardless of which alias form triggered it.
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-uuid-abc");
+    const stderr = bufferStream();
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBody("mcp__agent_tasks__tasks_transition", {
+          taskId: "task-uuid-abc",
+          status: "in_progress",
+        }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(false);
+    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+  });
+});
+
+describe("pack hook track-active-claim — Codex wire-format synonyms (task cf4cdc93 review fix, MEDIUM)", () => {
+  // Reviewer probe (empirically confirmed): a Codex-shaped payload using
+  // the `raw_input` field (instead of `tool_input`) or the `tool` field
+  // (instead of `tool_name`) used to silently no-op here, even though
+  // the sibling `codex-post-tool-use` hook already tolerated both
+  // synonyms via its own `pickString` / `resolveToolInput`. These pin
+  // the fix via the shared `hook-bootstrap.ts` helpers.
+  it("writes active-claim on task_start when the taskId arrives under raw_input instead of tool_input", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const stderr = bufferStream();
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "mcp__agent-tasks__task_start",
+          raw_input: { taskId: "task-uuid-abc" },
+        }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimWritten).toBe(true);
+    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+  });
+
+  it("writes active-claim on task_start when the tool name arrives under `tool` instead of `tool_name`", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const stderr = bufferStream();
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool: "mcp__agent-tasks__task_start",
+          tool_input: { taskId: "task-uuid-abc" },
+        }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimWritten).toBe(true);
+    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+  });
+
+  it("clears active-claim on task_finish when both synonyms (`tool` + `raw_input`) are used together", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-uuid-abc");
+    const stderr = bufferStream();
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool: "mcp__agent-tasks__task_finish",
+          raw_input: { taskId: "task-uuid-abc" },
+        }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(true);
+    expect(readActiveClaim(generatedDir)).toBeNull();
+  });
+
+  it("prefers tool_input over raw_input when both are present (matches the sibling codex-post-tool-use precedence)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const stderr = bufferStream();
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "mcp__agent-tasks__task_start",
+          tool_input: { taskId: "from-tool-input" },
+          raw_input: { taskId: "from-raw-input" },
+        }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimWritten).toBe(true);
+    expect(readActiveClaim(generatedDir)).toBe("from-tool-input");
+  });
+
+  it("negative control: missing both tool_name and tool still skips (no false-positive synonym resolution)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const stderr = bufferStream();
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          raw_input: { taskId: "task-uuid-abc" },
+        }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimWritten).toBe(false);
+    expect(readActiveClaim(generatedDir)).toBeNull();
+    expect(stderr.read()).toMatch(/missing tool_name/);
+  });
+});
+
 describe("pack hook track-active-claim — guards and fall-through", () => {
   it("skips silently when pack is enabled:false", async () => {
     const generatedDir = path.join(tmp, "harness.generated");

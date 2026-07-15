@@ -14,6 +14,12 @@
 //   5. `pickString` — first-defined-string-wins candidate picker (was three
 //      byte-identical copies across the Codex hook trio — pre-tool-use,
 //      stop, post-tool-use — before task a1348c89 extracted it here).
+//   6. `resolveToolInput` — tool_input-with-raw_input-fallback resolver
+//      (task cf4cdc93 review finding: track-active-claim and
+//      stay-in-scope read ONLY `tool_input`, silently no-op-ing on a
+//      Codex shim that sends `raw_input` instead — the exact shape
+//      `hook-codex-post-tool-use.ts`'s own private `resolveToolInput`
+//      already handles).
 //
 // Not used by:
 //   - hook-runtime-reality.ts: its stdin reader uses async iteration + an
@@ -137,7 +143,31 @@ export function pickString(...candidates: unknown[]): string | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Pack `config.ux` parser
+// 5. tool_input-with-raw_input-fallback resolver
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve a PostToolUse-style event's tool arguments: prefer `tool_input`
+ * (the field name real Codex sends, matching Claude Code's own
+ * convention — `hook-codex-post-tool-use.ts`'s own doc comment) and fall
+ * back to `raw_input` (harness's originally-published portable wire
+ * format, still accepted for any shim built against harness's earlier
+ * Codex adapter). Mirrors that hook's private `resolveToolInput`
+ * (task a1348c89); extracted here so the agent-tasks-specific
+ * PostToolUse hooks added later for Codex parity (track-active-claim,
+ * stay-in-scope — task cf4cdc93) share the identical resolution instead
+ * of hand-copying it a second and third time.
+ */
+export function resolveToolInput(event: {
+  tool_input?: unknown;
+  raw_input?: unknown;
+}): unknown {
+  if (event.tool_input !== undefined) return event.tool_input;
+  return event.raw_input;
+}
+
+// ---------------------------------------------------------------------------
+// 6. Pack `config.ux` parser
 // ---------------------------------------------------------------------------
 
 /**

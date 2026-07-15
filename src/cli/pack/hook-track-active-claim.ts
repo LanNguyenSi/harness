@@ -30,9 +30,34 @@
 // specific. Operators on Linear / JIRA can ignore this hook (the
 // matcher will never fire for them); a config-driven extension can
 // land later if a second tasking system asks for it.
+//
+// Codex parity (task cf4cdc93): this hook is now also wired on the
+// Codex adapter (`understanding-before-execution.ts`, `runtime ===
+// "codex"` branch), reusing this exact command — no Codex-specific
+// CLI verb needed. The tool-name comparisons below are alias-aware
+// (`toolNameMatchesAny`, not raw `===`): a Codex session can emit an
+// MCP tool name in a variant form for the identical tool (server
+// hyphen/underscore swap, the `mcp__server__.tool` dotted form), and
+// the emitted Codex matcher is alias-EXPANDED at `harness apply` time
+// (`expandCodexHookMatchPattern`) so the dispatcher DOES invoke this
+// hook for a variant — a raw `===` here would then silently miss it,
+// the exact bug class task a1348c89 fixed once already for the
+// marker-expiry PostToolUse hook.
+//
+// Review finding on task cf4cdc93 (empirically confirmed, MEDIUM): the
+// event envelope's field NAMES also vary across the tolerated Codex
+// synonyms — `tool` as well as `tool_name`, `raw_input` as well as
+// `tool_input` (`hook-codex-post-tool-use.ts`'s own doc comment and
+// `docs/policy-packs/understanding-before-execution.md`'s wire-format
+// block both document this). A payload shaped `{ tool, raw_input }`
+// (or any mix) used to silently no-op here while the sibling
+// `codex-post-tool-use` hook already handled it via its own
+// `pickString(event.tool_name, event.tool)` / `resolveToolInput`. Now
+// mirrored via the same shared helpers (`hook-bootstrap.ts`).
 
 import {
   clearActiveClaim,
+  toolNameMatchesAny,
   writeActiveClaim,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
@@ -41,7 +66,9 @@ import { type LoaderOptions } from "../loader.js";
 import {
   checkHookPause,
   loadManifestOrInjected,
+  pickString,
   readStdin,
+  resolveToolInput,
 } from "./hook-bootstrap.js";
 
 const PACK_NAME = "understanding-before-execution";
@@ -103,7 +130,13 @@ export interface PackHookTrackActiveClaimResult {
 interface ToolEventLite {
   session_id?: unknown;
   tool_name?: unknown;
+  // Codex synonym tolerated alongside tool_name (mirrors the sibling
+  // codex-post-tool-use hook's `pickString(event.tool_name, event.tool)`).
+  tool?: unknown;
   tool_input?: unknown;
+  // Codex-shim fallback tolerated alongside tool_input (mirrors the
+  // sibling codex-post-tool-use hook's `resolveToolInput`).
+  raw_input?: unknown;
 }
 
 function extractTaskId(toolInput: unknown): string {
@@ -158,7 +191,7 @@ export async function runPackHookTrackActiveClaimCli(
     );
   }
 
-  const toolName = typeof event.tool_name === "string" ? event.tool_name : "";
+  const toolName = pickString(event.tool_name, event.tool) ?? "";
   if (toolName === "") {
     return noop(
       "harness pack hook track-active-claim: missing tool_name, skipping",
@@ -209,9 +242,10 @@ export async function runPackHookTrackActiveClaimCli(
     );
   }
 
-  const taskId = extractTaskId(event.tool_input);
+  const toolInput = resolveToolInput(event);
+  const taskId = extractTaskId(toolInput);
 
-  if (toolName === TOOL_NAME_TASK_START) {
+  if (toolNameMatchesAny(toolName, [TOOL_NAME_TASK_START])) {
     if (taskId === "") {
       return noop(
         `harness pack hook track-active-claim: task_start without tool_input.taskId, skipping`,
@@ -238,8 +272,7 @@ export async function runPackHookTrackActiveClaimCli(
   }
 
   if (
-    toolName === TOOL_NAME_TASK_FINISH ||
-    toolName === TOOL_NAME_TASK_ABANDON
+    toolNameMatchesAny(toolName, [TOOL_NAME_TASK_FINISH, TOOL_NAME_TASK_ABANDON])
   ) {
     clearActiveClaim(generatedDir);
     const diagnostic = `harness pack hook track-active-claim: cleared active-claim after ${toolName}`;
@@ -253,8 +286,8 @@ export async function runPackHookTrackActiveClaimCli(
     };
   }
 
-  if (toolName === TOOL_NAME_TASKS_TRANSITION) {
-    const status = extractStatus(event.tool_input);
+  if (toolNameMatchesAny(toolName, [TOOL_NAME_TASKS_TRANSITION])) {
+    const status = extractStatus(toolInput);
     if (!TASKS_TRANSITION_CLEAR_STATUSES.has(status)) {
       // open / in_progress / review keep the work claim per v2 semantics
       // (see task_finish docs). Malformed / missing status also falls

@@ -43,11 +43,46 @@
 // Disable knob: `STAY_IN_SCOPE_DISABLED=1` short-circuits to no-op AFTER
 // pause-sentinel evaluation, so an operator who pauses harness still
 // sees the standard pause notice instead of stay-in-scope's silence.
+//
+// Codex parity (task cf4cdc93): this hook is now also wired on the
+// Codex adapter (`understanding-before-execution.ts`, `runtime ===
+// "codex"` branch), reusing this exact command — no Codex-specific CLI
+// verb is needed. The tool-name watch-list check is alias-aware
+// (`toolNameMatchesAny`, not a raw `.includes`): a Codex session can
+// emit an MCP tool name in a variant form for the identical tool
+// (server hyphen/underscore swap, the `mcp__server__.tool` dotted
+// form), and the emitted Codex matcher is alias-EXPANDED at
+// `harness apply` time (`expandCodexHookMatchPattern`) so the
+// dispatcher DOES invoke this hook for a variant — a raw membership
+// check here would then silently miss it, the exact bug class task
+// a1348c89 fixed once already for the marker-expiry PostToolUse hook.
+//
+// Review finding on task cf4cdc93 (empirically confirmed, MEDIUM): the
+// event envelope's field NAMES also vary across the tolerated Codex
+// synonyms — `tool` as well as `tool_name`, `raw_input` as well as
+// `tool_input` (`hook-codex-post-tool-use.ts`'s own doc comment and
+// `docs/policy-packs/understanding-before-execution.md`'s wire-format
+// block both document this). A payload shaped `{ tool, raw_input }`
+// used to silently no-op here. Now mirrored via the same shared
+// helpers (`hook-bootstrap.ts`'s `pickString` / `resolveToolInput`) the
+// sibling `codex-post-tool-use` hook already used. This does NOT touch
+// the `tool_response` taskId fallback below (a Claude-side convenience
+// for the create-call shape where the task UUID is only known after
+// the server roundtrip) — the Codex envelope may not carry
+// `tool_response` at all, and that fallback correctly stays a no-op in
+// that case rather than being folded into the tool_input/raw_input
+// resolution.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { resolveHomeDir } from "../../runtime/home-dir.js";
-import { checkHookPause, readStdin } from "./hook-bootstrap.js";
+import { toolNameMatchesAny } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
+import {
+  checkHookPause,
+  pickString,
+  readStdin,
+  resolveToolInput,
+} from "./hook-bootstrap.js";
 import type { LoaderOptions } from "../loader.js";
 
 export const TOOL_NAME_TASK_CREATE = "mcp__agent-tasks__task_create";
@@ -140,7 +175,13 @@ export interface PackHookStayInScopeResult {
 interface ToolEventLite {
   session_id?: unknown;
   tool_name?: unknown;
+  // Codex synonym tolerated alongside tool_name (mirrors the sibling
+  // codex-post-tool-use hook's `pickString(event.tool_name, event.tool)`).
+  tool?: unknown;
   tool_input?: unknown;
+  // Codex-shim fallback tolerated alongside tool_input (mirrors the
+  // sibling codex-post-tool-use hook's `resolveToolInput`).
+  raw_input?: unknown;
   tool_response?: unknown;
 }
 
@@ -199,32 +240,44 @@ function extractTitle(toolInput: unknown): string | null {
   return typeof t === "string" && t.length > 0 ? t : null;
 }
 
-// Pull a taskId out of either the tool_input (for tasks_update) or the
-// tool_response (the typical create-call shape, where the task UUID is
-// only known after the server roundtrip). Returns null when neither
-// surface carries one.
-function extractTaskId(event: ToolEventLite): string | null {
+// Pull a taskId out of either the (resolved) tool input — tool_input,
+// with the raw_input Codex-shim fallback already applied by the caller
+// — for tasks_update, or the tool_response (the typical create-call
+// shape, where the task UUID is only known after the server
+// roundtrip). Returns null when neither surface carries one.
+//
+// `toolResponse` is read as-is, NOT resolved through the tool_input/
+// raw_input fallback: `tool_response` is a Claude Code convention (the
+// MCP call's return value) that the Codex PostToolUse envelope may not
+// carry at all (see `docs/policy-packs/understanding-before-execution.md`
+// "Adapter notes / Codex" — the documented Codex envelope names
+// `tool_response` nowhere). Folding it into the same resolution as the
+// tool_input/raw_input synonym pair would be wrong: a Codex event
+// simply has no equivalent field, so this half of the fallback
+// correctly stays a no-op there rather than being widened to "resolve
+// from something else".
+function extractTaskId(toolInput: unknown, toolResponse: unknown): string | null {
   const fromInput = (() => {
     if (
-      typeof event.tool_input !== "object" ||
-      event.tool_input === null ||
-      Array.isArray(event.tool_input)
+      typeof toolInput !== "object" ||
+      toolInput === null ||
+      Array.isArray(toolInput)
     ) {
       return null;
     }
-    const tid = (event.tool_input as Record<string, unknown>)["taskId"];
+    const tid = (toolInput as Record<string, unknown>)["taskId"];
     return typeof tid === "string" && tid.length > 0 ? tid : null;
   })();
   if (fromInput !== null) return fromInput;
 
   if (
-    typeof event.tool_response !== "object" ||
-    event.tool_response === null ||
-    Array.isArray(event.tool_response)
+    typeof toolResponse !== "object" ||
+    toolResponse === null ||
+    Array.isArray(toolResponse)
   ) {
     return null;
   }
-  const respObj = event.tool_response as Record<string, unknown>;
+  const respObj = toolResponse as Record<string, unknown>;
   // The server response wraps the task under `task` for task_create and
   // task_finish, but at the top level for some bulk verbs. Probe both
   // shapes; fall back to null on miss.
@@ -343,17 +396,17 @@ export async function runPackHookStayInScopeCli(
     );
   }
 
-  const toolName =
-    typeof event.tool_name === "string" ? event.tool_name : "";
-  if (toolName === "" || !STAY_IN_SCOPE_TOOLS.includes(toolName)) {
+  const toolName = pickString(event.tool_name, event.tool) ?? "";
+  if (toolName === "" || !toolNameMatchesAny(toolName, STAY_IN_SCOPE_TOOLS)) {
     return noop(
       `harness pack hook stay-in-scope: tool ${toolName || "(missing)"} not in watch list, skipping`,
       stderr,
     );
   }
 
-  const labels = extractLabels(event.tool_input);
-  const description = extractDescription(event.tool_input);
+  const toolInput = resolveToolInput(event);
+  const labels = extractLabels(toolInput);
+  const description = extractDescription(toolInput);
   const evaluation = evaluateMatch(labels, description);
   if (!evaluation.matched) {
     return noop(
@@ -362,8 +415,8 @@ export async function runPackHookStayInScopeCli(
     );
   }
 
-  const taskId = extractTaskId(event);
-  const title = extractTitle(event.tool_input);
+  const taskId = extractTaskId(toolInput, event.tool_response);
+  const title = extractTitle(toolInput);
   const now = (opts.now ?? new Date()).toISOString();
 
   const record: StayInScopeAuditRecord = {

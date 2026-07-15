@@ -1,9 +1,9 @@
 ---
 type: module
 title: Codex runtime adapter — parity gaps vs Claude Code
-description: What harness's Codex runtime adapter is, the enumerated behavioral gaps vs the Claude Code first-class target (former headline gap — no Codex PostToolUse hook — closed by task a1348c89; current top gap is the missing active-claim tracker / stay-in-scope reminder on Codex), and the Codex wire-format contract.
+description: What harness's Codex runtime adapter is, the enumerated behavioral gaps vs the Claude Code first-class target (former headline gap — no Codex PostToolUse hook — closed by task a1348c89; the active-claim tracker / stay-in-scope reminder gap closed by task cf4cdc93; current top gap is the un-translated permission-profile / sandbox stanza, gap 4), and the Codex wire-format contract.
 tags: [codex, runtime-adapter, parity, hooks]
-timestamp: 2026-07-09T02:50:30.125962Z
+timestamp: 2026-07-15T08:49:45.923000Z
 sources:
   - src/policy-packs/builtin/understanding-before-execution.ts
   - src/policy-packs/builtin/understanding-before-execution-runtime.ts
@@ -13,6 +13,9 @@ sources:
   - src/cli/pack/hook-codex-post-tool-use.ts
   - src/cli/pack/hook-codex-stop.ts
   - src/cli/pack/hook-codex-user-prompt-submit.ts
+  - src/cli/pack/hook-track-active-claim.ts
+  - src/cli/pack/hook-stay-in-scope.ts
+  - src/cli/pack/hook-bootstrap.ts
   - src/cli/apply/apply.ts
   - src/cli/apply/generate-codex-config.ts
   - src/cli/apply/install-codex-config.ts
@@ -43,7 +46,15 @@ Cross-runtime approval state is shared by design: both runtimes persist reports 
 
 2. **What e7c2ec3c DID fix (so you don't re-fix it): TTL and task-scoped markers now reach Codex.** Before 0.39.0 the Codex blocker called the bare session-marker check, so `approval_lifecycle.max_age` and `harness approve understanding --task` markers applied only to Claude Code. Both hooks now share `checkOperatorApprovalMarkers` (`understanding-before-execution-runtime.ts` ~line 859; consumed at `hook-codex-pre-tool-use.ts` lines 253–280), task-scoped marker first, session marker second, same TTL, plus a task-scope trace line on stderr. Pinned by five parity tests per CHANGELOG 0.39.0.
 
-3. **CURRENT TOP GAP — no Codex active-claim tracker or stay-in-scope reminder.** The Claude branch emits the `track-active-claim` PostToolUse hook (writes `harness.generated/active-claim` on `task_start`, lets `harness approve understanding` auto-resolve `--task`) and the `stay-in-scope` PostToolUse reminder; the Codex branch emits neither, even after gap 1 closed (the Codex `PostToolUse` group now carries exactly one hook, the marker-expiry one from gap 1 — `understanding-before-execution.ts`, `runtime === "codex"` branch). A Codex session honors an existing task-scoped marker (gap 2) but can never produce the active-claim file itself.
+3. **CLOSED (task cf4cdc93) — the pack now wires the active-claim tracker and the stay-in-scope reminder on Codex too.** The `runtime === "codex"` branch of `buildHooks` (`understanding-before-execution.ts`) now returns six hooks (UserPromptSubmit, Stop, PreToolUse, PostToolUse marker-expiry from gap 1, PostToolUse active-claim tracker, PostToolUse stay-in-scope reminder) — the same count and hook roster as the Claude branch. A Codex session can now both honor an existing task-scoped marker (gap 2) AND produce the active-claim file itself, closing the asymmetry this gap used to describe.
+
+   **Why this was feasible with no dispatcher-level wire-format gap, unlike gap 4 (permission profiles):** both hooks (`src/cli/pack/hook-track-active-claim.ts`, `src/cli/pack/hook-stay-in-scope.ts`) needed no new Codex-specific CLI verb, no session-id resolution, and no shell-command extraction the way `codex-post-tool-use`/`codex-pre-tool-use` need; `harness pack hook track-active-claim` and `harness pack hook stay-in-scope` are the SAME command on both runtimes now (avoids reintroducing the Claude/Codex drift class task e7c2ec3c fixed on the PreToolUse side).
+
+   **What DID need Codex-specific handling (mirrors the gap-1 sub-finding, same bug class, dispatcher layer):** the two hardcoded Claude matchers (`TRACK_ACTIVE_CLAIM_MATCH`, `STAY_IN_SCOPE_MATCH`) are anchored `^(?:...)$` regexes, which `expandCodexHookMatchPattern`'s "simple token" guard passes through UNCHANGED at TOML-emit time — a Codex session sending an MCP tool-name variant (server hyphen/underscore swap, the `mcp__server__.tool` dotted form) would never even reach the hook. Fixed with Codex-specific bare `|`-joined sibling constants (`TRACK_ACTIVE_CLAIM_MATCH_CODEX`, `STAY_IN_SCOPE_MATCH_CODEX`), same shape as `codexPostToolUseMatchPattern`'s output. The hook BODIES were also made alias-aware (`toolNameMatchesAny`, not raw `===`/`.includes`) so a variant `tool_name` that the widened Codex matcher now routes to the hook is also recognized once inside it — the exact two-layer fix shape (dispatcher + body) task a1348c89 established.
+
+   **Sub-finding fixed in the same task (review, empirically confirmed, MEDIUM):** the initial cf4cdc93 landing left both hook bodies reading ONLY `event.tool_name` / `event.tool_input`, even though the documented Codex envelope (see "Wire-format differences" below) also tolerates `tool` as a `tool_name` synonym and `raw_input` as a `tool_input` synonym — the exact pair `codex-post-tool-use` already handles via its own `pickString(event.tool_name, event.tool)` / `resolveToolInput`. A reviewer probe confirmed both `{ tool_name, raw_input: { taskId } }` and `{ tool, tool_input: { taskId } }` silently no-op'd in `track-active-claim` and `stay-in-scope` while the sibling hook worked. Fixed by extracting the sibling's two helpers into shared `src/cli/pack/hook-bootstrap.ts` functions (`pickString`, already there from task a1348c89; new `resolveToolInput`) and consuming them from both hooks, rather than hand-copying a third and fourth private copy. `stay-in-scope`'s `tool_response` taskId fallback (a Claude-side convention the Codex envelope may not carry at all) was deliberately left untouched — it is read as-is, not folded into the `tool_input`/`raw_input` resolution. New tests in `tests/cli/pack-hook-track-active-claim.test.ts` and `tests/cli/pack-hook-stay-in-scope.test.ts` cover the `raw_input`-only shape, the `tool`-only shape, tool_input-over-raw_input precedence, the still-working `tool_response` fallback, and a negative control (neither name field present still skips).
+
+   Generator-layer + hook-body tests live in `tests/policy-packs/expand.test.ts`, `tests/cli/apply/generate-codex-config.test.ts`, `tests/cli/pack-hook-track-active-claim.test.ts`, and `tests/cli/pack-hook-stay-in-scope.test.ts`.
 
 4. **Pack permission profiles are not translated to a Codex sandbox stanza.** `policy_packs[].config.permission_profile` projects into Claude Code's `settings.json` `permissions` block; the Codex generator does not consume it and `apply --runtime codex` emits a counting warning instead ("--runtime codex does not yet wire permissions into Codex's sandbox shape (filed as a Phase 6 #6 follow-up)", `apply.ts` lines 382–398; generator header comment lines 26–28; docs pack file "Out of scope for v1"). For v1 the hooks alone are the enforcement on Codex.
 

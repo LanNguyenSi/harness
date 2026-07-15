@@ -289,10 +289,15 @@ describe("expandPolicyPacks", () => {
   it("Codex adapter contributes a PostToolUse marker-expiry hook (task a1348c89 — closes the parity gap)", () => {
     // Before task a1348c89 the Codex branch of buildHooks emitted exactly
     // 3 hooks (UserPromptSubmit + Stop + PreToolUse); approval_lifecycle
-    // boundaries never fired in Codex sessions. This pins the 4th hook.
+    // boundaries never fired in Codex sessions. Task cf4cdc93 then added
+    // the active-claim tracker + stay-in-scope reminder (2 more
+    // always-on PostToolUse hooks), growing the default expansion to 6
+    // — same total as the Claude sibling. This test pins the
+    // marker-expiry hook specifically; the two newer hooks are pinned
+    // below.
     const m = buildManifest([{ name: "understanding-before-execution" }]);
     const r = expandPolicyPacks(m, "codex");
-    expect(r.hooks).toHaveLength(4);
+    expect(r.hooks).toHaveLength(6);
     const post = r.hooks.find((h) => h.event === "PostToolUse");
     expect(post).toBeDefined();
     expect(post?.command).toBe("harness pack hook codex-post-tool-use");
@@ -309,7 +314,81 @@ describe("expandPolicyPacks", () => {
     );
   });
 
-  it("Codex PostToolUse hook is suppressed when approval_lifecycle.mode = session (parity with the Claude opt-out)", () => {
+  it("Codex adapter contributes the active-claim tracker + stay-in-scope reminder hooks (task cf4cdc93 — closes parity gap #3)", () => {
+    // Before task cf4cdc93 the Codex branch never emitted these two
+    // hooks at all: a Codex session honored an existing task-scoped
+    // marker (gap 2) but could never PRODUCE the active-claim file
+    // itself, and got no stay-in-scope reminder either.
+    const m = buildManifest([{ name: "understanding-before-execution" }]);
+    const r = expandPolicyPacks(m, "codex");
+    expect(r.hooks).toHaveLength(6);
+    const names = r.hooks.map((h) => h.name).sort();
+    expect(names).toEqual([
+      "policy-pack:understanding-before-execution:codex:post-tool-use",
+      "policy-pack:understanding-before-execution:codex:pre-tool-use",
+      "policy-pack:understanding-before-execution:codex:stay-in-scope",
+      "policy-pack:understanding-before-execution:codex:stop",
+      "policy-pack:understanding-before-execution:codex:track-active-claim",
+      "policy-pack:understanding-before-execution:codex:user-prompt-submit",
+    ]);
+
+    const claim = r.hooks.find(
+      (h) => h.name === "policy-pack:understanding-before-execution:codex:track-active-claim",
+    );
+    expect(claim?.event).toBe("PostToolUse");
+    expect(claim?.blocking).toBe(false);
+    // Same command as the Claude sibling (no Codex-specific CLI verb
+    // needed — the hook body only inspects generic tool_name/tool_input
+    // fields).
+    expect(claim?.command).toBe("harness pack hook track-active-claim");
+    // Bare pipe list (not the Claude builder's anchored form), same
+    // rationale as the marker-expiry hook above.
+    expect(claim?.match).toBe(
+      "mcp__agent-tasks__task_start|mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__tasks_transition",
+    );
+
+    const scope = r.hooks.find(
+      (h) => h.name === "policy-pack:understanding-before-execution:codex:stay-in-scope",
+    );
+    expect(scope?.event).toBe("PostToolUse");
+    expect(scope?.blocking).toBe(false);
+    expect(scope?.command).toBe("harness pack hook stay-in-scope");
+    expect(scope?.match).toBe(
+      "mcp__agent-tasks__task_create|mcp__agent-tasks__tasks_create|mcp__agent-tasks__tasks_update",
+    );
+  });
+
+  it("the emitted Codex track-active-claim / stay-in-scope match strings are alias-expandable (task cf4cdc93, mirrors the a1348c89 review finding)", () => {
+    const m = buildManifest([{ name: "understanding-before-execution" }]);
+    const r = expandPolicyPacks(m, "codex");
+    const claim = r.hooks.find(
+      (h) => h.name === "policy-pack:understanding-before-execution:codex:track-active-claim",
+    );
+    const scope = r.hooks.find(
+      (h) => h.name === "policy-pack:understanding-before-execution:codex:stay-in-scope",
+    );
+    const expandedClaim = expandCodexHookMatchPattern(claim?.match ?? "");
+    const expandedScope = expandCodexHookMatchPattern(scope?.match ?? "");
+    // Proves the bare form actually expands (unlike the anchored Claude
+    // form, which the a1348c89 regression test above already guards).
+    expect(expandedClaim).not.toBe(claim?.match);
+    expect(expandedScope).not.toBe(scope?.match);
+    const claimRe = new RegExp(expandedClaim);
+    expect(claimRe.test("mcp__agent-tasks__task_start")).toBe(true); // canonical
+    expect(claimRe.test("mcp__agent-tasks__.task_start")).toBe(true); // dotted
+    expect(claimRe.test("mcp__agent_tasks__task_start")).toBe(true); // underscore-server
+    expect(claimRe.test("Read")).toBe(false); // negative control
+    const scopeRe = new RegExp(expandedScope);
+    expect(scopeRe.test("mcp__agent-tasks__task_create")).toBe(true);
+    expect(scopeRe.test("mcp__agent_tasks__.task_create")).toBe(true);
+    expect(scopeRe.test("Read")).toBe(false);
+  });
+
+  it("track-active-claim and stay-in-scope always emit on Codex regardless of approval_lifecycle config (parity with the Claude opt-out)", () => {
+    // Mirrors the Claude-side "marker-expiry PostToolUse hook is
+    // suppressed when approval_lifecycle.mode = session (but
+    // track-active-claim still emits)" test above: these two hooks are
+    // independent of marker-expiry semantics on Codex too.
     const m = buildManifest([
       {
         name: "understanding-before-execution",
@@ -317,8 +396,30 @@ describe("expandPolicyPacks", () => {
       },
     ]);
     const r = expandPolicyPacks(m, "codex");
-    expect(r.hooks).toHaveLength(3);
-    expect(r.hooks.some((h) => h.event === "PostToolUse")).toBe(false);
+    const postToolUseHooks = r.hooks.filter((h) => h.event === "PostToolUse");
+    expect(postToolUseHooks).toHaveLength(2);
+    const names = postToolUseHooks.map((h) => h.name).sort();
+    expect(names).toEqual([
+      "policy-pack:understanding-before-execution:codex:stay-in-scope",
+      "policy-pack:understanding-before-execution:codex:track-active-claim",
+    ]);
+    expect(r.hooks).toHaveLength(5);
+  });
+
+  it("Codex PostToolUse marker-expiry hook is suppressed when approval_lifecycle.mode = session (parity with the Claude opt-out)", () => {
+    const m = buildManifest([
+      {
+        name: "understanding-before-execution",
+        config: { approval_lifecycle: { mode: "session" } },
+      },
+    ]);
+    const r = expandPolicyPacks(m, "codex");
+    // 5, not 3: track-active-claim + stay-in-scope (task cf4cdc93) are
+    // always-on and are not suppressed by the marker-expiry opt-out.
+    expect(r.hooks).toHaveLength(5);
+    expect(
+      r.hooks.find((h) => h.command === "harness pack hook codex-post-tool-use"),
+    ).toBeUndefined();
   });
 
   it("Codex PostToolUse hook match pattern reflects a custom expire_on_tool_match list", () => {
