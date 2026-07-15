@@ -153,9 +153,10 @@ describe("generateCodexConfig", () => {
     // as a regex, matches a canonical `task_finish` call AND the
     // server-hyphen/underscore + dotted MCP name variants Codex may
     // send for the identical tool. Negative: an unrelated tool name
-    // does not match. This is the MCP tool-name side only —
-    // expire_on_bash_match Bash routing is a separate, still-open gap
-    // (agent-tasks bea04a03), deliberately not asserted here.
+    // does not match. This is the MCP tool-name side only; the
+    // expire_on_bash_match / shell-alias routing this comment used to
+    // call a "still-open gap" is now covered by the dedicated test below
+    // (task bea04a03 closed it).
     const m = parseManifest({
       version: 1,
       policy_packs: [{ name: "understanding-before-execution" }],
@@ -171,6 +172,42 @@ describe("generateCodexConfig", () => {
     expect(re.test("mcp__agent-tasks__.task_finish")).toBe(true); // dotted
     expect(re.test("mcp__agent_tasks__task_finish")).toBe(true); // underscore-server
     expect(re.test("Read")).toBe(false); // negative control: unrelated tool
+  });
+
+  it("routes a shell call through the real emitted PostToolUse matcher when expire_on_bash_match is configured (task bea04a03 generator-layer pin)", () => {
+    // Same end-to-end shape as the test above, but for the
+    // expire_on_bash_match boundary: before task bea04a03, the emitted
+    // config.toml PostToolUse matcher never contained any Codex shell
+    // alias, so a real `shell`/`exec_command`/`functions.exec_command`/
+    // `Bash` call could never reach the hook that evaluates
+    // expire_on_bash_match, no matter how the operator configured it.
+    const m = parseManifest({
+      version: 1,
+      policy_packs: [
+        {
+          name: "understanding-before-execution",
+          config: {
+            approval_lifecycle: {
+              expire_on_bash_match: ["^gh pr (merge|close)\\b"],
+            },
+          },
+        },
+      ],
+    });
+    const { hooks } = expandPolicyPacks(m, "codex");
+    const { content } = generateCodexConfig(parseManifest({ version: 1, hooks }));
+
+    const matcher = content.match(/\[\[hooks\.PostToolUse\]\]\nmatcher = "([^"]+)"/)?.[1];
+    expect(matcher).toBeDefined();
+
+    const re = new RegExp(matcher!);
+    // Positive: every Codex shell alias now routes.
+    expect(re.test("Bash")).toBe(true);
+    expect(re.test("shell")).toBe(true);
+    expect(re.test("exec_command")).toBe(true);
+    expect(re.test("functions.exec_command")).toBe(true);
+    // Negative control: an unrelated tool still does not match.
+    expect(re.test("Read")).toBe(false);
   });
 
   it("keeps the 2s policy-intercept floor when budget_ms ceil already meets it", () => {

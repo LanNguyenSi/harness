@@ -118,6 +118,78 @@ describe("expandPolicyPacks", () => {
     expect(post?.match).toBe("^(?:mcp__linear__issue_close|Bash)$");
   });
 
+  it("widens the PostToolUse matcher to include Bash when expire_on_bash_match is configured (task bea04a03)", () => {
+    // Before task bea04a03, `match` was built ONLY from
+    // expire_on_tool_match, so a real Bash call never invoked this hook
+    // at all — expire_on_bash_match was dead at the wiring level. This
+    // pins the fix: the default tool list PLUS "Bash".
+    const m = buildManifest([
+      {
+        name: "understanding-before-execution",
+        config: {
+          approval_lifecycle: {
+            expire_on_bash_match: ["^gh pr (merge|close)\\b"],
+          },
+        },
+      },
+    ]);
+    const r = expandPolicyPacks(m);
+    const post = r.hooks.find(
+      (h) => h.name === "policy-pack:understanding-before-execution:post-tool-use",
+    );
+    expect(post?.match).toBe(
+      "^(?:mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__pull_requests_merge|mcp__agent-tasks__tasks_transition|Bash)$",
+    );
+    // Positive control: a real Bash tool_name now routes through the
+    // emitted matcher. Negative control: an unrelated tool does not.
+    const re = new RegExp(post!.match!);
+    expect(re.test("Bash")).toBe(true);
+    expect(re.test("Read")).toBe(false);
+  });
+
+  it("still emits the PostToolUse hook (Bash-only matcher) when expire_on_tool_match is explicitly empty but expire_on_bash_match is configured", () => {
+    // Regression guard: resolveExpireOnToolMatch alone would have
+    // returned emitHook:false here (tools.length === 0), which would
+    // have suppressed the hook entirely even though a bash boundary was
+    // configured — a worse bug than merely not routing Bash.
+    const m = buildManifest([
+      {
+        name: "understanding-before-execution",
+        config: {
+          approval_lifecycle: {
+            expire_on_tool_match: [],
+            expire_on_bash_match: ["^gh pr (merge|close)\\b"],
+          },
+        },
+      },
+    ]);
+    const r = expandPolicyPacks(m);
+    const post = r.hooks.find(
+      (h) => h.name === "policy-pack:understanding-before-execution:post-tool-use",
+    );
+    expect(post).toBeDefined();
+    expect(post?.match).toBe("^(?:Bash)$");
+  });
+
+  it("does not duplicate Bash in the matcher when expire_on_tool_match already lists it", () => {
+    const m = buildManifest([
+      {
+        name: "understanding-before-execution",
+        config: {
+          approval_lifecycle: {
+            expire_on_tool_match: ["Bash"],
+            expire_on_bash_match: ["^gh pr merge\\b"],
+          },
+        },
+      },
+    ]);
+    const r = expandPolicyPacks(m);
+    const post = r.hooks.find(
+      (h) => h.name === "policy-pack:understanding-before-execution:post-tool-use",
+    );
+    expect(post?.match).toBe("^(?:Bash)$");
+  });
+
   it("PreToolUse hook is hard-blocking with the documented match", () => {
     const m = buildManifest([{ name: "understanding-before-execution" }]);
     const r = expandPolicyPacks(m);
@@ -263,6 +335,54 @@ describe("expandPolicyPacks", () => {
     const r = expandPolicyPacks(m, "codex");
     const post = r.hooks.find((h) => h.event === "PostToolUse");
     expect(post?.match).toBe("mcp__linear__issue_close|Bash");
+  });
+
+  it("widens the Codex PostToolUse matcher to include the shell-tool aliases when expire_on_bash_match is configured (task bea04a03)", () => {
+    // Codex parity of the Claude widening test above: before task
+    // bea04a03, expire_on_bash_match never routed a real shell call
+    // (Bash/shell/exec_command/functions.exec_command) to this hook on
+    // Codex either.
+    const m = buildManifest([
+      {
+        name: "understanding-before-execution",
+        config: {
+          approval_lifecycle: {
+            expire_on_bash_match: ["^gh pr (merge|close)\\b"],
+          },
+        },
+      },
+    ]);
+    const r = expandPolicyPacks(m, "codex");
+    const post = r.hooks.find((h) => h.event === "PostToolUse");
+    expect(post?.match).toBe(
+      "mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__pull_requests_merge|mcp__agent-tasks__tasks_transition|Bash|shell|exec_command|functions.exec_command",
+    );
+    // Positive control (each shell alias routes); negative control (an
+    // unrelated tool does not).
+    const re = new RegExp(`^(?:${post!.match!})$`);
+    expect(re.test("Bash")).toBe(true);
+    expect(re.test("shell")).toBe(true);
+    expect(re.test("exec_command")).toBe(true);
+    expect(re.test("functions.exec_command")).toBe(true);
+    expect(re.test("Read")).toBe(false);
+  });
+
+  it("still emits the Codex PostToolUse hook when expire_on_tool_match is explicitly empty but expire_on_bash_match is configured", () => {
+    const m = buildManifest([
+      {
+        name: "understanding-before-execution",
+        config: {
+          approval_lifecycle: {
+            expire_on_tool_match: [],
+            expire_on_bash_match: ["^gh pr merge\\b"],
+          },
+        },
+      },
+    ]);
+    const r = expandPolicyPacks(m, "codex");
+    const post = r.hooks.find((h) => h.event === "PostToolUse");
+    expect(post).toBeDefined();
+    expect(post?.match).toBe("Bash|shell|exec_command|functions.exec_command");
   });
 
   it("the emitted Codex PostToolUse match string is alias-expandable and routes MCP tool-name variants (task a1348c89 review finding)", () => {

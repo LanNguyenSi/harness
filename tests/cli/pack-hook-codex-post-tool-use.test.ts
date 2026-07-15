@@ -21,6 +21,7 @@ import {
   writeApprovalMarker,
   writeTaskApprovalMarker,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
+import { expandPolicyPacks } from "../../src/policy-packs/expand.js";
 import { writeSentinel } from "../../src/runtime/pause-sentinel.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
@@ -820,5 +821,69 @@ describe("pack hook codex-post-tool-use — integration must-pass control: expir
     });
     expect(preAfter.exitCode).toBe(2);
     expect(preAfter.blocked).toBe(true);
+  });
+});
+
+describe("pack hook codex-post-tool-use — end-to-end matcher routing for expire_on_bash_match (task bea04a03)", () => {
+  // Codex parity of the Claude suite's equivalent block
+  // (tests/cli/pack-hook-post-tool-use.test.ts): every test above builds
+  // the manifest directly and calls the hook CLI function without going
+  // through the pack's own Codex matcher builder, which is why the
+  // routing bug (the emitted `config.toml` matcher never included the
+  // Codex shell aliases) was invisible to the existing suite.
+  it("the real emitted Codex PostToolUse matcher routes a `gh pr merge` shell call to the hook, which expires the marker end-to-end", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-05-17T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+
+    const manifest = manifestWithPack({
+      approval_lifecycle: {
+        expire_on_bash_match: ["^gh pr (merge|close)\\b"],
+      },
+    });
+    const { hooks } = expandPolicyPacks(manifest, "codex");
+    const post = hooks.find((h) => h.event === "PostToolUse");
+    expect(post?.match).toBeDefined();
+
+    // Codex's own hook dispatch is unanchored substring-style matching
+    // against the bare pipe-joined `match` field (see
+    // codexPostToolUseMatchPattern's doc comment); simulate that gate
+    // directly. Before task bea04a03 this assertion was false for every
+    // shell alias — none of Bash/shell/exec_command/functions.exec_command
+    // was ever in the matcher.
+    expect(new RegExp(post!.match!).test("shell")).toBe(true);
+
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPostToolUseCli({
+      manifest,
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "shell",
+          tool_input: { command: "gh pr merge 42 --squash" },
+        }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+    expect(result.matchedExpiry).toBe(true);
+    expect(result.markerCleared).toBe(true);
+    expect(fs.existsSync(approvalMarkerPathFor(generatedDir, "sess-1"))).toBe(
+      false,
+    );
+  });
+
+  it("negative control: the real emitted matcher does not route a non-boundary tool", () => {
+    const manifest = manifestWithPack({
+      approval_lifecycle: {
+        expire_on_bash_match: ["^gh pr (merge|close)\\b"],
+      },
+    });
+    const { hooks } = expandPolicyPacks(manifest, "codex");
+    const post = hooks.find((h) => h.event === "PostToolUse");
+    const re = new RegExp(post!.match!);
+    expect(re.test("Read")).toBe(false);
   });
 });

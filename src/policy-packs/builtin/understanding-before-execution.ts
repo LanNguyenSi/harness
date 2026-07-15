@@ -27,6 +27,7 @@ import {
   KNOWN_PROFILE_NAMES,
 } from "./permission-profiles.js";
 import { REPORTS_DIR_ENV } from "./understanding-before-execution-runtime.js";
+import { SHELL_ALIASES } from "../../runtime/tool-name-aliases.js";
 
 export const PACK_NAME = "understanding-before-execution";
 
@@ -272,16 +273,51 @@ const STAY_IN_SCOPE_MATCH =
 
 const STAY_IN_SCOPE_COMMAND_CLAUDE = "harness pack hook stay-in-scope";
 
+// Bash tool name used to widen the PostToolUse matcher when
+// `expire_on_bash_match` is configured (task bea04a03). Matches the
+// single entry of `DEFAULT_BASH_TOOL_NAMES` in
+// understanding-before-execution-runtime.ts.
+const BASH_TOOL_NAME_CLAUDE = "Bash";
+
+// Codex shell-tool aliases used for the same widening on the Codex
+// matcher builder below. Derived from the canonical `SHELL_ALIASES` in
+// `src/runtime/tool-name-aliases.ts` (task bea04a03 review finding) —
+// `policy-packs/` IS allowed to depend on `runtime/` (layering rule,
+// `.dependency-cruiser.cjs`; the sibling understanding-before-execution-runtime.ts
+// already imports from there), so this is a shared source of truth
+// rather than a third hand-maintained copy. `CODEX_SHELL_TOOLS` in
+// `src/cli/pack/hook-codex-pre-tool-use.ts` stays a separate literal:
+// `policy-packs/` may not depend on `cli/` (same layering rule), so that
+// one cannot be unified with this without a boundary violation.
+const BASH_TOOL_NAMES_CODEX: ReadonlyArray<string> = SHELL_ALIASES;
+
 /**
- * Compose the PostToolUse `match` regex from the configured tool list.
+ * Compose the PostToolUse `match` regex from the configured tool list,
+ * widened with the Bash tool name when `includeBash` is true (task
+ * bea04a03: `approval_lifecycle.expire_on_bash_match` carries at least
+ * one pattern). Before this widening, `expire_on_tool_match` alone
+ * gated the matcher, so a real `Bash` call never reached the hook at
+ * all — `matchPostToolUseBoundary`'s bash-regex check (which DOES
+ * correctly evaluate `expire_on_bash_match` once invoked) was
+ * unreachable in practice. Adding "Bash" here only ROUTES the call to
+ * the hook; it does not add "Bash" to `expire_on_tool_match`'s own
+ * semantics — the hook body still classifies a matched Bash call as a
+ * bash-regex match (`toolNameMatched: false`), never a tool-name match.
  * Each tool name is regex-escaped and joined with `|` so settings.json
  * fires the hook only when the just-completed tool is one we care
  * about. When the operator declared `approval_lifecycle: { mode: session }`
- * (or cleared the list), no PostToolUse hook is emitted at all (caller
+ * (or cleared both lists), no PostToolUse hook is emitted at all (caller
  * filters).
  */
-function postToolUseMatchPattern(tools: ReadonlyArray<string>): string {
-  const escaped = tools.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+function postToolUseMatchPattern(
+  tools: ReadonlyArray<string>,
+  includeBash: boolean,
+): string {
+  const widened =
+    includeBash && !tools.includes(BASH_TOOL_NAME_CLAUDE)
+      ? [...tools, BASH_TOOL_NAME_CLAUDE]
+      : tools;
+  const escaped = widened.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   return `^(?:${escaped.join("|")})$`;
 }
 
@@ -315,9 +351,25 @@ function postToolUseMatchPattern(tools: ReadonlyArray<string>): string {
  * matcher) is unanchored substring-style matching already, and this
  * keeps the Codex and Claude builders independently tunable rather
  * than smuggling a Codex-only branch into the shared Claude helper.
+ *
+ * Like the Claude builder above, `includeBash` (task bea04a03) widens
+ * the emitted list with the Codex shell-tool aliases
+ * (`BASH_TOOL_NAMES_CODEX`: Bash/shell/exec_command/functions.exec_command)
+ * when `approval_lifecycle.expire_on_bash_match` carries at least one
+ * pattern, so a real Codex shell call is actually routed to the hook.
+ * The aliases stay simple tokens (no anchors), so they still pass
+ * through `expandCodexHookMatchPattern` unchanged — they have no MCP-style
+ * variants to expand, but they must not trip the "simple token" guard
+ * either.
  */
-function codexPostToolUseMatchPattern(tools: ReadonlyArray<string>): string {
-  return tools.join("|");
+function codexPostToolUseMatchPattern(
+  tools: ReadonlyArray<string>,
+  includeBash: boolean,
+): string {
+  const widened = includeBash
+    ? [...tools, ...BASH_TOOL_NAMES_CODEX.filter((t) => !tools.includes(t))]
+    : tools;
+  return widened.join("|");
 }
 
 function resolveExpireOnToolMatch(pack: PolicyPack): {
@@ -347,6 +399,67 @@ function resolveExpireOnToolMatch(pack: PolicyPack): {
     return { tools, emitHook: tools.length > 0 };
   }
   return { tools: [...DEFAULT_EXPIRE_ON_TOOL_MATCH], emitHook: true };
+}
+
+/**
+ * Whether `approval_lifecycle.expire_on_bash_match` carries at least one
+ * non-empty pattern (task bea04a03). Used ONLY to decide whether the
+ * emitted PostToolUse matcher should be widened to route Bash (Claude) /
+ * shell-alias (Codex) calls to the hook at all — the actual regex
+ * compiling and matching against `tool_input.command` happens downstream
+ * in `parseApprovalLifecycle` / `matchPostToolUseBoundary`
+ * (understanding-before-execution-runtime.ts). An entry that turns out to
+ * be an invalid regex is silently dropped there with a warning; that is
+ * harmless here — the matcher merely routes the call to the hook, and a
+ * hook invocation that finds no live bash-regex match just no-ops
+ * (mirrors the existing `noBoundariesConfigured` / `boundary.matched`
+ * no-op paths in hook-post-tool-use.ts / hook-codex-post-tool-use.ts).
+ *
+ * Mirrors `resolveExpireOnToolMatch`'s traversal of the same config
+ * block (undefined/non-object/`mode: session` all resolve to "not
+ * configured"), but returns a bare boolean since the matcher builders
+ * only need presence, not the pattern strings themselves.
+ */
+function resolveExpireOnBashMatchConfigured(pack: PolicyPack): boolean {
+  const raw = (pack.config as Record<string, unknown>)["approval_lifecycle"];
+  if (raw === undefined || raw === null) return false;
+  if (typeof raw !== "object" || Array.isArray(raw)) return false;
+  const obj = raw as Record<string, unknown>;
+  if (obj["mode"] === "session") return false;
+  const list = obj["expire_on_bash_match"];
+  if (!Array.isArray(list)) return false;
+  return list.some((v) => typeof v === "string" && v.length > 0);
+}
+
+interface PostToolUseBoundaries {
+  tools: string[];
+  bashConfigured: boolean;
+  /** `true` when the PostToolUse hook should be emitted at all: either
+   * `expire_on_tool_match` resolved a non-empty list, or
+   * `expire_on_bash_match` is configured (task bea04a03) — the latter
+   * matters on its own because an operator can set
+   * `expire_on_tool_match: []` while still wanting a Bash-only boundary,
+   * which `resolveExpireOnToolMatch`'s own `emitHook` alone would have
+   * suppressed entirely. */
+  emit: boolean;
+}
+
+/**
+ * Shared PostToolUse boundary resolution for BOTH the Claude and Codex
+ * `buildHooks` branches (task bea04a03): combines
+ * `resolveExpireOnToolMatch` and `resolveExpireOnBashMatchConfigured`
+ * into the one decision each branch's IIFE needs. Extracted specifically
+ * to avoid re-introducing the exact clone-avoidance problem
+ * `understanding-before-execution-runtime.ts`'s `matchPostToolUseBoundary`
+ * / `applyPostToolUseExpiry` / `describePostToolUseExpiry` extraction
+ * already solved once for the two runtimes' hook CLIs (`check:duplication`
+ * flagged the inline duplicate when this task first wired the two nearly-
+ * identical IIFEs by hand).
+ */
+function resolvePostToolUseBoundaries(pack: PolicyPack): PostToolUseBoundaries {
+  const { tools, emitHook: toolsEmitHook } = resolveExpireOnToolMatch(pack);
+  const bashConfigured = resolveExpireOnBashMatchConfigured(pack);
+  return { tools, bashConfigured, emit: toolsEmitHook || bashConfigured };
 }
 
 function buildHooks(
@@ -395,36 +508,40 @@ function buildHooks(
         description:
           "Codex adapter: block apply_patch and Codex shell tools until an approved Understanding Report exists for the session. Consults both the evidence-ledger tag and the persisted JSON report.",
       },
-      // PostToolUse marker-expiry (task a1348c89). Same boundary-tool
-      // list as the Claude hook below (resolveExpireOnToolMatch) so
-      // Codex expires on the identical default set (agent-tasks
-      // task_finish / task_abandon / pull_requests_merge /
-      // tasks_transition) — but a DIFFERENT `match` builder
-      // (`codexPostToolUseMatchPattern`, not `postToolUseMatchPattern`):
-      // see that function's own doc comment for why the Claude builder's
-      // anchored regex form silently defeats the Codex generator's MCP
-      // tool-name alias expansion (review finding on this same task).
-      // NOTE: `match` is built ONLY from `expire_on_tool_match` — it
-      // never includes "Bash" or any shell alias, on this runtime OR
-      // the Claude one below, so an `expire_on_bash_match` command
-      // boundary is evaluated by the hook body once invoked but is
-      // never actually ROUTED to it by this trigger today. Pre-existing
-      // limitation shared with Claude, not introduced by this task;
-      // tracked separately (agent-tasks bea04a03). Do not describe this
-      // hook as covering expire_on_bash_match until that follow-up
-      // lands.
+      // PostToolUse marker-expiry (task a1348c89, widened by task
+      // bea04a03). Same boundary-tool list as the Claude hook below
+      // (resolveExpireOnToolMatch) so Codex expires on the identical
+      // default set (agent-tasks task_finish / task_abandon /
+      // pull_requests_merge / tasks_transition) — but a DIFFERENT
+      // `match` builder (`codexPostToolUseMatchPattern`, not
+      // `postToolUseMatchPattern`): see that function's own doc comment
+      // for why the Claude builder's anchored regex form silently
+      // defeats the Codex generator's MCP tool-name alias expansion
+      // (review finding on task a1348c89).
+      // `match` is ALSO widened with the Codex shell-tool aliases
+      // (Bash/shell/exec_command/functions.exec_command) whenever
+      // `approval_lifecycle.expire_on_bash_match` carries at least one
+      // pattern (task bea04a03): before this, `match` was built ONLY
+      // from `expire_on_tool_match`, so a real shell call never reached
+      // the hook body at all on EITHER runtime, even though
+      // `matchPostToolUseBoundary`'s bash-regex check correctly
+      // evaluates `expire_on_bash_match` once invoked. The widened
+      // aliases are NEVER added to `expire_on_tool_match` itself — the
+      // hook body still classifies a matched shell call as a bash-regex
+      // match, not a tool-name match, via `CODEX_SHELL_TOOLS.has(toolName)`
+      // in the caller (hook-codex-post-tool-use.ts).
       ...((): Hook[] => {
-        const { tools, emitHook } = resolveExpireOnToolMatch(pack);
-        if (!emitHook) return [];
+        const { tools, bashConfigured, emit } = resolvePostToolUseBoundaries(pack);
+        if (!emit) return [];
         const hook: Hook = {
           name: `${HOOK_NAME_PREFIX}:codex:post-tool-use`,
           event: "PostToolUse",
-          match: codexPostToolUseMatchPattern(tools),
+          match: codexPostToolUseMatchPattern(tools, bashConfigured),
           command: wrap(COMMAND_POST_TOOL_USE_CODEX),
           blocking: false,
           budget_ms: 2000,
           description:
-            "Codex adapter: expire the approval marker AND the persisted report after a task-completion boundary tool (default: agent-tasks task_finish / task_abandon / pull_requests_merge). Forces a fresh Understanding Report on the next task.",
+            "Codex adapter: expire the approval marker AND the persisted report after a task-completion boundary tool or expire_on_bash_match shell command (default tools: agent-tasks task_finish / task_abandon / pull_requests_merge). Forces a fresh Understanding Report on the next task.",
         };
         return [hook];
       })(),
@@ -479,20 +596,32 @@ function buildHooks(
         "Block Edit/Write/Bash until an approved Understanding Report exists for the session. Consults both the evidence-ledger tag (understanding-approved:${SESSION_ID}) and the persisted JSON report.",
     },
     // PostToolUse marker-expiry hook (agent-tasks/d8ee60ca). Fires on the
-    // configured task-boundary tools and deletes the approval marker so
-    // the next Edit / Write / Bash forces a fresh Understanding Report.
-    // Default tool list expires on agent-tasks task_finish / task_abandon /
-    // pull_requests_merge. Operators on other task systems override the
-    // list via config.approval_lifecycle.expire_on_tool_match; setting
+    // configured task-boundary tools, and (task bea04a03) on a Bash call
+    // when `approval_lifecycle.expire_on_bash_match` carries at least one
+    // pattern, and deletes the approval marker so the next Edit / Write /
+    // Bash forces a fresh Understanding Report. Default tool list expires
+    // on agent-tasks task_finish / task_abandon / pull_requests_merge.
+    // Operators on other task systems override the list via
+    // config.approval_lifecycle.expire_on_tool_match; setting
     // `approval_lifecycle: { mode: session }` opts out entirely and
     // suppresses this hook from being emitted at all.
+    //
+    // Before task bea04a03, `match` was built ONLY from
+    // `expire_on_tool_match`, so a real `Bash` call never invoked this
+    // hook at all — `matchPostToolUseBoundary`'s bash-regex check (which
+    // DOES correctly evaluate `expire_on_bash_match` once invoked)
+    // was unreachable. Widening `match` to include "Bash" does not
+    // change how the hook body classifies the match: a Bash call that
+    // fires the hook is still evaluated as a bash-regex match
+    // (`toolNameMatched: false`), never folded into
+    // `expire_on_tool_match`'s own tool-name semantics.
     ...((): Hook[] => {
-      const { tools, emitHook } = resolveExpireOnToolMatch(pack);
-      if (!emitHook) return [];
+      const { tools, bashConfigured, emit } = resolvePostToolUseBoundaries(pack);
+      if (!emit) return [];
       const hook: Hook = {
         name: `${HOOK_NAME_PREFIX}:post-tool-use`,
         event: "PostToolUse",
-        match: postToolUseMatchPattern(tools),
+        match: postToolUseMatchPattern(tools, bashConfigured),
         // Wrap with UNDERSTANDING_GATE_REPORT_DIR so the post-tool-use
         // hook resolves the same persisted-reports directory as the
         // pre-tool-use blocker; otherwise it can't expire the persisted
@@ -501,7 +630,7 @@ function buildHooks(
         blocking: false,
         budget_ms: 2000,
         description:
-          "Expire the approval marker AND the persisted report after a task-completion boundary tool (default: agent-tasks task_finish / task_abandon / pull_requests_merge). Forces a fresh Understanding Report on the next task.",
+          "Expire the approval marker AND the persisted report after a task-completion boundary tool or expire_on_bash_match Bash command (default tools: agent-tasks task_finish / task_abandon / pull_requests_merge). Forces a fresh Understanding Report on the next task.",
       };
       return [hook];
     })(),
