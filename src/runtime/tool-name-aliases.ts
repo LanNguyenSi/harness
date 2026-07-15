@@ -1,4 +1,10 @@
-const SHELL_ALIASES = [
+// Canonical shell-tool alias set: Claude Code's single "Bash" tool plus
+// the Codex shell-tool names current runtimes emit. Exported so callers
+// elsewhere in the layering (e.g. policy-packs/builtin, which may import
+// from runtime/ but not from cli/) can derive their own shell-alias
+// lists from this one definition instead of hand-copying the literal
+// array (task bea04a03 review finding).
+export const SHELL_ALIASES = [
   "Bash",
   "shell",
   "exec_command",

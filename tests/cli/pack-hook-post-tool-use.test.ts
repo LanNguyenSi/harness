@@ -10,6 +10,7 @@ import {
   writeApprovalMarker,
   writeTaskApprovalMarker,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
+import { expandPolicyPacks } from "../../src/policy-packs/expand.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
 let tmp: string;
@@ -704,5 +705,75 @@ describe("pack hook post-tool-use — tasks_transition v1 status filter (PR #200
 
     expect(result.matchedExpiry).toBe(false);
     expect(fs.existsSync(approvalMarkerPathFor(generatedDir, "sess-1"))).toBe(true);
+  });
+});
+
+describe("pack hook post-tool-use — end-to-end matcher routing for expire_on_bash_match (task bea04a03)", () => {
+  // Every test above constructs the manifest directly and calls the hook
+  // CLI function without ever going through the pack's own matcher
+  // builder — which is exactly why the routing bug (expire_on_bash_match
+  // never reached this hook because settings.json's `matcher` never
+  // included "Bash") was invisible to the existing suite. These tests
+  // close that gap by running the REAL `expandPolicyPacks` expansion
+  // (what `harness apply` emits into settings.json) and simulating the
+  // dispatcher's matcher gate before invoking the hook.
+  it("the real emitted PostToolUse matcher routes a `gh pr merge` Bash call to the hook, which expires the marker end-to-end", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-05-17T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+
+    const manifest = manifestWithPack({
+      approval_lifecycle: {
+        expire_on_bash_match: ["^gh pr (merge|close)\\b"],
+      },
+    });
+    const { hooks } = expandPolicyPacks(manifest);
+    const post = hooks.find(
+      (h) => h.name === "policy-pack:understanding-before-execution:post-tool-use",
+    );
+    expect(post?.match).toBeDefined();
+
+    // Simulate the dispatcher gate settings.json enforces: Claude Code
+    // only invokes the hook when tool_name matches the emitted
+    // `matcher`. Before task bea04a03 this assertion was false — "Bash"
+    // was never in the matcher — so the call below would never have
+    // happened in a real session.
+    expect(new RegExp(post!.match!).test("Bash")).toBe(true);
+
+    const stderr = bufferStream();
+    const result = await runPackHookPostToolUseCli({
+      manifest,
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "Bash",
+          tool_input: { command: "gh pr merge 42 --squash" },
+        }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+    expect(result.matchedExpiry).toBe(true);
+    expect(result.markerCleared).toBe(true);
+    expect(fs.existsSync(approvalMarkerPathFor(generatedDir, "sess-1"))).toBe(
+      false,
+    );
+  });
+
+  it("negative control: the real emitted matcher does not route a non-boundary tool", () => {
+    const manifest = manifestWithPack({
+      approval_lifecycle: {
+        expire_on_bash_match: ["^gh pr (merge|close)\\b"],
+      },
+    });
+    const { hooks } = expandPolicyPacks(manifest);
+    const post = hooks.find(
+      (h) => h.name === "policy-pack:understanding-before-execution:post-tool-use",
+    );
+    const re = new RegExp(post!.match!);
+    expect(re.test("Read")).toBe(false);
+    expect(re.test("mcp__unrelated__verb")).toBe(false);
   });
 });
