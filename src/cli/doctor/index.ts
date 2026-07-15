@@ -497,6 +497,10 @@ function buildPolicies(manifest: Manifest): PolicyEntryReport[] {
     // array is guaranteed non-empty for any manifest that loaded.
     if (
       p.enforcement === "block" &&
+      // operator_only: true (task 2cc73f55) policies declare no
+      // requires: at all — there is no ledger_tag/within to go stale, so
+      // there is nothing for a producer to keep fresh.
+      p.requires !== undefined &&
       p.requires.within !== undefined &&
       (p.producers === undefined || p.producers.length === 0)
     ) {

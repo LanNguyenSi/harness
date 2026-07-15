@@ -7,11 +7,15 @@ import { buildProgram } from "../../src/cli/index.js";
 import { validate } from "../../src/cli/validate/index.js";
 import {
   __testables,
+  checkPolicySelfAttestation,
   createDefaultGitIgnoreProbe,
 } from "../../src/cli/validate/checks.js";
 import { spawnSync } from "node:child_process";
 import { writeLock, type LockEntry } from "../../src/io/harness-lock.js";
 import * as crypto from "node:crypto";
+import { parse as parseYaml } from "yaml";
+import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
+import { parseManifest } from "../../src/schema/index.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..", "..");
@@ -1397,6 +1401,75 @@ ${producersBlock}`;
     expect(
       result.diagnostics.find((d) => /any ledger writer/i.test(d.message)),
     ).toBeUndefined();
+  });
+
+  // task 2cc73f55: operator_only: true is the unconditional operator-only
+  // deny — correct-by-construction, no self-satisfiable requires: to leave
+  // undocumented. Neither the plain warning NOR --strict's promotion to an
+  // error should fire for it.
+  function buildOperatorOnlyFixture(): string {
+    const yaml = `version: 1
+hooks:
+  - name: gate-hook
+    event: PreToolUse
+    command: /usr/bin/true
+    blocking: false
+policies:
+  - name: gate-test
+    description: test policy
+    trigger:
+      event: PreToolUse
+      match: Bash
+    operator_only: true
+    hook: gate-hook
+    enforcement: block`;
+    return writeFixture({ "harness.yaml": yaml });
+  }
+
+  it("does not warn for an operator_only: true policy with no producers (correct-by-construction)", () => {
+    const home = buildOperatorOnlyFixture();
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(
+      result.diagnostics.find((d) => /any ledger writer/i.test(d.message)),
+    ).toBeUndefined();
+  });
+
+  it("--strict does not turn the (absent) warning into an error for operator_only: true", () => {
+    // Note: this fixture (like its siblings above) wires no grounding-mcp,
+    // so it always trips the unrelated "policies declared but
+    // grounding-mcp not wired" hard error regardless of operator_only —
+    // that check is orthogonal to self-attestation. The assertion here is
+    // scoped to the self-attestation diagnostic specifically: it must be
+    // absent under --strict exactly as it is without it.
+    const home = buildOperatorOnlyFixture();
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      strict: true,
+      ...NOOP_PROBES,
+    });
+    expect(
+      result.diagnostics.find((d) => /any ledger writer/i.test(d.message)),
+    ).toBeUndefined();
+  });
+
+  // Direct regression guard (reviewer follow-up, task 2cc73f55): drives
+  // checkPolicySelfAttestation itself against the REAL shipped FULL_TEMPLATE
+  // manifest, bypassing validate()'s unrelated diagnostics (grounding-mcp
+  // wiring, lock drift, etc.) entirely. FULL_TEMPLATE's three migrated
+  // deny-* kill-switch policies (operator_only: true, no producers:) must
+  // produce ZERO self-attestation diagnostics; a future edit that
+  // reintroduces a bare requires:-based block policy with no producers:,
+  // or that regresses the operator_only skip in checkPolicySelfAttestation,
+  // fails this directly instead of only being caught indirectly through
+  // `harness validate --strict`.
+  it("returns zero diagnostics for the real FULL_TEMPLATE manifest", () => {
+    const manifest = parseManifest(parseYaml(FULL_TEMPLATE));
+    expect(checkPolicySelfAttestation(manifest)).toEqual([]);
   });
 });
 

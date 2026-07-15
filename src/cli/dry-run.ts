@@ -142,6 +142,11 @@ function staticLedgerQuery(
   ctx: ExtractEventContext,
   builtins: ExtractBuiltins,
 ): string {
+  if (policy.requires === undefined) {
+    // operator_only: true (task 2cc73f55): no requires.ledger_tag to
+    // substitute — the policy never queries the ledger at all.
+    return "(operator-only: no ledger query — unconditional deny)";
+  }
   const extract = evaluateExtract(policy.trigger.extract ?? {}, ctx, builtins);
   const sub = substituteTemplate(policy.requires.ledger_tag, extract.values);
   return sub.result;

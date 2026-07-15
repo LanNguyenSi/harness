@@ -1,0 +1,16 @@
+# requires: is mandatory unless the policy declares operator_only: true
+# (task 2cc73f55). A policy with neither is a schema error, not a silent
+# always-allow or always-deny.
+version: 1
+hooks:
+  - name: h
+    event: PreToolUse
+    command: /bin/true
+    blocking: false
+policies:
+  - name: bad-no-contract
+    description: Declares neither requires nor operator_only.
+    trigger:
+      event: PreToolUse
+    hook: h
+    enforcement: block

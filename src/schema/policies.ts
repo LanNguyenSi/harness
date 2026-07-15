@@ -136,30 +136,104 @@ export const PolicyWhenSchema = z
     }
   });
 
+// `operator_only: true` — the unconditional operator-only deny (task
+// 2cc73f55). Every other `block` policy names `requires.ledger_tag`
+// evidence, but the only satisfaction primitives the engine has —
+// a ledger tag (writable in-session via
+// `mcp__agent-grounding__ledger_add`) or a filesystem marker (operator-
+// only only while a gate already locks Bash/Write down, circular on a
+// default install) — are agent-satisfiable. That leaves no honest way to
+// express "the agent may NEVER do this, and cannot self-satisfy it this
+// session" — see the three `deny-*` kill-switch policies in
+// `src/cli/init/templates.ts`, which had to ship with permanent
+// self-attestation warnings for exactly this reason.
+//
+// `operator_only: true` closes that gap by omission rather than by
+// naming a fake evidence source: the policy declares NO `requires:` at
+// all, and `intercept()` (`src/runtime/intercept.ts`) short-circuits
+// before the `requires` pipeline entirely — no ledger query, no
+// template substitution, no `evaluateRequires` call — so there is
+// nothing an in-session actor (ledger write, marker file, env flag) can
+// ever produce that flips the outcome to allow. Restricted to
+// `enforcement: block`: `warn` and `require_approval` already have
+// their own always-evaluated evidence paths, and require_approval's
+// canonical unblock is the `harness approve risk` operator verb, not a
+// requires-satisfaction story this marker would replace.
+//
+// Mutually exclusive with `requires:` AND `producers:` by construction
+// (both enforced below): declaring `requires:` alongside it would be
+// self-contradictory — an unconditional deny that also names an
+// in-session-satisfiable evidence tag nobody will ever evaluate.
+// `producers:` is the same class of contradiction one level up: it
+// describes a documented way to PRODUCE the evidence that unblocks the
+// gate ("here is a legitimate way to satisfy this"), but `operator_only:
+// true` never evaluates any evidence at all, so a declared producer
+// would misrepresent the gate as satisfiable when it structurally is
+// not. `checkPolicySelfAttestation` (`src/cli/validate/checks.ts`)
+// treats `operator_only: true` as correct-by-construction and emits
+// neither the "declares no producers" warning nor a --strict error for
+// it, since there is no undocumented evidence source to flag.
 export const PolicySchema = z
   .object({
     name: z.string().min(1),
     description: z.string().min(1),
     trigger: PolicyTriggerSchema,
-    requires: RequiresSchema,
+    requires: RequiresSchema.optional(),
     hook: z.string().min(1),
     enforcement: PolicyEnforcementSchema,
+    operator_only: z.boolean().optional(),
     producers: z.array(ProducerSchema).min(1).optional(),
     ux: PolicyUxSchema.optional(),
     when: PolicyWhenSchema.optional(),
   })
   .strict()
   .superRefine((policy, ctx) => {
-    const refs = referencedVariables(policy.requires.ledger_tag);
-    const declared = new Set(Object.keys(policy.trigger.extract ?? {}));
-    for (const v of refs) {
-      if (isBuiltinVariable(v)) continue;
-      if (!declared.has(v)) {
+    if (policy.operator_only === true) {
+      if (policy.enforcement !== "block") {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          path: ["requires", "ledger_tag"],
-          message: `requires.ledger_tag references \${${v}} but no matching trigger.extract entry was declared`,
+          path: ["operator_only"],
+          message:
+            "operator_only: true is only meaningful for enforcement: block (an unconditional operator-only deny); warn / require_approval already have their own always-evaluated evidence paths",
         });
+      }
+      if (policy.requires !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["requires"],
+          message:
+            "operator_only: true policies must not also declare requires: — an unconditional deny that also names in-session-satisfiable evidence is self-contradictory; drop requires: (the policy never evaluates it)",
+        });
+      }
+      if (policy.producers !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["producers"],
+          message:
+            "operator_only: true policies must not also declare producers: — producers describe a documented way to satisfy the gate, but an unconditional deny never evaluates any evidence, so a declared producer would misrepresent it as satisfiable; drop producers: (or drop operator_only: true if you actually want a satisfiable requires: gate)",
+        });
+      }
+    } else if (policy.requires === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["requires"],
+        message:
+          "requires is mandatory unless the policy declares operator_only: true (an unconditional operator-only deny)",
+      });
+    }
+
+    if (policy.requires !== undefined) {
+      const refs = referencedVariables(policy.requires.ledger_tag);
+      const declared = new Set(Object.keys(policy.trigger.extract ?? {}));
+      for (const v of refs) {
+        if (isBuiltinVariable(v)) continue;
+        if (!declared.has(v)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["requires", "ledger_tag"],
+            message: `requires.ledger_tag references \${${v}} but no matching trigger.extract entry was declared`,
+          });
+        }
       }
     }
     if (policy.producers !== undefined) {

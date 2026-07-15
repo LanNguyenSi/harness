@@ -506,34 +506,40 @@ policies:
   # layer is the enforcement point that actually runs BEFORE the agent's Bash
   # executes.
   #
-  # HONESTY NOTE (review finding, same task, cf1fde6d): the requires.ledger_tag
-  # these three declare is, like every requires:-based policy in this engine,
-  # satisfiable by the SAME agent it gates: nothing stops it from calling
-  # mcp__agent-grounding__ledger_add with content matching the tag for its own
-  # session before running the denied command, which flips deny to allow
-  # (src/runtime/intercept.ts, the satisfied-requires branch). See
-  # docs/writing-custom-policies.md tripwire 4, "whoever can write the ledger
-  # can open the gate". These three are therefore BEST-EFFORT FRICTION, not a
-  # hard boundary: they stop the literal one-liners this task found live; they
-  # do not stop an agent that deliberately sets out to defeat them. We still
-  # declare no producers: on purpose. Documenting a "legitimate" way to write
-  # this tag would misrepresent a forgery path as sanctioned, which is worse
-  # than the honest gap. `harness validate` warns "declares no producers" on
-  # all three (checkPolicySelfAttestation, src/cli/validate/checks.ts); that
-  # warning is the correct, honest signal here, not something to silence.
-  # A real fix needs a schema-level operator-only unconditional-deny
-  # expression (an enforcement mode that carries no requires: at all); that is
-  # a follow-up, not this task. See tests/cli/init-full-template-kill-switch-deny.test.ts
-  # for a test that drives intercept() and records this exact self-satisfy
-  # path as a known, asserted (not hidden) behaviour.
+  # UPDATE (task 2cc73f55, closes the gap the HONESTY NOTE below used to
+  # document): these three now declare `operator_only: true` instead of a
+  # requires.ledger_tag. Every requires:-based policy in this engine is, by
+  # construction, satisfiable by the SAME agent it gates: nothing stops it
+  # from calling mcp__agent-grounding__ledger_add with content matching the
+  # tag for its own session before running the denied command, which used to
+  # flip deny to allow (src/runtime/intercept.ts, the satisfied-requires
+  # branch). `operator_only: true` closes that specific hole: the policy
+  # declares NO requires: at all, and intercept() short-circuits to an
+  # unconditional deny before the requires pipeline runs — no ledger query,
+  # no template substitution, so no ledger write, marker file, or flag can
+  # ever flip it to allow. See docs/writing-custom-policies.md tripwire 4 and
+  # the "Operator-only unconditional deny" section for the schema contract,
+  # and tests/cli/init-full-template-kill-switch-deny.test.ts for a test that
+  # forges every ledger-evidence shape available to intercept() and asserts
+  # the block holds.
+  #
+  # RESIDUAL GAP (still open, out of scope for task 2cc73f55): bash_match is
+  # still a regex over the raw command string, matched BEFORE evaluation ever
+  # reaches operator_only:, so it still cannot see through a heredoc,
+  # `sh -c '...'`, `eval`, a base64-decoded payload, or a script file the
+  # agent writes and then executes — an agent that defeats the TRIGGER match
+  # never reaches this deny at all. That is a bash_match coverage gap, not a
+  # requires-satisfaction gap, and is unrelated to the fix here (see PR #341
+  # for the known uncoverable shapes). `harness validate` no longer warns
+  # "declares no producers" on these three (checkPolicySelfAttestation now
+  # recognises operator_only: true as correct-by-construction).
   - name: deny-kill-switch-bypass
     description: Deny harness pause, harness resume, harness gate disable, and harness gate enable from the agent's Bash tool. These are operator-only kill switches.
     trigger:
       event: PreToolUse
       match: "Bash"
       bash_match: '(^|\n|;|\||&&|\()\s*(\w+=\S*\s+)*(?:npx\s+|\S*/)?harness\s+(["\x27]?)(?:pause|resume|gate\s+(["\x27]?)(?:disable|enable)\4)\3(?![\w-])'
-    requires:
-      ledger_tag: "operator-ran-this-outside-the-session:${SESSION_ID}"
+    operator_only: true
     hook: deny-kill-switch-bash
     enforcement: block
     ux:
@@ -541,7 +547,7 @@ policies:
       required:
         - "the OPERATOR to run this from a terminal genuinely outside your agent session, not a `! `-prefixed Claude Code shell, which inherits this session's env and stdin and does not count"
       run:
-        - "Stop. Explain to the operator what you were trying to do and why, and let THEM decide whether to pause/resume/toggle a gate from their own terminal. This is the only INTENDED way to unblock this gate: it is friction against routine use, not an unbreakable boundary against a deliberately adversarial agent, the same honest limit that applies to the pause sentinel itself (see docs/okf/pause-vs-gate-kill-switch.md)."
+        - "Stop. Explain to the operator what you were trying to do and why, and let THEM decide whether to pause/resume/toggle a gate from their own terminal. This is the only way to unblock this gate: it is an unconditional deny (operator_only: true) that no in-session evidence — a ledger write, a marker file, a flag — can ever satisfy; the only remaining gap is bash_match's regex coverage of exotic shell shapes, not this evaluation (see docs/okf/pause-vs-gate-kill-switch.md)."
 
   - name: deny-session-env-strip
     description: Deny Bash attempts to strip or unset the agent-session env vars that harness pause/resume check ($CLAUDE_CODE_SESSION_ID, $CLAUDE_SESSION_ID, $CODEX_SESSION_ID). Closes the one-liner that otherwise defeats refuseIfAgentShell.
@@ -549,8 +555,7 @@ policies:
       event: PreToolUse
       match: "Bash"
       bash_match: '(^|\n|;|\||&&|\()\s*(\w+=\S*\s+)*(env\b[^;\n|&]*-u\s*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\b|env\b[^;\n|&]*--unset(?:=|\s+)(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\b|unset\s+(\S+\s+)*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\b|(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)=(?=\s))'
-    requires:
-      ledger_tag: "operator-ran-this-outside-the-session:${SESSION_ID}"
+    operator_only: true
     hook: deny-session-env-strip-bash
     enforcement: block
     ux:
@@ -558,7 +563,7 @@ policies:
       required:
         - "no legitimate reason from inside this session: stripping $CLAUDE_CODE_SESSION_ID / $CLAUDE_SESSION_ID / $CODEX_SESSION_ID is recognised as an attempt to defeat the harness pause/resume agent-shell check"
       run:
-        - "Stop. If you believe you have a legitimate reason to run a command without one of these env vars set, ask the OPERATOR to do it from their own terminal instead. This gate is friction against routine use, not an unbreakable boundary; see docs/okf/pause-vs-gate-kill-switch.md for the honest trust model."
+        - "Stop. If you believe you have a legitimate reason to run a command without one of these env vars set, ask the OPERATOR to do it from their own terminal instead. This gate is an unconditional deny (operator_only: true); see docs/okf/pause-vs-gate-kill-switch.md for the honest trust model and the residual bash_match coverage gap."
 
   - name: deny-pause-sentinel-forgery
     description: Deny Bash writes (redirect, tee, cp) to the harness pause sentinel file (.harness-paused). The sentinel is unsigned JSON; a forged file silences every gate exactly like a real operator pause. Reads (cat, stat) are unaffected.
@@ -566,8 +571,7 @@ policies:
       event: PreToolUse
       match: "Bash"
       bash_match: '(^|\n|;|\||&&|\()\s*(\w+=\S*\s+)*(tee|cp)\b[^;\n|&]*\.harness-paused\b|>{1,2}\s*\S*\.harness-paused\b'
-    requires:
-      ledger_tag: "operator-ran-this-outside-the-session:${SESSION_ID}"
+    operator_only: true
     hook: deny-sentinel-write-bash
     enforcement: block
     ux:
@@ -575,7 +579,7 @@ policies:
       required:
         - "the OPERATOR to run `harness pause`/`harness resume` themselves, from a terminal outside your agent session, never a direct write to the sentinel file"
       run:
-        - "Stop. Do not write, redirect, tee, or copy anything to .harness-paused. Ask the OPERATOR to run harness pause / harness resume themselves if the session genuinely needs gates silenced. This gate is friction against routine use, not an unbreakable boundary; see docs/okf/pause-vs-gate-kill-switch.md for the honest trust model."
+        - "Stop. Do not write, redirect, tee, or copy anything to .harness-paused. Ask the OPERATOR to run harness pause / harness resume themselves if the session genuinely needs gates silenced. This gate is an unconditional deny (operator_only: true); see docs/okf/pause-vs-gate-kill-switch.md for the honest trust model and the residual bash_match coverage gap."
 
 policy_packs:
   - name: understanding-before-execution

@@ -107,7 +107,9 @@ function buildPolicyRows(manifest: Manifest): Record<string, unknown>[] {
     enforcement: p.enforcement,
     event: p.trigger.event,
     hook: p.hook,
-    requires_tag: p.requires.ledger_tag,
+    // `operator_only: true` policies (task 2cc73f55) declare no
+    // `requires:` at all — there is no tag to show.
+    requires_tag: p.requires?.ledger_tag ?? "(operator-only)",
   }));
 }
 

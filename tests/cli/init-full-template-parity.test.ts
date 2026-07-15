@@ -48,7 +48,7 @@ type LoadBearingPolicy = {
   triggerBashMatch: string | undefined;
   triggerPathMatch: string | undefined;
   triggerExtract: Record<string, string> | undefined;
-  ledgerTag: string;
+  ledgerTag: string | undefined;
   within: string | undefined;
   atHead: boolean | undefined;
   countMin: number | undefined;
@@ -56,6 +56,12 @@ type LoadBearingPolicy = {
   countMax: number | undefined;
   enforcement: string;
   hook: string;
+  // operator_only (task 2cc73f55): the unconditional operator-only deny
+  // marker. Load-bearing exactly like `requires` — a policy that carries
+  // it in one manifest must carry it in the other, or the two manifests'
+  // decision behavior (self-satisfiable vs. genuinely unconditional)
+  // silently drifts.
+  operatorOnly: boolean | undefined;
   // when (Phase 7 #5): the risk/environment-aware match clauses. Now
   // load-bearing — `harness policy intercept` ANDs `when:` onto the
   // trigger — so a `when:`-bearing policy must carry the identical block
@@ -83,17 +89,18 @@ function loadBearing(p: Manifest["policies"][number]): LoadBearingPolicy {
     triggerBashMatch: p.trigger.bash_match ?? undefined,
     triggerPathMatch: p.trigger.path_match ?? undefined,
     triggerExtract: p.trigger.extract,
-    ledgerTag: p.requires.ledger_tag,
-    within: p.requires.within ?? undefined,
-    atHead: p.requires.at_head ?? undefined,
-    countMin: p.requires.count?.min ?? undefined,
-    countExact: p.requires.count?.exact ?? undefined,
-    countMax: p.requires.count?.max ?? undefined,
+    ledgerTag: p.requires?.ledger_tag ?? undefined,
+    within: p.requires?.within ?? undefined,
+    atHead: p.requires?.at_head ?? undefined,
+    countMin: p.requires?.count?.min ?? undefined,
+    countExact: p.requires?.count?.exact ?? undefined,
+    countMax: p.requires?.count?.max ?? undefined,
     enforcement: p.enforcement,
     hook: p.hook,
     when: p.when,
     producers: p.producers,
     ux: p.ux,
+    operatorOnly: p.operator_only ?? undefined,
   };
 }
 
