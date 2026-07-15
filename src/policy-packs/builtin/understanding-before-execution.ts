@@ -304,8 +304,18 @@ const DEFAULT_EXPIRE_ON_TOOL_MATCH: ReadonlyArray<string> = [
 ];
 
 const POST_TOOL_USE_COMMAND_CLAUDE = "harness pack hook post-tool-use";
-const TRACK_ACTIVE_CLAIM_COMMAND_CLAUDE =
-  "harness pack hook track-active-claim";
+
+// Task cf4cdc93 (Codex parity gap #3): unlike stop/pre-tool-use/
+// post-tool-use, the active-claim tracker and stay-in-scope reminder
+// need NO runtime-specific CLI verb — both hook bodies only ever
+// inspect the generic `tool_name` / `tool_input` fields already common
+// to Claude's and Codex's PostToolUse envelope (no session_id, no
+// shell-command extraction, no Codex-only synonym). One shared command
+// constant per hook is therefore reused verbatim on both runtimes below
+// instead of a `codex-track-active-claim` / `codex-stay-in-scope`
+// sibling binary — avoids reintroducing the exact Claude/Codex drift
+// class task e7c2ec3c fixed on the PreToolUse side.
+const TRACK_ACTIVE_CLAIM_COMMAND = "harness pack hook track-active-claim";
 
 // Hardcoded matcher for the v2 active-claim tracker (harness/494fd1e5).
 // Agent-tasks specific; operators on other tasking systems can ignore
@@ -313,6 +323,21 @@ const TRACK_ACTIVE_CLAIM_COMMAND_CLAUDE =
 // extension can land later if a second tasking system asks for it.
 const TRACK_ACTIVE_CLAIM_MATCH =
   "^(?:mcp__agent-tasks__task_start|mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__tasks_transition)$";
+
+// Codex sibling of TRACK_ACTIVE_CLAIM_MATCH above (task cf4cdc93): a
+// bare, unescaped `|`-joined list, NOT the anchored `^(?:...)$` form —
+// same rationale as `codexPostToolUseMatchPattern`'s own doc comment
+// (task a1348c89 review finding): `expandCodexHookMatchPattern`'s
+// "simple token" guard (`isSimpleToolPatternToken`, generate-codex-config.ts)
+// only alias-expands a match string whose tokens are ALL "simple"; the
+// anchor characters `^`, `(`, `?` trip that guard and the anchored form
+// is passed through UNCHANGED at TOML-emit time, so a Codex session
+// sending a dotted/underscore-server MCP tool-name variant would never
+// even reach the hook. This bare form lets the emitted `config.toml`
+// matcher — and therefore Codex's own dispatcher — recognize those
+// variants, exactly like `PRE_TOOL_USE_MATCH_CODEX` already does.
+const TRACK_ACTIVE_CLAIM_MATCH_CODEX =
+  "mcp__agent-tasks__task_start|mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__tasks_transition";
 
 // Hardcoded matcher for the stay-in-scope reminder (harness/2ba06030).
 // Fires on the three task-mutation verbs that can carry labels and
@@ -322,7 +347,12 @@ const TRACK_ACTIVE_CLAIM_MATCH =
 const STAY_IN_SCOPE_MATCH =
   "^(?:mcp__agent-tasks__task_create|mcp__agent-tasks__tasks_create|mcp__agent-tasks__tasks_update)$";
 
-const STAY_IN_SCOPE_COMMAND_CLAUDE = "harness pack hook stay-in-scope";
+// Codex sibling of STAY_IN_SCOPE_MATCH above (task cf4cdc93), same
+// bare-unanchored-list rationale as TRACK_ACTIVE_CLAIM_MATCH_CODEX.
+const STAY_IN_SCOPE_MATCH_CODEX =
+  "mcp__agent-tasks__task_create|mcp__agent-tasks__tasks_create|mcp__agent-tasks__tasks_update";
+
+const STAY_IN_SCOPE_COMMAND = "harness pack hook stay-in-scope";
 
 // Bash tool name used to widen the PostToolUse matcher when
 // `expire_on_bash_match` is configured (task bea04a03). Matches the
@@ -596,6 +626,36 @@ function buildHooks(
         };
         return [hook];
       })(),
+      // Active-claim tracker (harness/494fd1e5), Codex parity task
+      // cf4cdc93 (parity-gaps doc gap #3). Always emitted alongside the
+      // pack, mirroring the Claude sibling below — the matcher won't
+      // fire for operators on non-agent-tasks tasking systems, so the
+      // file simply never appears for them. Same command as Claude
+      // (see TRACK_ACTIVE_CLAIM_COMMAND's doc comment above): the hook
+      // body needs no Codex-specific handling.
+      {
+        name: `${HOOK_NAME_PREFIX}:codex:track-active-claim`,
+        event: "PostToolUse",
+        match: TRACK_ACTIVE_CLAIM_MATCH_CODEX,
+        command: TRACK_ACTIVE_CLAIM_COMMAND,
+        blocking: false,
+        budget_ms: 2000,
+        description:
+          "Codex adapter: track the active agent-tasks claim by writing/clearing <generatedDir>/active-claim on task_start / task_finish / task_abandon. Lets `harness approve understanding` auto-resolve the task id (harness/494fd1e5, Codex parity task cf4cdc93).",
+      },
+      // Stay-in-scope reminder (harness/2ba06030), Codex parity task
+      // cf4cdc93 (parity-gaps doc gap #3). Same always-on / soft-only
+      // semantics as the Claude sibling below.
+      {
+        name: `${HOOK_NAME_PREFIX}:codex:stay-in-scope`,
+        event: "PostToolUse",
+        match: STAY_IN_SCOPE_MATCH_CODEX,
+        command: STAY_IN_SCOPE_COMMAND,
+        blocking: false,
+        budget_ms: 2000,
+        description:
+          "Codex adapter: emit a soft reminder + audit row when a review-derived follow-up task gets created. Surfaces user-memory feedback_reviewer_findings_stay_in_scope. Disable: STAY_IN_SCOPE_DISABLED=1 (harness/2ba06030, Codex parity task cf4cdc93).",
+      },
     ];
   }
   // `min_version` floor on the npm-backed bins: 0.4.0 ships the
@@ -696,7 +756,7 @@ function buildHooks(
       name: `${HOOK_NAME_PREFIX}:track-active-claim`,
       event: "PostToolUse",
       match: TRACK_ACTIVE_CLAIM_MATCH,
-      command: TRACK_ACTIVE_CLAIM_COMMAND_CLAUDE,
+      command: TRACK_ACTIVE_CLAIM_COMMAND,
       blocking: false,
       budget_ms: 2000,
       description:
@@ -716,7 +776,7 @@ function buildHooks(
       name: `${HOOK_NAME_PREFIX}:stay-in-scope`,
       event: "PostToolUse",
       match: STAY_IN_SCOPE_MATCH,
-      command: STAY_IN_SCOPE_COMMAND_CLAUDE,
+      command: STAY_IN_SCOPE_COMMAND,
       blocking: false,
       budget_ms: 2000,
       description:

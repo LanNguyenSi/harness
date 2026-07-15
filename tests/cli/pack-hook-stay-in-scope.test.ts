@@ -277,6 +277,184 @@ describe("pack hook stay-in-scope — no-match cases", () => {
   });
 });
 
+describe("pack hook stay-in-scope — Codex MCP tool-name alias variants (task cf4cdc93 parity)", () => {
+  // Same rationale as the track-active-claim alias tests: Codex can
+  // emit an MCP tool name in a variant form for the identical tool
+  // (server hyphen/underscore swap, the `mcp__server__.tool` dotted
+  // form). The generator's `expandCodexHookMatchPattern` already routes
+  // these variants to the hook at dispatch time; these tests pin that
+  // the hook BODY's watch-list check also recognizes them.
+  it("matches a review-shaped task_create carried on an underscore-server tool_name variant", async () => {
+    const stderr = bufferStream();
+    const result = await runPackHookStayInScopeCli({
+      generatedDir: path.join(tmp, "harness.generated"),
+      logPath: logPath(),
+      env: {},
+      stdin: readableFromString(
+        eventBody("mcp__agent_tasks__task_create", {
+          title: "follow-up",
+          labels: ["from-review"],
+          description: "Split out of the parent PR.",
+        }),
+      ),
+      stderr: stderr.stream,
+    });
+    expect(result.matched).toBe(true);
+    expect(result.matchedRule).toBe("label");
+    expect(result.logged).toBe(true);
+  });
+
+  it("matches a review-shaped tasks_update carried on the dotted mcp__server__.tool form", async () => {
+    const stderr = bufferStream();
+    const result = await runPackHookStayInScopeCli({
+      generatedDir: path.join(tmp, "harness.generated"),
+      logPath: logPath(),
+      env: {},
+      stdin: readableFromString(
+        eventBody("mcp__agent-tasks__.tasks_update", {
+          taskId: "task-uuid-abc",
+          labels: ["reviewer-finding"],
+        }),
+      ),
+      stderr: stderr.stream,
+    });
+    expect(result.matched).toBe(true);
+    expect(result.logged).toBe(true);
+  });
+
+  it("still ignores an alias-variant tool_name outside the watch list", async () => {
+    const stderr = bufferStream();
+    const result = await runPackHookStayInScopeCli({
+      generatedDir: path.join(tmp, "harness.generated"),
+      logPath: logPath(),
+      env: {},
+      stdin: readableFromString(
+        eventBody("mcp__agent_tasks__tasks_get", {
+          taskId: "abc",
+          labels: ["from-review"],
+        }),
+      ),
+      stderr: stderr.stream,
+    });
+    expect(result.matched).toBe(false);
+    expect(stderr.read()).toMatch(/not in watch list/);
+  });
+});
+
+describe("pack hook stay-in-scope — Codex wire-format synonyms (task cf4cdc93 review fix, MEDIUM)", () => {
+  // Reviewer probe (empirically confirmed): a Codex-shaped payload using
+  // `raw_input` (instead of `tool_input`) or `tool` (instead of
+  // `tool_name`) used to silently no-op here, even though the sibling
+  // `codex-post-tool-use` hook already tolerated both synonyms via its
+  // own `pickString` / `resolveToolInput`. These pin the fix via the
+  // shared `hook-bootstrap.ts` helpers.
+  it("matches a review-shaped task_create when the payload arrives under raw_input instead of tool_input", async () => {
+    const stderr = bufferStream();
+    const result = await runPackHookStayInScopeCli({
+      generatedDir: path.join(tmp, "harness.generated"),
+      logPath: logPath(),
+      env: {},
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: TOOL_NAME_TASK_CREATE,
+          raw_input: {
+            title: "follow-up",
+            labels: ["from-review"],
+            description: "Split out of the parent PR.",
+          },
+        }),
+      ),
+      stderr: stderr.stream,
+    });
+    expect(result.matched).toBe(true);
+    expect(result.matchedRule).toBe("label");
+    expect(result.logged).toBe(true);
+  });
+
+  it("matches a review-shaped task_create when the tool name arrives under `tool` instead of `tool_name`", async () => {
+    const stderr = bufferStream();
+    const result = await runPackHookStayInScopeCli({
+      generatedDir: path.join(tmp, "harness.generated"),
+      logPath: logPath(),
+      env: {},
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool: TOOL_NAME_TASK_CREATE,
+          tool_input: {
+            title: "follow-up",
+            labels: ["reviewer-finding"],
+          },
+        }),
+      ),
+      stderr: stderr.stream,
+    });
+    expect(result.matched).toBe(true);
+    expect(result.logged).toBe(true);
+  });
+
+  it("prefers tool_input over raw_input when both are present (matches the sibling codex-post-tool-use precedence)", async () => {
+    const stderr = bufferStream();
+    const result = await runPackHookStayInScopeCli({
+      generatedDir: path.join(tmp, "harness.generated"),
+      logPath: logPath(),
+      env: {},
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: TOOL_NAME_TASK_CREATE,
+          tool_input: { title: "from tool_input", labels: ["from-review"] },
+          raw_input: { title: "from raw_input", labels: ["from-review"] },
+        }),
+      ),
+      stderr: stderr.stream,
+    });
+    expect(result.matched).toBe(true);
+    const records = readLogRecords();
+    expect(records.at(-1)?.["title"]).toBe("from tool_input");
+  });
+
+  it("still honors the Claude-only tool_response taskId fallback when the payload also carries raw_input (residual note: Codex envelope may not carry tool_response at all — this only pins that the fallback is not broken by the new resolution)", async () => {
+    const stderr = bufferStream();
+    const result = await runPackHookStayInScopeCli({
+      generatedDir: path.join(tmp, "harness.generated"),
+      logPath: logPath(),
+      env: {},
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: TOOL_NAME_TASK_CREATE,
+          tool_input: { title: "follow-up", labels: ["from-review"] },
+          tool_response: { task: { id: "task-uuid-from-response" } },
+        }),
+      ),
+      stderr: stderr.stream,
+    });
+    expect(result.matched).toBe(true);
+    const records = readLogRecords();
+    expect(records.at(-1)?.["taskId"]).toBe("task-uuid-from-response");
+  });
+
+  it("negative control: missing both tool_name and tool still skips (no false-positive synonym resolution)", async () => {
+    const stderr = bufferStream();
+    const result = await runPackHookStayInScopeCli({
+      generatedDir: path.join(tmp, "harness.generated"),
+      logPath: logPath(),
+      env: {},
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          raw_input: { title: "follow-up", labels: ["from-review"] },
+        }),
+      ),
+      stderr: stderr.stream,
+    });
+    expect(result.matched).toBe(false);
+    expect(stderr.read()).toMatch(/not in watch list/);
+  });
+});
+
 describe("pack hook stay-in-scope — operator opt-out", () => {
   it("STAY_IN_SCOPE_DISABLED=1 short-circuits to no-op even on a perfect match", async () => {
     const stderr = bufferStream();

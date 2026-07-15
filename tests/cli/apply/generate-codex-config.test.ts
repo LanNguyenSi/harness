@@ -210,6 +210,57 @@ describe("generateCodexConfig", () => {
     expect(re.test("Read")).toBe(false);
   });
 
+  it("routes MCP task_start/task_finish/tasks_transition calls (and their variant forms) through the real emitted Codex track-active-claim matcher (task cf4cdc93 generator-layer pin)", () => {
+    // End-to-end through the real pack expansion + generator, same
+    // shape as the a1348c89 pin above: before task cf4cdc93 the Codex
+    // branch never emitted this hook at all, so no matcher existed to
+    // test. Positive: the real config.toml matcher, once compiled as a
+    // regex, matches the canonical `task_start` call AND the
+    // server-hyphen/underscore + dotted MCP name variants Codex may
+    // send. Negative: an unrelated tool name does not match.
+    const m = parseManifest({
+      version: 1,
+      policy_packs: [{ name: "understanding-before-execution" }],
+    });
+    const { hooks } = expandPolicyPacks(m, "codex");
+    const { content } = generateCodexConfig(parseManifest({ version: 1, hooks }));
+
+    const block = content
+      .split("\n\n")
+      .find((b) => b.includes('command = "harness pack hook track-active-claim"'));
+    expect(block).toBeDefined();
+    const matcher = block!.match(/matcher = "([^"]+)"/)?.[1];
+    expect(matcher).toBeDefined();
+
+    const re = new RegExp(matcher!);
+    expect(re.test("mcp__agent-tasks__task_start")).toBe(true); // canonical
+    expect(re.test("mcp__agent-tasks__.task_start")).toBe(true); // dotted
+    expect(re.test("mcp__agent_tasks__task_start")).toBe(true); // underscore-server
+    expect(re.test("Read")).toBe(false); // negative control: unrelated tool
+  });
+
+  it("routes MCP task_create/tasks_update calls (and their variant forms) through the real emitted Codex stay-in-scope matcher (task cf4cdc93 generator-layer pin)", () => {
+    const m = parseManifest({
+      version: 1,
+      policy_packs: [{ name: "understanding-before-execution" }],
+    });
+    const { hooks } = expandPolicyPacks(m, "codex");
+    const { content } = generateCodexConfig(parseManifest({ version: 1, hooks }));
+
+    const block = content
+      .split("\n\n")
+      .find((b) => b.includes('command = "harness pack hook stay-in-scope"'));
+    expect(block).toBeDefined();
+    const matcher = block!.match(/matcher = "([^"]+)"/)?.[1];
+    expect(matcher).toBeDefined();
+
+    const re = new RegExp(matcher!);
+    expect(re.test("mcp__agent-tasks__task_create")).toBe(true); // canonical
+    expect(re.test("mcp__agent-tasks__.task_create")).toBe(true); // dotted
+    expect(re.test("mcp__agent_tasks__task_create")).toBe(true); // underscore-server
+    expect(re.test("Read")).toBe(false); // negative control: unrelated tool
+  });
+
   it("keeps the 2s policy-intercept floor when budget_ms ceil already meets it", () => {
     // Guards against a regression where the timeout floor would shadow
     // (rather than coexist with) a legitimate >=2000ms budget. The
