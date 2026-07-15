@@ -192,11 +192,13 @@ function formatPoliciesSection(report: DoctorReport): string[] {
 // Both render ✗ here. Section stays silent when both lists are empty
 // (the healthy case is common; a noisy ✓ would dilute doctor's signal).
 function formatPolicyPacksSection(report: DoctorReport): string[] {
-  const { unresolved, configIssues, versionGaps, solutionAcceptance } = report.policyPacks;
+  const { unresolved, configIssues, versionGaps, uxDrift, solutionAcceptance } =
+    report.policyPacks;
   if (
     unresolved.length === 0 &&
     configIssues.length === 0 &&
     versionGaps.length === 0 &&
+    uxDrift.length === 0 &&
     solutionAcceptance.length === 0
   ) {
     return [];
@@ -221,6 +223,9 @@ function formatPolicyPacksSection(report: DoctorReport): string[] {
     out.push(
       `      the pack runs in degraded mode; any \`config:\` key that requires the newer release is silently ignored. Upgrade the package-side bin or lower the declared \`min_version\`.`,
     );
+  }
+  for (const drift of uxDrift) {
+    out.push(`  ⚠ ${drift.name}.config.${drift.fields.join("/")}  ${drift.message}`);
   }
   for (const d of solutionAcceptance) {
     if (d.severity === "error") {

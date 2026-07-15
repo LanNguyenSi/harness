@@ -21,9 +21,11 @@
 
 import { stringify } from "yaml";
 import {
-  understandingApprovalRequirement,
+  defaultProducers as understandingDefaultProducers,
+  defaultUx as understandingDefaultUx,
   type Mode,
 } from "../../policy-packs/builtin/understanding-before-execution.js";
+import { defaultUx as branchProtectionDefaultUx } from "../../policy-packs/builtin/branch-protection.js";
 
 export type CustomPackKey = "understanding-before-execution" | "branch-protection";
 export type CustomMcpKey =
@@ -565,28 +567,12 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
             "Force agents to expose their task interpretation and wait for explicit human approval before any write-capable tool fires.",
           config: {
             mode: understandingMode,
-            producers: [
-              {
-                kind: "ask",
-                command: "harness approve understanding",
-                description:
-                  "Bare command, no pipes or chaining. The hook recognises it via isEscapeCommand and emits permissionDecision:ask; the operator's go on that prompt IS the gate approval. Golden path.",
-              },
-              {
-                kind: "bash",
-                command: "harness approve understanding",
-                description:
-                  "Same command from any un-hooked terminal (operator only, not reachable from inside the gated session). Writes the canonical marker at harness.generated/.approvals/${SESSION_ID}.",
-              },
-            ],
-            ux: {
-              cannot: "You cannot use write-capable tools yet.",
-              required: [understandingApprovalRequirement(understandingMode)],
-              run: [
-                "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan, Prior Art (state what you searched for an existing solution and what you found, with an explicit adopt-or-build judgment)",
-                "Run `harness approve understanding` with the report attached as a quoted heredoc (harness approve understanding <<'UNDERSTANDING_REPORT' ...report... UNDERSTANDING_REPORT) so it is persisted for audit, then approve the prompt; the heredoc is the only extra shell shape the gate allows (no pipes, chaining, or other redirection)",
-              ],
-            },
+            // Producers + ux text: read from the builtin pack module so
+            // this stays the SAME canonical wording `harness pack reseed`
+            // pulls from (task 68b9ad9c) — one source, not a copy that can
+            // drift from the reseed path.
+            producers: understandingDefaultProducers(),
+            ux: understandingDefaultUx(understandingMode),
             // agent-tasks/d8ee60ca: expire the approval marker on
             // task-completion boundaries so multi-task sessions
             // re-prompt for an Understanding Report between tasks.
@@ -610,16 +596,8 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
           description:
             "Block Write/Edit (claude-code) or apply_patch (codex) on protected branches (master, main, develop) at the first source mutation.",
           config: {
-            ux: {
-              cannot: "You cannot edit files on protected branch ${BRANCH} yet.",
-              required: [
-                "a checkout of a non-protected branch (current `${BRANCH}` is protected)",
-              ],
-              run: [
-                "git checkout -b feat/<your-task>",
-                "harness session-start branch-check",
-              ],
-            },
+            // Same canonical source as the reseed path (task 68b9ad9c).
+            ux: branchProtectionDefaultUx(),
           },
         };
       }

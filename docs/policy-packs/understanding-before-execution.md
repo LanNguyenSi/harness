@@ -72,6 +72,33 @@ When `config.ux` is set, `config.producers` (the `ask` / `bash` recipes shipped 
 
 Full reference for the verbatim three-section form, `${VAR}` substitution context, and the agent / operator surface split: [`docs/for-agents.md`](../for-agents.md#agent-facing-block-messages-ux-block).
 
+### Refreshing `config.ux` after a harness upgrade (`harness pack reseed`, task `68b9ad9c`)
+
+`config.ux` is captured into `harness.yaml` once, at `harness init` time (or whenever `harness pack add` seeds it). A later harness release can improve the shipped wording — for example the heredoc submission form the `run:` line above teaches, added after some manifests had already been generated with the older bare-command wording — but `harness apply` only ever projects the manifest OUT to `settings.json`; it never reads a fix back INTO an already-installed manifest's `config.ux`. Without an explicit step, an operator who installed before a wording fix keeps seeing the stale deny message indefinitely, even after upgrading the `harness` CLI itself.
+
+Two verbs close that gap:
+
+- **`harness doctor`** warns when an enabled pack's `config.ux` (or `config.producers`) textually diverges from the CLI's shipped default for that pack (compared against the pack's own configured `mode`, not a hardcoded one — a `strict`-mode manifest is compared against `strict`'s wording). The warning names the pack and points at the fix. A pack that never declared `config.ux` at all is not flagged by this check — that is the separate, pre-existing "no `ux:` declared, falls back to the legacy envelope" case, not a stale copy of the shipped text.
+- **`harness pack reseed <name>`** pulls the shipped default `config.ux` (and `config.producers`, for packs that ship one) into the manifest, leaving every other key on the pack entry — `mode`, `approval_lifecycle`, `permission_profile`, `min_version`, ... — untouched. Run `harness pack reseed <name> --dry-run` first to review the exact diff; the bare command writes it. A pack whose `config.ux` already matches the shipped default is a no-op (nothing to write). Reseed also seeds `config.ux` for a pack that never declared one, since running the verb is itself the operator's explicit request.
+
+```console
+$ harness doctor
+...
+Policy Packs
+  ⚠ understanding-before-execution.config.ux  pack "understanding-before-execution" config.ux diverges from the shipped builtin template; a supported update exists. Review with `harness pack reseed understanding-before-execution --dry-run` and apply with `harness pack reseed understanding-before-execution`.
+
+Note that the warning is scoped to `config.ux`, but applying `reseed` also seeds or updates `config.producers` where the pack ships one — the `--dry-run` diff shows the full set of fields the write would touch.
+
+$ harness pack reseed understanding-before-execution --dry-run
+--- current
++++ proposed
+...
+$ harness pack reseed understanding-before-execution
+reseeded config.ux, config.producers for policy_packs entry "understanding-before-execution" in ~/.harness/harness.yaml
+```
+
+`reseed` is deliberately explicit-only: it is never invoked by `apply`, `doctor`, or any automatic path, so an operator's own deliberate customisation of `config.ux` (a house style for the deny message, a stricter `required:` line, ...) is never silently overwritten by an upgrade — the same reasoning `harness adopt` exists for in the opposite direction (on-disk hand-edits flowing back into the manifest). If the CLI's own comparison says a declared `config.ux` "diverges", that only means it textually differs from the shipped default; it does not distinguish "predates a fix" from "operator customised" — review the `--dry-run` diff before running the write.
+
 ### `config.mode`
 
 | Mode | Friction | When the gate fires |

@@ -689,6 +689,15 @@ policy_packs:
       # is a filesystem marker and the mcp ledger_add path no longer
       # satisfies the gate; the canonical unblock surface is the
       # operator-approval prompt.
+      #
+      # KEEP IN SYNC (task 68b9ad9c): this text must match
+      # defaultProducers() in
+      # src/policy-packs/builtin/understanding-before-execution.ts —
+      # that function is what \`harness pack reseed\` and \`harness doctor\`'s
+      # divergence warning treat as "the shipped template". A wording fix
+      # landed here without updating defaultProducers() would make reseed
+      # silently pull operators BACK to the stale wording. Pinned by
+      # tests/cli/init-templates-ux-parity.test.ts.
       producers:
         - kind: ask
           command: harness approve understanding
@@ -701,6 +710,10 @@ policy_packs:
       # shape. Engine details (the BLOCK reason naming session id /
       # marker / report state) still land in stderr for operator audit;
       # the agent only sees this.
+      #
+      # KEEP IN SYNC (task 68b9ad9c): see the producers: comment above —
+      # same rationale applies here, against defaultUx("grill_me") in the
+      # same builtin module.
       ux:
         cannot: "You cannot use write-capable tools yet."
         required:
@@ -762,6 +775,11 @@ policy_packs:
       # plain-language { cannot, required, run } shape. Engine details
       # (the BLOCK reason naming session id / freshness window) stay
       # on stderr for operator audit.
+      #
+      # KEEP IN SYNC (task 68b9ad9c): this text must match defaultUx() in
+      # src/policy-packs/builtin/branch-protection.ts — see the identical
+      # note on the understanding-before-execution pack above for why.
+      # Pinned by tests/cli/init-templates-ux-parity.test.ts.
       ux:
         cannot: "You cannot edit files on protected branch \${BRANCH} yet."
         required:

@@ -18,6 +18,7 @@ import { parsePackSource } from "../../policy-packs/source.js";
 import { resolveBuiltin } from "../../policy-packs/registry.js";
 import { checkPolicyPackConfigs } from "../../policy-packs/config-check.js";
 import { checkPolicyPackVersions } from "../../policy-packs/version-check.js";
+import { checkPolicyPackUxDrift } from "../../policy-packs/ux-drift-check.js";
 import { DEFAULT_RUNTIME } from "../../policy-packs/runtime.js";
 import {
   checkPolicyRiskWithoutEnvScope,
@@ -585,6 +586,11 @@ function buildPolicyPacks(
       message: gap.message,
     }),
   );
+  const uxDrift = checkPolicyPackUxDrift(manifest).map((drift) => ({
+    name: drift.packName,
+    fields: drift.fields,
+    message: drift.message,
+  }));
   // Same array as the producer check on purpose: countDiagnostics and the
   // renderers already tally / print `solutionAcceptance` by severity, so
   // the knob-ignored warning (task 24f6ceb9) inherits doctor parity with
@@ -593,7 +599,7 @@ function buildPolicyPacks(
     ...checkSolutionAcceptanceProducer(manifest),
     ...checkSolutionAcceptanceKnobIgnored(manifest, gitIgnoreProbe),
   ];
-  return { unresolved, configIssues, versionGaps, solutionAcceptance };
+  return { unresolved, configIssues, versionGaps, uxDrift, solutionAcceptance };
 }
 
 function buildWorkflows(manifest: Manifest): import("./types.js").WorkflowsSectionReport {
@@ -785,6 +791,11 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // release are lost. Parallel to the hook-level version probe's
   // `status: warn`.
   warningCount += report.policyPacks.versionGaps.length;
+  // Ux/producers drift is always warn: the pack still functions with the
+  // stale wording, the operator is just missing a wording improvement.
+  // Fix is opt-in (`harness pack reseed <name>`), so this never escalates
+  // to an error the way an unresolved pack or a rejected config value does.
+  warningCount += report.policyPacks.uxDrift.length;
   for (const d of report.policyPacks.solutionAcceptance) {
     if (d.severity === "error") errorCount++;
     else if (d.severity === "warning") warningCount++;

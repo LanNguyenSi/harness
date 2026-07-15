@@ -73,6 +73,13 @@ policy_packs:
       # deny envelope with the plain-language { cannot, required, run }
       # shape. Engine details still land in stderr for operator audit;
       # the agent only sees this.
+      #
+      # KEEP IN SYNC (task 68b9ad9c): this text must match
+      # defaultUx("grill_me") in
+      # src/policy-packs/builtin/understanding-before-execution.ts — that
+      # function is what \`harness pack reseed\` / \`harness doctor\`'s
+      # divergence warning treat as "the shipped template". Pinned by
+      # tests/cli/init-templates-ux-parity.test.ts.
       ux:
         cannot: "You cannot use write-capable tools yet."
         required:
@@ -217,6 +224,8 @@ policy_packs:
     config:
       mode: grill_me
       # ux (agent-tasks/60bc93e5): same shape as Solo's pack ux.
+      # KEEP IN SYNC (task 68b9ad9c): see the identical note on Solo's
+      # copy above — must match defaultUx("grill_me").
       ux:
         cannot: "You cannot use write-capable tools yet."
         required:

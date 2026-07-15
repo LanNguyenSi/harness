@@ -3,6 +3,7 @@
 // src/cli/remove/mutate.ts.
 
 import { isMap, isSeq, parseDocument } from "yaml";
+import type { PolicyUx, Producer } from "../../schema/index.js";
 
 export interface PackAddEntry {
   name: string;
@@ -60,6 +61,55 @@ export function planPackRemove(yamlText: string, name: string): PackRemovePlan {
     if (itemName === name) found = true;
   }
   return { found, availableNames: names };
+}
+
+export interface PackReseedFields {
+  /** Present when the pack has a canonical shipped `config.ux`. */
+  ux?: PolicyUx;
+  /** Present when the pack has a canonical shipped `config.producers`. */
+  producers?: Producer[];
+}
+
+/**
+ * Overwrite `policy_packs[<name>].config.ux` (and `.config.producers`,
+ * when supplied) with the given shipped-template values, leaving every
+ * other key in the entry — including sibling `config:` keys like `mode`
+ * or `approval_lifecycle` — untouched. Used by `harness pack reseed`
+ * (task 68b9ad9c) to pull a wording fix into an already-installed
+ * manifest without clobbering the operator's other customisations.
+ * `doc.setIn` creates the intermediate `config:` map when the entry
+ * doesn't have one yet (verified: an entry with no `config:` key at all
+ * round-trips to a freshly-created `config: { ux: ... }` block).
+ */
+export function applyPackReseedUx(
+  yamlText: string,
+  name: string,
+  fields: PackReseedFields,
+): string {
+  const doc = parseDocument(yamlText);
+  const node = doc.getIn(["policy_packs"]);
+  if (!isSeq(node)) {
+    throw new Error(`expected a YAML sequence at policy_packs, got ${typeof node}`);
+  }
+  let index = -1;
+  for (let i = 0; i < node.items.length; i++) {
+    const item = node.items[i];
+    if (!isMap(item)) continue;
+    if (item.get("name") === name) {
+      index = i;
+      break;
+    }
+  }
+  if (index === -1) {
+    throw new Error(`policy_packs entry ${JSON.stringify(name)} not found`);
+  }
+  if (fields.ux !== undefined) {
+    doc.setIn(["policy_packs", index, "config", "ux"], fields.ux);
+  }
+  if (fields.producers !== undefined) {
+    doc.setIn(["policy_packs", index, "config", "producers"], fields.producers);
+  }
+  return doc.toString({ flowCollectionPadding: false, lineWidth: 0 });
 }
 
 export function applyPackRemove(yamlText: string, name: string): string {
