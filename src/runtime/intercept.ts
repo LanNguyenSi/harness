@@ -334,6 +334,15 @@ function isBlockingDecision(d: PolicyDecision): boolean {
   return d.outcome === "require_approval";
 }
 
+/**
+ * Placeholder `ledgerTag` recorded on an `operator_only` decision (and on
+ * the defensive schema-invariant-violated branch below). Both outcomes
+ * are decided WITHOUT ever substituting or querying a real tag, so this
+ * is a readable marker for `harness audit` / `explain --trace` / the
+ * stderr diagnostic, not a value anything matches against.
+ */
+const NO_LEDGER_TAG = "(operator-only: no ledger tag — never evaluated)";
+
 async function evaluateOnePolicy(
   policy: Policy,
   options: InterceptOptions,
@@ -345,10 +354,64 @@ async function evaluateOnePolicy(
     ctx,
     options.builtins,
   );
+
+  // Unconditional operator-only deny (schema `operator_only: true`, task
+  // 2cc73f55). The schema's superRefine guarantees this form carries NO
+  // `requires:` and `enforcement: block`, so short-circuit here, BEFORE
+  // the requires pipeline: no ledger query, no template substitution, no
+  // `evaluateRequires` call. That is the load-bearing property — there is
+  // no in-session evidence (ledger tag, marker file, flag) this branch
+  // ever reads, so none can flip the outcome to allow. `extract` above is
+  // still computed (cheap, pure) only because a `ux:`/`producers:` block
+  // on this policy may reference `${VAR}`s from `trigger.extract`; it
+  // plays no role in the outcome below.
+  if (policy.operator_only === true) {
+    return {
+      policyName: policy.name,
+      enforcement: policy.enforcement,
+      outcome: "deny",
+      reason:
+        "operator-only: this policy declares no requires: and cannot be satisfied by any in-session evidence",
+      extractValues: extract.values,
+      ledgerTag: NO_LEDGER_TAG,
+      evaluatedAt,
+    };
+  }
+
+  const requires = policy.requires;
+  if (requires === undefined) {
+    // Unreachable under a schema-validated manifest: PolicySchema's
+    // superRefine requires either `requires:` or `operator_only: true`.
+    // Defensive branch only, for a manifest that bypassed
+    // `harness validate` (hand-built Policy object, stale cached parse).
+    //
+    // Deliberately `warn-degraded`, not `deny`: this is the SAME "could
+    // not decide" fail-open family as the other `warn-degraded` returns
+    // in this function (unresolved template variables, a degraded
+    // ledger query, an invalid `within`, a throwing `evaluateRequires`)
+    // — the contract for all of them is "the evaluator could not form a
+    // real verdict, so it never blocks and never silently allows either;
+    // it is loud instead" (recorded to the audit ledger and returned as
+    // a non-`allow`, non-`deny` outcome). Failing this branch `deny`
+    // would treat an internal schema-invariant violation as if it were a
+    // deliberate `operator_only: true` policy authored by the operator,
+    // which it is not — the two must stay observably distinct.
+    return {
+      policyName: policy.name,
+      enforcement: policy.enforcement,
+      outcome: "warn-degraded",
+      reason:
+        "policy declares neither requires: nor operator_only: true (schema invariant violated)",
+      extractValues: extract.values,
+      ledgerTag: NO_LEDGER_TAG,
+      evaluatedAt,
+    };
+  }
+
   const missingExtracts = extract.traceData
     .filter((t) => t.source === "missing")
     .map((t) => t.var);
-  const sub = substituteTemplate(policy.requires.ledger_tag, extract.values);
+  const sub = substituteTemplate(requires.ledger_tag, extract.values);
   const ledgerTag = sub.result;
   const unresolved = [...missingExtracts, ...sub.missing];
 
@@ -393,15 +456,15 @@ async function evaluateOnePolicy(
 
   // Pre-validate `within` against the runtime parser so a manifest that
   // bypassed `harness validate` doesn't throw uncaught.
-  if (policy.requires.within !== undefined) {
+  if (requires.within !== undefined) {
     try {
-      parseDurationSeconds(policy.requires.within);
+      parseDurationSeconds(requires.within);
     } catch {
       return {
         policyName: policy.name,
         enforcement: policy.enforcement,
         outcome: "warn-degraded",
-        reason: `invalid within: ${policy.requires.within}`,
+        reason: `invalid within: ${requires.within}`,
         extractValues: extract.values,
         ledgerTag,
         evaluatedAt,
@@ -420,7 +483,7 @@ async function evaluateOnePolicy(
   let evaluation: RequiresEvaluation;
   try {
     evaluation = evaluateRequires(
-      { ...policy.requires, ledger_tag: ledgerTag },
+      { ...requires, ledger_tag: ledgerTag },
       filtered,
       evalOpts,
     );

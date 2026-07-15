@@ -365,9 +365,10 @@ Schema:
 | `name` | string | yes | unique |
 | `description` | string | yes | surfaced by `harness describe` |
 | `trigger` | object | yes | `event`, `match`, optional `path_match` / `bash_match`, optional `extract` (see below) |
-| `requires` | object | yes | evidence shape; discriminated union, see below |
+| `requires` | object | yes, unless `operator_only: true` | evidence shape; discriminated union, see below |
 | `hook` | string | yes | must reference a `hooks[].name` |
-| `enforcement` | enum | yes | `block` / `warn`; higher level than hook's `blocking` flag |
+| `enforcement` | enum | yes | `block` / `warn` / `require_approval`; higher level than hook's `blocking` flag |
+| `operator_only` | boolean | no | `true` declares an unconditional operator-only deny: no `requires:` at all (mutually exclusive with it), only valid with `enforcement: block`. `harness policy intercept` never queries the ledger for this policy — no in-session evidence (ledger write, marker file, flag) can ever satisfy it. For a `requires:`-based policy, whoever can write the ledger can open the gate (see [`writing-custom-policies.md`](writing-custom-policies.md) tripwire 4); `operator_only: true` is the schema's answer for a gate that must never open from inside the session. See [`writing-custom-policies.md`](writing-custom-policies.md#recipe-c-operator-only-unconditional-deny-no-self-satisfiable-requires). |
 | `producers` | array | no | structured remediation hints rendered into the deny envelope; discriminated union of `bash` / `mcp` / `ask` kinds. At least one `mcp` producer is required when set (the ungated recovery path when Bash is locked down). |
 | `ux` | object | no | agent-facing block message; `{ cannot, required[], run[] }`. When set, replaces the engine-vocabulary text on the agent surface (`permissionDecisionReason`) with a plain-language three-section form; the operator-facing reason and audit ledger are unchanged. `${VAR}` references resolve against the same extract map the `ledger_tag` was substituted with, plus builtins (`SESSION_ID` / `REPO` / `BRANCH` / `TOOL_NAME` / `CWD`). Suppresses `producers:` rendering on the agent surface to avoid two competing remedy lists. See [`for-agents.md`](for-agents.md#agent-facing-block-messages-ux-block) for the verbatim form. |
 

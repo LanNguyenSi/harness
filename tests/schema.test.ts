@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { ManifestParseError, parseManifest } from "../src/schema/index.js";
+import { FULL_TEMPLATE } from "../src/cli/init/templates.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..");
@@ -228,6 +229,22 @@ describe("parseManifest — invalid fixtures", () => {
       file: "23-policy-when-empty.yaml",
       pattern: /when must declare at least one clause/i,
     },
+    {
+      file: "24-policy-operator-only-with-requires.yaml",
+      pattern: /operator_only.*must not also declare requires/i,
+    },
+    {
+      file: "25-policy-operator-only-wrong-enforcement.yaml",
+      pattern: /operator_only.*only meaningful for enforcement: block/i,
+    },
+    {
+      file: "26-policy-missing-requires-and-operator-only.yaml",
+      pattern: /requires is mandatory unless.*operator_only/i,
+    },
+    {
+      file: "27-policy-operator-only-with-producers.yaml",
+      pattern: /operator_only.*must not also declare producers/i,
+    },
   ];
 
   for (const c of cases) {
@@ -365,6 +382,128 @@ describe("parseManifest — requires shapes", () => {
         }),
       ),
     ).toThrow(/min.*<=.*max/i);
+  });
+});
+
+describe("parseManifest — operator_only unconditional deny (task 2cc73f55)", () => {
+  function buildOperatorOnlyManifest(overrides: Record<string, unknown> = {}): unknown {
+    return {
+      version: 1,
+      hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
+      policies: [
+        {
+          name: "p",
+          description: "d",
+          trigger: { event: "PreToolUse" },
+          hook: "h",
+          enforcement: "block",
+          operator_only: true,
+          ...overrides,
+        },
+      ],
+    };
+  }
+
+  it("accepts operator_only: true with enforcement: block and no requires:", () => {
+    const m = parseManifest(buildOperatorOnlyManifest());
+    expect(m.policies[0]?.operator_only).toBe(true);
+    expect(m.policies[0]?.requires).toBeUndefined();
+  });
+
+  it("rejects operator_only: true alongside a requires: block (self-contradictory)", () => {
+    expect(() =>
+      parseManifest(
+        buildOperatorOnlyManifest({ requires: { ledger_tag: "x:${SESSION_ID}" } }),
+      ),
+    ).toThrow(/operator_only.*must not also declare requires/i);
+  });
+
+  it("rejects operator_only: true alongside a declared producers: array (same mutual-exclusion class)", () => {
+    // producers: documents a legitimate way to SATISFY the gate; an
+    // unconditional deny never evaluates any evidence, so declaring both
+    // would misrepresent the gate as satisfiable.
+    expect(() =>
+      parseManifest(
+        buildOperatorOnlyManifest({
+          producers: [
+            {
+              kind: "mcp",
+              verb: "mcp__agent-grounding__ledger_add",
+              example: '{sessionId:"x", type:"fact", content:"x"}',
+              description: "bogus",
+            },
+          ],
+        }),
+      ),
+    ).toThrow(/operator_only.*must not also declare producers/i);
+  });
+
+  it("rejects operator_only: true with enforcement: warn", () => {
+    expect(() =>
+      parseManifest(buildOperatorOnlyManifest({ enforcement: "warn" })),
+    ).toThrow(/operator_only.*only meaningful for enforcement: block/i);
+  });
+
+  it("rejects operator_only: true with enforcement: require_approval", () => {
+    expect(() =>
+      parseManifest(buildOperatorOnlyManifest({ enforcement: "require_approval" })),
+    ).toThrow(/operator_only.*only meaningful for enforcement: block/i);
+  });
+
+  it("still rejects a plain block policy with neither requires: nor operator_only: true", () => {
+    expect(() =>
+      parseManifest(
+        buildOperatorOnlyManifest({ operator_only: undefined }),
+      ),
+    ).toThrow(/requires is mandatory unless.*operator_only/i);
+  });
+
+  it("existing requires-carrying block policies are unaffected (regression pin)", () => {
+    // operator_only is absent entirely here — the pre-existing mandatory-
+    // requires path must still work byte-identically.
+    expect(() =>
+      parseManifest({
+        version: 1,
+        hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
+        policies: [
+          {
+            name: "p",
+            description: "d",
+            trigger: { event: "PreToolUse" },
+            requires: { ledger_tag: "x:${SESSION_ID}" },
+            hook: "h",
+            enforcement: "block",
+          },
+        ],
+      }),
+    ).not.toThrow();
+  });
+
+  it("the three shipped operator_only kill-switch policies in FULL_TEMPLATE are unaffected by the producers: restriction (they use ux:, not producers:)", () => {
+    const m = parseManifest(parseYaml(FULL_TEMPLATE));
+    for (const name of [
+      "deny-kill-switch-bypass",
+      "deny-session-env-strip",
+      "deny-pause-sentinel-forgery",
+    ]) {
+      const p = m.policies.find((x) => x.name === name);
+      expect(p?.operator_only, `${name} operator_only`).toBe(true);
+      expect(p?.producers, `${name} producers`).toBeUndefined();
+      expect(p?.ux, `${name} ux`).toBeDefined();
+    }
+  });
+
+  it("does not warn/error the self-attestation check for an operator_only policy with no producers", async () => {
+    // checkPolicySelfAttestation lives in src/cli/validate/checks.ts and
+    // is exercised end-to-end (via `validate()`) in
+    // tests/cli/validate.test.ts; this is a light schema-layer sanity
+    // check that the parsed shape (operator_only true, no producers) is
+    // exactly what that check inspects.
+    const m = parseManifest(buildOperatorOnlyManifest());
+    const p = m.policies[0];
+    expect(p?.enforcement).toBe("block");
+    expect(p?.operator_only).toBe(true);
+    expect(p?.producers).toBeUndefined();
   });
 });
 

@@ -1,0 +1,20 @@
+# operator_only: true policies must not also declare requires: — an
+# unconditional deny that also names in-session-satisfiable evidence is
+# self-contradictory (task 2cc73f55). PolicySchema's superRefine rejects
+# the combination.
+version: 1
+hooks:
+  - name: h
+    event: PreToolUse
+    command: /bin/true
+    blocking: false
+policies:
+  - name: bad-operator-only-with-requires
+    description: Declares both operator_only and requires.
+    trigger:
+      event: PreToolUse
+    requires:
+      ledger_tag: "x:${SESSION_ID}"
+    operator_only: true
+    hook: h
+    enforcement: block

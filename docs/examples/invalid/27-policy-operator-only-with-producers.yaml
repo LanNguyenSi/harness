@@ -1,0 +1,24 @@
+# operator_only: true policies must not also declare producers: —
+# producers describe a documented way to SATISFY the gate, but an
+# unconditional deny never evaluates any evidence, so a declared
+# producer would misrepresent the gate as satisfiable (task 2cc73f55).
+# Same mutual-exclusion class as requires: (fixture 24).
+version: 1
+hooks:
+  - name: h
+    event: PreToolUse
+    command: /bin/true
+    blocking: false
+policies:
+  - name: bad-operator-only-with-producers
+    description: Declares both operator_only and producers.
+    trigger:
+      event: PreToolUse
+    operator_only: true
+    hook: h
+    enforcement: block
+    producers:
+      - kind: mcp
+        verb: mcp__agent-grounding__ledger_add
+        example: '{sessionId:"x", type:"fact", content:"x"}'
+        description: bogus — should never be declared alongside operator_only

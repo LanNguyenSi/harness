@@ -185,18 +185,27 @@ export async function explain(
   }
 
   if (!opts.trace) {
+    // `operator_only: true` policies (task 2cc73f55) declare no
+    // `requires:` at all: there is no ledger contract to show, and no
+    // hint to build — the policy is an unconditional deny, full stop.
     const projection = {
       name: policy.name,
       description: policy.description,
       trigger: policy.trigger,
-      requires: policy.requires,
+      ...(policy.requires !== undefined && { requires: policy.requires }),
       // toSatisfy mirrors the deny-time hint surfaced by `harness policy
       // intercept`, so a contributor reading the policy under `harness
       // explain <policy>` sees the same contract a blocked operator
       // sees in Claude Code. Built from the un-substituted ledger_tag
       // template (e.g. `review:${PR_NUMBER}`) so it reads as the policy
       // contract, not a specific event's instance.
-      toSatisfy: buildRecordHint(policy.requires, policy.requires.ledger_tag),
+      ...(policy.requires !== undefined && {
+        toSatisfy: buildRecordHint(policy.requires, policy.requires.ledger_tag),
+      }),
+      ...(policy.operator_only === true && {
+        toSatisfy:
+          "none — operator_only: true is an unconditional deny; no in-session evidence can ever satisfy it",
+      }),
       hook: policy.hook,
       enforcement: policy.enforcement,
       note: "run with --trace to see the last evaluation's full decision trail",
@@ -255,8 +264,14 @@ function renderTrace(
     }),
     extract: latest.payload.extractValues,
     ...(latest.payload.requiresEval && { requiresEval: latest.payload.requiresEval }),
-    ...(policy && {
+    ...(policy?.requires !== undefined && {
       toSatisfy: buildRecordHint(policy.requires, latest.payload.ledgerTag),
+    }),
+    // operator_only: true (task 2cc73f55) — no requires: to build a hint
+    // from; the policy is an unconditional deny.
+    ...(policy?.operator_only === true && {
+      toSatisfy:
+        "none — operator_only: true is an unconditional deny; no in-session evidence can ever satisfy it",
     }),
     // M7: surface the fail-closed unclassified flag in the trace so an
     // operator can distinguish a real critical-severity deny from a

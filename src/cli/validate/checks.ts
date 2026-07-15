@@ -388,6 +388,13 @@ export function checkPolicySelfAttestation(manifest: Manifest): Diagnostic[] {
     // flow that exists independent of producers:, so absence of producers
     // there does not mean the evidence source is undocumented.
     if (p === undefined || p.enforcement !== "block") continue;
+    // operator_only: true (task 2cc73f55) is the schema-level unconditional
+    // operator-only deny: no requires:, so there is no self-satisfiable
+    // evidence source to leave undocumented, and no producers: array could
+    // ever name a legitimate one (an unconditional deny is never satisfied
+    // from inside the session, by design). Correct-by-construction: skip
+    // both this warning and the --strict error it would become.
+    if (p.operator_only === true) continue;
     if (p.producers !== undefined && p.producers.length > 0) continue;
     diags.push({
       severity: "warning",

@@ -63,6 +63,10 @@ These four things bite people who skip ahead to the YAML:
    `harness validate` warns when a `block` policy declares no
    `producers:` at all, because then the evidence source is
    undocumented and this trade-off was never made visibly.
+   If your gate must be a genuine, unconditional operator-only deny —
+   no evidence, agent-executable or not, should EVER satisfy it — see
+   "Operator-only unconditional deny" below instead of trying to name
+   an unsatisfiable `requires:`.
 
 ## Anatomy of a custom policy
 
@@ -71,7 +75,7 @@ Every block-enforcement policy is four parts:
 | Part | Where | What |
 |------|-------|------|
 | **trigger** | `policies[].trigger` | which tool call should the policy look at (event + match + optional bash_match + optional extract) |
-| **requires** | `policies[].requires` | which ledger evidence must exist (`ledger_tag`, optional `within`, optional `count.min`) |
+| **requires** | `policies[].requires` | which ledger evidence must exist (`ledger_tag`, optional `within`, optional `count.min`); mandatory unless the policy declares `operator_only: true` instead (see below) |
 | **hook** | `hooks[]` referenced by `policies[].hook` | the PreToolUse glue that calls `harness policy intercept` so the runtime evaluates the policy |
 | **ux** | `policies[].ux` | what the agent sees on a block (`cannot`, `required[]`, `run[]`); omit for the legacy engine-vocabulary envelope, prefer it for anything agent-facing |
 
@@ -184,6 +188,70 @@ What this recipe adds over Recipe A:
 To use this with a different check, change the `slop-detector` call
 in `run:` and the ledger tag prefix. The hook wiring, the trigger
 regex, the `within:` value, all transfer.
+
+## Recipe C: operator-only unconditional deny (no self-satisfiable `requires:`)
+
+Recipes A and B are **process gates** (tripwire 4): they name a
+`requires.ledger_tag` the gated agent can write itself via
+`mcp__agent-grounding__ledger_add`, so the gate forces a step but does
+not survive an agent that skips it and writes the tag directly. That
+is the right shape for "make the agent do the review/check step
+first." It is the wrong shape for "the agent may NEVER do this, full
+stop" — there is no `ledger_tag` you can name for that intent that
+isn't itself something the agent could forge.
+
+`operator_only: true` (task 2cc73f55) is the schema's way of expressing
+that second intent honestly: the policy declares **no `requires:` at
+all**, and `harness policy intercept` denies unconditionally, without
+ever querying the evidence ledger. There is no ledger write, marker
+file, or env flag that flips it to allow — the runtime never looks.
+
+```yaml
+policies:
+  - name: deny-kill-switch-bypass
+    description: Deny harness pause / harness resume from the agent's Bash tool.
+    trigger:
+      event: PreToolUse
+      match: "Bash"
+      bash_match: '(^|\n|;|\||&&|\()\s*(\w+=\S*\s+)*harness\s+(pause|resume)\b'
+    operator_only: true
+    hook: deny-kill-switch-bash
+    enforcement: block
+    ux:
+      cannot: "You cannot run `harness pause` or `harness resume`."
+      required:
+        - "the OPERATOR to run this from a terminal genuinely outside your agent session"
+      run:
+        - "Stop. Ask the operator to run it themselves; this gate cannot be satisfied from inside the session."
+```
+
+Rules the schema enforces:
+
+- **`operator_only: true` and `requires:` are mutually exclusive.**
+  Declaring both is rejected — an unconditional deny that also names
+  in-session-satisfiable evidence is self-contradictory.
+- **Restricted to `enforcement: block`.** `warn` and `require_approval`
+  already have their own always-evaluated evidence paths;
+  `require_approval`'s canonical unblock is the `harness approve risk`
+  operator verb, not a requires-satisfaction story this marker would
+  replace.
+- **`harness validate` does not warn** about a missing `producers:` for
+  an `operator_only: true` policy (`checkPolicySelfAttestation` treats
+  it as correct-by-construction: there is no undocumented evidence
+  source to flag, because there is no evidence source at all).
+
+What this recipe does **not** fix: `bash_match` is still a regex over
+the raw command string, matched at the *trigger* layer, before
+`operator_only:` is ever consulted. An agent that defeats the trigger
+match (a heredoc, `sh -c '...'`, a base64-decoded payload, a script
+file it writes and then executes) never reaches this deny at all —
+`operator_only: true` closes the *evidence-satisfaction* hole, not the
+*trigger-matching-coverage* hole. See the three `deny-*` kill-switch
+policies in `docs/examples/full-manifest.yaml` /
+`src/cli/init/templates.ts` for the full worked example, and
+`tests/cli/init-full-template-kill-switch-deny.test.ts` for a test that
+forges every ledger-evidence shape available to `intercept()` and
+confirms none of them satisfy the gate.
 
 ## Variations
 
@@ -305,11 +373,12 @@ full ledger query, extract substitutions, and match trace.
 | `policies[].trigger.bash_match` | optional | Regex against `toolArgs.command` when `match: Bash`. Anchor at command start (`^` or `(^|\n|;|\\||&&|\\()`) to catch env-prefixes and subshells. |
 | `policies[].trigger.path_match` | optional | Regex against file paths for Edit/Write/MultiEdit triggers. |
 | `policies[].trigger.extract` | optional | Map of `${VAR}` → JSONPath against the tool payload. Required if `ledger_tag` references a non-builtin `${VAR}`. |
-| `policies[].requires.ledger_tag` | yes | Tag the runtime queries grounding-mcp for. Substring/regex against ledger `content`. |
+| `policies[].requires.ledger_tag` | yes, unless `operator_only: true` | Tag the runtime queries grounding-mcp for. Substring/regex against ledger `content`. |
 | `policies[].requires.within` | optional | Duration string (`10m`, `1h`, `24h`, `PT1H`, `86400s`). Filters to entries created in this window. |
 | `policies[].requires.count.min` | optional | Minimum number of matching entries. `0` is rejected. |
+| `policies[].operator_only` | optional | `true` declares an unconditional operator-only deny: no `requires:` at all, never queries the ledger, no in-session evidence can ever satisfy it. Mutually exclusive with `requires:`; only valid with `enforcement: block`. See [Recipe C](#recipe-c-operator-only-unconditional-deny-no-self-satisfiable-requires). |
 | `policies[].hook` | yes | Name of a `hooks[]` entry whose `command: harness policy intercept` actually invokes the runtime. |
-| `policies[].enforcement` | yes | `block` or `warn`. `warn` logs a `policy_decision` row but lets the tool call through. |
+| `policies[].enforcement` | yes | `block`, `warn`, or `require_approval`. `warn` logs a `policy_decision` row but lets the tool call through. |
 | `policies[].ux.cannot` | optional | One-line block message for the agent. `${VAR}` references substitute. |
 | `policies[].ux.required` | optional | Array of plain-words preconditions. |
 | `policies[].ux.run` | optional | Array of literal commands the agent can run to satisfy the gate. |

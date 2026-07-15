@@ -1,0 +1,17 @@
+# operator_only: true is only meaningful for enforcement: block (an
+# unconditional operator-only deny); warn / require_approval already have
+# their own always-evaluated evidence paths (task 2cc73f55).
+version: 1
+hooks:
+  - name: h
+    event: PreToolUse
+    command: /bin/true
+    blocking: false
+policies:
+  - name: bad-operator-only-warn
+    description: operator_only with enforcement warn, which is meaningless.
+    trigger:
+      event: PreToolUse
+    operator_only: true
+    hook: h
+    enforcement: warn
