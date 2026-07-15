@@ -265,6 +265,9 @@ export async function runPackHookCodexPreToolUseCli(
   // Claude hook (hook-pre-tool-use.ts) so the two runtimes stay in
   // lockstep, same rationale as `checkOperatorApprovalMarkers` itself.
   let markerExpired = false;
+  // True when checkOperatorApprovalMarkers found a marker FILE that failed
+  // signature verification (harness/f9485cc7), mirroring the Claude hook.
+  let markerForged = false;
   if (generatedDir !== undefined) {
     const markers = checkOperatorApprovalMarkers(
       generatedDir,
@@ -273,6 +276,7 @@ export async function runPackHookCodexPreToolUseCli(
       stderr,
     );
     markerExpired = markers.expired;
+    markerForged = markers.forged;
     if (markers.source !== "task") {
       // Trace the task-marker miss, mirroring the Claude hook, so an
       // operator debugging a Codex session sees the active-claim vs
@@ -355,8 +359,11 @@ export async function runPackHookCodexPreToolUseCli(
 
   // Neither operator source approved. Codex blocks via non-zero exit
   // + stderr reason; there is no JSON-decision wire to write to stdout.
+  // Mirrors the Claude hook's distinct forged-marker reason (harness/f9485cc7).
   const reason = generatedDir !== undefined
-    ? `no approval marker for session ${sessionId}; ${report.detail}; ${ledger.detail}`
+    ? markerForged
+      ? `forged/unsigned marker rejected for session ${sessionId}; ${report.detail}; ${ledger.detail}`
+      : `no approval marker for session ${sessionId}; ${report.detail}; ${ledger.detail}`
     : `generatedDir not resolvable (test/injection path); ${report.detail}; ${ledger.detail}`;
   // When the pack config declares `ux:`, the agent-facing block becomes
   // the plain-language shape and the legacy schemaHint text is

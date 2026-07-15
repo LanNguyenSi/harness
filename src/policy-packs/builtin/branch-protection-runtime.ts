@@ -83,8 +83,10 @@ export function writeBranchProtectionMarker(
 /**
  * Gate-side: is the operator's branch-protection override marker present
  * for `sessionId`? Inherits `checkApprovalMarker`'s contract
- * (existence-is-enough, symlink rejection, optional freshness via
- * `maxAgeMs`); only the namespaced filename differs.
+ * (signature-verified, symlink rejection, optional freshness via
+ * `maxAgeMs` — harness/f9485cc7 replaced the earlier existence-is-enough
+ * behaviour with HMAC signature verification); only the namespaced
+ * filename differs.
  */
 export function checkBranchProtectionMarker(
   generatedDir: string,

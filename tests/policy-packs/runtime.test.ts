@@ -22,6 +22,7 @@ import {
   writeTaskApprovalMarker,
   type PersistedReport,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
+import { signingKeyPathFor } from "../../src/runtime/approval-signing.js";
 
 let tmp: string;
 
@@ -357,9 +358,11 @@ describe("writeApprovalMarker / checkApprovalMarker / clearApprovalMarker (agent
     const r = checkApprovalMarker(tmp, "sess-1");
     expect(r.matched).toBe(true);
     expect(r.expired).toBe(false);
+    expect(r.forged).toBe(false);
     expect(r.marker).toEqual({
       approvedAt: "2026-05-15T20:00:00Z",
       approvedBy: "test-operator",
+      reportContentHash: null,
     });
     expect(r.detail).toMatch(/approved at 2026-05-15T20:00:00Z by test-operator/);
   });
@@ -373,18 +376,120 @@ describe("writeApprovalMarker / checkApprovalMarker / clearApprovalMarker (agent
     const r = checkApprovalMarker(tmp, "sess-absent");
     expect(r.matched).toBe(false);
     expect(r.expired).toBe(false);
+    expect(r.forged).toBe(false);
     expect(r.detail).toMatch(/no approval marker at/);
     expect(r.detail).toMatch(/sess-absent/);
   });
 
-  it("marker with corrupt JSON body still satisfies the gate by file existence", () => {
+  // harness/f9485cc7: this used to be titled "... still satisfies the gate
+  // by file existence" — the whole point of marker signing is to REMOVE
+  // that existence-only contract, since it is exactly the shape a forger
+  // only needs a bare filesystem-write for. A corrupt/malformed body now
+  // fails signature verification and is rejected, same as a missing
+  // marker, but with a distinct forged:true / "forged/unsigned marker
+  // rejected" detail.
+  it("marker with corrupt JSON body is REJECTED (forged:true), not existence-approved", () => {
     const markerPath = path.join(tmp, ".approvals", "sess-corrupt");
     fs.mkdirSync(path.dirname(markerPath), { recursive: true });
     fs.writeFileSync(markerPath, "{not-json");
     const r = checkApprovalMarker(tmp, "sess-corrupt");
-    expect(r.matched).toBe(true);
+    expect(r.matched).toBe(false);
+    expect(r.forged).toBe(true);
     expect(r.marker).toBeNull();
-    expect(r.detail).toMatch(/body unreadable/);
+    expect(r.detail).toMatch(/forged\/unsigned marker rejected/);
+  });
+
+  // Regression test (AC #3): a marker hand-written WITHOUT the signing key
+  // — simulating a forge via a non-gated write primitive (a future MCP
+  // tool the Edit|Write|Bash blocker matcher does not enumerate) — must
+  // NOT satisfy the gate, even though it carries perfectly well-formed
+  // approvedAt/approvedBy fields.
+  it("a hand-written marker without a signature does NOT satisfy the gate (forgery regression)", () => {
+    const markerPath = path.join(tmp, ".approvals", "sess-forged");
+    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+    fs.writeFileSync(
+      markerPath,
+      `${JSON.stringify({
+        approvedAt: new Date().toISOString(),
+        approvedBy: "attacker",
+      })}\n`,
+    );
+    const r = checkApprovalMarker(tmp, "sess-forged");
+    expect(r.matched).toBe(false);
+    expect(r.forged).toBe(true);
+    expect(r.marker).toBeNull();
+    expect(r.detail).toMatch(/forged\/unsigned marker rejected/);
+    expect(r.detail).toMatch(/missing signature/);
+  });
+
+  // Mutation-verification (AC #9): tamper ONE byte of an otherwise-valid
+  // signature and confirm the gate blocks.
+  it("a valid marker with one tampered signature byte is REJECTED", () => {
+    writeApprovalMarker(tmp, "sess-tamper", {
+      approvedAt: new Date().toISOString(),
+      approvedBy: "test-operator",
+    });
+    const markerPath = path.join(tmp, ".approvals", "sess-tamper");
+    const raw = JSON.parse(fs.readFileSync(markerPath, "utf8")) as { signature: string };
+    // Confirm the untampered marker verifies first, so the assertion below
+    // is attributable to the tamper, not to some other break.
+    expect(checkApprovalMarker(tmp, "sess-tamper").matched).toBe(true);
+    const original = raw.signature;
+    const flippedChar = original[0] === "0" ? "1" : "0";
+    raw.signature = flippedChar + original.slice(1);
+    fs.writeFileSync(markerPath, `${JSON.stringify(raw, null, 2)}\n`);
+    const r = checkApprovalMarker(tmp, "sess-tamper");
+    expect(r.matched).toBe(false);
+    expect(r.forged).toBe(true);
+    expect(r.detail).toMatch(/forged\/unsigned marker rejected/);
+    expect(r.detail).toMatch(/signature verification failed/);
+  });
+
+  // Review LOW 1 (harness/f9485cc7): a broken signing-key file (I/O error)
+  // must NOT read as an attack. Distinct from `forged`.
+  it("a signing-key I/O failure is fail-closed but NOT classified as forged", () => {
+    writeApprovalMarker(tmp, "sess-keybroken", {
+      approvedAt: new Date().toISOString(),
+      approvedBy: "test-operator",
+    });
+    expect(checkApprovalMarker(tmp, "sess-keybroken").matched).toBe(true);
+    const keyPath = signingKeyPathFor(tmp);
+    fs.rmSync(keyPath, { force: true });
+    fs.mkdirSync(keyPath); // directory at the key's path: readFileSync throws EISDIR
+    const r = checkApprovalMarker(tmp, "sess-keybroken");
+    expect(r.matched).toBe(false);
+    expect(r.forged).toBe(false);
+    expect(r.detail).toMatch(/could not be verified/);
+    expect(r.detail).toMatch(/signing key unavailable/);
+  });
+
+  // A marker copied/renamed onto a DIFFERENT session id must not verify:
+  // the signed payload binds the markerId (harness/f9485cc7), so a valid
+  // signature for "sess-original" does not transfer to "sess-copied".
+  it("a validly-signed marker copied to a different session id does NOT verify", () => {
+    writeApprovalMarker(tmp, "sess-original", {
+      approvedAt: new Date().toISOString(),
+      approvedBy: "test-operator",
+    });
+    const originalPath = path.join(tmp, ".approvals", "sess-original");
+    const copiedPath = path.join(tmp, ".approvals", "sess-copied");
+    fs.copyFileSync(originalPath, copiedPath);
+    const r = checkApprovalMarker(tmp, "sess-copied");
+    expect(r.matched).toBe(false);
+    expect(r.forged).toBe(true);
+  });
+
+  // A signed marker binds reportContentHash: writing with one hash and
+  // reading it back must preserve the value verbatim.
+  it("round-trips a non-null reportContentHash", () => {
+    writeApprovalMarker(tmp, "sess-with-report", {
+      approvedAt: new Date().toISOString(),
+      approvedBy: "test-operator",
+      reportContentHash: "abc123",
+    });
+    const r = checkApprovalMarker(tmp, "sess-with-report");
+    expect(r.matched).toBe(true);
+    expect(r.marker?.reportContentHash).toBe("abc123");
   });
 
   it("symlink at marker path is REJECTED, even pointing at a regular file (agent-tasks/d39f160e)", () => {

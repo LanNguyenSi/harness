@@ -35,6 +35,7 @@ import * as path from "node:path";
 import { atomicWriteFile } from "../../io/atomic-write.js";
 import { readRegularFileRejectingSymlink } from "../../io/read-regular-file.js";
 import { InvalidDurationError, parseDurationSeconds, type LedgerEntry } from "../../policies/index.js";
+import { signMarker, verifyMarkerSignature } from "../../runtime/approval-signing.js";
 import { POLICY_DECISION_TYPE } from "../../runtime/ledger-record.js";
 import { rejectMalformedSessionId } from "../../runtime/reject-malformed-session-id.js";
 import { expandToolNameAliases } from "../../runtime/tool-name-aliases.js";
@@ -404,6 +405,14 @@ export function approvalMarkerPathFor(generatedDir: string, sessionId: string): 
 export interface ApprovalMarker {
   approvedAt: string;
   approvedBy: string;
+  /**
+   * sha256 hex of the persisted-report content this approval is bound to
+   * at sign-time (harness/f9485cc7). Optional on write (defaults to
+   * `null` — a marker with no report to bind, e.g. `harness approve
+   * branch-protection`, or a ledger-only approval); always present
+   * (possibly `null`) on a marker `checkApprovalMarker` returns.
+   */
+  reportContentHash?: string | null;
 }
 
 /**
@@ -413,6 +422,14 @@ export interface ApprovalMarker {
  * operator runs from their un-hooked shell; if the agent could call
  * this path the gate's value would collapse, so it lives behind the
  * approve CLI rather than as a generally importable verb.
+ *
+ * The marker is HMAC-signed (harness/f9485cc7) over (sessionId,
+ * approvedAt, approvedBy, reportContentHash) using an operator-side key
+ * lazily generated at `<generatedDir>/.approval-signing.key` — see
+ * `src/runtime/approval-signing.ts` for the key-management contract and
+ * the honest trust model. Mode 0600 on the marker file itself, best-
+ * effort (matches the signing key's own permission convention); this is
+ * defense-in-depth alongside the signature, not a substitute for it.
  */
 export function writeApprovalMarker(
   generatedDir: string,
@@ -420,7 +437,8 @@ export function writeApprovalMarker(
   marker: ApprovalMarker,
 ): string {
   const filePath = approvalMarkerPathFor(generatedDir, sessionId);
-  atomicWriteFile(filePath, `${JSON.stringify(marker, null, 2)}\n`);
+  const signed = signMarker(generatedDir, sessionId, marker);
+  atomicWriteFile(filePath, `${JSON.stringify(signed, null, 2)}\n`, { mode: 0o600 });
   return filePath;
 }
 
@@ -442,6 +460,22 @@ export interface MarkerCheck {
    * src/runtime/recovery-git-commit.ts for the full argument.
    */
   expired: boolean;
+  /**
+   * True when a marker FILE existed at the expected path but failed
+   * signature verification (harness/f9485cc7): missing `signature`/`alg`
+   * fields (a legacy pre-signing marker, or a marker planted without the
+   * operator-side key), a mismatched `alg`, or a signature that does not
+   * verify against the current key. Distinct from the marker being
+   * simply absent (`forged: false`, `matched: false`) so a caller can
+   * log/alert on an active forgery attempt instead of the routine
+   * "nobody has approved yet" case. `matched` is always false when
+   * `forged` is true — a forged marker never satisfies the gate,
+   * regardless of `approval_lifecycle.max_age`. A transient I/O read
+   * failure (`forged: false`, `matched: false`) is kept distinct from
+   * both: it is neither "no marker" nor evidence of tampering, just a
+   * marker whose integrity cannot be proven right now.
+   */
+  forged: boolean;
 }
 
 export interface CheckApprovalMarkerOptions {
@@ -451,12 +485,6 @@ export interface CheckApprovalMarkerOptions {
    * treated as expired and returns `matched:false` with an
    * "expired" detail. When omitted, the marker has no TTL — the
    * legacy contract (one approval per session, no expiry).
-   *
-   * A marker whose body is unreadable (malformed JSON, missing
-   * `approvedAt`) is treated as approved-but-undateable: the
-   * existence-only contract documented above wins, so an operator
-   * who hand-wrote an empty marker file still gets through. This
-   * matters because the legacy DoS-resistance argument still holds.
    */
   maxAgeMs?: number;
   /** Override "now" for deterministic tests. */
@@ -464,23 +492,25 @@ export interface CheckApprovalMarkerOptions {
 }
 
 /**
- * Gate-side: is the per-session marker file present and readable?
- * Returns `matched: true` even if the marker JSON is malformed: the
- * file's *existence* is the operator's intent. Corrupted contents
- * surface as `marker: null` in the diagnostic but do not invalidate the
- * approval, since invalidating on a parse error would hand a denial-
- * of-service vector to anyone (including the agent) who could append a
- * stray byte to the file. Edit / Write / Bash are gated, so writing
- * stray bytes from inside Claude is not possible today, but the
- * existence-only contract is the defensible boundary regardless.
+ * Gate-side: is the per-session marker file present, readable, AND
+ * validly signed? (harness/f9485cc7 — this replaced the earlier
+ * "existence is enough" contract: a marker's mere presence used to
+ * satisfy the gate even with a malformed or corrupted body, on the
+ * theory that Edit/Write/Bash being gated meant only the operator could
+ * ever create the file. That theory holds only as long as no OTHER
+ * write primitive reaches `harness.generated/` — exactly the invariant
+ * this signing scheme no longer has to trust blindly.) A marker with no
+ * `signature`, a wrong `alg`, or a signature that fails to verify is
+ * REJECTED — see `MarkerCheck.forged` — with the SAME `matched: false`
+ * outcome as no marker at all, but a distinct, forgery-specific detail
+ * string so callers can tell the two apart for audit.
  *
- * `opts.maxAgeMs` (agent-tasks/d8ee60ca): when set, a marker whose
- * `approvedAt` is older than the cutoff returns `matched:false` with
- * an "expired" detail so the agent gets the same "no approval" UX as
- * a never-approved session and must re-approve. A marker with no
- * readable `approvedAt` (body corrupted) skips the freshness check
- * and is treated as approved — same DoS-resistance rationale as the
- * body-unreadable branch below.
+ * `opts.maxAgeMs` (agent-tasks/d8ee60ca): when set, a validly-signed
+ * marker whose `approvedAt` is older than the cutoff returns
+ * `matched:false` with an "expired" detail so the agent gets the same
+ * "no approval" UX as a never-approved session and must re-approve.
+ * Expiry is only evaluated AFTER signature verification succeeds — an
+ * unsigned/forged marker is rejected outright, never "expired".
  */
 export function checkApprovalMarker(
   generatedDir: string,
@@ -502,6 +532,7 @@ export function checkApprovalMarker(
       }`,
       marker: null,
       expired: false,
+      forged: false,
     };
   }
   // Shared symlink-rejecting read (src/io/read-regular-file.ts): the lstat
@@ -514,6 +545,7 @@ export function checkApprovalMarker(
       detail: `no approval marker at ${filePath}`,
       marker: null,
       expired: false,
+      forged: false,
     };
   }
   if (read.kind === "symlink") {
@@ -522,6 +554,7 @@ export function checkApprovalMarker(
       detail: `approval marker is a symlink, refusing for safety: ${filePath}`,
       marker: null,
       expired: false,
+      forged: false,
     };
   }
   if (read.kind === "not-regular") {
@@ -530,24 +563,69 @@ export function checkApprovalMarker(
       detail: `approval marker path is not a regular file: ${filePath}`,
       marker: null,
       expired: false,
+      forged: false,
     };
   }
-  let marker: ApprovalMarker | null = null;
-  if (read.kind === "ok") {
-    const parsed = safeJsonParse(read.content);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      const obj = parsed as Record<string, unknown>;
-      const approvedAt = typeof obj["approvedAt"] === "string" ? obj["approvedAt"] : "";
-      const approvedBy = typeof obj["approvedBy"] === "string" ? obj["approvedBy"] : "";
-      if (approvedAt.length > 0 && approvedBy.length > 0) {
-        marker = { approvedAt, approvedBy };
-      }
-    }
+  if (read.kind === "unreadable") {
+    // A genuine I/O error reading an existing regular file (permissions
+    // changed mid-flight, etc.) — not evidence of tampering, but its
+    // signature cannot be proven either, so fail closed. Kept distinct
+    // from `forged` (no claim of an active forgery attempt).
+    return {
+      matched: false,
+      detail: `approval marker at ${filePath} exists but could not be read (I/O error); treating as unapproved since its signature cannot be verified`,
+      marker: null,
+      expired: false,
+      forged: false,
+    };
   }
-  // read.kind === "unreadable" keeps marker:null; existence already
-  // satisfied the gate.
-  if (opts.maxAgeMs !== undefined && marker !== null) {
-    const approvedAtMs = Date.parse(marker.approvedAt);
+  // read.kind === "ok"
+  const parsed = safeJsonParse(read.content);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return {
+      matched: false,
+      detail: `forged/unsigned marker rejected: marker body at ${filePath} is not a JSON object`,
+      marker: null,
+      expired: false,
+      forged: true,
+    };
+  }
+  const obj = parsed as Record<string, unknown>;
+  const verification = verifyMarkerSignature(generatedDir, sessionId, obj);
+  if (!verification.ok) {
+    if (verification.kind === "key-unavailable") {
+      // Fail-closed I/O problem (permission error / disk issue reading or
+      // creating the signing key), NOT evidence of an active forgery
+      // attempt — a marker written by the operator with a perfectly valid
+      // signature would also fail this exact check if the key file became
+      // unreadable. Kept distinct from `forged` (review LOW 1,
+      // harness/f9485cc7) so a broken key file doesn't read as an attack
+      // in audit output, mirroring the `read.kind === "unreadable"` branch
+      // above.
+      return {
+        matched: false,
+        detail: `approval marker at ${filePath} could not be verified: ${verification.reason}; treating as unapproved`,
+        marker: null,
+        expired: false,
+        forged: false,
+      };
+    }
+    return {
+      matched: false,
+      detail: `forged/unsigned marker rejected: ${verification.reason} (${filePath})`,
+      marker: null,
+      expired: false,
+      forged: true,
+    };
+  }
+  const approvedAt = obj["approvedAt"] as string;
+  const approvedBy = obj["approvedBy"] as string;
+  const reportContentHash =
+    typeof obj["reportContentHash"] === "string" ? (obj["reportContentHash"] as string) : null;
+  const marker: ApprovalMarker = { approvedAt, approvedBy, reportContentHash };
+
+  if (opts.maxAgeMs !== undefined) {
+    const approvedAtMs = Date.parse(approvedAt);
     if (Number.isFinite(approvedAtMs)) {
       const nowMs = (opts.now ?? new Date()).getTime();
       const ageMs = nowMs - approvedAtMs;
@@ -556,21 +634,20 @@ export function checkApprovalMarker(
         const maxMin = Math.round(opts.maxAgeMs / 60_000);
         return {
           matched: false,
-          detail: `approval marker ${path.basename(filePath)} expired: age ${ageMin}m > max ${maxMin}m (approved at ${marker.approvedAt})`,
+          detail: `approval marker ${path.basename(filePath)} expired: age ${ageMin}m > max ${maxMin}m (approved at ${approvedAt})`,
           marker,
           expired: true,
+          forged: false,
         };
       }
     }
   }
-  const provenance = marker
-    ? `approved at ${marker.approvedAt} by ${marker.approvedBy}`
-    : "marker present, body unreadable (existence still satisfies the gate)";
   return {
     matched: true,
-    detail: `approved via marker ${path.basename(filePath)}: ${provenance}`,
+    detail: `approved via marker ${path.basename(filePath)}: approved at ${approvedAt} by ${approvedBy}, signature verified`,
     marker,
     expired: false,
+    forged: false,
   };
 }
 
@@ -815,6 +892,12 @@ export function taskApprovalMarkerPathFor(generatedDir: string, taskId: string):
  * Operator-side: write a task-scoped marker file. Atomic. Caller is
  * `harness approve understanding --task <id>`. The session marker is
  * written separately by the same caller for back-compat.
+ *
+ * Signed the same way as `writeApprovalMarker` (harness/f9485cc7), using
+ * `task-<id>` (the exact string `checkActiveClaimApprovalMarker` looks
+ * up) as the signed markerId — so a validly-signed task marker cannot be
+ * copied onto a different task id (or the session marker's id) and still
+ * verify.
  */
 export function writeTaskApprovalMarker(
   generatedDir: string,
@@ -822,7 +905,9 @@ export function writeTaskApprovalMarker(
   marker: ApprovalMarker,
 ): string {
   const filePath = taskApprovalMarkerPathFor(generatedDir, taskId);
-  atomicWriteFile(filePath, `${JSON.stringify(marker, null, 2)}\n`);
+  const markerId = `${APPROVAL_MARKER_TASK_PREFIX}${taskId}`;
+  const signed = signMarker(generatedDir, markerId, marker);
+  atomicWriteFile(filePath, `${JSON.stringify(signed, null, 2)}\n`, { mode: 0o600 });
   return filePath;
 }
 
@@ -839,7 +924,7 @@ export function writeTaskApprovalMarker(
  * because the scan returned the first existing marker regardless of
  * which task the agent had actually claimed.
  *
- * Same safety filters as `checkApprovalMarker` (existence-is-enough,
+ * Same safety filters as `checkApprovalMarker` (signature verification,
  * symlink rejection, optional freshness via `maxAgeMs`); the only
  * difference is the filename suffix derived from `active-claim`.
  */
@@ -854,6 +939,7 @@ export function checkActiveClaimApprovalMarker(
       detail: `no active-claim recorded; task-scoped check skipped`,
       marker: null,
       expired: false,
+      forged: false,
     };
   }
   const markerName = `${APPROVAL_MARKER_TASK_PREFIX}${claim}`;
@@ -864,6 +950,7 @@ export function checkActiveClaimApprovalMarker(
       detail: `task-scoped marker for active-claim ${claim}: ${check.detail}`,
       marker: check.marker,
       expired: false,
+      forged: false,
     };
   }
   return {
@@ -871,6 +958,7 @@ export function checkActiveClaimApprovalMarker(
     detail: `active-claim ${claim} has no fresh task marker (${check.detail})`,
     marker: null,
     expired: check.expired,
+    forged: check.forged,
   };
 }
 
@@ -895,6 +983,14 @@ export interface OperatorMarkerApproval {
    * Report; see src/runtime/recovery-git-commit.ts.
    */
   expired: boolean;
+  /**
+   * True when EITHER the task-scoped or the session-scoped marker
+   * existed but FAILED signature verification (harness/f9485cc7) —
+   * missing/invalid signature, wrong `alg`, or tampered payload. Distinct
+   * from a marker simply being absent, so a caller can log a forgery
+   * attempt distinctly from the routine "not approved yet" case.
+   */
+  forged: boolean;
 }
 
 /**
@@ -927,6 +1023,7 @@ export function checkOperatorApprovalMarkers(
       detail: taskMarker.detail,
       taskCheckDetail: taskMarker.detail,
       expired: false,
+      forged: false,
     };
   }
   const sessionMarker = checkApprovalMarker(generatedDir, sessionId, ageOpts);
@@ -937,6 +1034,7 @@ export function checkOperatorApprovalMarkers(
       detail: sessionMarker.detail,
       taskCheckDetail: taskMarker.detail,
       expired: false,
+      forged: false,
     };
   }
   return {
@@ -954,6 +1052,10 @@ export function checkOperatorApprovalMarkers(
     // check may simply have never existed) is just as legitimate a "this
     // had approval, it lapsed" signal as a session-scoped expiry.
     expired: taskMarker.expired || sessionMarker.expired,
+    // Surfaced so a forgery attempt against EITHER marker is visible to
+    // the caller even though the overall result is (correctly) unmatched
+    // — mirrors the `expired` OR-merge above.
+    forged: taskMarker.forged || sessionMarker.forged,
   };
 }
 

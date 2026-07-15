@@ -426,6 +426,35 @@ describe("pack hook pre-tool-use blocker", () => {
     expect(stderr.read()).toMatch(/approved via marker sess-1/);
   });
 
+  // harness/f9485cc7 regression (AC #3): a hand-written marker — simulating
+  // a forge via a write primitive the Edit|Write|Bash blocker matcher does
+  // not cover (e.g. a future MCP tool with local file-write) — must NOT
+  // satisfy the gate, and the block reason must be distinct from the
+  // routine "no approval marker" case.
+  it("BLOCKS when the marker is hand-written without a signature (forgery regression, distinct audit reason)", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const generatedDir = path.join(tmp, "harness.generated");
+    fs.mkdirSync(path.join(generatedDir, ".approvals"), { recursive: true });
+    fs.writeFileSync(
+      path.join(generatedDir, ".approvals", "sess-1"),
+      `${JSON.stringify({ approvedAt: "2026-05-07T08:00:00Z", approvedBy: "attacker" })}\n`,
+    );
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event()),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.approvalCheck.approved).toBe(false);
+    expect(result.approvalCheck.detail).toMatch(/forged\/unsigned marker rejected/);
+    expect(stderr.read()).toMatch(/forged\/unsigned marker rejected/);
+  });
+
   it("agent self-approval via MCP ledger_add does not satisfy the gate (agent-tasks/88ca4bb3, headline security test)", async () => {
     // Threat model: an agent with grounding-MCP wired can call
     // ledger_add and write `understanding-approved:<sid>` for its own

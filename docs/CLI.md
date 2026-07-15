@@ -68,7 +68,7 @@ These are called by Claude Code via `settings.json`; you usually do not run them
 
 ## Operator approvals
 
-`harness approve <kind>` writes the canonical operator-only marker the corresponding gate consults (under `harness.generated/.approvals/` for the understanding and branch-protection gates), and (where applicable) flips persisted artefacts such as the Understanding Report. It also records a best-effort audit-only evidence-ledger tag; the ledger row is agent-writable and no longer opens these gates. Operator surface; agents cannot self-approve.
+`harness approve <kind>` writes the canonical operator-only marker the corresponding gate consults (under `harness.generated/.approvals/` for the understanding and branch-protection gates), and (where applicable) flips persisted artefacts such as the Understanding Report. It also records a best-effort audit-only evidence-ledger tag; the ledger row is agent-writable and no longer opens these gates. Operator surface; agents cannot self-approve. Since harness/f9485cc7 the marker itself is HMAC-signed (see `docs/policy-packs/understanding-before-execution.md` "Marker signing"); a marker written before that change, or hand-written without the signing key, is rejected — re-approve once after upgrading a machine with a live approval.
 
 | Verb | One-liner |
 |------|-----------|

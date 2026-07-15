@@ -457,12 +457,20 @@ export async function runPackHookBranchProtectionCli(
   const ackEcho = check.hasAck
     ? ` [audit: ledger ${check.ackContent ?? ACK_TAG_PREFIX} present, no longer satisfies the gate]`
     : "";
+  // Distinct audit note when the override marker FILE existed but failed
+  // signature verification (harness/f9485cc7) — missing/invalid signature,
+  // wrong alg, or a tampered payload — so it reads apart from the routine
+  // "no operator override marker" case below.
+  let markerForgedNote = "";
   if (generatedDir !== undefined) {
     const markerCheck = checkBranchProtectionMarker(generatedDir, sessionId);
     if (markerCheck.matched) {
       const diagnostic = `branch-protection override marker active (${markerCheck.detail}); allowing${ackEcho}`;
       note(diagnostic);
       return { exitCode: 0, blocked: false, diagnostic };
+    }
+    if (markerCheck.forged) {
+      markerForgedNote = ` [forged/unsigned override marker rejected: ${markerCheck.detail}]`;
     }
   }
   if (check.hasFreshProducer) {
@@ -474,7 +482,7 @@ export async function runPackHookBranchProtectionCli(
   const why =
     check.degraded !== null
       ? `ledger degraded (${check.degraded}); refusing on failsafe`
-      : `no fresh ${NON_PROTECTED_TAG_PREFIX} tag (${check.totalEntries} entries scanned) and no operator override marker${ackEcho}`;
+      : `no fresh ${NON_PROTECTED_TAG_PREFIX} tag (${check.totalEntries} entries scanned) and no operator override marker${ackEcho}${markerForgedNote}`;
   const diagnostic = `BLOCK — ${why}`;
   note(diagnostic);
   stdout.write(`${blockJson(toolName, branch, why, protectedList, configUx, sessionId)}\n`);

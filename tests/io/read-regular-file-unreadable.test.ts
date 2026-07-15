@@ -40,7 +40,7 @@ describe("readRegularFileRejectingSymlink — unreadable kind (read failure afte
     }
   });
 
-  it("gate semantic: an existing-but-unreadable approval marker still SATISFIES the gate", () => {
+  it("gate semantic: an existing-but-unreadable approval marker does NOT satisfy the gate (harness/f9485cc7 — signing removed the existence-only contract)", () => {
     const tmp = makeTmp();
     try {
       const markerDir = path.join(tmp, ".approvals");
@@ -51,9 +51,13 @@ describe("readRegularFileRejectingSymlink — unreadable kind (read failure afte
         "utf8",
       );
       const r = checkApprovalMarker(tmp, "sess-unreadable");
-      expect(r.matched).toBe(true);
+      expect(r.matched).toBe(false);
       expect(r.marker).toBeNull();
-      expect(r.detail).toMatch(/body unreadable/);
+      // Distinct from `forged`: a genuine I/O read failure is not itself
+      // evidence of tampering, just fail-closed since the signature
+      // cannot be verified without reading the body.
+      expect(r.forged).toBe(false);
+      expect(r.detail).toMatch(/unreadable/);
     } finally {
       fsActual.rmSync(tmp, { recursive: true, force: true });
     }
