@@ -8,6 +8,16 @@
 // manifests under non-empty operator state cannot slip past the unit-tier
 // pin in `tests/cli/loader-isolation.test.ts`.
 //
+// Env-leak sibling (task 6ffa5672): the same failure class is reachable
+// WITHOUT a missing guard when a parent process leaks
+// HARNESS_ALLOW_REAL_GENERATED_DIR=1 into a vitest child, which is what
+// `harness preflight`'s spawned npm-test check did (the launcher sets the
+// flag for the real binary). That vector is closed at the spawn site
+// (spawnPreflight passes preflightChildEnv(), parent env minus the flag)
+// and pinned by the real-spawn regression in
+// tests/cli/session-start/preflight.test.ts; this file deliberately keeps
+// covering the no-flag hermetic baseline only.
+//
 // Why opt-in (HARNESS_INTEGRATION_TESTS=1): the test spawns a full
 // `vitest run` subprocess (~3-5s) and mutates the operator's real
 // `~/.claude/` for the duration of the run. Restoring state is wrapped
