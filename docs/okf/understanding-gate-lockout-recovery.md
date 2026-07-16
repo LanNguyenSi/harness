@@ -3,7 +3,7 @@ type: runbook
 title: Understanding-gate lockout recovery
 description: Operator procedure to unblock a session locked by the understanding-before-execution PreToolUse gate via `harness approve understanding`, including the 6-tier session-id resolution and the expiry semantics that re-arm the gate.
 tags: [runbook, understanding-gate, lockout, recovery, operator]
-timestamp: 2026-07-09T02:50:30.125962Z
+timestamp: 2026-07-16T02:26:27Z
 sources:
   - src/cli/approve/understanding.ts
   - src/cli/index.ts
@@ -27,7 +27,7 @@ Every `Edit` / `Write` / `Bash` call is refused by the `understanding-before-exe
 
 The blocker consults two operator-authored sources, either of which approves (`src/policy-packs/builtin/understanding-before-execution-runtime.ts`):
 
-1. **Approval marker files** under `<generatedDir>/.approvals/` — the canonical signal. `checkOperatorApprovalMarkers` checks the **task-scoped** marker first (`task-<taskId>`, where the task id comes from `<generatedDir>/active-claim`, written by the `track-active-claim` PostToolUse hook on `mcp__agent-tasks__task_start`), then the **session-scoped** marker (`<generatedDir>/.approvals/<sessionId>`). Both are subject to the same optional `max_age` TTL. Marker existence is enough even if the JSON body is unreadable (DoS-resistance); symlinks at the marker path are refused.
+1. **Approval marker files** under `<generatedDir>/.approvals/` — the canonical signal. `checkOperatorApprovalMarkers` checks the **task-scoped** marker first (`task-<taskId>`, where the task id comes from `<generatedDir>/active-claim`, written by the `track-active-claim` PostToolUse hook on `mcp__agent-tasks__task_start`), then the **session-scoped** marker (`<generatedDir>/.approvals/<sessionId>`). Both are subject to the same optional `max_age` TTL. Since harness/f9485cc7, existence alone is NOT enough: the marker also carries an HMAC-SHA256 signature verified against an operator-side key at `<generatedDir>/.approval-signing.key`; a marker with an unreadable body, malformed/non-object JSON, or a missing/invalid signature is rejected exactly like a missing marker (`matched:false`, tagged `forged:true` for the signature cases). Symlinks at the marker path are still refused.
 2. **Persisted JSON report** under the reports dir with `approvalStatus: "approved"` matching the session — fallback for solo `@lannguyensi/understanding-gate` users.
 
 You are locked out because no fresh marker exists for this session/task: it was never approved, it was deleted at a task boundary, or it aged past `max_age`.
@@ -44,9 +44,9 @@ Recovery is **operator-only**, from a shell the hooks do not gate (the `!`-shell
    harness approve understanding
    ```
 
-   Flags (`src/cli/index.ts:1385-1406`): `--session <id>`, `--task <ids...>` (variadic; also comma-joined `--task a,b,c`), `--reports-dir <path>`, `--approved-by <actor>` (default `harness-approve-cli`), `--force`, `--config <path>`, `--project <name>`.
+   Flags (`src/cli/index.ts:1480-1495`): `--session <id>`, `--task <ids...>` (variadic; also comma-joined `--task a,b,c`), `--reports-dir <path>`, `--approved-by <actor>` (default `harness-approve-cli`), `--force`, `--config <path>`, `--project <name>`.
 
-2. **Session-id resolution** — the bare command works because the id is resolved through a 6-tier precedence chain (`resolveApprovalSessionId`, `src/runtime/session-id.ts:241`; used by `src/cli/approve/understanding.ts:492`):
+2. **Session-id resolution** — the bare command works because the id is resolved through a 6-tier precedence chain (`resolveApprovalSessionId`, `src/runtime/session-id.ts:241`; used by `src/cli/approve/understanding.ts:513`):
    1. explicit `--session` flag
    2. `$CLAUDE_CODE_SESSION_ID` (the variable Claude Code actually exports; read first so the runtime's id beats a hand-exported legacy value)
    3. `$CLAUDE_SESSION_ID` (legacy peer)
@@ -57,7 +57,7 @@ Recovery is **operator-only**, from a shell the hooks do not gate (the `!`-shell
    All six empty → `HarnessExitError`, no guess. Fastest fix per the error text: run `harness preflight` once (it stages `.pending-approval` as a side effect), then re-run `harness approve understanding`.
 
 3. **What the command writes** (round-trips all sinks, `approveUnderstanding` in `src/cli/approve/understanding.ts`):
-   - the canonical session marker `<generatedDir>/.approvals/<sessionId>` (atomic JSON `{approvedAt, approvedBy}`). A failed marker write is a **hard error** — `marker: ✗ FAILED`, the gate keeps blocking.
+   - the canonical session marker `<generatedDir>/.approvals/<sessionId>` (atomic JSON `{approvedAt, approvedBy, reportContentHash, alg, signature}` since harness/f9485cc7 — the marker is now HMAC-signed, with `reportContentHash` the sha256 of the persisted Understanding Report bound to this approval, `null` when no report exists to bind). A failed marker write is a **hard error** — `marker: ✗ FAILED`, the gate keeps blocking.
    - one task-scoped marker `<generatedDir>/.approvals/task-<taskId>` per resolved task id: from `--task` (deduped, comma-split), else auto-resolved from `<generatedDir>/active-claim`. Either marker satisfies the gate; a task-marker failure degrades to session-marker-only, loudly.
    - an **audit-only** ledger row `understanding-approved:<sessionId>` via grounding-mcp `ledger_add` (degraded/missing grounding-mcp is a warning, never fatal: `ledger: ⚠ skipped (...) (audit only)`).
    - flips the latest matching persisted report `approvalStatus` → `approved`, stamping the session id onto sessionId-less reports. SessionId-less fallback adoption is restricted to non-terminal reports younger than 15 min (`TOLERANT_FALLBACK_MAX_AGE_MS = 15 * 60_000`; future-skew tolerance 5 min).
