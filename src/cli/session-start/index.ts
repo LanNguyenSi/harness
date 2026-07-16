@@ -53,7 +53,12 @@ interface SessionStartEvent {
 export interface PreflightJson {
   ready?: boolean;
   confidence?: number;
-  checks?: Array<{ name?: string; status?: string; message?: string }>;
+  checks?: Array<{
+    name?: string;
+    status?: string;
+    message?: string;
+    details?: string[];
+  }>;
 }
 
 export type RunPreflightResult =
@@ -153,6 +158,26 @@ function mcpCommandList(server: McpServer): string[] {
 }
 
 /**
+ * Environment for the spawned `preflight` child: the parent env minus
+ * HARNESS_ALLOW_REAL_GENERATED_DIR. The launcher sets that flag so the
+ * real harness binary may fall back to the operator's home dir, but the
+ * preflight child runs the repo's own test suite (its `npm-test` check),
+ * and an inherited flag re-enables the implicit real-homedir fallback
+ * INSIDE those test processes. With non-empty operator state (e.g. a
+ * `harness pause` sentinel) that broke 110 tests and surfaced as a false
+ * `failing: npm-test`, keeping the preflight gate shut. Third incident
+ * of the operator-state-isolation class PR #199 pinned; the flag must
+ * stay scoped to the process the operator actually invoked.
+ */
+export function preflightChildEnv(
+  parentEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env = { ...parentEnv };
+  delete env["HARNESS_ALLOW_REAL_GENERATED_DIR"];
+  return env;
+}
+
+/**
  * Default `preflight` runner: spawn `preflight run --json <cwd>` and
  * parse its stdout. Resolves `{ ok: false }` (never throws) for the
  * not-installed / timeout / unparseable cases so the caller can degrade.
@@ -162,7 +187,12 @@ function spawnPreflight(cwd: string, timeoutMs: number): Promise<RunPreflightRes
     execFile(
       PREFLIGHT_BIN,
       ["run", "--json", cwd],
-      { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, encoding: "utf8" },
+      {
+        timeout: timeoutMs,
+        maxBuffer: 16 * 1024 * 1024,
+        encoding: "utf8",
+        env: preflightChildEnv(),
+      },
       (err, stdout) => {
         // `preflight` may exit non-zero on a not-ready result while still
         // emitting valid JSON, so a parseable stdout wins over the exit
@@ -212,7 +242,25 @@ function spawnPreflight(cwd: string, timeoutMs: number): Promise<RunPreflightRes
 function describeNotReady(json: PreflightJson): string {
   const failing = (json.checks ?? [])
     .filter((c) => c.status === "fail" || c.status === "error")
-    .map((c) => c.name ?? "(unnamed)");
+    .map((c) => {
+      const name = c.name ?? "(unnamed)";
+      // Surface the check's own first detail line: a bare check name
+      // ("failing: npm-test") once cost a long false-negative diagnosis
+      // because the actual reason never left the child JSON. The typeof
+      // guards matter: this is untrusted subprocess JSON behind a cast,
+      // and a SessionStart producer must never throw (blocking:false,
+      // exit-0 contract above), so a malformed element degrades to the
+      // bare check name instead of crashing.
+      const detail =
+        c.details?.find((d) => typeof d === "string" && d.trim().length > 0) ??
+        (typeof c.message === "string" && c.message.trim().length > 0
+          ? c.message
+          : undefined);
+      if (!detail) return name;
+      const trimmed = detail.trim().replace(/\s+/g, " ");
+      const capped = trimmed.length > 140 ? `${trimmed.slice(0, 139)}…` : trimmed;
+      return `${name} (${capped})`;
+    });
   const confidence =
     typeof json.confidence === "number" ? json.confidence.toFixed(2) : "?";
   const failSuffix = failing.length > 0 ? `; failing: ${failing.join(", ")}` : "";

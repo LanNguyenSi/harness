@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  preflightChildEnv,
   runSessionStartPreflight,
   type RunPreflightResult,
 } from "../../../src/cli/session-start/index.js";
@@ -538,5 +539,134 @@ describe("runSessionStartPreflight — session-id resolution (task 5e84191b)", (
     });
     expect(result.sessionSource).toBe("stdin");
     expect(errOut()).not.toContain("WARNING");
+  });
+});
+
+describe("preflightChildEnv", () => {
+  it("strips HARNESS_ALLOW_REAL_GENERATED_DIR and keeps everything else, without mutating the input", () => {
+    const parent: NodeJS.ProcessEnv = {
+      PATH: "/usr/bin",
+      HARNESS_ALLOW_REAL_GENERATED_DIR: "1",
+      OTHER: "kept",
+    };
+    const child = preflightChildEnv(parent);
+    expect(child).not.toHaveProperty("HARNESS_ALLOW_REAL_GENERATED_DIR");
+    expect(child["PATH"]).toBe("/usr/bin");
+    expect(child["OTHER"]).toBe("kept");
+    // The parent env object is untouched (the launcher still needs the flag).
+    expect(parent["HARNESS_ALLOW_REAL_GENERATED_DIR"]).toBe("1");
+  });
+});
+
+describe("spawnPreflight child env (real spawn, fake binary)", () => {
+  // Regression pin for the env-leak false-negative: the launcher sets
+  // HARNESS_ALLOW_REAL_GENERATED_DIR=1 for the harness process itself, and
+  // an un-scrubbed execFile inherited it into agent-preflight and its
+  // nested `npm test` vitest run, where it re-enabled the implicit
+  // real-homedir fallback (110 failures with a real pause sentinel
+  // present). This drives the REAL spawn path (no runPreflight injection)
+  // against a fake `preflight` binary that records its environment.
+  it("does not pass HARNESS_ALLOW_REAL_GENERATED_DIR to the preflight child even when the parent has it set", async () => {
+    const repo = makeRepoFixture("leak-probe", "main");
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-fakebin-"));
+    cleanups.push(() => fs.rmSync(binDir, { recursive: true, force: true }));
+    const envDump = path.join(binDir, "child-env.json");
+    const fakeBin = path.join(binDir, "preflight");
+    fs.writeFileSync(
+      fakeBin,
+      [
+        "#!/bin/sh",
+        // Record exactly what the child sees, then emit a not-ready JSON
+        // whose failing check carries a details line (also pins the
+        // describeNotReady detail surfacing).
+        `node -e 'require("fs").writeFileSync(${JSON.stringify(envDump)}, JSON.stringify({ flag: process.env.HARNESS_ALLOW_REAL_GENERATED_DIR ?? null, passthrough: process.env.HARNESS_TEST_PASSTHROUGH ?? null }))'`,
+        `printf '%s' '{"ready":false,"confidence":0.74,"checks":[{"name":"npm-test","status":"fail","details":["110 failed | 2941 passed (leak repro)"]}]}'`,
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const priorPath = process.env["PATH"];
+    const priorFlag = process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"];
+    const priorPassthrough = process.env["HARNESS_TEST_PASSTHROUGH"];
+    process.env["PATH"] = `${binDir}${path.delimiter}${priorPath ?? ""}`;
+    process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"] = "1";
+    process.env["HARNESS_TEST_PASSTHROUGH"] = "yes";
+    try {
+      const { stream: err, output: errOut } = captureStream();
+      const result = await runSessionStartPreflight({
+        stdin: streamFrom(
+          JSON.stringify({ hook_event_name: "SessionStart", session_id: "sess-leak", cwd: repo }),
+        ),
+        stderr: err,
+        writeLedger: async () => ({ ok: true }),
+      });
+
+      const dumped = JSON.parse(fs.readFileSync(envDump, "utf8")) as {
+        flag: string | null;
+        passthrough: string | null;
+      };
+      // The guard flag must NOT reach the child...
+      expect(dumped.flag).toBeNull();
+      // ...while the rest of the environment passes through unchanged.
+      expect(dumped.passthrough).toBe("yes");
+
+      // not-ready path: tag unwritten, and the stderr line now carries the
+      // failing check's own detail instead of just its name.
+      expect(result.wrote).toBe(false);
+      expect(result.reason).toContain("npm-test (110 failed | 2941 passed (leak repro))");
+      expect(errOut()).toContain("npm-test (110 failed | 2941 passed (leak repro))");
+    } finally {
+      if (priorPath === undefined) delete process.env["PATH"];
+      else process.env["PATH"] = priorPath;
+      if (priorFlag === undefined) delete process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"];
+      else process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"] = priorFlag;
+      if (priorPassthrough === undefined) delete process.env["HARNESS_TEST_PASSTHROUGH"];
+      else process.env["HARNESS_TEST_PASSTHROUGH"] = priorPassthrough;
+    }
+  });
+});
+
+describe("describeNotReady robustness (via not-ready reason)", () => {
+  // The producer must never throw on malformed subprocess JSON: a
+  // SessionStart hook is blocking:false and exits 0 on every path. A
+  // non-string details element or message degrades to the bare check
+  // name instead of crashing (reviewer finding on task 6ffa5672).
+  it("degrades to the bare check name when details/message carry non-string or blank values", async () => {
+    const repo = makeRepoFixture("malformed-details", "main");
+    const { stream: err, output: errOut } = captureStream();
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(
+        JSON.stringify({ hook_event_name: "SessionStart", session_id: "sess-mal", cwd: repo }),
+      ),
+      stderr: err,
+      runPreflight: async () => ({
+        ok: true,
+        json: {
+          ready: false,
+          confidence: 0.5,
+          checks: [
+            {
+              name: "npm-test",
+              status: "fail",
+              // Deliberately violates the declared string[] shape: this is
+              // what the `as PreflightJson` cast can let through at runtime.
+              details: [null, 42, "   "] as unknown as string[],
+              message: 7 as unknown as string,
+            },
+            {
+              name: "secret-scan",
+              status: "fail",
+              details: ["  found key in .env.example  "],
+            },
+          ],
+        },
+      }),
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(false);
+    // Malformed check: bare name, no throw. Well-formed sibling: trimmed detail.
+    expect(result.reason).toContain("failing: npm-test, secret-scan (found key in .env.example)");
+    expect(errOut()).toContain("npm-test, secret-scan (found key in .env.example)");
   });
 });
