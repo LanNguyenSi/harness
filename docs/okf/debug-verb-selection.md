@@ -3,7 +3,7 @@ type: overview
 title: Debug verb selection — which harness verb answers which question
 description: Decision guide mapping "why did my policy (not) fire" questions to the right harness debug verb — ledger-replay vs live-hypothetical vs static-prediction vs stage-isolation vs end-to-end — with each verb's key discriminators and fail-postures.
 tags: [debugging, cli, audit, explain, dry-run, smoke]
-timestamp: 2026-07-09T02:50:30.125962Z
+timestamp: 2026-07-16T02:26:27Z
 sources:
   - docs/for-agents.md
   - docs/CLI.md
@@ -48,7 +48,7 @@ The harness ships nine read-side debug verbs plus one end-to-end runner. They di
 
 ## explain — the LAST RECORDED evaluation, from the ledger
 
-`harness explain [policy] [--trace] [--last] [--decision <outcome>] [--session <id>]` (src/cli/index.ts, `command("explain [policy]")`). Without `--trace` it just prints the policy definition plus the record hint. With `--trace` it fetches the ledger for the session and renders the most recent recorded evaluation of that policy: decision, enforcement, ledger tag, extracted variables, and (for post-Phase-7 rows) the recorded risk verdict. This **requires a real prior decision**: if the policy never fired in that session it exits `EX_FAIL` with "no recorded evaluations for policy ... the policy may not have fired yet, grounding-mcp is unreachable, or the decisions landed under a different session (pass `--session <id>`)" (src/cli/explain.ts, lines 219-227). `--last` is mutually exclusive with naming a policy and traces the most recent decision of ANY policy; `--decision` narrows `--last` by outcome. If grounding-mcp is unreachable the fetch degrades to a hard `cannot read audit log` error, not a silent empty trace.
+`harness explain [policy] [--trace] [--last] [--decision <outcome>] [--session <id>]` (src/cli/index.ts, `command("explain [policy]")`). Without `--trace` it just prints the policy definition plus the record hint. With `--trace` it fetches the ledger for the session and renders the most recent recorded evaluation of that policy: decision, enforcement, ledger tag, extracted variables, and (for post-Phase-7 rows) the recorded risk verdict. This **requires a real prior decision**: if the policy never fired in that session it exits `EX_FAIL` with "no recorded evaluations for policy ... the policy may not have fired yet, grounding-mcp is unreachable, or the decisions landed under a different session (pass `--session <id>`)" (src/cli/explain.ts, lines 229-233). `--last` is mutually exclusive with naming a policy and traces the most recent decision of ANY policy; `--decision` narrows `--last` by outcome. If grounding-mcp is unreachable the fetch degrades to a hard `cannot read audit log` error, not a silent empty trace.
 
 ## explain-policy --event — a HYPOTHETICAL event, evaluated live, ledger untouched
 
@@ -81,7 +81,7 @@ Use these when `explain-policy` shows a `when:` clause failing and you need to k
 
 ## doctor — install health, not decision debugging
 
-`harness doctor [--shallow] [--target codex] [--json] [--rm-rogue-ledgers [--yes]]` is the health summary across pillars: hooks, policy packs (declared-but-not-live detection, config-shape checks), MCP registrations and probes, runtime detection, and binary versions (src/cli/doctor/index.ts, src/cli/doctor/types.ts). It runs `min_version` probes for `tools.cli[]`, `tools.mcp[]`, and hooks that declare `min_version` + `version_command`, via a synchronous `--version` spawn with a 5s timeout (`defaultVersionProbe` in src/cli/index.ts); an installed version below `min_version` reports `installed vX < required Y`. `--shallow` skips MCP probes (CLI version probes still run). It also scans for rogue evidence-ledger directories and can delete them behind per-hit prompts. Doctor tells you whether the machinery CAN work; it says nothing about why a specific decision landed.
+`harness doctor [--shallow] [--target codex] [--json] [--rm-rogue-ledgers [--yes]]` is the health summary across pillars: hooks, policy packs (declared-but-not-live detection, config-shape checks), MCP registrations and probes, runtime detection, and binary versions (src/cli/doctor/index.ts, src/cli/doctor/types.ts). It runs `min_version` probes for `tools.cli[]`, `tools.mcp[]`, and hooks that declare `min_version` + `version_command`, via a synchronous `--version` spawn with a 5s timeout (`defaultVersionProbe` in src/cli/index.ts); an installed version below `min_version` reports `installed vX < required Y`. `--shallow` skips MCP probes (CLI version probes still run). It also scans for rogue evidence-ledger directories and can delete them behind per-hit prompts. Since task a07b379a / PR #342, `harness doctor` exits `1` whenever the report's `errorCount > 0` (warnings-only reports still exit `0`), so CI can gate on it directly instead of parsing text; a spawn `ENOENT` on a missing MCP/CLI binary no longer crashes the whole report (PR #340) — it surfaces as a finding, with a PATH-shadow hint when the binary is actually installed under an npm global bin dir not on PATH. Doctor tells you whether the machinery CAN work; it says nothing about why a specific decision landed.
 
 ## Selection heuristics
 
