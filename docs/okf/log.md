@@ -2,6 +2,17 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-07-18T05:00:00Z, scoped re-verification (task init-mcp-wiring-claude-code/T-004):
+  `okf-kit check` flagged 2 files stale (source mtime after doc timestamp).
+  `debug-verb-selection.md` — flagged for `src/cli/doctor/index.ts`, which
+  changed under the same run (T-003, additive `claudeMcp` field, no
+  existing-section behavior change). Diffed against the doc's `doctor`
+  section; content held except for the new "Claude Code MCP Registration"
+  check, now documented; re-stamped. The other 15 sources are unchanged
+  since the 2026-07-16 sweep and were not re-audited beyond that diff.
+  `policy-engine-producer-wiring.md` — flagged for `src/policies/ledger-client.ts`,
+  which this task's changes never touched (pre-existing/unrelated drift);
+  left un-stamped, out of scope for this task, noted as an open follow-up.
 - 2026-07-16T02:26:27Z, re-verification sweep (task 93c004a6): all 8 docs re-checked
   against their current sources after the 2026-07-13/15 code churn
   (HMAC marker signing, operator_only policies, pack reseed, Codex

@@ -187,7 +187,7 @@ Per-type schemas:
 | `command` | `string` or `string[]` | yes | argv-style; `string` is split on whitespace |
 | `env` | `{[key: string]: string}` | no | env vars for the child process |
 | `health` | `{verb: string, timeout_ms?: number}` | no | MCP verb to invoke for liveness |
-| `enabled` | boolean | no (default `true`) | `false` removes from generated `~/.claude.json` in Phase 3 |
+| `enabled` | boolean | no (default `true`) | `false` excludes the entry from the set `harness init`'s wizard registers via the `claude` CLI (`ensureMcpServers`, `src/io/claude-mcp.ts`) into the user-scope `~/.claude.json` registry — the surface Claude Code actually reads for user-scope MCP servers. harness never writes that file directly; registration goes exclusively through `claude mcp add-json --scope user`, and the (dead) `mcpServers` block this used to write into `~/.claude/settings.json` is no longer projected there at all. Toggling an already-registered entry to `false` does **not** deregister it today — there is no removal GC yet (known limitation, task `init-mcp-wiring-claude-code`, decision D-003) |
 | `min_version` | string | no | semver floor; `harness doctor` runs `version_command` against the first command token and emits a `⚠ outdated` line when the parsed version is below this value |
 | `version_command` | `string[]` | no | defaults to `[<first command token>, --version]` |
 
