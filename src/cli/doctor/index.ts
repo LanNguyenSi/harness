@@ -36,6 +36,8 @@ import {
 } from "./codex.js";
 import { checkNpmBinPath, type NpmExec } from "./npm-bin-path.js";
 import { scanForRogueLedgers, type RogueLedgerScanOptions } from "./rogue-ledger.js";
+import { buildClaudeMcpRegistration } from "./claude-mcp.js";
+import type { ClaudeMcpExec } from "../../io/claude-mcp.js";
 import {
   isDoctorTarget,
   KNOWN_DOCTOR_TARGETS,
@@ -90,6 +92,15 @@ export interface DoctorOptions extends LoaderOptions {
    * `shallow` so tests can exercise the check without paying for spawns.
    */
   gitIgnoreProbe?: GitIgnoreProbe;
+  /**
+   * Test-injection knob for the claude-code MCP registration check (task
+   * init-mcp-wiring-claude-code/T-003). Tests fake the `claude mcp list`
+   * spawn the same way `npmBinExec`/`gitIgnoreProbe` fake theirs;
+   * production omits this and the real `claude` CLI is spawned. The live
+   * call itself is additionally gated on `!shallow` and at least one
+   * enabled `tools.mcp[]` entry — see `buildClaudeMcpRegistration`.
+   */
+  claudeMcpExec?: ClaudeMcpExec;
 }
 
 export { isDoctorTarget, KNOWN_DOCTOR_TARGETS };
@@ -808,6 +819,13 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   if (report.grounding !== undefined) {
     warningCount += report.grounding.warnings.length;
   }
+  if (report.claudeMcp !== undefined) {
+    for (const e of report.claudeMcp.entries) {
+      if (e.status === "error") errorCount++;
+      else if (e.status === "warn") warningCount++;
+    }
+    warningCount += report.claudeMcp.warnings.length;
+  }
   if (report.npmGlobalBin?.status === "warn") warningCount++;
   if (report.memory.routerExecutable && !report.memory.routerExecutable.exists) errorCount++;
   if (!report.memory.routerExecutable) warningCount++;
@@ -915,6 +933,20 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     groundingServer !== null
       ? buildGrounding(manifest, groundingServer, home)
       : undefined;
+  // Claude Code MCP registration health (task
+  // init-mcp-wiring-claude-code/T-003). Gated purely on tools.mcp[]
+  // non-empty (see claude-mcp.ts's module header for why there's no
+  // further runtime-scoped gate); the live `claude mcp list` spawn
+  // inside buildClaudeMcpRegistration additionally self-gates on
+  // `!shallow` and at least one ENABLED entry.
+  const claudeMcp =
+    manifest.tools.mcp.length > 0
+      ? await buildClaudeMcpRegistration(manifest, {
+          home,
+          shallow: !!opts.shallow,
+          ...(opts.claudeMcpExec !== undefined ? { claudeMcpExec: opts.claudeMcpExec } : {}),
+        })
+      : undefined;
   const manifestSec = manifestSection(manifest);
 
   const rogueLedgerDbs = scanForRogueLedgers({
@@ -939,6 +971,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     workflows,
     riskGate,
     ...(grounding !== undefined ? { grounding } : {}),
+    ...(claudeMcp !== undefined ? { claudeMcp } : {}),
     rogueLedgerDbs,
     ...(npmGlobalBin !== undefined ? { npmGlobalBin } : {}),
   };

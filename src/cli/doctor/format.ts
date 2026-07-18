@@ -348,6 +348,42 @@ function formatGroundingSection(report: DoctorReport): string[] {
   return out;
 }
 
+function formatClaudeMcpSection(report: DoctorReport): string[] {
+  const c = report.claudeMcp;
+  if (c === undefined) return [];
+  const out: string[] = ["", "Claude Code MCP Registration"];
+  out.push(
+    "  ℹ verified via `claude mcp list` (user scope); assumes Claude Code is the effective " +
+      "MCP runtime — doctor has no per-runtime gate for this check yet",
+  );
+  switch (c.listStatus) {
+    case "skipped":
+      out.push(`  ~ not probed (${c.listMessage ?? "--shallow"})`);
+      break;
+    case "cli-missing":
+      out.push("  ~ claude CLI not found on PATH — skipping live registration check");
+      break;
+    case "timeout":
+    case "error":
+      // The explanatory line is rendered via the `warnings` loop below
+      // (it also needs to roll into warningCount, so it lives there —
+      // rendering it twice would just duplicate the same text).
+      break;
+    case "ok":
+      if (c.entries.length === 0) {
+        out.push("  (no enabled tools.mcp[] servers to check)");
+      } else {
+        for (const e of c.entries) {
+          const marker = e.status === "ok" ? "✓" : e.status === "warn" ? "⚠" : "✗";
+          out.push(`  ${marker} ${e.name}  ${e.message}`);
+        }
+      }
+      break;
+  }
+  for (const w of c.warnings) out.push(`  ⚠ ${w}`);
+  return out;
+}
+
 export function format(report: DoctorReport): string {
   const lines: string[] = [formatHeader(report)];
   lines.push(...formatManifestSection(report));
@@ -360,6 +396,7 @@ export function format(report: DoctorReport): string {
   lines.push(...formatWorkflowsSection(report));
   lines.push(...formatRiskGateSection(report));
   lines.push(...formatGroundingSection(report));
+  lines.push(...formatClaudeMcpSection(report));
   lines.push(...formatCodexTargetSection(report));
   lines.push(...formatRogueLedgerSection(report));
   lines.push(...formatSummary(report));

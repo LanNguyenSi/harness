@@ -2,6 +2,7 @@ import type { McpProbeResult } from "../../probes/mcp.js";
 import type { MemoryReport, StaleMemory } from "../../probes/memory.js";
 import type { Manifest } from "../../schema/index.js";
 import type { Diagnostic } from "../validate/types.js";
+import type { ClaudeMcpRegistrationSection } from "./claude-mcp.js";
 import type { CodexTargetReport } from "./codex.js";
 import type { NpmBinReport } from "./npm-bin-path.js";
 import type { RogueLedgerDb } from "./rogue-ledger.js";
@@ -273,6 +274,15 @@ export interface DoctorReport {
    */
   grounding?: GroundingSection;
   /**
+   * Claude Code MCP registration health (task
+   * init-mcp-wiring-claude-code/T-003). Present whenever `tools.mcp[]`
+   * is non-empty; verifies the live `claude mcp` user-scope registry
+   * instead of the inert settings.json `mcpServers` block. See
+   * `claude-mcp.ts` for the full rationale, including why the gate
+   * isn't further scoped by runtime.
+   */
+  claudeMcp?: ClaudeMcpRegistrationSection;
+  /**
    * Phase 6 #6 follow-up: present when `--target codex` is passed.
    * Aggregates harness-side codex adapter health checks (binary
    * resolution, generated config presence, hook command resolution,
@@ -293,6 +303,7 @@ export interface DoctorReport {
 }
 
 export type { NpmBinReport } from "./npm-bin-path.js";
+export type { ClaudeMcpRegistrationSection, ClaudeMcpEntryReport } from "./claude-mcp.js";
 
 export type {
   Manifest,

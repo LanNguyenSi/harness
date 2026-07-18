@@ -11,11 +11,31 @@ import { format } from "../../src/cli/doctor/format.js";
 import { VERSION } from "../../src/version.js";
 import type { McpProbe, McpProbeResult } from "../../src/probes/mcp.js";
 import type { McpServer } from "../../src/schema/index.js";
+import type { ClaudeMcpExec } from "../../src/io/claude-mcp.js";
 
 let cleanups: Array<() => void> = [];
 afterEach(() => {
   for (const c of cleanups) c();
   cleanups = [];
+});
+
+/**
+ * Deterministic "claude CLI not installed" stub for the claude-code MCP
+ * registration check (task init-mcp-wiring-claude-code/T-003, tested in
+ * `doctor-claude-mcp.test.ts`). The tests in THIS file exercise the MCP
+ * *health*-probe section (`mcpProbe`), not the live registration check;
+ * without this stub, any fixture declaring an enabled `tools.mcp[]`
+ * entry would fall through to the real `claude` CLI (present on dev
+ * machines) and make errorCount/warningCount depend on host state.
+ * cli-missing is a zero-count outcome (see claude-mcp.ts), so injecting
+ * this never perturbs this file's existing assertions.
+ */
+const NO_CLAUDE_CLI: ClaudeMcpExec = async () => ({
+  code: 127,
+  stdout: "",
+  stderr: "",
+  enoent: true,
+  timedOut: false,
 });
 
 function makeFixture(files: Record<string, string>): string {
@@ -104,6 +124,7 @@ tools:
       homeOverride: home,
       mcpProbe: probe,
       pathEnv: "",
+      claudeMcpExec: NO_CLAUDE_CLI,
     });
     const text = format(report);
     expect(text).toContain("codebase-oracle");
@@ -128,6 +149,7 @@ tools:
       homeOverride: home,
       mcpProbe: new FakeProbe({}),
       pathEnv: "",
+      claudeMcpExec: NO_CLAUDE_CLI,
     });
     expect(report.tools.mcp[0]?.outcome.kind).toBe("missing-verb");
     expect(format(report)).toContain("unknown — no health verb declared");
@@ -154,6 +176,7 @@ tools:
         "agent-tasks": { kind: "no-response", latencyMs: 12, phase: "initialize" },
       }),
       pathEnv: "",
+      claudeMcpExec: NO_CLAUDE_CLI,
     });
     expect(report.tools.mcp[0]?.outcome.kind).toBe("no-response");
     expect(report.errorCount).toBe(1);
@@ -181,6 +204,7 @@ tools:
       homeOverride: home,
       mcpProbe: new FakeProbe({ alpha: { kind: "healthy", latencyMs: 89 } }),
       pathEnv: "",
+      claudeMcpExec: NO_CLAUDE_CLI,
     });
     expect(format(report)).toContain("✓ alpha  healthy in 89ms");
   });
@@ -226,6 +250,7 @@ tools:
       })(),
       pathEnv: "",
       npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      claudeMcpExec: NO_CLAUDE_CLI,
     });
     const ghost = report.tools.mcp.find((m) => m.name === "ghost-mcp");
     expect(ghost?.outcome.kind).toBe("error");
@@ -278,6 +303,7 @@ tools:
       }),
       pathEnv: "/usr/bin",
       npmBinExec: async () => ({ code: 0, stdout: `${npmBinDirRoot}\n`, stderr: "" }),
+      claudeMcpExec: NO_CLAUDE_CLI,
     });
     const server = report.tools.mcp.find((m) => m.name === "grounding-mcp");
     expect(server?.outcome.kind).toBe("error");
@@ -471,6 +497,7 @@ tools:
       }),
       pathEnv: "/nonexistent",
       versionProbe: () => null,
+      claudeMcpExec: NO_CLAUDE_CLI,
     });
     expect(report.errorCount).toBeGreaterThanOrEqual(2);
     expect(report.warningCount).toBeGreaterThanOrEqual(1);
