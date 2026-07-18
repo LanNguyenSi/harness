@@ -186,7 +186,7 @@ describe("recordPolicyDecision writer fallback", () => {
     const { script, logPath } = makeCaptureServer({ behavior: "reject-policy-decision" });
     const result = await recordPolicyDecision(decision, "sess-1", {
       mcpCommand: [script],
-      timeoutMs: 4000,
+      timeoutMs: 8000,
     });
     expect(result.ok).toBe(true);
 
@@ -217,7 +217,7 @@ describe("recordPolicyDecision writer fallback", () => {
         TEST_ABSOLUTE: "/already/absolute/path",
         TEST_NO_TILDE: "plain-value-no-tilde",
       },
-      timeoutMs: 4000,
+      timeoutMs: 8000,
     });
     expect(result.ok).toBe(true);
     const envLine = fs.readFileSync(envLogPath, "utf8").trim();
@@ -234,7 +234,7 @@ describe("recordPolicyDecision writer fallback", () => {
     const { script, logPath } = makeCaptureServer({ behavior: "always-ok" });
     const result = await recordPolicyDecision(decision, "sess-1", {
       mcpCommand: [script],
-      timeoutMs: 4000,
+      timeoutMs: 8000,
     });
     expect(result.ok).toBe(true);
 
@@ -259,7 +259,7 @@ describe("recordPolicyDecisionOnSession (pooled connection)", () => {
 
   it("multiplexes multiple decisions over one session: single initialize, one ledger_add each", async () => {
     const { script, logPath } = makeCaptureServer({ behavior: "always-ok" });
-    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 4000 });
+    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 8000 });
     try {
       const first = await recordPolicyDecisionOnSession(session, decision, "sess-1");
       const second = await recordPolicyDecisionOnSession(
@@ -284,7 +284,7 @@ describe("recordPolicyDecisionOnSession (pooled connection)", () => {
 
   it("keeps the type='fact' fallback for old servers on the shared session", async () => {
     const { script, logPath } = makeCaptureServer({ behavior: "reject-policy-decision" });
-    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 4000 });
+    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 8000 });
     try {
       const result = await recordPolicyDecisionOnSession(session, decision, "sess-1");
       expect(result.ok).toBe(true);

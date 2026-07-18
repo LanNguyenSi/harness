@@ -88,7 +88,7 @@ describe("queryLedgerByTag", () => {
     const result = await queryLedgerByTag({
       mcpCommand: [script],
       sessionId: "sess-1",
-      timeoutMs: 4000,
+      timeoutMs: 8000,
     });
     expect(result.kind).toBe("ok");
     if (result.kind === "ok") {
@@ -117,7 +117,7 @@ describe("queryLedgerByTag", () => {
     const result = await queryLedgerByTag({
       mcpCommand: [script],
       sessionId: "sess-1",
-      timeoutMs: 4000,
+      timeoutMs: 8000,
     });
     expect(result.kind).toBe("ok");
     if (result.kind === "ok") {
@@ -134,7 +134,7 @@ describe("queryLedgerByTag", () => {
     const result = await queryLedgerByTag({
       mcpCommand: [script],
       sessionId: "sess-1",
-      timeoutMs: 4000,
+      timeoutMs: 8000,
     });
     expect(result).toEqual({ kind: "ok", entries: [] });
   });
@@ -153,7 +153,7 @@ describe("queryLedgerByTag", () => {
     const result = await queryLedgerByTag({
       mcpCommand: [script],
       sessionId: "sess-1",
-      timeoutMs: 4000,
+      timeoutMs: 8000,
     });
     expect(result.kind).toBe("ok");
     if (result.kind === "ok") {
@@ -178,7 +178,7 @@ describe("queryLedgerByTag", () => {
     const result = await queryLedgerByTag({
       mcpCommand: [script],
       sessionId: "sess-1",
-      timeoutMs: 4000,
+      timeoutMs: 8000,
     });
     expect(result.kind).toBe("degraded");
     if (result.kind === "degraded") {
@@ -266,7 +266,7 @@ describe("queryLedgerByTag", () => {
       const result = await queryLedgerByTag({
         mcpCommand: [script],
         sessionId: "sess-1",
-        timeoutMs: 4000,
+        timeoutMs: 8000,
       });
       expect(result.kind).toBe("ok");
       if (result.kind === "ok") {
@@ -301,7 +301,7 @@ describe("queryLedgerByTag", () => {
       const result = await queryLedgerByTag({
         mcpCommand: [script],
         sessionId: "sess-1",
-        timeoutMs: 4000,
+        timeoutMs: 8000,
       });
       expect(result.kind).toBe("ok");
       if (result.kind === "ok") {
@@ -367,7 +367,7 @@ process.stdin.on("data", (d) => {
         sessionId: "sess-1",
         sinceIso: "2026-05-01T08:00:00Z",
         contentPrefix: "policy_decision:",
-        timeoutMs: 4000,
+        timeoutMs: 8000,
       });
       expect(result.kind).toBe("ok");
       const captured = JSON.parse(fs.readFileSync(captureFile, "utf8"));
@@ -393,7 +393,7 @@ process.stdin.on("data", (d) => {
         sessionId: "sess-1",
         sinceIso: "2026-05-01T08:00:00Z",
         contentPrefix: "policy_decision:",
-        timeoutMs: 4000,
+        timeoutMs: 8000,
       });
       expect(result.kind).toBe("ok");
       const captured = JSON.parse(fs.readFileSync(captureFile, "utf8"));
@@ -439,11 +439,11 @@ process.stdin.on("data", (d) => {
         mcpCommand: [script],
         mcpEnv: { CAPTURE_FILE: captureFile },
         sessionId: "sess-1",
-        timeoutMs: 4000,
+        timeoutMs: 8000,
       });
       const elapsed = Date.now() - start;
       expect(result.kind).toBe("ok");
-      expect(elapsed).toBeLessThan(2000); // would be ~4s if tools/list ran and timed out
+      expect(elapsed).toBeLessThan(2000); // would be ~8s if tools/list ran and timed out
       const captured = JSON.parse(fs.readFileSync(captureFile, "utf8"));
       expect(captured).toEqual({ sessionId: "sess-1" });
     });
@@ -487,7 +487,7 @@ process.stdin.on("data", (d) => {
     const result = await queryLedgerByTag({
       mcpCommand: [script],
       sessionId: "sess-1",
-      timeoutMs: 4000,
+      timeoutMs: 8000,
     });
     expect(result.kind).toBe("degraded");
     if (result.kind === "degraded") {
@@ -500,7 +500,7 @@ process.stdin.on("data", (d) => {
     const result = await queryLedgerByTag({
       mcpCommand: [script],
       sessionId: "sess-1",
-      timeoutMs: 4000,
+      timeoutMs: 8000,
     });
     expect(result.kind).toBe("degraded");
     if (result.kind === "degraded") {
@@ -527,7 +527,7 @@ process.stdin.on("data", (d) => {
     const result = await queryLedgerByTag({
       mcpCommand: [script],
       sessionId: "sess-1",
-      timeoutMs: 4000,
+      timeoutMs: 8000,
     });
     expect(result.kind).toBe("ok");
     if (result.kind === "ok") {
@@ -576,7 +576,7 @@ process.stdin.on("data", (d) => {
   it("initializes once across multiple querySummary calls on the same session", async () => {
     const { openLedgerSession } = await import("../../src/policies/ledger-client.js");
     const script = makeScript(singleInitServer());
-    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 4000 });
+    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 8000 });
     try {
       const first = await session.querySummary({ sessionId: "sess-1" });
       const second = await session.querySummary({ sessionId: "sess-1" });
@@ -592,7 +592,7 @@ process.stdin.on("data", (d) => {
   it("callTool surfaces a JSON-RPC error as status 'error' (drives the record fallback)", async () => {
     const { openLedgerSession } = await import("../../src/policies/ledger-client.js");
     const script = makeScript(singleInitServer());
-    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 4000 });
+    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 8000 });
     try {
       const result = await session.callTool("ledger_add", { sessionId: "s" });
       expect(result.status).toBe("error");
@@ -681,6 +681,23 @@ process.stdin.on("data", (d) => {
     // pays process start + initialize, and on macOS a first-ever exec of
     // a fresh temp script can alone eat several hundred ms. 300ms made
     // the prompt-answering querySummary itself degrade on Darwin.
+    //
+    // NOT WIDENED (task 2026-07-18 subprocess-test-deflake, T-002): unlike
+    // the other tests in this file, this budget is intentionally left at
+    // 1500ms rather than raised. openLedgerSession takes exactly one
+    // timeoutMs for the whole session (see src/policies/ledger-client.ts,
+    // no per-call override), and it gates BOTH the success sub-path
+    // (`query` below, which must complete the cold spawn+init+round-trip)
+    // AND the intentional timeout trigger (`first`, whose server never
+    // answers ledger_add so it must actually hit the deadline). Raising it
+    // would also change the exact literal asserted below
+    // ("timeout after 1500ms") — i.e. the two paths are not separable
+    // without either touching production code (out of scope) or editing
+    // that assertion's embedded number, which was called out as something
+    // to avoid rather than "bend". Left unchanged; this is the exact test
+    // (line ~687, `query.kind` toBe("ok")) the reviewer's re-validation
+    // caught flaking under full-suite contention — see risks in the T-002
+    // implementer report.
     const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 1500 });
     try {
       const query = await session.querySummary({ sessionId: "s" });
@@ -707,7 +724,7 @@ process.stdin.on("data", (d) => {
   it("isolates a mid-session death: later calls degrade, earlier results stand, nothing throws", async () => {
     const { openLedgerSession } = await import("../../src/policies/ledger-client.js");
     const script = makeScript(dieAfterFirstAddServer());
-    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 4000 });
+    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 8000 });
     try {
       const first = await session.callTool("ledger_add", { sessionId: "s" });
       expect(first.status).toBe("ok");
@@ -726,7 +743,7 @@ process.stdin.on("data", (d) => {
   it("dispose is a safe no-op when called twice", async () => {
     const { openLedgerSession } = await import("../../src/policies/ledger-client.js");
     const script = makeScript(singleUseHappyServer());
-    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 4000 });
+    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 8000 });
     const result = await session.querySummary({ sessionId: "s" });
     expect(result.kind).toBe("ok");
     session.dispose();

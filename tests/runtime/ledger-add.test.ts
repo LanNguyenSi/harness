@@ -140,7 +140,7 @@ describe("addLedgerFact — error paths", () => {
     const result = await addLedgerFact({
       ...COMMON_OPTS,
       mcpCommand: [script],
-      timeoutMs: 2000,
+      timeoutMs: 8000,
     });
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -158,7 +158,7 @@ describe("addLedgerFact — error paths", () => {
     const result = await addLedgerFact({
       ...COMMON_OPTS,
       mcpCommand: [script],
-      timeoutMs: 2000,
+      timeoutMs: 8000,
     });
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -167,11 +167,18 @@ describe("addLedgerFact — error paths", () => {
   });
 
   it("returns ok:true on a successful round-trip (baseline / sanity)", async () => {
+    // timeoutMs raised 2000->8000 (task 2026-07-18 subprocess-test-deflake,
+    // T-002): this is the exact test the reviewer's re-validation caught
+    // failing under full-suite CPU contention (cold spawn+init+round-trip
+    // exceeded the old 2000ms budget). Production default is 5000ms
+    // (DEFAULT_TIMEOUT_MS, src/runtime/ledger-add.ts); this test always
+    // expects a successful round-trip, so a generous budget costs nothing
+    // on a green run and only helps under contention.
     const script = makeScript(OK_SERVER);
     const result = await addLedgerFact({
       ...COMMON_OPTS,
       mcpCommand: [script],
-      timeoutMs: 2000,
+      timeoutMs: 8000,
     });
     expect(result.ok).toBe(true);
   });
