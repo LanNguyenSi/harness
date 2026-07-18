@@ -29,6 +29,7 @@ import {
 } from "../apply/generate-settings.js";
 import {
   listMcpServers,
+  posixSingleQuote,
   type ClaudeMcpExec,
   type ClaudeMcpListEntry,
 } from "../../io/claude-mcp.js";
@@ -185,7 +186,9 @@ export async function buildClaudeMcpRegistration(
             status: "error",
             message:
               "not registered with the claude CLI — run `harness init --interactive` or " +
-              `\`claude mcp add-json --scope user ${name} '${JSON.stringify(desired[name])}'\``,
+              `\`claude mcp add-json --scope user ${name} ${posixSingleQuote(
+                JSON.stringify(desired[name]),
+              )}\``,
           });
           continue;
         }

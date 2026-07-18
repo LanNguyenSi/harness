@@ -151,6 +151,19 @@ export interface AddJsonResult {
   code: number;
 }
 
+/**
+ * Wrap a value as a single POSIX shell single-quoted token, escaping any
+ * embedded single quote as `'\''`. Used to build the copy-pasteable
+ * `claude mcp add-json ... <json>` fallback commands harness prints when the
+ * CLI is missing or a server is unregistered, so the operator can paste them
+ * verbatim even when a value (e.g. a home path containing an apostrophe, as
+ * projected into grounding-mcp's EVIDENCE_LEDGER_DB) has a single quote.
+ * Harness never executes these strings itself.
+ */
+export function posixSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 export async function addJsonMcpServer(
   name: string,
   spec: ClaudeMcpServerSpec,

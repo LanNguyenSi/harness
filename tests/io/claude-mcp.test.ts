@@ -8,6 +8,7 @@ import {
   getMcpServer,
   listMcpServers,
   parseClaudeMcpListOutput,
+  posixSingleQuote,
   removeMcpServer,
   resolveClaudeUserRegistryPath,
   stripOwnedMcpServers,
@@ -452,5 +453,22 @@ describe("stripOwnedMcpServers", () => {
     const before = JSON.stringify(settings);
     const r = stripOwnedMcpServers(settings, ["agent-tasks"]);
     expect(JSON.stringify(r.settings)).toBe(before);
+  });
+});
+
+describe("posixSingleQuote", () => {
+  it("wraps a quote-free value in single quotes", () => {
+    expect(posixSingleQuote('{"command":"grounding-mcp"}')).toBe(`'{"command":"grounding-mcp"}'`);
+  });
+
+  it("escapes an embedded single quote so the token stays shell-safe", () => {
+    // A home path with an apostrophe reaches here via EVIDENCE_LEDGER_DB.
+    const json = JSON.stringify({ env: { EVIDENCE_LEDGER_DB: "/Users/O'Brien/ledger.db" } });
+    const quoted = posixSingleQuote(json);
+    // Every apostrophe becomes the POSIX close-escape-reopen sequence '\''.
+    expect(quoted).toBe(`'{"env":{"EVIDENCE_LEDGER_DB":"/Users/O'\\''Brien/ledger.db"}}'`);
+    // And the token is balanced: it opens and closes with a single quote.
+    expect(quoted.startsWith("'")).toBe(true);
+    expect(quoted.endsWith("'")).toBe(true);
   });
 });

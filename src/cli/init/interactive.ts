@@ -45,6 +45,7 @@ import { loadManifest } from "../loader.js";
 import type { Manifest } from "../../schema/index.js";
 import {
   ensureMcpServers,
+  posixSingleQuote,
   stripOwnedMcpServers,
   type ClaudeMcpExec,
   type EnsureMcpServersResult,
@@ -429,7 +430,10 @@ function loadDesiredMcpServers(
 function manualAddJsonLines(desired: Record<string, SettingsMcpServer>): string[] {
   return Object.keys(desired)
     .sort()
-    .map((name) => `claude mcp add-json --scope user ${name} '${JSON.stringify(desired[name])}'`);
+    .map(
+      (name) =>
+        `claude mcp add-json --scope user ${name} ${posixSingleQuote(JSON.stringify(desired[name]))}`,
+    );
 }
 
 /**
