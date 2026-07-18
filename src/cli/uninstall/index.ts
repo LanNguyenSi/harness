@@ -77,7 +77,13 @@ const UNDERSTANDING_GATE_DIRNAME = ".understanding-gate";
  * list catches the same entries the templates planted; narrowing it
  * would leave them stranded after manifest-less uninstall.
  */
-const DEFAULT_OWNED_MCP_SERVERS = [
+// Exported (task init-mcp-wiring-claude-code/T-002): the init wizard's
+// settings.json mcpServers migration (src/cli/init/interactive.ts) reuses
+// this exact ownership list so a manifest-less/first-run migration still
+// recognizes the same default set uninstall already knows about, instead
+// of duplicating the list. Read-only import; uninstall's own behavior is
+// unchanged.
+export const DEFAULT_OWNED_MCP_SERVERS = [
   "agent-tasks",
   "codebase-oracle",
   "grounding-mcp",

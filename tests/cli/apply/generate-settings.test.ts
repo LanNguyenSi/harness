@@ -609,8 +609,15 @@ describe("buildMcpServers", () => {
   });
 });
 
+// T-002 (init-mcp-wiring-claude-code): Claude Code never read the
+// settings.json `mcpServers` block at runtime, so it is no longer part of
+// the settings.json projection (`root`) at all. The manifest's tools.mcp[]
+// servers are still translated into the Claude Code server-spec shape —
+// they now feed the `claude mcp` CLI Ensure path instead (io/claude-mcp.ts)
+// — and surface as the sibling `mcpServers` field on
+// `generateSettingsWithWarnings`'s result.
 describe("generateSettings + mcpServers integration", () => {
-  it("emits mcpServers alongside hooks when manifest has enabled MCPs", () => {
+  it("computes mcpServers for the Ensure path without projecting them into settings.json", () => {
     const m = manifestOf(
       [
         { name: "h", event: "SessionStart", command: "/h.sh", blocking: false, budget_ms: 30000 },
@@ -620,19 +627,19 @@ describe("generateSettings + mcpServers integration", () => {
         { name: "search-mcp", command: ["python", "-m", "search.server"], enabled: false },
       ],
     );
-    const out = generateSettingsWithWarnings(m, { homeDir: "/home/op" }).root;
-    expect(out.mcpServers).toBeDefined();
-    expect(out.mcpServers?.["grounding-mcp"]).toEqual({
+    const r = generateSettingsWithWarnings(m, { homeDir: "/home/op" });
+    expect(r.root).not.toHaveProperty("mcpServers");
+    expect(r.mcpServers["grounding-mcp"]).toEqual({
       command: "node",
       args: ["/opt/grounding/server.js"],
       // task 129e1b94: grounding.evidence_ledger.path (schema default here)
       // is projected as the env grounding-mcp's ledger-bridge reads.
       env: { EVIDENCE_LEDGER_DB: "/home/op/.evidence-ledger/ledger.db" },
     });
-    expect(out.mcpServers?.["search-mcp"]).toBeUndefined();
+    expect(r.mcpServers["search-mcp"]).toBeUndefined();
   });
 
-  it("omits the mcpServers key entirely when no enabled MCPs are configured", () => {
+  it("omits the mcpServers key entirely from settings.json regardless of enabled MCPs", () => {
     const m = manifestOf(
       [{ name: "h", event: "SessionStart", command: "/h.sh", blocking: false, budget_ms: 30000 }],
       [{ name: "off", command: "node x.js", enabled: false }],
@@ -641,7 +648,7 @@ describe("generateSettings + mcpServers integration", () => {
     expect(out).not.toHaveProperty("mcpServers");
   });
 
-  it("generateSettingsWithWarnings surfaces buildMcpServers warnings", () => {
+  it("generateSettingsWithWarnings surfaces buildMcpServers warnings and an empty mcpServers map", () => {
     const m = manifestOf(
       [{ name: "h", event: "SessionStart", command: "/h.sh", blocking: false, budget_ms: 30000 }],
       [{ name: "ghost", command: "   ", enabled: true }],
@@ -649,6 +656,7 @@ describe("generateSettings + mcpServers integration", () => {
     const r = generateSettingsWithWarnings(m);
     expect(r.warnings).toContain("tools.mcp.ghost: empty command, skipping");
     expect(r.root).not.toHaveProperty("mcpServers");
+    expect(r.mcpServers).toEqual({});
   });
 });
 
@@ -793,6 +801,12 @@ describe("generateSettings — memory.router projection (PR #203)", () => {
 // EVIDENCE_LEDGER_DB env — the variable grounding-mcp's ledger-bridge
 // actually reads. These tests are the removal-pin the task's acceptance
 // criteria demand: deleting projectGroundingEnv turns them red.
+//
+// T-002 (init-mcp-wiring-claude-code): the projection's OUTPUT moved from
+// `root.mcpServers` to the sibling `mcpServers` field (settings.json no
+// longer carries mcpServers at all — see the describe block above), but
+// projectGroundingEnv itself is unchanged and still feeds these assertions
+// via that sibling field, so the removal-pin still holds.
 describe("generateSettings — grounding: projection (task 129e1b94)", () => {
   const GROUNDING_MCP = {
     name: "grounding-mcp",
@@ -809,22 +823,23 @@ describe("generateSettings — grounding: projection (task 129e1b94)", () => {
       hooks: [],
       policies: [],
     });
-    const { root, warnings } = generateSettingsWithWarnings(m, { homeDir: "/home/op" });
-    expect(root.mcpServers?.["grounding-mcp"]?.env?.EVIDENCE_LEDGER_DB).toBe(
+    const { root, warnings, mcpServers } = generateSettingsWithWarnings(m, { homeDir: "/home/op" });
+    expect(root).not.toHaveProperty("mcpServers");
+    expect(mcpServers["grounding-mcp"]?.env?.EVIDENCE_LEDGER_DB).toBe(
       "/home/op/.evidence-ledger/ledger.db",
     );
     // Absolute after expansion — the literal-tilde child-process footgun
     // (agent-tasks/42d224a6) must not re-enter through the projection.
     expect(
-      root.mcpServers?.["grounding-mcp"]?.env?.EVIDENCE_LEDGER_DB?.startsWith("~"),
+      mcpServers["grounding-mcp"]?.env?.EVIDENCE_LEDGER_DB?.startsWith("~"),
     ).toBe(false);
     void warnings;
   });
 
   it("projects the schema default even when the manifest omits grounding: entirely", () => {
     const m = manifestOf([], [GROUNDING_MCP]);
-    const out = generateSettingsWithWarnings(m, { homeDir: "/home/op" }).root;
-    expect(out.mcpServers?.["grounding-mcp"]?.env?.EVIDENCE_LEDGER_DB).toBe(
+    const { mcpServers } = generateSettingsWithWarnings(m, { homeDir: "/home/op" });
+    expect(mcpServers["grounding-mcp"]?.env?.EVIDENCE_LEDGER_DB).toBe(
       "/home/op/.evidence-ledger/ledger.db",
     );
   });
@@ -833,8 +848,8 @@ describe("generateSettings — grounding: projection (task 129e1b94)", () => {
     const m = manifestOf([], [
       { ...GROUNDING_MCP, env: { EVIDENCE_LEDGER_DB: "/custom/ledger.db" } },
     ]);
-    const out = generateSettingsWithWarnings(m, { homeDir: "/home/op" }).root;
-    expect(out.mcpServers?.["grounding-mcp"]?.env?.EVIDENCE_LEDGER_DB).toBe(
+    const { mcpServers } = generateSettingsWithWarnings(m, { homeDir: "/home/op" });
+    expect(mcpServers["grounding-mcp"]?.env?.EVIDENCE_LEDGER_DB).toBe(
       "/custom/ledger.db",
     );
   });
@@ -843,17 +858,17 @@ describe("generateSettings — grounding: projection (task 129e1b94)", () => {
     const m = manifestOf([], [
       { name: "agent-tasks", command: ["node", "/opt/agent-tasks/mcp.js"], enabled: true },
     ]);
-    const out = generateSettingsWithWarnings(m, { homeDir: "/home/op" }).root;
-    expect(out.mcpServers?.["agent-tasks"]?.env).toBeUndefined();
-    expect(out.mcpServers?.["grounding-mcp"]).toBeUndefined();
+    const { mcpServers } = generateSettingsWithWarnings(m, { homeDir: "/home/op" });
+    expect(mcpServers["agent-tasks"]?.env).toBeUndefined();
+    expect(mcpServers["grounding-mcp"]).toBeUndefined();
   });
 
   it("treats an empty-string operator override as absent (projection replaces it)", () => {
     const m = manifestOf([], [
       { ...GROUNDING_MCP, env: { EVIDENCE_LEDGER_DB: "" } },
     ]);
-    const out = generateSettingsWithWarnings(m, { homeDir: "/home/op" }).root;
-    expect(out.mcpServers?.["grounding-mcp"]?.env?.EVIDENCE_LEDGER_DB).toBe(
+    const { mcpServers } = generateSettingsWithWarnings(m, { homeDir: "/home/op" });
+    expect(mcpServers["grounding-mcp"]?.env?.EVIDENCE_LEDGER_DB).toBe(
       "/home/op/.evidence-ledger/ledger.db",
     );
   });
@@ -867,8 +882,8 @@ describe("generateSettings — grounding: projection (task 129e1b94)", () => {
       hooks: [],
       policies: [],
     });
-    const out = generateSettingsWithWarnings(m, { homeDir: "/home/op" }).root;
-    expect(out.mcpServers?.["grounding-mcp"]?.env?.EVIDENCE_LEDGER_DB).toBe(
+    const { mcpServers } = generateSettingsWithWarnings(m, { homeDir: "/home/op" });
+    expect(mcpServers["grounding-mcp"]?.env?.EVIDENCE_LEDGER_DB).toBe(
       "/var/lib/ledger/ledger.db",
     );
   });

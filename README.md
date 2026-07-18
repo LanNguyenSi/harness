@@ -144,6 +144,15 @@ profile (`solo` / `team` / `full` / `custom`) and writes a starting
 `harness.yaml`. Ctrl-C aborts cleanly. Walkthrough +
 limitations: [`docs/init-interactive.md`](docs/init-interactive.md).
 
+Every enabled `tools.mcp[]` server is then registered with Claude
+Code via `claude mcp add-json --scope user` — the surface Claude Code
+actually reads for user-scope MCP servers; harness itself never
+writes `~/.claude.json`. This step requires the `claude` CLI on
+`$PATH`; if it's missing, the wizard warns and prints the equivalent
+`claude mcp add-json` commands to run by hand instead of failing.
+`harness doctor` includes a "Claude Code MCP Registration" section
+that re-verifies the live registration via `claude mcp list`.
+
 ### Profiles at a glance
 
 | Profile | External accounts / tools required | Best for |
