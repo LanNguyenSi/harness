@@ -51,7 +51,7 @@ describe("RealMcpProbe", () => {
     const server: McpServer = {
       name: "broken-oracle",
       command: [script],
-      health: { verb: "ping", timeout_ms: 2000 },
+      health: { verb: "ping", timeout_ms: 8000 },
       enabled: true,
     };
     const result = await probe.call(server);
@@ -66,12 +66,24 @@ describe("RealMcpProbe", () => {
     // Surfaced during v0.1.0 dogfood: agent-tasks exits 0 from the doctor
     // probe because it is launched without a token and shuts down quietly.
     // Reporting that as "FAILED" misleads; surface it as a distinct outcome.
+    //
+    // timeout_ms raised 2000->8000 (task 2026-07-18 subprocess-test-deflake,
+    // T-002): this outcome depends on the child's `exit` event winning a
+    // `Promise.race` against the init timeout (src/probes/mcp.ts ~228-238).
+    // The script exits immediately, so on an idle machine `exit` always
+    // wins; under full-suite CPU contention the event loop can be slow to
+    // observe/process that `exit` event before the timer fires, flipping
+    // the outcome to "error"/timed-out instead — exactly the flake the
+    // reviewer's re-validation caught here. Raising the budget only gives
+    // the (already-fast) exit event more headroom to win the race; it does
+    // not make this an intentional-timeout test, so the assertions below
+    // (outcome.kind, outcome.phase) are unchanged.
     const script = makeScript("#!/bin/sh\nexit 0\n");
     const probe = new RealMcpProbe();
     const server: McpServer = {
       name: "agent-tasks",
       command: [script],
-      health: { verb: "ping", timeout_ms: 2000 },
+      health: { verb: "ping", timeout_ms: 8000 },
       enabled: true,
     };
     const result = await probe.call(server);
@@ -122,7 +134,7 @@ process.stdin.on("data", (d) => {
     const server: McpServer = {
       name: "fake-mcp",
       command: ["node", script],
-      health: { verb: "ping", timeout_ms: 2000 },
+      health: { verb: "ping", timeout_ms: 8000 },
       enabled: true,
     };
     const result = await probe.call(server);
@@ -195,7 +207,7 @@ process.stdin.on("data", (d) => {
     const server: McpServer = {
       name: "verb-error",
       command: ["node", script],
-      health: { verb: "ping", timeout_ms: 2000 },
+      health: { verb: "ping", timeout_ms: 8000 },
       enabled: true,
     };
     const result = await probe.call(server);
@@ -231,7 +243,7 @@ process.stdin.on("data", (d) => {
     const server: McpServer = {
       name: "verb-crash",
       command: ["node", script],
-      health: { verb: "ping", timeout_ms: 2000 },
+      health: { verb: "ping", timeout_ms: 8000 },
       enabled: true,
     };
     const result = await probe.call(server);
@@ -288,7 +300,7 @@ process.stdin.on("data", (d) => {
     const server: McpServer = {
       name: "verb-clean-exit",
       command: ["node", script],
-      health: { verb: "ping", timeout_ms: 2000 },
+      health: { verb: "ping", timeout_ms: 8000 },
       enabled: true,
     };
     const result = await probe.call(server);
