@@ -334,6 +334,256 @@ describe("interactive wizard — Solo path", () => {
   });
 });
 
+describe("interactive wizard — MCP registration + settings.json migration (task init-mcp-wiring-claude-code/T-002)", () => {
+  // Stateful fake `claude` CLI: `add-json`/`remove` mutate a JSON file at
+  // `registryPath`, mirroring the real CLI's effect on
+  // `$CLAUDE_CONFIG_DIR/.claude.json` (here: `<tmpHome>/.claude.json`, per
+  // `resolveClaudeUserRegistryPath`'s precedence). This lets a second
+  // `ensureMcpServers` drift-check see the servers the first run
+  // "registered" and correctly no-op, without a real `claude` binary.
+  function fakeClaudeCli(registryPath: string): {
+    exec: import("../../src/io/claude-mcp.js").ClaudeMcpExec;
+    calls: string[][];
+  } {
+    const calls: string[][] = [];
+    function readRegistry(): Record<string, unknown> {
+      try {
+        return JSON.parse(fs.readFileSync(registryPath, "utf8")) as Record<string, unknown>;
+      } catch {
+        return {};
+      }
+    }
+    function writeRegistry(registry: Record<string, unknown>): void {
+      fs.writeFileSync(registryPath, JSON.stringify(registry, null, 2));
+    }
+    const exec: import("../../src/io/claude-mcp.js").ClaudeMcpExec = async (args) => {
+      calls.push(args);
+      if (args[0] === "mcp" && args[1] === "add-json") {
+        const name = args[4]!;
+        const spec = JSON.parse(args[5]!) as unknown;
+        const registry = readRegistry();
+        const mcpServers = (registry["mcpServers"] as Record<string, unknown>) ?? {};
+        mcpServers[name] = spec;
+        registry["mcpServers"] = mcpServers;
+        writeRegistry(registry);
+        return {
+          code: 0,
+          stdout: `Added stdio MCP server ${name} to user config\n`,
+          stderr: "",
+          enoent: false,
+          timedOut: false,
+        };
+      }
+      if (args[0] === "mcp" && args[1] === "remove") {
+        const name = args[4]!;
+        const registry = readRegistry();
+        const mcpServers = (registry["mcpServers"] as Record<string, unknown>) ?? {};
+        delete mcpServers[name];
+        registry["mcpServers"] = mcpServers;
+        writeRegistry(registry);
+        return { code: 0, stdout: "", stderr: "", enoent: false, timedOut: false };
+      }
+      return { code: 0, stdout: "", stderr: "", enoent: false, timedOut: false };
+    };
+    return { exec, calls };
+  }
+
+  function cliMissingExec(): import("../../src/io/claude-mcp.js").ClaudeMcpExec {
+    return async () => ({
+      code: 127,
+      stdout: "",
+      stderr: "spawn failed: ENOENT",
+      enoent: true,
+      timedOut: false,
+    });
+  }
+
+  it("registers manifest MCP servers via the claude CLI (not settings.json) and cleans up a dead settings.json mcpServers block", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    // Legacy state: a dead mcpServers block in settings.json carrying both
+    // harness-owned names (from a pre-T-002 harness version) and a
+    // foreign, operator-added entry.
+    fs.writeFileSync(
+      path.join(tmpHome, ".claude", "settings.json"),
+      JSON.stringify(
+        {
+          mcpServers: {
+            "agent-tasks": { command: "old-agent-tasks" },
+            "grounding-mcp": { command: "old-grounding" },
+            "my-own-server": { command: "mine" },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    const registryPath = path.join(tmpHome, ".claude.json");
+    const { exec, calls } = fakeClaudeCli(registryPath);
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      mcpExec: exec,
+      authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
+      prompts: mockPrompts({
+        select: ["team"],
+        // The pre-seeded settings.json above already declares `agent-tasks`
+        // in its (dead) mcpServers block, so detect() finds it and the
+        // "Team profile ... not yet wired, proceed?" confirm does not
+        // fire — only the write confirmation does.
+        confirm: [true],
+        checkbox: [["claude-code"]],
+        input: ["~/.claude/projects/{project}/memory"],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+
+    expect(result.aborted).toBe(false);
+    const outcome = result.applies?.[0];
+    expect(outcome?.runtime).toBe("claude-code");
+
+    // Ensure: both manifest servers added via the claude CLI (never a
+    // settings.json write).
+    const ensureNames = outcome?.mcpEnsure?.results.map((r) => r.name).sort();
+    expect(ensureNames).toEqual(["agent-tasks", "grounding-mcp"]);
+    expect(
+      outcome?.mcpEnsure?.results.every((r) => r.action === "add" && r.add?.status === "added"),
+    ).toBe(true);
+    const addCalls = calls.filter((c) => c[1] === "add-json");
+    expect(addCalls.map((c) => c[4]).sort()).toEqual(["agent-tasks", "grounding-mcp"]);
+    const registry = JSON.parse(fs.readFileSync(registryPath, "utf8")) as {
+      mcpServers: Record<string, { command: string; env?: Record<string, string> }>;
+    };
+    expect(registry.mcpServers["agent-tasks"]).toEqual({ command: "agent-tasks-mcp-bridge" });
+    expect(registry.mcpServers["grounding-mcp"]?.command).toBe("grounding-mcp");
+    expect(registry.mcpServers["grounding-mcp"]?.env?.["EVIDENCE_LEDGER_DB"]).toContain(
+      ".evidence-ledger/ledger.db",
+    );
+
+    // Migration: harness-owned names stripped from the dead settings.json
+    // block; the foreign entry survives untouched.
+    const settings = JSON.parse(
+      fs.readFileSync(path.join(tmpHome, ".claude", "settings.json"), "utf8"),
+    ) as { mcpServers?: Record<string, unknown> };
+    expect(settings.mcpServers).toEqual({ "my-own-server": { command: "mine" } });
+    expect(outcome?.mcpMigrationRemovedNames?.slice().sort()).toEqual([
+      "agent-tasks",
+      "grounding-mcp",
+    ]);
+    expect(cap.stderr()).toContain("registered 2 MCP server(s) with the claude CLI");
+    expect(cap.stderr()).toContain("removed 2 dead mcpServers entries");
+  });
+
+  it("second init run is fully idempotent: no further claude CLI calls, no settings.json write", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const registryPath = path.join(tmpHome, ".claude.json");
+    const runOnce = async (forceOverwrite: boolean): Promise<{ stderr: string; calls: string[][] }> => {
+      // A fresh fake per run, but pointed at the SAME on-disk registry
+      // file, so state persists across runs exactly like the real CLI
+      // persisting to `~/.claude.json` would.
+      const { exec: runExec, calls } = fakeClaudeCli(registryPath);
+      const cap = captureStreams();
+      await runInteractive({
+        homeDir: tmpHome,
+        dependencyPathEnv: fakeDepsPath,
+        forceOverwrite,
+        mcpExec: runExec,
+        authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
+        prompts: mockPrompts({
+          select: ["team"],
+          confirm: [true, true],
+          checkbox: [["claude-code"]],
+          input: ["~/.claude/projects/{project}/memory"],
+        }),
+        stdout: cap.out,
+        stderr: cap.err,
+      });
+      return { stderr: cap.stderr(), calls };
+    };
+
+    const first = await runOnce(false);
+    expect(first.calls.filter((c) => c[1] === "add-json")).toHaveLength(2);
+    expect(first.stderr).toContain("registered 2 MCP server(s)");
+
+    const settingsPath = path.join(tmpHome, ".claude", "settings.json");
+    const settingsBeforeSecondRun = fs.readFileSync(settingsPath, "utf8");
+    const registryBeforeSecondRun = fs.readFileSync(registryPath, "utf8");
+
+    const second = await runOnce(true);
+    // Ensure sees both servers already correctly registered (identical
+    // spec on disk in the registry file) — zero exec calls at all.
+    expect(second.calls).toHaveLength(0);
+    expect(second.stderr).not.toContain("registered");
+    expect(second.stderr).not.toContain("removed");
+    expect(fs.readFileSync(settingsPath, "utf8")).toBe(settingsBeforeSecondRun);
+    expect(fs.readFileSync(registryPath, "utf8")).toBe(registryBeforeSecondRun);
+  });
+
+  it("claude CLI missing: warns, prints manual add-json commands, continues without failing, and skips the settings.json migration", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    fs.writeFileSync(
+      path.join(tmpHome, ".claude", "settings.json"),
+      JSON.stringify({ mcpServers: { "agent-tasks": { command: "old" } } }, null, 2),
+    );
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      mcpExec: cliMissingExec(),
+      authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
+      prompts: mockPrompts({
+        select: ["team"],
+        // agent-tasks is already pre-seeded in settings.json above, so
+        // detect() finds it and only the write confirmation fires.
+        confirm: [true],
+        checkbox: [["claude-code"]],
+        input: ["~/.claude/projects/{project}/memory"],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+
+    expect(result.aborted).toBe(false);
+    const outcome = result.applies?.[0];
+    // No hard fail: the wizard still completes and reports the runtime.
+    expect(outcome?.runtime).toBe("claude-code");
+    expect(outcome?.mcpEnsure?.results.every((r) => r.add?.status === "cli-missing")).toBe(true);
+    expect(cap.stderr()).toContain("claude` CLI is not on PATH");
+    expect(cap.stderr()).toContain("claude mcp add-json --scope user agent-tasks");
+    expect(cap.stderr()).toContain("claude mcp add-json --scope user grounding-mcp");
+    // Migration did not run: the dead block is untouched (D-002).
+    expect(outcome?.mcpMigrationRemovedNames).toBeUndefined();
+    const settings = JSON.parse(
+      fs.readFileSync(path.join(tmpHome, ".claude", "settings.json"), "utf8"),
+    ) as { mcpServers?: Record<string, unknown> };
+    expect(settings.mcpServers).toEqual({ "agent-tasks": { command: "old" } });
+  });
+
+  it("no runtimes selected: prints manual claude mcp add-json fallback commands for the manifest's MCP servers", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
+      prompts: mockPrompts({
+        select: ["team"],
+        confirm: [true, true],
+        checkbox: [[]],
+        input: ["~/.claude/projects/{project}/memory"],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(false);
+    expect(result.applies).toEqual([]);
+    expect(cap.stderr()).toContain("claude-code hooks: harness apply --target");
+    expect(cap.stderr()).toContain("claude mcp add-json --scope user agent-tasks");
+    expect(cap.stderr()).toContain("claude mcp add-json --scope user grounding-mcp");
+  });
+});
+
 describe("interactive wizard — Team path", () => {
   it("warns when agent-tasks is not detected but proceeds when operator confirms", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));

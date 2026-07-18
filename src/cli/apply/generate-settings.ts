@@ -83,13 +83,26 @@ export interface SettingsPermissions {
 
 export interface SettingsRoot {
   hooks: Record<string, SettingsHookGroup[]>;
-  mcpServers?: Record<string, SettingsMcpServer>;
   permissions?: SettingsPermissions;
 }
 
 export interface GenerateSettingsResult {
   root: SettingsRoot;
   warnings: string[];
+  /**
+   * The manifest's `tools.mcp[]` entries translated into Claude Code's
+   * server-spec shape (command/args/env), INCLUDING the grounding-mcp
+   * `EVIDENCE_LEDGER_DB` projection (`projectGroundingEnv`). Deliberately
+   * NOT part of `root` and never serialized into settings.json (task
+   * init-mcp-wiring-claude-code/T-002): Claude Code does not read the
+   * settings.json `mcpServers` block at runtime — see
+   * `src/io/claude-mcp.ts`'s module header. User-scope MCP registration
+   * goes exclusively through the `claude mcp` CLI now
+   * (`ensureMcpServers`); this field is what feeds that path. The init
+   * wizard (`src/cli/init/interactive.ts`) reads it directly instead of
+   * reading it back out of a written settings.json.
+   */
+  mcpServers: Record<string, SettingsMcpServer>;
 }
 
 export interface GenerateSettingsExtras {
@@ -144,14 +157,19 @@ export function generateSettingsWithWarnings(
     out.hooks[event] = buildGroups(hooks);
   }
 
+  // buildMcpServers/projectGroundingEnv still run here (not moved) so the
+  // env-tilde and empty-command warnings stay attached to the same
+  // `warnings` array regardless of which path (settings.json hooks vs.
+  // the claude-mcp Ensure path) consumes the resulting spec map. The
+  // result is intentionally NOT projected into `out` — see
+  // GenerateSettingsResult.mcpServers.
   const mcp = buildMcpServers(manifest.tools.mcp, warnings);
   projectGroundingEnv(manifest, mcp, extras.homeDir);
-  if (Object.keys(mcp).length > 0) out.mcpServers = mcp;
 
   const permissions = compactPermissions(extras.packPermissions);
   if (permissions) out.permissions = permissions;
 
-  return { root: out, warnings };
+  return { root: out, warnings, mcpServers: mcp };
 }
 
 function compactPermissions(p: SettingsPermissions | undefined): SettingsPermissions | null {

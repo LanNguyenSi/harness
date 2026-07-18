@@ -22,6 +22,7 @@
 //   is essentially a UI for picking the `--template` value.
 
 import { select, confirm, input, checkbox } from "@inquirer/prompts";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { resolveHomeDir } from "../../runtime/home-dir.js";
@@ -34,7 +35,24 @@ import {
 } from "./detect.js";
 import { init, type InitResult } from "./index.js";
 import { validate } from "../validate/index.js";
-import { apply, CODEX_CONFIG_BASENAME, type ApplyResult } from "../apply/index.js";
+import { apply, CODEX_CONFIG_BASENAME, SETTINGS_BASENAME, type ApplyResult } from "../apply/index.js";
+import {
+  buildMcpServers,
+  projectGroundingEnv,
+  type SettingsMcpServer,
+} from "../apply/generate-settings.js";
+import { loadManifest } from "../loader.js";
+import type { Manifest } from "../../schema/index.js";
+import {
+  ensureMcpServers,
+  stripOwnedMcpServers,
+  type ClaudeMcpExec,
+  type EnsureMcpServersResult,
+} from "../../io/claude-mcp.js";
+import { atomicWriteFile } from "../../io/atomic-write.js";
+import { resolveGeneratedDir } from "../../io/generated-dir.js";
+import { readLastApply, type LastApplyRecord } from "../../io/last-apply.js";
+import { DEFAULT_OWNED_MCP_SERVERS } from "../uninstall/index.js";
 import {
   checkDependencies,
   checkDependencyList,
@@ -83,6 +101,20 @@ export interface RuntimeApplyOutcome {
   apply?: ApplyResult;
   /** Operator-facing recovery message when apply threw, or the manual merge command for codex. */
   recoveryHint?: string;
+  /**
+   * claude-code only (task init-mcp-wiring-claude-code/T-002): the result
+   * of reconciling the manifest's `tools.mcp[]` servers against the live
+   * `claude mcp` user-scope registry. Present whenever the wizard reached
+   * the Ensure step for claude-code, regardless of outcome.
+   */
+  mcpEnsure?: EnsureMcpServersResult;
+  /**
+   * claude-code only: names stripped from the dead settings.json
+   * `mcpServers` block, when the post-Ensure migration ran and changed
+   * something. Absent when migration didn't run (Ensure incomplete) or
+   * ran as a no-op.
+   */
+  mcpMigrationRemovedNames?: string[];
 }
 
 export interface RunInteractiveOptions {
@@ -108,6 +140,14 @@ export interface RunInteractiveOptions {
   authProbeSpawn?: ProbeSpawn;
   /** Override the agent-tasks-mcp-bridge `login` runner (tests). */
   authLoginSpawn?: LoginSpawn;
+  /**
+   * Override the `claude mcp` CLI exec (task init-mcp-wiring-claude-code/
+   * T-002). Tests inject a fake to drive the Ensure step (registering
+   * `tools.mcp[]` servers via `claude mcp add-json --scope user`) without
+   * a real `claude` binary on PATH. Production leaves this undefined and
+   * gets the real CLI spawn (see `io/claude-mcp.ts`).
+   */
+  mcpExec?: ClaudeMcpExec;
   /**
    * Repo directory the orchestrator-workflow co-install offer scaffolds
    * into when the operator accepts. Defaults to `process.cwd()` — the repo
@@ -221,6 +261,8 @@ interface WireRuntimeOpts {
   claudeSettingsPath: string;
   codexConfigPath: string;
   stderr: (s: string) => void;
+  /** Test seam for the `claude mcp` CLI exec (task T-002). */
+  mcpExec?: ClaudeMcpExec;
 }
 
 async function wireRuntime(o: WireRuntimeOpts): Promise<RuntimeApplyOutcome> {
@@ -286,13 +328,20 @@ async function wireRuntime(o: WireRuntimeOpts): Promise<RuntimeApplyOutcome> {
       if (!r.targetWritten && !r.targetInSync) {
         outcome.recoveryHint = `harness apply --target ${o.claudeSettingsPath} --merge --overwrite-drift`;
       }
+      // T-002: MCP registration below is independent of this hooks/
+      // settings.json merge — it goes through the `claude mcp` CLI, not
+      // through settings.json. Run it regardless of the merge outcome so
+      // a hooks-merge hiccup doesn't also withhold MCP wiring.
+      await wireClaudeMcp(o, outcome);
       return outcome;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const recoveryHint = `harness apply --target ${o.claudeSettingsPath} --merge --overwrite-drift`;
       o.stderr(`\nFailed to wire ${o.claudeSettingsPath}: ${message}\n`);
       o.stderr(`Manifest is on disk. To retry the merge manually:\n  ${recoveryHint}\n`);
-      return { runtime: "claude-code", recoveryHint };
+      const outcome: RuntimeApplyOutcome = { runtime: "claude-code", recoveryHint };
+      await wireClaudeMcp(o, outcome);
+      return outcome;
     }
   }
   // Codex path: apply --runtime codex emits harness.generated/codex/config.toml.
@@ -331,6 +380,236 @@ async function wireRuntime(o: WireRuntimeOpts): Promise<RuntimeApplyOutcome> {
     o.stderr(`\nFailed to generate codex config: ${message}\n`);
     o.stderr(`To retry manually:\n  ${recoveryHint}\n`);
     return { runtime: "codex", recoveryHint };
+  }
+}
+
+interface DesiredMcpServers {
+  manifest: Manifest;
+  desired: Record<string, SettingsMcpServer>;
+  warnings: string[];
+}
+
+/**
+ * Reload the effective manifest and translate `tools.mcp[]` into the
+ * server-spec shape the `claude mcp` CLI wants (task
+ * init-mcp-wiring-claude-code/T-002). Reuses the exact same
+ * `buildMcpServers` + `projectGroundingEnv` functions the settings.json
+ * projection used to feed into the (now dead) `mcpServers` block —
+ * see generate-settings.ts's `GenerateSettingsResult.mcpServers` doc.
+ * `harnessHomeDir` is the harness STATE root (`harnessHomeArg(opts)`),
+ * not the operator's `$HOME`; `projectGroundingEnv`'s tilde-expansion is
+ * deliberately left on its default (`os.homedir()`) here, mirroring
+ * `apply.ts`'s own `buildExpectedFiles` call, which never overrides it
+ * either.
+ *
+ * Returns `null` when the manifest can't be reloaded (should not happen
+ * right after a successful `init()`, but a hand-edited/deleted manifest
+ * between write and this read is possible); callers degrade gracefully.
+ */
+function loadDesiredMcpServers(
+  configPath: string,
+  harnessHomeDir: string | undefined,
+): DesiredMcpServers | null {
+  let manifest: Manifest;
+  try {
+    manifest = loadManifest({
+      configPath,
+      ...(harnessHomeDir !== undefined ? { homeDir: harnessHomeDir } : {}),
+    }).manifest;
+  } catch {
+    return null;
+  }
+  const warnings: string[] = [];
+  const desired = buildMcpServers(manifest.tools.mcp, warnings);
+  projectGroundingEnv(manifest, desired);
+  return { manifest, desired, warnings };
+}
+
+/** One `claude mcp add-json --scope user <name> '<json>'` line per desired server, sorted by name. */
+function manualAddJsonLines(desired: Record<string, SettingsMcpServer>): string[] {
+  return Object.keys(desired)
+    .sort()
+    .map((name) => `claude mcp add-json --scope user ${name} '${JSON.stringify(desired[name])}'`);
+}
+
+/**
+ * Extract the mcpServers names a PREVIOUS apply wrote into
+ * `harness.generated/settings.json`, from `.last-apply`. Pre-T-002
+ * harness versions projected `mcpServers` into that file; a leftover
+ * record from one of those versions is the provenance signal the
+ * migration step (below) needs to safely strip the matching names out of
+ * the live (dead) settings.json block without guessing. Mirrors the
+ * equivalent snippet in `apply.ts`'s `--target --merge` provenance
+ * handling (kept separate rather than shared: apply.ts's version is
+ * private to that module and the two call sites read a different record
+ * shape's field, not worth a shared export for ~10 lines).
+ */
+function priorGeneratedMcpNames(lastApply: LastApplyRecord | null): string[] {
+  const content = lastApply?.files[SETTINGS_BASENAME]?.content;
+  if (content === undefined) return [];
+  try {
+    const prior = JSON.parse(content) as Record<string, unknown>;
+    const mcp = prior["mcpServers"];
+    if (mcp !== null && typeof mcp === "object" && !Array.isArray(mcp)) {
+      return Object.keys(mcp as Record<string, unknown>);
+    }
+  } catch {
+    // Corrupt .last-apply record: no provenance names from it; the
+    // manifest + DEFAULT_OWNED_MCP_SERVERS sets still apply.
+  }
+  return [];
+}
+
+/**
+ * Strip harness-owned names from the dead `mcpServers` block in
+ * `o.claudeSettingsPath` (D-002/D-003: only ever called AFTER Ensure has
+ * confirmed every desired server is correctly registered via the `claude`
+ * CLI). Owned = the current manifest's `tools.mcp[]` names, UNION any
+ * names a pre-T-002 harness version generated into settings.json
+ * (`.last-apply` provenance), UNION the uninstall module's default
+ * ownership set (covers a manifest-less/first-run migration the same way
+ * `harness uninstall` already does). Foreign entries (anything outside
+ * that union — an operator hand-add, or another tool's MCP server) are
+ * left untouched. Writes only when something actually changes.
+ */
+function migrateDeadSettingsMcpBlock(o: WireRuntimeOpts, manifest: Manifest): string[] {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(o.claudeSettingsPath, "utf8");
+  } catch {
+    return []; // No settings.json (yet) — nothing to migrate.
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    o.stderr(
+      `\n⚠ ${o.claudeSettingsPath} is not valid JSON; skipped the dead mcpServers cleanup. Fix the file and re-run \`harness init --interactive\`.\n`,
+    );
+    return [];
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return [];
+  }
+
+  const generatedDir = resolveGeneratedDir({
+    ...(o.homeDir !== undefined ? { homeDir: o.homeDir } : {}),
+    manifestPath: o.configPath,
+  });
+  const lastApply = readLastApply(generatedDir);
+  const ownedNames = new Set<string>([
+    ...manifest.tools.mcp.map((m) => m.name),
+    ...priorGeneratedMcpNames(lastApply),
+    ...DEFAULT_OWNED_MCP_SERVERS,
+  ]);
+
+  const { settings, removedNames } = stripOwnedMcpServers(
+    parsed as Record<string, unknown>,
+    [...ownedNames],
+  );
+  if (removedNames.length === 0) return [];
+  atomicWriteFile(o.claudeSettingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+  return removedNames;
+}
+
+/**
+ * Register the manifest's `tools.mcp[]` servers with Claude Code's
+ * user-scope registry via the `claude mcp` CLI (task
+ * init-mcp-wiring-claude-code/T-001/T-002), then — only once every
+ * desired server is confirmed correctly registered (D-002) — strip the
+ * dead settings.json `mcpServers` block. Mutates `outcome` in place so
+ * both the try and catch branches of the caller (the settings.json/hooks
+ * apply above) get the same MCP wiring regardless of whether that apply
+ * itself succeeded.
+ *
+ * `claude` CLI missing (`cli-missing`) is NOT a hard failure: the wizard
+ * warns, prints copy-pasteable `claude mcp add-json --scope user <name>
+ * '<json>'` commands per server, and continues — the manifest is on disk
+ * and hooks may already be wired even if MCP isn't yet. Migration is
+ * skipped in that case (and for any other incomplete registration) so a
+ * still-effective legacy settings.json entry is never removed out from
+ * under a server that couldn't be re-registered.
+ */
+async function wireClaudeMcp(o: WireRuntimeOpts, outcome: RuntimeApplyOutcome): Promise<void> {
+  const loaded = loadDesiredMcpServers(o.configPath, o.homeDir);
+  if (loaded === null) {
+    o.stderr(
+      `\n⚠ Could not reload the manifest to register MCP servers with the claude CLI; skipped.\n`,
+    );
+    return;
+  }
+  for (const w of loaded.warnings) o.stderr(`mcp warning: ${w}\n`);
+
+  const claudeHomeDir = path.dirname(o.claudeSettingsPath);
+  const ensureResult = await ensureMcpServers({
+    desired: loaded.desired,
+    homeDir: claudeHomeDir,
+    ...(o.mcpExec ? { exec: o.mcpExec } : {}),
+  });
+  outcome.mcpEnsure = ensureResult;
+
+  const actionable = ensureResult.results.filter((r) => r.action !== "noop");
+  const cliMissing = actionable.some(
+    (r) => r.add?.status === "cli-missing" || r.remove?.status === "cli-missing",
+  );
+  const allOk = ensureResult.results.every(
+    (r) =>
+      r.action === "noop" ||
+      ((r.action === "add" || r.action === "replace") && r.add?.status === "added"),
+  );
+
+  if (!allOk) {
+    if (cliMissing) {
+      o.stderr(
+        [
+          "",
+          "⚠ The `claude` CLI is not on PATH — MCP servers were not registered automatically.",
+          "  Install Claude Code, then register the manifest's MCP servers yourself:",
+          "",
+          ...manualAddJsonLines(
+            Object.fromEntries(actionable.map((r) => [r.name, loaded.desired[r.name]!])),
+          ).map((l) => `    ${l}`),
+          "",
+        ].join("\n"),
+      );
+    } else {
+      o.stderr(
+        [
+          "",
+          "⚠ Registering one or more MCP servers with the `claude` CLI failed:",
+          ...actionable.map(
+            (r) => `  ${r.name}: ${r.add?.message ?? r.remove?.message ?? r.reason ?? r.action}`,
+          ),
+          "",
+        ].join("\n"),
+      );
+    }
+    o.stderr(
+      "  Re-run `harness init --interactive` after fixing the issue to finish MCP registration and the settings.json cleanup.\n",
+    );
+    if (outcome.recoveryHint === undefined) {
+      outcome.recoveryHint =
+        "re-run `harness init --interactive` to finish registering MCP servers with the claude CLI";
+    }
+    return; // D-002: migration runs only after every desired server registers successfully.
+  }
+
+  if (actionable.length > 0) {
+    o.stderr(
+      `\nregistered ${actionable.length} MCP server(s) with the claude CLI (user scope): ${actionable
+        .map((r) => r.name)
+        .join(", ")}\n`,
+    );
+  }
+
+  const removedNames = migrateDeadSettingsMcpBlock(o, loaded.manifest);
+  if (removedNames.length > 0) {
+    outcome.mcpMigrationRemovedNames = removedNames;
+    o.stderr(
+      `removed ${removedNames.length} dead mcpServers entr${
+        removedNames.length === 1 ? "y" : "ies"
+      } from ${o.claudeSettingsPath}: ${removedNames.join(", ")}\n`,
+    );
   }
 }
 
@@ -692,7 +971,7 @@ export async function runInteractive(
     if (profileNeedsAgentTasks(profile) && !detectionHasAgentTasks(detection)) {
       const proceed = await prompts.confirm({
         message:
-          "The Team profile wires the agent-tasks MCP via the `agent-tasks-mcp-bridge` binary AND assumes you have an agent-tasks account (hosted or self-hosted). Claude's settings.json does not yet declare the MCP; the wizard will offer to install missing packages and wire it in a moment via `harness apply --target ~/.claude/settings.json --merge`. Proceed?",
+          "The Team profile wires the agent-tasks MCP via the `agent-tasks-mcp-bridge` binary AND assumes you have an agent-tasks account (hosted or self-hosted). It is not registered with Claude Code yet; the wizard will offer to install missing packages and register it in a moment via the `claude mcp` CLI (user scope). Proceed?",
         default: true,
       });
       if (!proceed) {
@@ -969,11 +1248,29 @@ async function runPostInitTail(t: PostInitTailOpts): Promise<InteractiveResult> 
   })) as WireableRuntime[];
 
   if (selectedRuntimes.length === 0) {
+    // T-002: claude-code wiring is now two independent steps — the
+    // settings.json/hooks merge (still `harness apply --target ... --merge`)
+    // and MCP registration (via the `claude mcp` CLI, not settings.json;
+    // see io/claude-mcp.ts). There is no single non-interactive command for
+    // the latter yet, so print the manifest's per-server add-json commands
+    // directly — the same manual fallback the wizard itself prints when
+    // the `claude` CLI is missing.
+    const desiredMcp = loadDesiredMcpServers(initResult.path, harnessHomeArg(opts));
+    const mcpLines =
+      desiredMcp !== null && Object.keys(desiredMcp.desired).length > 0
+        ? manualAddJsonLines(desiredMcp.desired)
+        : [];
     stderr(
       [
         "",
         "Manifest written; no runtimes selected for wiring. To wire later:",
-        `  claude-code: harness apply --target ${claudeSettingsPath} --merge`,
+        `  claude-code hooks: harness apply --target ${claudeSettingsPath} --merge`,
+        ...(mcpLines.length > 0
+          ? [
+              "  claude-code MCP:   re-run `harness init --interactive` and select claude-code, or run:",
+              ...mcpLines.map((l) => `    ${l}`),
+            ]
+          : []),
         `  codex:       harness apply --runtime codex --install --codex-config ${codexConfigPath}`,
         "",
       ].join("\n"),
@@ -998,6 +1295,7 @@ async function runPostInitTail(t: PostInitTailOpts): Promise<InteractiveResult> 
     };
     const homeArg = harnessHomeArg(opts);
     if (homeArg !== undefined) wireOpts.homeDir = homeArg;
+    if (opts.mcpExec) wireOpts.mcpExec = opts.mcpExec;
     const outcome = await wireRuntime(wireOpts);
     applies.push(outcome);
   }

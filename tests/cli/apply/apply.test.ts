@@ -1117,9 +1117,18 @@ describe("apply --target / --merge", () => {
     ).rejects.toBeInstanceOf(HarnessExitError);
   });
 
-  it("--target --merge: operator-added mcpServer survives; disabling a manifest server removes it (task 059b669c)", async () => {
-    // Apply #1: manifest declares server `a`; target has an operator
-    // hand-add. `a` lands in the target, the hand-add survives.
+  // T-002 (init-mcp-wiring-claude-code): settings.json's `mcpServers`
+  // block is dead weight Claude Code never read at runtime; manifest
+  // `tools.mcp[]` servers are registered via the `claude mcp` CLI now
+  // (io/claude-mcp.ts's Ensure routine, wired into the init wizard), not
+  // via this apply --target --merge path. The two tests below replace the
+  // pre-T-002 "operator-added mcpServer survives; disabling a manifest
+  // server removes it (task 059b669c)" e2e: (1) pins the new "never
+  // re-add" contract, (2) pins that the PRE-EXISTING previously-generated-
+  // name provenance path — the actual mechanism task 059b669c relies on —
+  // still works unmodified for a settings.json inherited from a pre-T-002
+  // harness version.
+  it("--target --merge: manifest-declared MCP servers are never added to settings.json (registration moved to the claude CLI)", async () => {
     writeManifest({
       hooks: [basicHook()],
       mcp: [{ name: "a", command: ["node", "/a.js"] }],
@@ -1129,30 +1138,64 @@ describe("apply --target / --merge", () => {
       target,
       JSON.stringify({ mcpServers: { own: { command: "mine" } } }, null, 2),
     );
-    const r1 = await apply({ homeDir: tmpHome, target, merge: true });
-    expect(r1.outcome).toBe("applied");
-    const merged1 = JSON.parse(fs.readFileSync(target, "utf8"));
-    expect(Object.keys(merged1.mcpServers).sort()).toEqual(["a", "own"]);
-    expect(r1.targetMergeSummary).toContain("kept 1 operator-added mcpServer (own)");
+    const r = await apply({ homeDir: tmpHome, target, merge: true });
+    expect(r.outcome).toBe("applied");
+    const merged = JSON.parse(fs.readFileSync(target, "utf8"));
+    // No re-add: "a" is declared in the manifest, but the generated
+    // settings.json projection no longer emits mcpServers at all. The
+    // pre-existing operator hand-add is left untouched.
+    expect(merged.mcpServers).toEqual({ own: { command: "mine" } });
+  });
 
-    // Apply #2: the operator disables `a` in the manifest. The merge
-    // must remove it from the target (enabled:false stays a kill
-    // switch) while the operator hand-add still survives.
+  it("--target --merge: legacy .last-apply provenance still drops old harness-written mcpServers; operator hand-adds survive (059b669c regression pin, post-T-002)", async () => {
     writeManifest({
       hooks: [basicHook()],
-      mcp: [{ name: "a", command: ["node", "/a.js"], enabled: false }],
+      mcp: [{ name: "a", command: ["node", "/a.js"] }],
     });
-    const r2 = await apply({ homeDir: tmpHome, target, merge: true });
-    expect(r2.outcome).toBe("applied");
-    const merged2 = JSON.parse(fs.readFileSync(target, "utf8"));
-    expect(Object.keys(merged2.mcpServers)).toEqual(["own"]);
-    expect(r2.targetMergeSummary).toContain("dropped 1 manifest-removed mcpServer (a)");
+    const target = path.join(tmpHome, "settings.local.json");
+    fs.writeFileSync(
+      target,
+      JSON.stringify({ mcpServers: { own: { command: "mine" } } }, null, 2),
+    );
+    // Establish a real, consistent .last-apply baseline first.
+    await apply({ homeDir: tmpHome, target, merge: true });
 
-    // Apply #3: unchanged manifest — the merge is stable (no churn).
-    const r3 = await apply({ homeDir: tmpHome, target, merge: true });
-    const merged3 = JSON.parse(fs.readFileSync(target, "utf8"));
-    expect(merged3).toEqual(merged2);
-    expect(r3.targetWritten).toBe(false);
+    // Simulate upgrading from a pre-T-002 harness version whose
+    // settings.json projection still wrote a live mcpServers block. Set
+    // BOTH the on-disk harness.generated/settings.json AND its
+    // .last-apply record to the SAME legacy content, so the three-state
+    // comparator sees no drift (an out-of-band hand-edit would refuse the
+    // whole apply instead of letting it proceed).
+    const legacyContent = `${JSON.stringify(
+      { hooks: {}, mcpServers: { a: { command: "old-a" } } },
+      null,
+      2,
+    )}\n`;
+    fs.writeFileSync(settingsPath(), legacyContent);
+    const lastApplyFile = path.join(tmpHome, GENERATED_DIRNAME, LAST_APPLY_BASENAME);
+    const record = JSON.parse(fs.readFileSync(lastApplyFile, "utf8"));
+    record.files["settings.json"] = {
+      sha256: crypto.createHash("sha256").update(legacyContent).digest("hex"),
+      content: legacyContent,
+    };
+    fs.writeFileSync(lastApplyFile, JSON.stringify(record, null, 2));
+
+    // Seed the target with the legacy harness-written server alongside an
+    // operator hand-add, mirroring the pre-T-002 on-disk state.
+    fs.writeFileSync(
+      target,
+      JSON.stringify({ mcpServers: { a: { command: "old-a" }, own: { command: "mine" } } }, null, 2),
+    );
+
+    const r = await apply({ homeDir: tmpHome, target, merge: true });
+    expect(r.outcome).toBe("applied");
+    const merged = JSON.parse(fs.readFileSync(target, "utf8"));
+    // "a" was harness-written under the pre-T-002 scheme and is no longer
+    // emitted by the current settings.json projection: dropped. "own"
+    // (never harness-written) survives.
+    expect(merged.mcpServers).toEqual({ own: { command: "mine" } });
+    expect(r.targetMergeSummary).toContain("dropped 1 manifest-removed mcpServer (a)");
+    expect(r.targetMergeSummary).toContain("kept 1 operator-added mcpServer (own)");
   });
 
   it("--target --merge: a tampered .last-apply refuses BEFORE the merge (provenance fail-safe)", async () => {

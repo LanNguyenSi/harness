@@ -480,7 +480,7 @@ policies: []
     expect(r2.mcpDriftCount).toBe(0);
   });
 
-  it("round-trip: full apply → hand-edit → adopt → apply produces byte-identical settings.json", async () => {
+  it("round-trip: full apply → hand-edit → adopt captures the manifest change; settings.json no longer round-trips mcpServers (T-002)", async () => {
     // Seed a manifest with one MCP entry.
     fs.writeFileSync(
       manifestPath,
@@ -514,13 +514,26 @@ policies: []
     const r = await adopt(generatedPath, { configPath: manifestPath, yes: true });
     expect(r.outcome).toBe("applied");
     expect(r.replacedMcpNames).toEqual(["a"]);
+    const adoptedManifest = readManifest() as {
+      tools: { mcp: { name: string; command: unknown }[] };
+    };
+    expect(adoptedManifest.tools.mcp.find((e) => e.name === "a")?.command).toEqual([
+      "node",
+      "/edited.js",
+    ]);
 
     // Re-apply (using --overwrite-drift since the on-disk settings.json
     // is the user's hand-edit which apply would refuse to touch by default).
     await apply({ homeDir: tmpHome, overwriteDrift: true, prompt: async () => "yes" });
 
-    // Bytes must match the hand-edited input verbatim (the canonical AC).
-    expect(fs.readFileSync(generatedPath, "utf8")).toBe(handEditedBytes);
+    // T-002 (init-mcp-wiring-claude-code): settings.json's mcpServers key
+    // is no longer part of the generated projection at all — Claude Code
+    // never read it at runtime (see io/claude-mcp.ts). adopt still
+    // correctly captured the hand-edit into the MANIFEST (asserted
+    // above), but the regenerated settings.json can no longer be
+    // byte-identical to a hand-edit that included an mcpServers block:
+    // hooks still round-trip; mcpServers is intentionally dropped.
+    expect(JSON.parse(fs.readFileSync(generatedPath, "utf8"))).toEqual({ hooks: {} });
   });
 
   it("preserves manifest-only `health` field on replace-modified", async () => {
@@ -681,21 +694,34 @@ describe("apply -> adopt round-trip for the grounding projection", () => {
     policies: [],
   });
 
-  it("reports zero MCP drift after an apply-generated settings.json", () => {
-    const settings = generateSettingsWithWarnings(GROUNDING_MANIFEST, {
+  // T-002 (init-mcp-wiring-claude-code): settings.json's `mcpServers` key
+  // is no longer part of the generated projection at all (Claude Code
+  // never read it — see io/claude-mcp.ts). `generateSettingsWithWarnings`
+  // still computes the equivalent server-spec map (INCLUDING the
+  // EVIDENCE_LEDGER_DB projection) on its sibling `mcpServers` field, now
+  // feeding the `claude mcp` CLI Ensure path instead of settings.json. The
+  // two tests below simulate a settings.json that independently carries a
+  // (foreign, hand-authored, or pre-T-002-generated) `mcpServers` block by
+  // wrapping that sibling field into a raw settings object, so
+  // `parseSettingsMcpServers`/`computeMcpDrift` — which still operate on
+  // whatever live settings.json content adopt reads — stay covered.
+  it("reports zero MCP drift for a settings.json mcpServers block matching the grounding projection", () => {
+    const { mcpServers } = generateSettingsWithWarnings(GROUNDING_MANIFEST, {
       homeDir: "/home/op",
-    }).root;
+    });
+    const settings = { hooks: {}, mcpServers };
     const settingsMcp = parseSettingsMcpServers(settings);
     const projection = manifestMcpProjection(GROUNDING_MANIFEST, "/home/op");
     expect(computeMcpDrift(settingsMcp, projection)).toEqual([]);
   });
 
   it("still reports drift for a genuinely different env value", () => {
-    const settings = generateSettingsWithWarnings(GROUNDING_MANIFEST, {
+    const { mcpServers } = generateSettingsWithWarnings(GROUNDING_MANIFEST, {
       homeDir: "/home/op",
-    }).root;
-    // Simulate an out-of-band edit to the generated settings.
-    settings.mcpServers!["grounding-mcp"]!.env!.EVIDENCE_LEDGER_DB = "/elsewhere/l.db";
+    });
+    const settings = { hooks: {}, mcpServers };
+    // Simulate an out-of-band edit to a live settings.json.
+    settings.mcpServers["grounding-mcp"]!.env!.EVIDENCE_LEDGER_DB = "/elsewhere/l.db";
     const settingsMcp = parseSettingsMcpServers(settings);
     const projection = manifestMcpProjection(GROUNDING_MANIFEST, "/home/op");
     const drift = computeMcpDrift(settingsMcp, projection);
