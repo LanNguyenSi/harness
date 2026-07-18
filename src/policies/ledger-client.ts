@@ -436,7 +436,7 @@ export interface LedgerSessionQuery {
    * used. A timeout on an overridden call still sets the session-wide
    * latch exactly like a timeout on the session default would — see
    * `LedgerSession.callTool`'s `options.timeoutMs` doc for the shared
-   * latch contract.
+   * latch contract and the enforcement-path cost-bound caveat.
    */
   timeoutMs?: number;
 }
@@ -477,6 +477,12 @@ export interface LedgerSession {
    * session default does — every subsequent call (on this session, with
    * or without its own override) short-circuits to `degraded` without a
    * new round-trip.
+   *
+   * Cost-bound caveat (OKF gate-fail-posture-matrix): the latch's promise
+   * that a dead ledger costs a session at most ~1× its `timeoutMs` holds
+   * only while per-call overrides on the enforcement critical path stay
+   * ≤ the session default. The override exists for tests and non-critical
+   * callers; do not pass a LARGER override on the PreToolUse gate path.
    */
   callTool(
     name: string,

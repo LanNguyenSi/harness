@@ -851,7 +851,11 @@ process.stdin.on("data", (d) => {
     }
   });
 
-  it("(b) without an override, callTool uses the session's own timeoutMs (unchanged default behaviour)", async () => {
+  // (b) is a default-behaviour characterization, not a regression guard for
+  // the override code path: it also passes without the T-003 src change
+  // (an extra options argument is ignored in JS). (a) and (c) are the
+  // guards that would go red on a revert.
+  it("(b) without an override, callTool uses the session's own timeoutMs (default-behaviour characterization)", async () => {
     const { openLedgerSession } = await import("../../src/policies/ledger-client.js");
     const script = makeScript(neverRespondsAddServer());
     const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 250 });
