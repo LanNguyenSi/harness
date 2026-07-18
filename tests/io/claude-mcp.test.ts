@@ -1,0 +1,456 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  addJsonMcpServer,
+  ensureMcpServers,
+  getMcpServer,
+  listMcpServers,
+  parseClaudeMcpListOutput,
+  removeMcpServer,
+  resolveClaudeUserRegistryPath,
+  stripOwnedMcpServers,
+  type ClaudeMcpExec,
+  type ClaudeMcpExecResult,
+} from "../../src/io/claude-mcp.js";
+
+function ok(stdout: string): ClaudeMcpExecResult {
+  return { code: 0, stdout, stderr: "", enoent: false, timedOut: false };
+}
+function fail(code: number, stderr: string): ClaudeMcpExecResult {
+  return { code, stdout: "", stderr, enoent: false, timedOut: false };
+}
+function enoent(): ClaudeMcpExecResult {
+  return { code: 127, stdout: "", stderr: "spawn claude ENOENT", enoent: true, timedOut: false };
+}
+function timeout(): ClaudeMcpExecResult {
+  return { code: -1, stdout: "", stderr: "", enoent: false, timedOut: true };
+}
+
+describe("addJsonMcpServer", () => {
+  it("returns added on exit 0", async () => {
+    const exec: ClaudeMcpExec = async () => ok("Added stdio MCP server foo to user config");
+    const r = await addJsonMcpServer("foo", { command: "bar" }, { exec });
+    expect(r).toEqual({ status: "added", message: "Added stdio MCP server foo to user config", code: 0 });
+  });
+
+  it("returns already-exists on the documented exit 1 message", async () => {
+    const exec: ClaudeMcpExec = async () =>
+      fail(1, "MCP server foo already exists in user config");
+    const r = await addJsonMcpServer("foo", { command: "bar" }, { exec });
+    expect(r.status).toBe("already-exists");
+    expect(r.code).toBe(1);
+  });
+
+  it("returns invalid-config on malformed JSON exit 1", async () => {
+    const exec: ClaudeMcpExec = async () => fail(1, "Invalid configuration");
+    const r = await addJsonMcpServer("foo", { command: "bar" }, { exec });
+    expect(r.status).toBe("invalid-config");
+  });
+
+  it("returns error for an undocumented non-zero exit", async () => {
+    const exec: ClaudeMcpExec = async () => fail(2, "something else broke");
+    const r = await addJsonMcpServer("foo", { command: "bar" }, { exec });
+    expect(r.status).toBe("error");
+    expect(r.message).toBe("something else broke");
+  });
+
+  it("returns cli-missing on ENOENT", async () => {
+    const exec: ClaudeMcpExec = async () => enoent();
+    const r = await addJsonMcpServer("foo", { command: "bar" }, { exec });
+    expect(r.status).toBe("cli-missing");
+  });
+
+  it("returns timeout when the call is killed after the deadline", async () => {
+    const exec: ClaudeMcpExec = async () => timeout();
+    const r = await addJsonMcpServer("foo", { command: "bar" }, { exec, timeoutMs: 5 });
+    expect(r.status).toBe("timeout");
+    expect(r.message).toContain("5ms");
+  });
+
+  it("omits empty args/env from the JSON payload handed to the CLI", async () => {
+    let seenArgs: string[] = [];
+    const exec: ClaudeMcpExec = async (args) => {
+      seenArgs = args;
+      return ok("added");
+    };
+    await addJsonMcpServer("foo", { command: "bar", args: [], env: {} }, { exec });
+    const payload = JSON.parse(seenArgs[seenArgs.length - 1] ?? "{}");
+    expect(payload).toEqual({ command: "bar" });
+  });
+
+  it("passes scope user and the server name as CLI args", async () => {
+    let seenArgs: string[] = [];
+    const exec: ClaudeMcpExec = async (args) => {
+      seenArgs = args;
+      return ok("added");
+    };
+    await addJsonMcpServer("foo", { command: "bar", args: ["--x"] }, { exec });
+    expect(seenArgs.slice(0, 4)).toEqual(["mcp", "add-json", "--scope", "user"]);
+    expect(seenArgs[4]).toBe("foo");
+    expect(JSON.parse(seenArgs[5] ?? "{}")).toEqual({ command: "bar", args: ["--x"] });
+  });
+});
+
+describe("removeMcpServer", () => {
+  it("returns removed on exit 0", async () => {
+    const exec: ClaudeMcpExec = async () => ok("");
+    const r = await removeMcpServer("foo", { exec });
+    expect(r.status).toBe("removed");
+  });
+
+  it("returns not-found on the documented exit 1 message", async () => {
+    const exec: ClaudeMcpExec = async () =>
+      fail(1, 'No MCP server named "foo" in user scope');
+    const r = await removeMcpServer("foo", { exec });
+    expect(r.status).toBe("not-found");
+  });
+
+  it("returns cli-missing on ENOENT", async () => {
+    const exec: ClaudeMcpExec = async () => enoent();
+    const r = await removeMcpServer("foo", { exec });
+    expect(r.status).toBe("cli-missing");
+  });
+
+  it("returns timeout on timeout", async () => {
+    const exec: ClaudeMcpExec = async () => timeout();
+    const r = await removeMcpServer("foo", { exec });
+    expect(r.status).toBe("timeout");
+  });
+
+  it("passes scope user and the server name as CLI args", async () => {
+    let seenArgs: string[] = [];
+    const exec: ClaudeMcpExec = async (args) => {
+      seenArgs = args;
+      return ok("");
+    };
+    await removeMcpServer("foo", { exec });
+    expect(seenArgs).toEqual(["mcp", "remove", "--scope", "user", "foo"]);
+  });
+});
+
+describe("getMcpServer", () => {
+  it("returns found on exit 0", async () => {
+    const exec: ClaudeMcpExec = async () => ok("Scope: User\nStatus: connected");
+    const r = await getMcpServer("foo", { exec });
+    expect(r.status).toBe("found");
+    expect(r.raw).toContain("connected");
+  });
+
+  it("returns not-found on exit 1", async () => {
+    const exec: ClaudeMcpExec = async () => fail(1, "No such server");
+    const r = await getMcpServer("foo", { exec });
+    expect(r.status).toBe("not-found");
+  });
+
+  it("returns cli-missing on ENOENT", async () => {
+    const exec: ClaudeMcpExec = async () => enoent();
+    const r = await getMcpServer("foo", { exec });
+    expect(r.status).toBe("cli-missing");
+  });
+
+  it("returns timeout on timeout", async () => {
+    const exec: ClaudeMcpExec = async () => timeout();
+    const r = await getMcpServer("foo", { exec });
+    expect(r.status).toBe("timeout");
+  });
+});
+
+describe("parseClaudeMcpListOutput", () => {
+  it("parses a Connected entry", () => {
+    const entries = parseClaudeMcpListOutput(
+      "grounding-mcp: /usr/local/bin/grounding-mcp --stdio - ✔ Connected",
+    );
+    expect(entries).toEqual([
+      {
+        name: "grounding-mcp",
+        command: "/usr/local/bin/grounding-mcp",
+        args: ["--stdio"],
+        status: "connected",
+        statusText: "Connected",
+      },
+    ]);
+  });
+
+  it("parses a Failed to connect entry", () => {
+    const entries = parseClaudeMcpListOutput("dead-server: /bin/dead - ✘ Failed to connect");
+    expect(entries[0]).toMatchObject({ name: "dead-server", status: "failed", statusText: "Failed to connect" });
+  });
+
+  it("parses a foreign entry whose name contains a space and command is a URL", () => {
+    const entries = parseClaudeMcpListOutput(
+      "claude.ai Gmail: https://example.com/mcp - ! Needs authentication",
+    );
+    expect(entries).toEqual([
+      {
+        name: "claude.ai Gmail",
+        command: "https://example.com/mcp",
+        args: [],
+        status: "needs-authentication",
+        statusText: "Needs authentication",
+      },
+    ]);
+  });
+
+  it("parses multiple lines and skips blank/unmatched lines", () => {
+    const entries = parseClaudeMcpListOutput(
+      [
+        "agent-tasks: /bin/agent-tasks - ✔ Connected",
+        "",
+        "not a matching line",
+        "codebase-oracle: /bin/oracle --flag - ✘ Failed to connect",
+      ].join("\n"),
+    );
+    expect(entries.map((e) => e.name)).toEqual(["agent-tasks", "codebase-oracle"]);
+  });
+
+  it("returns an empty array for empty stdout", () => {
+    expect(parseClaudeMcpListOutput("")).toEqual([]);
+  });
+});
+
+describe("listMcpServers", () => {
+  it("returns ok with parsed servers on exit 0, even when a server is dead", async () => {
+    const exec: ClaudeMcpExec = async () =>
+      ok("a: /bin/a - ✔ Connected\nb: /bin/b - ✘ Failed to connect");
+    const r = await listMcpServers({ exec });
+    expect(r.status).toBe("ok");
+    expect(r.servers).toHaveLength(2);
+  });
+
+  it("returns cli-missing on ENOENT", async () => {
+    const exec: ClaudeMcpExec = async () => enoent();
+    const r = await listMcpServers({ exec });
+    expect(r.status).toBe("cli-missing");
+  });
+
+  it("returns timeout on timeout", async () => {
+    const exec: ClaudeMcpExec = async () => timeout();
+    const r = await listMcpServers({ exec });
+    expect(r.status).toBe("timeout");
+  });
+
+  it("returns error on an unexpected non-zero exit", async () => {
+    const exec: ClaudeMcpExec = async () => fail(3, "boom");
+    const r = await listMcpServers({ exec });
+    expect(r.status).toBe("error");
+    expect(r.message).toBe("boom");
+  });
+});
+
+describe("resolveClaudeUserRegistryPath", () => {
+  it("uses CLAUDE_CONFIG_DIR when set", () => {
+    const p = resolveClaudeUserRegistryPath({ env: { CLAUDE_CONFIG_DIR: "/tmp/cfgdir" } });
+    expect(p).toBe(path.join("/tmp/cfgdir", ".claude.json"));
+  });
+
+  it("falls back to ~/.claude.json derived from homeDir when unset", () => {
+    const p = resolveClaudeUserRegistryPath({ homeDir: "/home/lan/.claude", env: {} });
+    expect(p).toBe("/home/lan/.claude.json");
+  });
+
+  it("defaults homeDir to os.homedir()/.claude when neither is given", () => {
+    const p = resolveClaudeUserRegistryPath({ env: {} });
+    expect(p).toBe(path.join(os.homedir(), ".claude.json"));
+  });
+});
+
+describe("ensureMcpServers", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-mcp-ensure-"));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function registryPath(): string {
+    return path.join(tmpDir, ".claude.json");
+  }
+
+  function writeRegistry(obj: unknown): void {
+    fs.writeFileSync(registryPath(), JSON.stringify(obj), "utf8");
+  }
+
+  it("adds a server missing from the registry (no registry file yet = empty state)", async () => {
+    const calls: string[] = [];
+    const exec: ClaudeMcpExec = async (args) => {
+      calls.push(args.join(" "));
+      return ok("added");
+    };
+    const r = await ensureMcpServers({
+      desired: { foo: { command: "bar", args: ["--x"] } },
+      exec,
+      registryPath: registryPath(),
+    });
+    expect(r.results).toEqual([{ name: "foo", action: "add", add: { status: "added", message: "added", code: 0 } }]);
+    expect(calls).toEqual(["mcp add-json --scope user foo {\"command\":\"bar\",\"args\":[\"--x\"]}"]);
+  });
+
+  it("is a no-op with ZERO exec calls when the registry already matches (args default [] tolerated)", async () => {
+    writeRegistry({ mcpServers: { foo: { command: "bar" } } });
+    let execCalls = 0;
+    const exec: ClaudeMcpExec = async () => {
+      execCalls++;
+      return ok("");
+    };
+    const r = await ensureMcpServers({
+      desired: { foo: { command: "bar", args: [] } },
+      exec,
+      registryPath: registryPath(),
+    });
+    expect(r.results).toEqual([{ name: "foo", action: "noop" }]);
+    expect(execCalls).toBe(0);
+  });
+
+  it("is a no-op when env matches regardless of key order", async () => {
+    writeRegistry({ mcpServers: { foo: { command: "bar", env: { B: "2", A: "1" } } } });
+    let execCalls = 0;
+    const exec: ClaudeMcpExec = async () => {
+      execCalls++;
+      return ok("");
+    };
+    const r = await ensureMcpServers({
+      desired: { foo: { command: "bar", env: { A: "1", B: "2" } } },
+      exec,
+      registryPath: registryPath(),
+    });
+    expect(r.results).toEqual([{ name: "foo", action: "noop" }]);
+    expect(execCalls).toBe(0);
+  });
+
+  it("replaces (remove then add-json) on drift", async () => {
+    writeRegistry({ mcpServers: { foo: { command: "old-binary" } } });
+    const calls: string[] = [];
+    const exec: ClaudeMcpExec = async (args) => {
+      calls.push(args[0] === "mcp" ? `${args[0]} ${args[1]}` : args.join(" "));
+      if (args[1] === "remove") return ok("");
+      return ok("added");
+    };
+    const r = await ensureMcpServers({
+      desired: { foo: { command: "new-binary" } },
+      exec,
+      registryPath: registryPath(),
+    });
+    expect(r.results).toEqual([
+      {
+        name: "foo",
+        action: "replace",
+        remove: { status: "removed", message: "", code: 0 },
+        add: { status: "added", message: "added", code: 0 },
+      },
+    ]);
+    expect(calls).toEqual(["mcp remove", "mcp add-json"]);
+  });
+
+  it("stops after remove when remove fails for a reason other than not-found (does not call add-json)", async () => {
+    writeRegistry({ mcpServers: { foo: { command: "old-binary" } } });
+    let addCalled = false;
+    const exec: ClaudeMcpExec = async (args) => {
+      if (args[1] === "remove") return enoent();
+      addCalled = true;
+      return ok("added");
+    };
+    const r = await ensureMcpServers({
+      desired: { foo: { command: "new-binary" } },
+      exec,
+      registryPath: registryPath(),
+    });
+    expect(r.results).toEqual([
+      { name: "foo", action: "replace", remove: { status: "cli-missing", message: "claude CLI not found on PATH", code: 127 } },
+    ]);
+    expect(addCalled).toBe(false);
+  });
+
+  it("skips every desired server (no exec calls) when the registry file is malformed JSON", async () => {
+    fs.writeFileSync(registryPath(), "{not json", "utf8");
+    let execCalls = 0;
+    const exec: ClaudeMcpExec = async () => {
+      execCalls++;
+      return ok("");
+    };
+    const r = await ensureMcpServers({
+      desired: { foo: { command: "bar" } },
+      exec,
+      registryPath: registryPath(),
+    });
+    expect(r.results).toHaveLength(1);
+    expect(r.results[0]?.action).toBe("skipped");
+    expect(r.results[0]?.reason).toContain("not valid JSON");
+    expect(execCalls).toBe(0);
+  });
+
+  it("ignores foreign entries and never reads projects.<path>.mcpServers", async () => {
+    writeRegistry({
+      mcpServers: { unrelated: { command: "keep-me" } },
+      projects: { "/some/path": { mcpServers: { foo: { command: "should-be-ignored" } } } },
+    });
+    const exec: ClaudeMcpExec = async () => ok("added");
+    const r = await ensureMcpServers({
+      desired: { foo: { command: "bar" } },
+      exec,
+      registryPath: registryPath(),
+    });
+    // `foo` is absent from the TOP-LEVEL mcpServers (the projects.*.foo
+    // entry must not satisfy it), so it's added, not treated as a match.
+    expect(r.results).toEqual([{ name: "foo", action: "add", add: { status: "added", message: "added", code: 0 } }]);
+  });
+});
+
+describe("stripOwnedMcpServers", () => {
+  it("removes an only-owned block entirely and preserves other keys", () => {
+    const settings = { env: { FOO: "1" }, mcpServers: { "agent-tasks": { command: "a" }, "grounding-mcp": { command: "g" } } };
+    const r = stripOwnedMcpServers(settings, ["agent-tasks", "grounding-mcp"]);
+    expect(r.settings).toEqual({ env: { FOO: "1" } });
+    expect(r.removedNames).toEqual(["agent-tasks", "grounding-mcp"]);
+  });
+
+  it("removes only owned names from a mixed block, keeps foreign entries", () => {
+    const settings = {
+      mcpServers: {
+        "agent-tasks": { command: "a" },
+        "operator-own": { command: "mine" },
+      },
+    };
+    const r = stripOwnedMcpServers(settings, ["agent-tasks", "grounding-mcp"]);
+    expect(r.settings).toEqual({ mcpServers: { "operator-own": { command: "mine" } } });
+    expect(r.removedNames).toEqual(["agent-tasks"]);
+  });
+
+  it("is a no-op when mcpServers is absent", () => {
+    const settings = { hooks: {}, env: { X: "1" } };
+    const r = stripOwnedMcpServers(settings, ["agent-tasks"]);
+    expect(r.settings).toBe(settings);
+    expect(r.removedNames).toEqual([]);
+  });
+
+  it("is a no-op when mcpServers is present but not an object", () => {
+    const settings = { mcpServers: ["corrupt"] };
+    const r = stripOwnedMcpServers(settings, ["agent-tasks"]);
+    expect(r.settings).toBe(settings);
+    expect(r.removedNames).toEqual([]);
+  });
+
+  it("is a no-op when none of the owned names are present", () => {
+    const settings = { mcpServers: { "operator-own": { command: "mine" } } };
+    const r = stripOwnedMcpServers(settings, ["agent-tasks"]);
+    expect(r.settings).toEqual({ mcpServers: { "operator-own": { command: "mine" } } });
+    expect(r.removedNames).toEqual([]);
+  });
+
+  it("preserves the position and order of all other top-level keys", () => {
+    const settings = { a: 1, mcpServers: { owned: { command: "x" } }, b: 2, c: 3 };
+    const r = stripOwnedMcpServers(settings, ["owned"]);
+    expect(Object.keys(r.settings)).toEqual(["a", "b", "c"]);
+    expect(r.settings).toEqual({ a: 1, b: 2, c: 3 });
+  });
+
+  it("leaves an untouched settings object byte-identical when nothing is removed", () => {
+    const settings = { hooks: { x: 1 }, mcpServers: { foreign: { command: "f" } }, permissions: { allow: ["y"] } };
+    const before = JSON.stringify(settings);
+    const r = stripOwnedMcpServers(settings, ["agent-tasks"]);
+    expect(JSON.stringify(r.settings)).toBe(before);
+  });
+});
