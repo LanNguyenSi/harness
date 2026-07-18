@@ -18,6 +18,9 @@
 // so a failing preflight must leave the gate shut, not satisfy it.
 
 import { execFile } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
   addLedgerFact,
   resolveGitContext,
@@ -42,6 +45,15 @@ const PREFLIGHT_BIN = "preflight";
 // override per-call via `harness preflight --timeout <ms>`.
 const DEFAULT_PREFLIGHT_TIMEOUT_MS = 60_000;
 const LEDGER_SOURCE = "harness-session-start-preflight";
+
+// Not-ready diagnostic log: the raw `preflight run --json` payload is
+// persisted so an operator (or a follow-up session) can see the FULL
+// check output, not just the capped first-N detail lines this producer
+// surfaces on stderr. `keep-last-20` rotation bounds the directory —
+// it is shared across every repo the operator preflights from this
+// host, so unbounded growth would be a slow disk leak.
+const FAIL_LOG_KEEP_LAST = 20;
+const FAIL_LOG_PREFIX = "preflight-";
 
 interface SessionStartEvent {
   session_id?: unknown;
@@ -82,6 +94,13 @@ export interface SessionStartPreflightOptions extends LoaderOptions {
   ledgerTimeoutMs?: number;
   /** Inject the preflight runner (tests). */
   runPreflight?: (cwd: string, timeoutMs: number) => Promise<RunPreflightResult>;
+  /**
+   * Directory the not-ready diagnostic JSON is persisted to (task
+   * T-001). Test seam — production defaults to `~/.harness/logs`
+   * (`os.homedir()`-based). Always pass a tmp dir in tests so nothing
+   * ever touches the operator's real `~/.harness/logs/`.
+   */
+  logDir?: string;
   /** Inject the ledger writer (tests). */
   writeLedger?: (args: {
     sessionId: string;
@@ -239,32 +258,128 @@ function spawnPreflight(cwd: string, timeoutMs: number): Promise<RunPreflightRes
   });
 }
 
-function describeNotReady(json: PreflightJson): string {
+// Up to this many valid detail lines are surfaced per failing check.
+// Was 1 (the check's first detail line only) through v0.2x; a bare
+// check name plus a single truncated line once cost a long false-
+// negative diagnosis because the actual FAIL line (test name) sat
+// past the first line the producer looked at. Task T-001.
+const MAX_DETAIL_LINES_PER_CHECK = 3;
+const DETAIL_LINE_CHAR_CAP = 140;
+
+function capDetailLine(raw: string): string {
+  const trimmed = raw.trim().replace(/\s+/g, " ");
+  return trimmed.length > DETAIL_LINE_CHAR_CAP
+    ? `${trimmed.slice(0, DETAIL_LINE_CHAR_CAP - 1)}…`
+    : trimmed;
+}
+
+function describeNotReady(json: PreflightJson, logPath?: string): string {
   const failing = (json.checks ?? [])
     .filter((c) => c.status === "fail" || c.status === "error")
     .map((c) => {
       const name = c.name ?? "(unnamed)";
-      // Surface the check's own first detail line: a bare check name
-      // ("failing: npm-test") once cost a long false-negative diagnosis
-      // because the actual reason never left the child JSON. The typeof
-      // guards matter: this is untrusted subprocess JSON behind a cast,
-      // and a SessionStart producer must never throw (blocking:false,
-      // exit-0 contract above), so a malformed element degrades to the
-      // bare check name instead of crashing.
-      const detail =
-        c.details?.find((d) => typeof d === "string" && d.trim().length > 0) ??
-        (typeof c.message === "string" && c.message.trim().length > 0
-          ? c.message
-          : undefined);
-      if (!detail) return name;
-      const trimmed = detail.trim().replace(/\s+/g, " ");
-      const capped = trimmed.length > 140 ? `${trimmed.slice(0, 139)}…` : trimmed;
+      // Surface up to MAX_DETAIL_LINES_PER_CHECK of the check's own detail
+      // lines: a bare check name ("failing: npm-test") once cost a long
+      // false-negative diagnosis because the actual reason never left the
+      // child JSON. The typeof guards matter: this is untrusted subprocess
+      // JSON behind a cast, and a SessionStart producer must never throw
+      // (blocking:false, exit-0 contract above), so a malformed element is
+      // filtered out instead of crashing; a check with no valid detail
+      // line at all degrades to its bare name.
+      const validDetails = Array.isArray(c.details)
+        ? c.details.filter((d): d is string => typeof d === "string" && d.trim().length > 0)
+        : [];
+      const lines =
+        validDetails.length > 0
+          ? validDetails.slice(0, MAX_DETAIL_LINES_PER_CHECK)
+          : typeof c.message === "string" && c.message.trim().length > 0
+            ? [c.message]
+            : [];
+      if (lines.length === 0) return name;
+      const capped = lines.map(capDetailLine).join(" | ");
       return `${name} (${capped})`;
     });
   const confidence =
     typeof json.confidence === "number" ? json.confidence.toFixed(2) : "?";
   const failSuffix = failing.length > 0 ? `; failing: ${failing.join(", ")}` : "";
-  return `preflight not ready (confidence ${confidence})${failSuffix}`;
+  const logSuffix = logPath ? `; log: ${logPath}` : "";
+  return `preflight not ready (confidence ${confidence})${failSuffix}${logSuffix}`;
+}
+
+/** Default not-ready log directory: `~/.harness/logs` (task T-001). */
+function defaultFailLogDir(): string {
+  return path.join(os.homedir(), ".harness", "logs");
+}
+
+/** Repo names land in a filename; strip anything not filename-safe. */
+function sanitizeForFilename(value: string): string {
+  const cleaned = value.replace(/[^a-zA-Z0-9._-]/g, "-");
+  return cleaned.length > 0 ? cleaned : "repo";
+}
+
+/**
+ * Rotate `logDir` down to the `FAIL_LOG_KEEP_LAST` most recently modified
+ * `preflight-*.json` files, oldest first. Best-effort: any single stat/
+ * unlink failure is swallowed so one unreadable entry cannot block
+ * rotation of the rest. The directory is shared across every repo the
+ * operator preflights from this host, so filename order is not a
+ * reliable time proxy — mtime is.
+ */
+function rotateFailLogDir(logDir: string): void {
+  const names = fs
+    .readdirSync(logDir)
+    .filter((name) => name.startsWith(FAIL_LOG_PREFIX) && name.endsWith(".json"));
+  if (names.length <= FAIL_LOG_KEEP_LAST) return;
+  const withMtime = names
+    .map((name) => {
+      const full = path.join(logDir, name);
+      try {
+        return { full, mtimeMs: fs.statSync(full).mtimeMs };
+      } catch {
+        return null;
+      }
+    })
+    .filter((e): e is { full: string; mtimeMs: number } => e !== null)
+    .sort((a, b) => a.mtimeMs - b.mtimeMs);
+  const excess = withMtime.length - FAIL_LOG_KEEP_LAST;
+  for (let i = 0; i < excess; i++) {
+    const entry = withMtime[i];
+    if (!entry) continue;
+    try {
+      fs.unlinkSync(entry.full);
+    } catch {
+      /* best-effort rotation; a stray leftover file is not fatal */
+    }
+  }
+}
+
+/**
+ * Persist the not-ready `preflight run --json` payload (pretty-printed)
+ * to `<logDir>/preflight-<repo>-<timestamp>.json`, then rotate the
+ * directory. Never throws: a write or rotation failure degrades to
+ * `{ ok: false, reason }` so the caller can note() and keep going — the
+ * SessionStart producer must exit 0 on every path.
+ */
+function persistFailLog(
+  json: PreflightJson,
+  repo: string,
+  logDir: string,
+): { ok: true; path: string } | { ok: false; reason: string } {
+  let filePath: string;
+  try {
+    fs.mkdirSync(logDir, { recursive: true });
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    filePath = path.join(logDir, `${FAIL_LOG_PREFIX}${sanitizeForFilename(repo)}-${timestamp}.json`);
+    fs.writeFileSync(filePath, `${JSON.stringify(json, null, 2)}\n`, "utf8");
+  } catch (err) {
+    return { ok: false, reason: (err as Error).message };
+  }
+  try {
+    rotateFailLogDir(logDir);
+  } catch {
+    /* rotation failure must not undo an already-successful log write */
+  }
+  return { ok: true, path: filePath };
 }
 
 export async function runSessionStartPreflight(
@@ -383,7 +498,12 @@ export async function runSessionStartPreflight(
     return done(false, repo, branch, sessionId, sessionSource, preflight.reason);
   }
   if (preflight.json.ready !== true) {
-    const reason = describeNotReady(preflight.json);
+    const logDir = opts.logDir ?? defaultFailLogDir();
+    const persisted = persistFailLog(preflight.json, repo, logDir);
+    if (!persisted.ok) {
+      note(`preflight fail-log write failed: ${persisted.reason}`);
+    }
+    const reason = describeNotReady(preflight.json, persisted.ok ? persisted.path : undefined);
     note(`${reason} — leaving the preflight tag unwritten so the gate stays closed`);
     return done(false, repo, branch, sessionId, sessionSource, reason);
   }

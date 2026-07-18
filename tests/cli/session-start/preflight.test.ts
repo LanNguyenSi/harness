@@ -40,6 +40,18 @@ function makeRepoFixture(name: string, branch = "main"): string {
   return repo;
 }
 
+/**
+ * Tmp dir for the not-ready fail-log seam (task T-001). Every test that
+ * drives the not-ready branch MUST pass this as `logDir` — the producer
+ * now persists the raw preflight JSON there, and without an explicit
+ * override it would default to (and pollute) the real `~/.harness/logs/`.
+ */
+function makeLogDirFixture(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-logs-"));
+  cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
 const readyPreflight =
   (confidence = 0.83): ((cwd: string, t: number) => Promise<RunPreflightResult>) =>
   async () => ({ ok: true, json: { ready: true, confidence, checks: [] } });
@@ -307,6 +319,7 @@ describe("runSessionStartPreflight", () => {
     const result = await runSessionStartPreflight({
       stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
       stderr: err,
+      logDir: makeLogDirFixture(),
       runPreflight: async () => ({
         ok: true,
         json: {
@@ -599,6 +612,7 @@ describe("spawnPreflight child env (real spawn, fake binary)", () => {
           JSON.stringify({ hook_event_name: "SessionStart", session_id: "sess-leak", cwd: repo }),
         ),
         stderr: err,
+        logDir: makeLogDirFixture(),
         writeLedger: async () => ({ ok: true }),
       });
 
@@ -640,6 +654,7 @@ describe("describeNotReady robustness (via not-ready reason)", () => {
         JSON.stringify({ hook_event_name: "SessionStart", session_id: "sess-mal", cwd: repo }),
       ),
       stderr: err,
+      logDir: makeLogDirFixture(),
       runPreflight: async () => ({
         ok: true,
         json: {
@@ -668,5 +683,203 @@ describe("describeNotReady robustness (via not-ready reason)", () => {
     // Malformed check: bare name, no throw. Well-formed sibling: trimmed detail.
     expect(result.reason).toContain("failing: npm-test, secret-scan (found key in .env.example)");
     expect(errOut()).toContain("npm-test, secret-scan (found key in .env.example)");
+  });
+});
+
+describe("not-ready fail-log persistence (task T-001)", () => {
+  it("persists the full not-ready JSON pretty-printed and surfaces up to 3 raw detail lines + the log path", async () => {
+    const repo = makeRepoFixture("widget-service");
+    const logDir = makeLogDirFixture();
+    const { stream: err, output: errOut } = captureStream();
+    const notReadyJson = {
+      ready: false,
+      confidence: 0.4,
+      checks: [
+        {
+          name: "npm-test",
+          status: "fail",
+          // Today's raw-first-10-lines format from agent-preflight.
+          details: [
+            "FAIL tests/unit/foo.test.ts > suite > case one",
+            "FAIL tests/unit/bar.test.ts > suite > case two",
+            "FAIL tests/unit/baz.test.ts > suite > case three",
+            "FAIL tests/unit/qux.test.ts > suite > case four",
+          ],
+        },
+      ],
+    };
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: err,
+      logDir,
+      runPreflight: async () => ({ ok: true, json: notReadyJson }),
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(false);
+    expect(result.exitCode).toBe(0);
+
+    const files = fs.readdirSync(logDir);
+    expect(files).toHaveLength(1);
+    const logFile = files[0]!;
+    expect(logFile).toMatch(/^preflight-widget-service-.*\.json$/);
+    const logPath = path.join(logDir, logFile);
+    const persisted = JSON.parse(fs.readFileSync(logPath, "utf8")) as unknown;
+    expect(persisted).toEqual(notReadyJson);
+
+    // Only the first 3 of the 4 detail lines are surfaced in the message.
+    expect(result.reason).toContain(
+      "npm-test (FAIL tests/unit/foo.test.ts > suite > case one | " +
+        "FAIL tests/unit/bar.test.ts > suite > case two | " +
+        "FAIL tests/unit/baz.test.ts > suite > case three)",
+    );
+    expect(result.reason).not.toContain("case four");
+    expect(result.reason).toContain(`; log: ${logPath}`);
+    expect(errOut()).toContain(`; log: ${logPath}`);
+  });
+
+  it("surfaces the companion `full output: <path>` + FAIL-line format (test names appear in the message)", async () => {
+    const repo = makeRepoFixture("widget-service");
+    const logDir = makeLogDirFixture();
+    const { stream: err } = captureStream();
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: err,
+      logDir,
+      runPreflight: async () => ({
+        ok: true,
+        json: {
+          ready: false,
+          confidence: 0.55,
+          checks: [
+            {
+              name: "npm-test",
+              status: "fail",
+              details: [
+                "full output: /tmp/agent-preflight/npm-test.log",
+                "FAIL tests/unit/widget.test.ts > Widget > renders",
+                "FAIL tests/unit/gadget.test.ts > Gadget > mounts",
+              ],
+            },
+          ],
+        },
+      }),
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.reason).toContain("full output: /tmp/agent-preflight/npm-test.log");
+    expect(result.reason).toContain("FAIL tests/unit/widget.test.ts > Widget > renders");
+    expect(result.reason).toContain("FAIL tests/unit/gadget.test.ts > Gadget > mounts");
+  });
+
+  it("rotates the log directory down to the 20 newest preflight-* files, oldest first", async () => {
+    const repo = makeRepoFixture("rot-repo");
+    const logDir = makeLogDirFixture();
+    // 25 pre-existing files with distinct, explicit mtimes (oldest to
+    // newest) so rotation order is deterministic regardless of how fast
+    // the filesystem's clock ticks during the test run.
+    const baseMs = Date.parse("2020-01-01T00:00:00.000Z");
+    for (let i = 0; i < 25; i++) {
+      const p = path.join(logDir, `preflight-rot-repo-old-${String(i).padStart(2, "0")}.json`);
+      fs.writeFileSync(p, "{}");
+      const t = new Date(baseMs + i * 1000);
+      fs.utimesSync(p, t, t);
+    }
+    // A file that does NOT match the preflight-* pattern must survive
+    // rotation untouched.
+    fs.writeFileSync(path.join(logDir, "unrelated.txt"), "keep me");
+
+    const { stream: err } = captureStream();
+    await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: err,
+      logDir,
+      runPreflight: async () => ({
+        ok: true,
+        json: { ready: false, confidence: 0.3, checks: [{ name: "x", status: "fail" }] },
+      }),
+      writeLedger: async () => ({ ok: true }),
+    });
+
+    const remaining = fs.readdirSync(logDir);
+    const preflightFiles = remaining.filter((n) => n.startsWith("preflight-") && n.endsWith(".json"));
+    expect(preflightFiles).toHaveLength(20);
+    expect(remaining).toContain("unrelated.txt");
+    // 25 pre-existing + 1 just-written = 26 total; rotation evicts the 6
+    // oldest (old-00..old-05) to get back down to 20. The remaining
+    // fixtures and the just-written file all survive.
+    for (let i = 0; i < 6; i++) {
+      expect(preflightFiles).not.toContain(`preflight-rot-repo-old-${String(i).padStart(2, "0")}.json`);
+    }
+    for (let i = 6; i < 25; i++) {
+      expect(preflightFiles).toContain(`preflight-rot-repo-old-${String(i).padStart(2, "0")}.json`);
+    }
+  });
+
+  it("does NOT write a fail-log on a ready:true result (unchanged happy path)", async () => {
+    const repo = makeRepoFixture("widget-service");
+    const logDir = makeLogDirFixture();
+    const { stream: err } = captureStream();
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: err,
+      logDir,
+      runPreflight: readyPreflight(0.9),
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(fs.readdirSync(logDir)).toEqual([]);
+  });
+
+  it("does NOT write a fail-log when the preflight runner itself is unavailable (ok:false, no JSON to persist)", async () => {
+    const repo = makeRepoFixture("repo-x");
+    const logDir = makeLogDirFixture();
+    const { stream: err, output: errOut } = captureStream();
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: err,
+      logDir,
+      runPreflight: async () => ({
+        ok: false,
+        reason: "`preflight` not on PATH (npm i -g @lannguyensi/agent-preflight)",
+      }),
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(false);
+    expect(fs.readdirSync(logDir)).toEqual([]);
+    expect(errOut()).toContain("not on PATH");
+    expect(errOut()).not.toContain("; log:");
+  });
+
+  it("degrades gracefully when the log write fails: diagnosis still surfaces, exit code stays 0", async () => {
+    const repo = makeRepoFixture("widget-service");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-logfail-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    // Put a REGULAR FILE where the log directory should be, so
+    // fs.mkdirSync(logDir, { recursive: true }) throws.
+    const logDir = path.join(root, "logs-blocked");
+    fs.writeFileSync(logDir, "not a directory");
+
+    const { stream: err, output: errOut } = captureStream();
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: err,
+      logDir,
+      runPreflight: async () => ({
+        ok: true,
+        json: {
+          ready: false,
+          confidence: 0.4,
+          checks: [{ name: "npm-test", status: "fail", details: ["some failure"] }],
+        },
+      }),
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.wrote).toBe(false);
+    // Diagnosis is still present, just without a log path.
+    expect(result.reason).toContain("preflight not ready (confidence 0.40)");
+    expect(result.reason).toContain("failing: npm-test (some failure)");
+    expect(result.reason).not.toContain("; log:");
+    // A dedicated note explains the write failure without throwing.
+    expect(errOut()).toContain("preflight fail-log write failed");
   });
 });
