@@ -677,37 +677,36 @@ process.stdin.on("data", (d) => {
   it("latches after one timeout: subsequent calls degrade immediately without a round-trip", async () => {
     const { openLedgerSession } = await import("../../src/policies/ledger-client.js");
     const script = makeScript(slowAddServer());
-    // The budget must absorb a cold child spawn: the first querySummary
-    // pays process start + initialize, and on macOS a first-ever exec of
-    // a fresh temp script can alone eat several hundred ms. 300ms made
-    // the prompt-answering querySummary itself degrade on Darwin.
-    //
-    // NOT WIDENED (task 2026-07-18 subprocess-test-deflake, T-002): unlike
-    // the other tests in this file, this budget is intentionally left at
-    // 1500ms rather than raised. openLedgerSession takes exactly one
-    // timeoutMs for the whole session (see src/policies/ledger-client.ts,
-    // no per-call override), and it gates BOTH the success sub-path
-    // (`query` below, which must complete the cold spawn+init+round-trip)
-    // AND the intentional timeout trigger (`first`, whose server never
-    // answers ledger_add so it must actually hit the deadline). Raising it
-    // would also change the exact literal asserted below
-    // ("timeout after 1500ms") — i.e. the two paths are not separable
-    // without either touching production code (out of scope) or editing
-    // that assertion's embedded number, which was called out as something
-    // to avoid rather than "bend". Left unchanged; this is the exact test
-    // (line ~687, `query.kind` toBe("ok")) the reviewer's re-validation
-    // caught flaking under full-suite contention — see risks in the T-002
-    // implementer report.
-    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 1500 });
+    // DECOUPLED (task 2026-07-18 subprocess-test-deflake, T-003): the
+    // success sub-path (`query` below, which must absorb a cold child
+    // spawn — on macOS a first-ever exec of a fresh temp script can alone
+    // eat several hundred ms) and the intentional timeout trigger
+    // (`first`, whose server never answers ledger_add) used to share one
+    // session-level timeoutMs, so widening the success budget also
+    // widened the deliberate-timeout wait. `callTool`'s new optional
+    // per-call `options.timeoutMs` override (src/policies/ledger-client.ts)
+    // splits them: the session itself gets the same generous default as
+    // every other test in this file (absorbs contention-driven cold-spawn
+    // latency), while `first` overrides down to a tight budget so it still
+    // actually exercises the timeout branch and stays fast. This is
+    // exactly T-003's "unit coverage for the override" case (b)+(c) in
+    // spirit: session default for the ok path, a real per-call override
+    // for the trigger, and the trigger's timeout still latches the
+    // session for `second` below.
+    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 8000 });
     try {
       const query = await session.querySummary({ sessionId: "s" });
       expect(query.kind).toBe("ok");
-      const first = await session.callTool("ledger_add", { sessionId: "s" });
+      const first = await session.callTool(
+        "ledger_add",
+        { sessionId: "s" },
+        { timeoutMs: 250 },
+      );
       expect(first.status).toBe("degraded");
       if (first.status === "degraded") {
-        expect(first.reason).toContain("timeout after 1500ms");
+        expect(first.reason).toContain("timeout after 250ms");
       }
-      // The latch: this must NOT wait another 1500ms.
+      // The latch: this must NOT wait another 250ms (let alone 8000ms).
       const t0 = performance.now();
       const second = await session.callTool("ledger_add", { sessionId: "s" });
       const elapsed = performance.now() - t0;
@@ -773,4 +772,130 @@ process.stdin.on("data", (d) => {
 });
 `;
   }
+});
+
+// Task 2026-07-18 subprocess-test-deflake, T-003: dedicated unit coverage
+// for `LedgerSession.callTool`'s optional per-call `options.timeoutMs`
+// override (src/policies/ledger-client.ts). The "latches after one
+// timeout" test above already exercises the override end-to-end in a
+// realistic scenario; these three tests isolate each individual contract
+// point the override is supposed to satisfy.
+describe("openLedgerSession — callTool per-call timeoutMs override", () => {
+  // Answers init promptly; on ledger_add, waits `delayMs` before
+  // responding successfully (never hangs forever, unlike slowAddServer).
+  const delayedAddServer = (delayMs: number): string => `#!/usr/bin/env node
+let buf = "";
+process.stdin.on("data", (d) => {
+  buf += d.toString();
+  let nl = buf.indexOf("\\n");
+  while (nl !== -1) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    if (!line.trim()) { nl = buf.indexOf("\\n"); continue; }
+    let msg;
+    try { msg = JSON.parse(line); } catch { nl = buf.indexOf("\\n"); continue; }
+    if (msg.method === "initialize") {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\\n");
+    } else if (msg.method === "tools/call" && msg.params && msg.params.name === "ledger_add") {
+      setTimeout(() => {
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: '{"ok":true}' }] } }) + "\\n");
+      }, ${delayMs});
+    }
+    nl = buf.indexOf("\\n");
+  }
+});
+`;
+
+  // Never responds to ledger_add at all (reused shape of slowAddServer
+  // above, duplicated locally so this describe block is self-contained).
+  const neverRespondsAddServer = (): string => `#!/usr/bin/env node
+let buf = "";
+process.stdin.on("data", (d) => {
+  buf += d.toString();
+  let nl = buf.indexOf("\\n");
+  while (nl !== -1) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    if (!line.trim()) { nl = buf.indexOf("\\n"); continue; }
+    let msg;
+    try { msg = JSON.parse(line); } catch { nl = buf.indexOf("\\n"); continue; }
+    if (msg.method === "initialize") {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\\n");
+    }
+    // ledger_add: never respond -> caller times out.
+    nl = buf.indexOf("\\n");
+  }
+});
+`;
+
+  it("(a) a short per-call override times out even though the session default would have absorbed the delay", async () => {
+    const { openLedgerSession } = await import("../../src/policies/ledger-client.js");
+    // The server answers ledger_add after 300ms — comfortably inside the
+    // session's own 8000ms default, so if the override weren't actually
+    // taking effect this call would resolve "ok". A 100ms override must
+    // still fire first.
+    const script = makeScript(delayedAddServer(300));
+    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 8000 });
+    try {
+      const result = await session.callTool(
+        "ledger_add",
+        { sessionId: "s" },
+        { timeoutMs: 100 },
+      );
+      expect(result.status).toBe("degraded");
+      if (result.status === "degraded") {
+        expect(result.reason).toContain("timeout after 100ms");
+      }
+    } finally {
+      session.dispose();
+    }
+  });
+
+  it("(b) without an override, callTool uses the session's own timeoutMs (unchanged default behaviour)", async () => {
+    const { openLedgerSession } = await import("../../src/policies/ledger-client.js");
+    const script = makeScript(neverRespondsAddServer());
+    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 250 });
+    try {
+      const result = await session.callTool("ledger_add", { sessionId: "s" });
+      expect(result.status).toBe("degraded");
+      if (result.status === "degraded") {
+        expect(result.reason).toContain("timeout after 250ms");
+      }
+    } finally {
+      session.dispose();
+    }
+  });
+
+  it("(c) a timeout triggered via a per-call override still latches the session for later calls", async () => {
+    const { openLedgerSession } = await import("../../src/policies/ledger-client.js");
+    const script = makeScript(neverRespondsAddServer());
+    // Session default is generous; only the per-call override is tight.
+    const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 8000 });
+    try {
+      const first = await session.callTool(
+        "ledger_add",
+        { sessionId: "s" },
+        { timeoutMs: 100 },
+      );
+      expect(first.status).toBe("degraded");
+      if (first.status === "degraded") {
+        expect(first.reason).toContain("timeout after 100ms");
+      }
+      // The latch must fire from the override-triggered timeout too, and
+      // this second call (no override) must not wait out any budget at
+      // all — proving the latch, not a second independent timeout, is
+      // what resolved it.
+      const t0 = performance.now();
+      const second = await session.callTool("ledger_add", { sessionId: "s" });
+      const elapsed = performance.now() - t0;
+      expect(second.status).toBe("degraded");
+      if (second.status === "degraded") {
+        expect(second.reason).toContain("timed out earlier in this session");
+        expect(second.reason).toContain("(100ms)");
+      }
+      expect(elapsed).toBeLessThan(500);
+    } finally {
+      session.dispose();
+    }
+  });
 });

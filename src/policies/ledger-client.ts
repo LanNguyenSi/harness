@@ -145,11 +145,17 @@ interface CallResult {
   child: ChildProcessWithoutNullStreams;
   stderrBuf: { value: string };
   pending: Map<number, PendingResponse>;
-  /** Sends a JSON-RPC request; resolves on response, child close, or timeout. */
+  /**
+   * Sends a JSON-RPC request; resolves on response, child close, or timeout.
+   * `timeoutMsOverride` (task 2026-07-18 subprocess-test-deflake, T-003) is
+   * optional and per-call: omitted, this call uses the connection's own
+   * `timeoutMs` (from `LedgerClientOptions`) exactly as before.
+   */
   call: (
     id: number,
     method: string,
     params: Record<string, unknown>,
+    timeoutMsOverride?: number,
   ) => Promise<JsonRpcResponse | "exit" | "timeout">;
   notify: (method: string, params?: Record<string, unknown>) => void;
   exited: () => boolean;
@@ -258,13 +264,15 @@ function startSubprocess(
     child.once("error", done);
   });
 
-  function timeoutPromise(): { promise: Promise<"timeout">; timer: NodeJS.Timeout } {
+  function timeoutPromise(
+    ms: number,
+  ): { promise: Promise<"timeout">; timer: NodeJS.Timeout } {
     let timer!: NodeJS.Timeout;
     const promise = new Promise<"timeout">((resolve) => {
       timer = setTimeout(() => {
         timers.delete(timer);
         resolve("timeout");
-      }, timeoutMs);
+      }, ms);
       timer.unref();
       timers.add(timer);
     });
@@ -294,8 +302,9 @@ function startSubprocess(
     id: number,
     method: string,
     params: Record<string, unknown>,
+    timeoutMsOverride?: number,
   ): Promise<JsonRpcResponse | "exit" | "timeout"> {
-    const timeout = timeoutPromise();
+    const timeout = timeoutPromise(timeoutMsOverride ?? timeoutMs);
     try {
       return await Promise.race([
         send(id, method, params),
@@ -417,6 +426,19 @@ export interface LedgerSessionQuery {
   sessionId: string;
   sinceIso?: string;
   contentPrefix?: string;
+  /**
+   * Optional per-call override of the session's `timeoutMs` (task
+   * 2026-07-18 subprocess-test-deflake, T-003). Applies only to this
+   * call's `ledger_summary` round-trip (the `tools/list` capability
+   * probe, only run when `sinceIso`/`contentPrefix` is set, still uses
+   * the session default). Omitted, behaviour is byte-for-byte identical
+   * to before this option existed: the session's own `timeoutMs` is
+   * used. A timeout on an overridden call still sets the session-wide
+   * latch exactly like a timeout on the session default would — see
+   * `LedgerSession.callTool`'s `options.timeoutMs` doc for the shared
+   * latch contract.
+   */
+  timeoutMs?: number;
 }
 
 /**
@@ -444,9 +466,22 @@ export type LedgerSessionCallResult =
  */
 export interface LedgerSession {
   querySummary(query: LedgerSessionQuery): Promise<LedgerQueryResult>;
+  /**
+   * `options.timeoutMs` (task 2026-07-18 subprocess-test-deflake, T-003)
+   * is an optional per-call override of the session's `timeoutMs` for
+   * THIS call only; every other call on the session keeps using the
+   * session default. Omitted, behaviour is byte-for-byte identical to
+   * before this option existed. Fail-open/degrade semantics and the
+   * session-wide timeout latch are unchanged either way: a timeout on an
+   * overridden call latches the session exactly like a timeout on the
+   * session default does — every subsequent call (on this session, with
+   * or without its own override) short-circuits to `degraded` without a
+   * new round-trip.
+   */
   callTool(
     name: string,
     args: Record<string, unknown>,
+    options?: { timeoutMs?: number },
   ): Promise<LedgerSessionCallResult>;
   dispose(): void;
 }
@@ -469,6 +504,12 @@ export function openLedgerSession(opts: LedgerClientOptions): LedgerSession {
   // giving up on a server that already blew one deadline is the intended
   // fail-open direction, not a new failure mode.
   let timedOut = false;
+  // The budget actually in effect when the latch tripped (task
+  // 2026-07-18 subprocess-test-deflake, T-003): the session default
+  // unless a per-call `timeoutMs` override was the one that timed out.
+  // Tracked separately so `latchedReason()` reports the real number
+  // instead of always the session default.
+  let timedOutAtMs = timeoutMs;
   let nextId = 1;
 
   function ensureStarted(): CallResult | null {
@@ -495,6 +536,7 @@ export function openLedgerSession(opts: LedgerClientOptions): LedgerSession {
       if (initResult === "exit") return `grounding-mcp ${exitDiagnostic(c)}`;
       if (initResult === "timeout") {
         timedOut = true;
+        timedOutAtMs = timeoutMs;
         return `grounding-mcp timeout after ${timeoutMs}ms`;
       }
       if (initResult.error) {
@@ -507,7 +549,7 @@ export function openLedgerSession(opts: LedgerClientOptions): LedgerSession {
   }
 
   const latchedReason = (): string =>
-    `grounding-mcp timed out earlier in this session (${timeoutMs}ms); skipping further ledger calls`;
+    `grounding-mcp timed out earlier in this session (${timedOutAtMs}ms); skipping further ledger calls`;
 
   return {
     async querySummary(query: LedgerSessionQuery): Promise<LedgerQueryResult> {
@@ -538,10 +580,13 @@ export function openLedgerSession(opts: LedgerClientOptions): LedgerSession {
         callArgs.contentPrefix = query.contentPrefix;
       }
 
-      const callResult = await c.call(nextId++, "tools/call", {
-        name: "ledger_summary",
-        arguments: callArgs,
-      });
+      const effectiveTimeoutMs = query.timeoutMs ?? timeoutMs;
+      const callResult = await c.call(
+        nextId++,
+        "tools/call",
+        { name: "ledger_summary", arguments: callArgs },
+        effectiveTimeoutMs,
+      );
       if (callResult === "exit") {
         return {
           kind: "degraded",
@@ -550,9 +595,10 @@ export function openLedgerSession(opts: LedgerClientOptions): LedgerSession {
       }
       if (callResult === "timeout") {
         timedOut = true;
+        timedOutAtMs = effectiveTimeoutMs;
         return {
           kind: "degraded",
-          reason: `grounding-mcp timeout after ${timeoutMs}ms`,
+          reason: `grounding-mcp timeout after ${effectiveTimeoutMs}ms`,
         };
       }
       if (callResult.error) {
@@ -582,23 +628,28 @@ export function openLedgerSession(opts: LedgerClientOptions): LedgerSession {
     async callTool(
       name: string,
       args: Record<string, unknown>,
+      options?: { timeoutMs?: number },
     ): Promise<LedgerSessionCallResult> {
       if (timedOut) return { status: "degraded", reason: latchedReason() };
       const initError = await ensureInitialized();
       if (initError !== null) return { status: "degraded", reason: initError };
       const c = ctl!;
-      const result = await c.call(nextId++, "tools/call", {
-        name,
-        arguments: args,
-      });
+      const effectiveTimeoutMs = options?.timeoutMs ?? timeoutMs;
+      const result = await c.call(
+        nextId++,
+        "tools/call",
+        { name, arguments: args },
+        effectiveTimeoutMs,
+      );
       if (result === "exit") {
         return { status: "degraded", reason: `grounding-mcp ${exitDiagnostic(c)}` };
       }
       if (result === "timeout") {
         timedOut = true;
+        timedOutAtMs = effectiveTimeoutMs;
         return {
           status: "degraded",
-          reason: `grounding-mcp timeout after ${timeoutMs}ms`,
+          reason: `grounding-mcp timeout after ${effectiveTimeoutMs}ms`,
         };
       }
       if (result.error) {
