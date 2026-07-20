@@ -22,15 +22,15 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  addLedgerFact,
   resolveGitContext,
 } from "../../runtime/index.js";
+import { resolveManifestLedgerWriter } from "../../runtime/ledger-writer.js";
 import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
 import {
   resolveReadSessionId,
   type ResolveReadSessionOptions,
 } from "../../runtime/session-id.js";
-import type { Manifest, McpServer } from "../../schema/index.js";
+import type { Manifest } from "../../schema/index.js";
 import { loadManifest, resolvePaths, type LoaderOptions } from "../loader.js";
 
 const FALLBACK_SESSION = "default";
@@ -164,16 +164,6 @@ async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
     stream.on("end", () => resolve(data));
     stream.on("error", reject);
   });
-}
-
-function findGroundingMcp(manifest: Manifest): McpServer | null {
-  return manifest.tools.mcp.find((m) => m.name === "grounding-mcp") ?? null;
-}
-
-function mcpCommandList(server: McpServer): string[] {
-  return Array.isArray(server.command)
-    ? server.command
-    : server.command.trim().split(/\s+/);
 }
 
 /**
@@ -540,22 +530,15 @@ export async function runSessionStartPreflight(
       note(reason);
       return done(false, repo, branch, sessionId, sessionSource, reason);
     }
-    const server = findGroundingMcp(manifest);
-    if (!server) {
-      const reason = "grounding-mcp not declared in manifest; cannot record preflight tag";
+    const resolved = resolveManifestLedgerWriter(manifest, {
+      ...(opts.ledgerTimeoutMs !== undefined ? { ledgerTimeoutMs: opts.ledgerTimeoutMs } : {}),
+    });
+    if (!resolved.ok) {
+      const reason = `${resolved.reason}; cannot record preflight tag`;
       note(reason);
       return done(false, repo, branch, sessionId, sessionSource, reason);
     }
-    const command = mcpCommandList(server);
-    const env = server.env ?? undefined;
-    const timeoutMs = opts.ledgerTimeoutMs ?? server.health?.timeout_ms ?? 5_000;
-    writeLedger = (args) =>
-      addLedgerFact({
-        mcpCommand: command,
-        ...(env && { mcpEnv: env }),
-        timeoutMs,
-        ...args,
-      });
+    writeLedger = resolved.write;
   }
 
   const result = await writeLedger({ sessionId, content, source: LEDGER_SOURCE });

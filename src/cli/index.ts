@@ -45,6 +45,12 @@ import { approveBranchProtection } from "./approve/branch-protection.js";
 import { approveRisk } from "./approve/risk.js";
 import { approveUnderstanding } from "./approve/understanding.js";
 import { readPipedStdin } from "./approve/stdin-report.js";
+import {
+  runRecordDogfood,
+  runRecordReview,
+  runRecordReviewSubagent,
+  type RecordResult,
+} from "./record/index.js";
 import { describe, isPillar, type Pillar } from "./describe.js";
 import { diff as diffRun } from "./diff/index.js";
 import { diffSinceApply } from "./diff/since-apply.js";
@@ -2244,6 +2250,163 @@ export function buildProgram(opts: RunOptions = {}): Command {
       cliOpts.stagePendingApproval = writePendingApproval;
       await runSessionStartPreflight(cliOpts);
     });
+
+  // Shared by the three `record` verbs' action handlers below: parse
+  // `--ledger-timeout <ms>` into `cliOpts.ledgerTimeoutMs`, and report a
+  // `RecordResult` (print the recorded fact on success; on failure, throw
+  // with the runner's own exit code and an EMPTY message, since the
+  // runner already wrote the reason to stderr itself — throwing the same
+  // text again would double-print it).
+  const applyLedgerTimeout = (
+    raw: string | undefined,
+    cliOpts: { ledgerTimeoutMs?: number },
+  ): void => {
+    if (!raw) return;
+    const n = Number.parseInt(raw, 10);
+    if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
+  };
+  const reportRecordResult = (result: RecordResult): void => {
+    if (result.wrote) {
+      stdout(`recorded ${result.content} for session ${result.sessionId}\n`);
+    }
+    if (result.exitCode !== 0) {
+      throw new HarnessExitError("", result.exitCode);
+    }
+  };
+
+  // `harness record {review,review-subagent,dogfood}` (task T-001):
+  // evidence-ledger producers for the review-before-merge,
+  // review-subagent-before-pr-create, and dogfood-before-release gate
+  // families (see src/cli/init/templates.ts for the exact policies).
+  // Unlike the `preflight` / `session-start preflight` pair above,
+  // these are NOT hooks: they are invoked deliberately by an agent or
+  // operator, so a failure exits non-zero with a clear stderr message
+  // (written by the runner itself) rather than degrading silently.
+  const recordCmd = program
+    .command("record")
+    .description(
+      "Evidence-ledger producers for the review / review-subagent / dogfood gate families. " +
+        "Interactive verbs (not hooks): a failure exits non-zero.",
+    );
+
+  recordCmd
+    .command("review <summary>")
+    .description(
+      "Record a review:${PR_NUMBER} + review:${BRANCH} (+ review:${BASE}) fact for the " +
+        "review-before-merge / review-before-merge-bash gates.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .requiredOption("--pr <number>", "PR number the review:${PR_NUMBER} tag is namespaced by")
+    .option(
+      "--base <branch>",
+      "base branch for the review:${BASE} tag. Default: the remote's default branch read from " +
+        "refs/remotes/origin/HEAD (packed-refs fallback included); omitted with a stderr warning " +
+        "when neither resolves. No `gh` shell-out.",
+    )
+    .option("--branch <name>", "explicit branch override for review:${BRANCH} (default: current git branch)")
+    .option(
+      "--session <id>",
+      "explicit session id (default: $CLAUDE_CODE_SESSION_ID, then $CLAUDE_SESSION_ID, then newest Claude Code transcript)",
+    )
+    .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
+    .action(
+      async (
+        summary: string,
+        options: {
+          config?: string;
+          project?: string;
+          pr: string;
+          base?: string;
+          branch?: string;
+          session?: string;
+          ledgerTimeout?: string;
+        },
+      ) => {
+        const cliOpts: Parameters<typeof runRecordReview>[0] = { pr: options.pr, summary };
+        if (options.config) cliOpts.configPath = options.config;
+        if (options.project) cliOpts.project = options.project;
+        if (options.base) cliOpts.base = options.base;
+        if (options.branch) cliOpts.branch = options.branch;
+        if (options.session) cliOpts.session = options.session;
+        applyLedgerTimeout(options.ledgerTimeout, cliOpts);
+        reportRecordResult(await runRecordReview(cliOpts));
+      },
+    );
+
+  recordCmd
+    .command("review-subagent [summary]")
+    .description(
+      "Record a review-subagent:${TASK_ID} + review-subagent:${BRANCH} fact for the " +
+        "review-subagent-before-pr-create / review-subagent-before-pr-create-bash gates.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .requiredOption("--task <id>", "agent-tasks task id the review-subagent:${TASK_ID} tag is namespaced by")
+    .requiredOption("--verdict <text>", "reviewer verdict recorded in the fact content")
+    .option("--branch <name>", "explicit branch override for review-subagent:${BRANCH} (default: current git branch)")
+    .option(
+      "--session <id>",
+      "explicit session id (default: $CLAUDE_CODE_SESSION_ID, then $CLAUDE_SESSION_ID, then newest Claude Code transcript)",
+    )
+    .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
+    .action(
+      async (
+        summary: string | undefined,
+        options: {
+          config?: string;
+          project?: string;
+          task: string;
+          verdict: string;
+          branch?: string;
+          session?: string;
+          ledgerTimeout?: string;
+        },
+      ) => {
+        const cliOpts: Parameters<typeof runRecordReviewSubagent>[0] = {
+          task: options.task,
+          verdict: options.verdict,
+        };
+        if (options.config) cliOpts.configPath = options.config;
+        if (options.project) cliOpts.project = options.project;
+        if (options.branch) cliOpts.branch = options.branch;
+        if (options.session) cliOpts.session = options.session;
+        if (summary) cliOpts.summary = summary;
+        applyLedgerTimeout(options.ledgerTimeout, cliOpts);
+        reportRecordResult(await runRecordReviewSubagent(cliOpts));
+      },
+    );
+
+  recordCmd
+    .command("dogfood <summary>")
+    .description(
+      "Record a dogfood:${SESSION_ID} fact for the dogfood-before-release gate.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option(
+      "--session <id>",
+      "explicit session id (default: $CLAUDE_CODE_SESSION_ID, then $CLAUDE_SESSION_ID, then newest Claude Code transcript)",
+    )
+    .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
+    .action(
+      async (
+        summary: string,
+        options: {
+          config?: string;
+          project?: string;
+          session?: string;
+          ledgerTimeout?: string;
+        },
+      ) => {
+        const cliOpts: Parameters<typeof runRecordDogfood>[0] = { summary };
+        if (options.config) cliOpts.configPath = options.config;
+        if (options.project) cliOpts.project = options.project;
+        if (options.session) cliOpts.session = options.session;
+        applyLedgerTimeout(options.ledgerTimeout, cliOpts);
+        reportRecordResult(await runRecordDogfood(cliOpts));
+      },
+    );
 
   const sessionStart = program
     .command("session-start")
