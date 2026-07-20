@@ -214,7 +214,7 @@ policies:
       required:
         - "a recorded review of PR #\${PR_NUMBER}"
       run:
-        - 'mcp__agent-grounding__ledger_add { sessionId: "\${SESSION_ID}", type: "fact", content: "review:\${PR_NUMBER} — <verdict + key findings + nits>" }'
+        - 'harness record review --pr \${PR_NUMBER} "<summary>"'
 
 policy_packs:
   - name: understanding-before-execution

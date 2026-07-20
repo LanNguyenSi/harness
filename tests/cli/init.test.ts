@@ -192,6 +192,16 @@ describe("init — team profile", () => {
     expect(v.warningCount).toBe(0);
   });
 
+  it("review-before-merge ux.run points at `harness record review`, not a raw ledger_add (task 27ba3570)", async () => {
+    await init({ homeDir: tmpHome, template: "team" });
+    const yaml = fs.readFileSync(manifestPath, "utf8");
+    const parsed = parseYaml(yaml) as {
+      policies?: Array<{ name: string; ux?: { run?: string[] } }>;
+    };
+    const policy = parsed.policies?.find((p) => p.name === "review-before-merge");
+    expect(policy?.ux?.run).toEqual(['harness record review --pr ${PR_NUMBER} "<summary>"']);
+  });
+
   it("wires grounding-mcp so the review-before-merge policy does not degrade to warn-mode", async () => {
     // Memory `feedback_harness_policies_warn_mode`: a manifest with
     // policies: that doesn't declare grounding-mcp in tools.mcp silently

@@ -333,7 +333,7 @@ policies:
       required:
         - "a recorded review of PR #\${PR_NUMBER}"
       run:
-        - 'mcp__agent-grounding__ledger_add { sessionId: "\${SESSION_ID}", type: "fact", content: "review:\${PR_NUMBER} — <verdict + key findings + nits>" }'
+        - 'harness record review --pr \${PR_NUMBER} "<summary>"'
 
   # Bash-surface parallel of review-before-merge for operators on the gh-cli
   # workflow. Two scope notes:
@@ -366,7 +366,7 @@ policies:
       required:
         - "a recorded review of the PR for branch \${BRANCH}"
       run:
-        - 'mcp__agent-grounding__ledger_add { sessionId: "\${SESSION_ID}", type: "fact", content: "review:\${BRANCH} — <verdict + key findings + nits>" }'
+        - 'harness record review --pr <pr> "<summary>"'
 
   - name: dogfood-before-release
     description: Block npm publish / git tag v* without a recent dogfood ledger entry.
@@ -389,7 +389,7 @@ policies:
       required:
         - "an end-to-end dogfood run in this session"
       run:
-        - 'mcp__agent-grounding__ledger_add { sessionId: "\${SESSION_ID}", type: "fact", content: "dogfood:\${SESSION_ID} — <end-to-end smoke summary>" }'
+        - 'harness record dogfood "<was wurde real ausprobiert>"'
 
   - name: two-reviewers-required
     description: At least two distinct reviewer ledger entries must exist for the PR.
@@ -458,7 +458,7 @@ policies:
       required:
         - "a completed review-subagent pass on this task"
       run:
-        - 'mcp__agent-grounding__ledger_add { sessionId: "\${SESSION_ID}", type: "fact", content: "review-subagent:\${TASK_ID} — <verdict + key findings + nits>" }'
+        - 'harness record review-subagent --task \${TASK_ID} --verdict <verdict>'
 
   # Bash-surface parallel of review-subagent-before-pr-create. Tag shape is
   # \`review-subagent:\${BRANCH}\` because TASK_ID is an agent-tasks-only
@@ -486,7 +486,7 @@ policies:
       required:
         - "a completed review-subagent pass on branch \${BRANCH}"
       run:
-        - 'mcp__agent-grounding__ledger_add { sessionId: "\${SESSION_ID}", type: "fact", content: "review-subagent:\${BRANCH} — <verdict + key findings + nits>" }'
+        - 'harness record review-subagent --task <task-id> --verdict <verdict>'
 
   - name: preflight-before-push
     description: Block git push unless a fresh preflight ledger entry exists for the current branch. Catches the stale-checkout class of incident at the last reversible step.

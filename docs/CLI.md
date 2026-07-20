@@ -92,6 +92,34 @@ These are called by Claude Code via `settings.json`; you usually do not run them
 | `harness preflight` | Run the local preflight bundle (`agent-preflight`). The Risk Gate's preflight policy expects the resulting `preflight:<repo>` ledger tag before allowing destructive Bash on that repo. |
 | `harness smoke` | End-to-end smoke run for the installed harness (hook plumbing, ledger write, policy evaluation). Useful after a fresh `init --interactive` or a version bump. |
 
+## Evidence-ledger producers (`harness record`)
+
+`harness record {review,review-subagent,dogfood}` are the interactive producers for the `review-before-merge`, `review-subagent-before-pr-create`, and `dogfood-before-release` process-gate families (both the MCP and gh-cli `-bash` variants of the first two; see `src/cli/init/templates.ts` for the exact policy definitions and `docs/writing-custom-policies.md` "the trust model" for what a process gate does and does not enforce). Unlike a hook entrypoint, these are never called by Claude Code itself — an agent or operator runs them deliberately after doing the underlying work (a review pass, a review-subagent pass, an end-to-end smoke run) — so a failure (unreachable ledger, no resolvable git context, an empty summary) exits non-zero with a clear stderr reason instead of degrading silently.
+
+| Verb | One-liner |
+|------|-----------|
+| `harness record review <summary> --pr <number> [--base <branch>] [--branch <name>] [--session <id>] [--ledger-timeout <ms>]` | Writes ONE ledger fact carrying `review:<pr>` + `review:<branch>` (+ `review:<base>` when a base resolves) so a single review satisfies the gate regardless of which merge surface fires — see "Tag semantics" below. |
+| `harness record review-subagent [summary] --task <id> --verdict <text> [--branch <name>] [--session <id>] [--ledger-timeout <ms>]` | Writes ONE ledger fact carrying `review-subagent:<task>` + `review-subagent:<branch>` verdict:`<verdict>`, same multi-tag rationale as `record review`. |
+| `harness record dogfood <summary> [--session <id>] [--ledger-timeout <ms>]` | Writes `dogfood:<sessionId>` for the current session. |
+
+All three also accept `--config <path>` and `--project <name>` for manifest resolution, same as every other verb.
+
+### Tag semantics — single source of truth
+
+This table is the canonical mapping from process gate to the ledger tag it consults and how that tag's value is resolved. If you are wiring a custom policy that reuses one of these tag families, resolve it the same way the corresponding gate does.
+
+| Gate (`policies[].name`) | `requires.ledger_tag` | Value resolved from |
+|---|---|---|
+| `review-before-merge` (MCP surface) | `review:${PR_NUMBER}` | `toolArgs.prNumber` on the `mcp__agent-tasks__pull_requests_merge` call |
+| `review-before-merge-bash` (gh-cli surface) | `review:${BRANCH}` | the local `.git` checkout's current branch at the moment `gh pr merge` fires (or an explicit `--branch` override) |
+| `review-subagent-before-pr-create` (MCP surface) | `review-subagent:${TASK_ID}` | `toolArgs.taskId` on the `mcp__agent-tasks__pull_requests_create` call |
+| `review-subagent-before-pr-create-bash` (gh-cli surface) | `review-subagent:${BRANCH}` | the local `.git` checkout's current branch at the moment `gh pr create` fires (or an explicit `--branch` override) |
+| `dogfood-before-release` | `dogfood:${SESSION_ID}` (within 24h) | the current session id |
+
+**The merge-surface trap.** A gate is evaluated against whichever tool call actually fires — the PR number on an MCP merge, or the local `.git/HEAD` branch on a `gh pr merge` — and the runtime has no way to cross-reference the two at gate time (a checkout's branch is not guaranteed to match the PR number an operator has in mind, and either surface, or both, may be wired). That is why `harness record review` and `harness record review-subagent` each write a **multi-tag fact** — `review:<pr>` and `review:<branch>` together, not one or the other — in a single ledger write: recording a review once satisfies whichever surface's gate fires at merge/PR-create time, instead of requiring the operator to predict which surface will be used and record twice.
+
+**`--base` for non-default-base PRs.** `record review`'s `review:<base>` tag defaults to the repo's remote default branch (read from `refs/remotes/origin/HEAD`, packed-refs fallback), which is correct for an ordinary feature PR merging into `main`/`master`. A PR that targets a non-default base — for example a `release/*` branch — needs an explicit `--base <branch>` so the recorded `review:<base>` tag reflects the PR's actual target instead of silently recording against the wrong base; omitting `--base` when neither the flag nor origin/HEAD resolves prints a loud stderr warning rather than dropping the tag silently.
+
 ## Notes
 
 - `harness doctor` now exits non-zero (`1`) whenever the report has `errorCount > 0`, in both prose and `--json` output; previously it always exited `0` regardless of errors, so CI/scripts had no way to gate on doctor health (task a07b379a). Warnings-only reports (`warningCount > 0`, `errorCount === 0`) are unaffected and still exit `0`; this pass intentionally does not add a `--strict` flag to promote warnings to errors. Non-interactive `harness init` is unrelated and unchanged: it keeps its existing loud-stderr-but-exit-0 contract.

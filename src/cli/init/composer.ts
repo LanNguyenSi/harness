@@ -255,9 +255,7 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
     ux: {
       cannot: "You cannot merge PR #${PR_NUMBER} yet.",
       required: ["a recorded review of PR #${PR_NUMBER}"],
-      run: [
-        'mcp__agent-grounding__ledger_add { sessionId: "${SESSION_ID}", type: "fact", content: "review:${PR_NUMBER} — <verdict + key findings + nits>" }',
-      ],
+      run: ['harness record review --pr ${PR_NUMBER} "<summary>"'],
     },
   },
   "preflight-before-investigation": {
@@ -297,9 +295,7 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
     ux: {
       cannot: "You cannot open a pull request for task ${TASK_ID} yet.",
       required: ["a completed review-subagent pass on this task"],
-      run: [
-        'mcp__agent-grounding__ledger_add { sessionId: "${SESSION_ID}", type: "fact", content: "review-subagent:${TASK_ID} — <verdict + key findings + nits>" }',
-      ],
+      run: ['harness record review-subagent --task ${TASK_ID} --verdict <verdict>'],
     },
   },
   "preflight-before-push": {
@@ -346,9 +342,7 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
     ux: {
       cannot: "You cannot publish a release yet.",
       required: ["an end-to-end dogfood run in this session"],
-      run: [
-        'mcp__agent-grounding__ledger_add { sessionId: "${SESSION_ID}", type: "fact", content: "dogfood:${SESSION_ID} — <end-to-end smoke summary>" }',
-      ],
+      run: ['harness record dogfood "<was wurde real ausprobiert>"'],
     },
   },
   "two-reviewers-required": {
