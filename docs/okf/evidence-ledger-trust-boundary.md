@@ -3,7 +3,7 @@ type: invariant
 title: Evidence-ledger trust boundary
 description: The agent-writable evidence ledger is audit-only for the builtin enforcement gates; only operator- or trusted-process-authored filesystem markers (read via the shared symlink-rejecting reader in src/io/read-regular-file.ts) open them, while custom requires.ledger_tag policies are process gates by design.
 tags: [evidence-ledger, trust-boundary, approvals, security]
-timestamp: 2026-07-16T02:26:27Z
+timestamp: 2026-07-20T10:05:00Z
 sources:
   - src/io/read-regular-file.ts
   - src/policy-packs/builtin/understanding-before-execution-runtime.ts
@@ -35,7 +35,7 @@ No evidence sink the gated agent can write — above all the evidence ledger, re
 
 **Custom `requires.ledger_tag` policies are process gates BY DESIGN.** docs/writing-custom-policies.md tripwire 4: "whoever can write the ledger can open the gate" — a custom `block` policy is advisory against the agent it gates; it forces a deliberate step but does not survive an agent that writes the tag directly. Enforcement requires an `ask`-kind producer, CI, or a distinct trusted process. The evaluator side (`evaluateRequires` machinery in `src/policies/requires.ts`) substring-matches ledger entries but skips `policy_decision` rows (`LedgerEntry.type`; `isPolicyDecisionRow` in the understanding runtime does the same) so audit rows can't pollute matches, and its `recordHint` deliberately never names the recording verb (agent-tasks/88ca4bb3 rationale in the doc comment).
 
-**Ledger tags that remain load-bearing (as process gates).** The init-generated ship-flow policies in `src/cli/init/templates.ts` and `src/cli/init/composer.ts` still gate on ledger tags: `preflight:${REPO}` (before git investigation, within 1h; producer `harness session-start preflight`, docs/CLI.md), `review-subagent:${TASK_ID}` (before `mcp__agent-tasks__pull_requests_create`), `review-subagent:${BRANCH}` (before `gh pr create`, since no task UUID is in that command), `preflight:${BRANCH}` (before `git push`, HEAD-pinnable via `head:<sha>` / `requires.at_head` in `src/policies/requires.ts`), and `dogfood:${SESSION_ID}` (before `npm publish` / `git tag v*`). These declare their evidence source in `producers:` blocks and are intentionally advisory against a hostile agent.
+**Ledger tags that remain load-bearing (as process gates).** The init-generated ship-flow policies in `src/cli/init/templates.ts` and `src/cli/init/composer.ts` still gate on ledger tags: `preflight:${REPO}` (before git investigation, within 1h; producer `harness session-start preflight`, docs/CLI.md), `review-subagent:${TASK_ID}` (before `mcp__agent-tasks__pull_requests_create`), `review-subagent:${BRANCH}` (before `gh pr create`, since no task UUID is in that command), `preflight:${BRANCH}` (before `git push`, HEAD-pinnable via `head:<sha>` / `requires.at_head` in `src/policies/requires.ts`), and `dogfood:${SESSION_ID}` (before `npm publish` / `git tag v*`). These declare their evidence source in `producers:` blocks and are intentionally advisory against a hostile agent. Since the record-verbs change (agent-tasks/27ba3570), the generated `ux.run` hints for the review/review-subagent/dogfood gates name `harness record {review,review-subagent,dogfood}` (docs/CLI.md, "Evidence-ledger producers") — a CLI front-door over the same agent-writable `ledger_add` write path, changing ergonomics but not this trust boundary; the generic `recordHint` in `src/policies/requires.ts` still never names a recording verb (88ca4bb3).
 
 ## What breaks it
 
