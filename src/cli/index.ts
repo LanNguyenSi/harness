@@ -2257,13 +2257,26 @@ export function buildProgram(opts: RunOptions = {}): Command {
   // with the runner's own exit code and an EMPTY message, since the
   // runner already wrote the reason to stderr itself — throwing the same
   // text again would double-print it).
+  //
+  // An unparseable / non-positive value used to fall back to the
+  // default silently (review finding, T-004): an operator who typo'd
+  // `--ledger-timeout 5ooo` got the default timeout with zero
+  // diagnostic. Now a malformed value warns once on stderr before
+  // falling back, same "never a silent gap" convention `resolveBase`'s
+  // own degrade path already uses below.
   const applyLedgerTimeout = (
     raw: string | undefined,
     cliOpts: { ledgerTimeoutMs?: number },
   ): void => {
     if (!raw) return;
     const n = Number.parseInt(raw, 10);
-    if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
+    if (Number.isFinite(n) && n > 0) {
+      cliOpts.ledgerTimeoutMs = n;
+      return;
+    }
+    stderr(
+      `harness record: --ledger-timeout ${JSON.stringify(raw)} is not a positive integer; using the default timeout.\n`,
+    );
   };
   const reportRecordResult = (result: RecordResult): void => {
     if (result.wrote) {

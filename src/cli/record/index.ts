@@ -273,6 +273,34 @@ function resolveOriginHeadBase(gitDir: string): string | null {
 }
 
 /**
+ * Resolve the actual shared git directory for `gitDir`, following the
+ * `commondir` file linked worktrees write. `git worktree add` gives each
+ * worktree its own private `.git` FILE pointing at `<main>/.git/
+ * worktrees/<name>/` (what `findGitEntry` returns as `gitDir`), but
+ * `refs/remotes/origin/HEAD` and `packed-refs` are NOT duplicated there
+ * — they live only in the shared common dir, reachable via that
+ * per-worktree directory's own `commondir` file (a path, normally
+ * `../..`, relative to the per-worktree directory itself; see
+ * `git-worktree(1)`). Without this indirection, `resolveOriginHeadBase`
+ * would look for those refs in the empty per-worktree directory and
+ * always miss, degrading every linked-worktree `record review` to the
+ * "omit with warning" path even though the common dir has a perfectly
+ * resolvable origin/HEAD. Returns `gitDir` unchanged when no
+ * `commondir` file exists (the normal, non-worktree case).
+ */
+function resolveCommonDir(gitDir: string): string {
+  try {
+    const raw = fs.readFileSync(path.join(gitDir, "commondir"), "utf8").trim();
+    if (raw.length > 0) {
+      return path.isAbsolute(raw) ? raw : path.resolve(gitDir, raw);
+    }
+  } catch {
+    /* no commondir file — gitDir already IS the common dir */
+  }
+  return gitDir;
+}
+
+/**
  * Resolve the base branch for `record review`: explicit `--base` wins,
  * then the origin/HEAD filesystem fallback, then omission with a loud
  * stderr warning (never a silent gap — the operator needs to know the
@@ -287,7 +315,7 @@ function resolveBase(
   if (flag.length > 0) return flag;
   const gitDir = findGitEntry(cwd)?.gitDir;
   if (gitDir) {
-    const base = resolveOriginHeadBase(gitDir);
+    const base = resolveOriginHeadBase(resolveCommonDir(gitDir));
     if (base) return base;
   }
   note(
