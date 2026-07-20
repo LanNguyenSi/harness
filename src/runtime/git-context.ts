@@ -54,7 +54,7 @@ const HEAD_REF_RE = /^ref:\s*refs\/heads\/(.+)$/;
 // A loose ref or detached-HEAD sha is exactly 40 lowercase hex chars.
 const SHA_RE = /^[0-9a-f]{40}$/;
 
-interface GitEntry {
+export interface GitEntry {
   /** Directory that contains the `.git` entry (the work-tree root). */
   worktreeRoot: string;
   /** Resolved git directory — for a `.git` file, its `gitdir:` target. */
@@ -66,8 +66,16 @@ interface GitEntry {
  * common `.git` directory and the `.git` *file* form used by linked
  * worktrees and submodules. The walk is bounded so a pathologically
  * deep cwd cannot spin.
+ *
+ * Exported (task T-001, record-verbs) so `cli/record/index.ts` can
+ * locate the same `.git` directory this module resolves `repo`/
+ * `branch`/`sha` from, without re-walking the tree with duplicate
+ * logic — its base-branch resolution needs the raw git directory (to
+ * read `refs/remotes/origin/HEAD` / `packed-refs`), which
+ * `resolveGitContext`'s return shape does not expose. Behavior is
+ * unchanged; this is a visibility-only change.
  */
-function findGitEntry(startDir: string): GitEntry | null {
+export function findGitEntry(startDir: string): GitEntry | null {
   let dir = path.resolve(startDir);
   for (let depth = 0; depth < 128; depth++) {
     const dotGit = path.join(dir, ".git");

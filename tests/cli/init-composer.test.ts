@@ -104,32 +104,33 @@ describe("composeCustom — new policy entries (task 5dd3d8a6)", () => {
     expect(hook?.bash_match).toMatch(/tag v/);
   });
 
-  it("FULL_TEMPLATE: every ux.run ledger_add example names sessionId (PR #206 templates.ts pin)", async () => {
-    // Composer-side test below only covers the 3 policies in the custom
-    // POLICY map. The Full template adds two bash parallels
-    // (review-before-merge-bash, review-subagent-before-pr-create-bash)
-    // that live only in templates.ts. Materialise + parse the full
-    // manifest text and assert every ledger_add line is sessionId-tagged
-    // so a future contributor adding a new ux.run hint to the Full
-    // template is caught here.
+  it("FULL_TEMPLATE: the five evidence-process gates' ux.run points at the matching `harness record` verb, not a raw ledger_add (task 27ba3570)", async () => {
+    // Pre-27ba3570 these five gates' ux.run hinted a raw
+    // `mcp__agent-grounding__ledger_add` call. Now that `harness record
+    // {review,review-subagent,dogfood}` exist (task T-001), ux.run must
+    // point agents at those verbs instead — the producers[].example
+    // field (asserted separately below, PR #207 pin) intentionally keeps
+    // the raw ledger_add fallback for when the CLI verb is unavailable,
+    // so this test only scopes to ux.run.
     const { FULL_TEMPLATE } = await import("../../src/cli/init/templates.js");
     const yamlMod = await import("yaml");
     const parsed = yamlMod.parse(FULL_TEMPLATE) as {
       policies?: Array<{ name: string; ux?: { run?: string[] } }>;
     };
-    const ledgerLines: Array<{ policy: string; line: string }> = [];
-    for (const p of parsed.policies ?? []) {
-      for (const r of p.ux?.run ?? []) {
-        if (r.includes("mcp__agent-grounding__ledger_add")) {
-          ledgerLines.push({ policy: p.name, line: r });
-        }
-      }
-    }
-    expect(ledgerLines.length).toBeGreaterThanOrEqual(5);
-    for (const { policy, line } of ledgerLines) {
-      expect(line, `Full template policy ${policy} ux.run ledger_add missing sessionId`).toContain(
-        'sessionId: "${SESSION_ID}"',
-      );
+    const expectedRun: Record<string, string> = {
+      "review-before-merge": 'harness record review --pr ${PR_NUMBER} "<summary>"',
+      "review-before-merge-bash": 'harness record review --pr <pr> "<summary>"',
+      "review-subagent-before-pr-create":
+        "harness record review-subagent --task ${TASK_ID} --verdict <verdict>",
+      "review-subagent-before-pr-create-bash":
+        "harness record review-subagent --task <task-id> --verdict <verdict>",
+      "dogfood-before-release": 'harness record dogfood "<was wurde real ausprobiert>"',
+    };
+    const byName = new Map((parsed.policies ?? []).map((p) => [p.name, p]));
+    for (const [name, run] of Object.entries(expectedRun)) {
+      const policy = byName.get(name);
+      expect(policy, `FULL_TEMPLATE missing policy ${name}`).toBeDefined();
+      expect(policy?.ux?.run, `policy ${name} ux.run`).toEqual([run]);
     }
   });
 
@@ -167,12 +168,10 @@ describe("composeCustom — new policy entries (task 5dd3d8a6)", () => {
     }
   });
 
-  it("ux.run examples name sessionId: \"${SESSION_ID}\" on all ledger_add-producing policies (PR #206)", () => {
-    // Pre-#206 the ux.run renderer omitted the sessionId param from the
-    // ledger_add example, so operators bound sessionId to the tag UUID
-    // (review-subagent's TASK_ID for instance) and the gate kept refusing
-    // with the same opaque message. Pin that all four ledger-add policies
-    // now emit a sessionId hint pointing at the current session id.
+  it("composer: review-before-merge / review-subagent-before-pr-create / dogfood-before-release ux.run points at the matching `harness record` verb (task 27ba3570)", () => {
+    // Mirrors the FULL_TEMPLATE pin above for the 3-policy subset the
+    // Custom composer exposes (it has no -bash parallels, see the
+    // "composer surface" describe block below).
     const { manifest } = compose({
       policies: [
         "review-before-merge",
@@ -180,19 +179,16 @@ describe("composeCustom — new policy entries (task 5dd3d8a6)", () => {
         "dogfood-before-release",
       ],
     });
-    const ledgerPolicies = manifest.policies.filter(
-      (p) =>
-        p.ux?.run?.some((r) => r.includes("mcp__agent-grounding__ledger_add")),
-    );
-    expect(ledgerPolicies.length).toBeGreaterThan(0);
-    for (const p of ledgerPolicies) {
-      const runs = p.ux?.run ?? [];
-      const ledgerCall = runs.find((r) => r.includes("mcp__agent-grounding__ledger_add"));
-      expect(ledgerCall, `policy ${p.name} missing ledger_add line`).toBeDefined();
-      expect(
-        ledgerCall,
-        `policy ${p.name} ux.run ledger_add example must include sessionId: "\${SESSION_ID}"`,
-      ).toContain('sessionId: "${SESSION_ID}"');
+    const expectedRun: Record<string, string> = {
+      "review-before-merge": 'harness record review --pr ${PR_NUMBER} "<summary>"',
+      "review-subagent-before-pr-create":
+        "harness record review-subagent --task ${TASK_ID} --verdict <verdict>",
+      "dogfood-before-release": 'harness record dogfood "<was wurde real ausprobiert>"',
+    };
+    for (const [name, run] of Object.entries(expectedRun)) {
+      const policy = manifest.policies.find((p) => p.name === name);
+      expect(policy, `composer missing policy ${name}`).toBeDefined();
+      expect(policy?.ux?.run, `policy ${name} ux.run`).toEqual([run]);
     }
   });
 
