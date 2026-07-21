@@ -21,6 +21,8 @@
 import { spawn } from "node:child_process";
 import * as path from "node:path";
 
+import { assertNoRealSpawnInTests } from "../../runtime/hermetic-spawn-guard.js";
+
 export interface NpmBinReport {
   status: "ok" | "warn" | "unknown";
   /** The resolved global bin dir (e.g. /home/lan/.nvm/.../v22.22.0/bin). Empty on unknown. */
@@ -35,7 +37,51 @@ export interface NpmExec {
   (cmd: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string }>;
 }
 
+/**
+ * Hermetic guard (task 325ace29): asserts BEFORE touching `child_process`
+ * that we are not running under vitest without a test having injected a
+ * fake `exec`/`npmBinExec`. See src/runtime/hermetic-spawn-guard.ts for
+ * why and the env signal used. `realNpmExec` itself has no try/catch
+ * around this call, so the thrown `HermeticSpawnViolationError`
+ * propagates directly to the caller — but local "no try/catch here" is
+ * not the actual guarantee (the OW guard in src/cli/init/interactive.ts
+ * proved a local absence-of-catch argument isn't enough on its own).
+ * Backstops verified for this function's call chains:
+ *   - `checkNpmBinPath` (this module) has no try/catch around the call.
+ *   - doctor's `checkBinResolution` and `doctor()` (both in
+ *     src/cli/doctor/index.ts) call `checkNpmBinPath` with no
+ *     surrounding try/catch.
+ *   - init's `init()` (src/cli/init/index.ts) calls `checkBinResolution`
+ *     with no surrounding try/catch.
+ *   - `runInteractive`'s outer catch (src/cli/init/interactive.ts, the
+ *     handler that otherwise treats a caught error as either an
+ *     `isAbortError` Ctrl-C or a rethrow) explicitly re-throws any
+ *     `HermeticSpawnViolationError` past every intermediate handler.
+ *   - `run()`'s top-level catch (src/cli/index.ts) — which otherwise
+ *     degrades ANY thrown error to exit code 70 — explicitly re-throws
+ *     `HermeticSpawnViolationError` first (task 325ace29), so a
+ *     `harness doctor`/`harness init` CLI invocation never silently
+ *     folds a violation into a generic non-zero exit.
+ *
+ * (Review finding F2, task T-007): a `RunOptions.npmBinExec` seam that
+ * would let a CLI-level `run({ argv: [...] })` test inject a fake exec
+ * for `init`/`init --interactive` was considered and deliberately NOT
+ * added — no test needs it today, and adding an unused seam speculatively
+ * would just be more surface to keep honest. Add it if/when a CLI-level
+ * `init` test actually needs one.
+ */
 function realNpmExec(cmd: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  assertNoRealSpawnInTests(
+    `${cmd} ${args.join(" ")}`.trim(),
+    "Inject a fake `exec` directly (`CheckNpmBinPathOptions.exec`), or a fake `npmBinExec` if " +
+      "you're calling a caller that threads one through — `InitOptions.npmBinExec`, " +
+      "`DoctorOptions.npmBinExec`, and `RunInteractiveOptions.npmBinExec` all reach this seam. " +
+      "None of those are reachable from a CLI-level test that goes through `run({ argv: [...] })`: " +
+      "`RunOptions` (src/cli/index.ts) has no `npmBinExec`, and the `doctor`/`init`/`init " +
+      "--interactive` action handlers do not thread one through. For `doctor`, pass `--shallow` " +
+      "to skip this check entirely; for `init`/`init --interactive` there is no CLI-level seam " +
+      "today — call `init()`/`runInteractive()` directly instead of through `run()`.",
+  );
   return new Promise((resolve) => {
     let child;
     try {

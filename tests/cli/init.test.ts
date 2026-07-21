@@ -20,9 +20,21 @@ afterEach(() => {
   fs.rmSync(tmpHome, { recursive: true, force: true });
 });
 
+// Stubbed npm-bin probe so the many plain `callInit()` call sites below
+// (template/validate/next-steps assertions, none of which check
+// bin-resolution output) never spawn a real `npm prefix -g`. The
+// dedicated "bin-resolution check" describe block further down injects
+// its own `npmBinExec` per-test where the return value is asserted on,
+// and calls `init()` directly rather than through this wrapper.
+const STUB_NPM_BIN_EXEC = async () => ({ code: 1, stdout: "", stderr: "stub" });
+
+function callInit(opts: Parameters<typeof init>[0] = {}): ReturnType<typeof init> {
+  return init({ npmBinExec: STUB_NPM_BIN_EXEC, ...opts });
+}
+
 describe("init — minimal template", () => {
   it("writes a manifest at <homeDir>/harness.yaml when configPath is omitted", async () => {
-    const r = await init({ homeDir: tmpHome });
+    const r = await callInit({ homeDir: tmpHome });
     expect(r.path).toBe(manifestPath);
     expect(r.template).toBe("minimal");
     expect(r.overwrote).toBe(false);
@@ -30,27 +42,27 @@ describe("init — minimal template", () => {
   });
 
   it("the minimal manifest passes harness validate immediately", async () => {
-    await init({ homeDir: tmpHome });
+    await callInit({ homeDir: tmpHome });
     const result = validate({ configPath: manifestPath });
     expect(result.errorCount).toBe(0);
   });
 
   it("contains the version: 1 header and an explanatory comment block", async () => {
-    await init({ homeDir: tmpHome });
+    await callInit({ homeDir: tmpHome });
     const yaml = fs.readFileSync(manifestPath, "utf8");
     expect(yaml).toMatch(/^version: 1$/m);
     expect(yaml).toContain("# Bootstrapped by `harness init --template minimal`");
   });
 
   it("defaults to the minimal template when no flag is passed", async () => {
-    const r = await init({ homeDir: tmpHome });
+    const r = await callInit({ homeDir: tmpHome });
     expect(r.template).toBe("minimal");
   });
 });
 
 describe("init — full template", () => {
   it("writes a manifest pre-populated with Appendix A example values", async () => {
-    const r = await init({ homeDir: tmpHome, template: "full" });
+    const r = await callInit({ homeDir: tmpHome, template: "full" });
     expect(r.template).toBe("full");
     const yaml = fs.readFileSync(manifestPath, "utf8");
     // Parse to YAML so substring matches against comment prose cannot
@@ -104,7 +116,7 @@ describe("init — full template", () => {
 
 
   it("the full template parses as a schema-valid manifest", async () => {
-    await init({ homeDir: tmpHome, template: "full" });
+    await callInit({ homeDir: tmpHome, template: "full" });
     // Schema-level only: full-template paths reference the developer machine
     // that authored Appendix A, so file-existence checks may warn/error on
     // a fresh install. The manifest itself must parse cleanly.
@@ -126,7 +138,7 @@ describe("init — full template", () => {
     for (const template of ["solo", "team", "full"] as const) {
       const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `tilde-${template}-`));
       try {
-        await init({ homeDir: tmp, template });
+        await callInit({ homeDir: tmp, template });
         const yaml = fs.readFileSync(path.join(tmp, "harness.yaml"), "utf8");
         const parsed = parseYaml(yaml) as {
           tools?: { mcp?: { name: string; env?: Record<string, string> }[] };
@@ -148,7 +160,7 @@ describe("init — full template", () => {
 
 describe("init — solo profile", () => {
   it("writes a manifest with memory-router + understanding-before-execution pack", async () => {
-    const r = await init({ homeDir: tmpHome, template: "solo" });
+    const r = await callInit({ homeDir: tmpHome, template: "solo" });
     expect(r.template).toBe("solo");
     const yaml = fs.readFileSync(manifestPath, "utf8");
     expect(yaml).toContain("memory-router");
@@ -163,7 +175,7 @@ describe("init — solo profile", () => {
   });
 
   it("the solo template passes harness validate cleanly (0 errors, 0 warnings)", async () => {
-    await init({ homeDir: tmpHome, template: "solo" });
+    await callInit({ homeDir: tmpHome, template: "solo" });
     const v = validate({ configPath: manifestPath });
     expect(v.errorCount).toBe(0);
     expect(v.warningCount).toBe(0);
@@ -172,7 +184,7 @@ describe("init — solo profile", () => {
 
 describe("init — team profile", () => {
   it("writes a manifest with solo content plus agent-tasks + review-before-merge", async () => {
-    const r = await init({ homeDir: tmpHome, template: "team" });
+    const r = await callInit({ homeDir: tmpHome, template: "team" });
     expect(r.template).toBe("team");
     const yaml = fs.readFileSync(manifestPath, "utf8");
     expect(yaml).toContain("memory-router");
@@ -186,14 +198,14 @@ describe("init — team profile", () => {
   });
 
   it("the team template passes harness validate cleanly (0 errors, 0 warnings)", async () => {
-    await init({ homeDir: tmpHome, template: "team" });
+    await callInit({ homeDir: tmpHome, template: "team" });
     const v = validate({ configPath: manifestPath });
     expect(v.errorCount).toBe(0);
     expect(v.warningCount).toBe(0);
   });
 
   it("review-before-merge ux.run points at `harness record review`, not a raw ledger_add (task 27ba3570)", async () => {
-    await init({ homeDir: tmpHome, template: "team" });
+    await callInit({ homeDir: tmpHome, template: "team" });
     const yaml = fs.readFileSync(manifestPath, "utf8");
     const parsed = parseYaml(yaml) as {
       policies?: Array<{ name: string; ux?: { run?: string[] } }>;
@@ -207,7 +219,7 @@ describe("init — team profile", () => {
     // policies: that doesn't declare grounding-mcp in tools.mcp silently
     // lets all policies through. The team profile must include
     // grounding-mcp explicitly to honour the gate.
-    await init({ homeDir: tmpHome, template: "team" });
+    await callInit({ homeDir: tmpHome, template: "team" });
     const v = validate({ configPath: manifestPath });
     const hasPolicyWarning = v.diagnostics.some(
       (d) =>
@@ -221,7 +233,7 @@ describe("init — team profile", () => {
 describe("init — refuse on existing without --force", () => {
   it("throws HarnessExitError naming the existing path", async () => {
     fs.writeFileSync(manifestPath, "version: 1\n");
-    await expect(init({ homeDir: tmpHome })).rejects.toMatchObject({
+    await expect(callInit({ homeDir: tmpHome })).rejects.toMatchObject({
       name: "HarnessExitError",
       exitCode: 1,
       message: expect.stringContaining(manifestPath),
@@ -231,7 +243,7 @@ describe("init — refuse on existing without --force", () => {
   it("does not overwrite the existing file", async () => {
     fs.writeFileSync(manifestPath, "intact: true\n");
     try {
-      await init({ homeDir: tmpHome });
+      await callInit({ homeDir: tmpHome });
     } catch (e) {
       // expected
       if (!(e instanceof HarnessExitError)) throw e;
@@ -243,7 +255,7 @@ describe("init — refuse on existing without --force", () => {
 describe("init — --force overwrites", () => {
   it("overwrites and emits an `(overwriting ...)` message on stderr", async () => {
     fs.writeFileSync(manifestPath, "old: yes\n");
-    const r = await init({ homeDir: tmpHome, force: true });
+    const r = await callInit({ homeDir: tmpHome, force: true });
     expect(r.overwrote).toBe(true);
     expect(r.stderr).toContain(`overwriting existing manifest at ${manifestPath}`);
     expect(fs.readFileSync(manifestPath, "utf8")).toContain("version: 1");
@@ -252,7 +264,7 @@ describe("init — --force overwrites", () => {
 
 describe("init — next-steps hint", () => {
   it("prints validate / describe / doctor invocations on stdout", async () => {
-    const r = await init({ homeDir: tmpHome });
+    const r = await callInit({ homeDir: tmpHome });
     expect(r.stdout).toContain("Next steps:");
     expect(r.stdout).toContain("harness validate");
     expect(r.stdout).toContain("harness describe");
@@ -260,7 +272,7 @@ describe("init — next-steps hint", () => {
   });
 
   it("includes the resolved target path in each next-steps invocation", async () => {
-    const r = await init({ homeDir: tmpHome });
+    const r = await callInit({ homeDir: tmpHome });
     expect(r.stdout).toContain(`--config ${manifestPath}`);
   });
 });
@@ -268,7 +280,7 @@ describe("init — next-steps hint", () => {
 describe("init — explicit configPath", () => {
   it("writes to the given configPath when provided", async () => {
     const target = path.join(tmpHome, "subdir/harness.yaml");
-    const r = await init({ configPath: target });
+    const r = await callInit({ configPath: target });
     expect(r.path).toBe(target);
     expect(fs.existsSync(target)).toBe(true);
   });

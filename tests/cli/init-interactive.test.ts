@@ -2,8 +2,41 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { runInteractive, type InteractivePrompts } from "../../src/cli/init/interactive.js";
+import {
+  runInteractive as runInteractiveReal,
+  type InteractivePrompts,
+  type RunInteractiveOptions,
+} from "../../src/cli/init/interactive.js";
+import type { NpmExec } from "../../src/cli/doctor/npm-bin-path.js";
 import { HermeticSpawnViolationError } from "../../src/runtime/hermetic-spawn-guard.js";
+
+// Stub for `npm prefix -g` (task npm-prefix-g-hermeticity-guard/T-004).
+// Every call in this file goes through the `runInteractive` wrapper below
+// instead of the SDK export directly, so init()'s post-write bin-resolution
+// check (src/cli/doctor/npm-bin-path.ts) never spawns a real npm process.
+// Real `npm prefix -g` returns `code: 0` plus a genuine prefix path (verified
+// against this repo's npm), which resolves to status "ok" or "warn"
+// depending on PATH — the stub mirrors that "code 0 + a path" shape rather
+// than a blanket `{ code: 1 }`, which would read as status "unknown" and
+// could shift binResolutionClean / binResolutionErrorCount assertions (see
+// checkNpmBinPath's status contract). The stubbed prefix is a path
+// guaranteed not to exist on any test host, so checkBinResolution's
+// PATH-shadow hint — which stats real files under `<prefix>/bin` — never
+// fires by coincidence: deterministic "warn", no side effects, no
+// dependency on what happens to live under a real machine's npm prefix.
+const STUB_NPM_BIN_EXEC: NpmExec = async () => ({
+  code: 0,
+  stdout: "/nonexistent-npm-global-prefix-for-hermetic-tests\n",
+  stderr: "",
+});
+
+// Thin wrapper so every one of this file's ~60 `runInteractive(...)` call
+// sites gets `npmBinExec` injected without editing each one individually.
+// A test that needs different npm behavior can still override it by setting
+// its own `npmBinExec` in `opts` (spread after the default below).
+function runInteractive(opts: RunInteractiveOptions = {}): ReturnType<typeof runInteractiveReal> {
+  return runInteractiveReal({ npmBinExec: STUB_NPM_BIN_EXEC, ...opts });
+}
 
 // Helper: build a mock prompts pack that returns queued answers in order
 // the wizard asks them. This is intentionally dumb — we match by prompt
@@ -1073,6 +1106,13 @@ describe("interactive wizard — Team path", () => {
     expect(result.binResolutionClean).toBe(false);
     expect(cap.stderr()).toContain("not found on PATH");
     expect(cap.stderr()).toContain("grounding-mcp");
+    // Review finding F6 (task T-007): the title promises a "PATH-shadow-free
+    // hint" but this file previously never asserted the PATH-shadow hint's
+    // absence. It stays absent here because the stubbed npm prefix
+    // (STUB_NPM_BIN_EXEC, top of file) resolves to a directory guaranteed
+    // not to exist, so pathShadowHint's fs.existsSync check (src/cli/doctor/
+    // index.ts) never fires.
+    expect(cap.stderr()).not.toContain("export PATH=");
   });
 
   it("prints the agent-tasks coupling reminder after the manifest write", async () => {

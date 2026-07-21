@@ -11,12 +11,17 @@ let tmpHome: string;
 let manifestPath: string;
 let hooksDir: string;
 
+// Stubbed npm-bin probe so the fixture-setup `init()` below never spawns a
+// real `npm prefix -g` (this file's tests don't assert on bin-resolution
+// output; only the manifest side-effect of `init` matters here).
+const STUB_NPM_BIN_EXEC = async () => ({ code: 1, stdout: "", stderr: "stub" });
+
 beforeEach(async () => {
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-remove-"));
   manifestPath = path.join(tmpHome, "harness.yaml");
   hooksDir = path.join(tmpHome, "hooks");
   fs.mkdirSync(hooksDir, { recursive: true });
-  await init({ homeDir: tmpHome, template: "full" });
+  await init({ homeDir: tmpHome, template: "full", npmBinExec: STUB_NPM_BIN_EXEC });
   // Drop `required: true` from the full template's CLI entries (`gh`) so
   // the post-mutate asset check does not trip on CI hosts that lack the
   // binary. Hook scripts no longer apply: the full template since

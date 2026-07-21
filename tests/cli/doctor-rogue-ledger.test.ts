@@ -145,6 +145,7 @@ describe("doctor — rogue evidence-ledger scan", () => {
       mcpProbe: new FakeProbe(),
       versionProbe: () => null,
       pathEnv: "",
+      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
       rogueLedgerScanOptions: { homeDir: home, cwd: home },
     });
 
@@ -176,6 +177,7 @@ describe("doctor — rogue evidence-ledger scan", () => {
       mcpProbe: new FakeProbe(),
       versionProbe: () => null,
       pathEnv: "",
+      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
       rogueLedgerScanOptions: { homeDir: home, cwd: home },
     });
     // Inject a quote-containing path into the report and re-render.
@@ -198,6 +200,7 @@ describe("doctor — rogue evidence-ledger scan", () => {
       mcpProbe: new FakeProbe(),
       versionProbe: () => null,
       pathEnv: "",
+      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
       rogueLedgerScanOptions: { homeDir: home, cwd },
     });
 
@@ -219,6 +222,7 @@ describe("doctor — rogue evidence-ledger scan", () => {
       mcpProbe: new FakeProbe(),
       versionProbe: () => null,
       pathEnv: "",
+      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
       rogueLedgerScanOptions: { homeDir: home, cwd },
     });
 

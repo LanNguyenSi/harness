@@ -20,10 +20,15 @@ import {
 let tmpHome: string;
 let manifestPath: string;
 
+// Stubbed npm-bin probe so the fixture-setup `init()` below never spawns a
+// real `npm prefix -g` (this file's tests don't assert on bin-resolution
+// output; only the manifest side-effect of `init` matters here).
+const STUB_NPM_BIN_EXEC = async () => ({ code: 1, stdout: "", stderr: "stub" });
+
 beforeEach(async () => {
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-pack-reseed-"));
   manifestPath = path.join(tmpHome, "harness.yaml");
-  await init({ homeDir: tmpHome });
+  await init({ homeDir: tmpHome, npmBinExec: STUB_NPM_BIN_EXEC });
 });
 
 afterEach(() => {
