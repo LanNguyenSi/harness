@@ -19,6 +19,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, accessSync, constants } from "node:fs";
 import * as path from "node:path";
+import { assertNoRealSpawnInTests } from "../../runtime/hermetic-spawn-guard.js";
 
 import type { ProfileChoice } from "./interactive.js";
 import type { CustomSelection } from "./composer.js";
@@ -334,7 +335,30 @@ export interface InstallResult {
   exitCode: number;
 }
 
+/**
+ * Hermetic guard (task 54739002): asserts BEFORE touching
+ * `child_process` that we are not running under vitest without a test
+ * having injected `installSpawn`. This is the `npm i -g` install path —
+ * the largest blast radius of the guarded call sites, since an
+ * accidental real spawn here would actually install packages globally
+ * on whatever machine runs the tests. See
+ * src/runtime/hermetic-spawn-guard.ts for why and the env signal used.
+ * `installPackagesGlobally` has no try/catch around this call, so the
+ * thrown `HermeticSpawnViolationError` propagates directly to the
+ * caller — nothing here can degrade it to a warning. Local
+ * "no try/catch here" is not the actual guarantee, though: the OW guard
+ * (src/cli/init/interactive.ts) proved a local absence-of-catch argument
+ * isn't enough on its own — that violation had to survive a catch
+ * further up the call chain. The real backstop is runInteractive's outer
+ * catch (src/cli/init/interactive.ts:1297), which explicitly re-throws
+ * any `HermeticSpawnViolationError` past every intermediate handler
+ * between here and the wizard's top level.
+ */
 function realSpawn(cmd: string, args: string[]): Promise<{ code: number; stderr: string }> {
+  assertNoRealSpawnInTests(
+    "npm i -g",
+    "Inject a fake `installSpawn` runner in the test instead of exercising the real spawn path.",
+  );
   return new Promise((resolve) => {
     const child = spawn(cmd, args, { stdio: ["ignore", "inherit", "pipe"] });
     let stderr = "";

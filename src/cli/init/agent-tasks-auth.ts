@@ -15,6 +15,7 @@
 // two are informational.
 
 import { spawn } from "node:child_process";
+import { assertNoRealSpawnInTests } from "../../runtime/hermetic-spawn-guard.js";
 
 const BRIDGE_BIN = "agent-tasks-mcp-bridge";
 
@@ -33,7 +34,28 @@ export interface LoginSpawn {
   (cmd: string, args: string[]): Promise<{ code: number }>;
 }
 
+/**
+ * Hermetic guard (task 54739002): asserts BEFORE touching
+ * `child_process` that we are not running under vitest without a test
+ * having injected `probeSpawn`/`authProbeSpawn`. This binary reads the
+ * OPERATOR'S REAL OS keychain (the bridge's `status` verb), so an
+ * accidental real spawn here is a genuine machine-state leak, not just
+ * a slow no-op. See src/runtime/hermetic-spawn-guard.ts for why and the
+ * env signal used. `probeAgentTasksAuth` has no try/catch around this
+ * call, so the thrown `HermeticSpawnViolationError` propagates directly
+ * to the caller. Local "no try/catch here" is not the actual guarantee,
+ * though: the OW guard (src/cli/init/interactive.ts) proved a local
+ * absence-of-catch argument isn't enough on its own — that violation
+ * had to survive a catch further up the call chain. The real backstop
+ * is runInteractive's outer catch (src/cli/init/interactive.ts:1297),
+ * which explicitly re-throws any `HermeticSpawnViolationError` past
+ * every intermediate handler between here and the wizard's top level.
+ */
 function realProbeSpawn(cmd: string, args: string[]): Promise<{ code: number; stderr: string }> {
+  assertNoRealSpawnInTests(
+    "agent-tasks-mcp-bridge status",
+    "Inject a fake `probeSpawn` (interactive.ts: `authProbeSpawn`) runner in the test instead of exercising the real spawn path.",
+  );
   return new Promise((resolve) => {
     let child;
     try {
@@ -55,7 +77,23 @@ function realProbeSpawn(cmd: string, args: string[]): Promise<{ code: number; st
   });
 }
 
+/**
+ * Hermetic guard (task 54739002): same rationale as {@link realProbeSpawn}
+ * — this is the bridge's interactive `login` verb, which writes to the
+ * operator's real OS keychain (`stdio: "inherit"`, so it would also
+ * take over the terminal). `runBridgeLogin` has no try/catch around
+ * this call, so the thrown `HermeticSpawnViolationError` propagates
+ * directly to the caller. As with {@link realProbeSpawn}, the actual
+ * guarantee is not this local absence of a catch but runInteractive's
+ * outer catch (src/cli/init/interactive.ts:1297), which explicitly
+ * re-throws any `HermeticSpawnViolationError` past every intermediate
+ * handler between here and the wizard's top level.
+ */
 function realLoginSpawn(cmd: string, args: string[]): Promise<{ code: number }> {
+  assertNoRealSpawnInTests(
+    "agent-tasks-mcp-bridge login",
+    "Inject a fake `loginSpawn` (interactive.ts: `authLoginSpawn`) runner in the test instead of exercising the real spawn path.",
+  );
   return new Promise((resolve) => {
     let child;
     try {
