@@ -479,7 +479,7 @@ describe("interactive wizard — MCP registration + settings.json migration (tas
   it("second init run is fully idempotent: no further claude CLI calls, no settings.json write", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
     const registryPath = path.join(tmpHome, ".claude.json");
-    const runOnce = async (forceOverwrite: boolean): Promise<{ stderr: string; calls: string[][] }> => {
+    const runOnce = async (forceOverwrite: boolean, confirms: boolean[]): Promise<{ stderr: string; calls: string[][] }> => {
       // A fresh fake per run, but pointed at the SAME on-disk registry
       // file, so state persists across runs exactly like the real CLI
       // persisting to `~/.claude.json` would.
@@ -493,7 +493,12 @@ describe("interactive wizard — MCP registration + settings.json migration (tas
         authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
         prompts: mockPrompts({
           select: ["team"],
-          confirm: [true, true],
+          // Each run must queue EXACTLY the confirms its flow consumes so
+          // the trailing OW co-install offer always hits a dry queue
+          // (auto-decline — see the mockPrompts contract above). A
+          // leftover `true` here reaches that offer and spawns a real
+          // `npx orchestrator-workflow init`.
+          confirm: confirms,
           checkbox: [["claude-code"]],
           input: ["~/.claude/projects/{project}/memory"],
         }),
@@ -503,7 +508,10 @@ describe("interactive wizard — MCP registration + settings.json migration (tas
       return { stderr: cap.stderr(), calls };
     };
 
-    const first = await runOnce(false);
+    // Run 1: registry doesn't exist yet, so detect() (task 83d8d03a:
+    // registry-aware) reads agent-tasks as "not yet wired" — the "Team
+    // profile ... proceed?" confirm fires, then the write confirmation.
+    const first = await runOnce(false, [true, true]);
     expect(first.calls.filter((c) => c[1] === "add-json")).toHaveLength(2);
     expect(first.stderr).toContain("registered 2 MCP server(s)");
 
@@ -511,7 +519,12 @@ describe("interactive wizard — MCP registration + settings.json migration (tas
     const settingsBeforeSecondRun = fs.readFileSync(settingsPath, "utf8");
     const registryBeforeSecondRun = fs.readFileSync(registryPath, "utf8");
 
-    const second = await runOnce(true);
+    // Run 2: the registry now holds both servers, so detect() reads
+    // agent-tasks as wired and the proceed confirm does NOT fire — only
+    // the write confirmation consumes an answer. Queueing a second
+    // `true` here would leak into the OW co-install offer (real npx
+    // spawn; >5s on cold CI runners — run 29798137418).
+    const second = await runOnce(true, [true]);
     // Ensure sees both servers already correctly registered (identical
     // spec on disk in the registry file) — zero exec calls at all.
     expect(second.calls).toHaveLength(0);
