@@ -67,6 +67,71 @@ function captureStreams(): { stdout: () => string; stderr: () => string; out: (s
   };
 }
 
+// Stateful fake `claude` CLI: `add-json`/`remove` mutate a JSON file at
+// `registryPath`, mirroring the real CLI's effect on
+// `$CLAUDE_CONFIG_DIR/.claude.json` (here: `<tmpHome>/.claude.json`, per
+// `resolveClaudeUserRegistryPath`'s precedence). This lets a second
+// `ensureMcpServers` drift-check (or a second wizard run) see the servers
+// a prior run "registered"/"removed" and correctly reconcile, without a
+// real `claude` binary. Module-scope (not describe-local) so both the
+// MCP-registration and MCP-removal-GC describe blocks below can share it.
+function fakeClaudeCli(registryPath: string): {
+  exec: import("../../src/io/claude-mcp.js").ClaudeMcpExec;
+  calls: string[][];
+} {
+  const calls: string[][] = [];
+  function readRegistry(): Record<string, unknown> {
+    try {
+      return JSON.parse(fs.readFileSync(registryPath, "utf8")) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }
+  function writeRegistry(registry: Record<string, unknown>): void {
+    fs.writeFileSync(registryPath, JSON.stringify(registry, null, 2));
+  }
+  const exec: import("../../src/io/claude-mcp.js").ClaudeMcpExec = async (args) => {
+    calls.push(args);
+    if (args[0] === "mcp" && args[1] === "add-json") {
+      const name = args[4]!;
+      const spec = JSON.parse(args[5]!) as unknown;
+      const registry = readRegistry();
+      const mcpServers = (registry["mcpServers"] as Record<string, unknown>) ?? {};
+      mcpServers[name] = spec;
+      registry["mcpServers"] = mcpServers;
+      writeRegistry(registry);
+      return {
+        code: 0,
+        stdout: `Added stdio MCP server ${name} to user config\n`,
+        stderr: "",
+        enoent: false,
+        timedOut: false,
+      };
+    }
+    if (args[0] === "mcp" && args[1] === "remove") {
+      const name = args[4]!;
+      const registry = readRegistry();
+      const mcpServers = (registry["mcpServers"] as Record<string, unknown>) ?? {};
+      delete mcpServers[name];
+      registry["mcpServers"] = mcpServers;
+      writeRegistry(registry);
+      return { code: 0, stdout: "", stderr: "", enoent: false, timedOut: false };
+    }
+    return { code: 0, stdout: "", stderr: "", enoent: false, timedOut: false };
+  };
+  return { exec, calls };
+}
+
+function cliMissingExec(): import("../../src/io/claude-mcp.js").ClaudeMcpExec {
+  return async () => ({
+    code: 127,
+    stdout: "",
+    stderr: "spawn failed: ENOENT",
+    enoent: true,
+    timedOut: false,
+  });
+}
+
 // `fakeDepsPath` points at a tmp directory containing executable stubs
 // for every binary `dependenciesForProfile("full")` looks for. Tests
 // that do not exercise the dependency-install flow pass
@@ -335,69 +400,6 @@ describe("interactive wizard — Solo path", () => {
 });
 
 describe("interactive wizard — MCP registration + settings.json migration (task init-mcp-wiring-claude-code/T-002)", () => {
-  // Stateful fake `claude` CLI: `add-json`/`remove` mutate a JSON file at
-  // `registryPath`, mirroring the real CLI's effect on
-  // `$CLAUDE_CONFIG_DIR/.claude.json` (here: `<tmpHome>/.claude.json`, per
-  // `resolveClaudeUserRegistryPath`'s precedence). This lets a second
-  // `ensureMcpServers` drift-check see the servers the first run
-  // "registered" and correctly no-op, without a real `claude` binary.
-  function fakeClaudeCli(registryPath: string): {
-    exec: import("../../src/io/claude-mcp.js").ClaudeMcpExec;
-    calls: string[][];
-  } {
-    const calls: string[][] = [];
-    function readRegistry(): Record<string, unknown> {
-      try {
-        return JSON.parse(fs.readFileSync(registryPath, "utf8")) as Record<string, unknown>;
-      } catch {
-        return {};
-      }
-    }
-    function writeRegistry(registry: Record<string, unknown>): void {
-      fs.writeFileSync(registryPath, JSON.stringify(registry, null, 2));
-    }
-    const exec: import("../../src/io/claude-mcp.js").ClaudeMcpExec = async (args) => {
-      calls.push(args);
-      if (args[0] === "mcp" && args[1] === "add-json") {
-        const name = args[4]!;
-        const spec = JSON.parse(args[5]!) as unknown;
-        const registry = readRegistry();
-        const mcpServers = (registry["mcpServers"] as Record<string, unknown>) ?? {};
-        mcpServers[name] = spec;
-        registry["mcpServers"] = mcpServers;
-        writeRegistry(registry);
-        return {
-          code: 0,
-          stdout: `Added stdio MCP server ${name} to user config\n`,
-          stderr: "",
-          enoent: false,
-          timedOut: false,
-        };
-      }
-      if (args[0] === "mcp" && args[1] === "remove") {
-        const name = args[4]!;
-        const registry = readRegistry();
-        const mcpServers = (registry["mcpServers"] as Record<string, unknown>) ?? {};
-        delete mcpServers[name];
-        registry["mcpServers"] = mcpServers;
-        writeRegistry(registry);
-        return { code: 0, stdout: "", stderr: "", enoent: false, timedOut: false };
-      }
-      return { code: 0, stdout: "", stderr: "", enoent: false, timedOut: false };
-    };
-    return { exec, calls };
-  }
-
-  function cliMissingExec(): import("../../src/io/claude-mcp.js").ClaudeMcpExec {
-    return async () => ({
-      code: 127,
-      stdout: "",
-      stderr: "spawn failed: ENOENT",
-      enoent: true,
-      timedOut: false,
-    });
-  }
-
   it("registers manifest MCP servers via the claude CLI (not settings.json) and cleans up a dead settings.json mcpServers block", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
     // Legacy state: a dead mcpServers block in settings.json carrying both
@@ -615,7 +617,7 @@ describe("interactive wizard — MCP-removal GC (task 363a6de0)", () => {
   // `tools.mcp[]` is empty, isolating the GC behavior from the ordinary
   // add/replace path.
 
-  it(".last-apply manifest snapshot: a name owned under a PRIOR manifest (absent from the current one) is still GC'd (D-103 snapshot union)", async () => {
+  it(".last-apply manifest snapshot: a name owned under a PRIOR manifest (absent from the current one) is still GC'd (D-107 snapshot union)", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
     fs.writeFileSync(path.join(tmpHome, ".claude", "settings.json"), "not-json{");
 
@@ -676,9 +678,10 @@ describe("interactive wizard — MCP-removal GC (task 363a6de0)", () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
     fs.writeFileSync(path.join(tmpHome, ".claude", "settings.json"), "not-json{");
     // No .last-apply seeded at all this time — the conservative fallback
-    // per D-103: without the snapshot, ownership is only
-    // DEFAULT_OWNED_MCP_SERVERS ∪ the (here empty) current manifest, so
-    // this name is indistinguishable from a foreign entry and is left
+    // per D-107: without the snapshot, ownership is only the (here empty)
+    // current manifest's names (DEFAULT_OWNED_MCP_SERVERS is no longer
+    // part of GC eligibility at all — see the FIX-1 guard tests below),
+    // so this name is indistinguishable from a foreign entry and is left
     // alone rather than guessed at.
     const registryPath = path.join(tmpHome, ".claude.json");
     fs.writeFileSync(
@@ -715,6 +718,273 @@ describe("interactive wizard — MCP-removal GC (task 363a6de0)", () => {
       mcpServers?: Record<string, unknown>;
     };
     expect(registry.mcpServers).toEqual({ "legacy-only-mcp": { command: "legacy-bin" } });
+  });
+
+  it("corrupt .last-apply degrades to manifest-only ownership without crashing the wizard (FIX-4 double-throw guard)", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const generatedDir = path.join(tmpHome, ".harness", "harness.generated");
+    fs.mkdirSync(generatedDir, { recursive: true });
+    // Malformed JSON: readLastApply's own JSON.parse throws on this.
+    // readPriorLastApply (src/cli/init/interactive.ts) must catch it and
+    // degrade to null — D-107's conservative fallback — rather than let
+    // the throw escape. Pins the Pass-1 double-throw crash path: apply()
+    // ALSO reads `.last-apply` internally (apply.ts, unrelated to this
+    // task) and throws on the SAME corrupt file; wireRuntime's own
+    // try/catch already handles that first throw — this test's job is to
+    // prove wireClaudeMcp's read of the SAME file doesn't throw a SECOND
+    // time from inside the catch branch (which, pre-fix, had no outer
+    // try to catch it and would crash the whole wizard).
+    fs.writeFileSync(path.join(generatedDir, ".last-apply"), "{corrupt");
+
+    const registryPath = path.join(tmpHome, ".claude.json");
+    // A custom server that would ONLY be recognized as owned via a valid
+    // snapshot (it's absent from the — here empty, solo — current
+    // manifest). With the snapshot corrupt/unreadable, it must NOT be
+    // removed: the conservative fallback, not a guess.
+    fs.writeFileSync(
+      registryPath,
+      JSON.stringify({ mcpServers: { "legacy-only-mcp": { command: "legacy-bin" } } }),
+    );
+
+    let execCalls = 0;
+    const exec: import("../../src/io/claude-mcp.js").ClaudeMcpExec = async () => {
+      execCalls++;
+      return { code: 0, stdout: "", stderr: "", enoent: false, timedOut: false };
+    };
+
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      mcpExec: exec,
+      prompts: mockPrompts({
+        select: ["solo"],
+        input: ["~/.claude/projects/{project}/memory"],
+        confirm: [true],
+        checkbox: [["claude-code"]],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+
+    // (a) No throw escapes to the wizard: it completes normally.
+    expect(result.aborted).toBe(false);
+    const outcome = result.applies?.[0];
+    expect(outcome?.runtime).toBe("claude-code");
+    // apply() itself ALSO reads `.last-apply` (apply.ts, pre-existing,
+    // out of this task's scope) and throws on the same corrupt content —
+    // wireRuntime's pre-existing try/catch handles that, landing here in
+    // the catch-branch outcome shape (apply undefined, recoveryHint
+    // set). The load-bearing assertion is what happens NEXT: wireClaudeMcp/
+    // readPriorLastApply must not throw a SECOND time from inside that
+    // catch branch.
+    expect(outcome?.apply).toBeUndefined();
+    expect(outcome?.recoveryHint).toBeDefined();
+
+    // (b) GC degrades to manifest-only ownership: "legacy-only-mcp"
+    // would only be owned via the (corrupt) snapshot, so it is left
+    // alone — zero exec calls, not removed.
+    expect(outcome?.mcpEnsure?.gc?.results).toEqual([]);
+    expect(execCalls).toBe(0);
+    const registry = JSON.parse(fs.readFileSync(registryPath, "utf8")) as {
+      mcpServers?: Record<string, unknown>;
+    };
+    expect(registry.mcpServers).toEqual({ "legacy-only-mcp": { command: "legacy-bin" } });
+  });
+
+  it("FIX-1 guard (D-107 HIGH finding): a DEFAULT_OWNED-named server registered outside any manifest is never a GC candidate, even across a profile switch", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const registryPath = path.join(tmpHome, ".claude.json");
+    // Simulate an operator-registered "codebase-oracle" that predates any
+    // harness manifest on this machine — it shares a name with
+    // DEFAULT_OWNED_MCP_SERVERS but is selected by NEITHER profile below.
+    // Pre-D-107, unconditional DEFAULT_OWNED eligibility would have made
+    // it a GC candidate the moment `desired` didn't include it.
+    fs.writeFileSync(
+      registryPath,
+      JSON.stringify({ mcpServers: { "codebase-oracle": { command: "manually-installed-oracle" } } }),
+    );
+
+    const run1Cli = fakeClaudeCli(registryPath);
+    const cap1 = captureStreams();
+    const run1 = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      mcpExec: run1Cli.exec,
+      authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
+      prompts: mockPrompts({
+        select: ["team"],
+        confirm: [true, true],
+        checkbox: [["claude-code"]],
+        input: ["~/.claude/projects/{project}/memory"],
+      }),
+      stdout: cap1.out,
+      stderr: cap1.err,
+    });
+    expect(run1.aborted).toBe(false);
+    const registryAfterRun1 = JSON.parse(fs.readFileSync(registryPath, "utf8")) as {
+      mcpServers?: Record<string, unknown>;
+    };
+    // team registers agent-tasks + grounding-mcp; codebase-oracle (never
+    // in this or any manifest) is left exactly as the operator set it up.
+    expect(registryAfterRun1.mcpServers?.["codebase-oracle"]).toEqual({
+      command: "manually-installed-oracle",
+    });
+
+    // Profile switch: solo drops tools.mcp[] entirely — precisely the
+    // scenario that would make a still-unconditionally-eligible
+    // DEFAULT_OWNED_MCP_SERVERS entry look GC-able.
+    const run2Cli = fakeClaudeCli(registryPath);
+    const cap2 = captureStreams();
+    const run2 = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      forceOverwrite: true,
+      mcpExec: run2Cli.exec,
+      prompts: mockPrompts({
+        select: ["solo"],
+        input: ["~/.claude/projects/{project}/memory"],
+        confirm: [true],
+        checkbox: [["claude-code"]],
+      }),
+      stdout: cap2.out,
+      stderr: cap2.err,
+    });
+    expect(run2.aborted).toBe(false);
+    const outcome2 = run2.applies?.[0];
+    const gcNames2 = outcome2?.mcpEnsure?.gc?.results.map((r) => r.name) ?? [];
+    expect(gcNames2).not.toContain("codebase-oracle");
+    const registryAfterRun2 = JSON.parse(fs.readFileSync(registryPath, "utf8")) as {
+      mcpServers?: Record<string, unknown>;
+    };
+    expect(registryAfterRun2.mcpServers?.["codebase-oracle"]).toEqual({
+      command: "manually-installed-oracle",
+    });
+  });
+
+  it("apply-succeeds happy path: an MCP-only manifest edit still GC's the dropped custom server (no re-stamp occurs on an MCP-only edit; survival across a real re-stamp is proven by the combined-edit case below)", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const registryPath = path.join(tmpHome, ".claude.json");
+
+    const run1Cli = fakeClaudeCli(registryPath);
+    const cap1 = captureStreams();
+    const run1 = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      mcpExec: run1Cli.exec,
+      authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
+      prompts: mockPrompts({
+        select: ["custom"],
+        checkbox: [["understanding-before-execution"], ["agent-tasks"], [], ["claude-code"]],
+        input: ["~/.claude/projects/{project}/memory"],
+        confirm: [true],
+      }),
+      stdout: cap1.out,
+      stderr: cap1.err,
+    });
+    expect(run1.aborted).toBe(false);
+    const registryAfterRun1 = JSON.parse(fs.readFileSync(registryPath, "utf8")) as {
+      mcpServers?: Record<string, unknown>;
+    };
+    expect(registryAfterRun1.mcpServers?.["agent-tasks"]).toBeDefined();
+
+    // Run 2: SAME pack selection (no hook change) — only the MCP
+    // selection drops agent-tasks. apply() SUCCEEDS this time (unlike
+    // the catch-branch tests above). Dropping an MCP entry does NOT by
+    // itself change settings.json/hooks content (mcpServers is no longer
+    // projected there at all, post-T-002), so `.last-apply` is in fact
+    // NOT re-stamped here — this case only proves the ordinary
+    // apply-succeeds path still GC's correctly. Proving the snapshot
+    // survives an ACTUAL re-stamp (FIX 2's real point) is the combined-
+    // edit case below, which also changes a hook.
+    const run2Cli = fakeClaudeCli(registryPath);
+    const cap2 = captureStreams();
+    const run2 = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      forceOverwrite: true,
+      mcpExec: run2Cli.exec,
+      prompts: mockPrompts({
+        select: ["custom"],
+        checkbox: [["understanding-before-execution"], [], [], ["claude-code"]],
+        input: ["~/.claude/projects/{project}/memory"],
+        confirm: [true],
+      }),
+      stdout: cap2.out,
+      stderr: cap2.err,
+    });
+    expect(run2.aborted).toBe(false);
+    const outcome2 = run2.applies?.[0];
+    expect(outcome2?.apply).toBeDefined(); // apply() succeeded this run (not the catch branch)
+    expect(outcome2?.mcpEnsure?.gc?.results).toEqual([
+      { name: "agent-tasks", action: "removed", remove: { status: "removed", message: "", code: 0 } },
+    ]);
+    const registryAfterRun2 = JSON.parse(fs.readFileSync(registryPath, "utf8")) as {
+      mcpServers?: Record<string, unknown>;
+    };
+    expect(registryAfterRun2.mcpServers?.["agent-tasks"]).toBeUndefined();
+    expect(cap2.stderr()).toContain("deregistered 1 stale MCP server(s)");
+  });
+
+  it("combined edit (MCP removal + a NEW pack/hook addition) still GC's the dropped custom server, even though apply() also re-stamps for the hook change", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const registryPath = path.join(tmpHome, ".claude.json");
+
+    const run1Cli = fakeClaudeCli(registryPath);
+    const cap1 = captureStreams();
+    const run1 = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      mcpExec: run1Cli.exec,
+      authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
+      prompts: mockPrompts({
+        select: ["custom"],
+        checkbox: [[], ["agent-tasks"], [], ["claude-code"]],
+        input: ["~/.claude/projects/{project}/memory"],
+        confirm: [true],
+      }),
+      stdout: cap1.out,
+      stderr: cap1.err,
+    });
+    expect(run1.aborted).toBe(false);
+    const registryAfterRun1 = JSON.parse(fs.readFileSync(registryPath, "utf8")) as {
+      mcpServers?: Record<string, unknown>;
+    };
+    expect(registryAfterRun1.mcpServers?.["agent-tasks"]).toBeDefined();
+    const settingsBeforeRun2 = fs.readFileSync(path.join(tmpHome, ".claude", "settings.json"), "utf8");
+
+    // Run 2: drop agent-tasks (MCP removal) AND add a brand-new pack
+    // (hook change) in the SAME edit. apply() re-stamps `.last-apply`
+    // for the hook change regardless of the GC question; the pre-apply
+    // capture (FIX 2) must still see agent-tasks in the PRIOR snapshot.
+    const run2Cli = fakeClaudeCli(registryPath);
+    const cap2 = captureStreams();
+    const run2 = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      forceOverwrite: true,
+      mcpExec: run2Cli.exec,
+      prompts: mockPrompts({
+        select: ["custom"],
+        checkbox: [["understanding-before-execution"], [], [], ["claude-code"]],
+        input: ["~/.claude/projects/{project}/memory"],
+        confirm: [true],
+      }),
+      stdout: cap2.out,
+      stderr: cap2.err,
+    });
+    expect(run2.aborted).toBe(false);
+    const outcome2 = run2.applies?.[0];
+    expect(outcome2?.apply?.targetWritten).toBe(true); // the hook change DID land (real re-stamp)
+    const settingsAfterRun2 = fs.readFileSync(path.join(tmpHome, ".claude", "settings.json"), "utf8");
+    expect(settingsAfterRun2).not.toBe(settingsBeforeRun2); // confirms a genuine hook-side change
+    expect(outcome2?.mcpEnsure?.gc?.results).toEqual([
+      { name: "agent-tasks", action: "removed", remove: { status: "removed", message: "", code: 0 } },
+    ]);
+    const registryAfterRun2 = JSON.parse(fs.readFileSync(registryPath, "utf8")) as {
+      mcpServers?: Record<string, unknown>;
+    };
+    expect(registryAfterRun2.mcpServers?.["agent-tasks"]).toBeUndefined();
   });
 });
 

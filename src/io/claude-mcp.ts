@@ -484,13 +484,20 @@ export interface EnsureServerResult {
 export interface EnsureMcpServersGcOptions {
   /**
    * Names this harness install is allowed to garbage-collect from the
-   * registry (task 363a6de0, D-103 ownership union: the uninstall
-   * module's `DEFAULT_OWNED_MCP_SERVERS`, union the current manifest's
-   * `tools.mcp[]` names, union the `.last-apply` manifest snapshot's
-   * `tools.mcp[]` names). Building this set is entirely the caller's
-   * responsibility — see `wireClaudeMcp` in `cli/init/interactive.ts` for
-   * the reference construction. A registry entry outside this set is
-   * NEVER touched by GC, no matter how it drifts from `desired`.
+   * registry (task 363a6de0, D-107 ownership union: the current
+   * manifest's `tools.mcp[]` names, union the `.last-apply` manifest
+   * snapshot's `tools.mcp[]` names — the snapshot as of BEFORE the
+   * caller's own apply ran, so a combined edit that both drops an entry
+   * and re-stamps `.last-apply` doesn't erase the provenance). Building
+   * this set is entirely the caller's responsibility — see `wireClaudeMcp`
+   * in `cli/init/interactive.ts` for the reference construction.
+   * Deliberately NOT included: the uninstall module's
+   * `DEFAULT_OWNED_MCP_SERVERS` (D-107 supersedes the original D-103,
+   * reviewer HIGH finding) — a server sharing one of those default names
+   * that the operator registered themselves, outside/before any harness
+   * manifest, must never be GC'd just because it's absent from `desired`.
+   * A registry entry outside this set is NEVER touched by GC, no matter
+   * how it drifts from `desired`.
    */
   ownedNames: string[];
 }
@@ -630,9 +637,11 @@ export async function ensureMcpServers(opts: EnsureMcpServersOptions): Promise<E
     } else {
       const desiredNames = new Set(Object.keys(opts.desired));
       const owned = new Set(opts.gc.ownedNames);
-      // Owned ∧ registered ∧ NOT desired (D-103). `desired` membership is
-      // checked first, so a still-active manifest entry is protected
-      // regardless of whether its registered content has drifted.
+      // Owned ∧ registered ∧ NOT desired (D-103/D-107 — this module is
+      // agnostic to how the caller built `ownedNames`). `desired`
+      // membership is checked first, so a still-active manifest entry is
+      // protected regardless of whether its registered content has
+      // drifted.
       const candidates = Object.keys(existing)
         .filter((name) => owned.has(name) && !desiredNames.has(name))
         .sort();
