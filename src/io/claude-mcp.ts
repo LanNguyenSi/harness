@@ -374,7 +374,7 @@ export function resolveClaudeUserRegistryPath(opts: ResolveRegistryPathOptions =
   return path.join(path.dirname(homeDir), ".claude.json");
 }
 
-interface RegistryReadResult {
+export interface RegistryReadResult {
   servers: Record<string, unknown>;
   error: string | null;
 }
@@ -384,8 +384,14 @@ interface RegistryReadResult {
  * reads/interprets `projects.<path>.mcpServers` — that's project-local
  * Claude Code state, out of scope here (see `probeProjectLocalClaudeJson`
  * in uninstall for the existing, separate, read-only handling of it).
+ *
+ * Exported (task 83d8d03a) as the single allowed primitive for reading the
+ * effective Claude Code user-scope MCP registration from outside this
+ * module — `adopt` (MCP-drift comparison) and `detect` (team/full
+ * recognition) both call this directly instead of duplicating a registry
+ * reader or spawning `claude mcp list`. Read-only; never writes.
  */
-function readTopLevelMcpServers(registryPath: string): RegistryReadResult {
+export function readTopLevelMcpServers(registryPath: string): RegistryReadResult {
   let raw: string;
   try {
     raw = fs.readFileSync(registryPath, "utf8");

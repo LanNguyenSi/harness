@@ -157,12 +157,16 @@ export interface SettingsRootWithMcp extends SettingsRoot {
   mcpServers?: Record<string, SettingsMcpSpec>;
 }
 
-export function parseSettingsMcpServers(raw: unknown): DerivedMcp[] {
-  if (!isRecord(raw)) return [];
-  const root = raw as SettingsRootWithMcp;
-  if (!isRecord(root.mcpServers)) return [];
+/**
+ * Shared per-entry projection: a raw `{ name -> spec }` map (settings.json's
+ * `mcpServers` block, or the registry's top-level `mcpServers` key) into the
+ * flat `DerivedMcp[]` shape both `parseSettingsMcpServers` (dead-block
+ * warning, task 83d8d03a) and `projectRegistryMcpServers` (the actual
+ * drift source, D-101) need identically.
+ */
+function projectMcpServersRecord(entries: Record<string, unknown>): DerivedMcp[] {
   const out: DerivedMcp[] = [];
-  for (const [name, specRaw] of Object.entries(root.mcpServers)) {
+  for (const [name, specRaw] of Object.entries(entries)) {
     if (!isRecord(specRaw)) continue;
     const spec = specRaw as SettingsMcpSpec;
     if (typeof spec.command !== "string" || spec.command.length === 0) continue;
@@ -181,6 +185,31 @@ export function parseSettingsMcpServers(raw: unknown): DerivedMcp[] {
     out.push(entry);
   }
   return out;
+}
+
+export function parseSettingsMcpServers(raw: unknown): DerivedMcp[] {
+  if (!isRecord(raw)) return [];
+  const root = raw as SettingsRootWithMcp;
+  if (!isRecord(root.mcpServers)) return [];
+  return projectMcpServersRecord(root.mcpServers);
+}
+
+/**
+ * Project the effective Claude Code user-scope MCP registry — the
+ * top-level `mcpServers` map of `~/.claude.json` /
+ * `$CLAUDE_CONFIG_DIR/.claude.json`, read read-only via
+ * `readTopLevelMcpServers` in io/claude-mcp.ts — into the same flat
+ * `DerivedMcp[]` shape `parseSettingsMcpServers` produces for the (dead)
+ * settings.json block, so `computeMcpDrift` can diff either source
+ * against the manifest projection uniformly.
+ *
+ * D-101: this is now the ONLY source `adopt` uses to compute MCP drift,
+ * regardless of the `<file>` CLI argument — settings.json's own
+ * `mcpServers` block (still parsed by `parseSettingsMcpServers` above) is
+ * dead at runtime and is surfaced only as a warning, never as drift.
+ */
+export function projectRegistryMcpServers(servers: Record<string, unknown>): DerivedMcp[] {
+  return projectMcpServersRecord(servers);
 }
 
 export function manifestMcpProjection(

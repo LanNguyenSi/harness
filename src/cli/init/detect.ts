@@ -4,13 +4,22 @@
 // shape, never thrown. No writes, no network, no child processes.
 //
 // v1 scope (mirrors task c5287b80): Claude Code + Codex. MCP detection
-// reads Claude Code's settings.json only — Codex's TOML parser lives in
-// the v1.1 opencode-adapter task. The result is still useful for Codex
-// users: `runtimes[]` flags presence so the wizard can pre-select.
+// reads Claude Code's EFFECTIVE user-scope registration only — the
+// top-level `mcpServers` key of `~/.claude.json` /
+// `$CLAUDE_CONFIG_DIR/.claude.json`, read read-only via
+// `readTopLevelMcpServers` (io/claude-mcp.ts) (task 83d8d03a). It no
+// longer reads the `mcpServers` block in `~/.claude/settings.json`: Claude
+// Code never consumed that block at runtime (see io/claude-mcp.ts:1-9),
+// so `team`/`full` profile recognition (interactive.ts's
+// `detectionHasAgentTasks`) would otherwise key off dead state. Codex's
+// TOML parser lives in the v1.1 opencode-adapter task. The result is
+// still useful for Codex users: `runtimes[]` flags presence so the
+// wizard can pre-select.
 
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { readTopLevelMcpServers, resolveClaudeUserRegistryPath } from "../../io/claude-mcp.js";
 import { resolveHomeDir } from "../../runtime/home-dir.js";
 import { VERSION } from "../../version.js";
 
@@ -24,13 +33,15 @@ export interface DetectedRuntime {
   /** The runtime's primary config file path. */
   settingsPath: string;
   settingsExists: boolean;
-  /** Set when settingsExists but parsing failed. settingsExists stays true. */
-  settingsParseError?: string;
 }
 
 export interface DetectedMcpServer {
   name: string;
-  /** Which runtime's config file this entry was read from. v1: only claude-code. */
+  /**
+   * Which runtime this entry was read from. v1: only claude-code — read
+   * from its effective user-scope registry (~/.claude.json), not
+   * settings.json (task 83d8d03a).
+   */
   runtime: "claude-code";
   command: string;
   args: string[];
@@ -50,11 +61,26 @@ export interface DetectionResult {
   runtimes: DetectedRuntime[];
   manifest: DetectedManifest;
   mcpServers: DetectedMcpServer[];
+  /**
+   * Set when the Claude Code user-scope MCP registry (~/.claude.json /
+   * $CLAUDE_CONFIG_DIR/.claude.json) exists but could not be read safely
+   * (malformed JSON, `mcpServers` not an object). A missing registry file
+   * is NOT an error — `mcpServers` is simply `[]` in that case; this field
+   * lets a caller distinguish "genuinely not registered" from "could not
+   * tell" instead of detect() silently guessing empty (task 83d8d03a).
+   */
+  mcpRegistryParseError?: string;
 }
 
 export interface DetectOptions {
   /** Override `os.homedir()` for tests. */
   homeDir?: string;
+  /**
+   * Override for process.env (CLAUDE_CONFIG_DIR lookup) used to resolve
+   * the Claude Code user-scope MCP registry path. Defaults to
+   * `process.env`.
+   */
+  env?: NodeJS.ProcessEnv;
 }
 
 function resolveHome(opts: DetectOptions): string {
@@ -64,14 +90,6 @@ function resolveHome(opts: DetectOptions): string {
 function safeStat(p: string): fs.Stats | null {
   try {
     return fs.statSync(p);
-  } catch {
-    return null;
-  }
-}
-
-function safeReadFile(p: string): string | null {
-  try {
-    return fs.readFileSync(p, "utf8");
   } catch {
     return null;
   }
@@ -106,37 +124,38 @@ function detectCodexRuntime(home: string): DetectedRuntime {
   };
 }
 
-interface ClaudeSettingsShape {
-  mcpServers?: Record<string, { command?: string; args?: string[] }>;
+interface RegistryMcpSpec {
+  command?: unknown;
+  args?: unknown;
 }
 
+/**
+ * Read Claude Code's EFFECTIVE user-scope MCP registration: the top-level
+ * `mcpServers` key of `~/.claude.json` / `$CLAUDE_CONFIG_DIR/.claude.json`
+ * (task 83d8d03a), via the shared read-only primitive in io/claude-mcp.ts.
+ * Never reads `~/.claude/settings.json` for this — Claude Code does not
+ * consume that file's `mcpServers` block at runtime. A missing registry
+ * file is not an error (empty list); malformed JSON / a non-object
+ * `mcpServers` is reported via `parseError` rather than guessed at.
+ */
 function parseClaudeMcpServers(
   runtime: DetectedRuntime,
+  env: NodeJS.ProcessEnv,
 ): { servers: DetectedMcpServer[]; parseError?: string } {
-  if (!runtime.settingsExists) return { servers: [] };
-  const raw = safeReadFile(runtime.settingsPath);
-  if (raw === null) {
-    return { servers: [], parseError: "settings.json unreadable" };
-  }
-  let parsed: ClaudeSettingsShape;
-  try {
-    parsed = JSON.parse(raw) as ClaudeSettingsShape;
-  } catch (err) {
-    return { servers: [], parseError: `settings.json invalid JSON: ${(err as Error).message}` };
-  }
-  const entries = parsed.mcpServers;
-  if (!entries || typeof entries !== "object") return { servers: [] };
+  const registryPath = resolveClaudeUserRegistryPath({ homeDir: runtime.home, env });
+  const { servers: rawServers, error } = readTopLevelMcpServers(registryPath);
   const servers: DetectedMcpServer[] = [];
-  for (const name of Object.keys(entries).sort()) {
-    const entry = entries[name];
-    if (!entry || typeof entry !== "object") continue;
+  for (const name of Object.keys(rawServers).sort()) {
+    const entryRaw = rawServers[name];
+    if (typeof entryRaw !== "object" || entryRaw === null || Array.isArray(entryRaw)) continue;
+    const entry = entryRaw as RegistryMcpSpec;
     if (typeof entry.command !== "string" || entry.command.length === 0) continue;
     const args = Array.isArray(entry.args)
       ? entry.args.filter((a): a is string => typeof a === "string")
       : [];
     servers.push({ name, runtime: "claude-code", command: entry.command, args });
   }
-  return { servers };
+  return error !== null ? { servers, parseError: error } : { servers };
 }
 
 function detectManifest(userHome: string): DetectedManifest {
@@ -162,12 +181,13 @@ export async function detect(opts: DetectOptions = {}): Promise<DetectionResult>
   const claude = detectClaudeRuntime(home);
   const codex = detectCodexRuntime(home);
   const manifest = detectManifest(home);
-  const { servers, parseError } = parseClaudeMcpServers(claude);
-  if (parseError) claude.settingsParseError = parseError;
-  return {
+  const { servers, parseError } = parseClaudeMcpServers(claude, opts.env ?? process.env);
+  const result: DetectionResult = {
     harness: { version: VERSION },
     runtimes: [claude, codex],
     manifest,
     mcpServers: servers,
   };
+  if (parseError !== undefined) result.mcpRegistryParseError = parseError;
+  return result;
 }
