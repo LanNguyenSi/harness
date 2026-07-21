@@ -9,16 +9,20 @@ import {
   SNAPSHOT_VERSION,
   type UninstallSnapshot,
 } from "../../../src/cli/uninstall/snapshot.js";
+import { manualRemoveLines, type ClaudeMcpExec } from "../../../src/io/claude-mcp.js";
 
 let tmp: string;
 let homeDir: string;
 let settingsPath: string;
+/** `resolveClaudeUserRegistryPath` derives this as `path.join(path.dirname(homeDir), ".claude.json")`. */
+let registryPath: string;
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-uninstall-"));
   homeDir = path.join(tmp, ".claude");
   fs.mkdirSync(homeDir, { recursive: true });
   settingsPath = path.join(homeDir, "settings.json");
+  registryPath = path.join(tmp, ".claude.json");
 });
 
 afterEach(() => {
@@ -29,12 +33,55 @@ function writeSettings(obj: Record<string, unknown>): void {
   fs.writeFileSync(settingsPath, `${JSON.stringify(obj, null, 2)}\n`);
 }
 
+function writeRegistry(obj: Record<string, unknown>): void {
+  fs.writeFileSync(registryPath, `${JSON.stringify(obj, null, 2)}\n`);
+}
+
 function readJson(filePath: string): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
 }
 
+// ---------------------------------------------------------------------
+// Fake-exec helpers (mirrors tests/cli/doctor-claude-mcp.test.ts) — every
+// test in the "MCP registry deregistration" describe blocks below injects
+// `mcpExec` so no real `claude` CLI is ever spawned.
+// ---------------------------------------------------------------------
+
+function execCliMissing(): ClaudeMcpExec {
+  return async () => ({ code: 127, stdout: "", stderr: "", enoent: true, timedOut: false });
+}
+
+function execThrowsIfCalled(): ClaudeMcpExec {
+  return async () => {
+    throw new Error("claude mcp remove must not be spawned in this test");
+  };
+}
+
+/**
+ * Records every `args` array it's called with and resolves per-name
+ * outcomes from `outcomes` (default: success, exit 0). The server name is
+ * always the last element of `claude mcp remove --scope user <name>`.
+ */
+function execRecordingRemove(
+  calls: string[][],
+  outcomes: Record<string, { code: number; stderr?: string }> = {},
+): ClaudeMcpExec {
+  return async (args) => {
+    calls.push(args);
+    const name = args[args.length - 1] ?? "";
+    const outcome = outcomes[name] ?? { code: 0 };
+    return {
+      code: outcome.code,
+      stdout: "",
+      stderr: outcome.stderr ?? "",
+      enoent: false,
+      timedOut: false,
+    };
+  };
+}
+
 describe("uninstall — inventory (no --apply)", () => {
-  it("reports all harness-owned artefacts and leaves disk untouched", () => {
+  it("reports all harness-owned artefacts and leaves disk untouched", async () => {
     fs.writeFileSync(path.join(homeDir, "harness.yaml"), "version: 1\n");
     fs.writeFileSync(path.join(homeDir, "harness.lock"), "{}\n");
     fs.mkdirSync(path.join(homeDir, "harness.generated", ".approvals"), { recursive: true });
@@ -65,7 +112,7 @@ describe("uninstall — inventory (no --apply)", () => {
       },
     });
 
-    const r = uninstall({ homeDir, settingsPath });
+    const r = await uninstall({ homeDir, settingsPath, mcpExec: execThrowsIfCalled() });
     expect(r.mode).toBe("list");
     if (r.mode !== "list") return;
     expect(r.inventory.manifestPath).toBe(path.join(homeDir, "harness.yaml"));
@@ -80,6 +127,9 @@ describe("uninstall — inventory (no --apply)", () => {
     ]);
     // grounding-mcp is owned by the default allowlist; foreign-mcp is foreign.
     expect(r.inventory.mcpServers).toEqual(["grounding-mcp"]);
+    // No registry file on disk -> nothing registered, nothing planned.
+    expect(r.inventory.mcpRegistryServers).toEqual([]);
+    expect(r.inventory.mcpRegistryReadError).toBeNull();
 
     // No new files on disk besides what we set up.
     const all = fs.readdirSync(homeDir).sort();
@@ -88,18 +138,19 @@ describe("uninstall — inventory (no --apply)", () => {
     expect(all.some((n) => n.startsWith(SNAPSHOT_BASENAME_PREFIX))).toBe(false);
   });
 
-  it("returns an empty inventory when ~/.claude is empty", () => {
-    const r = uninstall({ homeDir, settingsPath });
+  it("returns an empty inventory when ~/.claude is empty", async () => {
+    const r = await uninstall({ homeDir, settingsPath, mcpExec: execThrowsIfCalled() });
     if (r.mode !== "list") throw new Error("expected list");
     expect(r.inventory.manifestPath).toBeNull();
     expect(r.inventory.lockPath).toBeNull();
     expect(r.inventory.generatedDir).toBeNull();
     expect(r.inventory.hookGroups).toEqual([]);
     expect(r.inventory.mcpServers).toEqual([]);
+    expect(r.inventory.mcpRegistryServers).toEqual([]);
     expect(r.inventory.preHarnessBackups).toEqual([]);
   });
 
-  it("treats mixed (harness + foreign) hook groups as foreign and warns", () => {
+  it("treats mixed (harness + foreign) hook groups as foreign and warns", async () => {
     writeSettings({
       hooks: {
         PreToolUse: [
@@ -113,13 +164,13 @@ describe("uninstall — inventory (no --apply)", () => {
         ],
       },
     });
-    const r = uninstall({ homeDir, settingsPath });
+    const r = await uninstall({ homeDir, settingsPath, mcpExec: execThrowsIfCalled() });
     if (r.mode !== "list") throw new Error("expected list");
     expect(r.inventory.hookGroups).toEqual([]);
     expect(r.inventory.warnings.join("\n")).toMatch(/mixed group/);
   });
 
-  it("falls back to the bundled-template allowlist when the manifest is gone", () => {
+  it("falls back to the bundled-template allowlist when the manifest is gone", async () => {
     // No manifest on disk. uninstall must still recognise the MCP names
     // the bundled templates wire by default (agent-tasks, codebase-oracle,
     // grounding-mcp), else a manifest-less uninstall silently strands them.
@@ -131,7 +182,7 @@ describe("uninstall — inventory (no --apply)", () => {
         "foreign": { command: "f" },
       },
     });
-    const r = uninstall({ homeDir, settingsPath });
+    const r = await uninstall({ homeDir, settingsPath, mcpExec: execThrowsIfCalled() });
     if (r.mode !== "list") throw new Error("expected list");
     expect(r.inventory.mcpServers.sort()).toEqual([
       "agent-tasks",
@@ -140,7 +191,7 @@ describe("uninstall — inventory (no --apply)", () => {
     ]);
   });
 
-  it("picks up manifest-declared MCP names beyond the default allowlist", () => {
+  it("picks up manifest-declared MCP names beyond the default allowlist", async () => {
     fs.writeFileSync(
       path.join(homeDir, "harness.yaml"),
       "tools:\n  mcp:\n    - name: my-custom-mcp\n      command: x\n",
@@ -152,14 +203,14 @@ describe("uninstall — inventory (no --apply)", () => {
         "foreign": { command: "f" },
       },
     });
-    const r = uninstall({ homeDir, settingsPath });
+    const r = await uninstall({ homeDir, settingsPath, mcpExec: execThrowsIfCalled() });
     if (r.mode !== "list") throw new Error("expected list");
     expect(r.inventory.mcpServers.sort()).toEqual(["grounding-mcp", "my-custom-mcp"]);
   });
 });
 
 describe("uninstall — --apply", () => {
-  it("removes harness-owned hook groups + mcpServers, writes backup + snapshot, leaves siblings intact", () => {
+  it("removes harness-owned hook groups + mcpServers, writes backup + snapshot, leaves siblings intact", async () => {
     fs.writeFileSync(path.join(homeDir, "harness.yaml"), "version: 1\n");
     fs.writeFileSync(path.join(homeDir, "harness.lock"), "{}\n");
     fs.mkdirSync(path.join(homeDir, "harness.generated"), { recursive: true });
@@ -178,11 +229,12 @@ describe("uninstall — --apply", () => {
       theme: "dark",
     });
 
-    const r = uninstall({
+    const r = await uninstall({
       homeDir,
       settingsPath,
       apply: true,
       now: new Date("2026-05-16T10:00:00Z"),
+      mcpExec: execThrowsIfCalled(),
     });
     expect(r.mode).toBe("apply");
     if (r.mode !== "apply") return;
@@ -194,6 +246,9 @@ describe("uninstall — --apply", () => {
     expect(r.removedFiles).toContain(path.join(homeDir, "harness.generated"));
     expect(fs.existsSync(path.join(homeDir, "harness.yaml"))).toBe(false);
     expect(fs.existsSync(path.join(homeDir, "harness.generated"))).toBe(false);
+    // No registry file on disk -> no candidates -> no exec calls at all
+    // (execThrowsIfCalled would have failed the test otherwise).
+    expect(r.mcpRegistryRemovals).toEqual([]);
 
     const after = readJson(settingsPath);
     const hooks = after["hooks"] as Record<string, unknown[]>;
@@ -219,33 +274,34 @@ describe("uninstall — --apply", () => {
     expect(snap.settingsBeforeSha256).not.toBe(snap.settingsAfterSha256);
   });
 
-  it("drops the hooks and mcpServers keys entirely when removal empties them", () => {
+  it("drops the hooks and mcpServers keys entirely when removal empties them", async () => {
     writeSettings({
       hooks: { PreToolUse: [{ hooks: [{ type: "command", command: "harness policy intercept" }] }] },
       mcpServers: { "grounding-mcp": { command: "g" } },
     });
-    const r = uninstall({ homeDir, settingsPath, apply: true });
+    const r = await uninstall({ homeDir, settingsPath, apply: true, mcpExec: execThrowsIfCalled() });
     if (r.mode !== "apply") throw new Error("expected apply");
     const after = readJson(settingsPath);
     expect(after).not.toHaveProperty("hooks");
     expect(after).not.toHaveProperty("mcpServers");
   });
 
-  it("on a clean system with no harness install, exits without writing anything", () => {
-    const r = uninstall({ homeDir, settingsPath, apply: true });
+  it("on a clean system with no harness install, exits without writing anything", async () => {
+    const r = await uninstall({ homeDir, settingsPath, apply: true, mcpExec: execThrowsIfCalled() });
     if (r.mode !== "apply") throw new Error("expected apply");
     expect(r.backupPath).toBeNull();
     expect(r.snapshotPath).toBeNull();
     expect(r.removedFiles).toEqual([]);
+    expect(r.mcpRegistryRemovals).toEqual([]);
     const entries = fs.readdirSync(homeDir);
     expect(entries).toEqual([]);
   });
 
-  it("with no settings.json, still removes ~/.claude/harness.* on --apply", () => {
+  it("with no settings.json, still removes ~/.claude/harness.* on --apply", async () => {
     fs.writeFileSync(path.join(homeDir, "harness.yaml"), "version: 1\n");
     fs.writeFileSync(path.join(homeDir, "harness.lock"), "{}\n");
     // No settings.json on disk.
-    const r = uninstall({ homeDir, settingsPath, apply: true });
+    const r = await uninstall({ homeDir, settingsPath, apply: true, mcpExec: execThrowsIfCalled() });
     if (r.mode !== "apply") throw new Error("expected apply");
     expect(r.removedFiles).toEqual([
       path.join(homeDir, "harness.yaml"),
@@ -257,30 +313,34 @@ describe("uninstall — --apply", () => {
 });
 
 describe("uninstall — refuses malformed settings.json", () => {
-  it("throws on unreadable JSON", () => {
+  it("throws on unreadable JSON", async () => {
     fs.writeFileSync(settingsPath, "{ not json");
-    expect(() => uninstall({ homeDir, settingsPath })).toThrow(UninstallError);
-    expect(() => uninstall({ homeDir, settingsPath })).toThrow(/not valid JSON/);
+    await expect(uninstall({ homeDir, settingsPath })).rejects.toThrow(UninstallError);
+    await expect(uninstall({ homeDir, settingsPath })).rejects.toThrow(/not valid JSON/);
   });
 
-  it("throws when settings.json is an array", () => {
+  it("throws when settings.json is an array", async () => {
     fs.writeFileSync(settingsPath, "[]");
-    expect(() => uninstall({ homeDir, settingsPath })).toThrow(/not a JSON object/);
+    await expect(uninstall({ homeDir, settingsPath })).rejects.toThrow(/not a JSON object/);
   });
 
-  it("throws when hooks is not an object", () => {
+  it("throws when hooks is not an object", async () => {
     writeSettings({ hooks: ["bad"] as unknown as Record<string, unknown[]> });
-    expect(() => uninstall({ homeDir, settingsPath })).toThrow(/`hooks` field is not an object/);
+    await expect(uninstall({ homeDir, settingsPath })).rejects.toThrow(
+      /`hooks` field is not an object/,
+    );
   });
 
-  it("throws when mcpServers is not an object", () => {
+  it("throws when mcpServers is not an object", async () => {
     writeSettings({ mcpServers: [] as unknown as Record<string, unknown> });
-    expect(() => uninstall({ homeDir, settingsPath })).toThrow(/`mcpServers` field is not an object/);
+    await expect(uninstall({ homeDir, settingsPath })).rejects.toThrow(
+      /`mcpServers` field is not an object/,
+    );
   });
 });
 
 describe("uninstall — --restore-from", () => {
-  it("atomically replaces settings.json from a pre-harness backup, snapshots both, and unlinks harness files", () => {
+  it("atomically replaces settings.json from a pre-harness backup, snapshots both, and unlinks harness files", async () => {
     const pristine = { theme: "dark", mcpServers: { foreign: { command: "f" } } };
     const backupSource = path.join(homeDir, "settings.json.pre-harness-2026-05-11");
     fs.writeFileSync(backupSource, `${JSON.stringify(pristine, null, 2)}\n`);
@@ -294,11 +354,12 @@ describe("uninstall — --restore-from", () => {
       theme: "dark",
     });
 
-    const r = uninstall({
+    const r = await uninstall({
       homeDir,
       settingsPath,
       restoreFrom: backupSource,
       now: new Date("2026-05-16T10:00:00Z"),
+      mcpExec: execThrowsIfCalled(),
     });
     if (r.mode !== "restore") throw new Error("expected restore");
 
@@ -306,6 +367,7 @@ describe("uninstall — --restore-from", () => {
     expect(after).toEqual(pristine);
     expect(fs.existsSync(path.join(homeDir, "harness.yaml"))).toBe(false);
     expect(fs.existsSync(path.join(homeDir, "harness.lock"))).toBe(false);
+    expect(r.mcpRegistryRemovals).toEqual([]);
 
     // Backup of pre-restore live file lands next to settings.json.
     expect(fs.existsSync(r.backupPath)).toBe(true);
@@ -318,54 +380,60 @@ describe("uninstall — --restore-from", () => {
     expect(snap.removedMcpServers.map((s) => s.name)).toEqual(["grounding-mcp"]);
   });
 
-  it("refuses when the restore source is not valid JSON", () => {
+  it("refuses when the restore source is not valid JSON", async () => {
     const bad = path.join(tmp, "bad.json");
     fs.writeFileSync(bad, "{ corrupt");
     writeSettings({});
-    expect(() => uninstall({ homeDir, settingsPath, restoreFrom: bad })).toThrow(
+    await expect(uninstall({ homeDir, settingsPath, restoreFrom: bad })).rejects.toThrow(
       /restore source .* is not valid JSON/,
     );
   });
 
-  it("refuses when settings.json does not exist", () => {
+  it("refuses when settings.json does not exist", async () => {
     const src = path.join(tmp, "src.json");
     fs.writeFileSync(src, `${JSON.stringify({ theme: "dark" })}\n`);
-    expect(() => uninstall({ homeDir, settingsPath, restoreFrom: src })).toThrow(
+    await expect(uninstall({ homeDir, settingsPath, restoreFrom: src })).rejects.toThrow(
       /does not exist; nothing to restore over/,
     );
   });
 });
 
 describe("uninstall — gate state + state root (harness-discovery M2)", () => {
-  it("inventories and removes .understanding-gate/ under the state root", () => {
+  it("inventories and removes .understanding-gate/ under the state root", async () => {
     fs.writeFileSync(path.join(homeDir, "harness.yaml"), "version: 1\n");
     const gateDir = path.join(homeDir, ".understanding-gate");
     fs.mkdirSync(path.join(gateDir, "reports"), { recursive: true });
     fs.writeFileSync(path.join(gateDir, "reports", "r.json"), "{}\n");
     fs.mkdirSync(path.join(gateDir, "parse-errors"), { recursive: true });
 
-    const listed = uninstall({ homeDir, settingsPath });
+    const listed = await uninstall({ homeDir, settingsPath, mcpExec: execThrowsIfCalled() });
     expect(listed.mode).toBe("list");
     if (listed.mode !== "list") return;
     expect(listed.inventory.gateStateDir).toBe(gateDir);
     // Dry-run leaves it on disk.
     expect(fs.existsSync(gateDir)).toBe(true);
 
-    const r = uninstall({ homeDir, settingsPath, apply: true });
+    const r = await uninstall({ homeDir, settingsPath, apply: true, mcpExec: execThrowsIfCalled() });
     expect(r.mode).toBe("apply");
     if (r.mode !== "apply") return;
     expect(r.removedFiles).toContain(gateDir);
     expect(fs.existsSync(gateDir)).toBe(false);
   });
 
-  it("resolves manifest/lock/generated/gate-state from a split state root (migrated installs)", () => {
+  it("resolves manifest/lock/generated/gate-state from a split state root (migrated installs)", async () => {
     const stateDir = path.join(tmp, ".harness");
     fs.mkdirSync(path.join(stateDir, "harness.generated"), { recursive: true });
     fs.writeFileSync(path.join(stateDir, "harness.yaml"), "version: 1\n");
     fs.mkdirSync(path.join(stateDir, ".understanding-gate"), { recursive: true });
     writeSettings({});
 
-    const r = uninstall({ homeDir, settingsPath, stateDir, apply: true });
+    const r = await uninstall({
+      homeDir,
+      settingsPath,
+      stateDir,
+      apply: true,
+      mcpExec: execThrowsIfCalled(),
+    });
     expect(r.mode).toBe("apply");
     if (r.mode !== "apply") return;
     expect(r.inventory.stateDir).toBe(stateDir);
@@ -375,9 +443,9 @@ describe("uninstall — gate state + state root (harness-discovery M2)", () => {
     expect(fs.existsSync(path.join(stateDir, ".understanding-gate"))).toBe(false);
   });
 
-  it("explicit homeDir without stateDir keeps the historic single-root contract", () => {
+  it("explicit homeDir without stateDir keeps the historic single-root contract", async () => {
     fs.writeFileSync(path.join(homeDir, "harness.yaml"), "version: 1\n");
-    const r = uninstall({ homeDir, settingsPath });
+    const r = await uninstall({ homeDir, settingsPath, mcpExec: execThrowsIfCalled() });
     expect(r.mode).toBe("list");
     if (r.mode !== "list") return;
     expect(r.inventory.stateDir).toBe(homeDir);
@@ -386,15 +454,163 @@ describe("uninstall — gate state + state root (harness-discovery M2)", () => {
 });
 
 describe("uninstall — real-state-root seatbelt", () => {
-  it("refuses to resolve the real state root without explicit overrides (test-leak guard)", () => {
+  it("refuses to resolve the real state root without explicit overrides (test-leak guard)", async () => {
     const saved = process.env.HARNESS_ALLOW_REAL_GENERATED_DIR;
     delete process.env.HARNESS_ALLOW_REAL_GENERATED_DIR;
     try {
-      expect(() => uninstall({ settingsPath })).toThrow(UninstallError);
-      expect(() => uninstall({ settingsPath })).toThrow(/refused to fall back/);
+      await expect(uninstall({ settingsPath })).rejects.toThrow(UninstallError);
+      await expect(uninstall({ settingsPath })).rejects.toThrow(/refused to fall back/);
     } finally {
       if (saved === undefined) delete process.env.HARNESS_ALLOW_REAL_GENERATED_DIR;
       else process.env.HARNESS_ALLOW_REAL_GENERATED_DIR = saved;
     }
+  });
+});
+
+// ---------------------------------------------------------------------
+// MCP registry deregistration (task d6086441): `claude mcp remove` for
+// harness-owned servers actually REGISTERED in the claude CLI's
+// user-scope registry (~/.claude.json — here `registryPath`, a temp-dir
+// stand-in). Orthogonal to the settings.json `mcpServers` block handled
+// above.
+// ---------------------------------------------------------------------
+
+describe("uninstall — MCP registry deregistration, dry-run", () => {
+  it("lists planned removals with ZERO exec calls", async () => {
+    writeRegistry({
+      mcpServers: {
+        "grounding-mcp": { command: "node", args: ["server.js"] },
+        "foreign-mcp": { command: "node", args: ["other.js"] },
+      },
+    });
+    const r = await uninstall({ homeDir, settingsPath, mcpExec: execThrowsIfCalled() });
+    if (r.mode !== "list") throw new Error("expected list");
+    expect(r.inventory.mcpRegistryPath).toBe(registryPath);
+    // Owned (default allowlist) + registered -> planned; foreign untouched.
+    expect(r.inventory.mcpRegistryServers).toEqual(["grounding-mcp"]);
+  });
+});
+
+describe("uninstall — MCP registry deregistration, --apply", () => {
+  it("removes owned+registered names via exact `claude mcp remove` commands; non-owned stays untouched", async () => {
+    writeRegistry({
+      mcpServers: {
+        "grounding-mcp": { command: "node", args: ["server.js"] },
+        "foreign-mcp": { command: "node", args: ["other.js"] },
+      },
+    });
+    const calls: string[][] = [];
+    const r = await uninstall({
+      homeDir,
+      settingsPath,
+      apply: true,
+      mcpExec: execRecordingRemove(calls),
+    });
+    if (r.mode !== "apply") throw new Error("expected apply");
+    expect(calls).toEqual([["mcp", "remove", "--scope", "user", "grounding-mcp"]]);
+    expect(r.mcpRegistryRemovals).toEqual([
+      { name: "grounding-mcp", status: "removed", message: "" },
+    ]);
+  });
+
+  it("attempts no remove for an owned name that is not actually registered", async () => {
+    // settings.json declares grounding-mcp owned (drives the settings.json
+    // cleanup path), but the LIVE registry only has an unrelated foreign
+    // entry — the registry-removal path must never blindly iterate the
+    // DEFAULT_OWNED_MCP_SERVERS/manifest allowlist; only names confirmed
+    // present via a read-only registry check are candidates.
+    writeSettings({ mcpServers: { "grounding-mcp": { command: "g" } } });
+    writeRegistry({ mcpServers: { "foreign-mcp": { command: "node" } } });
+    const r = await uninstall({
+      homeDir,
+      settingsPath,
+      apply: true,
+      mcpExec: execThrowsIfCalled(),
+    });
+    if (r.mode !== "apply") throw new Error("expected apply");
+    // settings.json cleanup still ran (independent subsystem).
+    expect(r.backupPath).not.toBeNull();
+    expect(r.inventory.mcpRegistryServers).toEqual([]);
+    expect(r.mcpRegistryRemovals).toEqual([]);
+  });
+
+  it("with no registry file on disk, attempts no remove", async () => {
+    const r = await uninstall({
+      homeDir,
+      settingsPath,
+      apply: true,
+      mcpExec: execThrowsIfCalled(),
+    });
+    if (r.mode !== "apply") throw new Error("expected apply");
+    expect(r.inventory.mcpRegistryServers).toEqual([]);
+    expect(r.mcpRegistryRemovals).toEqual([]);
+  });
+
+  it("CLI missing: warns with copy-pasteable manual commands, no hard fail", async () => {
+    writeRegistry({ mcpServers: { "grounding-mcp": { command: "node" } } });
+    const r = await uninstall({
+      homeDir,
+      settingsPath,
+      apply: true,
+      mcpExec: execCliMissing(),
+    });
+    if (r.mode !== "apply") throw new Error("expected apply");
+    expect(r.mcpRegistryRemovals).toEqual([
+      { name: "grounding-mcp", status: "cli-missing", message: "claude CLI not found on PATH" },
+    ]);
+    const warningsText = r.inventory.warnings.join("\n");
+    for (const line of manualRemoveLines(["grounding-mcp"])) {
+      expect(warningsText).toContain(line);
+    }
+  });
+
+  it("registry read error: no remove attempted, warning surfaced (D-002 analogy)", async () => {
+    fs.writeFileSync(registryPath, "{ not json");
+    const r = await uninstall({
+      homeDir,
+      settingsPath,
+      apply: true,
+      mcpExec: execThrowsIfCalled(),
+    });
+    if (r.mode !== "apply") throw new Error("expected apply");
+    expect(r.inventory.mcpRegistryReadError).not.toBeNull();
+    expect(r.inventory.mcpRegistryServers).toEqual([]);
+    expect(r.mcpRegistryRemovals).toEqual([]);
+    expect(r.inventory.warnings.join("\n")).toMatch(
+      /could not read the claude CLI user-scope MCP registry/,
+    );
+  });
+
+  it("partial success: settings.json cleanup succeeds while one registry remove fails, distinguishably reported", async () => {
+    writeSettings({
+      hooks: { PreToolUse: [{ hooks: [{ type: "command", command: "harness policy intercept" }] }] },
+    });
+    writeRegistry({
+      mcpServers: {
+        "agent-tasks": { command: "a" },
+        "grounding-mcp": { command: "g" },
+      },
+    });
+    const calls: string[][] = [];
+    const r = await uninstall({
+      homeDir,
+      settingsPath,
+      apply: true,
+      mcpExec: execRecordingRemove(calls, {
+        "grounding-mcp": { code: 1, stderr: "boom" },
+      }),
+    });
+    if (r.mode !== "apply") throw new Error("expected apply");
+    // settings.json cleanup happened (hook group removed -> backup/snapshot written).
+    expect(r.backupPath).not.toBeNull();
+    expect(r.snapshotPath).not.toBeNull();
+    // Per-name outcomes are distinguishable: one removed, one errored.
+    expect(r.mcpRegistryRemovals).toEqual([
+      { name: "agent-tasks", status: "removed", message: "" },
+      { name: "grounding-mcp", status: "error", message: "boom" },
+    ]);
+    const warningsText = r.inventory.warnings.join("\n");
+    expect(warningsText).toMatch(/grounding-mcp: error/);
+    expect(warningsText).not.toMatch(/agent-tasks: /);
   });
 });
