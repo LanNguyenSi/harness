@@ -995,6 +995,7 @@ describe("interactive wizard — Team path", () => {
     const result = await runInteractive({
       homeDir: tmpHome,
       dependencyPathEnv: fakeDepsPath,
+      authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
       prompts: mockPrompts({
         select: ["team"],
         confirm: [
@@ -1024,6 +1025,7 @@ describe("interactive wizard — Team path", () => {
     const result = await runInteractive({
       homeDir: tmpHome,
       dependencyPathEnv: fakeDepsPath,
+      authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
       prompts: mockPrompts({
         select: ["team"],
         confirm: [
@@ -1051,6 +1053,7 @@ describe("interactive wizard — Team path", () => {
       // fix and this init-time check both target.
       dependencyPathEnv: "/nonexistent-bin-dir-for-tests",
       installSpawn: async () => ({ code: 0, stderr: "" }),
+      authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
       prompts: mockPrompts({
         select: ["team"],
         confirm: [
@@ -1077,6 +1080,7 @@ describe("interactive wizard — Team path", () => {
     await runInteractive({
       homeDir: tmpHome,
       dependencyPathEnv: fakeDepsPath,
+      authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
       prompts: mockPrompts({
         select: ["team"],
         confirm: [true, true],
@@ -1345,6 +1349,7 @@ describe("interactive wizard — Custom path (task 31d2fbb5)", () => {
     const result = await runInteractive({
       homeDir: tmpHome,
       dependencyPathEnv: fakeDepsPath,
+      authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
       prompts: mockPrompts({
         select: ["custom"],
         checkbox: [
@@ -1653,6 +1658,7 @@ describe("interactive wizard — Full profile", () => {
     const result = await runInteractive({
       homeDir: tmpHome,
       dependencyPathEnv: fakeDepsPath,
+      authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
       prompts: mockPrompts({
         select: ["full"],
         input: ["~/.claude/projects/{project}/memory"],
@@ -1695,6 +1701,7 @@ describe("interactive wizard — Full profile", () => {
     await runInteractive({
       homeDir: tmpHome,
       dependencyPathEnv: fakeDepsPath,
+      authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
       prompts: mockPrompts({
         select: ["full"],
         input: ["~/.claude/projects/{project}/memory"],
@@ -2130,5 +2137,73 @@ describe("interactive wizard — orchestrator-workflow co-install offer (task S5
       "/tmp/the-repo-dir",
     ]);
     expect(cap.stderr()).toContain("orchestrator-workflow set up");
+  });
+});
+
+describe("interactive wizard — hermetic spawn guard (task 54739002)", () => {
+  it("accepting the OW offer WITHOUT an injected owInitSpawn fails hard instead of silently spawning a real npx", async () => {
+    // Meta-test for the hermetic-spawn guard (src/runtime/hermetic-spawn-guard.ts).
+    // Deliberately does NOT inject `owInitSpawn`, so the offer falls
+    // through to the real `realOwInitSpawn()`. This drives the FULL
+    // runInteractive() -> offerOrchestratorWorkflow() path (not a direct
+    // call to realOwInitSpawn) so it also proves the violation survives
+    // offerOrchestratorWorkflow's try/catch around `run(...)`, which
+    // otherwise degrades a thrown runner to a mere warning (see "opt-in
+    // where the spawn throws STILL succeeds" above) — the exact catch
+    // that would have swallowed a non-dedicated guard error and made
+    // this guard silently toothless.
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    await expect(
+      runInteractive({
+        homeDir: tmpHome,
+        dependencyPathEnv: fakeDepsPath,
+        repoDir: "/tmp/the-repo-dir",
+        prompts: mockPrompts({
+          select: ["solo"],
+          input: ["~/.claude/projects/{project}/memory"],
+          confirm: [
+            true, // write manifest
+            true, // YES, set up orchestrator-workflow (no owInitSpawn injected!)
+          ],
+          checkbox: [[]],
+        }),
+        stdout: cap.out,
+        stderr: cap.err,
+      }),
+    ).rejects.toThrow(/Refusing to spawn a REAL "npx orchestrator-workflow init" process while running under vitest/);
+  });
+
+  it("a Team-profile run WITHOUT an injected authProbeSpawn fails hard instead of silently spawning the real bridge status probe", async () => {
+    // Meta-test for the hermetic-spawn guard on realProbeSpawn
+    // (src/cli/init/agent-tasks-auth.ts). Deliberately does NOT inject
+    // `authProbeSpawn`, so ensureAgentTasksAuth's probe falls through to
+    // the real `realProbeSpawn()`. Drives the FULL runInteractive() path
+    // (not a direct call to realProbeSpawn/probeAgentTasksAuth) so it
+    // also proves the violation survives all the way out of
+    // runInteractive — ensureAgentTasksAuth and probeAgentTasksAuth have
+    // no try/catch of their own around this call, and runInteractive's
+    // outer catch explicitly re-throws a HermeticSpawnViolationError
+    // rather than treating it like an ExitPromptError abort.
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    await expect(
+      runInteractive({
+        homeDir: tmpHome,
+        dependencyPathEnv: fakeDepsPath,
+        // Deliberately NOT injecting authProbeSpawn.
+        prompts: mockPrompts({
+          select: ["team"],
+          confirm: [
+            true, // proceed despite missing agent-tasks in settings.json
+            true, // confirm write
+          ],
+          checkbox: [[]],
+          input: ["~/.claude/projects/{project}/memory"],
+        }),
+        stdout: cap.out,
+        stderr: cap.err,
+      }),
+    ).rejects.toThrow(/Refusing to spawn a REAL "agent-tasks-mcp-bridge status" process while running under vitest/);
   });
 });

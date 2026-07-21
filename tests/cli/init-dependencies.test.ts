@@ -9,6 +9,7 @@ import {
   formatDependencyTable,
   installPackagesGlobally,
 } from "../../src/cli/init/dependencies.js";
+import { HermeticSpawnViolationError } from "../../src/runtime/hermetic-spawn-guard.js";
 
 let tmpBin: string;
 
@@ -143,6 +144,20 @@ describe("installPackagesGlobally — runner contract", () => {
     expect(result.ok).toBe(false);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("404");
+  });
+
+  it("hermetic guard (task 54739002): a non-empty package list with NO injected spawn hits the real `npm i -g` runner, which must refuse under vitest", async () => {
+    // Meta-test for the hermetic-spawn guard on realSpawn
+    // (src/cli/init/dependencies.ts). No `spawn` in opts at all, so
+    // `installPackagesGlobally` falls back to `realSpawn`, which must
+    // refuse to actually run `npm i -g` under vitest. Non-inert: remove
+    // the `assertNoRealSpawnInTests(...)` call at the top of `realSpawn`
+    // and this rejects on a hang/real spawn attempt instead of the
+    // expected HermeticSpawnViolationError (and, if a real `npm` were on
+    // PATH, would actually attempt a global install).
+    await expect(installPackagesGlobally(["@lannguyensi/does-not-matter"], {})).rejects.toThrow(
+      HermeticSpawnViolationError,
+    );
   });
 });
 

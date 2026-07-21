@@ -3,6 +3,7 @@ import {
   probeAgentTasksAuth,
   runBridgeLogin,
 } from "../../src/cli/init/agent-tasks-auth.js";
+import { HermeticSpawnViolationError } from "../../src/runtime/hermetic-spawn-guard.js";
 
 // Stderr discriminators pinned here so a future bridge that drifts its
 // message text fails this file (loud, local) instead of the integration
@@ -70,5 +71,19 @@ describe("runBridgeLogin", () => {
   it("login spawn exit non-zero → ok:false", async () => {
     const result = await runBridgeLogin({ spawn: async () => ({ code: 1 }) });
     expect(result).toEqual({ ok: false });
+  });
+
+  it("hermetic guard (task 54739002): NO injected spawn hits the real `agent-tasks-mcp-bridge login` runner, which must refuse under vitest", async () => {
+    // Meta-test for the hermetic-spawn guard on realLoginSpawn
+    // (src/cli/init/agent-tasks-auth.ts). No `spawn` in opts, so
+    // `runBridgeLogin` falls back to `realLoginSpawn`, which must refuse
+    // under vitest instead of actually running the bridge's interactive
+    // login (which takes over the terminal and writes to the OS
+    // keychain). Non-inert: remove the `assertNoRealSpawnInTests(...)`
+    // call at the top of `realLoginSpawn` and this rejects on a real
+    // spawn attempt (ENOENT on a machine without the bridge installed,
+    // or a genuine keychain-touching login prompt on one that has it)
+    // instead of the expected HermeticSpawnViolationError.
+    await expect(runBridgeLogin({})).rejects.toThrow(HermeticSpawnViolationError);
   });
 });

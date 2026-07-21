@@ -26,6 +26,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { resolveHomeDir } from "../../runtime/home-dir.js";
+import { assertNoRealSpawnInTests, HermeticSpawnViolationError } from "../../runtime/hermetic-spawn-guard.js";
 import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
 import {
   detect,
@@ -913,8 +914,20 @@ async function ensureAgentTasksAuth(
  * PATH) resolves `code: 1` rather than throwing, so the caller's
  * graceful-failure path handles a missing toolchain the same as a
  * non-zero exit.
+ *
+ * Hermetic guard (task 54739002): asserts BEFORE touching
+ * `child_process` that we are not running under vitest without a test
+ * having injected `owInitSpawn`. See
+ * src/runtime/hermetic-spawn-guard.ts for why and the env signal used.
+ * The thrown `HermeticSpawnViolationError` is re-thrown past the
+ * caller's try/catch (which otherwise degrades a thrown runner to a
+ * warning) — see the catch in offerOrchestratorWorkflow below.
  */
 function realOwInitSpawn(cmd: string, args: string[]): Promise<{ code: number; stderr: string }> {
+  assertNoRealSpawnInTests(
+    "npx orchestrator-workflow init",
+    "Inject a fake `owInitSpawn` runner in the test instead of exercising the real spawn path.",
+  );
   return new Promise((resolve) => {
     const child = spawn(cmd, args, { stdio: ["ignore", "inherit", "pipe"] });
     let stderr = "";
@@ -1018,6 +1031,11 @@ async function offerOrchestratorWorkflow(o: OfferOrchestratorWorkflowOpts): Prom
   try {
     result = await run("npx", ["orchestrator-workflow", "init", "--yes", o.repoDir]);
   } catch (err) {
+    // Hermetic guard (task 54739002): a real-spawn violation under
+    // vitest is NOT an ordinary runner failure — it must propagate past
+    // this optional-and-warn handling and fail the test hard, so it is
+    // re-thrown here before the generic degrade-to-warning below runs.
+    if (err instanceof HermeticSpawnViolationError) throw err;
     // A thrown runner (an injected spawn that rejects, or an unexpected
     // throw) is treated exactly like a non-zero exit: OW is optional, so
     // we warn and continue rather than failing harness init.
@@ -1270,6 +1288,13 @@ export async function runInteractive(
 
     return tailResult;
   } catch (err) {
+    // Defense-in-depth (task 54739002): a hermetic-spawn-guard violation
+    // must always propagate out of runInteractive as a hard failure.
+    // `isAbortError` below already wouldn't match a
+    // HermeticSpawnViolationError (it checks for an ExitPromptError/
+    // abort-shaped name), so this is belt-and-suspenders against a
+    // future change to isAbortError narrowing that behavior by name.
+    if (err instanceof HermeticSpawnViolationError) throw err;
     if (isAbortError(err)) {
       stderr("Aborted: Ctrl-C received during prompt; no manifest written.\n");
       return { aborted: true };
