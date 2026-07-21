@@ -2723,7 +2723,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
       if (options.state) cliOpts.stateDir = options.state;
       if (options.settings) cliOpts.settingsPath = options.settings;
       try {
-        const result = uninstall(cliOpts);
+        const result = await uninstall(cliOpts);
         const inv = result.inventory;
         if (result.mode === "list") {
           const nothing =
@@ -2733,6 +2733,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
             inv.gateStateDir === null &&
             inv.hookGroups.length === 0 &&
             inv.mcpServers.length === 0 &&
+            inv.mcpRegistryServers.length === 0 &&
             inv.preHarnessBackups.length === 0;
           const rootsLabel =
             inv.stateDir === inv.homeDir
@@ -2758,6 +2759,12 @@ export function buildProgram(opts: RunOptions = {}): Command {
           if (inv.mcpServers.length > 0) {
             stdout(`  mcpServers in ${inv.settingsPath}: ${inv.mcpServers.join(", ")}\n`);
           }
+          if (inv.mcpRegistryServers.length > 0) {
+            stdout(
+              `  mcpServers registered in the claude CLI user-scope registry (${inv.mcpRegistryPath}): ` +
+                `${inv.mcpRegistryServers.join(", ")}\n`,
+            );
+          }
           if (inv.preHarnessBackups.length > 0) {
             stdout(`  pre-harness backups:\n`);
             for (const b of inv.preHarnessBackups) stdout(`    ${b}\n`);
@@ -2776,6 +2783,10 @@ export function buildProgram(opts: RunOptions = {}): Command {
           if (result.removedFiles.length > 0) {
             stdout(`removed:\n`);
             for (const f of result.removedFiles) stdout(`  ${f}\n`);
+          }
+          if (result.mcpRegistryRemovals.length > 0) {
+            stdout(`claude mcp remove (user scope, ${inv.mcpRegistryPath}):\n`);
+            for (const r of result.mcpRegistryRemovals) stdout(`  ${r.name}: ${r.status}\n`);
           }
           stdout(
             `\nTo finish: \`npm uninstall -g @lannguyensi/harness\` (uninstall does not touch the npm install).\n`,
@@ -2817,10 +2828,15 @@ export function buildProgram(opts: RunOptions = {}): Command {
             /* state root itself may be gone or unreadable; nothing to report */
           }
         }
+        if (result.mcpRegistryRemovals.length > 0) {
+          stdout(`claude mcp remove (user scope, ${inv.mcpRegistryPath}):\n`);
+          for (const r of result.mcpRegistryRemovals) stdout(`  ${r.name}: ${r.status}\n`);
+        }
         if (
           result.backupPath === null &&
           result.snapshotPath === null &&
-          result.removedFiles.length === 0
+          result.removedFiles.length === 0 &&
+          result.mcpRegistryRemovals.length === 0
         ) {
           const rootsLabel =
             inv.stateDir === inv.homeDir

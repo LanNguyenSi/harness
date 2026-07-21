@@ -173,16 +173,30 @@ timestamp            policy               outcome  reason
 ## Rollback
 
 ```bash
-# Dry-run first: print every harness-owned artefact under ~/.claude/.
+# Dry-run first: print every harness-owned artefact under ~/.claude/,
+# including any harness-owned MCP server names currently registered with
+# the claude CLI (~/.claude.json — the live registry, not the dead
+# settings.json mcpServers block; see the gotcha above).
 harness uninstall
 
 # Tear down: removes the manifest, lock, harness.generated/, harness-owned
-# hook groups and mcpServers entries from settings.json. Writes a
-# reversible settings.json backup + snapshot next to settings.json.
+# hook groups and mcpServers entries from settings.json, AND deregisters
+# harness-owned MCP servers from the claude CLI's user-scope registry via
+# `claude mcp remove --scope user <name>` — restoring the pre-install state
+# symmetrically on both sides (dead settings.json block + live registry).
+# Writes a reversible settings.json backup + snapshot next to settings.json
+# (the registry deregistration itself is a `claude mcp remove` call, not a
+# file harness owns, so it isn't part of that backup/snapshot).
 harness uninstall --apply
 
+# If the `claude` CLI isn't on PATH, uninstall does not hard-fail: it warns
+# and prints copy-pasteable commands instead, e.g.:
+#   claude mcp remove --scope user grounding-mcp
+# Run these yourself once the CLI is available.
+
 # Alternative: if you kept the pre-install backup from the install step,
-# atomically restore it instead of selective removal.
+# atomically restore it instead of selective removal (this still
+# deregisters harness-owned MCP servers from the live registry as above).
 harness uninstall --restore-from ~/.claude/settings.json.pre-harness-2026-05-11
 
 # Finally, drop the CLI itself (harness uninstall does not touch npm):
