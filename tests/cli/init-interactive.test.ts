@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runInteractive, type InteractivePrompts } from "../../src/cli/init/interactive.js";
+import { HermeticSpawnViolationError } from "../../src/runtime/hermetic-spawn-guard.js";
 
 // Helper: build a mock prompts pack that returns queued answers in order
 // the wizard asks them. This is intentionally dumb — we match by prompt
@@ -2205,5 +2206,68 @@ describe("interactive wizard — hermetic spawn guard (task 54739002)", () => {
         stderr: cap.err,
       }),
     ).rejects.toThrow(/Refusing to spawn a REAL "agent-tasks-mcp-bridge status" process while running under vitest/);
+  });
+});
+
+describe("interactive wizard — hermetic spawn guard, claude-mcp path (task 0d80e969)", () => {
+  it("wiring claude-code for a Team-profile manifest WITHOUT an injected mcpExec fails hard instead of silently spawning the real claude CLI", async () => {
+    // Meta-test for the hermetic-spawn guard on realClaudeMcpExec
+    // (src/io/claude-mcp.ts). Deliberately does NOT inject `mcpExec`, so
+    // `wireClaudeMcp`'s `ensureMcpServers` call falls through to the real
+    // `realClaudeMcpExec()`. Drives the FULL runInteractive() ->
+    // wireRuntime() -> wireClaudeMcp() path (not a direct call into
+    // io/claude-mcp.ts — that's covered separately in
+    // tests/io/claude-mcp.test.ts) so it also proves the violation
+    // survives the exact catch this task found unguarded: apply()
+    // succeeds, wireClaudeMcp's FIRST call (inside wireRuntime's `try`,
+    // src/cli/init/interactive.ts ~:374) throws, and wireRuntime's own
+    // catch (the "Failed to wire ..." handler) must re-throw a
+    // HermeticSpawnViolationError immediately rather than degrading it to
+    // that warning and calling wireClaudeMcp a SECOND time (which would
+    // both print a misleading message and double the guarded call).
+    // runInteractive's outer catch (the top-level handler that otherwise
+    // treats a caught error as either an `isAbortError` Ctrl-C or a
+    // rethrow) then re-throws it again past every remaining intermediate
+    // handler, same as the other two guarded call sites above.
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    let caught: unknown;
+    try {
+      await runInteractive({
+        homeDir: tmpHome,
+        dependencyPathEnv: fakeDepsPath,
+        authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
+        // Deliberately NOT injecting mcpExec.
+        prompts: mockPrompts({
+          select: ["team"],
+          confirm: [
+            true, // proceed despite missing agent-tasks in settings.json
+            true, // confirm write
+          ],
+          checkbox: [["claude-code"]],
+          input: ["~/.claude/projects/{project}/memory"],
+        }),
+        stdout: cap.out,
+        stderr: cap.err,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(HermeticSpawnViolationError);
+    // Deliberately not pinned to a specific verb (e.g. "add-json" for the
+    // first `desired` entry in ensureMcpServers' current alphabetical
+    // add/replace order): that's an internal implementation detail of
+    // ensureMcpServers, not part of this guard's contract. If a future
+    // change adds a pre-flight `list` call (or reorders `desired`), this
+    // assertion must keep passing — the instanceof check above and the
+    // "Failed to wire" negative assertion below already carry the actual
+    // burden of proof.
+    expect((caught as Error).message).toMatch(/Refusing to spawn a REAL "claude mcp /);
+    // The catch-handling fix (wireRuntime's catch, src/cli/init/
+    // interactive.ts) must re-throw the violation BEFORE printing this
+    // degrade-to-warning message — its presence would mean the guard
+    // error was swallowed as an ordinary apply failure and wireClaudeMcp
+    // was invoked a second time.
+    expect(cap.stderr()).not.toContain("Failed to wire");
   });
 });

@@ -10,6 +10,7 @@ import {
   type UninstallSnapshot,
 } from "../../../src/cli/uninstall/snapshot.js";
 import { manualRemoveLines, type ClaudeMcpExec } from "../../../src/io/claude-mcp.js";
+import { HermeticSpawnViolationError } from "../../../src/runtime/hermetic-spawn-guard.js";
 
 // Mutable override for `os.homedir()`, used ONLY by the "MCP registry axis
 // seatbelt" tests below to keep the real-homedir fallback inside `tmp`
@@ -656,6 +657,35 @@ describe("uninstall — MCP registry deregistration, --apply", () => {
     const warningsText = r.inventory.warnings.join("\n");
     expect(warningsText).toMatch(/grounding-mcp: error/);
     expect(warningsText).not.toMatch(/agent-tasks: /);
+  });
+});
+
+describe("uninstall — hermetic spawn guard, claude-mcp path (task 0d80e969)", () => {
+  it("a registered owned MCP server with NO injected mcpExec fails hard instead of silently spawning the real claude CLI", async () => {
+    // Chain meta-test (review finding, task 0d80e969): pins the property
+    // this task's implementer verified by inspection but never pinned in
+    // a test — that uninstall()'s call chain down to `realClaudeMcpExec`
+    // has NO swallowing catch anywhere. `removeRegisteredMcpServers`
+    // (src/cli/uninstall/index.ts) awaits `removeMcpServer` with no
+    // try/catch, and `uninstall()` has no try/catch wrapping either of
+    // its two `removeRegisteredMcpServers` call sites (restore-mode,
+    // apply-mode). Passing an explicit `homeDir` (as every other test in
+    // this file does) satisfies `mcpRegistryAxisAllowed`, so the registry
+    // read + remove attempt actually happens.
+    //
+    // Deliberately does NOT inject `mcpExec`. The registry has one owned,
+    // registered name (grounding-mcp), so `removeRegisteredMcpServers`
+    // actually attempts a `claude mcp remove` call and falls through to
+    // the real `realClaudeMcpExec()`.
+    writeRegistry({ mcpServers: { "grounding-mcp": { command: "node", args: ["server.js"] } } });
+    await expect(
+      uninstall({
+        homeDir,
+        settingsPath,
+        apply: true,
+        // Deliberately NOT injecting mcpExec.
+      }),
+    ).rejects.toThrow(HermeticSpawnViolationError);
   });
 });
 

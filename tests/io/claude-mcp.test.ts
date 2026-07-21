@@ -16,6 +16,7 @@ import {
   type ClaudeMcpExec,
   type ClaudeMcpExecResult,
 } from "../../src/io/claude-mcp.js";
+import { HermeticSpawnViolationError } from "../../src/runtime/hermetic-spawn-guard.js";
 
 function ok(stdout: string): ClaudeMcpExecResult {
   return { code: 0, stdout, stderr: "", enoent: false, timedOut: false };
@@ -238,6 +239,44 @@ describe("listMcpServers", () => {
     const r = await listMcpServers({ exec });
     expect(r.status).toBe("error");
     expect(r.message).toBe("boom");
+  });
+});
+
+describe("realClaudeMcpExec hermetic spawn guard (task 0d80e969)", () => {
+  // Direct test on the primitive application: every exported verb here
+  // defaults `opts.exec` to the module-private `realClaudeMcpExec`
+  // (src/io/claude-mcp.ts), which calls `assertNoRealSpawnInTests` before
+  // touching `child_process`. These calls give NO `exec` at all, so they
+  // fall through to that real spawn path — under vitest it must refuse
+  // instead of actually invoking `claude`. Non-inert: removing the
+  // `assertNoRealSpawnInTests(...)` call at the top of `realClaudeMcpExec`
+  // makes these reject on a real `spawn("claude", ...)` attempt instead
+  // (ENOENT on a machine without the `claude` CLI, or an actual `claude
+  // mcp list`/`add-json` call against the operator's real registry on a
+  // machine that has it) — see this task's verification notes for what
+  // was observed.
+  it("listMcpServers with no injected exec refuses instead of spawning the real claude CLI", async () => {
+    await expect(listMcpServers()).rejects.toThrow(HermeticSpawnViolationError);
+    await expect(listMcpServers()).rejects.toThrow(/Refusing to spawn a REAL "claude mcp list"/);
+  });
+
+  it("addJsonMcpServer with no injected exec refuses instead of spawning the real claude CLI", async () => {
+    await expect(addJsonMcpServer("foo", { command: "bar" })).rejects.toThrow(
+      HermeticSpawnViolationError,
+    );
+    await expect(addJsonMcpServer("foo", { command: "bar" })).rejects.toThrow(
+      /Refusing to spawn a REAL "claude mcp add-json"/,
+    );
+  });
+
+  it("removeMcpServer with no injected exec refuses instead of spawning the real claude CLI", async () => {
+    await expect(removeMcpServer("foo")).rejects.toThrow(HermeticSpawnViolationError);
+    await expect(removeMcpServer("foo")).rejects.toThrow(/Refusing to spawn a REAL "claude mcp remove"/);
+  });
+
+  it("getMcpServer with no injected exec refuses instead of spawning the real claude CLI", async () => {
+    await expect(getMcpServer("foo")).rejects.toThrow(HermeticSpawnViolationError);
+    await expect(getMcpServer("foo")).rejects.toThrow(/Refusing to spawn a REAL "claude mcp get"/);
   });
 });
 

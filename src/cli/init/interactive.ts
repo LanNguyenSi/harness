@@ -374,6 +374,14 @@ async function wireRuntime(o: WireRuntimeOpts): Promise<RuntimeApplyOutcome> {
       await wireClaudeMcp(o, outcome, priorLastApply);
       return outcome;
     } catch (err) {
+      // Hermetic guard (task 0d80e969): a real-spawn violation from
+      // `wireClaudeMcp`'s FIRST call above (inside this `try`) must
+      // never be treated as an ordinary `apply()` failure — this catch
+      // otherwise degrades any thrown error to a "Failed to wire ..."
+      // warning AND calls `wireClaudeMcp` a SECOND time below, which
+      // would both print a misleading message and retry a spawn that
+      // must never happen under vitest. Re-throw before any of that.
+      if (err instanceof HermeticSpawnViolationError) throw err;
       const message = err instanceof Error ? err.message : String(err);
       const recoveryHint = `harness apply --target ${o.claudeSettingsPath} --merge --overwrite-drift`;
       o.stderr(`\nFailed to wire ${o.claudeSettingsPath}: ${message}\n`);
