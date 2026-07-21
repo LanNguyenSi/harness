@@ -69,6 +69,16 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
+    // Suite-wide deny-by-default spawn allowlist (task 052f9d5b): patches
+    // all seven node:child_process launch points so a FUTURE real spawn
+    // of a non-allowlisted binary — at the point THIS process actually
+    // launches it — fails hard, instead of only after someone measures
+    // it. This does not cover what an allowlisted interpreter (sh/node)
+    // or a forked child, in turn, spawns on its own — see that file's
+    // "Residual exposure" note. Full rationale, the
+    // seven-vs-four-entry-point finding, and the allowlist itself live in
+    // the setup file.
+    setupFiles: ["./tests/_helpers/hermetic-spawn-allowlist.ts"],
     maxWorkers: 6,
     coverage: {
       provider: "v8",

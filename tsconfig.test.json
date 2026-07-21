@@ -1,0 +1,29 @@
+// Types-only check that ALSO covers tests/ (task 052f9d5b review G4). The
+// repo's main tsconfig.json deliberately excludes tests/ (vitest
+// transpiles test files via esbuild, with no type checking at all), so
+// `npm run typecheck` reports 0 errors regardless of what's under tests/
+// — including regressions in the three files task 052f9d5b's fix-pass
+// changed. This config is standalone (does NOT extend tsconfig.json) so
+// it can drop rootDir/outDir/declaration/sourceMap, which would
+// otherwise conflict with including both src/ and tests/ under one
+// program; it mirrors tsconfig.json's strictness flags so the check is
+// meaningful, not just "does it parse". Run via `npm run typecheck:tests`
+// (package.json). Deliberately a SEPARATE config/script, not a change to
+// tsconfig.json or the existing `typecheck` script — see that task's
+// constraints.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "noEmit": true
+  },
+  "include": ["src", "tests"],
+  "exclude": ["node_modules", "dist"]
+}

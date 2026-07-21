@@ -37,3 +37,18 @@ CLAUDE.md
 
 # Dogfood smoke run artefacts — per-run transcripts, not committed
 dogfood/*/transcript/
+
+# Hermetic-spawn-allowlist test fixture directories (task 052f9d5b review
+# G6): tests/runtime/hermetic-spawn-allowlist*.test.ts write short-lived
+# fixture dirs directly under process.cwd() (the repo root), NOT
+# os.tmpdir(), on purpose — do not "helpfully" move them to tmpdir.
+# Required because (1) os.tmpdir() is the D3 EXEMPT path in
+# tests/_helpers/hermetic-spawn-allowlist.ts itself, so a fixture binary
+# placed there would be silently allowed through regardless of what's
+# under test, and (2) the nested-vitest fixtures need real node_modules
+# resolution for `vitest/config`, which an out-of-tree tmpdir copy can't
+# reach (verified: fails with UNRESOLVED_IMPORT). Each test removes its
+# own fixture dir in a try/finally or afterAll, but an aborted run
+# (Ctrl-C, a crash) can leave one behind — ignored rather than deleted on
+# the next run, so a partial run's evidence isn't silently destroyed.
+hermetic-*/
