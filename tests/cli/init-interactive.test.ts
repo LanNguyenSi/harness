@@ -588,6 +588,123 @@ describe("interactive wizard — MCP registration + settings.json migration (tas
   });
 });
 
+describe("interactive wizard — MCP-removal GC (task 363a6de0)", () => {
+  // Both tests below force apply()'s `--merge` step to throw (invalid
+  // existing settings.json — same trick the "recovers gracefully when the
+  // wire-now merge throws" test above uses), landing wireRuntime in the
+  // catch branch. wireClaudeMcp still runs there (it's independent of the
+  // hooks/settings.json merge outcome) — and crucially, THIS run's
+  // apply() throws before ever reaching its own `.last-apply` write
+  // (apply.ts's merge-parse throw happens before `writeLastApply`), so a
+  // `.last-apply` seeded beforehand (as if left by a PRIOR, successful
+  // run) survives untouched for wireClaudeMcp's GC ownership build to
+  // read. Both tests use the "solo" profile so the current manifest's own
+  // `tools.mcp[]` is empty, isolating the GC behavior from the ordinary
+  // add/replace path.
+
+  it(".last-apply manifest snapshot: a name owned under a PRIOR manifest (absent from the current one) is still GC'd (D-103 snapshot union)", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    fs.writeFileSync(path.join(tmpHome, ".claude", "settings.json"), "not-json{");
+
+    const generatedDir = path.join(tmpHome, ".harness", "harness.generated");
+    fs.mkdirSync(generatedDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(generatedDir, ".last-apply"),
+      JSON.stringify({
+        files: {},
+        manifest: {
+          sha256: "unused-in-test",
+          content: JSON.stringify({
+            tools: { mcp: [{ name: "legacy-only-mcp", command: "legacy-bin", enabled: true }] },
+          }),
+        },
+      }),
+    );
+
+    const registryPath = path.join(tmpHome, ".claude.json");
+    fs.writeFileSync(
+      registryPath,
+      JSON.stringify({ mcpServers: { "legacy-only-mcp": { command: "legacy-bin" } } }),
+    );
+
+    const calls: string[][] = [];
+    const exec: import("../../src/io/claude-mcp.js").ClaudeMcpExec = async (args) => {
+      calls.push(args);
+      return { code: 0, stdout: "", stderr: "", enoent: false, timedOut: false };
+    };
+
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      mcpExec: exec,
+      prompts: mockPrompts({
+        select: ["solo"],
+        input: ["~/.claude/projects/{project}/memory"],
+        confirm: [true],
+        checkbox: [["claude-code"]],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+
+    expect(result.aborted).toBe(false);
+    const outcome = result.applies?.[0];
+    expect(outcome?.apply).toBeUndefined(); // apply() threw, caught by wireRuntime
+    expect(outcome?.mcpEnsure?.gc?.results).toEqual([
+      { name: "legacy-only-mcp", action: "removed", remove: { status: "removed", message: "", code: 0 } },
+    ]);
+    expect(calls).toEqual([["mcp", "remove", "--scope", "user", "legacy-only-mcp"]]);
+    expect(cap.stderr()).toContain("deregistered 1 stale MCP server(s)");
+    expect(cap.stderr()).toContain("legacy-only-mcp");
+  });
+
+  it("conservative fallback: without a .last-apply manifest snapshot, a registered-but-unowned name is left alone", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    fs.writeFileSync(path.join(tmpHome, ".claude", "settings.json"), "not-json{");
+    // No .last-apply seeded at all this time — the conservative fallback
+    // per D-103: without the snapshot, ownership is only
+    // DEFAULT_OWNED_MCP_SERVERS ∪ the (here empty) current manifest, so
+    // this name is indistinguishable from a foreign entry and is left
+    // alone rather than guessed at.
+    const registryPath = path.join(tmpHome, ".claude.json");
+    fs.writeFileSync(
+      registryPath,
+      JSON.stringify({ mcpServers: { "legacy-only-mcp": { command: "legacy-bin" } } }),
+    );
+
+    let execCalls = 0;
+    const exec: import("../../src/io/claude-mcp.js").ClaudeMcpExec = async () => {
+      execCalls++;
+      return { code: 0, stdout: "", stderr: "", enoent: false, timedOut: false };
+    };
+
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      mcpExec: exec,
+      prompts: mockPrompts({
+        select: ["solo"],
+        input: ["~/.claude/projects/{project}/memory"],
+        confirm: [true],
+        checkbox: [["claude-code"]],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+
+    expect(result.aborted).toBe(false);
+    const outcome = result.applies?.[0];
+    expect(outcome?.mcpEnsure?.gc?.results).toEqual([]);
+    expect(execCalls).toBe(0);
+    const registry = JSON.parse(fs.readFileSync(registryPath, "utf8")) as {
+      mcpServers?: Record<string, unknown>;
+    };
+    expect(registry.mcpServers).toEqual({ "legacy-only-mcp": { command: "legacy-bin" } });
+  });
+});
+
 describe("interactive wizard — Team path", () => {
   it("warns when agent-tasks is not detected but proceeds when operator confirms", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));

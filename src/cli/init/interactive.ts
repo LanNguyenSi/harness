@@ -45,6 +45,7 @@ import { loadManifest } from "../loader.js";
 import type { Manifest } from "../../schema/index.js";
 import {
   ensureMcpServers,
+  manualRemoveLines,
   posixSingleQuote,
   stripOwnedMcpServers,
   type ClaudeMcpExec,
@@ -465,6 +466,45 @@ function priorGeneratedMcpNames(lastApply: LastApplyRecord | null): string[] {
 }
 
 /**
+ * Extract `tools.mcp[]` names from the manifest snapshot `.last-apply`
+ * stores (`LastApplyRecord.manifest`, Phase 3 #1) — the effective manifest
+ * as of the most recent apply that reached the write step, not necessarily
+ * the manifest on disk right now. GC ownership (task 363a6de0, D-103)
+ * needs this: a server whose `tools.mcp[]` entry was removed or disabled
+ * AFTER that apply is still harness-owned, and the CURRENT manifest alone
+ * can never surface it — by definition it's gone from there. An older
+ * `.last-apply` record (pre-manifest-snapshot, so `.manifest` is absent)
+ * or a snapshot that fails to parse both degrade to an EMPTY result — the
+ * conservative fallback D-103 calls for is to fold back to just the other
+ * two ownership-union members (`DEFAULT_OWNED_MCP_SERVERS` + the current
+ * manifest) rather than guess at this one.
+ */
+function priorManifestMcpNames(lastApply: LastApplyRecord | null): string[] {
+  const content = lastApply?.manifest?.content;
+  if (content === undefined) return [];
+  try {
+    const prior = JSON.parse(content) as { tools?: { mcp?: unknown } };
+    const mcp = prior.tools?.mcp;
+    if (!Array.isArray(mcp)) return [];
+    const names: string[] = [];
+    for (const entry of mcp) {
+      if (
+        entry !== null &&
+        typeof entry === "object" &&
+        typeof (entry as { name?: unknown }).name === "string"
+      ) {
+        names.push((entry as { name: string }).name);
+      }
+    }
+    return names;
+  } catch {
+    // Corrupt .last-apply record: no provenance names from it; the other
+    // two ownership-union members still apply.
+    return [];
+  }
+}
+
+/**
  * Strip harness-owned names from the dead `mcpServers` block in
  * `o.claudeSettingsPath` (D-002/D-003: only ever called AFTER Ensure has
  * confirmed every desired server is correctly registered via the `claude`
@@ -475,8 +515,16 @@ function priorGeneratedMcpNames(lastApply: LastApplyRecord | null): string[] {
  * `harness uninstall` already does). Foreign entries (anything outside
  * that union — an operator hand-add, or another tool's MCP server) are
  * left untouched. Writes only when something actually changes.
+ *
+ * `lastApply` is read once by the caller (`wireClaudeMcp`, task 363a6de0)
+ * and passed in rather than re-read here, since GC's ownership-union
+ * construction needs the same record.
  */
-function migrateDeadSettingsMcpBlock(o: WireRuntimeOpts, manifest: Manifest): string[] {
+function migrateDeadSettingsMcpBlock(
+  o: WireRuntimeOpts,
+  manifest: Manifest,
+  lastApply: LastApplyRecord | null,
+): string[] {
   let raw: string;
   try {
     raw = fs.readFileSync(o.claudeSettingsPath, "utf8");
@@ -496,11 +544,6 @@ function migrateDeadSettingsMcpBlock(o: WireRuntimeOpts, manifest: Manifest): st
     return [];
   }
 
-  const generatedDir = resolveGeneratedDir({
-    ...(o.homeDir !== undefined ? { homeDir: o.homeDir } : {}),
-    manifestPath: o.configPath,
-  });
-  const lastApply = readLastApply(generatedDir);
   const ownedNames = new Set<string>([
     ...manifest.tools.mcp.map((m) => m.name),
     ...priorGeneratedMcpNames(lastApply),
@@ -533,6 +576,15 @@ function migrateDeadSettingsMcpBlock(o: WireRuntimeOpts, manifest: Manifest): st
  * skipped in that case (and for any other incomplete registration) so a
  * still-effective legacy settings.json entry is never removed out from
  * under a server that couldn't be re-registered.
+ *
+ * Also drives GC (task 363a6de0): `ensureMcpServers`'s `gc` option is
+ * given the D-103 ownership union (`DEFAULT_OWNED_MCP_SERVERS` ∪ the
+ * current manifest's `tools.mcp[]` names ∪ the `.last-apply` manifest
+ * snapshot's `tools.mcp[]` names), so a server whose manifest entry was
+ * removed or disabled since it was last registered gets `claude mcp
+ * remove`d. GC reporting is independent of the add/replace gate below —
+ * it runs, and is reported, regardless of whether the add/replace pass
+ * for `desired` succeeded.
  */
 async function wireClaudeMcp(o: WireRuntimeOpts, outcome: RuntimeApplyOutcome): Promise<void> {
   const loaded = loadDesiredMcpServers(o.configPath, o.homeDir);
@@ -544,13 +596,55 @@ async function wireClaudeMcp(o: WireRuntimeOpts, outcome: RuntimeApplyOutcome): 
   }
   for (const w of loaded.warnings) o.stderr(`mcp warning: ${w}\n`);
 
+  const generatedDir = resolveGeneratedDir({
+    ...(o.homeDir !== undefined ? { homeDir: o.homeDir } : {}),
+    manifestPath: o.configPath,
+  });
+  const lastApply = readLastApply(generatedDir);
+  const gcOwnedNames = [
+    ...new Set<string>([
+      ...DEFAULT_OWNED_MCP_SERVERS,
+      ...loaded.manifest.tools.mcp.map((m) => m.name),
+      ...priorManifestMcpNames(lastApply),
+    ]),
+  ];
+
   const claudeHomeDir = path.dirname(o.claudeSettingsPath);
   const ensureResult = await ensureMcpServers({
     desired: loaded.desired,
     homeDir: claudeHomeDir,
+    gc: { ownedNames: gcOwnedNames },
     ...(o.mcpExec ? { exec: o.mcpExec } : {}),
   });
   outcome.mcpEnsure = ensureResult;
+
+  const gcResults = ensureResult.gc?.results ?? [];
+  const gcRemoved = gcResults.filter((r) => r.action === "removed");
+  const gcSkipped = gcResults.filter((r) => r.action === "skipped");
+  if (gcRemoved.length > 0) {
+    o.stderr(
+      `deregistered ${gcRemoved.length} stale MCP server(s) no longer in the manifest ` +
+        `(user scope, claude CLI): ${gcRemoved.map((r) => r.name).join(", ")}\n`,
+    );
+  }
+  if (gcSkipped.length > 0) {
+    o.stderr(
+      [
+        "",
+        "⚠ Could not deregister one or more stale MCP server(s) via the `claude` CLI:",
+        ...gcSkipped.map((r) => `  ${r.name}: ${r.reason ?? r.remove.message}`),
+        "  Remove them yourself:",
+        ...manualRemoveLines(gcSkipped.map((r) => r.name)).map((l) => `    ${l}`),
+        "",
+      ].join("\n"),
+    );
+  }
+  if (ensureResult.gc?.registryReadError) {
+    o.stderr(
+      "⚠ Could not read the claude CLI user-scope registry to garbage-collect stale MCP " +
+        `servers: ${ensureResult.gc.registryReadError}\n`,
+    );
+  }
 
   const actionable = ensureResult.results.filter((r) => r.action !== "noop");
   const cliMissing = actionable.some(
@@ -606,7 +700,7 @@ async function wireClaudeMcp(o: WireRuntimeOpts, outcome: RuntimeApplyOutcome): 
     );
   }
 
-  const removedNames = migrateDeadSettingsMcpBlock(o, loaded.manifest);
+  const removedNames = migrateDeadSettingsMcpBlock(o, loaded.manifest, lastApply);
   if (removedNames.length > 0) {
     outcome.mcpMigrationRemovedNames = removedNames;
     o.stderr(

@@ -13,12 +13,20 @@
 //      exit codes/stderr into structured result objects (never throws for
 //      "CLI missing" or "timed out" — those are just another outcome).
 //   2. `ensureMcpServers`: reconciles a desired per-server state against
-//      the live registry. The ONLY read of the registry file this module
-//      performs is for this drift comparison, and it reads strictly the
-//      top-level `mcpServers` key — never `projects.<path>.mcpServers`
-//      (that's project-local Claude Code state; `uninstall`'s
-//      `probeProjectLocalClaudeJson` already surfaces it separately,
-//      read-only). All writes still go through the CLI wrapper above.
+//      the live registry (add/replace-on-drift/no-op), and — opt-in via
+//      `opts.gc` (task 363a6de0, MCP-removal GC) — also `claude mcp
+//      remove`s any caller-designated "owned" name that's registered but
+//      no longer in `desired` (a manifest entry the operator removed or
+//      disabled). Ownership is entirely the caller's call: this module
+//      never guesses which names harness owns, so a foreign/manually
+//      registered server is never touched, no matter how it drifts from
+//      `desired`. The ONLY read of the registry file this module performs
+//      serves both the drift comparison and the GC candidate scan, and it
+//      reads strictly the top-level `mcpServers` key — never
+//      `projects.<path>.mcpServers` (that's project-local Claude Code
+//      state; `uninstall`'s `probeProjectLocalClaudeJson` already surfaces
+//      it separately, read-only). All writes still go through the CLI
+//      wrapper above.
 //   3. `stripOwnedMcpServers`: a pure function that removes owned names
 //      from a parsed settings.json object (the dead `mcpServers` block
 //      the old write path left behind). No file I/O — callers own reading
@@ -223,6 +231,22 @@ export async function removeMcpServer(
   return { status: "error", message: stderr || `claude mcp remove exited ${r.code}`, code: r.code };
 }
 
+/**
+ * One `claude mcp remove --scope user <name>` line per name, sorted.
+ * Sibling of `manualAddJsonLines` in `cli/init/interactive.ts` — the
+ * copy-pasteable fallback GC (task 363a6de0) prints when it can't reach
+ * the `claude` CLI (or hits some other non-"removed"/"not-found" outcome)
+ * to deregister a stale, harness-owned server itself. Uses
+ * {@link posixSingleQuote} on the name for the same reason
+ * `manualAddJsonLines` quotes its JSON payload: a server name is an
+ * ordinary token today, but quoting it costs nothing and keeps the line
+ * safe to paste verbatim regardless. Harness never executes these strings
+ * itself.
+ */
+export function manualRemoveLines(names: readonly string[]): string[] {
+  return [...names].sort().map((name) => `claude mcp remove --scope user ${posixSingleQuote(name)}`);
+}
+
 export type GetStatus = "found" | "not-found" | "cli-missing" | "timeout";
 
 export interface GetResult {
@@ -342,7 +366,7 @@ export async function listMcpServers(opts: ClaudeMcpCallOptions = {}): Promise<L
 }
 
 // ---------------------------------------------------------------------
-// Layer 2: ensure routine (desired-state reconciliation)
+// Layer 2: ensure routine (desired-state reconciliation + opt-in GC)
 // ---------------------------------------------------------------------
 
 function isRecord(x: unknown): x is Record<string, unknown> {
@@ -457,6 +481,52 @@ export interface EnsureServerResult {
   reason?: string;
 }
 
+export interface EnsureMcpServersGcOptions {
+  /**
+   * Names this harness install is allowed to garbage-collect from the
+   * registry (task 363a6de0, D-103 ownership union: the uninstall
+   * module's `DEFAULT_OWNED_MCP_SERVERS`, union the current manifest's
+   * `tools.mcp[]` names, union the `.last-apply` manifest snapshot's
+   * `tools.mcp[]` names). Building this set is entirely the caller's
+   * responsibility — see `wireClaudeMcp` in `cli/init/interactive.ts` for
+   * the reference construction. A registry entry outside this set is
+   * NEVER touched by GC, no matter how it drifts from `desired`.
+   */
+  ownedNames: string[];
+}
+
+export type GcAction = "removed" | "skipped";
+
+export interface GcServerResult {
+  name: string;
+  action: GcAction;
+  /** The underlying `claude mcp remove` outcome. */
+  remove: RemoveResult;
+  /**
+   * Present when action === "skipped": `remove.status` was something
+   * other than "removed"/"not-found" (cli-missing, timeout, or a genuine
+   * error) — restated here as a human-readable reason so callers don't
+   * have to re-derive it from `remove`.
+   */
+  reason?: string;
+}
+
+export interface GcResult {
+  /**
+   * One entry per GC candidate: an owned name (per `opts.gc.ownedNames`)
+   * that is present in the registry and absent from `desired`. Empty when
+   * there were no candidates, or when `registryReadError` is set.
+   */
+  results: GcServerResult[];
+  /**
+   * Present when the registry could not be read safely — the same
+   * condition the main loop reports per-name via `skipped`/`reason`. No
+   * GC candidate could be determined, so no removal was attempted for any
+   * owned name; `results` stays empty rather than guessing.
+   */
+  registryReadError?: string;
+}
+
 export interface EnsureMcpServersOptions {
   /** Desired state: server name -> spec. */
   desired: Record<string, ClaudeMcpServerSpec>;
@@ -468,11 +538,23 @@ export interface EnsureMcpServersOptions {
   homeDir?: string;
   /** Override for process.env (CLAUDE_CONFIG_DIR lookup) when `registryPath` is not given. */
   env?: NodeJS.ProcessEnv;
+  /**
+   * Opt-in garbage collection (task 363a6de0): after reconciling
+   * `desired`, additionally `claude mcp remove` any name in
+   * `gc.ownedNames` that's registered but no longer in `desired` (i.e.
+   * removed or disabled in the manifest since it was last registered).
+   * Omitted entirely: behavior is exactly the pre-GC contract — every
+   * registry entry outside `desired` is left untouched, and
+   * `EnsureMcpServersResult.gc` stays undefined.
+   */
+  gc?: EnsureMcpServersGcOptions;
 }
 
 export interface EnsureMcpServersResult {
   registryPath: string;
   results: EnsureServerResult[];
+  /** Present iff `opts.gc` was given. */
+  gc?: GcResult;
 }
 
 /**
@@ -486,6 +568,21 @@ export interface EnsureMcpServersResult {
  * every desired server is reported `skipped` with a reason instead of
  * guessing — a missing file (ENOENT, i.e. no registry yet) is NOT an
  * error and is treated as an empty registry.
+ *
+ * `opts.gc` (task 363a6de0) opts into a second pass over the SAME
+ * registry snapshot: every name in `opts.gc.ownedNames` that is currently
+ * registered but absent from `desired` gets `claude mcp remove`d — this is
+ * how a manifest edit that deletes or disables a `tools.mcp[]` entry
+ * propagates into a deregistration on the next ensure run. A name that's
+ * owned but ALSO still in `desired` (e.g. an operator hand-registered a
+ * drifted copy of a still-active entry) is never a GC candidate — the
+ * `desired` membership check excludes it before ownership is even
+ * considered, so it's protected automatically, not via special-cased
+ * content comparison. Without `opts.gc`, behavior is exactly the pre-GC
+ * contract: every registry entry outside `desired` is left alone. If the
+ * registry couldn't be read safely, GC is skipped too, mirroring the main
+ * loop (`gc.registryReadError` set, `gc.results` empty) — same "never
+ * guess" rule.
  */
 export async function ensureMcpServers(opts: EnsureMcpServersOptions): Promise<EnsureMcpServersResult> {
   const registryPath =
@@ -526,7 +623,33 @@ export async function ensureMcpServers(opts: EnsureMcpServersOptions): Promise<E
     results.push({ name, action: "replace", remove, add });
   }
 
-  return { registryPath, results };
+  let gc: GcResult | undefined;
+  if (opts.gc) {
+    if (readError !== null) {
+      gc = { results: [], registryReadError: readError };
+    } else {
+      const desiredNames = new Set(Object.keys(opts.desired));
+      const owned = new Set(opts.gc.ownedNames);
+      // Owned ∧ registered ∧ NOT desired (D-103). `desired` membership is
+      // checked first, so a still-active manifest entry is protected
+      // regardless of whether its registered content has drifted.
+      const candidates = Object.keys(existing)
+        .filter((name) => owned.has(name) && !desiredNames.has(name))
+        .sort();
+      const gcResults: GcServerResult[] = [];
+      for (const name of candidates) {
+        const remove = await removeMcpServer(name, callOpts);
+        if (remove.status === "removed" || remove.status === "not-found") {
+          gcResults.push({ name, action: "removed", remove });
+        } else {
+          gcResults.push({ name, action: "skipped", remove, reason: remove.message });
+        }
+      }
+      gc = { results: gcResults };
+    }
+  }
+
+  return { registryPath, results, ...(gc !== undefined ? { gc } : {}) };
 }
 
 // ---------------------------------------------------------------------
