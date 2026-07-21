@@ -7,6 +7,7 @@ import {
   ensureMcpServers,
   getMcpServer,
   listMcpServers,
+  manualRemoveLines,
   parseClaudeMcpListOutput,
   posixSingleQuote,
   removeMcpServer,
@@ -397,6 +398,195 @@ describe("ensureMcpServers", () => {
     // `foo` is absent from the TOP-LEVEL mcpServers (the projects.*.foo
     // entry must not satisfy it), so it's added, not treated as a match.
     expect(r.results).toEqual([{ name: "foo", action: "add", add: { status: "added", message: "added", code: 0 } }]);
+  });
+});
+
+describe("ensureMcpServers gc option (task 363a6de0, MCP-removal GC)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-mcp-gc-"));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function registryPath(): string {
+    return path.join(tmpDir, ".claude.json");
+  }
+
+  function writeRegistry(obj: unknown): void {
+    fs.writeFileSync(registryPath(), JSON.stringify(obj), "utf8");
+  }
+
+  it("removes an owned, registered, no-longer-desired server (remove branch, exact command)", async () => {
+    writeRegistry({ mcpServers: { "stale-owned": { command: "old-bin" } } });
+    const calls: string[][] = [];
+    const exec: ClaudeMcpExec = async (args) => {
+      calls.push(args);
+      return ok("");
+    };
+    const r = await ensureMcpServers({
+      desired: {},
+      exec,
+      registryPath: registryPath(),
+      gc: { ownedNames: ["stale-owned"] },
+    });
+    expect(r.gc?.results).toEqual([
+      { name: "stale-owned", action: "removed", remove: { status: "removed", message: "", code: 0 } },
+    ]);
+    expect(calls).toEqual([["mcp", "remove", "--scope", "user", "stale-owned"]]);
+  });
+
+  it("leaves a foreign (non-owned) registered server untouched (ownership boundary)", async () => {
+    writeRegistry({ mcpServers: { "foreign-server": { command: "someone-elses-bin" } } });
+    let execCalls = 0;
+    const exec: ClaudeMcpExec = async () => {
+      execCalls++;
+      return ok("");
+    };
+    const r = await ensureMcpServers({
+      desired: {},
+      exec,
+      registryPath: registryPath(),
+      gc: { ownedNames: ["some-other-owned-name"] },
+    });
+    expect(r.gc?.results).toEqual([]);
+    expect(execCalls).toBe(0);
+  });
+
+  it("does not GC an owned name still present in desired, even if its registered content drifted (operator-hotfix protection)", async () => {
+    writeRegistry({ mcpServers: { "agent-tasks": { command: "operator-hotfix-bin" } } });
+    const calls: string[][] = [];
+    const exec: ClaudeMcpExec = async (args) => {
+      calls.push(args);
+      if (args[1] === "remove") return ok("");
+      return ok("added");
+    };
+    const r = await ensureMcpServers({
+      desired: { "agent-tasks": { command: "bridge-bin" } },
+      exec,
+      registryPath: registryPath(),
+      gc: { ownedNames: ["agent-tasks"] },
+    });
+    // Main loop resyncs the drifted entry via its normal replace path...
+    expect(r.results).toEqual([
+      {
+        name: "agent-tasks",
+        action: "replace",
+        remove: { status: "removed", message: "", code: 0 },
+        add: { status: "added", message: "added", code: 0 },
+      },
+    ]);
+    // ...and GC sees zero candidates: `agent-tasks` is owned but ALSO in
+    // `desired`, so the desired-membership check excludes it before
+    // ownership is even considered — no separate content check needed.
+    expect(r.gc?.results).toEqual([]);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("is fully idempotent: GC removes once, a second run against the resulting registry makes zero exec calls", async () => {
+    writeRegistry({ mcpServers: { "stale-owned": { command: "old-bin" } } });
+    function statefulRemoveExec(calls: string[][]): ClaudeMcpExec {
+      return async (args) => {
+        calls.push(args);
+        if (args[0] === "mcp" && args[1] === "remove") {
+          const registry = JSON.parse(fs.readFileSync(registryPath(), "utf8")) as Record<string, unknown>;
+          const mcpServers = (registry["mcpServers"] as Record<string, unknown>) ?? {};
+          delete mcpServers[args[4]!];
+          registry["mcpServers"] = mcpServers;
+          fs.writeFileSync(registryPath(), JSON.stringify(registry));
+        }
+        return ok("");
+      };
+    }
+
+    const firstCalls: string[][] = [];
+    const r1 = await ensureMcpServers({
+      desired: {},
+      exec: statefulRemoveExec(firstCalls),
+      registryPath: registryPath(),
+      gc: { ownedNames: ["stale-owned"] },
+    });
+    expect(r1.gc?.results.map((g) => g.name)).toEqual(["stale-owned"]);
+    expect(firstCalls).toEqual([["mcp", "remove", "--scope", "user", "stale-owned"]]);
+
+    const secondCalls: string[][] = [];
+    const r2 = await ensureMcpServers({
+      desired: {},
+      exec: statefulRemoveExec(secondCalls),
+      registryPath: registryPath(),
+      gc: { ownedNames: ["stale-owned"] },
+    });
+    expect(r2.gc?.results).toEqual([]);
+    expect(secondCalls).toHaveLength(0);
+  });
+
+  it("skips GC entirely (no remove attempted) when the registry can't be read safely, and surfaces the error", async () => {
+    fs.writeFileSync(registryPath(), "{not json", "utf8");
+    let execCalls = 0;
+    const exec: ClaudeMcpExec = async () => {
+      execCalls++;
+      return ok("");
+    };
+    const r = await ensureMcpServers({
+      desired: {},
+      exec,
+      registryPath: registryPath(),
+      gc: { ownedNames: ["stale-owned"] },
+    });
+    expect(r.gc?.results).toEqual([]);
+    expect(r.gc?.registryReadError).toContain("not valid JSON");
+    expect(execCalls).toBe(0);
+  });
+
+  it("cli-missing on remove: reported as skipped with a reason, not a hard failure", async () => {
+    writeRegistry({ mcpServers: { "stale-owned": { command: "old-bin" } } });
+    const exec: ClaudeMcpExec = async () => enoent();
+    const r = await ensureMcpServers({
+      desired: {},
+      exec,
+      registryPath: registryPath(),
+      gc: { ownedNames: ["stale-owned"] },
+    });
+    expect(r.gc?.results).toEqual([
+      {
+        name: "stale-owned",
+        action: "skipped",
+        remove: { status: "cli-missing", message: "claude CLI not found on PATH", code: 127 },
+        reason: "claude CLI not found on PATH",
+      },
+    ]);
+    // The caller (wireClaudeMcp) builds the copy-pasteable fallback from
+    // exactly these skipped names.
+    expect(manualRemoveLines(r.gc!.results.map((g) => g.name))).toEqual([
+      "claude mcp remove --scope user 'stale-owned'",
+    ]);
+  });
+
+  it("without opts.gc, a stale owned entry is left alone and gc is undefined (unchanged pre-GC behavior)", async () => {
+    writeRegistry({ mcpServers: { "stale-owned": { command: "old-bin" } } });
+    let execCalls = 0;
+    const exec: ClaudeMcpExec = async () => {
+      execCalls++;
+      return ok("");
+    };
+    const r = await ensureMcpServers({ desired: {}, exec, registryPath: registryPath() });
+    expect(r.gc).toBeUndefined();
+    expect(execCalls).toBe(0);
+  });
+});
+
+describe("manualRemoveLines", () => {
+  it("builds one sorted, quoted `claude mcp remove` line per name", () => {
+    expect(manualRemoveLines(["b-server", "a-server"])).toEqual([
+      "claude mcp remove --scope user 'a-server'",
+      "claude mcp remove --scope user 'b-server'",
+    ]);
+  });
+
+  it("returns an empty array for empty input", () => {
+    expect(manualRemoveLines([])).toEqual([]);
   });
 });
 
