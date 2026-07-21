@@ -35,6 +35,7 @@ import {
   type RuntimeName,
 } from "./detect.js";
 import { init, type InitResult } from "./index.js";
+import type { NpmExec } from "../doctor/npm-bin-path.js";
 import { validate } from "../validate/index.js";
 import { apply, CODEX_CONFIG_BASENAME, SETTINGS_BASENAME, type ApplyResult } from "../apply/index.js";
 import {
@@ -164,6 +165,15 @@ export interface RunInteractiveOptions {
    * can fake success / non-zero exit / throw without touching the network.
    */
   owInitSpawn?: InstallOptions["spawn"];
+  /**
+   * Override the `npm prefix -g` runner used by `init()`'s post-write
+   * bin-resolution check (task 325ace29). Mirrors `dependencyPathEnv`:
+   * the wizard owns no npm spawn of its own, it just forwards this to
+   * `init()`, which already accepts it as `InitOptions.npmBinExec`.
+   * Production leaves it undefined and gets the real spawn; tests MUST
+   * inject a fake, or the hermetic-spawn guard on `realNpmExec` throws.
+   */
+  npmBinExec?: NpmExec;
 }
 
 export interface InteractiveResult {
@@ -1253,6 +1263,7 @@ export async function runInteractive(
       force: boolean;
       homeDir?: string;
       pathEnv?: string;
+      npmBinExec?: NpmExec;
     } = {
       template: profile,
       force: detection.manifest.exists || opts.forceOverwrite === true,
@@ -1266,6 +1277,11 @@ export async function runInteractive(
     // check, so the two checks agree on what's "installed" for this run.
     if (opts.dependencyPathEnv !== undefined) {
       initOpts.pathEnv = opts.dependencyPathEnv;
+    }
+    // Task 325ace29: same forwarding for the `npm prefix -g` runner, so a
+    // test can keep `init()`'s bin-resolution check off the real npm.
+    if (opts.npmBinExec !== undefined) {
+      initOpts.npmBinExec = opts.npmBinExec;
     }
     const initResult = await init(initOpts);
     stdout(initResult.stdout);
@@ -1666,6 +1682,7 @@ async function runCustomProfile(rc: RunCustomOpts): Promise<InteractiveResult> {
     force: boolean;
     homeDir?: string;
     pathEnv?: string;
+    npmBinExec?: NpmExec;
   } = {
     content: composed.yaml,
     contentLabel: "custom",
@@ -1675,6 +1692,8 @@ async function runCustomProfile(rc: RunCustomOpts): Promise<InteractiveResult> {
   if (homeArg !== undefined) initOpts.homeDir = homeArg;
   // Task 7f8fb4bc: see the named-profile path above for rationale.
   if (opts.dependencyPathEnv !== undefined) initOpts.pathEnv = opts.dependencyPathEnv;
+  // Task 325ace29: see the named-profile path above for rationale.
+  if (opts.npmBinExec !== undefined) initOpts.npmBinExec = opts.npmBinExec;
   const initResult = await init(initOpts);
   stdout(initResult.stdout);
 

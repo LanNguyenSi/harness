@@ -14,9 +14,21 @@
 // the same shape (a new call site, a reordered prompt, a queue typo)
 // fails the test loudly instead of quietly spawning a real process. A
 // follow-up review (same task) found the same "injectable runner + real
-// default" shape unguarded at three more call sites — see the guard
-// call sites listed at each `real*Spawn`/`real*Exec` function using this
-// primitive for the up-to-date list.
+// default" shape unguarded at three more call sites; a sixth
+// (`realNpmExec` in src/cli/doctor/npm-bin-path.ts) was guarded later,
+// under task 325ace29. As of that task, the guarded `real*Spawn`/
+// `real*Exec` functions are:
+//   - `realClaudeMcpExec` (src/io/claude-mcp.ts)
+//   - `realSpawn` (src/cli/init/dependencies.ts)
+//   - `realProbeSpawn` (src/cli/init/agent-tasks-auth.ts)
+//   - `realLoginSpawn` (src/cli/init/agent-tasks-auth.ts)
+//   - `realOwInitSpawn` (src/cli/init/interactive.ts)
+//   - `realNpmExec` (src/cli/doctor/npm-bin-path.ts)
+// Naming them here (instead of just a count) is deliberate (review
+// finding F5, task T-007): a bare count silently drifts every time a new
+// call site is added and nobody remembers to bump it. See the guard call
+// site listed at each function above (each links back to this doc) for
+// the up-to-date detail on that specific call chain.
 //
 // Env signal: `process.env.VITEST`, checked for a truthy, non-"false"/
 // "0" value (vitest itself only ever sets it to the string "true", but
@@ -50,8 +62,8 @@
 // exercise the REAL spawn path end-to-end (e.g. a manual, opt-in
 // integration check) — it must not be set in normal test runs, CI, or
 // production, and no test in this repo sets it today. Because this is a
-// SILENT global kill-switch for all four guarded call sites, activating
-// it under vitest prints a one-time stderr warning (module-local flag,
+// SILENT global kill-switch for every guarded call site listed above,
+// activating it under vitest prints a one-time stderr warning (module-local flag,
 // not per-call) so an accidentally-set env var is visible in test output
 // instead of quietly disabling every tripwire in this file.
 //

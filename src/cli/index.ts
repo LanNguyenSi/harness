@@ -4,6 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Command } from "commander";
 
+import { HermeticSpawnViolationError } from "../runtime/hermetic-spawn-guard.js";
+
 // Production version probe for `harness doctor`: synchronous --version
 // invocation with a 5s timeout. Tests inject their own probe; the CLI
 // entrypoint wires this default. Same shape as `cli/doctor/codex.ts`.
@@ -3031,6 +3033,17 @@ export async function run(opts: RunOptions = {}): Promise<number> {
     await program.parseAsync(argv, { from: "user" });
     return 0;
   } catch (err) {
+    // Defense-in-depth (task 325ace29): a hermetic-spawn-guard violation
+    // must always propagate out of run() as a hard failure, never be
+    // folded into the generic "return 70" branch below. Without this,
+    // any test that merely asserts "exit code != 0" (rather than the
+    // specific message) would mask a future real spawn slipping past a
+    // guarded call site. This is production-neutral: the guard
+    // (src/runtime/hermetic-spawn-guard.ts) only ever throws when
+    // `process.env.VITEST` is set, which a real, standalone `harness`
+    // invocation never has — so this branch is unreachable outside of
+    // vitest and changes no production behavior.
+    if (err instanceof HermeticSpawnViolationError) throw err;
     if (err instanceof HarnessExitError) {
       if (err.exitCode !== 0 && err.message) stderr(`${err.message}\n`);
       return err.exitCode;

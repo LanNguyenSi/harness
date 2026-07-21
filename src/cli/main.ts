@@ -18,8 +18,21 @@
 // homeDir/configPath there or hoist this assignment above the import.
 process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"] = "1";
 
+import { EX_SOFTWARE } from "./exit-codes.js";
 import { run } from "./index.js";
 
-run().then((code) => {
-  process.exit(code);
-});
+run().then(
+  (code) => {
+    process.exit(code);
+  },
+  (err) => {
+    // Review finding F3 (task T-007): without this `.catch()`, an error
+    // re-thrown past `run()`'s own top-level catch — today that is only
+    // `HermeticSpawnViolationError` (see src/cli/index.ts's `run()` and
+    // src/runtime/hermetic-spawn-guard.ts) — would surface as an unhandled
+    // rejection with a raw stack trace instead of a formatted message and
+    // a clean non-zero exit.
+    process.stderr.write(`${(err as Error).message ?? err}\n`);
+    process.exit(EX_SOFTWARE);
+  },
+);

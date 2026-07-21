@@ -67,6 +67,7 @@ describe("doctor --target codex", () => {
       mcpProbe: new FakeProbe(),
       versionProbe: () => null,
       pathEnv: "",
+      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
       target: "codex",
       codexCheckOptions: {
         manifestDir: home,
@@ -115,6 +116,7 @@ describe("doctor --target codex", () => {
       mcpProbe: new FakeProbe(),
       versionProbe: () => null,
       pathEnv: "/nonexistent/dir",
+      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
       target: "codex",
       codexCheckOptions: {
         manifestDir: home,
@@ -151,6 +153,7 @@ describe("doctor --target codex", () => {
       mcpProbe: new FakeProbe(),
       versionProbe: () => null,
       pathEnv: "",
+      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
       target: "codex",
       codexCheckOptions: {
         manifestDir: home,
@@ -179,6 +182,7 @@ describe("doctor --target codex", () => {
       mcpProbe: new FakeProbe(),
       versionProbe: () => null,
       pathEnv: "",
+      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
       target: "codex",
       codexCheckOptions: {
         manifestDir: home,
@@ -207,6 +211,7 @@ describe("doctor --target codex", () => {
       mcpProbe: new FakeProbe(),
       versionProbe: () => null,
       pathEnv: "",
+      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
       target: "codex",
       codexCheckOptions: {
         manifestDir: home,
@@ -234,6 +239,7 @@ describe("doctor --target codex", () => {
       mcpProbe: new FakeProbe(),
       versionProbe: () => null,
       pathEnv: "",
+      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
       target: "codex",
       codexCheckOptions: {
         manifestDir: home,
@@ -258,6 +264,7 @@ describe("doctor --target codex", () => {
       mcpProbe: new FakeProbe(),
       versionProbe: () => null,
       pathEnv: "",
+      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
     });
 
     expect(report.codexTarget).toBeUndefined();
