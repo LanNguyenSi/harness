@@ -1597,6 +1597,7 @@ ${mcpBlock}
       mcpProbe: new FakeProbe({ bare: { kind: "missing-verb" } }),
       versionProbe: () => "v0.1.0\n",
       pathEnv: "",
+      claudeMcpExec: NO_CLAUDE_CLI,
     });
     expect(report.tools.mcpVersions).toEqual([]);
   });
@@ -1613,6 +1614,7 @@ ${mcpBlock}
       mcpProbe: new FakeProbe({ "ok-mcp": { kind: "missing-verb" } }),
       versionProbe: (cmd) => (cmd[0] === "my-mcp-bin" ? "my-mcp-bin v0.6.1\n" : null),
       pathEnv: "",
+      claudeMcpExec: NO_CLAUDE_CLI,
     });
     expect(report.tools.mcpVersions).toEqual([
       { name: "ok-mcp", status: "ok", message: "v0.6.1 ≥ 0.5.0" },
@@ -1636,6 +1638,7 @@ ${mcpBlock}
       mcpProbe: new FakeProbe({ "stale-mcp": { kind: "missing-verb" } }),
       versionProbe: () => "stale-bin v0.2.0\n",
       pathEnv: "",
+      claudeMcpExec: NO_CLAUDE_CLI,
     });
     expect(report.tools.mcpVersions).toEqual([
       {
@@ -1686,6 +1689,7 @@ ${mcpBlock}
       }),
       versionProbe: (cmd) => (cmd[0] === "garbled-bin" ? "no number in here\n" : null),
       pathEnv: "",
+      claudeMcpExec: NO_CLAUDE_CLI,
     });
     const byName = Object.fromEntries(report.tools.mcpVersions.map((v) => [v.name, v]));
     expect(byName["probe-fail"]?.status).toBe("warn");
@@ -1711,6 +1715,7 @@ ${mcpBlock}
         return "1.2.3\n";
       },
       pathEnv: "",
+      claudeMcpExec: NO_CLAUDE_CLI,
     });
     expect(received).toEqual(["custom-bin", "--print-version"]);
     expect(report.tools.mcpVersions[0]?.status).toBe("ok");

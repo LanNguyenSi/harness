@@ -54,6 +54,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { assertNoRealSpawnInTests } from "../runtime/hermetic-spawn-guard.js";
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -75,7 +76,53 @@ export interface ClaudeMcpExec {
   (args: string[], timeoutMs: number): Promise<ClaudeMcpExecResult>;
 }
 
+/**
+ * Hermetic guard (task 54739002 primitive, applied here per task
+ * 0d80e969): asserts BEFORE touching `child_process` that we are not
+ * running under vitest without a test having injected `opts.exec`. This
+ * is the ONLY spawn point behind every `claude mcp <verb>` call in this
+ * module (add-json/remove/get/list all default to `opts.exec ??
+ * realClaudeMcpExec`). An accidental real spawn here talks to the
+ * OPERATOR'S REAL Claude Code user-scope MCP registry (`~/.claude.json`
+ * or `$CLAUDE_CONFIG_DIR/.claude.json`) — `list`/`get` only read it, but
+ * `add-json`/`remove` actually mutate it. See
+ * src/runtime/hermetic-spawn-guard.ts for why and the env signal used.
+ *
+ * `realClaudeMcpExec` has no try/catch around this call, so the thrown
+ * `HermeticSpawnViolationError` propagates directly to whichever
+ * exported wrapper (addJsonMcpServer/removeMcpServer/getMcpServer/
+ * listMcpServers) called it, and from there to every one of THEIR
+ * callers (including `ensureMcpServers`). Local "no try/catch here" is
+ * not the actual guarantee, though: the OW guard
+ * (src/cli/init/interactive.ts) proved a local absence-of-catch
+ * argument isn't enough on its own — that violation had to survive a
+ * catch further up the call chain. The backstops verified for THIS
+ * module's call sites:
+ *   - init's wire-now path: `wireRuntime`'s own catch
+ *     (src/cli/init/interactive.ts, the "Failed to wire ..." handler)
+ *     re-throws a `HermeticSpawnViolationError` before its normal
+ *     degrade-to-warning-and-retry handling, and runInteractive's outer
+ *     catch (src/cli/init/interactive.ts, the top-level handler that
+ *     otherwise treats a caught error as either an `isAbortError`
+ *     Ctrl-C or a rethrow) re-throws it again past every remaining
+ *     intermediate handler.
+ *   - doctor's `buildClaudeMcpRegistration` (src/cli/doctor/claude-mcp.ts)
+ *     and `doctor()` (src/cli/doctor/index.ts) have no try/catch at all
+ *     around the `listMcpServers` call, so it propagates unmodified.
+ *   - uninstall's `removeRegisteredMcpServers` (src/cli/uninstall/
+ *     index.ts) and `uninstall()` likewise have no try/catch around the
+ *     `removeMcpServer` call.
+ */
 function realClaudeMcpExec(args: string[], timeoutMs: number): Promise<ClaudeMcpExecResult> {
+  // Every caller in this module passes >=2 elements (["mcp", <verb>, ...]),
+  // so the fallback below is unreached today — kept anyway so a future
+  // call site that passes fewer never degrades to a blank/truncated
+  // "claude " label in the guard's own error message.
+  const verb = args.slice(0, 2).join(" ") || "(no args)";
+  assertNoRealSpawnInTests(
+    `claude ${verb}`,
+    "Inject a fake `exec` (ClaudeMcpExec) via opts.exec instead of exercising the real spawn path.",
+  );
   return new Promise((resolve) => {
     let child;
     try {

@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { doctor } from "../../src/cli/doctor/index.js";
 import { format } from "../../src/cli/doctor/format.js";
 import type { ClaudeMcpExec } from "../../src/io/claude-mcp.js";
+import { HermeticSpawnViolationError } from "../../src/runtime/hermetic-spawn-guard.js";
 
 let cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -317,5 +318,40 @@ describe("doctor — dead settings.json mcpServers block", () => {
       claudeMcpExec: execWithStdout("alpha: /usr/bin/true - ✔ Connected"),
     });
     expect(report.claudeMcp?.deadSettingsBlockNames).toEqual([]);
+  });
+});
+
+describe("doctor — hermetic spawn guard, claude-mcp path (task 0d80e969)", () => {
+  it("an enabled MCP server with NO injected claudeMcpExec fails hard instead of silently spawning the real claude CLI", async () => {
+    // Chain meta-test (review finding, task 0d80e969): pins the property
+    // this task's implementer verified by inspection but never pinned in
+    // a test — that doctor()'s call chain down to `realClaudeMcpExec` has
+    // NO swallowing catch anywhere. `buildClaudeMcpRegistration`
+    // (src/cli/doctor/claude-mcp.ts) awaits `listMcpServers` with no
+    // try/catch, and `doctor()` (src/cli/doctor/index.ts) has no
+    // try/catch anywhere in its body either. Unlike the wizard's
+    // wireClaudeMcp path (see tests/cli/init-interactive.test.ts's
+    // hermetic-guard describe block), there is no catch here at all to
+    // find, so this is a simpler propagation proof: the violation must
+    // reach the caller completely unmodified.
+    //
+    // Deliberately does NOT inject `claudeMcpExec`, does NOT pass
+    // `shallow`, and declares an ENABLED tools.mcp[] entry so the live
+    // `claude mcp list` probe actually fires and falls through to the
+    // real `realClaudeMcpExec()`.
+    const home = makeFixture({
+      "harness.yaml": manifestWithMcp(
+        `    - name: alpha\n      command: [/usr/bin/true]\n      enabled: true`,
+      ),
+    });
+    await expect(
+      doctor({
+        configPath: path.join(home, "harness.yaml"),
+        homeOverride: home,
+        pathEnv: "",
+        npmBinExec: STUB_NPM_BIN_EXEC,
+        // Deliberately NOT injecting claudeMcpExec.
+      }),
+    ).rejects.toThrow(HermeticSpawnViolationError);
   });
 });
