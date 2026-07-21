@@ -13,6 +13,7 @@ import {
 import { parseManifest, type McpServer } from "../../schema/index.js";
 import { applyAdd, type McpEntry as McpAddEntry } from "../add/mutate.js";
 import { EX_FAIL, EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
+import { readTopLevelMcpServers, resolveClaudeUserRegistryPath } from "../../io/claude-mcp.js";
 import {
   computeDrift,
   computeMcpDrift,
@@ -20,6 +21,7 @@ import {
   manifestProjection,
   parseSettingsHooks,
   parseSettingsMcpServers,
+  projectRegistryMcpServers,
   synthesizeName,
   type DerivedHook,
   type DerivedMcp,
@@ -38,6 +40,21 @@ export interface AdoptOptions {
    * exercised hermetically.
    */
   stdinIsTTY?: boolean;
+  /**
+   * Test seam (D-101/D-102, task 83d8d03a): explicit override for the
+   * Claude Code user-scope MCP registry file (~/.claude.json /
+   * $CLAUDE_CONFIG_DIR/.claude.json) `adopt` reads READ-ONLY to compute
+   * MCP drift. Takes precedence over `env`. Production callers leave this
+   * unset; the CLI never needs to pass it since the real registry always
+   * lives at the resolved default path.
+   */
+  registryPath?: string;
+  /**
+   * Override for process.env (CLAUDE_CONFIG_DIR lookup) used to resolve
+   * the default registry path when `registryPath` is not given. Defaults
+   * to `process.env`.
+   */
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface AdoptResult {
@@ -59,6 +76,21 @@ export interface AdoptResult {
   replacedMcpNames: string[];
   /** Human-readable status: "no-drift" | "declined" | "applied". */
   outcome: "no-drift" | "declined" | "applied";
+  /**
+   * Names present in a legacy/dead top-level `mcpServers` block inside
+   * `settingsPath` (D-101, task 83d8d03a). Claude Code does not read this
+   * file for MCP registration at runtime (io/claude-mcp.ts:1-9) — this is
+   * surfaced purely as a cleanup hint, NEVER as a source of `mcpDrift`.
+   * Sorted; empty when `settingsPath` has no such block.
+   */
+  deadSettingsMcpNames: string[];
+  /**
+   * Set when the effective MCP registry file could not be read safely
+   * (malformed JSON, `mcpServers` not an object — an ENOENT/missing file
+   * is NOT an error and leaves this unset). MCP drift is computed against
+   * an empty registry projection in that case rather than guessing.
+   */
+  registryReadError?: string;
 }
 
 const DEFAULT_BASENAME = "harness.yaml";
@@ -119,9 +151,24 @@ export async function adopt(
   const settingsHooks = parseSettingsHooks(settingsRaw);
   const drift = computeDrift(settingsHooks, projection);
 
-  const settingsMcp = parseSettingsMcpServers(settingsRaw);
+  // D-101: MCP drift is ALWAYS computed against the effective Claude Code
+  // user-scope registry (read-only top-level `mcpServers` of
+  // ~/.claude.json / $CLAUDE_CONFIG_DIR/.claude.json), regardless of
+  // `settingsPath` — Claude Code does not consume settings.json's
+  // `mcpServers` block at runtime (io/claude-mcp.ts:1-9). `settingsPath`
+  // remains the source for hook adoption above. A dead `mcpServers` block
+  // in `settingsPath`, if present, is still surfaced (`deadSettingsMcpNames`)
+  // as a cleanup hint but never feeds `mcpDrift`.
+  const deadSettingsMcpNames = parseSettingsMcpServers(settingsRaw)
+    .map((m) => m.name)
+    .sort();
+
+  const registryPath = opts.registryPath ?? resolveClaudeUserRegistryPath({ env: opts.env });
+  const { servers: registryServers, error: registryReadError } =
+    readTopLevelMcpServers(registryPath);
+  const registryMcp = projectRegistryMcpServers(registryServers);
   const mcpProjection = manifestMcpProjection(manifest);
-  const mcpDrift = computeMcpDrift(settingsMcp, mcpProjection);
+  const mcpDrift = computeMcpDrift(registryMcp, mcpProjection);
 
   if (drift.length === 0 && mcpDrift.length === 0) {
     return {
@@ -136,6 +183,8 @@ export async function adopt(
       adoptedMcpNames: [],
       replacedMcpNames: [],
       outcome: "no-drift",
+      deadSettingsMcpNames,
+      ...(registryReadError !== null ? { registryReadError } : {}),
     };
   }
 
@@ -215,6 +264,8 @@ export async function adopt(
         adoptedMcpNames,
         replacedMcpNames,
         outcome: "declined",
+        deadSettingsMcpNames,
+        ...(registryReadError !== null ? { registryReadError } : {}),
       };
     }
   }
@@ -275,6 +326,8 @@ export async function adopt(
     adoptedMcpNames,
     replacedMcpNames,
     outcome: "applied",
+    deadSettingsMcpNames,
+    ...(registryReadError !== null ? { registryReadError } : {}),
   };
 }
 

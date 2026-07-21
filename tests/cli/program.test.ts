@@ -111,8 +111,11 @@ describe("CLI program — init --probe", () => {
     const pathMod = await import("node:path");
     const home = fs.mkdtempSync(pathMod.join(os.tmpdir(), "harness-probe-cli-"));
     fs.mkdirSync(pathMod.join(home, ".claude"));
+    // task 83d8d03a: detect() reads the effective Claude Code user-scope
+    // registry (~/.claude.json), not the dead settings.json mcpServers
+    // block.
     fs.writeFileSync(
-      pathMod.join(home, ".claude", "settings.json"),
+      pathMod.join(home, ".claude.json"),
       JSON.stringify({ mcpServers: { "agent-tasks": { command: "node", args: ["x.js"] } } }),
     );
     const savedHome = process.env.HOME;
@@ -466,6 +469,81 @@ memory:
       expect(r2.stdout).not.toContain("Nothing is wired into Claude Code yet");
       expect(r2.stdout).toContain(`target already in sync: ${target}`);
       expect(r2.stdout).toContain(`wired into ${target}`);
+    });
+  });
+});
+
+// task 83d8d03a review finding (medium, tests): the two new stderr warning
+// branches in the `adopt` CLI action (dead settings.json mcpServers block;
+// unreadable effective registry) were only exercised at the `adopt()`
+// library level, never through the actual CLI command — a revert of either
+// branch would have gone undetected. These CLI-level tests close that gap.
+describe("CLI program — adopt command (registry warnings, task 83d8d03a)", () => {
+  const MINIMAL_MANIFEST = `version: 1
+hooks: []
+policies: []
+`;
+
+  async function withAdoptFixture(
+    fn: (o: { home: string; manifestPath: string; settingsPath: string }) => Promise<void>,
+  ): Promise<void> {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-adopt-cli-"));
+    const manifestPath = path.join(home, "harness.yaml");
+    const settingsPath = path.join(home, "settings.json");
+    fs.writeFileSync(manifestPath, MINIMAL_MANIFEST);
+    const savedConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    // Hermetic (D-102): pin the effective Claude Code MCP registry to this
+    // tmp fixture via CLAUDE_CONFIG_DIR so the CLI-level `adopt` invocation
+    // never reads the real developer/CI machine's ~/.claude.json. The
+    // `adopt` command has no --registry-path flag, so CLAUDE_CONFIG_DIR is
+    // the only hermetic seam available at this (CLI) layer.
+    process.env.CLAUDE_CONFIG_DIR = home;
+    try {
+      await fn({ home, manifestPath, settingsPath });
+    } finally {
+      if (savedConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = savedConfigDir;
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }
+
+  it("no-drift path: warns on stderr about a dead settings.json mcpServers block while stdout still reports 'nothing to adopt'", async () => {
+    await withAdoptFixture(async ({ manifestPath, settingsPath }) => {
+      const fs = await import("node:fs");
+      // Dead block: Claude Code never reads this file's mcpServers at
+      // runtime (io/claude-mcp.ts:1-9). The effective registry
+      // ($CLAUDE_CONFIG_DIR/.claude.json) doesn't exist here (ENOENT is
+      // not an error, just an empty registry), so there is genuinely no
+      // MCP drift — but the dead block must still be flagged.
+      fs.writeFileSync(
+        settingsPath,
+        JSON.stringify({ hooks: {}, mcpServers: { stale: { command: "old-binary" } } }),
+      );
+      const r = await exec(["adopt", settingsPath, "--config", manifestPath, "--yes"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("nothing to adopt");
+      expect(r.stderr).toContain("dead `mcpServers` block");
+      expect(r.stderr).toContain("stale");
+    });
+  });
+
+  it("registry read error path: warns on stderr about a malformed effective registry without failing the command", async () => {
+    await withAdoptFixture(async ({ manifestPath, settingsPath, home }) => {
+      const fs = await import("node:fs");
+      fs.writeFileSync(settingsPath, JSON.stringify({ hooks: {} }));
+      // Malformed effective registry ($CLAUDE_CONFIG_DIR/.claude.json).
+      fs.writeFileSync(path.join(home, ".claude.json"), "{not json");
+      const r = await exec(["adopt", settingsPath, "--config", manifestPath, "--yes"]);
+      // Otherwise unchanged command behavior: exit 0, MCP drift treated as
+      // empty (never guessed), and no dead-block warning since settingsPath
+      // has no mcpServers block here.
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("nothing to adopt");
+      expect(r.stderr).toContain("could not read the Claude Code MCP registry");
+      expect(r.stderr).toContain("not valid JSON");
+      expect(r.stderr).not.toContain("dead `mcpServers` block");
     });
   });
 });

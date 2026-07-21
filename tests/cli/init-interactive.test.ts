@@ -427,11 +427,12 @@ describe("interactive wizard — MCP registration + settings.json migration (tas
       authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
       prompts: mockPrompts({
         select: ["team"],
-        // The pre-seeded settings.json above already declares `agent-tasks`
-        // in its (dead) mcpServers block, so detect() finds it and the
-        // "Team profile ... not yet wired, proceed?" confirm does not
-        // fire — only the write confirmation does.
-        confirm: [true],
+        // task 83d8d03a: detect() now reads the EFFECTIVE registry
+        // (~/.claude.json), not the dead settings.json block seeded
+        // above. The registry doesn't exist yet at wizard-start, so
+        // agent-tasks reads as "not yet wired" and the "Team profile ...
+        // proceed?" confirm fires first, then the write confirmation.
+        confirm: [true, true],
         checkbox: [["claude-code"]],
         input: ["~/.claude/projects/{project}/memory"],
       }),
@@ -534,9 +535,12 @@ describe("interactive wizard — MCP registration + settings.json migration (tas
       authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
       prompts: mockPrompts({
         select: ["team"],
-        // agent-tasks is already pre-seeded in settings.json above, so
-        // detect() finds it and only the write confirmation fires.
-        confirm: [true],
+        // task 83d8d03a: detect() reads the effective registry
+        // (~/.claude.json), not the dead settings.json block seeded
+        // above, so agent-tasks reads as "not yet wired" and the "Team
+        // profile ... proceed?" confirm fires first, then the write
+        // confirmation.
+        confirm: [true, true],
         checkbox: [["claude-code"]],
         input: ["~/.claude/projects/{project}/memory"],
       }),
@@ -608,10 +612,12 @@ describe("interactive wizard — Team path", () => {
     expect(result.validateClean).toBe(true);
   });
 
-  it("does NOT warn about agent-tasks when it is already wired in settings.json", async () => {
+  it("does NOT warn about agent-tasks when it is already wired in the Claude Code user-scope registry", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
+    // task 83d8d03a: detect() reads the effective registry
+    // (~/.claude.json), not the dead settings.json mcpServers block.
     fs.writeFileSync(
-      path.join(tmpHome, ".claude", "settings.json"),
+      path.join(tmpHome, ".claude.json"),
       JSON.stringify({ mcpServers: { "agent-tasks": { command: "node", args: ["x.js"] } } }),
     );
     const cap = captureStreams();
@@ -976,11 +982,13 @@ describe("interactive wizard — Custom path (task 31d2fbb5)", () => {
     expect(cap.stderr()).not.toMatch(/composer warning/);
   });
 
-  it("pre-checks MCPs whose names are already wired in detected settings.json", async () => {
+  it("pre-checks MCPs whose names are already wired in the effective Claude Code registry", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
-    // Pre-wire agent-tasks in settings.json so detect() surfaces it.
+    // task 83d8d03a: pre-wire agent-tasks in the effective registry
+    // (~/.claude.json), not the dead settings.json mcpServers block, so
+    // detect() surfaces it.
     fs.writeFileSync(
-      path.join(tmpHome, ".claude", "settings.json"),
+      path.join(tmpHome, ".claude.json"),
       JSON.stringify({ mcpServers: { "agent-tasks": { command: "node", args: ["x.js"] } } }),
     );
     let capturedMcpChoices: { value: string; checked: boolean }[] = [];

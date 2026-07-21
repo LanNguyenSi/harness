@@ -725,14 +725,30 @@ export function buildProgram(opts: RunOptions = {}): Command {
   program
     .command("adopt <file>")
     .description(
-      "Capture hand-edits from a runtime file (today: ~/.claude/settings.json) " +
-        "into the manifest. Diffs against the manifest's current declarations and " +
-        "prompts y/N before writing.",
+      "Capture hand-edits into the manifest. Hooks are diffed against <file> " +
+        "(today: ~/.claude/settings.json). MCP servers are ALWAYS diffed " +
+        "against the effective Claude Code registry (top-level mcpServers in " +
+        "~/.claude.json, respecting CLAUDE_CONFIG_DIR) regardless of <file> — " +
+        "Claude Code does not read <file>'s mcpServers block at runtime. " +
+        "Prompts y/N before writing.",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--yes", "skip the confirmation prompt (for non-interactive use)")
     .action(async (file: string, options: { config?: string; yes?: boolean }) => {
       const result = await adopt(file, { configPath: options.config, yes: options.yes });
+      if (result.deadSettingsMcpNames.length > 0) {
+        stderr(
+          `⚠ ${file} has a dead \`mcpServers\` block (${result.deadSettingsMcpNames.join(", ")}); ` +
+            "Claude Code does not read this file for MCP registration — adopt diffed against the " +
+            "effective registry instead. Safe to remove by hand.\n",
+        );
+      }
+      if (result.registryReadError !== undefined) {
+        stderr(
+          `⚠ could not read the Claude Code MCP registry: ${result.registryReadError}; ` +
+            "treated as empty for MCP drift purposes.\n",
+        );
+      }
       if (result.outcome === "no-drift") {
         stdout(`nothing to adopt (no drift between ${file} and ${result.manifestPath})\n`);
         return;

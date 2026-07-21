@@ -90,19 +90,32 @@ describe("init detect — manifest presence", () => {
   });
 });
 
-describe("init detect — MCP servers from Claude settings.json", () => {
-  function settingsPath(): string {
-    return path.join(tmpHome, ".claude", "settings.json");
+// task 83d8d03a: detect() reads Claude Code's EFFECTIVE user-scope MCP
+// registration — the top-level `mcpServers` key of `~/.claude.json` /
+// `$CLAUDE_CONFIG_DIR/.claude.json` — via the shared read-only primitive
+// in io/claude-mcp.ts, NOT the (dead-at-runtime) `mcpServers` block in
+// `~/.claude/settings.json`. This is what feeds `interactive.ts`'s
+// team/full agent-tasks detection (`detectionHasAgentTasks`).
+describe("init detect — MCP servers from the effective Claude Code registry (task 83d8d03a)", () => {
+  function registryPath(): string {
+    return path.join(tmpHome, ".claude.json");
   }
 
-  it("returns an empty list when settings.json is missing", async () => {
-    fs.mkdirSync(path.join(tmpHome, ".claude"));
+  it("returns an empty list when the registry file is missing", async () => {
+    const r = await detect({ homeDir: tmpHome });
+    expect(r.mcpServers).toEqual([]);
+  });
+
+  it("does NOT read a dead mcpServers block in ~/.claude/settings.json", async () => {
+    writeJson(path.join(tmpHome, ".claude", "settings.json"), {
+      mcpServers: { "agent-tasks": { command: "node", args: ["x.js"] } },
+    });
     const r = await detect({ homeDir: tmpHome });
     expect(r.mcpServers).toEqual([]);
   });
 
   it("parses mcpServers into a sorted list of {name, command, args}", async () => {
-    writeJson(settingsPath(), {
+    writeJson(registryPath(), {
       mcpServers: {
         "z-server": { command: "/usr/bin/z", args: ["--mode", "x"] },
         "agent-tasks": { command: "node", args: ["/opt/agent-tasks/dist/server.js"] },
@@ -115,8 +128,17 @@ describe("init detect — MCP servers from Claude settings.json", () => {
     ]);
   });
 
-  it("defaults args to [] when omitted in the settings entry", async () => {
-    writeJson(settingsPath(), { mcpServers: { bare: { command: "/bin/bare" } } });
+  it("ignores projects.<path>.mcpServers, only reading the top-level key", async () => {
+    writeJson(registryPath(), {
+      mcpServers: { top: { command: "/bin/top" } },
+      projects: { "/some/path": { mcpServers: { nested: { command: "/bin/nested" } } } },
+    });
+    const r = await detect({ homeDir: tmpHome });
+    expect(r.mcpServers.map((s) => s.name)).toEqual(["top"]);
+  });
+
+  it("defaults args to [] when omitted in the registry entry", async () => {
+    writeJson(registryPath(), { mcpServers: { bare: { command: "/bin/bare" } } });
     const r = await detect({ homeDir: tmpHome });
     expect(r.mcpServers).toEqual([
       { name: "bare", runtime: "claude-code", command: "/bin/bare", args: [] },
@@ -124,7 +146,7 @@ describe("init detect — MCP servers from Claude settings.json", () => {
   });
 
   it("drops entries missing a command (defensive)", async () => {
-    writeJson(settingsPath(), {
+    writeJson(registryPath(), {
       mcpServers: {
         valid: { command: "/bin/valid" },
         broken: { args: ["--lonely"] },
@@ -134,18 +156,15 @@ describe("init detect — MCP servers from Claude settings.json", () => {
     expect(r.mcpServers.map((s) => s.name)).toEqual(["valid"]);
   });
 
-  it("reports parseError on invalid JSON without throwing", async () => {
-    fs.mkdirSync(path.join(tmpHome, ".claude"));
-    fs.writeFileSync(settingsPath(), "{ not valid json");
+  it("reports mcpRegistryParseError on invalid JSON without throwing", async () => {
+    fs.writeFileSync(registryPath(), "{ not valid json");
     const r = await detect({ homeDir: tmpHome });
-    const claude = r.runtimes.find((x) => x.name === "claude-code");
-    expect(claude?.settingsExists).toBe(true);
-    expect(claude?.settingsParseError).toMatch(/invalid JSON/);
+    expect(r.mcpRegistryParseError).toMatch(/not valid JSON/);
     expect(r.mcpServers).toEqual([]);
   });
 
   it("defaults args to [] when the entry's args field is not an array", async () => {
-    writeJson(settingsPath(), {
+    writeJson(registryPath(), {
       mcpServers: { x: { command: "/bin/x", args: "not-an-array" } },
     });
     const r = await detect({ homeDir: tmpHome });
@@ -155,7 +174,7 @@ describe("init detect — MCP servers from Claude settings.json", () => {
   });
 
   it("filters non-string elements out of args, keeping the string-typed ones", async () => {
-    writeJson(settingsPath(), {
+    writeJson(registryPath(), {
       mcpServers: { x: { command: "/bin/x", args: [1, "keep", null, "also-keep", false] } },
     });
     const r = await detect({ homeDir: tmpHome });
@@ -165,7 +184,7 @@ describe("init detect — MCP servers from Claude settings.json", () => {
   });
 
   it("drops entries whose command field is not a string", async () => {
-    writeJson(settingsPath(), {
+    writeJson(registryPath(), {
       mcpServers: {
         valid: { command: "/bin/valid" },
         nonStringCommand: { command: 42, args: ["--ignored"] },
@@ -175,23 +194,33 @@ describe("init detect — MCP servers from Claude settings.json", () => {
     expect(r.mcpServers.map((s) => s.name)).toEqual(["valid"]);
   });
 
-  it("reports settingsParseError when settings.json is unreadable", async () => {
-    // Exercise the safeReadFile null path (permission denied on read).
+  it("reports mcpRegistryParseError when the registry file is unreadable", async () => {
     // chmod 0000 is unreliable for root, so skip when running as root.
     if (process.getuid?.() === 0) return;
-    fs.mkdirSync(path.join(tmpHome, ".claude"));
-    fs.writeFileSync(settingsPath(), JSON.stringify({ mcpServers: {} }));
-    fs.chmodSync(settingsPath(), 0o000);
+    fs.writeFileSync(registryPath(), JSON.stringify({ mcpServers: {} }));
+    fs.chmodSync(registryPath(), 0o000);
     try {
       const r = await detect({ homeDir: tmpHome });
-      const claude = r.runtimes.find((x) => x.name === "claude-code");
-      expect(claude?.settingsExists).toBe(true);
-      expect(claude?.settingsParseError).toBe("settings.json unreadable");
+      expect(r.mcpRegistryParseError).toContain("cannot read");
       expect(r.mcpServers).toEqual([]);
     } finally {
       // Restore so afterEach's rmSync can clean up the tmp tree.
-      fs.chmodSync(settingsPath(), 0o600);
+      fs.chmodSync(registryPath(), 0o600);
     }
+  });
+
+  it("respects CLAUDE_CONFIG_DIR precedence over ~/.claude.json (D-102)", async () => {
+    // A registry at the default ~/.claude.json location that must be
+    // ignored once CLAUDE_CONFIG_DIR points elsewhere.
+    writeJson(registryPath(), {
+      mcpServers: { "should-be-ignored": { command: "/bin/wrong" } },
+    });
+    const customConfigDir = path.join(tmpHome, "custom-config-dir");
+    writeJson(path.join(customConfigDir, ".claude.json"), {
+      mcpServers: { "from-custom-dir": { command: "/bin/right" } },
+    });
+    const r = await detect({ homeDir: tmpHome, env: { CLAUDE_CONFIG_DIR: customConfigDir } });
+    expect(r.mcpServers.map((s) => s.name)).toEqual(["from-custom-dir"]);
   });
 });
 

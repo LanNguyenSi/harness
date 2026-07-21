@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
-import { adopt } from "../../src/cli/adopt/index.js";
+import { adopt, type AdoptOptions } from "../../src/cli/adopt/index.js";
 import {
   computeDrift,
   computeMcpDrift,
@@ -20,11 +20,19 @@ import { parseManifest } from "../../src/schema/index.js";
 let tmpHome: string;
 let manifestPath: string;
 let settingsPath: string;
+// task 83d8d03a (D-101): MCP drift now comes from the effective Claude
+// Code registry (read-only top-level `mcpServers` of ~/.claude.json),
+// NEVER from settingsPath. `registryPath` is a per-test tmp fixture that
+// does not exist until a test writes to it via `writeRegistry` — never
+// the real machine's ~/.claude.json — so every `runAdopt()` call below
+// stays hermetic even when a test doesn't care about MCP servers at all.
+let registryPath: string;
 
 beforeEach(async () => {
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-adopt-"));
   manifestPath = path.join(tmpHome, "harness.yaml");
   settingsPath = path.join(tmpHome, "settings.json");
+  registryPath = path.join(tmpHome, ".claude.json");
   await init({ homeDir: tmpHome }); // minimal — empty hooks
 });
 
@@ -36,8 +44,26 @@ function writeSettings(hooks: unknown): void {
   fs.writeFileSync(settingsPath, JSON.stringify({ hooks }, null, 2));
 }
 
+/** Writes the effective Claude Code user-scope registry fixture (~/.claude.json shape). */
+function writeRegistry(mcpServers: unknown): void {
+  fs.writeFileSync(registryPath, JSON.stringify({ mcpServers }, null, 2));
+}
+
 function readManifest(): unknown {
   return parseYaml(fs.readFileSync(manifestPath, "utf8"));
+}
+
+/**
+ * Hermetic wrapper around `adopt()`: defaults `registryPath` to this
+ * test's tmp fixture (see `registryPath` above) so no call ever falls
+ * through to `resolveClaudeUserRegistryPath()`'s real-machine default —
+ * a bare `adopt()` call without this would read the ACTUAL developer/CI
+ * machine's `~/.claude.json` for MCP drift, which is exactly what task
+ * 83d8d03a's "hermetic tests" acceptance criterion forbids. Individual
+ * tests can still override `registryPath` (or `env`) via `opts`.
+ */
+function runAdopt(file: string, opts: AdoptOptions = {}): ReturnType<typeof adopt> {
+  return adopt(file, { registryPath, ...opts });
 }
 
 describe("derive — pure functions", () => {
@@ -122,7 +148,7 @@ describe("adopt — drift-and-accept (write-and-confirm y)", () => {
         { matcher: "", hooks: [{ type: "command", command: "/tmp/extra.sh" }] },
       ],
     });
-    const result = await adopt(settingsPath, {
+    const result = await runAdopt(settingsPath, {
       configPath: manifestPath,
       prompt: async () => "y",
     });
@@ -144,7 +170,7 @@ describe("adopt — non-TTY guard", () => {
     });
     const before = fs.readFileSync(manifestPath, "utf8");
     await expect(
-      adopt(settingsPath, { configPath: manifestPath, stdinIsTTY: false }),
+      runAdopt(settingsPath, { configPath: manifestPath, stdinIsTTY: false }),
     ).rejects.toThrow(/stdin is not a TTY.*--yes/);
     expect(fs.readFileSync(manifestPath, "utf8")).toBe(before);
   });
@@ -158,7 +184,7 @@ describe("adopt — drift-and-decline", () => {
       ],
     });
     const before = fs.readFileSync(manifestPath, "utf8");
-    const result = await adopt(settingsPath, {
+    const result = await runAdopt(settingsPath, {
       configPath: manifestPath,
       prompt: async () => "N",
     });
@@ -171,7 +197,7 @@ describe("adopt — drift-and-decline", () => {
     writeSettings({
       SessionStart: [{ matcher: "", hooks: [{ type: "command", command: "/tmp/x" }] }],
     });
-    const result = await adopt(settingsPath, {
+    const result = await runAdopt(settingsPath, {
       configPath: manifestPath,
       prompt: async () => "",
     });
@@ -184,7 +210,7 @@ describe("adopt — no-drift", () => {
     // Empty hooks in settings AND empty hooks in minimal-template manifest = no drift.
     writeSettings({});
     const before = fs.readFileSync(manifestPath, "utf8");
-    const result = await adopt(settingsPath, { configPath: manifestPath });
+    const result = await runAdopt(settingsPath, { configPath: manifestPath });
     expect(result.outcome).toBe("no-drift");
     expect(result.driftCount).toBe(0);
     expect(result.applied).toBe(false);
@@ -200,7 +226,7 @@ describe("adopt — --yes", () => {
         { matcher: "", hooks: [{ type: "command", command: "/tmp/yes.sh" }] },
       ],
     });
-    const result = await adopt(settingsPath, {
+    const result = await runAdopt(settingsPath, {
       configPath: manifestPath,
       yes: true,
       // prompt MUST NOT be called when --yes is set; throw to verify.
@@ -226,7 +252,7 @@ describe("adopt — input validation", () => {
       ],
     });
     fs.writeFileSync(manifestPath, "version: 99\n");
-    await expect(adopt(settingsPath, { configPath: manifestPath })).rejects.toBeDefined();
+    await expect(runAdopt(settingsPath, { configPath: manifestPath })).rejects.toBeDefined();
   });
 });
 
@@ -235,13 +261,13 @@ describe("adopt — manifest must exist", () => {
     fs.unlinkSync(manifestPath);
     writeSettings({});
     await expect(
-      adopt(settingsPath, { configPath: manifestPath }),
+      runAdopt(settingsPath, { configPath: manifestPath }),
     ).rejects.toMatchObject({ name: "HarnessExitError", exitCode: 66 });
   });
 
   it("EX_NOINPUT (66) when settings file is missing", async () => {
     await expect(
-      adopt(path.join(tmpHome, "no-such.json"), { configPath: manifestPath }),
+      runAdopt(path.join(tmpHome, "no-such.json"), { configPath: manifestPath }),
     ).rejects.toMatchObject({ name: "HarnessExitError", exitCode: 66 });
   });
 });
@@ -250,7 +276,7 @@ describe("adopt — invalid JSON", () => {
   it("EX_FAIL on malformed settings.json", async () => {
     fs.writeFileSync(settingsPath, "not json {{");
     await expect(
-      adopt(settingsPath, { configPath: manifestPath }),
+      runAdopt(settingsPath, { configPath: manifestPath }),
     ).rejects.toMatchObject({
       name: "HarnessExitError",
       exitCode: 1,
@@ -380,20 +406,45 @@ describe("derive — MCP servers", () => {
     });
     expect(flat).toEqual([{ name: "a", command: ["node", "/x", "--port", "/y"] }]);
   });
+
+  // task 83d8d03a (D-101): the same per-entry projection, but fed from the
+  // registry's already-extracted `mcpServers` record (as returned by
+  // `readTopLevelMcpServers`) rather than a whole settings.json-shaped
+  // object — this is the function `adopt` now uses for the actual drift
+  // source.
+  it("projectRegistryMcpServers translates a registry mcpServers record into a flat list", async () => {
+    const { projectRegistryMcpServers } = await import("../../src/cli/adopt/derive.js");
+    const flat = projectRegistryMcpServers({
+      "grounding-mcp": { command: "node", args: ["/opt/server.js"] },
+      "no-args": { command: "/usr/bin/lone" },
+      "with-env": { command: "python", args: ["-m", "x"], env: { TOKEN: "abc" } },
+    });
+    expect(flat).toEqual([
+      { name: "grounding-mcp", command: ["node", "/opt/server.js"] },
+      { name: "no-args", command: ["/usr/bin/lone"] },
+      { name: "with-env", command: ["python", "-m", "x"], env: { TOKEN: "abc" } },
+    ]);
+  });
+
+  it("projectRegistryMcpServers ignores entries without a command, same as parseSettingsMcpServers", async () => {
+    const { projectRegistryMcpServers } = await import("../../src/cli/adopt/derive.js");
+    const flat = projectRegistryMcpServers({
+      ok: { command: "node", args: ["x"] },
+      broken: { args: ["x"] },
+      empty: { command: "" },
+      notobj: "string",
+    });
+    expect(flat).toEqual([{ name: "ok", command: ["node", "x"] }]);
+  });
 });
 
 describe("adopt — MCP server adoption", () => {
   it("captures a new mcpServers entry into tools.mcp[]", async () => {
-    fs.writeFileSync(
-      settingsPath,
-      JSON.stringify({
-        hooks: {},
-        mcpServers: {
-          "grounding-mcp": { command: "node", args: ["/opt/server.js"] },
-        },
-      }),
-    );
-    const r = await adopt(settingsPath, { configPath: manifestPath, yes: true });
+    // task 83d8d03a (D-101): MCP drift is read from the effective Claude
+    // Code registry, not settingsPath.
+    writeSettings({});
+    writeRegistry({ "grounding-mcp": { command: "node", args: ["/opt/server.js"] } });
+    const r = await runAdopt(settingsPath, { configPath: manifestPath, yes: true });
     expect(r.outcome).toBe("applied");
     expect(r.driftCount).toBe(1);
     expect(r.hookDriftCount).toBe(0);
@@ -409,9 +460,9 @@ describe("adopt — MCP server adoption", () => {
     });
   });
 
-  it("replaces an existing tools.mcp entry when settings.json content differs", async () => {
-    // Hand-write a manifest with one MCP entry; we'll then have settings.json
-    // describe the same name with different command tokens.
+  it("replaces an existing tools.mcp entry when the registry content differs", async () => {
+    // Hand-write a manifest with one MCP entry; the effective registry then
+    // describes the same name with different command tokens.
     fs.writeFileSync(
       manifestPath,
       `version: 1
@@ -427,16 +478,9 @@ hooks: []
 policies: []
 `,
     );
-    fs.writeFileSync(
-      settingsPath,
-      JSON.stringify({
-        hooks: {},
-        mcpServers: {
-          "grounding-mcp": { command: "node", args: ["/opt/new.js"] },
-        },
-      }),
-    );
-    const r = await adopt(settingsPath, { configPath: manifestPath, yes: true });
+    writeSettings({});
+    writeRegistry({ "grounding-mcp": { command: "node", args: ["/opt/new.js"] } });
+    const r = await runAdopt(settingsPath, { configPath: manifestPath, yes: true });
     expect(r.outcome).toBe("applied");
     expect(r.mcpDriftCount).toBe(1);
     expect(r.replacedMcpNames).toEqual(["grounding-mcp"]);
@@ -449,16 +493,9 @@ policies: []
   });
 
   it("preserves env across adopt", async () => {
-    fs.writeFileSync(
-      settingsPath,
-      JSON.stringify({
-        hooks: {},
-        mcpServers: {
-          a: { command: "node", args: ["/x.js"], env: { TOK: "xyz" } },
-        },
-      }),
-    );
-    const r = await adopt(settingsPath, { configPath: manifestPath, yes: true });
+    writeSettings({});
+    writeRegistry({ a: { command: "node", args: ["/x.js"], env: { TOK: "xyz" } } });
+    const r = await runAdopt(settingsPath, { configPath: manifestPath, yes: true });
     expect(r.outcome).toBe("applied");
     const m = readManifest() as {
       tools: { mcp: { name: string; env?: Record<string, string> }[] };
@@ -467,20 +504,15 @@ policies: []
   });
 
   it("re-adopting after no further hand-edits is a no-op (idempotent)", async () => {
-    fs.writeFileSync(
-      settingsPath,
-      JSON.stringify({
-        hooks: {},
-        mcpServers: { a: { command: "node", args: ["/x.js"] } },
-      }),
-    );
-    await adopt(settingsPath, { configPath: manifestPath, yes: true });
-    const r2 = await adopt(settingsPath, { configPath: manifestPath, yes: true });
+    writeSettings({});
+    writeRegistry({ a: { command: "node", args: ["/x.js"] } });
+    await runAdopt(settingsPath, { configPath: manifestPath, yes: true });
+    const r2 = await runAdopt(settingsPath, { configPath: manifestPath, yes: true });
     expect(r2.outcome).toBe("no-drift");
     expect(r2.mcpDriftCount).toBe(0);
   });
 
-  it("round-trip: full apply → hand-edit → adopt captures the manifest change; settings.json no longer round-trips mcpServers (T-002)", async () => {
+  it("round-trip: full apply → registry hand-edit → adopt captures the manifest change from the registry, NOT a dead settings.json mcpServers block (T-002 / D-101)", async () => {
     // Seed a manifest with one MCP entry.
     fs.writeFileSync(
       manifestPath,
@@ -502,24 +534,34 @@ policies: []
     await apply({ homeDir: tmpHome });
     const generatedPath = path.join(tmpHome, "harness.generated", "settings.json");
 
-    // Hand-edit settings.json: change the command path.
+    // Hand-edit settings.json: an operator revives the dead `mcpServers`
+    // block by hand, pointing at yet ANOTHER command path. Per D-101 this
+    // must be surfaced only as a warning (`deadSettingsMcpNames`) and must
+    // NOT drive drift — the effective registry is the only drift source.
     const handEdited = {
       hooks: {},
-      mcpServers: { a: { command: "node", args: ["/edited.js"] } },
+      mcpServers: { a: { command: "node", args: ["/dead-block-edit.js"] } },
     };
-    const handEditedBytes = `${JSON.stringify(handEdited, null, 2)}\n`;
-    fs.writeFileSync(generatedPath, handEditedBytes);
+    fs.writeFileSync(generatedPath, `${JSON.stringify(handEdited, null, 2)}\n`);
 
-    // Adopt the hand-edit back into the manifest.
-    const r = await adopt(generatedPath, { configPath: manifestPath, yes: true });
+    // The REAL out-of-band change lives in the effective Claude Code
+    // registry, with yet a third command path, so the test can tell the
+    // three sources (manifest / dead settings.json block / registry) apart.
+    writeRegistry({ a: { command: "node", args: ["/registry-edited.js"] } });
+
+    // Adopt: hooks source is generatedPath (none here); MCP drift source
+    // is ALWAYS the registry.
+    const r = await runAdopt(generatedPath, { configPath: manifestPath, yes: true });
     expect(r.outcome).toBe("applied");
     expect(r.replacedMcpNames).toEqual(["a"]);
+    expect(r.deadSettingsMcpNames).toEqual(["a"]);
     const adoptedManifest = readManifest() as {
       tools: { mcp: { name: string; command: unknown }[] };
     };
+    // Captured from the REGISTRY, not the dead settings.json block.
     expect(adoptedManifest.tools.mcp.find((e) => e.name === "a")?.command).toEqual([
       "node",
-      "/edited.js",
+      "/registry-edited.js",
     ]);
 
     // Re-apply (using --overwrite-drift since the on-disk settings.json
@@ -529,8 +571,8 @@ policies: []
     // T-002 (init-mcp-wiring-claude-code): settings.json's mcpServers key
     // is no longer part of the generated projection at all — Claude Code
     // never read it at runtime (see io/claude-mcp.ts). adopt still
-    // correctly captured the hand-edit into the MANIFEST (asserted
-    // above), but the regenerated settings.json can no longer be
+    // correctly captured the registry hand-edit into the MANIFEST
+    // (asserted above), but the regenerated settings.json can no longer be
     // byte-identical to a hand-edit that included an mcpServers block:
     // hooks still round-trip; mcpServers is intentionally dropped.
     expect(JSON.parse(fs.readFileSync(generatedPath, "utf8"))).toEqual({ hooks: {} });
@@ -553,14 +595,9 @@ hooks: []
 policies: []
 `,
     );
-    fs.writeFileSync(
-      settingsPath,
-      JSON.stringify({
-        hooks: {},
-        mcpServers: { a: { command: "node", args: ["/new.js"] } },
-      }),
-    );
-    const r = await adopt(settingsPath, { configPath: manifestPath, yes: true });
+    writeSettings({});
+    writeRegistry({ a: { command: "node", args: ["/new.js"] } });
+    const r = await runAdopt(settingsPath, { configPath: manifestPath, yes: true });
     expect(r.outcome).toBe("applied");
     const m = readManifest() as {
       tools: { mcp: { name: string; health?: { verb: string } }[] };
@@ -586,18 +623,13 @@ hooks: []
 policies: []
 `,
     );
-    // Note: settings.json wouldn't normally contain a disabled server (apply
-    // skips them), but the user could re-add one by hand. The replace path
-    // must keep the user's prior `enabled: false` intent rather than silently
-    // re-enabling it.
-    fs.writeFileSync(
-      settingsPath,
-      JSON.stringify({
-        hooks: {},
-        mcpServers: { a: { command: "node", args: ["/new.js"] } },
-      }),
-    );
-    const r = await adopt(settingsPath, { configPath: manifestPath, yes: true });
+    // Note: the registry wouldn't normally contain a disabled server (apply
+    // skips them), but the user could re-register one by hand via the
+    // `claude mcp` CLI. The replace path must keep the user's prior
+    // `enabled: false` intent rather than silently re-enabling it.
+    writeSettings({});
+    writeRegistry({ a: { command: "node", args: ["/new.js"] } });
+    const r = await runAdopt(settingsPath, { configPath: manifestPath, yes: true });
     expect(r.outcome).toBe("applied");
     const m = readManifest() as {
       tools: { mcp: { name: string; enabled?: boolean }[] };
@@ -606,18 +638,11 @@ policies: []
   });
 
   it("hooks + mcp drift in the same run both adopted", async () => {
-    fs.writeFileSync(
-      settingsPath,
-      JSON.stringify({
-        hooks: {
-          SessionStart: [
-            { matcher: "", hooks: [{ type: "command", command: "/h.sh" }] },
-          ],
-        },
-        mcpServers: { a: { command: "node", args: ["/x.js"] } },
-      }),
-    );
-    const r = await adopt(settingsPath, { configPath: manifestPath, yes: true });
+    writeSettings({
+      SessionStart: [{ matcher: "", hooks: [{ type: "command", command: "/h.sh" }] }],
+    });
+    writeRegistry({ a: { command: "node", args: ["/x.js"] } });
+    const r = await runAdopt(settingsPath, { configPath: manifestPath, yes: true });
     expect(r.outcome).toBe("applied");
     expect(r.hookDriftCount).toBe(1);
     expect(r.mcpDriftCount).toBe(1);
@@ -625,24 +650,105 @@ policies: []
   });
 
   it("declined: nothing written even when both hook + mcp drift", async () => {
-    fs.writeFileSync(
-      settingsPath,
-      JSON.stringify({
-        hooks: {
-          SessionStart: [
-            { matcher: "", hooks: [{ type: "command", command: "/h.sh" }] },
-          ],
-        },
-        mcpServers: { a: { command: "node", args: ["/x.js"] } },
-      }),
-    );
+    writeSettings({
+      SessionStart: [{ matcher: "", hooks: [{ type: "command", command: "/h.sh" }] }],
+    });
+    writeRegistry({ a: { command: "node", args: ["/x.js"] } });
     const before = fs.readFileSync(manifestPath, "utf8");
-    const r = await adopt(settingsPath, {
+    const r = await runAdopt(settingsPath, {
       configPath: manifestPath,
       prompt: async () => "N",
     });
     expect(r.outcome).toBe("declined");
     expect(fs.readFileSync(manifestPath, "utf8")).toBe(before);
+  });
+});
+
+// task 83d8d03a (D-101): MCP drift is computed EXCLUSIVELY against the
+// effective Claude Code registry; a dead `mcpServers` block inside
+// settingsPath is surfaced only as a warning (`deadSettingsMcpNames`),
+// never as a drift source.
+describe("adopt — dead settings.json mcpServers block (D-101)", () => {
+  it("surfaces a dead settings.json mcpServers block as a warning even when there is no other drift", async () => {
+    writeSettings({});
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({ hooks: {}, mcpServers: { stale: { command: "old-binary" } } }),
+    );
+    // No registry file at all: the effective registry is empty, so there
+    // is genuinely nothing to adopt — but the dead block must still be
+    // reported.
+    const r = await runAdopt(settingsPath, { configPath: manifestPath, yes: true });
+    expect(r.outcome).toBe("no-drift");
+    expect(r.mcpDriftCount).toBe(0);
+    expect(r.deadSettingsMcpNames).toEqual(["stale"]);
+  });
+
+  it("does NOT let a dead settings.json mcpServers block satisfy or suppress registry-sourced drift", async () => {
+    // The dead block claims `a` is already `/dead.js` — if it were
+    // (wrongly) consulted for drift, this would look like a match and no
+    // drift would be reported. The registry says otherwise.
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({ hooks: {}, mcpServers: { a: { command: "node", args: ["/dead.js"] } } }),
+    );
+    writeRegistry({ a: { command: "node", args: ["/registry.js"] } });
+    const r = await runAdopt(settingsPath, { configPath: manifestPath, yes: true });
+    expect(r.outcome).toBe("applied");
+    expect(r.mcpDriftCount).toBe(1);
+    expect(r.deadSettingsMcpNames).toEqual(["a"]);
+    const m = readManifest() as { tools: { mcp: { name: string; command: unknown }[] } };
+    expect(m.tools.mcp.find((e) => e.name === "a")?.command).toEqual(["node", "/registry.js"]);
+  });
+
+  it("reports an empty deadSettingsMcpNames when settingsPath has no mcpServers block", async () => {
+    writeSettings({});
+    writeRegistry({ a: { command: "node", args: ["/x.js"] } });
+    const r = await runAdopt(settingsPath, { configPath: manifestPath, yes: true });
+    expect(r.deadSettingsMcpNames).toEqual([]);
+    expect(r.mcpDriftCount).toBe(1);
+  });
+});
+
+describe("adopt — CLAUDE_CONFIG_DIR precedence for the MCP registry (D-102)", () => {
+  it("reads the registry from $CLAUDE_CONFIG_DIR/.claude.json when set, ignoring the default ~/.claude.json fixture", async () => {
+    writeSettings({});
+    // Default-location fixture that must be ignored once CLAUDE_CONFIG_DIR
+    // is set: if it fed drift, this would come back as "should-be-ignored".
+    writeRegistry({ "should-be-ignored": { command: "/bin/wrong" } });
+    const customConfigDir = path.join(tmpHome, "custom-config-dir");
+    fs.mkdirSync(customConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(customConfigDir, ".claude.json"),
+      JSON.stringify({ mcpServers: { a: { command: "node", args: ["/from-custom-dir.js"] } } }),
+    );
+    const r = await runAdopt(settingsPath, {
+      configPath: manifestPath,
+      yes: true,
+      // Explicit `undefined` overrides `runAdopt`'s default fixture
+      // registryPath, forcing `adopt()`'s own CLAUDE_CONFIG_DIR-aware
+      // default resolution (resolveClaudeUserRegistryPath) below.
+      registryPath: undefined,
+      env: { CLAUDE_CONFIG_DIR: customConfigDir },
+    });
+    expect(r.outcome).toBe("applied");
+    expect(r.adoptedMcpNames).toEqual(["a"]);
+    const m = readManifest() as { tools: { mcp: { name: string; command: unknown }[] } };
+    expect(m.tools.mcp.find((e) => e.name === "a")?.command).toEqual([
+      "node",
+      "/from-custom-dir.js",
+    ]);
+  });
+});
+
+describe("adopt — malformed effective registry (defensive, D-101)", () => {
+  it("reports registryReadError and treats MCP drift as empty rather than guessing", async () => {
+    writeSettings({});
+    fs.writeFileSync(registryPath, "{not json");
+    const r = await runAdopt(settingsPath, { configPath: manifestPath, yes: true });
+    expect(r.outcome).toBe("no-drift");
+    expect(r.mcpDriftCount).toBe(0);
+    expect(r.registryReadError).toMatch(/not valid JSON/);
   });
 });
 
@@ -662,7 +768,7 @@ describe("adopt — multi-hook drift", () => {
         },
       ],
     });
-    const result = await adopt(settingsPath, {
+    const result = await runAdopt(settingsPath, {
       configPath: manifestPath,
       yes: true,
     });
@@ -740,7 +846,7 @@ describe("adopt — round-trip fidelity (task 059b669c)", () => {
         },
       ],
     });
-    const r = await adopt(settingsPath, { configPath: manifestPath, yes: true });
+    const r = await runAdopt(settingsPath, { configPath: manifestPath, yes: true });
     expect(r.outcome).toBe("applied");
     const raw = readManifest() as { hooks: { name: string; budget_ms?: number }[] };
     expect(raw.hooks[0]).toMatchObject({ name: "extra", budget_ms: 45000 });
@@ -764,7 +870,7 @@ describe("adopt — round-trip fidelity (task 059b669c)", () => {
         },
       ],
     });
-    const r = await adopt(settingsPath, { configPath: manifestPath, yes: true });
+    const r = await runAdopt(settingsPath, { configPath: manifestPath, yes: true });
     expect(r.outcome).toBe("applied");
     expect(fs.readFileSync(manifestPath, "utf8")).not.toContain("budget_ms");
   });
@@ -797,7 +903,7 @@ policies: []
       ],
     });
     const before = fs.readFileSync(manifestPath, "utf8");
-    const r = await adopt(settingsPath, { configPath: manifestPath, yes: true });
+    const r = await runAdopt(settingsPath, { configPath: manifestPath, yes: true });
     expect(r.outcome).toBe("no-drift");
     expect(r.hookDriftCount).toBe(0);
     expect(fs.readFileSync(manifestPath, "utf8")).toBe(before);
@@ -821,14 +927,9 @@ hooks: []
 policies: []
 `,
     );
-    fs.writeFileSync(
-      settingsPath,
-      JSON.stringify({
-        hooks: {},
-        mcpServers: { a: { command: "node", args: ["/new.js"] } },
-      }),
-    );
-    const r = await adopt(settingsPath, { configPath: manifestPath, yes: true });
+    writeSettings({});
+    writeRegistry({ a: { command: "node", args: ["/new.js"] } });
+    const r = await runAdopt(settingsPath, { configPath: manifestPath, yes: true });
     expect(r.outcome).toBe("applied");
     const m = readManifest() as {
       tools: {

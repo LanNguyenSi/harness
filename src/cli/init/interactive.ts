@@ -233,7 +233,7 @@ function summariseDetection(d: DetectionResult): string {
   if (d.mcpServers.length > 0) {
     lines.push(`  MCP wired   ${d.mcpServers.map((s) => s.name).join(", ")}`);
   } else {
-    lines.push(`  MCP wired   (none detected in Claude settings.json)`);
+    lines.push(`  MCP wired   (none detected in the Claude Code user-scope registry)`);
   }
   lines.push(`  harness     v${d.harness.version}`);
   return lines.join("\n");
