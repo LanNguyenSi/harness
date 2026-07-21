@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { uninstall, UninstallError } from "../../../src/cli/uninstall/index.js";
 import {
   BACKUP_INFIX,
@@ -10,6 +10,21 @@ import {
   type UninstallSnapshot,
 } from "../../../src/cli/uninstall/snapshot.js";
 import { manualRemoveLines, type ClaudeMcpExec } from "../../../src/io/claude-mcp.js";
+
+// Mutable override for `os.homedir()`, used ONLY by the "MCP registry axis
+// seatbelt" tests below to keep the real-homedir fallback inside `tmp`
+// when a test intentionally omits the `homeDir` option (to exercise
+// `mcpRegistryAxisAllowed`'s "no explicit override" branch without ever
+// touching the developer's actual home directory). `vi.spyOn` can't patch
+// a live ESM namespace export directly ("Module namespace is not
+// configurable in ESM"), hence the `vi.mock` + `vi.hoisted` indirection.
+// Every other test in this file leaves `homedirOverride.value` unset, so
+// `os.homedir()` behaves exactly as the real one for them.
+const homedirOverride = vi.hoisted(() => ({ value: undefined as string | undefined }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: () => homedirOverride.value ?? actual.homedir() };
+});
 
 let tmp: string;
 let homeDir: string;
@@ -380,6 +395,35 @@ describe("uninstall — --restore-from", () => {
     expect(snap.removedMcpServers.map((s) => s.name)).toEqual(["grounding-mcp"]);
   });
 
+  it("also deregisters an owned+registered MCP server from the live registry (exact argv asserted, not just the shared-helper proxy)", async () => {
+    const pristine = { theme: "dark" };
+    const backupSource = path.join(homeDir, "settings.json.pre-harness-2026-05-11");
+    fs.writeFileSync(backupSource, `${JSON.stringify(pristine, null, 2)}\n`);
+    writeSettings({ theme: "dark" });
+    writeRegistry({
+      mcpServers: {
+        "grounding-mcp": { command: "node", args: ["server.js"] },
+        "foreign-mcp": { command: "node" },
+      },
+    });
+
+    const calls: string[][] = [];
+    const r = await uninstall({
+      homeDir,
+      settingsPath,
+      restoreFrom: backupSource,
+      mcpExec: execRecordingRemove(calls),
+    });
+    if (r.mode !== "restore") throw new Error("expected restore");
+
+    // Only the owned+registered name is touched; the foreign entry is
+    // never even a candidate.
+    expect(calls).toEqual([["mcp", "remove", "--scope", "user", "grounding-mcp"]]);
+    expect(r.mcpRegistryRemovals).toEqual([
+      { name: "grounding-mcp", status: "removed", message: "" },
+    ]);
+  });
+
   it("refuses when the restore source is not valid JSON", async () => {
     const bad = path.join(tmp, "bad.json");
     fs.writeFileSync(bad, "{ corrupt");
@@ -612,5 +656,101 @@ describe("uninstall — MCP registry deregistration, --apply", () => {
     const warningsText = r.inventory.warnings.join("\n");
     expect(warningsText).toMatch(/grounding-mcp: error/);
     expect(warningsText).not.toMatch(/agent-tasks: /);
+  });
+});
+
+describe("uninstall — MCP registry axis seatbelt (task d6086441 review finding)", () => {
+  // Every test here intentionally omits the `homeDir` OPTION to exercise
+  // `mcpRegistryAxisAllowed`'s "no explicit override" branch. Since the
+  // real (unmocked) fallback would otherwise resolve toward the
+  // developer's actual home directory, `homedirOverride.value` (module
+  // top) is set to stay inside `tmp` — this does NOT affect the guard
+  // itself, which keys off `opts.homeDir` being undefined, not the
+  // resolved path.
+  afterEach(() => {
+    homedirOverride.value = undefined;
+  });
+
+  it("blocks the axis entirely (no read, no remove) without --home, mcpExec, or the env flag", async () => {
+    homedirOverride.value = tmp;
+    const stateDir = path.join(tmp, ".harness-state");
+    fs.mkdirSync(stateDir, { recursive: true });
+    const isolatedSettingsPath = path.join(tmp, "isolated-settings.json");
+    // Populate what the (mocked) real registry path resolves to, so a
+    // guard regression would have an owned+registered name to actually
+    // find and remove — proving the block, not just an empty-by-accident
+    // result.
+    writeRegistry({ mcpServers: { "grounding-mcp": { command: "g" } } });
+
+    const saved = process.env.HARNESS_ALLOW_REAL_GENERATED_DIR;
+    delete process.env.HARNESS_ALLOW_REAL_GENERATED_DIR;
+    try {
+      const r = await uninstall({ stateDir, settingsPath: isolatedSettingsPath, apply: true });
+      if (r.mode !== "apply") throw new Error("expected apply");
+      expect(r.inventory.mcpRegistryServers).toEqual([]);
+      expect(r.mcpRegistryRemovals).toEqual([]);
+      expect(r.inventory.warnings.join("\n")).toMatch(
+        /skipped the claude CLI user-scope MCP registry check/,
+      );
+    } finally {
+      if (saved === undefined) delete process.env.HARNESS_ALLOW_REAL_GENERATED_DIR;
+      else process.env.HARNESS_ALLOW_REAL_GENERATED_DIR = saved;
+    }
+  });
+
+  it("unlocks the axis via HARNESS_ALLOW_REAL_GENERATED_DIR=1 even without --home (dry-run stays hermetic)", async () => {
+    homedirOverride.value = tmp;
+    const stateDir = path.join(tmp, ".harness-state");
+    fs.mkdirSync(stateDir, { recursive: true });
+    const isolatedSettingsPath = path.join(tmp, "isolated-settings.json");
+    writeRegistry({
+      mcpServers: {
+        "grounding-mcp": { command: "g" },
+        "foreign-mcp": { command: "f" },
+      },
+    });
+
+    const saved = process.env.HARNESS_ALLOW_REAL_GENERATED_DIR;
+    process.env.HARNESS_ALLOW_REAL_GENERATED_DIR = "1";
+    try {
+      // Dry-run (no --apply): remove is never attempted regardless of the
+      // guard — execThrowsIfCalled proves it — only the read-only listing
+      // is under test here.
+      const r = await uninstall({
+        stateDir,
+        settingsPath: isolatedSettingsPath,
+        mcpExec: execThrowsIfCalled(),
+      });
+      if (r.mode !== "list") throw new Error("expected list");
+      expect(r.inventory.mcpRegistryServers).toEqual(["grounding-mcp"]);
+      expect(r.inventory.warnings.join("\n")).not.toMatch(
+        /skipped the claude CLI user-scope MCP registry check/,
+      );
+    } finally {
+      if (saved === undefined) delete process.env.HARNESS_ALLOW_REAL_GENERATED_DIR;
+      else process.env.HARNESS_ALLOW_REAL_GENERATED_DIR = saved;
+    }
+  });
+
+  it("unlocks the axis via an explicit --home override, independent of the env flag", async () => {
+    const stateDir = path.join(tmp, ".harness-state");
+    fs.mkdirSync(stateDir, { recursive: true });
+    writeRegistry({ mcpServers: { "grounding-mcp": { command: "g" } } });
+
+    const saved = process.env.HARNESS_ALLOW_REAL_GENERATED_DIR;
+    delete process.env.HARNESS_ALLOW_REAL_GENERATED_DIR;
+    try {
+      const r = await uninstall({
+        homeDir,
+        stateDir,
+        settingsPath,
+        mcpExec: execThrowsIfCalled(),
+      });
+      if (r.mode !== "list") throw new Error("expected list");
+      expect(r.inventory.mcpRegistryServers).toEqual(["grounding-mcp"]);
+    } finally {
+      if (saved === undefined) delete process.env.HARNESS_ALLOW_REAL_GENERATED_DIR;
+      else process.env.HARNESS_ALLOW_REAL_GENERATED_DIR = saved;
+    }
   });
 });

@@ -119,6 +119,12 @@ export interface UninstallOptions {
    * it also overrides the harness state root, preserving the historic
    * "one directory holds everything" contract tests and non-default
    * installs rely on. Falls back to `os.homedir()/.claude`.
+   *
+   * Also one of the two overrides that unlock the MCP-registry axis (see
+   * `mcpRegistryAxisAllowed`): the `claude` CLI's user-scope registry path
+   * is derived from `homeDir`, so an explicit override here is what lets a
+   * test/library caller point that axis somewhere other than the real
+   * `~/.claude.json` without needing `HARNESS_ALLOW_REAL_GENERATED_DIR=1`.
    */
   homeDir?: string;
   /**
@@ -149,6 +155,11 @@ export interface UninstallOptions {
    * the real CLI (see `realClaudeMcpExec` in `io/claude-mcp.ts`). Orthogonal
    * to `writeSettingsWithRemovals`: that function only ever touches the
    * dead `mcpServers` block in settings.json, never the CLI-backed registry.
+   *
+   * Also one of the two overrides that unlock the MCP-registry axis (see
+   * `mcpRegistryAxisAllowed`): an explicit `mcpExec` guarantees no real
+   * `claude` subprocess gets spawned, so it neutralizes the axis's real-
+   * world risk on its own even when `homeDir` is left at its real default.
    */
   mcpExec?: ClaudeMcpExec;
 }
@@ -279,6 +290,42 @@ function resolveStateDir(opts: UninstallOptions): string {
     );
   }
   return resolveHarnessStateRoot().path;
+}
+
+/**
+ * Seatbelt for the MCP-registry axis (read via `readTopLevelMcpServers` +
+ * removal via `claude mcp remove`, task d6086441 review finding). The
+ * registry path is DERIVED from `homeDir`, which — unlike `stateDir` — has
+ * no guard of its own (`resolveHomeDir` silently falls back to the real
+ * `os.homedir()/.claude`). Without this check, a caller that overrides
+ * `stateDir` but omits both `homeDir` and `mcpExec` would have this axis
+ * silently read AND `claude mcp remove` against the real, live
+ * `~/.claude.json` — a materially bigger blast radius than an unguarded
+ * file read, since it spawns a real subprocess that mutates global Claude
+ * Code state.
+ *
+ * Mirrors `resolveStateDir`'s seatbelt, but either of TWO independent
+ * overrides neutralizes the risk on its own (no strict tier order needed):
+ *   - an explicit `homeDir` — the caller already controls what path the
+ *     registry resolves to (same trust boundary as `resolveStateDir`'s
+ *     explicit-`stateDir`/`homeDir` tiers), or
+ *   - an explicit `mcpExec` — no real `claude` subprocess can be spawned
+ *     regardless of what path resolves.
+ * Absent both, the same env var unlocks it: `HARNESS_ALLOW_REAL_GENERATED_DIR=1`,
+ * which `src/cli/main.ts` sets unconditionally before the real binary
+ * runs — so production behavior is unchanged; this only blocks a test or
+ * library caller that supplies neither override and forgets the flag.
+ *
+ * When this returns false, the axis is skipped ENTIRELY — not just the
+ * remove but the read too (see the call site in `buildInventory`):
+ * reporting "here's what we'd remove but won't" from a real-path read the
+ * caller never opted into would be its own leak, so a blocked run reports
+ * an empty `mcpRegistryServers` list plus a clear warning instead.
+ */
+function mcpRegistryAxisAllowed(opts: UninstallOptions): boolean {
+  if (opts.homeDir !== undefined) return true;
+  if (opts.mcpExec !== undefined) return true;
+  return process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"] === "1";
 }
 
 function resolveSettingsPath(opts: UninstallOptions, homeDir: string): string {
@@ -622,16 +669,36 @@ function buildInventory(opts: UninstallOptions): {
   // registry never guesses — mcpRegistryServers stays empty and a warning
   // is surfaced instead (D-002 analogy, same rule `ensureMcpServers`'s GC
   // pass applies).
+  //
+  // Seatbelt (review finding): only enter this axis at all — read
+  // included — when `mcpRegistryAxisAllowed` says it's safe to. See that
+  // function's doc for the full rationale; the short version is that the
+  // registry path is derived from `homeDir`, which has no guard of its
+  // own, and this axis's remove step is a real subprocess spawn, not just
+  // a file read.
   const mcpRegistryPath = resolveClaudeUserRegistryPath({ homeDir });
-  const registryRead = readTopLevelMcpServers(mcpRegistryPath);
-  const mcpRegistryReadError = registryRead.error;
-  const mcpRegistryServers =
-    mcpRegistryReadError === null ? ownedMcpServerNames(registryRead.servers, manifestPath) : [];
-  if (mcpRegistryReadError !== null) {
+  let mcpRegistryServers: string[] = [];
+  let mcpRegistryReadError: string | null = null;
+  if (mcpRegistryAxisAllowed(opts)) {
+    const registryRead = readTopLevelMcpServers(mcpRegistryPath);
+    mcpRegistryReadError = registryRead.error;
+    mcpRegistryServers =
+      mcpRegistryReadError === null ? ownedMcpServerNames(registryRead.servers, manifestPath) : [];
+    if (mcpRegistryReadError !== null) {
+      warnings.push(
+        `could not read the claude CLI user-scope MCP registry at ${mcpRegistryPath} ` +
+          `(${mcpRegistryReadError}); skipping automatic deregistration there. Check the file and, ` +
+          "if needed, remove harness-owned servers yourself with `claude mcp remove --scope user <name>`.",
+      );
+    }
+  } else {
     warnings.push(
-      `could not read the claude CLI user-scope MCP registry at ${mcpRegistryPath} ` +
-        `(${mcpRegistryReadError}); skipping automatic deregistration there. Check the file and, ` +
-        "if needed, remove harness-owned servers yourself with `claude mcp remove --scope user <name>`.",
+      `skipped the claude CLI user-scope MCP registry check at ${mcpRegistryPath}: no explicit ` +
+        "--home override and no injected exec, so this run can't tell whether that path is safe to " +
+        "touch. Re-run with --home <path>, or (for the real harness binary) set " +
+        "HARNESS_ALLOW_REAL_GENERATED_DIR=1, to include harness-owned MCP servers in this teardown; " +
+        "otherwise check/clean it yourself with `claude mcp list` / " +
+        "`claude mcp remove --scope user <name>`.",
     );
   }
 
