@@ -28,6 +28,23 @@
 // self-contaminate (the inner run discovers the outer's test files and
 // runs them again, plus the planted sentinel would be visible to both
 // runs). The subprocess gets a clean module state.
+//
+// Why `process.execPath` + resolveVitestEntry(), not `npx vitest` (task
+// 052f9d5b review H1): this file's suite runs under the SAME
+// vitest.config.ts as everything else, so the suite-wide hermetic spawn
+// allowlist (tests/_helpers/hermetic-spawn-allowlist.ts) is active here
+// too. `npx` resolves to a real, non-fixture, non-INFRA binary, so a
+// `spawnSync("npx", [...])` here is a genuine, correctly-blocked
+// violation under that guard — and CI (.github/workflows/ci.yml) runs
+// `npm run test:integration` unconditionally on every push/PR, so this
+// broke CI outright, not just a local opt-in run (the default `npm test`
+// skips this describe entirely via `describe.skipIf` below, which is
+// exactly why the earlier `npx`-based version's own suite runs never
+// caught it). `process.execPath` is D6-INFRA-allowlisted; pairing it with
+// vitest's own resolved CLI entry (not a shell command string) is the
+// same pattern this repo's other nested-`vitest run` proofs already use
+// — see tests/_helpers/nested-vitest.ts and
+// tests/runtime/hermetic-spawn-allowlist-nested-fixtures.test.ts.
 
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -35,6 +52,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { sentinelPath, writeSentinel } from "../../src/runtime/pause-sentinel.js";
+import { resolveVitestEntry } from "../_helpers/nested-vitest.js";
 
 const REAL_GENERATED_DIR = path.join(os.homedir(), ".claude", "harness.generated");
 const SENTINEL_PATH = sentinelPath(REAL_GENERATED_DIR);
@@ -123,9 +141,9 @@ describe.skipIf(!process.env["HARNESS_INTEGRATION_TESTS"])(
       delete childEnv["HARNESS_INTEGRATION_TESTS"];
 
       const result = spawnSync(
-        "npx",
+        process.execPath,
         [
-          "vitest",
+          resolveVitestEntry(),
           "run",
           "--silent",
           // Excluding tests/integration/** is also a defence against
