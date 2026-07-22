@@ -82,6 +82,7 @@ import { runInterceptCli } from "./policy/intercept.js";
 import { runSessionStartPreflight } from "./session-start/index.js";
 import { writePendingApproval } from "../runtime/pending-approval.js";
 import { runSessionStartBranchCheck } from "./session-start/branch-check.js";
+import { runSessionStartToolchainParity } from "./session-start/toolchain-parity.js";
 import { runPackHookBranchProtectionCli } from "./pack/hook-branch-protection.js";
 import { runPackHookSolutionAcceptanceCli } from "./pack/hook-solution-acceptance.js";
 import { runPackHookSolutionAcceptanceWriteguardCli } from "./pack/hook-solution-acceptance-writeguard.js";
@@ -2520,6 +2521,42 @@ export function buildProgram(opts: RunOptions = {}): Command {
         if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
       }
       await runSessionStartBranchCheck(cliOpts);
+    });
+  sessionStart
+    .command("toolchain-parity")
+    .description(
+      "SessionStart producer (opt-in via `toolchain_parity.enabled: true`): writes THIS machine's " +
+        "toolchain snapshot (node version, npm globals, OW-Kit version, MCP server names) to " +
+        "`<machine_state_dir>/<profile>.json`, compares it against every OTHER snapshot file already " +
+        "in that directory, and records a `toolchain-parity:ok` / `toolchain-parity:drift:<n>` fact " +
+        "to the evidence ledger. Purely advisory — never blocking, and never touches a peer's file. " +
+        "Cross-machine transport of the snapshot files is agent-memory-sync's job, not this command's.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option(
+      "--session <id>",
+      "explicit session id (overrides stdin event + env)",
+    )
+    .option("--cwd <path>", "override cwd resolution (default: stdin event.cwd then process.cwd())")
+    .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
+    .action(async (options: {
+      config?: string;
+      project?: string;
+      session?: string;
+      cwd?: string;
+      ledgerTimeout?: string;
+    }) => {
+      const cliOpts: Parameters<typeof runSessionStartToolchainParity>[0] = {};
+      if (options.config) cliOpts.configPath = options.config;
+      if (options.project) cliOpts.project = options.project;
+      if (options.session) cliOpts.session = options.session;
+      if (options.cwd) cliOpts.cwd = options.cwd;
+      if (options.ledgerTimeout) {
+        const n = Number.parseInt(options.ledgerTimeout, 10);
+        if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
+      }
+      await runSessionStartToolchainParity(cliOpts);
     });
 
   // `harness gate` — operator escape hatch for hard-blocking hooks.

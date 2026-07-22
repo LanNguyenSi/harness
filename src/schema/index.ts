@@ -8,6 +8,7 @@ import { PermissionProfilesSchema } from "./permission-profiles.js";
 import { PolicyPacksSchema } from "./policy-packs.js";
 import { RiskSchema } from "./risk.js";
 import { ToolsSchema } from "./tools.js";
+import { ToolchainParitySchema } from "./toolchain-parity.js";
 import { AuditSchema } from "./audit.js";
 import { ReviewTemplatesSchema, WorkflowsSchema } from "./workflows.js";
 
@@ -34,6 +35,9 @@ export const ManifestSchema = z
     workflows: WorkflowsSchema.default([]),
     review_templates: ReviewTemplatesSchema.default({}),
     audit: AuditSchema.default({}),
+    // Optional, default-OFF: `harness session-start toolchain-parity`
+    // snapshot + peer-drift-compare config. See ./toolchain-parity.ts.
+    toolchain_parity: ToolchainParitySchema.default({}),
   })
   .strict()
   .superRefine((manifest, ctx) => {
@@ -129,6 +133,7 @@ export * from "./permission-profiles.js";
 export * from "./policies.js";
 export * from "./policy-packs.js";
 export * from "./risk.js";
+export * from "./toolchain-parity.js";
 export * from "./environments.js";
 export * from "./workflows.js";
 export * from "./audit.js";

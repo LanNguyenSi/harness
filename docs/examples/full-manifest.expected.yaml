@@ -598,3 +598,5 @@ audit:
       replacement: <REDACTED>
     - env_var: OPENAI_API_KEY
       replacement: <REDACTED>
+toolchain_parity:
+  enabled: false
