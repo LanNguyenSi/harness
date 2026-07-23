@@ -48,6 +48,7 @@ function eventJson(
     cwd: string;
     tool_input: Record<string, unknown>;
     tool_output: unknown;
+    tool_response: unknown;
   }> = {},
 ): string {
   return JSON.stringify({
@@ -57,14 +58,108 @@ function eventJson(
     cwd: over.cwd ?? "/tmp",
     tool_input: over.tool_input ?? { command: "gh pr merge" },
     ...(over.tool_output !== undefined && { tool_output: over.tool_output }),
+    ...(over.tool_response !== undefined && { tool_response: over.tool_response }),
   });
+}
+
+/**
+ * A real 2.1.218-shaped Contract-B response for the given gh success
+ * sentence. Text lands on `stderr` — `gh`'s success line goes through its
+ * `infof` helper, which writes to STDERR, not stdout (verified against
+ * gh v2.94.0 pkg/cmd/pr/merge/merge.go:369-376). `stdout` stays empty, the
+ * realistic shape for a `gh pr merge` Bash result.
+ */
+function ghSuccessResponse(sentence: string): Record<string, unknown> {
+  return { stdout: "", stderr: `✓ ${sentence}\n`, interrupted: false, isImage: false, noOutputExpected: false };
 }
 
 function manifestNoPolicyPacks(): Manifest {
   return parseManifest({ version: 1 });
 }
 
-describe("runPackHookPostMergeGateRecordCli — writes on confirmed success", () => {
+// ---------------------------------------------------------------------------
+// Golden fixture — drift guard against the real 2.1.218 payload shape.
+// Captured live via `claude -p --settings` with a dump-hook (19/19
+// PostToolUse events fired, all `tool_response`-shaped, 0 `tool_output`).
+// If a future Claude Code version renames a field this hook depends on,
+// this test's key assertions fail loud instead of the producer silently
+// degrading to a permanent no-op.
+// ---------------------------------------------------------------------------
+
+describe("golden fixture — drift guard against the real 2.1.218 payload", () => {
+  const fixturePath = path.join(
+    __dirname,
+    "..",
+    "fixtures",
+    "post-merge-gate",
+    "real-posttooluse-payload-2.1.218.json",
+  );
+  const REQUIRED_TOP_LEVEL_KEYS = ["session_id", "cwd", "tool_name", "tool_input", "tool_response"];
+  const REQUIRED_TOOL_RESPONSE_KEYS = ["stdout", "stderr", "interrupted"];
+
+  it("the real payload carries every field the hook depends on", () => {
+    const raw = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as Record<string, unknown>;
+    for (const key of REQUIRED_TOP_LEVEL_KEYS) {
+      expect(raw, `missing top-level key ${key}`).toHaveProperty(key);
+    }
+    expect(raw).not.toHaveProperty("tool_output");
+    const toolResponse = raw["tool_response"] as Record<string, unknown>;
+    for (const key of REQUIRED_TOOL_RESPONSE_KEYS) {
+      expect(toolResponse, `missing tool_response key ${key}`).toHaveProperty(key);
+    }
+    expect(toolResponse["interrupted"]).toBe(false);
+  });
+
+  it("the real payload, replayed verbatim, is a benign no-op (its command is not gh pr merge)", async () => {
+    const raw = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as Record<string, unknown>;
+    let calls = 0;
+    const result = await runPackHookPostMergeGateRecordCli({
+      stdin: streamFrom(JSON.stringify(raw)),
+      stderr: captureStream().stream,
+      manifest: manifestNoPolicyPacks(),
+      writeLedger: async () => {
+        calls += 1;
+        return { ok: true };
+      },
+    });
+    expect(result.wrote).toBe(false);
+    expect(calls).toBe(0);
+    expect(result.diagnostic).toMatch(/did not match gh pr merge/);
+  });
+
+  it("the real payload's OWN shape, with a REAL gh success sentence appended to stderr, DOES confirm via Contract B", async () => {
+    const raw = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as Record<string, unknown>;
+    const repo = makeRepoFixture("svc", "feat/cool", SHA);
+    let written: { content: string } | undefined;
+    const replayed = {
+      ...raw,
+      cwd: repo,
+      tool_input: { command: "gh pr merge", description: "Merge PR" },
+      tool_response: {
+        ...(raw["tool_response"] as Record<string, unknown>),
+        stdout: "",
+        // gh's success line goes through `infof` — its stderr channel
+        // (gh v2.94.0 pkg/cmd/pr/merge/merge.go:369-376) — with the repo
+        // fullname glued to `#<n>`.
+        stderr: "✓ Squashed and merged pull request LanNguyenSi/agent-memory#99 (Add feature)",
+      },
+    };
+    const result = await runPackHookPostMergeGateRecordCli({
+      stdin: streamFrom(JSON.stringify(replayed)),
+      stderr: captureStream().stream,
+      manifest: manifestNoPolicyPacks(),
+      writeLedger: async (args) => {
+        written = args;
+        return { ok: true };
+      },
+    });
+    expect(result.wrote).toBe(true);
+    expect(written?.content).toContain(`${MERGED_TAG_PREFIX}:svc:feat/cool:${SHA}`);
+    expect(written?.content).toContain("pr:99");
+  });
+});
+
+describe("runPackHookPostMergeGateRecordCli — Contract A: writes on confirmed exit_code success", () => {
   it("writes the merged fact when exit_code is exactly 0", async () => {
     const repo = makeRepoFixture("svc", "feat/cool", SHA);
     const { stream: err } = captureStream();
@@ -108,6 +203,252 @@ describe("runPackHookPostMergeGateRecordCli — writes on confirmed success", ()
   });
 });
 
+// ---------------------------------------------------------------------------
+// Contract B (payload-reality follow-up, 2026-07): live verification against
+// a real Claude Code 2.1.218 install found the PostToolUse Bash payload
+// carries NO `tool_output` field at all — only `tool_response`, shaped
+// `{ stdout, stderr, interrupted, isImage, noOutputExpected }` (see
+// tests/fixtures/post-merge-gate/real-posttooluse-payload-2.1.218.json for
+// the verbatim capture). These tests drive the full CLI (not just the
+// runtime unit) against gh's REAL success-sentence shape, verified against
+// the installed gh v2.94.0 (pkg/cmd/pr/merge/merge.go:369-376): the repo
+// fullname sits between "pull request" and the PR number, glued to `#`
+// with no space (`owner/repo#<n>`, not `#<n>`), and the sentence itself
+// goes through `infof` — gh's STDERR channel.
+// ---------------------------------------------------------------------------
+
+describe("runPackHookPostMergeGateRecordCli — Contract B: writes on a confirmed gh success sentence (2.1.218 reality)", () => {
+  it.each([
+    ["Squashed and merged", "Squashed and merged pull request LanNguyenSi/agent-memory#99 (Add feature)"],
+    ["Rebased and merged", "Rebased and merged pull request LanNguyenSi/agent-memory#99 (Add feature)"],
+    ["Merged", "Merged pull request LanNguyenSi/agent-memory#99 (Add feature)"],
+  ])(
+    "writes the merged fact for the REAL %s success sentence (owner/repo#n), with the correct repo:branch:sha + pr",
+    async (_label, sentence) => {
+      const repo = makeRepoFixture("svc", "feat/cool", SHA);
+      let written: { sessionId: string; content: string; source: string } | undefined;
+      const result = await runPackHookPostMergeGateRecordCli({
+        stdin: streamFrom(
+          eventJson({
+            cwd: repo,
+            tool_input: { command: "gh pr merge" },
+            tool_response: ghSuccessResponse(sentence),
+          }),
+        ),
+        stderr: captureStream().stream,
+        manifest: manifestNoPolicyPacks(),
+        now: new Date("2026-07-23T00:00:00.000Z"),
+        writeLedger: async (args) => {
+          written = args;
+          return { ok: true };
+        },
+      });
+      expect(result.wrote).toBe(true);
+      expect(written?.content).toContain(`${MERGED_TAG_PREFIX}:svc:feat/cool:${SHA}`);
+      // No PR number in the command itself — falls back to the success
+      // sentence's own capture.
+      expect(written?.content).toContain("pr:99");
+      expect(written?.content).toContain("at:2026-07-23T00:00:00.000Z");
+    },
+  );
+
+  // Doc-shape / future-gh-version tolerance (bare `#<n>`, no fullname) —
+  // NOT gh's actual current wording, kept as a second parametrized
+  // variant since the matcher accepts it defensively at no extra
+  // matching-surface cost (see GH_MERGE_SUCCESS_RE's doc comment).
+  it.each([
+    ["Squashed and merged", "Squashed and merged pull request #99 (Add feature)"],
+    ["Rebased and merged", "Rebased and merged pull request #99 (Add feature)"],
+    ["Merged", "Merged pull request #99 (Add feature)"],
+  ])(
+    "also writes the merged fact for the doc-shape %s success sentence (bare #n, no fullname)",
+    async (_label, sentence) => {
+      const repo = makeRepoFixture("svc", "feat/cool", SHA);
+      let written: { content: string } | undefined;
+      const result = await runPackHookPostMergeGateRecordCli({
+        stdin: streamFrom(
+          eventJson({
+            cwd: repo,
+            tool_input: { command: "gh pr merge" },
+            tool_response: ghSuccessResponse(sentence),
+          }),
+        ),
+        stderr: captureStream().stream,
+        manifest: manifestNoPolicyPacks(),
+        writeLedger: async (args) => {
+          written = args;
+          return { ok: true };
+        },
+      });
+      expect(result.wrote).toBe(true);
+      expect(written?.content).toContain(`${MERGED_TAG_PREFIX}:svc:feat/cool:${SHA}`);
+      expect(written?.content).toContain("pr:99");
+    },
+  );
+
+  it("prefers the PR number from the command over the success-sentence capture", async () => {
+    const repo = makeRepoFixture("svc", "feat/cool", SHA);
+    let written: { content: string } | undefined;
+    await runPackHookPostMergeGateRecordCli({
+      stdin: streamFrom(
+        eventJson({
+          cwd: repo,
+          tool_input: { command: "gh pr merge 7" },
+          tool_response: ghSuccessResponse("Merged pull request LanNguyenSi/agent-memory#99 (Add feature)"),
+        }),
+      ),
+      stderr: captureStream().stream,
+      manifest: manifestNoPolicyPacks(),
+      writeLedger: async (args) => {
+        written = args;
+        return { ok: true };
+      },
+    });
+    expect(written?.content).toContain("pr:7");
+    expect(written?.content).not.toContain("pr:99");
+  });
+});
+
+describe("runPackHookPostMergeGateRecordCli — Contract B: no fact on any non-confirming tool_response", () => {
+  it.each([
+    // REAL wordings, verified against the installed gh v2.94.0 (same
+    // source file as the success sentence).
+    [
+      "gh --auto pending text (real wording)",
+      "✓ Pull request owner/repo#99 will be automatically merged via squash when all requirements are met\n",
+    ],
+    ["already-merged warning (real wording, warnf/! icon)", "! Pull request owner/repo#99 was already merged\n"],
+    // Broader negative-class checks (not gh's exact current CLI wording,
+    // but the same reversed-word-order / no-past-tense-verb class).
+    ["already-merged GraphQL error shape", "GraphQL: Pull request Foo/Bar#99 is already merged (mergePullRequest)\n"],
+    ["not-mergeable error text", "X Pull request #99 is not mergeable: the merge commit could not be cleanly created.\n"],
+    ["empty output", ""],
+  ])("writes nothing for %s", async (_label, text) => {
+    const repo = makeRepoFixture("svc", "feat/cool", SHA);
+    let calls = 0;
+    const result = await runPackHookPostMergeGateRecordCli({
+      stdin: streamFrom(
+        eventJson({
+          cwd: repo,
+          tool_response: { stdout: "", stderr: text, interrupted: false, isImage: false, noOutputExpected: false },
+        }),
+      ),
+      stderr: captureStream().stream,
+      manifest: manifestNoPolicyPacks(),
+      writeLedger: async () => {
+        calls += 1;
+        return { ok: true };
+      },
+    });
+    expect(result.wrote).toBe(false);
+    expect(calls).toBe(0);
+  });
+
+  it("writes nothing when interrupted is true, even with an otherwise-matching success sentence", async () => {
+    const repo = makeRepoFixture("svc", "feat/cool", SHA);
+    let calls = 0;
+    const result = await runPackHookPostMergeGateRecordCli({
+      stdin: streamFrom(
+        eventJson({
+          cwd: repo,
+          tool_response: {
+            stdout: "",
+            stderr: "✓ Merged pull request owner/repo#99 (Add feature)\n",
+            interrupted: true,
+            isImage: false,
+            noOutputExpected: false,
+          },
+        }),
+      ),
+      stderr: captureStream().stream,
+      manifest: manifestNoPolicyPacks(),
+      writeLedger: async () => {
+        calls += 1;
+        return { ok: true };
+      },
+    });
+    expect(result.wrote).toBe(false);
+    expect(calls).toBe(0);
+  });
+
+  it("writes nothing when both stdout and stderr are empty", async () => {
+    const repo = makeRepoFixture("svc", "feat/cool", SHA);
+    let calls = 0;
+    const result = await runPackHookPostMergeGateRecordCli({
+      stdin: streamFrom(
+        eventJson({
+          cwd: repo,
+          tool_response: { stdout: "", stderr: "", interrupted: false, isImage: false, noOutputExpected: false },
+        }),
+      ),
+      stderr: captureStream().stream,
+      manifest: manifestNoPolicyPacks(),
+      writeLedger: async () => {
+        calls += 1;
+        return { ok: true };
+      },
+    });
+    expect(result.wrote).toBe(false);
+    expect(calls).toBe(0);
+  });
+});
+
+// Binding ordering decision (coordinator follow-up): Contract A wins
+// whenever it resolves to ANY definite verdict. Pinned at the full-CLI
+// level (the runtime unit test pins the same decision at
+// resolveMergeConfirmation() in isolation).
+describe("runPackHookPostMergeGateRecordCli — both contracts present: Contract A wins", () => {
+  it("exit_code 0 AND a matching gh success text: writes using Contract A's PR resolution (command-only, no text fallback)", async () => {
+    const repo = makeRepoFixture("svc", "feat/cool", SHA);
+    let written: { content: string } | undefined;
+    const result = await runPackHookPostMergeGateRecordCli({
+      stdin: streamFrom(
+        eventJson({
+          cwd: repo,
+          tool_input: { command: "gh pr merge" }, // no PR number in the command
+          tool_output: { exit_code: 0 },
+          tool_response: ghSuccessResponse("Merged pull request LanNguyenSi/agent-memory#99 (Add feature)"),
+        }),
+      ),
+      stderr: captureStream().stream,
+      manifest: manifestNoPolicyPacks(),
+      writeLedger: async (args) => {
+        written = args;
+        return { ok: true };
+      },
+    });
+    expect(result.wrote).toBe(true);
+    // Contract A's own (unchanged) PR resolution is command-only — the
+    // Contract-B text-fallback must NOT leak into an exit_code-confirmed
+    // write, even though tool_response is also present and matching.
+    expect(written?.content).not.toContain("pr:99");
+    expect(written?.content).toContain(`${MERGED_TAG_PREFIX}:svc:feat/cool:${SHA}`);
+  });
+
+  it("non-zero exit_code AND a matching gh success text: writes nothing (Contract A's failure wins)", async () => {
+    const repo = makeRepoFixture("svc", "feat/cool", SHA);
+    let calls = 0;
+    const result = await runPackHookPostMergeGateRecordCli({
+      stdin: streamFrom(
+        eventJson({
+          cwd: repo,
+          tool_output: { exit_code: 1 },
+          tool_response: ghSuccessResponse("Merged pull request LanNguyenSi/agent-memory#99 (Add feature)"),
+        }),
+      ),
+      stderr: captureStream().stream,
+      manifest: manifestNoPolicyPacks(),
+      writeLedger: async () => {
+        calls += 1;
+        return { ok: true };
+      },
+    });
+    expect(result.wrote).toBe(false);
+    expect(calls).toBe(0);
+    expect(result.diagnostic).toMatch(/Contract A reports failure; Contract B not consulted/);
+  });
+});
+
 describe("runPackHookPostMergeGateRecordCli — no fact on anything but confirmed success", () => {
   it("writes nothing when exit_code is non-zero", async () => {
     const repo = makeRepoFixture("svc", "feat/cool", SHA);
@@ -123,10 +464,11 @@ describe("runPackHookPostMergeGateRecordCli — no fact on anything but confirme
     });
     expect(result.wrote).toBe(false);
     expect(calls).toBe(0);
-    expect(result.diagnostic).toMatch(/not a confirmed success/);
+    expect(result.diagnostic).toMatch(/not a confirmed merge success/);
+    expect(result.diagnostic).toMatch(/Contract A reports failure; Contract B not consulted/);
   });
 
-  it("writes nothing when tool_output has an unexpected/unknown shape", async () => {
+  it("writes nothing when tool_output has an unexpected/unknown shape and no tool_response is present", async () => {
     const repo = makeRepoFixture("svc", "feat/cool", SHA);
     let calls = 0;
     const result = await runPackHookPostMergeGateRecordCli({
@@ -142,28 +484,23 @@ describe("runPackHookPostMergeGateRecordCli — no fact on anything but confirme
     });
     expect(result.wrote).toBe(false);
     expect(calls).toBe(0);
-    expect(result.diagnostic).toMatch(/unresolvable \(unexpected tool_output shape\)/);
+    expect(result.diagnostic).toMatch(
+      /no confirming tool_output\.exit_code \(Contract A\) and no matching gh merge success text in tool_response \(Contract B\)/,
+    );
   });
 
-  // Coordinator review follow-up (post-merge-gate): the decisions doc
-  // explicitly names `tool_response` as an alternate payload shape a
-  // future Claude Code version (or a differently-shimmed adapter) could
-  // send instead of `tool_output`. The runtime unit test only covers
-  // `extractExitCode` in isolation; this pins the SAME defensive behavior
-  // at the full CLI level — a complete, otherwise well-formed event whose
-  // exit-code payload lives under `tool_response` instead of `tool_output`
-  // must still write NO fact (no special-casing ever reads tool_response).
-  it("writes nothing when the payload uses tool_response instead of tool_output (documented alternate-shape variant)", async () => {
+  // A tool_response that carries an exit_code-shaped sibling field (as if
+  // someone hand-crafted a hybrid payload) is NOT a Contract-B shape: the
+  // matcher only ever reads stdout/stderr/interrupted from tool_response,
+  // never an exit_code key inside it. Without a real `interrupted: false`
+  // field and a matching gh success sentence, it must still write nothing.
+  it("writes nothing when tool_response carries an exit_code-shaped sibling field instead of the real Contract-B shape", async () => {
     const repo = makeRepoFixture("svc", "feat/cool", SHA);
     let calls = 0;
     const result = await runPackHookPostMergeGateRecordCli({
       stdin: streamFrom(
-        JSON.stringify({
-          hook_event_name: "PostToolUse",
-          session_id: "sess-1",
-          tool_name: "Bash",
+        eventJson({
           cwd: repo,
-          tool_input: { command: "gh pr merge" },
           tool_response: { exit_code: 0, stdout: "Merged", stderr: "" },
         }),
       ),
@@ -176,7 +513,6 @@ describe("runPackHookPostMergeGateRecordCli — no fact on anything but confirme
     });
     expect(result.wrote).toBe(false);
     expect(calls).toBe(0);
-    expect(result.diagnostic).toMatch(/unresolvable \(unexpected tool_output shape\)/);
   });
 
   it("writes nothing when tool_output is entirely absent", async () => {

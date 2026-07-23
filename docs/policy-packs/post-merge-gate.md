@@ -25,15 +25,63 @@ The pack contributes two hooks to `settings.json`:
 
 1. **PostToolUse producer** (`harness pack hook post-merge-gate-record`,
    `blocking: false`) on `Bash`: fires only when the just-run command
-   matched `gh pr merge` AND `tool_output.exit_code` reads as the plain
-   number `0`. On a match, records
+   matched `gh pr merge` AND the merge is CONFIRMED by one of two
+   contracts (dual-contract, payload-reality follow-up):
+   - **Contract A** — `tool_output.exit_code` reads as the plain number
+     `0`. This is the shape documented at
+     [code.claude.com/docs/en/hooks](https://code.claude.com/docs/en/hooks),
+     and it is left completely unchanged: any install that DOES send it
+     still works exactly as before.
+   - **Contract B** — `tool_response` is present with
+     `interrupted === false` AND its `stdout`+`stderr` contain `gh pr
+     merge`'s own past-tense success sentence — `Squashed and merged
+     pull request <fullname?>#<n>`, `Rebased and merged pull request
+     <fullname?>#<n>`, or `Merged pull request <fullname?>#<n>` (all
+     three merge methods covered; case-sensitive, exact phrasing,
+     `\b`-bounded on both ends). **Source, verified against the
+     installed `gh` binary (v2.94.0, `pkg/cmd/pr/merge/merge.go` lines
+     369-376)**: the line is built as `infof("%s %s pull request %s#%d
+     (%s)", icon, action, ghrepo.FullName(baseRepo), pr.Number,
+     pr.Title)` — the repo fullname sits between "pull request" and the
+     bare PR number, GLUED to `#` with **no space** (real example:
+     `✓ Squashed and merged pull request owner/repo#65 (Some title)`),
+     and `infof` writes to `gh`'s **STDERR** channel, which is why this
+     contract checks the concatenated `stdout`+`stderr`, never stdout
+     alone. The matcher's `[^\s#]*` between "pull request" and `#`
+     accepts both that real `owner/repo#<n>` shape and a bare `#<n>`
+     (no fullname — not `gh`'s actual current wording, but tolerated
+     defensively at no extra matching-surface cost). **Why this
+     exists**: live verification against a real Claude Code **2.1.218**
+     native install (a `claude -p --settings` dump-hook capture, 19/19
+     fired PostToolUse events) found NO `tool_output` field at all — the
+     field is `tool_response`, shaped `{ stdout, stderr, interrupted,
+     isImage, noOutputExpected }`, with no exit-code equivalent. A
+     verbatim capture of that real payload lives at
+     [`tests/fixtures/post-merge-gate/real-posttooluse-payload-2.1.218.json`](../../tests/fixtures/post-merge-gate/real-posttooluse-payload-2.1.218.json).
+     The `tool_output.exit_code` shape (Contract A) evidently describes
+     a different — newer, or differently-shimmed — Claude Code contract
+     than 2.1.218's, not a documentation error; Contract B is what makes
+     the producer fire AT ALL on that install.
+
+   **Ordering (binding)**: Contract A wins whenever it resolves to ANY
+   definite verdict, success OR failure — a well-formed non-zero
+   `exit_code` short-circuits WITHOUT consulting Contract B (so a
+   coincidental gh success phrase sitting in a sibling `tool_response`
+   field, the hypothetical "both present" shape, can never override an
+   authoritative Contract-A failure). Contract B is tried only when
+   Contract A's `exit_code` is entirely unresolvable.
+
+   On a confirmed match, records
    `post-merge-gate:merged:<repo>:<branch>:<sha>` (plus PR number and
    timestamp, audit-only) to the evidence ledger via the Trusted-Writer
    path (`resolveManifestLedgerWriter` / `addLedgerFact`) — never an
    agent-issued `ledger_add`. `<sha>` is the LOCAL branch tip observed
    right after the merge: `gh pr merge` merges the PR on the remote side
    and does not itself move the local branch pointer, so this is exactly
-   the commit that got merged.
+   the commit that got merged. `<n>` prefers extraction from the `gh pr
+   merge` command itself, falling back to the number captured out of the
+   Contract-B success sentence when the command carries none (e.g. bare
+   `gh pr merge` run from the checked-out branch).
 
 2. **PreToolUse blocker** (`harness pack hook post-merge-gate`,
    `blocking: hard`) on `Bash`, in this order:
@@ -173,6 +221,19 @@ binary; this pack has no version probe registered. Declaring
   availability-only (a spurious deny, always escapable), never a
   privilege the agent gains — consistent with
   [`docs/okf/evidence-ledger-trust-boundary.md`](../okf/evidence-ledger-trust-boundary.md).
+- **Contract B is coupled to `gh`'s current wording**: the success-text
+  matcher matches `gh`'s OWN past-tense success sentence, verbatim, as
+  verified against the installed `gh` v2.94.0 source
+  (`pkg/cmd/pr/merge/merge.go` lines 369-376). A future `gh` release that
+  rephrases that sentence — or changes the `%s#%d` glued-fullname
+  formatting — makes Contract B silently, FAIL-SAFELY inert on installs
+  that never send `tool_output.exit_code` (Contract A stays available
+  wherever it's actually sent) — never a false "merged" record, but the
+  blocker also never fires for that merge. Not attempted to close here
+  (would need a `gh` wire-format contract, e.g. `--json`, out of this
+  pack's Bash-text matching design). **Verification path** after
+  upgrading `gh`: merge a throwaway PR and check for a fresh
+  `post-merge-gate:merged` fact in the evidence ledger.
 - **No Codex adapter**: both hooks assume the Claude Code Bash tool
   surface (mirrors `solution-acceptance`, which ships with no Codex
   variant either).
@@ -180,7 +241,12 @@ binary; this pack has no version probe registered. Declaring
 ## Test fixtures
 
 - `tests/policy-packs/post-merge-gate-runtime.test.ts`, helpers
+  (including the dual-contract `resolveMergeConfirmation` decision table)
 - `tests/policy-packs/post-merge-gate-expand.test.ts`, pack expansion
 - `tests/cli/pack-hook-post-merge-gate-record.test.ts`, producer
+  (Contract A, Contract B success/negative cases, both-present ordering)
 - `tests/cli/pack-hook-post-merge-gate.test.ts`, blocker (including the
   escape self-lock table and the squash-merge end-to-end fixture)
+- `tests/fixtures/post-merge-gate/real-posttooluse-payload-2.1.218.json`
+  — a verbatim capture of a real Claude Code 2.1.218 PostToolUse Bash
+  payload (drift guard for the `tool_response` shape Contract B reads)

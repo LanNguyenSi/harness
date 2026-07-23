@@ -126,11 +126,25 @@ export function isCuratedMutationCommand(command: string): boolean {
 
 /**
  * Defensive `tool_output.exit_code` reader for the PostToolUse Bash
- * payload. Returns `null` on ANY shape other than a plain finite number —
- * missing field, a differently-named variant (e.g. a future
- * `tool_response`-shaped payload), a string, etc. — so the producer's
- * "no fact on anything but a confirmed success" rule (03-decisions.md)
- * degrades to "no fact" rather than guessing.
+ * payload — Contract A. Returns `null` on ANY shape other than a plain
+ * finite number — missing field, a differently-named variant, a string,
+ * etc. — so the producer's "no fact on anything but a confirmed success"
+ * rule (03-decisions.md) degrades to "no fact" rather than guessing.
+ *
+ * PAYLOAD REALITY (2026-07, follow-up to 03-decisions.md): live
+ * verification against a real Claude Code 2.1.218 native install (a
+ * `claude -p --settings` dump-hook capture, 19/19 fired events) found NO
+ * `tool_output` field at all — the field is `tool_response`, shaped
+ * `{ stdout, stderr, interrupted, isImage, noOutputExpected }` with no
+ * exit-code equivalent (see `tests/fixtures/post-merge-gate/
+ * real-posttooluse-payload-2.1.218.json`, a verbatim capture). The
+ * `tool_output.stdout/stderr/exit_code` shape this function reads
+ * evidently describes a DIFFERENT — newer, or differently-shimmed —
+ * Claude Code contract than 2.1.218's, not a documentation error to
+ * "fix" here: Contract A is left exactly as it was (any install that
+ * DOES send `tool_output.exit_code` still works unchanged), and Contract
+ * B below is the fallback that makes the producer fire on 2.1.218 at
+ * all. See `resolveMergeConfirmation`.
  */
 export function extractExitCode(toolOutput: unknown): number | null {
   if (typeof toolOutput !== "object" || toolOutput === null) return null;
@@ -146,6 +160,156 @@ const PR_NUMBER_RE = /gh\s+pr\s+merge\b[^\n;|&]*?(\d+)\b/;
 export function extractPrNumber(command: string): string | null {
   const m = PR_NUMBER_RE.exec(command);
   return m ? m[1]! : null;
+}
+
+/**
+ * Contract B success-text matcher (2.1.218 payload-reality follow-up).
+ * `gh pr merge`'s own past-tense confirmation sentence, verbatim across
+ * all three merge methods.
+ *
+ * SOURCE (verified against the installed `gh` binary, v2.94.0,
+ * `pkg/cmd/pr/merge/merge.go` lines 369-376): the success line is built
+ * as `infof("%s %s pull request %s#%d (%s)", icon, action,
+ * ghrepo.FullName(baseRepo), pr.Number, pr.Title)` — i.e. the repo
+ * FULLNAME sits directly between "pull request" and the bare `#<n>`,
+ * GLUED to the `#` with no space (`%s#%d`, not `%s #%d`):
+ *
+ *   ✓ Squashed and merged pull request owner/repo#65 (Some title)
+ *   ✓ Rebased and merged pull request owner/repo#65 (Some title)
+ *   ✓ Merged pull request owner/repo#65 (Some title)
+ *
+ * `infof` writes to `gh`'s STDERR (the informational-message channel,
+ * distinct from `gh`'s own stdout, which is reserved for machine-
+ * consumable output) — another reason this matcher tests the CONCATENATED
+ * `stdout`+`stderr`, not stdout alone. `icon` is a bare `✓` (or `!` for
+ * warnings) with no ANSI color codes when `gh` detects a non-TTY output
+ * stream, which a hook-captured Bash hijacks it into.
+ *
+ * `[^\s#]*` between "pull request" and `#` accepts BOTH that real
+ * `owner/repo#<n>` shape AND a bare `#<n>` (no fullname) — the latter is
+ * not `gh`'s actual current wording but is accepted defensively as a
+ * documentation-shape / future-`gh`-version tolerance, at zero matching-
+ * surface cost (repo fullnames never contain whitespace or `#`, so the
+ * character class cannot itself widen what counts as a match beyond
+ * "some non-space run immediately before the PR number").
+ *
+ * Still deliberately narrow overall (conservative — false negatives are
+ * the safe direction here, false positives are not):
+ *   - exact past-tense phrase, not a bare "merged" substring — excludes
+ *     `gh pr merge --auto`'s pending text (real wording, same source
+ *     file: "Pull request owner/repo#65 will be automatically merged via
+ *     squash when all requirements are met" — capitalized standalone
+ *     "Pull request", no "Squashed/Rebased and merged" or standalone
+ *     "Merged" immediately precedes it), and excludes the already-merged
+ *     warning (real wording: "Pull request owner/repo#65 was already
+ *     merged" — word order is reversed: "Pull request ... was already
+ *     merged", not "Merged pull request ...").
+ *   - case-sensitive, matching gh's own capitalization exactly (no `/i`)
+ *     — narrower matching surface, same conservative direction.
+ *   - `\b` word boundaries on both ends so a partial-word coincidence
+ *     (e.g. a hypothetical "ReMerged") cannot match.
+ *
+ * KNOWN GAP (documented, not attempted to close here): this is coupled
+ * to `gh`'s current wording. A future `gh` release that rephrases its
+ * success sentence makes this matcher — and therefore the whole
+ * Contract-B path — silently, fail-safely inert (no fact written, same
+ * as any other unmatched shape; never a false "merged" record). See the
+ * pack's instructions.md / docs/policy-packs/post-merge-gate.md "Known
+ * gaps" for the operator-facing verification path.
+ */
+export const GH_MERGE_SUCCESS_RE =
+  /\b(?:Squashed and merged|Rebased and merged|Merged)\s+pull request\s+[^\s#]*#(\d+)\b/;
+
+export type GhMergeSuccessMatch = { matched: true; pr: string | null } | { matched: false };
+
+/**
+ * Contract B confirmation: does `toolResponse` carry a real Claude Code
+ * 2.1.218-shaped Bash result (`{ stdout, stderr, interrupted, ... }`)
+ * whose `stdout`+`stderr` contain a `gh pr merge` success sentence?
+ *
+ * `interrupted` must be the LITERAL boolean `false` — missing, `true`,
+ * or any other value all fail closed (no match), the same fail-safe
+ * direction as Contract A's exit_code check. `stdout`/`stderr` default
+ * to `""` when absent or non-string (never throws), and are joined with
+ * a newline before matching so a phrase cannot accidentally form by
+ * concatenating the tail of one stream with the head of the other.
+ */
+export function matchGhMergeSuccessText(toolResponse: unknown): GhMergeSuccessMatch {
+  if (typeof toolResponse !== "object" || toolResponse === null) return { matched: false };
+  const tr = toolResponse as Record<string, unknown>;
+  if (tr["interrupted"] !== false) return { matched: false };
+  const stdout = typeof tr["stdout"] === "string" ? tr["stdout"] : "";
+  const stderr = typeof tr["stderr"] === "string" ? tr["stderr"] : "";
+  const combined = `${stdout}\n${stderr}`;
+  const match = GH_MERGE_SUCCESS_RE.exec(combined);
+  if (!match) return { matched: false };
+  return { matched: true, pr: match[1] ?? null };
+}
+
+export interface MergeConfirmation {
+  confirmed: boolean;
+  /** Which contract produced the verdict; "none" when `confirmed` is false. */
+  contract: "exit_code" | "gh_success_text" | "none";
+  /** Resolved PR number (command-first; text-fallback only for gh_success_text), or null. */
+  pr: string | null;
+  /** Human-readable reason, always populated (feeds the producer's stderr diagnostic). */
+  reason: string;
+}
+
+/**
+ * Dual-contract merge confirmation (2.1.218 payload-reality follow-up).
+ * Tries Contract A (`tool_output.exit_code`, unchanged) first; falls
+ * back to Contract B (`tool_response` + a matching `gh` success
+ * sentence) only when Contract A yields no verdict at all.
+ *
+ * BINDING ordering decision — Contract A wins whenever it resolves to
+ * ANY definite verdict, success OR failure: a well-formed, non-zero
+ * `exit_code` is Contract A's own explicit failure signal and short-
+ * circuits WITHOUT consulting Contract B, so a coincidental gh success
+ * phrase sitting in a sibling `tool_response` field (the hypothetical
+ * "both present" shape) can never override an authoritative failure.
+ * Contract B is consulted only when `exit_code` is entirely unresolvable
+ * (`extractExitCode` returns `null` — missing field, wrong shape, or the
+ * field genuinely absent as on 2.1.218).
+ */
+export function resolveMergeConfirmation(
+  toolOutput: unknown,
+  toolResponse: unknown,
+  command: string,
+): MergeConfirmation {
+  const exitCode = extractExitCode(toolOutput);
+  if (exitCode === 0) {
+    return {
+      confirmed: true,
+      contract: "exit_code",
+      pr: extractPrNumber(command),
+      reason: "tool_output.exit_code === 0 (Contract A)",
+    };
+  }
+  if (exitCode !== null) {
+    return {
+      confirmed: false,
+      contract: "none",
+      pr: null,
+      reason: `tool_output.exit_code is ${exitCode}, not 0 (Contract A reports failure; Contract B not consulted)`,
+    };
+  }
+  const ghSuccess = matchGhMergeSuccessText(toolResponse);
+  if (ghSuccess.matched) {
+    return {
+      confirmed: true,
+      contract: "gh_success_text",
+      pr: extractPrNumber(command) ?? ghSuccess.pr,
+      reason: "tool_response carries a confirmed gh merge success sentence (Contract B)",
+    };
+  }
+  return {
+    confirmed: false,
+    contract: "none",
+    pr: null,
+    reason:
+      "no confirming tool_output.exit_code (Contract A) and no matching gh merge success text in tool_response (Contract B)",
+  };
 }
 
 /**

@@ -13,13 +13,24 @@
 //
 //   1. PostToolUse producer (`harness pack hook post-merge-gate-record`)
 //      watches every Bash call and, ONLY when the command matched
-//      `gh pr merge` AND the tool actually exited 0, writes a
+//      `gh pr merge` AND the merge is CONFIRMED, writes a
 //      `post-merge-gate:merged:<repo>:<branch>:<sha>` fact (plus PR
 //      number and timestamp, audit-only) to the evidence ledger — `sha`
 //      being the LOCAL branch tip observed right after the merge, which
 //      is the exact commit that got merged (`gh pr merge` merges on the
-//      remote side; it does not move the local tip). Payload reads are
-//      defensive: an unexpected shape or a non-zero exit writes nothing.
+//      remote side; it does not move the local tip). Confirmation is
+//      DUAL-CONTRACT (payload-reality follow-up, 2026-07): a `tool_output.
+//      exit_code === 0` (Contract A) is NOT reliably present — live
+//      verification against a real Claude Code 2.1.218 install found the
+//      PostToolUse Bash payload carries no `tool_output` / exit-code field
+//      at all, only `tool_response` (`{ stdout, stderr, interrupted,
+//      isImage, noOutputExpected }`) — so a `gh pr merge` success sentence
+//      match against `tool_response` (Contract B) is the fallback that
+//      makes the producer fire at all on that install. See
+//      `resolveMergeConfirmation` in post-merge-gate-runtime.ts for the
+//      exact dual-contract / "Contract A wins" ordering. Payload reads are
+//      defensive throughout: an unexpected shape on either contract writes
+//      nothing.
 //
 //   2. PreToolUse blocker (`harness pack hook post-merge-gate`) checks a
 //      CURATED list of history-mutating commands (see
@@ -64,6 +75,7 @@ import {
   CURATED_MUTATION_BASH_RE,
   ESCAPE_GIT_BASH_RE,
   ESCAPE_HARNESS_BASH_RE,
+  GH_MERGE_SUCCESS_RE,
   GH_PR_MERGE_BASH_RE,
   MERGED_TAG_PREFIX,
   PACK_NAME,
@@ -157,14 +169,40 @@ ${runtime}${runtime === "codex" ? " (UNSUPPORTED — see \"Known gaps\" below; b
 
 1. \`PostToolUse\` producer (\`${PRODUCER_COMMAND}\`, blocking: false) on
    \`Bash\`: matches \`${GH_PR_MERGE_BASH_RE.source}\` against the command
-   text. Fires only when the just-run tool's \`tool_output.exit_code\`
-   is the number \`0\` (any other shape — non-zero exit, a missing or
-   differently-shaped payload — writes NO fact; fail-safe against a
-   false "merged" record). On a match, records
+   text. Fires only on a CONFIRMED merge, via either of two contracts
+   (dual-contract, payload-reality follow-up — real Claude Code shims
+   have shipped both shapes in the wild):
+   - **Contract A** — \`tool_output.exit_code\` is the number \`0\`.
+   - **Contract B** — \`tool_response\` is present with
+     \`interrupted === false\` AND its \`stdout\`+\`stderr\` contain \`gh pr
+     merge\`'s own past-tense success sentence: \`${GH_MERGE_SUCCESS_RE.source}\`
+     (covers all three merge methods: Squashed / Rebased / plain Merged).
+     Verified against the installed \`gh\` binary (v2.94.0,
+     \`pkg/cmd/pr/merge/merge.go\` lines 369-376): the line is built as
+     \`infof("%s %s pull request %s#%d (%s)", icon, action,
+     ghrepo.FullName(baseRepo), pr.Number, pr.Title)\` — the repo
+     fullname sits between "pull request" and the PR number, GLUED to
+     \`#\` with no space (e.g. \`Squashed and merged pull request
+     owner/repo#65 (title)\`), and \`infof\` writes to \`gh\`'s STDERR,
+     which is why this contract checks the concatenated
+     \`stdout\`+\`stderr\`, not stdout alone.
+   Contract A wins whenever it resolves to ANY definite verdict, success
+   OR failure — a well-formed non-zero \`exit_code\` short-circuits
+   WITHOUT consulting Contract B. Contract B is tried only when Contract
+   A's \`exit_code\` is entirely unresolvable (missing field, wrong
+   shape, or genuinely absent — as verified live against Claude Code
+   2.1.218, whose real PostToolUse Bash payload carries NO \`tool_output\`
+   / no exit-code field at all, only \`tool_response\`; the
+   \`tool_output.exit_code\` shape appears to describe a different,
+   possibly newer, Claude Code contract). Any other shape on either
+   contract writes NO fact; fail-safe against a false "merged" record.
+   On a confirmed match, records
    \`${MERGED_TAG_PREFIX}:<repo>:<branch>:<sha>[ pr:<n>] at:<iso>\` to the
    evidence ledger, where \`<sha>\` is the LOCAL branch tip observed right
    after the merge (the exact commit that got merged — \`gh pr merge\`
-   merges remote-side and does not itself move the local tip).
+   merges remote-side and does not itself move the local tip). \`<n>\`
+   prefers extraction from the \`gh pr merge\` command itself, falling
+   back to the number captured out of the Contract-B success sentence.
 
 2. \`PreToolUse\` blocker (\`${BLOCKER_COMMAND}\`, blocking: hard) on
    \`Bash\`: checked in this order —
@@ -224,6 +262,19 @@ ${runtime}${runtime === "codex" ? " (UNSUPPORTED — see \"Known gaps\" below; b
   different \`repo:branch:sha\` triple is inert; this is availability-only
   (a spurious deny, always escapable), never a privilege the agent gains,
   consistent with docs/okf/evidence-ledger-trust-boundary.md.
+- **Contract B is coupled to \`gh\`'s current wording**: \`${GH_MERGE_SUCCESS_RE.source}\`
+  matches \`gh\`'s OWN past-tense success sentence, verbatim, as verified
+  against the installed \`gh\` v2.94.0 source
+  (\`pkg/cmd/pr/merge/merge.go\` lines 369-376). A future \`gh\` release
+  that rephrases that sentence makes
+  Contract B silently, FAIL-SAFELY inert on installs that never send
+  \`tool_output.exit_code\` (Contract A stays available wherever it's
+  actually sent) — never a false "merged" record, but the blocker also
+  never fires for that merge. Not attempted to close here (would need a
+  \`gh\` wire-format contract, e.g. \`--json\`, out of this pack's Bash-text
+  matching design). Verification path after upgrading \`gh\`: merge a
+  throwaway PR and check for a fresh \`${MERGED_TAG_PREFIX}\` fact in the
+  evidence ledger.
 - **No Codex adapter**: see "Runtime" above.
 
 ## Fail posture
