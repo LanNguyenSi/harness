@@ -3,9 +3,20 @@
 //
 // Receives Claude Code's PostToolUse event JSON on stdin. Fires only when
 // the just-completed tool was Bash AND the command matched `gh pr merge`
-// AND `tool_output.exit_code` reads as the plain number `0`. On a match,
-// records a `post-merge-gate:merged:<repo>:<branch>:<sha>` fact (plus PR
-// number and timestamp, audit-only) to the evidence ledger via the same
+// AND the merge is CONFIRMED by one of two contracts (see
+// `resolveMergeConfirmation` in post-merge-gate-runtime.ts, "PAYLOAD
+// REALITY" follow-up):
+//
+//   Contract A (original, unchanged): `tool_output.exit_code === 0`.
+//   Contract B (2.1.218 payload reality): `tool_response` present with
+//     `interrupted === false` AND `stdout`+`stderr` containing `gh pr
+//     merge`'s own past-tense success sentence (all three merge methods).
+//
+// Contract A wins whenever it resolves to any definite verdict (success
+// OR failure); Contract B is consulted only when Contract A's exit_code
+// is entirely unresolvable. On a confirmed merge, records a
+// `post-merge-gate:merged:<repo>:<branch>:<sha>` fact (plus PR number and
+// timestamp, audit-only) to the evidence ledger via the same
 // Trusted-Writer path `harness session-start branch-check` /
 // `harness record *` use (`resolveManifestLedgerWriter` /
 // `addLedgerFact`) — never an agent-issued `ledger_add`.
@@ -17,19 +28,17 @@
 // rationale — no ancestry walk, no `git` subprocess).
 //
 // Every non-match / failure path is a no-op: wrong tool, non-matching
-// command, a non-zero or unresolvable exit code, an unresolvable git
-// context, no session id, a manifest/ledger failure. `PostToolUse` is
-// `blocking:false` by contract (see the pack's Hook entry) so none of
-// these ever break the session; the only observable effect of a miss is
-// that the blocker has no merged-tip fact to compare against for this
-// particular merge.
+// command, neither contract confirms, an unresolvable git context, no
+// session id, a manifest/ledger failure. `PostToolUse` is `blocking:false`
+// by contract (see the pack's Hook entry) so none of these ever break the
+// session; the only observable effect of a miss is that the blocker has
+// no merged-tip fact to compare against for this particular merge.
 
 import {
   buildMergedTagContent,
-  extractExitCode,
-  extractPrNumber,
   GH_PR_MERGE_BASH_RE,
   PACK_NAME,
+  resolveMergeConfirmation,
 } from "../../policy-packs/builtin/post-merge-gate-runtime.js";
 import { resolveGitContext } from "../../runtime/git-context.js";
 import { resolveManifestLedgerWriter, type LedgerWriteFn } from "../../runtime/ledger-writer.js";
@@ -72,7 +81,10 @@ interface ToolEventLite {
   tool_name?: unknown;
   cwd?: unknown;
   tool_input?: unknown;
+  /** Contract A (original hooks-doc shape: `{ stdout, stderr, exit_code }`). */
   tool_output?: unknown;
+  /** Contract B (live 2.1.218 shape: `{ stdout, stderr, interrupted, isImage, noOutputExpected }`). */
+  tool_response?: unknown;
 }
 
 function bashCommandOf(toolInput: unknown): string {
@@ -121,15 +133,15 @@ export async function runPackHookPostMergeGateRecordCli(
     return { exitCode: 0, wrote: false, diagnostic };
   }
 
-  // The confirmed-success gate: any exit code other than the literal
-  // number 0 — including an unresolvable / unexpected payload shape —
-  // writes NO fact. Fail-safe against a false "merged" record, which
-  // would be a self-lock in the wrong direction (03-decisions.md).
-  const exitCode = extractExitCode(event.tool_output);
-  if (exitCode !== 0) {
-    const diagnostic = `exit_code is ${
-      exitCode === null ? "unresolvable (unexpected tool_output shape)" : exitCode
-    }, not a confirmed success; skipping (no fact written)`;
+  // The confirmed-success gate: neither contract confirming — including
+  // any unresolvable / unexpected payload shape on either — writes NO
+  // fact. Fail-safe against a false "merged" record, which would be a
+  // self-lock in the wrong direction (03-decisions.md). See
+  // resolveMergeConfirmation's own doc comment for the dual-contract /
+  // "Contract A wins" ordering decision.
+  const confirmation = resolveMergeConfirmation(event.tool_output, event.tool_response, command);
+  if (!confirmation.confirmed) {
+    const diagnostic = `not a confirmed merge success (${confirmation.reason}); skipping (no fact written)`;
     note(diagnostic);
     return { exitCode: 0, wrote: false, diagnostic };
   }
@@ -164,9 +176,11 @@ export async function runPackHookPostMergeGateRecordCli(
     return { exitCode: 0, wrote: false, diagnostic };
   }
 
-  const pr = extractPrNumber(command);
+  // PR number: resolveMergeConfirmation already applied the binding
+  // resolution order (command-first, gh-success-sentence fallback only
+  // for Contract B; Contract A stays command-only, unchanged).
   const whenIso = (opts.now ?? new Date()).toISOString();
-  const content = buildMergedTagContent({ repo, branch, sha, pr, whenIso });
+  const content = buildMergedTagContent({ repo, branch, sha, pr: confirmation.pr, whenIso });
 
   let writeLedger = opts.writeLedger;
   if (!writeLedger) {

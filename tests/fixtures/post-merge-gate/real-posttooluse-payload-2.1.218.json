@@ -1,0 +1,25 @@
+{
+  "session_id": "bc9f11c0-531a-4481-a029-6e2266328d54",
+  "transcript_path": "/Users/lannguyensi/.claude/projects/-Users-lannguyensi-git-pandora-harness/bc9f11c0-531a-4481-a029-6e2266328d54.jsonl",
+  "cwd": "/Users/lannguyensi/git/pandora/harness",
+  "prompt_id": "fcde6581-a869-499c-b3ec-20390ec57386",
+  "permission_mode": "default",
+  "effort": {
+    "level": "xhigh"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "echo hookprobe-ok",
+    "description": "Echo hookprobe-ok"
+  },
+  "tool_response": {
+    "stdout": "hookprobe-ok",
+    "stderr": "",
+    "interrupted": false,
+    "isImage": false,
+    "noOutputExpected": false
+  },
+  "tool_use_id": "toolu_016ZoVTiQYAHNqbCZ3YizHgH",
+  "duration_ms": 557
+}
