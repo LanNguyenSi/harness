@@ -86,6 +86,8 @@ import { runSessionStartToolchainParity } from "./session-start/toolchain-parity
 import { runPackHookBranchProtectionCli } from "./pack/hook-branch-protection.js";
 import { runPackHookSolutionAcceptanceCli } from "./pack/hook-solution-acceptance.js";
 import { runPackHookSolutionAcceptanceWriteguardCli } from "./pack/hook-solution-acceptance-writeguard.js";
+import { runPackHookPostMergeGateRecordCli } from "./pack/hook-post-merge-gate-record.js";
+import { runPackHookPostMergeGateCli } from "./pack/hook-post-merge-gate.js";
 import { runPackHookRuntimeRealityCli } from "./pack/hook-runtime-reality.js";
 import { gateDisable, GateDisableError } from "./gate/disable.js";
 import { gateEnable, GateEnableError } from "./gate/enable.js";
@@ -1412,6 +1414,69 @@ export function buildProgram(opts: RunOptions = {}): Command {
       if (options.project) cliOpts.project = options.project;
       if (options.cwd) cliOpts.cwd = options.cwd;
       const result = await runPackHookSolutionAcceptanceWriteguardCli(cliOpts);
+      if (result.exitCode !== 0) {
+        throw new HarnessExitError("", result.exitCode);
+      }
+    });
+
+  packHookCmd
+    .command("post-merge-gate-record")
+    .description(
+      "PostToolUse producer for the post-merge-gate pack: read tool-event JSON from stdin and, on a " +
+        "`gh pr merge` Bash call whose tool_output.exit_code is the number 0, record a " +
+        "`post-merge-gate:merged:<repo>:<branch>:<sha>` fact to the evidence ledger. blocking:false; every " +
+        "non-match / failure path is a no-op.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
+    .option("--cwd <path>", "override cwd resolution (default: stdin event.cwd then process.cwd())")
+    .action(async (options: {
+      config?: string;
+      project?: string;
+      ledgerTimeout?: string;
+      cwd?: string;
+    }) => {
+      const cliOpts: Parameters<typeof runPackHookPostMergeGateRecordCli>[0] = {};
+      if (options.config) cliOpts.configPath = options.config;
+      if (options.project) cliOpts.project = options.project;
+      if (options.cwd) cliOpts.cwd = options.cwd;
+      if (options.ledgerTimeout) {
+        const n = Number.parseInt(options.ledgerTimeout, 10);
+        if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
+      }
+      await runPackHookPostMergeGateRecordCli(cliOpts);
+    });
+
+  packHookCmd
+    .command("post-merge-gate")
+    .description(
+      "PreToolUse blocker for the post-merge-gate pack: read tool-event JSON from stdin, and on a curated " +
+        "history-mutating Bash command (git commit/add/push/merge/rebase/cherry-pick/revert/reset/stash " +
+        "pop|apply, gh pr create/merge) emit a deny envelope when the current branch tip matches a recorded " +
+        "merged-tip fact. An escape allowlist (git switch/checkout/pull/fetch, git branch -d/-D, git stash " +
+        "list/show, any `harness ...` command) is checked first, unconditionally. Fails open when the ledger " +
+        "is unreachable.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
+    .option("--cwd <path>", "override cwd resolution (default: stdin event.cwd then process.cwd())")
+    .action(async (options: {
+      config?: string;
+      project?: string;
+      ledgerTimeout?: string;
+      cwd?: string;
+    }) => {
+      const cliOpts: Parameters<typeof runPackHookPostMergeGateCli>[0] = {};
+      if (options.config) cliOpts.configPath = options.config;
+      if (options.project) cliOpts.project = options.project;
+      if (options.cwd) cliOpts.cwd = options.cwd;
+      if (options.ledgerTimeout) {
+        const n = Number.parseInt(options.ledgerTimeout, 10);
+        if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
+      }
+      const result = await runPackHookPostMergeGateCli(cliOpts);
       if (result.exitCode !== 0) {
         throw new HarnessExitError("", result.exitCode);
       }

@@ -169,3 +169,99 @@ export function resolveGitContext(cwd: string): GitRepoContext {
   }
   return { repo, branch, sha };
 }
+
+// ---------------------------------------------------------------------------
+// Default-branch resolution (offline, no `gh`/`git` subprocess).
+//
+// Originally written for `harness record review`'s `--base` fallback
+// (task T-001, record-verbs) and lived only in `cli/record/index.ts`.
+// Exported here (task post-merge-gate, T-001) so
+// `policy-packs/builtin/post-merge-gate-runtime.ts` can resolve the same
+// "what's the default branch to switch back to" answer for its deny
+// message without a policy-pack module reaching into `cli/`. Behavior is
+// unchanged; this is a visibility/location move, not a rewrite — see
+// `findGitEntry`'s doc comment above for the identical precedent
+// (record/index.ts reusing this module's git-dir walk instead of
+// duplicating it).
+// ---------------------------------------------------------------------------
+
+// `.git/refs/remotes/origin/HEAD` on a normal clone: a symbolic ref
+// pointing at the remote's default branch.
+const ORIGIN_HEAD_REF_RE = /^ref:\s*refs\/remotes\/origin\/(.+)$/;
+const ORIGIN_HEAD_REF_PATH = "refs/remotes/origin/HEAD";
+const ORIGIN_REMOTE_PREFIX = "refs/remotes/origin/";
+
+/**
+ * Resolve the remote's default branch name from `<gitDir>/refs/remotes/
+ * origin/HEAD`. Loose symbolic ref first (the normal shape: `ref: refs/
+ * remotes/origin/<name>`, written by `git clone` / `git remote set-head
+ * origin -a`). When that loose file is absent, falls back to
+ * `packed-refs`: some git versions / tooling pack `refs/remotes/origin/
+ * HEAD` as a plain `<sha> <ref>` entry instead of a symref, which loses
+ * the branch NAME directly — recovered here by matching that sha
+ * against another packed `refs/remotes/origin/<name>` entry that shares
+ * it (mirrors the loose-then-packed shape `resolveBranchSha` uses
+ * above, adapted since packed-refs has no symref concept). Returns null
+ * when neither source resolves a name.
+ */
+export function resolveOriginHeadBase(gitDir: string): string | null {
+  try {
+    const raw = fs
+      .readFileSync(path.join(gitDir, "refs", "remotes", "origin", "HEAD"), "utf8")
+      .trim();
+    const match = ORIGIN_HEAD_REF_RE.exec(raw);
+    if (match) return match[1]!.trim();
+  } catch {
+    /* loose symref missing — try packed-refs */
+  }
+  try {
+    const packed = fs.readFileSync(path.join(gitDir, "packed-refs"), "utf8");
+    let headSha: string | null = null;
+    const entries: Array<{ sha: string; ref: string }> = [];
+    for (const rawLine of packed.split("\n")) {
+      const line = rawLine.trim();
+      if (line === "" || line.startsWith("#") || line.startsWith("^")) continue;
+      const parts = line.split(/\s+/);
+      const sha = parts[0];
+      const ref = parts[1];
+      if (!sha || !ref || !SHA_RE.test(sha)) continue;
+      if (ref === ORIGIN_HEAD_REF_PATH) headSha = sha;
+      else entries.push({ sha, ref });
+    }
+    if (headSha) {
+      const match = entries.find(
+        (e) => e.sha === headSha && e.ref.startsWith(ORIGIN_REMOTE_PREFIX),
+      );
+      if (match) return match.ref.slice(ORIGIN_REMOTE_PREFIX.length);
+    }
+  } catch {
+    /* packed-refs missing too — caller treats null as "unresolvable" */
+  }
+  return null;
+}
+
+/**
+ * Resolve the actual shared git directory for `gitDir`, following the
+ * `commondir` file linked worktrees write. `git worktree add` gives each
+ * worktree its own private `.git` FILE pointing at `<main>/.git/
+ * worktrees/<name>/` (what `findGitEntry` returns as `gitDir`), but
+ * `refs/remotes/origin/HEAD` and `packed-refs` are NOT duplicated there
+ * — they live only in the shared common dir, reachable via that
+ * per-worktree directory's own `commondir` file (a path, normally
+ * `../..`, relative to the per-worktree directory itself; see
+ * `git-worktree(1)`). Without this indirection, `resolveOriginHeadBase`
+ * would look for those refs in the empty per-worktree directory and
+ * always miss. Returns `gitDir` unchanged when no `commondir` file
+ * exists (the normal, non-worktree case).
+ */
+export function resolveCommonDir(gitDir: string): string {
+  try {
+    const raw = fs.readFileSync(path.join(gitDir, "commondir"), "utf8").trim();
+    if (raw.length > 0) {
+      return path.isAbsolute(raw) ? raw : path.resolve(gitDir, raw);
+    }
+  } catch {
+    /* no commondir file — gitDir already IS the common dir */
+  }
+  return gitDir;
+}

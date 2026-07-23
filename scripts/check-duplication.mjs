@@ -44,7 +44,23 @@ import * as path from "node:path";
 // genuinely new kind of copy-paste). Same tolerated category as the
 // reseed.ts precedent above; extracting a shared base would mean touching
 // the two existing sibling files too, out of this task's scope.
-const MAX_CLONES = 95;
+// Raised to 102 for the `post-merge-gate` builtin policy pack (agent-tasks
+// d368e30d): its two new CLI hook verbs (`cli/pack/hook-post-merge-gate.ts`
+// / `hook-post-merge-gate-record.ts`) and their `cli/index.ts` command
+// registration deliberately mirror the SAME pre-existing patterns the two
+// prior raises above already tolerate — the `--config`/`--project`/
+// `--ledger-timeout`/`--cwd` option-parsing + action-body shape shared by
+// `branch-protection` / `solution-acceptance` / `codex-pre-tool-use`'s CLI
+// wiring in `cli/index.ts`, and the `findGroundingMcp` + ledger-probe
+// boilerplate `hook-branch-protection.ts` / `hook-solution-acceptance.ts`
+// already duplicate against each other. Checked first (per the review
+// brief) whether the two new files duplicate EACH OTHER — they do not:
+// every one of the 8 newly-reported clone pairs is against a DIFFERENT
+// pre-existing sibling-pack file, so no shared helper between just the two
+// new verbs would remove any of them. Deduping any of them means touching
+// an existing sibling pack's file, out of this task's scope (same
+// rationale as the reseed.ts / toolchain-parity precedents above).
+const MAX_CLONES = 102;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).

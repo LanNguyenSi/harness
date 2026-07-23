@@ -22,6 +22,7 @@ import {
   defaultUx,
 } from "../../src/policy-packs/builtin/understanding-before-execution.js";
 import { defaultUx as branchProtectionDefaultUx } from "../../src/policy-packs/builtin/branch-protection.js";
+import { defaultUx as postMergeGateDefaultUx } from "../../src/policy-packs/builtin/post-merge-gate.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
 function packConfig(
@@ -75,5 +76,11 @@ describe("init generation surfaces stay in lockstep with the canonical defaults 
     const m = parseManifest(parseYaml(r.yaml));
     const cfg = packConfig(m, "branch-protection");
     expect(cfg.ux).toEqual(branchProtectionDefaultUx());
+  });
+
+  it("FULL_TEMPLATE's post-merge-gate ux matches the canonical default", () => {
+    const m = parseManifest(parseYaml(FULL_TEMPLATE));
+    const cfg = packConfig(m, "post-merge-gate");
+    expect(cfg.ux).toEqual(postMergeGateDefaultUx());
   });
 });
