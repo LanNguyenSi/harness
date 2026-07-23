@@ -145,6 +145,40 @@ describe("runPackHookPostMergeGateRecordCli — no fact on anything but confirme
     expect(result.diagnostic).toMatch(/unresolvable \(unexpected tool_output shape\)/);
   });
 
+  // Coordinator review follow-up (post-merge-gate): the decisions doc
+  // explicitly names `tool_response` as an alternate payload shape a
+  // future Claude Code version (or a differently-shimmed adapter) could
+  // send instead of `tool_output`. The runtime unit test only covers
+  // `extractExitCode` in isolation; this pins the SAME defensive behavior
+  // at the full CLI level — a complete, otherwise well-formed event whose
+  // exit-code payload lives under `tool_response` instead of `tool_output`
+  // must still write NO fact (no special-casing ever reads tool_response).
+  it("writes nothing when the payload uses tool_response instead of tool_output (documented alternate-shape variant)", async () => {
+    const repo = makeRepoFixture("svc", "feat/cool", SHA);
+    let calls = 0;
+    const result = await runPackHookPostMergeGateRecordCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PostToolUse",
+          session_id: "sess-1",
+          tool_name: "Bash",
+          cwd: repo,
+          tool_input: { command: "gh pr merge" },
+          tool_response: { exit_code: 0, stdout: "Merged", stderr: "" },
+        }),
+      ),
+      stderr: captureStream().stream,
+      manifest: manifestNoPolicyPacks(),
+      writeLedger: async () => {
+        calls += 1;
+        return { ok: true };
+      },
+    });
+    expect(result.wrote).toBe(false);
+    expect(calls).toBe(0);
+    expect(result.diagnostic).toMatch(/unresolvable \(unexpected tool_output shape\)/);
+  });
+
   it("writes nothing when tool_output is entirely absent", async () => {
     const repo = makeRepoFixture("svc", "feat/cool", SHA);
     let calls = 0;

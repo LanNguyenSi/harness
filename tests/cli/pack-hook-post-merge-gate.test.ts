@@ -178,6 +178,60 @@ describe("runPackHookPostMergeGateCli — escape self-lock table", () => {
   );
 });
 
+// Coordinator review follow-up (post-merge-gate): the escape-first ordering
+// (checked before the curated-mutation match and before any manifest/ledger
+// access — module header + docs/policy-packs/post-merge-gate.md "Known
+// gaps: Chained-escape bypass") is a BINDING decision, not an incidental
+// implementation detail. Neither test above actually proves the ORDERING —
+// every escape command in ESCAPE_COMMANDS is pure escape (never also
+// curated), and every innocent neighbour is pure curated (never also
+// escape), so a hook that checked curated-match first and escape second
+// would still pass both tables. The two tests below use a command that is
+// BOTH escape AND curated at once — the only shape that actually
+// distinguishes "escape checked first" from "escape checked after (or
+// instead of) curated" — and would go red if a future edit reordered the
+// checks or moved the escape check behind the ledger query.
+describe("runPackHookPostMergeGateCli — escape-first ordering guard (pins the binding decision)", () => {
+  it("a command that is BOTH escape and curated is allowed, and the ledger is never queried", async () => {
+    const repo = makeRepoFixture("svc", "feat/cool", SHA_MERGED);
+    let ledgerQueryCalls = 0;
+    const result = await runPackHookPostMergeGateCli({
+      stdin: streamFrom(
+        eventJson({ cwd: repo, tool_input: { command: "harness pause && git commit -am x" } }),
+      ),
+      stdout: captureStream().stream,
+      stderr: captureStream().stream,
+      manifest: manifestWithPack(),
+      ledgerQuery: async () => {
+        ledgerQueryCalls += 1;
+        return [mergedEntry("svc", "feat/cool", SHA_MERGED)];
+      },
+    });
+    expect(result.blocked).toBe(false);
+    expect(ledgerQueryCalls).toBe(0);
+  });
+
+  // Documented behavior (docs/policy-packs/post-merge-gate.md "Known gaps:
+  // Chained-escape bypass"), pinned here so it fails loud instead of
+  // silently drifting if the matcher is ever changed. Order reversed from
+  // the test above (mutation FIRST, escape SECOND) — same allow outcome
+  // either way, because the escape matcher scans the WHOLE command string,
+  // not just its first clause.
+  it("chained mutation-then-escape is allowed (documented gap, not a bug): git commit && git switch", async () => {
+    const repo = makeRepoFixture("svc", "feat/cool", SHA_MERGED);
+    const result = await runPackHookPostMergeGateCli({
+      stdin: streamFrom(
+        eventJson({ cwd: repo, tool_input: { command: "git commit -am x && git switch main" } }),
+      ),
+      stdout: captureStream().stream,
+      stderr: captureStream().stream,
+      manifest: manifestWithPack(),
+      ledgerQuery: async () => [mergedEntry("svc", "feat/cool", SHA_MERGED)],
+    });
+    expect(result.blocked).toBe(false);
+  });
+});
+
 describe("runPackHookPostMergeGateCli — allow paths", () => {
   it("allows when no merged fact matches the current tip", async () => {
     const repo = makeRepoFixture("svc", "feat/cool", SHA_MERGED);

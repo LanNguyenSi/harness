@@ -208,6 +208,22 @@ ${runtime}${runtime === "codex" ? " (UNSUPPORTED — see \"Known gaps\" below; b
   commands on a just-merged branch (e.g. hand-editing files outside
   git's own history primitives) are out of v1 scope, mirroring
   branch-protection's documented scope-cut.
+- **Chained-escape bypass**: escape-first is checked against the WHOLE
+  command string, not per-clause, so a curated mutation chained with an
+  escape verb (e.g. \`git commit -am x && git switch main\`) is fully
+  ALLOWED — the escape match wins for the entire compound command. Same
+  accepted class as the regex-vs-shell-eval residual above (\`eval\`,
+  heredoc, \`sh -c\`); not attempted to close here, and deliberate: the
+  alternative (per-clause splitting) would need a real shell parser.
+- **Inverted trust-boundary residual**: a merged fact written by any
+  means OTHER than the producer (e.g. directly via
+  \`mcp__agent-grounding__ledger_add\`) that happens to exactly match the
+  CURRENT \`repo:branch:sha\` triple denies curated mutations on that
+  branch — recoverable via any escape command or by making a new commit
+  (which moves the tip and the fact no longer matches). A fact for a
+  different \`repo:branch:sha\` triple is inert; this is availability-only
+  (a spurious deny, always escapable), never a privilege the agent gains,
+  consistent with docs/okf/evidence-ledger-trust-boundary.md.
 - **No Codex adapter**: see "Runtime" above.
 
 ## Fail posture

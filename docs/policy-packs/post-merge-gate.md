@@ -156,6 +156,23 @@ binary; this pack has no version probe registered. Declaring
   runs).
 - **Curated scope, not every Bash command**: destructive non-git
   mutation on a just-merged branch is out of v1 scope.
+- **Chained-escape bypass**: escape-first matches against the WHOLE
+  command string, not per-clause, so a curated mutation chained with an
+  escape verb (e.g. `git commit -am x && git switch main`) is fully
+  ALLOWED — the escape wins for the entire compound command. Same
+  accepted class as the regex-vs-shell-eval residual above (`eval`,
+  heredoc, `sh -c`); the alternative (per-clause splitting) would need a
+  real shell parser.
+- **Inverted trust-boundary residual**: a merged fact written by any
+  means other than the producer (e.g. directly via
+  `mcp__agent-grounding__ledger_add`) that happens to exactly match the
+  CURRENT `repo:branch:sha` triple denies curated mutations on that
+  branch — recoverable via any escape command or by making a new commit
+  (which moves the tip and the fact no longer matches). A fact for a
+  different `repo:branch:sha` triple is inert; this is
+  availability-only (a spurious deny, always escapable), never a
+  privilege the agent gains — consistent with
+  [`docs/okf/evidence-ledger-trust-boundary.md`](../okf/evidence-ledger-trust-boundary.md).
 - **No Codex adapter**: both hooks assume the Claude Code Bash tool
   surface (mirrors `solution-acceptance`, which ships with no Codex
   variant either).
