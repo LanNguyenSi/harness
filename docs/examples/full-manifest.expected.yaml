@@ -493,6 +493,19 @@ policy_packs:
     enabled: false
     description: Gate task completion on a ready, HEAD-pinned solution-acceptance verdict earned from a real preflight run.
     config: {}
+  - name: post-merge-gate
+    source: builtin
+    enabled: false
+    description: Deny curated history-mutating git/gh commands on a branch whose current tip was already merged.
+    config:
+      ux:
+        cannot: You cannot run ${TOOL_NAME} on branch ${BRANCH} yet — its current tip was already merged.
+        required:
+          - a branch tip that is not sitting at an already-merged commit (switch off `${BRANCH}`, or move its tip with a new commit)
+        run:
+          - git switch ${DEFAULT_BRANCH}
+          - git pull --ff-only
+          - "git branch -d ${BRANCH}  # optional cleanup"
 risk:
   classifiers:
     - name: dangerous-shell

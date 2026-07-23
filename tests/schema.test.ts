@@ -55,7 +55,7 @@ describe("parseManifest — happy path", () => {
     );
     expect(preflightPushPolicy?.requires.ledger_tag).toBe("preflight:${BRANCH}");
     expect(preflightPushPolicy?.requires.within).toBe("10m");
-    expect(manifest.policy_packs).toHaveLength(3);
+    expect(manifest.policy_packs).toHaveLength(4);
     expect(manifest.policy_packs[0]?.name).toBe("understanding-before-execution");
     expect(manifest.policy_packs[0]?.source).toBe("builtin");
     expect(manifest.policy_packs[0]?.enabled).toBe(true);
@@ -67,6 +67,11 @@ describe("parseManifest — happy path", () => {
     expect(manifest.policy_packs[2]?.name).toBe("solution-acceptance");
     expect(manifest.policy_packs[2]?.source).toBe("builtin");
     expect(manifest.policy_packs[2]?.enabled).toBe(false);
+    // post-merge-gate ships disabled too (a fresh gate; operator opts in
+    // once they've reviewed the curated command list for their workflow).
+    expect(manifest.policy_packs[3]?.name).toBe("post-merge-gate");
+    expect(manifest.policy_packs[3]?.source).toBe("builtin");
+    expect(manifest.policy_packs[3]?.enabled).toBe(false);
     // config carries the gate mode + the producers list extension
     // (agent-tasks/25bced52). Assert on keys rather than deep-equality
     // so further config additions don't churn this test.

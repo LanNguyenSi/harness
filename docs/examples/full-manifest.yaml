@@ -678,6 +678,35 @@ policy_packs:
     enabled: false
     description: Gate task completion on a ready, HEAD-pinned solution-acceptance verdict earned from a real preflight run.
 
+  # post-merge-gate (harness T-001, post-merge-gate): catches "kept working
+  # on a branch after it was already merged" — a PostToolUse producer
+  # records a merged-tip fact on a successful `gh pr merge`; a PreToolUse
+  # blocker denies curated history-mutating commands (git commit/add/push/
+  # merge/rebase/cherry-pick/revert/reset/stash pop|apply, gh pr create/
+  # merge) while the current branch tip still exactly matches that
+  # recorded tip. An escape allowlist (git switch/checkout/pull/fetch,
+  # git branch -d/-D, git stash list/show, any `harness ...` command) is
+  # checked first, unconditionally, before any manifest or ledger access.
+  # Fails OPEN (unlike branch-protection) when the ledger is unreachable.
+  # DISABLED by default: a fresh gate, opt in once you've reviewed the
+  # curated command list for your workflow. Full reference:
+  # docs/policy-packs/post-merge-gate.md.
+  - name: post-merge-gate
+    source: builtin
+    enabled: false
+    description: Deny curated history-mutating git/gh commands on a branch whose current tip was already merged.
+    config:
+      # ux: replaces the legacy "post-merge-gate: refusing ..." envelope
+      # with the plain-language { cannot, required, run } shape.
+      ux:
+        cannot: "You cannot run ${TOOL_NAME} on branch ${BRANCH} yet — its current tip was already merged."
+        required:
+          - "a branch tip that is not sitting at an already-merged commit (switch off `${BRANCH}`, or move its tip with a new commit)"
+        run:
+          - "git switch ${DEFAULT_BRANCH}"
+          - "git pull --ff-only"
+          - "git branch -d ${BRANCH}  # optional cleanup"
+
 # Phase 7 Risk Gate. As of Phase 7 #5/#6 these are LIVE at the runtime
 # gate: `harness policy intercept` classifies actions against
 # `risk.classifiers[]`, resolves the target environment against

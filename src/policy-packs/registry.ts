@@ -28,6 +28,12 @@ import {
   PACK_NAME as SOLUTION_ACCEPTANCE,
   resolve as resolveSolutionAcceptance,
 } from "./builtin/solution-acceptance.js";
+import {
+  configSchema as postMergeGateConfigSchema,
+  defaultUx as postMergeGateDefaultUx,
+  PACK_NAME as POST_MERGE_GATE,
+  resolve as resolvePostMergeGate,
+} from "./builtin/post-merge-gate.js";
 import { DEFAULT_RUNTIME, type Runtime } from "./runtime.js";
 import type { PackContribution } from "./types.js";
 
@@ -35,6 +41,7 @@ export const KNOWN_BUILTIN_PACKS = [
   UNDERSTANDING_BEFORE_EXECUTION,
   BRANCH_PROTECTION,
   SOLUTION_ACCEPTANCE,
+  POST_MERGE_GATE,
 ] as const;
 export type BuiltinPackName = (typeof KNOWN_BUILTIN_PACKS)[number];
 
@@ -60,6 +67,8 @@ export function resolveBuiltin(
       return resolveBranchProtection(pack, runtime);
     case SOLUTION_ACCEPTANCE:
       return resolveSolutionAcceptance(pack, runtime, opts);
+    case POST_MERGE_GATE:
+      return resolvePostMergeGate(pack, runtime);
   }
 }
 
@@ -81,6 +90,8 @@ export function resolveBuiltinConfigSchema(
       return branchProtectionConfigSchema;
     case SOLUTION_ACCEPTANCE:
       return solutionAcceptanceConfigSchema;
+    case POST_MERGE_GATE:
+      return postMergeGateConfigSchema;
   }
 }
 
@@ -106,6 +117,10 @@ export function resolveBuiltinVersionCommand(
     case SOLUTION_ACCEPTANCE:
       // Blocker is harness itself; the producer (grounding-mcp) is probed
       // via its tools.mcp min_version, not a pack-side bin.
+      return null;
+    case POST_MERGE_GATE:
+      // Both the producer and the blocker are harness itself; no
+      // separate package-side bin to probe.
       return null;
   }
 }
@@ -147,5 +162,7 @@ export function resolveBuiltinDefaultConfig(
       return { ux: branchProtectionDefaultUx() };
     case SOLUTION_ACCEPTANCE:
       return null;
+    case POST_MERGE_GATE:
+      return { ux: postMergeGateDefaultUx() };
   }
 }
