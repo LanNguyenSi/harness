@@ -165,6 +165,30 @@ hooks:
     min_version: "0.2.0"
     version_command: ["preflight", "--version"]
 
+  # toolchain-parity (PATH-shim incident 2026-07-22 follow-up): writes THIS
+  # machine's toolchain snapshot (node version, npm globals, OW-Kit
+  # version, MCP server names) to \`toolchain_parity.machine_state_dir\`
+  # and advisorily compares it against every peer machine's snapshot
+  # already there, warning on drift (version mismatches, missing
+  # packages, node/OW-Kit drift, MCP-name differences). Purely advisory —
+  # no policy consumes the \`toolchain-parity:\` ledger fact this writes,
+  # it exists for \`harness audit\`/operator visibility only. DISABLED by
+  # default (no \`toolchain_parity:\` block above): opt in with
+  # \`toolchain_parity: { enabled: true }\` (machine_state_dir/profile/
+  # workspace_root all have sane defaults — see docs/CLI.md). No external
+  # binary to floor-check (node/npm are assumed present already), so
+  # unlike git-preflight this hook carries no min_version/version_command.
+  - name: toolchain-parity
+    event: SessionStart
+    command: harness session-start toolchain-parity
+    blocking: false
+    # node --version + npm ls -g run in parallel (bounded ~2s/~4s each);
+    # plus two near-instant file reads and a ledger write. 10s leaves
+    # comfortable headroom over the normal-case sub-5s wall time without
+    # approaching git-preflight's 70s (which wraps a full external test
+    # suite, a fundamentally heavier operation this hook never performs).
+    budget_ms: 10000
+
   - name: require-review-evidence
     event: PreToolUse
     match: "mcp__agent-tasks__pull_requests_merge"
