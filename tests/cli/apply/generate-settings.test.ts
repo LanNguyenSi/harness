@@ -345,7 +345,7 @@ describe("generateSettings", () => {
       },
     ]);
     const out = generateSettings(m);
-    const inner = out.hooks.PreToolUse[0]?.hooks[0];
+    const inner = out.hooks.PreToolUse?.[0]?.hooks[0];
     expect(inner).toBeDefined();
     expect(inner).not.toHaveProperty("blocking");
   });
@@ -481,7 +481,8 @@ describe("generateSettings", () => {
       },
     ]);
     const out = generateSettings(m);
-    expect(out.hooks.SessionStart[0]).not.toHaveProperty("matcher");
+    expect(out.hooks.SessionStart).toHaveLength(1);
+    expect(out.hooks.SessionStart?.[0]).not.toHaveProperty("matcher");
   });
 });
 
@@ -522,7 +523,7 @@ describe("buildMcpServers", () => {
       ),
       w,
     );
-    expect(out.withenv.env).toEqual({ TOKEN: "x" });
+    expect(out.withenv?.env).toEqual({ TOKEN: "x" });
     expect(out.noenv).not.toHaveProperty("env");
   });
 
