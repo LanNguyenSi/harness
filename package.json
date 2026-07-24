@@ -43,6 +43,7 @@
     "check:ug-schema-drift": "node scripts/check-ug-schema-drift.mjs",
     "check:boundaries": "depcruise --config .dependency-cruiser.cjs src",
     "check:duplication": "node scripts/check-duplication.mjs",
+    "check:no-only": "node scripts/check-no-only.mjs",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

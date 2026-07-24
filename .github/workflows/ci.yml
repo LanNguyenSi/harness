@@ -42,6 +42,16 @@ jobs:
         # Fails when src/ grows a clone beyond the pinned baseline.
         run: npm run check:duplication
 
+      - name: No committed .only in tests/
+        # scripts/check-no-only.mjs — closes the gap where vitest's own
+        # allowOnly=false guard can still exit 0 (a file whose `.only`
+        # selection leaves nothing running defeats the hermetic-spawn
+        # backstop too; see tests/_helpers/hermetic-spawn-allowlist.ts's
+        # "Known gap" comment and task b4845053). AST-based (TypeScript
+        # compiler), so it never mistakes a `.only` inside a string,
+        # comment, or test name for a real describe/it/test call.
+        run: npm run check:no-only
+
       - name: Build
         run: npm run build
 
