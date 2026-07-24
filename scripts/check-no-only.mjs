@@ -24,12 +24,44 @@
 // the dot or before the call's `(` is likewise irrelevant to the AST, so
 // variants like `it.only (` need no special-casing.
 //
-// Deliberately matches on the PROPERTY NAME `only` reached from a
-// `describe`/`it`/`test`-rooted access chain (walking down through any
-// number of chained modifiers, e.g. `it.concurrent.only`), not on a
-// specific call shape — that also catches the `.each` variants
-// (`it.only.each`, `describe.only.each`, `test.only.each`) for free, since
-// `.each` is just one more link appended to the same chain.
+// Two independent shapes are matched, both catching real vitest bypasses
+// review found while validating this gate:
+//   1. The PROPERTY NAME `only` reached from a `describe`/`it`/`test`-
+//      rooted access chain (walking down through any number of chained
+//      modifiers, e.g. `it.concurrent.only`) — catches the `.each`
+//      variants (`it.only.each`, `describe.only.each`, `test.only.each`)
+//      for free, since `.each` is just one more link on the same chain.
+//   2. The options-object form `it("name", { only: true }, fn)` (and the
+//      `test`/`describe` equivalents) — vitest's documented TestOptions
+//      second positional argument. Empirically confirmed (task b4845053
+//      review) to independently activate only-mode: it filters the
+//      setup-injected hermetic-spawn backstop test out of the run just
+//      like `it.only(...)` does, and shape (1) above does not see it
+//      (there is no PropertyAccessExpression named `only` anywhere in
+//      that call). Scoped tightly to preserve precision: only a DIRECT,
+//      non-computed `only: true` property literal on the object literal
+//      in the call's 2nd argument position counts — no nested objects
+//      (`{ retry: { only: true } }` does not count, since `only` there is
+//      not a direct property of the options object), no computed keys,
+//      and no non-literal value (`only: someVar` does not count, since a
+//      non-`true` runtime value can't be confirmed statically).
+//
+// Known bypasses (accepted, low realistic likelihood): this gate trades
+// exhaustive coverage of every way vitest can be told to run a subset of
+// tests for precision (a false positive gets the gate bypassed rather than
+// repaired — see the task rationale above). Deliberately NOT covered:
+//   - bracket/computed property access: describe["only"](...)
+//   - aliasing the holder: const d = describe; d.only(...)
+//   - renamed imports: import { it as x } from "vitest"; x.only(...)
+//   - bench.only(...) (vitest's benchmark API, a different global than
+//     describe/it/test)
+//   - the options-object form reached through a chained call, e.g.
+//     it.each([...])("name", { only: true }, fn) — the outer call's
+//     callee is itself a CallExpression (`it.each([...])`), not a bare
+//     describe/it/test identifier chain, so it doesn't resolve to a
+//     holder name
+// None of these appear anywhere in this repo's tests/ today (verified by
+// running this gate against the current tree with 0 violations).
 //
 // Runs in a single source-scan pass, no second suite run: parsing every
 // file under tests/ with the TS compiler is a sub-second operation for
@@ -37,6 +69,7 @@
 
 import { readFileSync, readdirSync } from "node:fs";
 import { extname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import ts from "typescript";
 
 const ONLY_HOLDERS = new Set(["describe", "it", "test"]);
@@ -59,10 +92,12 @@ export function collectTestSourceFiles(dir, out = []) {
  * Walks down a (possibly chained) PropertyAccessExpression to its
  * left-most identifier, e.g. the `expression` of `describe.concurrent`
  * within `describe.concurrent.only` resolves to the identifier
- * `describe`. Returns null when the chain does not bottom out on a bare
- * identifier (e.g. a call result, `foo().only`).
+ * `describe`; the (already bare) callee of `it(...)` resolves to `it`
+ * directly (the loop body never runs). Returns null when the chain does
+ * not bottom out on a bare identifier (e.g. a call result, `foo().only`,
+ * or `it.each([...])(...)` where the callee is itself a CallExpression).
  */
-function baseHolderName(expr) {
+function rootIdentifierName(expr) {
   let cur = expr;
   while (ts.isPropertyAccessExpression(cur)) {
     cur = cur.expression;
@@ -71,10 +106,37 @@ function baseHolderName(expr) {
 }
 
 /**
- * Returns every `(describe|it|test)[.chain].only[.each]` access found in
- * `source` as real code — never inside a string, template, or comment,
- * because the TS parser does not surface those as PropertyAccessExpression
- * nodes.
+ * True when `objectLiteral` has a DIRECT (non-computed, non-nested,
+ * non-shorthand) property named `only` whose value is the literal `true`.
+ * Deliberately narrow — see the "options-object form" note above.
+ */
+function hasDirectOnlyTrueProperty(objectLiteral) {
+  for (const prop of objectLiteral.properties) {
+    if (!ts.isPropertyAssignment(prop)) {
+      // Excludes shorthand (`{ only }`, value not statically a literal),
+      // spread (`{ ...opts }`), and method/get/set properties.
+      continue;
+    }
+    if (ts.isComputedPropertyName(prop.name)) {
+      continue;
+    }
+    const keyText = ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name) ? prop.name.text : null;
+    if (keyText !== "only") {
+      continue;
+    }
+    if (prop.initializer.kind === ts.SyntaxKind.TrueKeyword) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Returns every real-code (never string/template/comment) `.only` access
+ * found in `source`: both `(describe|it|test)[.chain].only[.each]`
+ * PropertyAccessExpressions and `(describe|it|test)(name, { only: true },
+ * fn)` options-object CallExpressions. See the module header for the
+ * precision rationale behind each shape's scope.
  */
 export function findOnlyViolations(source, fileName = "input.ts") {
   const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
@@ -82,10 +144,19 @@ export function findOnlyViolations(source, fileName = "input.ts") {
 
   function visit(node) {
     if (ts.isPropertyAccessExpression(node) && node.name.text === "only") {
-      const holder = baseHolderName(node.expression);
+      const holder = rootIdentifierName(node.expression);
       if (holder && ONLY_HOLDERS.has(holder)) {
         const pos = sourceFile.getLineAndCharacterOfPosition(node.name.getStart(sourceFile));
-        violations.push({ line: pos.line + 1, column: pos.character + 1, holder });
+        violations.push({ line: pos.line + 1, column: pos.character + 1, holder, kind: "only-chain" });
+      }
+    } else if (ts.isCallExpression(node)) {
+      const holder = rootIdentifierName(node.expression);
+      const optionsArg = node.arguments[1];
+      if (holder && ONLY_HOLDERS.has(holder) && optionsArg && ts.isObjectLiteralExpression(optionsArg)) {
+        if (hasDirectOnlyTrueProperty(optionsArg)) {
+          const pos = sourceFile.getLineAndCharacterOfPosition(optionsArg.getStart(sourceFile));
+          violations.push({ line: pos.line + 1, column: pos.character + 1, holder, kind: "options-object" });
+        }
       }
     }
     ts.forEachChild(node, visit);
@@ -95,13 +166,19 @@ export function findOnlyViolations(source, fileName = "input.ts") {
   return violations;
 }
 
-function main(testsDir) {
+/** Formats one violation into the human-readable failure line main() prints. */
+function formatViolation(file, v) {
+  const what = v.kind === "options-object" ? `${v.holder}(..., { only: true }, ...)` : `${v.holder}.only`;
+  return `${file}:${v.line}:${v.column} — committed \`${what}\``;
+}
+
+export function main(testsDir) {
   const files = collectTestSourceFiles(testsDir);
   const failures = [];
   for (const file of files) {
     const source = readFileSync(file, "utf8");
     for (const v of findOnlyViolations(source, file)) {
-      failures.push(`${file}:${v.line}:${v.column} — committed \`${v.holder}.only\``);
+      failures.push(formatViolation(file, v));
     }
   }
   if (failures.length > 0) {
@@ -119,4 +196,9 @@ function main(testsDir) {
   console.log(`check-no-only: OK — scanned ${files.length} file(s) under tests/, no committed .only`);
 }
 
-main("tests");
+// Only auto-run when invoked directly (not when imported by tests) — same
+// guard as scripts/check-ug-schema-drift.mjs.
+const isDirectRun = import.meta.url === pathToFileURL(process.argv[1] ?? "").href;
+if (isDirectRun) {
+  main("tests");
+}

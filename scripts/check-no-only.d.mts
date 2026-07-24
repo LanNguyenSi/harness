@@ -12,6 +12,9 @@ export interface OnlyViolation {
   line: number;
   column: number;
   holder: string;
+  kind: "only-chain" | "options-object";
 }
 
 export function findOnlyViolations(source: string, fileName?: string): OnlyViolation[];
+
+export function main(testsDir: string): void;
