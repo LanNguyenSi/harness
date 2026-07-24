@@ -53,6 +53,23 @@ function summarizeParseError(error: {
   return `${error.reason}${missing}`;
 }
 
+/**
+ * `@lannguyensi/understanding-gate` added an additive optional
+ * `malformedSections` field to `ParseError` (agent-grounding PR #154 /
+ * be98cd96 — the package lives in the agent-grounding repo; follow-up
+ * to the 2026-07-22 incident where prose under a (list) heading was
+ * rejected with no way for the agent to see why): populated when a
+ * (list) section heading EXISTS but its body is prose instead of
+ * markdown list items — a strict subset of `missing`. The version pinned
+ * in this repo's package.json (0.4.x) predates the field, so it is read
+ * through this minimal structural extension of the imported `ParseError`
+ * type rather than trusting a newer type shape (or reaching for `any`);
+ * `?? []` below covers both "the pin predates the field" and "the field
+ * is present but empty". Mirrors how agent-grounding's handle-stop.ts
+ * and opencode's persist-report.ts take the same field.
+ */
+type ParseErrorWithMalformedSections = { malformedSections?: string[] };
+
 /** Reports are a few KB; anything beyond this is not a report. */
 export const STDIN_REPORT_MAX_BYTES = 512 * 1024;
 
@@ -132,10 +149,13 @@ export function persistStdinReport(args: PersistStdinReportArgs): StdinReportOut
     // carries sessionId (findLatestParseError skips logs it cannot
     // attribute to the approving session).
     const parseErrorDir = path.join(path.dirname(args.reportsDir), "parse-errors");
+    const malformedSections =
+      (result.error as ParseErrorWithMalformedSections).malformedSections ?? [];
     const payload = `${JSON.stringify(
       {
         reason: result.error.reason,
         missing: result.error.missing,
+        malformedSections,
         schemaErrors: result.error.schemaErrors,
         message: result.error.message,
         stamp,

@@ -20,6 +20,12 @@ describe("renderReportSchemaHint", () => {
     expect(hint).toContain(".understanding-gate/parse-errors/");
   });
 
+  it("states explicitly that (list) sections need markdown list items and reject prose (task 7e29e5d7, 2026-07-22 incident: prose under Verification Plan / Prior Art was rejected with no visible reason)", () => {
+    const hint = renderReportSchemaHint();
+    expect(hint).toContain("(list) need markdown list items ('- ' or '1.')");
+    expect(hint).toMatch(/prose paragraph under a \(list\) heading is rejected/);
+  });
+
   it("formats bullets one per line so a JSON-stringified gate envelope reads cleanly", () => {
     const hint = renderReportSchemaHint();
     const bulletLines = hint.split("\n").filter((l) => l.startsWith("  - "));
