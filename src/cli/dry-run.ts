@@ -115,16 +115,16 @@ function policyMatchesTool(
       return { matched: false, reason: `trigger.bash_match is not a valid regex` };
     }
     // Raw-OR-normalised, mirroring `policyMatchesEvent`'s real evaluation
-    // path exactly (F8 fix, review round 2026-07-27, run
-    // 2026-07-27-gate-target-repo-resolution): dry-run used to test only
-    // the RAW command, so it predicted `env -C /tmp git status` as NOT
-    // matching `preflight-before-investigation` while `policy intercept`
-    // actually blocks it — a debug verb contradicting the runtime it
-    // exists to predict (its own comment above and
-    // docs/okf/debug-verb-selection.md both assert parity). The
-    // REPO/BRANCH half of this file (`builtinsFor`, cwd-only) is a
-    // separate, still-open residual — not fixed here, see the run's
-    // handoff for the follow-up.
+    // path exactly: dry-run used to test only the RAW command, so it
+    // predicted `env -C /tmp git status` as NOT matching
+    // `preflight-before-investigation` while `policy intercept` actually
+    // blocks it — a debug verb contradicting the runtime it exists to
+    // predict (its own comment above and docs/okf/debug-verb-selection.md
+    // both assert parity). The REPO/BRANCH half of this file
+    // (`builtinsFor`, cwd-only) stays in parity with the runtime, which
+    // is also cwd-only for `${REPO}`/`${BRANCH}` — see
+    // `src/cli/policy/intercept.ts`'s comment above `cwdGitContext` for
+    // why a per-command target directory is deliberately not consulted.
     if (!re.test(args.command) && !re.test(normalizeCommand(args.command).normalized)) {
       return {
         matched: false,

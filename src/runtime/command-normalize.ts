@@ -1,59 +1,68 @@
-// Trigger-matching normaliser for Bash command strings (run
-// 2026-07-27-gate-target-repo-resolution, T-001/T-002; hardened against a
-// reviewer's empirical findings from a second pass over the SAME run,
-// tracked here as F2/F3/F4/F5/F6; hardened AGAIN against a second,
-// independent reviewer's findings over the SAME fix, tracked here as
-// G1/G2/G3/G4/G6, "review round 2").
+// Trigger-matching normaliser for Bash command strings.
 //
-// Every `bash_match` policy trigger (`src/cli/init/templates.ts`,
-// `docs/examples/full-manifest.yaml`) is a single regex tested against the
-// UNPARSED command string, anchored on a shell boundary
-// (`^ \n ; | && (`) followed by optional `VAR=value` tokens and a literal
-// `git`. That anchor is exact-spelling brittle: a wrapper binary, a git
-// global option other than `-C`, or even a second space between `git` and
-// its subcommand defeats the match silently — the policy is skipped, no
-// ledger query happens, and there is zero audit signal (see `01-plan.md`
-// for the original reproduction). This module closes that gap by deriving
-// a NORMALISED form of the command that a `bash_match` regex can ALSO be
-// tested against (raw-OR-normalised, never raw-replaced-by-normalised —
-// see `src/runtime/intercept.ts`'s `policyMatchesEvent`).
+// STATUS (read this before wiring anything new to `targetDir`/
+// `targetBase`): this module has two independent outputs with different
+// consumption status. `normalized` — the command with wrapper prefixes
+// peeled and a git invocation's own global options collapsed — is LIVE:
+// `policyMatchesEvent` (`src/runtime/intercept.ts`) tests every
+// `bash_match` regex against the raw command first and, only on a raw
+// miss, against this normalised form too (raw-OR-normalised, never raw-
+// replaced-by-normalised), closing a class of silent trigger bypasses
+// (see below). `targetDir` / `targetBase` — the effective target
+// directory of the command's own git invocation(s), when one can be
+// named unambiguously — are NOT WIRED TO ANY GATE. An earlier version of
+// this run used them to resolve the `${REPO}`/`${BRANCH}` policy
+// builtins (`src/cli/policy/intercept.ts`) to a command's named target
+// instead of the hook's own cwd; that wiring produced three consecutive
+// review-round security regressions (Risk Gate risk declassification, a
+// push-gate multi-invocation fail-open, and a non-git gated verb leaking
+// a decoy repo's target, first via `&&`, still open via `|`/`||`), each
+// only partially closeable because a single per-event `targetDir` cannot
+// express "this invocation targets repo B, but the gated verb after it
+// runs in the caller's cwd." The wiring was removed before shipping (see
+// `src/cli/policy/intercept.ts` and `CHANGELOG.md`); the extraction and
+// its own ambiguity rules stay here, fully tested, as the foundation for
+// a redesign that attributes a target to the SEGMENT satisfying a
+// policy's own trigger instead of to the whole event — follow-up task
+// `98ad072f`. Nothing below describes gate wiring; it describes what
+// THIS MODULE computes, live or not.
 //
-// SUPPORTED (peeled/canonicalised):
+// THE TRIGGER-MATCHING GAP THIS CLOSES: every `bash_match` policy trigger
+// (`src/cli/init/templates.ts`, `docs/examples/full-manifest.yaml`) is a
+// single regex tested against the UNPARSED command string, anchored on a
+// shell boundary (`^ \n ; | && (`) followed by optional `VAR=value`
+// tokens and a literal `git`. That anchor is exact-spelling brittle: a
+// wrapper binary, a git global option other than `-C`, or even a second
+// space between `git` and its subcommand defeats the match silently —
+// the policy is skipped, no ledger query happens, no audit signal at all.
+//
+// CURRENT RULES — trigger normalisation (peeled/canonicalised into
+// `normalized`):
 //   - Leading `VAR=value` tokens (any number, in sequence).
 //   - `env`, including `-C <dir>` / `--chdir <dir>` / `-C<dir>` /
 //     `--chdir=<dir>` and its own `VAR=value` arguments. The flag-NAME
 //     enumeration (which flags exist, not their VALUES) is IMPORTED from
 //     `read-only-bash.ts`'s `ENV_LEADING_FLAGS` / `ENV_VALUE_FLAGS` /
-//     `ENV_SPLIT_STRING_FLAGS` rather than hand-rolled here a second time
-//     (F6 fix, review round 2026-07-27: a private third copy had already
-//     drifted from the other two — `env --default-signal=INT` was peeled
-//     by `read-only-bash.ts`'s generic glued-long-flag catch-all but NOT
-//     here, a confirmed live divergence between the two flag-NAME sets).
-//     `read-only-bash.ts`'s generic "any OTHER glued `--long=value` flag"
-//     catch-all is now ALSO mirrored here (G6 fix, review round 2,
-//     2026-07-27 — sharing the flag-NAME sets alone did not close this:
-//     `--default-signal=INT` isn't in any of the three named sets, it
-//     only ever fell through each peeler's own generic branch, and this
-//     module previously had none). Each module keeps its own decision
-//     about what a recognised flag means: this module additionally needs
-//     the VALUE of `-C`/`--chdir` to extract `targetDir`, which
-//     `read-only-bash.ts` never needs, so that glued-value parsing
-//     (`-C<dir>`, `--chdir=<dir>`) stays local here.
+//     `ENV_SPLIT_STRING_FLAGS` rather than hand-rolled here a second
+//     time, so the two peelers cannot independently drift on which
+//     flags exist; `read-only-bash.ts`'s generic "any OTHER glued
+//     `--long=value` flag" catch-all is mirrored here too. Each module
+//     keeps its own decision about what a recognised flag MEANS: this
+//     module additionally needs the VALUE of `-C`/`--chdir` to extract
+//     `targetDir`, which `read-only-bash.ts` never needs, so that
+//     glued-value parsing (`-C<dir>`, `--chdir=<dir>`) stays local here.
 //   - `command` (its own flags, e.g. `-p`/`-v`/`-V`, and `--`).
 //   - `nice`, including `-n <n>` / `-n<n>` / `--adjustment=<n>`, and the
-//     bare `-<n>` / `+<n>` forms (G3 fix, review round 2, 2026-07-27:
-//     `nice -10 cmd` — increment glued straight to the leading dash, no
-//     `n` — is `nice(1)`'s PRIMARY documented spelling; `nice` was
-//     already in this SUPPORTED list, but only the `-n`-prefixed
-//     spellings were actually recognised).
+//     bare `-<n>` / `+<n>` forms — `nice -10 cmd` (increment glued
+//     straight to the leading dash, no `n`) is `nice(1)`'s PRIMARY
+//     documented spelling.
 //   - `sudo` / `doas` (their own user/group/config flags — see
 //     `SUDO_VALUE_FLAGS` / `DOAS_VALUE_FLAGS`), `time` (`-o`/`-f`/
 //     `--output`/`--format` plus boolean flags), `timeout` (its own flags
 //     PLUS the mandatory leading DURATION positional — see
 //     `peelTimeout`), `stdbuf` (`-i`/`-o`/`-e`, always value-taking), and
-//     `setsid` (`-w`/`-c`/`-f`, boolean). (F4 fix, review round
-//     2026-07-27: each was measured as a live trigger bypass. NOT
-//     `xargs` — deliberately excluded, see NOT SUPPORTED below.)
+//     `setsid` (`-w`/`-c`/`-f`, boolean). NOT `xargs` — deliberately
+//     excluded, see NOT SUPPORTED below.
 //   - A git invocation's own global options: `-C <dir>`, `-c <k=v>`,
 //     `--git-dir[= ]<dir>`, `--work-tree[= ]<dir>`, `--no-pager`,
 //     `-p`/`--paginate`, `--exec-path[=<path>]`, `--namespace[= ]<ns>`,
@@ -61,11 +70,13 @@
 //     subcommand becomes adjacent to the literal `git` token, and the
 //     whitespace between them collapses to exactly one space.
 //   - The `git` token itself may be path-qualified (`/usr/bin/git`,
-//     `./git`, any `\S*/git`), matched by BASENAME (F4 fix: measured live
-//     bypass; mirrors the existing `deny-kill-switch-bypass` regex's own
-//     `(?:npx\s+|\S*/)?harness` shape). The canonicalised output always
-//     writes the literal `git`, regardless of how the invocation spelled
-//     the binary.
+//     `./git`, any `\S*/git`), matched by BASENAME (mirrors the existing
+//     `deny-kill-switch-bypass` regex's own `(?:npx\s+|\S*/)?harness`
+//     shape). The canonicalised output always writes the literal `git`,
+//     regardless of how the invocation spelled the binary.
+//
+// CURRENT RULES — target-directory extraction (`targetDir`/`targetBase`;
+// UNCONSUMED — see STATUS above):
 //   - The effective target directory of the command's git invocation(s),
 //     from (in priority order per invocation) the git invocation's own
 //     `-C` / `--work-tree` / `--git-dir` (parent directory when the path
@@ -73,56 +84,45 @@
 //     invocation, or — only when NO invocation named one explicitly — a
 //     leading `cd <dir> &&|;` prefix (delegated to `bash-prefix-
 //     parse.ts`, which already parses that idiom). A `~`-prefixed value
-//     is treated as though no target were named AT ALL (F5 fix, review
-//     round 2026-07-27): this module does not expand `~`, and letting it
-//     resolve against the caller's cwd produced a CONFIDENTLY WRONG
-//     answer (an unrelated repo found by walking up from a bogus path)
-//     instead of the documented "no target" fallback.
+//     is treated as though no target were named AT ALL: this module does
+//     not expand `~`, and letting it resolve against the caller's cwd
+//     would produce a CONFIDENTLY WRONG answer (an unrelated repo found
+//     by walking up from a bogus path) instead of the documented "no
+//     target" fallback.
 //   - `targetBase`: when exactly one git invocation named an explicit
 //     target (or several agree on the SAME one) and it is a RELATIVE
 //     path, this names the directory it is relative to, when this
 //     module saw one — the wrapping `env -C` on the SAME invocation
-//     (highest priority), else a leading `cd <dir> &&|;` prefix (F5 fix:
-//     `cd <repo> && git -C src status` used to resolve `src` against the
-//     CALLER's own cwd instead of `<repo>`, because nothing threaded a
-//     base through). `null` when neither is present — the caller
-//     resolves `targetDir` against its own cwd instead, unchanged from
-//     before this field existed.
+//     (highest priority), else a leading `cd <dir> &&|;` prefix (`cd
+//     <repo> && git -C src status` resolves `src` against `<repo>`, not
+//     a caller's own cwd). `null` when neither is present — a
+//     hypothetical future consumer resolves `targetDir` against its own
+//     cwd instead.
 //   - When a command names MORE THAN ONE git invocation, `targetDir` (and
 //     `targetBase`) are populated only when every invocation AGREES: all
-//     of them name the SAME explicit target, or NONE of them do
-//     (falling through to the leading-`cd` case above). A command mixing
-//     a bare invocation with an explicitly-targeted one — `git -C <B>
-//     log && git push` — or naming two DIFFERENT explicit targets, is
-//     AMBIGUOUS and `targetDir` is `null` (F2 fix, review round
-//     2026-07-27: this used to report the FIRST invocation's target for
-//     the WHOLE command, so `preflight-before-push` resolved `${BRANCH}`
-//     from an unrelated `git -C`'d investigation earlier in the same
-//     command line instead of the push's own repo — a fail-open on the
-//     push gate specifically, since a bare branch name has no repo
-//     qualifier and any repo's `preflight:<branch>` fact satisfied it).
+//     of them name the SAME explicit target, or NONE of them do (falling
+//     through to the leading-`cd` case above). A command mixing a bare
+//     invocation with an explicitly-targeted one — `git -C <B> log &&
+//     git push` — or naming two DIFFERENT explicit targets, is AMBIGUOUS
+//     and `targetDir` is `null`.
 //   - "Every invocation agrees" is ALSO broken by a non-git command that
-//     shares the chain (G1 fix, HIGH, review round 2, 2026-07-27): F2
-//     above only ever counted OTHER *git* invocations toward agreement, so
-//     `git -C <B> rev-parse HEAD && gh pr merge` still reported B for the
-//     WHOLE command — `gh pr merge` is not git at all, so it was invisible
-//     to the F2 check, even though `-C` scopes only the ONE git call it
+//     shares the chain: a command-starting segment (follows
+//     `&&`/`;`/`\n`/`(`, or is the first segment — never a bare `|`,
+//     which stays in the SAME directory) that is NEITHER a git
+//     invocation NOR the recognised leading `cd` prefix forces
+//     `targetDir` to `null` too, the same conservative fallback used for
+//     git-vs-git disagreement — measured case: `git -C <B> rev-parse
+//     HEAD && gh pr merge`, where `-C` scopes only the ONE git call it
 //     decorates and `gh pr merge` genuinely runs at the real, unaffected
-//     cwd. A command-starting segment (follows `&&`/`;`/`\n`/`(`, or is
-//     the first segment — never a bare `|`, which stays in the SAME
-//     directory) that is NEITHER a git invocation NOR the recognised
-//     leading `cd` prefix now forces `targetDir` to `null` too, the same
-//     conservative fallback F2 already uses for git-vs-git disagreement.
-//     The leading `cd` prefix stays exempt on purpose: unlike `-C`, `cd`
-//     genuinely persists for the rest of the chain, so `cd <B> && gh pr
-//     create` really does run against B and correctly keeps resolving
-//     there — only a PER-INVOCATION override (`-C`, `--work-tree`,
-//     `--git-dir`, wrapping `env -C`) can leak across an unrelated later
-//     command; a persistent `cd` cannot, by construction.
+//     cwd. The leading `cd` prefix stays exempt on purpose: unlike `-C`,
+//     `cd` genuinely persists for the rest of the chain, so `cd <B> &&
+//     gh pr create` really does run against B — only a PER-INVOCATION
+//     override (`-C`, `--work-tree`, `--git-dir`, wrapping `env -C`) can
+//     leak across an unrelated later command; a persistent `cd` cannot,
+//     by construction.
 //
 // DELIBERATELY NOT SUPPORTED, and out of reach of ANY string-level
-// approach (see `CHANGELOG.md` task `2cc73f55`, decision D-005 in this
-// run's `03-decisions.md`):
+// approach (see `CHANGELOG.md` task `2cc73f55`, decision D-005):
 //   - `sh -c '...'` / `bash -c '...'`: the wrapped command lives inside a
 //     single string argument. This module does not parse into it — note
 //     that such a command usually still matches a `bash_match` regex
@@ -138,86 +138,75 @@
 //     without quote-awareness, so such a case falls through to "no git
 //     invocation found here" and the segment is left unchanged. Safe
 //     (never a false positive), just not one of the covered shapes.
-//   - `xargs git status` (F4 finding, confirmed still a live bypass):
-//     unlike `env`/`command`/`nice`/`sudo`/`doas`/..., `xargs`'s own argv
-//     is not simply "the command to run" — it appends stdin lines as
-//     trailing arguments and may invoke the wrapped command MULTIPLE
-//     times, or zero, depending on stdin. Different enough semantics
-//     that peeling it the same way would be misleading, not just
-//     incomplete, so it is deliberately excluded, not merely missed.
-//   - A quoted git subcommand (`git "status"`) (F4 finding, confirmed
-//     still a live bypass): the tokeniser sees the literal token
-//     `"status"` (quotes included) and canonicalises to `git "status"`,
-//     which does not satisfy a `bash_match` regex expecting a bare word
-//     boundary. The same class of problem as the whitespace-in-quoted-
-//     path gap above.
+//   - `xargs git status`: unlike `env`/`command`/`nice`/`sudo`/`doas`/...,
+//     `xargs`'s own argv is not simply "the command to run" — it appends
+//     stdin lines as trailing arguments and may invoke the wrapped
+//     command MULTIPLE times, or zero, depending on stdin. Different
+//     enough semantics that peeling it the same way would be misleading,
+//     not just incomplete, so it is deliberately excluded, not merely
+//     missed.
+//   - A quoted git subcommand (`git "status"`): the tokeniser sees the
+//     literal token `"status"` (quotes included) and canonicalises to
+//     `git "status"`, which does not satisfy a `bash_match` regex
+//     expecting a bare word boundary. The same class of problem as the
+//     whitespace-in-quoted-path gap above.
 //   - Backtick command substitution wrapping the real invocation, e.g.
-//     `` echo `env -C /tmp git status` `` (F4 finding, confirmed still a
-//     live bypass): this module canonicalises the OUTER command only and
-//     does not recurse into a substitution's contents — the same
-//     boundary `sh -c` stops at, above.
+//     `` echo `env -C /tmp git status` ``: this module canonicalises the
+//     OUTER command only and does not recurse into a substitution's
+//     contents — the same boundary `sh -c` stops at, above.
 //   - `$(...)` command substitution is NOT in this list — see the
 //     "accidentally covered" note right below. Do not read its absence
 //     here as "also open"; it genuinely blocks today, pinned by a test.
-//   - Ten more spellings, each measured as a live bypass (G2 finding,
-//     review round 2, 2026-07-27), none of them peeled wrapper prefixes
-//     or a recognised `git` spelling: `exec git status`, `nohup git
-//     status`, `ionice -c3 git status`, `flock /tmp/l git status`,
+//   - Ten more measured-bypass spellings, none of them peeled wrapper
+//     prefixes or a recognised `git` spelling: `exec git status`, `nohup
+//     git status`, `ionice -c3 git status`, `flock /tmp/l git status`,
 //     `script -q /dev/null git status`, `chrt -b 0 git status`, `taskset
 //     -c 0 git status`, `\git status` (the backslash defeats
 //     `GIT_TOKEN_RE`, which requires the bare basename), `"git" status`
 //     (a QUOTED binary name — the mirror image of the quoted-subcommand
 //     gap above), and `env -S "git status"` (the split-string flag hands
 //     the rest of the argv to a fresh, opaque re-parse this module
-//     deliberately does not follow, per `peelEnv`'s own comment). The
-//     same G2 pass measured an ELEVENTH spelling, `nice -10 git status`,
-//     as a live bypass too — but that one is the G3 fix above, not a
-//     ceiling: it is intentionally not listed here anymore.
+//     deliberately does not follow, per `peelEnv`'s own comment).
 //
-// `$(...)` command substitution is ACCIDENTALLY covered (G2 finding,
-// review round 2, 2026-07-27) — not a deliberate feature, and distinct
-// from the backtick case above, which is a genuine, deliberate gap.
-// `BOUNDARY_RE` treats a bare `(` as a shell-boundary token (needed for
-// the leading-command case, `(cd X && ...)`), and `$(...)`'s opening
-// paren is, character-for-character, the same `(`. So `echo $(env -C
-// /tmp git status)` splits into a segment starting exactly at that `(`,
-// `canonicalizeSegment` finds a real git invocation inside it, and the
-// close paren rides along harmlessly as trailing text after the
-// subcommand (`git status)` still satisfies a `...status\b` regex, since
-// `)` is a non-word character). This is coincidental, not intentional:
-// `BOUNDARY_RE` was never designed with `$(...)` in mind, and an
-// unrelated future change to it could silently drop this coverage with
-// no test noticing — pinned by a dedicated test for exactly that reason.
+// `$(...)` command substitution is ACCIDENTALLY covered — not a
+// deliberate feature, and distinct from the backtick case above, which
+// is a genuine, deliberate gap. `BOUNDARY_RE` treats a bare `(` as a
+// shell-boundary token (needed for the leading-command case, `(cd X &&
+// ...)`), and `$(...)`'s opening paren is, character-for-character, the
+// same `(`. So `echo $(env -C /tmp git status)` splits into a segment
+// starting exactly at that `(`, `canonicalizeSegment` finds a real git
+// invocation inside it, and the close paren rides along harmlessly as
+// trailing text after the subcommand (`git status)` still satisfies a
+// `...status\b` regex, since `)` is a non-word character). This is
+// coincidental: `BOUNDARY_RE` was never designed with `$(...)` in mind,
+// and an unrelated future change to it could silently drop this coverage
+// with no test noticing — pinned by a dedicated test for exactly that
+// reason.
 //
 // Above `MAX_NORMALIZE_LENGTH` characters, normalisation is skipped
-// entirely and the command is returned unchanged (F3 fix, review round
-// 2026-07-27): `harness policy intercept` runs on every Bash/Edit/Write
-// tool call and `require-preflight-evidence` declares `budget_ms: 1000`,
-// so command SIZE must never be able to drive the hook past its own
-// timeout budget. The RAW command is still tested by `policyMatchesEvent`
-// regardless (D-003's raw-OR-normalised construction), so an oversized
-// command only loses the ADDITIONAL normalised-form coverage, never the
-// baseline one. The skip itself used to carry no signal at all — no
-// stderr line, no audit row — so it was a SILENT new fail-open ceiling
-// (G4 finding, review round 2, 2026-07-27). `NormalizedCommand.truncated`
-// now reports the skip back to the caller; `runInterceptCli`
-// (`src/cli/policy/intercept.ts`) writes exactly one stderr line when it
-// sees `truncated: true`, keeping this module itself pure and I/O-free
-// (see below) while making the skip observable at the one place that
-// already owns a stderr stream for this event.
+// entirely and the command is returned unchanged: `harness policy
+// intercept` runs on every Bash/Edit/Write tool call and `require-
+// preflight-evidence` declares `budget_ms: 1000`, so command SIZE must
+// never be able to drive the hook past its own timeout budget. The RAW
+// command is still tested by `policyMatchesEvent` regardless (raw-OR-
+// normalised construction), so an oversized command only loses the
+// ADDITIONAL normalised-form coverage, never the baseline one.
+// `NormalizedCommand.truncated` reports the skip back to the caller;
+// `runInterceptCli` (`src/cli/policy/intercept.ts`) writes exactly one
+// stderr line when it sees `truncated: true`, keeping this module itself
+// pure and I/O-free (see below) while making the skip observable at the
+// one place that already owns a stderr stream for this event.
 //
 // Bounded, allocation-light, pure string work: no `fs`, no
 // `child_process`, no network — `node:path` is used ONLY for
 // `path.isAbsolute`, a synchronous string check with no I/O. This runs on
-// every Bash/Edit/Write tool call, so it must stay cheap:
-// `findNextBoundary` is a single combined-alternation regex scan rather
-// than one `indexOf` per boundary token (F3 fix: the previous form had to
-// scan to the END of the remaining string to CONFIRM each token's
-// absence, so a command with many segments and at least one boundary
-// kind that never occurs anywhere degenerated to O(segments × length);
-// see `findNextBoundary`'s own comment). Never throws: a malformed or
-// unparseable command falls through cleanly and `normalized` is the
-// input unchanged.
+// every Bash/Edit/Write tool call, so it must stay cheap: `findNextBoundary`
+// is a single combined-alternation regex scan rather than one `indexOf`
+// per boundary token (a command with many segments and at least one
+// boundary kind that never occurs anywhere would otherwise degenerate to
+// O(segments × length) — see `findNextBoundary`'s own comment). Never
+// throws: a malformed or unparseable command falls through cleanly and
+// `normalized` is the input unchanged.
 
 import * as path from "node:path";
 import { parseBashPrefix } from "./bash-prefix-parse.js";
@@ -239,17 +228,24 @@ export interface NormalizedCommand {
   /**
    * The effective target directory of the command's git invocation, or
    * `null` when the command names none, the command names invocations
-   * that disagree (F2 — see the module header), or the only named value
-   * is `~`-prefixed (F5 — treated as unparseable).
+   * that disagree, or the only named value is `~`-prefixed (see the
+   * module header's target-directory-extraction rules).
+   *
+   * NOT WIRED TO ANY GATE (see the module header's STATUS paragraph):
+   * extracted and fully tested, pending a redesign that attributes a
+   * target per-policy instead of per-event — follow-up task
+   * `98ad072f`.
    */
   targetDir: string | null;
   /**
    * When `targetDir` is a RELATIVE path, the directory it should be
    * resolved against instead of the caller's own cwd — the wrapping
-   * `env -C` on the same invocation, or a leading `cd` prefix (F5, see
-   * the module header). `null` when `targetDir` is absolute, `null`
-   * itself, or no more specific base was found (resolve against the
-   * caller's cwd, unchanged from before this field existed).
+   * `env -C` on the same invocation, or a leading `cd` prefix (see the
+   * module header). `null` when `targetDir` is absolute, `null` itself,
+   * or no more specific base was found.
+   *
+   * Same unconsumed status as `targetDir` above — see the module
+   * header's STATUS paragraph.
    */
   targetBase: string | null;
   /**

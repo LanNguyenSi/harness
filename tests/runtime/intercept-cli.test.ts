@@ -748,377 +748,58 @@ describe("runInterceptCli — REPO / BRANCH builtins resolve from event.cwd", ()
     expect(result.decisions[0]!.ledgerTag).toBe("preflight:main");
   });
 
-  // T-003 (run 2026-07-27-gate-target-repo-resolution): when a Bash
-  // command explicitly names a target directory that resolves to a
-  // real git work tree, ${REPO}/${BRANCH} must name THAT repository,
-  // not the hook cwd's — this is the fix for the reproduced cross-repo
-  // gap in 01-plan.md ("a preflight for `harness` authorised an
-  // investigation of `agent-grounding`").
-  describe("target-directory resolution overrides ${REPO} / ${BRANCH} (T-003)", () => {
-    function ledgerWithFact(content: string): LedgerClient {
-      return {
-        async query() {
-          return {
-            kind: "ok",
-            entries: [{ id: "fact-1", content, createdAt: new Date().toISOString() }],
-          };
-        },
-        async record() {
-          /* no-op */
-        },
-      };
-    }
-
-    async function runBashCommand(
-      command: string,
-      cwd: string,
-      ledger: LedgerClient = emptyLedger,
-    ) {
-      const { stream: out } = captureStream();
-      const { stream: err } = captureStream();
-      const result = await runInterceptCli({
-        stdin: streamFrom(
-          JSON.stringify({
-            hook_event_name: "PreToolUse",
-            tool_name: "Bash",
-            tool_input: { command },
-            session_id: "sess-1",
-            cwd,
-          }),
-        ),
-        stdout: out,
-        stderr: err,
-        manifest: fakeManifest([PREFLIGHT_POLICY]),
-        ledger,
-      });
-      expect(result.decisions).toHaveLength(1);
-      return result;
-    }
-
-    const SPELLINGS: Array<[string, (b: string) => string]> = [
-      ["git -C <B> status", (b) => `git -C ${b} status`],
-      ["env -C <B> git status", (b) => `env -C ${b} git status`],
-      [
-        "git --work-tree=<B> --git-dir=<B>/.git status",
-        (b) => `git --work-tree=${b} --git-dir=${b}/.git status`,
-      ],
-      ["cd <B> && git status", (b) => `cd ${b} && git status`],
-    ];
-
-    it.each(SPELLINGS)(
-      "%s resolves REPO/BRANCH to the named target, not cwd's repo",
-      async (_label, buildCommand) => {
-        const repoA = makeRepoFixture("target-a", "main");
-        const repoB = makeRepoFixture("target-b", "feature/target");
-        const result = await runBashCommand(buildCommand(repoB), repoA);
-        expect(result.decisions[0]!.extractValues.REPO).toBe("target-b");
-        expect(result.decisions[0]!.extractValues.BRANCH).toBe("feature/target");
-      },
-    );
-
-    it("keeps ${CWD} as the hook cwd even when REPO/BRANCH come from a target dir", async () => {
-      const repoA = makeRepoFixture("cwd-a", "main");
-      const repoB = makeRepoFixture("cwd-b", "main");
-      const result = await runBashCommand(`git -C ${repoB} status`, repoA);
-      expect(result.decisions[0]!.extractValues.CWD).toBe(repoA);
-      expect(result.decisions[0]!.extractValues.REPO).toBe("cwd-b");
+  // Explicit regression pin for the split decided in run
+  // 2026-07-27-gate-target-repo-resolution: a command naming a FOREIGN
+  // target repository (`git -C <B>`) resolves ${REPO}/${BRANCH} from the
+  // CWD's own repository, never the named target, so a future
+  // reintroduction of a per-command target-directory resolution cannot
+  // land unnoticed. A per-command resolution was built and reviewed on
+  // this same run but removed before shipping (three consecutive review
+  // rounds each found a different way it leaked into the wrong
+  // evaluation) — see CHANGELOG.md and command-normalize.ts's module
+  // header for the full account.
+  it("a command naming a foreign target repo resolves ${REPO}/${BRANCH} to the cwd repo, not the named target", async () => {
+    const repoA = makeRepoFixture("split-cwd-repo", "main");
+    const repoB = makeRepoFixture("split-foreign-target", "feature/other");
+    const { stream: out } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: `git -C ${repoB} status` },
+          session_id: "sess-1",
+          cwd: repoA,
+        }),
+      ),
+      stdout: out,
+      manifest: fakeManifest([PREFLIGHT_POLICY]),
+      ledger: emptyLedger,
     });
-
-    it("REGRESSION: a preflight fact for repo A does not satisfy the gate for a command targeting repo B", async () => {
-      const repoA = makeRepoFixture("cross-repo-a", "main");
-      const repoB = makeRepoFixture("cross-repo-b", "main");
-      const factForA = ledgerWithFact("preflight:cross-repo-a");
-
-      // The empirical finding from 01-plan.md, turned into a regression
-      // test: a fact recorded for A must not authorise a command that
-      // explicitly targets B.
-      const crossRepo = await runBashCommand(`git -C ${repoB} status`, repoA, factForA);
-      expect(crossRepo.decisions[0]!.outcome).toBe("deny");
-      expect(crossRepo.blocked).toBe(true);
-
-      // The SAME fact DOES satisfy the gate for a command targeting A.
-      const sameRepo = await runBashCommand(`git -C ${repoA} status`, repoA, factForA);
-      expect(sameRepo.decisions[0]!.outcome).toBe("allow");
-      expect(sameRepo.blocked).toBe(false);
-    });
-
-    it("falls back to the cwd-derived REPO/BRANCH when the target dir does not exist", async () => {
-      const repoA = makeRepoFixture("fallback-nonexistent", "main");
-      const bogus = path.join(path.dirname(repoA), "does-not-exist-xyz-12345");
-      const result = await runBashCommand(`git -C ${bogus} status`, repoA);
-      expect(result.decisions[0]!.extractValues.REPO).toBe("fallback-nonexistent");
-      expect(result.decisions[0]!.extractValues.BRANCH).toBe("main");
-    });
-
-    it("falls back to the cwd-derived REPO/BRANCH when the target dir exists but is not a git repository", async () => {
-      const repoA = makeRepoFixture("fallback-non-repo", "main");
-      const plainDir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-intercept-plain-"));
-      cleanups.push(() => fs.rmSync(plainDir, { recursive: true, force: true }));
-      const result = await runBashCommand(`git -C ${plainDir} status`, repoA);
-      expect(result.decisions[0]!.extractValues.REPO).toBe("fallback-non-repo");
-      expect(result.decisions[0]!.extractValues.BRANCH).toBe("main");
-    });
-
-    it("falls back to the cwd-derived REPO/BRANCH when the command's target dir is unparseable", async () => {
-      // An escaped-space path is one of command-normalize.ts's documented
-      // blind spots: its tokeniser is not quote/escape-aware, so `-C`'s
-      // argument is truncated at the literal space, yielding a garbled
-      // ABSOLUTE targetDir ("/tmp/some\") that cannot exist on disk.
-      // Absolute (not resolved against cwd) so this genuinely exercises
-      // the "does not resolve to a work tree" guard rather than
-      // coincidentally walking back up into repoA's own `.git`.
-      const repoA = makeRepoFixture("fallback-unparseable", "main");
-      const result = await runBashCommand(
-        "git -C /tmp/harness-t003-unparseable\\ dir status",
-        repoA,
-      );
-      expect(result.decisions[0]!.extractValues.REPO).toBe("fallback-unparseable");
-      expect(result.decisions[0]!.extractValues.BRANCH).toBe("main");
-    });
-
-    // F2 fix (review round 2026-07-27): a command with MORE THAN ONE git
-    // invocation must not resolve ${REPO}/${BRANCH} from just the FIRST
-    // one when a LATER invocation runs bare (no explicit target of its
-    // own) — that invocation actually runs against cwd, not the first
-    // invocation's target. Measured regression: `git -C <agent-grounding>
-    // log && git push` resolved REPO=agent-grounding for the PUSH too,
-    // so `preflight-before-push`'s `preflight:${BRANCH}` tag was
-    // satisfied by a preflight for an unrelated repo (a bare branch name
-    // has no repo qualifier).
-    it("F2: a bare invocation after an explicitly-targeted one keeps the cwd-derived REPO/BRANCH (ambiguous, not 'first wins')", async () => {
-      const repoA = makeRepoFixture("f2-repo-a", "main");
-      const repoB = makeRepoFixture("f2-repo-b", "feature/other");
-      const result = await runBashCommand(`git -C ${repoB} log && git push`, repoA);
-      expect(result.decisions[0]!.extractValues.REPO).toBe("f2-repo-a");
-      expect(result.decisions[0]!.extractValues.BRANCH).toBe("main");
-    });
-
-    // G1 fix (HIGH, review round 2, 2026-07-27): F2 above only ever
-    // counted OTHER *git* invocations toward "does everyone agree" — a
-    // non-git GATED verb sharing the chain (`gh pr merge`, `gh pr
-    // create`, `npm publish`) was invisible to it, so `git -C <decoy>
-    // rev-parse HEAD && gh pr merge` still resolved ${REPO}/${BRANCH}
-    // from the decoy even though `-C` scopes only that ONE git call and
-    // `gh pr merge` genuinely runs at the real, unaffected cwd. Exercised
-    // through the REAL shipped `review-before-merge-bash` /
-    // `review-subagent-before-pr-create-bash` / `dogfood-before-release`
-    // trigger regexes (via `policyBashMatch`, F7 fix rationale) rather
-    // than a hand-copied literal, so a future edit to those regexes can't
-    // silently drift this coverage.
-    describe("G1: an explicit git -C target must not leak into a DIFFERENT, non-git command sharing the chain", () => {
-      const REAL_REVIEW_BEFORE_MERGE_BASH: Policy = {
-        name: "review-before-merge-bash",
-        description: "real trigger regex, review round 2",
-        trigger: {
-          event: "PreToolUse",
-          match: "Bash",
-          bash_match: policyBashMatch("review-before-merge-bash"),
-        },
-        requires: { ledger_tag: "review:${BRANCH}" },
-        hook: "h",
-        enforcement: "block",
-      } as Policy;
-
-      const REAL_REVIEW_SUBAGENT_BEFORE_PR_CREATE_BASH: Policy = {
-        name: "review-subagent-before-pr-create-bash",
-        description: "real trigger regex, review round 2",
-        trigger: {
-          event: "PreToolUse",
-          match: "Bash",
-          bash_match: policyBashMatch("review-subagent-before-pr-create-bash"),
-        },
-        requires: { ledger_tag: "review-subagent:${BRANCH}" },
-        hook: "h",
-        enforcement: "block",
-      } as Policy;
-
-      const REAL_DOGFOOD_BEFORE_RELEASE: Policy = {
-        name: "dogfood-before-release",
-        description: "real trigger regex, review round 2",
-        trigger: {
-          event: "PreToolUse",
-          match: "Bash",
-          bash_match: policyBashMatch("dogfood-before-release"),
-        },
-        requires: { ledger_tag: "dogfood:${SESSION_ID}" },
-        hook: "h",
-        enforcement: "block",
-      } as Policy;
-
-      async function runBashCommandWithPolicy(command: string, cwd: string, policy: Policy) {
-        const { stream: out } = captureStream();
-        const { stream: err } = captureStream();
-        const result = await runInterceptCli({
-          stdin: streamFrom(
-            JSON.stringify({
-              hook_event_name: "PreToolUse",
-              tool_name: "Bash",
-              tool_input: { command },
-              session_id: "sess-g1",
-              cwd,
-            }),
-          ),
-          stdout: out,
-          stderr: err,
-          manifest: fakeManifest([policy]),
-          ledger: emptyLedger,
-        });
-        expect(result.decisions).toHaveLength(1);
-        return result;
-      }
-
-      it("git -C <B> rev-parse HEAD && gh pr merge keeps the cwd-derived REPO/BRANCH, not the decoy's", async () => {
-        const repoA = makeRepoFixture("g1-merge-a", "main");
-        const repoB = makeRepoFixture("g1-merge-b", "feature/decoy");
-        const result = await runBashCommandWithPolicy(
-          `git -C ${repoB} rev-parse HEAD && gh pr merge 123`,
-          repoA,
-          REAL_REVIEW_BEFORE_MERGE_BASH,
-        );
-        expect(result.decisions[0]!.extractValues.REPO).toBe("g1-merge-a");
-        expect(result.decisions[0]!.extractValues.BRANCH).toBe("main");
-      });
-
-      it("git -C <B> rev-parse HEAD && gh pr create keeps the cwd-derived REPO/BRANCH, not the decoy's", async () => {
-        const repoA = makeRepoFixture("g1-create-a", "main");
-        const repoB = makeRepoFixture("g1-create-b", "feature/decoy");
-        const result = await runBashCommandWithPolicy(
-          `git -C ${repoB} rev-parse HEAD && gh pr create`,
-          repoA,
-          REAL_REVIEW_SUBAGENT_BEFORE_PR_CREATE_BASH,
-        );
-        expect(result.decisions[0]!.extractValues.REPO).toBe("g1-create-a");
-        expect(result.decisions[0]!.extractValues.BRANCH).toBe("main");
-      });
-
-      it("git -C <B> rev-parse HEAD && npm publish keeps the cwd-derived REPO/BRANCH, not the decoy's", async () => {
-        const repoA = makeRepoFixture("g1-publish-a", "main");
-        const repoB = makeRepoFixture("g1-publish-b", "feature/decoy");
-        const result = await runBashCommandWithPolicy(
-          `git -C ${repoB} rev-parse HEAD && npm publish`,
-          repoA,
-          REAL_DOGFOOD_BEFORE_RELEASE,
-        );
-        expect(result.decisions[0]!.extractValues.REPO).toBe("g1-publish-a");
-        expect(result.decisions[0]!.extractValues.BRANCH).toBe("main");
-      });
-
-      // Measured: this ALSO redirects today, but correctly — `cd`, unlike
-      // `-C`, genuinely persists for the rest of the chain, so `gh pr
-      // create` really does run against B here. Pinned so a future,
-      // over-broad tightening of the G1 fix above cannot accidentally
-      // collapse this back to cwd too.
-      it("cd <B> && gh pr create resolves REPO/BRANCH to B — cd genuinely persists, unlike the per-invocation git -C above", async () => {
-        const repoA = makeRepoFixture("g1-cd-a", "main");
-        const repoB = makeRepoFixture("g1-cd-b", "feature/target");
-        const result = await runBashCommandWithPolicy(
-          `cd ${repoB} && gh pr create`,
-          repoA,
-          REAL_REVIEW_SUBAGENT_BEFORE_PR_CREATE_BASH,
-        );
-        expect(result.decisions[0]!.extractValues.REPO).toBe("g1-cd-b");
-        expect(result.decisions[0]!.extractValues.BRANCH).toBe("feature/target");
-      });
-
-      // Hermetic end-to-end (measured live against the shipped binary
-      // per the review brief): with a legitimately-earned `review:
-      // feature/decoy` fact in the ledger for the DECOY repo, the merge
-      // must stay `blocked: true` — the decoy's review evidence must
-      // never satisfy a merge that never touched the decoy.
-      it("a review fact for the decoy branch does not satisfy the merge gate for the cwd's own branch", async () => {
-        const repoA = makeRepoFixture("g1-hermetic-a", "main");
-        const repoB = makeRepoFixture("g1-hermetic-b", "feature/decoy");
-        const decoyLedger: LedgerClient = {
-          async query() {
-            return {
-              kind: "ok",
-              entries: [
-                {
-                  id: "fact-1",
-                  content: "review:feature/decoy",
-                  createdAt: new Date().toISOString(),
-                },
-              ],
-            };
-          },
-          async record() {
-            /* no-op */
-          },
-        };
-        const { stream: out } = captureStream();
-        const { stream: err } = captureStream();
-        const result = await runInterceptCli({
-          stdin: streamFrom(
-            JSON.stringify({
-              hook_event_name: "PreToolUse",
-              tool_name: "Bash",
-              tool_input: {
-                command: `git -C ${repoB} rev-parse HEAD && gh pr merge 123`,
-              },
-              session_id: "sess-g1-hermetic",
-              cwd: repoA,
-            }),
-          ),
-          stdout: out,
-          stderr: err,
-          manifest: fakeManifest([REAL_REVIEW_BEFORE_MERGE_BASH]),
-          ledger: decoyLedger,
-        });
-        expect(result.decisions[0]!.extractValues.REPO).toBe("g1-hermetic-a");
-        expect(result.decisions[0]!.extractValues.BRANCH).toBe("main");
-        expect(result.decisions[0]!.outcome).toBe("deny");
-        expect(result.blocked).toBe(true);
-      });
-    });
-
-    // F5 fix (review round 2026-07-27): a RELATIVE git-level target
-    // resolves against the preceding `cd` / `env -C` context this module
-    // saw, instead of always against the caller's own cwd.
-    it("F5: cd <B> && git -C src status resolves against B, not the caller's cwd", async () => {
-      const repoA = makeRepoFixture("f5-cd-a", "main");
-      const repoB = makeRepoFixture("f5-cd-b", "feature/target");
-      // `src` is never created on disk: `findGitEntry` walks UP from a
-      // missing directory just as readily as from an existing one, and
-      // that upward walk landing on repoB's OWN `.git` is exactly the
-      // desired resolution (real `git -C <B>/src status` behaves the
-      // same way).
-      const result = await runBashCommand(`cd ${repoB} && git -C src status`, repoA);
-      expect(result.decisions[0]!.extractValues.REPO).toBe("f5-cd-b");
-      expect(result.decisions[0]!.extractValues.BRANCH).toBe("feature/target");
-    });
-
-    it("F5: env -C <B> git -C src status resolves against B, not the caller's cwd", async () => {
-      const repoA = makeRepoFixture("f5-env-a", "main");
-      const repoB = makeRepoFixture("f5-env-b", "feature/target");
-      const result = await runBashCommand(`env -C ${repoB} git -C src status`, repoA);
-      expect(result.decisions[0]!.extractValues.REPO).toBe("f5-env-b");
-      expect(result.decisions[0]!.extractValues.BRANCH).toBe("feature/target");
-    });
-
-    it("F5: a ~-prefixed target is treated as unparseable, falling back to the cwd-derived REPO/BRANCH (no tilde expansion, no accidental upward walk)", async () => {
-      const repoA = makeRepoFixture("f5-tilde-a", "main");
-      const result = await runBashCommand(
-        "git -C ~/git/pandora/agent-grounding status",
-        repoA,
-      );
-      expect(result.decisions[0]!.extractValues.REPO).toBe("f5-tilde-a");
-      expect(result.decisions[0]!.extractValues.BRANCH).toBe("main");
-    });
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]!.extractValues.REPO).toBe("split-cwd-repo");
+    expect(result.decisions[0]!.extractValues.BRANCH).toBe("main");
+    expect(result.decisions[0]!.extractValues.CWD).toBe(repoA);
   });
 });
 
 // F1 fix (CRITICAL, review round 2026-07-27): the Risk Gate's git context
 // (feeding `environments.resolvers[].signals.branch_patterns`) must
-// resolve from the hook's own cwd, NEVER from a command's TARGET repo
-// (the `git -C` / `env -C` / `--work-tree` awareness that T-003 added for
-// ${REPO}/${BRANCH}). Before this fix, `resolverGit` fell back to the
-// SAME target-aware `gitContext` used for ${REPO}/${BRANCH}, so a
+// resolve from the hook's own cwd, NEVER from a command's TARGET repo. A
+// git-target-aware `${REPO}`/`${BRANCH}` was built and reviewed on this
+// same run (a `git -C` / `env -C` / `--work-tree` awareness) but was
+// removed before shipping — see `src/cli/policy/intercept.ts` and
+// `CHANGELOG.md`; `${REPO}`/`${BRANCH}` are cwd-only again. During that
+// run's development, `resolverGit` briefly fell back to the SAME
+// target-aware git context ${REPO}/${BRANCH} used at the time, so a
 // `production` + `branch_patterns: [main]` resolver classified the
 // environment from the COMMAND's target repo's branch instead of the cwd
 // repo's — a command like `git -C <repo-on-feature/x> log && rm -rf
 // /data` silently skipped the resolver (and every `when:`-gated policy
 // keyed on it) because the resolver read feature/x's branch, not the cwd
-// repo's `main`.
+// repo's `main`. Fixed before that version ever shipped; this suite
+// pins `resolverGit` staying cwd-only regardless of what the trigger
+// normaliser's own (now-unwired) target-directory extraction finds.
 describe("runInterceptCli — Risk Gate git context stays cwd-derived even when a target-naming git invocation precedes the gated command (F1 regression, review round 2026-07-27)", () => {
   let cleanups: Array<() => void> = [];
   afterEach(() => {

@@ -191,19 +191,19 @@ export interface InterceptOptions {
    */
   riskContext?: RiskGateContext;
   /**
-   * Precomputed `NormalizedCommand` for a Bash event's `tool_input.command`
-   * (F9 fix, run 2026-07-27-gate-target-repo-resolution). `runInterceptCli`
-   * already calls `normalizeCommand` once to resolve `targetDir`/
-   * `targetBase` for ${REPO}/${BRANCH}; threading the SAME result in here
-   * lets `policyMatchesEvent` reuse it for every policy in the `matching`
-   * loop below instead of recomputing it — same resolved-by-the-wrapper
-   * pattern as `currentHeadSha`, `builtins`, and `riskContext`. Optional:
-   * omitted by non-Bash events and by callers/tests that don't supply
-   * one, in which case `policyMatchesEvent` computes it lazily per policy
-   * (correct, just not de-duplicated).
+   * Precomputed `NormalizedCommand` for a Bash event's
+   * `tool_input.command`. `runInterceptCli` already calls
+   * `normalizeCommand` once (for `bash_match` trigger normalisation);
+   * threading the SAME result in here lets `policyMatchesEvent` reuse it
+   * for every policy in the `matching` loop below instead of recomputing
+   * it — same resolved-by-the-wrapper pattern as `currentHeadSha`,
+   * `builtins`, and `riskContext`. Optional: omitted by non-Bash events
+   * and by callers/tests that don't supply one, in which case
+   * `policyMatchesEvent` computes it lazily per policy (correct, just
+   * not de-duplicated).
    *
-   * INVARIANT (G6, review round 2, 2026-07-27): this is NOT checked
-   * against `event` at runtime — nothing verifies the `NormalizedCommand`
+   * INVARIANT: this is NOT checked against `event` at runtime — nothing
+   * verifies the `NormalizedCommand`
    * passed in was actually derived from THIS event's own
    * `tool_input.command`. Safe today because there is exactly one
    * production caller (`runInterceptCli`, `src/cli/policy/intercept.ts`),
@@ -295,20 +295,16 @@ function enrichEnvelope(
  * verdict on its own.
  *
  * `precomputedNormalizedCommand` is an optional caller-supplied
- * `NormalizedCommand` for the event's command (F9 fix, review round
- * 2026-07-27, run 2026-07-27-gate-target-repo-resolution): `intercept()`
- * below resolves ONE `NormalizedCommand` per event (via
- * `options.normalizedCommand`, itself computed once by `runInterceptCli`
- * — it already needs `targetDir`/`targetBase` for ${REPO}/${BRANCH}
- * resolution) and threads it into every `policyMatchesEvent` call in its
- * `matching` loop, so a raw-miss event normalises the command exactly
- * ONCE across the whole manifest instead of once per module (this file
- * used to keep its OWN single-slot memo, redundant with the CLI
- * wrapper's separate call — removed here, along with the module-level
- * mutable state that came with it). Omitted by standalone callers
- * (`harness explain-policy`, most tests), which fall back to computing
- * it lazily right here — correct either way, since `normalizeCommand` is
- * a pure function of the command string alone.
+ * `NormalizedCommand` for the event's command: `intercept()` below
+ * resolves ONE `NormalizedCommand` per event (via
+ * `options.normalizedCommand`, itself computed once by
+ * `runInterceptCli`) and threads it into every `policyMatchesEvent`
+ * call in its `matching` loop, so a raw-miss event normalises the
+ * command exactly ONCE across the whole manifest instead of once per
+ * policy. Omitted by standalone callers (`harness explain-policy`, most
+ * tests), which fall back to computing it lazily right here — correct
+ * either way, since `normalizeCommand` is a pure function of the
+ * command string alone.
  */
 export function policyMatchesEvent(
   policy: Policy,
