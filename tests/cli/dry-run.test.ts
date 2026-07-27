@@ -98,6 +98,43 @@ describe("dry-run — with --tool", () => {
   });
 });
 
+describe("dry-run — bash_match trigger matching is raw-OR-normalised (F8 fix, review round 2026-07-27)", () => {
+  // Before this fix, `policyMatchesTool` tested only the RAW command, so
+  // dry-run predicted `preflight-before-investigation` as NOT matching a
+  // wrapped git invocation while `harness policy intercept` (via
+  // `policyMatchesEvent`) actually blocks it — dry-run's own comment and
+  // docs/okf/debug-verb-selection.md both assert parity between the two.
+  it("matches a wrapper-peeled git invocation the same way the runtime does", () => {
+    const r = dryRun("look around", {
+      configPath: FULL_MANIFEST,
+      tool: "Bash",
+      toolArgs: JSON.stringify({ command: "env -C /tmp git status" }),
+    });
+    const matched = r.report.matchingPolicies.map((p) => p.name);
+    expect(matched).toContain("preflight-before-investigation");
+  });
+
+  it("still matches the raw (unwrapped) spelling — superset, not a replacement", () => {
+    const r = dryRun("look around", {
+      configPath: FULL_MANIFEST,
+      tool: "Bash",
+      toolArgs: JSON.stringify({ command: "git status" }),
+    });
+    const matched = r.report.matchingPolicies.map((p) => p.name);
+    expect(matched).toContain("preflight-before-investigation");
+  });
+
+  it("a non-git command is still reported as not matching (no false positive)", () => {
+    const r = dryRun("look around", {
+      configPath: FULL_MANIFEST,
+      tool: "Bash",
+      toolArgs: JSON.stringify({ command: "ls -la" }),
+    });
+    const matched = r.report.matchingPolicies.map((p) => p.name);
+    expect(matched).not.toContain("preflight-before-investigation");
+  });
+});
+
 describe("dry-run — REPO builtin resolves from cwd", () => {
   it("substitutes the cwd-derived repo name into a preflight policy's ledgerQuery", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-dryrun-git-"));

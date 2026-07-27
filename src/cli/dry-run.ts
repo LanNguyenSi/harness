@@ -5,6 +5,7 @@ import {
   type ExtractBuiltins,
   type ExtractEventContext,
 } from "../policies/index.js";
+import { normalizeCommand } from "../runtime/command-normalize.js";
 import { resolveGitContext } from "../runtime/git-context.js";
 import type { Hook, Manifest, Policy } from "../schema/index.js";
 import { EX_USAGE, HarnessExitError } from "./exit-codes.js";
@@ -113,7 +114,18 @@ function policyMatchesTool(
     } catch {
       return { matched: false, reason: `trigger.bash_match is not a valid regex` };
     }
-    if (!re.test(args.command)) {
+    // Raw-OR-normalised, mirroring `policyMatchesEvent`'s real evaluation
+    // path exactly (F8 fix, review round 2026-07-27, run
+    // 2026-07-27-gate-target-repo-resolution): dry-run used to test only
+    // the RAW command, so it predicted `env -C /tmp git status` as NOT
+    // matching `preflight-before-investigation` while `policy intercept`
+    // actually blocks it — a debug verb contradicting the runtime it
+    // exists to predict (its own comment above and
+    // docs/okf/debug-verb-selection.md both assert parity). The
+    // REPO/BRANCH half of this file (`builtinsFor`, cwd-only) is a
+    // separate, still-open residual — not fixed here, see the run's
+    // handoff for the follow-up.
+    if (!re.test(args.command) && !re.test(normalizeCommand(args.command).normalized)) {
       return {
         matched: false,
         reason: `bash_match "${policy.trigger.bash_match}" did not match`,

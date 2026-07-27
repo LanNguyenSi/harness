@@ -26,7 +26,7 @@ import {
 import type { Manifest, McpServer } from "../../schema/index.js";
 import { resolveGeneratedDir, writePendingApproval } from "../../runtime/pending-approval.js";
 import { parseBashPrefix } from "../../runtime/bash-prefix-parse.js";
-import { normalizeCommand } from "../../runtime/command-normalize.js";
+import { normalizeCommand, type NormalizedCommand } from "../../runtime/command-normalize.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import { checkPauseFromLoader } from "../pause-check.js";
 
@@ -417,26 +417,43 @@ export async function runInterceptCli(
   // or non-repository target directory falls through to `cwdGitContext`
   // unchanged (`resolveGitContext`'s own "" -> "unknown, caller falls
   // back" contract). When a command names more than one distinct target
-  // (e.g. two chained `git -C` invocations), `normalizeCommand`'s
-  // `targetDir` already resolves the FIRST one and so does this — a
-  // later target in the same command line is not consulted, which is
-  // that function's documented priority order, not a new residual here.
+  // (e.g. two chained `git -C` invocations that disagree, or one
+  // explicit invocation plus a bare one), `normalizeCommand`'s
+  // `targetDir` itself resolves to `null` (F2 fix, review round
+  // 2026-07-27 — see that module's header): this used to resolve the
+  // FIRST invocation's target for the whole command, which is exactly
+  // the fail-open `preflight-before-push` regression that fix closes,
+  // so there is no "first wins" residual here to document anymore.
   // ${CWD} is untouched by any of this: it always names the hook's own
   // cwd (see `builtins.CWD` below).
-  const targetDir =
+  //
+  // Also computed once here (not per-policy) so `intercept()` below can
+  // thread the SAME `NormalizedCommand` into every `bash_match` trigger
+  // check instead of each one recomputing it (F9 fix, review round
+  // 2026-07-27).
+  const normalizedCommand: NormalizedCommand | undefined =
     event.tool_name === "Bash"
       ? (() => {
           const cmd = readBashCommand(event.tool_input);
-          return cmd === null ? null : normalizeCommand(cmd).targetDir;
+          return cmd === null ? undefined : normalizeCommand(cmd);
         })()
-      : null;
+      : undefined;
+  const targetDir = normalizedCommand?.targetDir ?? null;
   const targetGitContext =
     targetDir === null
       ? null
       : (() => {
-          const resolved = path.isAbsolute(targetDir)
-            ? targetDir
-            : path.resolve(cwd, targetDir);
+          // F5 fix (review round 2026-07-27): a RELATIVE `targetDir`
+          // resolves against `targetBase` when the normaliser found a
+          // more specific one (a wrapping `env -C`, or a leading `cd`
+          // prefix) instead of always against the hook's own cwd — see
+          // `command-normalize.ts`'s header for the confidently-wrong
+          // cross-repo case this closes. `path.resolve` ignores the
+          // first argument entirely when `targetDir` is already
+          // absolute, so no separate `path.isAbsolute` branch is needed
+          // here.
+          const base = normalizedCommand?.targetBase ?? cwd;
+          const resolved = path.resolve(base, targetDir);
           const candidate = resolveGitContext(resolved);
           return candidate.repo.length > 0 ? candidate : null;
         })();
@@ -468,17 +485,24 @@ export async function runInterceptCli(
     // hook's starting cwd, so a prod signal smuggled through either
     // idiom silently passed the gate. Parse the leading prefix once from
     // the Bash command and merge the result into the resolver inputs
-    // only. This `cd`-prefix parse is deliberately narrower than, and
-    // independent of, the target-dir-aware `gitContext` computed above
-    // for the `${REPO}` / `${BRANCH}` builtins (task T-003, run
-    // 2026-07-27-gate-target-repo-resolution): it recognises only a
-    // leading `cd`, not `git -C` / `--work-tree` / `--git-dir` / `env
-    // -C`, because it feeds `when:`-clause risk classification, not
-    // ledger-tag namespacing, and the two were never required to agree.
-    // (Stale as of this task: this comment used to claim ${REPO} /
-    // ${BRANCH} / ${CWD} always keep the hook's cwd — no longer true for
-    // ${REPO} / ${BRANCH}, which can now come from the command's own
-    // target directory; only ${CWD} still always names the hook's cwd.)
+    // only. ${CWD} always names the hook's own cwd; ${REPO}/${BRANCH}
+    // (the `gitContext` above, feeding `builtins`) can come from the
+    // command's own target directory (T-003). The Risk Gate resolver's
+    // git base, `resolverGit` below, is DELIBERATELY INDEPENDENT of
+    // BOTH: it recognises only a leading `cd`, never `git -C` /
+    // `--work-tree` / `--git-dir` / `env -C`, and its base is always
+    // `cwdGitContext` (the hook cwd), never the target-aware
+    // `gitContext` — this feeds `when:`-clause risk classification, not
+    // ledger-tag namespacing, and the two are not required to agree.
+    // (F1 fix, review round 2026-07-27: this used to fall back to
+    // `gitContext`, so a `branch_patterns` resolver classified the
+    // environment from the command's TARGET repo's branch instead of the
+    // cwd repo's — `git -C <repo-on-feature/x> log && rm -rf /data`
+    // silently skipped a `production` + `branch_patterns: [main]`
+    // resolver keyed on the cwd repo being on `main`, because the
+    // resolver read feature/x's branch instead. Bottom line: `resolverGit`
+    // must never read anything other than `cwdGitContext`, or the leading-
+    // `cd` target within THIS same narrow parse.)
     const bashPrefix =
       event.tool_name === "Bash"
         ? (() => {
@@ -487,14 +511,14 @@ export async function runInterceptCli(
           })()
         : null;
     const resolverGit = (() => {
-      if (bashPrefix === null || bashPrefix.cdTarget === null) return gitContext;
+      if (bashPrefix === null || bashPrefix.cdTarget === null) return cwdGitContext;
       const effective = path.isAbsolute(bashPrefix.cdTarget)
         ? bashPrefix.cdTarget
         : path.resolve(cwd, bashPrefix.cdTarget);
       // resolveGitContext returns empty strings for non-git paths;
       // an empty repo means cd-target was bogus, fall through.
       const candidate = resolveGitContext(effective);
-      return candidate.repo.length > 0 ? candidate : gitContext;
+      return candidate.repo.length > 0 ? candidate : cwdGitContext;
     })();
     const resolverEnv = (() => {
       const base = opts.env ?? process.env;
@@ -526,6 +550,7 @@ export async function runInterceptCli(
       ...(opts.now && { now: opts.now }),
       ...(gitContext.sha.length > 0 && { currentHeadSha: gitContext.sha }),
       ...(riskContext && { riskContext }),
+      ...(normalizedCommand && { normalizedCommand }),
     });
   } finally {
     // Tear down the pooled grounding-mcp session (no-op for injected test

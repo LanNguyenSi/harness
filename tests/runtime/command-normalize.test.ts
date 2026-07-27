@@ -1,17 +1,29 @@
 import { describe, expect, it } from "vitest";
+import { parse as parseYaml } from "yaml";
+import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import { normalizeCommand } from "../../src/runtime/command-normalize.js";
+import { parseManifest } from "../../src/schema/index.js";
 
-// The exact bash_match regex from src/cli/init/templates.ts:442 (duplicated
-// at :224 and in docs/examples/full-manifest.yaml, pinned by
-// tests/cli/init-full-template-parity.test.ts). Inlined here as a literal,
-// matching the existing precedent in
-// tests/runtime/intercept.test.ts's "command-position bash_match" suite.
-const PREFLIGHT_BASH_MATCH =
-  "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* (status|log|diff|branch)\\b";
+// Read the real `bash_match` straight out of FULL_TEMPLATE instead of a
+// hand-copied literal (F7 fix, review round 2026-07-27, run
+// 2026-07-27-gate-target-repo-resolution): a literal here would keep
+// passing against the OLD pattern after a future edit (open task
+// `dbc6d303` tightens this exact regex), silently certifying stale
+// behaviour. Mirrors the precedent in
+// tests/cli/init-full-template-kill-switch-deny.test.ts's
+// `policyBashMatch` helper.
+function policyBashMatch(name: string): RegExp {
+  const parsed = parseManifest(parseYaml(FULL_TEMPLATE));
+  const policy = parsed.policies.find((p) => p.name === name);
+  if (!policy) throw new Error(`policy ${name} missing from FULL_TEMPLATE`);
+  const pattern = policy.trigger.bash_match;
+  if (!pattern) throw new Error(`policy ${name} declares no trigger.bash_match`);
+  return new RegExp(pattern);
+}
 
 describe("normalizeCommand", () => {
   describe("previously-allowed spellings normalise to a match", () => {
-    const re = new RegExp(PREFLIGHT_BASH_MATCH);
+    const re = policyBashMatch("preflight-before-investigation");
     const cases: Array<{ label: string; command: string }> = [
       { label: "env -C <repo>", command: "env -C /tmp/repo git status" },
       { label: "env (bare)", command: "env git status" },
@@ -23,6 +35,18 @@ describe("normalizeCommand", () => {
         label: "git --git-dir=<x>/.git --work-tree=<x>",
         command: "git --git-dir=/tmp/repo/.git --work-tree=/tmp/repo status",
       },
+      // F4 fix (HIGH, review round 2026-07-27): each of these was
+      // measured as a live bypass against the shipped binary.
+      { label: "sudo", command: "sudo git status" },
+      { label: "sudo with its own value flag", command: "sudo -u root git status" },
+      { label: "doas", command: "doas git status" },
+      { label: "time", command: "time git status" },
+      { label: "timeout with duration", command: "timeout 5 git status" },
+      { label: "timeout with its own flag", command: "timeout -k 1 5 git status" },
+      { label: "stdbuf glued mode flag", command: "stdbuf -o0 git status" },
+      { label: "setsid", command: "setsid git status" },
+      { label: "path-qualified git (basename match)", command: "/usr/bin/git status" },
+      { label: "relative path-qualified git", command: "./git status" },
     ];
     for (const c of cases) {
       it(`${c.label}: "${c.command}" normalises to a trigger match`, () => {
@@ -32,8 +56,34 @@ describe("normalizeCommand", () => {
     }
   });
 
+  // F4 fix: the DELIBERATELY-NOT-SUPPORTED spellings (module header) are
+  // pinned here so the ceiling is ASSERTED, not merely described in a
+  // comment — a future accidental fix to one of these should surface as a
+  // newly-passing test to update, not silent, unverified progress.
+  describe("F4: still-unsupported spellings stay unmatched (documented ceiling)", () => {
+    const re = policyBashMatch("preflight-before-investigation");
+    const cases: Array<{ label: string; command: string }> = [
+      { label: "xargs (deliberately excluded, not a peeled wrapper)", command: "xargs git status" },
+      { label: "quoted subcommand", command: 'git "status"' },
+      {
+        label: "backtick command substitution",
+        command: "echo `env -C /tmp git status`",
+      },
+    ];
+    for (const c of cases) {
+      it(`"${c.command}" does NOT normalise to a trigger match`, () => {
+        const { normalized } = normalizeCommand(c.command);
+        expect(re.test(normalized)).toBe(false);
+        // Also confirm the raw form doesn't accidentally match either —
+        // these are genuine bypasses, not merely "normalisation didn't
+        // help".
+        expect(re.test(c.command)).toBe(false);
+      });
+    }
+  });
+
   describe("superset: previously-matching spellings keep matching", () => {
-    const re = new RegExp(PREFLIGHT_BASH_MATCH);
+    const re = policyBashMatch("preflight-before-investigation");
     const cases = [
       "git status",
       "cd /tmp/repo; git status",
@@ -129,6 +179,59 @@ describe("normalizeCommand", () => {
     });
   });
 
+  // F3 fix (HIGH, review round 2026-07-27): `findNextBoundary` used to do
+  // up to 5 `indexOf` scans per segment, and confirming a token's ABSENCE
+  // requires scanning to the end of the remaining string every time, so a
+  // command with many segments and at least one boundary kind that never
+  // occurs anywhere degenerated to O(segments × length). Measured
+  // end-to-end (`node dist/cli/main.js policy intercept`) at 2790ms /
+  // 2715ms for a 360k-char command against a shipped-binary control that
+  // stayed flat at ~190ms/~110ms — `require-preflight-evidence` declares
+  // `budget_ms: 1000`, so command SIZE alone could drive the hook past
+  // its own timeout budget (a fail-open class). `findNextBoundary` is now
+  // a single combined-alternation regex scan (O(length) total), and
+  // `MAX_NORMALIZE_LENGTH` bounds the worst case to a small constant
+  // regardless.
+  describe("F3: bounded cost for large commands", () => {
+    it("returns the input unchanged above MAX_NORMALIZE_LENGTH (100_000 chars)", () => {
+      const oversized = "git status " + "x".repeat(100_000);
+      expect(oversized.length).toBeGreaterThan(100_000);
+      const result = normalizeCommand(oversized);
+      expect(result).toEqual({ normalized: oversized, targetDir: null, targetBase: null });
+    });
+
+    it("stays at or under the length bound: a 100_000-char command is still normalised (not just passed through)", () => {
+      const atBound = "git status " + "x".repeat(100_000 - "git status ".length);
+      expect(atBound.length).toBe(100_000);
+      // "git status" is still recognised and canonicalised — proves this
+      // exercises the REAL normalisation path, not the length-bound
+      // short-circuit, so the timing assertion below is meaningful.
+      expect(normalizeCommand(atBound).normalized.startsWith("git status")).toBe(true);
+    });
+
+    it("a >=100KB adversarial command (many segments, one boundary kind that never occurs) stays under a fixed time budget", () => {
+      // Reproduces the exact shape that degenerated under the OLD
+      // per-token `indexOf` scan: many `;`-joined segments and NO `(`
+      // anywhere in the whole command, so confirming "(" absent used to
+      // cost O(remaining length) on EVERY segment.
+      const segment = "a;";
+      const command = segment.repeat(Math.floor(100_000 / segment.length));
+      expect(command.length).toBeGreaterThanOrEqual(99_998);
+      expect(command).not.toContain("(");
+
+      const start = process.hrtime.bigint();
+      normalizeCommand(command);
+      const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+
+      // Measured ~5ms for this exact shape on the fixed implementation
+      // (vs. multi-second blowup pre-fix at comparable sizes, scaled
+      // from the reviewer's end-to-end measurements). 300ms leaves
+      // generous headroom for slower CI machines while still catching a
+      // reintroduced quadratic path outright.
+      expect(elapsedMs).toBeLessThan(300);
+    });
+  });
+
   describe("never throws", () => {
     const malformed = [
       "",
@@ -160,6 +263,7 @@ describe("normalizeCommand", () => {
       expect(normalizeCommand(null as unknown as string)).toEqual({
         normalized: "",
         targetDir: null,
+        targetBase: null,
       });
     });
 

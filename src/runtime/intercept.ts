@@ -191,6 +191,19 @@ export interface InterceptOptions {
    */
   riskContext?: RiskGateContext;
   /**
+   * Precomputed `NormalizedCommand` for a Bash event's `tool_input.command`
+   * (F9 fix, run 2026-07-27-gate-target-repo-resolution). `runInterceptCli`
+   * already calls `normalizeCommand` once to resolve `targetDir`/
+   * `targetBase` for ${REPO}/${BRANCH}; threading the SAME result in here
+   * lets `policyMatchesEvent` reuse it for every policy in the `matching`
+   * loop below instead of recomputing it — same resolved-by-the-wrapper
+   * pattern as `currentHeadSha`, `builtins`, and `riskContext`. Optional:
+   * omitted by non-Bash events and by callers/tests that don't supply
+   * one, in which case `policyMatchesEvent` computes it lazily per policy
+   * (correct, just not de-duplicated).
+   */
+  normalizedCommand?: NormalizedCommand;
+  /**
    * Destination for audit-write failure diagnostics. Defaults to
    * `process.stderr` when omitted. Goes to stderr so Claude Code's
    * stdout deny-JSON contract is unaffected.
@@ -263,36 +276,33 @@ function enrichEnvelope(
 }
 
 /**
- * Single-slot memo for `normalizeCommand`. `policyMatchesEvent` runs once
- * per policy for the SAME event (see the `matching` loop in `intercept()`
- * and the lone call in `harness explain-policy`), but normalisation is a
- * pure function of the command string alone, so re-deriving it per
- * policy would multiply the cost by the manifest's policy count for no
- * reason. A single cache slot is enough: the trigger-match loop always
- * evaluates the SAME command string back-to-back across every policy of
- * one event before it can change to a different one. Keyed by strict
- * string equality, so a stale entry can never produce a WRONG answer —
- * at worst a miss, which just recomputes.
- */
-let normalizeCommandMemo: { command: string; result: NormalizedCommand } | undefined;
-
-function normalizeCommandCached(command: string): NormalizedCommand {
-  if (normalizeCommandMemo !== undefined && normalizeCommandMemo.command === command) {
-    return normalizeCommandMemo.result;
-  }
-  const result = normalizeCommand(command);
-  normalizeCommandMemo = { command, result };
-  return result;
-}
-
-/**
  * Does a policy's `trigger:` match this event? This is the WHICH-tool-
  * calls filter; the WHETHER-it-applies filter is `policy.when:`,
  * evaluated separately (`evaluateWhen`). A policy fires only when both
  * hold. Exported so `harness explain-policy` can report the trigger
  * verdict on its own.
+ *
+ * `precomputedNormalizedCommand` is an optional caller-supplied
+ * `NormalizedCommand` for the event's command (F9 fix, review round
+ * 2026-07-27, run 2026-07-27-gate-target-repo-resolution): `intercept()`
+ * below resolves ONE `NormalizedCommand` per event (via
+ * `options.normalizedCommand`, itself computed once by `runInterceptCli`
+ * — it already needs `targetDir`/`targetBase` for ${REPO}/${BRANCH}
+ * resolution) and threads it into every `policyMatchesEvent` call in its
+ * `matching` loop, so a raw-miss event normalises the command exactly
+ * ONCE across the whole manifest instead of once per module (this file
+ * used to keep its OWN single-slot memo, redundant with the CLI
+ * wrapper's separate call — removed here, along with the module-level
+ * mutable state that came with it). Omitted by standalone callers
+ * (`harness explain-policy`, most tests), which fall back to computing
+ * it lazily right here — correct either way, since `normalizeCommand` is
+ * a pure function of the command string alone.
  */
-export function policyMatchesEvent(policy: Policy, event: ToolEvent): boolean {
+export function policyMatchesEvent(
+  policy: Policy,
+  event: ToolEvent,
+  precomputedNormalizedCommand?: NormalizedCommand,
+): boolean {
   if (policy.trigger.event !== event.hook_event_name) return false;
   if (policy.trigger.match !== undefined) {
     if (typeof event.tool_name !== "string") return false;
@@ -326,7 +336,7 @@ export function policyMatchesEvent(policy: Policy, event: ToolEvent): boolean {
     // shape — the fail-open direction for a gate — so this stays
     // additive rather than a substitution.
     if (!re.test(command)) {
-      const { normalized } = normalizeCommandCached(command);
+      const { normalized } = precomputedNormalizedCommand ?? normalizeCommand(command);
       if (!re.test(normalized)) return false;
     }
   }
@@ -623,7 +633,7 @@ export async function intercept(
   const whenFallbackMap = new Map<string, boolean>();
   const matching: Policy[] = [];
   for (const p of manifest.policies) {
-    if (!policyMatchesEvent(p, event)) continue;
+    if (!policyMatchesEvent(p, event, options.normalizedCommand)) continue;
     if (p.when === undefined) {
       matching.push(p);
       continue;
