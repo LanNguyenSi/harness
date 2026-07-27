@@ -758,29 +758,42 @@ describe("runInterceptCli — REPO / BRANCH builtins resolve from event.cwd", ()
   // rounds each found a different way it leaked into the wrong
   // evaluation) — see CHANGELOG.md and command-normalize.ts's module
   // header for the full account.
-  it("a command naming a foreign target repo resolves ${REPO}/${BRANCH} to the cwd repo, not the named target", async () => {
-    const repoA = makeRepoFixture("split-cwd-repo", "main");
-    const repoB = makeRepoFixture("split-foreign-target", "feature/other");
-    const { stream: out } = captureStream();
-    const result = await runInterceptCli({
-      stdin: streamFrom(
-        JSON.stringify({
-          hook_event_name: "PreToolUse",
-          tool_name: "Bash",
-          tool_input: { command: `git -C ${repoB} status` },
-          session_id: "sess-1",
-          cwd: repoA,
-        }),
-      ),
-      stdout: out,
-      manifest: fakeManifest([PREFLIGHT_POLICY]),
-      ledger: emptyLedger,
-    });
-    expect(result.decisions).toHaveLength(1);
-    expect(result.decisions[0]!.extractValues.REPO).toBe("split-cwd-repo");
-    expect(result.decisions[0]!.extractValues.BRANCH).toBe("main");
-    expect(result.decisions[0]!.extractValues.CWD).toBe(repoA);
-  });
+  // All four spellings the removed resolution understood are pinned, not
+  // just `git -C`. A reviewer demonstrated that a reintroduction limited
+  // to the leading-`cd` target — the spelling that looks safest, since a
+  // `cd` genuinely persists for the rest of the command — leaves a
+  // single-spelling pin entirely green.
+  it.each([
+    ["git -C", (b: string) => `git -C ${b} status`],
+    ["env -C", (b: string) => `env -C ${b} git status`],
+    ["--work-tree/--git-dir", (b: string) => `git --work-tree=${b} --git-dir=${b}/.git status`],
+    ["leading cd", (b: string) => `cd ${b} && git status`],
+  ])(
+    "%s: a command naming a foreign target repo resolves ${REPO}/${BRANCH} to the cwd repo, not the named target",
+    async (_spelling, build) => {
+      const repoA = makeRepoFixture("split-cwd-repo", "main");
+      const repoB = makeRepoFixture("split-foreign-target", "feature/other");
+      const { stream: out } = captureStream();
+      const result = await runInterceptCli({
+        stdin: streamFrom(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: build(repoB) },
+            session_id: "sess-1",
+            cwd: repoA,
+          }),
+        ),
+        stdout: out,
+        manifest: fakeManifest([PREFLIGHT_POLICY]),
+        ledger: emptyLedger,
+      });
+      expect(result.decisions).toHaveLength(1);
+      expect(result.decisions[0]!.extractValues.REPO).toBe("split-cwd-repo");
+      expect(result.decisions[0]!.extractValues.BRANCH).toBe("main");
+      expect(result.decisions[0]!.extractValues.CWD).toBe(repoA);
+    },
+  );
 });
 
 // F1 fix (CRITICAL, review round 2026-07-27): the Risk Gate's git context
