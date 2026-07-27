@@ -60,7 +60,23 @@ import * as path from "node:path";
 // new verbs would remove any of them. Deduping any of them means touching
 // an existing sibling pack's file, out of this task's scope (same
 // rationale as the reseed.ts / toolchain-parity precedents above).
-const MAX_CLONES = 102;
+// Raised to 103 for the risk-gate read-only floor (agent-tasks fb67b402),
+// and this one is NOT new copy-paste — verified rather than assumed. That
+// task adds a `cd`-target pre-check plus a quote-stripping helper near the
+// top of `cli/pack/hook-solution-acceptance-writeguard.ts`. Diffing the
+// full jscpd clone set against master shows 3 pairs appearing and 2
+// disappearing, net +1, and all 3 new pairs are that file's PRE-EXISTING
+// sibling-hook boilerplate — `pathToolTarget` / `bashCommandOf` / the CLI
+// runner body — matched against `hook-branch-protection.ts` and
+// `hook-post-merge-gate-record.ts`. None of them covers a line this task
+// wrote. The added lines shifted the file's contents, which moved jscpd's
+// windows and re-partitioned the same duplicated boilerplate into a
+// different set of reported pairs. So there is nothing here to extract
+// that was not already there: the underlying duplication is the same
+// sibling-pack hook cluster the three raises above already tolerate, and
+// deduping it means touching an existing sibling pack's file, out of this
+// task's scope.
+const MAX_CLONES = 103;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).
