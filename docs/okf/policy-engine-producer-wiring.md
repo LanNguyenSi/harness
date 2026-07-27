@@ -3,7 +3,7 @@ type: invariant
 title: Policy engine needs its producers wired
 description: A `policies:` entry only ever blocks if grounding-mcp is wired under `tools.mcp[]`; since v0.35.0 `harness apply` hard-refuses the misconfig, and since v0.39.0 a pooled per-intercept ledger session stops hook-timeout fail-open under load.
 tags: [policies, grounding-mcp, warn-mode, footgun, versions]
-timestamp: 2026-07-27T15:50:00Z
+timestamp: 2026-07-27T15:58:11Z
 sources:
   - src/cli/validate/checks.ts
   - src/cli/apply/apply.ts
