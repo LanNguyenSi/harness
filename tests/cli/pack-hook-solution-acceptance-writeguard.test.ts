@@ -84,6 +84,36 @@ describe("write-guard — forge-attempt matrix (the load-bearing anti-forgery pr
     expect(bash(`cd ${DIR}`).blocked).toBe(true);
   });
 
+  it("blocks bare `cd` into the verdict dir via a resolved-path pre-check, ahead of cd's own read-only classification", () => {
+    // `cd` is provably read-only on its own (task fb67b402), so without a
+    // dedicated pre-check this would fall through to "read-only Bash
+    // command" and be allowed — defeating the defense-in-depth property
+    // pinned above. The pre-check must fire first.
+    expect(bash(`cd ${DIR}`).blocked).toBe(true);
+    // A subdirectory of the verdict dir is inside it too.
+    expect(bash(`cd ${DIR}/sub`).blocked).toBe(true);
+  });
+
+  it("discriminating pair: cd into the verdict dir is blocked, cd into an unrelated dir is not", () => {
+    expect(bash(`cd ${DIR}`).blocked).toBe(true);
+    expect(bash("cd /home/u/.local/state/agent-grounding").blocked).toBe(false); // the dir's PARENT, not the dir itself
+    expect(bash("cd /tmp/some-other-project").blocked).toBe(false);
+    expect(bash("cd /repo").blocked).toBe(false);
+  });
+
+  it("resolves the cd target as a real path, not a substring match: near-miss siblings are not blocked", () => {
+    // Shares a long text prefix with the verdict dir but is a SIBLING
+    // directory (different leaf), not inside it. A substring-based check
+    // would wrongly flag this; the resolved-path check (isInsideDir) does not.
+    expect(bash(`cd ${DIR}-decoy`).blocked).toBe(false);
+    expect(bash("cd /tmp/verdict-dir-decoy").blocked).toBe(false);
+  });
+
+  it("does not flag `cd -` or a bare `cd` (no statically resolvable destination)", () => {
+    expect(bash("cd -").blocked).toBe(false);
+    expect(bash("cd").blocked).toBe(false);
+  });
+
   it("blocks shell-glob redirect targets that obscure the leaf (overwrite forge)", () => {
     // bash expands the glob to the real dir at runtime; the literal leaf
     // never appears, but a distinctive leaf word survives the single glob.

@@ -143,8 +143,8 @@ classification the runtime gate uses.
 #### Built-in read-only commands
 
 A second `low`-severity floor recognizes any *provably read-only* Bash
-command (`git status`, `git diff`, `grep`, `cat`, `ls`, `head`, `sort
-FILE`, `tree DIR`, `file FILE`, ...),
+command (`git status`, `git diff`, `grep`, `cat`, `ls`, `head`, `cd`,
+`npm audit`, `npm ls`, `sort FILE`, `tree DIR`, `file FILE`, ...),
 reusing the same metachar-hardened classifier the understanding gate uses
 to allow reads without an approved report
 (`src/runtime/read-only-bash.ts`). It exists for the same reason as the
@@ -172,6 +172,28 @@ Some bins are classified read-only only when their write flags are absent
 - `file`: read-only when neither `-C` / `--compile` nor a short-flag
   cluster containing uppercase `C` appears. Lowercase `-c` (magic-file
   check) is benign and is not blocked.
+
+Two more entries floor a whole class of commands that were previously
+unclassified and, on a production-resolved session (checked-out `main`
+or `release/*`), blocked by a prod-scoped `risk.severity_at_least`
+policy even though neither can write anything:
+
+- `cd`: read-only unconditionally, like `pwd`. `cd` mutates only the
+  invoking shell process's own working directory; it cannot write to
+  the filesystem or touch production, and it has no flag whose value is
+  an output path, so it needs no per-bin write-flag guard. A chained or
+  redirected form (`cd /x && rm -rf /`, `cd $(evil)`) never reaches this
+  floor: it is refused up front by the same shell-metacharacter /
+  substitution guard described below, so only the bare navigation form
+  is ever classified read-only.
+- `npm`: a curated positive allowlist of read-only subcommands — `ls` /
+  `list` (installed tree), `view` (registry metadata), `outdated`,
+  `why`, `ping` — plus bare `npm audit` (the report). `npm audit fix`
+  mutates the lockfile and `node_modules` and stays gated even though
+  `npm audit` alone is floored. Every other npm subcommand (`install`,
+  `ci`, `publish`, `update`, `version`, ...) stays unclassified: the
+  allowlist is positive, not a denylist, so an npm verb this floor has
+  not reasoned about is never assumed safe.
 
 Bins excluded entirely from the floor (no per-bin guard possible):
 

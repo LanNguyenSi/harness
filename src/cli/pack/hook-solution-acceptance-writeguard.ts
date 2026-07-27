@@ -17,6 +17,16 @@
 //     (covers `echo >`, `$SOLUTION_VERDICT_DIR` spellings, `tee`, `mv`/`cp`/
 //     `ln`/`install`, `python3 -c '...path...'`, and `chmod`/`chattr` that
 //     would loosen perms) — or whose shell cwd is inside the dir.
+//   - Bash `cd` whose RESOLVED target is inside the verdict dir. `cd` itself
+//     is provably read-only (task fb67b402 added it to the shared
+//     read-only-bash floor: it mutates only the invoking shell's own cwd,
+//     never the filesystem), so it no longer reaches the "not read-only"
+//     checks below. But stepping into the dir is the setup half of a
+//     two-call forge (`cd <dir>` then, in a LATER un-chained Bash call,
+//     a bare relative write): this pre-check keeps that first step blocked
+//     as defense-in-depth, ahead of (not instead of) the cwd-inside check
+//     below, which is what actually closes the later relative-write call
+//     once cwd has genuinely moved.
 //
 // Pure reads (`cat <dir>/x.json`) are allowed so the guard is not over-broad.
 //
@@ -90,6 +100,39 @@ function bashCommandOf(toolInput: unknown): string {
   return typeof cmd === "string" ? cmd : "";
 }
 
+/**
+ * Extract `cd`'s destination argument from a Bash command string, or null
+ * when the command is not a `cd` invocation or has no statically resolvable
+ * destination. Whitespace-tokenized, same as `read-only-bash.ts`'s own
+ * classifier (this hook does not shell-parse either).
+ *
+ * Deliberately narrow:
+ *   - Only fires when the FIRST token is exactly `cd`. `env cd x` or a
+ *     chained `foo && cd x` do not match here (tokens[0] would be `env` /
+ *     `foo`); those are unaffected by this pre-check and are still governed
+ *     by the existing not-read-only + `bashReferencesVerdictDir` checks
+ *     below, which already close the `cd <parent> && write <relative>`
+ *     descent via the leaf-segment match.
+ *   - `cd`'s own flags (`-L`, `-P`, `-e`, `-@`, and combinations) are
+ *     skipped to find the first positional path argument.
+ *   - `cd -` (switch to `$OLDPWD`) and a bare `cd` (goes to `$HOME`) have no
+ *     destination this function can resolve without ambient shell state;
+ *     both return null (not flagged), the same conservative stance as the
+ *     rest of this module's enumerated-path checks.
+ */
+function cdTargetArgument(command: string): string | null {
+  const tokens = command.trim().split(/\s+/);
+  if (tokens[0] !== "cd") return null;
+  for (let i = 1; i < tokens.length; i += 1) {
+    const t = tokens[i];
+    if (t === undefined) break;
+    if (t === "-") return null;
+    if (t.startsWith("-")) continue;
+    return t;
+  }
+  return null;
+}
+
 interface Decision {
   blocked: boolean;
   reason: string;
@@ -143,6 +186,21 @@ export function evaluateWriteGuard(
   if (toolName === "Bash") {
     const command = bashCommandOf(toolInput);
     if (command === "") return { blocked: false, reason: "empty Bash command" };
+
+    // Defense-in-depth, ahead of the read-only fast path below: `cd` itself
+    // cannot write, but `cd`ing into the verdict dir is the setup half of a
+    // two-call forge (see the module header). Only a RESOLVED-path check
+    // (via the shared `isInsideDir`, not a substring match) so a sibling
+    // that merely shares a text prefix with the dir (`solution-verdicts-decoy`,
+    // or a parent directory of it) is not wrongly flagged.
+    const cdTarget = cdTargetArgument(command);
+    if (cdTarget !== null && isInsideDir(cdTarget, dir, cwd)) {
+      return {
+        blocked: true,
+        reason: `cd targets the harness-protected solution-verdict dir (${dir}); stepping into it would set up a later un-chained relative write to forge the verdict marker`,
+      };
+    }
+
     if (isReadOnlyBashCommand(command)) {
       return { blocked: false, reason: "read-only Bash command" };
     }

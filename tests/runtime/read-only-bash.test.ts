@@ -103,6 +103,74 @@ describe("read-only Bash classifier", () => {
     });
   });
 
+  describe("cd (pure navigation form)", () => {
+    it.each([
+      "cd",
+      "cd -",
+      "cd ..",
+      "cd /tmp",
+      "cd /Users/lan/git/pandora/harness",
+      "cd ~",
+      "cd ../other-repo",
+      "cd -P /tmp",
+      "cd -L .",
+    ])("allows %s", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(true);
+    });
+
+    it.each([
+      // Chained or redirected `cd` forms mutate more than shell state (or
+      // hide a write behind the navigation prefix) and must not be
+      // floored: the metachar guard in `isReadOnlyBashCommand` rejects
+      // the whole string before `cd` is ever inspected.
+      "cd /tmp && rm -rf /",
+      "cd /tmp; rm -rf /",
+      "cd /tmp || rm -rf /",
+      "cd /tmp | rm -rf /",
+      "cd $(rm -rf /)",
+      "cd `rm -rf /`",
+      "cd /tmp > out.txt",
+      "cd /tmp < input",
+    ])("blocks %s (chained/redirected cd is not read-only)", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+  });
+
+  describe("npm read-only subcommands (curated allowlist)", () => {
+    it.each([
+      "npm audit",
+      "npm audit --json",
+      "npm ls",
+      "npm ls --depth=0",
+      "npm list",
+      "npm view lodash",
+      "npm view lodash version",
+      "npm outdated",
+      "npm why lodash",
+      "npm ping",
+    ])("allows %s", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(true);
+    });
+
+    it.each([
+      // Mutating subcommands must stay unclassified (gated), not floored.
+      "npm install",
+      "npm i lodash",
+      "npm ci",
+      "npm publish",
+      "npm update",
+      "npm version patch",
+      "npm run build",
+      "npm audit fix",
+      "npm audit fix --force",
+      // Unknown/future npm subcommand: the allowlist is positive, so an
+      // unenumerated verb stays unclassified rather than assumed safe.
+      "npm some-future-verb",
+    ])("blocks %s (positive allowlist, not a denylist)", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+  });
+
   describe("harness read-only subcommands", () => {
     it.each([
       "harness doctor",

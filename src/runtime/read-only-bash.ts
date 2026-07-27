@@ -60,6 +60,19 @@
  * Single-token read-only binaries. Each accepts arguments without
  * changing classification: `ls -la /tmp` is still read-only.
  *
+ * `cd` is included here even though it is a shell builtin, not an
+ * external binary — same as `echo`/`true`/`false` already in this set,
+ * the classifier only inspects argv tokens, not builtin-vs-binary
+ * status. `cd` mutates only the invoking shell process's own working
+ * directory; by construction it cannot write to the filesystem or
+ * touch production, and unlike `find`/`sort`/`tree`/`file` it has no
+ * flag whose value is an output path, so no per-bin write-flag guard is
+ * needed. A chained or redirected form (`cd /x && rm -rf /`,
+ * `cd $(evil)`) never reaches this set: the shell-metacharacter /
+ * substitution guard in `isReadOnlyBashCommand` refuses the whole
+ * string before tokenization, so only the bare navigation form (`cd`,
+ * `cd -`, `cd DIR`, with or without `-L`/`-P`) is ever classified here.
+ *
  * Deliberately EXCLUDED because their write vector is not a clean flag:
  *
  * `uniq`: a second positional operand is the output file. Detecting a
@@ -93,6 +106,7 @@ const SIMPLE_READ_ONLY_BINS: ReadonlySet<string> = new Set([
   "basename", "dirname", "realpath", "readlink",
   "less", "more", "cmp", "diff", "comm",
   "cut", "tr", "tac", "rev",
+  "cd",
 ]);
 
 /**
@@ -195,6 +209,30 @@ const GH_READ_ONLY_NOUNS: ReadonlySet<string> = new Set([
 const HARNESS_READ_ONLY_SUBS: ReadonlySet<string> = new Set([
   "doctor", "validate", "audit", "diff", "list", "version",
   "show", "status", "pause",
+]);
+
+/**
+ * `npm` subcommands that only inspect the installed tree, the registry,
+ * or the lockfile without writing to `node_modules`, `package.json`,
+ * `package-lock.json`, or the registry: `ls` / `list` (installed
+ * dependency tree), `view` (registry metadata), `outdated`, `why`
+ * (dependency-reason report), `ping` (registry reachability check).
+ *
+ * Deliberately a curated ALLOWLIST, not a denylist of known-mutating
+ * subcommands (`install`, `ci`, `publish`, `update`, `version`, ...): an
+ * npm verb this floor has not been reasoned about — a new one in a
+ * future npm release, or an existing one simply not enumerated here —
+ * stays unclassified rather than being assumed safe, per the "unknown
+ * is not safe" design contract.
+ *
+ * `audit` is deliberately NOT in this set. `npm audit` alone (the
+ * report) is read-only, but `npm audit fix` mutates the lockfile and
+ * `node_modules`; a single subcommand membership test cannot
+ * distinguish the two, so `audit` gets its own check in
+ * `classifyTokens` instead of joining this allowlist.
+ */
+const NPM_READ_ONLY_SUBS: ReadonlySet<string> = new Set([
+  "ls", "list", "view", "outdated", "why", "ping",
 ]);
 
 /**
@@ -464,6 +502,17 @@ function classifyTokens(tokens: readonly string[]): boolean {
   }
 
   if (bin === "harness") return HARNESS_READ_ONLY_SUBS.has(sub);
+
+  // `npm audit` (report) is read-only; `npm audit fix` mutates the
+  // lockfile and node_modules. Scan the whole tail for `fix` rather than
+  // assuming it is always the immediate third token, so a flag inserted
+  // before it (`npm audit --json fix`) cannot launder the mutation past
+  // this check. Every other npm subcommand goes through the curated
+  // positive allowlist: unknown/unenumerated verbs stay unclassified.
+  if (bin === "npm") {
+    if (sub === "audit") return !tokens.slice(2).includes("fix");
+    return NPM_READ_ONLY_SUBS.has(sub);
+  }
 
   return false;
 }
