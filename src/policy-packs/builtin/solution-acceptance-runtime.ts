@@ -344,20 +344,35 @@ export function bashReferencesVerdictDir(command: string, dir: string): boolean 
   ) {
     return true;
   }
-  // Glob-obscured references. bash expands `*?[` against EXISTING paths at
-  // runtime, so a glob like `solution-ver*/<id>.json` reaches the dir
-  // without the literal leaf ever appearing in the command text, and a
+  // Glob- and brace-obscured references. bash expands `*?[` against EXISTING
+  // paths at runtime, so a glob like `solution-ver*/<id>.json` reaches the
+  // dir without the literal leaf ever appearing in the command text, and a
   // matching glob can OVERWRITE an existing marker (flipping ready:false ->
-  // true). We cannot safely expand globs (that is the shell-eval surface
-  // read-only-bash refuses), so when a glob metachar is present we match the
-  // leaf's distinctive sub-words: a single glob can split the hyphenated
-  // leaf but not erase every >=6-char word of it (`solution-ver*` keeps
-  // "solution"; `solu*verdicts` keeps "verdicts"). The leaf words, not the
-  // parent segment, are used on purpose: the parent here is `agent-grounding`,
-  // which is also a repo name and would over-block legitimate work. A command
-  // that globs EVERY path segment is the residual the marker-signing
-  // follow-up closes.
-  if (/[*?[]/.test(command)) {
+  // true). `{...,...}` brace expansion is unconditional (no filesystem
+  // lookup needed) and can split the leaf the same way: `solution-verdict{s,}`
+  // expands to `solution-verdicts` / `solution-verdict`, neither of which
+  // contains the literal leaf as a contiguous substring, so the direct check
+  // above misses it. We cannot safely expand either (that is the shell-eval
+  // surface read-only-bash refuses), so when a glob OR brace metacharacter is
+  // present we match the leaf's distinctive sub-words: a single glob or
+  // brace can split the hyphenated leaf but not erase every >=6-char word of
+  // it (`solution-ver*` and `solution-verdict{s,}` both keep "solution";
+  // `solu*verdicts` keeps "verdicts"). The leaf words, not the parent
+  // segment, are used on purpose: the parent here is `agent-grounding`,
+  // which is also a repo name and would over-block legitimate work. A
+  // command that globs/braces EVERY path segment is the residual the
+  // marker-signing follow-up closes.
+  //
+  // ACCEPTED COST of including `{` here: any brace now enters this
+  // leaf-word fallback, so a command carrying a brace AND one of the
+  // generic words above trips it even when it never reaches the dir.
+  // Measured examples that block today and did not before: `cd
+  // /repo/{solution,notes}`, `cd /repo/{a,b}/solution-docs`, and any
+  // non-read-only command containing a brace plus "solution"/"verdicts".
+  // "solution" is a common word, so this is not rare. It is deliberate:
+  // it fails safe, and the tighter alternative (dropping `{`) reopens
+  // the `solution-verdict{s,}` split-leaf hole, which fails open.
+  if (/[*?[{]/.test(command)) {
     const leafWords = leaf.split(/[^A-Za-z0-9]+/).filter((w) => w.length >= 6);
     if (leafWords.some((w) => command.includes(w))) return true;
   }

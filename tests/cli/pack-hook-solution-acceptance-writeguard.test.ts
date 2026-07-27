@@ -84,6 +84,104 @@ describe("write-guard — forge-attempt matrix (the load-bearing anti-forgery pr
     expect(bash(`cd ${DIR}`).blocked).toBe(true);
   });
 
+  it("blocks bare `cd` into the verdict dir via a resolved-path pre-check, ahead of cd's own read-only classification", () => {
+    // `cd` is provably read-only on its own (task fb67b402), so without a
+    // dedicated pre-check this would fall through to "read-only Bash
+    // command" and be allowed — defeating the defense-in-depth property
+    // pinned above. The pre-check must fire first.
+    expect(bash(`cd ${DIR}`).blocked).toBe(true);
+    // A subdirectory of the verdict dir is inside it too.
+    expect(bash(`cd ${DIR}/sub`).blocked).toBe(true);
+  });
+
+  it("discriminating pair: cd into the verdict dir is blocked, cd into an unrelated dir is not", () => {
+    expect(bash(`cd ${DIR}`).blocked).toBe(true);
+    expect(bash("cd /home/u/.local/state/agent-grounding").blocked).toBe(false); // the dir's PARENT, not the dir itself
+    expect(bash("cd /tmp/some-other-project").blocked).toBe(false);
+    expect(bash("cd /repo").blocked).toBe(false);
+  });
+
+  it("resolves the cd target as a real path, not a substring match: near-miss siblings are not blocked", () => {
+    // Shares a long text prefix with the verdict dir but is a SIBLING
+    // directory (different leaf), not inside it. A substring-based check
+    // would wrongly flag this; the resolved-path check (isInsideDir) does not.
+    expect(bash(`cd ${DIR}-decoy`).blocked).toBe(false);
+    expect(bash("cd /tmp/verdict-dir-decoy").blocked).toBe(false);
+  });
+
+  it("a quoted decoy behaves like the unquoted decoy: quote-stripping makes the resolved-path check spelling-independent", () => {
+    // Before cdTargetArgument stripped surrounding quotes, a quoted decoy
+    // routed to CD_TARGET_UNRESOLVABLE_CHARS (the quote chars themselves
+    // triggered it) and fell through to bashReferencesVerdictDir's textual
+    // leaf match, which DOES match here (the leaf "solution-verdicts" is a
+    // literal PREFIX substring of "solution-verdicts-decoy") — so the
+    // quoted form was wrongly blocked while the unquoted form correctly was
+    // not. Stripping the quotes before either check runs makes both forms
+    // agree.
+    expect(bash(`cd "${DIR}-decoy"`).blocked).toBe(false);
+    expect(bash(`cd '${DIR}-decoy'`).blocked).toBe(false);
+    // Known, unchanged residual: a tilde/env-var decoy spelling is NOT
+    // normalized the same way (this module does not expand `~`/`$VAR` —
+    // that is the whole reason those forms fall through to the textual
+    // check at all), so it still hits the same textual-prefix over-match
+    // and stays blocked. This is a false positive (fails safe), not a
+    // forgery gap, and is out of this task's scope to resolve.
+    expect(bash("cd ~/.local/state/agent-grounding/solution-verdicts-decoy").blocked).toBe(true);
+  });
+
+  it("does not flag `cd -` or a bare `cd` (no statically resolvable destination)", () => {
+    expect(bash("cd -").blocked).toBe(false);
+    expect(bash("cd").blocked).toBe(false);
+  });
+
+  it("blocks cd targets path.resolve cannot literally evaluate: quoted / env-var / tilde / glob spellings of the verdict dir", () => {
+    // Each of these previously fell through to cd's unconditional read-only
+    // fast path (isReadOnlyBashCommand returns true for ANY `cd`), because
+    // path.resolve on the raw, un-shell-evaluated token never lands inside
+    // `dir` for any of these spellings. The fix routes them to the same
+    // bashReferencesVerdictDir text-reference check any other non-read-only
+    // Bash command goes through.
+    expect(bash(`cd "${DIR}"`).blocked).toBe(true); // double-quoted literal
+    expect(bash(`cd '${DIR}'`).blocked).toBe(true); // single-quoted literal
+    expect(bash("cd $SOLUTION_VERDICT_DIR").blocked).toBe(true); // env-var spelling
+    expect(bash("cd ~/.local/state/agent-grounding/solution-verdicts").blocked).toBe(true); // tilde spelling
+    expect(bash("cd $HOME/.local/state/agent-grounding/solution-verdicts").blocked).toBe(true); // $HOME spelling
+    expect(bash("cd ${HOME}/.local/state/agent-grounding/solution-verdicts").blocked).toBe(true); // ${HOME} spelling
+    expect(bash("cd /home/u/.local/state/agent-grounding/solution-ver*").blocked).toBe(true); // glob spelling
+    expect(bash("cd /home/u/.local/state/agent-grounding/solution-verdict?").blocked).toBe(true); // glob spelling
+  });
+
+  it("blocks brace-expansion cd spellings of the verdict dir (bash 3.2.57 verified: cd <parent>/{solution-verdicts,x} navigates into the leaf, ignoring the extra alternative)", () => {
+    // `{` `}` `,` were missing from CD_TARGET_UNRESOLVABLE_CHARS: path.resolve
+    // treats the whole brace expression as one literal (non-existent) path
+    // segment, so it is neither "inside" the dir nor flagged unresolvable,
+    // and cd's unconditional read-only fast path fired. Each of these
+    // previously measured blocked=false even though bashReferencesVerdictDir
+    // already returns true for all of them (the leaf "solution-verdicts"
+    // survives intact inside the braces in every one of these six forms).
+    const parent = "/home/u/.local/state/agent-grounding";
+    expect(bash(`cd ${parent}/{solution-verdicts,x}`).blocked).toBe(true);
+    expect(bash(`cd ${parent}/{x,solution-verdicts}`).blocked).toBe(true);
+    expect(bash(`cd ${parent}/{solution-verdicts,}`).blocked).toBe(true);
+    expect(bash(`cd -P ${parent}/{solution-verdicts,x}`).blocked).toBe(true);
+    expect(bash(`cd -- ${parent}/{solution-verdicts,x}`).blocked).toBe(true);
+    // Relative form: cwd is already the parent.
+    expect(bash("cd {solution-verdicts,x}", parent).blocked).toBe(true);
+  });
+
+  it("blocks a brace that SPLITS the leaf itself, via the widened bashReferencesVerdictDir glob/brace fallback", () => {
+    // `solution-verdict{s,}` expands to `solution-verdicts` / `solution-verdict`
+    // — neither contains the literal leaf as a contiguous substring, so the
+    // direct literal-leaf check misses it; only the leaf-WORD fallback (which
+    // needed `{` added to its trigger regex, same task) catches it, because
+    // "solution" alone (a >=6-char leaf word) survives the split. This
+    // sub-case predates the cd branch (it applies to bashReferencesVerdictDir
+    // for ANY command, not just cd) and was already a hole before this task;
+    // the same widening closes it here too.
+    const parent = "/home/u/.local/state/agent-grounding";
+    expect(bash(`cd ${parent}/solution-verdict{s,}`).blocked).toBe(true);
+  });
+
   it("blocks shell-glob redirect targets that obscure the leaf (overwrite forge)", () => {
     // bash expands the glob to the real dir at runtime; the literal leaf
     // never appears, but a distinctive leaf word survives the single glob.
