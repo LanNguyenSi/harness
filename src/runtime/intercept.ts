@@ -22,6 +22,7 @@ import { renderProducers } from "../policies/producers.js";
 import type { Manifest, Policy } from "../schema/index.js";
 import { buildActionEnvelope } from "./action-envelope.js";
 import { renderAgentFacing } from "./agent-facing.js";
+import { normalizeCommand, type NormalizedCommand } from "./command-normalize.js";
 import {
   resolveEnvironment,
   type EnvironmentResolution,
@@ -262,6 +263,29 @@ function enrichEnvelope(
 }
 
 /**
+ * Single-slot memo for `normalizeCommand`. `policyMatchesEvent` runs once
+ * per policy for the SAME event (see the `matching` loop in `intercept()`
+ * and the lone call in `harness explain-policy`), but normalisation is a
+ * pure function of the command string alone, so re-deriving it per
+ * policy would multiply the cost by the manifest's policy count for no
+ * reason. A single cache slot is enough: the trigger-match loop always
+ * evaluates the SAME command string back-to-back across every policy of
+ * one event before it can change to a different one. Keyed by strict
+ * string equality, so a stale entry can never produce a WRONG answer —
+ * at worst a miss, which just recomputes.
+ */
+let normalizeCommandMemo: { command: string; result: NormalizedCommand } | undefined;
+
+function normalizeCommandCached(command: string): NormalizedCommand {
+  if (normalizeCommandMemo !== undefined && normalizeCommandMemo.command === command) {
+    return normalizeCommandMemo.result;
+  }
+  const result = normalizeCommand(command);
+  normalizeCommandMemo = { command, result };
+  return result;
+}
+
+/**
  * Does a policy's `trigger:` match this event? This is the WHICH-tool-
  * calls filter; the WHETHER-it-applies filter is `policy.when:`,
  * evaluated separately (`evaluateWhen`). A policy fires only when both
@@ -288,7 +312,23 @@ export function policyMatchesEvent(policy: Policy, event: ToolEvent): boolean {
     } catch {
       return false;
     }
-    if (!re.test(command)) return false;
+    // Raw-OR-normalised (D-003, run 2026-07-27-gate-target-repo-
+    // resolution): test the RAW command first — cheap, and byte-
+    // identical to the pre-fix behaviour — then, only if that fails,
+    // fall back to the NORMALISED command (wrapper prefixes peeled, git
+    // global options dropped, whitespace collapsed). Strictly additive:
+    // a command that matched today keeps matching via the raw test
+    // alone; normalisation can only ADD a match a spelling would
+    // otherwise have missed (env/nice/command wrappers, extra git
+    // global options, doubled whitespace), never remove the raw one.
+    // Replacing the matcher input instead of OR-ing it risks silently
+    // REMOVING an existing match if normalisation ever mangles some
+    // shape — the fail-open direction for a gate — so this stays
+    // additive rather than a substitution.
+    if (!re.test(command)) {
+      const { normalized } = normalizeCommandCached(command);
+      if (!re.test(normalized)) return false;
+    }
   }
   return true;
 }

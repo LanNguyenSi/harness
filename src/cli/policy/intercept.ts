@@ -26,6 +26,7 @@ import {
 import type { Manifest, McpServer } from "../../schema/index.js";
 import { resolveGeneratedDir, writePendingApproval } from "../../runtime/pending-approval.js";
 import { parseBashPrefix } from "../../runtime/bash-prefix-parse.js";
+import { normalizeCommand } from "../../runtime/command-normalize.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import { checkPauseFromLoader } from "../pause-check.js";
 
@@ -402,7 +403,44 @@ export async function runInterceptCli(
   // literal `preflight:`. An explicit env var still wins: it is the
   // operator's deliberate override of the derived value.
   const cwd = resolvePolicyCwd(event, opts.codexCommandCwd);
-  const gitContext = resolveGitContext(cwd);
+  const cwdGitContext = resolveGitContext(cwd);
+  // Task T-003 (run 2026-07-27-gate-target-repo-resolution): a command
+  // can explicitly name a DIFFERENT repository than the hook's own cwd
+  // (`git -C`, `env -C`/`--chdir`, `--work-tree`/`--git-dir`, a leading
+  // `cd` prefix), and until this the ${REPO}/${BRANCH} builtins ignored
+  // that entirely — a preflight recorded for repo A satisfied the gate
+  // for a command that explicitly read repo B (01-plan.md's cross-repo
+  // reproduction). Reuse the T-001 normaliser's `targetDir` extraction
+  // (no second parser) and, ONLY when it resolves to an ACTUAL git work
+  // tree, let it name ${REPO}/${BRANCH} instead of the cwd's repo.
+  // Bounded so this can never lock anyone out: an unparseable, missing,
+  // or non-repository target directory falls through to `cwdGitContext`
+  // unchanged (`resolveGitContext`'s own "" -> "unknown, caller falls
+  // back" contract). When a command names more than one distinct target
+  // (e.g. two chained `git -C` invocations), `normalizeCommand`'s
+  // `targetDir` already resolves the FIRST one and so does this — a
+  // later target in the same command line is not consulted, which is
+  // that function's documented priority order, not a new residual here.
+  // ${CWD} is untouched by any of this: it always names the hook's own
+  // cwd (see `builtins.CWD` below).
+  const targetDir =
+    event.tool_name === "Bash"
+      ? (() => {
+          const cmd = readBashCommand(event.tool_input);
+          return cmd === null ? null : normalizeCommand(cmd).targetDir;
+        })()
+      : null;
+  const targetGitContext =
+    targetDir === null
+      ? null
+      : (() => {
+          const resolved = path.isAbsolute(targetDir)
+            ? targetDir
+            : path.resolve(cwd, targetDir);
+          const candidate = resolveGitContext(resolved);
+          return candidate.repo.length > 0 ? candidate : null;
+        })();
+  const gitContext = targetGitContext ?? cwdGitContext;
   const builtins = {
     SESSION_ID: builtinSessionId,
     REPO: process.env.HARNESS_REPO ?? gitContext.repo,
@@ -428,10 +466,19 @@ export async function runInterceptCli(
     // were invisible to the resolver before: the env resolver read
     // `process.env` and the branch resolver read `.git/HEAD` under the
     // hook's starting cwd, so a prod signal smuggled through either
-    // idiom silently passed the gate. Parse the leading prefix once
-    // from the Bash command and merge the result into the resolver
-    // inputs only — builtin `${REPO}` / `${BRANCH}` / `${CWD}` keep the
-    // hook's cwd so policy-template namespacing is not affected.
+    // idiom silently passed the gate. Parse the leading prefix once from
+    // the Bash command and merge the result into the resolver inputs
+    // only. This `cd`-prefix parse is deliberately narrower than, and
+    // independent of, the target-dir-aware `gitContext` computed above
+    // for the `${REPO}` / `${BRANCH}` builtins (task T-003, run
+    // 2026-07-27-gate-target-repo-resolution): it recognises only a
+    // leading `cd`, not `git -C` / `--work-tree` / `--git-dir` / `env
+    // -C`, because it feeds `when:`-clause risk classification, not
+    // ledger-tag namespacing, and the two were never required to agree.
+    // (Stale as of this task: this comment used to claim ${REPO} /
+    // ${BRANCH} / ${CWD} always keep the hook's cwd — no longer true for
+    // ${REPO} / ${BRANCH}, which can now come from the command's own
+    // target directory; only ${CWD} still always names the hook's cwd.)
     const bashPrefix =
       event.tool_name === "Bash"
         ? (() => {

@@ -727,6 +727,135 @@ describe("runInterceptCli — REPO / BRANCH builtins resolve from event.cwd", ()
     expect(result.decisions[0]!.extractValues.BRANCH).toBe("main");
     expect(result.decisions[0]!.ledgerTag).toBe("preflight:main");
   });
+
+  // T-003 (run 2026-07-27-gate-target-repo-resolution): when a Bash
+  // command explicitly names a target directory that resolves to a
+  // real git work tree, ${REPO}/${BRANCH} must name THAT repository,
+  // not the hook cwd's — this is the fix for the reproduced cross-repo
+  // gap in 01-plan.md ("a preflight for `harness` authorised an
+  // investigation of `agent-grounding`").
+  describe("target-directory resolution overrides ${REPO} / ${BRANCH} (T-003)", () => {
+    function ledgerWithFact(content: string): LedgerClient {
+      return {
+        async query() {
+          return {
+            kind: "ok",
+            entries: [{ id: "fact-1", content, createdAt: new Date().toISOString() }],
+          };
+        },
+        async record() {
+          /* no-op */
+        },
+      };
+    }
+
+    async function runBashCommand(
+      command: string,
+      cwd: string,
+      ledger: LedgerClient = emptyLedger,
+    ) {
+      const { stream: out } = captureStream();
+      const { stream: err } = captureStream();
+      const result = await runInterceptCli({
+        stdin: streamFrom(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command },
+            session_id: "sess-1",
+            cwd,
+          }),
+        ),
+        stdout: out,
+        stderr: err,
+        manifest: fakeManifest([PREFLIGHT_POLICY]),
+        ledger,
+      });
+      expect(result.decisions).toHaveLength(1);
+      return result;
+    }
+
+    const SPELLINGS: Array<[string, (b: string) => string]> = [
+      ["git -C <B> status", (b) => `git -C ${b} status`],
+      ["env -C <B> git status", (b) => `env -C ${b} git status`],
+      [
+        "git --work-tree=<B> --git-dir=<B>/.git status",
+        (b) => `git --work-tree=${b} --git-dir=${b}/.git status`,
+      ],
+      ["cd <B> && git status", (b) => `cd ${b} && git status`],
+    ];
+
+    it.each(SPELLINGS)(
+      "%s resolves REPO/BRANCH to the named target, not cwd's repo",
+      async (_label, buildCommand) => {
+        const repoA = makeRepoFixture("target-a", "main");
+        const repoB = makeRepoFixture("target-b", "feature/target");
+        const result = await runBashCommand(buildCommand(repoB), repoA);
+        expect(result.decisions[0]!.extractValues.REPO).toBe("target-b");
+        expect(result.decisions[0]!.extractValues.BRANCH).toBe("feature/target");
+      },
+    );
+
+    it("keeps ${CWD} as the hook cwd even when REPO/BRANCH come from a target dir", async () => {
+      const repoA = makeRepoFixture("cwd-a", "main");
+      const repoB = makeRepoFixture("cwd-b", "main");
+      const result = await runBashCommand(`git -C ${repoB} status`, repoA);
+      expect(result.decisions[0]!.extractValues.CWD).toBe(repoA);
+      expect(result.decisions[0]!.extractValues.REPO).toBe("cwd-b");
+    });
+
+    it("REGRESSION: a preflight fact for repo A does not satisfy the gate for a command targeting repo B", async () => {
+      const repoA = makeRepoFixture("cross-repo-a", "main");
+      const repoB = makeRepoFixture("cross-repo-b", "main");
+      const factForA = ledgerWithFact("preflight:cross-repo-a");
+
+      // The empirical finding from 01-plan.md, turned into a regression
+      // test: a fact recorded for A must not authorise a command that
+      // explicitly targets B.
+      const crossRepo = await runBashCommand(`git -C ${repoB} status`, repoA, factForA);
+      expect(crossRepo.decisions[0]!.outcome).toBe("deny");
+      expect(crossRepo.blocked).toBe(true);
+
+      // The SAME fact DOES satisfy the gate for a command targeting A.
+      const sameRepo = await runBashCommand(`git -C ${repoA} status`, repoA, factForA);
+      expect(sameRepo.decisions[0]!.outcome).toBe("allow");
+      expect(sameRepo.blocked).toBe(false);
+    });
+
+    it("falls back to the cwd-derived REPO/BRANCH when the target dir does not exist", async () => {
+      const repoA = makeRepoFixture("fallback-nonexistent", "main");
+      const bogus = path.join(path.dirname(repoA), "does-not-exist-xyz-12345");
+      const result = await runBashCommand(`git -C ${bogus} status`, repoA);
+      expect(result.decisions[0]!.extractValues.REPO).toBe("fallback-nonexistent");
+      expect(result.decisions[0]!.extractValues.BRANCH).toBe("main");
+    });
+
+    it("falls back to the cwd-derived REPO/BRANCH when the target dir exists but is not a git repository", async () => {
+      const repoA = makeRepoFixture("fallback-non-repo", "main");
+      const plainDir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-intercept-plain-"));
+      cleanups.push(() => fs.rmSync(plainDir, { recursive: true, force: true }));
+      const result = await runBashCommand(`git -C ${plainDir} status`, repoA);
+      expect(result.decisions[0]!.extractValues.REPO).toBe("fallback-non-repo");
+      expect(result.decisions[0]!.extractValues.BRANCH).toBe("main");
+    });
+
+    it("falls back to the cwd-derived REPO/BRANCH when the command's target dir is unparseable", async () => {
+      // An escaped-space path is one of command-normalize.ts's documented
+      // blind spots: its tokeniser is not quote/escape-aware, so `-C`'s
+      // argument is truncated at the literal space, yielding a garbled
+      // ABSOLUTE targetDir ("/tmp/some\") that cannot exist on disk.
+      // Absolute (not resolved against cwd) so this genuinely exercises
+      // the "does not resolve to a work tree" guard rather than
+      // coincidentally walking back up into repoA's own `.git`.
+      const repoA = makeRepoFixture("fallback-unparseable", "main");
+      const result = await runBashCommand(
+        "git -C /tmp/harness-t003-unparseable\\ dir status",
+        repoA,
+      );
+      expect(result.decisions[0]!.extractValues.REPO).toBe("fallback-unparseable");
+      expect(result.decisions[0]!.extractValues.BRANCH).toBe("main");
+    });
+  });
 });
 
 describe("runInterceptCli — Phase 7 #5: when: evaluation wiring", () => {
@@ -1102,5 +1231,135 @@ describe("runInterceptCli — hookName self-identification", () => {
     expect(errOutput()).toContain(
       "harness policy intercept [hook=require-review-evidence]: audit-write failed for review-before-merge",
     );
+  });
+});
+
+describe("runInterceptCli — normalised bash_match trigger matching (T-002, run 2026-07-27-gate-target-repo-resolution)", () => {
+  // The exact bash_match regex from src/cli/init/templates.ts:442
+  // (duplicated at :224 and in docs/examples/full-manifest.yaml, pinned
+  // by tests/cli/init-full-template-parity.test.ts). The PREFLIGHT_POLICY
+  // fixture used elsewhere in this file carries NO bash_match, so the
+  // trigger regex itself was untested through the real evaluation path
+  // before this describe block.
+  const REAL_BASH_MATCH =
+    "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* (status|log|diff|branch)\\b";
+
+  const REAL_PREFLIGHT_POLICY: Policy = {
+    name: "preflight-before-investigation",
+    description: "gate git reads on a per-repo preflight tag (real trigger regex)",
+    trigger: { event: "PreToolUse", match: "Bash", bash_match: REAL_BASH_MATCH },
+    requires: { ledger_tag: "preflight:${REPO}" },
+    hook: "h",
+    enforcement: "block",
+  } as Policy;
+
+  const emptyLedgerLocal: LedgerClient = {
+    async query() {
+      return { kind: "ok", entries: [] };
+    },
+    async record() {
+      /* no-op */
+    },
+  };
+
+  async function runFor(command: string) {
+    const { stream: out } = captureStream();
+    const { stream: err } = captureStream();
+    return runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+          session_id: "sess-1",
+          cwd: "/tmp/harness-normalize-test-cwd",
+        }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([REAL_PREFLIGHT_POLICY]),
+      ledger: emptyLedgerLocal,
+    });
+  }
+
+  describe("previously-allowed spellings now block", () => {
+    const cases: Array<{ label: string; command: string }> = [
+      { label: "env -C <repo>", command: "env -C /tmp/some-repo git status" },
+      { label: "env (bare)", command: "env git status" },
+      { label: "env VAR=value", command: "env FOO=bar git status" },
+      { label: "nice", command: "nice git status" },
+      { label: "git --no-pager", command: "git --no-pager status" },
+      { label: "double space", command: "git  status" },
+      {
+        label: "git --git-dir=<x>/.git --work-tree=<x>",
+        command: "git --git-dir=/tmp/some-repo/.git --work-tree=/tmp/some-repo status",
+      },
+    ];
+    for (const c of cases) {
+      it(`${c.label}: "${c.command}" is blocked with no ledger evidence`, async () => {
+        const result = await runFor(c.command);
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]?.outcome).toBe("deny");
+        expect(result.blocked).toBe(true);
+      });
+    }
+  });
+
+  describe("superset: previously-blocked spellings still block", () => {
+    const cases = [
+      "git status",
+      "cd /tmp/some-repo; git status",
+      "cd /tmp/some-repo && git status",
+      "git -C /tmp/some-repo status",
+      "sh -c 'cd /tmp/some-repo && git status'",
+    ];
+    for (const command of cases) {
+      it(`"${command}" is still blocked with no ledger evidence`, async () => {
+        const result = await runFor(command);
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]?.outcome).toBe("deny");
+        expect(result.blocked).toBe(true);
+      });
+    }
+  });
+
+  it("a non-git Bash command produces no decision (no-op, no false positive)", async () => {
+    const result = await runFor("ls -la");
+    expect(result.decisions).toHaveLength(0);
+    expect(result.blocked).toBe(false);
+  });
+
+  it("a malformed bash_match fails safe to no-match and never throws", async () => {
+    const malformedPolicy: Policy = {
+      name: "malformed-bash-match",
+      description: "deliberately unparseable regex",
+      trigger: { event: "PreToolUse", match: "Bash", bash_match: "(" },
+      requires: { ledger_tag: "preflight:${REPO}" },
+      hook: "h",
+      enforcement: "block",
+    } as Policy;
+    const { stream: out } = captureStream();
+    const { stream: err } = captureStream();
+    // If policyMatchesEvent's try/catch around `new RegExp` (or the added
+    // normalised-path test) ever regressed, this call would throw/reject
+    // instead of resolving — the `await` below is itself the "never
+    // throws" assertion.
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "git status" },
+          session_id: "sess-1",
+          cwd: "/tmp/harness-normalize-test-cwd",
+        }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([malformedPolicy]),
+      ledger: emptyLedgerLocal,
+    });
+    expect(result.decisions).toHaveLength(0);
+    expect(result.blocked).toBe(false);
   });
 });
