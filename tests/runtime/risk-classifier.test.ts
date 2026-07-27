@@ -299,6 +299,12 @@ describe("classifyRisk — built-in read-only floor", () => {
     "cat README.md",
     "ls -la /tmp",
     "head -20 CHANGELOG.md",
+    "cd /Users/lan/git/pandora/harness",
+    "cd ..",
+    "npm audit",
+    "npm ls",
+    "npm view lodash",
+    "npm outdated",
   ])("classifies the provably read-only command %j as low", (command) => {
     // Without this floor each of these is unclassified, and on a
     // production-resolved branch "unknown is not safe" lets a prod-scoped
@@ -338,6 +344,12 @@ describe("classifyRisk — built-in read-only floor", () => {
 
   it.each([
     "npm version patch",
+    // `npm audit` (report) is floored, but `npm audit fix` mutates the
+    // lockfile/node_modules and must stay gated; likewise other mutating
+    // npm subcommands not on the curated allowlist.
+    "npm audit fix",
+    "npm publish",
+    "npm install",
     // Bins that write through their own flags/operands (excluded from the
     // read-only allowlist) must not be floored either.
     "sort -o out.txt in.txt",

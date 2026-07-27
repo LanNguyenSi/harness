@@ -224,7 +224,7 @@ describe("recordPolicyDecision writer fallback", () => {
     const captured = JSON.parse(envLine) as Record<string, string>;
     // The leading `~/` must have expanded to the operator's HOME.
     expect(captured.TEST_TILDE).toMatch(/\/\.evidence-ledger\/ledger\.db$/);
-    expect(captured.TEST_TILDE.startsWith("~")).toBe(false);
+    expect(captured.TEST_TILDE?.startsWith("~")).toBe(false);
     // Absolute + plain values pass through untouched.
     expect(captured.TEST_ABSOLUTE).toBe("/already/absolute/path");
     expect(captured.TEST_NO_TILDE).toBe("plain-value-no-tilde");

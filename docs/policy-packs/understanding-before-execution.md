@@ -38,6 +38,39 @@ PreToolUse hook               ← Phase 6 #4 (harness-side blocker)
 Agent executes
 ```
 
+### Read-only Bash bypasses this blocker without an approved report — deliberate, and widening
+
+The PreToolUse blocker admits a provably read-only Bash command or `|`-pipeline
+(`isReadOnlyBashPipeline` in `src/runtime/read-only-bash.ts`) WITHOUT an
+approved Understanding Report — the same shared classifier that gives the
+Risk Classifier its built-in read-only floor (`docs/risk-gate.md`, "Built-in
+read-only commands"). This is intentional, not an oversight: open task
+`f28d9071` ("read-only Bash vor Approval nicht pauschal als write-capable
+blocken") asks for exactly this relaxation, and `git status`/`git diff`/`git
+fetch`/`git ls-remote` and the read-only `gh` verbs (`view`, `list`, `diff`,
+`checks`, `status`) already bypassed this gate before task `fb67b402` widened
+the shared classifier to additionally recognize `cd` (pure navigation form
+only) and a curated npm read-only subcommand set — `ls` / `list`, `view` /
+`info` / `show`, `outdated`, `why` / `explain`, `ping`, and `npm audit` /
+`npm audit signatures` (never `npm audit fix`, whose mutating tail is
+detected by a positive shape, not a denylist, so shell-quoting cannot
+launder it through). `cd`, `npm audit`, and `npm ls` now also pass this hard
+gate pre-approval, exactly as `git status` already did.
+
+**Consciously accepted residual: a pre-report NETWORK READ.** `git fetch`
+and `gh <noun> view/list/checks/status` already made a live network call
+before this pack's approval gate ever engaged; widening the same floor to
+`npm audit` / `npm ls` / `npm view` / `npm outdated` continues that same
+class of residual (an outbound registry round-trip, not a local write or a
+git-state mutation) rather than introducing a new one. What the floor
+refuses, in both the old and the widened form, is letting any of these
+commands smuggle a WRITE: shell chaining, redirection, and command
+substitution all still forfeit the read-only classification and fall back
+to requiring an approved report, and an npm invocation carrying an
+untrusted `--registry` / `--userconfig` / `--globalconfig` flag forfeits it
+too (`docs/risk-gate.md` has the exact rules and the quoting-bypass
+analysis for `npm audit fix`).
+
 ## Requirements
 
 - `@lannguyensi/understanding-gate@>=0.2.0` available on PATH (the package ships `understanding-gate-claude-hook`, `understanding-gate-claude-stop`, `understanding-gate-claude-pre-tool-use`, plus the `understanding-gate` CLI). The package owns templates, parser, schema, persistence, and the minimal standalone PreToolUse blocker. Harness owns ledger glue, permission profiles, doctor wiring.

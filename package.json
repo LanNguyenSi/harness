@@ -1,6 +1,6 @@
 {
   "name": "@lannguyensi/harness",
-  "version": "0.41.0",
+  "version": "0.42.0",
   "description": "Declarative control plane for agent harnesses — one YAML for grounding, tools, memory, and hooks.",
   "license": "MIT",
   "homepage": "https://github.com/LanNguyenSi/harness",
@@ -43,6 +43,7 @@
     "check:ug-schema-drift": "node scripts/check-ug-schema-drift.mjs",
     "check:boundaries": "depcruise --config .dependency-cruiser.cjs src",
     "check:duplication": "node scripts/check-duplication.mjs",
+    "check:no-only": "node scripts/check-no-only.mjs",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

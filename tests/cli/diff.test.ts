@@ -204,7 +204,11 @@ tools:
 // layer lives outside the repo. The pre-existing no-override tests above pin
 // that the plain path is unchanged.
 describe("diff — override-layer symmetry (--since)", () => {
-  const DISCRIMINATOR = { hostname: "h", platform: "linux", procVersionPath: "/nonexistent" };
+  // `as const` narrows `platform` to the literal "linux" (NodeJS.Platform
+  // member) instead of the widened `string` TS infers by default — without
+  // it, `diff()`'s `discriminator: DiscriminatorOptions` param rejects the
+  // object at every call site below.
+  const DISCRIMINATOR = { hostname: "h", platform: "linux", procVersionPath: "/nonexistent" } as const;
 
   const plainBase = `version: 1
 hooks: []

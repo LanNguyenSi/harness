@@ -409,8 +409,23 @@ process.stdin.on("data", (d) => {
         "args.json",
       );
       cleanups.push(() => fs.rmSync(path.dirname(captureFile), { recursive: true, force: true }));
-      // Server intentionally does NOT respond to tools/list. If the
-      // capability detector ran, this test would hang to the timeout.
+      // Sits next to captureFile, so the same cleanup covers it.
+      const listMarker = path.join(path.dirname(captureFile), "tools-list-seen");
+      // The server RECORDS a tools/list request but never answers it, so the
+      // hot path is observable directly: if the capability detector ran, the
+      // marker exists. Asserting on the marker rather than on elapsed
+      // wall-clock time keeps this deterministic under load — the previous
+      // `elapsed < 2000` budget measured 2113ms once on a loaded machine and
+      // failed spuriously.
+      //
+      // The per-test timeout below is load-bearing for the DIAGNOSTIC, not for
+      // the happy path (which takes well under a second). A regressed run
+      // issues tools/list, gets no answer, and burns the full 8000ms client
+      // budget. Under vitest's 5000ms default testTimeout the test would then
+      // die with a bare "Test timed out in 5000ms" and never reach the marker
+      // assertion, so the failure would say nothing about tools/list. Giving
+      // the test more room than the client budget lets the probe complete and
+      // fail on the marker with a message that names the actual regression.
       const script = makeScript(`#!/usr/bin/env node
 const fs = require("fs");
 let buf = "";
@@ -425,28 +440,29 @@ process.stdin.on("data", (d) => {
     try { msg = JSON.parse(line); } catch { nl = buf.indexOf("\\n"); continue; }
     if (msg.method === "initialize") {
       process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\\n");
+    } else if (msg.method === "tools/list") {
+      // Record only. Deliberately no response, so a detector that runs here
+      // still hangs exactly as it did before this marker was added.
+      fs.writeFileSync(process.env.LIST_MARKER_FILE, "1");
     } else if (msg.method === "tools/call" && msg.params && msg.params.name === "ledger_summary") {
       fs.writeFileSync(process.env.CAPTURE_FILE, JSON.stringify(msg.params.arguments));
       process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: JSON.stringify({ sessionId: "sess-1", counts: {}, entries: { facts: [], hypotheses: [], rejected: [], unknowns: [] } }) }] } }) + "\\n");
     }
-    // Note: no tools/list handler.
     nl = buf.indexOf("\\n");
   }
 });
 `);
-      const start = Date.now();
       const result = await queryLedgerByTag({
         mcpCommand: [script],
-        mcpEnv: { CAPTURE_FILE: captureFile },
+        mcpEnv: { CAPTURE_FILE: captureFile, LIST_MARKER_FILE: listMarker },
         sessionId: "sess-1",
         timeoutMs: 8000,
       });
-      const elapsed = Date.now() - start;
       expect(result.kind).toBe("ok");
-      expect(elapsed).toBeLessThan(2000); // would be ~8s if tools/list ran and timed out
+      expect(fs.existsSync(listMarker)).toBe(false);
       const captured = JSON.parse(fs.readFileSync(captureFile, "utf8"));
       expect(captured).toEqual({ sessionId: "sess-1" });
-    });
+    }, 12000);
   });
 
   it("degrades when an empty command is given", async () => {

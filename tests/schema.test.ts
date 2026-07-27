@@ -34,7 +34,7 @@ describe("parseManifest — happy path", () => {
     expect(manifest.hooks).toHaveLength(12);
     expect(manifest.policies).toHaveLength(13);
     const reviewPolicy = manifest.policies.find((p) => p.name === "review-before-merge");
-    expect(reviewPolicy?.requires.ledger_tag).toBe("review:${PR_NUMBER}");
+    expect(reviewPolicy?.requires?.ledger_tag).toBe("review:${PR_NUMBER}");
     expect(reviewPolicy?.trigger.extract?.PR_NUMBER).toBe("toolArgs.prNumber");
     // Field-level invariants on the two policies added alongside this test.
     // Schema parsing alone would not catch a typo like `toolArgs.task_id` —
@@ -45,7 +45,7 @@ describe("parseManifest — happy path", () => {
     );
     expect(reviewSubagentPolicy?.trigger.match).toBe("mcp__agent-tasks__pull_requests_create");
     expect(reviewSubagentPolicy?.trigger.extract?.TASK_ID).toBe("toolArgs.taskId");
-    expect(reviewSubagentPolicy?.requires.ledger_tag).toBe("review-subagent:${TASK_ID}");
+    expect(reviewSubagentPolicy?.requires?.ledger_tag).toBe("review-subagent:${TASK_ID}");
     const preflightPushPolicy = manifest.policies.find(
       (p) => p.name === "preflight-before-push",
     );
@@ -53,8 +53,8 @@ describe("parseManifest — happy path", () => {
     expect(preflightPushPolicy?.trigger.bash_match).toBe(
       "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b",
     );
-    expect(preflightPushPolicy?.requires.ledger_tag).toBe("preflight:${BRANCH}");
-    expect(preflightPushPolicy?.requires.within).toBe("10m");
+    expect(preflightPushPolicy?.requires?.ledger_tag).toBe("preflight:${BRANCH}");
+    expect(preflightPushPolicy?.requires?.within).toBe("10m");
     expect(manifest.policy_packs).toHaveLength(4);
     expect(manifest.policy_packs[0]?.name).toBe("understanding-before-execution");
     expect(manifest.policy_packs[0]?.source).toBe("builtin");
@@ -186,7 +186,7 @@ describe("parseManifest — happy path", () => {
           },
         ],
       });
-      expect(m.policies[0]?.requires.within).toBe(within);
+      expect(m.policies[0]?.requires?.within).toBe(within);
     }
   });
 });

