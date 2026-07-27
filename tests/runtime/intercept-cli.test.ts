@@ -893,6 +893,184 @@ describe("runInterceptCli — REPO / BRANCH builtins resolve from event.cwd", ()
       expect(result.decisions[0]!.extractValues.BRANCH).toBe("main");
     });
 
+    // G1 fix (HIGH, review round 2, 2026-07-27): F2 above only ever
+    // counted OTHER *git* invocations toward "does everyone agree" — a
+    // non-git GATED verb sharing the chain (`gh pr merge`, `gh pr
+    // create`, `npm publish`) was invisible to it, so `git -C <decoy>
+    // rev-parse HEAD && gh pr merge` still resolved ${REPO}/${BRANCH}
+    // from the decoy even though `-C` scopes only that ONE git call and
+    // `gh pr merge` genuinely runs at the real, unaffected cwd. Exercised
+    // through the REAL shipped `review-before-merge-bash` /
+    // `review-subagent-before-pr-create-bash` / `dogfood-before-release`
+    // trigger regexes (via `policyBashMatch`, F7 fix rationale) rather
+    // than a hand-copied literal, so a future edit to those regexes can't
+    // silently drift this coverage.
+    describe("G1: an explicit git -C target must not leak into a DIFFERENT, non-git command sharing the chain", () => {
+      const REAL_REVIEW_BEFORE_MERGE_BASH: Policy = {
+        name: "review-before-merge-bash",
+        description: "real trigger regex, review round 2",
+        trigger: {
+          event: "PreToolUse",
+          match: "Bash",
+          bash_match: policyBashMatch("review-before-merge-bash"),
+        },
+        requires: { ledger_tag: "review:${BRANCH}" },
+        hook: "h",
+        enforcement: "block",
+      } as Policy;
+
+      const REAL_REVIEW_SUBAGENT_BEFORE_PR_CREATE_BASH: Policy = {
+        name: "review-subagent-before-pr-create-bash",
+        description: "real trigger regex, review round 2",
+        trigger: {
+          event: "PreToolUse",
+          match: "Bash",
+          bash_match: policyBashMatch("review-subagent-before-pr-create-bash"),
+        },
+        requires: { ledger_tag: "review-subagent:${BRANCH}" },
+        hook: "h",
+        enforcement: "block",
+      } as Policy;
+
+      const REAL_DOGFOOD_BEFORE_RELEASE: Policy = {
+        name: "dogfood-before-release",
+        description: "real trigger regex, review round 2",
+        trigger: {
+          event: "PreToolUse",
+          match: "Bash",
+          bash_match: policyBashMatch("dogfood-before-release"),
+        },
+        requires: { ledger_tag: "dogfood:${SESSION_ID}" },
+        hook: "h",
+        enforcement: "block",
+      } as Policy;
+
+      async function runBashCommandWithPolicy(command: string, cwd: string, policy: Policy) {
+        const { stream: out } = captureStream();
+        const { stream: err } = captureStream();
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command },
+              session_id: "sess-g1",
+              cwd,
+            }),
+          ),
+          stdout: out,
+          stderr: err,
+          manifest: fakeManifest([policy]),
+          ledger: emptyLedger,
+        });
+        expect(result.decisions).toHaveLength(1);
+        return result;
+      }
+
+      it("git -C <B> rev-parse HEAD && gh pr merge keeps the cwd-derived REPO/BRANCH, not the decoy's", async () => {
+        const repoA = makeRepoFixture("g1-merge-a", "main");
+        const repoB = makeRepoFixture("g1-merge-b", "feature/decoy");
+        const result = await runBashCommandWithPolicy(
+          `git -C ${repoB} rev-parse HEAD && gh pr merge 123`,
+          repoA,
+          REAL_REVIEW_BEFORE_MERGE_BASH,
+        );
+        expect(result.decisions[0]!.extractValues.REPO).toBe("g1-merge-a");
+        expect(result.decisions[0]!.extractValues.BRANCH).toBe("main");
+      });
+
+      it("git -C <B> rev-parse HEAD && gh pr create keeps the cwd-derived REPO/BRANCH, not the decoy's", async () => {
+        const repoA = makeRepoFixture("g1-create-a", "main");
+        const repoB = makeRepoFixture("g1-create-b", "feature/decoy");
+        const result = await runBashCommandWithPolicy(
+          `git -C ${repoB} rev-parse HEAD && gh pr create`,
+          repoA,
+          REAL_REVIEW_SUBAGENT_BEFORE_PR_CREATE_BASH,
+        );
+        expect(result.decisions[0]!.extractValues.REPO).toBe("g1-create-a");
+        expect(result.decisions[0]!.extractValues.BRANCH).toBe("main");
+      });
+
+      it("git -C <B> rev-parse HEAD && npm publish keeps the cwd-derived REPO/BRANCH, not the decoy's", async () => {
+        const repoA = makeRepoFixture("g1-publish-a", "main");
+        const repoB = makeRepoFixture("g1-publish-b", "feature/decoy");
+        const result = await runBashCommandWithPolicy(
+          `git -C ${repoB} rev-parse HEAD && npm publish`,
+          repoA,
+          REAL_DOGFOOD_BEFORE_RELEASE,
+        );
+        expect(result.decisions[0]!.extractValues.REPO).toBe("g1-publish-a");
+        expect(result.decisions[0]!.extractValues.BRANCH).toBe("main");
+      });
+
+      // Measured: this ALSO redirects today, but correctly — `cd`, unlike
+      // `-C`, genuinely persists for the rest of the chain, so `gh pr
+      // create` really does run against B here. Pinned so a future,
+      // over-broad tightening of the G1 fix above cannot accidentally
+      // collapse this back to cwd too.
+      it("cd <B> && gh pr create resolves REPO/BRANCH to B — cd genuinely persists, unlike the per-invocation git -C above", async () => {
+        const repoA = makeRepoFixture("g1-cd-a", "main");
+        const repoB = makeRepoFixture("g1-cd-b", "feature/target");
+        const result = await runBashCommandWithPolicy(
+          `cd ${repoB} && gh pr create`,
+          repoA,
+          REAL_REVIEW_SUBAGENT_BEFORE_PR_CREATE_BASH,
+        );
+        expect(result.decisions[0]!.extractValues.REPO).toBe("g1-cd-b");
+        expect(result.decisions[0]!.extractValues.BRANCH).toBe("feature/target");
+      });
+
+      // Hermetic end-to-end (measured live against the shipped binary
+      // per the review brief): with a legitimately-earned `review:
+      // feature/decoy` fact in the ledger for the DECOY repo, the merge
+      // must stay `blocked: true` — the decoy's review evidence must
+      // never satisfy a merge that never touched the decoy.
+      it("a review fact for the decoy branch does not satisfy the merge gate for the cwd's own branch", async () => {
+        const repoA = makeRepoFixture("g1-hermetic-a", "main");
+        const repoB = makeRepoFixture("g1-hermetic-b", "feature/decoy");
+        const decoyLedger: LedgerClient = {
+          async query() {
+            return {
+              kind: "ok",
+              entries: [
+                {
+                  id: "fact-1",
+                  content: "review:feature/decoy",
+                  createdAt: new Date().toISOString(),
+                },
+              ],
+            };
+          },
+          async record() {
+            /* no-op */
+          },
+        };
+        const { stream: out } = captureStream();
+        const { stream: err } = captureStream();
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: {
+                command: `git -C ${repoB} rev-parse HEAD && gh pr merge 123`,
+              },
+              session_id: "sess-g1-hermetic",
+              cwd: repoA,
+            }),
+          ),
+          stdout: out,
+          stderr: err,
+          manifest: fakeManifest([REAL_REVIEW_BEFORE_MERGE_BASH]),
+          ledger: decoyLedger,
+        });
+        expect(result.decisions[0]!.extractValues.REPO).toBe("g1-hermetic-a");
+        expect(result.decisions[0]!.extractValues.BRANCH).toBe("main");
+        expect(result.decisions[0]!.outcome).toBe("deny");
+        expect(result.blocked).toBe(true);
+      });
+    });
+
     // F5 fix (review round 2026-07-27): a RELATIVE git-level target
     // resolves against the preceding `cd` / `env -C` context this module
     // saw, instead of always against the caller's own cwd.
@@ -1555,5 +1733,76 @@ describe("runInterceptCli — normalised bash_match trigger matching (T-002, run
     });
     expect(result.decisions).toHaveLength(0);
     expect(result.blocked).toBe(false);
+  });
+});
+
+// G4 fix (MEDIUM, review round 2, 2026-07-27): above
+// `MAX_NORMALIZE_LENGTH`, `normalizeCommand` used to skip normalisation
+// SILENTLY — no stderr line, no audit row, the skip was only visible by
+// reading the source. End-to-end through the real `policy intercept`
+// entrypoint (not just the normaliser unit), per the review brief.
+describe("runInterceptCli — G4 fix: MAX_NORMALIZE_LENGTH skip is now observable on stderr", () => {
+  const REAL_BASH_MATCH = policyBashMatch("preflight-before-investigation");
+  const REAL_PREFLIGHT_POLICY: Policy = {
+    name: "preflight-before-investigation",
+    description: "gate git reads on a per-repo preflight tag (real trigger regex)",
+    trigger: { event: "PreToolUse", match: "Bash", bash_match: REAL_BASH_MATCH },
+    requires: { ledger_tag: "preflight:${REPO}" },
+    hook: "h",
+    enforcement: "block",
+  } as Policy;
+
+  const emptyLedgerLocal: LedgerClient = {
+    async query() {
+      return { kind: "ok", entries: [] };
+    },
+    async record() {
+      /* no-op */
+    },
+  };
+
+  async function runFor(command: string) {
+    const { stream: out } = captureStream();
+    const { stream: err, output: errOutput } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+          session_id: "sess-g4",
+          cwd: "/tmp/harness-normalize-test-cwd",
+        }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([REAL_PREFLIGHT_POLICY]),
+      ledger: emptyLedgerLocal,
+    });
+    return { result, errOutput };
+  }
+
+  it("emits exactly one stderr line when the command exceeds MAX_NORMALIZE_LENGTH, and the RAW match still fires (D-003)", async () => {
+    const oversized = "git status " + "x".repeat(100_000);
+    expect(oversized.length).toBeGreaterThan(100_000);
+    const { result, errOutput } = await runFor(oversized);
+    // The raw command still matches ("git status" appears verbatim at
+    // the start), so the trigger fires regardless of the skipped
+    // ADDITIONAL normalised-form coverage — the skip only loses the
+    // extra reach normalisation would have added, never the baseline.
+    expect(result.decisions).toHaveLength(1);
+    const stderrText = errOutput();
+    const skipLines = stderrText
+      .split("\n")
+      .filter((line) => line.includes("normalised-form matching skipped"));
+    expect(skipLines).toHaveLength(1);
+    expect(stderrText).toContain("100000");
+  });
+
+  it("emits NO skip line at or under the bound", async () => {
+    const atBound = "git status " + "x".repeat(100_000 - "git status ".length);
+    expect(atBound.length).toBe(100_000);
+    const { errOutput } = await runFor(atBound);
+    expect(errOutput()).not.toContain("normalised-form matching skipped");
   });
 });

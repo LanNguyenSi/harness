@@ -201,6 +201,18 @@ export interface InterceptOptions {
    * omitted by non-Bash events and by callers/tests that don't supply
    * one, in which case `policyMatchesEvent` computes it lazily per policy
    * (correct, just not de-duplicated).
+   *
+   * INVARIANT (G6, review round 2, 2026-07-27): this is NOT checked
+   * against `event` at runtime — nothing verifies the `NormalizedCommand`
+   * passed in was actually derived from THIS event's own
+   * `tool_input.command`. Safe today because there is exactly one
+   * production caller (`runInterceptCli`, `src/cli/policy/intercept.ts`),
+   * which computes it from the SAME `event` it then passes to
+   * `intercept()`. A future second caller that threads a mismatched
+   * `NormalizedCommand` (e.g. reused across two different events) would
+   * silently apply the wrong command's `bash_match` normalisation with
+   * no error — keep this pairing manual-but-obvious at every call site
+   * rather than assuming it self-enforces.
    */
   normalizedCommand?: NormalizedCommand;
   /**

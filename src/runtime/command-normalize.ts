@@ -1,7 +1,9 @@
 // Trigger-matching normaliser for Bash command strings (run
 // 2026-07-27-gate-target-repo-resolution, T-001/T-002; hardened against a
 // reviewer's empirical findings from a second pass over the SAME run,
-// tracked here as F2/F3/F4/F5/F6).
+// tracked here as F2/F3/F4/F5/F6; hardened AGAIN against a second,
+// independent reviewer's findings over the SAME fix, tracked here as
+// G1/G2/G3/G4/G6, "review round 2").
 //
 // Every `bash_match` policy trigger (`src/cli/init/templates.ts`,
 // `docs/examples/full-manifest.yaml`) is a single regex tested against the
@@ -26,13 +28,24 @@
 //     (F6 fix, review round 2026-07-27: a private third copy had already
 //     drifted from the other two — `env --default-signal=INT` was peeled
 //     by `read-only-bash.ts`'s generic glued-long-flag catch-all but NOT
-//     here, a confirmed live divergence). Each module keeps its own
-//     decision about what a recognised flag means: this module
-//     additionally needs the VALUE of `-C`/`--chdir` to extract
-//     `targetDir`, which `read-only-bash.ts` never needs, so that glued-
-//     value parsing (`-C<dir>`, `--chdir=<dir>`) stays local here.
+//     here, a confirmed live divergence between the two flag-NAME sets).
+//     `read-only-bash.ts`'s generic "any OTHER glued `--long=value` flag"
+//     catch-all is now ALSO mirrored here (G6 fix, review round 2,
+//     2026-07-27 — sharing the flag-NAME sets alone did not close this:
+//     `--default-signal=INT` isn't in any of the three named sets, it
+//     only ever fell through each peeler's own generic branch, and this
+//     module previously had none). Each module keeps its own decision
+//     about what a recognised flag means: this module additionally needs
+//     the VALUE of `-C`/`--chdir` to extract `targetDir`, which
+//     `read-only-bash.ts` never needs, so that glued-value parsing
+//     (`-C<dir>`, `--chdir=<dir>`) stays local here.
 //   - `command` (its own flags, e.g. `-p`/`-v`/`-V`, and `--`).
-//   - `nice`, including `-n <n>` / `-n<n>` / `--adjustment=<n>`.
+//   - `nice`, including `-n <n>` / `-n<n>` / `--adjustment=<n>`, and the
+//     bare `-<n>` / `+<n>` forms (G3 fix, review round 2, 2026-07-27:
+//     `nice -10 cmd` — increment glued straight to the leading dash, no
+//     `n` — is `nice(1)`'s PRIMARY documented spelling; `nice` was
+//     already in this SUPPORTED list, but only the `-n`-prefixed
+//     spellings were actually recognised).
 //   - `sudo` / `doas` (their own user/group/config flags — see
 //     `SUDO_VALUE_FLAGS` / `DOAS_VALUE_FLAGS`), `time` (`-o`/`-f`/
 //     `--output`/`--format` plus boolean flags), `timeout` (its own flags
@@ -88,6 +101,24 @@
 //     command line instead of the push's own repo — a fail-open on the
 //     push gate specifically, since a bare branch name has no repo
 //     qualifier and any repo's `preflight:<branch>` fact satisfied it).
+//   - "Every invocation agrees" is ALSO broken by a non-git command that
+//     shares the chain (G1 fix, HIGH, review round 2, 2026-07-27): F2
+//     above only ever counted OTHER *git* invocations toward agreement, so
+//     `git -C <B> rev-parse HEAD && gh pr merge` still reported B for the
+//     WHOLE command — `gh pr merge` is not git at all, so it was invisible
+//     to the F2 check, even though `-C` scopes only the ONE git call it
+//     decorates and `gh pr merge` genuinely runs at the real, unaffected
+//     cwd. A command-starting segment (follows `&&`/`;`/`\n`/`(`, or is
+//     the first segment — never a bare `|`, which stays in the SAME
+//     directory) that is NEITHER a git invocation NOR the recognised
+//     leading `cd` prefix now forces `targetDir` to `null` too, the same
+//     conservative fallback F2 already uses for git-vs-git disagreement.
+//     The leading `cd` prefix stays exempt on purpose: unlike `-C`, `cd`
+//     genuinely persists for the rest of the chain, so `cd <B> && gh pr
+//     create` really does run against B and correctly keeps resolving
+//     there — only a PER-INVOCATION override (`-C`, `--work-tree`,
+//     `--git-dir`, wrapping `env -C`) can leak across an unrelated later
+//     command; a persistent `cd` cannot, by construction.
 //
 // DELIBERATELY NOT SUPPORTED, and out of reach of ANY string-level
 // approach (see `CHANGELOG.md` task `2cc73f55`, decision D-005 in this
@@ -120,11 +151,43 @@
 //     which does not satisfy a `bash_match` regex expecting a bare word
 //     boundary. The same class of problem as the whitespace-in-quoted-
 //     path gap above.
-//   - Command substitution (backticks or `$(...)`) wrapping the real
-//     invocation, e.g. `` echo `env -C /tmp git status` `` (F4 finding,
-//     confirmed still a live bypass): this module canonicalises the
-//     OUTER command only and does not recurse into a substitution's
-//     contents — the same boundary `sh -c` stops at, above.
+//   - Backtick command substitution wrapping the real invocation, e.g.
+//     `` echo `env -C /tmp git status` `` (F4 finding, confirmed still a
+//     live bypass): this module canonicalises the OUTER command only and
+//     does not recurse into a substitution's contents — the same
+//     boundary `sh -c` stops at, above.
+//   - `$(...)` command substitution is NOT in this list — see the
+//     "accidentally covered" note right below. Do not read its absence
+//     here as "also open"; it genuinely blocks today, pinned by a test.
+//   - Ten more spellings, each measured as a live bypass (G2 finding,
+//     review round 2, 2026-07-27), none of them peeled wrapper prefixes
+//     or a recognised `git` spelling: `exec git status`, `nohup git
+//     status`, `ionice -c3 git status`, `flock /tmp/l git status`,
+//     `script -q /dev/null git status`, `chrt -b 0 git status`, `taskset
+//     -c 0 git status`, `\git status` (the backslash defeats
+//     `GIT_TOKEN_RE`, which requires the bare basename), `"git" status`
+//     (a QUOTED binary name — the mirror image of the quoted-subcommand
+//     gap above), and `env -S "git status"` (the split-string flag hands
+//     the rest of the argv to a fresh, opaque re-parse this module
+//     deliberately does not follow, per `peelEnv`'s own comment). The
+//     same G2 pass measured an ELEVENTH spelling, `nice -10 git status`,
+//     as a live bypass too — but that one is the G3 fix above, not a
+//     ceiling: it is intentionally not listed here anymore.
+//
+// `$(...)` command substitution is ACCIDENTALLY covered (G2 finding,
+// review round 2, 2026-07-27) — not a deliberate feature, and distinct
+// from the backtick case above, which is a genuine, deliberate gap.
+// `BOUNDARY_RE` treats a bare `(` as a shell-boundary token (needed for
+// the leading-command case, `(cd X && ...)`), and `$(...)`'s opening
+// paren is, character-for-character, the same `(`. So `echo $(env -C
+// /tmp git status)` splits into a segment starting exactly at that `(`,
+// `canonicalizeSegment` finds a real git invocation inside it, and the
+// close paren rides along harmlessly as trailing text after the
+// subcommand (`git status)` still satisfies a `...status\b` regex, since
+// `)` is a non-word character). This is coincidental, not intentional:
+// `BOUNDARY_RE` was never designed with `$(...)` in mind, and an
+// unrelated future change to it could silently drop this coverage with
+// no test noticing — pinned by a dedicated test for exactly that reason.
 //
 // Above `MAX_NORMALIZE_LENGTH` characters, normalisation is skipped
 // entirely and the command is returned unchanged (F3 fix, review round
@@ -134,7 +197,14 @@
 // timeout budget. The RAW command is still tested by `policyMatchesEvent`
 // regardless (D-003's raw-OR-normalised construction), so an oversized
 // command only loses the ADDITIONAL normalised-form coverage, never the
-// baseline one.
+// baseline one. The skip itself used to carry no signal at all — no
+// stderr line, no audit row — so it was a SILENT new fail-open ceiling
+// (G4 finding, review round 2, 2026-07-27). `NormalizedCommand.truncated`
+// now reports the skip back to the caller; `runInterceptCli`
+// (`src/cli/policy/intercept.ts`) writes exactly one stderr line when it
+// sees `truncated: true`, keeping this module itself pure and I/O-free
+// (see below) while making the skip observable at the one place that
+// already owns a stderr stream for this event.
 //
 // Bounded, allocation-light, pure string work: no `fs`, no
 // `child_process`, no network — `node:path` is used ONLY for
@@ -182,6 +252,17 @@ export interface NormalizedCommand {
    * caller's cwd, unchanged from before this field existed).
    */
   targetBase: string | null;
+  /**
+   * `true` when the input exceeded `MAX_NORMALIZE_LENGTH` and
+   * normalisation was skipped entirely (G4 fix, review round 2,
+   * 2026-07-27): the caller previously had no way to tell "nothing
+   * recognisable was found" apart from "normalisation never ran at all",
+   * so the skip carried no audit signal. `false` whenever the input WAS
+   * run through `normalizeCommandInner` (including when nothing
+   * recognisable was found there either — that case is still `false`,
+   * only the length-bound short-circuit sets this).
+   */
+  truncated: boolean;
 }
 
 /** A whitespace-delimited token plus its offset within the segment it came from. */
@@ -209,8 +290,11 @@ const GIT_TOKEN_RE = /^(?:\S*\/)?git$/;
  * 100k characters comfortably covers any command a human or agent would
  * plausibly type, while keeping the worst case a small constant instead
  * of scaling with whatever ends up pasted into a single Bash call.
+ * Exported (G4 fix, review round 2) so a caller reporting the skip (see
+ * `NormalizedCommand.truncated`) can reference the same number instead of
+ * hand-copying it into a diagnostic message.
  */
-const MAX_NORMALIZE_LENGTH = 100_000;
+export const MAX_NORMALIZE_LENGTH = 100_000;
 
 /**
  * Shell boundary tokens a `bash_match` regex can anchor on, expressed as
@@ -243,15 +327,16 @@ export function normalizeCommand(command: string): NormalizedCommand {
       normalized: typeof command === "string" ? command : "",
       targetDir: null,
       targetBase: null,
+      truncated: false,
     };
   }
   if (command.length > MAX_NORMALIZE_LENGTH) {
-    return { normalized: command, targetDir: null, targetBase: null };
+    return { normalized: command, targetDir: null, targetBase: null, truncated: true };
   }
   try {
     return normalizeCommandInner(command);
   } catch {
-    return { normalized: command, targetDir: null, targetBase: null };
+    return { normalized: command, targetDir: null, targetBase: null, truncated: false };
   }
 }
 
@@ -263,6 +348,24 @@ function normalizeCommandInner(command: string): NormalizedCommand {
   let bareGitSegmentCount = 0;
   let i = 0;
   const n = command.length;
+
+  // A leading `cd <dir> &&|;` prefix, parsed ONCE up front (G1 fix,
+  // review round 2, 2026-07-27) instead of the two separate calls the
+  // size===1 and size===0 branches below each used to make on their own.
+  // Also needed here now to exempt the recognised leading-cd segment
+  // itself from the new non-git-command ambiguity check just below: that
+  // segment is not "some other command sharing the chain" — it IS the
+  // directory every later bare command in the chain actually runs
+  // inside.
+  const leadingCd = parseBashPrefix(command).cdTarget;
+
+  // Boundary token immediately preceding the segment currently being
+  // examined (`null` for the very first segment). Tracked so the G1
+  // check below can tell a real "new command" boundary (`&&`/`;`/`\n`/
+  // `(`) apart from a bare `|`, which keeps running in the SAME
+  // directory as whatever precedes it.
+  let precedingBoundaryToken: string | null = null;
+  let hasAmbiguousNonGitSegment = false;
 
   // Walk the command as alternating (segment, boundary) pairs. Each
   // segment is handed to `canonicalizeSegment`, which rewrites ONLY its
@@ -287,19 +390,49 @@ function normalizeCommandInner(command: string): NormalizedCommand {
           sawExplicitBase = true;
         }
       }
+    } else if (
+      precedingBoundaryToken !== "|" &&
+      !(precedingBoundaryToken === null && leadingCd !== null)
+    ) {
+      // G1 fix (HIGH, review round 2, 2026-07-27): a segment that STARTS
+      // a new command (follows `&&`/`;`/`\n`/`(` — or is the very first
+      // segment in the command — never a bare `|`, which keeps running
+      // in the SAME directory as whatever it reads from) and is NOT
+      // itself a git invocation is a genuinely DIFFERENT command that
+      // does not necessarily run wherever some OTHER git invocation
+      // elsewhere in the chain explicitly pointed. Measured case: `git
+      // -C <B> rev-parse HEAD && gh pr merge` — `-C` scopes only the ONE
+      // git call it decorates, so `gh pr merge` actually runs at the
+      // real (unaffected) cwd; resolving ${REPO}/${BRANCH} from B for it
+      // let a fact recorded against a decoy repo satisfy
+      // `review-before-merge-bash` / `review-subagent-before-pr-create-
+      // bash` for a merge/PR that never touched B. The one exemption is
+      // the recognised LEADING `cd` prefix itself: unlike `-C`, `cd`
+      // genuinely persists for the rest of the chain, so `cd <B> && git
+      // status` (or any other command after it) really does run in B —
+      // that stays the untouched `explicitTargets.size === 0` branch
+      // below, not this one.
+      hasAmbiguousNonGitSegment = true;
     }
     if (!boundary) break;
     parts.push(boundary.token);
     i = boundary.start + boundary.token.length;
+    precedingBoundaryToken = boundary.token;
   }
 
   let targetDir: string | null;
   let targetBase: string | null = null;
 
-  if (explicitTargets.size === 1 && bareGitSegmentCount === 0) {
+  if (
+    explicitTargets.size === 1 &&
+    bareGitSegmentCount === 0 &&
+    !hasAmbiguousNonGitSegment
+  ) {
     // Every git invocation the command names agrees on ONE repository —
     // safe to use it even when there are several (e.g. two `git -C <same
-    // dir>` calls chained together).
+    // dir>` calls chained together) — AND no OTHER, non-git command
+    // shares the chain that this single target does not actually apply
+    // to (G1 fix, review round 2).
     targetDir = [...explicitTargets][0]!;
     targetBase = explicitTargetBase;
     if (targetBase === null && !path.isAbsolute(targetDir)) {
@@ -311,8 +444,7 @@ function normalizeCommandInner(command: string): NormalizedCommand {
       // simulate the chain deeply enough to attribute a NON-leading `cd`
       // to a specific later invocation, same ceiling as the leading-only
       // fallback immediately below.
-      const cd = parseBashPrefix(command).cdTarget;
-      if (cd !== null && !isTildeTarget(cd)) targetBase = cd;
+      if (leadingCd !== null && !isTildeTarget(leadingCd)) targetBase = leadingCd;
     }
   } else if (explicitTargets.size === 0) {
     // No git invocation named an explicit target of its own (whether
@@ -321,23 +453,29 @@ function normalizeCommandInner(command: string): NormalizedCommand {
     // target DIRECTLY here — every bare invocation in the chain runs
     // inside it, so this is not a base for something else, it IS the
     // answer — delegated to the existing leading-prefix parser rather
-    // than reimplementing its quote-handling.
-    const cd = parseBashPrefix(command).cdTarget;
-    targetDir = cd !== null && !isTildeTarget(cd) ? cd : null;
+    // than reimplementing its quote-handling. Unaffected by the G1
+    // ambiguity flag above: a non-git command after a leading `cd` is
+    // exactly the case that flag exempts, and a non-git command with NO
+    // git invocation anywhere in the chain never disagrees with
+    // anything, since there is no explicit git target to disagree with
+    // in the first place.
+    targetDir = leadingCd !== null && !isTildeTarget(leadingCd) ? leadingCd : null;
   } else {
     // Ambiguous: either more than one git invocation names a DIFFERENT
-    // repository, or at least one invocation names a repo explicitly
-    // while another runs bare (which may be a THIRD repo — whatever the
-    // shell's cwd happens to be at that point). Neither has one
-    // unambiguous answer, so — per the "when in doubt, fall back to cwd"
-    // rule this whole run was built on — report no target at all rather
-    // than silently picking one invocation's answer for the whole
-    // command (F2 fix; see the module header for the push-gate
-    // fail-open this closes).
+    // repository, at least one invocation names a repo explicitly while
+    // another runs bare (which may be a THIRD repo — whatever the
+    // shell's cwd happens to be at that point), or (G1 fix, review round
+    // 2) a non-git, non-leading-cd command elsewhere in the chain that
+    // the single explicit git target does not actually apply to. None of
+    // these has one unambiguous answer, so — per the "when in doubt,
+    // fall back to cwd" rule this whole run was built on — report no
+    // target at all rather than silently picking one invocation's answer
+    // for the whole command (F2 fix; see the module header for the
+    // push-gate fail-open this closes).
     targetDir = null;
   }
 
-  return { normalized: parts.join(""), targetDir, targetBase };
+  return { normalized: parts.join(""), targetDir, targetBase, truncated: false };
 }
 
 /** Find the earliest shell boundary token at or after `from`. Returns null when none remain. */
@@ -525,6 +663,18 @@ function peelEnv(
       idx += 1;
       continue;
     }
+    // Generic glued long flag with a value (`--default-signal=INT`, or
+    // any OTHER `env` long option this module does not need the VALUE
+    // of): single token, skip it (G6 fix, review round 2, 2026-07-27 —
+    // mirrors `read-only-bash.ts`'s own generic catch-all, so the two
+    // peelers' coverage cannot drift again the way `--default-signal=INT`
+    // once did; see the module header). Placed AFTER the named `-C` /
+    // `--chdir` / `--unset` forms above so it only ever catches a flag
+    // this module has no more specific handling for.
+    if (t.startsWith("--") && t.includes("=")) {
+      idx += 1;
+      continue;
+    }
     if (VAR_ASSIGN_RE.test(t)) {
       idx += 1;
       continue;
@@ -552,7 +702,15 @@ function peelCommand(tokens: Token[], startIdx: number): number {
   return idx;
 }
 
-/** Peel `nice`'s own flags: `-n <n>`, `-n<n>`, `--adjustment=<n>`. */
+/**
+ * Peel `nice`'s own flags: `-n <n>`, `-n<n>`, `--adjustment=<n>`, and the
+ * bare `-<n>` / `+<n>` forms (G3 fix, review round 2, 2026-07-27):
+ * `nice(1)` documents `nice -10 cmd` (increment glued directly to the
+ * leading dash, no `n`) as its PRIMARY spelling, and some BSD variants
+ * also accept a leading `+` for a positive increment — `nice -10 git
+ * status` bypassed even though `nice` was already in the SUPPORTED list,
+ * because only the `-n`-prefixed spellings were recognised.
+ */
 function peelNice(tokens: Token[], startIdx: number): number {
   let idx = startIdx;
   while (idx < tokens.length) {
@@ -567,6 +725,10 @@ function peelNice(tokens: Token[], startIdx: number): number {
       continue;
     }
     if (t.startsWith("--adjustment=")) {
+      idx += 1;
+      continue;
+    }
+    if (/^[-+]\d+$/.test(t)) {
       idx += 1;
       continue;
     }

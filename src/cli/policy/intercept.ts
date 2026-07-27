@@ -26,7 +26,11 @@ import {
 import type { Manifest, McpServer } from "../../schema/index.js";
 import { resolveGeneratedDir, writePendingApproval } from "../../runtime/pending-approval.js";
 import { parseBashPrefix } from "../../runtime/bash-prefix-parse.js";
-import { normalizeCommand, type NormalizedCommand } from "../../runtime/command-normalize.js";
+import {
+  MAX_NORMALIZE_LENGTH,
+  normalizeCommand,
+  type NormalizedCommand,
+} from "../../runtime/command-normalize.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import { checkPauseFromLoader } from "../pause-check.js";
 
@@ -422,8 +426,17 @@ export async function runInterceptCli(
   // `targetDir` itself resolves to `null` (F2 fix, review round
   // 2026-07-27 — see that module's header): this used to resolve the
   // FIRST invocation's target for the whole command, which is exactly
-  // the fail-open `preflight-before-push` regression that fix closes,
-  // so there is no "first wins" residual here to document anymore.
+  // the fail-open `preflight-before-push` regression that fix closes.
+  // That F2 fix only counted OTHER *git* invocations toward "does
+  // everyone agree" — a non-git gated verb sharing the same chain (`git
+  // -C <B> rev-parse HEAD && gh pr merge`) was invisible to it, so
+  // `${BRANCH}` still resolved to B for the merge even though `gh pr
+  // merge` runs at the real, unaffected cwd. G1 fix, review round 2,
+  // 2026-07-27 (see `command-normalize.ts`'s header): `targetDir` now
+  // also goes `null` when a different, non-git command shares the
+  // chain that the single explicit git target does not actually apply
+  // to — so there is genuinely no "first/only invocation wins for an
+  // unrelated verb" residual left to document here.
   // ${CWD} is untouched by any of this: it always names the hook's own
   // cwd (see `builtins.CWD` below).
   //
@@ -438,6 +451,19 @@ export async function runInterceptCli(
           return cmd === null ? undefined : normalizeCommand(cmd);
         })()
       : undefined;
+  // G4 fix (MEDIUM, review round 2, 2026-07-27): above
+  // `MAX_NORMALIZE_LENGTH`, `normalizeCommand` skips normalisation
+  // entirely and `truncated` comes back `true` — previously a SILENT
+  // fail-open on the ADDITIONAL normalised-form coverage (raw matching
+  // still applies regardless, per `policyMatchesEvent`'s raw-OR-
+  // normalised construction), with no stderr line and no audit row. One
+  // line here makes the skip observable without touching the module's
+  // pure, I/O-free contract.
+  if (normalizedCommand?.truncated === true) {
+    stderr.write(
+      `harness policy intercept${hookSuffix(opts.hookName)}: Bash command exceeds ${MAX_NORMALIZE_LENGTH} chars; normalised-form matching skipped for this call (raw match only)\n`,
+    );
+  }
   const targetDir = normalizedCommand?.targetDir ?? null;
   const targetGitContext =
     targetDir === null
@@ -503,6 +529,23 @@ export async function runInterceptCli(
     // resolver read feature/x's branch instead. Bottom line: `resolverGit`
     // must never read anything other than `cwdGitContext`, or the leading-
     // `cd` target within THIS same narrow parse.)
+    //
+    // G5 (review round 2, 2026-07-27): that leading-`cd` parse is itself
+    // still a live declassification lever, PRE-EXISTING and NOT changed
+    // by this run — identical on the shipped 0.42.0 control, so this is
+    // documentation of a known asymmetry, not a new gap. From a repo on
+    // `main`, `rm -rf /data` BLOCKS, but `cd <repo-on-feature/x> && rm -rf
+    // /data` is ALLOWED: the `cd` target makes the resolver read
+    // feature/x's branch instead of cwd's `main`, so `branch_patterns:
+    // [main]` no longer matches. The asymmetry cuts both ways and neither
+    // direction is fixed here: a leading `cd` can make a prod signal
+    // VISIBLE that cwd alone would have missed (cwd on a feature branch,
+    // `cd` into a repo actually on `main`) just as readily as it can make
+    // one INVISIBLE (cwd on `main`, `cd` into a repo on a feature
+    // branch, as in the example above) — `resolverGit` trusts whichever
+    // of the two the command happens to name, with no independent check
+    // that the `cd` target is the repo the destructive command actually
+    // runs against.
     const bashPrefix =
       event.tool_name === "Bash"
         ? (() => {

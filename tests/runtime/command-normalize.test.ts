@@ -47,6 +47,16 @@ describe("normalizeCommand", () => {
       { label: "setsid", command: "setsid git status" },
       { label: "path-qualified git (basename match)", command: "/usr/bin/git status" },
       { label: "relative path-qualified git", command: "./git status" },
+      // G3 fix (MEDIUM, review round 2, 2026-07-27): `nice -10 cmd` is
+      // `nice(1)`'s PRIMARY documented spelling (increment glued to the
+      // leading dash, no `n`); `nice` was already SUPPORTED but only the
+      // `-n`-prefixed forms were recognised.
+      { label: "nice bare -N (primary nice(1) spelling)", command: "nice -10 git status" },
+      { label: "nice bare +N (BSD positive form)", command: "nice +10 git status" },
+      // G6 fix (LOW, review round 2, 2026-07-27): the module header's
+      // motivating divergence example — `read-only-bash.ts` peeled this
+      // via its generic glued-long-flag catch-all, this module had none.
+      { label: "env --default-signal=INT (generic glued long flag)", command: "env --default-signal=INT git status" },
     ];
     for (const c of cases) {
       it(`${c.label}: "${c.command}" normalises to a trigger match`, () => {
@@ -80,6 +90,50 @@ describe("normalizeCommand", () => {
         expect(re.test(c.command)).toBe(false);
       });
     }
+  });
+
+  // G2 fix (MEDIUM, review round 2, 2026-07-27): ten more spellings
+  // measured as live bypasses against the shipped binary, none of them
+  // previously named in the module header's NOT-SUPPORTED list or the
+  // CHANGELOG — same rationale as the F4 block above: assert the
+  // ceiling, don't just describe it in a comment.
+  describe("G2: still-unsupported spellings stay unmatched (documented ceiling, review round 2)", () => {
+    const re = policyBashMatch("preflight-before-investigation");
+    const cases: Array<{ label: string; command: string }> = [
+      { label: "exec", command: "exec git status" },
+      { label: "nohup", command: "nohup git status" },
+      { label: "ionice", command: "ionice -c3 git status" },
+      { label: "flock", command: "flock /tmp/l git status" },
+      { label: "script", command: "script -q /dev/null git status" },
+      { label: "chrt", command: "chrt -b 0 git status" },
+      { label: "taskset", command: "taskset -c 0 git status" },
+      { label: "backslash-escaped git", command: "\\git status" },
+      { label: "quoted git binary name", command: '"git" status' },
+      { label: "env -S (split-string, opaque re-parse)", command: 'env -S "git status"' },
+    ];
+    for (const c of cases) {
+      it(`"${c.command}" does NOT normalise to a trigger match`, () => {
+        const { normalized } = normalizeCommand(c.command);
+        expect(re.test(normalized)).toBe(false);
+        expect(re.test(c.command)).toBe(false);
+      });
+    }
+  });
+
+  // G2 fix, other direction: CHANGELOG.md used to lump "backtick/$()
+  // command substitution" together as open. Only the backtick case
+  // (above) genuinely is — `$(...)` ACCIDENTALLY blocks today because
+  // its opening paren is the same `(` character `BOUNDARY_RE` already
+  // treats as a shell boundary (see the module header). Pinned here so a
+  // future, unrelated `BOUNDARY_RE` edit that silently drops this
+  // coincidental coverage shows up as a newly-failing test.
+  describe("G2: $(...) command substitution is accidentally covered (pin, not a deliberate feature)", () => {
+    const re = policyBashMatch("preflight-before-investigation");
+    it('"echo $(env -C /tmp git status)" DOES normalise to a trigger match', () => {
+      const command = "echo $(env -C /tmp git status)";
+      const { normalized } = normalizeCommand(command);
+      expect(re.test(normalized)).toBe(true);
+    });
   });
 
   describe("superset: previously-matching spellings keep matching", () => {
@@ -179,6 +233,44 @@ describe("normalizeCommand", () => {
     });
   });
 
+  // G1 fix (HIGH, review round 2, 2026-07-27): unit-level pins on
+  // `targetDir` itself, complementing the end-to-end
+  // tests/runtime/intercept-cli.test.ts coverage (which asserts the
+  // resulting ${REPO}/${BRANCH} through the real `review-before-merge-
+  // bash` / `review-subagent-before-pr-create-bash` gates).
+  describe("G1: an explicit git -C target must not leak into a different, non-git command sharing the chain", () => {
+    it("git -C <B> rev-parse HEAD && gh pr merge — targetDir is null (gh pr merge does not run in B)", () => {
+      expect(
+        normalizeCommand("git -C /tmp/repoB rev-parse HEAD && gh pr merge 123").targetDir,
+      ).toBe(null);
+    });
+    it("git -C <B> rev-parse HEAD && gh pr create — targetDir is null", () => {
+      expect(
+        normalizeCommand("git -C /tmp/repoB rev-parse HEAD && gh pr create").targetDir,
+      ).toBe(null);
+    });
+    it("git -C <B> rev-parse HEAD && npm publish — targetDir is null", () => {
+      expect(
+        normalizeCommand("git -C /tmp/repoB rev-parse HEAD && npm publish").targetDir,
+      ).toBe(null);
+    });
+    it("git -C /x status | head — pipe is NOT a new command, stays scoped to /x", () => {
+      expect(normalizeCommand("git -C /tmp/repoB status | head").targetDir).toBe(
+        "/tmp/repoB",
+      );
+    });
+    it("cd <B> && git status — still resolves to B (F5, unaffected by G1)", () => {
+      expect(normalizeCommand("cd /tmp/repoB && git status").targetDir).toBe(
+        "/tmp/repoB",
+      );
+    });
+    it("cd <B> && gh pr create — resolves to B too: cd genuinely persists for the rest of the chain, unlike a per-invocation git -C", () => {
+      expect(normalizeCommand("cd /tmp/repoB && gh pr create").targetDir).toBe(
+        "/tmp/repoB",
+      );
+    });
+  });
+
   // F3 fix (HIGH, review round 2026-07-27): `findNextBoundary` used to do
   // up to 5 `indexOf` scans per segment, and confirming a token's ABSENCE
   // requires scanning to the end of the remaining string every time, so a
@@ -197,7 +289,19 @@ describe("normalizeCommand", () => {
       const oversized = "git status " + "x".repeat(100_000);
       expect(oversized.length).toBeGreaterThan(100_000);
       const result = normalizeCommand(oversized);
-      expect(result).toEqual({ normalized: oversized, targetDir: null, targetBase: null });
+      expect(result).toEqual({
+        normalized: oversized,
+        targetDir: null,
+        targetBase: null,
+        // G4 fix (MEDIUM, review round 2, 2026-07-27): the length-bound
+        // skip is now reported back, not silent — see the `truncated`
+        // end-to-end assertions in tests/runtime/intercept-cli.test.ts.
+        truncated: true,
+      });
+    });
+
+    it("truncated is false at/under the bound, even though nothing matched (G4 fix)", () => {
+      expect(normalizeCommand("ls -la").truncated).toBe(false);
     });
 
     it("stays at or under the length bound: a 100_000-char command is still normalised (not just passed through)", () => {
@@ -264,6 +368,7 @@ describe("normalizeCommand", () => {
         normalized: "",
         targetDir: null,
         targetBase: null,
+        truncated: false,
       });
     });
 
