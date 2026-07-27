@@ -27,13 +27,22 @@
 //     as defense-in-depth, ahead of (not instead of) the cwd-inside check
 //     below, which is what actually closes the later relative-write call
 //     once cwd has genuinely moved. A `cd` target that `path.resolve`
-//     cannot literally evaluate (quoted, `$VAR`/`${VAR}`, `~`, or a glob)
-//     does NOT get `cd`'s read-only fast path either: it falls through to
-//     the same reference-based checks as any other non-read-only Bash, so
-//     `cd "$SOLUTION_VERDICT_DIR"` / `cd ~/.../solution-verdicts` /
-//     `cd .../solution-ver*` stay covered by the `$SOLUTION_VERDICT_DIR`
-//     spellings and leaf-segment matching described below, exactly as a
-//     non-cd command referencing the dir would be.
+//     cannot literally evaluate does NOT get `cd`'s read-only fast path
+//     either: it falls through to the same reference-based checks as any
+//     other non-read-only Bash. `CD_TARGET_UNRESOLVABLE_CHARS` documents
+//     exactly WHICH expansions this enumerates (quoting, `$`/env-var,
+//     `~`, glob, and `{...}` brace expansion) — that list is what this
+//     check catches, not a claim that every shell-expansion class is
+//     closed. Known-open residual, pre-existing (not introduced by this
+//     branch, since it applies to `bashReferencesVerdictDir`'s textual
+//     match on ANY Bash command, not just `cd`): a backslash-escaped
+//     spelling of the leaf, e.g. `cd <parent>/solution\-verdicts`, still
+//     navigates into the dir under bash (verified against bash 3.2.57)
+//     while `bashReferencesVerdictDir` returns false — the backslash
+//     breaks the literal-leaf substring match and no metacharacter here
+//     triggers the glob/brace fallback either. Closing it needs
+//     shell-unescaping in the textual check itself, which is more than
+//     this task absorbs; do not assume the class is closed.
 //
 // Pure reads (`cat <dir>/x.json`) are allowed so the guard is not over-broad.
 //
@@ -47,7 +56,10 @@
 // write paths above. A path constructed at runtime inside an interpreter
 // with no textual reference is NOT caught; marker signing (a cross-repo
 // follow-up) closes content-authenticity against an unguarded write
-// primitive.
+// primitive. The `cd`-target check added later (task fb67b402) has its own
+// enumerated, not exhaustive, expansion list — see the bullet above and
+// `CD_TARGET_UNRESOLVABLE_CHARS`'s docstring for the backslash-escaping
+// residual specifically.
 
 import {
   bashReferencesVerdictDir,
@@ -126,6 +138,15 @@ function bashCommandOf(toolInput: unknown): string {
  *     destination this function can resolve without ambient shell state;
  *     both return null (not flagged), the same conservative stance as the
  *     rest of this module's enumerated-path checks.
+ *   - A single layer of surrounding quotes (`"..."` or `'...'`) is stripped
+ *     from the returned token before the caller does anything with it, so
+ *     `cd "<path>"` and `cd <path>` are treated identically (both the
+ *     resolved-path inside-dir check AND the unresolvable-chars check see
+ *     the same unquoted value). Without this, a quoted literal that merely
+ *     shares a text prefix with the verdict dir (`cd "<dir>-decoy"`) would
+ *     route to the textual leaf match and be wrongly blocked, while the
+ *     unquoted `cd <dir>-decoy` correctly passes via the resolved-path
+ *     check — spelling-dependent behavior for what is the same destination.
  */
 function cdTargetArgument(command: string): string | null {
   const tokens = command.trim().split(/\s+/);
@@ -135,26 +156,57 @@ function cdTargetArgument(command: string): string | null {
     if (t === undefined) break;
     if (t === "-") return null;
     if (t.startsWith("-")) continue;
-    return t;
+    return stripSurroundingQuotes(t);
   }
   return null;
 }
 
 /**
- * Characters that make a `cd` destination token something `path.resolve`
- * cannot literally evaluate: quoting (`"`, `'`), env-var / brace expansion
- * (`$`), home-directory expansion (`~`), and shell globbing (`*`, `?`,
- * `[`). `path.resolve` treats the raw token as a literal path segment, so
- * `cd "$SOLUTION_VERDICT_DIR"` or `cd ~/.../solution-verdicts` resolves to
- * a nonsense path that is never "inside" the dir even though the real
- * shell would expand it TO the dir. A `cd` target containing any of these
- * must therefore NOT take the read-only fast path in `evaluateWriteGuard`:
- * control must fall through to the same `bashReferencesVerdictDir`
- * text-reference check any other non-read-only Bash command goes through,
- * which DOES recognize these spellings (the env-var token, the
- * `agent-grounding/solution-verdicts` tail, and glob-obscured leaf words).
+ * Strip one layer of surrounding double or single quotes from `token`, or
+ * return it unchanged if it is not fully wrapped in a matching pair. Does
+ * NOT attempt any other shell-quoting semantics (no backslash-escape
+ * handling, no nested-quote handling) — this is a narrow normalization so a
+ * simple quoted literal reads the same as its unquoted form, not a shell
+ * parser.
  */
-const CD_TARGET_UNRESOLVABLE_CHARS = /[$~*?["']/;
+function stripSurroundingQuotes(token: string): string {
+  if (
+    token.length >= 2 &&
+    ((token.startsWith('"') && token.endsWith('"')) ||
+      (token.startsWith("'") && token.endsWith("'")))
+  ) {
+    return token.slice(1, -1);
+  }
+  return token;
+}
+
+/**
+ * Characters/sequences that make a `cd` destination token something
+ * `path.resolve` cannot literally evaluate: quoting (`"`, `'` — the residual
+ * case after `stripSurroundingQuotes` has already removed a clean single
+ * layer, e.g. an unbalanced or embedded quote), env-var expansion (`$`),
+ * home-directory expansion (`~`), shell globbing (`*`, `?`, `[`), and brace
+ * expansion (`{`, `}`, `,`). `path.resolve` treats the raw token as a
+ * literal path segment, so `cd "$SOLUTION_VERDICT_DIR"`, `cd
+ * ~/.../solution-verdicts`, or `cd <parent>/{solution-verdicts,x}` all
+ * resolve to a nonsense path that is never "inside" the dir even though a
+ * real shell would expand each of them TO (or, for the brace form, INTO)
+ * the dir. A `cd` target containing any of these must therefore NOT take
+ * the read-only fast path in `evaluateWriteGuard`: control must fall
+ * through to the same `bashReferencesVerdictDir` text-reference check any
+ * other non-read-only Bash command goes through, which DOES recognize
+ * these spellings (the env-var token, the `agent-grounding/solution-verdicts`
+ * tail, and — after the matching widening in
+ * `solution-acceptance-runtime.ts`'s glob-metacharacter test — glob- and
+ * brace-obscured leaf words).
+ *
+ * This list is enumerated, not exhaustive: it is exactly the expansion
+ * classes this check has been reasoned about, not a claim that every way a
+ * shell can rewrite a `cd` argument is covered. A known-open residual
+ * (pre-existing, not introduced by this check) is backslash escaping — see
+ * the module header's "Known-open residual" note.
+ */
+const CD_TARGET_UNRESOLVABLE_CHARS = /[$~*?[{},"']/;
 
 interface Decision {
   blocked: boolean;
@@ -223,13 +275,13 @@ export function evaluateWriteGuard(
         reason: `cd targets the harness-protected solution-verdict dir (${dir}); stepping into it would set up a later un-chained relative write to forge the verdict marker`,
       };
     }
-    // A `cd` target `path.resolve` cannot literally evaluate (quoted,
-    // `$VAR`/`${VAR}`, `~`, or a glob) must not take `cd`'s read-only fast
-    // path below: without this, `cd "$SOLUTION_VERDICT_DIR"` etc. would be
-    // waved through by `isReadOnlyBashCommand` (true for ANY `cd`, per the
-    // shared read-only-bash floor) before ever reaching the reference
-    // check that recognizes these exact spellings. See
-    // `CD_TARGET_UNRESOLVABLE_CHARS`.
+    // A `cd` target containing one of the enumerated unresolvable
+    // expansions (see `CD_TARGET_UNRESOLVABLE_CHARS`'s docstring for the
+    // exact list and its non-exhaustive scope) must not take `cd`'s
+    // read-only fast path below: without this, `cd "$SOLUTION_VERDICT_DIR"`
+    // etc. would be waved through by `isReadOnlyBashCommand` (true for ANY
+    // `cd`, per the shared read-only-bash floor) before ever reaching the
+    // reference check that recognizes these exact spellings.
     const cdTargetUnresolvable =
       cdTarget !== null && CD_TARGET_UNRESOLVABLE_CHARS.test(cdTarget);
 

