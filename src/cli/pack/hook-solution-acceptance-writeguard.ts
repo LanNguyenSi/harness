@@ -43,6 +43,14 @@
 //     triggers the glob/brace fallback either. Closing it needs
 //     shell-unescaping in the textual check itself, which is more than
 //     this task absorbs; do not assume the class is closed.
+//     A SECOND residual of the same class, and on a macOS operator
+//     machine the more reachable of the two: case variance.
+//     `cd <parent>/SOLUTION-VERDICTS` navigates into the dir on a
+//     case-insensitive APFS volume, but `isInsideDir` compares with a
+//     case-sensitive `path.relative` and the textual check uses a
+//     case-sensitive `includes`, so both return false. Also allowed:
+//     a trailing backslash, `cd <DIR>\`. Both pre-existing; closing
+//     them needs case-folding in the textual check.
 //
 // Pure reads (`cat <dir>/x.json`) are allowed so the guard is not over-broad.
 //

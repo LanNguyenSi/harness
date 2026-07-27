@@ -362,6 +362,16 @@ export function bashReferencesVerdictDir(command: string, dir: string): boolean 
   // which is also a repo name and would over-block legitimate work. A
   // command that globs/braces EVERY path segment is the residual the
   // marker-signing follow-up closes.
+  //
+  // ACCEPTED COST of including `{` here: any brace now enters this
+  // leaf-word fallback, so a command carrying a brace AND one of the
+  // generic words above trips it even when it never reaches the dir.
+  // Measured examples that block today and did not before: `cd
+  // /repo/{solution,notes}`, `cd /repo/{a,b}/solution-docs`, and any
+  // non-read-only command containing a brace plus "solution"/"verdicts".
+  // "solution" is a common word, so this is not rare. It is deliberate:
+  // it fails safe, and the tighter alternative (dropping `{`) reopens
+  // the `solution-verdict{s,}` split-leaf hole, which fails open.
   if (/[*?[{]/.test(command)) {
     const leafWords = leaf.split(/[^A-Za-z0-9]+/).filter((w) => w.length >= 6);
     if (leafWords.some((w) => command.includes(w))) return true;
