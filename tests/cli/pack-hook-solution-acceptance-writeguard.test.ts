@@ -114,6 +114,23 @@ describe("write-guard — forge-attempt matrix (the load-bearing anti-forgery pr
     expect(bash("cd").blocked).toBe(false);
   });
 
+  it("blocks cd targets path.resolve cannot literally evaluate: quoted / env-var / tilde / glob spellings of the verdict dir", () => {
+    // Each of these previously fell through to cd's unconditional read-only
+    // fast path (isReadOnlyBashCommand returns true for ANY `cd`), because
+    // path.resolve on the raw, un-shell-evaluated token never lands inside
+    // `dir` for any of these spellings. The fix routes them to the same
+    // bashReferencesVerdictDir text-reference check any other non-read-only
+    // Bash command goes through.
+    expect(bash(`cd "${DIR}"`).blocked).toBe(true); // double-quoted literal
+    expect(bash(`cd '${DIR}'`).blocked).toBe(true); // single-quoted literal
+    expect(bash("cd $SOLUTION_VERDICT_DIR").blocked).toBe(true); // env-var spelling
+    expect(bash("cd ~/.local/state/agent-grounding/solution-verdicts").blocked).toBe(true); // tilde spelling
+    expect(bash("cd $HOME/.local/state/agent-grounding/solution-verdicts").blocked).toBe(true); // $HOME spelling
+    expect(bash("cd ${HOME}/.local/state/agent-grounding/solution-verdicts").blocked).toBe(true); // ${HOME} spelling
+    expect(bash("cd /home/u/.local/state/agent-grounding/solution-ver*").blocked).toBe(true); // glob spelling
+    expect(bash("cd /home/u/.local/state/agent-grounding/solution-verdict?").blocked).toBe(true); // glob spelling
+  });
+
   it("blocks shell-glob redirect targets that obscure the leaf (overwrite forge)", () => {
     // bash expands the glob to the real dir at runtime; the literal leaf
     // never appears, but a distinctive leaf word survives the single glob.

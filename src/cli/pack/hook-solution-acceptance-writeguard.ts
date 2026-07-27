@@ -26,7 +26,14 @@
 //     a bare relative write): this pre-check keeps that first step blocked
 //     as defense-in-depth, ahead of (not instead of) the cwd-inside check
 //     below, which is what actually closes the later relative-write call
-//     once cwd has genuinely moved.
+//     once cwd has genuinely moved. A `cd` target that `path.resolve`
+//     cannot literally evaluate (quoted, `$VAR`/`${VAR}`, `~`, or a glob)
+//     does NOT get `cd`'s read-only fast path either: it falls through to
+//     the same reference-based checks as any other non-read-only Bash, so
+//     `cd "$SOLUTION_VERDICT_DIR"` / `cd ~/.../solution-verdicts` /
+//     `cd .../solution-ver*` stay covered by the `$SOLUTION_VERDICT_DIR`
+//     spellings and leaf-segment matching described below, exactly as a
+//     non-cd command referencing the dir would be.
 //
 // Pure reads (`cat <dir>/x.json`) are allowed so the guard is not over-broad.
 //
@@ -133,6 +140,22 @@ function cdTargetArgument(command: string): string | null {
   return null;
 }
 
+/**
+ * Characters that make a `cd` destination token something `path.resolve`
+ * cannot literally evaluate: quoting (`"`, `'`), env-var / brace expansion
+ * (`$`), home-directory expansion (`~`), and shell globbing (`*`, `?`,
+ * `[`). `path.resolve` treats the raw token as a literal path segment, so
+ * `cd "$SOLUTION_VERDICT_DIR"` or `cd ~/.../solution-verdicts` resolves to
+ * a nonsense path that is never "inside" the dir even though the real
+ * shell would expand it TO the dir. A `cd` target containing any of these
+ * must therefore NOT take the read-only fast path in `evaluateWriteGuard`:
+ * control must fall through to the same `bashReferencesVerdictDir`
+ * text-reference check any other non-read-only Bash command goes through,
+ * which DOES recognize these spellings (the env-var token, the
+ * `agent-grounding/solution-verdicts` tail, and glob-obscured leaf words).
+ */
+const CD_TARGET_UNRESOLVABLE_CHARS = /[$~*?["']/;
+
 interface Decision {
   blocked: boolean;
   reason: string;
@@ -200,8 +223,17 @@ export function evaluateWriteGuard(
         reason: `cd targets the harness-protected solution-verdict dir (${dir}); stepping into it would set up a later un-chained relative write to forge the verdict marker`,
       };
     }
+    // A `cd` target `path.resolve` cannot literally evaluate (quoted,
+    // `$VAR`/`${VAR}`, `~`, or a glob) must not take `cd`'s read-only fast
+    // path below: without this, `cd "$SOLUTION_VERDICT_DIR"` etc. would be
+    // waved through by `isReadOnlyBashCommand` (true for ANY `cd`, per the
+    // shared read-only-bash floor) before ever reaching the reference
+    // check that recognizes these exact spellings. See
+    // `CD_TARGET_UNRESOLVABLE_CHARS`.
+    const cdTargetUnresolvable =
+      cdTarget !== null && CD_TARGET_UNRESOLVABLE_CHARS.test(cdTarget);
 
-    if (isReadOnlyBashCommand(command)) {
+    if (!cdTargetUnresolvable && isReadOnlyBashCommand(command)) {
       return { blocked: false, reason: "read-only Bash command" };
     }
     if (isInsideDir(".", dir, cwd)) {

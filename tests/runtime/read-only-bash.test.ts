@@ -140,13 +140,18 @@ describe("read-only Bash classifier", () => {
     it.each([
       "npm audit",
       "npm audit --json",
+      "npm audit signatures",
+      "npm audit --json signatures",
       "npm ls",
       "npm ls --depth=0",
       "npm list",
       "npm view lodash",
       "npm view lodash version",
+      "npm info lodash", // alias for view
+      "npm show lodash", // alias for view
       "npm outdated",
       "npm why lodash",
+      "npm explain lodash", // formal name for why
       "npm ping",
     ])("allows %s", (cmd) => {
       expect(isReadOnlyBashCommand(cmd)).toBe(true);
@@ -163,10 +168,43 @@ describe("read-only Bash classifier", () => {
       "npm run build",
       "npm audit fix",
       "npm audit fix --force",
+      "npm audit --audit-level high", // separated flag value fails closed
       // Unknown/future npm subcommand: the allowlist is positive, so an
       // unenumerated verb stays unclassified rather than assumed safe.
       "npm some-future-verb",
+      // Aliases are deliberately NOT floored, only canonical spellings.
+      "npm la",
+      "npm ll",
+      "npm v lodash",
     ])("blocks %s (positive allowlist, not a denylist)", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+
+    it.each([
+      // Shell-quoting spellings of `fix` that a token-equality denylist
+      // would miss because none of the RAW tokens equals the string "fix"
+      // (npm's own argv parsing strips the quoting before npm ever sees
+      // it). The positive-shape check (only `-flags` or literal
+      // `signatures` after `audit`) fails closed on all of them.
+      "npm audit \"fix\"",
+      "npm audit 'fix'",
+      "npm audit f''ix",
+      "npm audit fi\"x\"",
+      "npm audit $'fix'",
+    ])("blocks %s (quoted/glued spellings of the mutating audit-fix arm)", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+
+    it.each([
+      // --registry / --userconfig / --globalconfig redirect npm's network
+      // or config lookups to an operator-unverified location; forfeit the
+      // floor for ANY otherwise-read-only npm subcommand.
+      "npm audit --registry=http://attacker.example",
+      "npm audit --registry http://attacker.example",
+      "npm ls --registry=http://attacker.example",
+      "npm view lodash --userconfig=/tmp/evil.npmrc",
+      "npm outdated --globalconfig=/tmp/evil.npmrc",
+    ])("blocks %s (untrusted registry/config source flag)", (cmd) => {
       expect(isReadOnlyBashCommand(cmd)).toBe(false);
     });
   });
