@@ -3,7 +3,7 @@ type: module
 title: Codex runtime adapter — parity gaps vs Claude Code
 description: What harness's Codex runtime adapter is, the enumerated behavioral gaps vs the Claude Code first-class target (former headline gap — no Codex PostToolUse hook — closed by task a1348c89; the active-claim tracker / stay-in-scope reminder gap closed by task cf4cdc93; current top gap is the un-translated permission-profile / sandbox stanza, gap 4), and the Codex wire-format contract.
 tags: [codex, runtime-adapter, parity, hooks]
-timestamp: 2026-07-16T02:26:27Z
+timestamp: 2026-07-27T15:58:11Z
 sources:
   - src/policy-packs/builtin/understanding-before-execution.ts
   - src/policy-packs/builtin/understanding-before-execution-runtime.ts

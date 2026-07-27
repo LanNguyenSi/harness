@@ -22,6 +22,7 @@ import { renderProducers } from "../policies/producers.js";
 import type { Manifest, Policy } from "../schema/index.js";
 import { buildActionEnvelope } from "./action-envelope.js";
 import { renderAgentFacing } from "./agent-facing.js";
+import { normalizeCommand, type NormalizedCommand } from "./command-normalize.js";
 import {
   resolveEnvironment,
   type EnvironmentResolution,
@@ -190,6 +191,31 @@ export interface InterceptOptions {
    */
   riskContext?: RiskGateContext;
   /**
+   * Precomputed `NormalizedCommand` for a Bash event's
+   * `tool_input.command`. `runInterceptCli` already calls
+   * `normalizeCommand` once (for `bash_match` trigger normalisation);
+   * threading the SAME result in here lets `policyMatchesEvent` reuse it
+   * for every policy in the `matching` loop below instead of recomputing
+   * it — same resolved-by-the-wrapper pattern as `currentHeadSha`,
+   * `builtins`, and `riskContext`. Optional: omitted by non-Bash events
+   * and by callers/tests that don't supply one, in which case
+   * `policyMatchesEvent` computes it lazily per policy (correct, just
+   * not de-duplicated).
+   *
+   * INVARIANT: this is NOT checked against `event` at runtime — nothing
+   * verifies the `NormalizedCommand`
+   * passed in was actually derived from THIS event's own
+   * `tool_input.command`. Safe today because there is exactly one
+   * production caller (`runInterceptCli`, `src/cli/policy/intercept.ts`),
+   * which computes it from the SAME `event` it then passes to
+   * `intercept()`. A future second caller that threads a mismatched
+   * `NormalizedCommand` (e.g. reused across two different events) would
+   * silently apply the wrong command's `bash_match` normalisation with
+   * no error — keep this pairing manual-but-obvious at every call site
+   * rather than assuming it self-enforces.
+   */
+  normalizedCommand?: NormalizedCommand;
+  /**
    * Destination for audit-write failure diagnostics. Defaults to
    * `process.stderr` when omitted. Goes to stderr so Claude Code's
    * stdout deny-JSON contract is unaffected.
@@ -267,8 +293,24 @@ function enrichEnvelope(
  * evaluated separately (`evaluateWhen`). A policy fires only when both
  * hold. Exported so `harness explain-policy` can report the trigger
  * verdict on its own.
+ *
+ * `precomputedNormalizedCommand` is an optional caller-supplied
+ * `NormalizedCommand` for the event's command: `intercept()` below
+ * resolves ONE `NormalizedCommand` per event (via
+ * `options.normalizedCommand`, itself computed once by
+ * `runInterceptCli`) and threads it into every `policyMatchesEvent`
+ * call in its `matching` loop, so a raw-miss event normalises the
+ * command exactly ONCE across the whole manifest instead of once per
+ * policy. Omitted by standalone callers (`harness explain-policy`, most
+ * tests), which fall back to computing it lazily right here — correct
+ * either way, since `normalizeCommand` is a pure function of the
+ * command string alone.
  */
-export function policyMatchesEvent(policy: Policy, event: ToolEvent): boolean {
+export function policyMatchesEvent(
+  policy: Policy,
+  event: ToolEvent,
+  precomputedNormalizedCommand?: NormalizedCommand,
+): boolean {
   if (policy.trigger.event !== event.hook_event_name) return false;
   if (policy.trigger.match !== undefined) {
     if (typeof event.tool_name !== "string") return false;
@@ -288,7 +330,23 @@ export function policyMatchesEvent(policy: Policy, event: ToolEvent): boolean {
     } catch {
       return false;
     }
-    if (!re.test(command)) return false;
+    // Raw-OR-normalised (D-003, run 2026-07-27-gate-target-repo-
+    // resolution): test the RAW command first — cheap, and byte-
+    // identical to the pre-fix behaviour — then, only if that fails,
+    // fall back to the NORMALISED command (wrapper prefixes peeled, git
+    // global options dropped, whitespace collapsed). Strictly additive:
+    // a command that matched today keeps matching via the raw test
+    // alone; normalisation can only ADD a match a spelling would
+    // otherwise have missed (env/nice/command wrappers, extra git
+    // global options, doubled whitespace), never remove the raw one.
+    // Replacing the matcher input instead of OR-ing it risks silently
+    // REMOVING an existing match if normalisation ever mangles some
+    // shape — the fail-open direction for a gate — so this stays
+    // additive rather than a substitution.
+    if (!re.test(command)) {
+      const { normalized } = precomputedNormalizedCommand ?? normalizeCommand(command);
+      if (!re.test(normalized)) return false;
+    }
   }
   return true;
 }
@@ -583,7 +641,7 @@ export async function intercept(
   const whenFallbackMap = new Map<string, boolean>();
   const matching: Policy[] = [];
   for (const p of manifest.policies) {
-    if (!policyMatchesEvent(p, event)) continue;
+    if (!policyMatchesEvent(p, event, options.normalizedCommand)) continue;
     if (p.when === undefined) {
       matching.push(p);
       continue;

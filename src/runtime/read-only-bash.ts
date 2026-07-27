@@ -145,12 +145,24 @@ const FIND_WRITE_FLAGS: ReadonlySet<string> = new Set([
  * but still execute the residual command; `-` is the historical
  * synonym for `-i`. `--` ends option parsing. We skip these (and any
  * `NAME=VALUE` assignment tokens) to find the real underlying command.
+ *
+ * Exported (F6 fix, review round 2026-07-27, run
+ * 2026-07-27-gate-target-repo-resolution): `command-normalize.ts`'s
+ * `peelEnv` used to hand-roll its own copy of this exact enumeration
+ * ("that module's constants are private" — no longer true), and the two
+ * copies had already drifted (see that module's header for the confirmed
+ * divergence). Exporting the NAME sets here — not the parsing logic
+ * itself — lets both callers share one source of truth for "which `env`
+ * flags exist" while each keeps its own decision about what a match
+ * means (this file only needs to skip past them; `command-normalize.ts`
+ * additionally needs the VALUE of `-C`/`--chdir` to extract a target
+ * directory, which stays local to that module). No behaviour change here.
  */
-const ENV_LEADING_FLAGS: ReadonlySet<string> = new Set([
+export const ENV_LEADING_FLAGS: ReadonlySet<string> = new Set([
   "-i", "--ignore-environment", "-", "--",
 ]);
 /** `env` flags that consume the following token as their value. */
-const ENV_VALUE_FLAGS: ReadonlySet<string> = new Set([
+export const ENV_VALUE_FLAGS: ReadonlySet<string> = new Set([
   "-u", "--unset",
   "-C", "--chdir",
 ]);
@@ -162,7 +174,7 @@ const ENV_VALUE_FLAGS: ReadonlySet<string> = new Set([
  * split-string flag (bare, glued, or long-form) forfeits the
  * read-only classification. Fail closed.
  */
-const ENV_SPLIT_STRING_FLAGS = /^(-S.*|--split-string(=.*)?)$/;
+export const ENV_SPLIT_STRING_FLAGS = /^(-S.*|--split-string(=.*)?)$/;
 
 /**
  * `less` and `more` can shell out via interactive `!cmd`. The agent

@@ -3,16 +3,36 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { parse as parseYaml } from "yaml";
 import { realLedgerClient, runInterceptCli } from "../../src/cli/policy/intercept.js";
+import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import type { LedgerClient } from "../../src/runtime/intercept.js";
-import type {
-  EnvironmentResolver,
-  McpServer,
-  Policy,
-  RiskClassifier,
+import {
+  parseManifest,
+  type EnvironmentResolver,
+  type McpServer,
+  type Policy,
+  type RiskClassifier,
 } from "../../src/schema/index.js";
 import { makeDecision } from "../_helpers/decision.js";
 import { makeManifest } from "../_helpers/manifest.js";
+
+// Read the real `bash_match` straight out of FULL_TEMPLATE instead of a
+// hand-copied literal (F7 fix, review round 2026-07-27, run
+// 2026-07-27-gate-target-repo-resolution): a literal here would keep
+// passing against the OLD pattern after a future edit (open task
+// `dbc6d303` tightens this exact regex), silently certifying stale
+// behaviour. Mirrors the precedent in
+// tests/cli/init-full-template-kill-switch-deny.test.ts's
+// `policyBashMatch` helper.
+function policyBashMatch(name: string): string {
+  const parsed = parseManifest(parseYaml(FULL_TEMPLATE));
+  const policy = parsed.policies.find((p) => p.name === name);
+  if (!policy) throw new Error(`policy ${name} missing from FULL_TEMPLATE`);
+  const pattern = policy.trigger.bash_match;
+  if (!pattern) throw new Error(`policy ${name} declares no trigger.bash_match`);
+  return pattern;
+}
 
 function streamFrom(s: string): NodeJS.ReadableStream {
   return Readable.from([s]);
@@ -727,6 +747,156 @@ describe("runInterceptCli — REPO / BRANCH builtins resolve from event.cwd", ()
     expect(result.decisions[0]!.extractValues.BRANCH).toBe("main");
     expect(result.decisions[0]!.ledgerTag).toBe("preflight:main");
   });
+
+  // Explicit regression pin for the split decided in run
+  // 2026-07-27-gate-target-repo-resolution: a command naming a FOREIGN
+  // target repository (`git -C <B>`) resolves ${REPO}/${BRANCH} from the
+  // CWD's own repository, never the named target, so a future
+  // reintroduction of a per-command target-directory resolution cannot
+  // land unnoticed. A per-command resolution was built and reviewed on
+  // this same run but removed before shipping (three consecutive review
+  // rounds each found a different way it leaked into the wrong
+  // evaluation) — see CHANGELOG.md and command-normalize.ts's module
+  // header for the full account.
+  // All four spellings the removed resolution understood are pinned, not
+  // just `git -C`. A reviewer demonstrated that a reintroduction limited
+  // to the leading-`cd` target — the spelling that looks safest, since a
+  // `cd` genuinely persists for the rest of the command — leaves a
+  // single-spelling pin entirely green.
+  it.each([
+    ["git -C", (b: string) => `git -C ${b} status`],
+    ["env -C", (b: string) => `env -C ${b} git status`],
+    ["--work-tree/--git-dir", (b: string) => `git --work-tree=${b} --git-dir=${b}/.git status`],
+    ["leading cd", (b: string) => `cd ${b} && git status`],
+  ])(
+    "%s: a command naming a foreign target repo resolves ${REPO}/${BRANCH} to the cwd repo, not the named target",
+    async (_spelling, build) => {
+      const repoA = makeRepoFixture("split-cwd-repo", "main");
+      const repoB = makeRepoFixture("split-foreign-target", "feature/other");
+      const { stream: out } = captureStream();
+      const result = await runInterceptCli({
+        stdin: streamFrom(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: build(repoB) },
+            session_id: "sess-1",
+            cwd: repoA,
+          }),
+        ),
+        stdout: out,
+        manifest: fakeManifest([PREFLIGHT_POLICY]),
+        ledger: emptyLedger,
+      });
+      expect(result.decisions).toHaveLength(1);
+      expect(result.decisions[0]!.extractValues.REPO).toBe("split-cwd-repo");
+      expect(result.decisions[0]!.extractValues.BRANCH).toBe("main");
+      expect(result.decisions[0]!.extractValues.CWD).toBe(repoA);
+    },
+  );
+});
+
+// F1 fix (CRITICAL, review round 2026-07-27): the Risk Gate's git context
+// (feeding `environments.resolvers[].signals.branch_patterns`) must
+// resolve from the hook's own cwd, NEVER from a command's TARGET repo. A
+// git-target-aware `${REPO}`/`${BRANCH}` was built and reviewed on this
+// same run (a `git -C` / `env -C` / `--work-tree` awareness) but was
+// removed before shipping — see `src/cli/policy/intercept.ts` and
+// `CHANGELOG.md`; `${REPO}`/`${BRANCH}` are cwd-only again. During that
+// run's development, `resolverGit` briefly fell back to the SAME
+// target-aware git context ${REPO}/${BRANCH} used at the time, so a
+// `production` + `branch_patterns: [main]` resolver classified the
+// environment from the COMMAND's target repo's branch instead of the cwd
+// repo's — a command like `git -C <repo-on-feature/x> log && rm -rf
+// /data` silently skipped the resolver (and every `when:`-gated policy
+// keyed on it) because the resolver read feature/x's branch, not the cwd
+// repo's `main`. Fixed before that version ever shipped; this suite
+// pins `resolverGit` staying cwd-only regardless of what the trigger
+// normaliser's own (now-unwired) target-directory extraction finds.
+describe("runInterceptCli — Risk Gate git context stays cwd-derived even when a target-naming git invocation precedes the gated command (F1 regression, review round 2026-07-27)", () => {
+  let cleanups: Array<() => void> = [];
+  afterEach(() => {
+    for (const c of cleanups) c();
+    cleanups = [];
+  });
+
+  function makeRepoFixture(name: string, branch: string): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-f1-git-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const repo = path.join(root, name);
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+    return repo;
+  }
+
+  // Fires `production` off the CWD repo's branch, per
+  // `environments.resolvers[].signals.branch_patterns` — the exact
+  // resolver kind the finding measured.
+  const PROD_BRANCH_RESOLVER: EnvironmentResolver = {
+    name: "prod-branch",
+    environment: "production",
+    signals: { branch_patterns: ["main"] },
+  };
+
+  const RISK_POLICY: Policy = {
+    name: "gate-prod-destructive",
+    description: "block destructive actions classified as production",
+    trigger: { event: "PreToolUse", match: "Bash" },
+    when: { "environment.name": "production" },
+    requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
+    hook: "h",
+    enforcement: "block",
+  } as Policy;
+
+  const emptyLedger: LedgerClient = {
+    async query() {
+      return { kind: "ok", entries: [] };
+    },
+    async record() {
+      /* no-op */
+    },
+  };
+
+  async function runFor(command: string, cwd: string) {
+    const { stream: out } = captureStream();
+    const { stream: err } = captureStream();
+    return runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+          session_id: "sess-f1",
+          cwd,
+        }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: makeManifest({ policies: [RISK_POLICY], resolvers: [PROD_BRANCH_RESOLVER] }),
+      ledger: emptyLedger,
+    });
+  }
+
+  it("fires for a bare command with cwd on the resolver's branch (baseline)", async () => {
+    const repoA = makeRepoFixture("f1-repo-a", "main");
+    const result = await runFor("echo hi", repoA);
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.environment?.name).toBe("production");
+    expect(result.blocked).toBe(true);
+  });
+
+  it("STILL fires when a target-naming git invocation on a DIFFERENT branch precedes the gated command (the regression)", async () => {
+    const repoA = makeRepoFixture("f1-repo-a-2", "main");
+    const repoB = makeRepoFixture("f1-repo-b-2", "feature/x");
+    // Pre-fix, this resolved the Risk Gate's git context from repoB
+    // (feature/x), so `branch_patterns: [main]` never matched and the
+    // policy silently produced ZERO decisions — the exact silent-bypass
+    // shape this whole run exists to close, reintroduced on the risk axis.
+    const result = await runFor(`git -C ${repoB} log && echo hi`, repoA);
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.environment?.name).toBe("production");
+    expect(result.blocked).toBe(true);
+  });
 });
 
 describe("runInterceptCli — Phase 7 #5: when: evaluation wiring", () => {
@@ -1102,5 +1272,231 @@ describe("runInterceptCli — hookName self-identification", () => {
     expect(errOutput()).toContain(
       "harness policy intercept [hook=require-review-evidence]: audit-write failed for review-before-merge",
     );
+  });
+});
+
+describe("runInterceptCli — normalised bash_match trigger matching (T-002, run 2026-07-27-gate-target-repo-resolution)", () => {
+  // Read straight out of FULL_TEMPLATE (F7 fix — see the `policyBashMatch`
+  // helper above) rather than a hand-copied literal. The PREFLIGHT_POLICY
+  // fixture used elsewhere in this file carries NO bash_match, so the
+  // trigger regex itself was untested through the real evaluation path
+  // before this describe block.
+  const REAL_BASH_MATCH = policyBashMatch("preflight-before-investigation");
+
+  const REAL_PREFLIGHT_POLICY: Policy = {
+    name: "preflight-before-investigation",
+    description: "gate git reads on a per-repo preflight tag (real trigger regex)",
+    trigger: { event: "PreToolUse", match: "Bash", bash_match: REAL_BASH_MATCH },
+    requires: { ledger_tag: "preflight:${REPO}" },
+    hook: "h",
+    enforcement: "block",
+  } as Policy;
+
+  const emptyLedgerLocal: LedgerClient = {
+    async query() {
+      return { kind: "ok", entries: [] };
+    },
+    async record() {
+      /* no-op */
+    },
+  };
+
+  async function runFor(command: string) {
+    const { stream: out } = captureStream();
+    const { stream: err } = captureStream();
+    return runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+          session_id: "sess-1",
+          cwd: "/tmp/harness-normalize-test-cwd",
+        }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([REAL_PREFLIGHT_POLICY]),
+      ledger: emptyLedgerLocal,
+    });
+  }
+
+  describe("previously-allowed spellings now block", () => {
+    const cases: Array<{ label: string; command: string }> = [
+      { label: "env -C <repo>", command: "env -C /tmp/some-repo git status" },
+      { label: "env (bare)", command: "env git status" },
+      { label: "env VAR=value", command: "env FOO=bar git status" },
+      { label: "nice", command: "nice git status" },
+      { label: "git --no-pager", command: "git --no-pager status" },
+      { label: "double space", command: "git  status" },
+      {
+        label: "git --git-dir=<x>/.git --work-tree=<x>",
+        command: "git --git-dir=/tmp/some-repo/.git --work-tree=/tmp/some-repo status",
+      },
+      // F4 fix (HIGH, review round 2026-07-27): each of these was
+      // measured as a live bypass against the shipped binary.
+      { label: "sudo", command: "sudo git status" },
+      { label: "doas", command: "doas git status" },
+      { label: "time", command: "time git status" },
+      { label: "timeout", command: "timeout 5 git status" },
+      { label: "stdbuf glued mode flag", command: "stdbuf -o0 git status" },
+      { label: "setsid", command: "setsid git status" },
+      { label: "path-qualified git (basename match)", command: "/usr/bin/git status" },
+    ];
+    for (const c of cases) {
+      it(`${c.label}: "${c.command}" is blocked with no ledger evidence`, async () => {
+        const result = await runFor(c.command);
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]?.outcome).toBe("deny");
+        expect(result.blocked).toBe(true);
+      });
+    }
+  });
+
+  // F4 fix: the DELIBERATELY-NOT-SUPPORTED spellings pinned through the
+  // REAL evaluation path, so the ceiling is asserted end-to-end, not just
+  // at the normaliser's unit level.
+  describe("F4: still-unsupported spellings remain a bypass (documented ceiling)", () => {
+    const cases: Array<{ label: string; command: string }> = [
+      { label: "xargs (deliberately excluded)", command: "xargs git status" },
+      { label: "quoted subcommand", command: 'git "status"' },
+      { label: "backtick command substitution", command: "echo `env -C /tmp git status`" },
+    ];
+    for (const c of cases) {
+      it(`${c.label}: "${c.command}" produces no decision (still bypasses)`, async () => {
+        const result = await runFor(c.command);
+        expect(result.decisions).toHaveLength(0);
+        expect(result.blocked).toBe(false);
+      });
+    }
+  });
+
+  describe("superset: previously-blocked spellings still block", () => {
+    const cases = [
+      "git status",
+      "cd /tmp/some-repo; git status",
+      "cd /tmp/some-repo && git status",
+      "git -C /tmp/some-repo status",
+      "sh -c 'cd /tmp/some-repo && git status'",
+    ];
+    for (const command of cases) {
+      it(`"${command}" is still blocked with no ledger evidence`, async () => {
+        const result = await runFor(command);
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]?.outcome).toBe("deny");
+        expect(result.blocked).toBe(true);
+      });
+    }
+  });
+
+  it("a non-git Bash command produces no decision (no-op, no false positive)", async () => {
+    const result = await runFor("ls -la");
+    expect(result.decisions).toHaveLength(0);
+    expect(result.blocked).toBe(false);
+  });
+
+  it("a malformed bash_match fails safe to no-match and never throws", async () => {
+    const malformedPolicy: Policy = {
+      name: "malformed-bash-match",
+      description: "deliberately unparseable regex",
+      trigger: { event: "PreToolUse", match: "Bash", bash_match: "(" },
+      requires: { ledger_tag: "preflight:${REPO}" },
+      hook: "h",
+      enforcement: "block",
+    } as Policy;
+    const { stream: out } = captureStream();
+    const { stream: err } = captureStream();
+    // If policyMatchesEvent's try/catch around `new RegExp` (or the added
+    // normalised-path test) ever regressed, this call would throw/reject
+    // instead of resolving — the `await` below is itself the "never
+    // throws" assertion.
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "git status" },
+          session_id: "sess-1",
+          cwd: "/tmp/harness-normalize-test-cwd",
+        }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([malformedPolicy]),
+      ledger: emptyLedgerLocal,
+    });
+    expect(result.decisions).toHaveLength(0);
+    expect(result.blocked).toBe(false);
+  });
+});
+
+// G4 fix (MEDIUM, review round 2, 2026-07-27): above
+// `MAX_NORMALIZE_LENGTH`, `normalizeCommand` used to skip normalisation
+// SILENTLY — no stderr line, no audit row, the skip was only visible by
+// reading the source. End-to-end through the real `policy intercept`
+// entrypoint (not just the normaliser unit), per the review brief.
+describe("runInterceptCli — G4 fix: MAX_NORMALIZE_LENGTH skip is now observable on stderr", () => {
+  const REAL_BASH_MATCH = policyBashMatch("preflight-before-investigation");
+  const REAL_PREFLIGHT_POLICY: Policy = {
+    name: "preflight-before-investigation",
+    description: "gate git reads on a per-repo preflight tag (real trigger regex)",
+    trigger: { event: "PreToolUse", match: "Bash", bash_match: REAL_BASH_MATCH },
+    requires: { ledger_tag: "preflight:${REPO}" },
+    hook: "h",
+    enforcement: "block",
+  } as Policy;
+
+  const emptyLedgerLocal: LedgerClient = {
+    async query() {
+      return { kind: "ok", entries: [] };
+    },
+    async record() {
+      /* no-op */
+    },
+  };
+
+  async function runFor(command: string) {
+    const { stream: out } = captureStream();
+    const { stream: err, output: errOutput } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+          session_id: "sess-g4",
+          cwd: "/tmp/harness-normalize-test-cwd",
+        }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([REAL_PREFLIGHT_POLICY]),
+      ledger: emptyLedgerLocal,
+    });
+    return { result, errOutput };
+  }
+
+  it("emits exactly one stderr line when the command exceeds MAX_NORMALIZE_LENGTH, and the RAW match still fires (D-003)", async () => {
+    const oversized = "git status " + "x".repeat(100_000);
+    expect(oversized.length).toBeGreaterThan(100_000);
+    const { result, errOutput } = await runFor(oversized);
+    // The raw command still matches ("git status" appears verbatim at
+    // the start), so the trigger fires regardless of the skipped
+    // ADDITIONAL normalised-form coverage — the skip only loses the
+    // extra reach normalisation would have added, never the baseline.
+    expect(result.decisions).toHaveLength(1);
+    const stderrText = errOutput();
+    const skipLines = stderrText
+      .split("\n")
+      .filter((line) => line.includes("normalised-form matching skipped"));
+    expect(skipLines).toHaveLength(1);
+    expect(stderrText).toContain("100000");
+  });
+
+  it("emits NO skip line at or under the bound", async () => {
+    const atBound = "git status " + "x".repeat(100_000 - "git status ".length);
+    expect(atBound.length).toBe(100_000);
+    const { errOutput } = await runFor(atBound);
+    expect(errOutput()).not.toContain("normalised-form matching skipped");
   });
 });

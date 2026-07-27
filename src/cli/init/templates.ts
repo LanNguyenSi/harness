@@ -651,6 +651,20 @@ policies:
   # for the known uncoverable shapes). \`harness validate\` no longer warns
   # "declares no producers" on these three (checkPolicySelfAttestation now
   # recognises operator_only: true as correct-by-construction).
+  #
+  # UPDATE (run 2026-07-27-gate-target-repo-resolution, task ea8becf5): a
+  # wrapper prefix — \`env\`, \`nice\`, \`command\`, \`sudo\`, \`doas\`, \`time\`,
+  # \`timeout\`, \`stdbuf\`, \`setsid\` (e.g. \`env harness pause\`, \`nice
+  # harness gate disable\`) — still defeats all three of these triggers too,
+  # and this is now a KNOWN, documented gap rather than a silent one:
+  # \`src/runtime/command-normalize.ts\`'s raw-OR-normalised matching (wired
+  # into \`policyMatchesEvent\` in \`src/runtime/intercept.ts\`) closed the
+  # identical wrapper-prefix bypass for git-verb triggers (e.g.
+  # preflight-before-investigation, above), but it is a no-op here: it only
+  # canonicalises a segment whose peeled head token is literally \`git\`, and
+  # these three triggers match \`harness\`/\`env\`/\`tee\`-\`cp\` patterns, never
+  # \`git\`. Not fixed by that run — filed as a follow-up, not silently left
+  # for the next reader to rediscover.
   - name: deny-kill-switch-bypass
     description: Deny harness pause, harness resume, harness gate disable, and harness gate enable from the agent's Bash tool. These are operator-only kill switches.
     trigger:

@@ -3,7 +3,7 @@ type: overview
 title: Gate fail-posture matrix
 description: Which harness enforcement gates fail OPEN vs fail CLOSED when their evidence source (grounding-mcp ledger, approval markers, verdict files, probes) is unreachable or errors, with the exact code paths and override knobs.
 tags: [gates, fail-open, fail-closed, enforcement]
-timestamp: 2026-07-16T02:26:27Z
+timestamp: 2026-07-27T15:58:11Z
 sources:
   - docs/risk-gate.md
   - docs/policy-packs/branch-protection.md
@@ -26,6 +26,7 @@ Every harness enforcement gate has a deliberate posture for the moment its evide
 | Gate | Runtime entry | Evidence source | Posture on source failure | Degraded outcome |
 |---|---|---|---|---|
 | Policy engine / Risk Gate | `harness policy intercept` → `intercept()` in `src/runtime/intercept.ts` | grounding-mcp evidence ledger | fail **OPEN** | `warn-degraded` outcome; never blocks |
+| `bash_match` normalised-form matching | `harness policy intercept` → `normalizeCommand` in `src/runtime/command-normalize.ts` | command length vs `MAX_NORMALIZE_LENGTH` (100,000 chars) | fail **OPEN** above the bound | normalised-form matching skipped, raw match only; one stderr line names the skip (G4 fix, review round 2, 2026-07-27 — previously silent, no stderr line, no audit row) |
 | understanding-before-execution | `harness pack hook pre-tool-use` (`src/cli/pack/hook-pre-tool-use.ts`) | approval marker + persisted JSON report; ledger is audit-only | fail **OPEN** on load/parse/ledger/report-scan errors | allow, exit 0, stderr diagnostic |
 | branch-protection | `harness pack hook branch-protection` (`src/cli/pack/hook-branch-protection.ts`) | `branch:non-protected:<branch>` ledger tag (5-min window) + override marker | fail **CLOSED** on any load/parse/ledger error | block envelope |
 | solution-acceptance | `harness pack hook solution-acceptance` (`src/cli/pack/hook-solution-acceptance.ts`) | HEAD-pinned verdict marker file written by grounding-mcp `solution_evaluate` | fail **CLOSED** (scoped to completion actions) | deny the completion verb |
@@ -50,6 +51,10 @@ Header contract in `src/cli/pack/hook-solution-acceptance.ts` (lines 19–22): a
 ## runtime-reality: fail open, with an opt-in fail-closed knob
 
 `docs/runtime-reality-hook.md` (line 14): "Every load or probe error degrades to allow: a misconfigured probe never tarpits the session. The only deny path is a probe that actually produced state showing critical drift." The source (`src/cli/pack/hook-runtime-reality.ts`) mirrors this: stdin read failure, hook construction failure, unset `RUNTIME_REALITY_KEYWORD` (no baseline), and unset `RUNTIME_REALITY_PROBE_CMD` (nothing to compare) all resolve via `allowResult(...)`; a thrown/hung probe (10s subprocess timeout) is treated as "probe failed" under the same fail-open policy. Operators can invert per tier (env toggles documented in `docs/runtime-reality-hook.md`'s reference table; the escalation logic lives in the external `@lannguyensi/runtime-reality-checker` package, not in the hook file): `RUNTIME_REALITY_PROBE_FAIL_BLOCK=1` denies on probe failure, `RUNTIME_REALITY_WARN_AS_BLOCK=1` escalates warnings, `RUNTIME_REALITY_CRITICAL_AS_WARN=1` degrades critical drift to allow, `RUNTIME_REALITY_DISABLE=1` short-circuits entirely. This fail-open default is why `harness init --template full` ships the hook entry commented out: an active entry without the three env values "would degrade to a silent allow (a no-op that looks like protection)".
+
+## `bash_match` normalised-form matching: fail open above a size bound, now loud
+
+Above `MAX_NORMALIZE_LENGTH` (100,000 characters), `normalizeCommand` (`src/runtime/command-normalize.ts`) skips normalisation entirely and returns the command unchanged — a defensive bound so command SIZE alone can never drive `harness policy intercept` past a hook's own timeout budget (`require-preflight-evidence` declares `budget_ms: 1000`). The RAW command is still tested by `policyMatchesEvent` regardless (raw-OR-normalised construction), so this only loses the ADDITIONAL normalised-form coverage — wrapper-peeled or git-global-option-collapsed spellings a `bash_match` regex would otherwise also have matched — never the baseline raw match. Until review round 2 (G4 finding, 2026-07-27) this skip was completely silent: no stderr line, no audit row, discoverable only by reading the source. `NormalizedCommand` now carries a `truncated: boolean` field, and `runInterceptCli` (`src/cli/policy/intercept.ts`) writes exactly one stderr line reporting the skip whenever it is `true`, keeping the normaliser module itself pure and I/O-free while making the fail-open loud at the one place that already owns a stderr stream for the event.
 
 ## Cross-cutting rules
 

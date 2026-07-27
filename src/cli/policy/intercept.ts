@@ -26,6 +26,11 @@ import {
 import type { Manifest, McpServer } from "../../schema/index.js";
 import { resolveGeneratedDir, writePendingApproval } from "../../runtime/pending-approval.js";
 import { parseBashPrefix } from "../../runtime/bash-prefix-parse.js";
+import {
+  MAX_NORMALIZE_LENGTH,
+  normalizeCommand,
+  type NormalizedCommand,
+} from "../../runtime/command-normalize.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import { checkPauseFromLoader } from "../pause-check.js";
 
@@ -401,12 +406,56 @@ export async function runInterceptCli(
   // HARNESS_BRANCH env vars that nothing sets, collapsing every tag to the
   // literal `preflight:`. An explicit env var still wins: it is the
   // operator's deliberate override of the derived value.
+  //
+  // Deliberately CWD-ONLY, not target-directory-aware: a command that
+  // explicitly names a different repository (`git -C <B>`, `env -C
+  // <B>`, a leading `cd <B> &&`) still resolves ${REPO}/${BRANCH} from
+  // the hook's own cwd, so a preflight recorded for repo A still
+  // authorises a command that explicitly reads repo B — unchanged from
+  // the shipped 0.42.0 behaviour. A per-command target-directory
+  // resolution was built and reviewed (run
+  // 2026-07-27-gate-target-repo-resolution) but removed before shipping:
+  // three consecutive review rounds each found a different way one
+  // global `targetDir` per event leaked into the wrong evaluation (Risk
+  // Gate risk declassification; a push-gate multi-invocation fail-open;
+  // a non-git gated verb sharing a chain with a targeted git call, first
+  // via `&&`, then still open via `|` / `||`). Each fix was partial
+  // because a single per-event `targetDir` cannot express "this
+  // invocation targets repo B, but the gated verb after it runs in the
+  // caller's cwd" — the correct fix attributes a target to the SEGMENT
+  // that satisfies a policy's own trigger, which needs the policy
+  // builtins to become per-policy, not per-event. The extraction itself
+  // (`command-normalize.ts`'s `targetDir`/`targetBase`) stays in the
+  // tree, fully tested, as the foundation for that redesign — tracked as
+  // follow-up task `98ad072f`.
   const cwd = resolvePolicyCwd(event, opts.codexCommandCwd);
-  const gitContext = resolveGitContext(cwd);
+  const cwdGitContext = resolveGitContext(cwd);
+  // Computed once here (not per-policy) so `intercept()` below can
+  // thread the SAME `NormalizedCommand` into every `bash_match` trigger
+  // check instead of each one recomputing it.
+  const normalizedCommand: NormalizedCommand | undefined =
+    event.tool_name === "Bash"
+      ? (() => {
+          const cmd = readBashCommand(event.tool_input);
+          return cmd === null ? undefined : normalizeCommand(cmd);
+        })()
+      : undefined;
+  // Above `MAX_NORMALIZE_LENGTH`, `normalizeCommand` skips normalisation
+  // entirely and `truncated` comes back `true`. Raw matching still
+  // applies regardless (`policyMatchesEvent`'s raw-OR-normalised
+  // construction), so an oversized command only loses the ADDITIONAL
+  // normalised-form coverage — but that skip must not be silent, so one
+  // stderr line reports it here, keeping the module itself pure and
+  // I/O-free.
+  if (normalizedCommand?.truncated === true) {
+    stderr.write(
+      `harness policy intercept${hookSuffix(opts.hookName)}: Bash command exceeds ${MAX_NORMALIZE_LENGTH} chars; normalised-form matching skipped for this call (raw match only)\n`,
+    );
+  }
   const builtins = {
     SESSION_ID: builtinSessionId,
-    REPO: process.env.HARNESS_REPO ?? gitContext.repo,
-    BRANCH: process.env.HARNESS_BRANCH ?? gitContext.branch,
+    REPO: process.env.HARNESS_REPO ?? cwdGitContext.repo,
+    BRANCH: process.env.HARNESS_BRANCH ?? cwdGitContext.branch,
     TOOL_NAME: typeof event.tool_name === "string" ? event.tool_name : "",
     CWD: cwd,
   };
@@ -428,10 +477,34 @@ export async function runInterceptCli(
     // were invisible to the resolver before: the env resolver read
     // `process.env` and the branch resolver read `.git/HEAD` under the
     // hook's starting cwd, so a prod signal smuggled through either
-    // idiom silently passed the gate. Parse the leading prefix once
-    // from the Bash command and merge the result into the resolver
-    // inputs only — builtin `${REPO}` / `${BRANCH}` / `${CWD}` keep the
-    // hook's cwd so policy-template namespacing is not affected.
+    // idiom silently passed the gate. Parse the leading prefix once from
+    // the Bash command and merge the result into the resolver inputs
+    // only. ${CWD} always names the hook's own cwd; ${REPO}/${BRANCH}
+    // (`cwdGitContext` above, feeding `builtins`) are cwd-only too — see
+    // the comment above `cwdGitContext`'s declaration. The Risk Gate
+    // resolver's git base, `resolverGit` below, is its own independent
+    // narrow parse: it recognises only a leading `cd`, never `git -C` /
+    // `--work-tree` / `--git-dir` / `env -C`. Bottom line: `resolverGit`
+    // must never read anything other than `cwdGitContext`, or the
+    // leading-`cd` target within THIS same narrow parse — this feeds
+    // `when:`-clause risk classification, not ledger-tag namespacing.
+    //
+    // G5 (review round 2, 2026-07-27): that leading-`cd` parse is itself
+    // still a live declassification lever, PRE-EXISTING and NOT changed
+    // by this run — identical on the shipped 0.42.0 control, so this is
+    // documentation of a known asymmetry, not a new gap. From a repo on
+    // `main`, `rm -rf /data` BLOCKS, but `cd <repo-on-feature/x> && rm -rf
+    // /data` is ALLOWED: the `cd` target makes the resolver read
+    // feature/x's branch instead of cwd's `main`, so `branch_patterns:
+    // [main]` no longer matches. The asymmetry cuts both ways and neither
+    // direction is fixed here: a leading `cd` can make a prod signal
+    // VISIBLE that cwd alone would have missed (cwd on a feature branch,
+    // `cd` into a repo actually on `main`) just as readily as it can make
+    // one INVISIBLE (cwd on `main`, `cd` into a repo on a feature
+    // branch, as in the example above) — `resolverGit` trusts whichever
+    // of the two the command happens to name, with no independent check
+    // that the `cd` target is the repo the destructive command actually
+    // runs against.
     const bashPrefix =
       event.tool_name === "Bash"
         ? (() => {
@@ -440,14 +513,14 @@ export async function runInterceptCli(
           })()
         : null;
     const resolverGit = (() => {
-      if (bashPrefix === null || bashPrefix.cdTarget === null) return gitContext;
+      if (bashPrefix === null || bashPrefix.cdTarget === null) return cwdGitContext;
       const effective = path.isAbsolute(bashPrefix.cdTarget)
         ? bashPrefix.cdTarget
         : path.resolve(cwd, bashPrefix.cdTarget);
       // resolveGitContext returns empty strings for non-git paths;
       // an empty repo means cd-target was bogus, fall through.
       const candidate = resolveGitContext(effective);
-      return candidate.repo.length > 0 ? candidate : gitContext;
+      return candidate.repo.length > 0 ? candidate : cwdGitContext;
     })();
     const resolverEnv = (() => {
       const base = opts.env ?? process.env;
@@ -477,8 +550,9 @@ export async function runInterceptCli(
       stderr,
       ...(opts.ledgerTimeoutMs !== undefined && { ledgerTimeoutMs: opts.ledgerTimeoutMs }),
       ...(opts.now && { now: opts.now }),
-      ...(gitContext.sha.length > 0 && { currentHeadSha: gitContext.sha }),
+      ...(cwdGitContext.sha.length > 0 && { currentHeadSha: cwdGitContext.sha }),
       ...(riskContext && { riskContext }),
+      ...(normalizedCommand && { normalizedCommand }),
     });
   } finally {
     // Tear down the pooled grounding-mcp session (no-op for injected test

@@ -3,13 +3,14 @@ type: overview
 title: Debug verb selection — which harness verb answers which question
 description: Decision guide mapping "why did my policy (not) fire" questions to the right harness debug verb — ledger-replay vs live-hypothetical vs static-prediction vs stage-isolation vs end-to-end — with each verb's key discriminators and fail-postures.
 tags: [debugging, cli, audit, explain, dry-run, smoke]
-timestamp: 2026-07-18T05:00:00Z
+timestamp: 2026-07-27T15:58:11Z
 sources:
   - docs/for-agents.md
   - docs/CLI.md
   - docs/risk-gate.md
   - src/cli/index.ts
   - src/cli/dry-run.ts
+  - src/runtime/command-normalize.ts
   - src/cli/explain.ts
   - src/cli/explain-action.ts
   - src/cli/explain-policy.ts
@@ -56,7 +57,7 @@ The harness ships nine read-side debug verbs plus one end-to-end runner. They di
 
 ## dry-run — static prediction for a PROMPT, no ledger I/O
 
-`harness dry-run <prompt> [--tool <name>] [--tool-args <json>]` statically predicts which hooks fire, which policies match, and which memory directories route for a prompt, "without ledger I/O" (docs/for-agents.md line 227). src/cli/dry-run.ts confirms: it never fetches the ledger; for each matching policy it computes the `ledgerQuery` string the runtime WOULD run (`staticLedgerQuery`) and reports it alongside `requires`/`enforcement`, plus `couldMatchPolicies` with a reason. It is not fully hermetic: it derives `REPO`/`BRANCH` builtins from the cwd via `resolveGitContext` so predictions match runtime extraction. Prediction ≠ decision: dry-run tells you a policy WOULD match, not what outcome its `requires:` evaluation would produce, because that depends on ledger state it deliberately does not read.
+`harness dry-run <prompt> [--tool <name>] [--tool-args <json>]` statically predicts which hooks fire, which policies match, and which memory directories route for a prompt, "without ledger I/O" (docs/for-agents.md line 227). src/cli/dry-run.ts confirms: it never fetches the ledger; for each matching policy it computes the `ledgerQuery` string the runtime WOULD run (`staticLedgerQuery`) and reports it alongside `requires`/`enforcement`, plus `couldMatchPolicies` with a reason. **Trigger-matching parity (since task `ea8becf5`):** `policyMatchesTool`'s `bash_match` check (`src/cli/dry-run.ts`) now tests raw-OR-normalised via the same `normalizeCommand` (`src/runtime/command-normalize.ts`) the real `policyMatchesEvent` uses, so a wrapper-prefixed or extra-global-option command predicts the same match/no-match as the runtime. It is NOT fully hermetic, but IS full parity on `${REPO}`/`${BRANCH}`: `builtinsFor` derives them from the cwd alone via `resolveGitContext`, and so does the runtime (`src/cli/policy/intercept.ts`) — a per-command target-directory resolution for these builtins was built and reviewed on the same task but removed before shipping (three consecutive review rounds each found a different way it regressed security; see `CHANGELOG.md`'s `ea8becf5` entry and `src/runtime/command-normalize.ts`'s module header), so no such divergence between `dry-run` and the runtime exists today. Prediction ≠ decision: dry-run tells you a policy WOULD match, not what outcome its `requires:` evaluation would produce, because that depends on ledger state it deliberately does not read.
 
 ## explain-action — the normalized Action Envelope, nothing else
 
