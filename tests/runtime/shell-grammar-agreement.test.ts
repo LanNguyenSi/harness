@@ -7,17 +7,18 @@ import { normalizeCommand } from "../../src/runtime/command-normalize.js";
 // name in a leading `NAME=VALUE` assignment.
 //
 // WHY THIS EXISTS AND WHY IT IS A TEST RATHER THAN A SHARED CONSTANT
-// (task d977ad58, run 2026-07-28-shell-vocabulary, decisions D-001/D-007):
+// (task d977ad58, run 2026-07-28-shell-vocabulary, decisions D-001/D-007/D-008):
 // three modules encode this grammar independently and none exports it:
 //   - bash-prefix-parse.ts  VAR_START / VAR_CONT, walked character by character
 //   - read-only-bash.ts     an inline /^[A-Za-z_][A-Za-z0-9_]*=/ in the env peel
 //   - command-normalize.ts  VAR_ASSIGN_RE, byte-identical to the inline one
-// A read-only inventory measured that all three AGREE today, so there is no
-// drift to repair and no behaviour to change — extracting a shared constant
-// would have moved a correct line into a new module and shipped an export with
-// no second consumer, which is the "dead surface with no coupling" shape a
-// reviewer flagged one task earlier (074acf5d). What was missing is the
-// coupling itself, and that is what this file adds.
+// A read-only inventory measured that all three AGREE today. So a shared
+// module would have had nothing to repair: it would have moved one correct
+// line and created an export with no second consumer. The other candidate for
+// sharing, the shell-metacharacter catalogue, is worse — its three
+// enumerations differ ON PURPOSE, because the modules fail in opposite
+// directions, and one shared list would invite the next author to flatten
+// that. What was actually missing is the COUPLING, and a coupling is a test.
 //
 // It asserts BEHAVIOUR, not the constants: each module is observed through its
 // own public entry point, so an author may rewrite the regex freely as long as
@@ -34,6 +35,32 @@ import { normalizeCommand } from "../../src/runtime/command-normalize.js";
 // modules fail in opposite directions — read-only-bash.ts treats the unknown as
 // a write, command-normalize.ts only ever widens matching — and flattening them
 // into one list would be a behaviour change wearing a refactor's clothes.
+//
+// NOT covered either: a FOURTH module growing its own copy of this grammar
+// would join silently, which is the very failure mode the parent task was
+// opened for. Nothing here scans for that. Checked 2026-07-28: the only other
+// `[A-Za-z_][A-Za-z0-9_]*` under src/ is `IDENTIFIER_RE` in
+// src/policies/extract.ts, a JSONPath-DSL identifier — a different concept, so
+// "three modules" is accurate today and this is a watch item, not a gap.
+// src/runtime/bash-match-registry.ts's unregistered-set scan is the idiom to
+// copy if a guard is ever wanted.
+//
+// PROBE LIMITS — READ BEFORE ADDING A CASE. Two of the three observation
+// functions can answer from a guard that sits UPSTREAM of the grammar, so a
+// carelessly chosen name would produce a red that blames a divergence which
+// does not exist. Measured 2026-07-28 (reviewer):
+//   - Do NOT add a name beginning with `-`, nor one containing `;`, `&`, `|`,
+//     `<` or `>`. read-only-bash.ts answers those from its own flag-skipping
+//     (`--x=…` and `-uX`/`-CX` are consumed as `env`'s options) or from its
+//     chaining guard, never from the variable-name grammar. The corpus below
+//     stays clear of both: `-x` is the sole dash case and it matches neither
+//     catch-all, which is why it still measures the grammar.
+//   - `__proto__` is grammar-valid and accepted by all three modules, but
+//     `prefixParserAccepts` would report it rejected: bash-prefix-parse.ts
+//     stores into a plain object literal, so that one name sets the prototype
+//     instead of creating an own property. That is a real module defect
+//     (a silently dropped inline env var on the risk-gate resolver's input),
+//     filed separately — not something to encode here.
 
 interface GrammarCase {
   readonly name: string;
@@ -53,7 +80,11 @@ const CASES: readonly GrammarCase[] = [
   { name: "a-b", accepted: false, why: "hyphen is not an identifier character" },
   { name: "a.b", accepted: false, why: "dot is not an identifier character" },
   { name: "a+b", accepted: false, why: "plus is not an identifier character" },
-  { name: "a b", accepted: false, why: "a space ends the token before the =" },
+  {
+    name: "a b",
+    accepted: false,
+    why: "a space ends the token before the =; note only bash-prefix-parse.ts sees this string un-tokenized, the other two split on whitespace first, so this row pins one module rather than three",
+  },
   { name: "-x", accepted: false, why: "a leading dash reads as a flag, not a name" },
 ];
 
@@ -90,10 +121,19 @@ describe("cross-module agreement: POSIX variable-name grammar in a leading assig
     },
   );
 
-  it("covers both verdicts, so the agreement cannot hold vacuously", () => {
-    // Without this, a corpus that happened to be all-accepted or all-rejected
-    // would let a module that answers a constant still pass every case above.
-    expect(CASES.some((c) => c.accepted)).toBe(true);
-    expect(CASES.some((c) => !c.accepted)).toBe(true);
+  it("every PROBE returns both verdicts across the corpus, so none can have gone constant", () => {
+    // Asserting this per PROBE, not over CASES: a check on the literal array
+    // would only restate how the array was written and could never observe a
+    // degenerate probe. This observes the functions.
+    const probes = {
+      "bash-prefix-parse.ts": prefixParserAccepts,
+      "read-only-bash.ts": readOnlyClassifierAccepts,
+      "command-normalize.ts": normaliserAccepts,
+    };
+    for (const [module, probe] of Object.entries(probes)) {
+      const answers = CASES.map((c) => probe(c.name));
+      expect(answers, `${module} never accepted anything`).toContain(true);
+      expect(answers, `${module} never rejected anything`).toContain(false);
+    }
   });
 });
