@@ -357,6 +357,19 @@ describe("normalizeCommand", () => {
       expect(re.test(normalized)).toBe(false);
       expect(re.test(command)).toBe(false);
     });
+
+    it('"nice CLAUDE_SESSION_ID= npm publish" does NOT match deny-session-env-strip (headless VAR= alternative, wrapped)', () => {
+      // The policy's third alternative has no command-name head token at
+      // all (bare `<SESSION_VAR>=` empty assignment). Unwrapped it matches
+      // RAW; wrapped, the peel loop consumes the assignment as an ordinary
+      // `VAR=value` prefix, so neither raw nor normalised matches. Same
+      // documented ceiling as the four cases above (verify-pass finding).
+      const re = policyBashMatch("deny-session-env-strip");
+      const command = "nice CLAUDE_SESSION_ID= npm publish";
+      const { normalized } = normalizeCommand(command);
+      expect(re.test(normalized)).toBe(false);
+      expect(re.test(command)).toBe(false);
+    });
   });
 
   describe("whitespace and tail preservation", () => {

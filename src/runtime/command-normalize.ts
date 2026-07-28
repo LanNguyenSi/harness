@@ -110,7 +110,13 @@
 //     inaccurate claim in the prior version of this comment, which said
 //     this module's four head tokens were "the head tokens shipped
 //     policies actually gate today"): a shipped `bash_match` trigger
-//     actually keys on EIGHT distinct head-token spellings, not four.
+//     actually keys on EIGHT distinct COMMAND-NAME head tokens, not four —
+//     plus one HEADLESS alternative with no command name at all:
+//     `deny-session-env-strip`'s bare `<SESSION_VAR>=` empty-assignment
+//     form, whose wrapped spelling (`nice CLAUDE_SESSION_ID= npm publish`)
+//     is equally out of this module's reach, because the peel loop consumes
+//     the assignment as an ordinary `VAR=value` prefix (measured
+//     2026-07-28, pinned alongside the four below).
 //     `deny-session-env-strip` also keys on `env` (`env ... -u <VAR>` /
 //     `env ... --unset <VAR>`) and `unset` (`unset <VAR>...`);
 //     `deny-pause-sentinel-forgery` also keys on `tee` and `cp`. None of
@@ -635,10 +641,9 @@ function tokenizeWithOffsets(s: string): Token[] {
  * next-token gap), no option-dropping (see the module header). When no
  * recognised head token is found (wrong binary, ran out of tokens, or a
  * malformed git global option), the segment is returned COMPLETELY
- * UNCHANGED: peeling
- * is tentative, and nothing is stripped from a segment that turns out not
- * to be a recognised call (so `digit=1 foo`, `env -C X ls`, `ghx pr
- * merge`, etc. are never touched).
+ * UNCHANGED: peeling is tentative, and nothing is stripped from a
+ * segment that turns out not to be a recognised call (so `digit=1 foo`,
+ * `env -C X ls`, `ghx pr merge`, etc. are never touched).
  */
 function canonicalizeSegment(segmentText: string): {
   text: string;

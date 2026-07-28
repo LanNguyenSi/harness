@@ -26,14 +26,31 @@ import { parseManifest } from "../../src/schema/index.js";
 //      classified token, the ACTUAL bash_match string (read fresh, not
 //      copied) must still contain that token as a standalone word
 //      (`\bTOKEN\b`).
-// NAMED RESIDUAL (not closed by this test, and not required by the review
-// brief either): a THIRD alternative silently added ALONGSIDE an existing,
-// still-correctly-spelled token (e.g. dogfood-before-release someday also
-// gating `yarn publish`) would not trip either check, since nothing here
-// verifies the token INVENTORY is exhaustive, only that classified tokens
-// are present and the policy-name set matches. Closing that residual would
-// need a real regex-AST head-token extractor, which the review brief
-// explicitly allows skipping in favour of this curated-map approach.
+// NAMED RESIDUALS (not closed by this test, and not required by the review
+// brief either):
+//   a. A THIRD alternative silently added ALONGSIDE an existing,
+//      still-correctly-spelled token (e.g. dogfood-before-release someday
+//      also gating `yarn publish`) would not trip either check, since
+//      nothing here verifies the token INVENTORY is exhaustive, only that
+//      classified tokens are present and the policy-name set matches.
+//      Closing that would need a real regex-AST head-token extractor,
+//      which the review brief explicitly allows skipping in favour of this
+//      curated-map approach.
+//   b. DELETING a classified alternative whose token survives as a
+//      SUBSTRING elsewhere in the same regex (e.g. dropping the standalone
+//      `unset <VAR>` alternative while `--unset` remains) keeps the
+//      `\bTOKEN\b` presence check green. Measured (verify pass): that
+//      mutation is caught instead by the full-template parity and
+//      kill-switch-deny suites (122 failures across 15 files), so the repo
+//      is not blind to it — this guard just is not the net that catches it.
+//   c. The engine-to-manifest direction is covered by the dedicated
+//      assertion below (every NON_GIT_HEAD_TOKENS member must be
+//      classified here), added after the verify pass measured that an
+//      unshipped token quietly added to the set would otherwise stay
+//      green. Headless trigger alternatives (deny-session-env-strip's bare
+//      `<SESSION_VAR>=` form) have no head token and are therefore outside
+//      this guard's model entirely; that ceiling is pinned in
+//      command-normalize.test.ts instead.
 type HeadTokenClass = "git" | "non-git-set" | "documented-uncovered";
 
 interface HeadTokenExpectation {
@@ -84,6 +101,21 @@ describe("bash_match head-token drift guard (fix round 2, finding F3)", () => {
       .sort();
     const expectedNames = Object.keys(EXPECTED_BASH_MATCH_HEAD_TOKENS).sort();
     expect(actualNames).toEqual(expectedNames);
+  });
+
+  it("every NON_GIT_HEAD_TOKENS member is classified as non-git-set in the map — the engine cannot quietly normalise a head token no shipped policy gates (residual c)", () => {
+    const classifiedNonGit = new Set(
+      Object.values(EXPECTED_BASH_MATCH_HEAD_TOKENS)
+        .flat()
+        .filter((e) => e.class === "non-git-set")
+        .map((e) => e.token),
+    );
+    for (const token of NON_GIT_HEAD_TOKENS) {
+      expect(
+        classifiedNonGit.has(token),
+        `NON_GIT_HEAD_TOKENS contains "${token}", but no FULL_TEMPLATE bash_match policy is classified as gating it`,
+      ).toBe(true);
+    }
   });
 
   for (const [policyName, expectations] of Object.entries(EXPECTED_BASH_MATCH_HEAD_TOKENS)) {
