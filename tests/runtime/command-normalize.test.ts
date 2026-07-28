@@ -188,6 +188,35 @@ describe("normalizeCommand", () => {
     }
   });
 
+  // Fix round 2, finding F7: a path-qualified `gh`/`npm`/`harness`
+  // invocation is out of scope for the closed head-token set (EXACT
+  // literal equality, not basename like `GIT_TOKEN_RE` — see the module
+  // header's NOT-SUPPORTED list). Byte-identity pins this ceiling
+  // directly, mirroring the near-misses block above.
+  describe("negative cases: path-qualified gh/npm invocations stay unmatched (byte-identity, F7)", () => {
+    const cases = ["/usr/local/bin/gh pr merge 1", "./node_modules/.bin/npm publish"];
+    for (const command of cases) {
+      it(`"${command}" is left unchanged`, () => {
+        expect(normalizeCommand(command).normalized).toBe(command);
+      });
+    }
+  });
+
+  // Fix round 2, finding F7 (other direction): `harness`'s OWN trigger
+  // regex already covers a path-qualified spelling at the RAW-match level
+  // (`(?:npx\s+|\S*/)?harness` in `deny-kill-switch-bypass`) — this
+  // module's normaliser does not need to help here, and does not (the
+  // byte-identity pin above would be a false alarm if it did: the RAW
+  // string alone already satisfies the trigger). Positive control so this
+  // module's own byte-identity choice for `harness` is never mistaken for
+  // a live bypass.
+  describe("F7: /usr/local/bin/harness pause still denies via the trigger's own raw \\S*/ alternative (no normalisation needed)", () => {
+    const re = policyBashMatch("deny-kill-switch-bypass");
+    it('"/usr/local/bin/harness pause" matches the RAW regex directly', () => {
+      expect(re.test("/usr/local/bin/harness pause")).toBe(true);
+    });
+  });
+
   // T-001: canonicalisation pins for the three new non-git heads, mirroring
   // the git-focused "previously-allowed spellings normalise to a match"
   // block above. Real regexes read straight out of FULL_TEMPLATE via
@@ -204,6 +233,11 @@ describe("normalizeCommand", () => {
         { label: "env -C <dir> gh pr merge", command: "env -C /tmp/repo gh pr merge 123" },
         { label: "nice gh pr merge", command: "nice gh pr merge 123" },
         { label: "double space between gh and its subcommand", command: "gh  pr merge 123" },
+        // Fix round 2, finding F2: an interior whitespace run FURTHER INTO
+        // the multi-word trigger (between "pr" and "merge", not "gh" and
+        // "pr") used to survive the head-to-next-token-only collapse.
+        { label: "double space between pr and merge (F2)", command: "gh pr  merge 123" },
+        { label: "tab between pr and merge (F2)", command: "gh pr\tmerge 123" },
       ];
       for (const c of cases) {
         it(`${c.label}: "${c.command}" normalises to a trigger match`, () => {
@@ -215,10 +249,17 @@ describe("normalizeCommand", () => {
 
     describe("gh pr create (review-subagent-before-pr-create-bash)", () => {
       const re = policyBashMatch("review-subagent-before-pr-create-bash");
-      it('env gh pr create: "env gh pr create" normalises to a trigger match', () => {
-        const { normalized } = normalizeCommand("env gh pr create");
-        expect(re.test(normalized)).toBe(true);
-      });
+      const cases: Array<{ label: string; command: string }> = [
+        { label: "env gh pr create", command: "env gh pr create" },
+        // Fix round 2, finding F2.
+        { label: "double space between pr and create (F2)", command: "gh pr  create" },
+      ];
+      for (const c of cases) {
+        it(`${c.label}: "${c.command}" normalises to a trigger match`, () => {
+          const { normalized } = normalizeCommand(c.command);
+          expect(re.test(normalized)).toBe(true);
+        });
+      }
     });
 
     describe("npm publish (dogfood-before-release)", () => {
@@ -226,6 +267,13 @@ describe("normalizeCommand", () => {
       const cases: Array<{ label: string; command: string }> = [
         { label: "env npm publish", command: "env npm publish" },
         { label: "nice npm publish", command: "nice npm publish" },
+        // Fix round 2, finding F2/F7: double space / tab between npm and
+        // its subcommand (the head-to-next-token gap this collapse
+        // already covered, re-pinned here alongside the F2 additions for
+        // the other two heads so all three get the same whitespace-run
+        // coverage documented in one place).
+        { label: "double space between npm and publish (F2/F7)", command: "npm  publish" },
+        { label: "tab between npm and publish (F2/F7)", command: "npm\tpublish" },
       ];
       for (const c of cases) {
         it(`${c.label}: "${c.command}" normalises to a trigger match`, () => {
@@ -262,6 +310,49 @@ describe("normalizeCommand", () => {
     const re = policyBashMatch("review-before-merge-bash");
     it('"gh -R owner/repo pr merge 123" does NOT normalise to a trigger match', () => {
       const command = "gh -R owner/repo pr merge 123";
+      const { normalized } = normalizeCommand(command);
+      expect(re.test(normalized)).toBe(false);
+      expect(re.test(command)).toBe(false);
+    });
+  });
+
+  // Fix round 2, finding F1: a shipped `bash_match` trigger actually keys
+  // on EIGHT distinct head-token spellings, not the four this module
+  // covers — `deny-session-env-strip` also keys on `env`/`unset`,
+  // `deny-pause-sentinel-forgery` also keys on `tee`/`cp`. None of these
+  // four are reachable by this module (see the module header's "SHIPPED
+  // BUT NOT COVERED" paragraph for the structural reason `env` specifically
+  // can never be added by a simple set-membership change). Pinned here so
+  // the ceiling is ASSERTED, not merely described in a comment — mirrors
+  // the F4/G2/T-001 documented-ceiling precedent above.
+  describe("fix round 2, finding F1: env/unset/tee/cp stay unmatched even wrapped (documented ceiling, still structurally out of reach)", () => {
+    it('"nice env -u CLAUDE_SESSION_ID ls" does NOT normalise to a deny-session-env-strip match', () => {
+      const re = policyBashMatch("deny-session-env-strip");
+      const command = "nice env -u CLAUDE_SESSION_ID ls";
+      const { normalized } = normalizeCommand(command);
+      expect(re.test(normalized)).toBe(false);
+      expect(re.test(command)).toBe(false);
+    });
+
+    it('"nice unset CLAUDE_SESSION_ID" does NOT normalise to a deny-session-env-strip match', () => {
+      const re = policyBashMatch("deny-session-env-strip");
+      const command = "nice unset CLAUDE_SESSION_ID";
+      const { normalized } = normalizeCommand(command);
+      expect(re.test(normalized)).toBe(false);
+      expect(re.test(command)).toBe(false);
+    });
+
+    it('"nice tee /tmp/.harness-paused" does NOT normalise to a deny-pause-sentinel-forgery match', () => {
+      const re = policyBashMatch("deny-pause-sentinel-forgery");
+      const command = "nice tee /tmp/.harness-paused";
+      const { normalized } = normalizeCommand(command);
+      expect(re.test(normalized)).toBe(false);
+      expect(re.test(command)).toBe(false);
+    });
+
+    it('"nice cp a /tmp/.harness-paused" does NOT normalise to a deny-pause-sentinel-forgery match', () => {
+      const re = policyBashMatch("deny-pause-sentinel-forgery");
+      const command = "nice cp a /tmp/.harness-paused";
       const { normalized } = normalizeCommand(command);
       expect(re.test(normalized)).toBe(false);
       expect(re.test(command)).toBe(false);

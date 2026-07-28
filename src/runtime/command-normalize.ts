@@ -88,27 +88,64 @@
 //   - THE CLOSED HEAD-TOKEN SET (D-001, run
 //     2026-07-28-nongit-trigger-wrappers): after the SAME wrapper-peeling
 //     loop above, the head token is checked against `git` OR the three
-//     other literal head tokens a shipped `bash_match` trigger gates —
-//     `gh` (`gh pr merge` / `gh pr create`), `npm` (`npm publish`), and
-//     `harness` (the kill-switch verbs). `git` alone gets the git-specific
-//     global-option dropping described above; the other three get wrapper
-//     peeling PLUS whitespace collapsing between the head token and the
-//     SINGLE token immediately following it — the same collapse SCOPE
-//     `git`'s own subcommand rewrite already uses, just without any
-//     option-dropping (`gh -R`, `npm --loglevel`, and any other
-//     tool-specific flag stay UNSUPPORTED — see below — because a flag
-//     inserted between the head token and its subcommand tokens is not
-//     looked past). Matched by EXACT literal equality, not basename like
-//     `git` — a path-qualified `gh`/`npm`/`harness` invocation is out of
-//     scope for this set (named residual below); `harness`'s own trigger
-//     regex already covers a path-qualified spelling at the RAW-match
-//     level (`(?:npx\s+|\S*/)?harness` in `deny-kill-switch-bypass`), so
-//     nothing is lost there specifically. This is a CLOSED set, not a
-//     general "peel wrappers for any head token" rule: it hardcodes the
-//     four head tokens shipped policies actually gate today, so a custom
-//     third-party `bash_match` policy gating some OTHER head token stays
-//     uncovered by this module (named residual, no follow-up filed unless
-//     a real consumer appears).
+//     other literal head tokens this module covers — `gh` (`gh pr merge`
+//     / `gh pr create`), `npm` (`npm publish`), and `harness` (the
+//     kill-switch verbs). `git` alone gets the git-specific global-option
+//     dropping described above; the other three get wrapper peeling PLUS
+//     whitespace collapsing across the REST OF THE SEGMENT (fix round 2,
+//     finding F2 — collapsing only the head-to-next-token gap, the
+//     original scope, still let an interior whitespace run defeat a
+//     multi-word trigger like `gh pr  merge`), no option-dropping (`gh
+//     -R`, `npm --loglevel`, and any other tool-specific flag stay
+//     UNSUPPORTED — see below — because a flag inserted between the head
+//     token and its subcommand tokens is not looked past). Matched by
+//     EXACT literal equality, not basename like `git` — a path-qualified
+//     `gh`/`npm`/`harness` invocation is out of scope for this set (named
+//     residual below); `harness`'s own trigger regex already covers a
+//     path-qualified spelling at the RAW-match level (`(?:npx\s+|\S*/)?
+//     harness` in `deny-kill-switch-bypass`), so nothing is lost there
+//     specifically. This is a CLOSED set, not a general "peel wrappers
+//     for any head token" rule.
+//   - SHIPPED BUT NOT COVERED (fix round 2, finding F1 — corrects an
+//     inaccurate claim in the prior version of this comment, which said
+//     this module's four head tokens were "the head tokens shipped
+//     policies actually gate today"): a shipped `bash_match` trigger
+//     actually keys on EIGHT distinct head-token spellings, not four.
+//     `deny-session-env-strip` also keys on `env` (`env ... -u <VAR>` /
+//     `env ... --unset <VAR>`) and `unset` (`unset <VAR>...`);
+//     `deny-pause-sentinel-forgery` also keys on `tee` and `cp`. None of
+//     these four are in the closed set above, and adding them is not
+//     simply "the same kind of change again":
+//       - `env` is STRUCTURALLY unreachable by this module's own
+//         architecture, not merely unimplemented: the wrapper-peeling
+//         loop treats `env` ONLY as a pass-through wrapper hunting for a
+//         `git`/`gh`/`npm`/`harness` invocation behind it, so it ALWAYS
+//         calls `peelEnv` and consumes `env`'s OWN `-u`/`--unset` flags
+//         (and their VALUES) as part of that hunt — by the time `headTok`
+//         is checked, the very `-u <VAR>` text `deny-session-env-strip`'s
+//         trigger keys on has already been peeled away. Recognising
+//         `env` as ITSELF a head token would need the SAME literal token
+//         to get two different treatments depending on WHY it is there —
+//         an architecture change, not a set-membership change — and is
+//         out of scope for this closed-set run. Measured, still-open
+//         bypass: `nice env -u CLAUDE_SESSION_ID ls` (pinned as a
+//         documented ceiling, not silently left to a comment).
+//       - `unset` is simply not one of the wrapper-peeling loop's
+//         recognised names at all (unlike `env`, there is no
+//         `peelUnset`), so a wrapped `unset` invocation is not looked
+//         past either. Measured, still-open bypass: `nice unset
+//         CLAUDE_SESSION_ID`.
+//       - `tee` / `cp` are never wrapper-peeled or recognised as a head
+//         token by this module at all; `deny-pause-sentinel-forgery`'s
+//         own raw regex is the only thing that ever catches them.
+//         Measured, still-open bypasses: `nice tee /tmp/.harness-paused`,
+//         `nice cp a /tmp/.harness-paused`.
+//     A future policy gating some OTHER head token (one of these four, or
+//     any other) stays uncovered by this module too — named residual, no
+//     follow-up filed unless a real consumer appears. See
+//     `tests/runtime/bash-match-head-token-drift.test.ts` for the guard
+//     that couples this module's covered set to what FULL_TEMPLATE's
+//     shipped `bash_match` policies actually key on today.
 //
 // CURRENT RULES — target-directory extraction (`targetDir`/`targetBase`;
 // UNCONSUMED — see STATUS above):
@@ -206,12 +243,12 @@
 //     token and its subcommand: `gh -R owner/repo pr merge`, `gh --repo
 //     owner/repo pr create`, `npm --loglevel=silent publish`, `npm
 //     --registry <url> publish`. Only wrapper prefixes (`env`, `nice`,
-//     `command`, ...) and the single-token whitespace collapse
-//     immediately after the head token are peeled for these three heads
-//     (see the closed head-token-set rule above) — a flag belonging to
-//     `gh`/`npm` itself is never recognised or skipped, so it defeats the
-//     match the same way an unrecognised git flag would if
-//     `peelGitGlobalOptions` did not know its name.
+//     `command`, ...) and whitespace collapsing across the rest of the
+//     segment (see the closed head-token-set rule above) are peeled for
+//     these three heads — a flag belonging to `gh`/`npm` itself is never
+//     recognised or skipped, so it defeats the match the same way an
+//     unrecognised git flag would if `peelGitGlobalOptions` did not know
+//     its name.
 //   - A path-qualified `gh`/`npm`/`harness` invocation (`/usr/local/bin/gh
 //     pr merge`, `./node_modules/.bin/npm publish`): the closed
 //     head-token-set check is EXACT literal equality, not basename like
@@ -219,6 +256,24 @@
 //     path-qualified spelling at the raw-match level, so nothing is lost
 //     there specifically; `gh`/`npm` genuinely have no coverage for this
 //     shape.
+//
+// KNOWN OVER-MATCHING (FALSE POSITIVE) CLASS — `command -v NAME` / `sudo
+// -l [NAME]` (fix round 2, finding F5; doc-only, no behaviour change):
+// both are INTROSPECTION forms — `command -v NAME` prints what `NAME`
+// resolves to without running it, `sudo -l [NAME]` lists (without
+// running) whether `NAME` is permitted — but this module's wrapper
+// peeling treats `-v` (an otherwise-unrecognised `command` flag) and `-l`
+// (an otherwise-unrecognised `sudo` flag) as ordinary BOOLEAN flags to
+// skip past, exactly like any other flag either wrapper legitimately
+// takes before its real, EXECUTED payload. `command -v harness pause`
+// therefore canonicalises to `harness pause` and DENIES via
+// `deny-kill-switch-bypass` even though nothing was actually paused
+// (measured). This predates this run — `sudo -l git status` was already
+// a false positive under the git-only normaliser — this run only widens
+// it to also cover `gh`/`npm`/`harness`. Fail-CLOSED direction (an
+// operator gets an unnecessary deny, never a missed real gate), so left
+// as-is rather than special-cased; noted here so it is not mistaken for
+// a security hole if reported.
 //
 // `$(...)` command substitution is ACCIDENTALLY covered — not a
 // deliberate feature, and distinct from the backtick case above, which
@@ -328,19 +383,28 @@ const VAR_ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
  * Anchored to the WHOLE token (not a substring) so `mygit` / `git-foo`
  * still correctly fail to match — `\S*` only ever contributes characters
  * immediately before a literal `/`, never before `git` directly.
+ * Exported (fix round 2, finding F3) so
+ * `tests/runtime/bash-match-head-token-drift.test.ts` can couple this
+ * module's covered set to what FULL_TEMPLATE's shipped `bash_match`
+ * policies actually key on today, instead of a test-owned duplicate.
  */
-const GIT_TOKEN_RE = /^(?:\S*\/)?git$/;
+export const GIT_TOKEN_RE = /^(?:\S*\/)?git$/;
 
 /**
- * The three OTHER head tokens a shipped `bash_match` trigger gates (D-001,
- * run 2026-07-28-nongit-trigger-wrappers) — `gh` (`gh pr merge` / `gh pr
+ * The three OTHER head tokens this module covers (D-001, run
+ * 2026-07-28-nongit-trigger-wrappers) — `gh` (`gh pr merge` / `gh pr
  * create`), `npm` (`npm publish`), `harness` (the kill-switch verbs). A
  * closed set, deliberately NOT a general "any head token" rule (see the
  * module header): matched by EXACT literal equality, unlike `GIT_TOKEN_RE`'s
  * basename match, so a path-qualified spelling of any of these three stays
- * out of scope (named residual, module header NOT-SUPPORTED list).
+ * out of scope (named residual, module header NOT-SUPPORTED list). This is
+ * NOT the complete set of head tokens a shipped `bash_match` trigger keys
+ * on — see the module header's "SHIPPED BUT NOT COVERED" paragraph (fix
+ * round 2, finding F1) for the four that are NOT in this set (`env`,
+ * `unset`, `tee`, `cp`) and why. Exported (fix round 2, finding F3) for the
+ * same drift-guard reason as `GIT_TOKEN_RE` above.
  */
-const NON_GIT_HEAD_TOKENS: ReadonlySet<string> = new Set(["gh", "npm", "harness"]);
+export const NON_GIT_HEAD_TOKENS: ReadonlySet<string> = new Set(["gh", "npm", "harness"]);
 
 /**
  * Above this length, normalisation is skipped entirely and the command
@@ -565,12 +629,13 @@ function tokenizeWithOffsets(s: string): Token[] {
  * 2026-07-28-nongit-trigger-wrappers), and — ONLY if one is found —
  * canonicalise it. `git` is canonicalised to `git <subcommand>` with its
  * OWN global options dropped, same as before this run. The other three
- * are canonicalised to `<head> <next-token>` — wrapper peeling plus
- * whitespace collapsing between the head token and the single token
- * immediately following it, no option-dropping (see the module header) —
- * keeping everything after that token verbatim. When no recognised head
- * token is found (wrong binary, ran out of tokens, or a malformed git
- * global option), the segment is returned COMPLETELY UNCHANGED: peeling
+ * are canonicalised by wrapper peeling plus whitespace collapsing across
+ * the REST OF THE SEGMENT (fix round 2, finding F2 — rejoining every
+ * token from the head onward with a single space, not just the head-to-
+ * next-token gap), no option-dropping (see the module header). When no
+ * recognised head token is found (wrong binary, ran out of tokens, or a
+ * malformed git global option), the segment is returned COMPLETELY
+ * UNCHANGED: peeling
  * is tentative, and nothing is stripped from a segment that turns out not
  * to be a recognised call (so `digit=1 foo`, `env -C X ls`, `ghx pr
  * merge`, etc. are never touched).
@@ -674,25 +739,40 @@ function canonicalizeSegment(segmentText: string): {
   }
 
   if (NON_GIT_HEAD_TOKENS.has(headTok)) {
-    // D-001: `gh` / `npm` / `harness` get wrapper peeling (already applied
-    // above, same loop as `git`'s) plus whitespace collapsing between the
-    // head token and the SINGLE token immediately following it — the same
-    // collapse SCOPE the `git` branch above uses for its own subcommand,
-    // just with no option-dropping (`gh -R`, `npm --loglevel`, etc. stay
-    // unsupported — module header). `targetDir`/`targetBase` stay `null`:
-    // these are never git invocations, so no per-invocation target is
-    // extracted for them (unaffected by the STATUS note above — that
-    // extraction was never wired to a gate either way).
-    const nextTok = tokens[idx + 1];
-    if (nextTok === undefined) {
-      // Head token alone, no subcommand token to collapse toward — no
+    // D-001 + fix round 2 (finding F2): `gh` / `npm` / `harness` get
+    // wrapper peeling (already applied above, same loop as `git`'s) plus
+    // whitespace collapsing ACROSS THE REST OF THE SEGMENT — rejoining
+    // every token from the head token onward with exactly one space
+    // between each. The original scope (collapse only between the head
+    // token and the SINGLE token immediately following it) left an
+    // INTERIOR whitespace run further into a multi-word trigger able to
+    // defeat the match: `gh pr  merge` (double space between `pr` and
+    // `merge`, not `gh` and `pr`), `gh pr<TAB>merge`, `gh pr  create`.
+    // Full-segment rejoin closes any such run anywhere after the head,
+    // not just immediately after it. Safe because this is additive-only
+    // matching (raw-OR-normalised, module header) and byte-identity is an
+    // acceptance criterion only for heads NOT in this set (see the
+    // byte-identity negative tests below) — a RECOGNISED head's own tail
+    // may be freely rewritten. Still no option-dropping (`gh -R`, `npm
+    // --loglevel`, etc. stay unsupported — module header): a tool-specific
+    // flag between the head and its subcommand still isn't recognised or
+    // skipped, it just no longer needs an interior whitespace run to
+    // survive the rejoin. `targetDir`/`targetBase` stay `null`: these are
+    // never git invocations, so no per-invocation target is extracted for
+    // them (unaffected by the STATUS note above — that extraction was
+    // never wired to a gate either way).
+    if (idx + 1 >= tokens.length) {
+      // Head token alone, no further token to canonicalise toward — no
       // shipped trigger matches a bare head token anyway, and rewriting to
       // just the head would silently drop whatever wrapper preceded it for
       // no benefit. Leave untouched, same fail-safe shape as the git
       // malformed/no-subcommand case above.
       return { text: segmentText, targetDir: null, targetBase: null, isGit: false };
     }
-    const rewritten = `${headTok} ${nextTok.text}${segmentText.slice(nextTok.end)}`;
+    const rewritten = tokens
+      .slice(idx)
+      .map((t) => t.text)
+      .join(" ");
     return { text: rewritten, targetDir: null, targetBase: null, isGit: false };
   }
 

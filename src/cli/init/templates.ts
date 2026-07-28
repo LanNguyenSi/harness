@@ -652,19 +652,25 @@ policies:
   # "declares no producers" on these three (checkPolicySelfAttestation now
   # recognises operator_only: true as correct-by-construction).
   #
-  # UPDATE (run 2026-07-27-gate-target-repo-resolution, task ea8becf5): a
-  # wrapper prefix — \`env\`, \`nice\`, \`command\`, \`sudo\`, \`doas\`, \`time\`,
-  # \`timeout\`, \`stdbuf\`, \`setsid\` (e.g. \`env harness pause\`, \`nice
-  # harness gate disable\`) — still defeats all three of these triggers too,
-  # and this is now a KNOWN, documented gap rather than a silent one:
-  # \`src/runtime/command-normalize.ts\`'s raw-OR-normalised matching (wired
-  # into \`policyMatchesEvent\` in \`src/runtime/intercept.ts\`) closed the
-  # identical wrapper-prefix bypass for git-verb triggers (e.g.
-  # preflight-before-investigation, above), but it is a no-op here: it only
-  # canonicalises a segment whose peeled head token is literally \`git\`, and
-  # these three triggers match \`harness\`/\`env\`/\`tee\`-\`cp\` patterns, never
-  # \`git\`. Not fixed by that run — filed as a follow-up, not silently left
-  # for the next reader to rediscover.
+  # UPDATE (task 432db3d3, 2026-07-28, follow-up to ea8becf5): PARTIALLY
+  # closed — for THIS policy only. \`src/runtime/command-normalize.ts\` now
+  # peels wrapper prefixes (\`env\`, \`nice\`, \`command\`, \`sudo\`, \`doas\`,
+  # \`time\`, \`timeout\`, \`stdbuf\`, \`setsid\`, leading VAR=value) and
+  # collapses whitespace runs for the closed head-token set
+  # \`git\`/\`gh\`/\`npm\`/\`harness\`, so \`env harness pause\`, \`nice harness
+  # gate disable\` and the like now reach this deny via the raw-OR-normalised
+  # match — measured 2026-07-28 against the real trigger regex through the
+  # real hook entry point, pinned in tests/runtime/intercept-cli.test.ts.
+  # The OTHER TWO kill switches are NOT covered by that closed set:
+  # deny-session-env-strip keys on \`env\`/\`unset\` head tokens, and \`env\`
+  # is STRUCTURALLY unreachable for the normaliser (its peeling loop
+  # consumes \`env -u <VAR>\` while hunting for a gated command behind it,
+  # erasing the very text this trigger keys on); deny-pause-sentinel-forgery
+  # keys on \`tee\`/\`cp\`. Both remain wrapper-bypassable (\`nice env -u
+  # CLAUDE_CODE_SESSION_ID ...\`, \`nice tee <sentinel>\`), measured
+  # 2026-07-28 and pinned as explicit not-covered tests plus a head-token
+  # drift guard (tests/runtime/bash-match-head-token-drift.test.ts) that
+  # goes red when a future bash_match policy gates a new head token.
   - name: deny-kill-switch-bypass
     description: Deny harness pause, harness resume, harness gate disable, and harness gate enable from the agent's Bash tool. These are operator-only kill switches.
     trigger:

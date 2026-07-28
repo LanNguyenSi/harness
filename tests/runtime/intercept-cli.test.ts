@@ -1519,6 +1519,11 @@ describe("runInterceptCli — non-git head-token wrapper bypass matching (T-001,
       { label: "env -C <dir> gh pr merge", command: "env -C /tmp/some-repo gh pr merge 123" },
       { label: "nice gh pr merge", command: "nice gh pr merge 123" },
       { label: "double space between gh and its subcommand", command: "gh  pr merge 123" },
+      // Fix round 2, finding F2: an interior whitespace run further into
+      // the multi-word verb phrase (between "pr" and "merge") used to
+      // survive the head-to-next-token-only collapse.
+      { label: "double space between pr and merge (F2)", command: "gh pr  merge 123" },
+      { label: "tab between pr and merge (F2)", command: "gh pr\tmerge 123" },
     ];
     for (const c of cases) {
       it(`${c.label}: "${c.command}" is blocked with no ledger evidence`, async () => {
@@ -1531,18 +1536,28 @@ describe("runInterceptCli — non-git head-token wrapper bypass matching (T-001,
   });
 
   describe("gh pr create: previously-allowed wrapped spelling now blocks", () => {
-    it('env gh pr create: "env gh pr create" is blocked with no ledger evidence', async () => {
-      const result = await runFor(GH_CREATE_POLICY, "env gh pr create");
-      expect(result.decisions).toHaveLength(1);
-      expect(result.decisions[0]?.outcome).toBe("deny");
-      expect(result.blocked).toBe(true);
-    });
+    const cases: Array<{ label: string; command: string }> = [
+      { label: "env gh pr create", command: "env gh pr create" },
+      // Fix round 2, finding F2.
+      { label: "double space between pr and create (F2)", command: "gh pr  create" },
+    ];
+    for (const c of cases) {
+      it(`${c.label}: "${c.command}" is blocked with no ledger evidence`, async () => {
+        const result = await runFor(GH_CREATE_POLICY, c.command);
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]?.outcome).toBe("deny");
+        expect(result.blocked).toBe(true);
+      });
+    }
   });
 
   describe("npm publish: previously-allowed wrapped spellings now block", () => {
     const cases: Array<{ label: string; command: string }> = [
       { label: "env npm publish", command: "env npm publish" },
       { label: "nice npm publish", command: "nice npm publish" },
+      // Fix round 2, findings F2/F7.
+      { label: "double space between npm and publish (F2/F7)", command: "npm  publish" },
+      { label: "tab between npm and publish (F2/F7)", command: "npm\tpublish" },
     ];
     for (const c of cases) {
       it(`${c.label}: "${c.command}" is blocked with no ledger evidence`, async () => {
@@ -1616,6 +1631,64 @@ describe("runInterceptCli — non-git head-token wrapper bypass matching (T-001,
       expect(result.decisions).toHaveLength(0);
       expect(result.blocked).toBe(false);
     });
+  });
+});
+
+// Fix round 2, finding F6: raw-first ordering pin. `policyMatchesEvent`
+// tests every `bash_match` regex against the RAW command first and only
+// falls back to the normalised form on a raw miss (raw-OR-normalised,
+// never raw-replaced-by-normalised — command-normalize.ts module header).
+// This particular command is the one shipped shape that actually proves
+// the ordering matters: `env -u CLAUDE_SESSION_ID npm publish` matches
+// `deny-session-env-strip` on the RAW string (the "-u <VAR>" text is
+// right there), but this module's OWN normaliser treats the leading `env
+// -u <VAR>` as a wrapper preceding the real `npm publish` invocation and
+// PEELS IT AWAY when hunting for a recognised head token — so the
+// NORMALISED form of this exact command no longer contains the `-u <VAR>`
+// text `deny-session-env-strip`'s trigger needs (see the module header's
+// "SHIPPED BUT NOT COVERED" paragraph, finding F1). If raw-OR-normalised
+// ever collapsed to normalised-only, THIS test — and no other in this
+// suite — would go red, because every other shipped bypass this run
+// fixes is a case where raw already failed and normalised newly succeeds,
+// never the reverse.
+describe("runInterceptCli — fix round 2, finding F6: raw-first ordering (deny-session-env-strip still fires when normalisation erases its own evidence)", () => {
+  function realDenySessionEnvStripPolicy(): Policy {
+    const parsed = parseManifest(parseYaml(FULL_TEMPLATE));
+    const policy = parsed.policies.find((p) => p.name === "deny-session-env-strip");
+    if (!policy) throw new Error("deny-session-env-strip missing from FULL_TEMPLATE");
+    return policy;
+  }
+
+  const emptyLedgerLocal: LedgerClient = {
+    async query() {
+      return { kind: "ok", entries: [] };
+    },
+    async record() {
+      /* no-op */
+    },
+  };
+
+  it('"env -u CLAUDE_SESSION_ID npm publish" still blocks via deny-session-env-strip (raw matches even though normalised does not)', async () => {
+    const { stream: out } = captureStream();
+    const { stream: err } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "env -u CLAUDE_SESSION_ID npm publish" },
+          session_id: "sess-f6-1",
+          cwd: "/tmp/harness-f6-test-cwd",
+        }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([realDenySessionEnvStripPolicy()]),
+      ledger: emptyLedgerLocal,
+    });
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.outcome).toBe("deny");
+    expect(result.blocked).toBe(true);
   });
 });
 
