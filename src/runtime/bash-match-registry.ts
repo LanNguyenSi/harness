@@ -45,11 +45,19 @@
 //     "declare no members and check (c) below never runs" — is now a
 //     COMPILE ERROR, not a test failure. The "must-not-contain" arm keeps
 //     `members` optional (no purity semantics apply to it).
-//   (S2) check (d), COVERS-REDUNDANCY, below: closes the escape where a
-//     laundered set's declared `members` are all HONESTLY gated (so check
-//     (c) is satisfied) but the set's true purpose is something else — its
-//     gated members are, by construction, already covered by the real set
-//     that exists to cover them.
+//   (S2) check (d), COVERS-REDUNDANCY, below: NARROWS — does not close —
+//     the escape where a laundered set's declared `members` are all
+//     HONESTLY gated (so check (c) is satisfied) but the set's true
+//     purpose is something else. It works only for a gated token that some
+//     covers-set legitimately covers, and is STRUCTURALLY SILENT for the
+//     `documented-uncovered` subset. MEASURED (review round 3): a
+//     registration declaring `members: ["tee"]` — or any subset of
+//     `env`/`unset`/`tee`/`cp`, four of the eight live gated head tokens —
+//     passes checks (a) through (e) with an entirely honest, live-coupled
+//     `has()` and `members`, end to end on the real tree. That is the
+//     `dbc6d303` shape (an inert allowlist absorbing a gated head token)
+//     and this registry does not see it. Redesign filed as a follow-up;
+//     see the LIMITS paragraph at the end of this header.
 //   (S4) check (e), COVERS-PREDICATE-PURITY, below: closes the escape
 //     where a registration's `has()` PREDICATE accepts more than its
 //     declared `members` claim (measured: widening `GIT_TOKEN_RE` to also
@@ -101,6 +109,35 @@
 //
 // WHY src/runtime/, NOT tests/ (F8, fix round): see `bash-match-facts.ts`'s
 // module header — the same reasoning applies here.
+//
+// LIMITS — READ THIS BEFORE TRUSTING A REGISTRATION. Three independent
+// adversarial review passes each found a way to register a set that this
+// registry accepts but should not. Two rounds of added checks narrowed the
+// family without closing it, so the checks were frozen here deliberately
+// and the registration SURFACE is being redesigned instead (follow-up
+// task; the shape under consideration is that a registration hands the
+// registry the constant itself rather than a self-description, so a stale
+// or lying mirror cannot be expressed at all). What this registry does NOT
+// catch today, each measured end to end, not theorised:
+//   1. A covers registration whose declared `members` are all
+//      `documented-uncovered` gated tokens (`env`, `unset`, `tee`, `cp` —
+//      four of eight). Passes every check with an honest, live-coupled
+//      registration. This is the `dbc6d303` CRITICAL shape.
+//   2. A `has()` predicate that does not reflect the constant its
+//      `id`/`module` names: a stale hand-copied snapshot, or `() => false`.
+//      Nothing couples the two. The `must-not-contain` arm has no
+//      predicate check at all, and that is the arm the CRITICAL shape
+//      lives in.
+//   3. `members` declaring coverage the predicate rejects (the two are
+//      each walked in one direction, never against each other), and an
+//      empty `members: []`, which typechecks.
+//   4. A registration naming a `module`/`id` that no exported constant
+//      matches.
+// What it DOES catch is the bar it was built for and still meets: both
+// historical incidents (`432db3d3`'s covers-completeness gap and
+// `dbc6d303`'s `harness` in an inert allowlist), plus an unregistered set
+// in the runtime layer. Treat it as a tripwire for the accidental case,
+// never as a boundary against a determined one.
 //
 // TODAY'S REAL REGISTRATIONS are both "covers" sets — `GIT_TOKEN_RE` and
 // `NON_GIT_HEAD_TOKENS`, both from `command-normalize.ts`, the two sets
@@ -343,13 +380,19 @@ export function checkRegisteredSets(
   // relabeled "covers-gated-head-tokens" to dodge check (a)) whose
   // declared `members` are HONESTLY all gated — e.g. `new
   // Set(["harness"])` or `new Set(["harness", "gh"])` — passes check (c)
-  // cleanly (every declared member IS a live gated head token). But a
-  // laundered set's gated members are, by construction, already covered
-  // by the REAL set that exists to cover them ("harness" by
-  // `NON_GIT_HEAD_TOKENS`) — so this check rejects the shape without
-  // needing to know the set's true intent honestly: a gated head token
-  // legitimately has exactly ONE registered "covers" set responsible for
-  // it, and redundant coverage is the tell.
+  // cleanly (every declared member IS a live gated head token). The tell
+  // is redundancy: a gated head token legitimately has exactly ONE
+  // registered "covers" set responsible for it.
+  //
+  // SCOPE OF THIS CHECK, measured, not assumed (review round 3): the tell
+  // only exists for a token some covers-set ALREADY covers. For the four
+  // `documented-uncovered` tokens (`env`, `unset`, `tee`, `cp`) no
+  // covers-set covers them by definition, so `coveringSets.length` is 1
+  // and this check is structurally silent — while check (b) skips them and
+  // checks (c)/(e) pass because they ARE gated. A laundered set declaring
+  // only those tokens therefore passes everything. Do not read this check
+  // as a completeness proof; an earlier version of this comment did, and
+  // it was false for half the live vocabulary.
   for (const token of facts.gatedHeadTokens) {
     const coveringSets = registrations.filter(
       (reg) => reg.intent === "covers-gated-head-tokens" && reg.has(token),
