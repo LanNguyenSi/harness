@@ -1430,6 +1430,268 @@ describe("runInterceptCli — normalised bash_match trigger matching (T-002, run
   });
 });
 
+// T-001 (run 2026-07-28-nongit-trigger-wrappers, D-001): the head-token
+// condition in `canonicalizeSegment` generalised from "literally `git`" to
+// the closed set `git`, `gh`, `npm`, `harness` — every head token a shipped
+// `bash_match` trigger actually gates. A one-word wrapper (`env`, `nice`,
+// `command`, `env -C <dir>`) defeated the `gh`/`npm`/`harness` triggers
+// exactly as it used to defeat `git`'s before the prior run's fix. Real
+// regexes read straight out of FULL_TEMPLATE via `policyBashMatch` (see
+// helper above), mirroring the git-focused T-002 describe block this one
+// sits next to.
+describe("runInterceptCli — non-git head-token wrapper bypass matching (T-001, run 2026-07-28-nongit-trigger-wrappers)", () => {
+  const GH_MERGE_POLICY: Policy = {
+    name: "review-before-merge-bash",
+    description: "block gh pr merge without a ledger tag (real trigger regex)",
+    trigger: { event: "PreToolUse", match: "Bash", bash_match: policyBashMatch("review-before-merge-bash") },
+    requires: { ledger_tag: "review:${BRANCH}" },
+    hook: "h",
+    enforcement: "block",
+  } as Policy;
+
+  const GH_CREATE_POLICY: Policy = {
+    name: "review-subagent-before-pr-create-bash",
+    description: "block gh pr create without a ledger tag (real trigger regex)",
+    trigger: {
+      event: "PreToolUse",
+      match: "Bash",
+      bash_match: policyBashMatch("review-subagent-before-pr-create-bash"),
+    },
+    requires: { ledger_tag: "review-subagent:${BRANCH}" },
+    hook: "h",
+    enforcement: "block",
+  } as Policy;
+
+  const NPM_PUBLISH_POLICY: Policy = {
+    name: "dogfood-before-release",
+    description: "block npm publish without a recent dogfood ledger tag (real trigger regex)",
+    trigger: { event: "PreToolUse", match: "Bash", bash_match: policyBashMatch("dogfood-before-release") },
+    requires: { ledger_tag: "dogfood:${SESSION_ID}" },
+    hook: "h",
+    enforcement: "block",
+  } as Policy;
+
+  // deny-kill-switch-bypass is `operator_only: true` with NO `requires:` at
+  // all in FULL_TEMPLATE (task 2cc73f55 — see
+  // tests/cli/init-full-template-kill-switch-deny.test.ts). Read the REAL
+  // policy object rather than a hand-rolled fixture so that shape — and its
+  // no-ledger-query short-circuit — is exercised exactly as shipped, not
+  // approximated.
+  function realKillSwitchPolicy(): Policy {
+    const parsed = parseManifest(parseYaml(FULL_TEMPLATE));
+    const policy = parsed.policies.find((p) => p.name === "deny-kill-switch-bypass");
+    if (!policy) throw new Error("deny-kill-switch-bypass missing from FULL_TEMPLATE");
+    return policy;
+  }
+
+  const emptyLedgerLocal: LedgerClient = {
+    async query() {
+      return { kind: "ok", entries: [] };
+    },
+    async record() {
+      /* no-op */
+    },
+  };
+
+  async function runFor(policy: Policy, command: string) {
+    const { stream: out } = captureStream();
+    const { stream: err } = captureStream();
+    return runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+          session_id: "sess-nongit-1",
+          cwd: "/tmp/harness-nongit-test-cwd",
+        }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([policy]),
+      ledger: emptyLedgerLocal,
+    });
+  }
+
+  describe("gh pr merge: previously-allowed wrapped spellings now block", () => {
+    const cases: Array<{ label: string; command: string }> = [
+      { label: "env gh pr merge", command: "env gh pr merge 123" },
+      { label: "env -C <dir> gh pr merge", command: "env -C /tmp/some-repo gh pr merge 123" },
+      { label: "nice gh pr merge", command: "nice gh pr merge 123" },
+      { label: "double space between gh and its subcommand", command: "gh  pr merge 123" },
+      // Fix round 2, finding F2: an interior whitespace run further into
+      // the multi-word verb phrase (between "pr" and "merge") used to
+      // survive the head-to-next-token-only collapse.
+      { label: "double space between pr and merge (F2)", command: "gh pr  merge 123" },
+      { label: "tab between pr and merge (F2)", command: "gh pr\tmerge 123" },
+    ];
+    for (const c of cases) {
+      it(`${c.label}: "${c.command}" is blocked with no ledger evidence`, async () => {
+        const result = await runFor(GH_MERGE_POLICY, c.command);
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]?.outcome).toBe("deny");
+        expect(result.blocked).toBe(true);
+      });
+    }
+  });
+
+  describe("gh pr create: previously-allowed wrapped spelling now blocks", () => {
+    const cases: Array<{ label: string; command: string }> = [
+      { label: "env gh pr create", command: "env gh pr create" },
+      // Fix round 2, finding F2.
+      { label: "double space between pr and create (F2)", command: "gh pr  create" },
+    ];
+    for (const c of cases) {
+      it(`${c.label}: "${c.command}" is blocked with no ledger evidence`, async () => {
+        const result = await runFor(GH_CREATE_POLICY, c.command);
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]?.outcome).toBe("deny");
+        expect(result.blocked).toBe(true);
+      });
+    }
+  });
+
+  describe("npm publish: previously-allowed wrapped spellings now block", () => {
+    const cases: Array<{ label: string; command: string }> = [
+      { label: "env npm publish", command: "env npm publish" },
+      { label: "nice npm publish", command: "nice npm publish" },
+      // Fix round 2, findings F2/F7.
+      { label: "double space between npm and publish (F2/F7)", command: "npm  publish" },
+      { label: "tab between npm and publish (F2/F7)", command: "npm\tpublish" },
+    ];
+    for (const c of cases) {
+      it(`${c.label}: "${c.command}" is blocked with no ledger evidence`, async () => {
+        const result = await runFor(NPM_PUBLISH_POLICY, c.command);
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]?.outcome).toBe("deny");
+        expect(result.blocked).toBe(true);
+      });
+    }
+  });
+
+  describe("harness pause (kill switch): previously-allowed wrapped spellings now block", () => {
+    const cases: Array<{ label: string; command: string }> = [
+      { label: "env harness pause", command: "env harness pause" },
+      { label: "nice harness pause", command: "nice harness pause" },
+      { label: "command harness pause", command: "command harness pause" },
+      { label: "env -C <dir> harness pause", command: "env -C /tmp harness pause" },
+    ];
+    for (const c of cases) {
+      it(`${c.label}: "${c.command}" is blocked (operator_only, no requires needed)`, async () => {
+        const result = await runFor(realKillSwitchPolicy(), c.command);
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]?.outcome).toBe("deny");
+        expect(result.blocked).toBe(true);
+      });
+    }
+  });
+
+  // Superset re-assertion: bare, previously-matching spellings for each of
+  // these four policies must keep matching — additive raw-OR-normalised
+  // construction, never raw-replaced-by-normalised.
+  describe("superset: previously-blocked bare spellings still block", () => {
+    it("gh pr merge (bare)", async () => {
+      const result = await runFor(GH_MERGE_POLICY, "gh pr merge 123");
+      expect(result.decisions).toHaveLength(1);
+      expect(result.blocked).toBe(true);
+    });
+    it("gh pr create (bare)", async () => {
+      const result = await runFor(GH_CREATE_POLICY, "gh pr create");
+      expect(result.decisions).toHaveLength(1);
+      expect(result.blocked).toBe(true);
+    });
+    it("npm publish (bare)", async () => {
+      const result = await runFor(NPM_PUBLISH_POLICY, "npm publish");
+      expect(result.decisions).toHaveLength(1);
+      expect(result.blocked).toBe(true);
+    });
+    it("harness pause (bare)", async () => {
+      const result = await runFor(realKillSwitchPolicy(), "harness pause");
+      expect(result.decisions).toHaveLength(1);
+      expect(result.blocked).toBe(true);
+    });
+  });
+
+  // Negative controls: an unrelated Bash command, and a gh/npm/harness
+  // near-miss, must produce no decision at all — the widening is additive,
+  // never a false positive on innocent neighbours.
+  describe("negative controls: no false positives", () => {
+    it("an unrelated Bash command produces no decision", async () => {
+      const result = await runFor(GH_MERGE_POLICY, "echo hello");
+      expect(result.decisions).toHaveLength(0);
+      expect(result.blocked).toBe(false);
+    });
+    it("gitk --all produces no decision against the harness kill-switch policy", async () => {
+      const result = await runFor(realKillSwitchPolicy(), "gitk --all");
+      expect(result.decisions).toHaveLength(0);
+      expect(result.blocked).toBe(false);
+    });
+    it('a quoted-verb echo ("harness pause" as a string literal) produces no decision', async () => {
+      const result = await runFor(realKillSwitchPolicy(), 'echo "not a real harness pause call"');
+      expect(result.decisions).toHaveLength(0);
+      expect(result.blocked).toBe(false);
+    });
+  });
+});
+
+// Fix round 2, finding F6: raw-first ordering pin. `policyMatchesEvent`
+// tests every `bash_match` regex against the RAW command first and only
+// falls back to the normalised form on a raw miss (raw-OR-normalised,
+// never raw-replaced-by-normalised — command-normalize.ts module header).
+// This particular command is the one shipped shape that actually proves
+// the ordering matters: `env -u CLAUDE_SESSION_ID npm publish` matches
+// `deny-session-env-strip` on the RAW string (the "-u <VAR>" text is
+// right there), but this module's OWN normaliser treats the leading `env
+// -u <VAR>` as a wrapper preceding the real `npm publish` invocation and
+// PEELS IT AWAY when hunting for a recognised head token — so the
+// NORMALISED form of this exact command no longer contains the `-u <VAR>`
+// text `deny-session-env-strip`'s trigger needs (see the module header's
+// "SHIPPED BUT NOT COVERED" paragraph, finding F1). If raw-OR-normalised
+// ever collapsed to normalised-only, THIS test — and no other in this
+// suite — would go red, because every other shipped bypass this run
+// fixes is a case where raw already failed and normalised newly succeeds,
+// never the reverse.
+describe("runInterceptCli — fix round 2, finding F6: raw-first ordering (deny-session-env-strip still fires when normalisation erases its own evidence)", () => {
+  function realDenySessionEnvStripPolicy(): Policy {
+    const parsed = parseManifest(parseYaml(FULL_TEMPLATE));
+    const policy = parsed.policies.find((p) => p.name === "deny-session-env-strip");
+    if (!policy) throw new Error("deny-session-env-strip missing from FULL_TEMPLATE");
+    return policy;
+  }
+
+  const emptyLedgerLocal: LedgerClient = {
+    async query() {
+      return { kind: "ok", entries: [] };
+    },
+    async record() {
+      /* no-op */
+    },
+  };
+
+  it('"env -u CLAUDE_SESSION_ID npm publish" still blocks via deny-session-env-strip (raw matches even though normalised does not)', async () => {
+    const { stream: out } = captureStream();
+    const { stream: err } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "env -u CLAUDE_SESSION_ID npm publish" },
+          session_id: "sess-f6-1",
+          cwd: "/tmp/harness-f6-test-cwd",
+        }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([realDenySessionEnvStripPolicy()]),
+      ledger: emptyLedgerLocal,
+    });
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.outcome).toBe("deny");
+    expect(result.blocked).toBe(true);
+  });
+});
+
 // G4 fix (MEDIUM, review round 2, 2026-07-27): above
 // `MAX_NORMALIZE_LENGTH`, `normalizeCommand` used to skip normalisation
 // SILENTLY — no stderr line, no audit row, the skip was only visible by
