@@ -31,10 +31,21 @@
 // (`src/cli/init/templates.ts`, `docs/examples/full-manifest.yaml`) is a
 // single regex tested against the UNPARSED command string, anchored on a
 // shell boundary (`^ \n ; | && (`) followed by optional `VAR=value`
-// tokens and a literal `git`. That anchor is exact-spelling brittle: a
-// wrapper binary, a git global option other than `-C`, or even a second
-// space between `git` and its subcommand defeats the match silently —
+// tokens and a literal head token — `git` (most triggers), `gh` (`gh pr
+// merge`/`gh pr create`), `npm` (`npm publish`), or `harness` (the
+// kill-switch verbs). That anchor is exact-spelling brittle: a wrapper
+// binary, a git global option other than `-C`, or even a second space
+// between the head token and its subcommand defeats the match silently —
 // the policy is skipped, no ledger query happens, no audit signal at all.
+// Measured bypasses closed by this module (task `432db3d3`, run
+// `2026-07-28-nongit-trigger-wrappers`, D-001): `env gh pr merge`, `env -C
+// <dir> gh pr merge`, `nice gh pr merge`, `gh  pr merge` (double space),
+// `env gh pr create`, `env npm publish`, `nice npm publish`, `env harness
+// pause`, `nice harness pause`, `command harness pause`, `env -C <dir>
+// harness pause` — the exact one-word-wrapper class already fixed for
+// `git` in the prior run, reproduced against `gh`/`npm`/`harness` because
+// the head-token condition at the end of `canonicalizeSegment` checked
+// literal equality with `git` and nothing else.
 //
 // CURRENT RULES — trigger normalisation (peeled/canonicalised into
 // `normalized`):
@@ -74,6 +85,30 @@
 //     `deny-kill-switch-bypass` regex's own `(?:npx\s+|\S*/)?harness`
 //     shape). The canonicalised output always writes the literal `git`,
 //     regardless of how the invocation spelled the binary.
+//   - THE CLOSED HEAD-TOKEN SET (D-001, run
+//     2026-07-28-nongit-trigger-wrappers): after the SAME wrapper-peeling
+//     loop above, the head token is checked against `git` OR the three
+//     other literal head tokens a shipped `bash_match` trigger gates —
+//     `gh` (`gh pr merge` / `gh pr create`), `npm` (`npm publish`), and
+//     `harness` (the kill-switch verbs). `git` alone gets the git-specific
+//     global-option dropping described above; the other three get wrapper
+//     peeling PLUS whitespace collapsing between the head token and the
+//     SINGLE token immediately following it — the same collapse SCOPE
+//     `git`'s own subcommand rewrite already uses, just without any
+//     option-dropping (`gh -R`, `npm --loglevel`, and any other
+//     tool-specific flag stay UNSUPPORTED — see below — because a flag
+//     inserted between the head token and its subcommand tokens is not
+//     looked past). Matched by EXACT literal equality, not basename like
+//     `git` — a path-qualified `gh`/`npm`/`harness` invocation is out of
+//     scope for this set (named residual below); `harness`'s own trigger
+//     regex already covers a path-qualified spelling at the RAW-match
+//     level (`(?:npx\s+|\S*/)?harness` in `deny-kill-switch-bypass`), so
+//     nothing is lost there specifically. This is a CLOSED set, not a
+//     general "peel wrappers for any head token" rule: it hardcodes the
+//     four head tokens shipped policies actually gate today, so a custom
+//     third-party `bash_match` policy gating some OTHER head token stays
+//     uncovered by this module (named residual, no follow-up filed unless
+//     a real consumer appears).
 //
 // CURRENT RULES — target-directory extraction (`targetDir`/`targetBase`;
 // UNCONSUMED — see STATUS above):
@@ -167,6 +202,23 @@
 //     gap above), and `env -S "git status"` (the split-string flag hands
 //     the rest of the argv to a fresh, opaque re-parse this module
 //     deliberately does not follow, per `peelEnv`'s own comment).
+//   - `gh`'s / `npm`'s own tool-specific flags inserted BETWEEN the head
+//     token and its subcommand: `gh -R owner/repo pr merge`, `gh --repo
+//     owner/repo pr create`, `npm --loglevel=silent publish`, `npm
+//     --registry <url> publish`. Only wrapper prefixes (`env`, `nice`,
+//     `command`, ...) and the single-token whitespace collapse
+//     immediately after the head token are peeled for these three heads
+//     (see the closed head-token-set rule above) — a flag belonging to
+//     `gh`/`npm` itself is never recognised or skipped, so it defeats the
+//     match the same way an unrecognised git flag would if
+//     `peelGitGlobalOptions` did not know its name.
+//   - A path-qualified `gh`/`npm`/`harness` invocation (`/usr/local/bin/gh
+//     pr merge`, `./node_modules/.bin/npm publish`): the closed
+//     head-token-set check is EXACT literal equality, not basename like
+//     `GIT_TOKEN_RE`. `harness`'s own trigger regex already covers a
+//     path-qualified spelling at the raw-match level, so nothing is lost
+//     there specifically; `gh`/`npm` genuinely have no coverage for this
+//     shape.
 //
 // `$(...)` command substitution is ACCIDENTALLY covered — not a
 // deliberate feature, and distinct from the backtick case above, which
@@ -278,6 +330,17 @@ const VAR_ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
  * immediately before a literal `/`, never before `git` directly.
  */
 const GIT_TOKEN_RE = /^(?:\S*\/)?git$/;
+
+/**
+ * The three OTHER head tokens a shipped `bash_match` trigger gates (D-001,
+ * run 2026-07-28-nongit-trigger-wrappers) — `gh` (`gh pr merge` / `gh pr
+ * create`), `npm` (`npm publish`), `harness` (the kill-switch verbs). A
+ * closed set, deliberately NOT a general "any head token" rule (see the
+ * module header): matched by EXACT literal equality, unlike `GIT_TOKEN_RE`'s
+ * basename match, so a path-qualified spelling of any of these three stays
+ * out of scope (named residual, module header NOT-SUPPORTED list).
+ */
+const NON_GIT_HEAD_TOKENS: ReadonlySet<string> = new Set(["gh", "npm", "harness"]);
 
 /**
  * Above this length, normalisation is skipped entirely and the command
@@ -497,13 +560,20 @@ function tokenizeWithOffsets(s: string): Token[] {
 
 /**
  * Rewrite one boundary-delimited segment: peel wrapper prefixes to look
- * for a git invocation, and — ONLY if one is found — canonicalise it to
- * `git <subcommand>`, keeping everything after the subcommand verbatim.
- * When no git invocation is found (wrong binary, ran out of tokens, or a
- * malformed git global option), the segment is returned COMPLETELY
- * UNCHANGED: peeling is tentative, and nothing is stripped from a
- * segment that turns out not to be a git call (so `digit=1 foo`, `env -C
- * X ls`, etc. are never touched).
+ * for an invocation of one of the closed head-token set's four members
+ * (`git`, `gh`, `npm`, `harness` — D-001, run
+ * 2026-07-28-nongit-trigger-wrappers), and — ONLY if one is found —
+ * canonicalise it. `git` is canonicalised to `git <subcommand>` with its
+ * OWN global options dropped, same as before this run. The other three
+ * are canonicalised to `<head> <next-token>` — wrapper peeling plus
+ * whitespace collapsing between the head token and the single token
+ * immediately following it, no option-dropping (see the module header) —
+ * keeping everything after that token verbatim. When no recognised head
+ * token is found (wrong binary, ran out of tokens, or a malformed git
+ * global option), the segment is returned COMPLETELY UNCHANGED: peeling
+ * is tentative, and nothing is stripped from a segment that turns out not
+ * to be a recognised call (so `digit=1 foo`, `env -C X ls`, `ghx pr
+ * merge`, etc. are never touched).
  */
 function canonicalizeSegment(segmentText: string): {
   text: string;
@@ -573,32 +643,60 @@ function canonicalizeSegment(segmentText: string): {
   }
 
   const headTok = tokens[idx]?.text;
-  if (headTok === undefined || !GIT_TOKEN_RE.test(headTok)) {
-    return { text: segmentText, targetDir: null, targetBase: null, isGit: false };
-  }
-  idx += 1; // consume the git token (whatever spelling matched GIT_TOKEN_RE)
-
-  const gitOpts = peelGitGlobalOptions(tokens, idx);
-  if (gitOpts.malformed || gitOpts.idx >= tokens.length) {
-    // Malformed global option (missing required value) or no subcommand
-    // token left: nothing safe to canonicalise. Leave untouched.
+  if (headTok === undefined) {
     return { text: segmentText, targetDir: null, targetBase: null, isGit: false };
   }
 
-  const subcommandTok = tokens[gitOpts.idx]!;
-  const rewritten = `git ${subcommandTok.text}${segmentText.slice(subcommandTok.end)}`;
-  const targetDir = gitOpts.targetDir ?? envTargetDir;
-  // F5: the git invocation's OWN target wins (already the priority
-  // order above), but when it's RELATIVE and this same segment is
-  // wrapped by `env -C`, that env target is the base it's relative to —
-  // only meaningful when git's own target is the one actually used.
-  const targetBase =
-    gitOpts.targetDir !== null &&
-    envTargetDir !== null &&
-    !path.isAbsolute(gitOpts.targetDir)
-      ? envTargetDir
-      : null;
-  return { text: rewritten, targetDir, targetBase, isGit: true };
+  if (GIT_TOKEN_RE.test(headTok)) {
+    idx += 1; // consume the git token (whatever spelling matched GIT_TOKEN_RE)
+
+    const gitOpts = peelGitGlobalOptions(tokens, idx);
+    if (gitOpts.malformed || gitOpts.idx >= tokens.length) {
+      // Malformed global option (missing required value) or no subcommand
+      // token left: nothing safe to canonicalise. Leave untouched.
+      return { text: segmentText, targetDir: null, targetBase: null, isGit: false };
+    }
+
+    const subcommandTok = tokens[gitOpts.idx]!;
+    const rewritten = `git ${subcommandTok.text}${segmentText.slice(subcommandTok.end)}`;
+    const targetDir = gitOpts.targetDir ?? envTargetDir;
+    // F5: the git invocation's OWN target wins (already the priority
+    // order above), but when it's RELATIVE and this same segment is
+    // wrapped by `env -C`, that env target is the base it's relative to —
+    // only meaningful when git's own target is the one actually used.
+    const targetBase =
+      gitOpts.targetDir !== null &&
+      envTargetDir !== null &&
+      !path.isAbsolute(gitOpts.targetDir)
+        ? envTargetDir
+        : null;
+    return { text: rewritten, targetDir, targetBase, isGit: true };
+  }
+
+  if (NON_GIT_HEAD_TOKENS.has(headTok)) {
+    // D-001: `gh` / `npm` / `harness` get wrapper peeling (already applied
+    // above, same loop as `git`'s) plus whitespace collapsing between the
+    // head token and the SINGLE token immediately following it — the same
+    // collapse SCOPE the `git` branch above uses for its own subcommand,
+    // just with no option-dropping (`gh -R`, `npm --loglevel`, etc. stay
+    // unsupported — module header). `targetDir`/`targetBase` stay `null`:
+    // these are never git invocations, so no per-invocation target is
+    // extracted for them (unaffected by the STATUS note above — that
+    // extraction was never wired to a gate either way).
+    const nextTok = tokens[idx + 1];
+    if (nextTok === undefined) {
+      // Head token alone, no subcommand token to collapse toward — no
+      // shipped trigger matches a bare head token anyway, and rewriting to
+      // just the head would silently drop whatever wrapper preceded it for
+      // no benefit. Leave untouched, same fail-safe shape as the git
+      // malformed/no-subcommand case above.
+      return { text: segmentText, targetDir: null, targetBase: null, isGit: false };
+    }
+    const rewritten = `${headTok} ${nextTok.text}${segmentText.slice(nextTok.end)}`;
+    return { text: rewritten, targetDir: null, targetBase: null, isGit: false };
+  }
+
+  return { text: segmentText, targetDir: null, targetBase: null, isGit: false };
 }
 
 /**
