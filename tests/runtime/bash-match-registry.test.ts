@@ -104,6 +104,77 @@ describe("checkRegisteredSets — historical incident regressions", () => {
     expect(uncovered).toEqual(["cp", "tee", "unset"]);
   });
 
+  it("fix-round F1/F2 regression: a covers-gated-head-tokens registration whose declared `members` include a token that is NOT a live gated head token is flagged", () => {
+    // F1 (reverse ENGINE->MANIFEST direction): the pre-migration guard
+    // asserted every member of NON_GIT_HEAD_TOKENS must be a token some
+    // shipped policy gates; the migration to checkRegisteredSets dropped
+    // that direction (completeness-checking (b) only ever walks gated
+    // tokens outward, never a set's own members inward). This fixture's
+    // "COVERS_PLUS_UNGATED_MEMBER" registration declares an ungated member
+    // ("docker") the same way a real NON_GIT_HEAD_TOKENS mutation would.
+    //
+    // F2 (mis-declared-intent laundering): reproduces the reviewer's exact
+    // attack — the real dbc6d303 INERT_CONSUMER_HEADS shape (`new
+    // Set(["ls", "cat", "harness"])`, an inert-consumer allowlist that
+    // happens to contain the gated token "harness") registered under
+    // "covers-gated-head-tokens" instead of its true
+    // "must-not-contain-gated-head-token" intent, which made the
+    // pre-fix-round guard 19/19 GREEN because check (a) (must-not-contain)
+    // never inspects a "covers"-labelled registration and check (b)
+    // (covers-completeness) does not penalise EXTRA coverage. Declaring
+    // `members` here makes the laundering visible: "ls" and "cat" are not
+    // gated head tokens, so the covers-purity check (c) flags them.
+    const facts = fixtureFacts(["harness", "git"], { harness: "non-git-set", git: "git" });
+    const registrations: readonly RegisteredHeadTokenSet[] = [
+      {
+        id: "COVERS_PLUS_UNGATED_MEMBER",
+        module: "fixture: F1 reverse-direction shape",
+        intent: "covers-gated-head-tokens",
+        has: (token) => new Set(["harness", "docker"]).has(token),
+        members: ["harness", "docker"],
+        description: "fixture: a covers set that gained an ungated member (\"docker\"), the F1 shape",
+      },
+      {
+        id: "INERT_CONSUMER_HEADS_LAUNDERED",
+        module: "fixture: F2 mis-declared-intent shape (dbc6d303's real INERT_CONSUMER_HEADS contents)",
+        intent: "covers-gated-head-tokens", // mis-declared: this is really a must-not-contain-gated-head-token set
+        has: (token) => new Set(["ls", "cat", "harness"]).has(token),
+        members: ["ls", "cat", "harness"],
+        description: "fixture: an inert-consumer allowlist laundered under the covers intent to dodge the must-not-contain check",
+      },
+      {
+        id: "GIT_COVERS_FIXTURE",
+        module: "fixture",
+        intent: "covers-gated-head-tokens",
+        has: (token) => token === "git",
+        members: ["git"],
+        description: "fixture git coverage so only the covers-purity check is exercised, not covers-completeness",
+      },
+    ];
+
+    const violations = checkRegisteredSets(facts, registrations, new Set());
+
+    const purityViolationTokensBySet = new Map<string, string[]>();
+    for (const v of violations) {
+      const list = purityViolationTokensBySet.get(v.setId) ?? [];
+      list.push(v.token);
+      purityViolationTokensBySet.set(v.setId, list);
+    }
+
+    expect(purityViolationTokensBySet.get("COVERS_PLUS_UNGATED_MEMBER")).toEqual(["docker"]);
+    expect(purityViolationTokensBySet.get("INERT_CONSUMER_HEADS_LAUNDERED")?.sort()).toEqual([
+      "cat",
+      "ls",
+    ]);
+    // "harness" IS a live gated head token, so it must NOT be flagged by
+    // the purity check even though it sits inside the laundered set —
+    // only its genuinely non-gated members ("ls", "cat") are the tell.
+    expect(purityViolationTokensBySet.get("INERT_CONSUMER_HEADS_LAUNDERED")).not.toContain(
+      "harness",
+    );
+    expect(purityViolationTokensBySet.get("GIT_COVERS_FIXTURE")).toBeUndefined();
+  });
+
   it("a clean fixture (every gated token either covered or documented-uncovered, no must-not-contain violations) produces zero violations", () => {
     const facts = fixtureFacts(["gh", "npm", "env"], {
       gh: "non-git-set",

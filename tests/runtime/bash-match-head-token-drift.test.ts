@@ -49,17 +49,27 @@ import {
 //      "covers-gated-head-tokens" set, not only `NON_GIT_HEAD_TOKENS` —
 //      see `src/runtime/bash-match-registry.ts`.
 //
-// UNREGISTERED-SET SCAN — WHAT IT SEES AND WHAT IT MISSES (be honest,
-// per this run's brief): a textual regex scan of `src/runtime/*.ts`
-// (excluding this guard's own two modules) for a TOP-LEVEL
-// `export const NAME[: ReadonlySet<string>] = new Set([...])` literal
-// whose every element is a bare lowercase word (no leading `-`, matching
-// `read-only-bash.ts`'s own flag-vs-name distinction). Any match is a
-// "candidate" that MUST have its name present in
-// `REGISTERED_HEAD_TOKEN_SETS`.
-//   SEES: a new exported `Set`/`ReadonlySet<string>` literal of bare-word
-//   tokens anywhere in `src/runtime/*.ts`, regardless of which file —
-//   closing the exact "new module" shape of run `dbc6d303`.
+// UNREGISTERED-SET SCAN — WHAT IT SEES AND WHAT IT MISSES (be honest, per
+// this run's brief; broadened in the fix round, F3): a textual regex scan
+// of every non-test `.ts` file under `src/runtime/` (RECURSIVELY, so a
+// future `src/runtime/<subdir>/` is covered) for a TOP-LEVEL
+// `export const NAME[: <any type annotation>] = new Set(<optional
+// constructor generic>)([...])` literal containing AT LEAST ONE bare
+// lowercase word element (no leading `-`, matching `read-only-bash.ts`'s
+// own flag-vs-name distinction). Any match is a "candidate" that MUST have
+// its name present in `REGISTERED_HEAD_TOKEN_SETS`.
+//   SEES: a new exported `Set` literal of bare-word tokens anywhere under
+//   `src/runtime/` (any depth), regardless of file — closing the exact
+//   "new module" shape of run `dbc6d303` — AND, since the fix round,
+//   regardless of three shapes a fixed-form regex plus `every()` missed:
+//     (a) a MUTABLE type annotation (`export const X: Set<string> = ...`,
+//         not only `ReadonlySet<string>`).
+//     (b) a GENERIC on the constructor itself (`new Set<string>([...])`).
+//     (c) a `// comment` line sharing an array element's slot — this
+//         merges the comment into one element, which fails the bare-word
+//         test; `some()` (not `every()`) only needs ONE genuine bare-word
+//         element among the rest to flag the whole set, so a stray
+//         comment can no longer sink an otherwise-detectable set.
 //   MISSES (by construction, not oversight):
 //     - Anything outside `src/runtime/` (e.g. `src/policy-packs/`,
 //       `src/cli/`) — scoped to the layer where both real registrations
@@ -74,24 +84,30 @@ import {
 //       outside the module could reference it for registration anyway,
 //       and no other module could consume it as a mirror of manifest
 //       content.
-//     - Elements that are not bare lowercase words (a set mixing flags
-//       and head tokens, or using a different casing/quoting
-//       convention).
+//     - A set with NO bare-lowercase-word element at all (every element
+//       uppercase, a flag, or a non-string literal) — `some()` still
+//       needs at least one genuine candidate element to fire.
 //   This is a real, load-bearing but NARROW net — see this run's
-//   implementer report for the mutation probe that proves it fires.
+//   implementer report for the mutation probes that prove it fires, and
+//   the positive-control test below (F4) that proves it is not a no-op.
+//
+// SELF-EXCLUSION RECONSIDERED (F3, fix round): an earlier version of this
+// scan excluded this guard's own two modules by filename, reasoning they
+// "legitimately contain gated-head-token-shaped literals". Verified
+// empirically: neither module declares anything shaped like `export const
+// NAME = new Set([...])` — `CURATED_BASH_MATCH_FACTS` is a `Record`,
+// `DOCUMENTED_UNCOVERED_HEAD_TOKENS` is computed (not a literal), and
+// `REGISTERED_HEAD_TOKEN_SETS` is an array of objects, not a `Set`. A
+// blanket exclusion defended against nothing today and would have hidden
+// a real mirror added inside either module tomorrow — removed; both
+// modules are now scanned like any other file under `src/runtime/`.
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..", "..");
 const RUNTIME_DIR = path.join(REPO_ROOT, "src", "runtime");
 
-/** This guard's own modules: legitimately contain gated-head-token-shaped literals (the curated map, the registrations array) without being an independent mirror that needs registering. */
-const SELF_EXCLUDED_FILES: ReadonlySet<string> = new Set([
-  "bash-match-facts.ts",
-  "bash-match-registry.ts",
-]);
-
 const EXPORTED_SET_RE =
-  /export const (\w+)\s*:\s*ReadonlySet<string>\s*=\s*new Set\(\s*\[([^\]]*)\]\s*\)|export const (\w+)\s*=\s*new Set\(\s*\[([^\]]*)\]\s*\)/g;
+  /export const (\w+)\s*(?::\s*[\w.<>|\s]*)?=\s*new Set(?:<[^>]*>)?\(\s*\[([^\]]*)\]\s*\)/g;
 
 const BARE_WORD_RE = /^[a-z][a-z0-9_-]*$/;
 
@@ -100,32 +116,38 @@ interface CandidateSet {
   name: string;
 }
 
-/** Scan `src/runtime/*.ts` for exported bare-word-shaped `Set`/`ReadonlySet<string>` literals — see the module header for exactly what this sees and misses. */
+/** Recursively collect every non-test `.ts` file under `dir` (F3, fix round: a future `src/runtime/<subdir>/` must be covered, not just the top level). */
+function collectRuntimeTsFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...collectRuntimeTsFiles(full));
+    } else if (entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+/** Scan every `.ts` file under `src/runtime/` (recursively) for exported bare-word-shaped `Set` literals — see the module header for exactly what this sees and misses. */
 function scanForHeadTokenShapedSets(): CandidateSet[] {
   const found: CandidateSet[] = [];
-  const files = fs
-    .readdirSync(RUNTIME_DIR)
-    .filter(
-      (f) =>
-        f.endsWith(".ts") &&
-        !f.endsWith(".test.ts") &&
-        !SELF_EXCLUDED_FILES.has(f),
-    );
-  for (const file of files) {
-    const text = fs.readFileSync(path.join(RUNTIME_DIR, file), "utf8");
+  for (const full of collectRuntimeTsFiles(RUNTIME_DIR)) {
+    const text = fs.readFileSync(full, "utf8");
     EXPORTED_SET_RE.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = EXPORTED_SET_RE.exec(text)) !== null) {
-      const name = m[1] ?? m[3];
-      const arrayBody = m[2] ?? m[4] ?? "";
+      const name = m[1]!;
+      const arrayBody = m[2] ?? "";
       const elements = arrayBody
         .split(",")
         .map((s) => s.trim())
         .filter((s) => s.length > 0)
         .map((s) => s.replace(/^["']|["']$/g, ""));
       if (elements.length === 0) continue;
-      if (elements.every((e) => BARE_WORD_RE.test(e))) {
-        found.push({ file, name: name! });
+      if (elements.some((e) => BARE_WORD_RE.test(e))) {
+        found.push({ file: path.relative(RUNTIME_DIR, full), name });
       }
     }
   }
@@ -148,6 +170,10 @@ describe("bash_match facts drift guard (migrated onto src/runtime/bash-match-fac
       DOCUMENTED_UNCOVERED_HEAD_TOKENS,
     );
     expect(violations).toEqual([]);
+  });
+
+  it("checkRegisteredSets(liveFacts()) — called with ONLY the live facts, relying on BOTH defaults — is clean on the shipped tree (F5 fix-round regression: the `documentedUncovered` parameter previously defaulted to an empty Set despite its docstring claiming the real shipped value, which raised 4 FALSE violations — tee, cp, env, unset — on this exact clean tree)", () => {
+    expect(checkRegisteredSets(liveFacts())).toEqual([]);
   });
 
   describe("per-policy head-token facts (diagnostic detail preserved from the pre-migration guard)", () => {
@@ -198,5 +224,12 @@ describe("bash_match facts drift guard (migrated onto src/runtime/bash-match-fac
       unregistered,
       `found exported head-token-shaped set(s) not present in REGISTERED_HEAD_TOKEN_SETS (src/runtime/bash-match-registry.ts): ${JSON.stringify(unregistered)}`,
     ).toEqual([]);
+  });
+
+  it("scanForHeadTokenShapedSets DETECTS the known-good real case — a POSITIVE CONTROL so a future edit to the regexes, the directory walk, or the exclusion list that silently disables the scan cannot pass invisibly (F4 fix-round regression: sabotaging BARE_WORD_RE previously left the entire 3977-test suite green because the scan's only assertion, `expect(unregistered).toEqual([])`, is equally satisfied by 'found nothing to check' and 'found nothing wrong')", () => {
+    expect(scanForHeadTokenShapedSets()).toContainEqual({
+      file: "command-normalize.ts",
+      name: "NON_GIT_HEAD_TOKENS",
+    });
   });
 });

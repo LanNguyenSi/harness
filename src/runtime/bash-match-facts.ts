@@ -40,6 +40,14 @@
 // rule forbids `runtime/` importing `cli/`). The live wiring (parsing
 // FULL_TEMPLATE and calling this module) happens in test code, which the
 // boundary check does not scan.
+//
+// WHY src/runtime/, NOT tests/ (F8, fix round): this module and
+// `bash-match-registry.ts` are a single shared source of truth that TWO
+// independent test files (`bash-match-head-token-drift.test.ts`,
+// `bash-match-registry.test.ts`) import symmetrically — a module peer
+// test files both depend on belongs beside the engine code it inspects,
+// not inside the test tree that merely happens to hold its only callers
+// today.
 
 import type { Policy } from "../schema/index.js";
 
@@ -237,7 +245,19 @@ function assertStandaloneWord(pattern: string, word: string, policyName: string)
   }
 }
 
-/** "Is `token` gated by ANY shipped `bash_match` policy?" — the one-call question both incidents got wrong. */
-export function isHeadTokenGated(facts: BashMatchFacts, token: string): boolean {
+/**
+ * "Is `token` gated by ANY shipped `bash_match` policy?" — the one-call
+ * question both incidents got wrong. Real caller (F8, fix round):
+ * `bash-match-registry.ts`'s `checkRegisteredSets` covers-purity check,
+ * which asks this once per declared `member` of every
+ * "covers-gated-head-tokens" registration. Takes only the `gatedHeadTokens`
+ * slice of `BashMatchFacts` (not the full shape) so a caller holding the
+ * same narrowed `Pick` `checkRegisteredSets` accepts can call this directly
+ * without widening its own parameter type.
+ */
+export function isHeadTokenGated(
+  facts: Pick<BashMatchFacts, "gatedHeadTokens">,
+  token: string,
+): boolean {
   return facts.gatedHeadTokens.has(token);
 }
