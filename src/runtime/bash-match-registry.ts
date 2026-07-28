@@ -31,6 +31,37 @@
 //     head token). Checked by testing every LIVE gated head token against
 //     every such registered set's `has()`.
 //
+// FIX ROUND 2 (task `074acf5d`, second fix round, findings S1/S2/S4 —
+// see `.ai/runs/2026-07-28-manifest-facts-drift-guard/03-decisions.md`
+// D-002/D-004): review round 2 MEASURED that the round-1 guard's central
+// defence — a registration's self-declared `intent` — was still
+// escapable two ways, and that the guard reproduced its own defect class
+// inside itself. Three changes close what can be made STRUCTURALLY
+// impossible (D-002/D-003 deliberately draws the line here, not at every
+// enumerable escape — see the decisions file):
+//   (S1) `RegisteredHeadTokenSet` is now a DISCRIMINATED UNION on `intent`:
+//     the "covers-gated-head-tokens" arm's `members` is NON-OPTIONAL.
+//     Omitting `members` on a covers registration — the round-1 escape,
+//     "declare no members and check (c) below never runs" — is now a
+//     COMPILE ERROR, not a test failure. The "must-not-contain" arm keeps
+//     `members` optional (no purity semantics apply to it).
+//   (S2) check (d), COVERS-REDUNDANCY, below: closes the escape where a
+//     laundered set's declared `members` are all HONESTLY gated (so check
+//     (c) is satisfied) but the set's true purpose is something else — its
+//     gated members are, by construction, already covered by the real set
+//     that exists to cover them.
+//   (S4) check (e), COVERS-PREDICATE-PURITY, below: closes the escape
+//     where a registration's `has()` PREDICATE accepts more than its
+//     declared `members` claim (measured: widening `GIT_TOKEN_RE` to also
+//     match "docker" while leaving `members: ["git"]` untouched left the
+//     full suite green) — this guard reproducing, inside itself, the exact
+//     "engine-side constant mirrors manifest content with no coupling"
+//     defect class it exists to eliminate elsewhere.
+// Each violation now carries a `check` field (see `RegistrationViolation`)
+// naming exactly which of the five checks fired, so a fixture test can
+// assert on ONE check's output without an unrelated check's finding on the
+// same (setId, token) pair silently changing what the array contains.
+//
 // COVERS-PURITY (fix round, F1+F2): a THIRD check, over a "covers"
 // registration's OWN declared `members` (see `RegisteredHeadTokenSet.members`
 // below), closes two escapes with one rule — every declared member must
@@ -80,8 +111,13 @@
 // regression tests in `tests/runtime/bash-match-registry.test.ts`
 // (reproducing the CRITICAL's exact shape) and by a live mutation probe
 // against this file's own `REGISTERED_HEAD_TOKEN_SETS` array, not against
-// a second production consumer. See this run's implementer report for the
-// full probe log.
+// a second production consumer: temporarily registering a fixture
+// (`intent: "must-not-contain-gated-head-token"`, `has` containing
+// "harness") reddens exactly "every registered engine-side set is clean
+// against the live facts ..." and the F5 defaults test in
+// `tests/runtime/bash-match-head-token-drift.test.ts`, with the violation
+// naming the fixture's own `setId` and the offending token — the probe was
+// reverted immediately after.
 //
 // `has()` rather than an enumerable `ReadonlySet<string>` uniformly for
 // checks (a) and (b): the live gated-head-token vocabulary is small and
@@ -92,7 +128,10 @@
 // (COVERS-PURITY, above) is different in kind — it asks "does this
 // registered set contain something the facts DON'T know about", which no
 // predicate over the ~8 known tokens can answer; that is why `members` is
-// a separate, OPTIONAL, enumerable field rather than folded into `has()`.
+// a separate, enumerable field rather than folded into `has()` — NON-
+// OPTIONAL on the "covers-gated-head-tokens" arm as of fix round 2 (S1;
+// see `CoversHeadTokenSet`'s doc), optional on "must-not-contain", which
+// this field's checks never apply to.
 
 import { GIT_TOKEN_RE, NON_GIT_HEAD_TOKENS } from "./command-normalize.js";
 import { DOCUMENTED_UNCOVERED_HEAD_TOKENS, isHeadTokenGated } from "./bash-match-facts.js";
@@ -102,27 +141,52 @@ export type RegisteredSetIntent =
   | "covers-gated-head-tokens"
   | "must-not-contain-gated-head-token";
 
-export interface RegisteredHeadTokenSet {
+interface RegisteredHeadTokenSetCommon {
   /** Stable identifier, used in failure messages and by the unregistered-set scan's cross-reference. */
   readonly id: string;
   /** File the set is actually declared in, for failure messages. */
   readonly module: string;
-  readonly intent: RegisteredSetIntent;
   /** Membership test — `Set.has` or `RegExp.test`, see the module header. */
   readonly has: (token: string) => boolean;
-  /**
-   * Enumerable membership, OPTIONAL — see the module header's
-   * "COVERS-PURITY" paragraph (fix round, F1+F2). Only meaningful for a
-   * "covers-gated-head-tokens" registration: `checkRegisteredSets` walks
-   * every declared member and demands each be a live gated head token.
-   * Omitted (left `undefined`) skips the purity check for that
-   * registration — used deliberately by fixtures/registrations that
-   * isolate the OTHER checks, but every REAL "covers" registration going
-   * forward should declare it, or it gets a free pass on this check.
-   */
-  readonly members?: readonly string[];
   readonly description: string;
 }
+
+/**
+ * A "covers-gated-head-tokens" registration — the set exists so the engine
+ * RECOGNISES these head tokens. `members` is NON-OPTIONAL (fix round 2,
+ * S1): the round-1 shape had this field OPTIONAL, and
+ * `checkRegisteredSets`'s covers-purity check (c) simply `continue`d past
+ * any registration that omitted it — a new module registered as
+ * "covers-gated-head-tokens" WITHOUT `members` measurably passed the full
+ * suite (167 files / 3980 tests) even with a gated head token laundered
+ * inside its `has()` predicate. Making `members` mandatory on this arm
+ * turns that escape into a TYPE ERROR: a covers registration that omits
+ * `members` now fails `tsc`, not merely a test. See `checkRegisteredSets`
+ * checks (c), (d), (e) below for the three independent things `members`
+ * (and `has()`) are cross-checked against.
+ */
+export interface CoversHeadTokenSet extends RegisteredHeadTokenSetCommon {
+  readonly intent: "covers-gated-head-tokens";
+  readonly members: readonly string[];
+}
+
+/**
+ * A "must-not-contain-gated-head-token" registration — the set exists for
+ * some OTHER purpose and must never contain a token the manifest itself
+ * gates (the dbc6d303 CRITICAL shape). `members` is optional here: no
+ * purity/redundancy/predicate-purity semantics apply to this arm — only
+ * `has()` is ever asked anything (check (a)).
+ */
+export interface MustNotContainHeadTokenSet extends RegisteredHeadTokenSetCommon {
+  readonly intent: "must-not-contain-gated-head-token";
+  readonly members?: readonly string[];
+}
+
+/**
+ * Discriminated union on `intent` (fix round 2, S1) — see
+ * `CoversHeadTokenSet`'s doc for why the split exists.
+ */
+export type RegisteredHeadTokenSet = CoversHeadTokenSet | MustNotContainHeadTokenSet;
 
 export const REGISTERED_HEAD_TOKEN_SETS: readonly RegisteredHeadTokenSet[] = [
   {
@@ -145,12 +209,48 @@ export const REGISTERED_HEAD_TOKEN_SETS: readonly RegisteredHeadTokenSet[] = [
   },
 ];
 
+/**
+ * Which of the five independent checks flagged this violation (fix round
+ * 2): a fixture test asserting on one check's behaviour must not be
+ * silently polluted by another check's unrelated finding on the same
+ * (setId, token) pair — see `tests/runtime/bash-match-registry.test.ts`.
+ */
+export type RegistrationCheck =
+  | "must-not-contain"
+  | "covers-completeness"
+  | "covers-purity"
+  | "covers-redundancy"
+  | "covers-predicate-purity";
+
 export interface RegistrationViolation {
   readonly setId: string;
   readonly intent: RegisteredSetIntent;
   readonly token: string;
+  readonly check: RegistrationCheck;
   readonly reason: string;
 }
+
+/**
+ * Fixed, deliberately small vocabulary of plausible NON-gated head tokens
+ * (fix round 2, S4/D-004) — commands a reasonable engine-side set might
+ * plausibly mirror or accidentally absorb, but that no shipped
+ * `bash_match` policy gates today. Combined with the live
+ * `facts.gatedHeadTokens` (every token that IS gated, verified fresh —
+ * see `bash-match-facts.ts`) this gives check (e) below a concrete probe
+ * domain to test every registered "covers" predicate against, instead of
+ * trusting a registration's declared `members` to be an honest reflection
+ * of what its `has()` actually accepts.
+ */
+const PLAUSIBLE_NON_GATED_HEAD_TOKENS: readonly string[] = [
+  "docker",
+  "kubectl",
+  "ls",
+  "cat",
+  "node",
+  "python",
+  "make",
+  "ssh",
+];
 
 /**
  * Check every registered set against the live facts. Returns an EMPTY
@@ -182,6 +282,7 @@ export function checkRegisteredSets(
           setId: reg.id,
           intent: reg.intent,
           token,
+          check: "must-not-contain",
           reason: `"${reg.id}" (${reg.module} — ${reg.description}) declares intent "must-not-contain-gated-head-token" but contains "${token}", which IS gated by a shipped bash_match policy`,
         });
       }
@@ -202,6 +303,7 @@ export function checkRegisteredSets(
         setId: "(none)",
         intent: "covers-gated-head-tokens",
         token,
+        check: "covers-completeness",
         reason: `gated head token "${token}" (class: ${cls ?? "unknown"}) is not covered by ANY registered "covers-gated-head-tokens" set, and is not in the documented-uncovered list either`,
       });
     }
@@ -216,18 +318,83 @@ export function checkRegisteredSets(
   // laundering escape, where a `must-not-contain-gated-head-token` set is
   // relabeled `covers-gated-head-tokens` to dodge check (a) — a set that
   // exists for any purpose OTHER than recognising gated head tokens
-  // necessarily contains a member that fails this check. Registrations
-  // that omit `members` are not checked here — see the field's doc.
+  // necessarily contains a member that fails this check. `members` is
+  // non-optional on this arm as of fix round 2 (S1) — every registration
+  // that reaches here has one to walk.
   for (const reg of registrations) {
     if (reg.intent !== "covers-gated-head-tokens") continue;
-    if (reg.members === undefined) continue;
     for (const member of reg.members) {
       if (!isHeadTokenGated(facts, member)) {
         violations.push({
           setId: reg.id,
           intent: reg.intent,
           token: member,
+          check: "covers-purity",
           reason: `"${reg.id}" (${reg.module} — ${reg.description}) declares intent "covers-gated-head-tokens" and lists "${member}" among its members, but "${member}" is not a live gated head token (no shipped bash_match policy gates it) — pick the intent that describes the set's PURPOSE: a set that exists for any purpose OTHER than recognising gated head tokens is "must-not-contain-gated-head-token", never "covers-gated-head-tokens"`,
+        });
+      }
+    }
+  }
+
+  // (d) covers-redundancy (fix round 2, S2): a gated head token answered
+  // `true` by MORE THAN ONE registered "covers-gated-head-tokens" set is a
+  // violation. Closes the escape check (c) cannot: a laundered set (its
+  // TRUE purpose is something other than recognising gated head tokens,
+  // relabeled "covers-gated-head-tokens" to dodge check (a)) whose
+  // declared `members` are HONESTLY all gated — e.g. `new
+  // Set(["harness"])` or `new Set(["harness", "gh"])` — passes check (c)
+  // cleanly (every declared member IS a live gated head token). But a
+  // laundered set's gated members are, by construction, already covered
+  // by the REAL set that exists to cover them ("harness" by
+  // `NON_GIT_HEAD_TOKENS`) — so this check rejects the shape without
+  // needing to know the set's true intent honestly: a gated head token
+  // legitimately has exactly ONE registered "covers" set responsible for
+  // it, and redundant coverage is the tell.
+  for (const token of facts.gatedHeadTokens) {
+    const coveringSets = registrations.filter(
+      (reg) => reg.intent === "covers-gated-head-tokens" && reg.has(token),
+    );
+    if (coveringSets.length > 1) {
+      for (const reg of coveringSets) {
+        const others = coveringSets.filter((r) => r.id !== reg.id).map((r) => r.id);
+        violations.push({
+          setId: reg.id,
+          intent: reg.intent,
+          token,
+          check: "covers-redundancy",
+          reason: `"${reg.id}" (${reg.module} — ${reg.description}) declares intent "covers-gated-head-tokens" and answers true for "${token}", but "${token}" is ALSO covered by ${others.length} other registered covers-set(s) (${others.join(", ")}) — a gated head token must be covered by exactly one registered covers-set; redundant coverage is the signature of an intent-laundered set whose declared members happen to already be genuinely gated elsewhere`,
+        });
+      }
+    }
+  }
+
+  // (e) covers-predicate-purity (fix round 2, S4/D-004): unlike check (c),
+  // which only inspects a registration's DECLARED `members`, this probes
+  // the registration's ACTUAL `has()` predicate directly against a fixed
+  // vocabulary — every live gated head token plus
+  // `PLAUSIBLE_NON_GATED_HEAD_TOKENS` — and demands `has(token)` answer
+  // `true` ONLY for tokens that ARE live gated head tokens. Closes the
+  // exact defect class this run exists to eliminate, reproduced INSIDE
+  // this guard: a predicate-based registration (`GIT_TOKEN_RE.test`)
+  // paired with a hand-written `members` list that check (c) verifies but
+  // the predicate ITSELF is never re-checked against — measured (D-004):
+  // widening `GIT_TOKEN_RE` to also match "docker" while leaving
+  // `members: ["git"]` untouched left the full suite green before this
+  // check existed.
+  const probeVocabulary = new Set<string>([
+    ...facts.gatedHeadTokens,
+    ...PLAUSIBLE_NON_GATED_HEAD_TOKENS,
+  ]);
+  for (const reg of registrations) {
+    if (reg.intent !== "covers-gated-head-tokens") continue;
+    for (const token of probeVocabulary) {
+      if (reg.has(token) && !isHeadTokenGated(facts, token)) {
+        violations.push({
+          setId: reg.id,
+          intent: reg.intent,
+          token,
+          check: "covers-predicate-purity",
+          reason: `"${reg.id}" (${reg.module} — ${reg.description}) declares intent "covers-gated-head-tokens" and its has() predicate answers true for "${token}", but "${token}" is not a live gated head token — the predicate accepts more than its declared members claim, reproducing this run's own defect class (an engine-side predicate mirroring manifest content with no coupling) inside the guard itself`,
         });
       }
     }

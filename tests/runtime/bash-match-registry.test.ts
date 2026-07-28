@@ -48,6 +48,7 @@ describe("checkRegisteredSets — historical incident regressions", () => {
         module: "fixture",
         intent: "covers-gated-head-tokens",
         has: (token) => new Set(["harness", "git"]).has(token),
+        members: ["harness", "git"],
         description: "fixture covering both tokens so only the must-not-contain check is exercised",
       },
     ];
@@ -80,6 +81,7 @@ describe("checkRegisteredSets — historical incident regressions", () => {
         module: "fixture: reproduces 432db3d3",
         intent: "covers-gated-head-tokens",
         has: (token) => new Set(["gh", "npm", "harness", "env"]).has(token),
+        members: ["gh", "npm", "harness", "env"],
         description: "fixture reproducing 432db3d3: covers only 4 of the 8 gated head tokens",
       },
       {
@@ -87,6 +89,7 @@ describe("checkRegisteredSets — historical incident regressions", () => {
         module: "fixture",
         intent: "covers-gated-head-tokens",
         has: (token) => token === "git",
+        members: ["git"],
         description: "fixture git coverage",
       },
     ];
@@ -154,8 +157,16 @@ describe("checkRegisteredSets — historical incident regressions", () => {
 
     const violations = checkRegisteredSets(facts, registrations, new Set());
 
+    // Filtered to `check === "covers-purity"` (fix round 2) so the two NEW
+    // checks added this round — (d) covers-redundancy and (e)
+    // covers-predicate-purity, see `bash-match-registry.ts` — cannot
+    // silently change what THIS assertion (isolating check (c) alone)
+    // measures. Both new checks also fire on this exact fixture (see the
+    // dedicated assertions below) — that is additional evidence, not a
+    // substitute for this one.
+    const purityViolations = violations.filter((v) => v.check === "covers-purity");
     const purityViolationTokensBySet = new Map<string, string[]>();
-    for (const v of violations) {
+    for (const v of purityViolations) {
       const list = purityViolationTokensBySet.get(v.setId) ?? [];
       list.push(v.token);
       purityViolationTokensBySet.set(v.setId, list);
@@ -173,6 +184,153 @@ describe("checkRegisteredSets — historical incident regressions", () => {
       "harness",
     );
     expect(purityViolationTokensBySet.get("GIT_COVERS_FIXTURE")).toBeUndefined();
+
+    // Additional evidence (fix round 2): this same fixture ALSO trips the
+    // two new checks, independently of covers-purity above.
+    // covers-redundancy (d): "harness" is answered `true` by BOTH
+    // COVERS_PLUS_UNGATED_MEMBER and INERT_CONSUMER_HEADS_LAUNDERED, so
+    // both are flagged for it.
+    const redundancyViolations = violations.filter((v) => v.check === "covers-redundancy");
+    expect(redundancyViolations.map((v) => `${v.setId}:${v.token}`).sort()).toEqual([
+      "COVERS_PLUS_UNGATED_MEMBER:harness",
+      "INERT_CONSUMER_HEADS_LAUNDERED:harness",
+    ]);
+    // covers-predicate-purity (e): each set's has() answers true for a
+    // token beyond what its (honestly declared) members alone would
+    // predict as gated — the same tokens purity already caught by
+    // declaration, now caught by probing the predicate directly.
+    const predicatePurityViolations = violations.filter(
+      (v) => v.check === "covers-predicate-purity",
+    );
+    expect(predicatePurityViolations.map((v) => `${v.setId}:${v.token}`).sort()).toEqual([
+      "COVERS_PLUS_UNGATED_MEMBER:docker",
+      "INERT_CONSUMER_HEADS_LAUNDERED:cat",
+      "INERT_CONSUMER_HEADS_LAUNDERED:ls",
+    ]);
+  });
+
+  it("fix-round-2 S2 regression: an intent-laundered single-member covers set (members: [\"harness\"]) is flagged by covers-redundancy even though its one declared member is honestly gated", () => {
+    // Reproduces the reviewer's exact measurement: `new
+    // Set(["harness"])`, registered as "covers-gated-head-tokens" with
+    // `members: ["harness"]` declared HONESTLY (harness IS a live gated
+    // head token, so check (c) covers-purity passes cleanly), still
+    // passed the pre-S2 guard 22/22 because nothing checked whether
+    // "harness" was ALREADY covered by the real set that exists to cover
+    // it (NON_GIT_HEAD_TOKENS's analog here).
+    const facts = fixtureFacts(["harness", "git"], { harness: "non-git-set", git: "git" });
+    const registrations: readonly RegisteredHeadTokenSet[] = [
+      {
+        id: "NON_GIT_HEAD_TOKENS_FIXTURE",
+        module: "fixture: simulates the real NON_GIT_HEAD_TOKENS covering harness",
+        intent: "covers-gated-head-tokens",
+        has: (token) => new Set(["harness"]).has(token),
+        members: ["harness"],
+        description: "fixture: the real, legitimate coverage of harness",
+      },
+      {
+        id: "GIT_COVERS_FIXTURE",
+        module: "fixture",
+        intent: "covers-gated-head-tokens",
+        has: (token) => token === "git",
+        members: ["git"],
+        description: "fixture git coverage",
+      },
+      {
+        id: "LAUNDERED_SINGLE_MEMBER",
+        module: "fixture: reviewer-measured laundering shape",
+        intent: "covers-gated-head-tokens",
+        has: (token) => new Set(["harness"]).has(token),
+        members: ["harness"],
+        description:
+          "fixture: an intent-laundered set (new Set([\"harness\"])) registered as covers with its one member declared honestly",
+      },
+    ];
+
+    const violations = checkRegisteredSets(facts, registrations, new Set());
+    const redundancyViolations = violations.filter((v) => v.check === "covers-redundancy");
+    expect(redundancyViolations.map((v) => `${v.setId}:${v.token}`).sort()).toEqual([
+      "LAUNDERED_SINGLE_MEMBER:harness",
+      "NON_GIT_HEAD_TOKENS_FIXTURE:harness",
+    ]);
+  });
+
+  it("fix-round-2 S2 regression: an intent-laundered two-member covers set (members: [\"harness\", \"gh\"]) is flagged by covers-redundancy even though both declared members are honestly gated", () => {
+    // Reproduces the reviewer's second measurement: `new Set(["harness",
+    // "gh"])`, registered as covers with both members declared honestly
+    // (both ARE live gated head tokens), also passed the pre-S2 guard
+    // 22/22.
+    const facts = fixtureFacts(["harness", "git", "gh"], {
+      harness: "non-git-set",
+      git: "git",
+      gh: "non-git-set",
+    });
+    const registrations: readonly RegisteredHeadTokenSet[] = [
+      {
+        id: "NON_GIT_HEAD_TOKENS_FIXTURE",
+        module: "fixture: simulates the real NON_GIT_HEAD_TOKENS covering harness and gh",
+        intent: "covers-gated-head-tokens",
+        has: (token) => new Set(["harness", "gh"]).has(token),
+        members: ["harness", "gh"],
+        description: "fixture: the real, legitimate coverage of harness and gh",
+      },
+      {
+        id: "GIT_COVERS_FIXTURE",
+        module: "fixture",
+        intent: "covers-gated-head-tokens",
+        has: (token) => token === "git",
+        members: ["git"],
+        description: "fixture git coverage",
+      },
+      {
+        id: "LAUNDERED_TWO_MEMBER",
+        module: "fixture: reviewer-measured laundering shape",
+        intent: "covers-gated-head-tokens",
+        has: (token) => new Set(["harness", "gh"]).has(token),
+        members: ["harness", "gh"],
+        description:
+          "fixture: an intent-laundered set (new Set([\"harness\", \"gh\"])) registered as covers with both members declared honestly",
+      },
+    ];
+
+    const violations = checkRegisteredSets(facts, registrations, new Set());
+    const redundancyViolations = violations.filter((v) => v.check === "covers-redundancy");
+    expect(redundancyViolations.map((v) => `${v.setId}:${v.token}`).sort()).toEqual([
+      "LAUNDERED_TWO_MEMBER:gh",
+      "LAUNDERED_TWO_MEMBER:harness",
+      "NON_GIT_HEAD_TOKENS_FIXTURE:gh",
+      "NON_GIT_HEAD_TOKENS_FIXTURE:harness",
+    ]);
+  });
+
+  it("fix-round-2 S4/D-004 regression: a covers registration whose has() predicate accepts a token beyond its declared, honestly-gated members is flagged by covers-predicate-purity", () => {
+    // Reproduces the GIT_TOKEN_RE shape measured by the orchestrator
+    // (D-004): a predicate that answers `true` for more than its
+    // declared `members` claim, with `members` itself fully honest and
+    // clean (so check (c) alone would miss it entirely).
+    const facts = fixtureFacts(["git"], { git: "git" });
+    const registrations: readonly RegisteredHeadTokenSet[] = [
+      {
+        id: "WIDENED_PREDICATE_FIXTURE",
+        module: "fixture: reproduces the GIT_TOKEN_RE-widened-to-docker shape (D-004)",
+        intent: "covers-gated-head-tokens",
+        has: (token) => token === "git" || token === "docker",
+        members: ["git"],
+        description:
+          "fixture: predicate accepts \"docker\" though members only (honestly) declares \"git\"",
+      },
+    ];
+
+    const violations = checkRegisteredSets(facts, registrations, new Set());
+    const predicatePurityViolations = violations.filter(
+      (v) => v.check === "covers-predicate-purity",
+    );
+    expect(predicatePurityViolations).toEqual([
+      expect.objectContaining({ setId: "WIDENED_PREDICATE_FIXTURE", token: "docker" }),
+    ]);
+    // Check (c) covers-purity, in contrast, sees nothing wrong — the
+    // declared `members` are clean — which is exactly why check (e) had
+    // to be added as an INDEPENDENT check over the predicate itself.
+    expect(violations.filter((v) => v.check === "covers-purity")).toEqual([]);
   });
 
   it("a clean fixture (every gated token either covered or documented-uncovered, no must-not-contain violations) produces zero violations", () => {
@@ -187,6 +345,7 @@ describe("checkRegisteredSets — historical incident regressions", () => {
         module: "fixture",
         intent: "covers-gated-head-tokens",
         has: (token) => new Set(["gh", "npm"]).has(token),
+        members: ["gh", "npm"],
         description: "fixture",
       },
       {

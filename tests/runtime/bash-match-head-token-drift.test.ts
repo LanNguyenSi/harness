@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -87,9 +88,58 @@ import {
 //     - A set with NO bare-lowercase-word element at all (every element
 //       uppercase, a flag, or a non-string literal) — `some()` still
 //       needs at least one genuine candidate element to fire.
-//   This is a real, load-bearing but NARROW net — see this run's
-//   implementer report for the mutation probes that prove it fires, and
-//   the positive-control test below (F4) that proves it is not a no-op.
+//     - (fix round 2, S3 decision D-003 — deliberately DEFERRED, not
+//       fixed, as case enumeration; filed as follow-up rather than chased
+//       one shape at a time):
+//         - `new Set([...] as const)` — the trailing `as const` assertion
+//           after the array literal is not accounted for by
+//           `EXPORTED_SET_RE`.
+//         - a `// comment` line BETWEEN `(` and `[` (e.g. `new Set(\n  //
+//           why\n  [...])`) — distinct from the INSIDE-the-brackets
+//           comment case, SEES (c) above, which a comment IS tolerated
+//           for: the regex only tolerates whitespace between `(` and `[`,
+//           not text, so a comment there breaks the match entirely rather
+//           than merging into an element. A comment is tolerated ONLY
+//           inside the brackets, sharing an element's slot — nowhere else.
+//         - backtick-quoted (template-literal) elements — the unquoting
+//           step only strips a leading/trailing `"` or `'`, never a
+//           backtick.
+//         - a union-literal type annotation on the constant itself.
+//         - a trailing comma in the constructor call (`new Set([...], )`)
+//           — the regex demands `]` immediately (modulo whitespace)
+//           followed by `)`, with nothing in between.
+//   This is a real, load-bearing but NARROW net, honestly under-claimed:
+//   it catches both historical incidents and the shapes enumerated in SEES
+//   above; it does not catch the shapes enumerated in MISSES above,
+//   including the five just listed. See the fixture-tree tests below
+//   (fix round 2, S5) for the mutation probes that prove each SEEN shape
+//   fires, and the positive-control test (F4) for what it does and does
+//   not guarantee on its own.
+//
+// FIX ROUND 2 (task `074acf5d`, second fix round, findings S3/S5/S6 — see
+// `.ai/runs/2026-07-28-manifest-facts-drift-guard/03-decisions.md`):
+//   (S3) NAME-ONLY cross-reference closed: round-1 checked only whether a
+//     candidate's NAME appeared in `REGISTERED_HEAD_TOKEN_SETS`, so a set
+//     reusing an already-registered id from a DIFFERENT file (e.g. a new
+//     `src/runtime/other.ts` re-declaring `export const
+//     NON_GIT_HEAD_TOKENS = new Set([...])`) passed silently — the id
+//     matched, the file it actually lived in was never asked about. The
+//     cross-reference is now over the PAIR: `${file}::${name}` against
+//     `${module}::${id}`, both repo-root-relative.
+//   (S5) `scanForHeadTokenShapedSets` / `collectRuntimeTsFiles` take an
+//     INJECTABLE root directory (default `RUNTIME_DIR`), so the
+//     fixture-tree tests below can point the scan at a disposable
+//     `fs.mkdtempSync` tree instead of the real `src/runtime/`. Needed
+//     because the F4 positive control only ever asserted on
+//     `NON_GIT_HEAD_TOKENS` — the one real set that ALSO satisfies the
+//     pre-fix-round-1 narrow regex — so it was invariant under every
+//     widening it claims to protect (measured: reverting
+//     `EXPORTED_SET_RE` to its pre-fix-round-1 form, reverting `some()`
+//     back to `every()`, and disabling the recursive walk each left the
+//     guard's own 22 tests green).
+//   (S6) the stale run-directory pointer below is replaced with the
+//     inlined probe result — `.ai/runs/` is gitignored and this module
+//     ships into `dist`.
 //
 // SELF-EXCLUSION RECONSIDERED (F3, fix round): an earlier version of this
 // scan excluded this guard's own two modules by filename, reasoning they
@@ -112,11 +162,22 @@ const EXPORTED_SET_RE =
 const BARE_WORD_RE = /^[a-z][a-z0-9_-]*$/;
 
 interface CandidateSet {
+  /**
+   * Repo-root-relative path (fix round 2, S3) — matches the format
+   * `RegisteredHeadTokenSet.module` uses, so a candidate can be
+   * cross-referenced against a registration by the PAIR (file, name), not
+   * name alone.
+   */
   file: string;
   name: string;
 }
 
-/** Recursively collect every non-test `.ts` file under `dir` (F3, fix round: a future `src/runtime/<subdir>/` must be covered, not just the top level). */
+/**
+ * Recursively collect every non-test `.ts` file under `dir` (F3, fix
+ * round: a future `src/runtime/<subdir>/` must be covered, not just the
+ * top level; fix round 2, S5: `dir` is now a parameter, defaulted to
+ * `RUNTIME_DIR`, so a fixture tree can be walked the same way).
+ */
 function collectRuntimeTsFiles(dir: string): string[] {
   const out: string[] = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -130,10 +191,18 @@ function collectRuntimeTsFiles(dir: string): string[] {
   return out;
 }
 
-/** Scan every `.ts` file under `src/runtime/` (recursively) for exported bare-word-shaped `Set` literals — see the module header for exactly what this sees and misses. */
-function scanForHeadTokenShapedSets(): CandidateSet[] {
+/**
+ * Scan every `.ts` file under `rootDir` (recursively) for exported
+ * bare-word-shaped `Set` literals — see the module header for exactly
+ * what this sees and misses. `rootDir` defaults to the real
+ * `src/runtime/` but is INJECTABLE (fix round 2, S5) so a disposable
+ * `fs.mkdtempSync` fixture tree can be scanned instead, letting the
+ * fixture-tree tests below assert on shapes the real tree does not
+ * happen to contain today.
+ */
+function scanForHeadTokenShapedSets(rootDir: string = RUNTIME_DIR): CandidateSet[] {
   const found: CandidateSet[] = [];
-  for (const full of collectRuntimeTsFiles(RUNTIME_DIR)) {
+  for (const full of collectRuntimeTsFiles(rootDir)) {
     const text = fs.readFileSync(full, "utf8");
     EXPORTED_SET_RE.lastIndex = 0;
     let m: RegExpExecArray | null;
@@ -147,11 +216,48 @@ function scanForHeadTokenShapedSets(): CandidateSet[] {
         .map((s) => s.replace(/^["']|["']$/g, ""));
       if (elements.length === 0) continue;
       if (elements.some((e) => BARE_WORD_RE.test(e))) {
-        found.push({ file: path.relative(RUNTIME_DIR, full), name });
+        // Repo-root-relative (fix round 2, S3) — NOT rootDir-relative —
+        // so the (file, name) pair is directly comparable to a
+        // registration's (module, id) pair regardless of which root the
+        // scan actually walked (the real RUNTIME_DIR or a fixture tree).
+        found.push({ file: path.relative(REPO_ROOT, full), name });
       }
     }
   }
   return found;
+}
+
+/**
+ * Cross-reference scanned candidates against `REGISTERED_HEAD_TOKEN_SETS`
+ * by the PAIR (fix round 2, S3) — `${file}::${name}` against
+ * `${module}::${id}` — not by name alone. A candidate whose name matches a
+ * registered id but whose file does NOT match that registration's module
+ * is still unregistered: the id being taken elsewhere does not vouch for
+ * THIS file's set.
+ */
+function unregisteredCandidates(candidates: readonly CandidateSet[]): CandidateSet[] {
+  const registeredKeys = new Set(REGISTERED_HEAD_TOKEN_SETS.map((r) => `${r.module}::${r.id}`));
+  return candidates.filter((c) => !registeredKeys.has(`${c.file}::${c.name}`));
+}
+
+/**
+ * Build a disposable directory tree under the OS temp dir (fix round 2,
+ * S5), write `files` (keyed by path relative to the tree's root, value is
+ * file content) into it, run `fn` with the tree's root, then remove the
+ * tree — regardless of whether `fn` throws.
+ */
+function withFixtureTree(files: Readonly<Record<string, string>>, fn: (root: string) => void): void {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bash-match-scan-fixture-"));
+  try {
+    for (const [relPath, content] of Object.entries(files)) {
+      const full = path.join(root, relPath);
+      fs.mkdirSync(path.dirname(full), { recursive: true });
+      fs.writeFileSync(full, content, "utf8");
+    }
+    fn(root);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 }
 
 function liveFacts(): BashMatchFacts {
@@ -218,17 +324,83 @@ describe("bash_match facts drift guard (migrated onto src/runtime/bash-match-fac
 
   it("every exported bare-word-shaped Set/ReadonlySet<string> in src/runtime/*.ts is registered in REGISTERED_HEAD_TOKEN_SETS — the load-bearing clause: a NEW engine-side set that mirrors manifest content but is never registered must make this guard red (run dbc6d303's exact shape: a new module's set)", () => {
     const candidates = scanForHeadTokenShapedSets();
-    const registeredIds = new Set(REGISTERED_HEAD_TOKEN_SETS.map((r) => r.id));
-    const unregistered = candidates.filter((c) => !registeredIds.has(c.name));
+    const unregistered = unregisteredCandidates(candidates);
     expect(
       unregistered,
       `found exported head-token-shaped set(s) not present in REGISTERED_HEAD_TOKEN_SETS (src/runtime/bash-match-registry.ts): ${JSON.stringify(unregistered)}`,
     ).toEqual([]);
   });
 
-  it("scanForHeadTokenShapedSets DETECTS the known-good real case — a POSITIVE CONTROL so a future edit to the regexes, the directory walk, or the exclusion list that silently disables the scan cannot pass invisibly (F4 fix-round regression: sabotaging BARE_WORD_RE previously left the entire 3977-test suite green because the scan's only assertion, `expect(unregistered).toEqual([])`, is equally satisfied by 'found nothing to check' and 'found nothing wrong')", () => {
+  it("fix-round-2 S3 regression: a set reusing an already-registered id (\"NON_GIT_HEAD_TOKENS\") in a DIFFERENT file is still reported unregistered — the cross-reference is over the (file, name) PAIR, not the name alone", () => {
+    withFixtureTree(
+      {
+        "elsewhere.ts": 'export const NON_GIT_HEAD_TOKENS = new Set(["ls", "cat", "harness"]);\n',
+      },
+      (root) => {
+        const candidates = scanForHeadTokenShapedSets(root);
+        const unregistered = unregisteredCandidates(candidates);
+        expect(unregistered).toHaveLength(1);
+        expect(unregistered[0]).toMatchObject({ name: "NON_GIT_HEAD_TOKENS" });
+        // The real NON_GIT_HEAD_TOKENS registration's module is
+        // src/runtime/command-normalize.ts — this candidate must NOT be
+        // mistaken for it just because the NAME matches.
+        expect(unregistered[0]!.file).not.toBe("src/runtime/command-normalize.ts");
+      },
+    );
+  });
+
+  describe("fix-round-2 S5: scanForHeadTokenShapedSets on a disposable fixture tree — pins each SEEN shape independently of NON_GIT_HEAD_TOKENS, which (being the one real set that also satisfies the pre-fix-round-1 narrow regex) is invariant under every widening it claims to protect", () => {
+    it("detects a MUTABLE `: Set<string>` type annotation (not only `ReadonlySet<string>`)", () => {
+      withFixtureTree(
+        { "mutable-annotation.ts": 'export const MUTABLE_HEADS: Set<string> = new Set(["ls", "cat"]);\n' },
+        (root) => {
+          expect(scanForHeadTokenShapedSets(root)).toContainEqual(
+            expect.objectContaining({ name: "MUTABLE_HEADS" }),
+          );
+        },
+      );
+    });
+
+    it("detects a GENERIC on the constructor itself (`new Set<string>([...])`)", () => {
+      withFixtureTree(
+        { "generic-constructor.ts": 'export const GENERIC_HEADS = new Set<string>(["ls", "cat"]);\n' },
+        (root) => {
+          expect(scanForHeadTokenShapedSets(root)).toContainEqual(
+            expect.objectContaining({ name: "GENERIC_HEADS" }),
+          );
+        },
+      );
+    });
+
+    it("detects a set with a `// comment` line sharing an array element's slot (some(), not every())", () => {
+      withFixtureTree(
+        {
+          "commented-element.ts":
+            'export const COMMENTED_HEADS = new Set([\n  "ls",\n  // "cat" removed pending review\n  "cp",\n]);\n',
+        },
+        (root) => {
+          expect(scanForHeadTokenShapedSets(root)).toContainEqual(
+            expect.objectContaining({ name: "COMMENTED_HEADS" }),
+          );
+        },
+      );
+    });
+
+    it("detects a set in a file ONE DIRECTORY DOWN (the recursive walk)", () => {
+      withFixtureTree(
+        { "nested/dir/deep.ts": 'export const DEEP_HEADS = new Set(["ls", "cat"]);\n' },
+        (root) => {
+          expect(scanForHeadTokenShapedSets(root)).toContainEqual(
+            expect.objectContaining({ name: "DEEP_HEADS" }),
+          );
+        },
+      );
+    });
+  });
+
+  it("scanForHeadTokenShapedSets DETECTS the known-good real case on the ACTUAL src/runtime/ tree (F4 fix-round-1 regression, title corrected fix round 2: this alone is NOT a general positive control — NON_GIT_HEAD_TOKENS is the one real set that also satisfies the pre-fix-round-1 narrow regex, `every()`, and a non-recursive walk, so it is invariant under every widening those fixes made; it only proves the scan is not a no-op against TODAY's shipped tree. The fix-round-2 fixture-tree tests above are what actually pin the mutable-annotation, generic-constructor, comment-tolerance, and recursive-walk shapes independently)", () => {
     expect(scanForHeadTokenShapedSets()).toContainEqual({
-      file: "command-normalize.ts",
+      file: "src/runtime/command-normalize.ts",
       name: "NON_GIT_HEAD_TOKENS",
     });
   });
