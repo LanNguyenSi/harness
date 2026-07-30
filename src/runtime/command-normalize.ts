@@ -617,6 +617,60 @@ function findNextBoundary(
   return m === null ? null : { start: m.index, token: m[0] };
 }
 
+/**
+ * Consume one leading `VAR=value` assignment starting at `idx`, returning
+ * the index of the first token AFTER it. Task 13e55484: the VALUE may be
+ * quoted and span multiple whitespace-split tokens (`VAR='hello world'`),
+ * which used to leave a dangling `world'` token that aborted the peel
+ * loop — the one measured spelling where BOTH matching layers failed on
+ * the same character. The continuation engages ONLY while an opening
+ * quote from the assignment stays unbalanced at a token's end and a
+ * matching close exists in a later token; every other shape keeps the
+ * exact pre-task one-token consume:
+ * - an UNTERMINATED quote (`VAR='a git push`) falls back to consuming
+ *   one token, because that spelling normalised to `git push` before
+ *   this task and must keep doing so (never-unmatch);
+ * - backslash-escaped whitespace without quotes (`VAR=a\ b`) is task
+ *   b093911d's escape-handling class and is deliberately NOT continued
+ *   here (pinned as a still-open bypass in the test file).
+ * Quote semantics per POSIX: outside quotes `\` escapes the next char,
+ * single quotes close only at `'`, double quotes close at an unescaped
+ * `"`. A quote run may chain (`VAR='a b'"c d"`); the assignment ends at
+ * the first token that finishes outside any quote.
+ */
+function consumeAssignment(tokens: Token[], idx: number): number {
+  let state: "" | "'" | '"' = "";
+  let escaped = false;
+  for (let i = idx; i < tokens.length; i++) {
+    const text = tokens[i]!.text;
+    for (let k = 0; k < text.length; k++) {
+      const c = text[k]!;
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (state === "'") {
+        if (c === "'") state = "";
+        continue;
+      }
+      if (state === '"') {
+        if (c === "\\") escaped = true;
+        else if (c === '"') state = "";
+        continue;
+      }
+      if (c === "\\") escaped = true;
+      else if (c === "'" || c === '"') state = c;
+    }
+    // A backslash pending at a token's end would escape the separating
+    // whitespace itself — b093911d's class, not continued here.
+    escaped = false;
+    if (state === "") return i + 1;
+  }
+  // Ran out of tokens with a quote still open: unterminated. Preserve the
+  // pre-task behaviour exactly (consume only the assignment's first token).
+  return idx + 1;
+}
+
 /** Split a segment into whitespace-delimited tokens with their offsets. */
 function tokenizeWithOffsets(s: string): Token[] {
   const out: Token[] = [];
@@ -668,7 +722,7 @@ function canonicalizeSegment(segmentText: string): {
     const head = tokens[idx]?.text;
     if (head === undefined) break;
     if (VAR_ASSIGN_RE.test(head)) {
-      idx += 1;
+      idx = consumeAssignment(tokens, idx);
       continue;
     }
     if (head === "env") {
@@ -855,7 +909,7 @@ function peelEnv(
       continue;
     }
     if (VAR_ASSIGN_RE.test(t)) {
-      idx += 1;
+      idx = consumeAssignment(tokens, idx);
       continue;
     }
     break;

@@ -622,4 +622,140 @@ describe("normalizeCommand", () => {
       }
     });
   });
+
+  // Task 13e55484: a QUOTED env-assignment value with embedded whitespace
+  // (`VAR='hello world' git push`) was measured as a live bypass against
+  // the shipped 0.42.0 binary on BOTH matching layers: the raw regex's
+  // `(\w+=\S+\s+)*` cannot span the space, and this module's whitespace
+  // tokenizer split the assignment into two tokens, the second of which
+  // aborted the peel loop, so the segment came back byte-identical.
+  // The fix continues an assignment's VALUE across tokens while an
+  // opening quote from the same token is unbalanced — nothing else about
+  // tokenization changed.
+  describe("13e55484: quoted env-assignment values with whitespace normalise to a match", () => {
+    const pushRe = policyBashMatch("preflight-before-push");
+    const mergeRe = policyBashMatch("review-before-merge-bash");
+    const cases: Array<{ label: string; command: string; re: RegExp }> = [
+      {
+        label: "measured spelling, single quotes (push gate)",
+        command: "VAR='hello world' git push origin master",
+        re: pushRe,
+      },
+      {
+        label: "double quotes",
+        command: 'VAR="hello world" git push origin master',
+        re: pushRe,
+      },
+      {
+        label: "multiple assignments, mixed quoting",
+        command: "A='x y' B=\"z w\" git push origin master",
+        re: pushRe,
+      },
+      {
+        label: "assignment plus peeled wrapper (nice)",
+        command: "VAR='a b' nice git push origin master",
+        re: pushRe,
+      },
+      {
+        label: "assignment INSIDE env (peelEnv's own assignment scan)",
+        command: "env VAR='a b' git push origin master",
+        re: pushRe,
+      },
+      {
+        label: "tab instead of space in the value",
+        command: "VAR='a\tb' git push origin master",
+        re: pushRe,
+      },
+      {
+        label: "multi-quote-run value ('a b'\"c d\")",
+        command: "VAR='a b'\"c d\" git push origin master",
+        re: pushRe,
+      },
+      {
+        label: "second gated verb (gh pr merge)",
+        command: "VAR='hello world' gh pr merge 4242 --squash",
+        re: mergeRe,
+      },
+    ];
+    for (const c of cases) {
+      it(`${c.label}: normalises to a trigger match, raw stays a miss`, () => {
+        // Raw MUST miss: these cases exist precisely because the raw
+        // layer cannot span the quoted whitespace. If a future regex
+        // edit makes raw match, this pin flags that the case now tests
+        // nothing on the normalised layer and must move blocks.
+        expect(c.re.test(c.command)).toBe(false);
+        const { normalized } = normalizeCommand(c.command);
+        expect(c.re.test(normalized)).toBe(true);
+      });
+    }
+  });
+
+  // Task 13e55484, behaviour-preservation pins: the assignment-value
+  // continuation must engage ONLY on an unbalanced opening quote with a
+  // later close. Everything else keeps the pre-task byte behaviour.
+  describe("13e55484: quoted-assignment continuation does not change anything else", () => {
+    const pushRe = policyBashMatch("preflight-before-push");
+    it("unterminated quote keeps the pre-task one-token consume (never-unmatch)", () => {
+      // `VAR='a git push ...` normalised to `git push ...` BEFORE this
+      // task (the open quote never closes, so the old one-token consume
+      // saw `git` as the head). That match must survive the fix.
+      const cmd = "VAR='a git push origin master";
+      expect(pushRe.test(normalizeCommand(cmd).normalized)).toBe(true);
+    });
+    it("a quoted assignment before a non-invocation stays byte-identical", () => {
+      const cmd = "VAR='a b' foo bar";
+      expect(normalizeCommand(cmd).normalized).toBe(cmd);
+    });
+    it("backslash-escaped whitespace WITHOUT quotes stays a bypass (task b093911d's class, deliberately not handled here)", () => {
+      const cmd = "VAR=a\\ b git push origin master";
+      expect(pushRe.test(cmd)).toBe(false);
+      expect(pushRe.test(normalizeCommand(cmd).normalized)).toBe(false);
+    });
+  });
+
+  // Task 13e55484, never-unmatch property with an ENGAGEMENT assurance
+  // (the dbc6d303 lesson: a property test that never exercises the layer
+  // under test certifies nothing). The corpus below re-lists every
+  // matching spelling family this file already pins plus the new quoted
+  // forms; the engagement assertion requires a minimum number of entries
+  // to match ONLY via normalisation, so the property cannot rot into an
+  // all-raw (vacuously additive) corpus.
+  describe("13e55484: never-unmatch property over the matching corpus", () => {
+    const re = policyBashMatch("preflight-before-investigation");
+    const pushRe = policyBashMatch("preflight-before-push");
+    const corpus: Array<{ command: string; re: RegExp }> = [
+      { command: "git status", re },
+      { command: "env git status", re },
+      { command: "env -C /tmp/repo git status", re },
+      { command: "env FOO=bar git status", re },
+      { command: "FOO=bar git status", re },
+      { command: "nice git status", re },
+      { command: "nice -10 git status", re },
+      { command: "sudo git status", re },
+      { command: "timeout 5 git status", re },
+      { command: "stdbuf -o0 git status", re },
+      { command: "/usr/bin/git status", re },
+      { command: "git  status", re },
+      { command: "git --no-pager status", re },
+      { command: "env --default-signal=INT git status", re },
+      { command: "VAR='a git status", re },
+      { command: "git push origin master", re: pushRe },
+      { command: "FOO=bar git push origin master", re: pushRe },
+      { command: "VAR='hello world' git push origin master", re: pushRe },
+      { command: "env VAR='a b' git push origin master", re: pushRe },
+      { command: "VAR='a b'\"c d\" git push origin master", re: pushRe },
+    ];
+    it("every corpus entry matches raw-or-normalised", () => {
+      for (const c of corpus) {
+        const hit = c.re.test(c.command) || c.re.test(normalizeCommand(c.command).normalized);
+        expect(hit, `corpus entry stopped matching: ${c.command}`).toBe(true);
+      }
+    });
+    it("engagement assurance: at least 8 corpus entries match ONLY via normalisation", () => {
+      const normalizedOnly = corpus.filter(
+        (c) => !c.re.test(c.command) && c.re.test(normalizeCommand(c.command).normalized),
+      );
+      expect(normalizedOnly.length).toBeGreaterThanOrEqual(8);
+    });
+  });
 });
