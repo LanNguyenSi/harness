@@ -637,12 +637,36 @@ function findNextBoundary(
  * single quotes close only at `'`, double quotes close at an unescaped
  * `"`. A quote run may chain (`VAR='a b'"c d"`); the assignment ends at
  * the first token that finishes outside any quote.
+ *
+ * ONE-DIRECTIONAL GUARD (review round 1, CRITICAL): the continuation
+ * ABANDONS (returns the pre-task one-token consume) the moment the token
+ * it would consume next is a recognised head token (`GIT_TOKEN_RE` or
+ * `NON_GIT_HEAD_TOKENS`). Without this, a quote model diverging from
+ * bash on even ONE spelling lets the continuation swallow the gated
+ * command word and turn a previously-BLOCKED command into a bypass —
+ * measured live with ANSI-C quoting, where bash escapes `\'` inside
+ * `$'...'` but this scanner (correctly for plain `'...'`) treats the
+ * backslash as literal: `A=$'don\'t' env harness pause # '` produced a
+ * phantom-open state that consumed the whole segment, and NEITHER layer
+ * matched where master's one-token consume blocked. With the guard, a
+ * diverging quote state can only ever fall back to the exact pre-task
+ * behaviour, never re-target a later head token: normalisation stays
+ * monotone (measured, not assumed — see the differential pins in the
+ * test file). The honest cost, measured and named rather than implied:
+ * a quoted VALUE containing the literal word `git`/`gh`/`npm`/`harness`
+ * as its own token (`VAR='a git b' git push`) is not continued — the
+ * pre-task consume applies, which is byte-identical to master's
+ * behaviour on those spellings, so nothing regresses; the spelling
+ * simply stays in the not-closed set.
  */
 function consumeAssignment(tokens: Token[], idx: number): number {
   let state: "" | "'" | '"' = "";
   let escaped = false;
   for (let i = idx; i < tokens.length; i++) {
     const text = tokens[i]!.text;
+    if (i > idx && (GIT_TOKEN_RE.test(text) || NON_GIT_HEAD_TOKENS.has(text))) {
+      return idx + 1;
+    }
     for (let k = 0; k < text.length; k++) {
       const c = text[k]!;
       if (escaped) {
