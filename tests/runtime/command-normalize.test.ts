@@ -775,6 +775,32 @@ describe("normalizeCommand", () => {
         expect(c.re.test(normalizeCommand(c.command).normalized)).toBe(true);
       });
     }
+
+    // Round-2 review: the guard is NOT a universal monotonicity
+    // guarantee. When the continuation closes on a wrapper's glued flag
+    // token, the peel resumes at that wrapper's next ARGUMENT and
+    // breaks where master's peel completed. Every found member of the
+    // class is a MASTER FALSE POSITIVE (PATH-shim-verified: bash treats
+    // the quoted run as one assignment word and executes the next word,
+    // never the gated verb), so the branch is the bash-accurate side.
+    // Pinned so the class cannot silently widen into spellings where
+    // bash DOES invoke the gated verb — if this pin starts failing,
+    // re-measure with shims before accepting either direction.
+    it("wrapper-argument-list resume: master-false-positive class stays unmatched (bash never runs the gated verb here)", () => {
+      const cmd = "A='x timeout --signal=INT' 5 git push origin master";
+      expect(pushRe.test(cmd)).toBe(false);
+      expect(pushRe.test(normalizeCommand(cmd).normalized)).toBe(false);
+    });
+    // Round-2 review, complementary guard boundary: a PATH-QUALIFIED
+    // head glued to the closing quote is NOT abandoned (the token is
+    // `/usr/bin/git'`, which GIT_TOKEN_RE rejects), the continuation
+    // completes, and the REAL invocation behind it matches — a measured
+    // fail-closed GAIN over master (master allowed this real git push).
+    it("path-qualified head glued to the closing quote: the real invocation behind it now matches (gain over master)", () => {
+      const cmd = "VAR='a /usr/bin/git' git push origin master";
+      expect(pushRe.test(cmd)).toBe(false);
+      expect(pushRe.test(normalizeCommand(cmd).normalized)).toBe(true);
+    });
   });
 
   // Task 13e55484, never-unmatch property with an ENGAGEMENT assurance

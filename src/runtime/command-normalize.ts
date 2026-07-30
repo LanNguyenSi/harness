@@ -672,16 +672,33 @@ function findNextBoundary(
  * `$'...'` but this scanner (correctly for plain `'...'`) treats the
  * backslash as literal: `A=$'don\'t' env harness pause # '` produced a
  * phantom-open state that consumed the whole segment, and NEITHER layer
- * matched where master's one-token consume blocked. With the guard, a
- * diverging quote state can only ever fall back to the exact pre-task
- * behaviour, never re-target a later head token: normalisation stays
- * monotone (measured, not assumed — see the differential pins in the
- * test file). The honest cost, measured and named rather than implied:
- * a quoted VALUE containing the literal word `git`/`gh`/`npm`/`harness`
- * as its own token (`VAR='a git b' git push`) is not continued — the
- * pre-task consume applies, which is byte-identical to master's
- * behaviour on those spellings, so nothing regresses; the spelling
- * simply stays in the not-closed set.
+ * matched where master's one-token consume blocked. The guard closes
+ * the HEAD-SWALLOW channel specifically: a diverging quote state can
+ * never re-target or swallow a recognised head token (measured — see
+ * the differential pins in the test file). It is NOT a universal
+ * monotonicity guarantee (round-2 review, measured): when the
+ * continuation closes on a WRAPPER'S glued flag token, the peel resumes
+ * at that wrapper's next ARGUMENT (a positional like timeout's
+ * duration, or a second flag), which is neither head nor wrapper, so
+ * the segment comes back unchanged where the pre-continuation peel
+ * completed — e.g. `A='x timeout --signal=INT' 5 git push` matched on
+ * master and does not here. Every found member of that class (550 of
+ * 41,440 adversarial cases) is a MASTER FALSE POSITIVE, PATH-shim-
+ * verified: bash treats the quoted run as one assignment word and then
+ * executes the next word (`5`, `-e0`), never the gated verb — 110 are
+ * outright `bash -n` syntax errors — so no gated invocation is lost and
+ * this side is the more bash-accurate one; the class is pinned in the
+ * test file so it cannot silently widen. The honest cost of the guard,
+ * measured and named rather than implied: a quoted VALUE containing the
+ * literal word `git`/`gh`/`npm`/`harness` as its own token
+ * (`VAR='a git b' git push`) is not continued — the pre-task consume
+ * applies, byte-identical to master's behaviour, so nothing regresses.
+ * The guard checks EXACT head spellings only: a path-qualified head
+ * glued to the closing quote (`VAR='a /usr/bin/git' git push` — the
+ * token is `/usr/bin/git'`, which GIT_TOKEN_RE rejects) is NOT
+ * abandoned, the continuation completes, and the REAL invocation behind
+ * it now matches — a measured fail-closed gain over master, also
+ * pinned.
  */
 function consumeAssignment(tokens: Token[], idx: number): number {
   let state: "" | "'" | '"' = "";
