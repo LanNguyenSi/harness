@@ -3,7 +3,7 @@
 // The operator's deliberate blessing of a protected-branch edit (version
 // bumps, CI workflow patches, hotfixes) for one session. Audit finding
 // #39: the old override was a `branch-protection-ack:` ledger tag, but the
-// agent has direct `mcp__agent-grounding__ledger_add` access and could
+// agent has direct `mcp__grounding-mcp__ledger_add` access and could
 // self-write that tag to bless its own edit. This verb instead writes the
 // canonical operator-only approval MARKER under
 // `harness.generated/.approvals/branch-protection-<sessionId>` (the same

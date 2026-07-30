@@ -213,7 +213,7 @@ binary; this pack has no version probe registered. Declaring
   real shell parser.
 - **Inverted trust-boundary residual**: a merged fact written by any
   means other than the producer (e.g. directly via
-  `mcp__agent-grounding__ledger_add`) that happens to exactly match the
+  `mcp__grounding-mcp__ledger_add`) that happens to exactly match the
   CURRENT `repo:branch:sha` triple denies curated mutations on that
   branch — recoverable via any escape command or by making a new commit
   (which moves the tip and the fact no longer matches). A fact for a

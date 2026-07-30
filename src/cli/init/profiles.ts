@@ -206,7 +206,7 @@ policies:
     # verdict itself, so against the agent the gate is advisory by design.
     producers:
       - kind: mcp
-        verb: mcp__agent-grounding__ledger_add
+        verb: mcp__grounding-mcp__ledger_add
         example: '{sessionId:"\${SESSION_ID}", type:"fact", content:"review:\${PR_NUMBER} — <verdict + key findings + nits>", source:"Agent(general-purpose) review"}'
         description: Spawn a review subagent against the PR diff, capture its verdict, then persist a ledger entry tagged with the PR number.
     ux:

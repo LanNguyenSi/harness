@@ -433,7 +433,7 @@ describe("parseManifest — operator_only unconditional deny (task 2cc73f55)", (
           producers: [
             {
               kind: "mcp",
-              verb: "mcp__agent-grounding__ledger_add",
+              verb: "mcp__grounding-mcp__ledger_add",
               example: '{sessionId:"x", type:"fact", content:"x"}',
               description: "bogus",
             },

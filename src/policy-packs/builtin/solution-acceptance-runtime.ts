@@ -254,7 +254,7 @@ export function evaluateGate(
   if (!verdict) {
     return {
       allowed: false,
-      reason: `no solution-acceptance verdict recorded for "${id}" (run mcp__agent-grounding__solution_evaluate first)`,
+      reason: `no solution-acceptance verdict recorded for "${id}" (run mcp__grounding-mcp__solution_evaluate first)`,
       verdict: null,
     };
   }

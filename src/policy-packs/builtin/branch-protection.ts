@@ -21,7 +21,7 @@
 //          written by `harness approve branch-protection`. The legacy
 //          `branch-protection-ack:` ledger tag is no longer trusted as an
 //          override (audit finding #39): it is agent-writable via
-//          `mcp__agent-grounding__ledger_add`, so it could self-bless an
+//          `mcp__grounding-mcp__ledger_add`, so it could self-bless an
 //          edit. The marker lives under `harness.generated/`, which Edit /
 //          Write / Bash are all gated from writing.
 //
@@ -170,7 +170,7 @@ While this pack is enabled, hooks are wired into the ${settingsArtefact}:
   a deliberate reason to edit a protected branch (version bumps, CI
   workflow patches, hotfixes). SECURITY (audit finding #39): a
   \`${ACK_TAG_PREFIX}:<reason>\` ledger tag is NO LONGER sufficient on its
-  own — it is agent-writable via \`mcp__agent-grounding__ledger_add\`, so
+  own — it is agent-writable via \`mcp__grounding-mcp__ledger_add\`, so
   the gate would otherwise be self-approvable. The approve verb still
   records that ledger tag for audit, but only the marker file (which the
   agent cannot write) opens the gate.

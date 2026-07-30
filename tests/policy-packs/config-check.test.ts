@@ -159,7 +159,7 @@ describe("checkPolicyPackConfigs — understanding-before-execution", () => {
           producers: [
             {
               kind: "mcp",
-              verb: "mcp__agent-grounding__ledger_add",
+              verb: "mcp__grounding-mcp__ledger_add",
               example: "ledger_add({ type: 'fact', content: 'ok' })",
               description: "record an evidence-ledger fact",
             },

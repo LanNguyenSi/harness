@@ -181,7 +181,7 @@ describe("intercept — deny with producer hints", () => {
       producers: [
         {
           kind: "mcp",
-          verb: "mcp__agent-grounding__ledger_add",
+          verb: "mcp__grounding-mcp__ledger_add",
           example: '{type:"fact", content:"review:${PR_NUMBER}"}',
           description: "Persist the review verdict tagged with the PR number.",
         },
@@ -199,7 +199,7 @@ describe("intercept — deny with producer hints", () => {
     expect(reason).toContain("no matching ledger entry for tag `review:42`");
     expect(reason).toContain("To satisfy: record an evidence-ledger entry");
     expect(reason).toContain("To produce this tag:");
-    expect(reason).toContain("1. [mcp]  mcp__agent-grounding__ledger_add");
+    expect(reason).toContain("1. [mcp]  mcp__grounding-mcp__ledger_add");
     expect(reason).toContain('example={type:"fact", content:"review:42"}');
     expect(reason).toContain(
       "Persist the review verdict tagged with the PR number.",
@@ -403,7 +403,7 @@ describe("intercept — agent-facing ux for non-preflight policies (MCP-recipe r
         cannot: "You cannot merge PR #${PR_NUMBER} yet.",
         required: ["a recorded review of PR #${PR_NUMBER}"],
         run: [
-          'mcp__agent-grounding__ledger_add { type: "fact", content: "review:${PR_NUMBER} — <verdict + key findings + nits>" }',
+          'mcp__grounding-mcp__ledger_add { type: "fact", content: "review:${PR_NUMBER} — <verdict + key findings + nits>" }',
         ],
       },
     } as Policy;
@@ -423,7 +423,7 @@ describe("intercept — agent-facing ux for non-preflight policies (MCP-recipe r
         "- a recorded review of PR #42",
         "",
         "Run:",
-        '  mcp__agent-grounding__ledger_add { type: "fact", content: "review:42 — <verdict + key findings + nits>" }',
+        '  mcp__grounding-mcp__ledger_add { type: "fact", content: "review:42 — <verdict + key findings + nits>" }',
       ].join("\n"),
     );
   });
@@ -444,7 +444,7 @@ describe("intercept — agent-facing ux for non-preflight policies (MCP-recipe r
         cannot: "You cannot open a pull request for task ${TASK_ID} yet.",
         required: ["a completed review-subagent pass on this task"],
         run: [
-          'mcp__agent-grounding__ledger_add { type: "fact", content: "review-subagent:${TASK_ID} — <verdict + key findings + nits>" }',
+          'mcp__grounding-mcp__ledger_add { type: "fact", content: "review-subagent:${TASK_ID} — <verdict + key findings + nits>" }',
         ],
       },
     } as Policy;
@@ -469,7 +469,7 @@ describe("intercept — agent-facing ux for non-preflight policies (MCP-recipe r
         "- a completed review-subagent pass on this task",
         "",
         "Run:",
-        '  mcp__agent-grounding__ledger_add { type: "fact", content: "review-subagent:abc-123 — <verdict + key findings + nits>" }',
+        '  mcp__grounding-mcp__ledger_add { type: "fact", content: "review-subagent:abc-123 — <verdict + key findings + nits>" }',
       ].join("\n"),
     );
   });
@@ -490,7 +490,7 @@ describe("intercept — agent-facing ux for non-preflight policies (MCP-recipe r
         cannot: "You cannot publish a release yet.",
         required: ["an end-to-end dogfood run in this session"],
         run: [
-          'mcp__agent-grounding__ledger_add { type: "fact", content: "dogfood:${SESSION_ID} — <end-to-end smoke summary>" }',
+          'mcp__grounding-mcp__ledger_add { type: "fact", content: "dogfood:${SESSION_ID} — <end-to-end smoke summary>" }',
         ],
       },
     } as Policy;
@@ -515,7 +515,7 @@ describe("intercept — agent-facing ux for non-preflight policies (MCP-recipe r
         "- an end-to-end dogfood run in this session",
         "",
         "Run:",
-        '  mcp__agent-grounding__ledger_add { type: "fact", content: "dogfood:sess-1 — <end-to-end smoke summary>" }',
+        '  mcp__grounding-mcp__ledger_add { type: "fact", content: "dogfood:sess-1 — <end-to-end smoke summary>" }',
       ].join("\n"),
     );
   });

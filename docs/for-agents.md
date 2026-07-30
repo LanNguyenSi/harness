@@ -21,7 +21,7 @@ handling), see [`for-humans.md`](for-humans.md).
 3. Your job, as the agent, is to log the evidence the policies
    require: a `review:${PR_NUMBER}` entry before a merge, a
    `dogfood:${SESSION_ID}` entry before a release, and so on. Do that
-   via `mcp__agent-grounding__ledger_add` (or whatever ledger surface
+   via `mcp__grounding-mcp__ledger_add` (or whatever ledger surface
    the host repo provides).
 
 ## Workflow lifecycle
@@ -196,7 +196,7 @@ suggestions for the same block. `producers:` still feeds
 
 1. Read the three sections in order: state, requirement, remedy.
 2. Run the `Run:` command. If it is a bare `harness ...` invocation,
-   the Bash gate accepts it; if it is an `mcp__agent-grounding__ledger_add`
+   the Bash gate accepts it; if it is an `mcp__grounding-mcp__ledger_add`
    recipe, write it via the MCP tool (the ungated recovery path when
    Bash is locked down).
 3. Retry the original tool call. The same call goes straight through

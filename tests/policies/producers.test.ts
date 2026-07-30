@@ -20,7 +20,7 @@ describe("renderProducers", () => {
       },
       {
         kind: "mcp",
-        verb: "mcp__agent-grounding__ledger_add",
+        verb: "mcp__grounding-mcp__ledger_add",
         example: '{type:"fact", content:"preflight:${REPO}"}',
         description: "Ungated recovery path.",
       },
@@ -29,7 +29,7 @@ describe("renderProducers", () => {
     expect(out).toContain("To produce this tag:");
     expect(out).toContain("1. [bash] `harness session-start preflight`");
     expect(out).toContain("Standard producer; writes preflight:harness on ready:true.");
-    expect(out).toContain("2. [mcp]  mcp__agent-grounding__ledger_add");
+    expect(out).toContain("2. [mcp]  mcp__grounding-mcp__ledger_add");
     expect(out).toContain('example={type:"fact", content:"preflight:harness"}');
     expect(out).toContain("Ungated recovery path.");
   });
@@ -43,7 +43,7 @@ describe("renderProducers", () => {
       },
       {
         kind: "mcp",
-        verb: "mcp__agent-grounding__ledger_add",
+        verb: "mcp__grounding-mcp__ledger_add",
         example: '{content:"understanding-approved:${SESSION_ID}"}',
         description: "Audit-only fallback (post-v0.14.0 the marker file is the gate signal).",
       },

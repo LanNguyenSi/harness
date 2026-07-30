@@ -140,7 +140,7 @@ echo '{"hook_event_name":"PreToolUse","session_id":"default","tool_name":"mcp__a
 # → {"decision":"block","reason":"review-before-merge: no matching ledger entry for tag `review:99`","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"…"}}
 
 # Add a ledger entry for PR 99
-# (via mcp__agent-grounding__ledger_add, sessionId="default", content includes "review:99")
+# (via mcp__grounding-mcp__ledger_add, sessionId="default", content includes "review:99")
 
 # Probe B: PR 99, ledger entry present → must allow
 echo '{"hook_event_name":"PreToolUse","session_id":"default","tool_name":"mcp__agent-tasks__pull_requests_merge","tool_input":{"prNumber":99}}' \

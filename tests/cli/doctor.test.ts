@@ -662,7 +662,7 @@ policies:
     enforcement: block
     producers:
       - kind: mcp
-        verb: mcp__agent-grounding__ledger_add
+        verb: mcp__grounding-mcp__ledger_add
         example: '{type:"fact", content:"eta:\${REPO} (operator-driven smoke summary)"}'
         description: Document what was exercised so the gate has an auditable manual recovery path.
 `;

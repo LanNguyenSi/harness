@@ -149,7 +149,7 @@ trusted override signal.
 
 > **Security (audit finding #39).** A `branch-protection-ack:<reason>`
 > ledger tag is NO LONGER a sufficient override on its own. The agent has
-> direct `mcp__agent-grounding__ledger_add` access, so it could self-write
+> direct `mcp__grounding-mcp__ledger_add` access, so it could self-write
 > that tag and bless its own protected-branch edit. The approve verb still
 > records the ledger tag for audit (`--reason` becomes its `:<reason>`
 > suffix), but only the marker file opens the gate.
