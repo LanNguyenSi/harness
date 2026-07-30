@@ -224,14 +224,14 @@ policies:
       required:
         - "a recorded review of PR #${PR_NUMBER}"
       run:
-        - 'mcp__agent-grounding__ledger_add { sessionId: "${SESSION_ID}", type: "fact", content: "review:${PR_NUMBER} — <verdict>" }'
+        - 'mcp__grounding-mcp__ledger_add { sessionId: "${SESSION_ID}", type: "fact", content: "review:${PR_NUMBER} — <verdict>" }'
 ```
 
 What lands on each surface:
 
 | Surface | Without `ux:` | With `ux:` |
 |---|---|---|
-| `permissionDecisionReason` (agent stdout) | `review-before-merge: no matching ledger entry for tag review:42` | `You cannot merge PR #42 yet.\n\nRequired:\n- a recorded review of PR #42\n\nRun:\n  mcp__agent-grounding__ledger_add ...` |
+| `permissionDecisionReason` (agent stdout) | `review-before-merge: no matching ledger entry for tag review:42` | `You cannot merge PR #42 yet.\n\nRequired:\n- a recorded review of PR #42\n\nRun:\n  mcp__grounding-mcp__ledger_add ...` |
 | `policy_decision` row (audit ledger) | engine-vocabulary reason | engine-vocabulary reason (unchanged) |
 | `harness audit` / `explain --trace` | engine-vocabulary reason | engine-vocabulary reason (unchanged) |
 | stderr diagnostic | engine-vocabulary reason | engine-vocabulary reason (unchanged) |

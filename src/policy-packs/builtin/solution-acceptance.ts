@@ -187,7 +187,7 @@ harness-managed settings:
 ## Earning a verdict
 
 \`\`\`
-mcp__agent-grounding__solution_evaluate({ id: "<active-task-id>" })
+mcp__grounding-mcp__solution_evaluate({ id: "<active-task-id>" })
 \`\`\`
 
 This runs \`preflight run --json\` and records a HEAD-pinned verdict. A

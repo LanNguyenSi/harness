@@ -43,7 +43,7 @@ policies:
     # against the agent; the gate enforces the two-review STEP.
     producers:
       - kind: mcp
-        verb: mcp__agent-grounding__ledger_add
+        verb: mcp__grounding-mcp__ledger_add
         example: '{sessionId:"${SESSION_ID}", type:"fact", content:"review:${PR_NUMBER} — <verdict>", source:"review subagent 1 of 2"}'
         description: Persist each reviewer's verdict separately; the count.min gate needs two distinct entries.
     ux:
@@ -51,4 +51,4 @@ policies:
       required:
         - "two distinct reviews for PR ${PR_NUMBER}"
       run:
-        - "have each reviewer write review:${PR_NUMBER} via mcp__agent-grounding__ledger_add"
+        - "have each reviewer write review:${PR_NUMBER} via mcp__grounding-mcp__ledger_add"

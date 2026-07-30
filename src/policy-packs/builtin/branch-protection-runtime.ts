@@ -30,7 +30,7 @@ export const NON_PROTECTED_TAG_PREFIX = "branch:non-protected";
  * Operator escape-hatch tag, kept as a best-effort AUDIT echo only.
  *
  * SECURITY (audit finding #39): this tag is NO LONGER a trusted override
- * signal. The agent has direct `mcp__agent-grounding__ledger_add` access,
+ * signal. The agent has direct `mcp__grounding-mcp__ledger_add` access,
  * so it could self-write `branch-protection-ack:<anything>` and bless its
  * own protected-branch edit — exactly the self-approval backdoor the
  * understanding gate closed in agent-tasks/88ca4bb3 by moving the

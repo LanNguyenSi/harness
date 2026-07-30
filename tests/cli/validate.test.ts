@@ -1344,7 +1344,7 @@ ${producersBlock}`;
     const home = buildPolicyFixture(
       "    producers:\n" +
         "      - kind: mcp\n" +
-        "        verb: mcp__agent-grounding__ledger_add\n" +
+        "        verb: mcp__grounding-mcp__ledger_add\n" +
         "        example: '{sessionId:\"s\", type:\"fact\", content:\"review:x\"}'\n" +
         "        description: process gate — agent records the review verdict\n",
     );
@@ -1365,7 +1365,7 @@ ${producersBlock}`;
         "        command: harness approve risk\n" +
         "        description: operator approves from their own shell\n" +
         "      - kind: mcp\n" +
-        "        verb: mcp__agent-grounding__ledger_add\n" +
+        "        verb: mcp__grounding-mcp__ledger_add\n" +
         "        example: '{sessionId:\"s\", type:\"fact\", content:\"review:x\"}'\n" +
         "        description: recovery path\n",
     );

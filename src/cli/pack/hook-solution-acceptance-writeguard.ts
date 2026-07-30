@@ -319,7 +319,7 @@ function blockJson(toolName: string, reason: string): string {
     `solution-acceptance write-guard: refusing ${toolName}. ${reason}.\n` +
     `The solution-acceptance verdict marker is derived by the producer from a ` +
     `real preflight run; hand-writing it would forge a green "done". ` +
-    `Run \`mcp__agent-grounding__solution_evaluate({ id: "<task-id>" })\` instead, ` +
+    `Run \`mcp__grounding-mcp__solution_evaluate({ id: "<task-id>" })\` instead, ` +
     `which writes the marker for you.\n` +
     `Operator override: \`harness pause\`.`;
   return JSON.stringify({

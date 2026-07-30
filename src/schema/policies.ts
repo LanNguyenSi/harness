@@ -140,7 +140,7 @@ export const PolicyWhenSchema = z
 // 2cc73f55). Every other `block` policy names `requires.ledger_tag`
 // evidence, but the only satisfaction primitives the engine has —
 // a ledger tag (writable in-session via
-// `mcp__agent-grounding__ledger_add`) or a filesystem marker (operator-
+// `mcp__grounding-mcp__ledger_add`) or a filesystem marker (operator-
 // only only while a gate already locks Bash/Write down, circular on a
 // default install) — are agent-satisfiable. That leaves no honest way to
 // express "the agent may NEVER do this, and cannot self-satisfy it this

@@ -363,7 +363,7 @@ export function checkSolutionAcceptanceKnobIgnored(
 // Self-attestation disclosure (task 43b107f2, harness-review-2026-07-01).
 // The generic `requires:`/`ledger_tag` engine matches substrings in ledger
 // content that the GATED AGENT can write directly via
-// `mcp__agent-grounding__ledger_add` — whoever can write the ledger can open
+// `mcp__grounding-mcp__ledger_add` — whoever can write the ledger can open
 // the gate. The two builtin packs were hardened to filesystem markers after
 // exactly this class of self-approval bug (docs/CLI.md, branch-protection),
 // but a custom block-policy is only as strong as its evidence producer.
@@ -403,7 +403,7 @@ export function checkPolicySelfAttestation(manifest: Manifest): Diagnostic[] {
         `policy "${p.name}" blocks on requires.ledger_tag but declares no ` +
         `producers: — the evidence source is undocumented, and the tag is ` +
         `satisfied by ANY ledger writer, including the gated agent itself ` +
-        `via mcp__agent-grounding__ledger_add (advisory against the agent ` +
+        `via mcp__grounding-mcp__ledger_add (advisory against the agent ` +
         `it gates). Declare a producers: entry naming the intended evidence ` +
         `flow — an ask-kind producer for operator-in-the-loop approval ` +
         `(alongside the mcp recovery producer the schema requires), or an ` +

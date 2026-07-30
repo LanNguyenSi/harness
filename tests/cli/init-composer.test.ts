@@ -106,7 +106,7 @@ describe("composeCustom — new policy entries (task 5dd3d8a6)", () => {
 
   it("FULL_TEMPLATE: the five evidence-process gates' ux.run points at the matching `harness record` verb, not a raw ledger_add (task 27ba3570)", async () => {
     // Pre-27ba3570 these five gates' ux.run hinted a raw
-    // `mcp__agent-grounding__ledger_add` call. Now that `harness record
+    // `mcp__grounding-mcp__ledger_add` call. Now that `harness record
     // {review,review-subagent,dogfood}` exist (task T-001), ux.run must
     // point agents at those verbs instead — the producers[].example
     // field (asserted separately below, PR #207 pin) intentionally keeps
@@ -152,7 +152,7 @@ describe("composeCustom — new policy entries (task 5dd3d8a6)", () => {
     for (const p of parsed.policies ?? []) {
       for (const prod of p.producers ?? []) {
         if (
-          prod.verb === "mcp__agent-grounding__ledger_add" &&
+          prod.verb === "mcp__grounding-mcp__ledger_add" &&
           typeof prod.example === "string"
         ) {
           ledgerExamples.push({ policy: p.name, example: prod.example });

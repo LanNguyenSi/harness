@@ -46,7 +46,7 @@ These four things bite people who skip ahead to the YAML:
 4. **The trust model: whoever can write the ledger can open the gate.**
    `requires.ledger_tag` is a substring match against evidence-ledger
    entries, and the gated agent can write those entries directly via
-   `mcp__agent-grounding__ledger_add`. A custom `block` policy is
+   `mcp__grounding-mcp__ledger_add`. A custom `block` policy is
    therefore **advisory against the agent it gates**: it forces a
    deliberate step (record the review verdict, log the smoke result)
    but does not survive an agent that simply writes the tag. That is
@@ -115,7 +115,7 @@ policies:
       cannot: "You cannot merge PR ${PR_NUMBER} yet."
       required: ["a logged review for PR ${PR_NUMBER}"]
       run:
-        - "have the reviewer write review:${PR_NUMBER} via mcp__agent-grounding__ledger_add"
+        - "have the reviewer write review:${PR_NUMBER} via mcp__grounding-mcp__ledger_add"
 ```
 
 `harness dry-run "merge PR 42" --tool mcp__agent-tasks__pull_requests_merge --tool-args '{"prNumber":42}' --config docs/examples/policies/01-review-before-merge.yaml`
@@ -125,7 +125,7 @@ substituted `review:42` tag it would look for.
 At runtime, the first merge fires `harness policy intercept`, which
 looks up `review:42` in the ledger for the current session, finds
 nothing, and returns the `ux:` envelope. The reviewer (or a review
-subagent) calls `mcp__agent-grounding__ledger_add` with content
+subagent) calls `mcp__grounding-mcp__ledger_add` with content
 `review:42:approved`. The next merge call lets through, and both
 decisions (deny then allow) land in `harness audit` as
 `policy_decision` rows.
@@ -161,7 +161,7 @@ policies:
       cannot: "You cannot push branch ${BRANCH} without a recent clean check."
       required: ["a clean-check:${BRANCH} ledger entry from the last 10 minutes"]
       run:
-        - "slop-detector check . --pack ui-slop,code-slop && mcp__agent-grounding__ledger_add { tag: clean-check:${BRANCH} }"
+        - "slop-detector check . --pack ui-slop,code-slop && mcp__grounding-mcp__ledger_add { tag: clean-check:${BRANCH} }"
 ```
 
 `--pack` filters slop-detector to a subset of its packs; omit the
@@ -193,7 +193,7 @@ regex, the `within:` value, all transfer.
 
 Recipes A and B are **process gates** (tripwire 4): they name a
 `requires.ledger_tag` the gated agent can write itself via
-`mcp__agent-grounding__ledger_add`, so the gate forces a step but does
+`mcp__grounding-mcp__ledger_add`, so the gate forces a step but does
 not survive an agent that skips it and writes the tag directly. That
 is the right shape for "make the agent do the review/check step
 first." It is the wrong shape for "the agent may NEVER do this, full
@@ -324,7 +324,7 @@ policies:
       required:
         - "a recorded review of the PR for branch ${BRANCH}"
       run:
-        - 'mcp__agent-grounding__ledger_add { sessionId: "${SESSION_ID}", type: "fact", content: "review:${BRANCH} — <verdict + key findings + nits>" }'
+        - 'mcp__grounding-mcp__ledger_add { sessionId: "${SESSION_ID}", type: "fact", content: "review:${BRANCH} — <verdict + key findings + nits>" }'
 ```
 
 If your workflow only uses one surface, ship only that policy. The

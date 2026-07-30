@@ -19,7 +19,7 @@
 //      bumps, CI workflow patches, hotfixes). The legacy
 //      `branch-protection-ack:` LEDGER tag is NO LONGER trusted as an
 //      override (audit finding #39): the agent has direct
-//      `mcp__agent-grounding__ledger_add` access and could self-write the
+//      `mcp__grounding-mcp__ledger_add` access and could self-write the
 //      tag to bless its own edit. The marker lives under
 //      `harness.generated/`, which Edit / Write / Bash are all gated from
 //      writing, so only a process the operator launched can produce it.

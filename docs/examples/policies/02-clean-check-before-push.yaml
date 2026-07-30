@@ -56,7 +56,7 @@ policies:
     # agent, enforcing the STEP. producers: documents that trust decision.
     producers:
       - kind: mcp
-        verb: mcp__agent-grounding__ledger_add
+        verb: mcp__grounding-mcp__ledger_add
         example: '{sessionId:"${SESSION_ID}", type:"fact", content:"clean-check:${BRANCH} — 0 findings", source:"slop-detector"}'
         description: Run the clean-check tool, then persist the result tagged with the branch.
     ux:
@@ -67,4 +67,4 @@ policies:
         # `--pack` filters slop-detector to a subset of its packs; drop
         # the flag to run all five (agent-tics, prose-slop,
         # comment-slop, code-slop, ui-slop).
-        - "slop-detector check . --pack ui-slop,code-slop && mcp__agent-grounding__ledger_add { tag: clean-check:${BRANCH} }"
+        - "slop-detector check . --pack ui-slop,code-slop && mcp__grounding-mcp__ledger_add { tag: clean-check:${BRANCH} }"

@@ -47,7 +47,7 @@ policies:
     # against the agent; the gate enforces the readiness STEP.
     producers:
       - kind: mcp
-        verb: mcp__agent-grounding__ledger_add
+        verb: mcp__grounding-mcp__ledger_add
         example: '{sessionId:"${SESSION_ID}", type:"fact", content:"deploy-ready:${SERVICE} — checks green", source:"readiness check"}'
         description: Run the readiness checks for the service, then persist the result tagged with the service name.
     ux:

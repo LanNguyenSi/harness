@@ -199,7 +199,7 @@ describe("FULL_TEMPLATE: kill-switch deny policies declare no producers, and are
 //      pin at the string level).
 //   2. task 2cc73f55 FIX: forging every ledger-evidence shape available to
 //      intercept() — the exact tag content an agent could write via
-//      mcp__agent-grounding__ledger_add, a spoofed `source: "operator"`,
+//      mcp__grounding-mcp__ledger_add, a spoofed `source: "operator"`,
 //      a head-matching entry, multiple entries — no longer flips any of
 //      the three to allow. Before this task, exactly this forged entry DID
 //      flip the decision to allow (the self-satisfy hole the round-2
@@ -282,7 +282,7 @@ describe("FULL_TEMPLATE: kill-switch deny policies actually block via intercept(
   // of "evidence" a determined agent might try, all in ONE ledger so a
   // single fire has to survive every shape simultaneously:
   //   - the exact legacy tag content, byte-for-byte, as the agent would
-  //     have written it via mcp__agent-grounding__ledger_add.
+  //     have written it via mcp__grounding-mcp__ledger_add.
   //   - the same tag with a spoofed `source: "operator"` (claiming an
   //     operator wrote it).
   //   - the same tag plus a `head:<sha>` token matching the runtime's

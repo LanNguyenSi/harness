@@ -200,7 +200,7 @@ block; see Failure mode #2):
 | Variable | Effect | Default |
 |----------|--------|---------|
 | `SOLUTION_VERDICT_DIR` | Overrides the verdict directory the consumer reads. Must match where the producer writes. | `$XDG_STATE_HOME/agent-grounding/solution-verdicts`, falling back to `~/.local/state/agent-grounding/solution-verdicts` |
-| `SOLUTION_VERDICT_ID` | Verdict id for solo / non-agent-tasks sessions. Consulted only when no `active-claim` exists. Validated as a safe single path segment; malformed fails closed. Set it to the same id passed to `mcp__agent-grounding__solution_evaluate({ id })`. | unset (fail-closed without a claim) |
+| `SOLUTION_VERDICT_ID` | Verdict id for solo / non-agent-tasks sessions. Consulted only when no `active-claim` exists. Validated as a safe single path segment; malformed fails closed. Set it to the same id passed to `mcp__grounding-mcp__solution_evaluate({ id })`. | unset (fail-closed without a claim) |
 
 ## See also
 

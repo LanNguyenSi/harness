@@ -51,7 +51,7 @@ const BASH: Producer = {
 };
 const MCP: Producer = {
   kind: "mcp",
-  verb: "mcp__agent-grounding__ledger_add",
+  verb: "mcp__grounding-mcp__ledger_add",
   example: '{sessionId:"x"}',
   description: "d3",
 };
