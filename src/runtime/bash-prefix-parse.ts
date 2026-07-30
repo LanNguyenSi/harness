@@ -87,6 +87,19 @@ function skipWs(s: string, i: number): number {
  * On a syntactically broken token (e.g. unterminated quote) the broken
  * token is NOT consumed and the function returns the cursor at the
  * start of that token, preserving the rest of the command for fallback.
+ *
+ * QUOTE-MODEL DIVERGENCE, recorded so the next change here starts from
+ * the known state instead of rediscovering it (task 13e55484, review
+ * round 1): `command-normalize.ts`'s `consumeAssignment` is a SECOND
+ * quote model for the same leading-`VAR=value` construction, with
+ * different deliberate coverage — it handles backslash escapes (outside
+ * single quotes) and chained quote runs (`'a b'"c d"`), which this
+ * function does not, while this function extracts the VALUE (which the
+ * normaliser never needs). Neither model handles ANSI-C `$'...'`
+ * escapes; the normaliser side carries a one-directional guard so that
+ * divergence can only fall back to its pre-continuation behaviour,
+ * never swallow a gated head token. This function's own escape gaps are
+ * task `b093911d`.
  */
 function consumeInlineEnv(s: string, start: number, into: Record<string, string>): number {
   let i = skipWs(s, start);

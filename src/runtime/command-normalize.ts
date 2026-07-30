@@ -211,6 +211,18 @@
 //     agent writes and then executes.
 //   - `pushd`/`popd`, and a `cd` inside a nested subshell
 //     (`(cd X && ...)`) — mirrors `bash-prefix-parse.ts`'s own scope.
+//   - A shell-boundary character INSIDE a quoted assignment VALUE
+//     (`VAR='a; b' git push` — task 13e55484's pinned residual):
+//     `BOUNDARY_RE` splits segments BEFORE tokenisation and is quote-
+//     unaware, so the quoted value is cut at the `;` and neither
+//     resulting segment carries a recognisable invocation. Closing this
+//     means a quote-aware segmenter, a different (and riskier) change
+//     than the assignment-value continuation that task shipped.
+//   - A quoted assignment VALUE containing the literal word `git`/`gh`/
+//     `npm`/`harness` as its own token (`VAR='a git b' git push`): the
+//     continuation's one-directional guard abandons rather than risk
+//     swallowing a real head token (see `consumeAssignment`), leaving
+//     the byte-exact pre-task behaviour on those spellings.
 //   - Quoted directory arguments containing whitespace (e.g. `git -C
 //     '/path with spaces' status`): the tokeniser splits on whitespace
 //     without quote-awareness, so such a case falls through to "no git
@@ -280,6 +292,18 @@
 // operator gets an unnecessary deny, never a missed real gate), so left
 // as-is rather than special-cased; noted here so it is not mistaken for
 // a security hole if reported.
+//
+// SAME CLASS, second member (task 13e55484, review round 1): a QUOTED
+// ASSIGNMENT INSIDE TEXT at a segment-start position now over-matches.
+// `BOUNDARY_RE` splits segments with no quote awareness, so in
+// `echo "a; VAR='x y' git push"` the text after the `;` becomes its own
+// segment, the assignment continuation normalises it to `git push`, and
+// the push gate DENIES a command that only PRINTS the spelling
+// (measured; master allowed it). Fail-closed direction, accepted and
+// pinned in the test file as a boundary assertion — the practical cost
+// is that documenting or testing that bypass class through a Bash call
+// trips the gate, the same cost the dbc6d303 quoted/heredoc class
+// already carries.
 //
 // `$(...)` command substitution is ACCIDENTALLY covered — not a
 // deliberate feature, and distinct from the backtick case above, which
