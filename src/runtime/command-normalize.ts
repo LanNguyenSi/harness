@@ -211,6 +211,18 @@
 //     agent writes and then executes.
 //   - `pushd`/`popd`, and a `cd` inside a nested subshell
 //     (`(cd X && ...)`) — mirrors `bash-prefix-parse.ts`'s own scope.
+//   - A shell-boundary character INSIDE a quoted assignment VALUE
+//     (`VAR='a; b' git push` — task 13e55484's pinned residual):
+//     `BOUNDARY_RE` splits segments BEFORE tokenisation and is quote-
+//     unaware, so the quoted value is cut at the `;` and neither
+//     resulting segment carries a recognisable invocation. Closing this
+//     means a quote-aware segmenter, a different (and riskier) change
+//     than the assignment-value continuation that task shipped.
+//   - A quoted assignment VALUE containing the literal word `git`/`gh`/
+//     `npm`/`harness` as its own token (`VAR='a git b' git push`): the
+//     continuation's one-directional guard abandons rather than risk
+//     swallowing a real head token (see `consumeAssignment`), leaving
+//     the byte-exact pre-task behaviour on those spellings.
 //   - Quoted directory arguments containing whitespace (e.g. `git -C
 //     '/path with spaces' status`): the tokeniser splits on whitespace
 //     without quote-awareness, so such a case falls through to "no git
@@ -280,6 +292,18 @@
 // operator gets an unnecessary deny, never a missed real gate), so left
 // as-is rather than special-cased; noted here so it is not mistaken for
 // a security hole if reported.
+//
+// SAME CLASS, second member (task 13e55484, review round 1): a QUOTED
+// ASSIGNMENT INSIDE TEXT at a segment-start position now over-matches.
+// `BOUNDARY_RE` splits segments with no quote awareness, so in
+// `echo "a; VAR='x y' git push"` the text after the `;` becomes its own
+// segment, the assignment continuation normalises it to `git push`, and
+// the push gate DENIES a command that only PRINTS the spelling
+// (measured; master allowed it). Fail-closed direction, accepted and
+// pinned in the test file as a boundary assertion — the practical cost
+// is that documenting or testing that bypass class through a Bash call
+// trips the gate, the same cost the dbc6d303 quoted/heredoc class
+// already carries.
 //
 // `$(...)` command substitution is ACCIDENTALLY covered — not a
 // deliberate feature, and distinct from the backtick case above, which
@@ -617,6 +641,101 @@ function findNextBoundary(
   return m === null ? null : { start: m.index, token: m[0] };
 }
 
+/**
+ * Consume one leading `VAR=value` assignment starting at `idx`, returning
+ * the index of the first token AFTER it. Task 13e55484: the VALUE may be
+ * quoted and span multiple whitespace-split tokens (`VAR='hello world'`),
+ * which used to leave a dangling `world'` token that aborted the peel
+ * loop — the one measured spelling where BOTH matching layers failed on
+ * the same character. The continuation engages ONLY while an opening
+ * quote from the assignment stays unbalanced at a token's end and a
+ * matching close exists in a later token; every other shape keeps the
+ * exact pre-task one-token consume:
+ * - an UNTERMINATED quote (`VAR='a git push`) falls back to consuming
+ *   one token, because that spelling normalised to `git push` before
+ *   this task and must keep doing so (never-unmatch);
+ * - backslash-escaped whitespace without quotes (`VAR=a\ b`) is task
+ *   b093911d's escape-handling class and is deliberately NOT continued
+ *   here (pinned as a still-open bypass in the test file).
+ * Quote semantics per POSIX: outside quotes `\` escapes the next char,
+ * single quotes close only at `'`, double quotes close at an unescaped
+ * `"`. A quote run may chain (`VAR='a b'"c d"`); the assignment ends at
+ * the first token that finishes outside any quote.
+ *
+ * ONE-DIRECTIONAL GUARD (review round 1, CRITICAL): the continuation
+ * ABANDONS (returns the pre-task one-token consume) the moment the token
+ * it would consume next is a recognised head token (`GIT_TOKEN_RE` or
+ * `NON_GIT_HEAD_TOKENS`). Without this, a quote model diverging from
+ * bash on even ONE spelling lets the continuation swallow the gated
+ * command word and turn a previously-BLOCKED command into a bypass —
+ * measured live with ANSI-C quoting, where bash escapes `\'` inside
+ * `$'...'` but this scanner (correctly for plain `'...'`) treats the
+ * backslash as literal: `A=$'don\'t' env harness pause # '` produced a
+ * phantom-open state that consumed the whole segment, and NEITHER layer
+ * matched where master's one-token consume blocked. The guard closes
+ * the HEAD-SWALLOW channel specifically: a diverging quote state can
+ * never re-target or swallow a recognised head token (measured — see
+ * the differential pins in the test file). It is NOT a universal
+ * monotonicity guarantee (round-2 review, measured): when the
+ * continuation closes on a WRAPPER'S glued flag token, the peel resumes
+ * at that wrapper's next ARGUMENT (a positional like timeout's
+ * duration, or a second flag), which is neither head nor wrapper, so
+ * the segment comes back unchanged where the pre-continuation peel
+ * completed — e.g. `A='x timeout --signal=INT' 5 git push` matched on
+ * master and does not here. Every found member of that class (550 of
+ * 41,440 adversarial cases) is a MASTER FALSE POSITIVE, PATH-shim-
+ * verified: bash treats the quoted run as one assignment word and then
+ * executes the next word (`5`, `-e0`), never the gated verb — 110 are
+ * outright `bash -n` syntax errors — so no gated invocation is lost and
+ * this side is the more bash-accurate one; the class is pinned in the
+ * test file so it cannot silently widen. The honest cost of the guard,
+ * measured and named rather than implied: a quoted VALUE containing the
+ * literal word `git`/`gh`/`npm`/`harness` as its own token
+ * (`VAR='a git b' git push`) is not continued — the pre-task consume
+ * applies, byte-identical to master's behaviour, so nothing regresses.
+ * The guard checks EXACT head spellings only: a path-qualified head
+ * glued to the closing quote (`VAR='a /usr/bin/git' git push` — the
+ * token is `/usr/bin/git'`, which GIT_TOKEN_RE rejects) is NOT
+ * abandoned, the continuation completes, and the REAL invocation behind
+ * it now matches — a measured fail-closed gain over master, also
+ * pinned.
+ */
+function consumeAssignment(tokens: Token[], idx: number): number {
+  let state: "" | "'" | '"' = "";
+  let escaped = false;
+  for (let i = idx; i < tokens.length; i++) {
+    const text = tokens[i]!.text;
+    if (i > idx && (GIT_TOKEN_RE.test(text) || NON_GIT_HEAD_TOKENS.has(text))) {
+      return idx + 1;
+    }
+    for (let k = 0; k < text.length; k++) {
+      const c = text[k]!;
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (state === "'") {
+        if (c === "'") state = "";
+        continue;
+      }
+      if (state === '"') {
+        if (c === "\\") escaped = true;
+        else if (c === '"') state = "";
+        continue;
+      }
+      if (c === "\\") escaped = true;
+      else if (c === "'" || c === '"') state = c;
+    }
+    // A backslash pending at a token's end would escape the separating
+    // whitespace itself — b093911d's class, not continued here.
+    escaped = false;
+    if (state === "") return i + 1;
+  }
+  // Ran out of tokens with a quote still open: unterminated. Preserve the
+  // pre-task behaviour exactly (consume only the assignment's first token).
+  return idx + 1;
+}
+
 /** Split a segment into whitespace-delimited tokens with their offsets. */
 function tokenizeWithOffsets(s: string): Token[] {
   const out: Token[] = [];
@@ -668,7 +787,7 @@ function canonicalizeSegment(segmentText: string): {
     const head = tokens[idx]?.text;
     if (head === undefined) break;
     if (VAR_ASSIGN_RE.test(head)) {
-      idx += 1;
+      idx = consumeAssignment(tokens, idx);
       continue;
     }
     if (head === "env") {
@@ -855,7 +974,7 @@ function peelEnv(
       continue;
     }
     if (VAR_ASSIGN_RE.test(t)) {
-      idx += 1;
+      idx = consumeAssignment(tokens, idx);
       continue;
     }
     break;

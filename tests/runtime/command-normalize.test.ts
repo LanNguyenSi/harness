@@ -622,4 +622,246 @@ describe("normalizeCommand", () => {
       }
     });
   });
+
+  // Task 13e55484: a QUOTED env-assignment value with embedded whitespace
+  // (`VAR='hello world' git push`) was measured as a live bypass against
+  // the shipped 0.42.0 binary on BOTH matching layers: the raw regex's
+  // `(\w+=\S+\s+)*` cannot span the space, and this module's whitespace
+  // tokenizer split the assignment into two tokens, the second of which
+  // aborted the peel loop, so the segment came back byte-identical.
+  // The fix continues an assignment's VALUE across tokens while an
+  // opening quote from the same token is unbalanced — nothing else about
+  // tokenization changed.
+  describe("13e55484: quoted env-assignment values with whitespace normalise to a match", () => {
+    const pushRe = policyBashMatch("preflight-before-push");
+    const mergeRe = policyBashMatch("review-before-merge-bash");
+    const cases: Array<{ label: string; command: string; re: RegExp }> = [
+      {
+        label: "measured spelling, single quotes (push gate)",
+        command: "VAR='hello world' git push origin master",
+        re: pushRe,
+      },
+      {
+        label: "double quotes",
+        command: 'VAR="hello world" git push origin master',
+        re: pushRe,
+      },
+      {
+        label: "multiple assignments, mixed quoting",
+        command: "A='x y' B=\"z w\" git push origin master",
+        re: pushRe,
+      },
+      {
+        label: "assignment plus peeled wrapper (nice)",
+        command: "VAR='a b' nice git push origin master",
+        re: pushRe,
+      },
+      {
+        label: "assignment INSIDE env (peelEnv's own assignment scan)",
+        command: "env VAR='a b' git push origin master",
+        re: pushRe,
+      },
+      {
+        label: "tab instead of space in the value",
+        command: "VAR='a\tb' git push origin master",
+        re: pushRe,
+      },
+      {
+        label: "multi-quote-run value ('a b'\"c d\")",
+        command: "VAR='a b'\"c d\" git push origin master",
+        re: pushRe,
+      },
+      {
+        label: "second gated verb (gh pr merge)",
+        command: "VAR='hello world' gh pr merge 4242 --squash",
+        re: mergeRe,
+      },
+    ];
+    for (const c of cases) {
+      it(`${c.label}: normalises to a trigger match, raw stays a miss`, () => {
+        // Raw MUST miss: these cases exist precisely because the raw
+        // layer cannot span the quoted whitespace. If a future regex
+        // edit makes raw match, this pin flags that the case now tests
+        // nothing on the normalised layer and must move blocks.
+        expect(c.re.test(c.command)).toBe(false);
+        const { normalized } = normalizeCommand(c.command);
+        expect(c.re.test(normalized)).toBe(true);
+      });
+    }
+  });
+
+  // Task 13e55484, behaviour-preservation pins: the assignment-value
+  // continuation must engage ONLY on an unbalanced opening quote with a
+  // later close. Everything else keeps the pre-task byte behaviour.
+  describe("13e55484: quoted-assignment continuation does not change anything else", () => {
+    const pushRe = policyBashMatch("preflight-before-push");
+    it("unterminated quote keeps the pre-task one-token consume (never-unmatch)", () => {
+      // `VAR='a git push ...` normalised to `git push ...` BEFORE this
+      // task (the open quote never closes, so the old one-token consume
+      // saw `git` as the head). That match must survive the fix.
+      const cmd = "VAR='a git push origin master";
+      expect(pushRe.test(normalizeCommand(cmd).normalized)).toBe(true);
+    });
+    it("a quoted assignment before a non-invocation stays byte-identical", () => {
+      const cmd = "VAR='a b' foo bar";
+      expect(normalizeCommand(cmd).normalized).toBe(cmd);
+    });
+    it("backslash-escaped whitespace WITHOUT quotes stays a bypass (task b093911d's class, deliberately not handled here)", () => {
+      const cmd = "VAR=a\\ b git push origin master";
+      expect(pushRe.test(cmd)).toBe(false);
+      expect(pushRe.test(normalizeCommand(cmd).normalized)).toBe(false);
+    });
+    it("a boundary character INSIDE the quoted value stays a bypass (quote-unaware BOUNDARY_RE splits first; measured still-open residual)", () => {
+      // BOUNDARY_RE segments the command BEFORE tokenisation and has no
+      // quote awareness, so `VAR='a; b' git push` splits at the `;` and
+      // neither resulting segment carries a recognisable invocation.
+      // Same class as the closure but a different mechanism (segmenting,
+      // not tokenising); halt criterion 1 puts BOUNDARY_RE out of this
+      // task's budget, so the residual is pinned instead of closed.
+      const cmd = "VAR='a; b' git push origin master";
+      expect(pushRe.test(cmd)).toBe(false);
+      expect(pushRe.test(normalizeCommand(cmd).normalized)).toBe(false);
+    });
+    it("accepted over-block: a quoted assignment inside TEXT after a boundary char now matches (fail-closed direction, decided not discovered)", () => {
+      // The quote-unaware segment split puts `VAR='x y' git push` at a
+      // segment start inside the string literal, and the continuation
+      // now normalises it to a match. Direction is over-block (deny),
+      // consistent with the module's KNOWN OVER-MATCHING stance; this
+      // pin asserts the boundary of the accepted false-positive class.
+      const cmd = "echo \"a; VAR='x y' git push\"";
+      expect(pushRe.test(normalizeCommand(cmd).normalized)).toBe(true);
+    });
+  });
+
+  // Task 13e55484, review round 1 (CRITICAL): differential regression
+  // pins. The first shipped version of consumeAssignment diverged from
+  // bash on ANSI-C quoting (`$'...\'...'` — bash escapes the quote, a
+  // plain-'...' scanner closes on it), producing a phantom-open state
+  // that swallowed the gated head token: each command below BLOCKED on
+  // master and produced "no policy matched" with the un-guarded helper,
+  // measured at the real hook entry point with PATH shims proving bash
+  // executes the gated verb. The one-directional guard restores master's
+  // one-token consume the moment the continuation would swallow a
+  // recognised head token, so these must match (normalised) again.
+  describe("13e55484 review round 1: continuation must never swallow a recognised head token", () => {
+    const pushRe = policyBashMatch("preflight-before-push");
+    const mergeRe = policyBashMatch("review-before-merge-bash");
+    const killRe = policyBashMatch("deny-kill-switch-bypass");
+    const cases: Array<{ label: string; command: string; re: RegExp }> = [
+      {
+        label: "ANSI-C phantom-open before the push gate",
+        command: "A=$'don\\'t' env git push origin master # '",
+        re: pushRe,
+      },
+      {
+        label: "ANSI-C phantom-open before the merge gate",
+        command: "A=$'don\\'t' env gh pr merge 4242 --squash # '",
+        re: mergeRe,
+      },
+      {
+        label: "ANSI-C phantom-open before the operator-only kill switch",
+        command: "A=$'don\\'t' env harness pause # '",
+        re: killRe,
+      },
+      {
+        label: "wrapper-swallow: quoted value opening over a real git invocation",
+        command: "env VAR='a git push origin master' foo",
+        re: pushRe,
+      },
+    ];
+    for (const c of cases) {
+      it(`${c.label}: "${c.command}" matches via normalisation again`, () => {
+        expect(c.re.test(c.command)).toBe(false);
+        expect(c.re.test(normalizeCommand(c.command).normalized)).toBe(true);
+      });
+    }
+
+    // Round-2 review: the guard is NOT a universal monotonicity
+    // guarantee. When the continuation closes on a wrapper's glued flag
+    // token, the peel resumes at that wrapper's next ARGUMENT and
+    // breaks where master's peel completed. Every found member of the
+    // class is a MASTER FALSE POSITIVE (PATH-shim-verified: bash treats
+    // the quoted run as one assignment word and executes the next word,
+    // never the gated verb), so the branch is the bash-accurate side.
+    // Pinned so the class cannot silently widen into spellings where
+    // bash DOES invoke the gated verb — if this pin starts failing,
+    // re-measure with shims before accepting either direction.
+    it("wrapper-argument-list resume: master-false-positive class stays unmatched (bash never runs the gated verb here)", () => {
+      const cmd = "A='x timeout --signal=INT' 5 git push origin master";
+      expect(pushRe.test(cmd)).toBe(false);
+      expect(pushRe.test(normalizeCommand(cmd).normalized)).toBe(false);
+    });
+    // Round-2 review, complementary guard boundary: a PATH-QUALIFIED
+    // head glued to the closing quote is NOT abandoned (the token is
+    // `/usr/bin/git'`, which GIT_TOKEN_RE rejects), the continuation
+    // completes, and the REAL invocation behind it matches — a measured
+    // fail-closed GAIN over master (master allowed this real git push).
+    it("path-qualified head glued to the closing quote: the real invocation behind it now matches (gain over master)", () => {
+      const cmd = "VAR='a /usr/bin/git' git push origin master";
+      expect(pushRe.test(cmd)).toBe(false);
+      expect(pushRe.test(normalizeCommand(cmd).normalized)).toBe(true);
+    });
+  });
+
+  // Task 13e55484, never-unmatch property with an ENGAGEMENT assurance
+  // (the dbc6d303 lesson: a property test that never exercises the layer
+  // under test certifies nothing). The corpus below re-lists every
+  // matching spelling family this file already pins plus the new quoted
+  // forms; the engagement assertion requires a minimum number of entries
+  // to match ONLY via normalisation, so the property cannot rot into an
+  // all-raw (vacuously additive) corpus.
+  describe("13e55484: never-unmatch property over the matching corpus", () => {
+    const re = policyBashMatch("preflight-before-investigation");
+    const pushRe = policyBashMatch("preflight-before-push");
+    const corpus: Array<{ command: string; re: RegExp; family?: "quoted-assign" }> = [
+      { command: "git status", re },
+      { command: "env git status", re },
+      { command: "env -C /tmp/repo git status", re },
+      { command: "env FOO=bar git status", re },
+      { command: "FOO=bar git status", re },
+      { command: "nice git status", re },
+      { command: "nice -10 git status", re },
+      { command: "sudo git status", re },
+      { command: "timeout 5 git status", re },
+      { command: "stdbuf -o0 git status", re },
+      { command: "/usr/bin/git status", re },
+      { command: "git  status", re },
+      { command: "git --no-pager status", re },
+      { command: "env --default-signal=INT git status", re },
+      { command: "VAR='a git status", re },
+      { command: "git push origin master", re: pushRe },
+      { command: "FOO=bar git push origin master", re: pushRe },
+      { command: "VAR='hello world' git push origin master", re: pushRe, family: "quoted-assign" },
+      { command: "env VAR='a b' git push origin master", re: pushRe, family: "quoted-assign" },
+      { command: "VAR='a b'\"c d\" git push origin master", re: pushRe, family: "quoted-assign" },
+      { command: "A='x y' B=\"z w\" git push origin master", re: pushRe, family: "quoted-assign" },
+      { command: "VAR='a\tb' nice git push origin master", re: pushRe, family: "quoted-assign" },
+    ];
+    it("every corpus entry matches raw-or-normalised", () => {
+      for (const c of corpus) {
+        const hit = c.re.test(c.command) || c.re.test(normalizeCommand(c.command).normalized);
+        expect(hit, `corpus entry stopped matching: ${c.command}`).toBe(true);
+      }
+    });
+    // Engagement assurance, reworked in review round 1: the first
+    // version asserted ">=8 corpus entries match normalized-only" over
+    // the WHOLE corpus — measured NOT load-bearing, because 12-13
+    // pre-existing wrapper spellings satisfied it with every
+    // quoted-assignment entry deleted (and the mutation probe left it
+    // green). This version scopes the assurance to the family that
+    // exercises consumeAssignment: every quoted-assign entry must match
+    // ONLY via normalisation, and there must be at least 4 of them, so
+    // disabling the continuation turns THIS assertion red.
+    it("engagement assurance: every quoted-assign corpus entry matches ONLY via normalisation (>=4 entries)", () => {
+      const family = corpus.filter((c) => c.family === "quoted-assign");
+      expect(family.length).toBeGreaterThanOrEqual(4);
+      for (const c of family) {
+        expect(c.re.test(c.command), `raw unexpectedly matches: ${c.command}`).toBe(false);
+        expect(
+          c.re.test(normalizeCommand(c.command).normalized),
+          `normalisation no longer closes: ${c.command}`,
+        ).toBe(true);
+      }
+    });
+  });
 });
