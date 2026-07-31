@@ -97,25 +97,23 @@
 //   illustrative, not the population — 19 distinct spellings were found
 //   at the hook, 72 of 91 head/separator combinations at parse level.
 //
-//   PHANTOM HALF — bash NEVER enters the directory and the gated command
-//   runs where it started. `VAR='';: cd DECOY ; terraform destroy`
-//   blocks on master, is allowed here, and the shim shows terraform
-//   executing in the PRODUCTION repo. This half is NOT "consistency, not
-//   a new hole": it is a real widening of a real bypass. The class
-//   pre-exists on master (`VAR=x||y cd DECOY ; …` phantoms there too),
-//   but the quoted-head family is new and the count roughly doubles
-//   (900-sample fuzz: 119 working phantoms on master, 258 here). Cause
-//   is the VALUE scan concatenating runs past an unquoted metacharacter,
-//   not `consumeLeadingCd`.
+//   PHANTOM HALF — bash NEVER enters the directory, the gated command
+//   runs where it started, and the resolver is nonetheless pointed away.
+//   `VAR='';: cd DECOY ; terraform destroy` used to be allowed while a
+//   PATH shim showed terraform executing in the PRODUCTION repo. This
+//   half was NOT "consistency, not a new hole"; it was a real widening
+//   of a real bypass, and round 2 of the review is what caught it.
+//   CLOSED in round 3 (operator-authorised) by the `stopAtWsOrMeta`
+//   predicate above: a value now ends where bash ends it. Measured over
+//   81 bash-valid shapes, phantom targets went master 27 -> 72 before
+//   the fix -> 0 after, with 0 honest `cd` targets and 0 `prod`
+//   indicators lost against EITHER earlier state. It also closes
+//   spellings master itself got wrong (`VAR=x||y cd DECOY ; …`).
 //
-// The phantom half is DELIBERATELY NOT FIXED HERE. The candidate fix —
-// ending a value at an unquoted metacharacter, which is what bash does
-// and which loses no target master had — is a third parser change in a
-// row after two rounds that each falsified a safety claim, so the run's
-// pre-declared halt criterion applies: stop, pin, hand the decision on.
-// See .ai/runs/2026-07-31-bash-prefix-parse-escapes/06-handoff.md and
-// task 98ad072f (per-policy target attribution), which is the structural
-// answer to `cdTarget` being a replacement at all.
+// The honest half stays, and stays two-directional. Task 98ad072f
+// (per-policy target attribution) is the structural answer to `cdTarget`
+// being a context replacement at all; until then any accuracy change in
+// `consumeLeadingCd` must be measured for phantoms, not only for gains.
 
 /** Parsed leading-prefix result. */
 export interface BashPrefix {
@@ -190,7 +188,17 @@ interface Scanned {
 /** Predicate for the characters that end a word when UNQUOTED. */
 type StopAt = (ch: string) => boolean;
 
-const stopAtWs: StopAt = (ch) => WS.test(ch);
+/**
+ * Unquoted shell metacharacters. bash ends a word at any of these just as
+ * it does at whitespace, so a VALUE cannot run past one. Getting this
+ * wrong is what produced the phantom-`cd` class (task b093911d, review
+ * round 2): a value that swallowed `;` kept consuming, made a later `cd`
+ * look like a prefix, and handed the risk-gate resolver a directory bash
+ * never enters.
+ */
+const META = new Set([";", "&", "|", "(", ")", "<", ">"]);
+
+const stopAtWsOrMeta: StopAt = (ch) => WS.test(ch) || META.has(ch);
 const stopAtWsOrSep: StopAt = (ch) => WS.test(ch) || ch === ";" || ch === "&";
 
 /**
@@ -341,8 +349,9 @@ function consumeInlineEnv(s: string, start: number, into: Record<string, string>
     const name = s.slice(nameStart, i);
     i++;
     // Read the value as one shell word: quoted runs, unquoted runs and
-    // backslash escapes concatenate up to the first unquoted whitespace.
-    const scanned = scanWord(s, i, stopAtWs);
+    // backslash escapes concatenate up to the first unquoted whitespace
+    // OR shell metacharacter, which is where bash ends the word too.
+    const scanned = scanWord(s, i, stopAtWsOrMeta);
     if (scanned === null) return lastGood;
     into[name] = scanned.value;
     i = scanned.next;

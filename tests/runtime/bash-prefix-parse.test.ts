@@ -198,7 +198,10 @@ describe("parseBashPrefix", () => {
 
     it("does NOT interpolate parameters or command substitutions", () => {
       expect(parseBashPrefix('A="$HOME/prod" cmd').inlineEnv).toEqual({ A: "$HOME/prod" });
-      expect(parseBashPrefix("A=$(echo prod) cmd").inlineEnv).toEqual({ A: "$(echo" });
+      // bash substitutes and yields `prod`; the value stops at the `(`
+      // metacharacter instead. Still not covered, just differently: the
+      // point of the pin is that no substitution happens.
+      expect(parseBashPrefix("A=$(echo prod) cmd").inlineEnv).toEqual({ A: "$" });
     });
 
     it("treats an unquoted backslash-newline as a line continuation, like the double-quoted run does", () => {
@@ -214,48 +217,44 @@ describe("parseBashPrefix", () => {
       expect(parseBashPrefix("cd /pro\\\nd && terraform destroy").cdTarget).toBe("/prod");
     });
 
-    it("does NOT treat an UNQUOTED separator as ending the value (pre-existing, unchanged)", () => {
-      // bash would read `A=x` and then run `cd /prod && rm`. Both before and
-      // after this task the value swallows the following `cd`, so the cd
-      // target is lost. Measured identical on master — not caused by this
-      // change and not closed by it. Pinned so the gap is a known quantity
-      // rather than a surprise, and so a future fix has to move this line.
-      // Structurally the same family as task cf3dff51 (a boundary character
-      // that the scanner does not treat as a boundary), one module over.
+    it("ends a value at an UNQUOTED separator, the way bash does", () => {
+      // bash reads `A=x` and then runs `cd /prod && rm`. Before round 3
+      // the value swallowed the following `cd` (`{A:"x;cd"}`, master does
+      // this too), which is what made a later `cd` look like a prefix.
       const r = parseBashPrefix("A=x;cd /prod && rm");
-      expect(r.inlineEnv).toEqual({ A: "x;cd" });
+      expect(r.inlineEnv).toEqual({ A: "x" });
+      // The `cd` after an unquoted separator is still not captured as a
+      // PREFIX — this module extracts a leading `cd`, and here `cd` is a
+      // second command. Same as master; not a regression, not a closure.
       expect(r.cdTarget).toBe(null);
     });
 
-    it("DOES diverge from master once the value's head is quoted (over-consumption, measured)", () => {
-      // The pin above holds only for the unquoted-head spelling. With a
-      // quoted head the value ends at the closing quote, the separator is
-      // then read as ordinary text, and a `cd` further along becomes
-      // reachable — where bash performs no `cd` at all. Measured: 20 of
-      // 30 head/separator combinations diverge from master, every one of
-      // them in this over-consumption direction. Pinned so the class is a
-      // known quantity; see 03-decisions.md for why it is not closed here.
-      expect(parseBashPrefix("A='a b'|y cd /prod && rm").cdTarget).toBe("/prod");
-      expect(parseBashPrefix('A="a b">y cd /prod && rm').cdTarget).toBe("/prod");
+    it("ends the value at every unquoted metacharacter, not just the separator", () => {
+      for (const sep of [";", "&", "|", "(", ")", "<", ">"]) {
+        expect(parseBashPrefix(`A=x${sep}y cmd`).inlineEnv).toEqual({ A: "x" });
+      }
+      // Quoted, the same characters are ordinary text.
+      expect(parseBashPrefix("A='x;y|z' cmd").inlineEnv).toEqual({ A: "x;y|z" });
+      expect(parseBashPrefix('A="x&y(z" cmd').inlineEnv).toEqual({ A: "x&y(z" });
     });
 
-    it("pins the PHANTOM cd target: a directory bash never enters", () => {
-      // The dangerous half of the cdTarget lever, and the one the first
-      // waiver wrongly assumed away. The value scan concatenates runs
-      // past an unquoted metacharacter, so a `cd` further along becomes
-      // reachable — but bash ends the assignment word at that
-      // metacharacter and runs `:` / `y` instead, never entering the
-      // directory. `resolverGit` nonetheless swaps to it, which
-      // declassifies a production action. Measured at the real hook:
-      // `A='';: cd DECOY ; terraform destroy` blocks on master, is
-      // allowed here, and terraform executes in the PRODUCTION repo.
-      // NOT fixed in this change (halt criterion; see 06-handoff.md).
-      // The candidate fix is to end a value at an unquoted metacharacter,
-      // which is what bash does — this pin has to move deliberately.
-      expect(parseBashPrefix("A='';: cd /decoy ; terraform destroy").cdTarget).toBe("/decoy");
-      expect(parseBashPrefix("A='a b';y cd /decoy ; terraform destroy").cdTarget).toBe("/decoy");
-      // Pre-existing on master too, so the class is widened here, not created.
-      expect(parseBashPrefix("A=x||y cd /decoy ; terraform destroy").cdTarget).toBe("/decoy");
+    it("reports NO cd target where bash never enters the directory (phantom class, closed)", () => {
+      // The dangerous half of the cdTarget lever. Because cdTarget
+      // REPLACES the resolver's git context, a phantom target
+      // declassifies a production action: measured at the real hook,
+      // `A='';: cd DECOY ; terraform destroy` used to be allowed while
+      // terraform executed in the PRODUCTION repo. bash ends the
+      // assignment word at the metacharacter and runs `:` / `y`, never
+      // entering the directory, so the honest answer is null.
+      //
+      // This pin previously asserted the opposite; it moved deliberately
+      // in round 3 (operator-authorised, see 03-decisions.md).
+      expect(parseBashPrefix("A='';: cd /decoy ; terraform destroy").cdTarget).toBe(null);
+      expect(parseBashPrefix("A='a b';y cd /decoy ; terraform destroy").cdTarget).toBe(null);
+      expect(parseBashPrefix('A="a b">y cd /decoy ; rm').cdTarget).toBe(null);
+      // This spelling was a phantom on MASTER as well, so round 3 closes
+      // a pre-existing bypass rather than only the one it introduced.
+      expect(parseBashPrefix("A=x||y cd /decoy ; terraform destroy").cdTarget).toBe(null);
     });
 
     it("pins the cd target that REPLACES the resolver's git context", () => {
