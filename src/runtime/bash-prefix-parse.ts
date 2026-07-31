@@ -41,6 +41,20 @@
 // fallback to process env / hook cwd holds. There are no thrown errors
 // from this module.
 //
+// NO LENGTH CAP, unlike `command-normalize.ts`'s
+// `MAX_NORMALIZE_LENGTH`, and that asymmetry is deliberate. Skipping
+// oversized input there only forfeits the ADDITIONAL normalised-form
+// coverage, because the raw command is still matched either way. Here a
+// skip forfeits the ONLY signal: an empty `inlineEnv` and a null
+// `cdTarget` are what the resolver falls back on, so a cap would trade
+// a cost that was measured as immaterial for a real fail-open. Measured
+// cost of the word scanner on the worst shape (a long double-quoted
+// value): ~0.16 ms at 20 KB, ~1.1 ms at 160 KB, ~3.7 ms at 320 KB,
+// growing linearly, against hook budgets of 2000 ms and up. It is
+// roughly 100x the old `indexOf` scan, which never built the value
+// string — a large ratio on a very small absolute number. 200k random
+// shell-soup inputs all returned, none hung.
+//
 // Falling through is NOT the conservative direction here, which is why
 // the scanner parses instead of bailing wherever bash's boundary is
 // determinate: the risk gate SEARCHES for production indicators, so an
