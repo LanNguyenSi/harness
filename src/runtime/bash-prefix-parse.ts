@@ -26,10 +26,26 @@
 // `VAR=v cd /x && cmd` both parse); the parser walks up to two passes
 // before giving up.
 //
-// On a syntactically broken prefix (unterminated quote, missing `&&`
-// after `cd <path>`) the parser falls through cleanly: the malformed
-// prefix is not consumed, the resolver-side fallback to process env /
-// hook cwd holds. There are no thrown errors from this module.
+// Values and paths are scanned as shell WORDS: a concatenation of
+// unquoted, single-quoted, double-quoted and ANSI-C (`$'…'`) runs, with
+// bash's backslash rules per run kind. That is what makes `VAR='it'\''s
+// fine' cd /prod && …` and `VAR="say \"hi\"" cd /prod && …` land on the
+// same word boundary bash uses. What is deliberately NOT done: `$`
+// interpolation, command substitution, and ANSI-C escape DECODING
+// (`$'a\nb'` yields the literal two characters `\n`, not a newline; only
+// `\'` and `\\` are decoded, because only those move the boundary).
+//
+// On a syntactically broken prefix (unterminated quote, dangling
+// backslash, missing `&&` after `cd <path>`) the parser falls through
+// cleanly: the malformed prefix is not consumed, the resolver-side
+// fallback to process env / hook cwd holds. There are no thrown errors
+// from this module.
+//
+// Falling through is NOT the conservative direction here, which is why
+// the scanner parses instead of bailing wherever bash's boundary is
+// determinate: the risk gate SEARCHES for production indicators, so an
+// empty `inlineEnv` and a null `cdTarget` are exactly the state in which
+// `env_var_patterns` and `branch_patterns` see nothing.
 
 /** Parsed leading-prefix result. */
 export interface BashPrefix {
@@ -48,7 +64,13 @@ export function parseBashPrefix(command: string): BashPrefix {
   if (typeof command !== "string" || command.length === 0) {
     return { inlineEnv: {}, cdTarget: null };
   }
-  const inlineEnv: Record<string, string> = {};
+  // Null-prototype carrier: `__proto__` is a grammatically valid POSIX
+  // variable name, and on a plain object literal `into["__proto__"] = v`
+  // would set the prototype (a no-op for a string) instead of creating an
+  // own property, silently dropping the assignment from the resolver's
+  // view. Not a pollution vector — assigning a string to `__proto__` does
+  // nothing — but a signal loss.
+  const inlineEnv: Record<string, string> = Object.create(null) as Record<string, string>;
   let cdTarget: string | null = null;
   let cursor = 0;
   // Two passes catch `cd /x && VAR=v cmd` and `VAR=v cd /x && cmd`. A
@@ -78,6 +100,122 @@ function skipWs(s: string, i: number): number {
   return i;
 }
 
+/** A consumed run or word: its literal text and the cursor after it. */
+interface Scanned {
+  value: string;
+  next: number;
+}
+
+/** Predicate for the characters that end a word when UNQUOTED. */
+type StopAt = (ch: string) => boolean;
+
+const stopAtWs: StopAt = (ch) => WS.test(ch);
+const stopAtWsOrSep: StopAt = (ch) => WS.test(ch) || ch === ";" || ch === "&";
+
+/**
+ * Inside double quotes bash strips a backslash only before these; before
+ * anything else the backslash stays literal (`"a\b"` is `a\b`).
+ */
+const DQ_ESCAPES = new Set(['"', "\\", "$", "`", "\n"]);
+
+/** Scan a `"…"` run, cursor just past the opening quote. */
+function scanDoubleQuoted(s: string, start: number): Scanned | null {
+  let i = start;
+  let out = "";
+  while (i < s.length) {
+    const ch = s[i]!;
+    if (ch === '"') return { value: out, next: i + 1 };
+    const nxt = s[i + 1];
+    if (ch === "\\" && nxt !== undefined && DQ_ESCAPES.has(nxt)) {
+      // `\<newline>` is a line continuation: both characters vanish.
+      if (nxt !== "\n") out += nxt;
+      i += 2;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return null;
+}
+
+/**
+ * Scan a `$'…'` (ANSI-C) run, cursor just past the opening quote. Only
+ * `\'` and `\\` are decoded — they are the two escapes that decide where
+ * the run ENDS. Every other escape is kept verbatim, so `$'a\nb'` yields
+ * the two literal characters `\n`; decoding those would be shell
+ * emulation this module deliberately stays out of.
+ */
+function scanAnsiC(s: string, start: number): Scanned | null {
+  let i = start;
+  let out = "";
+  while (i < s.length) {
+    const ch = s[i]!;
+    if (ch === "'") return { value: out, next: i + 1 };
+    const nxt = s[i + 1];
+    if (ch === "\\" && nxt !== undefined) {
+      out += nxt === "'" || nxt === "\\" ? nxt : ch + nxt;
+      i += 2;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return null;
+}
+
+/**
+ * Scan one shell word from `start`, stopping before the first UNQUOTED
+ * character `stop` accepts (or at end of input). Quoted runs are consumed
+ * whole, so a separator inside quotes does not end the word.
+ *
+ * Returns null when the word has no determinable end — an unterminated
+ * quote of any kind, or a dangling final backslash. The caller then leaves
+ * the text unconsumed, preserving the module's fall-through contract.
+ */
+function scanWord(s: string, start: number, stop: StopAt): Scanned | null {
+  let i = start;
+  let out = "";
+  while (i < s.length) {
+    const ch = s[i]!;
+    if (stop(ch)) break;
+    if (ch === "\\") {
+      // Unquoted: a backslash escapes exactly one following character.
+      if (i + 1 >= s.length) return null;
+      out += s[i + 1]!;
+      i += 2;
+      continue;
+    }
+    if (ch === "'") {
+      // Single quotes take no escapes at all, so the next `'` closes the
+      // run. That is precisely why the `'\''` apostrophe idiom works:
+      // it is close, escaped quote, reopen — three runs, not an escape.
+      const end = s.indexOf("'", i + 1);
+      if (end < 0) return null;
+      out += s.slice(i + 1, end);
+      i = end + 1;
+      continue;
+    }
+    const opener = ch === "$" ? s[i + 1] : ch;
+    if (opener === '"') {
+      const run = scanDoubleQuoted(s, ch === "$" ? i + 2 : i + 1);
+      if (run === null) return null;
+      out += run.value;
+      i = run.next;
+      continue;
+    }
+    if (ch === "$" && opener === "'") {
+      const run = scanAnsiC(s, i + 2);
+      if (run === null) return null;
+      out += run.value;
+      i = run.next;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return { value: out, next: i };
+}
+
 /**
  * Consume zero or more leading `VAR=value` tokens. Each successful
  * consumption registers into `into`. Returns the cursor position after
@@ -91,15 +229,16 @@ function skipWs(s: string, i: number): number {
  * QUOTE-MODEL DIVERGENCE, recorded so the next change here starts from
  * the known state instead of rediscovering it (task 13e55484, review
  * round 1): `command-normalize.ts`'s `consumeAssignment` is a SECOND
- * quote model for the same leading-`VAR=value` construction, with
- * different deliberate coverage — it handles backslash escapes (outside
- * single quotes) and chained quote runs (`'a b'"c d"`), which this
- * function does not, while this function extracts the VALUE (which the
- * normaliser never needs). Neither model handles ANSI-C `$'...'`
- * escapes; the normaliser side carries a one-directional guard so that
- * divergence can only fall back to its pre-continuation behaviour,
- * never swallow a gated head token. This function's own escape gaps are
- * task `b093911d`.
+ * quote model for the same leading-`VAR=value` construction, and the two
+ * are still not one implementation (unifying them is task `d977ad58`).
+ * As of task `b093911d` the divergence has NARROWED but flipped
+ * direction in one respect: this side now handles backslash escapes,
+ * chained quote runs (`'a b'"c d"`) AND ANSI-C `$'…'` boundaries, which
+ * the normaliser side does not — there, ANSI-C is covered only by a
+ * one-directional guard that falls back to pre-continuation behaviour so
+ * the divergence can never swallow a gated head token. This side also
+ * extracts the VALUE, which the normaliser never needs. Anything the two
+ * still disagree on is a `d977ad58` question, not a bug in either.
  */
 function consumeInlineEnv(s: string, start: number, into: Record<string, string>): number {
   let i = skipWs(s, start);
@@ -112,24 +251,12 @@ function consumeInlineEnv(s: string, start: number, into: Record<string, string>
     if (s[i] !== "=") break;
     const name = s.slice(nameStart, i);
     i++;
-    // Read value: quoted (single/double, literal) or unquoted (to ws).
-    let value: string;
-    if (s[i] === "'") {
-      const end = s.indexOf("'", i + 1);
-      if (end < 0) return lastGood;
-      value = s.slice(i + 1, end);
-      i = end + 1;
-    } else if (s[i] === '"') {
-      const end = s.indexOf('"', i + 1);
-      if (end < 0) return lastGood;
-      value = s.slice(i + 1, end);
-      i = end + 1;
-    } else {
-      const vStart = i;
-      while (i < s.length && !WS.test(s[i]!)) i++;
-      value = s.slice(vStart, i);
-    }
-    into[name] = value;
+    // Read the value as one shell word: quoted runs, unquoted runs and
+    // backslash escapes concatenate up to the first unquoted whitespace.
+    const scanned = scanWord(s, i, stopAtWs);
+    if (scanned === null) return lastGood;
+    into[name] = scanned.value;
+    i = scanned.next;
     i = skipWs(s, i);
     lastGood = i;
   }
@@ -150,23 +277,12 @@ function consumeLeadingCd(s: string, start: number): { path: string; next: numbe
   if (s[i] !== "c" || s[i + 1] !== "d") return null;
   if (i + 2 >= s.length || !WS.test(s[i + 2]!)) return null;
   i = skipWs(s, i + 2);
-  // Path: quoted or unquoted.
-  let path: string;
-  if (s[i] === "'") {
-    const end = s.indexOf("'", i + 1);
-    if (end < 0) return null;
-    path = s.slice(i + 1, end);
-    i = end + 1;
-  } else if (s[i] === '"') {
-    const end = s.indexOf('"', i + 1);
-    if (end < 0) return null;
-    path = s.slice(i + 1, end);
-    i = end + 1;
-  } else {
-    const pStart = i;
-    while (i < s.length && !WS.test(s[i]!) && s[i] !== ";" && s[i] !== "&") i++;
-    path = s.slice(pStart, i);
-  }
+  // Path as one shell word; `;` and `&` end it only when UNQUOTED, so
+  // `cd "/tmp/a;b" && …` keeps its separator inside the path.
+  const scanned = scanWord(s, i, stopAtWsOrSep);
+  if (scanned === null) return null;
+  const path = scanned.value;
+  i = scanned.next;
   if (path.length === 0) return null;
   i = skipWs(s, i);
   if (s[i] === "&" && s[i + 1] === "&") {

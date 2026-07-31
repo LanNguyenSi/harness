@@ -94,6 +94,146 @@ describe("parseBashPrefix", () => {
     });
   });
 
+  // Task b093911d. Every case below was measured against the built
+  // master parser first (all wrong there, see the run log) and against
+  // real bash for the expected value. The point of the class is that
+  // these are ordinary operator spellings, not adversarial input: each
+  // one used to hand the risk-gate resolver a truncated value, a lost
+  // `cd` target, or both — which is the fail-open direction, since the
+  // resolver SEARCHES for production indicators.
+  describe("quoting and backslash escapes (b093911d)", () => {
+    it("keeps an escaped double quote inside a double-quoted value, and the cd target with it", () => {
+      const r = parseBashPrefix('A="say \\"hi\\"" cd /prod && terraform destroy');
+      expect(r.inlineEnv).toEqual({ A: 'say "hi"' });
+      expect(r.cdTarget).toBe("/prod");
+    });
+
+    it("handles the '\\'' apostrophe idiom as three runs, not as an escape", () => {
+      const r = parseBashPrefix("A='it'\\''s fine' cd /prod && terraform destroy");
+      expect(r.inlineEnv).toEqual({ A: "it's fine" });
+      expect(r.cdTarget).toBe("/prod");
+    });
+
+    it("joins chained quoted and unquoted runs into one word", () => {
+      const r = parseBashPrefix("A='a b'\"c d\"e cd /prod && rm");
+      expect(r.inlineEnv).toEqual({ A: "a bc de" });
+      expect(r.cdTarget).toBe("/prod");
+    });
+
+    it("treats a backslash-escaped space in an unquoted value as part of the value", () => {
+      const r = parseBashPrefix("A=a\\ b cd /prod && terraform destroy");
+      expect(r.inlineEnv).toEqual({ A: "a b" });
+      expect(r.cdTarget).toBe("/prod");
+    });
+
+    it("unescapes a doubled backslash inside double quotes", () => {
+      const r = parseBashPrefix('A="prod\\\\" cd /x && rm');
+      expect(r.inlineEnv).toEqual({ A: "prod\\" });
+      expect(r.cdTarget).toBe("/x");
+    });
+
+    it("strips a backslash only before the characters bash strips it for", () => {
+      // `\b` is not escapable inside double quotes, so both characters stay.
+      const r = parseBashPrefix('A="a\\b$x" cmd');
+      expect(r.inlineEnv).toEqual({ A: "a\\b$x" });
+    });
+
+    it("finds a cd target whose path carries an escaped space", () => {
+      expect(parseBashPrefix("cd /pro\\ d && terraform destroy").cdTarget).toBe("/pro d");
+    });
+
+    it("finds a cd target whose quoted path carries an escaped quote", () => {
+      expect(parseBashPrefix('cd "/tmp/a\\"b" && rm').cdTarget).toBe('/tmp/a"b');
+    });
+
+    it("does not let a separator inside a quoted cd path end the path", () => {
+      expect(parseBashPrefix('cd "/tmp/a;b" && rm').cdTarget).toBe("/tmp/a;b");
+      expect(parseBashPrefix("cd '/tmp/a&b' && rm").cdTarget).toBe("/tmp/a&b");
+    });
+
+    it("closes an ANSI-C $'...' run at the unescaped quote", () => {
+      const r = parseBashPrefix("A=$'don\\'t' cd /prod && terraform destroy");
+      expect(r.inlineEnv).toEqual({ A: "don't" });
+      expect(r.cdTarget).toBe("/prod");
+    });
+
+    it("treats $\"...\" like a double-quoted run", () => {
+      const r = parseBashPrefix('A=$"prod" cd /x && rm');
+      expect(r.inlineEnv).toEqual({ A: "prod" });
+      expect(r.cdTarget).toBe("/x");
+    });
+
+    it("keeps falling through on input with no determinable word boundary", () => {
+      // Unterminated quote of each kind, plus a dangling backslash. The
+      // resolver's process-env / hook-cwd fallback is the intended state
+      // here; there is no boundary to be right about.
+      expect(parseBashPrefix('A="unterminated cd /prod && rm')).toEqual({
+        inlineEnv: {},
+        cdTarget: null,
+      });
+      expect(parseBashPrefix("A=$'unterminated cd /prod && rm")).toEqual({
+        inlineEnv: {},
+        cdTarget: null,
+      });
+      expect(parseBashPrefix("A=x\\")).toEqual({ inlineEnv: {}, cdTarget: null });
+      expect(parseBashPrefix("cd '/unterminated && rm")).toEqual({
+        inlineEnv: {},
+        cdTarget: null,
+      });
+    });
+
+    it("keeps an earlier well-formed assignment when a later one is unparsable", () => {
+      const r = parseBashPrefix("A=1 B='unterminated cd /prod && rm");
+      expect(r.inlineEnv).toEqual({ A: "1" });
+      expect(r.cdTarget).toBe(null);
+    });
+
+    // Named non-coverage. These are documented limits, not defects; the
+    // pins exist so a future change notices when it moves one of them.
+    it("does NOT decode ANSI-C escapes beyond the ones that move the boundary", () => {
+      // bash would yield a real newline here, and `prod` for \x70rod.
+      expect(parseBashPrefix("A=$'a\\nb' cmd").inlineEnv).toEqual({ A: "a\\nb" });
+      expect(parseBashPrefix("A=$'\\x70rod' cmd").inlineEnv).toEqual({ A: "\\x70rod" });
+    });
+
+    it("does NOT interpolate parameters or command substitutions", () => {
+      expect(parseBashPrefix('A="$HOME/prod" cmd').inlineEnv).toEqual({ A: "$HOME/prod" });
+      expect(parseBashPrefix("A=$(echo prod) cmd").inlineEnv).toEqual({ A: "$(echo" });
+    });
+  });
+
+  describe("__proto__ as a variable name (b093911d)", () => {
+    it("keeps a __proto__ assignment as an own property instead of dropping it", () => {
+      const r = parseBashPrefix("__proto__=/prod cd /x && terraform destroy");
+      expect(Object.keys(r.inlineEnv)).toEqual(["__proto__"]);
+      expect(r.inlineEnv["__proto__"]).toBe("/prod");
+    });
+
+    it("survives the spread the risk-gate resolver input is built with", () => {
+      // Mirrors `resolverEnv` in src/cli/policy/intercept.ts: the parsed
+      // assignments are spread over the ambient env, and the resolver then
+      // does `inputs.env[name]` + `value.includes(pattern)`. A prototype
+      // hit there is not a string, so the signal would be skipped.
+      const { inlineEnv } = parseBashPrefix("__proto__=postgres://prod cmd");
+      const ambient: Record<string, string> = { PATH: "/usr/bin" };
+      const resolverEnv: Record<string, string> = { ...ambient, ...inlineEnv };
+      expect(typeof resolverEnv["__proto__"]).toBe("string");
+      expect(resolverEnv["__proto__"]).toContain("prod");
+    });
+
+    it("still resolves other reserved-looking names as before", () => {
+      const r = parseBashPrefix("constructor=/prod cd /x && rm");
+      expect(r.inlineEnv["constructor"]).toBe("/prod");
+      expect(r.cdTarget).toBe("/x");
+    });
+
+    it("does not report inherited Object.prototype members as parsed variables", () => {
+      const r = parseBashPrefix("terraform destroy");
+      expect(r.inlineEnv["toString"]).toBeUndefined();
+      expect(r.inlineEnv["hasOwnProperty"]).toBeUndefined();
+    });
+  });
+
   describe("degenerate input", () => {
     it("returns empty for empty / whitespace-only command", () => {
       expect(parseBashPrefix("")).toEqual({ inlineEnv: {}, cdTarget: null });
