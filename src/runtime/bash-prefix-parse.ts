@@ -103,17 +103,35 @@
 //   PATH shim showed terraform executing in the PRODUCTION repo. This
 //   half was NOT "consistency, not a new hole"; it was a real widening
 //   of a real bypass, and round 2 of the review is what caught it.
-//   CLOSED in round 3 (operator-authorised) by the `stopAtWsOrMeta`
-//   predicate above: a value now ends where bash ends it. Measured over
-//   81 bash-valid shapes, phantom targets went master 27 -> 72 before
-//   the fix -> 0 after, with 0 honest `cd` targets and 0 `prod`
-//   indicators lost against EITHER earlier state. It also closes
-//   spellings master itself got wrong (`VAR=x||y cd DECOY ; …`).
+//   Closed in round 3 (operator-authorised) by the `stopAtWsOrMeta`
+//   predicate above: a value now ends where bash ends it. Phantom
+//   targets went master 27 -> 72 before the fix -> 0 after.
 //
-// The honest half stays, and stays two-directional. Task 98ad072f
-// (per-policy target attribution) is the structural answer to `cdTarget`
-// being a context replacement at all; until then any accuracy change in
-// `consumeLeadingCd` must be measured for phantoms, not only for gains.
+// ROUND 3 TRADED THE PHANTOM FOR A FAIL-OPEN, AND THE FIRST WRITE-UP OF
+// IT WAS WRONG. This paragraph claimed "0 honest `cd` targets and 0
+// `prod` indicators lost against EITHER earlier state". That number came
+// from a corpus that could not produce it: its unseparated arm rendered
+// `A=xcd /tmp` with no space, it ran from a non-writable directory so
+// every redirection shape was dropped, and its own output reported a
+// positive control of ZERO honest targets in all three builds. Re-run
+// from a writable directory with the positive control asserted (84
+// honest shapes of 102), the real figures are 8 honest `cd` targets lost
+// against master, 16 against the pre-round-3 state, and 9 `prod`
+// indicators lost.
+//
+// Mechanism: the value scan now parks the cursor ON the metacharacter,
+// and `consumeLeadingCd`'s `skipWs` does not skip one, so a GENUINE
+// leading `cd` after `A=x; ` is unreachable. Measured at the real hook
+// with cwd non-production and the `cd` target production,
+// `A=x; cd PROD && terraform destroy` blocks on master AND before round
+// 3, is allowed here, and the shim shows terraform running in the
+// production repo.
+//
+// Task 98ad072f (per-policy target attribution) is the structural answer
+// to `cdTarget` being a context replacement at all. Until it lands,
+// every accuracy change to this parser has produced a two-directional
+// security effect — three rounds, three demonstrations — so measure both
+// directions AND assert the positive control before reporting a zero.
 
 /** Parsed leading-prefix result. */
 export interface BashPrefix {
