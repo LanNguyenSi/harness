@@ -231,14 +231,18 @@ function scanWord(s: string, start: number, stop: StopAt): Scanned | null {
  * round 1): `command-normalize.ts`'s `consumeAssignment` is a SECOND
  * quote model for the same leading-`VAR=value` construction, and the two
  * are still not one implementation (unifying them is task `d977ad58`).
- * As of task `b093911d` the divergence has NARROWED but flipped
- * direction in one respect: this side now handles backslash escapes,
- * chained quote runs (`'a b'"c d"`) AND ANSI-C `$'…'` boundaries, which
- * the normaliser side does not — there, ANSI-C is covered only by a
- * one-directional guard that falls back to pre-continuation behaviour so
- * the divergence can never swallow a gated head token. This side also
- * extracts the VALUE, which the normaliser never needs. Anything the two
- * still disagree on is a `d977ad58` question, not a bug in either.
+ * Read before assuming which side is weaker — as of task `b093911d` it
+ * is not a strict ordering. BOTH sides handle backslash escapes outside
+ * single quotes and chained quote runs (`'a b'"c d"`). This side
+ * additionally (a) models ANSI-C `$'…'` as its own run kind, where
+ * `consumeAssignment` has no ANSI-C model at all and instead carries a
+ * one-directional guard so that divergence can only fall back to its
+ * pre-continuation behaviour, never swallow a gated head token; and
+ * (b) continues across a backslash-escaped separator (`VAR=a\ b`), which
+ * `consumeAssignment` deliberately does not (its own comment names that
+ * as this task's class). The normaliser in turn needs only the BOUNDARY,
+ * while this function needs the VALUE. Anything the two still disagree
+ * on is a `d977ad58` question, not a bug in either.
  */
 function consumeInlineEnv(s: string, start: number, into: Record<string, string>): number {
   let i = skipWs(s, start);

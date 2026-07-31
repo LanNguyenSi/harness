@@ -200,6 +200,19 @@ describe("parseBashPrefix", () => {
       expect(parseBashPrefix('A="$HOME/prod" cmd').inlineEnv).toEqual({ A: "$HOME/prod" });
       expect(parseBashPrefix("A=$(echo prod) cmd").inlineEnv).toEqual({ A: "$(echo" });
     });
+
+    it("does NOT treat an UNQUOTED separator as ending the value (pre-existing, unchanged)", () => {
+      // bash would read `A=x` and then run `cd /prod && rm`. Both before and
+      // after this task the value swallows the following `cd`, so the cd
+      // target is lost. Measured identical on master — not caused by this
+      // change and not closed by it. Pinned so the gap is a known quantity
+      // rather than a surprise, and so a future fix has to move this line.
+      // Structurally the same family as task cf3dff51 (a boundary character
+      // that the scanner does not treat as a boundary), one module over.
+      const r = parseBashPrefix("A=x;cd /prod && rm");
+      expect(r.inlineEnv).toEqual({ A: "x;cd" });
+      expect(r.cdTarget).toBe(null);
+    });
   });
 
   describe("__proto__ as a variable name (b093911d)", () => {
