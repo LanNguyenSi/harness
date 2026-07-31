@@ -248,20 +248,40 @@ describe("parseBashPrefix", () => {
 
     it("does NOT step over a separator that changes shell or stream", () => {
       // Load-bearing restriction. `;` and `&&` keep the next command in
-      // the same shell and directory; `|`, `&`, `(`, `<`, `>` start a
-      // subshell or a redirection, so a `cd` behind them is not a prefix
-      // of the gated command. Stepping over these is exactly how the
-      // round-2 phantom class arose — bash never enters the directory.
+      // the same shell and directory; `|`, `||`, `(`, `<`, `>` put it in
+      // a subshell, short-circuit it away, or redirect. Stepping over
+      // those is exactly how the round-2 phantom class arose.
+      //
+      // These spellings have NO filler token between the separator and
+      // `cd`, deliberately: with a filler (`A=x|y cd …`) the pin passes
+      // even when the restriction is removed, because the filler stops
+      // `consumeLeadingCd` anyway. That inert version let a widening
+      // mutation survive; this one kills it. Each expectation below was
+      // measured against real bash — the parent shell's cwd is unchanged
+      // in every one.
       for (const cmd of [
-        "A=x|y cd /prod ; rm",
-        "A=x&y cd /prod ; rm",
-        "A=x(y cd /prod ; rm",
+        "A=x|cd /prod ; rm",
+        "A=x||cd /prod ; rm",
+        "A=x(cd /prod ; rm",
         "A=x>o cd /prod ; rm",
         "A=x<i cd /prod ; rm",
-        "A=x||y cd /prod ; rm",
       ]) {
         expect(parseBashPrefix(cmd).cdTarget).toBe(null);
       }
+    });
+
+    it("does NOT see a cd behind a single `&`, which bash DOES run in the parent", () => {
+      // Named non-coverage, measured rather than assumed: `A=x&` puts
+      // only the assignment in the background, so `cd /prod` runs in the
+      // parent shell and bash's cwd really does change. Reporting null
+      // is therefore a miss, not a correct answer — the same miss master
+      // has (its value scan runs past `&` and lands nowhere useful), so
+      // this is parity, not a regression introduced here.
+      //
+      // Deliberately NOT fixed: the operator authorised `;` and `&&`,
+      // and widening the set is the direction that produced the phantom
+      // class twice. Tracked for a separate, separately-measured round.
+      expect(parseBashPrefix("A=x&cd /prod ; rm").cdTarget).toBe(null);
     });
 
     it("ends the value at every unquoted metacharacter, not just the separator", () => {
