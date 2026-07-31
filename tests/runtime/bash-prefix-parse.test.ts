@@ -223,10 +223,45 @@ describe("parseBashPrefix", () => {
       // this too), which is what made a later `cd` look like a prefix.
       const r = parseBashPrefix("A=x;cd /prod && rm");
       expect(r.inlineEnv).toEqual({ A: "x" });
-      // The `cd` after an unquoted separator is still not captured as a
-      // PREFIX — this module extracts a leading `cd`, and here `cd` is a
-      // second command. Same as master; not a regression, not a closure.
-      expect(r.cdTarget).toBe(null);
+      // bash runs `cd /prod && rm` in the same shell and directory, so
+      // the target IS a prefix of the gated command and must be seen.
+      // Round 3 lost this (the cursor parked on the `;` and
+      // `consumeLeadingCd`'s skipWs does not skip a metacharacter),
+      // which turned `A=x; cd PROD && terraform destroy` from block into
+      // allow while the command really ran in production.
+      expect(r.cdTarget).toBe("/prod");
+    });
+
+    it("finds a leading cd after a separator the value stopped on (round-3 regression pin)", () => {
+      // Measured at the real hook: each of these blocked on master,
+      // blocked before round 3, and was ALLOWED by round 3 while a PATH
+      // shim showed the command executing in the production repo.
+      for (const cmd of [
+        "A=x; cd /prod && rm",
+        "A=x&& cd /prod && rm",
+        "A=prod; cd /prod ; rm",
+        "A='a b'; cd /prod && rm",
+      ]) {
+        expect(parseBashPrefix(cmd).cdTarget).toBe("/prod");
+      }
+    });
+
+    it("does NOT step over a separator that changes shell or stream", () => {
+      // Load-bearing restriction. `;` and `&&` keep the next command in
+      // the same shell and directory; `|`, `&`, `(`, `<`, `>` start a
+      // subshell or a redirection, so a `cd` behind them is not a prefix
+      // of the gated command. Stepping over these is exactly how the
+      // round-2 phantom class arose — bash never enters the directory.
+      for (const cmd of [
+        "A=x|y cd /prod ; rm",
+        "A=x&y cd /prod ; rm",
+        "A=x(y cd /prod ; rm",
+        "A=x>o cd /prod ; rm",
+        "A=x<i cd /prod ; rm",
+        "A=x||y cd /prod ; rm",
+      ]) {
+        expect(parseBashPrefix(cmd).cdTarget).toBe(null);
+      }
     });
 
     it("ends the value at every unquoted metacharacter, not just the separator", () => {

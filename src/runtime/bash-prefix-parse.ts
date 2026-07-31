@@ -177,6 +177,21 @@ export function parseBashPrefix(command: string): BashPrefix {
     const before = cursor;
     cursor = consumeInlineEnv(command, cursor, inlineEnv);
     if (cdTarget === null) {
+      // The value scan stops ON an unquoted metacharacter and
+      // `consumeLeadingCd` starts with `skipWs`, which does not skip one
+      // — so without this step a GENUINE leading `cd` after `A=x; ` was
+      // unreachable and the resolver silently fell back to the hook cwd
+      // (review round 3: measured 8 honest targets lost against master,
+      // and `A=x; cd PROD && terraform destroy` went from block to
+      // allow while the command really did run in production).
+      //
+      // ONLY `;` and `&&`, and that restriction is load-bearing: they
+      // are the two separators after which the next command still runs
+      // in the same shell and the same directory. `|`, `&`, `(`, `<` and
+      // `>` start a subshell or a redirection, so a `cd` behind them is
+      // not a prefix of the gated command — stepping over those is
+      // exactly how the phantom class of round 2 came about.
+      cursor = skipConsumedSeparator(command, cursor);
       const cd = consumeLeadingCd(command, cursor);
       if (cd !== null) {
         cdTarget = cd.path;
@@ -194,6 +209,18 @@ const VAR_CONT = /[A-Za-z0-9_]/;
 
 function skipWs(s: string, i: number): number {
   while (i < s.length && WS.test(s[i]!)) i++;
+  return i;
+}
+
+/**
+ * Step over a `;` or `&&` the value scan stopped on, so the `cd` clause
+ * that follows is still reachable as a prefix. Returns the cursor
+ * unchanged for anything else — see the call site for why the narrow set
+ * is the point rather than an omission.
+ */
+function skipConsumedSeparator(s: string, i: number): number {
+  if (s[i] === ";") return skipWs(s, i + 1);
+  if (s[i] === "&" && s[i + 1] === "&") return skipWs(s, i + 2);
   return i;
 }
 
