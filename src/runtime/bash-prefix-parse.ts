@@ -120,26 +120,42 @@
 // metacharacter and `consumeLeadingCd`'s `skipWs` does not skip one, so
 // a genuine leading `cd` after `A=x; ` was unreachable.
 //
-// CLOSED in round 4 (operator-authorised) by `skipConsumedSeparator`
-// above. Measured against all THREE states with the positive control
-// asserted first: 0 honest targets lost against master, 0 against
-// pre-round-3, 0 phantoms remaining.
+// Round 4 (operator-authorised) added `skipConsumedSeparator` above and
+// closed the `; `/`&& ` half. ITS OWN "0 lost against master" CLAIM WAS
+// ALSO WRONG, for the third time in a row and by the same mechanism: the
+// corpus sampled the one spelling per separator where MASTER is null
+// too (`&` only unspaced, `>` in a shape that never ran), so those arms
+// could not evidence a loss. Re-run with both spacings, real redirection
+// targets, and a PER-ARM gate that refuses to fold an arm whose baseline
+// never produced a target into a zero:
 //
-// The separator set is measured, not assumed. Against real bash, asking
-// for each one whether the PARENT shell's cwd actually changes:
+//     LOST honest cd targets vs master : 12
+//     phantoms still produced          : 0
+//     arms that prove nothing          : 11 of 16, named in the output
 //
-//     ;   yes -> stepped over        ||  no  -> not stepped over
-//     &&  yes -> stepped over        |   no  -> not stepped over
-//     &   YES -> NOT stepped over    (   no  -> not stepped over
-//                                    >   no  -> not stepped over
-//                                    <   no  -> not stepped over
+// STILL OPEN AGAINST MASTER, measured at the real hook with cwd
+// non-production and the `cd` target production — master blocks, this
+// branch allows, and a PATH shim shows the command running in
+// production: `A=x& cd PROD …`, `A=x>o cd PROD …`, `A=x<in cd PROD …`,
+// `A=x;y|| cd PROD …`.
 //
-// The `&` row is a real miss, named rather than hidden: `A=x&`
-// backgrounds only the assignment, so `cd /prod` runs in the parent and
-// bash's cwd does change. It is the same miss master has, so parity
-// rather than a regression, and widening the set is the direction that
-// produced the phantom class twice — left for a separate, separately
-// measured round. Pinned.
+// The separator matrix below was ALSO wrong where it mattered. Measured
+// against real bash, asking whether the PARENT shell's cwd changes:
+//
+//     ;   yes -> stepped over        ||  no  -> correctly not stepped over
+//     &&  yes -> stepped over        |   no  -> correctly not stepped over
+//     &   YES -> NOT stepped (miss)  (   no  -> correctly not stepped over
+//     >   YES -> NOT stepped (miss)
+//     <   YES -> NOT stepped (miss)
+//
+// A redirection is NOT a separator: it attaches to the same simple
+// command, so the `cd` behind it is still the prefix of the gated
+// command. The earlier comment claiming `<`/`>` "start a subshell or a
+// redirection, so a `cd` behind them is not a prefix" stated a wrong
+// reason for a conservative choice. `&` likewise: `A=x&` backgrounds
+// only the assignment. All three are MISSES, not correct exclusions,
+// and unlike the earlier write-up they are NOT parity with master —
+// master captures the spaced spellings and this branch does not.
 //
 // Task 98ad072f (per-policy target attribution) is the structural answer
 // to `cdTarget` being a context replacement at all. Until it lands,
@@ -199,12 +215,16 @@ export function parseBashPrefix(command: string): BashPrefix {
       // and `A=x; cd PROD && terraform destroy` went from block to
       // allow while the command really did run in production).
       //
-      // ONLY `;` and `&&`, and that restriction is load-bearing: they
-      // are the two separators after which the next command still runs
-      // in the same shell and the same directory. `|`, `&`, `(`, `<` and
-      // `>` start a subshell or a redirection, so a `cd` behind them is
-      // not a prefix of the gated command — stepping over those is
-      // exactly how the phantom class of round 2 came about.
+      // ONLY `;` and `&&`. `|`, `||` and `(` genuinely must NOT be
+      // stepped over — they put the `cd` in a subshell or short-circuit
+      // it away, so bash never enters the directory and stepping over
+      // them is exactly how round 2's phantom class arose.
+      //
+      // `&`, `<` and `>` are a different case and are MISSES, not
+      // correct exclusions: measured against bash, all three leave the
+      // `cd` running in the parent shell, so their targets are real and
+      // this parser does not see them. Left uncovered because the
+      // operator authorised `;` and `&&` only; see the module header.
       cursor = skipConsumedSeparator(command, cursor);
       const cd = consumeLeadingCd(command, cursor);
       if (cd !== null) {

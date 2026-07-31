@@ -259,29 +259,36 @@ describe("parseBashPrefix", () => {
       // mutation survive; this one kills it. Each expectation below was
       // measured against real bash — the parent shell's cwd is unchanged
       // in every one.
-      for (const cmd of [
-        "A=x|cd /prod ; rm",
-        "A=x||cd /prod ; rm",
-        "A=x(cd /prod ; rm",
-        "A=x>o cd /prod ; rm",
-        "A=x<i cd /prod ; rm",
-      ]) {
+      for (const cmd of ["A=x|cd /prod ; rm", "A=x||cd /prod ; rm", "A=x(cd /prod ; rm"]) {
         expect(parseBashPrefix(cmd).cdTarget).toBe(null);
       }
     });
 
-    it("does NOT see a cd behind a single `&`, which bash DOES run in the parent", () => {
-      // Named non-coverage, measured rather than assumed: `A=x&` puts
-      // only the assignment in the background, so `cd /prod` runs in the
-      // parent shell and bash's cwd really does change. Reporting null
-      // is therefore a miss, not a correct answer — the same miss master
-      // has (its value scan runs past `&` and lands nowhere useful), so
-      // this is parity, not a regression introduced here.
+    it("MISSES a cd behind `&`, `>` or `<`, which bash does run in the parent", () => {
+      // Named non-coverage, and a LOSS rather than a correct answer.
+      // Measured against real bash: `A=x&` backgrounds only the
+      // assignment, and a redirection attaches to the same simple
+      // command rather than starting a new shell — so in all three the
+      // parent's cwd really does change and the target is a genuine
+      // prefix of the gated command.
       //
-      // Deliberately NOT fixed: the operator authorised `;` and `&&`,
-      // and widening the set is the direction that produced the phantom
-      // class twice. Tracked for a separate, separately-measured round.
+      // An earlier version of this pin called it "parity with master".
+      // That was measured false: master captures the SPACED spellings
+      // (`A=x& cd /prod …`, `A=x>o cd /prod …`, `A=x<in cd /prod …`) and
+      // this branch does not, so these are 12 lost honest targets and
+      // four of them are hook-confirmed fail-opens. The unspaced
+      // spellings below are the only ones where master is null too.
+      //
+      // Left uncovered because the operator authorised `;` and `&&`
+      // only, and widening the set is the direction that produced the
+      // phantom class twice. Tracked, not waived.
       expect(parseBashPrefix("A=x&cd /prod ; rm").cdTarget).toBe(null);
+      expect(parseBashPrefix("A=x>ocd /prod ; rm").cdTarget).toBe(null);
+      // The spaced spellings are the measured losses. Pinned so the gap
+      // is a tracked quantity and a future fix has to move these lines.
+      expect(parseBashPrefix("A=x& cd /prod ; rm").cdTarget).toBe(null);
+      expect(parseBashPrefix("A=x>o cd /prod ; rm").cdTarget).toBe(null);
+      expect(parseBashPrefix("A=x<in cd /prod ; rm").cdTarget).toBe(null);
     });
 
     it("ends the value at every unquoted metacharacter, not just the separator", () => {
