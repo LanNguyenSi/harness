@@ -239,6 +239,25 @@ describe("parseBashPrefix", () => {
       expect(parseBashPrefix('A="a b">y cd /prod && rm').cdTarget).toBe("/prod");
     });
 
+    it("pins the PHANTOM cd target: a directory bash never enters", () => {
+      // The dangerous half of the cdTarget lever, and the one the first
+      // waiver wrongly assumed away. The value scan concatenates runs
+      // past an unquoted metacharacter, so a `cd` further along becomes
+      // reachable — but bash ends the assignment word at that
+      // metacharacter and runs `:` / `y` instead, never entering the
+      // directory. `resolverGit` nonetheless swaps to it, which
+      // declassifies a production action. Measured at the real hook:
+      // `A='';: cd DECOY ; terraform destroy` blocks on master, is
+      // allowed here, and terraform executes in the PRODUCTION repo.
+      // NOT fixed in this change (halt criterion; see 06-handoff.md).
+      // The candidate fix is to end a value at an unquoted metacharacter,
+      // which is what bash does — this pin has to move deliberately.
+      expect(parseBashPrefix("A='';: cd /decoy ; terraform destroy").cdTarget).toBe("/decoy");
+      expect(parseBashPrefix("A='a b';y cd /decoy ; terraform destroy").cdTarget).toBe("/decoy");
+      // Pre-existing on master too, so the class is widened here, not created.
+      expect(parseBashPrefix("A=x||y cd /decoy ; terraform destroy").cdTarget).toBe("/decoy");
+    });
+
     it("pins the cd target that REPLACES the resolver's git context", () => {
       // This is the coupling that made the fix two-directional. A
       // non-null cdTarget does not ADD to the resolver's inputs, it

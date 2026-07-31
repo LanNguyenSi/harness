@@ -54,11 +54,14 @@
 // `cdTarget` are what the resolver falls back on, so a cap would trade
 // a cost that was measured as immaterial for a real fail-open. Measured
 // cost of the word scanner on the worst shape (a long double-quoted
-// value): ~0.16 ms at 20 KB, ~1.1 ms at 160 KB, ~3.7 ms at 320 KB,
-// growing linearly, against hook budgets of 2000 ms and up. It is
-// roughly 100x the old `indexOf` scan, which never built the value
-// string — a large ratio on a very small absolute number. 200k random
-// shell-soup inputs all returned, none hung.
+// value), as a range across two machines' single-run measurements:
+// 0.16-0.23 ms at 20 KB, 1.1-2.4 ms at 160 KB, ~3.7 ms at 320 KB,
+// growing linearly, against hook budgets of 2000 ms and up. The ratio to
+// the old `indexOf` scan, which never built the value string, is
+// 100x-1200x depending on shape — a large ratio on a very small absolute
+// number, so the conclusion (no cap) is unaffected, but the reserve is
+// smaller than a single figure would suggest. 200k random shell-soup
+// inputs all returned, none hung; an independent 300k run agreed.
 //
 // Falling through is NOT the conservative direction here, which is why
 // the scanner parses instead of bailing wherever bash's boundary is
@@ -66,28 +69,53 @@
 // empty `inlineEnv` and a null `cdTarget` are exactly the state in which
 // `env_var_patterns` and `branch_patterns` see nothing.
 //
-// THAT ARGUMENT HOLDS FOR `inlineEnv` AND ONLY PARTLY FOR `cdTarget`,
-// measured (task b093911d, review round 1) rather than assumed.
-// `inlineEnv` is merged INTO the ambient env and matched by substring,
-// so a more accurate value can only make more patterns match.
-// `cdTarget`, by contrast, REPLACES the resolver's git context
-// (`resolverGit`, src/cli/policy/intercept.ts:515-524), so accuracy cuts
-// BOTH ways: it can also point the resolver at a non-production repo
-// that the command genuinely cd's into. That declassification lever is
-// pre-existing and deliberate — see the G5 note at
-// src/cli/policy/intercept.ts:492-507, and task 98ad072f for the
-// per-policy target attribution that would actually resolve it — but
-// this parser decides how MANY spellings reach it. Measured end-to-end
-// at the hook entry point with cwd on `main` and a `cd` into a repo on a
-// feature branch, five spellings went from BLOCK on master to allow
-// here (`VAR=a\ b cd X`, `VAR="say \"hi\"" cd X`, `VAR='it'\''s cd X`,
-// `VAR='a b'"c d" cd X`, `cd /esc\ aped`). Those blocks were an ACCIDENT
-// of the parse bug, not a policy decision — three other spellings
-// (`cd X`, `A=x cd X`, `cd 'X'`) already allowed on master — so this is
-// consistency, not a new hole. It is recorded because a future accuracy
-// gain in `consumeLeadingCd` will widen the same lever again, and
-// because measuring only the gaining direction is how the claim got
-// stated too broadly the first time.
+// THAT ARGUMENT IS NARROWER THAN IT LOOKS, on both outputs. Corrected
+// across two review rounds of task b093911d, each of which falsified the
+// preceding wording by measurement.
+//
+// `inlineEnv`: merged INTO the ambient env and matched by substring. NOT
+// monotone, though — the corrected value is a different string, not a
+// superset of the truncated one (measured: 10 of 15 corpus values are
+// not supersets, e.g. `$'plain'` was `$'plain'` and is now `plain`). A
+// pattern written against the TRUNCATED form can therefore stop
+// matching. What is measured is narrower and is all that may be
+// claimed: no realistic production indicator was lost — 0 lost matches
+// over 38 values, and `prod` survives in every corpus case.
+//
+// `cdTarget`: REPLACES the resolver's git context (`resolverGit`,
+// src/cli/policy/intercept.ts:515-524). Accuracy therefore cuts BOTH
+// ways, and the losing side splits again:
+//
+//   HONEST HALF — bash really does enter the directory, so pointing the
+//   resolver there is correct even when it declassifies. Measured at the
+//   hook entry point (cwd on `main`, target on a feature branch),
+//   spellings such as `VAR=a\ b cd X`, `VAR="say \"hi\"" cd X`,
+//   `VAR='it'\''s cd X`, `VAR='a b'"c d" cd X`, `cd /esc\ aped` and
+//   `cd /de\<newline>coy` flip BLOCK->allow. Those blocks were an
+//   ACCIDENT of the parse bug, not a policy decision: `cd X`,
+//   `A=x cd X` and `cd 'X'` already allowed on master. Enumeration is
+//   illustrative, not the population — 19 distinct spellings were found
+//   at the hook, 72 of 91 head/separator combinations at parse level.
+//
+//   PHANTOM HALF — bash NEVER enters the directory and the gated command
+//   runs where it started. `VAR='';: cd DECOY ; terraform destroy`
+//   blocks on master, is allowed here, and the shim shows terraform
+//   executing in the PRODUCTION repo. This half is NOT "consistency, not
+//   a new hole": it is a real widening of a real bypass. The class
+//   pre-exists on master (`VAR=x||y cd DECOY ; …` phantoms there too),
+//   but the quoted-head family is new and the count roughly doubles
+//   (900-sample fuzz: 119 working phantoms on master, 258 here). Cause
+//   is the VALUE scan concatenating runs past an unquoted metacharacter,
+//   not `consumeLeadingCd`.
+//
+// The phantom half is DELIBERATELY NOT FIXED HERE. The candidate fix —
+// ending a value at an unquoted metacharacter, which is what bash does
+// and which loses no target master had — is a third parser change in a
+// row after two rounds that each falsified a safety claim, so the run's
+// pre-declared halt criterion applies: stop, pin, hand the decision on.
+// See .ai/runs/2026-07-31-bash-prefix-parse-escapes/06-handoff.md and
+// task 98ad072f (per-policy target attribution), which is the structural
+// answer to `cdTarget` being a replacement at all.
 
 /** Parsed leading-prefix result. */
 export interface BashPrefix {
