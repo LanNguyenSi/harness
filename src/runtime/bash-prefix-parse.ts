@@ -108,24 +108,38 @@
 //   targets went master 27 -> 72 before the fix -> 0 after.
 //
 // ROUND 3 TRADED THE PHANTOM FOR A FAIL-OPEN, AND THE FIRST WRITE-UP OF
-// IT WAS WRONG. This paragraph claimed "0 honest `cd` targets and 0
-// `prod` indicators lost against EITHER earlier state". That number came
-// from a corpus that could not produce it: its unseparated arm rendered
-// `A=xcd /tmp` with no space, it ran from a non-writable directory so
-// every redirection shape was dropped, and its own output reported a
-// positive control of ZERO honest targets in all three builds. Re-run
-// from a writable directory with the positive control asserted (84
-// honest shapes of 102), the real figures are 8 honest `cd` targets lost
-// against master, 16 against the pre-round-3 state, and 9 `prod`
-// indicators lost.
+// IT WAS WRONG. It claimed "0 honest `cd` targets lost against EITHER
+// earlier state". That number came from a corpus that could not produce
+// it: its unseparated arm rendered `A=xcd /tmp` with no space, it ran
+// from a non-writable directory so every redirection shape was dropped,
+// and its own output reported a positive control of ZERO honest targets
+// in all three builds. Re-run from a writable directory with the
+// positive control asserted (84 honest shapes of 102), the real figures
+// were 8 honest `cd` targets lost against master and 16 against the
+// pre-round-3 state. Mechanism: the value scan parks the cursor ON the
+// metacharacter and `consumeLeadingCd`'s `skipWs` does not skip one, so
+// a genuine leading `cd` after `A=x; ` was unreachable.
 //
-// Mechanism: the value scan now parks the cursor ON the metacharacter,
-// and `consumeLeadingCd`'s `skipWs` does not skip one, so a GENUINE
-// leading `cd` after `A=x; ` is unreachable. Measured at the real hook
-// with cwd non-production and the `cd` target production,
-// `A=x; cd PROD && terraform destroy` blocks on master AND before round
-// 3, is allowed here, and the shim shows terraform running in the
-// production repo.
+// CLOSED in round 4 (operator-authorised) by `skipConsumedSeparator`
+// above. Measured against all THREE states with the positive control
+// asserted first: 0 honest targets lost against master, 0 against
+// pre-round-3, 0 phantoms remaining.
+//
+// The separator set is measured, not assumed. Against real bash, asking
+// for each one whether the PARENT shell's cwd actually changes:
+//
+//     ;   yes -> stepped over        ||  no  -> not stepped over
+//     &&  yes -> stepped over        |   no  -> not stepped over
+//     &   YES -> NOT stepped over    (   no  -> not stepped over
+//                                    >   no  -> not stepped over
+//                                    <   no  -> not stepped over
+//
+// The `&` row is a real miss, named rather than hidden: `A=x&`
+// backgrounds only the assignment, so `cd /prod` runs in the parent and
+// bash's cwd does change. It is the same miss master has, so parity
+// rather than a regression, and widening the set is the direction that
+// produced the phantom class twice — left for a separate, separately
+// measured round. Pinned.
 //
 // Task 98ad072f (per-policy target attribution) is the structural answer
 // to `cdTarget` being a context replacement at all. Until it lands,
