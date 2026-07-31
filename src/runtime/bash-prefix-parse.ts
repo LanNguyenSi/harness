@@ -13,7 +13,12 @@
 //
 // This parser extracts the leading idioms from a Bash command string so
 // the resolver layer can merge them into its inputs before
-// `environments.resolvers[]` runs. Two POSIX forms are supported in v1
+// `environments.resolvers[]` runs. SECOND CONSUMER, easy to miss because
+// it lives in another module: `command-normalize.ts` calls this for the
+// `cd` half only (`const leadingCd = parseBashPrefix(command).cdTarget`),
+// feeding its `targetDir`/`targetBase`. Both of those are currently
+// unwired — nothing outside that module reads them — but a change here
+// moves them without touching that file. Two POSIX forms are supported in v1
 // (kept narrow on purpose, see follow-up scope in the originating task):
 //
 //   1. Inline env: leading `\w+=value` tokens. Values may be unquoted,
@@ -60,10 +65,42 @@
 // determinate: the risk gate SEARCHES for production indicators, so an
 // empty `inlineEnv` and a null `cdTarget` are exactly the state in which
 // `env_var_patterns` and `branch_patterns` see nothing.
+//
+// THAT ARGUMENT HOLDS FOR `inlineEnv` AND ONLY PARTLY FOR `cdTarget`,
+// measured (task b093911d, review round 1) rather than assumed.
+// `inlineEnv` is merged INTO the ambient env and matched by substring,
+// so a more accurate value can only make more patterns match.
+// `cdTarget`, by contrast, REPLACES the resolver's git context
+// (`resolverGit`, src/cli/policy/intercept.ts:515-524), so accuracy cuts
+// BOTH ways: it can also point the resolver at a non-production repo
+// that the command genuinely cd's into. That declassification lever is
+// pre-existing and deliberate — see the G5 note at
+// src/cli/policy/intercept.ts:492-507, and task 98ad072f for the
+// per-policy target attribution that would actually resolve it — but
+// this parser decides how MANY spellings reach it. Measured end-to-end
+// at the hook entry point with cwd on `main` and a `cd` into a repo on a
+// feature branch, five spellings went from BLOCK on master to allow
+// here (`VAR=a\ b cd X`, `VAR="say \"hi\"" cd X`, `VAR='it'\''s cd X`,
+// `VAR='a b'"c d" cd X`, `cd /esc\ aped`). Those blocks were an ACCIDENT
+// of the parse bug, not a policy decision — three other spellings
+// (`cd X`, `A=x cd X`, `cd 'X'`) already allowed on master — so this is
+// consistency, not a new hole. It is recorded because a future accuracy
+// gain in `consumeLeadingCd` will widen the same lever again, and
+// because measuring only the gaining direction is how the claim got
+// stated too broadly the first time.
 
 /** Parsed leading-prefix result. */
 export interface BashPrefix {
-  /** `VAR -> value` pairs from leading inline-env assignments. Empty when none. */
+  /**
+   * `VAR -> value` pairs from leading inline-env assignments. Empty when
+   * none.
+   *
+   * The carrier has a NULL PROTOTYPE (see `parseBashPrefix`). Spread,
+   * `Object.keys`, `JSON.stringify`, `structuredClone` and `in` all
+   * behave normally and preserve a `__proto__` key; `Object.assign`
+   * silently DROPS it, and `value.hasOwnProperty(...)` throws — use
+   * `Object.prototype.hasOwnProperty.call(value, k)`.
+   */
   inlineEnv: Record<string, string>;
   /** Path argument of a leading `cd <path> &&|;`, or null when none. */
   cdTarget: string | null;
@@ -76,7 +113,9 @@ export interface BashPrefix {
  */
 export function parseBashPrefix(command: string): BashPrefix {
   if (typeof command !== "string" || command.length === 0) {
-    return { inlineEnv: {}, cdTarget: null };
+    // Same null-prototype carrier as the main path: a caller must not
+    // have to know which return it got before trusting a lookup.
+    return { inlineEnv: Object.create(null) as Record<string, string>, cdTarget: null };
   }
   // Null-prototype carrier: `__proto__` is a grammatically valid POSIX
   // variable name, and on a plain object literal `into["__proto__"] = v`
@@ -193,9 +232,13 @@ function scanWord(s: string, start: number, stop: StopAt): Scanned | null {
     const ch = s[i]!;
     if (stop(ch)) break;
     if (ch === "\\") {
-      // Unquoted: a backslash escapes exactly one following character.
+      // Unquoted: a backslash escapes exactly one following character,
+      // except `\<newline>`, which is a line continuation — both
+      // characters vanish, same rule `scanDoubleQuoted` applies. Multi-
+      // line Bash commands are routine here, so the two runs having
+      // different rules would be a silent divergence (review finding).
       if (i + 1 >= s.length) return null;
-      out += s[i + 1]!;
+      if (s[i + 1] !== "\n") out += s[i + 1]!;
       i += 2;
       continue;
     }

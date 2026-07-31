@@ -201,6 +201,19 @@ describe("parseBashPrefix", () => {
       expect(parseBashPrefix("A=$(echo prod) cmd").inlineEnv).toEqual({ A: "$(echo" });
     });
 
+    it("treats an unquoted backslash-newline as a line continuation, like the double-quoted run does", () => {
+      // bash drops both characters. `scanDoubleQuoted` already did; the
+      // unquoted run did not, which made multi-line commands parse
+      // differently depending on whether the value was quoted.
+      expect(parseBashPrefix("A=postgres://prod\\\n-host/db cmd").inlineEnv).toEqual({
+        A: "postgres://prod-host/db",
+      });
+      expect(parseBashPrefix('A="postgres://prod\\\n-host/db" cmd').inlineEnv).toEqual({
+        A: "postgres://prod-host/db",
+      });
+      expect(parseBashPrefix("cd /pro\\\nd && terraform destroy").cdTarget).toBe("/prod");
+    });
+
     it("does NOT treat an UNQUOTED separator as ending the value (pre-existing, unchanged)", () => {
       // bash would read `A=x` and then run `cd /prod && rm`. Both before and
       // after this task the value swallows the following `cd`, so the cd
@@ -212,6 +225,35 @@ describe("parseBashPrefix", () => {
       const r = parseBashPrefix("A=x;cd /prod && rm");
       expect(r.inlineEnv).toEqual({ A: "x;cd" });
       expect(r.cdTarget).toBe(null);
+    });
+
+    it("DOES diverge from master once the value's head is quoted (over-consumption, measured)", () => {
+      // The pin above holds only for the unquoted-head spelling. With a
+      // quoted head the value ends at the closing quote, the separator is
+      // then read as ordinary text, and a `cd` further along becomes
+      // reachable — where bash performs no `cd` at all. Measured: 20 of
+      // 30 head/separator combinations diverge from master, every one of
+      // them in this over-consumption direction. Pinned so the class is a
+      // known quantity; see 03-decisions.md for why it is not closed here.
+      expect(parseBashPrefix("A='a b'|y cd /prod && rm").cdTarget).toBe("/prod");
+      expect(parseBashPrefix('A="a b">y cd /prod && rm').cdTarget).toBe("/prod");
+    });
+
+    it("pins the cd target that REPLACES the resolver's git context", () => {
+      // This is the coupling that made the fix two-directional. A
+      // non-null cdTarget does not ADD to the resolver's inputs, it
+      // SWAPS the git context (`resolverGit`, src/cli/policy/intercept.ts
+      // :515-524), so recovering the target can also point the resolver
+      // at a NON-production repo the command genuinely cd's into.
+      // Measured: five spellings including this one went from BLOCK on
+      // master to allow. Kept because bash really does cd there and three
+      // sibling spellings already behaved this way; pinned because the
+      // next accuracy gain here widens the same lever (task 98ad072f).
+      expect(parseBashPrefix("A=a\\ b cd /prod && terraform destroy").cdTarget).toBe("/prod");
+      expect(parseBashPrefix('A="say \\"hi\\"" cd /prod && terraform destroy').cdTarget).toBe(
+        "/prod",
+      );
+      expect(parseBashPrefix("cd /esc\\ aped && terraform destroy").cdTarget).toBe("/esc aped");
     });
   });
 
@@ -244,6 +286,15 @@ describe("parseBashPrefix", () => {
       const r = parseBashPrefix("terraform destroy");
       expect(r.inlineEnv["toString"]).toBeUndefined();
       expect(r.inlineEnv["hasOwnProperty"]).toBeUndefined();
+    });
+
+    it("uses the same null-prototype carrier on the degenerate return path", () => {
+      // The early return for empty / non-string input used a plain `{}`,
+      // so a lookup's meaning depended on WHICH return the caller got.
+      expect(parseBashPrefix("").inlineEnv["toString"]).toBeUndefined();
+      expect(parseBashPrefix("   \t  ").inlineEnv["toString"]).toBeUndefined();
+      // @ts-expect-error testing runtime guard
+      expect(parseBashPrefix(undefined).inlineEnv["toString"]).toBeUndefined();
     });
   });
 
