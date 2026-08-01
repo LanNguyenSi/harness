@@ -3,7 +3,7 @@ type: overview
 title: Gate fail-posture matrix
 description: Which harness enforcement gates fail OPEN vs fail CLOSED when their evidence source (grounding-mcp ledger, approval markers, verdict files, probes) is unreachable or errors, with the exact code paths and override knobs.
 tags: [gates, fail-open, fail-closed, enforcement]
-timestamp: 2026-07-27T15:58:11Z
+timestamp: 2026-08-01T17:28:03Z
 sources:
   - docs/risk-gate.md
   - docs/policy-packs/branch-protection.md
@@ -11,6 +11,7 @@ sources:
   - docs/policy-packs/understanding-before-execution.md
   - docs/runtime-reality-hook.md
   - src/runtime/intercept.ts
+  - src/runtime/command-normalize.ts
   - src/cli/policy/intercept.ts
   - src/cli/pack/hook-pre-tool-use.ts
   - src/cli/pack/hook-branch-protection.ts
@@ -26,7 +27,7 @@ Every harness enforcement gate has a deliberate posture for the moment its evide
 | Gate | Runtime entry | Evidence source | Posture on source failure | Degraded outcome |
 |---|---|---|---|---|
 | Policy engine / Risk Gate | `harness policy intercept` → `intercept()` in `src/runtime/intercept.ts` | grounding-mcp evidence ledger | fail **OPEN** | `warn-degraded` outcome; never blocks |
-| `bash_match` normalised-form matching | `harness policy intercept` → `normalizeCommand` in `src/runtime/command-normalize.ts` | command length vs `MAX_NORMALIZE_LENGTH` (100,000 chars) | fail **OPEN** above the bound | normalised-form matching skipped, raw match only; one stderr line names the skip (G4 fix, review round 2, 2026-07-27 — previously silent, no stderr line, no audit row) |
+| `bash_match` normalised-form matching (both passes) | `harness policy intercept` → `normalizeCommand` / `normalizeCommandAmpAware` in `src/runtime/command-normalize.ts` | command length vs `MAX_NORMALIZE_LENGTH` (100,000 chars) | fail **OPEN** above the bound | normalised-form matching skipped for BOTH the primary and the ampersand-aware second pass (task `aabbad63`) — they share the identical bound on the identical input command, so one stderr line covers both; raw match only. Previously silent, no stderr line, no audit row (G4 fix, review round 2, 2026-07-27) |
 | understanding-before-execution | `harness pack hook pre-tool-use` (`src/cli/pack/hook-pre-tool-use.ts`) | approval marker + persisted JSON report; ledger is audit-only | fail **OPEN** on load/parse/ledger/report-scan errors | allow, exit 0, stderr diagnostic |
 | branch-protection | `harness pack hook branch-protection` (`src/cli/pack/hook-branch-protection.ts`) | `branch:non-protected:<branch>` ledger tag (5-min window) + override marker | fail **CLOSED** on any load/parse/ledger error | block envelope |
 | solution-acceptance | `harness pack hook solution-acceptance` (`src/cli/pack/hook-solution-acceptance.ts`) | HEAD-pinned verdict marker file written by grounding-mcp `solution_evaluate` | fail **CLOSED** (scoped to completion actions) | deny the completion verb |
@@ -54,7 +55,7 @@ Header contract in `src/cli/pack/hook-solution-acceptance.ts` (lines 19–22): a
 
 ## `bash_match` normalised-form matching: fail open above a size bound, now loud
 
-Above `MAX_NORMALIZE_LENGTH` (100,000 characters), `normalizeCommand` (`src/runtime/command-normalize.ts`) skips normalisation entirely and returns the command unchanged — a defensive bound so command SIZE alone can never drive `harness policy intercept` past a hook's own timeout budget (`require-preflight-evidence` declares `budget_ms: 1000`). The RAW command is still tested by `policyMatchesEvent` regardless (raw-OR-normalised construction), so this only loses the ADDITIONAL normalised-form coverage — wrapper-peeled or git-global-option-collapsed spellings a `bash_match` regex would otherwise also have matched — never the baseline raw match. Until review round 2 (G4 finding, 2026-07-27) this skip was completely silent: no stderr line, no audit row, discoverable only by reading the source. `NormalizedCommand` now carries a `truncated: boolean` field, and `runInterceptCli` (`src/cli/policy/intercept.ts`) writes exactly one stderr line reporting the skip whenever it is `true`, keeping the normaliser module itself pure and I/O-free while making the fail-open loud at the one place that already owns a stderr stream for the event.
+Above `MAX_NORMALIZE_LENGTH` (100,000 characters), `normalizeCommand` (`src/runtime/command-normalize.ts`) skips normalisation entirely and returns the command unchanged — a defensive bound so command SIZE alone can never drive `harness policy intercept` past a hook's own timeout budget (`require-preflight-evidence` declares `budget_ms: 1000`). The RAW command is still tested by `policyMatchesEvent` regardless (raw-OR-normalised construction), so this only loses the ADDITIONAL normalised-form coverage — wrapper-peeled or git-global-option-collapsed spellings a `bash_match` regex would otherwise also have matched — never the baseline raw match. Until review round 2 (G4 finding, 2026-07-27) this skip was completely silent: no stderr line, no audit row, discoverable only by reading the source. `NormalizedCommand` now carries a `truncated: boolean` field, and `runInterceptCli` (`src/cli/policy/intercept.ts`) writes exactly one stderr line reporting the skip whenever it is `true`, keeping the normaliser module itself pure and I/O-free while making the fail-open loud at the one place that already owns a stderr stream for the event. The ampersand-aware SECOND pass added by task `aabbad63` (`normalizeCommandAmpAware`, same file) carries the IDENTICAL fail-open posture over the IDENTICAL bound — it is only ever invoked with the same Bash command `normalizeCommand` was, so its own `truncated` flag can never disagree with the primary pass's for the one production caller (`runInterceptCli`), and the one stderr line above already reports the skip for both passes at once; there is no separate stderr line naming the amp pass's own skip, nor does one need to exist while the two passes share both the bound and the input.
 
 ## Cross-cutting rules
 

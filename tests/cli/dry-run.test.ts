@@ -135,6 +135,45 @@ describe("dry-run — bash_match trigger matching is raw-OR-normalised (F8 fix, 
   });
 });
 
+// Task aabbad63: dry-run's bash_match check gained a third,
+// ampersand-aware arm (`normalizeCommandAmpAware`) alongside the raw and
+// existing-normalised ones, so `harness dry-run` keeps predicting exactly
+// what `harness policy intercept` (via `policyMatchesEvent`) actually
+// does for the bare-`&` bypass family — the same parity rationale as the
+// "raw-OR-normalised" describe block above (F8 fix), just for the newly
+// added arm.
+describe("dry-run — bash_match trigger matching gains the amp-aware third arm (task aabbad63)", () => {
+  it('matches "A=x&env -C /tmp git status" (glued ampersand) the same way the runtime does', () => {
+    const r = dryRun("look around", {
+      configPath: FULL_MANIFEST,
+      tool: "Bash",
+      toolArgs: JSON.stringify({ command: "A=x&env -C /tmp git status" }),
+    });
+    const matched = r.report.matchingPolicies.map((p) => p.name);
+    expect(matched).toContain("preflight-before-investigation");
+  });
+
+  it('matches "echo hi & nice git status" (genuine background job) the same way the runtime does', () => {
+    const r = dryRun("look around", {
+      configPath: FULL_MANIFEST,
+      tool: "Bash",
+      toolArgs: JSON.stringify({ command: "echo hi & nice git status" }),
+    });
+    const matched = r.report.matchingPolicies.map((p) => p.name);
+    expect(matched).toContain("preflight-before-investigation");
+  });
+
+  it("still predicts a match via the EXISTING pass alone for the quoted-value family (unaffected by the new arm)", () => {
+    const r = dryRun("look around", {
+      configPath: FULL_MANIFEST,
+      tool: "Bash",
+      toolArgs: JSON.stringify({ command: "env FOO='a&b' git status" }),
+    });
+    const matched = r.report.matchingPolicies.map((p) => p.name);
+    expect(matched).toContain("preflight-before-investigation");
+  });
+});
+
 describe("dry-run — REPO builtin resolves from cwd", () => {
   it("substitutes the cwd-derived repo name into a preflight policy's ledgerQuery", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-dryrun-git-"));

@@ -526,7 +526,23 @@ describe.skipIf(!bashOnPath || !existsSync(builtCommandNormalize))("CLI self-tes
     expect(out).toContain("self-test ok");
   }, 150_000);
 
-  it("a full run reports arm A all-keep-gate for the 6 measured wrappers and arm B fail-open", () => {
+  // Task aabbad63 landed the ampersand-aware second normalisation pass:
+  // arm A stays 96/96 kept (0 lost — the pass is additive-only, verified,
+  // not merely reasoned about), and arm B moved from the pre-fix 36/36
+  // fail-open down to 16/36 gated. It is NOT 0/36: the remaining 20
+  // ungated forms are all `A=x&<wrapper> -C /tmp <verb>` for
+  // nice/command/nohup/setsid/stdbuf — a DIFFERENT, pre-existing
+  // limitation than the bare-`&` boundary problem aabbad63 closes. Those
+  // five wrappers' own flag-peeling never recognised a `-C <dir>` value
+  // flag in the first place (only `env`/`git` document one; `sudo`'s own
+  // `-C` coincidentally overlaps in NAME with unrelated semantics, and
+  // `timeout`'s mandatory duration positional coincidentally swallows the
+  // stray `/tmp`) — reproduced identically on the UNCHANGED primary pass
+  // with no `&` involved at all (`normalizeCommand("nice -C /tmp git
+  // status").normalized` was already byte-identical to its own input
+  // before this task), so it is independent of the boundary alphabet
+  // fix and out of aabbad63's scope.
+  it("a full run reports arm A all-keep-gate for the 6 measured wrappers and arm B mostly-closed (task aabbad63)", () => {
     const out = execFileSync(process.execPath, [script], {
       encoding: "utf8",
       cwd: repoRoot,
@@ -534,6 +550,7 @@ describe.skipIf(!bashOnPath || !existsSync(builtCommandNormalize))("CLI self-tes
     });
     expect(out).toContain("96 kept gate, 0 lost");
     expect(out).toContain("NOT a global 8-wrapper result: 2 of 8 arms prove nothing");
-    expect(out).toContain("36/36 forms ungated today");
+    expect(out).toContain("16/36 gate");
+    expect(out).toContain("20/36 forms ungated today");
   }, 150_000);
 });
