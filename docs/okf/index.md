@@ -12,6 +12,13 @@ deliberately do not duplicate them.
 - [Gate fail-posture matrix](gate-fail-posture-matrix.md), which enforcement
   gates fail open vs fail closed when their evidence source is unreachable,
   with the exact code paths and override knobs.
+- [Shell quote models, measured divergence against bash](quote-model-divergence.md),
+  what the three independent shell-word models actually extract, measured
+  against real bash; headline: the trigger boundary alphabet knew `&&` but
+  not single `&`, which defeated every bash_match gate including an
+  operator-only deny, closed at template level in v0.43.0 (task
+  `d834a065`); an existing `full` install picks it up only after re-running
+  `harness init --template full --force`.
 - [Debug verb selection](debug-verb-selection.md), which harness verb answers
   which "why did my policy (not) fire" question: ledger-replay vs
   live-hypothetical vs static-prediction vs stage-isolation vs end-to-end.
