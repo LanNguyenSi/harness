@@ -45,6 +45,7 @@
     "check:duplication": "node scripts/check-duplication.mjs",
     "check:no-only": "node scripts/check-no-only.mjs",
     "measure:bash-prefix-parse": "node scripts/measure-bash-prefix-parse.mjs",
+    "measure:command-normalize": "node scripts/measure-command-normalize.mjs",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

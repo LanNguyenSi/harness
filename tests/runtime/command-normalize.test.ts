@@ -390,6 +390,30 @@ describe("normalizeCommand", () => {
     });
   });
 
+  // Groundwork for task aabbad63 (the BOUNDARY_RE bare-`&` fix). These pin
+  // targetDir invariants that are TRUE TODAY and that a future BOUNDARY_RE
+  // edit could disturb — see scripts/measure-command-normalize.mjs (arm
+  // C) for the reusable measurement instrument these mirror.
+  describe("aabbad63 groundwork: targetDir invariants a future BOUNDARY_RE edit must not disturb", () => {
+    it("git -C /x log 2>&1 still resolves /x (redirect after the invocation)", () => {
+      expect(normalizeCommand("git -C /x log 2>&1").targetDir).toBe("/x");
+    });
+    it("git -C /x status &> out still resolves /x (combined stdout+stderr redirect)", () => {
+      expect(normalizeCommand("git -C /x status &> out").targetDir).toBe("/x");
+    });
+    it("git -C /x push & still resolves /x (trailing background job)", () => {
+      expect(normalizeCommand("git -C /x push &").targetDir).toBe("/x");
+    });
+    // Currently UNPINNED before this task: guards the `&&` agreement/
+    // ordering invariant (both invocations name the SAME explicit target)
+    // that a future quote-aware BOUNDARY_RE edit could break.
+    it("git -C /tmp/repoB status && git -C /tmp/repoB log resolves /tmp/repoB (&& agreement/ordering)", () => {
+      expect(
+        normalizeCommand("git -C /tmp/repoB status && git -C /tmp/repoB log").targetDir,
+      ).toBe("/tmp/repoB");
+    });
+  });
+
   describe("targetDir extraction", () => {
     it("env -C <dir>", () => {
       expect(normalizeCommand("env -C /tmp/repoA git status").targetDir).toBe("/tmp/repoA");

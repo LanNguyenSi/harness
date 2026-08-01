@@ -35,7 +35,12 @@
 // Note the tool itself measures ONLY bash-prefix-parse.ts's `cdTarget`
 // extraction; this module's `normalized`/`targetDir`/`targetBase`
 // outputs have no instrument yet, so cross-build claims about them need
-// their own per-arm-gated measurement.
+// their own per-arm-gated measurement — that instrument now exists:
+// scripts/measure-command-normalize.mjs (groundwork for task aabbad63, the
+// BOUNDARY_RE bare-`&` fix below). It rebuilds a faithful superset of the
+// reverted fix's 140-form quoted-value regression corpus and gates arm A
+// on bash actually running the verb, per the same never-fold-into-a-zero
+// discipline.
 //
 // THE TRIGGER-MATCHING GAP THIS CLOSES: every `bash_match` policy trigger
 // (`src/cli/init/templates.ts`, `docs/examples/full-manifest.yaml`) is a
