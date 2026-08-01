@@ -82,23 +82,54 @@ export function buildMergedTagContent(args: {
  * indirection defeats this match before the producer ever runs — not
  * attempted to close here (the MCP merge path, `pull_requests_merge`, is
  * the other documented gap; see the pack's instructions.md).
+ *
+ * Task 76671e5a: bare `&` added to the boundary alternation (`&&` kept to
+ * its left only to mirror `src/runtime/command-normalize.ts`'s alternation
+ * order for readability — NOT because order is load-bearing here, unlike
+ * that module). Same fix as `d834a065` applied to every policy trigger —
+ * bash starts a new command after a single `&`, so `A=x&gh pr merge` used
+ * to miss this trigger entirely and the producer silently never recorded
+ * the merged-tip fact for that spelling. Broadening a TRIGGER only widens
+ * when the producer fires (a strictly safer direction, mirrors the
+ * deny-side reasoning below), unlike the escape allowlist further down.
+ * Measured: swapping to `&|&&` produces a byte-identical match set for this
+ * matcher (a `RegExp.test` existential check over every start offset, not a
+ * segmenter — the reasoning that makes order matter in
+ * `command-normalize.ts`'s `BOUNDARY_RE`/`AMP_BOUNDARY_RE` does not transfer
+ * to a plain `.test()` matcher like this one).
  */
-export const GH_PR_MERGE_BASH_RE = /(?:^|\n|;|\||&&|\()\s*(?:\w+=\S+\s+)*gh\s+pr\s+merge\b/;
+export const GH_PR_MERGE_BASH_RE = /(?:^|\n|;|\||&&|&|\()\s*(?:\w+=\S+\s+)*gh\s+pr\s+merge\b/;
 
 /**
  * Blocker deny-scope v1 (03-decisions.md): the curated mutation command
  * list. Deliberately NOT "every Bash command" — read-only git
  * (status/log/diff/branch) and unrelated shell stay unaffected. Same
  * anchoring convention as `GH_PR_MERGE_BASH_RE`.
+ *
+ * Task 76671e5a: bare `&` added to the boundary alternation, same reasoning
+ * as `GH_PR_MERGE_BASH_RE` above — this is a DENY-scope matcher, so
+ * broadening it is the STRICTER direction (more commands recognized as
+ * curated mutations, none dropped). Verified disjoint from the escape
+ * allowlist below on a single-command corpus (no verb overlap), so this
+ * broadening cannot lock out the documented recovery path.
  */
 export const CURATED_MUTATION_BASH_RE =
-  /(?:^|\n|;|\||&&|\()\s*(?:\w+=\S+\s+)*(?:git(?:\s+-C\s+\S+)?\s+(?:commit|add|push|merge|rebase|cherry-pick|revert|reset|stash\s+(?:pop|apply))\b|gh\s+pr\s+(?:create|merge)\b)/;
+  /(?:^|\n|;|\||&&|&|\()\s*(?:\w+=\S+\s+)*(?:git(?:\s+-C\s+\S+)?\s+(?:commit|add|push|merge|rebase|cherry-pick|revert|reset|stash\s+(?:pop|apply))\b|gh\s+pr\s+(?:create|merge)\b)/;
 
 /**
  * Escape allowlist, git verbs (03-decisions.md): the exact recovery path
  * the deny message recommends, plus read-only stash inspection. Checked
  * BEFORE the curated-mutation match and before any manifest/ledger access
  * — see hook-post-merge-gate.ts for the ordering guarantee.
+ *
+ * Task 76671e5a, DELIBERATELY LEFT on the old (no bare-`&`) boundary
+ * alphabet: this is an ALLOW-list, not a deny/trigger, so broadening it is
+ * the LOOSER — dangerous — direction. `isEscapeCommand` (below) is checked
+ * FIRST and unconditionally by `hook-post-merge-gate.ts`, before the
+ * curated-mutation deny match; widening this alternation would let MORE
+ * commands skip the gate entirely, the opposite of what `d834a065` and the
+ * broadenings above are for. Pinned by a regression test asserting this
+ * regex's source never gains the `&|` boundary token.
  */
 export const ESCAPE_GIT_BASH_RE =
   /(?:^|\n|;|\||&&|\()\s*(?:\w+=\S+\s+)*git(?:\s+-C\s+\S+)?\s+(?:switch\b|checkout\b|pull\b|fetch\b|branch\s+-(?:d|D)\b|stash\s+(?:list|show)\b)/;
@@ -111,6 +142,11 @@ export const ESCAPE_GIT_BASH_RE =
  * `./node_modules/.bin` robustness the `deny-kill-switch-bash` regex in
  * `src/cli/init/templates.ts` already established for the same class of
  * bypass concern.
+ *
+ * Task 76671e5a: DELIBERATELY LEFT narrow, same reasoning as
+ * `ESCAPE_GIT_BASH_RE` immediately above — an allow-list, checked first and
+ * unconditionally, so broadening its boundary alphabet would only ever
+ * widen the bypass surface.
  */
 export const ESCAPE_HARNESS_BASH_RE = /(?:^|\n|;|\||&&|\()\s*(?:\w+=\S+\s+)*(?:npx\s+|\S*\/)?harness\b/;
 

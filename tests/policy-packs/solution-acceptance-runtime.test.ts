@@ -235,6 +235,23 @@ describe("DEFAULT_PUSH_BASH_RE — completion bash matcher", () => {
     expect(DEFAULT_PUSH_BASH_RE.test("git status")).toBe(false);
     expect(DEFAULT_PUSH_BASH_RE.test("git pushup")).toBe(false);
   });
+
+  // Task 76671e5a: bash starts a new command after a single `&`, so
+  // `A=x&git push` used to slip past this DENY matcher entirely (the
+  // boundary alternation only listed `&&`). Same fix `d834a065` applied to
+  // every policy trigger. `&&` cases pin subsumption (nothing dropped).
+  it.each(["A=x&git push", "sleep 0 & git push", "A=x&gh pr merge"])(
+    "matches the bare-`&`-separated form %s (task 76671e5a)",
+    (cmd) => {
+      expect(DEFAULT_PUSH_BASH_RE.test(cmd)).toBe(true);
+    },
+  );
+  it.each(["A=x&&git push", "echo x && git push"])(
+    "still matches the `&&`-separated form %s (subsumed, not dropped)",
+    (cmd) => {
+      expect(DEFAULT_PUSH_BASH_RE.test(cmd)).toBe(true);
+    },
+  );
 });
 
 describe("resolveProtectedCompletionTools", () => {

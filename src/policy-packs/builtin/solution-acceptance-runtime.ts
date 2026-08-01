@@ -70,9 +70,22 @@ export const DEFAULT_PROTECTED_COMPLETION_TOOLS = [
  * load-bearing choke points; hardening this is follow-up `7207d8f9`.
  * Tolerates a leading `cd … &&`, inline `VAR=val` assignments, and `git -C
  * <path> push`.
+ *
+ * Task 76671e5a: bare `&` added to the boundary alternation (`&&` kept to
+ * its left only to mirror `src/runtime/command-normalize.ts`'s alternation
+ * order for readability — NOT because order is load-bearing here, unlike
+ * that module). Same fix as `d834a065` applied to every policy trigger —
+ * bash starts a new command after a single `&`, so `A=x&git push` used to
+ * slip past this DENY matcher entirely. Broadening is the stricter direction
+ * here (this gates completion actions, it is not an allow-list). Measured:
+ * swapping to `&|&&` produces a byte-identical match set for this matcher
+ * (a `RegExp.test` existential check over every start offset, not a
+ * segmenter — the reasoning that makes order matter in
+ * `command-normalize.ts`'s `BOUNDARY_RE`/`AMP_BOUNDARY_RE` does not transfer
+ * to a plain `.test()` matcher like this one).
  */
 export const DEFAULT_PUSH_BASH_RE =
-  /(?:^|\n|;|\||&&|\()\s*(?:\w+=\S+\s+)*(?:git(?:\s+-C\s+\S+)?\s+push|gh\s+pr\s+merge)\b/;
+  /(?:^|\n|;|\||&&|&|\()\s*(?:\w+=\S+\s+)*(?:git(?:\s+-C\s+\S+)?\s+push|gh\s+pr\s+merge)\b/;
 
 /**
  * Resolve the completion verbs the gate fires on: the pack's
