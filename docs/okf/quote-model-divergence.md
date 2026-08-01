@@ -6,6 +6,7 @@ tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
 timestamp: 2026-08-01T13:15:00Z
 sources:
   - src/runtime/command-normalize.ts
+  - src/cli/init/composer.ts
   - src/runtime/bash-prefix-parse.ts
   - src/runtime/read-only-bash.ts
   - src/runtime/intercept.ts
@@ -31,19 +32,28 @@ ein eingechecktes Instrument mit demselben Pro-Arm-Gate.
 Dieses Dokument ist ein Post-Fix-Writeup: es lag bis zum Release bewusst
 zurück, weil es kopierfertige Exploits gegen im damals ausgelieferten
 0.42.0 offene Gates enthält. **Empfehlung 1 (`&` ins Boundary-Alphabet)
-ist inzwischen umgesetzt und ausgeliefert** — Task `d834a065`, in v0.43.0
-über `src/cli/init/templates.ts`, `src/cli/init/composer.ts` und
-`docs/examples/full-manifest.yaml`; ein bestehendes `full`-Install zieht
-sie erst nach erneutem `harness init` (Template-Ebene, kein
-Engine-Upgrade). `d834a065` hat einen ersten Fehlalarm-Korpus mitgemessen
-(3 vorbestehende + 6 neue Fehlalarme); die in Empfehlung 1 offen
-gelassene Präzisionsseite (K4, 75/75 ungemessen) läuft als Folge-Task
-`b150745c`, die gemeinsame `decodeShellWord`-Primitive aus Empfehlung 2
-als `fdee7d0f`. Die benachbarte `command-normalize`-Boundary-Lücke
+ist auf der Trigger-Ebene umgesetzt und ausgeliefert**, Task `d834a065`,
+in v0.43.0 über `src/cli/init/templates.ts`, `src/cli/init/composer.ts`
+und `docs/examples/full-manifest.yaml`; ein bestehendes `full`-Install
+zieht sie erst nach erneutem `harness init --template full --force`
+(Template-Ebene, kein Engine-Upgrade). `d834a065` hat einen ersten
+Fehlalarm-Korpus mitgemessen (3 vorbestehende + 6 neue Fehlalarme); die in
+Empfehlung 1 offen gelassene Präzisionsseite (K4, 75/75 ungemessen) läuft
+als Folge-Task `b150745c`, die gemeinsame `decodeShellWord`-Primitive aus
+Empfehlung 2 als `fdee7d0f`. **Nicht mitgeschlossen und als `76671e5a`
+offen:** drei Policy-Pack-Runtime-Regexe (`CURATED_MUTATION_BASH_RE`,
+`GH_PR_MERGE_BASH_RE`, `DEFAULT_PUSH_BASH_RE`) tragen dieselbe `&`-Lücke
+auf ausgelieferten Gate-Flächen; bewusst nicht gesweept, weil
+Geschwister-Regexe im selben Pack Allow-Listen sind, wo Verbreitern eine
+Gate LOCKERT. Die benachbarte `command-normalize`-Boundary-Lücke
 (`A=x&env -C /tmp git status`, deren naiver `&`-in-`BOUNDARY_RE`-Fix 140
 von 140 gequotete Wert-Formen regressiert) ist als `aabbad63` gefilt und
 bleibt offen. Der Rest der Messung bezieht sich weiterhin auf master
-`c423880` (= Stand vor v0.43.0) und ist unverändert gültig.
+`c423880` (= master nach PR #383, vor PR #385; NICHT identisch mit dem
+ausgelieferten 0.42.0, dem der Normaliser aus PR #383 ganz fehlt). Er
+bleibt als Messung gegen `c423880` gültig; die reinen `&`-Zeilen in der
+K4-Aufschlüsselung und in der Fail-open-Tabelle beschreiben den
+Vor-Fix-Stand der Trigger-Ebene, nicht den heutigen.
 
 ## Kurzfassung
 
