@@ -81,6 +81,16 @@ describe("FULL_TEMPLATE: deny-kill-switch-bypass bash_match", () => {
     "harness 'resume'",
     'harness gate "disable"',
     "CLAUDE_CODE_SESSION_ID= harness pause",
+    // Task d834a065: a single `&` is a command boundary to bash but was
+    // absent from the alternation, so these reached no deny at all.
+    // Measured through the real prediction path with the plain form as
+    // a per-policy positive control and a PATH shim proving `harness`
+    // really executed. The second needs no assignment prefix, so this
+    // is a boundary-alphabet gap, not a quote-model one.
+    "A=x&harness pause",
+    "sleep 0 & harness pause",
+    "A=x&harness resume",
+    "echo x & harness gate disable --matcher foo",
   ])("matches %s", (cmd) => {
     expect(re().test(cmd)).toBe(true);
   });

@@ -61,6 +61,107 @@ describe("FULL_TEMPLATE: runtime-reality stays commented (no active no-op hook)"
 // that compiles to literal "\b" (backslash + b) instead of \b
 // (word boundary). Trace: TS source → runtime string → YAML disk →
 // yaml.parse → new RegExp → .test against a realistic Bash command.
+// Task d834a065. bash starts a new command after a single `&`, but the
+// boundary alternation every policy trigger shares only listed `&&`, so
+// `A=x&git push`, `A=x&gh pr merge`, `A=x&harness pause` (an
+// operator_only deny) and even `sleep 0 & git status` reached their
+// gated verb with no trigger match at all. Measured through the real
+// prediction path against docs/examples/full-manifest.yaml, with the
+// plain form of each policy as a per-policy positive control and a PATH
+// shim proving the verb really executed (task 287fefaf).
+//
+// `&&` is subsumed by `&`: in `A=x&&git status` the SECOND `&` serves as
+// the boundary, so the alternation is strictly more permissive than
+// before. The `&&` cases below are the regression pin for that.
+describe("profile templates: single `&` is a command boundary in every policy trigger", () => {
+  function policyTriggers(templateSource: string): Array<{ name: string; re: RegExp }> {
+    const parsed = parseManifest(parseYaml(templateSource));
+    return parsed.policies
+      .filter((p) => typeof p.trigger.bash_match === "string")
+      .map((p) => ({ name: p.name, re: new RegExp(p.trigger.bash_match as string) }));
+  }
+
+  const TEMPLATES: Array<[string, string]> = [
+    ["SOLO_TEMPLATE", SOLO_TEMPLATE],
+    ["TEAM_TEMPLATE", TEAM_TEMPLATE],
+    ["FULL_TEMPLATE", FULL_TEMPLATE],
+  ];
+
+  // Each entry: the plain form (positive control, must match today) and
+  // the `&`-separated forms that used to slip through. A verb whose
+  // plain form does not match in a given template simply is not gated
+  // there, and the case is skipped rather than counted as a pass.
+  const VERBS: Array<{ plain: string; amp: string[] }> = [
+    { plain: "git status", amp: ["A=x&git status", "sleep 0 & git status"] },
+    { plain: "git push", amp: ["A=x&git push"] },
+    { plain: "gh pr merge", amp: ["A=x&gh pr merge"] },
+    { plain: "gh pr create", amp: ["A=x&gh pr create"] },
+    { plain: "npm publish", amp: ["A=x&npm publish"] },
+    { plain: "harness pause", amp: ["A=x&harness pause", "sleep 0 & harness pause"] },
+  ];
+
+  // Only FULL ships bash_match policies today (solo/team gate through
+  // MCP-match triggers alone). The assertions are data-driven off what a
+  // template actually declares, so a bash_match policy added to solo or
+  // team later is covered automatically instead of silently exempt; the
+  // companion test below pins today's emptiness so that addition is
+  // visible.
+  it.each(TEMPLATES)("%s: every `&`-separated gated verb matches the trigger its plain form matches", (_, src) => {
+    const triggers = policyTriggers(src);
+    if (triggers.length === 0) return;
+    let asserted = 0;
+    for (const { plain, amp } of VERBS) {
+      const gating = triggers.filter((t) => t.re.test(plain));
+      if (gating.length === 0) continue; // not gated in this profile
+      for (const cmd of amp) {
+        for (const t of gating) {
+          expect(t.re.test(cmd), `${t.name} must match ${JSON.stringify(cmd)}`).toBe(true);
+          asserted += 1;
+        }
+      }
+    }
+    // Positive control for the assertion loop itself: a template that
+    // declares triggers but exercises none would otherwise pass
+    // vacuously.
+    expect(asserted, "template declares bash_match triggers but none was exercised").toBeGreaterThan(0);
+  });
+
+  it.each(TEMPLATES)("%s: `&&` keeps matching (subsumed, not dropped)", (_, src) => {
+    const triggers = policyTriggers(src);
+    if (triggers.length === 0) return;
+    let asserted = 0;
+    for (const { plain } of VERBS) {
+      const gating = triggers.filter((t) => t.re.test(plain));
+      for (const t of gating) {
+        expect(t.re.test(`A=x&&${plain}`), `${t.name} must still match A=x&&${plain}`).toBe(true);
+        expect(t.re.test(`echo x && ${plain}`), `${t.name} must still match echo x && ${plain}`).toBe(true);
+        asserted += 1;
+      }
+    }
+    expect(asserted).toBeGreaterThan(0);
+  });
+
+  it("only FULL_TEMPLATE declares bash_match policy triggers today", () => {
+    expect(policyTriggers(SOLO_TEMPLATE)).toHaveLength(0);
+    expect(policyTriggers(TEAM_TEMPLATE)).toHaveLength(0);
+    expect(policyTriggers(FULL_TEMPLATE).length).toBeGreaterThan(0);
+  });
+
+  it.each(TEMPLATES)("%s: expire_on_bash_match is a separate anchored family, untouched", (_, src) => {
+    const parsed = parseManifest(parseYaml(src));
+    const pack = parsed.policy_packs.find((p) => p.name === "understanding-before-execution");
+    const lifecycle = (pack?.config as Record<string, unknown>)?.["approval_lifecycle"];
+    const patterns = (lifecycle as Record<string, unknown>)?.["expire_on_bash_match"] as string[];
+    expect(Array.isArray(patterns)).toBe(true);
+    for (const p of patterns) {
+      // Anchored, no boundary alternation: widening the trigger family
+      // must never leak into ledger-expiry semantics.
+      expect(p.startsWith("^"), `${p} must stay anchored`).toBe(true);
+      expect(p.includes("|&"), `${p} must not carry a boundary alternation`).toBe(false);
+    }
+  });
+});
+
 describe("profile templates: expire_on_bash_match round-trips to functioning regex", () => {
   function bashMatchers(templateSource: string): RegExp[] {
     const parsed = parseManifest(parseYaml(templateSource));
