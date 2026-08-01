@@ -710,9 +710,11 @@ function normalizeCommandInner(command: string): NormalizedCommand {
  * (`explicitTargets`, `explicitTargetBase`, `bareGitSegmentCount`,
  * `leadingCd`'s full `parseBashPrefix` pass, and the whole G1 ambiguity
  * resolution below) is knowingly computed and then discarded by
- * `normalizeCommandAmpAware`'s caller — this is the containment design's
- * cost, not an oversight, so a future reader should not "fix" it by
- * exposing these fields to a hypothetical amp-alphabet consumer.
+ * `normalizeCommandAmpAware` ITSELF, which returns only
+ * `{ normalized, truncated }` — its own caller never sees these fields at
+ * all. This is the containment design's cost, not an oversight, so a
+ * future reader should not "fix" it by exposing these fields to a
+ * hypothetical amp-alphabet consumer.
  */
 function segmentAndCanonicalize(
   command: string,
@@ -872,20 +874,27 @@ function segmentAndCanonicalize(
  * differences across the corpus and left the suite green (see
  * `tests/runtime/command-normalize.test.ts`'s F8 note — the mutation was
  * applied and reverted to confirm this, not merely reasoned about). The
- * line is still a legitimate guard, just for a DIFFERENT reason: if
- * `canonicalizeSegment` were to THROW partway through a scan and
- * something later caught that throw and resumed the SAME loop against
- * the SAME regex object, the object's `lastIndex` would be left wherever
- * the last successful match landed, and this reset is what would make a
- * resumed scan start at the intended offset instead of a stale one.
- * UNREACHABLE TODAY, by construction: nothing in this module catches
- * mid-scan and resumes — a throw anywhere in the loop propagates to the
- * one top-level `catch` in `normalizeCommand` / `normalizeCommandAmpAware`,
- * which returns a fallback and never touches `boundaryRe` again. So the
- * measured inertness above is EXPECTED given today's control flow, not
- * evidence the guard is pointless — it is forward defensive cover for a
- * control-flow shape (a caught-and-resumed scan) this module does not
- * have, not for one it does.
+ * line is still a legitimate guard, just for a DIFFERENT reason:
+ * `BOUNDARY_RE` and `AMP_BOUNDARY_RE` are module-level `/g` objects
+ * shared by every call in the process, so their `lastIndex` outlives any
+ * single scan. If `canonicalizeSegment` THROWS partway through a scan,
+ * the top-level `catch` in `normalizeCommand` /
+ * `normalizeCommandAmpAware` returns a fallback but leaves that shared
+ * object's `lastIndex` wherever the last successful match landed — and
+ * the NEXT call, on a completely different command, would then start
+ * scanning from that stale offset. This reset re-anchors it.
+ *
+ * DO NOT DELETE THIS LINE ON THE STRENGTH OF ITS MUTATION-INERTNESS.
+ * Measured (fix round 2): with the reset removed and a throw forced into
+ * `canonicalizeSegment`, the FOLLOWING call to
+ * `normalizeCommandAmpAware("a | env git push origin master")` returned
+ * the un-normalised string, and `preflight-before-push` went from MATCH
+ * to NO-MATCH. That is a gate-losing fail-open, not a stylistic nit.
+ * The honest caveat, stated rather than implied: no throw is KNOWN to be
+ * reachable from real input — the leak above was demonstrated with a
+ * forced throw, which is why the line measures inert. The module's own
+ * top-level `catch` exists because a throw is treated as possible, and
+ * this reset is the other half of that same posture.
  */
 function findNextBoundary(
   s: string,

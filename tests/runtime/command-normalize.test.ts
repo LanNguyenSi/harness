@@ -952,6 +952,21 @@ describe("normalizeCommandAmpAware (task aabbad63: closes the bare-& gating gap 
         policyName: "deny-kill-switch-bypass",
         command: "echo hi & nohup harness pause",
       },
+      // Fix round 2: these two complete the pin. The measured residual is
+      // FOUR spellings, one per gated verb; round 1 pinned only two of
+      // them (plus the read gate, which is not one of the four), so a
+      // change to the merge or publish spelling could have passed
+      // silently while the CHANGELOG claimed the residual was pinned.
+      {
+        label: "review-before-merge-bash",
+        policyName: "review-before-merge-bash",
+        command: "echo hi & nohup gh pr merge 1 --squash",
+      },
+      {
+        label: "dogfood-before-release",
+        policyName: "dogfood-before-release",
+        command: "echo hi & nohup npm publish",
+      },
     ];
     for (const c of cases) {
       it(`${c.label}: "${c.command}" does NOT normalise to a trigger match via either pass`, () => {
@@ -996,10 +1011,17 @@ describe("normalizeCommandAmpAware (task aabbad63: closes the bare-& gating gap 
     // `/g` regex with mutable `lastIndex` state; execing the shared object
     // directly here would leave `lastIndex` non-zero for whatever runs
     // next. `new RegExp(AMP_BOUNDARY_RE.source, AMP_BOUNDARY_RE.flags)`
-    // still pins THIS source's actual alternation (a swapped order still
-    // reddens these two tests — verified by temporarily swapping the
-    // alternation, rebuilding, and re-running), it just does not touch the
-    // shared object's own scan position.
+    // still pins THIS source's actual alternation, it just does not touch
+    // the shared object's own scan position.
+    //
+    // Fix round 2: the prior wording here claimed a swapped order reddens
+    // "these two tests". Measured, it reddens exactly ONE — the `&&` test
+    // below (`expected '&' to be '&&'`). The lone-`&` test stays green
+    // under the swap, because a single `&` with no adjacent second one
+    // matches identically whichever alternative the engine tries first;
+    // it is order-INSENSITIVE by construction and exists to pin the
+    // single-character token, not the ordering. Only the `&&` test is the
+    // ordering pin.
     it("matches && as ONE two-character token, not two consecutive bare-& tokens", () => {
       const re = new RegExp(AMP_BOUNDARY_RE.source, AMP_BOUNDARY_RE.flags);
       const m = re.exec("git status && git log");

@@ -33,7 +33,7 @@ import {
   type AmpAwareNormalizedCommand,
   type NormalizedCommand,
 } from "../../runtime/command-normalize.js";
-import { extractShellCommand } from "../../runtime/tool-name-aliases.js";
+import { extractShellCommand, SHELL_ALIASES } from "../../runtime/tool-name-aliases.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import { checkPauseFromLoader } from "../pause-check.js";
 
@@ -182,13 +182,13 @@ function readBashCommand(input: unknown): string | null {
   return typeof cmd === "string" && cmd.length > 0 ? cmd : null;
 }
 
+// Derived from `SHELL_ALIASES` rather than hand-copying its members (fix
+// round 2): `tool-name-aliases.ts`'s own header warns against the copy,
+// and since fix round 1 the precompute-matches-matcher argument above
+// depends on this set and the alias expansion agreeing. Deriving it means
+// they cannot drift apart.
 function isCodexShellTool(toolName: unknown): boolean {
-  return (
-    toolName === "Bash" ||
-    toolName === "shell" ||
-    toolName === "exec_command" ||
-    toolName === "functions.exec_command"
-  );
+  return typeof toolName === "string" && (SHELL_ALIASES as readonly string[]).includes(toolName);
 }
 
 function extractPerCallCwd(input: unknown): string | null {
@@ -452,11 +452,20 @@ export async function runInterceptCli(
   // `policyMatchesEvent`'s per-policy fallback ran BOTH normalisation
   // passes once PER MATCHING POLICY instead of once per event.
   // `isCodexShellTool` scopes the precompute to exactly the tool-name set
-  // `SHELL_ALIASES` expands (Bash plus the three Codex shell aliases) —
-  // the only names a `match: "Bash"` policy's `bash_match` branch can ever
-  // be reached through — so this does not start normalising unrelated
-  // tool calls that merely happen to carry a `command`/`cmd`-named
-  // argument for some other purpose.
+  // `SHELL_ALIASES` expands (Bash plus the three Codex shell aliases), so
+  // this does not start normalising unrelated tool calls that merely
+  // happen to carry a `command`/`cmd`-named argument for some other
+  // purpose.
+  //
+  // Fix round 2: that set is NOT, as this comment previously claimed, the
+  // only way a `match: "Bash"` policy's `bash_match` branch can be
+  // reached. `trigger.match` is a SUBSTRING test over the expanded alias
+  // list, so `BashOutput` and `KillBash` — real Claude Code tool names —
+  // satisfy `match: "Bash"` too and do reach that branch (measured: both
+  // return `policyMatchesEvent === true`). They simply fall through to
+  // the per-policy fallback here, exactly as they did before this change,
+  // so nothing is gated differently; the precompute just does not
+  // de-duplicate for them.
   //
   // This also makes the precomputed value and the matcher's own value
   // PROVABLY consistent for the common case: both are now the same
@@ -472,16 +481,29 @@ export async function runInterceptCli(
   // change between the moment this is read and any later read of the same
   // event object, however unlikely in practice.
   //
-  // One behavioural difference, checked and harmless: `readBashCommand`
-  // required a NON-EMPTY string; `extractShellCommand` accepts an empty
-  // one. An empty command now becomes `bashCommand = ""` instead of
-  // `null`, so `normalizedCommand` becomes a defined
-  // `normalizeCommand("") = {normalized: "", truncated: false, ...}`
-  // instead of staying `undefined` — behaviourally identical either way
-  // (a pure function of the empty string, now computed once instead of
-  // falling back per policy), and `truncated` can never be `true` for an
-  // empty string, so the `MAX_NORMALIZE_LENGTH` stderr line just below is
-  // unaffected by this difference.
+  // TWO behavioural differences, both checked (fix round 2 corrects the
+  // prior wording, which named only the first):
+  //
+  // 1. `readBashCommand` required a NON-EMPTY string; `extractShellCommand`
+  //    accepts an empty one. An empty command now becomes
+  //    `bashCommand = ""` instead of `null`, so `normalizedCommand`
+  //    becomes a defined `normalizeCommand("") = {normalized: "",
+  //    truncated: false, ...}` instead of staying `undefined` —
+  //    behaviourally identical either way (a pure function of the empty
+  //    string, now computed once instead of falling back per policy), and
+  //    `truncated` can never be `true` for an empty string, so the
+  //    `MAX_NORMALIZE_LENGTH` stderr line just below cannot fire from it.
+  //
+  // 2. That stderr line's SCOPE widened. Under the old ternary
+  //    `bashCommand` was unconditionally `null` for any non-`Bash`
+  //    `tool_name`, so `normalizedCommand` stayed `undefined` and the
+  //    guard could never fire for a Codex shell event, nor for a command
+  //    carried under `raw_input`/`input` or a `cmd` key. Measured at
+  //    HEAD: a `tool_name: "shell"` event with a 100,001-char
+  //    `raw_input.cmd` now emits the line. The direction is
+  //    safety-positive — a previously SILENT loss of normalised-form
+  //    coverage on those events is now reported — but it is a real change
+  //    in observable output, so it is named here rather than implied.
   const bashCommand = isCodexShellTool(event.tool_name) ? extractShellCommand(event) : null;
   const normalizedCommand: NormalizedCommand | undefined =
     bashCommand === null ? undefined : normalizeCommand(bashCommand);
