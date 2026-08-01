@@ -27,6 +27,13 @@
 // `98ad072f`. Nothing below describes gate wiring; it describes what
 // THIS MODULE computes, live or not.
 //
+// MEASUREMENT RULE (task 47297478): any claim comparing this module's
+// (or bash-prefix-parse.ts's) extraction behavior across builds must be
+// produced with scripts/measure-bash-prefix-parse.mjs, the per-arm-gated
+// corpus with real bash as referee — a corpus arm whose baseline never
+// hit proves nothing, and an ungated zero from an ad-hoc corpus has
+// already been wrong three times in a row (b093911d run).
+//
 // THE TRIGGER-MATCHING GAP THIS CLOSES: every `bash_match` policy trigger
 // (`src/cli/init/templates.ts`, `docs/examples/full-manifest.yaml`) is a
 // single regex tested against the UNPARSED command string, anchored on a

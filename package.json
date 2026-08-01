@@ -44,6 +44,7 @@
     "check:boundaries": "depcruise --config .dependency-cruiser.cjs src",
     "check:duplication": "node scripts/check-duplication.mjs",
     "check:no-only": "node scripts/check-no-only.mjs",
+    "measure:bash-prefix-parse": "node scripts/measure-bash-prefix-parse.mjs",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
