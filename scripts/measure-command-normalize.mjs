@@ -207,7 +207,7 @@ export function auditArmA({ shapes, controls, gates, bashRan }) {
   const arms = new Map();
   const ensure = (arm) => {
     if (!arms.has(arm)) {
-      arms.set(arm, { shapes: 0, bashRan: 0, gated: 0, notGated: [], controls: [] });
+      arms.set(arm, { shapes: 0, bashRan: 0, gated: 0, ranAndGated: 0, notGated: [], controls: [] });
     }
     return arms.get(arm);
   };
@@ -228,6 +228,7 @@ export function auditArmA({ shapes, controls, gates, bashRan }) {
     const gated = gates(s.cmd, s.policy);
     if (ran) st.bashRan += 1;
     if (gated) st.gated += 1;
+    if (ran && gated) st.ranAndGated += 1;
     if (ran && !gated) st.notGated.push(s.cmd);
   }
 
@@ -247,7 +248,19 @@ export function auditArmA({ shapes, controls, gates, bashRan }) {
     if (reason) {
       unmeasuredArms.push({ arm, reason });
     } else {
-      keptGate += st.gated;
+      // keptGate counts only shapes that BOTH bash-ran AND gated, so a shape
+      // that gates without running can never inflate the "kept gate" total.
+      // Every bash-ran shape is either gated or in notGated, so this
+      // identity must hold for a measured arm; a future corpus change that
+      // breaks it (e.g. a shape gating without running) fails loudly here
+      // rather than silently padding keptGate.
+      if (st.ranAndGated + st.notGated.length !== st.bashRan) {
+        throw new Error(
+          `per-arm invariant violated for arm "${arm}": ranAndGated (${st.ranAndGated}) + ` +
+            `notGated (${st.notGated.length}) !== bashRan (${st.bashRan})`,
+        );
+      }
+      keptGate += st.ranAndGated;
       regressed += st.notGated.length;
     }
   }

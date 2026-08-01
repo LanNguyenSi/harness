@@ -50,6 +50,7 @@ export interface ArmAStats {
   shapes: number;
   bashRan: number;
   gated: number;
+  ranAndGated: number;
   notGated: string[];
   controls: ArmAControl[];
 }

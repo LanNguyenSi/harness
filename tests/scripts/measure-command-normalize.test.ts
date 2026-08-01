@@ -20,9 +20,16 @@ import {
   renderReportC,
   VERBS,
   WRAPPERS,
-  type ArmAAudit,
 } from "../../scripts/measure-command-normalize.mjs";
 import { resolveBash } from "../../scripts/measure-bash-prefix-parse.mjs";
+
+// Derive the audit type from the imported value rather than importing the
+// named type: a `type` import from a `.mjs` only resolves via the colocated
+// `.d.mts` under tsconfig.test.json, but an editor's default resolver flags
+// it (TS2305). `ReturnType<typeof auditArmA>` needs only the value import,
+// which every config resolves, and matches the sibling test's value-only
+// import convention.
+type ArmAAudit = ReturnType<typeof auditArmA>;
 
 // The audit core is tested hermetically: `gates`/`bashRan`/`normalize` are
 // injected stubs, no manifest is parsed and no bash process is ever
@@ -135,6 +142,27 @@ describe("auditArmA", () => {
       { arm: "nice", reason: discriminating.gateReason(niceSt) },
     ]);
     expect(discriminating.totals.meaningfulZero).toBe(false);
+  });
+
+  it("a shape that gates WITHOUT bash-running never inflates keptGate (keptGate counts ran-and-gated only)", () => {
+    const built = buildCorpusA({ wrappers: ["env"], qvals: ["'a&b'", '"a&b"'], verbs: [VERBS[0]!] });
+    // Everything "gates"; everything bash-runs EXCEPT the double-quoted
+    // shape. The positive control (`env <verb>`, no FOO=) still runs and
+    // gates, so the arm is measured — but the one shape that gates without
+    // running must not be counted as a kept gate.
+    const audit = auditArmA({
+      shapes: built.shapes,
+      controls: built.controls,
+      gates: () => true,
+      bashRan: (cmd) => !cmd.includes('"a&b"'),
+    });
+    const st = must(audit.arms.get("env"), "env arm");
+    expect(audit.gateReason(st)).toBe(null); // measured
+    expect(st.gated).toBe(2); // raw gate count includes the non-running shape
+    expect(st.ranAndGated).toBe(1); // but only one shape both ran AND gated
+    expect(st.bashRan).toBe(1);
+    expect(audit.totals.keptGate).toBe(1); // keptGate follows ranAndGated, not raw gated
+    expect(audit.totals.regressed).toBe(0);
   });
 
   it("counts a bash-proven, ungated assignment shape as regressed, only for a measured arm", () => {
@@ -477,6 +505,16 @@ const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const script = join(repoRoot, "scripts", "measure-command-normalize.mjs");
 const builtCommandNormalize = join(repoRoot, "dist", "runtime", "command-normalize.js");
 const bashOnPath = resolveBash() !== null;
+
+if (!bashOnPath || !existsSync(builtCommandNormalize)) {
+  // Do not let a missing build or a bash-less environment read as a pass:
+  // the CLI e2e below carries the load-bearing real-path assertions, and a
+  // silent skip would hide that they never ran (run `npm run build` first).
+  console.warn(
+    `[measure-command-normalize.test] skipping real-bash CLI e2e: ` +
+      `bashOnPath=${bashOnPath}, built=${existsSync(builtCommandNormalize)}`,
+  );
+}
 
 describe.skipIf(!bashOnPath || !existsSync(builtCommandNormalize))("CLI self-test (real bash + real manifest)", () => {
   it("--self-test passes against the current build and shipped manifest", () => {
