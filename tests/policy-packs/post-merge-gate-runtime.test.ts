@@ -155,6 +155,28 @@ describe("CURATED_MUTATION_BASH_RE / isCuratedMutationCommand", () => {
       expect(isCuratedMutationCommand(cmd)).toBe(true);
     },
   );
+
+  // Known, ACCEPTED false-positive cost of the bare-`&` broadening (task
+  // 76671e5a, F2) — nothing in this suite recorded this before. Extends the
+  // existing in-quotes false-positive class (`&&` / `;` / `|`, task
+  // `dbc6d303`) to a bare `&`: a gated verb mentioned as TEXT inside a
+  // quoted string, after a literal `&`, now matches. Verified against the
+  // live PATH (no `git` subprocess runs; bash only echoes/prints the quoted
+  // text) that these are genuine over-blocks, not real invocations. The
+  // predecessor change `d834a065` disclosed exactly this shape for `&&` in
+  // CHANGELOG.md ("6 new ones, every new one of the shape gated verb
+  // mentioned as text after a literal `&`"); this pins that the `&`-only
+  // widening does not regress that standard, by naming the new cost rather
+  // than hiding it. Direction is fail-closed (over-block, not under-block).
+  it.each([
+    'echo "a&git push"',
+    "echo 'rollback plan: stop&git reset --hard'",
+    "grep -F 'x&git commit' notes.md",
+    'printf \'%s\\n\' "note: build&git push"',
+  ])("accepted over-block: %s matches as curated mutation even though bash never runs the gated verb", (cmd) => {
+    expect(isCuratedMutationCommand(cmd)).toBe(true);
+  });
+
   // Disjointness (no-lockout) spot-check: none of the bare-`&`-broadened
   // deny matches also classify as an escape command — broadening the deny
   // side must never shrink the effective recovery path. Measured
@@ -167,6 +189,25 @@ describe("CURATED_MUTATION_BASH_RE / isCuratedMutationCommand", () => {
       expect(isEscapeCommand(cmd)).toBe(false);
     },
   );
+
+  // Accepted asymmetry (task 76671e5a, F6), pinned rather than left
+  // implicit: the deny side now recognizes a bare `&` boundary;
+  // ESCAPE_GIT_BASH_RE/ESCAPE_HARNESS_BASH_RE deliberately do not. Measured
+  // consequence over a 5,880-command three-segment corpus: 480 commands of
+  // exactly one shape, `<LEAD> & <RECOVERY> & <DENY>` (e.g. `sleep 0&git
+  // switch master&git push`), become newly blocked, because the recovery
+  // verb is reachable only via a bare `&` and so is invisible to the narrow
+  // escape check. This is NOT a lockout: every such command also contains a
+  // mutation verb bash really runs, and the plain recovery command the deny
+  // message recommends (`git switch master` alone, no bare-`&` chaining) is
+  // never blocked. A future sweep that widens the escape list to "fix" this
+  // must make that decision consciously, not by drift.
+  it("accepted asymmetry: a recovery verb reachable only via a bare `&` is not recognized as an escape, even though the chained command containing it is a curated mutation", () => {
+    expect(isEscapeCommand("sleep 0 & git switch master")).toBe(false);
+    expect(isCuratedMutationCommand("sleep 0&git switch master&git push")).toBe(true);
+    // The plain recovery the deny message recommends is never blocked.
+    expect(isCuratedMutationCommand("git switch master")).toBe(false);
+  });
 });
 
 // Self-lock table 2/2: the escape allowlist. Checked FIRST by the blocker
@@ -236,13 +277,22 @@ describe("ESCAPE_GIT_BASH_RE / ESCAPE_HARNESS_BASH_RE / isEscapeCommand", () => 
   // one-line change every other matcher in this file just got) must turn
   // this red. Mutation-tested: temporarily adding `|&` to either source and
   // reverting reddened/re-greened this exact test.
-  it("ESCAPE_GIT_BASH_RE / ESCAPE_HARNESS_BASH_RE do not carry a bare-`&` boundary alternative", () => {
-    // Exactly 2 `&` characters expected (the doubled `&&`); a bare `&`
-    // alternative would push this to 3.
-    expect((ESCAPE_GIT_BASH_RE.source.match(/&/g) ?? []).length).toBe(2);
-    expect((ESCAPE_HARNESS_BASH_RE.source.match(/&/g) ?? []).length).toBe(2);
-    expect(ESCAPE_GIT_BASH_RE.source.includes("&&|&|")).toBe(false);
-    expect(ESCAPE_HARNESS_BASH_RE.source.includes("&&|&|")).toBe(false);
+  it("ESCAPE_GIT_BASH_RE / ESCAPE_HARNESS_BASH_RE carry the EXACT narrow boundary group, not just the old `&`-count / substring checks", () => {
+    // A prior version of this pin counted `&` characters and checked for
+    // the substring `&&|&|`. Disproven by mutation (task 76671e5a fix round
+    // 1, finding F4): rewriting the boundary to `(?:^|\n|;|\||&&?|\()` is a
+    // genuine widening — `&&?` matches a single bare `&`, so
+    // `isEscapeCommand("A=x&git switch main")` flips from `false` to `true`,
+    // reopening the exact bypass this allowlist must not have — while still
+    // containing exactly two `&` characters and never the literal substring
+    // `&&|&|`. Under that mutation only the BEHAVIORAL pin below caught it;
+    // the character-count/substring pin stayed green. Assert the exact
+    // narrow boundary group's source text instead, so `&&?`, `&{1,2}`,
+    // `[&]`, or any other reshaping is rejected in one check rather than
+    // enumerated one mutation at a time.
+    const NARROW_BOUNDARY_GROUP = "(?:^|\\n|;|\\||&&|\\()";
+    expect(ESCAPE_GIT_BASH_RE.source.startsWith(NARROW_BOUNDARY_GROUP)).toBe(true);
+    expect(ESCAPE_HARNESS_BASH_RE.source.startsWith(NARROW_BOUNDARY_GROUP)).toBe(true);
   });
 
   it("ESCAPE_GIT_BASH_RE / ESCAPE_HARNESS_BASH_RE do NOT allow the bare-`&`-separated form of an escape verb (behavioral pin, mirrors the source-level pin above)", () => {

@@ -198,13 +198,20 @@ describe("profile templates: single `&` is a command boundary in every policy tr
       "docs/examples/policies/02-clean-check-before-push.yaml",
       "docs/writing-custom-policies.md",
       "docs/ARCHITECTURE.md",
-      // Task 76671e5a: this file was the documented gap — the dogfood
-      // manifest gates this repo's OWN releases (dogfood-recency), so an
-      // old-alphabet regression here is self-inflicted. Note this guard
-      // works by splitting on the literal `bash_match` YAML token, which
-      // this file carries; it would NOT see a plain exported regex
-      // constant with no such token (see post-merge-gate-runtime.test.ts /
-      // solution-acceptance-runtime.test.ts for those pins instead).
+      // Task 76671e5a: this file was the documented gap. It is a
+      // `harness validate` / `harness doctor` FIXTURE (see its own header),
+      // deliberately declaring policies without grounding-mcp wired to
+      // exercise the validate/doctor degraded-warn-mode warnings — `harness
+      // apply --config dogfood/harness.yaml` deliberately REJECTS it
+      // (measured: exits 1, "policies declared but grounding-mcp not
+      // wired"), so it is never applied as a running manifest. Kept in
+      // boundary-alphabet parity with the shipped templates anyway, so a
+      // regression here would still mislead the validate/doctor warnings it
+      // exists to exercise. Note this guard works by splitting on the
+      // literal `bash_match` YAML token, which this file carries; it would
+      // NOT see a plain exported regex constant with no such token (see
+      // post-merge-gate-runtime.test.ts / solution-acceptance-runtime.test.ts
+      // for those pins instead).
       "dogfood/harness.yaml",
     ];
     const offenders: string[] = [];
@@ -224,6 +231,37 @@ describe("profile templates: single `&` is a command boundary in every policy tr
       }
     }
     expect(offenders, `these still carry the pre-d834a065 boundary:\n${offenders.join("\n")}`).toEqual([]);
+  });
+
+  // Task 76671e5a, F7: the drift guard above only checks that the file
+  // does NOT contain the old alternation substring — it never compiles the
+  // pattern or runs a command through it, so a typo that broke the regex
+  // entirely (e.g. an unbalanced group) would keep that guard green. This
+  // pins the ACTUAL compiled dogfood-recency trigger against representative
+  // spellings (including the bare-`&` one) and near-misses, so a broken
+  // pattern reddens here even when it never contains the literal `&&|\(`
+  // substring the guard above scans for.
+  it("dogfood/harness.yaml's dogfood-recency trigger compiles and fires on representative spellings, not on near-misses", () => {
+    const text = readFileSync(new URL("../../dogfood/harness.yaml", import.meta.url), "utf8");
+    const parsed = parseManifest(parseYaml(text));
+    const policy = parsed.policies.find((p) => p.name === "dogfood-recency");
+    expect(policy, "dogfood/harness.yaml must declare a dogfood-recency policy").toBeDefined();
+    expect(typeof policy?.trigger.bash_match).toBe("string");
+    const re = new RegExp(policy?.trigger.bash_match as string);
+
+    for (const cmd of [
+      "npm publish",
+      "git tag v1.0.0",
+      "A=x&npm publish",
+      "sleep 0 & npm publish",
+      "A=x&git tag v2.0.0",
+      "echo x && npm publish",
+    ]) {
+      expect(re.test(cmd), `must fire for ${JSON.stringify(cmd)}`).toBe(true);
+    }
+    for (const cmd of ["npm publisher", "git tagv1", "echo npm publish"]) {
+      expect(re.test(cmd), `must NOT fire for ${JSON.stringify(cmd)}`).toBe(false);
+    }
   });
 
   it.each(TEMPLATES)("%s: expire_on_bash_match is a separate anchored family, untouched", (_, src) => {
