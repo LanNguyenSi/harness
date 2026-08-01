@@ -34,6 +34,11 @@ deliberately do not duplicate them.
 - [Managed mutations validate the whole manifest](manifest-validation-scope.md),
   add/remove schema-validate the entire proposed harness.yaml; add's asset
   gate baseline-diffs so only newly-introduced asset errors block.
+- [Shell quote models, measured divergence against bash](quote-model-divergence.md),
+  what the three independent shell-word models actually extract, measured
+  against real bash; headline: the trigger boundary alphabet knows `&&` but
+  not single `&`, which defeats every bash_match gate including an
+  operator-only deny.
 
 ## Runbooks
 
