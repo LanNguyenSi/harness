@@ -30,6 +30,11 @@ function audit(overrides: {
   return auditCorpus({ targetDir: TARGET, ...overrides });
 }
 
+function must<T>(value: T | undefined, label: string): T {
+  if (value === undefined) throw new Error(`${label} unexpectedly missing`);
+  return value;
+}
+
 describe("buildCorpus", () => {
   it("samples BOTH spellings of every separator (with and without a following space)", () => {
     for (const base of [";", "&&", "&", "||", "|", ">o", "<in", "("]) {
@@ -86,8 +91,8 @@ describe("auditCorpus counting", () => {
       candidateParse: () => TARGET,
       baselines: [{ name: "master", parse: () => "/somewhere/else" }],
     });
-    const arm = result.arms.get(";");
-    const bs = arm.perBaseline.get("master");
+    const arm = must(result.arms.get(";"), "arm ;");
+    const bs = must(arm.perBaseline.get("master"), "baseline master");
     expect(bs.hits).toBe(0);
     expect(bs.wrong).toBe(1);
     expect(result.gateReason(arm, bs)).toBe("BASELINE NEVER HIT");
@@ -100,8 +105,8 @@ describe("auditCorpus counting", () => {
       candidateParse: () => "/somewhere/else",
       baselines: [{ name: "master", parse: () => TARGET }],
     });
-    const arm = result.arms.get(";");
-    const bs = arm.perBaseline.get("master");
+    const arm = must(result.arms.get(";"), "arm ;");
+    const bs = must(arm.perBaseline.get("master"), "baseline master");
     expect(arm.candidateHits).toBe(0);
     expect(arm.candidateWrong).toEqual(["c1"]);
     expect(bs.lost).toEqual([]);
@@ -119,9 +124,9 @@ describe("auditCorpus counting", () => {
       candidateParse: (cmd) => (cmd === "phantom" ? TARGET : null),
       baselines: [{ name: "master", parse: () => TARGET }],
     });
-    const arm = result.arms.get("|");
+    const arm = must(result.arms.get("|"), "arm |");
     expect(arm.phantoms).toEqual(["phantom"]);
-    expect(arm.perBaseline.get("master").phantomFixed).toBe(1);
+    expect(must(arm.perBaseline.get("master"), "baseline master").phantomFixed).toBe(1);
     expect(result.candidateTotals.phantoms).toBe(1);
   });
 });
@@ -139,8 +144,8 @@ describe("the per-arm gate", () => {
       baselines: [{ name: "master", parse: () => null }],
     });
     const reason = (armName: string) => {
-      const arm = result.arms.get(armName);
-      return result.gateReason(arm, arm.perBaseline.get("master"));
+      const arm = must(result.arms.get(armName), `arm ${armName}`);
+      return result.gateReason(arm, must(arm.perBaseline.get("master"), "baseline master"));
     };
     expect(reason("never-ran")).toBe("NO SHAPE RAN");
     expect(reason("never-entered")).toBe("NO ENTERED SHAPES");
@@ -175,7 +180,7 @@ describe("the per-arm gate", () => {
       candidateParse: (cmd) => (cmd === "m" ? TARGET : null),
       baselines: [{ name: "master", parse: (cmd) => (cmd === "m" ? TARGET : null) }],
     });
-    const totals = result.perBaselineTotals[0];
+    const totals = must(result.perBaselineTotals[0], "totals");
     expect(totals.lost).toBe(0);
     expect(totals.meaningfulZero).toBe(false);
     const report = renderReport(result);
