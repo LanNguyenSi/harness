@@ -3,7 +3,7 @@ type: overview
 title: Shell quote models, measured divergence against bash
 description: The policy engine has three independent shell-word models plus a raw-regex trigger layer. This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-08-01T11:58:00Z
+timestamp: 2026-08-01T13:15:00Z
 sources:
   - src/runtime/command-normalize.ts
   - src/runtime/bash-prefix-parse.ts
@@ -25,6 +25,25 @@ Messskripte lagen im Scratchpad des Runs und sind nicht Teil des Repos;
 nachvollziehbar ist damit die Gating-Disziplin, nicht der Korpus. Für
 den cdTarget-Kanal existiert mit `scripts/measure-bash-prefix-parse.mjs`
 ein eingechecktes Instrument mit demselben Pro-Arm-Gate.
+
+## Status seit dieser Messung
+
+Dieses Dokument ist ein Post-Fix-Writeup: es lag bis zum Release bewusst
+zurück, weil es kopierfertige Exploits gegen im damals ausgelieferten
+0.42.0 offene Gates enthält. **Empfehlung 1 (`&` ins Boundary-Alphabet)
+ist inzwischen umgesetzt und ausgeliefert** — Task `d834a065`, in v0.43.0
+über `src/cli/init/templates.ts`, `src/cli/init/composer.ts` und
+`docs/examples/full-manifest.yaml`; ein bestehendes `full`-Install zieht
+sie erst nach erneutem `harness init` (Template-Ebene, kein
+Engine-Upgrade). `d834a065` hat einen ersten Fehlalarm-Korpus mitgemessen
+(3 vorbestehende + 6 neue Fehlalarme); die in Empfehlung 1 offen
+gelassene Präzisionsseite (K4, 75/75 ungemessen) läuft als Folge-Task
+`b150745c`, die gemeinsame `decodeShellWord`-Primitive aus Empfehlung 2
+als `fdee7d0f`. Die benachbarte `command-normalize`-Boundary-Lücke
+(`A=x&env -C /tmp git status`, deren naiver `&`-in-`BOUNDARY_RE`-Fix 140
+von 140 gequotete Wert-Formen regressiert) ist als `aabbad63` gefilt und
+bleibt offen. Der Rest der Messung bezieht sich weiterhin auf master
+`c423880` (= Stand vor v0.43.0) und ist unverändert gültig.
 
 ## Kurzfassung
 
