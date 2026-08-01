@@ -1,5 +1,5 @@
 ---
-type: invariant
+type: overview
 title: Shell quote models, measured divergence against bash
 description: The policy engine has three independent shell-word models plus a raw-regex trigger layer. This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
@@ -12,17 +12,19 @@ sources:
   - src/cli/policy/intercept.ts
   - src/runtime/environment-resolver.ts
   - src/cli/init/templates.ts
+  - docs/examples/full-manifest.yaml
+  - scripts/measure-bash-prefix-parse.mjs
 ---
 
 # Shell quote models, measured divergence against bash
 
 Task `287fefaf`, gemessen 2026-08-01 gegen master `c423880`, Fassung 2
-nach einer skeptischen Gegenpruefung. Alle Zahlen stammen aus gelaufenen
-Messungen mit echtem bash als Schiedsrichter ueber PATH-Shims. Die
+nach einer skeptischen Gegenprüfung. Alle Zahlen stammen aus gelaufenen
+Messungen mit echtem bash als Schiedsrichter über PATH-Shims. Die
 Messskripte lagen im Scratchpad des Runs und sind nicht Teil des Repos;
-reproduzierbar ist die Methodik ueber die Beschreibung unten und ueber
-`scripts/measure-bash-prefix-parse.mjs` (Pro-Arm-Gate) fuer den
-cdTarget-Kanal.
+nachvollziehbar ist damit die Gating-Disziplin, nicht der Korpus. Für
+den cdTarget-Kanal existiert mit `scripts/measure-bash-prefix-parse.mjs`
+ein eingechecktes Instrument mit demselben Pro-Arm-Gate.
 
 ## Kurzfassung
 
@@ -31,10 +33,12 @@ Symptome EINER fehlenden Quote-Abstraktion. Gemessen ergibt sich ein
 zweigeteiltes Bild.
 
 - **Die größte einzelne Fail-open-Fläche ist kein Quote-Problem.** Das
-  Boundary-Alphabet jedes ausgelieferten Triggers kennt `&&`, aber
+  Boundary-Alphabet jedes ausgelieferten `bash_match`-Triggers kennt `&&`, aber
   **nicht einzelnes `&`**. Von 45 gemessenen Fail-opens bei einfacher
-  Head-Schreibweise schließt das Hinzufügen von `&` **40** (gemessen,
-  nicht geschätzt: Gegenprobe mit gepatchtem Alphabet).
+  Head-Schreibweise schließt das Hinzufügen von `&` **40**: davon 30 echt,
+  10 nur maskiert (die Wertschreibweise bleibt besiegt, bekommt aber
+  zufällig eine Boundary). Gemessen, nicht geschätzt: Gegenprobe mit
+  gepatchtem Alphabet.
 - **Die Quote-Abstraktion ist trotzdem real, und breiter als die Task
   annahm.** Dieselbe Unquoting-Familie schlägt in **drei verschiedenen
   Konsumenten** zu: Wert-Dekodierung (`bash-prefix-parse`), Peeling
@@ -69,7 +73,7 @@ Ausgaben und sind nur paarweise überlappend messbar.
 
 | Modul | Ausgabe | verdrahtet an |
 |---|---|---|
-| `command-normalize.ts` | `normalized` | `bash_match` raw-OR-normalized (`intercept.ts:346-349`) |
+| `command-normalize.ts` | `normalized` | `bash_match` raw-OR-normalized (`src/runtime/intercept.ts:346-349`) |
 | | `targetDir`/`targetBase` | nichts (grep-verifiziert) |
 | `bash-prefix-parse.ts` | `inlineEnv`, `cdTarget` | Risk-Gate-Kontext (`src/cli/policy/intercept.ts:508-531`) |
 | `read-only-bash.ts` | Boolean | Risk-Floor, Understanding-Gate-PreToolUse (2 Hooks), Write-Guard |
@@ -147,7 +151,11 @@ Achsen ohne Referenz):
 |---|---|---|
 | `bash-prefix-parse` | 196 | 0 |
 | `command-normalize` (peelt?) | 99 | 97 |
-| `read-only-bash` (read-only?) | 0 | — |
+| `read-only-bash` (read-only?) | n/a | n/a |
+
+`read-only-bash` liefert ein Boolean, keinen Präfixbegriff: es verwirft
+in allen 196 Formen (fail-closed by design), also gibt es hier nichts
+zuzustimmen oder abzuweichen. Kein gemessener Nullwert.
 
 ### K4, Trigger-Verdikt gegen wirklich ausgeführten gegateten Verb
 
@@ -261,7 +269,7 @@ Zeichenfolge `prod`.
 
 ## Empfehlung
 
-1. **Zuerst: `&` ins Boundary-Alphabet aller Trigger.** Eine
+1. **Zuerst: `&` ins Boundary-Alphabet aller `policies[].trigger.bash_match`.** Eine
    Zeichenklasse in einem geteilten Regex-Präfix. Gemessene Wirkung:
    45 → 5 verbleibende Fail-opens bei einfacher Head-Schreibweise, und
    der operator-only Deny wird wieder wirksam. Kein Parser, keine
@@ -312,7 +320,11 @@ sticht sie alle im Verhältnis Wirkung zu Aufwand.
   quelltextseitig geprüft (gleiche Boundary-Gruppe), nicht gemessen.
 - `command-normalize.normalized` wurde nur über sein Trigger-Ergebnis
   gemessen, nicht als String gegen eine bash-Referenz.
+- `expire_on_bash_match` ist eine ANDERE Familie (`^gh pr (merge|close)`,
+  `^git push origin (master|main)`, verankert, ohne Boundary-Alternation
+  und ohne Zuweisungs-Toleranz). Sie wurde weder gemessen noch adressiert;
+  der Alphabet-Fix betrifft sie nicht.
 - Eine Maschine (WSL2, bash 5.x, GNU findutils). `&`-Backgrounding,
   Job-Control und `find -delete` können anderswo abweichen.
 - Die Resolver-Probe rekonstruiert den Merge-Pfad aus
-  `intercept.ts:525-531`, statt den echten PreToolUse-Hook zu fahren.
+  `src/cli/policy/intercept.ts:525-531`, statt den echten PreToolUse-Hook zu fahren.
