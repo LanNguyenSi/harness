@@ -75,6 +75,25 @@ describe("GH_PR_MERGE_BASH_RE (producer trigger)", () => {
       expect(GH_PR_MERGE_BASH_RE.test(cmd)).toBe(false);
     },
   );
+
+  // Task 76671e5a: bash starts a new command after a single `&`, so
+  // `A=x&gh pr merge` used to slip past this producer trigger entirely
+  // (the boundary alternation only listed `&&`). Same fix `d834a065`
+  // applied to every policy trigger. `&&` is subsumed by `&` (the second
+  // `&` in `A=x&&gh pr merge` itself serves as the boundary), so the `&&`
+  // cases are the regression pin proving nothing was dropped.
+  it.each(["A=x&gh pr merge", "sleep 0 & gh pr merge", "A=x&gh pr merge 42"])(
+    "matches the bare-`&`-separated form %s (task 76671e5a)",
+    (cmd) => {
+      expect(GH_PR_MERGE_BASH_RE.test(cmd)).toBe(true);
+    },
+  );
+  it.each(["A=x&&gh pr merge", "echo x && gh pr merge"])(
+    "still matches the `&&`-separated form %s (subsumed, not dropped)",
+    (cmd) => {
+      expect(GH_PR_MERGE_BASH_RE.test(cmd)).toBe(true);
+    },
+  );
 });
 
 // Self-lock table 1/2: the curated v1 deny-scope. Every command the
@@ -119,6 +138,35 @@ describe("CURATED_MUTATION_BASH_RE / isCuratedMutationCommand", () => {
   ])("does not match innocent neighbour %s", (cmd) => {
     expect(isCuratedMutationCommand(cmd)).toBe(false);
   });
+
+  // Task 76671e5a: this is a DENY-scope matcher (broader = stricter, the
+  // safe direction), so it gets the same bare-`&` boundary fix as
+  // GH_PR_MERGE_BASH_RE above. `A=x&git push` used to slip past the
+  // blocker entirely. `&&` cases pin subsumption (nothing dropped).
+  it.each(["A=x&git push", "sleep 0 & git commit -am 'x'", "A=x&gh pr merge"])(
+    "matches the bare-`&`-separated form %s (task 76671e5a)",
+    (cmd) => {
+      expect(isCuratedMutationCommand(cmd)).toBe(true);
+    },
+  );
+  it.each(["A=x&&git push", "echo x && git push"])(
+    "still matches the `&&`-separated form %s (subsumed, not dropped)",
+    (cmd) => {
+      expect(isCuratedMutationCommand(cmd)).toBe(true);
+    },
+  );
+  // Disjointness (no-lockout) spot-check: none of the bare-`&`-broadened
+  // deny matches also classify as an escape command — broadening the deny
+  // side must never shrink the effective recovery path. Measured
+  // exhaustively over a larger corpus outside the suite; this pins the
+  // representative cases inline so a future edit that narrows the escape
+  // verb list or widens the deny list into it trips a test.
+  it.each(["A=x&git push", "sleep 0 & git commit -am 'x'", "A=x&gh pr merge"])(
+    "the bare-`&` deny match %s is never also an escape command",
+    (cmd) => {
+      expect(isEscapeCommand(cmd)).toBe(false);
+    },
+  );
 });
 
 // Self-lock table 2/2: the escape allowlist. Checked FIRST by the blocker
@@ -177,6 +225,31 @@ describe("ESCAPE_GIT_BASH_RE / ESCAPE_HARNESS_BASH_RE / isEscapeCommand", () => 
     // a future edit to either list trips it if it ever changes.
     expect(isCuratedMutationCommand("git branch -d feat/x")).toBe(false);
     expect(isEscapeCommand("git branch -d feat/x")).toBe(true);
+  });
+
+  // Task 76671e5a, ALLOW-LIST PIN: unlike GH_PR_MERGE_BASH_RE and
+  // CURATED_MUTATION_BASH_RE (deny/trigger matchers, broadened above), the
+  // escape allowlist is checked FIRST and unconditionally — broadening its
+  // boundary alphabet would let MORE commands skip the gate, the dangerous
+  // direction. Both regexes must therefore carry EXACTLY the doubled `&&`
+  // and no bare `&` alternative. A future sweep that widens them (the
+  // one-line change every other matcher in this file just got) must turn
+  // this red. Mutation-tested: temporarily adding `|&` to either source and
+  // reverting reddened/re-greened this exact test.
+  it("ESCAPE_GIT_BASH_RE / ESCAPE_HARNESS_BASH_RE do not carry a bare-`&` boundary alternative", () => {
+    // Exactly 2 `&` characters expected (the doubled `&&`); a bare `&`
+    // alternative would push this to 3.
+    expect((ESCAPE_GIT_BASH_RE.source.match(/&/g) ?? []).length).toBe(2);
+    expect((ESCAPE_HARNESS_BASH_RE.source.match(/&/g) ?? []).length).toBe(2);
+    expect(ESCAPE_GIT_BASH_RE.source.includes("&&|&|")).toBe(false);
+    expect(ESCAPE_HARNESS_BASH_RE.source.includes("&&|&|")).toBe(false);
+  });
+
+  it("ESCAPE_GIT_BASH_RE / ESCAPE_HARNESS_BASH_RE do NOT allow the bare-`&`-separated form of an escape verb (behavioral pin, mirrors the source-level pin above)", () => {
+    expect(isEscapeCommand("A=x&git switch main")).toBe(false);
+    expect(isEscapeCommand("sleep 0 & git switch main")).toBe(false);
+    expect(isEscapeCommand("A=x&harness pause")).toBe(false);
+    expect(isEscapeCommand("sleep 0 & harness pause")).toBe(false);
   });
 });
 

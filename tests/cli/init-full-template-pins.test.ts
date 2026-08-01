@@ -198,6 +198,14 @@ describe("profile templates: single `&` is a command boundary in every policy tr
       "docs/examples/policies/02-clean-check-before-push.yaml",
       "docs/writing-custom-policies.md",
       "docs/ARCHITECTURE.md",
+      // Task 76671e5a: this file was the documented gap — the dogfood
+      // manifest gates this repo's OWN releases (dogfood-recency), so an
+      // old-alphabet regression here is self-inflicted. Note this guard
+      // works by splitting on the literal `bash_match` YAML token, which
+      // this file carries; it would NOT see a plain exported regex
+      // constant with no such token (see post-merge-gate-runtime.test.ts /
+      // solution-acceptance-runtime.test.ts for those pins instead).
+      "dogfood/harness.yaml",
     ];
     const offenders: string[] = [];
     for (const rel of roots) {

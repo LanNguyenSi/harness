@@ -118,7 +118,7 @@ policies:
     trigger:
       event: PreToolUse
       match: "Bash"
-      bash_match: '(^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*(npm publish\b|git( -C \S+)* tag v)'
+      bash_match: '(^|\n|;|\||&&|&|\()\s*(\w+=\S+\s+)*(npm publish\b|git( -C \S+)* tag v)'
     requires:
       ledger_tag: "dogfood:${SESSION_ID}"
       within: 24h
