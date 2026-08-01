@@ -201,11 +201,18 @@ describe("profile templates: single `&` is a command boundary in every policy tr
     ];
     const offenders: string[] = [];
     for (const rel of roots) {
+      // Scan the file as ONE string with newlines collapsed: a
+      // prettier-wrapped value puts the pattern on a continuation line
+      // that carries no `bash_match` token, and a per-line filter went
+      // blind to 4 of the 6 composer patterns (measured: reverting one
+      // of them left the whole suite green).
       const text = readFileSync(new URL(`../../${rel}`, import.meta.url), "utf8");
-      for (const line of text.split("\n")) {
-        if (!line.includes("bash_match")) continue;
-        if (line.includes("expire_on_bash_match")) continue; // separate anchored family
-        if (line.includes("&&|\\(") || line.includes("&&|\\\\(")) offenders.push(`${rel}: ${line.trim()}`);
+      const flat = text.replace(/\s*\n\s*/g, " ");
+      for (const chunk of flat.split("bash_match").slice(1)) {
+        const value = chunk.slice(0, 400);
+        if (value.includes("&&|\\(") || value.includes("&&|\\\\(")) {
+          offenders.push(`${rel}: ...${value.slice(0, 120)}`);
+        }
       }
     }
     expect(offenders, `these still carry the pre-d834a065 boundary:\n${offenders.join("\n")}`).toEqual([]);
@@ -221,7 +228,7 @@ describe("profile templates: single `&` is a command boundary in every policy tr
       // Anchored, no boundary alternation: widening the trigger family
       // must never leak into ledger-expiry semantics.
       expect(p.startsWith("^"), `${p} must stay anchored`).toBe(true);
-      expect(p.includes("|&"), `${p} must not carry a boundary alternation`).toBe(false);
+      expect(p.includes("&"), `${p} must not carry a boundary alternation`).toBe(false);
     }
   });
 });
