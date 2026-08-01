@@ -205,7 +205,7 @@ hooks:
   - name: require-review-evidence-bash
     event: PreToolUse
     match: "Bash"
-    bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
     command: harness policy intercept
     blocking: hard
     budget_ms: 2000
@@ -213,7 +213,7 @@ hooks:
   - name: require-dogfood-evidence
     event: PreToolUse
     match: "Bash"
-    bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*(npm publish\\b|git( -C \\S+)* tag v)'
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*(npm publish\\b|git( -C \\S+)* tag v)'
     command: harness policy intercept
     blocking: hard
     budget_ms: 2000
@@ -221,7 +221,7 @@ hooks:
   - name: require-preflight-evidence
     event: PreToolUse
     match: "Bash"
-    bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* (status|log|diff|branch)\\b'
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* (status|log|diff|branch)\\b'
     command: harness policy intercept
     blocking: hard
     budget_ms: 1000
@@ -242,7 +242,7 @@ hooks:
   - name: require-review-subagent-evidence-bash
     event: PreToolUse
     match: "Bash"
-    bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*gh pr create\\b'
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr create\\b'
     command: harness policy intercept
     blocking: hard
     budget_ms: 2000
@@ -250,7 +250,7 @@ hooks:
   - name: require-preflight-push-evidence
     event: PreToolUse
     match: "Bash"
-    bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b'
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b'
     command: harness policy intercept
     blocking: hard
     budget_ms: 1000
@@ -269,7 +269,7 @@ hooks:
   - name: deny-kill-switch-bash
     event: PreToolUse
     match: "Bash"
-    bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S*\\s+)*(?:npx\\s+|\\S*/)?harness\\s+(["\\x27]?)(?:pause|resume|gate\\s+(["\\x27]?)(?:disable|enable)\\4)\\3(?![\\w-])'
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S*\\s+)*(?:npx\\s+|\\S*/)?harness\\s+(["\\x27]?)(?:pause|resume|gate\\s+(["\\x27]?)(?:disable|enable)\\4)\\3(?![\\w-])'
     command: harness policy intercept
     blocking: hard
     budget_ms: 1000
@@ -277,7 +277,7 @@ hooks:
   - name: deny-session-env-strip-bash
     event: PreToolUse
     match: "Bash"
-    bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S*\\s+)*(env\\b[^;\\n|&]*-u\\s*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b|env\\b[^;\\n|&]*--unset(?:=|\\s+)(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b|unset\\s+(\\S+\\s+)*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b|(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)=(?=\\s))'
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S*\\s+)*(env\\b[^;\\n|&]*-u\\s*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b|env\\b[^;\\n|&]*--unset(?:=|\\s+)(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b|unset\\s+(\\S+\\s+)*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b|(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)=(?=\\s))'
     command: harness policy intercept
     blocking: hard
     budget_ms: 1000
@@ -297,7 +297,7 @@ hooks:
   - name: deny-sentinel-write-bash
     event: PreToolUse
     match: "Bash"
-    bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S*\\s+)*(tee|cp)\\b[^;\\n|&]*\\.harness-paused\\b|>{1,2}\\s*\\S*\\.harness-paused\\b'
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S*\\s+)*(tee|cp)\\b[^;\\n|&]*\\.harness-paused\\b|>{1,2}\\s*\\S*\\.harness-paused\\b'
     command: harness policy intercept
     blocking: hard
     budget_ms: 1000
@@ -375,7 +375,7 @@ policies:
     trigger:
       event: PreToolUse
       match: "Bash"
-      bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
+      bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
     requires:
       ledger_tag: "review:\${BRANCH}"
     hook: require-review-evidence-bash
@@ -397,7 +397,7 @@ policies:
     trigger:
       event: PreToolUse
       match: "Bash"
-      bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*(npm publish\\b|git( -C \\S+)* tag v)'
+      bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*(npm publish\\b|git( -C \\S+)* tag v)'
     requires:
       ledger_tag: "dogfood:\${SESSION_ID}"
       within: 24h
@@ -439,7 +439,7 @@ policies:
     trigger:
       event: PreToolUse
       match: "Bash"
-      bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* (status|log|diff|branch)\\b'
+      bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* (status|log|diff|branch)\\b'
     requires:
       ledger_tag: "preflight:\${REPO}"
       within: 1h
@@ -495,7 +495,7 @@ policies:
     trigger:
       event: PreToolUse
       match: "Bash"
-      bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*gh pr create\\b'
+      bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr create\\b'
     requires:
       ledger_tag: "review-subagent:\${BRANCH}"
     hook: require-review-subagent-evidence-bash
@@ -517,7 +517,7 @@ policies:
     trigger:
       event: PreToolUse
       match: "Bash"
-      bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b'
+      bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b'
     requires:
       ledger_tag: "preflight:\${BRANCH}"
       within: 10m
@@ -676,7 +676,7 @@ policies:
     trigger:
       event: PreToolUse
       match: "Bash"
-      bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S*\\s+)*(?:npx\\s+|\\S*/)?harness\\s+(["\\x27]?)(?:pause|resume|gate\\s+(["\\x27]?)(?:disable|enable)\\4)\\3(?![\\w-])'
+      bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S*\\s+)*(?:npx\\s+|\\S*/)?harness\\s+(["\\x27]?)(?:pause|resume|gate\\s+(["\\x27]?)(?:disable|enable)\\4)\\3(?![\\w-])'
     operator_only: true
     hook: deny-kill-switch-bash
     enforcement: block
@@ -692,7 +692,7 @@ policies:
     trigger:
       event: PreToolUse
       match: "Bash"
-      bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S*\\s+)*(env\\b[^;\\n|&]*-u\\s*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b|env\\b[^;\\n|&]*--unset(?:=|\\s+)(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b|unset\\s+(\\S+\\s+)*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b|(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)=(?=\\s))'
+      bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S*\\s+)*(env\\b[^;\\n|&]*-u\\s*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b|env\\b[^;\\n|&]*--unset(?:=|\\s+)(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b|unset\\s+(\\S+\\s+)*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b|(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)=(?=\\s))'
     operator_only: true
     hook: deny-session-env-strip-bash
     enforcement: block
@@ -708,7 +708,7 @@ policies:
     trigger:
       event: PreToolUse
       match: "Bash"
-      bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S*\\s+)*(tee|cp)\\b[^;\\n|&]*\\.harness-paused\\b|>{1,2}\\s*\\S*\\.harness-paused\\b'
+      bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S*\\s+)*(tee|cp)\\b[^;\\n|&]*\\.harness-paused\\b|>{1,2}\\s*\\S*\\.harness-paused\\b'
     operator_only: true
     hook: deny-sentinel-write-bash
     enforcement: block

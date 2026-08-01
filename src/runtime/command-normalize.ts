@@ -468,6 +468,21 @@ export const MAX_NORMALIZE_LENGTH = 100_000;
  * position (only `&&` is multi-character, and no other alternative
  * starts with `&`), so there is no tie for the regex engine's leftmost-
  * match rule to break.
+ *
+ * DELIBERATELY MISSING: single `&`, even though bash starts a new
+ * command after it and every shipped `bash_match` trigger now treats it
+ * as a boundary (task `d834a065`). Adding it here was tried and
+ * REVERTED after measurement: this regex is quote-unaware, `&` inside a
+ * quoted assignment value is common, and the split lands mid-quote, so
+ * the value continuation never engages and the wrapper is never peeled.
+ * Measured against the pre-change build with a passing positive
+ * control: 140 of 140 sampled `<wrapper> FOO='a&b' <gated verb>`
+ * spellings LOST a gate they previously held, including the
+ * `operator_only` kill-switch deny. The consequence of leaving it out
+ * is that `A=x&env -C /tmp git status` stays ungated (the wrapper can
+ * only be peeled after a recognised boundary); that gap is tracked
+ * separately and needs a design that does not regress the quoted-value
+ * case, not another character in this alternation.
  */
 const BOUNDARY_RE = /\n|&&|;|\||\(/g;
 

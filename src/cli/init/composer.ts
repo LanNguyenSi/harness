@@ -192,7 +192,7 @@ const HOOK_FOR_POLICY: Record<CustomPolicyKey, HookSpec> = {
     event: "PreToolUse",
     match: "Bash",
     bash_match:
-      "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* (status|log|diff|branch)\\b",
+      "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* (status|log|diff|branch)\\b",
     command: "harness policy intercept",
     blocking: "hard",
     budget_ms: 1000,
@@ -209,7 +209,7 @@ const HOOK_FOR_POLICY: Record<CustomPolicyKey, HookSpec> = {
     name: "require-preflight-push-evidence",
     event: "PreToolUse",
     match: "Bash",
-    bash_match: "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b",
+    bash_match: "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b",
     command: "harness policy intercept",
     blocking: "hard",
     budget_ms: 1000,
@@ -219,7 +219,7 @@ const HOOK_FOR_POLICY: Record<CustomPolicyKey, HookSpec> = {
     event: "PreToolUse",
     match: "Bash",
     bash_match:
-      "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*(npm publish\\b|git( -C \\S+)* tag v)",
+      "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*(npm publish\\b|git( -C \\S+)* tag v)",
     command: "harness policy intercept",
     blocking: "hard",
     budget_ms: 2000,
@@ -266,7 +266,7 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
       event: "PreToolUse",
       match: "Bash",
       bash_match:
-        "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* (status|log|diff|branch)\\b",
+        "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* (status|log|diff|branch)\\b",
     },
     requires: { ledger_tag: "preflight:${REPO}", within: "1h" },
     hook: "require-preflight-evidence",
@@ -305,7 +305,7 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
     trigger: {
       event: "PreToolUse",
       match: "Bash",
-      bash_match: "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b",
+      bash_match: "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b",
     },
     requires: {
       ledger_tag: "preflight:${BRANCH}",
@@ -334,7 +334,7 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
       event: "PreToolUse",
       match: "Bash",
       bash_match:
-        "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*(npm publish\\b|git( -C \\S+)* tag v)",
+        "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*(npm publish\\b|git( -C \\S+)* tag v)",
     },
     requires: { ledger_tag: "dogfood:${SESSION_ID}", within: "24h" },
     hook: "require-dogfood-evidence",

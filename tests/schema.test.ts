@@ -51,7 +51,7 @@ describe("parseManifest — happy path", () => {
     );
     expect(preflightPushPolicy?.trigger.match).toBe("Bash");
     expect(preflightPushPolicy?.trigger.bash_match).toBe(
-      "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b",
+      "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b",
     );
     expect(preflightPushPolicy?.requires?.ledger_tag).toBe("preflight:${BRANCH}");
     expect(preflightPushPolicy?.requires?.within).toBe("10m");
