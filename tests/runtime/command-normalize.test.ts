@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
-import { normalizeCommand } from "../../src/runtime/command-normalize.js";
+import {
+  AMP_BOUNDARY_RE,
+  normalizeCommand,
+  normalizeCommandAmpAware,
+} from "../../src/runtime/command-normalize.js";
 import { parseManifest } from "../../src/schema/index.js";
 
 // Read the real `bash_match` straight out of FULL_TEMPLATE instead of a
@@ -886,6 +890,131 @@ describe("normalizeCommand", () => {
           `normalisation no longer closes: ${c.command}`,
         ).toBe(true);
       }
+    });
+  });
+});
+
+describe("normalizeCommandAmpAware (task aabbad63: closes the bare-& gating gap via a second normalisation pass)", () => {
+  describe("closes the two measured bare-& bypasses BOUNDARY_RE cannot see", () => {
+    it('"A=x&env -C /tmp git status" (glued ampersand, no space before the wrapper) normalises to a trigger match', () => {
+      const re = policyBashMatch("preflight-before-investigation");
+      const command = "A=x&env -C /tmp git status";
+      // Genuinely a NEW match the third arm adds: both the raw form and
+      // the EXISTING (BOUNDARY_RE) normalised form still miss.
+      expect(re.test(command)).toBe(false);
+      expect(re.test(normalizeCommand(command).normalized)).toBe(false);
+      expect(re.test(normalizeCommandAmpAware(command).normalized)).toBe(true);
+    });
+
+    it('"echo hi & nice git status" (genuine bash background job) normalises to a trigger match', () => {
+      const re = policyBashMatch("preflight-before-investigation");
+      const command = "echo hi & nice git status";
+      expect(re.test(command)).toBe(false);
+      expect(re.test(normalizeCommand(command).normalized)).toBe(false);
+      expect(re.test(normalizeCommandAmpAware(command).normalized)).toBe(true);
+    });
+  });
+
+  describe("return type carries no targetDir/targetBase (hard constraint: impossible to wire up by mistake)", () => {
+    it("the returned object has exactly {normalized, truncated} — no targetDir/targetBase key at all", () => {
+      const result = normalizeCommandAmpAware("git -C /x log 2>&1");
+      expect(Object.keys(result).sort()).toEqual(["normalized", "truncated"]);
+      expect("targetDir" in result).toBe(false);
+      expect("targetBase" in result).toBe(false);
+    });
+  });
+
+  // The primary pass's own targetDir invariants (git -C /x log 2>&1, etc.)
+  // are pinned above in the "aabbad63 groundwork" describe block, which
+  // exercises ONLY `normalizeCommand` — never this function. Nothing here
+  // duplicates those; this just confirms this function has no field for a
+  // future consumer to misread in the first place (previous describe
+  // block) rather than re-asserting the primary pass is unaffected.
+
+  describe("AMP_BOUNDARY_RE alternation order (&& must stand left of bare &)", () => {
+    // MEASURED (see the regex's own module comment): for this module's
+    // segment-and-rejoin architecture, swapping this order does NOT
+    // change `normalizeCommandAmpAware`'s own `.normalized` output for
+    // any input tried (a genuine `&&` is two ADJACENT `&` characters, so
+    // two single-character boundary matches sandwich an always-empty,
+    // no-op segment) — verified directly by temporarily swapping the
+    // alternation, rebuilding, and diffing output on several `&&`-bearing
+    // commands. So the meaningful pin is on the regex's own match
+    // behaviour, not on the string it feeds into.
+    it("matches && as ONE two-character token, not two consecutive bare-& tokens", () => {
+      AMP_BOUNDARY_RE.lastIndex = 0;
+      const m = AMP_BOUNDARY_RE.exec("git status && git log");
+      expect(m?.[0]).toBe("&&");
+    });
+
+    it("a lone & with no adjacent second & still matches as a single-character token", () => {
+      AMP_BOUNDARY_RE.lastIndex = 0;
+      const m = AMP_BOUNDARY_RE.exec("echo hi & nice git status");
+      expect(m?.[0]).toBe("&");
+    });
+  });
+
+  describe("MAX_NORMALIZE_LENGTH bound (same contract as normalizeCommand)", () => {
+    it("skips normalisation and reports truncated:true above the length bound", () => {
+      const big = "a".repeat(100_001);
+      const result = normalizeCommandAmpAware(big);
+      expect(result.truncated).toBe(true);
+      expect(result.normalized).toBe(big);
+    });
+
+    it("does not truncate at exactly the bound", () => {
+      const atBound = "a".repeat(100_000);
+      expect(normalizeCommandAmpAware(atBound).truncated).toBe(false);
+    });
+  });
+
+  describe("never throws (same fail-safe contract as normalizeCommand)", () => {
+    it("returns the empty string unchanged for an empty command", () => {
+      expect(normalizeCommandAmpAware("")).toEqual({ normalized: "", truncated: false });
+    });
+
+    it("returns a non-string input coerced to the empty-string fallback (defensive)", () => {
+      // @ts-expect-error deliberately probing the runtime guard with a non-string
+      expect(normalizeCommandAmpAware(null)).toEqual({ normalized: "", truncated: false });
+    });
+  });
+
+  // Fail-CLOSED false-positive cost, measured and named rather than
+  // implied (hard constraint / honesty rule): the amp pass is
+  // quote-unaware, same as BOUNDARY_RE, so a wrapper spelling sitting
+  // behind a bare `&` INSIDE a quoted string can now be peeled and
+  // canonicalised as though it were a real invocation. This BLOCKS a
+  // harmless `echo` that merely PRINTS the spelling — never a missed
+  // real gate, but a real, measured cost, not "no false positives".
+  describe("known false-positive cost of the amp pass (fail-closed, expected)", () => {
+    it('echo "x & nice git push" is picked up by the push gate\'s trigger via the amp pass alone', () => {
+      const re = policyBashMatch("preflight-before-push");
+      const command = 'echo "x & nice git push"';
+      expect(re.test(command)).toBe(false);
+      expect(re.test(normalizeCommand(command).normalized)).toBe(false);
+      expect(re.test(normalizeCommandAmpAware(command).normalized)).toBe(true);
+    });
+
+    it('echo "a & nice npm publish" is picked up by the release gate\'s trigger via the amp pass alone', () => {
+      const re = policyBashMatch("dogfood-before-release");
+      const command = 'echo "a & nice npm publish"';
+      expect(re.test(command)).toBe(false);
+      expect(re.test(normalizeCommand(command).normalized)).toBe(false);
+      expect(re.test(normalizeCommandAmpAware(command).normalized)).toBe(true);
+    });
+  });
+
+  describe("the quoted-value family still matches via the EXISTING pass, unaffected by the amp pass's existence", () => {
+    it("env FOO='a&b' git push origin master matches via the existing (BOUNDARY_RE) pass alone", () => {
+      const re = policyBashMatch("preflight-before-push");
+      const command = "env FOO='a&b' git push origin master";
+      expect(re.test(normalizeCommand(command).normalized)).toBe(true);
+    });
+
+    it("nice FOO='x & y' harness pause matches via the existing (BOUNDARY_RE) pass alone", () => {
+      const re = policyBashMatch("deny-kill-switch-bypass");
+      const command = "nice FOO='x & y' harness pause";
+      expect(re.test(normalizeCommand(command).normalized)).toBe(true);
     });
   });
 });

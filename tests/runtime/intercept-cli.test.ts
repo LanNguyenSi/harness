@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { realLedgerClient, runInterceptCli } from "../../src/cli/policy/intercept.js";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
-import type { LedgerClient } from "../../src/runtime/intercept.js";
+import { normalizeCommandAmpAware } from "../../src/runtime/command-normalize.js";
+import { policyMatchesEvent, type LedgerClient, type ToolEvent } from "../../src/runtime/intercept.js";
 import {
   parseManifest,
   type EnvironmentResolver,
@@ -1760,5 +1761,149 @@ describe("runInterceptCli — G4 fix: MAX_NORMALIZE_LENGTH skip is now observabl
     expect(atBound.length).toBe(100_000);
     const { errOutput } = await runFor(atBound);
     expect(errOutput()).not.toContain("normalised-form matching skipped");
+  });
+});
+
+// Task aabbad63: `policyMatchesEvent`'s third, ampersand-aware matching
+// arm. Unlike the T-001/T-002 blocks above (which exercise the FULL
+// `runInterceptCli` pipeline), these tests call `policyMatchesEvent`
+// directly — the same seam `scripts/measure-command-normalize.mjs`'s
+// `loadRealGates` uses — against the REAL trigger regex read straight out
+// of FULL_TEMPLATE (never a hand-copied literal, same F7-fix rationale as
+// the `policyBashMatch` helper above).
+describe("policyMatchesEvent — ampersand-aware third normalisation arm (task aabbad63)", () => {
+  const REAL_PREFLIGHT_MATCH = policyBashMatch("preflight-before-investigation");
+  const REAL_PREFLIGHT_POLICY: Policy = {
+    name: "preflight-before-investigation",
+    description: "gate git reads on a per-repo preflight tag (real trigger regex)",
+    trigger: { event: "PreToolUse", match: "Bash", bash_match: REAL_PREFLIGHT_MATCH },
+    requires: { ledger_tag: "preflight:${REPO}" },
+    hook: "h",
+    enforcement: "block",
+  } as Policy;
+
+  function eventFor(command: string): ToolEvent {
+    return {
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command },
+    };
+  }
+
+  describe("the two measured bare-& bypasses now match against the real trigger regex", () => {
+    it('"A=x&env -C /tmp git status" (glued ampersand, no space before the wrapper) matches', () => {
+      expect(
+        policyMatchesEvent(REAL_PREFLIGHT_POLICY, eventFor("A=x&env -C /tmp git status")),
+      ).toBe(true);
+    });
+
+    it('"echo hi & nice git status" (genuine bash background job) matches', () => {
+      expect(
+        policyMatchesEvent(REAL_PREFLIGHT_POLICY, eventFor("echo hi & nice git status")),
+      ).toBe(true);
+    });
+  });
+
+  describe("the quoted-value family still matches (via the EXISTING pass, unaffected by the third arm)", () => {
+    const REAL_PUSH_MATCH = policyBashMatch("preflight-before-push");
+    const REAL_PUSH_POLICY: Policy = {
+      name: "preflight-before-push",
+      description: "gate git push on a per-branch preflight tag (real trigger regex)",
+      trigger: { event: "PreToolUse", match: "Bash", bash_match: REAL_PUSH_MATCH },
+      requires: { ledger_tag: "preflight:${BRANCH}" },
+      hook: "h",
+      enforcement: "block",
+    } as Policy;
+
+    function realKillSwitchPolicy(): Policy {
+      const parsed = parseManifest(parseYaml(FULL_TEMPLATE));
+      const policy = parsed.policies.find((p) => p.name === "deny-kill-switch-bypass");
+      if (!policy) throw new Error("deny-kill-switch-bypass missing from FULL_TEMPLATE");
+      return policy;
+    }
+
+    it("env FOO='a&b' git push origin master still matches", () => {
+      expect(
+        policyMatchesEvent(REAL_PUSH_POLICY, eventFor("env FOO='a&b' git push origin master")),
+      ).toBe(true);
+    });
+
+    it("nice FOO='x & y' harness pause still matches", () => {
+      expect(
+        policyMatchesEvent(realKillSwitchPolicy(), eventFor("nice FOO='x & y' harness pause")),
+      ).toBe(true);
+    });
+  });
+
+  describe("laziness: the third arm is consulted only after BOTH the raw and existing-normalised forms miss", () => {
+    it("the amp thunk is NEVER called when the raw command already matches", () => {
+      let calls = 0;
+      const thunk = (): { normalized: string; truncated: boolean } => {
+        calls += 1;
+        throw new Error("must not be called: raw command already matched");
+      };
+      const matched = policyMatchesEvent(
+        REAL_PREFLIGHT_POLICY,
+        eventFor("git status"),
+        undefined,
+        thunk,
+      );
+      expect(matched).toBe(true);
+      expect(calls).toBe(0);
+    });
+
+    it("the amp thunk is NEVER called when the raw form misses but the EXISTING normalised form matches", () => {
+      let calls = 0;
+      const thunk = (): { normalized: string; truncated: boolean } => {
+        calls += 1;
+        throw new Error("must not be called: the existing normalised pass already matched");
+      };
+      const matched = policyMatchesEvent(
+        REAL_PREFLIGHT_POLICY,
+        eventFor("env git status"), // raw misses, BOUNDARY_RE-normalised form matches
+        undefined,
+        thunk,
+      );
+      expect(matched).toBe(true);
+      expect(calls).toBe(0);
+    });
+
+    it("the amp thunk IS called when both the raw and existing-normalised forms miss", () => {
+      let calls = 0;
+      const command = "A=x&env -C /tmp git status";
+      const thunk = () => {
+        calls += 1;
+        return normalizeCommandAmpAware(command);
+      };
+      const matched = policyMatchesEvent(REAL_PREFLIGHT_POLICY, eventFor(command), undefined, thunk);
+      expect(matched).toBe(true);
+      expect(calls).toBe(1);
+    });
+
+    // `policyMatchesEvent` itself does not memoise — it just calls whatever
+    // thunk it is handed. The "at most once PER EVENT, not once per policy"
+    // property is a contract of the MEMOISING thunk `runInterceptCli`
+    // constructs (`src/cli/policy/intercept.ts`'s `ampNormalizedCommandThunk`,
+    // a `??=`-memoised closure over one `normalizeCommandAmpAware` call),
+    // shared by reference across every policy in the manifest-wide loop.
+    // This test proves that CONTRACT directly: a memoising thunk of that
+    // exact shape, handed to `policyMatchesEvent` for TWO DIFFERENT
+    // policies matching the SAME event, does the underlying work only once.
+    it("a memoising thunk (the shape runInterceptCli builds) computes the amp pass only ONCE across two different policies for the same event", () => {
+      let realCalls = 0;
+      let cache: { normalized: string; truncated: boolean } | undefined;
+      const command = "A=x&env -C /tmp git status";
+      const thunk = (): { normalized: string; truncated: boolean } =>
+        (cache ??= ((): { normalized: string; truncated: boolean } => {
+          realCalls += 1;
+          return normalizeCommandAmpAware(command);
+        })());
+      const event = eventFor(command);
+      const policyA: Policy = { ...REAL_PREFLIGHT_POLICY, name: "policy-a" };
+      const policyB: Policy = { ...REAL_PREFLIGHT_POLICY, name: "policy-b" };
+      expect(policyMatchesEvent(policyA, event, undefined, thunk)).toBe(true);
+      expect(policyMatchesEvent(policyB, event, undefined, thunk)).toBe(true);
+      expect(realCalls).toBe(1);
+    });
   });
 });

@@ -5,7 +5,7 @@ import {
   type ExtractBuiltins,
   type ExtractEventContext,
 } from "../policies/index.js";
-import { normalizeCommand } from "../runtime/command-normalize.js";
+import { normalizeCommand, normalizeCommandAmpAware } from "../runtime/command-normalize.js";
 import { resolveGitContext } from "../runtime/git-context.js";
 import type { Hook, Manifest, Policy } from "../schema/index.js";
 import { EX_USAGE, HarnessExitError } from "./exit-codes.js";
@@ -114,18 +114,26 @@ function policyMatchesTool(
     } catch {
       return { matched: false, reason: `trigger.bash_match is not a valid regex` };
     }
-    // Raw-OR-normalised, mirroring `policyMatchesEvent`'s real evaluation
-    // path exactly: dry-run used to test only the RAW command, so it
-    // predicted `env -C /tmp git status` as NOT matching
-    // `preflight-before-investigation` while `policy intercept` actually
-    // blocks it — a debug verb contradicting the runtime it exists to
-    // predict (its own comment above and docs/okf/debug-verb-selection.md
-    // both assert parity). The REPO/BRANCH half of this file
-    // (`builtinsFor`, cwd-only) stays in parity with the runtime, which
-    // is also cwd-only for `${REPO}`/`${BRANCH}` — see
-    // `src/cli/policy/intercept.ts`'s comment above `cwdGitContext` for
+    // Raw-OR-normalised-OR-amp-normalised, mirroring `policyMatchesEvent`'s
+    // real evaluation path exactly (third arm added task aabbad63): dry-run
+    // used to test only the RAW command, so it predicted `env -C /tmp git
+    // status` as NOT matching `preflight-before-investigation` while
+    // `policy intercept` actually blocks it — a debug verb contradicting the
+    // runtime it exists to predict (its own comment above and
+    // docs/okf/debug-verb-selection.md both assert parity). Leaving out the
+    // amp-aware third arm here would reintroduce that SAME class of
+    // contradiction for the bare-`&` family (`A=x&env -C /tmp git status`,
+    // `echo hi & nice git status`): `policy intercept` now blocks those via
+    // `normalizeCommandAmpAware`, so dry-run must try it too. The REPO/
+    // BRANCH half of this file (`builtinsFor`, cwd-only) stays in parity
+    // with the runtime, which is also cwd-only for `${REPO}`/`${BRANCH}` —
+    // see `src/cli/policy/intercept.ts`'s comment above `cwdGitContext` for
     // why a per-command target directory is deliberately not consulted.
-    if (!re.test(args.command) && !re.test(normalizeCommand(args.command).normalized)) {
+    if (
+      !re.test(args.command) &&
+      !re.test(normalizeCommand(args.command).normalized) &&
+      !re.test(normalizeCommandAmpAware(args.command).normalized)
+    ) {
       return {
         matched: false,
         reason: `bash_match "${policy.trigger.bash_match}" did not match`,

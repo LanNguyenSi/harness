@@ -22,7 +22,12 @@ import { renderProducers } from "../policies/producers.js";
 import type { Manifest, Policy } from "../schema/index.js";
 import { buildActionEnvelope } from "./action-envelope.js";
 import { renderAgentFacing } from "./agent-facing.js";
-import { normalizeCommand, type NormalizedCommand } from "./command-normalize.js";
+import {
+  normalizeCommand,
+  normalizeCommandAmpAware,
+  type AmpAwareNormalizedCommand,
+  type NormalizedCommand,
+} from "./command-normalize.js";
 import {
   resolveEnvironment,
   type EnvironmentResolution,
@@ -216,6 +221,36 @@ export interface InterceptOptions {
    */
   normalizedCommand?: NormalizedCommand;
   /**
+   * Memoised thunk resolving the ampersand-aware SECOND normalisation
+   * pass for the SAME Bash event's `tool_input.command` (task aabbad63,
+   * `src/runtime/command-normalize.ts`'s `normalizeCommandAmpAware`).
+   * `policyMatchesEvent`'s third arm calls this ONLY when a policy's
+   * regex has already missed BOTH the raw command and `normalizedCommand`
+   * above — most events never reach it. Threaded as a THUNK rather than
+   * a precomputed value (unlike `normalizedCommand`) specifically so that
+   * "compute at most once per event" can be achieved WITHOUT paying the
+   * cost on the common (already-matched) path: `runInterceptCli`
+   * constructs one self-memoising closure per event and hands it here;
+   * every policy in the `matching` loop below that still needs the amp
+   * form calls the SAME thunk, and only the FIRST such call does the
+   * actual work.
+   *
+   * Optional: omitted by non-Bash events and by callers/tests that don't
+   * supply one, in which case `policyMatchesEvent` falls back to calling
+   * `normalizeCommandAmpAware` directly per policy (correct, just not
+   * de-duplicated) — the same fallback shape `normalizedCommand` already
+   * has.
+   *
+   * SAME INVARIANT as `normalizedCommand` above: this is NOT checked
+   * against `event` at runtime. Nothing verifies the thunk passed in was
+   * actually derived from THIS event's own `tool_input.command`. Safe
+   * today because there is exactly one production caller
+   * (`runInterceptCli`), which builds the thunk from the SAME `event` it
+   * then passes to `intercept()` — keep this pairing manual-but-obvious
+   * at every call site rather than assuming it self-enforces.
+   */
+  ampNormalizedCommandThunk?: () => AmpAwareNormalizedCommand;
+  /**
    * Destination for audit-write failure diagnostics. Defaults to
    * `process.stderr` when omitted. Goes to stderr so Claude Code's
    * stdout deny-JSON contract is unaffected.
@@ -305,11 +340,20 @@ function enrichEnvelope(
  * tests), which fall back to computing it lazily right here — correct
  * either way, since `normalizeCommand` is a pure function of the
  * command string alone.
+ *
+ * `ampNormalizedCommandThunk` (task aabbad63) is the SAME
+ * resolved-by-the-wrapper pattern for the ampersand-aware SECOND
+ * normalisation pass, but threaded as a memoised THUNK rather than a
+ * precomputed value — see `InterceptOptions.ampNormalizedCommandThunk`
+ * for why laziness matters here specifically. Omitted callers fall back
+ * to calling `normalizeCommandAmpAware` directly, same shape as the
+ * `precomputedNormalizedCommand` fallback above.
  */
 export function policyMatchesEvent(
   policy: Policy,
   event: ToolEvent,
   precomputedNormalizedCommand?: NormalizedCommand,
+  ampNormalizedCommandThunk?: () => AmpAwareNormalizedCommand,
 ): boolean {
   if (policy.trigger.event !== event.hook_event_name) return false;
   if (policy.trigger.match !== undefined) {
@@ -330,22 +374,32 @@ export function policyMatchesEvent(
     } catch {
       return false;
     }
-    // Raw-OR-normalised (D-003, run 2026-07-27-gate-target-repo-
-    // resolution): test the RAW command first — cheap, and byte-
-    // identical to the pre-fix behaviour — then, only if that fails,
-    // fall back to the NORMALISED command (wrapper prefixes peeled, git
-    // global options dropped, whitespace collapsed). Strictly additive:
-    // a command that matched today keeps matching via the raw test
-    // alone; normalisation can only ADD a match a spelling would
-    // otherwise have missed (env/nice/command wrappers, extra git
-    // global options, doubled whitespace), never remove the raw one.
-    // Replacing the matcher input instead of OR-ing it risks silently
-    // REMOVING an existing match if normalisation ever mangles some
-    // shape — the fail-open direction for a gate — so this stays
-    // additive rather than a substitution.
+    // Raw-OR-normalised-OR-amp-normalised (D-003, run 2026-07-27-gate-
+    // target-repo-resolution; third arm added task aabbad63): test the
+    // RAW command first — cheap, and byte-identical to the pre-fix
+    // behaviour — then, only if that fails, the primary NORMALISED
+    // command (wrapper prefixes peeled, git global options dropped,
+    // whitespace collapsed, BOUNDARY_RE segmentation) — then, only if
+    // THAT also fails, the ampersand-aware second pass (AMP_BOUNDARY_RE
+    // segmentation, closing the bare-`&` family BOUNDARY_RE cannot see:
+    // `A=x&env -C /tmp git status`, `echo hi & nice git status`).
+    // Strictly additive at every step: a command that matched today
+    // keeps matching via the raw test alone; the primary normalised form
+    // can only ADD a match (env/nice/command wrappers, extra git global
+    // options, doubled whitespace); the amp-aware form can only add a
+    // FURTHER match on top of those two, never remove one either of them
+    // already found. Replacing the matcher input instead of OR-ing it in
+    // risks silently REMOVING an existing match if some pass ever
+    // mangles a shape — the fail-open direction for a gate — so this
+    // stays additive rather than a substitution at every arm.
     if (!re.test(command)) {
       const { normalized } = precomputedNormalizedCommand ?? normalizeCommand(command);
-      if (!re.test(normalized)) return false;
+      if (!re.test(normalized)) {
+        const amp = ampNormalizedCommandThunk
+          ? ampNormalizedCommandThunk()
+          : normalizeCommandAmpAware(command);
+        if (!re.test(amp.normalized)) return false;
+      }
     }
   }
   return true;
@@ -641,7 +695,16 @@ export async function intercept(
   const whenFallbackMap = new Map<string, boolean>();
   const matching: Policy[] = [];
   for (const p of manifest.policies) {
-    if (!policyMatchesEvent(p, event, options.normalizedCommand)) continue;
+    if (
+      !policyMatchesEvent(
+        p,
+        event,
+        options.normalizedCommand,
+        options.ampNormalizedCommandThunk,
+      )
+    ) {
+      continue;
+    }
     if (p.when === undefined) {
       matching.push(p);
       continue;

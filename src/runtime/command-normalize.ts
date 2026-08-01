@@ -474,22 +474,94 @@ export const MAX_NORMALIZE_LENGTH = 100_000;
  * starts with `&`), so there is no tie for the regex engine's leftmost-
  * match rule to break.
  *
- * DELIBERATELY MISSING: single `&`, even though bash starts a new
- * command after it and every shipped `bash_match` trigger now treats it
- * as a boundary (task `d834a065`). Adding it here was tried and
- * REVERTED after measurement: this regex is quote-unaware, `&` inside a
- * quoted assignment value is common, and the split lands mid-quote, so
- * the value continuation never engages and the wrapper is never peeled.
+ * DELIBERATELY MISSING, STILL: single `&`, even though bash starts a new
+ * command after it. Adding it HERE was tried and REVERTED after
+ * measurement: this regex is quote-unaware, `&` inside a quoted
+ * assignment value is common, and the split lands mid-quote, so the
+ * value continuation never engages and the wrapper is never peeled.
  * Measured against the pre-change build with a passing positive
  * control: 140 of 140 sampled `<wrapper> FOO='a&b' <gated verb>`
  * spellings LOST a gate they previously held, including the
- * `operator_only` kill-switch deny. The consequence of leaving it out
- * is that `A=x&env -C /tmp git status` stays ungated (the wrapper can
- * only be peeled after a recognised boundary); that gap is tracked
- * separately and needs a design that does not regress the quoted-value
- * case, not another character in this alternation.
+ * `operator_only` kill-switch deny. That evidence is why THIS alphabet
+ * stays byte-identical rather than growing a bare `&` alternative
+ * directly — see `scripts/measure-command-normalize.mjs`'s arm A for the
+ * regression corpus that keeps proving it stays byte-identical.
+ *
+ * TASK aabbad63 (this run): the bare-`&` family this alphabet cannot see
+ * (`A=x&env -C /tmp git status`, `echo hi & nice git status`) is now
+ * handled WITHOUT touching this regex at all — by a SECOND, independent
+ * boundary alphabet (`AMP_BOUNDARY_RE` below) driving a SECOND
+ * normalisation pass (`normalizeCommandAmpAware`) that
+ * `policyMatchesEvent` (`src/runtime/intercept.ts`) tries ONLY as a
+ * third, additional raw-OR-normalised-OR-amp-normalised disjunct — never
+ * a replacement for either of the first two arms. That construction is
+ * exactly what avoids re-triggering the 140/140 regression above: every
+ * command that matched via the raw test or via THIS (BOUNDARY_RE)
+ * normalised form keeps matching through those same two arms, byte-for-
+ * byte unchanged; the amp-aware arm can only ADD a match a spelling
+ * would otherwise have missed, so a quoted `FOO='a&b'` value that this
+ * alphabet already normalises correctly is never at risk of losing that
+ * gate to the new arm. See `AMP_BOUNDARY_RE`'s own comment for why it
+ * has to be a distinct regex object rather than a mutation of this one,
+ * and `normalizeCommandAmpAware`'s comment for why its return type
+ * carries no `targetDir`/`targetBase`.
  */
 const BOUNDARY_RE = /\n|&&|;|\||\(/g;
+
+/**
+ * Second boundary alphabet (task aabbad63): identical to `BOUNDARY_RE`
+ * plus a bare `&` — bash's OWN "start a new command here" token, which
+ * every shipped `bash_match` trigger regex has treated as one of its own
+ * anchor characters since task `d834a065`, but which `BOUNDARY_RE` above
+ * has never recognised as a NORMALISATION-time boundary (see its comment
+ * for the reverted, measured-140/140-regression attempt to add it there
+ * directly).
+ *
+ * ALTERNATION ORDER IS LOAD-BEARING: `&&` MUST be listed to the LEFT of
+ * the bare `&` alternative. JS regex alternation is leftmost-FIRST, not
+ * leftmost-longest — with `&` tried before `&&`, every `&&` in a command
+ * would tokenise as TWO consecutive one-character `&` boundary MATCHES
+ * instead of a single two-character `&&` boundary match.
+ *
+ * MEASURED, NOT ASSUMED (do not "simplify" the pin below to an
+ * end-to-end `.normalized` string assertion): for THIS module's segment-
+ * and-rejoin architecture specifically, that reordering is, perhaps
+ * counter-intuitively, INVISIBLE in `normalizeCommandAmpAware`'s own
+ * output string. Two adjacent single-`&` matches sandwich a genuinely
+ * zero-length segment between them (the two `&` characters of a real
+ * `&&` are, by definition, adjacent), `canonicalizeSegment("")` is a
+ * verbatim no-op, and `parts.join("")` reassembles the exact same bytes
+ * either way — verified directly (not merely reasoned about) by
+ * temporarily swapping this alternation's order, rebuilding, and
+ * diffing `normalizeCommandAmpAware(...).normalized` across several
+ * `&&`-bearing commands (including this comment's own `git -C
+ * /tmp/repoB status && git -C /tmp/repoB log` example): byte-identical
+ * output both ways. So a test asserting on the OUTPUT STRING alone
+ * cannot distinguish the two orderings for this architecture — the pin
+ * in `tests/runtime/command-normalize.test.ts` therefore execs this
+ * regex object DIRECTLY against a `&&`-bearing string and asserts the
+ * match text is `"&&"`, not `"&"`, which DOES fail under a swap. The
+ * order is still specified exactly as documented above (leftmost-first
+ * is real JS semantics, and the internal `segmentAndCanonicalize`
+ * bookkeeping this alphabet ALSO drives — `hasAmbiguousNonGitSegment`,
+ * discarded by `normalizeCommandAmpAware` but not by a hypothetical
+ * future consumer of `segmentAndCanonicalize` under this alphabet —
+ * would still see a spurious extra "non-git segment" under the wrong
+ * order), it just cannot be pinned through this module's ONE exposed
+ * string alone.
+ *
+ * Used ONLY by `normalizeCommandAmpAware` below, which is consulted ONLY
+ * as `policyMatchesEvent`'s third, additional matching arm — see that
+ * function's own comment for why its result never carries a `targetDir`/
+ * `targetBase`, and `src/runtime/intercept.ts` for the memoised-thunk
+ * threading that keeps this off the common (raw-or-normalised-already-
+ * matched) path. Exported (mirrors `GIT_TOKEN_RE` / `NON_GIT_HEAD_TOKENS`
+ * / `MAX_NORMALIZE_LENGTH` above) solely so the ordering pin test can
+ * exec it directly instead of re-declaring an equivalent regex literal
+ * that would test JS semantics in general, not THIS source's actual
+ * alternation.
+ */
+export const AMP_BOUNDARY_RE = /\n|&&|&|;|\||\(/g;
 
 /** A target value starting with `~` — not expanded, treated as unparseable (F5). */
 function isTildeTarget(dir: string): boolean {
@@ -523,7 +595,93 @@ export function normalizeCommand(command: string): NormalizedCommand {
   }
 }
 
+/**
+ * Return type of `normalizeCommandAmpAware` — deliberately NOT
+ * `NormalizedCommand` (task aabbad63, hard constraint). It carries only
+ * `normalized`/`truncated`; there is no `targetDir`/`targetBase` field at
+ * all, so a future caller cannot wire one up to a gate by mistake — see
+ * `normalizeCommandAmpAware`'s own comment for why a directory extracted
+ * under the ampersand-aware alphabet would be unreliable in the first
+ * place, not merely "unwired today".
+ */
+export interface AmpAwareNormalizedCommand {
+  /** Same contract as `NormalizedCommand.normalized`, under `AMP_BOUNDARY_RE`. */
+  normalized: string;
+  /** Same contract as `NormalizedCommand.truncated`. */
+  truncated: boolean;
+}
+
+/**
+ * Ampersand-aware SECOND normalisation pass (task aabbad63). Segments the
+ * command under `AMP_BOUNDARY_RE` (`BOUNDARY_RE` plus a bare `&`) instead
+ * of `BOUNDARY_RE`, then canonicalises exactly like the primary pass
+ * (same `canonicalizeSegment`, same wrapper-peeling rules, same
+ * `MAX_NORMALIZE_LENGTH` bound). Closes the gap `BOUNDARY_RE`'s own
+ * comment names: `A=x&env -C /tmp git status` and `echo hi & nice git
+ * status` were ungated because a wrapper can only be peeled after a
+ * recognised boundary, and a bare `&` was not one.
+ *
+ * Return type deliberately has NO `targetDir`/`targetBase` — not merely
+ * "always null under this alphabet", genuinely ABSENT from the type, so
+ * no consumer can read one by mistake. Reason: a bare `&` is ALSO how
+ * bash spells a background job (`git -C /x push &`) and how a redirect
+ * merges streams (`git -C /x log 2>&1`, `... &> out`). Under THIS
+ * alphabet each of those splits into a spurious extra "segment", which
+ * `segmentAndCanonicalize`'s own non-git-segment ambiguity rule (a
+ * segment that starts a new command and is not itself a git invocation
+ * forces `targetDir` to `null` — see its G1 comment) would turn into a
+ * wrong-shaped loss for a case the PRIMARY pass still resolves correctly
+ * today. Pinned in `tests/runtime/command-normalize.test.ts`'s "aabbad63
+ * groundwork" describe block, which exercises ONLY `normalizeCommand`
+ * (the primary pass), never this function — `targetDir`/`targetBase`
+ * stay the primary pass's property alone.
+ *
+ * Only consulted by `policyMatchesEvent`'s third arm
+ * (`src/runtime/intercept.ts`), and only when a policy's `bash_match`
+ * regex has already missed BOTH the raw command and the primary
+ * normalised form — see that module and `src/cli/policy/intercept.ts`
+ * for the memoised-thunk threading that keeps this computation off the
+ * common (already-matched) path.
+ */
+export function normalizeCommandAmpAware(command: string): AmpAwareNormalizedCommand {
+  if (typeof command !== "string" || command.length === 0) {
+    return { normalized: typeof command === "string" ? command : "", truncated: false };
+  }
+  if (command.length > MAX_NORMALIZE_LENGTH) {
+    return { normalized: command, truncated: true };
+  }
+  try {
+    return { normalized: segmentAndCanonicalize(command, AMP_BOUNDARY_RE).normalized, truncated: false };
+  } catch {
+    return { normalized: command, truncated: false };
+  }
+}
+
 function normalizeCommandInner(command: string): NormalizedCommand {
+  const { normalized, targetDir, targetBase } = segmentAndCanonicalize(command, BOUNDARY_RE);
+  return { normalized, targetDir, targetBase, truncated: false };
+}
+
+/**
+ * The shared segmentation + canonicalisation engine behind BOTH
+ * normalisation passes (task aabbad63). Parameterised on the boundary
+ * alphabet (`boundaryRe`) instead of closing over a single module-level
+ * regex, so the primary pass (`BOUNDARY_RE`) and the ampersand-aware
+ * second pass (`AMP_BOUNDARY_RE`) never share regex scan state: each
+ * call is handed its OWN regex object, and `findNextBoundary` resets
+ * that object's own `lastIndex` before every use, so the two passes
+ * (even if a future change nested one inside the other, which nothing
+ * here does today) can never observe or clobber each other's position.
+ * `targetDir`/`targetBase` ARE still computed here regardless of which
+ * alphabet drove the segmentation — `normalizeCommandAmpAware` below
+ * simply never returns them to its own caller; see that function's
+ * comment for why exposing them would be wrong under the amp alphabet
+ * specifically.
+ */
+function segmentAndCanonicalize(
+  command: string,
+  boundaryRe: RegExp,
+): { normalized: string; targetDir: string | null; targetBase: string | null } {
   const parts: string[] = [];
   const explicitTargets = new Set<string>();
   let explicitTargetBase: string | null = null;
@@ -558,7 +716,7 @@ function normalizeCommandInner(command: string): NormalizedCommand {
   // least one boundary token's length each iteration a boundary is
   // found, and the loop stops once none remain.
   for (;;) {
-    const boundary = findNextBoundary(command, i);
+    const boundary = findNextBoundary(command, i, boundaryRe);
     const segEnd = boundary ? boundary.start : n;
     const segmentText = command.slice(i, segEnd);
     const result = canonicalizeSegment(segmentText);
@@ -658,16 +816,25 @@ function normalizeCommandInner(command: string): NormalizedCommand {
     targetDir = null;
   }
 
-  return { normalized: parts.join(""), targetDir, targetBase, truncated: false };
+  return { normalized: parts.join(""), targetDir, targetBase };
 }
 
-/** Find the earliest shell boundary token at or after `from`. Returns null when none remain. */
+/**
+ * Find the earliest shell boundary token at or after `from`, under the
+ * CALLER-SUPPLIED boundary alphabet. Takes `boundaryRe` as an explicit
+ * parameter rather than closing over a single module-level regex (task
+ * aabbad63) so the primary pass (`BOUNDARY_RE`) and the ampersand-aware
+ * second pass (`AMP_BOUNDARY_RE`) each mutate only their OWN regex
+ * object's `lastIndex` — resetting it here, on every call, before
+ * `exec`, so neither pass's scan position can leak into the other's.
+ */
 function findNextBoundary(
   s: string,
   from: number,
+  boundaryRe: RegExp,
 ): { start: number; token: string } | null {
-  BOUNDARY_RE.lastIndex = from;
-  const m = BOUNDARY_RE.exec(s);
+  boundaryRe.lastIndex = from;
+  const m = boundaryRe.exec(s);
   return m === null ? null : { start: m.index, token: m[0] };
 }
 

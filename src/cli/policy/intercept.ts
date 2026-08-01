@@ -29,6 +29,8 @@ import { parseBashPrefix } from "../../runtime/bash-prefix-parse.js";
 import {
   MAX_NORMALIZE_LENGTH,
   normalizeCommand,
+  normalizeCommandAmpAware,
+  type AmpAwareNormalizedCommand,
   type NormalizedCommand,
 } from "../../runtime/command-normalize.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
@@ -433,13 +435,30 @@ export async function runInterceptCli(
   // Computed once here (not per-policy) so `intercept()` below can
   // thread the SAME `NormalizedCommand` into every `bash_match` trigger
   // check instead of each one recomputing it.
+  const bashCommand = event.tool_name === "Bash" ? readBashCommand(event.tool_input) : null;
   const normalizedCommand: NormalizedCommand | undefined =
-    event.tool_name === "Bash"
-      ? (() => {
-          const cmd = readBashCommand(event.tool_input);
-          return cmd === null ? undefined : normalizeCommand(cmd);
-        })()
-      : undefined;
+    bashCommand === null ? undefined : normalizeCommand(bashCommand);
+  // Memoised thunk for the ampersand-aware SECOND normalisation pass
+  // (task aabbad63). Unlike `normalizedCommand` above — eagerly computed
+  // once per Bash event, because `policyMatchesEvent`'s first two arms
+  // may need it on every raw-miss — the amp-aware pass is consulted only
+  // as a THIRD, additional arm, and only when a policy's regex has
+  // already missed BOTH the raw command and `normalizedCommand`; most
+  // events never reach it at all. Computing it eagerly here would pay
+  // its segmentation cost on the common path for every single Bash call
+  // inside the ~1000ms hook budget, whether or not any policy ends up
+  // needing it. Wrapping it in a lazily-evaluated, self-memoising thunk
+  // instead lets `policyMatchesEvent` call it from inside the manifest-
+  // wide `matching` loop below (once per policy that still hasn't
+  // matched) while the actual segmentation work happens AT MOST ONCE per
+  // event — the same "computed once per event, not once per policy"
+  // discipline `normalizedCommand` already has, just deferred until
+  // first use instead of forced up front.
+  let ampNormalizedCommandCache: AmpAwareNormalizedCommand | undefined;
+  const ampNormalizedCommandThunk: (() => AmpAwareNormalizedCommand) | undefined =
+    bashCommand === null
+      ? undefined
+      : () => (ampNormalizedCommandCache ??= normalizeCommandAmpAware(bashCommand));
   // Above `MAX_NORMALIZE_LENGTH`, `normalizeCommand` skips normalisation
   // entirely and `truncated` comes back `true`. Raw matching still
   // applies regardless (`policyMatchesEvent`'s raw-OR-normalised
@@ -553,6 +572,7 @@ export async function runInterceptCli(
       ...(cwdGitContext.sha.length > 0 && { currentHeadSha: cwdGitContext.sha }),
       ...(riskContext && { riskContext }),
       ...(normalizedCommand && { normalizedCommand }),
+      ...(ampNormalizedCommandThunk && { ampNormalizedCommandThunk }),
     });
   } finally {
     // Tear down the pooled grounding-mcp session (no-op for injected test
