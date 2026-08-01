@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
@@ -133,6 +134,13 @@ describe("auditCorpus counting", () => {
     expect(arm.phantoms).toEqual(["phantom"]);
     expect(must(arm.perBaseline.get("master"), "baseline master").phantomFixed).toBe(1);
     expect(result.candidateTotals.phantoms).toBe(1);
+    // Pin the rendered VALUES, not just the column headers: a report
+    // printing the right columns with fabricated zeros must go red.
+    const report = renderReport(result);
+    expect(report).toMatch(/"\|"\s+2\s+2\s+0\s+0\s+1\s+0\s+NO ENTERED SHAPES/);
+    expect(report).toContain("TOTAL candidate: phantoms = 1, wrong targets = 0");
+    expect(report).toContain("phantom spellings:");
+    expect(report).toContain('"phantom"');
   });
 });
 
@@ -207,6 +215,7 @@ describe("the per-arm gate", () => {
     expect(result.candidateTotals.meaningfulZero).toBe(false);
     const report = renderReport(result);
     expect(report).toContain("phantom/wrong zeros do not cover 1 arm(s) whose shapes never ran");
+    expect(report).toMatch(/"dead"\s+1\s+0\s+0\s+0\s+0\s+0\s+NO SHAPE RAN/);
   });
 
   it("pins the column sets of both rendered tables", () => {
@@ -279,7 +288,9 @@ function selfTestPair(opts: {
   });
   const sabotaged = audit({
     shapes: [{ arm: " ", cmd: "sab-space" }],
-    runReal: opts.sabotagedRunReal ?? (() => null),
+    // The realistic sabotaged shape: it RUNS (the `;` tails execute the
+    // probe) but never ENTERS the target — matching the tightened rung 5.
+    runReal: opts.sabotagedRunReal ?? (() => "/stayed/home"),
     candidateParse: identityParse,
     baselines: [{ name: SELF_TEST_IDENTITY_BASELINE, parse: identityParse }],
   });
@@ -333,6 +344,63 @@ describe("evaluateSelfTest", () => {
     const { failures, warnings } = evaluateSelfTest(selfTestPair({ identityParse: () => null }));
     expect(failures).toEqual([]);
     expect(warnings.some((w) => w.includes("no correct target on the healthy separator-less arm"))).toBe(true);
+  });
+
+  it("distinguishes a dead referee (nothing ran) from a working sabotage", () => {
+    const { failures } = evaluateSelfTest(selfTestPair({ sabotagedRunReal: () => null }));
+    expect(failures.some((f) => f.includes("referee died"))).toBe(true);
+  });
+
+  it("fails when the sabotaged report loses the NOT-a-global-zero marker while the gate still fires", () => {
+    const pair = selfTestPair();
+    const markerless = {
+      ...pair.sabotaged,
+      perBaselineTotals: pair.sabotaged.perBaselineTotals.map((t: any) => ({
+        ...t,
+        unmeasuredArms: [],
+        meaningfulZero: true,
+      })),
+    };
+    const { failures } = evaluateSelfTest({ healthy: pair.healthy, sabotaged: markerless });
+    expect(failures.some((f) => f.includes("NOT-a-global-zero marker"))).toBe(true);
+  });
+
+  it("fails when an audit pair is missing the separator-less arm entirely", () => {
+    const pair = selfTestPair();
+    const armless = audit({
+      shapes: [{ arm: ">o ", cmd: "redirect" }],
+      runReal: () => TARGET,
+      candidateParse: () => TARGET,
+      baselines: [{ name: SELF_TEST_IDENTITY_BASELINE, parse: () => TARGET }],
+    });
+    const { failures } = evaluateSelfTest({ healthy: armless, sabotaged: pair.sabotaged });
+    expect(failures.some((f) => f.includes("missing the separator-less arm entirely"))).toBe(true);
+  });
+});
+
+describe("resolveBash", () => {
+  it("ignores directories and non-executable files named bash, finds an executable one, skips empty entries", () => {
+    const base = mkdtempSync(join(tmpdir(), "resolve-bash-"));
+    try {
+      const dirTrap = join(base, "dir-trap");
+      mkdirSync(join(dirTrap, "bash"), { recursive: true });
+      const nonExec = join(base, "non-exec");
+      mkdirSync(nonExec);
+      writeFileSync(join(nonExec, "bash"), "#!/bin/sh\n");
+      chmodSync(join(nonExec, "bash"), 0o644);
+      const real = join(base, "real");
+      mkdirSync(real);
+      writeFileSync(join(real, "bash"), "#!/bin/sh\n");
+      chmodSync(join(real, "bash"), 0o755);
+
+      expect(resolveBash(dirTrap)).toBe(null);
+      expect(resolveBash(nonExec)).toBe(null);
+      expect(resolveBash("")).toBe(null);
+      expect(resolveBash(`${delimiter}${delimiter}`)).toBe(null);
+      expect(resolveBash([dirTrap, nonExec, real].join(delimiter))).toBe(join(real, "bash"));
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });
 

@@ -78,10 +78,23 @@
 // first). Runs offline. bash is resolved from the ambient PATH once and
 // invoked by absolute path; the corpus child processes get a PATH
 // containing ONLY the shim directory, so no corpus command can resolve
-// a real binary — "only the probe shim is executable" is structural.
+// a real binary VIA PATH. (That constrains lookups, not absolute
+// paths: the shim's interpreter is the real bash, and buildCorpus
+// emitting no absolute binary paths is a property of the generator —
+// so today nothing but the probe shim, via its bash interpreter,
+// executes.)
 
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  accessSync,
+  chmodSync,
+  constants as fsConstants,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -302,7 +315,7 @@ export function renderReport(audit) {
       `TOTAL vs ${totals.name} (measured arms only): LOST honest targets = ${totals.lost}, ` +
         `degraded to wrong = ${totals.degradedToWrong}`,
     );
-    if (totals.unmeasuredArms.length > 0) {
+    if (!totals.meaningfulZero) {
       lines.push(`ARMS THAT PROVE NOTHING vs ${totals.name} (excluded from every total, by construction):`);
       for (const { arm, reason } of totals.unmeasuredArms) {
         lines.push(`   ${q(arm)} — ${reason}`);
@@ -330,7 +343,7 @@ export function renderReport(audit) {
         String(st.candidateHits).padStart(10) +
         String(st.phantoms.length).padStart(10) +
         String(st.candidateWrong.length).padStart(14) +
-        (st.ran === 0 ? "  NO SHAPE RAN" : ""),
+        (st.ran === 0 ? "  NO SHAPE RAN" : st.entered === 0 ? "  NO ENTERED SHAPES" : ""),
     );
   }
   lines.push(
@@ -340,7 +353,7 @@ export function renderReport(audit) {
   lines.push(
     `TOTAL candidate: phantoms = ${audit.candidateTotals.phantoms}, wrong targets = ${audit.candidateTotals.wrong}`,
   );
-  if (audit.candidateTotals.armsWithoutObservation.length > 0) {
+  if (!audit.candidateTotals.meaningfulZero) {
     lines.push(
       `!! phantom/wrong zeros do not cover ${audit.candidateTotals.armsWithoutObservation.length} arm(s) whose shapes never ran: ` +
         audit.candidateTotals.armsWithoutObservation.map((arm) => q(arm)).join(", "),
@@ -354,10 +367,26 @@ export function renderReport(audit) {
   return lines.join("\n");
 }
 
-/** Resolve bash from the ambient PATH once; null when absent. */
+/**
+ * Resolve bash from the ambient PATH once; null when absent. Mirrors
+ * the execvp-faithful checks of the spawn guard's resolveAbsolute
+ * (regular file + executable, not mere existence — a DIRECTORY named
+ * `bash` on PATH must not be "found"). Empty PATH entries (POSIX: cwd)
+ * are deliberately skipped: a referee picked up from whatever cwd the
+ * tool happens to run in would be exactly the kind of ambient
+ * dependency this instrument exists to avoid.
+ */
 export function resolveBash(pathEnv = process.env.PATH ?? "") {
   for (const dir of pathEnv.split(delimiter)) {
-    if (dir.length > 0 && existsSync(join(dir, "bash"))) return join(dir, "bash");
+    if (dir.length === 0) continue;
+    const candidate = join(dir, "bash");
+    try {
+      if (!statSync(candidate).isFile()) continue;
+      accessSync(candidate, fsConstants.X_OK);
+      return candidate;
+    } catch {
+      continue;
+    }
   }
   return null;
 }
@@ -398,6 +427,15 @@ export function createBashWorkspace() {
       return null;
     }
   };
+  // Shim positive control: run the shim once before handing the
+  // workspace out. A shim that cannot execute (e.g. a bash path with a
+  // space breaking the shebang) would otherwise surface as the generic
+  // "environment or corpus broken" self-test failure, pointing the
+  // operator at the cwd instead of the interpreter.
+  if (runReal("probeshim") === null) {
+    rmSync(dir, { recursive: true, force: true });
+    throw new Error(`the probe shim did not execute — check the bash interpreter path in its shebang: ${bash}`);
+  }
   return {
     dir,
     targetDir,
@@ -489,18 +527,25 @@ export function evaluateSelfTest({ healthy, sabotaged }) {
   }
 
   // 5. Sabotage detection, entered-based delta so parser state cannot
-  //    satisfy it: the sabotaged separator-less arm must fail the gate
-  //    for a CORPUS reason (its shapes cannot enter), while the healthy
-  //    one entered (asserted in 1).
+  //    satisfy it: the sabotaged separator-less arm must reproduce the
+  //    exact round-3 shape — its shapes RUN (via the `;` tails) but
+  //    never ENTER — and the gate must say so. A dead referee (nothing
+  //    ran) is a different defect and gets its own message instead of
+  //    silently satisfying this control.
   if (sabotagedSpace.entered > 0) {
     failures.push(
       "sabotaged corpus (missing space in the separator-less arm) still ENTERED the target — the sabotage is inert " +
         "and this self-test is not testing anything",
     );
+  } else if (sabotagedSpace.ran === 0) {
+    failures.push(
+      "sabotaged corpus: no separator-less shape ran at all — the referee died between the audits; " +
+        "this proves nothing about the gate",
+    );
   } else {
     const sabIdentity = sabotagedSpace.perBaseline.get(SELF_TEST_IDENTITY_BASELINE);
     const reason = sabIdentity === undefined ? null : sabotaged.gateReason(sabotagedSpace, sabIdentity);
-    if (reason === null) {
+    if (reason !== "NO ENTERED SHAPES") {
       failures.push(
         "sabotaged corpus (missing space in the separator-less arm) was NOT flagged as evidence-free — " +
           "the per-arm gate is not doing its job",
@@ -584,6 +629,18 @@ export function parseArgs(argv) {
 export async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
 
+  // Validate the arguments BEFORE the ~340-spawn self-test so an
+  // argument mistake costs an error message, not an instrument run.
+  if (!args.selfTestOnly && args.baselines.length < 2) {
+    console.error(
+      "measure-bash-prefix-parse: a measurement run needs at least two --baseline name=path builds " +
+        "(typically master and the shipped release) — a single reference point is how the round-4 corpus " +
+        "sampled itself blind. Use --self-test to run the instrument check alone.",
+    );
+    process.exitCode = 1;
+    return;
+  }
+
   const selfTest = await runSelfTest({ candidatePath: args.candidate });
   if (!selfTest.ok) {
     console.error("measure-bash-prefix-parse: SELF-TEST FAILED — no measurement below can be trusted:");
@@ -596,16 +653,6 @@ export async function main(argv = process.argv.slice(2)) {
     console.warn(`measure-bash-prefix-parse: warning: ${warning}`);
   }
   if (args.selfTestOnly) return;
-
-  if (args.baselines.length < 2) {
-    console.error(
-      "measure-bash-prefix-parse: a measurement run needs at least two --baseline name=path builds " +
-        "(typically master and the shipped release) — a single reference point is how the round-4 corpus " +
-        "sampled itself blind. Use --self-test to run the instrument check alone.",
-    );
-    process.exitCode = 1;
-    return;
-  }
 
   const candidateParse = await loadParser(args.candidate, "candidate");
   const baselines = [];
