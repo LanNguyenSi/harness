@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { SOLO_TEMPLATE, TEAM_TEMPLATE } from "../../src/cli/init/profiles.js";
+import { composeCustom } from "../../src/cli/init/composer.js";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import { parseManifest } from "../../src/schema/index.js";
 
@@ -53,14 +55,6 @@ describe("FULL_TEMPLATE: runtime-reality stays commented (no active no-op hook)"
   });
 });
 
-// Regression guard for the YAML-render round-trip of the new
-// expire_on_bash_match defaults (task f54e0ecb). The unit tests in
-// pack-hook-post-tool-use.test.ts use direct JS string literals which
-// bypasses the YAML render step entirely; this test catches the
-// off-by-one-backslash class of bug where the templates emit a regex
-// that compiles to literal "\b" (backslash + b) instead of \b
-// (word boundary). Trace: TS source → runtime string → YAML disk →
-// yaml.parse → new RegExp → .test against a realistic Bash command.
 // Task d834a065. bash starts a new command after a single `&`, but the
 // boundary alternation every policy trigger shares only listed `&&`, so
 // `A=x&git push`, `A=x&gh pr merge`, `A=x&harness pause` (an
@@ -98,6 +92,15 @@ describe("profile templates: single `&` is a command boundary in every policy tr
     { plain: "gh pr create", amp: ["A=x&gh pr create"] },
     { plain: "npm publish", amp: ["A=x&npm publish"] },
     { plain: "harness pause", amp: ["A=x&harness pause", "sleep 0 & harness pause"] },
+    // The two other operator_only denies. Without these the loop skipped
+    // them (no plain verb matched their triggers) while the `asserted > 0`
+    // guard was satisfied vacuously by the six above — measured: reverting
+    // either family's alphabet left the whole suite green.
+    {
+      plain: "env -u CLAUDE_CODE_SESSION_ID sh",
+      amp: ["A=x&env -u CLAUDE_CODE_SESSION_ID sh", "sleep 0 & env -u CLAUDE_CODE_SESSION_ID sh"],
+    },
+    { plain: "tee .harness-paused", amp: ["A=x&tee .harness-paused", "sleep 0 & cp a .harness-paused"] },
   ];
 
   // Only FULL ships bash_match policies today (solo/team gate through
@@ -120,10 +123,17 @@ describe("profile templates: single `&` is a command boundary in every policy tr
         }
       }
     }
-    // Positive control for the assertion loop itself: a template that
-    // declares triggers but exercises none would otherwise pass
-    // vacuously.
+    // Positive control for the assertion loop itself. `asserted > 0` is
+    // not enough: with six of eight triggers covered it stayed green
+    // while two operator_only denies were silently skipped. Require
+    // EVERY declared trigger to have been exercised, so a policy added
+    // to a template later cannot join the skipped set unnoticed.
     expect(asserted, "template declares bash_match triggers but none was exercised").toBeGreaterThan(0);
+    const exercised = new Set(
+      triggers.filter((t) => VERBS.some(({ plain }) => t.re.test(plain))).map((t) => t.name),
+    );
+    const skipped = triggers.filter((t) => !exercised.has(t.name)).map((t) => t.name);
+    expect(skipped, `no VERBS entry exercises these triggers: ${skipped.join(", ")}`).toEqual([]);
   });
 
   it.each(TEMPLATES)("%s: `&&` keeps matching (subsumed, not dropped)", (_, src) => {
@@ -147,6 +157,60 @@ describe("profile templates: single `&` is a command boundary in every policy tr
     expect(policyTriggers(FULL_TEMPLATE).length).toBeGreaterThan(0);
   });
 
+  // The Custom profile is a fourth, independently-authored emitter that
+  // the three template constants do not cover. It shipped the old
+  // alphabet after the templates were fixed, so the same CRITICAL
+  // bypass stayed live for every operator who picked Custom.
+  it("composeCustom() output carries the same `&` boundary as the templates", () => {
+    const composed = composeCustom({
+      packs: [],
+      mcps: [],
+      policies: ["preflight-before-investigation", "preflight-before-push", "dogfood-before-release"],
+    });
+    const triggers = policyTriggers(composed.yaml);
+    expect(triggers.length, "composed manifest declares no bash_match trigger to check").toBeGreaterThan(0);
+    let asserted = 0;
+    for (const { plain, amp } of VERBS) {
+      for (const t of triggers.filter((x) => x.re.test(plain))) {
+        for (const cmd of amp) {
+          expect(t.re.test(cmd), `${t.name} must match ${JSON.stringify(cmd)}`).toBe(true);
+          asserted += 1;
+        }
+      }
+    }
+    expect(asserted).toBeGreaterThan(0);
+  });
+
+  // One cheap guard over every emitter at once: no shipped bash_match
+  // string may carry the old `&&`-only boundary alternative. This is
+  // what would have caught composer.ts, the copy-paste policy example
+  // and dogfood/harness.yaml in one go.
+  it("no shipped bash_match string carries the old `&&|` boundary alternative", () => {
+    const roots = [
+      "src/cli/init/templates.ts",
+      "src/cli/init/profiles.ts",
+      "src/cli/init/composer.ts",
+      "docs/examples/full-manifest.yaml",
+      "docs/examples/full-manifest.expected.yaml",
+      // Shipped copy-paste artefacts: the docs are the propagation
+      // vector, so an operator following them must not be handed the
+      // hole this task closed.
+      "docs/examples/policies/02-clean-check-before-push.yaml",
+      "docs/writing-custom-policies.md",
+      "docs/ARCHITECTURE.md",
+    ];
+    const offenders: string[] = [];
+    for (const rel of roots) {
+      const text = readFileSync(new URL(`../../${rel}`, import.meta.url), "utf8");
+      for (const line of text.split("\n")) {
+        if (!line.includes("bash_match")) continue;
+        if (line.includes("expire_on_bash_match")) continue; // separate anchored family
+        if (line.includes("&&|\\(") || line.includes("&&|\\\\(")) offenders.push(`${rel}: ${line.trim()}`);
+      }
+    }
+    expect(offenders, `these still carry the pre-d834a065 boundary:\n${offenders.join("\n")}`).toEqual([]);
+  });
+
   it.each(TEMPLATES)("%s: expire_on_bash_match is a separate anchored family, untouched", (_, src) => {
     const parsed = parseManifest(parseYaml(src));
     const pack = parsed.policy_packs.find((p) => p.name === "understanding-before-execution");
@@ -162,6 +226,14 @@ describe("profile templates: single `&` is a command boundary in every policy tr
   });
 });
 
+// Regression guard for the YAML-render round-trip of the new
+// expire_on_bash_match defaults (task f54e0ecb). The unit tests in
+// pack-hook-post-tool-use.test.ts use direct JS string literals which
+// bypasses the YAML render step entirely; this test catches the
+// off-by-one-backslash class of bug where the templates emit a regex
+// that compiles to literal "\b" (backslash + b) instead of \b
+// (word boundary). Trace: TS source → runtime string → YAML disk →
+// yaml.parse → new RegExp → .test against a realistic Bash command.
 describe("profile templates: expire_on_bash_match round-trips to functioning regex", () => {
   function bashMatchers(templateSource: string): RegExp[] {
     const parsed = parseManifest(parseYaml(templateSource));

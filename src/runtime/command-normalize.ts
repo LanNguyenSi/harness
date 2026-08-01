@@ -463,13 +463,24 @@ export const MAX_NORMALIZE_LENGTH = 100_000;
  * Shell boundary tokens a `bash_match` regex can anchor on, expressed as
  * ONE alternation so `findNextBoundary` does a single regex scan per
  * remaining span instead of one `indexOf` per token (F3 fix, review
- * round 2026-07-27). Order among the alternatives does not affect
- * correctness: no two of these tokens can start at the same string
- * position (only `&&` is multi-character, and no other alternative
- * starts with `&`), so there is no tie for the regex engine's leftmost-
- * match rule to break.
+ * round 2026-07-27).
+ *
+ * ORDER IS LOAD-BEARING HERE (task `d834a065`): `&&` and `&` DO start at
+ * the same position, so `&&` must stay to the LEFT. JS alternation is
+ * leftmost-alternative-wins, so listing `&` first would tokenise `&&` as
+ * two adjacent single-`&` boundaries and split a segment where bash has
+ * one. The earlier version of this comment reasoned that no two tokens
+ * can collide because "only `&&` is multi-character, and no other
+ * alternative starts with `&`" — that assumption is what adding `&`
+ * breaks, hence this note.
+ *
+ * `&` is a boundary because bash starts a new command after it (`sleep 0
+ * & git status` runs git). It was absent here and from every shipped
+ * trigger regex until `d834a065`; while the triggers were fixed and this
+ * was not, `A=x&env -C /tmp git status` stayed completely ungated
+ * because the wrapper could only be peeled after a recognised boundary.
  */
-const BOUNDARY_RE = /\n|&&|;|\||\(/g;
+const BOUNDARY_RE = /\n|&&|&|;|\||\(/g;
 
 /** A target value starting with `~` — not expanded, treated as unparseable (F5). */
 function isTildeTarget(dir: string): boolean {
@@ -558,7 +569,7 @@ function normalizeCommandInner(command: string): NormalizedCommand {
       !(precedingBoundaryToken === null && leadingCd !== null)
     ) {
       // G1 fix (HIGH, review round 2, 2026-07-27): a segment that STARTS
-      // a new command (follows `&&`/`;`/`\n`/`(` — or is the very first
+      // a new command (follows `&&`/`&`/`;`/`\n`/`(` — or is the very first
       // segment in the command — never a bare `|`, which keeps running
       // in the SAME directory as whatever it reads from) and is NOT
       // itself a git invocation is a genuinely DIFFERENT command that

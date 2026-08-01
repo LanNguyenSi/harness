@@ -350,7 +350,7 @@ policies:
     trigger:
       event: PreToolUse
       match: "Bash"
-      bash_match: '(^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*(npm publish\b|git( -C \S+)* tag v)'
+      bash_match: '(^|\n|;|\||&|\()\s*(\w+=\S+\s+)*(npm publish\b|git( -C \S+)* tag v)'
     requires:
       ledger_tag: "dogfood:${SESSION_ID}"
       within: 24h
@@ -897,7 +897,7 @@ hooks:
   - name: require-preflight-evidence
     event: PreToolUse
     match: "Bash"
-    bash_match: '(^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*git( -C \S+)* (status|log|diff|branch)\b'
+    bash_match: '(^|\n|;|\||&|\()\s*(\w+=\S+\s+)*git( -C \S+)* (status|log|diff|branch)\b'
     # Shell wrapper that reads ${REPO} from the latest preflight ledger entry
     # and exits non-zero if it's missing, stale, or `ready: false`.
     command: ~/.claude/hooks/require-preflight-evidence.sh
@@ -922,7 +922,7 @@ policies:
     trigger:
       event: PreToolUse
       match: "Bash"
-      bash_match: '(^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*(npm publish\b|git( -C \S+)* tag v)'
+      bash_match: '(^|\n|;|\||&|\()\s*(\w+=\S+\s+)*(npm publish\b|git( -C \S+)* tag v)'
     requires:
       ledger_tag: "dogfood:${SESSION_ID}"
       within: 24h
@@ -939,7 +939,7 @@ policies:
     trigger:
       event: PreToolUse
       match: "Bash"
-      bash_match: '(^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*git( -C \S+)* (status|log|diff|branch)\b'
+      bash_match: '(^|\n|;|\||&|\()\s*(\w+=\S+\s+)*git( -C \S+)* (status|log|diff|branch)\b'
     requires:
       ledger_tag: "preflight:${REPO}"
       within: 1h
@@ -1037,7 +1037,7 @@ Hooks
   ✓ git-preflight                SessionStart, blocking: false
   ✓ require-review-evidence      PreToolUse mcp__agent-tasks__pull_requests_merge, blocking: hard
   ✓ require-dogfood-evidence     PreToolUse Bash, blocking: hard
-  ✓ require-preflight-evidence   PreToolUse Bash (^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*git( -C \S+)* (status|log|diff|branch)\b, blocking: hard
+  ✓ require-preflight-evidence   PreToolUse Bash (^|\n|;|\||&|\()\s*(\w+=\S+\s+)*git( -C \S+)* (status|log|diff|branch)\b, blocking: hard
 
 Policies
   ✓ review-before-merge             last evaluated 2026-04-26T18:14Z (allowed)

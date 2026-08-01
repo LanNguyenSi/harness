@@ -35,7 +35,7 @@ hooks:
     event: PreToolUse
     command: harness policy intercept
     match: "Bash"
-    bash_match: "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b"
+    bash_match: "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b"
     blocking: hard
     budget_ms: 2000
 
@@ -45,7 +45,7 @@ policies:
     trigger:
       event: PreToolUse
       match: "Bash"
-      bash_match: "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b"
+      bash_match: "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b"
     requires:
       ledger_tag: "clean-check:${BRANCH}"
       within: 10m

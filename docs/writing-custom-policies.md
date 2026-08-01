@@ -151,7 +151,7 @@ policies:
     trigger:
       event: PreToolUse
       match: "Bash"
-      bash_match: "(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b"
+      bash_match: "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b"
     requires:
       ledger_tag: "clean-check:${BRANCH}"
       within: 10m
@@ -213,7 +213,7 @@ policies:
     trigger:
       event: PreToolUse
       match: "Bash"
-      bash_match: '(^|\n|;|\||&&|\()\s*(\w+=\S*\s+)*harness\s+(pause|resume)\b'
+      bash_match: '(^|\n|;|\||&|\()\s*(\w+=\S*\s+)*harness\s+(pause|resume)\b'
     operator_only: true
     hook: deny-kill-switch-bash
     enforcement: block
@@ -314,7 +314,7 @@ policies:
     trigger:
       event: PreToolUse
       match: "Bash"
-      bash_match: '(^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*gh pr merge\b'
+      bash_match: '(^|\n|;|\||&|\()\s*(\w+=\S+\s+)*gh pr merge\b'
     requires:
       ledger_tag: "review:${BRANCH}"
     hook: require-review-evidence-bash
@@ -370,7 +370,7 @@ full ledger query, extract substitutions, and match trace.
 | `policies[].description` | yes | One line. Shows up in `harness describe` and audit context. |
 | `policies[].trigger.event` | yes | `PreToolUse` for blockers (the most common). Other events parse but rarely make sense for `requires` gates. |
 | `policies[].trigger.match` | optional | Substring match against the tool name. For MCP tools: `mcp__<server>__<tool>`. For built-ins: `Bash`, `Edit`, `Write`, ... |
-| `policies[].trigger.bash_match` | optional | Regex against `toolArgs.command` when `match: Bash`. Anchor at command start (`^` or `(^|\n|;|\\||&&|\\()`) to catch env-prefixes and subshells. |
+| `policies[].trigger.bash_match` | optional | Regex against `toolArgs.command` when `match: Bash`. Anchor at command start (`^` or `(^|\n|;|\\||&|\\()`) to catch env-prefixes and subshells. |
 | `policies[].trigger.path_match` | optional | Regex against file paths for Edit/Write/MultiEdit triggers. |
 | `policies[].trigger.extract` | optional | Map of `${VAR}` → JSONPath against the tool payload. Required if `ledger_tag` references a non-builtin `${VAR}`. |
 | `policies[].requires.ledger_tag` | yes, unless `operator_only: true` | Tag the runtime queries grounding-mcp for. Substring/regex against ledger `content`. |
