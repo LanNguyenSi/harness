@@ -102,7 +102,7 @@ hooks:
     event: PreToolUse
     command: ~/.claude/hooks/require-review-evidence.sh
     match: Bash
-    bash_match: (^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*gh pr merge\b
+    bash_match: (^|\n|;|\||&|\()\s*(\w+=\S+\s+)*gh pr merge\b
     blocking: hard
     budget_ms: 2000
   - name: require-dogfood-evidence
@@ -115,7 +115,7 @@ hooks:
     event: PreToolUse
     command: ~/.claude/hooks/require-preflight-evidence.sh
     match: Bash
-    bash_match: (^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*git( -C \S+)* (status|log|diff|branch)\b
+    bash_match: (^|\n|;|\||&|\()\s*(\w+=\S+\s+)*git( -C \S+)* (status|log|diff|branch)\b
     blocking: hard
     budget_ms: 1000
   - name: require-review-subagent-evidence
@@ -128,35 +128,35 @@ hooks:
     event: PreToolUse
     command: ~/.claude/hooks/require-review-subagent-evidence.sh
     match: Bash
-    bash_match: (^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*gh pr create\b
+    bash_match: (^|\n|;|\||&|\()\s*(\w+=\S+\s+)*gh pr create\b
     blocking: hard
     budget_ms: 2000
   - name: require-preflight-push-evidence
     event: PreToolUse
     command: ~/.claude/hooks/require-preflight-push-evidence.sh
     match: Bash
-    bash_match: (^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*git( -C \S+)* push\b
+    bash_match: (^|\n|;|\||&|\()\s*(\w+=\S+\s+)*git( -C \S+)* push\b
     blocking: hard
     budget_ms: 1000
   - name: deny-kill-switch-bash
     event: PreToolUse
     command: ~/.claude/hooks/deny-kill-switch.sh
     match: Bash
-    bash_match: (^|\n|;|\||&&|\()\s*(\w+=\S*\s+)*(?:npx\s+|\S*/)?harness\s+(["\x27]?)(?:pause|resume|gate\s+(["\x27]?)(?:disable|enable)\4)\3(?![\w-])
+    bash_match: (^|\n|;|\||&|\()\s*(\w+=\S*\s+)*(?:npx\s+|\S*/)?harness\s+(["\x27]?)(?:pause|resume|gate\s+(["\x27]?)(?:disable|enable)\4)\3(?![\w-])
     blocking: hard
     budget_ms: 1000
   - name: deny-session-env-strip-bash
     event: PreToolUse
     command: ~/.claude/hooks/deny-session-env-strip.sh
     match: Bash
-    bash_match: (^|\n|;|\||&&|\()\s*(\w+=\S*\s+)*(env\b[^;\n|&]*-u\s*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\b|env\b[^;\n|&]*--unset(?:=|\s+)(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\b|unset\s+(\S+\s+)*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\b|(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)=(?=\s))
+    bash_match: (^|\n|;|\||&|\()\s*(\w+=\S*\s+)*(env\b[^;\n|&]*-u\s*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\b|env\b[^;\n|&]*--unset(?:=|\s+)(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\b|unset\s+(\S+\s+)*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\b|(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)=(?=\s))
     blocking: hard
     budget_ms: 1000
   - name: deny-sentinel-write-bash
     event: PreToolUse
     command: ~/.claude/hooks/deny-sentinel-write.sh
     match: Bash
-    bash_match: (^|\n|;|\||&&|\()\s*(\w+=\S*\s+)*(tee|cp)\b[^;\n|&]*\.harness-paused\b|>{1,2}\s*\S*\.harness-paused\b
+    bash_match: (^|\n|;|\||&|\()\s*(\w+=\S*\s+)*(tee|cp)\b[^;\n|&]*\.harness-paused\b|>{1,2}\s*\S*\.harness-paused\b
     blocking: hard
     budget_ms: 1000
   - name: risk-gate
@@ -193,7 +193,7 @@ policies:
     trigger:
       event: PreToolUse
       match: Bash
-      bash_match: (^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*gh pr merge\b
+      bash_match: (^|\n|;|\||&|\()\s*(\w+=\S+\s+)*gh pr merge\b
     requires:
       ledger_tag: review:${BRANCH}
     hook: require-review-evidence-bash
@@ -214,7 +214,7 @@ policies:
     trigger:
       event: PreToolUse
       match: Bash
-      bash_match: (^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*(npm publish\b|git( -C \S+)* tag v)
+      bash_match: (^|\n|;|\||&|\()\s*(\w+=\S+\s+)*(npm publish\b|git( -C \S+)* tag v)
     requires:
       ledger_tag: dogfood:${SESSION_ID}
       within: 24h
@@ -254,7 +254,7 @@ policies:
     trigger:
       event: PreToolUse
       match: Bash
-      bash_match: (^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*git( -C \S+)* (status|log|diff|branch)\b
+      bash_match: (^|\n|;|\||&|\()\s*(\w+=\S+\s+)*git( -C \S+)* (status|log|diff|branch)\b
     requires:
       ledger_tag: preflight:${REPO}
       within: 1h
@@ -302,7 +302,7 @@ policies:
     trigger:
       event: PreToolUse
       match: Bash
-      bash_match: (^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*gh pr create\b
+      bash_match: (^|\n|;|\||&|\()\s*(\w+=\S+\s+)*gh pr create\b
     requires:
       ledger_tag: review-subagent:${BRANCH}
     hook: require-review-subagent-evidence-bash
@@ -323,7 +323,7 @@ policies:
     trigger:
       event: PreToolUse
       match: Bash
-      bash_match: (^|\n|;|\||&&|\()\s*(\w+=\S+\s+)*git( -C \S+)* push\b
+      bash_match: (^|\n|;|\||&|\()\s*(\w+=\S+\s+)*git( -C \S+)* push\b
     requires:
       ledger_tag: preflight:${BRANCH}
       within: 10m
@@ -405,7 +405,7 @@ policies:
     trigger:
       event: PreToolUse
       match: Bash
-      bash_match: (^|\n|;|\||&&|\()\s*(\w+=\S*\s+)*(?:npx\s+|\S*/)?harness\s+(["\x27]?)(?:pause|resume|gate\s+(["\x27]?)(?:disable|enable)\4)\3(?![\w-])
+      bash_match: (^|\n|;|\||&|\()\s*(\w+=\S*\s+)*(?:npx\s+|\S*/)?harness\s+(["\x27]?)(?:pause|resume|gate\s+(["\x27]?)(?:disable|enable)\4)\3(?![\w-])
     hook: deny-kill-switch-bash
     enforcement: block
     operator_only: true
@@ -420,7 +420,7 @@ policies:
     trigger:
       event: PreToolUse
       match: Bash
-      bash_match: (^|\n|;|\||&&|\()\s*(\w+=\S*\s+)*(env\b[^;\n|&]*-u\s*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\b|env\b[^;\n|&]*--unset(?:=|\s+)(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\b|unset\s+(\S+\s+)*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\b|(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)=(?=\s))
+      bash_match: (^|\n|;|\||&|\()\s*(\w+=\S*\s+)*(env\b[^;\n|&]*-u\s*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\b|env\b[^;\n|&]*--unset(?:=|\s+)(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\b|unset\s+(\S+\s+)*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\b|(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)=(?=\s))
     hook: deny-session-env-strip-bash
     enforcement: block
     operator_only: true
@@ -435,7 +435,7 @@ policies:
     trigger:
       event: PreToolUse
       match: Bash
-      bash_match: (^|\n|;|\||&&|\()\s*(\w+=\S*\s+)*(tee|cp)\b[^;\n|&]*\.harness-paused\b|>{1,2}\s*\S*\.harness-paused\b
+      bash_match: (^|\n|;|\||&|\()\s*(\w+=\S*\s+)*(tee|cp)\b[^;\n|&]*\.harness-paused\b|>{1,2}\s*\S*\.harness-paused\b
     hook: deny-sentinel-write-bash
     enforcement: block
     operator_only: true
