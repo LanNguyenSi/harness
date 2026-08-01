@@ -3,9 +3,16 @@
 // parser (task 47297478). Measures a CANDIDATE build of
 // src/runtime/bash-prefix-parse.ts against real bash (the referee) and
 // at least two BASELINE builds (typically master and the shipped
-// release), reporting per separator arm: shapes, ran, bash-entered,
-// baseline hits, lost honest targets, targets degraded to wrong,
-// phantoms.
+// release). Scope: this instrument compares exactly ONE extraction,
+// `parseBashPrefix(cmd).cdTarget`. It does NOT measure inline-env
+// extraction (`inlineEnv`) and it cannot load command-normalize.ts
+// builds at all — claims about those dimensions need their own
+// instrument.
+//
+// Per separator arm and per baseline it reports: shapes, ran,
+// bash-entered, baseline hits, lost honest targets, targets degraded
+// to wrong; plus a baseline-independent per-arm candidate section with
+// hits, phantoms, and wrong targets.
 //
 // WHY THE PER-ARM GATE EXISTS (the b093911d run, 2026-07-31): three
 // consecutive measurement corpora reported "0 lost cd targets" while
@@ -23,24 +30,42 @@
 // baseline never hit cannot evidence anything, is reported as NOT
 // MEASURED, and is never folded into a total zero. A total that
 // excludes such arms says so explicitly instead of printing a bare 0.
+// The candidate-side totals carry the same qualifier for arms whose
+// shapes never ran at all.
 //
-// Two residual weaknesses of the run-local ancestor
-// (.ai/runs/2026-07-31-bash-prefix-parse-escapes/final-audit.mjs) are
-// fixed here, both named by that run's reviewer:
+// Two residual weaknesses of the run-local ancestor (final-audit.mjs in
+// the 2026-07-31 run directory — a run artifact, NOT in the repository;
+// both weaknesses are restated here so the pointer is not needed) are
+// fixed:
 //   (a) baselines were folded through an `else if` chain, so a shape
 //       lost against BOTH baselines was counted once — every baseline
 //       now keeps fully independent counters;
 //   (b) a non-null-but-WRONG target was not counted at all — it is now
 //       its own failure class and never a hit, for candidate and
-//       baselines alike.
+//       baselines alike (a wrong-target baseline cannot satisfy the
+//       gate either).
+//
+// A note on the phantom class, because the raw number invites
+// over-reading: a phantom is any non-null candidate target on a shape
+// bash did not enter ON THIS RUN. That includes a statically present
+// `cd` on a branch bash short-circuited at runtime (e.g. the `||` arms,
+// where the assignment succeeds and `cd` never runs). For a risk gate,
+// extracting the target there is the conservative reading, not by
+// itself a parser defect — the per-arm attribution exists precisely so
+// a phantom count can be traced to its spelling before it is judged.
 //
 // Self-test (runs automatically before every measurement, or alone via
-// --self-test): rebuilds the round-3 defect on purpose (missing space
-// in the separator-less arm) and requires the gate to flag that arm as
-// evidence-free instead of printing zeros. It also requires the healthy
-// corpus to produce at least one measured arm and at least one executed
-// redirect shape, so a broken environment (missing bash, non-writable
-// cwd) fails loudly instead of producing silent nulls.
+// --self-test / `npm run measure:bash-prefix-parse -- --self-test`):
+// rebuilds the round-3 defect on purpose (missing space in the
+// separator-less arm) and requires the gate to flag that arm as
+// evidence-free; carries a deliberately blind baseline as a positive
+// control that the BASELINE-NEVER-HIT rung (the round-4 countermeasure)
+// can fire; and requires the healthy corpus to produce an entered
+// separator-less arm and executed redirect shapes, so a broken
+// environment (missing bash, non-writable cwd) fails loudly. The
+// assertion set lives in `evaluateSelfTest`, a pure function with its
+// own failure-path tests, so a deleted assertion cannot vanish
+// silently.
 //
 // Usage:
 //   node scripts/measure-bash-prefix-parse.mjs --self-test
@@ -50,13 +75,15 @@
 //     [--candidate dist/runtime/bash-prefix-parse.js]
 //
 // The candidate defaults to this repo's own build (`npm run build`
-// first). Runs offline. Corpus commands only ever execute a PATH shim
-// inside a throwaway temp directory, never a real binary.
+// first). Runs offline. bash is resolved from the ambient PATH once and
+// invoked by absolute path; the corpus child processes get a PATH
+// containing ONLY the shim directory, so no corpus command can resolve
+// a real binary — "only the probe shim is executable" is structural.
 
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // Every separator in BOTH spellings (with and without a following
@@ -80,6 +107,8 @@ export const HEADS = ["x", "prod", "'a b'", '"a b"', "a\\ b"];
 export const TAILS = ["&&", ";"];
 
 export const SABOTAGE_MISSING_SPACE = "missing-space";
+export const SELF_TEST_IDENTITY_BASELINE = "candidate-as-baseline";
+export const SELF_TEST_BLIND_BASELINE = "blind-control";
 
 /**
  * Build the corpus: one shape per (arm, head, tail). `sabotage:
@@ -132,10 +161,22 @@ function newArmStats(baselines) {
  *   - degraded to wrong:   baseline hit, candidate non-null but wrong
  *   - candidate wrong:     candidate non-null and !== real
  * Per non-entered shape:
- *   - phantom:             candidate reports a target bash never entered
+ *   - phantom:             candidate reports a target bash never
+ *                          entered on this run (see the module-header
+ *                          note before judging the number)
  *   - phantom fixed:       baseline reported one and candidate does not
  */
 export function auditCorpus({ shapes, targetDir, runReal, candidateParse, baselines }) {
+  const seenNames = new Set();
+  for (const b of baselines) {
+    if (seenNames.has(b.name)) {
+      // Two baselines under one name would silently merge into one
+      // counter bucket and double-count every class — fail loudly.
+      throw new Error(`duplicate baseline name: ${b.name}`);
+    }
+    seenNames.add(b.name);
+  }
+
   const arms = new Map();
   for (const { arm } of shapes) {
     if (!arms.has(arm)) arms.set(arm, newArmStats(baselines));
@@ -209,18 +250,28 @@ export function auditCorpus({ shapes, targetDir, runReal, candidateParse, baseli
     };
   });
 
+  // Candidate-side totals get the same honesty treatment: an arm whose
+  // shapes never ran was not observed at all, so a phantom/wrong zero
+  // cannot speak for it.
   let phantoms = 0;
   let candidateWrong = 0;
-  for (const st of arms.values()) {
+  const armsWithoutObservation = [];
+  for (const [arm, st] of arms) {
     phantoms += st.phantoms.length;
     candidateWrong += st.candidateWrong.length;
+    if (st.ran === 0) armsWithoutObservation.push(arm);
   }
 
   return {
     arms,
     gateReason,
     perBaselineTotals,
-    candidateTotals: { phantoms, wrong: candidateWrong },
+    candidateTotals: {
+      phantoms,
+      wrong: candidateWrong,
+      armsWithoutObservation,
+      meaningfulZero: armsWithoutObservation.length === 0,
+    },
   };
 }
 
@@ -230,9 +281,7 @@ export function renderReport(audit) {
   const q = (s) => JSON.stringify(s);
   for (const totals of audit.perBaselineTotals) {
     lines.push(`== baseline: ${totals.name} ==`);
-    lines.push(
-      "arm       shapes   ran  entered  baseline-hit  LOST  degraded-to-wrong  baseline-wrong  phantom-fixed  gate",
-    );
+    lines.push("arm       shapes   ran  entered  baseline-hit  LOST  degraded-to-wrong  baseline-wrong  phantom-fixed  gate");
     for (const [arm, st] of audit.arms) {
       const bs = st.perBaseline.get(totals.name);
       const reason = audit.gateReason(st, bs);
@@ -269,35 +318,78 @@ export function renderReport(audit) {
     }
     lines.push("");
   }
+
+  lines.push("== candidate (baseline-independent) ==");
+  lines.push("arm       shapes   ran  entered  cand-hit  phantoms  wrong-target  gate");
+  for (const [arm, st] of audit.arms) {
+    lines.push(
+      q(arm).padEnd(10) +
+        String(st.shapes).padStart(6) +
+        String(st.ran).padStart(6) +
+        String(st.entered).padStart(9) +
+        String(st.candidateHits).padStart(10) +
+        String(st.phantoms.length).padStart(10) +
+        String(st.candidateWrong.length).padStart(14) +
+        (st.ran === 0 ? "  NO SHAPE RAN" : ""),
+    );
+  }
   lines.push(
-    `candidate (baseline-independent): phantoms = ${audit.candidateTotals.phantoms}, ` +
-      `wrong targets = ${audit.candidateTotals.wrong}`,
+    "(a phantom = candidate target bash did not enter ON THIS RUN — includes a statically present cd on a " +
+      "branch bash short-circuited, e.g. the || arms; attribute before judging)",
   );
+  lines.push(
+    `TOTAL candidate: phantoms = ${audit.candidateTotals.phantoms}, wrong targets = ${audit.candidateTotals.wrong}`,
+  );
+  if (audit.candidateTotals.armsWithoutObservation.length > 0) {
+    lines.push(
+      `!! phantom/wrong zeros do not cover ${audit.candidateTotals.armsWithoutObservation.length} arm(s) whose shapes never ran: ` +
+        audit.candidateTotals.armsWithoutObservation.map((arm) => q(arm)).join(", "),
+    );
+  }
+  const phantomSpellings = [...audit.arms.values()].flatMap((st) => st.phantoms);
+  if (phantomSpellings.length > 0) {
+    lines.push("phantom spellings:");
+    for (const cmd of phantomSpellings) lines.push(`   ${q(cmd)}`);
+  }
   return lines.join("\n");
+}
+
+/** Resolve bash from the ambient PATH once; null when absent. */
+export function resolveBash(pathEnv = process.env.PATH ?? "") {
+  for (const dir of pathEnv.split(delimiter)) {
+    if (dir.length > 0 && existsSync(join(dir, "bash"))) return join(dir, "bash");
+  }
+  return null;
 }
 
 /**
  * Throwaway bash workspace: writable cwd (mkdtemp), the redirect input
  * file `in` pre-created, and a PATH shim `probeshim` that prints the
  * PWD it ran in — every trap the round-3 corpus fell into is closed
- * structurally, not by discipline.
+ * structurally, not by discipline. bash is invoked by absolute path and
+ * the child PATH contains only the shim directory, so a corpus command
+ * cannot resolve any real binary.
  */
 export function createBashWorkspace() {
+  const bash = resolveBash();
+  if (bash === null) {
+    throw new Error("bash not found on PATH — the corpus needs real bash as its referee");
+  }
   const dir = mkdtempSync(join(tmpdir(), "measure-bash-prefix-"));
   const targetDir = join(dir, "target");
   const shims = join(dir, "shims");
   mkdirSync(targetDir);
   mkdirSync(shims);
   writeFileSync(join(dir, "in"), "");
-  writeFileSync(join(shims, "probeshim"), '#!/bin/bash\nprintf "PWD=%s\\0" "$PWD"\n');
+  writeFileSync(join(shims, "probeshim"), `#!${bash}\nprintf "PWD=%s\\0" "$PWD"\n`);
   chmodSync(join(shims, "probeshim"), 0o755);
   const runReal = (cmd) => {
     try {
-      const out = execFileSync("bash", ["-c", cmd], {
+      const out = execFileSync(bash, ["-c", cmd], {
         cwd: dir,
         encoding: "utf8",
         timeout: 5000,
-        env: { PATH: `${shims}:/usr/bin:/bin`, HOME: dir },
+        env: { PATH: shims, HOME: dir },
         stdio: ["ignore", "pipe", "ignore"],
       });
       const probe = out.split("\0").find((part) => part.startsWith("PWD="));
@@ -330,78 +422,158 @@ async function loadParser(modulePath, label) {
 }
 
 /**
- * The instrument's own positive control. Proves the harness CAN fail
- * before any of its numbers are believed:
- *   1. healthy corpus: the separator-less arm must be measured (it is
- *      the canonical honest-target arm) and at least one redirect shape
- *      must have run (writable-cwd control);
- *   2. sabotaged corpus (round-3 defect rebuilt on purpose): the gate
- *      must flag the separator-less arm as evidence-free, and the
- *      report must refuse to present its zeros as a global zero.
+ * The self-test's assertion set, pure and separately unit-tested so a
+ * deleted assertion cannot vanish silently (the instrument's ability to
+ * fail is itself pinned). `healthy` must carry the identity baseline
+ * AND the deliberately blind control baseline; `sabotaged` carries the
+ * identity baseline.
+ *
+ * Failures abort a measurement. Warnings do not: a candidate that
+ * genuinely regressed on the canonical arm is exactly what the
+ * measurement against real baselines exists to show, so the instrument
+ * check must not block it (and must not misreport it as a broken
+ * environment).
+ */
+export function evaluateSelfTest({ healthy, sabotaged }) {
+  const failures = [];
+  const warnings = [];
+  const healthySpace = healthy.arms.get(" ");
+  const sabotagedSpace = sabotaged.arms.get(" ");
+  if (!healthySpace || !sabotagedSpace) {
+    failures.push("self-test audits are missing the separator-less arm entirely");
+    return { failures, warnings };
+  }
+
+  // 1. Environment / corpus control, entered-based so it is independent
+  //    of any parser: the canonical honest-target arm must actually
+  //    reach the target directory on the healthy corpus.
+  if (healthySpace.ran === 0 || healthySpace.entered === 0) {
+    failures.push(
+      `healthy corpus: the separator-less arm never ${healthySpace.ran === 0 ? "ran" : "entered the target"} ` +
+        `(ran=${healthySpace.ran}, entered=${healthySpace.entered}) — environment or corpus broken`,
+    );
+  }
+
+  // 2. Writable-cwd control (the round-3 trap): at least one redirect
+  //    shape must have executed.
+  const redirectRan = [">o", ">o ", "<in", "<in "].reduce(
+    (n, arm) => n + (healthy.arms.get(arm)?.ran ?? 0),
+    0,
+  );
+  if (redirectRan === 0) {
+    failures.push("healthy corpus: no redirect shape ran at all — cwd not writable or `in` missing (the round-3 trap)");
+  }
+
+  // 3. Round-4 rung control: the deliberately blind baseline must trip
+  //    BASELINE NEVER HIT on the entered separator-less arm — the only
+  //    in-tool proof that the hits-based gate rung can fire at all.
+  const blind = healthySpace.perBaseline.get(SELF_TEST_BLIND_BASELINE);
+  if (healthySpace.entered > 0) {
+    if (!blind) {
+      failures.push("the blind-control baseline is missing from the healthy audit");
+    } else if (healthy.gateReason(healthySpace, blind) !== "BASELINE NEVER HIT") {
+      failures.push(
+        "the blind-control baseline was not flagged BASELINE NEVER HIT — the hits rung of the per-arm gate is not doing its job",
+      );
+    }
+  }
+
+  // 4. A candidate with no correct target on the canonical arm is a
+  //    warning, not an instrument failure — see the function doc.
+  const identity = healthySpace.perBaseline.get(SELF_TEST_IDENTITY_BASELINE);
+  if (healthySpace.entered > 0 && identity !== undefined && identity.hits === 0) {
+    warnings.push(
+      "candidate produced no correct target on the healthy separator-less arm — not an instrument failure, " +
+        "but expect the measurement below to show losses",
+    );
+  }
+
+  // 5. Sabotage detection, entered-based delta so parser state cannot
+  //    satisfy it: the sabotaged separator-less arm must fail the gate
+  //    for a CORPUS reason (its shapes cannot enter), while the healthy
+  //    one entered (asserted in 1).
+  if (sabotagedSpace.entered > 0) {
+    failures.push(
+      "sabotaged corpus (missing space in the separator-less arm) still ENTERED the target — the sabotage is inert " +
+        "and this self-test is not testing anything",
+    );
+  } else {
+    const sabIdentity = sabotagedSpace.perBaseline.get(SELF_TEST_IDENTITY_BASELINE);
+    const reason = sabIdentity === undefined ? null : sabotaged.gateReason(sabotagedSpace, sabIdentity);
+    if (reason === null) {
+      failures.push(
+        "sabotaged corpus (missing space in the separator-less arm) was NOT flagged as evidence-free — " +
+          "the per-arm gate is not doing its job",
+      );
+    }
+  }
+
+  // 6. The refusal marker must actually render — guards against the
+  //    NOT-a-global-zero path being deleted from the report.
+  if (!renderReport(sabotaged).includes("NOT a global zero")) {
+    failures.push("sabotaged corpus: rendered report does not carry the NOT-a-global-zero marker");
+  }
+
+  return { failures, warnings };
+}
+
+/**
+ * Run the instrument's positive control against real bash: healthy
+ * corpus (with identity + blind-control baselines) and sabotaged corpus
+ * (round-3 defect rebuilt on purpose), evaluated by
+ * `evaluateSelfTest`.
  */
 export async function runSelfTest({ candidatePath }) {
   const parse = await loadParser(candidatePath, "candidate");
-  const failures = [];
   const ws = createBashWorkspace();
   try {
-    const identity = [{ name: "self", parse }];
-    const audit = (sabotage) =>
+    const audit = (sabotage, baselines) =>
       auditCorpus({
         shapes: buildCorpus({ targetDir: ws.targetDir, sabotage }),
         targetDir: ws.targetDir,
         runReal: ws.runReal,
         candidateParse: parse,
-        baselines: identity,
+        baselines,
       });
-
-    const healthy = audit(null);
-    const spaceArm = healthy.arms.get(" ");
-    const spaceArmBs = spaceArm.perBaseline.get("self");
-    if (healthy.gateReason(spaceArm, spaceArmBs) !== null) {
-      failures.push(
-        `healthy corpus: the separator-less arm is not measurable (ran=${spaceArm.ran}, entered=${spaceArm.entered}, hits=${spaceArmBs.hits}) — environment or corpus broken`,
-      );
-    }
-    const redirectRan = [">o", ">o ", "<in", "<in "].reduce((n, arm) => n + healthy.arms.get(arm).ran, 0);
-    if (redirectRan === 0) {
-      failures.push("healthy corpus: no redirect shape ran at all — cwd not writable or `in` missing (the round-3 trap)");
-    }
-
-    const sabotaged = audit(SABOTAGE_MISSING_SPACE);
-    const sabArm = sabotaged.arms.get(" ");
-    const sabReason = sabotaged.gateReason(sabArm, sabArm.perBaseline.get("self"));
-    if (sabReason === null) {
-      failures.push(
-        "sabotaged corpus (missing space in the separator-less arm) was NOT flagged as evidence-free — the per-arm gate is not doing its job",
-      );
-    }
-    const sabTotals = sabotaged.perBaselineTotals.find((t) => t.name === "self");
-    if (sabTotals.meaningfulZero) {
-      failures.push("sabotaged corpus: totals still claim a meaningful global zero");
-    }
-    if (!renderReport(sabotaged).includes("NOT a global zero")) {
-      failures.push("sabotaged corpus: rendered report does not carry the NOT-a-global-zero marker");
-    }
+    const healthy = audit(null, [
+      { name: SELF_TEST_IDENTITY_BASELINE, parse },
+      { name: SELF_TEST_BLIND_BASELINE, parse: () => null },
+    ]);
+    const sabotaged = audit(SABOTAGE_MISSING_SPACE, [{ name: SELF_TEST_IDENTITY_BASELINE, parse }]);
+    const { failures, warnings } = evaluateSelfTest({ healthy, sabotaged });
+    return { ok: failures.length === 0, failures, warnings };
   } finally {
     ws.dispose();
   }
-  return { ok: failures.length === 0, failures };
 }
 
-function parseArgs(argv) {
+/** @param {string[]} argv */
+export function parseArgs(argv) {
   const args = { candidate: "dist/runtime/bash-prefix-parse.js", baselines: [], selfTestOnly: false };
+  const valueOf = (flag, i) => {
+    const value = argv[i];
+    if (value === undefined || value.startsWith("--")) {
+      throw new Error(`${flag} needs a value`);
+    }
+    return value;
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--self-test") {
       args.selfTestOnly = true;
     } else if (arg === "--candidate") {
-      args.candidate = argv[(i += 1)];
+      args.candidate = valueOf(arg, (i += 1));
     } else if (arg === "--baseline") {
-      const value = argv[(i += 1)];
-      const eq = value?.indexOf("=") ?? -1;
-      args.baselines.push(
-        eq > 0 ? { name: value.slice(0, eq), path: value.slice(eq + 1) } : { name: `baseline${args.baselines.length + 1}`, path: value },
-      );
+      const value = valueOf(arg, (i += 1));
+      const eq = value.indexOf("=");
+      const entry =
+        eq > 0
+          ? { name: value.slice(0, eq), path: value.slice(eq + 1) }
+          : { name: `baseline${args.baselines.length + 1}`, path: value };
+      if (args.baselines.some((b) => b.name === entry.name)) {
+        throw new Error(`duplicate baseline name: ${entry.name} — name each --baseline uniquely (name=path)`);
+      }
+      args.baselines.push(entry);
     } else {
       throw new Error(`unknown argument: ${arg}`);
     }
@@ -420,6 +592,9 @@ export async function main(argv = process.argv.slice(2)) {
     return;
   }
   console.log("measure-bash-prefix-parse: self-test ok (per-arm gate flags a sabotaged corpus as evidence-free)");
+  for (const warning of selfTest.warnings) {
+    console.warn(`measure-bash-prefix-parse: warning: ${warning}`);
+  }
   if (args.selfTestOnly) return;
 
   if (args.baselines.length < 2) {

@@ -8,6 +8,8 @@ export const SEPARATOR_ARMS: string[];
 export const HEADS: string[];
 export const TAILS: string[];
 export const SABOTAGE_MISSING_SPACE: "missing-space";
+export const SELF_TEST_IDENTITY_BASELINE: "candidate-as-baseline";
+export const SELF_TEST_BLIND_BASELINE: "blind-control";
 
 export interface CorpusShape {
   arm: string;
@@ -43,11 +45,18 @@ export interface BaselineTotals {
   meaningfulZero: boolean;
 }
 
+export interface CandidateTotals {
+  phantoms: number;
+  wrong: number;
+  armsWithoutObservation: string[];
+  meaningfulZero: boolean;
+}
+
 export interface AuditResult {
   arms: Map<string, ArmStats>;
   gateReason: (st: ArmStats, bs: BaselineArmStats) => string | null;
   perBaselineTotals: BaselineTotals[];
-  candidateTotals: { phantoms: number; wrong: number };
+  candidateTotals: CandidateTotals;
 }
 
 export interface Baseline {
@@ -65,6 +74,8 @@ export function auditCorpus(options: {
 
 export function renderReport(audit: AuditResult): string;
 
+export function resolveBash(pathEnv?: string): string | null;
+
 export interface BashWorkspace {
   dir: string;
   targetDir: string;
@@ -74,6 +85,23 @@ export interface BashWorkspace {
 
 export function createBashWorkspace(): BashWorkspace;
 
-export function runSelfTest(options: { candidatePath: string }): Promise<{ ok: boolean; failures: string[] }>;
+export interface SelfTestEvaluation {
+  failures: string[];
+  warnings: string[];
+}
+
+export function evaluateSelfTest(audits: { healthy: AuditResult; sabotaged: AuditResult }): SelfTestEvaluation;
+
+export function runSelfTest(options: {
+  candidatePath: string;
+}): Promise<{ ok: boolean; failures: string[]; warnings: string[] }>;
+
+export interface ParsedArgs {
+  candidate: string;
+  baselines: Array<{ name: string; path: string }>;
+  selfTestOnly: boolean;
+}
+
+export function parseArgs(argv: string[]): ParsedArgs;
 
 export function main(argv?: string[]): Promise<void>;

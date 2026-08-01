@@ -32,12 +32,14 @@
 // hook cwd holds. There are no thrown errors from this module.
 //
 // MEASUREMENT RULE (task 47297478): any claim about this parser's
-// extraction behavior versus another build (lost or gained cd targets
-// or env values) must come from scripts/measure-bash-prefix-parse.mjs,
-// the per-arm-gated corpus with real bash as referee. Three consecutive
+// CD-TARGET extraction versus another build (lost or gained `cdTarget`
+// values) must come from scripts/measure-bash-prefix-parse.mjs, the
+// per-arm-gated corpus with real bash as referee. Three consecutive
 // ad-hoc corpora in the b093911d run reported "0 lost" while being
 // structurally unable to report a loss; that tool's self-test rebuilds
-// exactly that failure and demands the gate catch it.
+// exactly that failure and demands the gate catch it. The tool does NOT
+// measure `inlineEnv` extraction — claims about inline-env behavior
+// have no instrument yet and need their own measurement.
 
 /** Parsed leading-prefix result. */
 export interface BashPrefix {

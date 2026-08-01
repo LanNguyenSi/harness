@@ -1,13 +1,18 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   auditCorpus,
   buildCorpus,
+  evaluateSelfTest,
+  parseArgs,
   renderReport,
+  resolveBash,
   SABOTAGE_MISSING_SPACE,
+  SELF_TEST_BLIND_BASELINE,
+  SELF_TEST_IDENTITY_BASELINE,
   SEPARATOR_ARMS,
 } from "../../scripts/measure-bash-prefix-parse.mjs";
 
@@ -188,6 +193,50 @@ describe("the per-arm gate", () => {
     expect(report).toContain('"blind" — BASELINE NEVER HIT');
   });
 
+  it("qualifies the candidate-side totals when arms were never observed at all", () => {
+    const result = audit({
+      shapes: [
+        { arm: "observed", cmd: "o" },
+        { arm: "dead", cmd: "d" },
+      ],
+      runReal: (cmd) => (cmd === "o" ? TARGET : null),
+      candidateParse: () => TARGET,
+      baselines: [{ name: "master", parse: () => TARGET }],
+    });
+    expect(result.candidateTotals.armsWithoutObservation).toEqual(["dead"]);
+    expect(result.candidateTotals.meaningfulZero).toBe(false);
+    const report = renderReport(result);
+    expect(report).toContain("phantom/wrong zeros do not cover 1 arm(s) whose shapes never ran");
+  });
+
+  it("pins the column sets of both rendered tables", () => {
+    const result = audit({
+      shapes: [{ arm: ";", cmd: "c1" }],
+      runReal: () => TARGET,
+      candidateParse: () => TARGET,
+      baselines: [{ name: "master", parse: () => TARGET }],
+    });
+    const report = renderReport(result);
+    expect(report).toContain(
+      "arm       shapes   ran  entered  baseline-hit  LOST  degraded-to-wrong  baseline-wrong  phantom-fixed  gate",
+    );
+    expect(report).toContain("arm       shapes   ran  entered  cand-hit  phantoms  wrong-target  gate");
+  });
+
+  it("rejects duplicate baseline names instead of silently merging their counters", () => {
+    expect(() =>
+      audit({
+        shapes: [{ arm: ";", cmd: "c1" }],
+        runReal: () => TARGET,
+        candidateParse: () => TARGET,
+        baselines: [
+          { name: "master", parse: () => TARGET },
+          { name: "master", parse: () => null },
+        ],
+      }),
+    ).toThrow(/duplicate baseline name: master/);
+  });
+
   it("lists lost spellings in the rendered report", () => {
     const result = audit({
       shapes: [{ arm: ";", cmd: "A=x; cd /measure/target && probeshim" }],
@@ -201,6 +250,121 @@ describe("the per-arm gate", () => {
   });
 });
 
+// --- evaluateSelfTest -------------------------------------------------
+// The assertion set is pure and pinned here so a deleted assertion
+// cannot vanish silently — the instrument's ability to fail is itself
+// under test (the exact failure class task 47297478 exists to prevent).
+
+function selfTestPair(opts: {
+  healthyRunReal?: (cmd: string) => string | null;
+  sabotagedRunReal?: (cmd: string) => string | null;
+  identityParse?: (cmd: string) => string | null;
+  blindParse?: ((cmd: string) => string | null) | "omit";
+} = {}) {
+  const identityParse = opts.identityParse ?? (() => TARGET);
+  const healthyBaselines: Array<{ name: string; parse: (cmd: string) => string | null }> = [
+    { name: SELF_TEST_IDENTITY_BASELINE, parse: identityParse },
+  ];
+  if (opts.blindParse !== "omit") {
+    healthyBaselines.push({ name: SELF_TEST_BLIND_BASELINE, parse: opts.blindParse ?? (() => null) });
+  }
+  const healthy = audit({
+    shapes: [
+      { arm: " ", cmd: "space" },
+      { arm: ">o ", cmd: "redirect" },
+    ],
+    runReal: opts.healthyRunReal ?? (() => TARGET),
+    candidateParse: identityParse,
+    baselines: healthyBaselines,
+  });
+  const sabotaged = audit({
+    shapes: [{ arm: " ", cmd: "sab-space" }],
+    runReal: opts.sabotagedRunReal ?? (() => null),
+    candidateParse: identityParse,
+    baselines: [{ name: SELF_TEST_IDENTITY_BASELINE, parse: identityParse }],
+  });
+  return { healthy, sabotaged };
+}
+
+describe("evaluateSelfTest", () => {
+  it("passes a well-formed healthy/sabotaged pair with no failures and no warnings", () => {
+    const { failures, warnings } = evaluateSelfTest(selfTestPair());
+    expect(failures).toEqual([]);
+    expect(warnings).toEqual([]);
+  });
+
+  it("fails when the sabotage is inert (the sabotaged arm still enters the target)", () => {
+    const { failures } = evaluateSelfTest(selfTestPair({ sabotagedRunReal: () => TARGET }));
+    expect(failures.some((f) => f.includes("inert"))).toBe(true);
+  });
+
+  it("fails when the gate does not flag the sabotaged arm as evidence-free", () => {
+    const pair = selfTestPair();
+    const gateless = { ...pair.sabotaged, gateReason: () => null };
+    const { failures } = evaluateSelfTest({ healthy: pair.healthy, sabotaged: gateless });
+    expect(failures.some((f) => f.includes("NOT flagged as evidence-free"))).toBe(true);
+  });
+
+  it("fails when the healthy separator-less arm never enters (broken environment or corpus)", () => {
+    const { failures } = evaluateSelfTest(
+      selfTestPair({ healthyRunReal: (cmd) => (cmd === "space" ? "/stayed/home" : TARGET) }),
+    );
+    expect(failures.some((f) => f.includes("environment or corpus broken"))).toBe(true);
+  });
+
+  it("fails when no redirect shape ran (the round-3 writable-cwd trap)", () => {
+    const { failures } = evaluateSelfTest(
+      selfTestPair({ healthyRunReal: (cmd) => (cmd === "redirect" ? null : TARGET) }),
+    );
+    expect(failures.some((f) => f.includes("round-3 trap"))).toBe(true);
+  });
+
+  it("fails when the blind-control baseline is missing", () => {
+    const { failures } = evaluateSelfTest(selfTestPair({ blindParse: "omit" }));
+    expect(failures.some((f) => f.includes("blind-control baseline is missing"))).toBe(true);
+  });
+
+  it("fails when the blind control is not flagged BASELINE NEVER HIT (the round-4 rung)", () => {
+    const { failures } = evaluateSelfTest(selfTestPair({ blindParse: () => TARGET }));
+    expect(failures.some((f) => f.includes("hits rung"))).toBe(true);
+  });
+
+  it("treats a candidate regression on the canonical arm as a warning, never a failure", () => {
+    const { failures, warnings } = evaluateSelfTest(selfTestPair({ identityParse: () => null }));
+    expect(failures).toEqual([]);
+    expect(warnings.some((w) => w.includes("no correct target on the healthy separator-less arm"))).toBe(true);
+  });
+});
+
+describe("parseArgs", () => {
+  it("splits name=path baselines and auto-names bare paths", () => {
+    const args = parseArgs(["--baseline", "master=/a", "--baseline", "/b"]);
+    expect(args.baselines).toEqual([
+      { name: "master", path: "/a" },
+      { name: "baseline2", path: "/b" },
+    ]);
+  });
+
+  it("accepts --candidate and --self-test", () => {
+    const args = parseArgs(["--self-test", "--candidate", "/c"]);
+    expect(args.selfTestOnly).toBe(true);
+    expect(args.candidate).toBe("/c");
+  });
+
+  it("rejects duplicate baseline names", () => {
+    expect(() => parseArgs(["--baseline", "m=/a", "--baseline", "m=/b"])).toThrow(/duplicate baseline name: m/);
+  });
+
+  it("rejects a flag without a value", () => {
+    expect(() => parseArgs(["--candidate"])).toThrow(/needs a value/);
+    expect(() => parseArgs(["--baseline", "--self-test"])).toThrow(/needs a value/);
+  });
+
+  it("rejects unknown arguments", () => {
+    expect(() => parseArgs(["--nope"])).toThrow(/unknown argument/);
+  });
+});
+
 // --- CLI self-test e2e ------------------------------------------------
 // Spawns the tool via `node` (INFRA-allowlisted); real bash runs as a
 // grandchild, outside the hermetic guard's scope by its documented
@@ -210,9 +374,9 @@ describe("the per-arm gate", () => {
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const script = join(repoRoot, "scripts", "measure-bash-prefix-parse.mjs");
 const builtCandidate = join(repoRoot, "dist", "runtime", "bash-prefix-parse.js");
-const bashOnPath = (process.env.PATH ?? "")
-  .split(delimiter)
-  .some((dir) => dir.length > 0 && existsSync(join(dir, "bash")));
+// Same resolution the tool itself uses, so the skip condition cannot
+// diverge from what the tool will actually find.
+const bashOnPath = resolveBash() !== null;
 
 describe.skipIf(!bashOnPath || !existsSync(builtCandidate))("CLI self-test (real bash)", () => {
   it("--self-test passes against the current build", () => {

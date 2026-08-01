@@ -27,12 +27,15 @@
 // `98ad072f`. Nothing below describes gate wiring; it describes what
 // THIS MODULE computes, live or not.
 //
-// MEASUREMENT RULE (task 47297478): any claim comparing this module's
-// (or bash-prefix-parse.ts's) extraction behavior across builds must be
-// produced with scripts/measure-bash-prefix-parse.mjs, the per-arm-gated
-// corpus with real bash as referee — a corpus arm whose baseline never
-// hit proves nothing, and an ungated zero from an ad-hoc corpus has
-// already been wrong three times in a row (b093911d run).
+// MEASUREMENT RULE (task 47297478): before measuring THIS module's
+// extraction across builds with an ad-hoc corpus, read the per-arm-gate
+// design in scripts/measure-bash-prefix-parse.mjs — a corpus arm whose
+// baseline never hit proves nothing, and an ungated zero from an ad-hoc
+// corpus has already been wrong three times in a row (b093911d run).
+// Note the tool itself measures ONLY bash-prefix-parse.ts's `cdTarget`
+// extraction; this module's `normalized`/`targetDir`/`targetBase`
+// outputs have no instrument yet, so cross-build claims about them need
+// their own per-arm-gated measurement.
 //
 // THE TRIGGER-MATCHING GAP THIS CLOSES: every `bash_match` policy trigger
 // (`src/cli/init/templates.ts`, `docs/examples/full-manifest.yaml`) is a
