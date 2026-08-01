@@ -8,7 +8,14 @@
 // `bash_match` regex against the raw command first and, only on a raw
 // miss, against this normalised form too (raw-OR-normalised, never raw-
 // replaced-by-normalised), closing a class of silent trigger bypasses
-// (see below). `targetDir` / `targetBase` — the effective target
+// (see below) — and, only on a further miss of THIS form, against a
+// SECOND, independent, ampersand-aware normalisation pass (`AMP_BOUNDARY_RE`
+// / `normalizeCommandAmpAware` below, task aabbad63) that this header
+// otherwise never mentions; see that function's own comment for its scope
+// and why it carries no `targetDir`/`targetBase` of its own (fix round 1,
+// finding F5 — added so a reader of this header, the module's index,
+// learns a second pass exists at all instead of finding it only by
+// reading past this point). `targetDir` / `targetBase` — the effective target
 // directory of the command's own git invocation(s), when one can be
 // named unambiguously — are NOT WIRED TO ANY GATE. An earlier version of
 // this run used them to resolve the `${REPO}`/`${BRANCH}` policy
@@ -319,6 +326,28 @@
 // is that documenting or testing that bypass class through a Bash call
 // trips the gate, the same cost the dbc6d303 quoted/heredoc class
 // already carries.
+//
+// SAME CLASS, third member (task aabbad63, this run's own amp-aware
+// second pass): a WIDENING of the second member above, not a new class —
+// `AMP_BOUNDARY_RE` is quote-unaware in exactly the same way `BOUNDARY_RE`
+// is, so a bare `&` INSIDE a quoted string is now also a segment
+// boundary, and a wrapper spelling sitting behind it can be peeled and
+// canonicalised as though it were a real invocation. Measured on a
+// 160-form quoted-text corpus arbitrated by real bash (PATH-shimmed
+// verbs + a marker file the verb would touch if it actually ran): 144
+// spellings of `<text> & <wrapper> <gated verb>` INSIDE a quoted string
+// now match where the base (pre-aabbad63) build did not, and bash ran
+// the gated verb in 0 of them — a false alarm on a command that only
+// PRINTS the spelling, never a missed real gate. The wrapper-LESS
+// variant of the same shape (`echo 'a & git push'`) already false-
+// alarmed on the base build 16/16 via the RAW regex alone, because every
+// shipped `bash_match` trigger already anchors on a bare `&` (task
+// `d834a065`) — so this is a WIDENING of an already-accepted over-block
+// class to the wrapped spellings of it, not a new false-positive class
+// this task introduces. The opposite direction, measured on the general
+// (non-adversarial) corpus rather than this quoted-text one: of 276
+// matches this pass gains there, all 151 classifiable ones were TRUE
+// positives, 0 false alarms.
 //
 // `$(...)` command substitution is ACCIDENTALLY covered — not a
 // deliberate feature, and distinct from the backtick case above, which
@@ -676,7 +705,14 @@ function normalizeCommandInner(command: string): NormalizedCommand {
  * alphabet drove the segmentation — `normalizeCommandAmpAware` below
  * simply never returns them to its own caller; see that function's
  * comment for why exposing them would be wrong under the amp alphabet
- * specifically.
+ * specifically. Fix round 1, finding F10: under the amp alphabet
+ * specifically, ALL of this function's target bookkeeping
+ * (`explicitTargets`, `explicitTargetBase`, `bareGitSegmentCount`,
+ * `leadingCd`'s full `parseBashPrefix` pass, and the whole G1 ambiguity
+ * resolution below) is knowingly computed and then discarded by
+ * `normalizeCommandAmpAware`'s caller — this is the containment design's
+ * cost, not an oversight, so a future reader should not "fix" it by
+ * exposing these fields to a hypothetical amp-alphabet consumer.
  */
 function segmentAndCanonicalize(
   command: string,
@@ -824,9 +860,32 @@ function segmentAndCanonicalize(
  * CALLER-SUPPLIED boundary alphabet. Takes `boundaryRe` as an explicit
  * parameter rather than closing over a single module-level regex (task
  * aabbad63) so the primary pass (`BOUNDARY_RE`) and the ampersand-aware
- * second pass (`AMP_BOUNDARY_RE`) each mutate only their OWN regex
- * object's `lastIndex` — resetting it here, on every call, before
- * `exec`, so neither pass's scan position can leak into the other's.
+ * second pass (`AMP_BOUNDARY_RE`) each carry their own `lastIndex` state.
+ *
+ * Fix round 1, finding F8 (corrects the prior wording here): resetting
+ * `lastIndex = from` on every call is NOT what stops the two passes from
+ * clobbering each other's scan position — they are two DISTINCT regex
+ * objects, so there is nothing shared for either to clobber, and
+ * `segmentAndCanonicalize`'s own loop always calls this with `from`
+ * already equal to where the previous match's `lastIndex` would have
+ * landed anyway. That is why removing this reset measured 0 output
+ * differences across the corpus and left the suite green (see
+ * `tests/runtime/command-normalize.test.ts`'s F8 note — the mutation was
+ * applied and reverted to confirm this, not merely reasoned about). The
+ * line is still a legitimate guard, just for a DIFFERENT reason: if
+ * `canonicalizeSegment` were to THROW partway through a scan and
+ * something later caught that throw and resumed the SAME loop against
+ * the SAME regex object, the object's `lastIndex` would be left wherever
+ * the last successful match landed, and this reset is what would make a
+ * resumed scan start at the intended offset instead of a stale one.
+ * UNREACHABLE TODAY, by construction: nothing in this module catches
+ * mid-scan and resumes — a throw anywhere in the loop propagates to the
+ * one top-level `catch` in `normalizeCommand` / `normalizeCommandAmpAware`,
+ * which returns a fallback and never touches `boundaryRe` again. So the
+ * measured inertness above is EXPECTED given today's control flow, not
+ * evidence the guard is pointless — it is forward defensive cover for a
+ * control-flow shape (a caught-and-resumed scan) this module does not
+ * have, not for one it does.
  */
 function findNextBoundary(
   s: string,

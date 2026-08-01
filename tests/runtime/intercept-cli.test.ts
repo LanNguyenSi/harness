@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { realLedgerClient, runInterceptCli } from "../../src/cli/policy/intercept.js";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
@@ -17,6 +17,27 @@ import {
 } from "../../src/schema/index.js";
 import { makeDecision } from "../_helpers/decision.js";
 import { makeManifest } from "../_helpers/manifest.js";
+
+// Fix round 1, findings F2+F3+F4: a call-through mock of
+// `normalizeCommandAmpAware` used ONLY as a counting seam (never changes
+// its behaviour — `actual.normalizeCommandAmpAware` still runs) so the
+// "runs at most ONCE per event, not once per matching policy" contract of
+// `runInterceptCli`'s real, production `ampNormalizedCommandThunk`
+// (`src/cli/policy/intercept.ts`) can be asserted directly, instead of by
+// the tautological "a memoising thunk of this shape memoises" test lower
+// in this file. `vi.spyOn` cannot target this: Vitest's ESM module
+// namespace objects are non-configurable, so `vi.spyOn(mod, "name")`
+// throws "Module namespace is not configurable" for an own-source module
+// exactly as it does for a third-party one — the call-through `vi.mock`
+// below is this repo's established workaround (see
+// tests/... project memory `reference_vitest_spyon_esm_named_export`).
+// `InterceptCliOptions` has no injection seam for the amp normaliser
+// itself, so this is the only way to count real production calls without
+// restructuring the production code to add one.
+vi.mock("../../src/runtime/command-normalize.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/runtime/command-normalize.js")>();
+  return { ...actual, normalizeCommandAmpAware: vi.fn(actual.normalizeCommandAmpAware) };
+});
 
 // Read the real `bash_match` straight out of FULL_TEMPLATE instead of a
 // hand-copied literal (F7 fix, review round 2026-07-27, run
@@ -1904,6 +1925,122 @@ describe("policyMatchesEvent — ampersand-aware third normalisation arm (task a
       expect(policyMatchesEvent(policyA, event, undefined, thunk)).toBe(true);
       expect(policyMatchesEvent(policyB, event, undefined, thunk)).toBe(true);
       expect(realCalls).toBe(1);
+      // NOTE (fix round 1, findings F2+F3): this test proves a memoising
+      // thunk OF THIS SHAPE memoises — it builds its own `cache ??=`
+      // closure and never touches `runInterceptCli` itself, so it caught
+      // neither (1) replacing `runInterceptCli`'s real
+      // `ampNormalizedCommandCache ??= normalizeCommandAmpAware(bashCommand)`
+      // with a non-memoising call, nor (2) deleting the
+      // `ampNormalizedCommandThunk` spread into `intercept()` entirely —
+      // both mutations left the whole suite green including this test. The
+      // describe block below drives real events through the real
+      // `runInterceptCli` entrypoint and counts real
+      // `normalizeCommandAmpAware` calls via a call-through `vi.mock`,
+      // closing that gap; both mutations above were applied and reverted
+      // to confirm they turn IT red (see the fix-round report).
     });
+  });
+});
+
+// Fix round 1, findings F2+F3+F4: `runInterceptCli`'s real,
+// production-built `ampNormalizedCommandThunk` (`src/cli/policy/intercept.ts`)
+// must compute the ampersand-aware normalisation pass AT MOST ONCE PER
+// EVENT, no matter how many `bash_match` policies in the manifest need it
+// — that is the entire reason it is threaded as a memoising thunk rather
+// than a precomputed value (see that file's own comment). The
+// "policyMatchesEvent — ampersand-aware third normalisation arm" describe
+// block above proves `policyMatchesEvent` calls WHATEVER thunk it is
+// handed correctly, and proves a hand-built memoising closure memoises —
+// but neither test drives an event through `runInterceptCli` itself, so
+// neither one actually exercises the PRODUCTION thunk
+// (`ampNormalizedCommandCache ??= normalizeCommandAmpAware(bashCommand)`)
+// or the `ampNormalizedCommandThunk` spread that wires it into
+// `intercept()`. These two tests do, using the module-level
+// `vi.mock("../../src/runtime/command-normalize.js", ...)` call-through
+// counting seam declared at the top of this file.
+describe("runInterceptCli — the amp normalisation pass computes at most ONCE per event (fix round 1, F2+F3+F4)", () => {
+  const REAL_PREFLIGHT_MATCH_F2 = policyBashMatch("preflight-before-investigation");
+  const REAL_PUSH_MATCH_F4 = policyBashMatch("preflight-before-push");
+
+  /** Two differently-named policies sharing one bash_match regex, so both reach the third arm for the same event. */
+  function twinPolicies(bashMatch: string, ledgerTag: string): [Policy, Policy] {
+    const base: Policy = {
+      name: "policy-a",
+      description: "real trigger regex, duplicated under two names",
+      trigger: { event: "PreToolUse", match: "Bash", bash_match: bashMatch },
+      requires: { ledger_tag: ledgerTag },
+      hook: "h",
+      enforcement: "block",
+    } as Policy;
+    return [base, { ...base, name: "policy-b" }];
+  }
+
+  const emptyLedgerAmpOnce: LedgerClient = {
+    async query() {
+      return { kind: "ok", entries: [] };
+    },
+    async record() {
+      /* no-op */
+    },
+  };
+
+  it("F2+F3: computes the amp pass exactly ONCE for a Bash event even when TWO policies both need it", async () => {
+    const mockedAmpAware = vi.mocked(normalizeCommandAmpAware);
+    mockedAmpAware.mockClear();
+    const { stream: out } = captureStream();
+    const { stream: err } = captureStream();
+    // Both the raw form and the primary (BOUNDARY_RE) normalised form miss
+    // this command; only the third, amp-aware arm matches (same measured
+    // spelling used throughout this file's aabbad63 coverage).
+    const command = "echo hi & nice git status";
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+          session_id: "sess-f2f3",
+          cwd: "/tmp/harness-f2f3-test-cwd",
+        }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest(twinPolicies(REAL_PREFLIGHT_MATCH_F2, "preflight:${REPO}")),
+      ledger: emptyLedgerAmpOnce,
+    });
+    expect(result.decisions).toHaveLength(2);
+    expect(result.decisions.every((d) => d.outcome === "deny")).toBe(true);
+    expect(mockedAmpAware).toHaveBeenCalledTimes(1);
+  });
+
+  it("F4: computes the amp pass exactly ONCE for a Codex shell event whose command lives under raw_input.cmd", async () => {
+    const mockedAmpAware = vi.mocked(normalizeCommandAmpAware);
+    mockedAmpAware.mockClear();
+    const { stream: out } = captureStream();
+    const { stream: err } = captureStream();
+    // `raw_input.cmd`, not `tool_input.command` — the exact shape the old
+    // `event.tool_name === "Bash"` + `readBashCommand(event.tool_input)`
+    // pair could never see, which is why this event used to reach
+    // `policyMatchesEvent`'s per-policy fallback (both normalisers
+    // recomputed once PER POLICY) instead of the precomputed/memoised path.
+    const command = "echo hi & nice git push origin fix/codex-amp-once";
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "shell",
+          raw_input: { cmd: command },
+          session_id: "sess-f4",
+          cwd: "/tmp/harness-f4-test-cwd",
+        }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest(twinPolicies(REAL_PUSH_MATCH_F4, "preflight:${BRANCH}")),
+      ledger: emptyLedgerAmpOnce,
+    });
+    expect(result.decisions).toHaveLength(2);
+    expect(result.decisions.every((d) => d.outcome === "deny")).toBe(true);
+    expect(mockedAmpAware).toHaveBeenCalledTimes(1);
   });
 });

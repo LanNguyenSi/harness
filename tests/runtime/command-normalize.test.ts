@@ -915,6 +915,54 @@ describe("normalizeCommandAmpAware (task aabbad63: closes the bare-& gating gap 
     });
   });
 
+  // Fix round 1, finding F1: corrects an inaccurate closure claim measured
+  // against a realistic corpus (7 wrappers {env, nice, sudo, command,
+  // setsid, stdbuf, nohup} x 4 gated verbs x 2 shapes — `A=x&<wrapper>
+  // <verb>` and `echo hi & <wrapper> <verb>` — 56 spellings): 28/56 were
+  // ALREADY gated before this task (raw or the primary BOUNDARY_RE arm),
+  // 52/56 gate after, a delta of 24 attributable to this arm alone, and 4
+  // remain ungated — all of the shape pinned here. The pre-change 28/56 is
+  // high because the shipped trigger regexes' own `(\w+=\S+\s+)*` leading-
+  // assignment group lets `\S+` swallow a glued `&<wrapper>` (`A=x&nice git
+  // push` already matched the RAW regex before this task ever ran), so the
+  // GLUED family was never actually what this task closed — the
+  // background-job family (`echo hi & <wrapper> <verb>`) is, and `nohup`
+  // specifically stays out of reach of BOTH normalisation passes: it is not
+  // one of `canonicalizeSegment`'s recognised wrapper names (`env`,
+  // `command`, `nice`, `sudo`, `doas`, `time`, `timeout`, `stdbuf`,
+  // `setsid`), a pre-existing, already-documented gap in the module
+  // header's NOT-SUPPORTED list (`nohup git status` was measured as a
+  // bypass back in task `ea8becf5`) — not something a boundary alphabet
+  // (BOUNDARY_RE or AMP_BOUNDARY_RE) can reach, since the gap is in the
+  // wrapper-name vocabulary, not the segmentation.
+  describe("fix round 1, finding F1: 'echo hi & nohup <gated verb>' stays ungated (documented ceiling, not closed by either pass)", () => {
+    const cases: Array<{ label: string; policyName: string; command: string }> = [
+      {
+        label: "preflight-before-investigation (read gate)",
+        policyName: "preflight-before-investigation",
+        command: "echo hi & nohup git status",
+      },
+      {
+        label: "preflight-before-push",
+        policyName: "preflight-before-push",
+        command: "echo hi & nohup git push origin master",
+      },
+      {
+        label: "deny-kill-switch-bypass (operator_only, no in-session recovery)",
+        policyName: "deny-kill-switch-bypass",
+        command: "echo hi & nohup harness pause",
+      },
+    ];
+    for (const c of cases) {
+      it(`${c.label}: "${c.command}" does NOT normalise to a trigger match via either pass`, () => {
+        const re = policyBashMatch(c.policyName);
+        expect(re.test(c.command)).toBe(false);
+        expect(re.test(normalizeCommand(c.command).normalized)).toBe(false);
+        expect(re.test(normalizeCommandAmpAware(c.command).normalized)).toBe(false);
+      });
+    }
+  });
+
   describe("return type carries no targetDir/targetBase (hard constraint: impossible to wire up by mistake)", () => {
     it("the returned object has exactly {normalized, truncated} — no targetDir/targetBase key at all", () => {
       const result = normalizeCommandAmpAware("git -C /x log 2>&1");
@@ -941,15 +989,26 @@ describe("normalizeCommandAmpAware (task aabbad63: closes the bare-& gating gap 
     // alternation, rebuilding, and diffing output on several `&&`-bearing
     // commands. So the meaningful pin is on the regex's own match
     // behaviour, not on the string it feeds into.
+    //
+    // Fix round 1, finding F9: exec a CLONE of the exported regex, not the
+    // shared module-level object itself. `AMP_BOUNDARY_RE` is exported and
+    // consumed elsewhere (`findNextBoundary`, `segmentAndCanonicalize`) as a
+    // `/g` regex with mutable `lastIndex` state; execing the shared object
+    // directly here would leave `lastIndex` non-zero for whatever runs
+    // next. `new RegExp(AMP_BOUNDARY_RE.source, AMP_BOUNDARY_RE.flags)`
+    // still pins THIS source's actual alternation (a swapped order still
+    // reddens these two tests — verified by temporarily swapping the
+    // alternation, rebuilding, and re-running), it just does not touch the
+    // shared object's own scan position.
     it("matches && as ONE two-character token, not two consecutive bare-& tokens", () => {
-      AMP_BOUNDARY_RE.lastIndex = 0;
-      const m = AMP_BOUNDARY_RE.exec("git status && git log");
+      const re = new RegExp(AMP_BOUNDARY_RE.source, AMP_BOUNDARY_RE.flags);
+      const m = re.exec("git status && git log");
       expect(m?.[0]).toBe("&&");
     });
 
     it("a lone & with no adjacent second & still matches as a single-character token", () => {
-      AMP_BOUNDARY_RE.lastIndex = 0;
-      const m = AMP_BOUNDARY_RE.exec("echo hi & nice git status");
+      const re = new RegExp(AMP_BOUNDARY_RE.source, AMP_BOUNDARY_RE.flags);
+      const m = re.exec("echo hi & nice git status");
       expect(m?.[0]).toBe("&");
     });
   });
