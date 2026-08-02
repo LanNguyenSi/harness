@@ -539,3 +539,211 @@ describe("read-only Bash pipeline classifier (isReadOnlyBashPipeline)", () => {
     expect(isReadOnlyBashCommand("gh pr checks 123 | head")).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task fdee7d0f: the write-flag guards compared RAW tokens, so any shell
+// quoting hid the flag from them while bash still passed it through. Each
+// case below was verified against the real binary in a fresh sandbox: the
+// command genuinely wrote (or deleted), and the classifier still called it
+// read-only. Ground truth was the artefact — a canary file's disappearance
+// for `find`, the created output/cache file for `sort`/`file` — not the
+// exit code.
+//
+// Which comparisons the family defeats is not uniform, and the split is the
+// interesting part: exact set membership (`FIND_WRITE_FLAGS.has`) and
+// long-flag prefix tests (`startsWith("--output=")`) are fully defeated,
+// while the short-flag CLUSTER tests survive by accident, because the flag
+// letter remains a substring of the quoted token (`-"o"` still contains
+// `o`). The fix decodes the token before every one of these comparisons, so
+// the surviving-by-accident cases stop depending on that accident.
+//
+// NOT COVERED, named rather than implied. Two channels stay open, both
+// measured, neither made worse by this change:
+//
+// 1. GNU long-option ABBREVIATION. `sort --out=x`, `sort --o=x` and
+//    `sort --outp=x` were each measured creating their output file while
+//    classifying read-only, before and after, because the guards match full
+//    spellings. Orthogonal to quoting.
+//
+// 2. NUL escapes inside `$'...'`. bash TRUNCATES a `$'...'` run at a NUL and
+//    drops a NUL sitting between runs; `decodeShellWord` emits a literal
+//    U+0000 and keeps accumulating, so the decoded value never equals the
+//    flag bash actually passes. Artefact-confirmed bypasses (canary deleted
+//    / file created), all five NUL spellings `\0 \000 \x00 \u0000
+//    \U00000000`:
+//      find . -name c $'-delete\0XYZ'      find . -name c -$'\0'delete
+//      sort $'--output\0' o.txt data.txt   file $'--compile\0X' -m magic
+//    plus the same through the `env` and `command` recursions. Master fails
+//    open identically, so this is a pre-existing gap this change does not
+//    close and does not widen; the raw-token fallback cannot help, because
+//    the raw form matches nothing either.
+//
+// The `$'...'` cases pinned in this file cover the NON-NUL spellings only.
+// Deliberately NOT fixed here: modelling NUL truncation would be a third
+// round of teaching this decoder one more bash rule, and the run's halt
+// criterion (03-decisions.md D2, written before fix round 1) says to stop
+// growing the model and file it instead.
+// ---------------------------------------------------------------------------
+
+describe("write-flag guards see through shell quoting (task fdee7d0f)", () => {
+  // `find`: exact set membership, fully defeated by every spelling.
+  it.each([
+    'find . -"delete"',
+    "find . -'delete'",
+    "find . -\\delete",
+    "find . -$'delete'",
+    'find . -de"lete"',
+    "find . -'exec' rm {} ;",
+    'find . -$\'\\x64elete\'',
+  ])("blocks the quoted find write flag: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // Long-flag prefix tests: `sort --output=`, `sort --compress-program=`,
+  // `sort --temporary-directory=`, `file --compile`.
+  it.each([
+    'sort --"output"=out.txt data.txt',
+    'sort --outp"ut"=out.txt data.txt',
+    "sort --'compress-program'=/bin/cat data.txt",
+    'sort --"temporary-directory"=. data.txt',
+    'file --"compile" -m magic',
+  ])("blocks the quoted long write flag: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // Short clusters: these already blocked before the fix (the letter stays
+  // a substring), pinned so the decode cannot silently drop them.
+  it.each(['sort -"o" out.txt data.txt', "sort -'o' out.txt data.txt", 'file -"C" -m magic'])(
+    "still blocks the quoted short write flag: %s",
+    (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    },
+  );
+
+  // Negative controls: decoding must not turn a genuinely read-only command
+  // into a write. Without these the suite could not detect over-blocking.
+  it.each([
+    "find . -name canary.txt",
+    'find . -name "*.ts"',
+    "find . -type f",
+    "sort data.txt",
+    'sort -"n" data.txt',
+    "cat data.txt",
+    "ls -la",
+    "file -m magic data.txt",
+  ])("keeps genuinely read-only commands read-only: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(true);
+  });
+
+  // An unresolvable word decodes to itself, so classification falls back to
+  // today's behaviour rather than to an invented value.
+  it("an unterminated quote leaves the token compared raw", () => {
+    expect(isReadOnlyBashCommand("find . -name 'x")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Review round 1. Each case measured against real binaries with the artefact
+// as ground truth (canary gone / output file created), not the exit code.
+// ---------------------------------------------------------------------------
+
+describe("write-flag guards: round-1 findings (task fdee7d0f)", () => {
+  // F1. `$"..."` is bash locale quoting. With no catalog it is just a
+  // double-quoted run, so `-$"delete"` IS `-delete`. The decoder had no
+  // branch for it and SUCCEEDED with a wrong value, so the raw-token
+  // fallback never fired. Five artefact-confirmed writes, including through
+  // both command-runner recursions.
+  it.each([
+    'find . -name canary.txt -$"delete"',
+    'env find . -name canary.txt -$"delete"',
+    'command find . -name canary.txt -$"delete"',
+    'sort --outp$"ut"=o.txt data.txt',
+    'file --$"compile" -m magic',
+  ])("blocks locale-quoted write flag: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // F2. `env --split-string=CMD` runs CMD. It is the one explicitly
+  // fail-closed guard in this function and it was left comparing the RAW
+  // token while its neighbours were decoded, so quoting the flag NAME
+  // walked past it: measured executing `touch PWNED.txt` with no shell
+  // metacharacter anywhere.
+  it.each([
+    'env --split-"string"=make',
+    "env --split-'string'=make",
+    "env --split-string=make",
+    "env -S make",
+  ])("blocks env split-string execution: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // F3. THE DIRECTION PIN. These went BLOCKED -> READONLY when the guards
+  // tested the decoded token ALONE: the cluster branch excludes `--` by
+  // construction, so a token whose leading `-X` decodes to `--` fell out of
+  // the branch that used to match it. Testing raw OR decoded makes
+  // "decoding only ever ADDS a match" true by construction; without that
+  // shape these go red.
+  it.each([
+    'sort -"-out"=x.txt data.txt',
+    "sort -'-out'=x.txt data.txt",
+    'sort -"-o"=x.txt data.txt',
+    'file -"-C" -m magic',
+  ])("decoding never LOSES a match: %s stays blocked", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // The decode is wired into tree's guard too, but tree is NOT installed on
+  // the machine this was measured on, so these are classifier-level only —
+  // stated rather than implied. Without them the tree/output decode sites
+  // were inert (removing them left the whole suite green).
+  it.each([
+    'tree -"o" list.txt',
+    "tree --'output' list.txt",
+    'tree --"output"=list.txt',
+  ])("blocks quoted tree output flag (classifier-level, tree not installed): %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // Double-decode shapes. NOTE (round 2): an earlier version of this comment
+  // said re-adding the second decode changes nothing because the raw arm
+  // covers it. Measured false over 201,252 inputs — it moves 180 of them,
+  // all fail-open. `-"-o"=x` below is the discriminating case: it dies
+  // under BOTH the double-decode mutant and the decoded-only mutant, which
+  // the three long-flag tree cases above cannot detect.
+  it.each(["tree -\"'-o'\" d", "tree -$'\\x27-o\\x27' d", 'tree -"-o"=x d', 'tree -"-out" d'])(
+    "blocks a doubly-quoted tree output flag: %s",
+    (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    },
+  );
+
+  it("keeps a genuinely read-only tree invocation read-only", () => {
+    expect(isReadOnlyBashCommand("tree -L 2 src")).toBe(true);
+  });
+
+  // ACCEPTED over-blocking, pinned so it is a decision rather than an
+  // accident: a quoted operand that decodes EXACTLY to a write flag is
+  // blocked even though it is a read. Over-blocking a read is the accepted
+  // direction. Verified NOT to extend to the shapes most likely to hurt.
+  it.each([
+    "find . -name '-delete'",
+    'find . -name "-exec"',
+    "find . -newer '-exec'",
+    "sort -k1 '-o'",
+    "file '-C'",
+  ])(
+    "ACCEPTED over-block: %s",
+    (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    },
+  );
+
+  it.each([
+    'find . -name "*delete*"',
+    "grep -- -delete data.txt",
+    "find . -path './-ok'",
+    'sort -"n" data.txt',
+  ])("over-blocking does NOT extend to: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(true);
+  });
+});
