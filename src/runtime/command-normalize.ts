@@ -34,6 +34,20 @@
 // `98ad072f`. Nothing below describes gate wiring; it describes what
 // THIS MODULE computes, live or not.
 //
+// UPDATE (task `98ad072f`, run `2026-08-02-per-repo-gate-scoping-
+// redesign`, T-002): the per-segment foundation named above now EXISTS as
+// a real export — `segmentViewOf` / `CommandSegment`, defined below
+// `normalizeCommand` — instead of being only a design intention. It
+// exposes, per boundary-delimited segment, the canonicalised text, the
+// segment's OWN explicit target, and an EFFECTIVE target composed with the
+// last preceding `cd <path>` segment (see `CommandSegment`'s own doc
+// comment for the composition rules and its own not-covered list, which
+// is narrower in places than `targetDir`/`targetBase` above — e.g. no
+// `VAR=value cd <path>` tolerance). Still NOT WIRED TO ANY GATE — no
+// consumer reads it yet; that wiring is `98ad072f`'s NEXT slice, T-003.
+// `normalizeCommand`'s own `targetDir`/`targetBase` are UNCHANGED by this
+// addition — byte-identical in every pre-existing test.
+//
 // MEASUREMENT RULE (task 47297478): before measuring THIS module's
 // extraction across builds with an ad-hoc corpus, read the per-arm-gate
 // design in scripts/measure-bash-prefix-parse.mjs — a corpus arm whose
@@ -442,6 +456,99 @@ export interface NormalizedCommand {
   truncated: boolean;
 }
 
+/**
+ * One boundary-delimited segment's canonicalised text plus its own and
+ * "effective" target directory (task `98ad072f` groundwork, T-002 of run
+ * `2026-08-02-per-repo-gate-scoping-redesign`) — the foundation for a
+ * future redesign that attributes a target to the SPECIFIC segment
+ * satisfying a policy's own `bash_match` trigger, instead of the single,
+ * whole-command `targetDir` / `targetBase` on `NormalizedCommand` above.
+ * Produced by `segmentViewOf`. NOT WIRED TO ANY GATE — no consumer reads
+ * this yet (see the module header's STATUS/UPDATE note); that wiring is a
+ * separate, later slice (T-003).
+ */
+export interface CommandSegment {
+  /**
+   * This segment's canonicalised text — the same rewrite
+   * `NormalizedCommand.normalized` applies to the corresponding span,
+   * boundary tokens EXCLUDED (they sit between segments, never inside
+   * one). Every shipped `bash_match` pattern's boundary alternation
+   * includes a `^` branch, so testing such a pattern against THIS string
+   * alone (no leading boundary character) is well-defined — see
+   * `01-plan.md`'s Proposed Approach item 2 for how a future consumer
+   * uses this.
+   */
+  text: string;
+  /**
+   * This segment's OWN explicit target, named by ITS OWN invocation
+   * only — a git invocation's `-C` / `--work-tree` / `--git-dir` (or the
+   * SAME invocation's wrapping `env -C`, git-own-target-prioritised the
+   * same way `NormalizedCommand.targetDir` already is), or, for a
+   * recognised bare `cd <path>` segment, the parsed path. `null` when this
+   * segment names no target of its own (not a git invocation, not a `cd`
+   * segment, or a bare git invocation) OR the named value is one of this
+   * view's unattributable forms: `~`-prefixed, carrying a stray quote
+   * character (the tokeniser is not quote-aware — a quoted value is
+   * captured WITH its quote character(s) still attached, not a real
+   * path), containing a command-substitution marker (`$(` or a backtick),
+   * or — for `cd` specifically — a bare `cd` with no argument or a `cd`
+   * with a flag (`cd -P /x`, three tokens instead of two). ALSO `null`
+   * when the SAME invocation names a git target via BOTH a relative own
+   * `-C` / `--work-tree` / `--git-dir` AND a wrapping `env -C` / `--chdir`
+   * base (`env -C /tmp/base git -C sub status`) — a mixed, internally
+   * ambiguous composition, unattributable for the same reason a relative
+   * own target after a preceding `cd` is (see `effectiveTarget` below);
+   * this is the ONE case where `ownTarget` itself, not just
+   * `effectiveTarget`, is nulled by a composition rule rather than by the
+   * raw value being unrecognisable on its own. A relative value (including
+   * `-C .`) and an absolute value are both otherwise preserved here
+   * verbatim, unresolved against any cwd — that resolution is a future
+   * consumer's job, not this module's.
+   */
+  ownTarget: string | null;
+  /**
+   * The directory this segment's own invocation actually runs in, once
+   * composed with the LAST PRECEDING recognised `cd <path>` segment in the
+   * same command (not necessarily the immediately preceding segment — any
+   * non-`cd` segment in between leaves the running cd-basis unchanged, the
+   * same way a non-`cd` shell command never itself changes the directory).
+   * Composition rules (`01-plan.md`, Proposed Approach item 1, verbatim):
+   *   - `ownTarget === null` → inherits the incoming cd-basis as-is
+   *     (including `null` when nothing preceding named one either).
+   *   - `ownTarget` absolute → itself, unconditionally — an absolute
+   *     value is never "relative to" anything a preceding `cd` named.
+   *   - `ownTarget` relative AND a preceding `cd` basis is known
+   *     (non-`null`) → `null`. This is the K1 divergence case
+   *     (`docs/okf/quote-model-divergence.md`): `cd T && git -C sub
+   *     status` does NOT become `T/sub` here — that would need real
+   *     filesystem-shaped path joining this module deliberately does not
+   *     perform — so it is UNATTRIBUTABLE rather than guessed at.
+   *   - `ownTarget` relative AND no preceding `cd` basis is known → the
+   *     raw relative value itself (deferred to a future consumer to
+   *     resolve against the real cwd).
+   * A same-invocation mixed `env -C <base>` + relative own `-C`/
+   * `--work-tree`/`--git-dir` composition (see `ownTarget` above) is
+   * `null` here TOO — checked BEFORE the cd-basis rules above and
+   * independently of them: `env -C /tmp/base git -C sub status` never
+   * becomes `/tmp/base/sub` (real path joining, deliberately not this
+   * module's job — same reasoning as the cd-basis K1 case) NOR does it
+   * fall through to the "relative, no cd basis, stays raw" branch above
+   * (that would hand a future consumer resolving relatives against ITS
+   * OWN cwd a CONFIDENTLY WRONG repository whenever the caller's cwd
+   * differs from `/tmp/base` — the "relative and `~` target dirs resolve
+   * to a confidently wrong repo" class named in the 07-27 review). A bare
+   * `env -C <base> git status` (no relative own target) is UNAFFECTED —
+   * `ownTarget` is `<base>` as usual, composed the ordinary way below.
+   * A recognised `cd <path>` segment whose OWN value is one of the
+   * unattributable forms above (e.g. `cd ~`) still RESETS the running
+   * cd-basis to `null` for every LATER segment — a later segment must not
+   * silently keep inheriting whatever basis existed BEFORE that `cd`,
+   * since the shell genuinely changed directory to somewhere this module
+   * cannot name.
+   */
+  effectiveTarget: string | null;
+}
+
 /** A whitespace-delimited token plus its offset within the segment it came from. */
 interface Token {
   text: string;
@@ -598,6 +705,168 @@ function isTildeTarget(dir: string): boolean {
 }
 
 /**
+ * A target value `segmentViewOf`'s `CommandSegment.ownTarget` (task
+ * `98ad072f` groundwork) treats as unattributable even where the
+ * pre-existing per-segment machinery below (`canonicalizeSegment` /
+ * `peelGitGlobalOptions` / `peelEnv`) still captures SOME string for the
+ * OLD aggregate's `targetDir` — that extraction is UNCHANGED by this check
+ * (see the module header's STATUS/UPDATE note): the tokeniser is not
+ * quote-aware, so a quoted `-C` / `--work-tree` / `--git-dir` / `env -C`
+ * value is captured WITH its quote character(s) still attached
+ * (`git -C "/tmp/repoB" status` captures `"/tmp/repoB"`, quotes included —
+ * not a real path, and not `null` either under the pre-existing
+ * extraction) rather than being rejected outright. The same is true of a
+ * value containing a command-substitution marker (`$(` or a backtick) —
+ * this module never resolves substitutions, so a value carrying one names
+ * nothing this module can vouch for as a literal path. A
+ * whitespace-containing path needs no separate check here: the
+ * whitespace-splitting tokeniser never captures a value containing
+ * whitespace as ONE token in the first place — it becomes a different,
+ * unrecognised token sequence instead (see the module header's own
+ * "quoted directory arguments containing whitespace" note), which for
+ * `segmentViewOf` purposes simply fails to produce a recognised own target
+ * at all (see `parseCdSegmentTarget` below for the `cd` case).
+ *
+ * A value ENDING in a bare `$` is ALSO rejected, even though it does not
+ * literally contain the two-character `$(` marker: `BOUNDARY_RE` (this
+ * function is only ever reached through the primary, non-amp-aware pass —
+ * `segmentViewOf` never runs under `AMP_BOUNDARY_RE`) treats a bare `(` as
+ * a shell boundary UNCONDITIONALLY (needed for the leading-command case,
+ * module header), so `$(` can never survive as a substring WITHIN one
+ * token or segment in the first place — the `(` always splits it into its
+ * own boundary match first. A `cd` target ending in `$` is the tell-tale
+ * leftover of exactly that split (`cd $(pwd)/T && ...` tokenises this
+ * function's caller's OWN segment as literal `cd $`, a syntactically
+ * valid-LOOKING two-token `cd <path>` with `<path>` being the single
+ * character `$` — measured live, not hypothetical). Rejecting it here
+ * closes that gap without needing `parseCdSegmentTarget` (which has no
+ * visibility into what boundary token follows its own segment) to
+ * special-case it itself. The `-C`/`--work-tree`/`--git-dir`/`env -C` side
+ * of this module never has this specific gap: a value-capturing git
+ * global option additionally requires a SUBCOMMAND token after its value
+ * (`peelGitGlobalOptions`'s caller checks `gitOpts.idx >= tokens.length`),
+ * so `git -C $(pwd) status` already comes back `isGit: false` (no
+ * subcommand token survives the split) before this function is ever
+ * consulted for it — this extra check is `cd`-specific, `cd <path>` having
+ * no analogous "and then a subcommand" requirement.
+ */
+function isUnattributableTargetValue(value: string): boolean {
+  return (
+    value.includes("'") ||
+    value.includes('"') ||
+    value.includes("$(") ||
+    value.includes("`") ||
+    value.endsWith("$")
+  );
+}
+
+/**
+ * Recognise a segment that is EXACTLY a bare `cd <path>` invocation and
+ * nothing else — no flags, no extra arguments, `<path>` a single
+ * whitespace-delimited token — for `segmentViewOf`'s cd-basis tracking
+ * (task `98ad072f` groundwork). Returns the raw path text (still possibly
+ * `~`-prefixed, quoted, or substitution-bearing — the caller applies the
+ * SAME `isTildeTarget` / `isUnattributableTargetValue` filters used for a
+ * git invocation's own target) when the shape matches, `null` otherwise: a
+ * bare `cd` with no argument, a `cd` with a flag (`cd -P /tmp/x` — three
+ * tokens, not two), and anything else this module does not track
+ * (`pushd` / `popd`, a `cd` inside a subshell — module header) all return
+ * `null` the same way.
+ *
+ * Deliberately narrower than `bash-prefix-parse.ts`'s own
+ * `consumeLeadingCd`: that parser is quote-aware and also tolerates a
+ * LEADING `VAR=value` before the `cd` (used only for the OLD aggregate's
+ * `targetDir` fallback, computed once over the WHOLE command string, not
+ * per segment — see `leadingCd` in `segmentAndCanonicalize`). This
+ * function is segment-local and does not replicate that tolerance: a `cd`
+ * segment preceded by an assignment (`A=1 cd /tmp/T && git status`) is NOT
+ * recognised here (`tokenizeWithOffsets` yields three tokens, not two) and
+ * falls through as "not cd-shaped" — the running cd-basis is left
+ * UNCHANGED rather than guessed at, a narrower ceiling than the old
+ * aggregate carries for that one construction, named here rather than
+ * left implicit.
+ */
+function parseCdSegmentTarget(segmentText: string): string | null {
+  const tokens = tokenizeWithOffsets(segmentText);
+  if (tokens.length !== 2) return null;
+  if (tokens[0]!.text !== "cd") return null;
+  const arg = tokens[1]!.text;
+  if (arg.length === 0 || arg.startsWith("-")) return null;
+  return arg;
+}
+
+/**
+ * Compute one segment's `ownTarget` / `effectiveTarget` (task `98ad072f`
+ * groundwork, `segmentViewOf` / `CommandSegment`) and the cd-basis to
+ * carry into the NEXT segment, from: this segment's own canonicalisation
+ * result (already computed by the shared walk for the OLD aggregate —
+ * `targetDir` / `isGit`, unmodified here), whether THIS segment is itself
+ * a recognised `cd <path>` segment, and the cd-basis carried in from
+ * whatever preceded it. Implements `CommandSegment.effectiveTarget`'s doc
+ * comment verbatim; see that comment for the consumer-facing statement of
+ * these rules.
+ */
+function computeSegmentTarget(
+  segmentText: string,
+  canon: { targetDir: string | null; targetBase: string | null; isGit: boolean },
+  incomingCdBasis: string | null,
+): { ownTarget: string | null; effectiveTarget: string | null; outgoingCdBasis: string | null } {
+  // Same-invocation `env -C`/`--chdir` base + a RELATIVE own git target
+  // (orchestrator follow-up after the initial T-002 round, still task
+  // `98ad072f` groundwork): `canon.targetBase` is non-null EXACTLY in this
+  // mixed case — see `canonicalizeSegment`'s own `targetBase` computation,
+  // reused here unmodified, never when there is no wrapping `env -C` on
+  // the SAME invocation. `env -C /tmp/base git -C sub status` must NOT
+  // hand a future consumer `ownTarget`/`effectiveTarget: "sub"` (raw,
+  // relative): a naive consumer resolving a relative value against ITS
+  // OWN cwd (this module's documented fallback for the "no known basis"
+  // branch below) would land on a CONFIDENTLY WRONG repository whenever
+  // the caller's cwd differs from `/tmp/base` — precisely the "relative
+  // and `~` target dirs resolve to a confidently wrong repo" class named
+  // in the 07-27 review. Composing correctly to `/tmp/base/sub` would ALSO
+  // be correct but is deliberately NOT this module's job (real
+  // filesystem-shaped path joining — the same reason the cd-basis
+  // composition rule below refuses to compose `cd T && git -C sub` into
+  // `T/sub`); noted here as a possible LATER precision gain, not built in
+  // this slice. A bare git invocation with an `env -C` base and no
+  // relative own target (`env -C /abs git status`) is UNAFFECTED — the
+  // ordinary `canon.targetDir` extraction below already folds that in
+  // (`gitOpts.targetDir ?? envTargetDir`), and `canon.targetBase` stays
+  // `null` for that shape (no relative own git target to be relative TO).
+  // A `cd`-shaped segment never reaches this branch: it never matches
+  // `GIT_TOKEN_RE`, so `canon.isGit` is always `false` for one.
+  if (canon.isGit && canon.targetBase !== null) {
+    return { ownTarget: null, effectiveTarget: null, outgoingCdBasis: incomingCdBasis };
+  }
+
+  const cdArg = parseCdSegmentTarget(segmentText);
+  const rawOwn = cdArg !== null ? cdArg : canon.isGit ? canon.targetDir : null;
+  const ownTarget =
+    rawOwn !== null && !isTildeTarget(rawOwn) && !isUnattributableTargetValue(rawOwn)
+      ? rawOwn
+      : null;
+
+  let effectiveTarget: string | null;
+  if (ownTarget === null) {
+    effectiveTarget = incomingCdBasis;
+  } else if (path.isAbsolute(ownTarget)) {
+    effectiveTarget = ownTarget;
+  } else {
+    effectiveTarget = incomingCdBasis === null ? ownTarget : null;
+  }
+
+  // Only a recognised `cd <path>` segment updates the outgoing basis
+  // (whether or not its OWN value came out attributable — see
+  // `CommandSegment.effectiveTarget`'s doc comment for why an
+  // unattributable `cd` must still RESET the basis to `null`, not leave a
+  // stale earlier one in place). Every other segment — gated or not —
+  // never itself changes the shell's directory, so the incoming basis
+  // passes through unchanged.
+  const outgoingCdBasis = cdArg !== null ? effectiveTarget : incomingCdBasis;
+  return { ownTarget, effectiveTarget, outgoingCdBasis };
+}
+
+/**
  * Given a Bash command string, return its normalised form and the target
  * directory (and base, if relative) of its git invocation. Never throws:
  * any internal failure (there should be none — this is a defensive
@@ -621,6 +890,38 @@ export function normalizeCommand(command: string): NormalizedCommand {
     return normalizeCommandInner(command);
   } catch {
     return { normalized: command, targetDir: null, targetBase: null, truncated: false };
+  }
+}
+
+/**
+ * Given a Bash command string, return its per-segment view (task
+ * `98ad072f` groundwork, T-002) — see `CommandSegment`'s own doc comment
+ * for the field-level composition rules. `null` when the input exceeded
+ * `MAX_NORMALIZE_LENGTH` (mirrors `NormalizedCommand.truncated`, but as
+ * the ABSENCE of a view rather than a boolean flag alongside one, since
+ * there is no meaningful per-segment view to return for an input whose
+ * normalisation itself was skipped). `[]` for an empty or non-string
+ * command, and as the never-throws fallback (mirrors `normalizeCommand`'s
+ * own defensive backstop — see its doc comment above).
+ *
+ * Computed inside the SAME segment walk `normalizeCommand` already runs
+ * (`segmentAndCanonicalize`, `collectSegments: true`) — no additional pass
+ * over the command string, so this stays O(length) the same way
+ * `normalizeCommand` does. The ampersand-aware second pass
+ * (`normalizeCommandAmpAware`) NEVER collects a segment view (always calls
+ * `segmentAndCanonicalize` with `collectSegments: false`) — see that
+ * function's own comment for why a directory extracted under the
+ * ampersand-aware alphabet would be unreliable in the first place; the
+ * same reasoning applies here, so this module offers no amp-aware variant
+ * of this function at all.
+ */
+export function segmentViewOf(command: string): CommandSegment[] | null {
+  if (typeof command !== "string" || command.length === 0) return [];
+  if (command.length > MAX_NORMALIZE_LENGTH) return null;
+  try {
+    return segmentAndCanonicalize(command, BOUNDARY_RE, true).segments ?? [];
+  } catch {
+    return [];
   }
 }
 
@@ -680,14 +981,17 @@ export function normalizeCommandAmpAware(command: string): AmpAwareNormalizedCom
     return { normalized: command, truncated: true };
   }
   try {
-    return { normalized: segmentAndCanonicalize(command, AMP_BOUNDARY_RE).normalized, truncated: false };
+    return {
+      normalized: segmentAndCanonicalize(command, AMP_BOUNDARY_RE, false).normalized,
+      truncated: false,
+    };
   } catch {
     return { normalized: command, truncated: false };
   }
 }
 
 function normalizeCommandInner(command: string): NormalizedCommand {
-  const { normalized, targetDir, targetBase } = segmentAndCanonicalize(command, BOUNDARY_RE);
+  const { normalized, targetDir, targetBase } = segmentAndCanonicalize(command, BOUNDARY_RE, false);
   return { normalized, targetDir, targetBase, truncated: false };
 }
 
@@ -715,11 +1019,28 @@ function normalizeCommandInner(command: string): NormalizedCommand {
  * all. This is the containment design's cost, not an oversight, so a
  * future reader should not "fix" it by exposing these fields to a
  * hypothetical amp-alphabet consumer.
+ *
+ * `collectSegments` (task `98ad072f` groundwork, T-002): when `true`, ALSO
+ * builds the per-segment view `segmentViewOf` returns (`CommandSegment[]`)
+ * inside this SAME walk — no additional pass over `command`, just a
+ * bounded amount of extra work per segment already being visited (see
+ * `computeSegmentTarget`). `normalizeCommandInner` and
+ * `normalizeCommandAmpAware` both pass `false`: the OLD aggregate never
+ * needed this, and the amp-aware pass deliberately never exposes a segment
+ * view at all (see that function's own comment). `segments` is `null` on
+ * the returned object when `collectSegments` is `false`, an array
+ * (possibly empty) otherwise.
  */
 function segmentAndCanonicalize(
   command: string,
   boundaryRe: RegExp,
-): { normalized: string; targetDir: string | null; targetBase: string | null } {
+  collectSegments: boolean,
+): {
+  normalized: string;
+  targetDir: string | null;
+  targetBase: string | null;
+  segments: CommandSegment[] | null;
+} {
   const parts: string[] = [];
   const explicitTargets = new Set<string>();
   let explicitTargetBase: string | null = null;
@@ -727,6 +1048,15 @@ function segmentAndCanonicalize(
   let bareGitSegmentCount = 0;
   let i = 0;
   const n = command.length;
+
+  // task `98ad072f` groundwork (T-002): the per-segment view's own,
+  // independent bookkeeping — a running cd-basis (see
+  // `computeSegmentTarget`) and the accumulated segments themselves.
+  // Entirely separate from `explicitTargets` / `bareGitSegmentCount` /
+  // `hasAmbiguousNonGitSegment` above, which stay exactly as they were:
+  // this never reads or writes them, and they never read or write this.
+  const segments: CommandSegment[] | null = collectSegments ? [] : null;
+  let cdBasis: string | null = null;
 
   // A leading `cd <dir> &&|;` prefix, parsed ONCE up front (G1 fix,
   // review round 2, 2026-07-27) instead of the two separate calls the
@@ -759,6 +1089,18 @@ function segmentAndCanonicalize(
     const segmentText = command.slice(i, segEnd);
     const result = canonicalizeSegment(segmentText);
     parts.push(result.text);
+    if (segments !== null) {
+      // task `98ad072f` groundwork (T-002): O(1) extra work per segment
+      // already being visited — see `segmentAndCanonicalize`'s own doc
+      // comment for why this is not a second pass over `command`.
+      const seg = computeSegmentTarget(segmentText, result, cdBasis);
+      segments.push({
+        text: result.text,
+        ownTarget: seg.ownTarget,
+        effectiveTarget: seg.effectiveTarget,
+      });
+      cdBasis = seg.outgoingCdBasis;
+    }
     if (result.isGit) {
       if (result.targetDir === null) {
         bareGitSegmentCount += 1;
@@ -854,7 +1196,7 @@ function segmentAndCanonicalize(
     targetDir = null;
   }
 
-  return { normalized: parts.join(""), targetDir, targetBase };
+  return { normalized: parts.join(""), targetDir, targetBase, segments };
 }
 
 /**

@@ -3,8 +3,10 @@ import { parse as parseYaml } from "yaml";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import {
   AMP_BOUNDARY_RE,
+  MAX_NORMALIZE_LENGTH,
   normalizeCommand,
   normalizeCommandAmpAware,
+  segmentViewOf,
 } from "../../src/runtime/command-normalize.js";
 import { parseManifest } from "../../src/schema/index.js";
 
@@ -1096,6 +1098,360 @@ describe("normalizeCommandAmpAware (task aabbad63: closes the bare-& gating gap 
       const re = policyBashMatch("deny-kill-switch-bypass");
       const command = "nice FOO='x & y' harness pause";
       expect(re.test(normalizeCommand(command).normalized)).toBe(true);
+    });
+  });
+});
+
+// T-002 of run 2026-08-02-per-repo-gate-scoping-redesign (task `98ad072f`
+// groundwork): the per-segment view export. `normalizeCommand`'s own
+// `targetDir`/`targetBase` behaviour is untouched by any of this — see the
+// "existing behaviour is unaffected" describe block below, which re-runs a
+// representative slice of the pre-existing `targetDir extraction` /
+// `G1` fixtures through `normalizeCommand` alone to pin that explicitly.
+describe("segmentViewOf", () => {
+  // The K1 divergence table's 8 forms, docs/okf/quote-model-divergence.md
+  // (`bash-prefix-parse.cdTarget` vs. `command-normalize.targetDir`, "6 of
+  // 8 divergent"): 7 rows are printed in the doc's table (the 8th, a bare
+  // `git status` with no cd and no own target, is the boring baseline both
+  // models already agree is `null` and is omitted from a table whose whole
+  // point is to show divergence — included here for completeness). This
+  // describe block asserts what `segmentViewOf` — a THIRD, deliberately
+  // more conservative model — computes for the segment carrying the git
+  // invocation in each form, per `CommandSegment.effectiveTarget`'s own
+  // composition rules.
+  describe("K1 8-forms table (docs/okf/quote-model-divergence.md)", () => {
+    it("cd <T> && git status -> T (absolute cd basis adopted by the bare git segment)", () => {
+      const segs = segmentViewOf("cd /tmp/repoD && git status");
+      expect(segs).not.toBeNull();
+      expect(segs![1]!.effectiveTarget).toBe("/tmp/repoD");
+      expect(segs![1]!.ownTarget).toBe(null);
+    });
+
+    it("cd ~ && git status -> null (tilde cd target resets the basis to null, not left at whatever preceded it)", () => {
+      const segs = segmentViewOf("cd ~ && git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+      expect(segs![1]!.effectiveTarget).toBe(null);
+    });
+
+    it("git -C <T> status (no cd) -> T (absolute own target)", () => {
+      const segs = segmentViewOf("git -C /tmp/repoB status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe("/tmp/repoB");
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoB");
+    });
+
+    it("git --work-tree=<T> status (no cd) -> T", () => {
+      const segs = segmentViewOf("git --work-tree=/tmp/repoB status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoB");
+    });
+
+    it("git --git-dir=<T>/.git status (no cd) -> T (parent-of-.git, same as targetDir)", () => {
+      const segs = segmentViewOf("git --git-dir=/tmp/repoC/.git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoC");
+    });
+
+    it("env -C <T> git status (no cd) -> T", () => {
+      const segs = segmentViewOf("env -C /tmp/repoA git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoA");
+    });
+
+    it("cd <T> && git -C sub status -> null (K1 divergence case: relative own target after a known cd basis is UNATTRIBUTABLE, not composed to T/sub)", () => {
+      const segs = segmentViewOf("cd /tmp/T && git -C sub status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/T");
+      expect(segs![1]!.ownTarget).toBe("sub");
+      expect(segs![1]!.effectiveTarget).toBe(null);
+    });
+
+    it("git status (bare, no cd, no own target) -> null (the boring baseline both bp and cn already agree on)", () => {
+      const segs = segmentViewOf("git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+    });
+  });
+
+  describe("-C . and absolute paths stay as ownTarget verbatim (resolution against cwd is a future consumer's job)", () => {
+    it("git -C . status, no preceding cd -> ownTarget and effectiveTarget are both '.'", () => {
+      const segs = segmentViewOf("git -C . status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(".");
+      expect(segs![0]!.effectiveTarget).toBe(".");
+    });
+
+    it("git -C sub status, no preceding cd -> ownTarget and effectiveTarget both stay the raw relative value", () => {
+      const segs = segmentViewOf("git -C sub status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe("sub");
+      expect(segs![0]!.effectiveTarget).toBe("sub");
+    });
+
+    it("git -C /tmp/repoB status -> absolute ownTarget always wins as effectiveTarget", () => {
+      const segs = segmentViewOf("git -C /tmp/repoB status");
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoB");
+    });
+  });
+
+  // Orchestrator follow-up after the initial T-002 round (07-27 review
+  // precedent: "relative and ~ target dirs resolve to a confidently wrong
+  // repo"): a same-invocation `env -C <base>` + relative own `-C` mix must
+  // NOT hand a future consumer a raw relative value that consumer would
+  // resolve against ITS OWN cwd — that would land on a repo unrelated to
+  // the `<base>` the command itself named. Pinned in both directions.
+  describe("same-invocation env -C base + relative own -C is unattributable (both fields null, never the raw relative value)", () => {
+    it("(i) env -C /tmp/base git -C sub status -> ownTarget and effectiveTarget are both null (the mixed case)", () => {
+      const segs = segmentViewOf("env -C /tmp/base git -C sub status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+    });
+
+    it("(ii) env -C /tmp/base git status (no relative own -C) -> ownTarget/effectiveTarget stay /tmp/base, unaffected", () => {
+      const segs = segmentViewOf("env -C /tmp/base git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe("/tmp/base");
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/base");
+    });
+
+    it("(iii) git -C sub status with NO env -C base at all -> still the raw relative value 'sub' (the pre-existing deferred rule)", () => {
+      const segs = segmentViewOf("git -C sub status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe("sub");
+      expect(segs![0]!.effectiveTarget).toBe("sub");
+    });
+
+    it("a preceding cd basis does not rescue the mixed case either — the env -C/relative-own-C check applies first and independently", () => {
+      const segs = segmentViewOf("cd /tmp/X && env -C /tmp/base git -C sub status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/X"); // the cd segment itself, unaffected
+      expect(segs![1]!.ownTarget).toBe(null);
+      expect(segs![1]!.effectiveTarget).toBe(null);
+    });
+  });
+
+  describe("multi-segment cd-basis propagation across every BOUNDARY_RE separator", () => {
+    const cases: Array<{ label: string; command: string }> = [
+      { label: "&&", command: "cd /tmp/repoD && git status" },
+      { label: ";", command: "cd /tmp/repoD ; git status" },
+      { label: "\\n", command: "cd /tmp/repoD\ngit status" },
+      { label: "| (bare pipe, mirrors the existing G1 'same directory' precedent)", command: "cd /tmp/repoD | git status" },
+      { label: "( (subshell)", command: "cd /tmp/repoD && (git status)" },
+    ];
+    for (const c of cases) {
+      it(`separator ${c.label}: the cd basis reaches the later git segment`, () => {
+        const segs = segmentViewOf(c.command);
+        expect(segs).not.toBeNull();
+        const gitSeg = segs!.find((s) => /\bgit status\)?$/.test(s.text));
+        expect(gitSeg).toBeDefined();
+        expect(gitSeg!.effectiveTarget).toBe("/tmp/repoD");
+      });
+    }
+
+    it("a non-cd segment between two cd segments does not reset the basis on its own", () => {
+      // "echo hi" never changes directory; the basis established by the
+      // leading cd must still reach the trailing git segment.
+      const segs = segmentViewOf("cd /tmp/repoD && echo hi && git status");
+      expect(segs).not.toBeNull();
+      expect(segs![2]!.text).toBe("git status");
+      expect(segs![2]!.effectiveTarget).toBe("/tmp/repoD");
+    });
+
+    it("a second cd overrides the first for everything after it", () => {
+      const segs = segmentViewOf("cd /tmp/repoD && cd /tmp/repoE && git status");
+      expect(segs).not.toBeNull();
+      expect(segs![2]!.effectiveTarget).toBe("/tmp/repoE");
+    });
+  });
+
+  describe("unattributable forms (all -> null, never a guess)", () => {
+    it("~-prefixed cd target", () => {
+      const segs = segmentViewOf("cd ~/repo && git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![1]!.effectiveTarget).toBe(null);
+    });
+
+    it("~-prefixed git -C target", () => {
+      const segs = segmentViewOf("git -C ~/repo status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+    });
+
+    it("quoted git -C value (double-quoted, no internal whitespace) -> null, not the quote-included garbage the old aggregate's targetDir still carries", () => {
+      const command = 'git -C "/tmp/repoB" status';
+      expect(normalizeCommand(command).targetDir).toBe('"/tmp/repoB"'); // pre-existing, unchanged aggregate behaviour
+      const segs = segmentViewOf(command);
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+    });
+
+    it("quoted+whitespace git -C value (single-quoted, internal whitespace) -> null on every fragment", () => {
+      const segs = segmentViewOf("git -C '/tmp/repo B' status");
+      expect(segs).not.toBeNull();
+      for (const seg of segs!) {
+        expect(seg.ownTarget).toBe(null);
+        expect(seg.effectiveTarget).toBe(null);
+      }
+    });
+
+    it("quoted cd target (single-quoted, internal whitespace) -> null, not the dequoted value the old aggregate's leadingCd still carries", () => {
+      const command = "cd '/tmp/repo B' && git status";
+      expect(normalizeCommand(command).targetDir).toBe("/tmp/repo B"); // pre-existing, unchanged aggregate behaviour
+      const segs = segmentViewOf(command);
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![1]!.effectiveTarget).toBe(null);
+    });
+
+    it("command substitution in a cd target ($(pwd)/T) -> null on every fragment, not the bare '$' fragment left by the boundary split", () => {
+      const segs = segmentViewOf("cd $(pwd)/T && git status");
+      expect(segs).not.toBeNull();
+      for (const seg of segs!) {
+        expect(seg.ownTarget).toBe(null);
+        expect(seg.effectiveTarget).toBe(null);
+      }
+    });
+
+    it("command substitution in a git -C target ($(pwd)/sub) -> null (already isGit:false via the pre-existing malformed/no-subcommand path)", () => {
+      const segs = segmentViewOf("git -C $(pwd)/sub status");
+      expect(segs).not.toBeNull();
+      for (const seg of segs!) {
+        expect(seg.ownTarget).toBe(null);
+        expect(seg.effectiveTarget).toBe(null);
+      }
+    });
+
+    it("backtick command substitution in a cd target -> null", () => {
+      const segs = segmentViewOf("cd `pwd` && git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![1]!.effectiveTarget).toBe(null);
+    });
+
+    it("bare cd with no argument -> not cd-shaped, does not touch the basis, and names nothing itself", () => {
+      const segs = segmentViewOf("cd && git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+      expect(segs![1]!.effectiveTarget).toBe(null);
+    });
+
+    it("cd with a flag -> not recognised as cd-shaped (three tokens, not two)", () => {
+      const segs = segmentViewOf("cd -P /tmp/x && git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![1]!.effectiveTarget).toBe(null);
+    });
+
+    it("VAR=value before cd -> narrower than the old aggregate's leadingCd on purpose (documented ceiling): not recognised, basis stays null", () => {
+      const command = "A=1 cd /tmp/T && git status";
+      expect(normalizeCommand(command).targetDir).toBe("/tmp/T"); // pre-existing aggregate DOES resolve this one
+      const segs = segmentViewOf(command);
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![1]!.effectiveTarget).toBe(null);
+    });
+  });
+
+  describe("truncated (> MAX_NORMALIZE_LENGTH) -> null, not an array", () => {
+    it("returns null above the length bound", () => {
+      const oversized = "git status " + "x".repeat(MAX_NORMALIZE_LENGTH);
+      expect(oversized.length).toBeGreaterThan(MAX_NORMALIZE_LENGTH);
+      expect(segmentViewOf(oversized)).toBe(null);
+    });
+
+    it("does not truncate at exactly the bound", () => {
+      const atBound = "git status " + "x".repeat(MAX_NORMALIZE_LENGTH - "git status ".length);
+      expect(atBound.length).toBe(MAX_NORMALIZE_LENGTH);
+      expect(segmentViewOf(atBound)).not.toBeNull();
+    });
+  });
+
+  describe("empty / non-string input -> [] (never null, null is reserved for truncation)", () => {
+    it("empty string", () => {
+      expect(segmentViewOf("")).toEqual([]);
+    });
+
+    it("non-string input", () => {
+      expect(segmentViewOf(null as unknown as string)).toEqual([]);
+      expect(segmentViewOf(undefined as unknown as string)).toEqual([]);
+    });
+  });
+
+  describe("never throws", () => {
+    const malformed = [
+      "",
+      "   ",
+      "git",
+      "'",
+      '"',
+      "cd '",
+      "env -C",
+      "git -C",
+      "git --git-dir",
+      "git --work-tree",
+      "\n\n\n",
+      ";;;;&&&&||||((((",
+      "git".repeat(10000),
+      String.fromCharCode(0, 1, 2, 3) + "git status",
+      "FOO=" + "x".repeat(5000) + " git status",
+      "env -S 'echo hi; git status'",
+      "cd",
+      "cd -P /tmp/x",
+    ];
+    for (const command of malformed) {
+      it(`does not throw on ${JSON.stringify(command.slice(0, 40))}`, () => {
+        expect(() => segmentViewOf(command)).not.toThrow();
+      });
+    }
+  });
+
+  // O(length): the length-bound test above already exercises the largest
+  // permitted input; this pins that a large, many-segment command still
+  // returns promptly, mirroring `normalizeCommand`'s own F3 perf guard —
+  // `computeSegmentTarget`'s extra per-segment work is O(1) additional
+  // work inside the SAME walk, not a second pass over the string.
+  describe("O(length): bounded cost, no additional pass", () => {
+    it("a >=100KB adversarial command (many segments, one boundary kind that never occurs) stays under a fixed time budget", () => {
+      const segment = "cd /tmp/x;";
+      const command = segment.repeat(Math.floor(MAX_NORMALIZE_LENGTH / segment.length));
+      expect(command.length).toBeGreaterThanOrEqual(MAX_NORMALIZE_LENGTH - 10);
+      expect(command).not.toContain("(");
+
+      const start = process.hrtime.bigint();
+      segmentViewOf(command);
+      const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+      expect(elapsedMs).toBeLessThan(300);
+    });
+  });
+
+  // amp-aware pass stays target-free: the type-level pin
+  // (`AmpAwareNormalizedCommand` has exactly `{normalized, truncated}`,
+  // asserted in the "return type carries no targetDir/targetBase" describe
+  // block above) is untouched by this task — `segmentViewOf` offers no
+  // amp-aware variant at all, so there is nothing new to pin here beyond
+  // that existing guard staying green.
+
+  describe("existing behaviour is unaffected (spot-check: normalizeCommand's aggregate is untouched by this task)", () => {
+    it("targetDir extraction still resolves the pre-existing forms exactly as before", () => {
+      expect(normalizeCommand("env -C /tmp/repoA git status").targetDir).toBe("/tmp/repoA");
+      expect(normalizeCommand("git -C /tmp/repoB status").targetDir).toBe("/tmp/repoB");
+      expect(normalizeCommand("cd /tmp/repoD && git status").targetDir).toBe("/tmp/repoD");
+      expect(normalizeCommand("cd /tmp/T && git -C sub status").targetDir).toBe("sub");
+      expect(normalizeCommand("cd /tmp/T && git -C sub status").targetBase).toBe("/tmp/T");
+    });
+
+    it("G1 non-git-segment ambiguity is still null, unaffected by the new per-segment cd-basis tracking", () => {
+      expect(
+        normalizeCommand("git -C /tmp/repoB rev-parse HEAD && gh pr merge 123").targetDir,
+      ).toBe(null);
     });
   });
 });
