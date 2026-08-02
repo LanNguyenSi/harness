@@ -56,6 +56,8 @@
 // parallel classifier in the future, it should mirror this allowlist
 // verbatim, not diverge.
 
+import { decodeShellWord } from "./shell-word.js";
+
 /**
  * Single-token read-only binaries. Each accepts arguments without
  * changing classification: `ls -la /tmp` is still read-only.
@@ -389,7 +391,8 @@ export function isReadOnlyBashPipeline(command: string): boolean {
  * dash is a write vector. Conservative: a filename token like `foo.txt`
  * does not start with `-` and is therefore never matched.
  */
-function isOutputWriteToken(t: string): boolean {
+function isOutputWriteToken(raw: string): boolean {
+  const t = decodeShellWord(raw);
   if (t === "--output" || t.startsWith("--output=")) return true;
   // Short flag or cluster: single leading '-' (not '--'), containing
   // lowercase 'o'. Catches -o, -oFILE, -no, -rno, -rnofoo, etc.
@@ -400,8 +403,15 @@ function isOutputWriteToken(t: string): boolean {
  * Returns true when a token is a write flag for `tree`. tree's only
  * file-writing vector is the output redirect `-o` / `--output`; it has
  * no exec or temp-dir flags, so this delegates to `isOutputWriteToken`.
+ *
+ * NOT MEASURED against a real `tree` (task fdee7d0f): the binary is not
+ * installed on the machine this was verified on, so the quoted-spelling
+ * family could only be confirmed for `find`, `sort` and `file`. The fix
+ * below is applied here on the same reasoning, but this sentence is the
+ * honest status rather than a claim of coverage.
  */
-function isTreeWriteToken(t: string): boolean {
+function isTreeWriteToken(raw: string): boolean {
+  const t = decodeShellWord(raw);
   return isOutputWriteToken(t);
 }
 
@@ -422,7 +432,8 @@ function isTreeWriteToken(t: string): boolean {
  * over-block a few benign size values (e.g. `-S2T`); over-blocking a
  * read is acceptable, under-blocking a write is not.
  */
-function isSortWriteToken(t: string): boolean {
+function isSortWriteToken(raw: string): boolean {
+  const t = decodeShellWord(raw);
   if (t === "--compress-program" || t.startsWith("--compress-program=")) return true;
   if (t === "--temporary-directory" || t.startsWith("--temporary-directory=")) return true;
   if (t === "--output" || t.startsWith("--output=")) return true;
@@ -438,7 +449,8 @@ function isSortWriteToken(t: string): boolean {
  * `C` triggers a write. Cluster detection: `-bC`, `-Cb`, and `-bCx`
  * all contain uppercase `C` after the leading dash and are write vectors.
  */
-function isFileWriteToken(t: string): boolean {
+function isFileWriteToken(raw: string): boolean {
+  const t = decodeShellWord(raw);
   if (t === "--compile" || t.startsWith("--compile=")) return true;
   // Short flag or cluster: single leading '-' (not '--'), containing
   // uppercase 'C'. Lowercase 'c' is intentionally not matched.
@@ -515,7 +527,12 @@ function classifyTokens(tokens: readonly string[]): boolean {
   // write to operator-supplied paths without going through shell
   // redirection. If any such flag appears, fall through to block.
   if (bin === "find") {
-    return !tokens.slice(1).some((t) => FIND_WRITE_FLAGS.has(t));
+    // Decode each token first: `-"delete"`, `-'delete'`, `-\delete`,
+    // `-$'delete'` and `-de"lete"` are all the single argv entry `-delete`
+    // to bash, and all five really deleted while classifying as read-only
+    // (task fdee7d0f, measured with a canary file per form). Set membership
+    // on the RAW token is what they defeated.
+    return !tokens.slice(1).some((t) => FIND_WRITE_FLAGS.has(decodeShellWord(t)));
   }
 
   // `sort` is read-only ONLY when none of its argv tokens are write or

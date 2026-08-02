@@ -539,3 +539,78 @@ describe("read-only Bash pipeline classifier (isReadOnlyBashPipeline)", () => {
     expect(isReadOnlyBashCommand("gh pr checks 123 | head")).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task fdee7d0f: the write-flag guards compared RAW tokens, so any shell
+// quoting hid the flag from them while bash still passed it through. Each
+// case below was verified against the real binary in a fresh sandbox: the
+// command genuinely wrote (or deleted), and the classifier still called it
+// read-only. Ground truth was the artefact — a canary file's disappearance
+// for `find`, the created output/cache file for `sort`/`file` — not the
+// exit code.
+//
+// Which comparisons the family defeats is not uniform, and the split is the
+// interesting part: exact set membership (`FIND_WRITE_FLAGS.has`) and
+// long-flag prefix tests (`startsWith("--output=")`) are fully defeated,
+// while the short-flag CLUSTER tests survive by accident, because the flag
+// letter remains a substring of the quoted token (`-"o"` still contains
+// `o`). The fix decodes the token before every one of these comparisons, so
+// the surviving-by-accident cases stop depending on that accident.
+// ---------------------------------------------------------------------------
+
+describe("write-flag guards see through shell quoting (task fdee7d0f)", () => {
+  // `find`: exact set membership, fully defeated by every spelling.
+  it.each([
+    'find . -"delete"',
+    "find . -'delete'",
+    "find . -\\delete",
+    "find . -$'delete'",
+    'find . -de"lete"',
+    "find . -'exec' rm {} ;",
+    'find . -$\'\\x64elete\'',
+  ])("blocks the quoted find write flag: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // Long-flag prefix tests: `sort --output=`, `sort --compress-program=`,
+  // `sort --temporary-directory=`, `file --compile`.
+  it.each([
+    'sort --"output"=out.txt data.txt',
+    'sort --outp"ut"=out.txt data.txt',
+    "sort --'compress-program'=/bin/cat data.txt",
+    'sort --"temporary-directory"=. data.txt',
+    'file --"compile" -m magic',
+  ])("blocks the quoted long write flag: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // Short clusters: these already blocked before the fix (the letter stays
+  // a substring), pinned so the decode cannot silently drop them.
+  it.each(['sort -"o" out.txt data.txt', "sort -'o' out.txt data.txt", 'file -"C" -m magic'])(
+    "still blocks the quoted short write flag: %s",
+    (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    },
+  );
+
+  // Negative controls: decoding must not turn a genuinely read-only command
+  // into a write. Without these the suite could not detect over-blocking.
+  it.each([
+    "find . -name canary.txt",
+    'find . -name "*.ts"',
+    "find . -type f",
+    "sort data.txt",
+    'sort -"n" data.txt',
+    "cat data.txt",
+    "ls -la",
+    "file -m magic data.txt",
+  ])("keeps genuinely read-only commands read-only: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(true);
+  });
+
+  // An unresolvable word decodes to itself, so classification falls back to
+  // today's behaviour rather than to an invented value.
+  it("an unterminated quote leaves the token compared raw", () => {
+    expect(isReadOnlyBashCommand("find . -name 'x")).toBe(true);
+  });
+});
