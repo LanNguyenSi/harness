@@ -7,7 +7,13 @@ import { parse as parseYaml } from "yaml";
 import { realLedgerClient, runInterceptCli } from "../../src/cli/policy/intercept.js";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import { normalizeCommandAmpAware } from "../../src/runtime/command-normalize.js";
-import { policyMatchesEvent, type LedgerClient, type ToolEvent } from "../../src/runtime/intercept.js";
+import {
+  policyMatchesEvent,
+  MAX_ATTRIBUTED_CONTEXTS,
+  type LedgerClient,
+  type PolicyDecision,
+  type ToolEvent,
+} from "../../src/runtime/intercept.js";
 import {
   parseManifest,
   type EnvironmentResolver,
@@ -770,28 +776,27 @@ describe("runInterceptCli — REPO / BRANCH builtins resolve from event.cwd", ()
     expect(result.decisions[0]!.ledgerTag).toBe("preflight:main");
   });
 
-  // Explicit regression pin for the split decided in run
-  // 2026-07-27-gate-target-repo-resolution: a command naming a FOREIGN
-  // target repository (`git -C <B>`) resolves ${REPO}/${BRANCH} from the
-  // CWD's own repository, never the named target, so a future
-  // reintroduction of a per-command target-directory resolution cannot
-  // land unnoticed. A per-command resolution was built and reviewed on
-  // this same run but removed before shipping (three consecutive review
-  // rounds each found a different way it leaked into the wrong
-  // evaluation) — see CHANGELOG.md and command-normalize.ts's module
-  // header for the full account.
-  // All four spellings the removed resolution understood are pinned, not
-  // just `git -C`. A reviewer demonstrated that a reintroduction limited
-  // to the leading-`cd` target — the spelling that looks safest, since a
-  // `cd` genuinely persists for the rest of the command — leaves a
-  // single-spelling pin entirely green.
+  // Pin for the unattributable-fallback rule (98ad072f, D-003): this
+  // policy's trigger is `match: "Bash"` with NO `bash_match`, so it
+  // matches the EVENT as a whole and no segment can satisfy it — the
+  // per-policy attribution added in T-003 therefore never applies, and
+  // ${REPO}/${BRANCH} resolve from the cwd for every target-naming
+  // spelling. (The shipped preflight-before-investigation policy DOES
+  // carry a bash_match and IS attributed — that behaviour is pinned in
+  // the T-003 describe blocks below. Historical context for the four
+  // spellings: the 07-27 run's removed per-event resolution understood
+  // exactly these, see CHANGELOG.md.)
+  // All four spellings stay pinned, not just `git -C`, so a future
+  // change that widens attribution to whole-event triggers — the
+  // fail-open direction for policies whose template semantics assume the
+  // session repo — cannot land on a single-spelling pin staying green.
   it.each([
     ["git -C", (b: string) => `git -C ${b} status`],
     ["env -C", (b: string) => `env -C ${b} git status`],
     ["--work-tree/--git-dir", (b: string) => `git --work-tree=${b} --git-dir=${b}/.git status`],
     ["leading cd", (b: string) => `cd ${b} && git status`],
   ])(
-    "%s: a command naming a foreign target repo resolves ${REPO}/${BRANCH} to the cwd repo, not the named target",
+    "%s: a policy without bash_match (whole-event trigger) keeps cwd-derived ${REPO}/${BRANCH} despite a foreign target",
     async (_spelling, build) => {
       const repoA = makeRepoFixture("split-cwd-repo", "main");
       const repoB = makeRepoFixture("split-foreign-target", "feature/other");
@@ -820,21 +825,20 @@ describe("runInterceptCli — REPO / BRANCH builtins resolve from event.cwd", ()
 
 // F1 fix (CRITICAL, review round 2026-07-27): the Risk Gate's git context
 // (feeding `environments.resolvers[].signals.branch_patterns`) must
-// resolve from the hook's own cwd, NEVER from a command's TARGET repo. A
-// git-target-aware `${REPO}`/`${BRANCH}` was built and reviewed on this
-// same run (a `git -C` / `env -C` / `--work-tree` awareness) but was
-// removed before shipping — see `src/cli/policy/intercept.ts` and
-// `CHANGELOG.md`; `${REPO}`/`${BRANCH}` are cwd-only again. During that
-// run's development, `resolverGit` briefly fell back to the SAME
-// target-aware git context ${REPO}/${BRANCH} used at the time, so a
-// `production` + `branch_patterns: [main]` resolver classified the
-// environment from the COMMAND's target repo's branch instead of the cwd
-// repo's — a command like `git -C <repo-on-feature/x> log && rm -rf
-// /data` silently skipped the resolver (and every `when:`-gated policy
-// keyed on it) because the resolver read feature/x's branch, not the cwd
-// repo's `main`. Fixed before that version ever shipped; this suite
-// pins `resolverGit` staying cwd-only regardless of what the trigger
-// normaliser's own (now-unwired) target-directory extraction finds.
+// resolve from the hook's own cwd, NEVER from a command's TARGET repo.
+// During the 07-27 run's development, `resolverGit` briefly fell back to
+// a target-aware git context, so a `production` + `branch_patterns:
+// [main]` resolver classified the environment from the COMMAND's target
+// repo's branch instead of the cwd repo's — a command like `git -C
+// <repo-on-feature/x> log && rm -rf /data` silently skipped the resolver
+// (and every `when:`-gated policy keyed on it) because the resolver read
+// feature/x's branch, not the cwd repo's `main`. Fixed before that
+// version ever shipped. Since 98ad072f (T-003), `${REPO}`/`${BRANCH}`
+// ARE per-policy attributed to the trigger-satisfying segment's target —
+// but the Risk Gate context is a separate, deliberately untouched path:
+// this suite pins `resolverGit` staying cwd-only regardless of any
+// target the segment view or the (still-unwired) aggregate extraction
+// finds.
 describe("runInterceptCli — Risk Gate git context stays cwd-derived even when a target-naming git invocation precedes the gated command (F1 regression, review round 2026-07-27)", () => {
   let cleanups: Array<() => void> = [];
   afterEach(() => {
@@ -918,6 +922,322 @@ describe("runInterceptCli — Risk Gate git context stays cwd-derived even when 
     expect(result.decisions).toHaveLength(1);
     expect(result.decisions[0]?.environment?.name).toBe("production");
     expect(result.blocked).toBe(true);
+  });
+});
+
+// Task 98ad072f (run 2026-08-02-per-repo-gate-scoping-redesign), T-001:
+// the three regressions measured against the FIRST (rejected) attempt at
+// per-command target-repo resolution — see
+// .ai/runs/2026-07-27-gate-target-repo-resolution/05-review-findings.md
+// (critical row, first "high | security" row, and the Pass 2/3 rows) and
+// D-016 in that run's 03-decisions.md. Written FIRST, BEFORE the redesign
+// (T-002/T-003) exists, so the new per-policy attribution can be built
+// against a red-first, then-green baseline instead of retrofitted.
+//
+// A command's git invocation(s) already carry a fully-tested target
+// extraction (`command-normalize.ts`'s `targetDir`), but it is
+// deliberately UNWIRED — see that module's STATUS header and the cwd-only
+// comment on `cwdGitContext` in `src/cli/policy/intercept.ts`. These three
+// tests pin that today's behaviour stays cwd-only regardless of what a
+// command's OWN git invocation(s) name, so a reintroduction of ANY
+// per-event global target — including the simplest possible one, wiring
+// `targetDir` straight into `cwdGitContext` — cannot land unnoticed. The
+// orchestrator's mutant at
+// `.ai/runs/2026-08-02-per-repo-gate-scoping-redesign/mutants/global-target-dir.patch`
+// does exactly that.
+//
+// Command-shape note: `command-normalize.ts`'s OWN `targetDir` already
+// refuses to resolve (falls back to `null`) when a command mixes a
+// PER-INVOCATION-targeted git call (`-C`/`--work-tree`/`--git-dir`/
+// `env -C`) with an unrelated bare invocation across `&&`/`;` — see its
+// module header's "every invocation agrees" rule — but NOT across `|`/
+// `||`, which it treats as staying in the same effective directory (its
+// own comment: "never a bare `|`, which stays in the SAME directory").
+// That asymmetry is exactly the historical shape of this run's Pass 2/3
+// findings ("closed for `&&`, still open for `|` and `||`"). Each test
+// below is written to pin TODAY's cwd-only behaviour across all four
+// separators regardless of that asymmetry; which sub-cases actually flip
+// under the orchestrator's naive mutant is documented per test.
+//
+// Orchestrator decision D-010 (2026-08-02, T-003 fix round): (a) and (c)
+// below are UNCHANGED. (b)'s command shape was rewritten from a
+// leading-`cd` idiom to the literal `-C`-on-decoy form (see its own
+// describe block for why) — the leading-`cd` shape is now covered as a
+// DELIVERABLE (attribution correctly follows the `cd`), in the
+// "leading-cd is now a deliverable" describe block further down this
+// file, not as a regression pin here.
+describe("runInterceptCli — 98ad072f mandatory regression pins (written FIRST against master 98ecb1b, per-repo gate-scoping redesign)", () => {
+  let cleanups: Array<() => void> = [];
+  afterEach(() => {
+    for (const c of cleanups) c();
+    cleanups = [];
+  });
+
+  function makeRepoFixture(name: string, branch: string): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-98ad072f-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const repo = path.join(root, name);
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+    return repo;
+  }
+
+  const emptyQuery: LedgerClient["query"] = async () => ({ kind: "ok", entries: [] });
+
+  // (a) Risk Gate (F1-shaped): a `when: environment.name: production`
+  // policy — the same shape as the shipped `gate-prod-destructive` /
+  // `gate-prod-destructive-approval` templates — still fires although a
+  // target-naming git read on a FOREIGN branch precedes the gated
+  // command. Superset of the existing F1 pin above (which covers only
+  // `&&`): `it.each` over all four separators.
+  //
+  // Measured (see this task's implementer report): under the
+  // orchestrator's mutant, the `&&`/`;` sub-cases stay green (command-
+  // normalize's own git-vs-non-git disagreement rule already nulls
+  // `targetDir` for those two), but `|`/`||` flip red — `targetDir` leaks
+  // through for those two separators today, exactly the historical Pass
+  // 2/3 asymmetry noted above.
+  describe("(a) Risk Gate: when: environment-production still fires despite a target-naming git read", () => {
+    const PROD_BRANCH_RESOLVER: EnvironmentResolver = {
+      name: "prod-branch",
+      environment: "production",
+      signals: { branch_patterns: ["main"] },
+    };
+
+    const GATE_PROD_DESTRUCTIVE: Policy = {
+      name: "gate-prod-destructive",
+      description: "block destructive actions classified as production",
+      trigger: { event: "PreToolUse", match: "Bash" },
+      when: { "environment.name": "production" },
+      requires: { ledger_tag: "risk-override:${SESSION_ID}" },
+      hook: "risk-gate",
+      enforcement: "block",
+    } as Policy;
+
+    it.each(["&&", ";", "|", "||"])(
+      "separator %s: fires (decision + audit row + block) with a foreign-branch git read ahead of the gated command",
+      async (sep) => {
+        const repoA = makeRepoFixture("prod-cwd-repo", "main");
+        const repoB = makeRepoFixture("prod-decoy-repo", "feature/x");
+        const recordCalls: PolicyDecision[] = [];
+        const ledger: LedgerClient = {
+          query: emptyQuery,
+          async record(decision) {
+            recordCalls.push(decision);
+          },
+        };
+        const { stream: out, output: outText } = captureStream();
+        const { stream: err } = captureStream();
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: `git -C ${repoB} log ${sep} echo hi` },
+              session_id: "sess-98ad072f-a",
+              cwd: repoA,
+            }),
+          ),
+          stdout: out,
+          stderr: err,
+          manifest: makeManifest({
+            policies: [GATE_PROD_DESTRUCTIVE],
+            resolvers: [PROD_BRANCH_RESOLVER],
+          }),
+          ledger,
+        });
+
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]?.environment?.name).toBe("production");
+        expect(result.decisions[0]?.outcome).toBe("deny");
+        expect(result.blocked).toBe(true);
+        // Deny payload actually emitted on the hook's stdout contract.
+        expect(outText()).toContain('"permissionDecision":"deny"');
+        // Audit row actually written, not just an in-memory decision.
+        expect(recordCalls).toHaveLength(1);
+        expect(recordCalls[0]?.policyName).toBe("gate-prod-destructive");
+        expect(recordCalls[0]?.environment?.name).toBe("production");
+      },
+    );
+  });
+
+  // (b) Push gate: a target-NAMING read (`-C <decoy>`, the literal 07-27
+  // regression form) chained with a BARE `git push` in ONE command demands
+  // the CWD repo's `${BRANCH}` tag, satisfied only via `currentHeadSha`
+  // resolved from the CWD repo — never the read target's branch or HEAD.
+  // The ledger entry below is deliberately STALE (outside the policy's
+  // `within: 10m` window) and satisfiable ONLY through the `at_head`
+  // bypass matching the CWD repo's sha, so an "allow" here is only
+  // possible when BOTH `${BRANCH}` and `currentHeadSha` were resolved from
+  // the cwd repo, not the decoy.
+  //
+  // This is the PROTECTED class: `-C` scopes only the ONE git invocation
+  // it decorates (`command-normalize.ts`'s own "every invocation agrees"
+  // rule already refuses to resolve a mixed explicit/bare chain like this
+  // one), so `git push` genuinely runs at the real cwd, never the read
+  // target — `${BRANCH}`/`currentHeadSha` staying cwd-derived here is
+  // CORRECT bash semantics, not merely "unattributed".
+  //
+  // Orchestrator decision D-010 (2026-08-02): a LEADING-`cd` version of
+  // this shape (`cd <B> && git log && git push`) previously lived here as
+  // a "regression" pin, on the theory that an intervening `git log`
+  // should stop `B` from reaching the push. REJECTED and moved to the
+  // deliverable describe block below ("leading-cd is now a deliverable"):
+  // a `cd` genuinely persists across the whole chain in real bash, so
+  // `git push` after `cd <B> && git log` really does run inside B —
+  // demanding B's tag there is the FIX this task delivers, not a
+  // regression to guard against. `-C`, unlike `cd`, never persists past
+  // its own invocation, which is exactly why THIS shape stays cwd-only.
+  //
+  // Measured against the NEW per-policy attribution design (not the old,
+  // already-removed global-`targetDir` mutant, which never resolved this
+  // specific mixed-invocation shape in the first place — see the comment
+  // above): flips under
+  // `.ai/runs/2026-08-02-per-repo-gate-scoping-redesign/mutants/first-invocation-wins.patch`,
+  // which attributes EVERY matching policy to the first non-null segment
+  // target in the event instead of only its OWN trigger-satisfying
+  // segment(s) — under that mutant the `-C <decoy>` read's target reaches
+  // the (unrelated) push policy too.
+  describe("(b) push gate: a target-naming -C read + a bare push in one command stays cwd-derived (tag AND currentHeadSha)", () => {
+    const CWD_SHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const DECOY_SHA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    function makeRepoFixtureWithSha(name: string, branch: string, sha: string): string {
+      const repo = makeRepoFixture(name, branch);
+      const refPath = path.join(repo, ".git", "refs", "heads", branch);
+      fs.mkdirSync(path.dirname(refPath), { recursive: true });
+      fs.writeFileSync(refPath, `${sha}\n`);
+      return repo;
+    }
+
+    const PREFLIGHT_PUSH_POLICY: Policy = {
+      name: "preflight-before-push",
+      description: "gate pushes on a per-branch preflight tag (real trigger regex)",
+      trigger: {
+        event: "PreToolUse",
+        match: "Bash",
+        bash_match: policyBashMatch("preflight-before-push"),
+      },
+      requires: { ledger_tag: "preflight:${BRANCH}", within: "10m", at_head: true },
+      hook: "require-preflight-push-evidence",
+      enforcement: "block",
+    } as Policy;
+
+    // Extended (fix round, run 2026-08-02-per-repo-gate-scoping-redesign,
+    // task F.3) from a single `&&`-only pin to every separator this
+    // module recognises, PLUS a literal newline: the `-C <decoy>` read
+    // never sets a cd-basis (only a recognised `cd <path>` segment does —
+    // `command-normalize.ts`'s `computeSegmentTarget`), so `git push`'s
+    // own `effectiveTarget` stays `null` regardless of which separator
+    // precedes it, and this shape stays cwd-only under D-011 too (no
+    // inherited target to be additive WITH). Do not confuse this with the
+    // LEADING-cd deliverable class (`tests ... "leading-cd is now a
+    // deliverable"` below): a decoy `-C` read never persists past its own
+    // invocation, whereas a `cd` genuinely does.
+    it.each(["&&", ";", "|", "||", "\n"])(
+      "separator %j: demands preflight:<cwd branch>, satisfied only via the cwd repo's HEAD sha",
+      async (sep) => {
+        const cwdRepo = makeRepoFixtureWithSha("push-cwd-repo", "cwd-branch", CWD_SHA);
+        const decoyRepo = makeRepoFixtureWithSha("push-decoy-repo", "decoy-branch", DECOY_SHA);
+
+        const staleHeadMatched = {
+          id: "e1",
+          content: `preflight:cwd-branch head:${CWD_SHA} — stale but head-pinned`,
+          createdAt: new Date(Date.now() - 3600_000).toISOString(),
+        };
+        const recordCalls: PolicyDecision[] = [];
+        const ledger: LedgerClient = {
+          async query() {
+            return { kind: "ok", entries: [staleHeadMatched] };
+          },
+          async record(decision) {
+            recordCalls.push(decision);
+          },
+        };
+
+        const { stream: out } = captureStream();
+        const { stream: err } = captureStream();
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: `git -C ${decoyRepo} log ${sep} git push` },
+              session_id: "sess-98ad072f-b",
+              cwd: cwdRepo,
+            }),
+          ),
+          stdout: out,
+          stderr: err,
+          manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+          ledger,
+        });
+
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]!.ledgerTag).toBe("preflight:cwd-branch");
+        expect(result.decisions[0]!.outcome).toBe("allow");
+        expect(result.decisions[0]!.reason).toContain(CWD_SHA.slice(0, 7));
+        expect(result.blocked).toBe(false);
+        expect(recordCalls).toHaveLength(1);
+        expect(recordCalls[0]?.ledgerTag).toBe("preflight:cwd-branch");
+      },
+    );
+  });
+
+  // (c) Non-git gated verb: a targeted git read chained with the real
+  // `review-before-merge-bash` trigger (`gh pr merge`) over each of the
+  // four separators demands the CWD repo's `${BRANCH}` tag, never the
+  // decoy's — the exact shape of the Pass 2/3 finding ("an explicit `-C`
+  // target still leaking into a later non-git gated verb").
+  //
+  // Measured: `&&`/`;` stay green under the orchestrator's mutant
+  // (command-normalize already nulls `targetDir` for a `-C`-targeted git
+  // call mixed with an unrelated non-git command across those two
+  // separators); `|`/`||` flip red (the documented "stays in the SAME
+  // directory" pipe exemption lets `targetDir` leak through), reproducing
+  // the historical asymmetry exactly.
+  describe("(c) merge verb: targeted read chained via &&, ;, |, || demands the CWD repo's tag (it.each)", () => {
+    const GH_MERGE_POLICY: Policy = {
+      name: "review-before-merge-bash",
+      description: "block gh pr merge without a ledger tag (real trigger regex)",
+      trigger: {
+        event: "PreToolUse",
+        match: "Bash",
+        bash_match: policyBashMatch("review-before-merge-bash"),
+      },
+      requires: { ledger_tag: "review:${BRANCH}" },
+      hook: "h",
+      enforcement: "block",
+    } as Policy;
+
+    it.each(["&&", ";", "|", "||"])(
+      "separator %s: a foreign-branch git read chained with gh pr merge demands review:<cwd branch>, never the decoy's",
+      async (sep) => {
+        const cwdRepo = makeRepoFixture("merge-cwd-repo", "cwd-merge-branch");
+        const decoyRepo = makeRepoFixture("merge-decoy-repo", "decoy-merge-branch");
+        const { stream: out } = captureStream();
+        const { stream: err } = captureStream();
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: `git -C ${decoyRepo} log ${sep} gh pr merge 1` },
+              session_id: "sess-98ad072f-c",
+              cwd: cwdRepo,
+            }),
+          ),
+          stdout: out,
+          stderr: err,
+          manifest: fakeManifest([GH_MERGE_POLICY]),
+          ledger: { query: emptyQuery, async record() {} },
+        });
+
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]!.ledgerTag).toBe("review:cwd-merge-branch");
+        expect(result.decisions[0]!.extractValues.BRANCH).toBe("cwd-merge-branch");
+      },
+    );
   });
 });
 
@@ -2042,5 +2362,1700 @@ describe("runInterceptCli — the amp normalisation pass computes at most ONCE p
     expect(result.decisions).toHaveLength(2);
     expect(result.decisions.every((d) => d.outcome === "deny")).toBe(true);
     expect(mockedAmpAware).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Task 98ad072f, T-003 (run 2026-08-02-per-repo-gate-scoping-redesign):
+// the per-policy attribution wiring that closes the cross-repo defect the
+// T-001 pins above deliberately leave open (that block pins TODAY's
+// cwd-only behaviour so a naive GLOBAL targetDir reintroduction cannot
+// land unnoticed — see its own header comment). These tests exercise the
+// actual fix: `${REPO}`/`${BRANCH}`/`currentHeadSha` resolve from the
+// segment that satisfies a policy's OWN `bash_match` trigger, not always
+// the event's cwd, per `01-plan.md` Proposed Approach items 2-4 and
+// `src/runtime/intercept.ts`'s `attributeTriggerSegments` /
+// `resolveAttributedContexts`.
+describe("runInterceptCli — 98ad072f T-003 per-policy attribution (segment-level target resolution)", () => {
+  let cleanups: Array<() => void> = [];
+  afterEach(() => {
+    for (const c of cleanups) c();
+    cleanups = [];
+  });
+
+  function makeRepoFixture(name: string, branch: string): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-98ad072f-t003-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const repo = path.join(root, name);
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+    return repo;
+  }
+
+  const PREFLIGHT_INVESTIGATION_POLICY: Policy = {
+    name: "preflight-before-investigation",
+    description: "gate investigative git reads on a per-repo preflight tag (real trigger regex)",
+    trigger: {
+      event: "PreToolUse",
+      match: "Bash",
+      bash_match: policyBashMatch("preflight-before-investigation"),
+    },
+    requires: { ledger_tag: "preflight:${REPO}" },
+    hook: "require-preflight-evidence",
+    enforcement: "block",
+  } as Policy;
+
+  function ledgerWithEntries(contents: string[]): LedgerClient {
+    const entries = contents.map((content, i) => ({
+      id: `e${i}`,
+      content,
+      createdAt: new Date().toISOString(),
+    }));
+    return {
+      async query() {
+        return { kind: "ok", entries };
+      },
+      async record() {
+        /* no-op */
+      },
+    };
+  }
+
+  // Deliverable pin (task acceptance criterion): only `preflight:<A>` on
+  // record, cwd in A, a target-naming read on B → refused, the DEMANDED
+  // tag is `preflight:<B>` — never `preflight:<A>` (which the shipped,
+  // cwd-only engine would have accepted). Both required spellings
+  // (`-C` absolute, and the `cd B && <read>` idiom) are covered.
+  describe("deliverable pin: a target-naming read on B demands preflight:<B>, not preflight:<A>", () => {
+    // "-C absolute" names its OWN explicit target — D-021 UNIVERSAL-
+    // ADDITIVE (operator decision, superseding D-011's REPLACE semantics
+    // for an own-target segment): the cwd (A) context is demanded
+    // UNCONDITIONALLY alongside B's, not replaced by it. Either alone
+    // still denies (its own context is unsatisfied); only both together
+    // allow.
+    it("-C absolute: demands BOTH preflight:<A> and preflight:<B> — either alone still denies, both together allows", async () => {
+      const repoA = makeRepoFixture("deliverable-repo-a", "main");
+      const repoB = makeRepoFixture("deliverable-repo-b", "main");
+      const commandFor = (repoB: string) => `git -C ${repoB} status`;
+
+      async function runWith(entries: string[]) {
+        return runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: commandFor(repoB) },
+              session_id: "sess-98ad072f-deliverable",
+              cwd: repoA,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([PREFLIGHT_INVESTIGATION_POLICY]),
+          ledger: ledgerWithEntries(entries),
+        });
+      }
+
+      // Only A's own tag on record — the shipped, cwd-only engine would
+      // have accepted this for the same command; the new design still
+      // refuses (B's context is unsatisfied).
+      const onlyA = await runWith(["preflight:deliverable-repo-a — evidence for A only"]);
+      expect(onlyA.decisions).toHaveLength(2);
+      expect(onlyA.decisions.map((d) => d.ledgerTag).sort()).toEqual([
+        "preflight:deliverable-repo-a",
+        "preflight:deliverable-repo-b",
+      ]);
+      expect(onlyA.decisions.find((d) => d.ledgerTag === "preflight:deliverable-repo-a")?.outcome).toBe(
+        "allow",
+      );
+      expect(onlyA.decisions.find((d) => d.ledgerTag === "preflight:deliverable-repo-b")?.outcome).toBe(
+        "deny",
+      );
+      expect(onlyA.blocked).toBe(true);
+
+      // Only B's own tag on record — pre-D-021 this alone ALLOWED (REPLACE
+      // dropped A's demand entirely for an own-target segment). Under
+      // universal-additive, A's context is now unconditionally demanded
+      // too, so this ALSO still denies — the accepted semantics change.
+      const onlyB = await runWith(["preflight:deliverable-repo-b — evidence for B"]);
+      expect(onlyB.decisions).toHaveLength(2);
+      expect(onlyB.decisions.find((d) => d.ledgerTag === "preflight:deliverable-repo-a")?.outcome).toBe(
+        "deny",
+      );
+      expect(onlyB.decisions.find((d) => d.ledgerTag === "preflight:deliverable-repo-b")?.outcome).toBe(
+        "allow",
+      );
+      expect(onlyB.blocked).toBe(true);
+
+      // Both tags on record → allow.
+      const both = await runWith([
+        "preflight:deliverable-repo-a — evidence for A",
+        "preflight:deliverable-repo-b — evidence for B",
+      ]);
+      expect(both.decisions).toHaveLength(2);
+      expect(both.decisions.every((d) => d.outcome === "allow")).toBe(true);
+      expect(both.blocked).toBe(false);
+    });
+
+    // "cd B && <read>" names NO own target on the read segment — the
+    // target is INHERITED from the preceding `cd` — D-011 ADDITIVE
+    // semantics (fix round, run 2026-08-02-per-repo-gate-scoping-
+    // redesign): the engine now demands BOTH the cwd (A) context AND B's,
+    // not B alone. Adapted from the pre-fix-round pin (which asserted
+    // exactly 1 decision, B only) to the new contract: deny with only A's
+    // tag (B unsatisfied), deny with only B's tag (A unsatisfied), allow
+    // only with BOTH.
+    it("cd B && <read>: demands BOTH preflight:<A> and preflight:<B> — either alone still denies, both together allows", async () => {
+      const repoA = makeRepoFixture("deliverable-cd-repo-a", "main");
+      const repoB = makeRepoFixture("deliverable-cd-repo-b", "main");
+      const command = `cd ${repoB} && git status`;
+      const sessionId = "sess-98ad072f-deliverable-cd";
+
+      async function runWith(entries: string[]) {
+        return runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command },
+              session_id: sessionId,
+              cwd: repoA,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([PREFLIGHT_INVESTIGATION_POLICY]),
+          ledger: ledgerWithEntries(entries),
+        });
+      }
+
+      const onlyA = await runWith(["preflight:deliverable-cd-repo-a — evidence for A only"]);
+      expect(onlyA.decisions).toHaveLength(2);
+      expect(onlyA.decisions.map((d) => d.ledgerTag).sort()).toEqual([
+        "preflight:deliverable-cd-repo-a",
+        "preflight:deliverable-cd-repo-b",
+      ]);
+      expect(onlyA.decisions.find((d) => d.ledgerTag === "preflight:deliverable-cd-repo-a")?.outcome).toBe(
+        "allow",
+      );
+      expect(onlyA.decisions.find((d) => d.ledgerTag === "preflight:deliverable-cd-repo-b")?.outcome).toBe(
+        "deny",
+      );
+      expect(onlyA.blocked).toBe(true);
+
+      const onlyB = await runWith(["preflight:deliverable-cd-repo-b — evidence for B only"]);
+      expect(onlyB.decisions).toHaveLength(2);
+      expect(onlyB.decisions.find((d) => d.ledgerTag === "preflight:deliverable-cd-repo-a")?.outcome).toBe(
+        "deny",
+      );
+      expect(onlyB.decisions.find((d) => d.ledgerTag === "preflight:deliverable-cd-repo-b")?.outcome).toBe(
+        "allow",
+      );
+      // The cwd's OWN demand is unsatisfied here — the whole event still
+      // blocks even though B (the segment's inherited target) is covered.
+      expect(onlyB.blocked).toBe(true);
+
+      const both = await runWith([
+        "preflight:deliverable-cd-repo-a — evidence for A",
+        "preflight:deliverable-cd-repo-b — evidence for B",
+      ]);
+      expect(both.decisions).toHaveLength(2);
+      expect(both.decisions.every((d) => d.outcome === "allow")).toBe(true);
+      expect(both.blocked).toBe(false);
+    });
+  });
+
+  // Unattributable-form pin (D-003): a policy whose `bash_match` matches
+  // the WHOLE command only across a segment boundary — never a single
+  // segment individually — falls back to cwd builtins, identical to
+  // shipped, even though a foreign target (repoB) genuinely appears
+  // earlier in the same chain. `attributeTriggerSegments` finds no
+  // individually-matching segment, so `resolveAttributedContexts` never
+  // resolves anything from repoB at all.
+  it("unattributable form: a whole-string-only bash_match falls back to cwd builtins despite a foreign target in the chain", async () => {
+    const repoA = makeRepoFixture("unattrib-repo-a", "main");
+    const repoB = makeRepoFixture("unattrib-repo-b", "main");
+    const WHOLE_STRING_ONLY_POLICY: Policy = {
+      name: "whole-string-only-probe",
+      description: "regex only satisfiable by spanning two segments, never one alone",
+      trigger: { event: "PreToolUse", match: "Bash", bash_match: "status.*log" },
+      requires: { ledger_tag: "preflight:${REPO}" },
+      hook: "h",
+      enforcement: "block",
+    } as Policy;
+
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: `cd ${repoB} && git status && git log` },
+          session_id: "sess-98ad072f-unattrib",
+          cwd: repoA,
+        }),
+      ),
+      stdout: captureStream().stream,
+      stderr: captureStream().stream,
+      manifest: fakeManifest([WHOLE_STRING_ONLY_POLICY]),
+      ledger: ledgerWithEntries(["preflight:unattrib-repo-a — evidence for A"]),
+    });
+
+    // Whole-command raw test DOES match (spans "status ... log" across
+    // the chain) — this asserts the policy actually fired, not that it
+    // was skipped for an unrelated reason.
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]!.ledgerTag).toBe("preflight:unattrib-repo-a");
+    expect(result.decisions[0]!.extractValues.REPO).toBe("unattrib-repo-a");
+    expect(result.decisions[0]!.outcome).toBe("allow");
+    expect(result.blocked).toBe(false);
+  });
+
+  // Multi-target pin (D-004): a decoy read AND a cwd read chained in ONE
+  // command each independently satisfy the SAME policy's trigger. With
+  // only the cwd tag on record, the policy is evaluated once per distinct
+  // target and the B-context's unsatisfied requirement blocks the whole
+  // decision — the decision set names B (via its own ledgerTag/extractValues)
+  // as the target that produced the still-unsatisfied demand. With BOTH
+  // tags on record, every context is satisfied and the command allows.
+  describe("multi-target pin (D-004): decoy read + cwd read in one chain, evaluated once per distinct target", () => {
+    it("only the cwd tag on record: denies, naming B as the unsatisfied target", async () => {
+      const repoA = makeRepoFixture("multi-repo-a", "main");
+      const repoB = makeRepoFixture("multi-repo-b", "main");
+
+      const result = await runInterceptCli({
+        stdin: streamFrom(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: `git -C ${repoB} status && git status` },
+            session_id: "sess-98ad072f-multi",
+            cwd: repoA,
+          }),
+        ),
+        stdout: captureStream().stream,
+        stderr: captureStream().stream,
+        manifest: fakeManifest([PREFLIGHT_INVESTIGATION_POLICY]),
+        ledger: ledgerWithEntries(["preflight:multi-repo-a — evidence for A only"]),
+      });
+
+      // One decision per distinct attributed context (D-004): A and B.
+      expect(result.decisions).toHaveLength(2);
+      const tags = result.decisions.map((d) => d.ledgerTag).sort();
+      expect(tags).toEqual(["preflight:multi-repo-a", "preflight:multi-repo-b"]);
+      const bDecision = result.decisions.find((d) => d.ledgerTag === "preflight:multi-repo-b");
+      expect(bDecision?.outcome).toBe("deny");
+      expect(bDecision?.extractValues.REPO).toBe("multi-repo-b");
+      // Any unsatisfied context blocks the whole event.
+      expect(result.blocked).toBe(true);
+    });
+
+    it("both tags on record: allows (every distinct context is satisfied)", async () => {
+      const repoA = makeRepoFixture("multi2-repo-a", "main");
+      const repoB = makeRepoFixture("multi2-repo-b", "main");
+
+      const result = await runInterceptCli({
+        stdin: streamFrom(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: `git -C ${repoB} status && git status` },
+            session_id: "sess-98ad072f-multi2",
+            cwd: repoA,
+          }),
+        ),
+        stdout: captureStream().stream,
+        stderr: captureStream().stream,
+        manifest: fakeManifest([PREFLIGHT_INVESTIGATION_POLICY]),
+        ledger: ledgerWithEntries([
+          "preflight:multi2-repo-a — evidence for A",
+          "preflight:multi2-repo-b — evidence for B",
+        ]),
+      });
+
+      expect(result.decisions).toHaveLength(2);
+      expect(result.decisions.every((d) => d.outcome === "allow")).toBe(true);
+      expect(result.blocked).toBe(false);
+    });
+  });
+
+  // Positive controls: single-repo ship-flow spellings stay on the
+  // single, cwd-only decision shape — no behaviour change for the
+  // overwhelming majority of real usage.
+  describe("positive controls: single-repo forms stay unchanged (one decision, cwd-derived)", () => {
+    it.each([
+      { label: "bare read", commandFor: () => "git status" },
+      { label: "-C .", commandFor: () => "git -C . status" },
+      { label: "-C <cwd absolute>", commandFor: (repoA: string) => `git -C ${repoA} status` },
+    ])("$label", async ({ commandFor }) => {
+      const repoA = makeRepoFixture("positive-repo-a", "main");
+      const result = await runInterceptCli({
+        stdin: streamFrom(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: commandFor(repoA) },
+            session_id: "sess-98ad072f-positive",
+            cwd: repoA,
+          }),
+        ),
+        stdout: captureStream().stream,
+        stderr: captureStream().stream,
+        manifest: fakeManifest([PREFLIGHT_INVESTIGATION_POLICY]),
+        ledger: ledgerWithEntries(["preflight:positive-repo-a — evidence for A"]),
+      });
+
+      expect(result.decisions).toHaveLength(1);
+      expect(result.decisions[0]!.ledgerTag).toBe("preflight:positive-repo-a");
+      expect(result.decisions[0]!.outcome).toBe("allow");
+      expect(result.blocked).toBe(false);
+    });
+  });
+
+  // Orchestrator decision D-010 (2026-08-02): a leading `cd <X> &&` GENUINELY
+  // persists across the whole chain in real bash — attribution follows it
+  // for EVERY gated verb in the chain, uniformly, including a verb (like
+  // `push`) that names no target of its own. This is the DELIVERABLE, not
+  // a regression: relative to the shipped, cwd-only binary (which would
+  // have accepted the CWD repo's own tag for these exact commands — a
+  // defect, since the verb genuinely runs against X, not cwd), the new
+  // design is MORE RESTRICTIVE, demanding X's tag instead. Contrast with
+  // describe block (b) above: a `-C <decoy>` read (which does NOT persist
+  // past its own invocation) leaves a later bare push cwd-derived — that
+  // shape stays protected; THIS shape (a real, persisting `cd`) does not.
+  describe("leading-cd is now a deliverable: attribution follows a persisting cd for EVERY verb in the chain, including push", () => {
+    // D-011 (fix round, run 2026-08-02-per-repo-gate-scoping-redesign):
+    // adapted from the pre-fix-round pin, which asserted `cd <X> && <read>`
+    // demanded X's tag ALONE (REPLACE) — the deliverable is now ADDITIVE:
+    // an inherited target demands the cwd tag TOO, since whether a `cd`
+    // genuinely persists to a given segment is something the static
+    // segment model cannot fully verify (D-011's own doc comment in
+    // `src/runtime/intercept.ts`), so a gap in that model must only ever
+    // ADD a demand, never drop the cwd's own. `cd <X> && <read>` still
+    // demands X's tag (still MORE restrictive than the shipped, cwd-only
+    // binary, which the pre-fix pin already established) — it now ALSO
+    // demands the cwd's own tag, which the pre-fix pin did not check.
+    it("cd <X> && <investigation read>: demands BOTH preflight:<cwd> and preflight:<X> — either alone still denies, both together allows", async () => {
+      const repoCwd = makeRepoFixture("leadingcd-read-cwd", "main");
+      const repoX = makeRepoFixture("leadingcd-read-x", "main");
+      const command = `cd ${repoX} && git status`;
+      const sessionId = "sess-98ad072f-leadingcd-read";
+
+      async function runWith(entries: string[]) {
+        return runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command },
+              session_id: sessionId,
+              cwd: repoCwd,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([PREFLIGHT_INVESTIGATION_POLICY]),
+          ledger: ledgerWithEntries(entries),
+        });
+      }
+
+      // Only the CWD repo's own tag on record — the shipped, cwd-only
+      // binary would have accepted this for the same command; the new
+      // design still refuses (X's context is unsatisfied).
+      const onlyCwd = await runWith(["preflight:leadingcd-read-cwd — evidence for cwd only"]);
+      expect(onlyCwd.decisions).toHaveLength(2);
+      expect(onlyCwd.decisions.map((d) => d.ledgerTag).sort()).toEqual([
+        "preflight:leadingcd-read-cwd",
+        "preflight:leadingcd-read-x",
+      ]);
+      expect(onlyCwd.decisions.find((d) => d.ledgerTag === "preflight:leadingcd-read-x")?.outcome).toBe(
+        "deny",
+      );
+      expect(onlyCwd.blocked).toBe(true);
+
+      // Only X's tag on record — the NEW additive demand for the cwd's own
+      // tag is unsatisfied, so this ALSO still denies (this is the actual
+      // fix: the pre-fix-round pin never checked this direction).
+      const onlyX = await runWith(["preflight:leadingcd-read-x — evidence for X only"]);
+      expect(onlyX.decisions).toHaveLength(2);
+      expect(onlyX.decisions.find((d) => d.ledgerTag === "preflight:leadingcd-read-cwd")?.outcome).toBe(
+        "deny",
+      );
+      expect(onlyX.decisions.find((d) => d.ledgerTag === "preflight:leadingcd-read-x")?.outcome).toBe(
+        "allow",
+      );
+      expect(onlyX.blocked).toBe(true);
+
+      // Both tags on record → allow.
+      const both = await runWith([
+        "preflight:leadingcd-read-cwd — evidence for cwd",
+        "preflight:leadingcd-read-x — evidence for X",
+      ]);
+      expect(both.decisions).toHaveLength(2);
+      expect(both.decisions.every((d) => d.outcome === "allow")).toBe(true);
+      expect(both.blocked).toBe(false);
+    });
+
+    // D-011 (fix round): same additive adaptation as the read test above,
+    // applied to the push gate — the shape D-011's own doc comment cites
+    // as the measured CRITICAL bypass class (a non-persisting `cd`
+    // variant of this same command let a forged tag satisfy a push the
+    // agent never earned preflight evidence for at the real target).
+    // `cd <X> && git push` now demands BOTH the cwd branch's tag AND X's,
+    // each satisfied only via ITS OWN head-pinned sha.
+    it("cd <X> && git push: demands BOTH the cwd branch's tag and X's — either alone still denies, both together allows", async () => {
+      const CWD_SHA = "cccccccccccccccccccccccccccccccccccccccc";
+      const X_SHA = "dddddddddddddddddddddddddddddddddddddddd";
+
+      function makeRepoFixtureWithSha(name: string, branch: string, sha: string): string {
+        const repo = makeRepoFixture(name, branch);
+        const refPath = path.join(repo, ".git", "refs", "heads", branch);
+        fs.mkdirSync(path.dirname(refPath), { recursive: true });
+        fs.writeFileSync(refPath, `${sha}\n`);
+        return repo;
+      }
+
+      const PREFLIGHT_PUSH_POLICY: Policy = {
+        name: "preflight-before-push",
+        description: "gate pushes on a per-branch preflight tag (real trigger regex)",
+        trigger: {
+          event: "PreToolUse",
+          match: "Bash",
+          bash_match: policyBashMatch("preflight-before-push"),
+        },
+        requires: { ledger_tag: "preflight:${BRANCH}", within: "10m", at_head: true },
+        hook: "require-preflight-push-evidence",
+        enforcement: "block",
+      } as Policy;
+
+      const cwdRepo = makeRepoFixtureWithSha("leadingcd-push-cwd", "cwd-branch", CWD_SHA);
+      const repoX = makeRepoFixtureWithSha("leadingcd-push-x", "x-branch", X_SHA);
+      const command = `cd ${repoX} && git push`;
+      const sessionId = "sess-98ad072f-leadingcd-push";
+
+      const cwdOnlyEntry = {
+        id: "e1",
+        content: `preflight:cwd-branch head:${CWD_SHA} — stale but head-pinned`,
+        createdAt: new Date(Date.now() - 3600_000).toISOString(),
+      };
+      const xEntry = {
+        id: "e2",
+        content: `preflight:x-branch head:${X_SHA} — evidence for X`,
+        createdAt: new Date(Date.now() - 3600_000).toISOString(),
+      };
+
+      async function runWith(entries: Array<typeof cwdOnlyEntry>) {
+        return runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command },
+              session_id: sessionId,
+              cwd: cwdRepo,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+          ledger: {
+            async query() {
+              return { kind: "ok", entries };
+            },
+            async record() {
+              /* no-op */
+            },
+          },
+        });
+      }
+
+      // Only the CWD repo's own head-pinned tag on record — what the
+      // shipped, cwd-only binary would have accepted for this exact
+      // command. The new design still refuses: X's context is unsatisfied.
+      const onlyCwd = await runWith([cwdOnlyEntry]);
+      expect(onlyCwd.decisions).toHaveLength(2);
+      expect(onlyCwd.decisions.map((d) => d.ledgerTag).sort()).toEqual([
+        "preflight:cwd-branch",
+        "preflight:x-branch",
+      ]);
+      expect(onlyCwd.decisions.find((d) => d.ledgerTag === "preflight:x-branch")?.outcome).toBe("deny");
+      expect(onlyCwd.blocked).toBe(true);
+
+      // Only X's own head-pinned tag on record — the NEW additive demand
+      // for the cwd branch's own tag is unsatisfied, so this ALSO still
+      // denies (the actual fix: the pre-fix-round pin never checked this
+      // direction, and this is exactly the shape the measured CRITICAL
+      // bypass exploited via a non-persisting `cd` variant).
+      const onlyX = await runWith([xEntry]);
+      expect(onlyX.decisions).toHaveLength(2);
+      expect(onlyX.decisions.find((d) => d.ledgerTag === "preflight:cwd-branch")?.outcome).toBe("deny");
+      expect(onlyX.decisions.find((d) => d.ledgerTag === "preflight:x-branch")?.outcome).toBe("allow");
+      expect(onlyX.blocked).toBe(true);
+
+      // Both head-pinned tags on record → allow, each context matched
+      // against its OWN sha (not the other's).
+      const both = await runWith([cwdOnlyEntry, xEntry]);
+      expect(both.decisions).toHaveLength(2);
+      expect(both.decisions.every((d) => d.outcome === "allow")).toBe(true);
+      const cwdDecision = both.decisions.find((d) => d.ledgerTag === "preflight:cwd-branch");
+      const xDecision = both.decisions.find((d) => d.ledgerTag === "preflight:x-branch");
+      expect(cwdDecision?.reason).toContain(CWD_SHA.slice(0, 7));
+      expect(xDecision?.reason).toContain(X_SHA.slice(0, 7));
+      expect(both.blocked).toBe(false);
+    });
+  });
+});
+
+// Task 98ad072f FIX ROUND (run 2026-08-02-per-repo-gate-scoping-redesign):
+// D-011 (CRITICAL), D-012, D-013, D-015. The orchestrator independently
+// reproduced the CRITICAL against the built binary: cwd on a real repo at
+// a fresh HEAD, ledger holding only a legitimately-earned but STALE
+// `preflight:<branch> head:<old-sha>` tag, a `.git/HEAD`-shaped "forged"
+// directory built with plain `mkdir`/file writes (no gated verb — the
+// SAME shape every `makeRepoFixture` helper in this file already builds;
+// `resolveGitContext` is a filesystem-shape check, not real git
+// validation). `(cd <forged> ; …) && git push`, `cd <forged> | git push`,
+// and `cd <forged> && cd - && git push` all ALLOWED pre-fix even though
+// bash genuinely runs `git push` at the real cwd in every one of them —
+// the cd-basis was carried into segments bash does not run it in, AND
+// attribution REPLACED the cwd demand instead of adding to it.
+describe("runInterceptCli — 98ad072f FIX ROUND: D-011 critical bypass closure + D-012/D-013/D-015 hardening", () => {
+  let cleanups: Array<() => void> = [];
+  afterEach(() => {
+    for (const c of cleanups) c();
+    cleanups = [];
+  });
+
+  function makeRepoFixture(name: string, branch: string): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-98ad072f-fix-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const repo = path.join(root, name);
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+    return repo;
+  }
+
+  function makeRepoFixtureWithSha(name: string, branch: string, sha: string): string {
+    const repo = makeRepoFixture(name, branch);
+    const refPath = path.join(repo, ".git", "refs", "heads", branch);
+    fs.mkdirSync(path.dirname(refPath), { recursive: true });
+    fs.writeFileSync(refPath, `${sha}\n`);
+    return repo;
+  }
+
+  const PREFLIGHT_PUSH_POLICY: Policy = {
+    name: "preflight-before-push",
+    description: "gate pushes on a per-branch preflight tag (real trigger regex)",
+    trigger: {
+      event: "PreToolUse",
+      match: "Bash",
+      bash_match: policyBashMatch("preflight-before-push"),
+    },
+    requires: { ledger_tag: "preflight:${BRANCH}", within: "10m", at_head: true },
+    hook: "require-preflight-push-evidence",
+    enforcement: "block",
+  } as Policy;
+
+  const PREFLIGHT_INVESTIGATION_POLICY: Policy = {
+    name: "preflight-before-investigation",
+    description: "gate investigative git reads on a per-repo preflight tag (real trigger regex)",
+    trigger: {
+      event: "PreToolUse",
+      match: "Bash",
+      bash_match: policyBashMatch("preflight-before-investigation"),
+    },
+    requires: { ledger_tag: "preflight:${REPO}" },
+    hook: "require-preflight-evidence",
+    enforcement: "block",
+  } as Policy;
+
+  // MEASURED (implementer, this fix round): this block is a full,
+  // combined-fix regression pin — RED with BOTH D-014 (bash-truthful
+  // basis tracking, `command-normalize.ts`) and D-011 (additive
+  // attribution, this file) reverted together, GREEN with both applied.
+  // Isolating them further: for these five SPECIFIC named forms, D-014
+  // alone already resets the cd-basis to `null` before it ever reaches
+  // the `git push` segment (each form is exactly one of D-014's own named
+  // reset triggers — subshell close, bare pipe, `cd -`, `pushd`, flagged
+  // `cd`), so `effectiveTarget` is `null` and the segment never enters
+  // D-011's inherited-target branch at all; disabling ONLY D-011's
+  // additive line (keeping D-014) left all five green. D-011 is
+  // deliberately NOT redundant despite that: its own justification
+  // (`resolveAttributedContexts`'s doc comment) is that shell control
+  // flow is an "unbounded construct set" no static, string-only model can
+  // fully enumerate — D-011 is the fail-closed backstop for whichever
+  // NEXT non-persisting construct D-014 has not (yet) named, not a
+  // mechanism these five specific, now-named forms individually need.
+  // D-011's own MARGINAL contribution (a case where the target genuinely
+  // IS correctly recognised as persisting, i.e. `effectiveTarget` stays
+  // non-null) is what "leading-cd is now a deliverable" and the
+  // "deliverable pin: cd B && <read>" tests above measure — both flip red
+  // when ONLY D-011 is disabled (D-014 left intact), confirmed the same
+  // way.
+  describe("D-011 CRITICAL: non-persisting cd forms must not let a forged target satisfy the push gate", () => {
+    const CWD_SHA = "111111111111111111111111111111111111111a";
+    const STALE_SHA = "222222222222222222222222222222222222222b";
+
+    // A legitimately-earned but STALE tag for the CWD's own branch (wrong
+    // head, outside the 10m window) — mirrors the orchestrator's exact
+    // repro. No entry at all exists for the forged target's own branch.
+    function staleBystanderEntry() {
+      return {
+        id: "e1",
+        content: `preflight:cwd-branch head:${STALE_SHA} — stale bystander evidence`,
+        createdAt: new Date(Date.now() - 3600_000).toISOString(),
+      };
+    }
+
+    it.each([
+      ["(cd B ; …) && push (subshell)", (b: string) => `(cd ${b} ; echo hi) && git push`],
+      ["cd B | push (pipe)", (b: string) => `cd ${b} | git push`],
+      ["cd B && cd - && push", (b: string) => `cd ${b} && cd - && git push`],
+      ["cd B && pushd /tmp && push", (b: string) => `cd ${b} && pushd /tmp && git push`],
+      ["cd B && cd -P /tmp && push", (b: string) => `cd ${b} && cd -P /tmp && git push`],
+    ])("%s: BLOCKS — bash truly runs push at cwd, a stale bystander tag cannot satisfy it", async (_label, build) => {
+      const cwdRepo = makeRepoFixtureWithSha("bypass-cwd", "cwd-branch", CWD_SHA);
+      const forgedB = makeRepoFixture("bypass-forged-b", "forged-branch");
+      const queryCalls: number[] = [];
+      const ledger: LedgerClient = {
+        async query() {
+          queryCalls.push(1);
+          return { kind: "ok", entries: [staleBystanderEntry()] };
+        },
+        async record() {
+          /* no-op */
+        },
+      };
+
+      const result = await runInterceptCli({
+        stdin: streamFrom(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: build(forgedB) },
+            session_id: "sess-bypass",
+            cwd: cwdRepo,
+          }),
+        ),
+        stdout: captureStream().stream,
+        stderr: captureStream().stream,
+        manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+        ledger,
+      });
+
+      expect(result.blocked).toBe(true);
+      // The cwd's OWN demand is present and denied — this is not merely
+      // "some decision denied", it is specifically the real target's own
+      // context that a shipped, cwd-only engine would already have
+      // evaluated and denied with this exact evidence.
+      const cwdDecision = result.decisions.find((d) => d.ledgerTag === "preflight:cwd-branch");
+      expect(cwdDecision?.outcome).toBe("deny");
+
+      // "never weaker than shipped" (additive statement, not just tag
+      // equality): the SAME ledger, driven against a bare `git push` with
+      // NO forgery at all — the baseline the shipped engine would have
+      // evaluated — denies with the identical reason. The forged chain's
+      // cwd-context decision is required to be evaluated against evidence
+      // the cwd context ITSELF would already reject; it cannot become
+      // satisfiable merely by being wrapped in a non-persisting `cd`.
+      const baseline = await runInterceptCli({
+        stdin: streamFrom(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: "git push" },
+            session_id: "sess-bypass",
+            cwd: cwdRepo,
+          }),
+        ),
+        stdout: captureStream().stream,
+        stderr: captureStream().stream,
+        manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+        ledger: { query: ledger.query, async record() {} },
+      });
+      expect(baseline.decisions).toHaveLength(1);
+      expect(baseline.decisions[0]!.outcome).toBe("deny");
+      expect(cwdDecision?.reason).toBe(baseline.decisions[0]!.reason);
+    });
+  });
+
+  // Pass-2 review CRITICAL (pre-existing since the T-002 base, not
+  // introduced by the D-011 additive fix — D-016 halt-counter accounting
+  // in 03-decisions.md): `git --work-tree=<B>` was folded into the same
+  // `ownTarget` bucket as `-C`/`--git-dir`, so `resolveAttributedContexts`'
+  // REPLACE branch (D-011) attributed to B alone and dropped the cwd
+  // demand — even though `--work-tree` sets a git invocation's working
+  // tree but does NOT relocate `--git-dir`, so `push`/`log`/`status`/`tag`
+  // genuinely still operate on the CWD repo. Orchestrator's own
+  // reproduction against the pre-fix HEAD (see 05-review-findings.md):
+  // `git --work-tree=<repoB> push` with only B's evidence on record
+  // ALLOWED; with only A's (cwd's) evidence on record it DENIED — exactly
+  // backwards. `command-normalize.ts`'s `peelGitGlobalOptions` now tracks
+  // a SEPARATE `relocateTargetDir`, fed only by `-C`/`--git-dir`, never
+  // `--work-tree` — see that function's own doc comment.
+  describe("D-017: --work-tree is not a repo-identity own-target (pass 2 CRITICAL, fix round 2)", () => {
+    const A_SHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const B_SHA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    function ledgerWithEntries(contents: string[]): LedgerClient {
+      const entries = contents.map((content, i) => ({
+        id: `e${i}`,
+        content,
+        createdAt: new Date().toISOString(),
+      }));
+      return {
+        async query() {
+          return { kind: "ok", entries };
+        },
+        async record() {
+          /* no-op */
+        },
+      };
+    }
+
+    // Synthetic, REPO-scoped probe policy: no shipped FULL_TEMPLATE policy
+    // gates a bare `git tag` by `${REPO}`/`${BRANCH}` today — the closest
+    // shipped policy, `dogfood-before-release`, matches `git tag v*` but
+    // keys its `ledger_tag` on `${SESSION_ID}`, not repo identity, so it
+    // cannot demonstrate cross-repo attribution at all. Mirrors
+    // `PREFLIGHT_PUSH_POLICY`'s own simple inline `bash_match` style
+    // (module-level `PREFLIGHT_PUSH_POLICY` above, line ~507), verb
+    // swapped to `tag`.
+    const PREFLIGHT_TAG_POLICY: Policy = {
+      name: "preflight-before-tag-d017-probe",
+      description: "gate git tag on a per-repo preflight tag (synthetic verb-coverage probe)",
+      trigger: { event: "PreToolUse", match: "Bash", bash_match: "git\\s+tag" },
+      requires: { ledger_tag: "preflight:${REPO}" },
+      hook: "require-preflight-evidence",
+      enforcement: "block",
+    } as Policy;
+
+    describe("push (BRANCH-scoped, at_head + within — the orchestrator's own repro)", () => {
+      it("only B's evidence on record: DENIES, demanding cwd A's tag (never weaker than shipped)", async () => {
+        const cwdRepo = makeRepoFixtureWithSha("worktree-cwd-a", "a-branch", A_SHA);
+        const foreignB = makeRepoFixtureWithSha("worktree-foreign-b", "b-branch", B_SHA);
+        const ledger = ledgerWithEntries([`preflight:b-branch head:${B_SHA} — evidence for B only`]);
+
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: `git --work-tree=${foreignB} push` },
+              session_id: "sess-d017-push-deny",
+              cwd: cwdRepo,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+          ledger,
+        });
+
+        expect(result.blocked).toBe(true);
+        expect(result.decisions).toHaveLength(1);
+        // The DEMANDED tag is cwd A's own branch tag, never B's — a
+        // pre-fix engine attributed to B alone and would have shown
+        // "preflight:b-branch" here (satisfied by the ledger above, so it
+        // would have ALLOWED).
+        expect(result.decisions[0]!.ledgerTag).toBe("preflight:a-branch");
+        expect(result.decisions[0]!.outcome).toBe("deny");
+
+        // "never weaker than shipped": the SAME ledger, driven against a
+        // bare `git push` with no `--work-tree` at all — what the shipped,
+        // cwd-only engine would have evaluated — denies with the
+        // IDENTICAL reason. `--work-tree` cannot make an otherwise-denied
+        // push become satisfiable.
+        const baseline = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: "git push" },
+              session_id: "sess-d017-push-deny",
+              cwd: cwdRepo,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+          ledger: { query: ledger.query, async record() {} },
+        });
+        expect(baseline.decisions).toHaveLength(1);
+        expect(baseline.decisions[0]!.outcome).toBe("deny");
+        expect(result.decisions[0]!.reason).toBe(baseline.decisions[0]!.reason);
+      });
+
+      it("A's own evidence on record: ALLOWS (the exact orchestrator repro row that must flip from the pre-fix DENY)", async () => {
+        const cwdRepo = makeRepoFixtureWithSha("worktree-cwd-a2", "a-branch", A_SHA);
+        const foreignB = makeRepoFixtureWithSha("worktree-foreign-b2", "b-branch", B_SHA);
+        const ledger = ledgerWithEntries([`preflight:a-branch head:${A_SHA} — evidence for A`]);
+
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: `git --work-tree=${foreignB} push` },
+              session_id: "sess-d017-push-allow",
+              cwd: cwdRepo,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+          ledger,
+        });
+
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]!.ledgerTag).toBe("preflight:a-branch");
+        expect(result.decisions[0]!.outcome).toBe("allow");
+        expect(result.blocked).toBe(false);
+      });
+    });
+
+    describe.each([
+      ["log", PREFLIGHT_INVESTIGATION_POLICY],
+      ["status", PREFLIGHT_INVESTIGATION_POLICY],
+      ["tag", PREFLIGHT_TAG_POLICY],
+    ] as const)("%s (REPO-scoped, no at_head/within)", (verb, policy) => {
+      it(`only B's evidence on record: DENIES, demanding cwd A's tag`, async () => {
+        const cwdRepo = makeRepoFixture(`worktree-cwd-a-${verb}`, "main");
+        const foreignB = makeRepoFixture(`worktree-foreign-b-${verb}`, "main");
+        const ledger = ledgerWithEntries([
+          `preflight:worktree-foreign-b-${verb} — evidence for B only`,
+        ]);
+
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: `git --work-tree=${foreignB} ${verb}` },
+              session_id: `sess-d017-${verb}-deny`,
+              cwd: cwdRepo,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([policy]),
+          ledger,
+        });
+
+        expect(result.blocked).toBe(true);
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]!.ledgerTag).toBe(`preflight:worktree-cwd-a-${verb}`);
+        expect(result.decisions[0]!.outcome).toBe("deny");
+      });
+
+      it(`A's own evidence on record: ALLOWS`, async () => {
+        const cwdRepo = makeRepoFixture(`worktree-cwd-a2-${verb}`, "main");
+        const foreignB = makeRepoFixture(`worktree-foreign-b2-${verb}`, "main");
+        const ledger = ledgerWithEntries([
+          `preflight:worktree-cwd-a2-${verb} — evidence for A`,
+        ]);
+
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: `git --work-tree=${foreignB} ${verb}` },
+              session_id: `sess-d017-${verb}-allow`,
+              cwd: cwdRepo,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([policy]),
+          ledger,
+        });
+
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]!.ledgerTag).toBe(`preflight:worktree-cwd-a2-${verb}`);
+        expect(result.decisions[0]!.outcome).toBe("allow");
+        expect(result.blocked).toBe(false);
+      });
+    });
+
+    // Pass-2 adopted missing test: the combo case. `--git-dir` IS
+    // repo-relocating (own-target, D-017 precision fix unaffected here);
+    // `--work-tree` on the SAME invocation must not compete with it — B
+    // (the work-tree) never gets a demand of its own. cwd is a THIRD,
+    // unrelated repo: under D-021 UNIVERSAL-ADDITIVE, attribution follows
+    // --git-dir's A AND cwd's C, never B (work-tree, D-017's own fix
+    // stands unchanged — it is what keeps B out of this entirely).
+    it("git --git-dir=<A>/.git --work-tree=<B> status, cwd=C: demands BOTH A and cwd C, never B", async () => {
+      const repoA = makeRepoFixture("gitdir-combo-a", "main");
+      const repoB = makeRepoFixture("worktree-combo-b", "main");
+      const cwdRepoC = makeRepoFixture("gitdir-combo-cwd-c", "main");
+
+      async function runWith(entries: string[]) {
+        return runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: {
+                command: `git --git-dir=${path.join(repoA, ".git")} --work-tree=${repoB} status`,
+              },
+              session_id: "sess-d017-combo",
+              cwd: cwdRepoC,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([PREFLIGHT_INVESTIGATION_POLICY]),
+          ledger: ledgerWithEntries(entries),
+        });
+      }
+
+      // Only A's own tag on record — cwd C's own, unconditional demand
+      // (D-021) is unsatisfied, so this still denies. Never B (work-tree):
+      // proves B never got a demand of its own in either direction.
+      const onlyA = await runWith(["preflight:gitdir-combo-a — evidence for A"]);
+      expect(onlyA.decisions).toHaveLength(2);
+      expect(onlyA.decisions.map((d) => d.ledgerTag).sort()).toEqual([
+        "preflight:gitdir-combo-a",
+        "preflight:gitdir-combo-cwd-c",
+      ]);
+      expect(onlyA.decisions.find((d) => d.ledgerTag === "preflight:gitdir-combo-a")?.outcome).toBe(
+        "allow",
+      );
+      expect(onlyA.decisions.find((d) => d.ledgerTag === "preflight:gitdir-combo-cwd-c")?.outcome).toBe(
+        "deny",
+      );
+      expect(onlyA.blocked).toBe(true);
+
+      // Both A's and cwd C's tags on record → allow.
+      const both = await runWith([
+        "preflight:gitdir-combo-a — evidence for A",
+        "preflight:gitdir-combo-cwd-c — evidence for cwd C",
+      ]);
+      expect(both.decisions).toHaveLength(2);
+      expect(both.decisions.every((d) => d.outcome === "allow")).toBe(true);
+      expect(both.blocked).toBe(false);
+    });
+  });
+
+  describe("D-012: a target reached through a symlink resolves to its REAL repository identity", () => {
+    // Under D-021 UNIVERSAL-ADDITIVE, cwd is demanded unconditionally
+    // alongside the symlink-resolved target — so this now asserts TWO
+    // decisions (cwd, and realY's own basename), not one. The D-012
+    // property under test is unchanged: the demanded foreign tag names
+    // realY's own basename, NEVER the symlink's own name.
+    it("git -C <symlink X -> Y> status demands both cwd's tag and Y's, never X's", async () => {
+      const repoCwd = makeRepoFixture("symlink-cwd", "main");
+      const realY = makeRepoFixture("symlink-real-y", "main");
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-98ad072f-symlink-"));
+      cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+      const symlinkX = path.join(root, "symlink-name-x");
+      fs.symlinkSync(realY, symlinkX, "dir");
+
+      const result = await runInterceptCli({
+        stdin: streamFrom(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: `git -C ${symlinkX} status` },
+            session_id: "sess-symlink",
+            cwd: repoCwd,
+          }),
+        ),
+        stdout: captureStream().stream,
+        stderr: captureStream().stream,
+        manifest: fakeManifest([PREFLIGHT_INVESTIGATION_POLICY]),
+        ledger: { async query() { return { kind: "ok", entries: [] }; }, async record() {} },
+      });
+
+      expect(result.decisions).toHaveLength(2);
+      const tags = result.decisions.map((d) => d.ledgerTag).sort();
+      // realY's own basename, never the symlink's own name ("symlink-name-x").
+      expect(tags).toEqual(["preflight:symlink-cwd", "preflight:symlink-real-y"]);
+      const yDecision = result.decisions.find((d) => d.ledgerTag === "preflight:symlink-real-y");
+      expect(yDecision?.extractValues.REPO).toBe("symlink-real-y");
+      expect(result.blocked).toBe(true);
+    });
+  });
+
+  describe("D-013: distinct attributed contexts are bounded — excess is a single deny, not a silent multi-eval", () => {
+    function makeManyTargetsCommand(targets: string[]): string {
+      return targets.map((t) => `git -C ${t} status`).join(" && ");
+    }
+
+    it(`more than ${MAX_ATTRIBUTED_CONTEXTS} distinct targets: zero ledger queries for this policy, one synthetic deny`, async () => {
+      const repoCwd = makeRepoFixture("bound-cwd", "main");
+      const targets = Array.from({ length: MAX_ATTRIBUTED_CONTEXTS + 2 }, (_, i) =>
+        makeRepoFixture(`bound-target-${i}`, "main"),
+      );
+      let queryCount = 0;
+      const ledger: LedgerClient = {
+        async query() {
+          queryCount += 1;
+          return { kind: "ok", entries: [] };
+        },
+        async record() {
+          /* no-op */
+        },
+      };
+
+      const result = await runInterceptCli({
+        stdin: streamFrom(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: makeManyTargetsCommand(targets) },
+            session_id: "sess-bound",
+            cwd: repoCwd,
+          }),
+        ),
+        stdout: captureStream().stream,
+        stderr: captureStream().stream,
+        manifest: fakeManifest([PREFLIGHT_INVESTIGATION_POLICY]),
+        ledger,
+      });
+
+      // Bounded: NO ledger query happened for this policy at all, despite
+      // MAX_ATTRIBUTED_CONTEXTS + 2 distinct real targets in the command —
+      // proving the count stays flat rather than scaling with the number
+      // of distinct targets (the measured amplification: K targets -> K
+      // queries, unbounded).
+      expect(queryCount).toBe(0);
+      expect(result.decisions).toHaveLength(1);
+      expect(result.decisions[0]!.outcome).toBe("deny");
+      expect(result.decisions[0]!.reason).toContain("ambiguous");
+      expect(result.blocked).toBe(true);
+    });
+
+    // Instrument-must-be-able-to-fail control: BELOW the bound, real
+    // queries genuinely happen, one per distinct target — proving the
+    // zero above is the bound engaging, not a broken query-counting
+    // ledger double or an unrelated no-op. Under D-021 UNIVERSAL-ADDITIVE
+    // cwd is itself always one of the distinct attributed contexts now, so
+    // `MAX_ATTRIBUTED_CONTEXTS - 1` FOREIGN targets plus the implicit cwd
+    // context lands EXACTLY at the bound (still "at or under", not
+    // exceeding it) — `+ 1` accounts for that cwd context throughout.
+    it(`at or under ${MAX_ATTRIBUTED_CONTEXTS} distinct targets: real per-target queries happen (bound does not engage)`, async () => {
+      const repoCwd = makeRepoFixture("bound-neg-cwd", "main");
+      const targets = Array.from({ length: MAX_ATTRIBUTED_CONTEXTS - 1 }, (_, i) =>
+        makeRepoFixture(`bound-neg-target-${i}`, "main"),
+      );
+      let queryCount = 0;
+      const ledger: LedgerClient = {
+        async query() {
+          queryCount += 1;
+          return { kind: "ok", entries: [] };
+        },
+        async record() {
+          /* no-op */
+        },
+      };
+
+      const result = await runInterceptCli({
+        stdin: streamFrom(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: makeManyTargetsCommand(targets) },
+            session_id: "sess-bound-neg",
+            cwd: repoCwd,
+          }),
+        ),
+        stdout: captureStream().stream,
+        stderr: captureStream().stream,
+        manifest: fakeManifest([PREFLIGHT_INVESTIGATION_POLICY]),
+        ledger,
+      });
+
+      expect(queryCount).toBe(targets.length + 1);
+      expect(result.decisions).toHaveLength(targets.length + 1);
+      expect(result.decisions.every((d) => d.outcome === "deny")).toBe(true);
+    });
+  });
+
+  describe("D-013 (D-004 shape): multiple attributed contexts each carry their OWN at_head/currentHeadSha", () => {
+    it("git -C <B> push && git push: B and cwd are each satisfied only via their OWN head-pinned sha", async () => {
+      const CWD_SHA = "333333333333333333333333333333333333333c";
+      const B_SHA = "444444444444444444444444444444444444444d";
+      const cwdRepo = makeRepoFixtureWithSha("multihead-cwd", "cwd-branch", CWD_SHA);
+      const repoB = makeRepoFixtureWithSha("multihead-b", "b-branch", B_SHA);
+
+      const cwdEntry = {
+        id: "e1",
+        content: `preflight:cwd-branch head:${CWD_SHA} — evidence for cwd`,
+        createdAt: new Date(Date.now() - 3600_000).toISOString(),
+      };
+      const bEntry = {
+        id: "e2",
+        content: `preflight:b-branch head:${B_SHA} — evidence for B`,
+        createdAt: new Date(Date.now() - 3600_000).toISOString(),
+      };
+
+      const result = await runInterceptCli({
+        stdin: streamFrom(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: `git -C ${repoB} push && git push` },
+            session_id: "sess-multihead",
+            cwd: cwdRepo,
+          }),
+        ),
+        stdout: captureStream().stream,
+        stderr: captureStream().stream,
+        manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+        ledger: {
+          async query() {
+            return { kind: "ok", entries: [cwdEntry, bEntry] };
+          },
+          async record() {
+            /* no-op */
+          },
+        },
+      });
+
+      expect(result.decisions).toHaveLength(2);
+      const cwdDecision = result.decisions.find((d) => d.ledgerTag === "preflight:cwd-branch");
+      const bDecision = result.decisions.find((d) => d.ledgerTag === "preflight:b-branch");
+      expect(cwdDecision?.outcome).toBe("allow");
+      expect(bDecision?.outcome).toBe("allow");
+      expect(cwdDecision?.reason).toContain(CWD_SHA.slice(0, 7));
+      expect(bDecision?.reason).toContain(B_SHA.slice(0, 7));
+      expect(cwdDecision?.reason).not.toContain(B_SHA.slice(0, 7));
+      expect(bDecision?.reason).not.toContain(CWD_SHA.slice(0, 7));
+      expect(result.blocked).toBe(false);
+    });
+  });
+
+  describe("D-015: HARNESS_REPO / HARNESS_BRANCH override wins in an ATTRIBUTED context too, not only the cwd one", () => {
+    it("cd <B> && git status with HARNESS_REPO/BRANCH set: both the cwd AND the attributed B context keep the override", async () => {
+      const savedRepo = process.env.HARNESS_REPO;
+      const savedBranch = process.env.HARNESS_BRANCH;
+      process.env.HARNESS_REPO = "override-repo";
+      process.env.HARNESS_BRANCH = "override-branch";
+      try {
+        const repoCwd = makeRepoFixture("override-cwd", "main");
+        const repoB = makeRepoFixture("override-b", "other-branch");
+
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: `cd ${repoB} && git status` },
+              session_id: "sess-override",
+              cwd: repoCwd,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([PREFLIGHT_INVESTIGATION_POLICY]),
+          ledger: { async query() { return { kind: "ok", entries: [] }; }, async record() {} },
+        });
+
+        // D-011 additive: two contexts (cwd + inherited B). D-015: NEITHER
+        // one's REPO was overwritten with the target repo's own identity —
+        // both keep the operator's override.
+        expect(result.decisions).toHaveLength(2);
+        for (const d of result.decisions) {
+          expect(d.extractValues.REPO).toBe("override-repo");
+        }
+      } finally {
+        if (savedRepo === undefined) delete process.env.HARNESS_REPO;
+        else process.env.HARNESS_REPO = savedRepo;
+        if (savedBranch === undefined) delete process.env.HARNESS_BRANCH;
+        else process.env.HARNESS_BRANCH = savedBranch;
+      }
+    });
+  });
+
+  // Pass-3 review CRITICAL (pre-existing since the T-002 base, not
+  // introduced by either fix round — D-016/D-018 halt-counter accounting
+  // in 03-decisions.md): orchestrator's own reproduction against REAL git
+  // 2.34.1. cwd = realProtectedA, ledger holds only a forged
+  // `preflight:forge-branch` tag:
+  //
+  //   git push                          -> deny  preflight:a-branch (correct)
+  //   git -C <forge> -C <realA> push    -> ALLOW preflight:forge-branch (BYPASS)
+  //
+  // git composes multiple `-C` cumulatively (later absolute wins) and
+  // actually runs in `<realA>` (== cwd here); the pre-fix engine
+  // attributed to the FIRST `-C` (`<forge>`) and REPLACEd the cwd demand.
+  // `peelGitGlobalOptions`'s `relocateTargetDir` now nulls out whenever
+  // more than one resolved repo-relocating option is present (D-018),
+  // falling back to the cwd context — exactly the shipped, cwd-only
+  // engine's own demand, never a forged first-token tag.
+  describe("D-018: more than one repo-relocating option falls back to cwd, never a first-token guess (pass 3 CRITICAL, fix round 3, last autonomous)", () => {
+    const A_SHA = "cccccccccccccccccccccccccccccccccccccccc";
+
+    function ledgerWithEntries(contents: string[]): LedgerClient {
+      const entries = contents.map((content, i) => ({
+        id: `e${i}`,
+        content,
+        createdAt: new Date().toISOString(),
+      }));
+      return {
+        async query() {
+          return { kind: "ok", entries };
+        },
+        async record() {
+          /* no-op */
+        },
+      };
+    }
+
+    const PREFLIGHT_TAG_POLICY: Policy = {
+      name: "preflight-before-tag-d018-probe",
+      description: "gate git tag on a per-repo preflight tag (synthetic verb-coverage probe)",
+      trigger: { event: "PreToolUse", match: "Bash", bash_match: "git\\s+tag" },
+      requires: { ledger_tag: "preflight:${REPO}" },
+      hook: "require-preflight-evidence",
+      enforcement: "block",
+    } as Policy;
+
+    describe("push (BRANCH-scoped, at_head + within — the orchestrator's own repro shape: cwd IS the second -C target)", () => {
+      it("only the forged first -C's evidence on record: DENIES, demanding cwd/second-C's OWN tag (never the first-token guess)", async () => {
+        const cwdRealA = makeRepoFixtureWithSha("multic-cwd-real-a", "a-branch", A_SHA);
+        const forgedB = makeRepoFixture("multic-forged-b", "forge-branch");
+        const ledger = ledgerWithEntries(["preflight:forge-branch — evidence for the forged first -C only"]);
+
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: `git -C ${forgedB} -C ${cwdRealA} push` },
+              session_id: "sess-d018-push-deny",
+              cwd: cwdRealA,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+          ledger,
+        });
+
+        expect(result.blocked).toBe(true);
+        expect(result.decisions).toHaveLength(1);
+        // A pre-fix engine attributed to the FIRST -C (forgedB) and would
+        // show "preflight:forge-branch" here, satisfied by the ledger
+        // above, so it would have ALLOWED — the exact bypass measured.
+        expect(result.decisions[0]!.ledgerTag).toBe("preflight:a-branch");
+        expect(result.decisions[0]!.outcome).toBe("deny");
+
+        // "never weaker than shipped": the SAME ledger, driven against a
+        // bare `git push` with no -C at all (what the shipped, cwd-only
+        // engine would have evaluated), denies with the IDENTICAL reason.
+        const baseline = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: "git push" },
+              session_id: "sess-d018-push-deny",
+              cwd: cwdRealA,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+          ledger: { query: ledger.query, async record() {} },
+        });
+        expect(baseline.decisions).toHaveLength(1);
+        expect(baseline.decisions[0]!.outcome).toBe("deny");
+        expect(result.decisions[0]!.reason).toBe(baseline.decisions[0]!.reason);
+      });
+
+      it("cwd/second-C's own evidence on record: ALLOWS (the exact orchestrator repro row that must flip from the pre-fix ALLOW-on-forgery)", async () => {
+        const cwdRealA = makeRepoFixtureWithSha("multic-cwd-real-a2", "a-branch", A_SHA);
+        const forgedB = makeRepoFixture("multic-forged-b2", "forge-branch");
+        const ledger = ledgerWithEntries([`preflight:a-branch head:${A_SHA} — evidence for the real cwd`]);
+
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: `git -C ${forgedB} -C ${cwdRealA} push` },
+              session_id: "sess-d018-push-allow",
+              cwd: cwdRealA,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+          ledger,
+        });
+
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]!.ledgerTag).toBe("preflight:a-branch");
+        expect(result.decisions[0]!.outcome).toBe("allow");
+        expect(result.blocked).toBe(false);
+      });
+    });
+
+    describe.each([
+      ["log", PREFLIGHT_INVESTIGATION_POLICY],
+      ["status", PREFLIGHT_INVESTIGATION_POLICY],
+      ["tag", PREFLIGHT_TAG_POLICY],
+    ] as const)("%s (REPO-scoped, no at_head/within)", (verb, policy) => {
+      it(`only the forged first -C's evidence on record: DENIES, demanding cwd's own tag`, async () => {
+        const cwdRepo = makeRepoFixture(`multic-cwd-${verb}`, "main");
+        const forgedRepo = makeRepoFixture(`multic-forged-${verb}`, "main");
+        const ledger = ledgerWithEntries([`preflight:multic-forged-${verb} — evidence for the forged first -C only`]);
+
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: `git -C ${forgedRepo} -C ${cwdRepo} ${verb}` },
+              session_id: `sess-d018-${verb}-deny`,
+              cwd: cwdRepo,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([policy]),
+          ledger,
+        });
+
+        expect(result.blocked).toBe(true);
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]!.ledgerTag).toBe(`preflight:multic-cwd-${verb}`);
+        expect(result.decisions[0]!.outcome).toBe("deny");
+      });
+
+      it(`cwd's own evidence on record: ALLOWS`, async () => {
+        const cwdRepo = makeRepoFixture(`multic-cwd-a2-${verb}`, "main");
+        const forgedRepo = makeRepoFixture(`multic-forged-a2-${verb}`, "main");
+        const ledger = ledgerWithEntries([`preflight:multic-cwd-a2-${verb} — evidence for cwd`]);
+
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: `git -C ${forgedRepo} -C ${cwdRepo} ${verb}` },
+              session_id: `sess-d018-${verb}-allow`,
+              cwd: cwdRepo,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([policy]),
+          ledger,
+        });
+
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]!.ledgerTag).toBe(`preflight:multic-cwd-a2-${verb}`);
+        expect(result.decisions[0]!.outcome).toBe("allow");
+        expect(result.blocked).toBe(false);
+      });
+    });
+
+    // Same class via `-C` + `--git-dir`, both orderings — order-independent,
+    // never a first-token guess either way. `slug` is filesystem-safe (no
+    // spaces — an unquoted space in a fixture's own path would corrupt the
+    // git command line under test, a test-harness bug distinct from the
+    // thing under test); `label` is the human-readable describe title only.
+    describe.each([
+      ["-C then --git-dir", "c-then-gitdir", (forged: string, real: string) => `git -C ${forged} --git-dir=${path.join(real, ".git")} status`],
+      ["--git-dir then -C", "gitdir-then-c", (forged: string, real: string) => `git --git-dir=${path.join(forged, ".git")} -C ${real} status`],
+    ] as const)("%s (divergent combo, order-independent)", (_label, slug, buildCommand) => {
+      it("falls back to cwd's own tag, not either flag's target", async () => {
+        const cwdRepo = makeRepoFixture(`multic-combo-cwd-${slug}`, "main");
+        const forgedRepo = makeRepoFixture(`multic-combo-forged-${slug}`, "main");
+        const ledger = ledgerWithEntries([`preflight:multic-combo-forged-${slug} — evidence for the forged flag only`]);
+
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: buildCommand(forgedRepo, cwdRepo) },
+              session_id: `sess-d018-combo-${slug}`,
+              cwd: cwdRepo,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([PREFLIGHT_INVESTIGATION_POLICY]),
+          ledger,
+        });
+
+        expect(result.blocked).toBe(true);
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]!.ledgerTag).toBe(`preflight:multic-combo-cwd-${slug}`);
+        expect(result.decisions[0]!.outcome).toBe("deny");
+      });
+    });
+  });
+
+  // D-021 (UNIVERSAL-ADDITIVE): the four historical fail-opens found across
+  // the four review passes of this fix round (D-011 non-persisting `cd`,
+  // D-017 `--work-tree`, D-018 more-than-one relocating flag, D-020's
+  // pass-4 tilde-valued flag), each pinned here against a ledger holding
+  // ONLY the forged/foreign target's OWN full evidence — evidence that
+  // would have satisfied a REPLACE-style attribution to that target alone
+  // (the exact shape each of the four passes measured as a live ALLOW
+  // against the shipped-at-the-time binary). Under universal-additive the
+  // cwd context is demanded UNCONDITIONALLY, so all four still DENY: no
+  // misattribution of the foreign/forged target, however it arises, can
+  // ever make the gate weaker than the shipped, cwd-only engine.
+  describe("D-021 security pins: the four historically bypassed forms block on forged-only evidence, never weaker than shipped", () => {
+    const CWD_SHA = "5555555555555555555555555555555555555e";
+    const FORGED_SHA = "6666666666666666666666666666666666666f";
+
+    function ledgerWithEntries(contents: string[]): LedgerClient {
+      const entries = contents.map((content, i) => ({
+        id: `e${i}`,
+        content,
+        createdAt: new Date().toISOString(),
+      }));
+      return {
+        async query() {
+          return { kind: "ok", entries };
+        },
+        async record() {
+          /* no-op */
+        },
+      };
+    }
+
+    async function bareVerbBaseline(cwdRepo: string, ledger: LedgerClient) {
+      return runInterceptCli({
+        stdin: streamFrom(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: "git push" },
+            session_id: "sess-d021-baseline",
+            cwd: cwdRepo,
+          }),
+        ),
+        stdout: captureStream().stream,
+        stderr: captureStream().stream,
+        manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+        ledger: { query: ledger.query, async record() {} },
+      });
+    }
+
+    // (a) non-persisting `cd` (subshell close) — the D-011/D-014 class.
+    // Note: `command-normalize.ts`'s D-014 basis-tracking already resets
+    // the cd-basis for a subshell close, so this construct never even
+    // reaches the additive branch (`effectiveTarget` is already `null`,
+    // D-003 cwd-only) — this pin is deliberately layer-agnostic: it
+    // asserts the OUTCOME (blocked, cwd's own tag demanded and denied on
+    // forged-only evidence) stays true regardless of which layer (D-014's
+    // basis reset, or D-021's additive backstop) is doing the defending.
+    it("(a) (cd <forged> ; echo hi) && git push: blocks on forged-only evidence, demanding cwd's own tag", async () => {
+      const cwdRepo = makeRepoFixtureWithSha("d021-a-cwd", "cwd-branch", CWD_SHA);
+      const forgedRepo = makeRepoFixtureWithSha("d021-a-forged", "forged-branch", FORGED_SHA);
+      const ledger = ledgerWithEntries([
+        `preflight:forged-branch head:${FORGED_SHA} — evidence for the forged target only`,
+      ]);
+
+      const result = await runInterceptCli({
+        stdin: streamFrom(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: `(cd ${forgedRepo} ; echo hi) && git push` },
+            session_id: "sess-d021-a",
+            cwd: cwdRepo,
+          }),
+        ),
+        stdout: captureStream().stream,
+        stderr: captureStream().stream,
+        manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+        ledger,
+      });
+
+      expect(result.blocked).toBe(true);
+      const cwdDecision = result.decisions.find((d) => d.ledgerTag === "preflight:cwd-branch");
+      expect(cwdDecision?.outcome).toBe("deny");
+
+      // "never weaker than shipped": the identical ledger, driven against
+      // a bare `git push` (the shipped, cwd-only baseline), denies with
+      // the IDENTICAL reason.
+      const baseline = await bareVerbBaseline(cwdRepo, ledger);
+      expect(baseline.decisions).toHaveLength(1);
+      expect(baseline.decisions[0]!.outcome).toBe("deny");
+      expect(cwdDecision?.reason).toBe(baseline.decisions[0]!.reason);
+    });
+
+    // (b) `--work-tree` — the D-017 class. `--work-tree` never produces an
+    // own OR inherited target at all (D-017 excludes it structurally), so
+    // this is the D-003 cwd-only fallback, identical to shipped — already
+    // pinned exhaustively (push + read verbs, deny + allow directions) in
+    // the "D-017: --work-tree is not a repo-identity own-target" describe
+    // block above; not duplicated here.
+
+    // (c) more than one repo-relocating flag — the D-018 class. Already
+    // pinned with a forged-only ledger (push + read verbs, both `-C`
+    // combos) in the "D-018: more than one repo-relocating option falls
+    // back to cwd" describe block above; not duplicated here.
+
+    // (d) a tilde-valued relocating flag not counted by D-018's ambiguity
+    // lock — the D-020 pass-4 finding. `git -C <decoy> -C ~/sub push`
+    // resolves `ownTarget`/`effectiveTarget` to the decoy alone (the
+    // tilde flag is dropped as unattributable, D-018's lock never sees a
+    // SECOND counted option) — pre-D-021, REPLACE attributed to the decoy
+    // alone and a forged decoy tag satisfied the push. Under universal-
+    // additive this adds a spurious-but-safe decoy demand ALONGSIDE cwd's
+    // unconditional one; the security property under test is "blocks
+    // without cwd's tag", not the exact context set — the spurious decoy
+    // demand is a documented precision residual (follow-up), not a
+    // safety gap.
+    it("(d) git -C <decoy> -C ~/sub push: blocks on decoy-only evidence, demanding cwd's own tag too", async () => {
+      const cwdRepo = makeRepoFixtureWithSha("d021-d-cwd", "cwd-branch", CWD_SHA);
+      const decoyRepo = makeRepoFixtureWithSha("d021-d-decoy", "decoy-branch", FORGED_SHA);
+      const ledger = ledgerWithEntries([
+        `preflight:decoy-branch head:${FORGED_SHA} — evidence for the decoy target only`,
+      ]);
+
+      const result = await runInterceptCli({
+        stdin: streamFrom(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: `git -C ${decoyRepo} -C ~/sub push` },
+            session_id: "sess-d021-d",
+            cwd: cwdRepo,
+          }),
+        ),
+        stdout: captureStream().stream,
+        stderr: captureStream().stream,
+        manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+        ledger,
+      });
+
+      expect(result.blocked).toBe(true);
+      const cwdDecision = result.decisions.find((d) => d.ledgerTag === "preflight:cwd-branch");
+      expect(cwdDecision?.outcome).toBe("deny");
+
+      // "never weaker than shipped": the identical ledger, driven against
+      // a bare `git push` (the shipped, cwd-only baseline), denies with
+      // the IDENTICAL reason.
+      const baseline = await bareVerbBaseline(cwdRepo, ledger);
+      expect(baseline.decisions).toHaveLength(1);
+      expect(baseline.decisions[0]!.outcome).toBe("deny");
+      expect(cwdDecision?.reason).toBe(baseline.decisions[0]!.reason);
+    });
+  });
+
+  // Review pass 5 (LOW, missing test, adopted into T-005): proves
+  // `findGitEntry`'s own upward walk (`src/runtime/git-context.ts`) is what
+  // collapses a relative `-C <subdir>` naming a plain subdirectory of the
+  // cwd repo (no `.git` of its own) into the SAME repository identity as
+  // cwd — one decision, not two. `sub` has no own `.git`, so
+  // `resolveGitContext` walks up from it and lands on cwd's own `.git`;
+  // the resulting `[repo, branch, sha]` signature matches cwd's
+  // (D-015), so `resolveAttributedContexts` dedupes the two into one
+  // `addCwdOnce()` call rather than emitting a spurious second context —
+  // distinct from the D-012 symlink test above (a symlink to a DIFFERENT
+  // repo) and the "positive controls" `-C .` / `-C <cwd absolute>` cases
+  // (the repo root itself, not a subdirectory reached via an upward walk).
+  describe("D-015 collapse via findGitEntry's upward walk: a relative -C <subdir-of-cwd-repo> (no own .git) is ONE cwd decision, not two", () => {
+    it("git -C sub status: sub has no own .git, walks up to cwd's own .git, collapses to a single cwd-tagged decision", async () => {
+      const cwdRepo = makeRepoFixture("collapse-sub-cwd", "main");
+      fs.mkdirSync(path.join(cwdRepo, "sub", "nested"), { recursive: true });
+
+      function ledgerWithEntries(contents: string[]): LedgerClient {
+        const entries = contents.map((content, i) => ({
+          id: `e${i}`,
+          content,
+          createdAt: new Date().toISOString(),
+        }));
+        return {
+          async query() {
+            return { kind: "ok", entries };
+          },
+          async record() {
+            /* no-op */
+          },
+        };
+      }
+
+      const result = await runInterceptCli({
+        stdin: streamFrom(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: "git -C sub status" },
+            session_id: "sess-collapse-sub",
+            cwd: cwdRepo,
+          }),
+        ),
+        stdout: captureStream().stream,
+        stderr: captureStream().stream,
+        manifest: fakeManifest([PREFLIGHT_INVESTIGATION_POLICY]),
+        ledger: ledgerWithEntries(["preflight:collapse-sub-cwd — evidence for cwd"]),
+      });
+
+      expect(result.decisions).toHaveLength(1);
+      expect(result.decisions[0]!.ledgerTag).toBe("preflight:collapse-sub-cwd");
+      expect(result.decisions[0]!.outcome).toBe("allow");
+      expect(result.blocked).toBe(false);
+    });
+  });
+
+  // Review pass 5 (LOW, missing test, adopted into T-005): D-013's bound
+  // ("more than MAX_ATTRIBUTED_CONTEXTS distinct targets") routes through
+  // `outcomeForFailedRequires(policy.enforcement)` (`boundedContextsDecision`
+  // above `intercept()`), the SAME enforcement-to-outcome mapping every
+  // other failed-evaluation branch in this module uses — never a
+  // hardcoded deny. This pins the OTHER enforcement arm: a `warn`-
+  // enforcement per-repo policy past the bound resolves to `warn`, not
+  // `deny`, and never blocks — respecting `outcomeForFailedRequires`
+  // exactly as a `block`-enforcement policy's bound (pinned above, "D-013:
+  // distinct attributed contexts are bounded") resolves to `deny`. Zero
+  // ledger queries either way (the bound engages before any query), so
+  // this is never weaker than shipped (which also never blocks on a
+  // `warn`-enforcement policy).
+  describe("D-013 bound respects a warn-enforcement policy: warns, never denies, never blocks", () => {
+    it(`more than ${MAX_ATTRIBUTED_CONTEXTS} distinct targets on a warn-enforcement policy: warns, zero ledger queries, not blocked`, async () => {
+      const repoCwd = makeRepoFixture("bound-warn-cwd", "main");
+      const targets = Array.from({ length: MAX_ATTRIBUTED_CONTEXTS + 2 }, (_, i) =>
+        makeRepoFixture(`bound-warn-target-${i}`, "main"),
+      );
+      const WARN_INVESTIGATION_POLICY: Policy = {
+        ...PREFLIGHT_INVESTIGATION_POLICY,
+        name: "preflight-before-investigation-warn",
+        enforcement: "warn",
+      };
+      let queryCount = 0;
+      const ledger: LedgerClient = {
+        async query() {
+          queryCount += 1;
+          return { kind: "ok", entries: [] };
+        },
+        async record() {
+          /* no-op */
+        },
+      };
+
+      const result = await runInterceptCli({
+        stdin: streamFrom(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: targets.map((t) => `git -C ${t} status`).join(" && ") },
+            session_id: "sess-bound-warn",
+            cwd: repoCwd,
+          }),
+        ),
+        stdout: captureStream().stream,
+        stderr: captureStream().stream,
+        manifest: fakeManifest([WARN_INVESTIGATION_POLICY]),
+        ledger,
+      });
+
+      expect(queryCount).toBe(0);
+      expect(result.decisions).toHaveLength(1);
+      expect(result.decisions[0]!.outcome).toBe("warn");
+      expect(result.decisions[0]!.enforcement).toBe("warn");
+      expect(result.decisions[0]!.reason).toContain("ambiguous");
+      expect(result.blocked).toBe(false);
+    });
   });
 });

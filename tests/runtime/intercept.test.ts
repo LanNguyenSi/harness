@@ -1,11 +1,14 @@
 import { Writable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import {
+  attributeTriggerSegments,
   intercept,
+  policyMatchesEvent,
   type LedgerClient,
   type RiskGateContext,
   type ToolEvent,
 } from "../../src/runtime/index.js";
+import type { CommandSegment } from "../../src/runtime/command-normalize.js";
 import type {
   ExtractBuiltins,
   LedgerEntry,
@@ -1557,5 +1560,99 @@ describe("intercept — M7 whenUnclassifiedFallback flag", () => {
     expect(result.blockJson?.reason).toContain(
       "You cannot run unrecognised commands here.",
     );
+  });
+});
+
+// Task 98ad072f, T-003: unit-level coverage of the attribution sibling of
+// `policyMatchesEvent` — segment-level re-testing of a policy's own
+// `bash_match`, independent of any filesystem/git-context resolution
+// (that end-to-end behaviour is covered in `intercept-cli.test.ts`,
+// where real git fixtures are available).
+describe("attributeTriggerSegments — segment-level re-test of a policy's own bash_match", () => {
+  const PUSH_POLICY: Policy = policy({
+    name: "preflight-before-push",
+    trigger: {
+      event: "PreToolUse",
+      match: "Bash",
+      bash_match: "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b",
+    },
+    requires: { ledger_tag: "preflight:${BRANCH}", at_head: true },
+    hook: "h",
+  });
+
+  const seg = (
+    text: string,
+    ownTarget: string | null = null,
+    effectiveTarget: string | null = null,
+  ): CommandSegment => ({ text, ownTarget, effectiveTarget });
+
+  it("returns only the segment(s) whose OWN text satisfies the regex", () => {
+    const segments = [seg("cd /tmp/decoy", "/tmp/decoy", "/tmp/decoy"), seg("git log"), seg("git push")];
+    const satisfying = attributeTriggerSegments(PUSH_POLICY, segments);
+    expect(satisfying).toHaveLength(1);
+    expect(satisfying[0]?.text).toBe("git push");
+  });
+
+  it("returns every segment that individually matches (D-004 shape: several satisfying segments)", () => {
+    const readPolicy: Policy = policy({
+      name: "preflight-before-investigation",
+      trigger: {
+        event: "PreToolUse",
+        match: "Bash",
+        bash_match: "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* (status|log|diff|branch)\\b",
+      },
+      requires: { ledger_tag: "preflight:${REPO}" },
+      hook: "h",
+    });
+    const segments = [
+      seg("git -C /tmp/B status", "/tmp/B", "/tmp/B"),
+      seg("git status"),
+    ];
+    const satisfying = attributeTriggerSegments(readPolicy, segments);
+    expect(satisfying).toHaveLength(2);
+  });
+
+  it("returns [] when no single segment matches (whole-string-only match)", () => {
+    const wholeStringOnly: Policy = policy({
+      name: "whole-string-only-probe",
+      trigger: { event: "PreToolUse", match: "Bash", bash_match: "status.*log" },
+      requires: { ledger_tag: "preflight:${REPO}" },
+      hook: "h",
+    });
+    const segments = [seg("git status"), seg("git log")];
+    expect(attributeTriggerSegments(wholeStringOnly, segments)).toEqual([]);
+  });
+
+  it("returns [] when the policy has no bash_match trigger (MCP-tool-name policy)", () => {
+    const mcpPolicy: Policy = policy({
+      name: "mcp-triggered",
+      trigger: { event: "PreToolUse", match: "mcp__x__y" },
+      requires: { ledger_tag: "review:${SESSION_ID}" },
+      hook: "h",
+    });
+    expect(attributeTriggerSegments(mcpPolicy, [seg("git push")])).toEqual([]);
+  });
+
+  it("returns [] defensively when the policy's bash_match is a malformed regex", () => {
+    const malformed: Policy = policy({
+      name: "malformed-regex",
+      trigger: { event: "PreToolUse", match: "Bash", bash_match: "(unterminated" },
+      requires: { ledger_tag: "preflight:${REPO}" },
+      hook: "h",
+    });
+    expect(attributeTriggerSegments(malformed, [seg("git push")])).toEqual([]);
+  });
+
+  it("never changes whether a policy matches — policyMatchesEvent stays a pure boolean, unrelated to this function", () => {
+    // Sanity pin that this task did not alter `policyMatchesEvent`'s own
+    // contract: it still returns a plain boolean and accepts no segment
+    // view at all.
+    const event: ToolEvent = {
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "git push" },
+      session_id: "sess-1",
+    };
+    expect(policyMatchesEvent(PUSH_POLICY, event)).toBe(true);
   });
 });

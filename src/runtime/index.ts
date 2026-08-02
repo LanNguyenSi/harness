@@ -1,4 +1,5 @@
 export {
+  attributeTriggerSegments,
   intercept,
   policyMatchesEvent,
   type ClaudeDenyJson,

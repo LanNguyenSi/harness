@@ -3,8 +3,10 @@ import { parse as parseYaml } from "yaml";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import {
   AMP_BOUNDARY_RE,
+  MAX_NORMALIZE_LENGTH,
   normalizeCommand,
   normalizeCommandAmpAware,
+  segmentViewOf,
 } from "../../src/runtime/command-normalize.js";
 import { parseManifest } from "../../src/schema/index.js";
 
@@ -1096,6 +1098,699 @@ describe("normalizeCommandAmpAware (task aabbad63: closes the bare-& gating gap 
       const re = policyBashMatch("deny-kill-switch-bypass");
       const command = "nice FOO='x & y' harness pause";
       expect(re.test(normalizeCommand(command).normalized)).toBe(true);
+    });
+  });
+});
+
+// T-002 of run 2026-08-02-per-repo-gate-scoping-redesign (task `98ad072f`
+// groundwork): the per-segment view export. `normalizeCommand`'s own
+// `targetDir`/`targetBase` behaviour is untouched by any of this — see the
+// "existing behaviour is unaffected" describe block below, which re-runs a
+// representative slice of the pre-existing `targetDir extraction` /
+// `G1` fixtures through `normalizeCommand` alone to pin that explicitly.
+describe("segmentViewOf", () => {
+  // The K1 divergence table's 8 forms, docs/okf/quote-model-divergence.md
+  // (`bash-prefix-parse.cdTarget` vs. `command-normalize.targetDir`, "6 of
+  // 8 divergent"): 7 rows are printed in the doc's table (the 8th, a bare
+  // `git status` with no cd and no own target, is the boring baseline both
+  // models already agree is `null` and is omitted from a table whose whole
+  // point is to show divergence — included here for completeness). This
+  // describe block asserts what `segmentViewOf` — a THIRD, deliberately
+  // more conservative model — computes for the segment carrying the git
+  // invocation in each form, per `CommandSegment.effectiveTarget`'s own
+  // composition rules.
+  describe("K1 8-forms table (docs/okf/quote-model-divergence.md)", () => {
+    it("cd <T> && git status -> T (absolute cd basis adopted by the bare git segment)", () => {
+      const segs = segmentViewOf("cd /tmp/repoD && git status");
+      expect(segs).not.toBeNull();
+      expect(segs![1]!.effectiveTarget).toBe("/tmp/repoD");
+      expect(segs![1]!.ownTarget).toBe(null);
+    });
+
+    it("cd ~ && git status -> null (tilde cd target resets the basis to null, not left at whatever preceded it)", () => {
+      const segs = segmentViewOf("cd ~ && git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+      expect(segs![1]!.effectiveTarget).toBe(null);
+    });
+
+    // D-014 (fix round, run 2026-08-02-per-repo-gate-scoping-redesign): the
+    // test right above never actually exercises "not left at whatever
+    // preceded it" — there is nothing preceding it to leave stale (no
+    // earlier `cd` at all), so pre-fix code passed it vacuously too (an
+    // unset basis inheriting is still null either way). THIS test
+    // establishes a REAL preceding basis first, so reset-vs-inherit is
+    // genuinely discriminated. RED against pre-fix `computeSegmentTarget`
+    // (measured: the trailing git-status segment's `effectiveTarget` was
+    // `"/tmp/repoD"`, the STALE preceding basis, not `null`).
+    it("cd /tmp/repoD && cd ~ && git status -> null: the tilde cd RESETS a real preceding basis, does not inherit it", () => {
+      const segs = segmentViewOf("cd /tmp/repoD && cd ~ && git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoD"); // the real preceding basis, established
+      expect(segs![1]!.ownTarget).toBe(null); // the tilde cd itself names nothing
+      expect(segs![1]!.effectiveTarget).toBe(null); // and does not inherit /tmp/repoD either
+      expect(segs![2]!.text).toBe("git status");
+      expect(segs![2]!.effectiveTarget).toBe(null); // the reset reaches the later segment
+    });
+
+    it("git -C <T> status (no cd) -> T (absolute own target)", () => {
+      const segs = segmentViewOf("git -C /tmp/repoB status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe("/tmp/repoB");
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoB");
+    });
+
+    // D-017 (fix round 2, run 2026-08-02-per-repo-gate-scoping-redesign):
+    // this test previously pinned `effectiveTarget` at "/tmp/repoB" as
+    // CORRECT — that was the pre-fix defect, not a spec. `--work-tree`
+    // sets a git invocation's working tree but does NOT relocate its
+    // `--git-dir` search: `git --work-tree=/tmp/repoB status` still
+    // operates on whatever repo the invocation's ACTUAL directory names,
+    // never `/tmp/repoB` alone. Pass-2 review measured this pin's old
+    // value feeding a live cross-repo fail-open once `ownTarget`/
+    // `effectiveTarget` were wired to `resolveAttributedContexts`'
+    // REPLACE branch (D-011): `git --work-tree=<B> push` from cwd A was
+    // attributed to B alone, dropping the cwd (A) demand a real `git
+    // push` there still has to satisfy. `null` here (falling through to
+    // whatever cd-basis was known, none in this no-cd case) is the fix,
+    // not a regression — same cwd-fallback shape D-003 already documents
+    // for every other unattributable form.
+    it("git --work-tree=<T> status (no cd) -> null (--work-tree is NOT a repo-relocating flag, D-017)", () => {
+      const segs = segmentViewOf("git --work-tree=/tmp/repoB status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+    });
+
+    it("git --git-dir=<T>/.git status (no cd) -> T (parent-of-.git, same as targetDir)", () => {
+      const segs = segmentViewOf("git --git-dir=/tmp/repoC/.git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe("/tmp/repoC");
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoC");
+    });
+
+    // D-017: the combo case — `--git-dir` IS repo-relocating, `--work-
+    // tree` is not, so attribution follows `--git-dir` (A), never the
+    // work-tree (B), regardless of which flag appears first on the
+    // command line (the priority is "which FLAG produced the value", not
+    // "which flag came first" — `--work-tree` never contributes to this
+    // field at all).
+    it("git --git-dir=<A>/.git --work-tree=<B> status -> A (--git-dir wins, --work-tree ignored for identity)", () => {
+      const segs = segmentViewOf("git --git-dir=/tmp/repoA/.git --work-tree=/tmp/repoB status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe("/tmp/repoA");
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoA");
+    });
+
+    it("git --work-tree=<B> --git-dir=<A>/.git status -> A even with --work-tree spelled first (order-independent)", () => {
+      const segs = segmentViewOf("git --work-tree=/tmp/repoB --git-dir=/tmp/repoA/.git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe("/tmp/repoA");
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoA");
+    });
+
+    it("env -C <T> git status (no cd) -> T", () => {
+      const segs = segmentViewOf("env -C /tmp/repoA git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoA");
+    });
+
+    // D-017: `env -C` DOES relocate (it chdirs before running git), so it
+    // still wins as the identity target even when the SAME invocation
+    // also carries a `--work-tree` — the work-tree flag simply never
+    // competes for this field.
+    it("env -C <A> git --work-tree=<B> status -> A (env -C relocates, --work-tree does not)", () => {
+      const segs = segmentViewOf("env -C /tmp/repoA git --work-tree=/tmp/repoB status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe("/tmp/repoA");
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoA");
+    });
+
+    // D-017: a preceding `cd` DOES persist (bash-truthful — this module's
+    // whole cd-basis mechanism), so `--work-tree` on the later git
+    // invocation still does not override it: the segment falls through to
+    // "no own target -> inherits the incoming cd-basis" exactly like a
+    // bare `git status` after a `cd` would.
+    it("cd <A> && git --work-tree=<B> status -> A (inherits the cd basis; --work-tree does not redirect it)", () => {
+      const segs = segmentViewOf("cd /tmp/repoA && git --work-tree=/tmp/repoB status");
+      expect(segs).not.toBeNull();
+      expect(segs![1]!.ownTarget).toBe(null);
+      expect(segs![1]!.effectiveTarget).toBe("/tmp/repoA");
+    });
+
+    it("cd <T> && git -C sub status -> null (K1 divergence case: relative own target after a known cd basis is UNATTRIBUTABLE, not composed to T/sub)", () => {
+      const segs = segmentViewOf("cd /tmp/T && git -C sub status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/T");
+      expect(segs![1]!.ownTarget).toBe("sub");
+      expect(segs![1]!.effectiveTarget).toBe(null);
+    });
+
+    it("git status (bare, no cd, no own target) -> null (the boring baseline both bp and cn already agree on)", () => {
+      const segs = segmentViewOf("git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+    });
+  });
+
+  describe("-C . and absolute paths stay as ownTarget verbatim (resolution against cwd is a future consumer's job)", () => {
+    it("git -C . status, no preceding cd -> ownTarget and effectiveTarget are both '.'", () => {
+      const segs = segmentViewOf("git -C . status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(".");
+      expect(segs![0]!.effectiveTarget).toBe(".");
+    });
+
+    it("git -C sub status, no preceding cd -> ownTarget and effectiveTarget both stay the raw relative value", () => {
+      const segs = segmentViewOf("git -C sub status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe("sub");
+      expect(segs![0]!.effectiveTarget).toBe("sub");
+    });
+
+    it("git -C /tmp/repoB status -> absolute ownTarget always wins as effectiveTarget", () => {
+      const segs = segmentViewOf("git -C /tmp/repoB status");
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoB");
+    });
+  });
+
+  // Orchestrator follow-up after the initial T-002 round (07-27 review
+  // precedent: "relative and ~ target dirs resolve to a confidently wrong
+  // repo"): a same-invocation `env -C <base>` + relative own `-C` mix must
+  // NOT hand a future consumer a raw relative value that consumer would
+  // resolve against ITS OWN cwd — that would land on a repo unrelated to
+  // the `<base>` the command itself named. Pinned in both directions.
+  describe("same-invocation env -C base + relative own -C is unattributable (both fields null, never the raw relative value)", () => {
+    it("(i) env -C /tmp/base git -C sub status -> ownTarget and effectiveTarget are both null (the mixed case)", () => {
+      const segs = segmentViewOf("env -C /tmp/base git -C sub status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+    });
+
+    it("(ii) env -C /tmp/base git status (no relative own -C) -> ownTarget/effectiveTarget stay /tmp/base, unaffected", () => {
+      const segs = segmentViewOf("env -C /tmp/base git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe("/tmp/base");
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/base");
+    });
+
+    it("(iii) git -C sub status with NO env -C base at all -> still the raw relative value 'sub' (the pre-existing deferred rule)", () => {
+      const segs = segmentViewOf("git -C sub status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe("sub");
+      expect(segs![0]!.effectiveTarget).toBe("sub");
+    });
+
+    it("a preceding cd basis does not rescue the mixed case either — the env -C/relative-own-C check applies first and independently", () => {
+      const segs = segmentViewOf("cd /tmp/X && env -C /tmp/base git -C sub status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/X"); // the cd segment itself, unaffected
+      expect(segs![1]!.ownTarget).toBe(null);
+      expect(segs![1]!.effectiveTarget).toBe(null);
+    });
+  });
+
+  // D-017 differential table (fix round 2, run 2026-08-02-per-repo-gate-
+  // scoping-redesign, missing_test adopted from pass-2 review): a single
+  // pass over the git-global-option matrix that names, per option, whether
+  // it is REPO-RELOCATING (contributes to `ownTarget`/`effectiveTarget`) or
+  // repo-NEUTRAL (does not) — so a future path-valued option added to
+  // `peelGitGlobalOptions` without updating `relocateTargetDir` shows up
+  // here as a silent flip from `null` to a real path, not just a missing
+  // dedicated test. All cases run with NO preceding cd (isolates the
+  // per-invocation flag classification from cd-basis composition, already
+  // covered separately above).
+  describe("D-017: repo-relocating vs repo-neutral git global options (differential, no preceding cd)", () => {
+    const cases: Array<{ label: string; command: string; expectedTarget: string | null }> = [
+      { label: "-C <dir> (relocating)", command: "git -C /tmp/repoX status", expectedTarget: "/tmp/repoX" },
+      {
+        label: "env -C <dir> (relocating, wraps the invocation)",
+        command: "env -C /tmp/repoX git status",
+        expectedTarget: "/tmp/repoX",
+      },
+      {
+        label: "--git-dir=<dir>/.git (relocating, parent-of-.git)",
+        command: "git --git-dir=/tmp/repoX/.git status",
+        expectedTarget: "/tmp/repoX",
+      },
+      {
+        label: "--work-tree=<dir> ALONE (NOT relocating, D-017)",
+        command: "git --work-tree=/tmp/repoX status",
+        expectedTarget: null,
+      },
+      {
+        label: "--git-dir=<dir>/.git + --work-tree=<other> (relocating flag wins)",
+        command: "git --git-dir=/tmp/repoX/.git --work-tree=/tmp/repoOTHER status",
+        expectedTarget: "/tmp/repoX",
+      },
+      // D-018 (fix round 3, pass-3 CRITICAL) rows, adopted per the review's
+      // "extend the D-017 differential table" missing test: more than one
+      // repo-relocating option is unattributable, never a first-token
+      // guess — so a future regression that reinstates first-wins flips
+      // these two rows from `null` back to a real path.
+      {
+        label: "-C <B> -C <A> (two -C, DIVERGENT: unattributable, D-018)",
+        command: "git -C /tmp/repoB -C /tmp/repoA status",
+        expectedTarget: null,
+      },
+      {
+        label: "-C <X> + --git-dir=<X>/.git (idempotent SAME value: stays X, D-018)",
+        command: "git -C /tmp/repoX --git-dir=/tmp/repoX/.git status",
+        expectedTarget: "/tmp/repoX",
+      },
+    ];
+    for (const c of cases) {
+      it(`${c.label}: "${c.command}" -> ownTarget/effectiveTarget = ${JSON.stringify(c.expectedTarget)}`, () => {
+        const segs = segmentViewOf(c.command);
+        expect(segs).not.toBeNull();
+        expect(segs![0]!.ownTarget).toBe(c.expectedTarget);
+        expect(segs![0]!.effectiveTarget).toBe(c.expectedTarget);
+      });
+    }
+  });
+
+  // D-018 (fix round 3, pass-3 CRITICAL, run 2026-08-02-per-repo-gate-
+  // scoping-redesign): pass 3 measured (against real git 2.34.1) that
+  // `git -C <forge> -C <realA> push` was attributed to the FIRST `-C`
+  // (`<forge>`) while git composes ALL `-C`/`--git-dir` options
+  // cumulatively and actually runs in `<realA>` — letting an agent name a
+  // decoy repo first and have a gate's evidence demand follow it instead
+  // of the repo the verb truly targets. The fix confines the own-target
+  // REPLACE (`relocateTargetDir`) to invocations naming EXACTLY ONE
+  // resolved repo-relocating option; two or more (in any combination, or
+  // via a wrapping `env -C` that diverges from git's own flag) fall back
+  // to unattributable (`null`) — the same cwd-fallback shape D-003
+  // already documents for every other unattributable form, never worse
+  // than the shipped cwd-only engine.
+  describe("D-018: more than one repo-relocating option is unattributable, not a first-token guess (fix round 3, pass-3 CRITICAL)", () => {
+    it("git -C <B> -C <A> status -> null (RED before the fix: was <B>, the first -C, not what real git runs in)", () => {
+      const segs = segmentViewOf("git -C /tmp/repoB -C /tmp/repoA status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+    });
+
+    it("git -C <B> -C ../A status -> null (second -C RELATIVE: still two options, not composed to a guessed path)", () => {
+      const segs = segmentViewOf("git -C /tmp/repoB -C ../A status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+    });
+
+    it("git -C <B> --git-dir=<A>/.git status -> null (-C then --git-dir, divergent)", () => {
+      const segs = segmentViewOf("git -C /tmp/repoB --git-dir=/tmp/repoA/.git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+    });
+
+    it("git --git-dir=<A>/.git -C <B> status -> null (--git-dir then -C, order-independent, divergent)", () => {
+      const segs = segmentViewOf("git --git-dir=/tmp/repoA/.git -C /tmp/repoB status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+    });
+
+    it("git --git-dir=<A>/.git --git-dir=<B>/.git status -> null (--git-dir doubled, divergent)", () => {
+      const segs = segmentViewOf("git --git-dir=/tmp/repoA/.git --git-dir=/tmp/repoB/.git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+    });
+
+    it("env -C <A> git -C <B> status -> null (env -C wrap diverges from git's own absolute -C)", () => {
+      const segs = segmentViewOf("env -C /tmp/repoA git -C /tmp/repoB status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+    });
+
+    it("env -C <A> git -C <A> status -> A (env -C wrap AGREES with git's own -C: idempotent, not ambiguous)", () => {
+      const segs = segmentViewOf("env -C /tmp/repoA git -C /tmp/repoA status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe("/tmp/repoA");
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoA");
+    });
+
+    it("git -C <X> -C <X> status -> X (same value repeated: idempotent, not ambiguous)", () => {
+      const segs = segmentViewOf("git -C /tmp/repoX -C /tmp/repoX status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe("/tmp/repoX");
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoX");
+    });
+
+    it("git -C <X> status (single -C, unaffected regression check) -> X", () => {
+      const segs = segmentViewOf("git -C /tmp/repoX status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe("/tmp/repoX");
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoX");
+    });
+
+    it("git --git-dir=<X>/.git status (single --git-dir, unaffected regression check) -> X", () => {
+      const segs = segmentViewOf("git --git-dir=/tmp/repoX/.git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe("/tmp/repoX");
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoX");
+    });
+
+    it("cwd=A, -C B -C A push: cd-basis unaffected, still falls through to whatever preceding cd named (none here) -> null, same as bare unattributable", () => {
+      const segs = segmentViewOf("git -C /tmp/repoB -C /tmp/repoA push");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.effectiveTarget).toBe(null);
+    });
+  });
+
+  describe("multi-segment cd-basis propagation across every BOUNDARY_RE separator", () => {
+    const cases: Array<{ label: string; command: string }> = [
+      { label: "&&", command: "cd /tmp/repoD && git status" },
+      { label: ";", command: "cd /tmp/repoD ; git status" },
+      { label: "\\n", command: "cd /tmp/repoD\ngit status" },
+      { label: "( (subshell)", command: "cd /tmp/repoD && (git status)" },
+    ];
+    for (const c of cases) {
+      it(`separator ${c.label}: the cd basis reaches the later git segment`, () => {
+        const segs = segmentViewOf(c.command);
+        expect(segs).not.toBeNull();
+        const gitSeg = segs!.find((s) => /\bgit status\)?$/.test(s.text));
+        expect(gitSeg).toBeDefined();
+        expect(gitSeg!.effectiveTarget).toBe("/tmp/repoD");
+      });
+    }
+
+    // D-014 (fix round, run 2026-08-02-per-repo-gate-scoping-redesign):
+    // REPLACES the pre-fix pin, which asserted the basis propagating
+    // across a bare `|` (mirroring the OLD aggregate's G1 "same directory"
+    // precedent) — that was the measured shape of the CRITICAL bypass this
+    // fix round closes: `cd <forged> | git push` genuinely runs `git push`
+    // at the real cwd (each side of a pipe is bash's own subshell; a `cd`
+    // on one side cannot affect the other), so a basis that crossed `|`
+    // let the attribution point at a forged target the real push never
+    // touched. RED against pre-fix `computeSegmentTarget` (measured: the
+    // git-status segment's `effectiveTarget` was `"/tmp/repoD"`, not
+    // `null`, before this fix round's basis-tracking change) — this is
+    // NOT the same "same directory" precedent the old aggregate's G1 rule
+    // uses for a non-cd segment; that rule is about a READ that never
+    // itself changes directory, not about a `cd`'s effect crossing a pipe
+    // boundary.
+    it("separator | (bare pipe): the cd basis does NOT cross it — each side of a pipe is its own subshell", () => {
+      const segs = segmentViewOf("cd /tmp/repoD | git status");
+      expect(segs).not.toBeNull();
+      const gitSeg = segs!.find((s) => /\bgit status\)?$/.test(s.text));
+      expect(gitSeg).toBeDefined();
+      expect(gitSeg!.effectiveTarget).toBe(null);
+    });
+
+    // D-014: a subshell's `cd` stops applying once the subshell closes —
+    // measured bypass shape: `(cd <forged> ; echo hi) && git push` let
+    // `<forged>` reach `git push`, which bash actually runs at the real
+    // cwd after the subshell exits. RED against pre-fix code (no `)`
+    // boundary handling at all — the basis carried straight through).
+    it("subshell close ')' resets the basis for everything AFTER it, while the segment ending in ')' still sees the basis itself", () => {
+      const segs = segmentViewOf("(cd /tmp/repoD ; echo hi) && git status");
+      expect(segs).not.toBeNull();
+      // "echo hi)" is still inside the (still-open, from its own
+      // perspective) subshell — its own effectiveTarget correctly reflects
+      // the basis, unaffected (irrelevant for gating, echo isn't a trigger,
+      // but proves the reset is scoped to what carries FORWARD, not this
+      // segment's own attribution).
+      const echoSeg = segs!.find((s) => s.text.includes("echo hi"));
+      expect(echoSeg).toBeDefined();
+      expect(echoSeg!.effectiveTarget).toBe("/tmp/repoD");
+      const gitSeg = segs!.find((s) => s.text === "git status");
+      expect(gitSeg).toBeDefined();
+      expect(gitSeg!.effectiveTarget).toBe(null);
+    });
+
+    it("a non-cd segment between two cd segments does not reset the basis on its own", () => {
+      // "echo hi" never changes directory; the basis established by the
+      // leading cd must still reach the trailing git segment.
+      const segs = segmentViewOf("cd /tmp/repoD && echo hi && git status");
+      expect(segs).not.toBeNull();
+      expect(segs![2]!.text).toBe("git status");
+      expect(segs![2]!.effectiveTarget).toBe("/tmp/repoD");
+    });
+
+    it("a second cd overrides the first for everything after it", () => {
+      const segs = segmentViewOf("cd /tmp/repoD && cd /tmp/repoE && git status");
+      expect(segs).not.toBeNull();
+      expect(segs![2]!.effectiveTarget).toBe("/tmp/repoE");
+    });
+  });
+
+  describe("unattributable forms (all -> null, never a guess)", () => {
+    it("~-prefixed cd target", () => {
+      const segs = segmentViewOf("cd ~/repo && git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![1]!.effectiveTarget).toBe(null);
+    });
+
+    it("~-prefixed git -C target", () => {
+      const segs = segmentViewOf("git -C ~/repo status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+    });
+
+    it("quoted git -C value (double-quoted, no internal whitespace) -> null, not the quote-included garbage the old aggregate's targetDir still carries", () => {
+      const command = 'git -C "/tmp/repoB" status';
+      expect(normalizeCommand(command).targetDir).toBe('"/tmp/repoB"'); // pre-existing, unchanged aggregate behaviour
+      const segs = segmentViewOf(command);
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+    });
+
+    it("quoted+whitespace git -C value (single-quoted, internal whitespace) -> null on every fragment", () => {
+      const segs = segmentViewOf("git -C '/tmp/repo B' status");
+      expect(segs).not.toBeNull();
+      for (const seg of segs!) {
+        expect(seg.ownTarget).toBe(null);
+        expect(seg.effectiveTarget).toBe(null);
+      }
+    });
+
+    it("quoted cd target (single-quoted, internal whitespace) -> null, not the dequoted value the old aggregate's leadingCd still carries", () => {
+      const command = "cd '/tmp/repo B' && git status";
+      expect(normalizeCommand(command).targetDir).toBe("/tmp/repo B"); // pre-existing, unchanged aggregate behaviour
+      const segs = segmentViewOf(command);
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![1]!.effectiveTarget).toBe(null);
+    });
+
+    it("command substitution in a cd target ($(pwd)/T) -> null on every fragment, not the bare '$' fragment left by the boundary split", () => {
+      const segs = segmentViewOf("cd $(pwd)/T && git status");
+      expect(segs).not.toBeNull();
+      for (const seg of segs!) {
+        expect(seg.ownTarget).toBe(null);
+        expect(seg.effectiveTarget).toBe(null);
+      }
+    });
+
+    it("command substitution in a git -C target ($(pwd)/sub) -> null (already isGit:false via the pre-existing malformed/no-subcommand path)", () => {
+      const segs = segmentViewOf("git -C $(pwd)/sub status");
+      expect(segs).not.toBeNull();
+      for (const seg of segs!) {
+        expect(seg.ownTarget).toBe(null);
+        expect(seg.effectiveTarget).toBe(null);
+      }
+    });
+
+    it("backtick command substitution in a cd target -> null", () => {
+      const segs = segmentViewOf("cd `pwd` && git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![1]!.effectiveTarget).toBe(null);
+    });
+
+    it("bare cd with no argument -> names nothing itself", () => {
+      const segs = segmentViewOf("cd && git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+      expect(segs![1]!.effectiveTarget).toBe(null);
+    });
+
+    // D-014 (fix round, run 2026-08-02-per-repo-gate-scoping-redesign): the
+    // test right above never actually exercises "does not touch the
+    // basis" in a way that could tell RESET apart from INHERIT — there is
+    // no preceding basis to either touch or leave alone (null either way).
+    // A bare `cd` genuinely changes directory (to `$HOME`), so it must
+    // RESET a real preceding basis, not silently keep carrying it forward.
+    // RED against pre-fix `computeSegmentTarget` (measured: the trailing
+    // git-status segment's `effectiveTarget` was `"/tmp/repoD"`, not
+    // `null` — the pre-fix code left a bare `cd` untouched as "not
+    // cd-shaped", which passed the basis through unchanged).
+    it("cd /tmp/repoD && cd && git status -> null: a bare cd RESETS a real preceding basis (it moves to $HOME)", () => {
+      const segs = segmentViewOf("cd /tmp/repoD && cd && git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoD");
+      expect(segs![1]!.ownTarget).toBe(null);
+      expect(segs![1]!.effectiveTarget).toBe(null);
+      expect(segs![2]!.text).toBe("git status");
+      expect(segs![2]!.effectiveTarget).toBe(null);
+    });
+
+    it("cd with a flag -> not recognised as cd-shaped (three tokens, not two)", () => {
+      const segs = segmentViewOf("cd -P /tmp/x && git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![1]!.effectiveTarget).toBe(null);
+    });
+
+    // D-014, same discipline as the bare-`cd` pair right above: a flagged
+    // `cd` (`cd -P /tmp/x`) genuinely changes directory too — it must
+    // RESET a real preceding basis, not inherit it. RED against pre-fix
+    // code (measured: `"/tmp/repoD"`, not `null`, for the trailing
+    // git-status segment).
+    it("cd /tmp/repoD && cd -P /tmp/x && git status -> null: a flagged cd RESETS a real preceding basis", () => {
+      const segs = segmentViewOf("cd /tmp/repoD && cd -P /tmp/x && git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoD");
+      expect(segs![1]!.ownTarget).toBe(null);
+      expect(segs![1]!.effectiveTarget).toBe(null);
+      expect(segs![2]!.text).toBe("git status");
+      expect(segs![2]!.effectiveTarget).toBe(null);
+    });
+
+    // D-014: `pushd`/`popd` are not tracked as directory-changing by this
+    // module's own OWN-target extraction (module header: "pushd/popd ...
+    // mirrors bash-prefix-parse.ts's own scope"), but both genuinely
+    // change the shell's directory — a real preceding basis must not
+    // survive one either. Not one of the "vacuum-green" trio named in the
+    // fix task, but the identical reset class, so pinned alongside them.
+    it("cd /tmp/repoD && pushd /tmp/other && git status -> null: pushd RESETS a real preceding basis", () => {
+      const segs = segmentViewOf("cd /tmp/repoD && pushd /tmp/other && git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoD");
+      expect(segs![2]!.text).toBe("git status");
+      expect(segs![2]!.effectiveTarget).toBe(null);
+    });
+
+    it("cd /tmp/repoD && popd && git status -> null: popd RESETS a real preceding basis", () => {
+      const segs = segmentViewOf("cd /tmp/repoD && popd && git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoD");
+      expect(segs![2]!.text).toBe("git status");
+      expect(segs![2]!.effectiveTarget).toBe(null);
+    });
+
+    // D-014: `cd -` (goes to `$OLDPWD`) is its own explicit member of the
+    // reset list, distinct from "flagged cd" — pinned on its own.
+    it("cd /tmp/repoD && cd - && git status -> null: 'cd -' RESETS a real preceding basis", () => {
+      const segs = segmentViewOf("cd /tmp/repoD && cd - && git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoD");
+      expect(segs![2]!.text).toBe("git status");
+      expect(segs![2]!.effectiveTarget).toBe(null);
+    });
+
+    it("VAR=value before cd -> narrower than the old aggregate's leadingCd on purpose (documented ceiling): not recognised, basis stays null", () => {
+      const command = "A=1 cd /tmp/T && git status";
+      expect(normalizeCommand(command).targetDir).toBe("/tmp/T"); // pre-existing aggregate DOES resolve this one
+      const segs = segmentViewOf(command);
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![1]!.effectiveTarget).toBe(null);
+    });
+  });
+
+  describe("truncated (> MAX_NORMALIZE_LENGTH) -> null, not an array", () => {
+    it("returns null above the length bound", () => {
+      const oversized = "git status " + "x".repeat(MAX_NORMALIZE_LENGTH);
+      expect(oversized.length).toBeGreaterThan(MAX_NORMALIZE_LENGTH);
+      expect(segmentViewOf(oversized)).toBe(null);
+    });
+
+    it("does not truncate at exactly the bound", () => {
+      const atBound = "git status " + "x".repeat(MAX_NORMALIZE_LENGTH - "git status ".length);
+      expect(atBound.length).toBe(MAX_NORMALIZE_LENGTH);
+      expect(segmentViewOf(atBound)).not.toBeNull();
+    });
+  });
+
+  describe("empty / non-string input -> [] (never null, null is reserved for truncation)", () => {
+    it("empty string", () => {
+      expect(segmentViewOf("")).toEqual([]);
+    });
+
+    it("non-string input", () => {
+      expect(segmentViewOf(null as unknown as string)).toEqual([]);
+      expect(segmentViewOf(undefined as unknown as string)).toEqual([]);
+    });
+  });
+
+  describe("never throws", () => {
+    const malformed = [
+      "",
+      "   ",
+      "git",
+      "'",
+      '"',
+      "cd '",
+      "env -C",
+      "git -C",
+      "git --git-dir",
+      "git --work-tree",
+      "\n\n\n",
+      ";;;;&&&&||||((((",
+      "git".repeat(10000),
+      String.fromCharCode(0, 1, 2, 3) + "git status",
+      "FOO=" + "x".repeat(5000) + " git status",
+      "env -S 'echo hi; git status'",
+      "cd",
+      "cd -P /tmp/x",
+    ];
+    for (const command of malformed) {
+      it(`does not throw on ${JSON.stringify(command.slice(0, 40))}`, () => {
+        expect(() => segmentViewOf(command)).not.toThrow();
+      });
+    }
+  });
+
+  // O(length): the length-bound test above already exercises the largest
+  // permitted input; this pins that a large, many-segment command still
+  // returns promptly, mirroring `normalizeCommand`'s own F3 perf guard —
+  // `computeSegmentTarget`'s extra per-segment work is O(1) additional
+  // work inside the SAME walk, not a second pass over the string.
+  describe("O(length): bounded cost, no additional pass", () => {
+    it("a >=100KB adversarial command (many segments, one boundary kind that never occurs) stays under a fixed time budget", () => {
+      const segment = "cd /tmp/x;";
+      const command = segment.repeat(Math.floor(MAX_NORMALIZE_LENGTH / segment.length));
+      expect(command.length).toBeGreaterThanOrEqual(MAX_NORMALIZE_LENGTH - 10);
+      expect(command).not.toContain("(");
+
+      const start = process.hrtime.bigint();
+      segmentViewOf(command);
+      const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+      expect(elapsedMs).toBeLessThan(300);
+    });
+  });
+
+  // amp-aware pass stays target-free: the type-level pin
+  // (`AmpAwareNormalizedCommand` has exactly `{normalized, truncated}`,
+  // asserted in the "return type carries no targetDir/targetBase" describe
+  // block above) is untouched by this task — `segmentViewOf` offers no
+  // amp-aware variant at all, so there is nothing new to pin here beyond
+  // that existing guard staying green.
+
+  describe("existing behaviour is unaffected (spot-check: normalizeCommand's aggregate is untouched by this task)", () => {
+    it("targetDir extraction still resolves the pre-existing forms exactly as before", () => {
+      expect(normalizeCommand("env -C /tmp/repoA git status").targetDir).toBe("/tmp/repoA");
+      expect(normalizeCommand("git -C /tmp/repoB status").targetDir).toBe("/tmp/repoB");
+      expect(normalizeCommand("cd /tmp/repoD && git status").targetDir).toBe("/tmp/repoD");
+      expect(normalizeCommand("cd /tmp/T && git -C sub status").targetDir).toBe("sub");
+      expect(normalizeCommand("cd /tmp/T && git -C sub status").targetBase).toBe("/tmp/T");
+    });
+
+    it("G1 non-git-segment ambiguity is still null, unaffected by the new per-segment cd-basis tracking", () => {
+      expect(
+        normalizeCommand("git -C /tmp/repoB rev-parse HEAD && gh pr merge 123").targetDir,
+      ).toBe(null);
     });
   });
 });

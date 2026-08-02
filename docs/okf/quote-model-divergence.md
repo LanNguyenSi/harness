@@ -3,7 +3,7 @@ type: overview
 title: Shell quote models, measured divergence against bash
 description: The policy engine has three independent shell-word models plus a raw-regex trigger layer. This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-08-01T13:15:00Z
+timestamp: 2026-08-02T20:15:00Z
 sources:
   - src/runtime/command-normalize.ts
   - src/cli/init/composer.ts
@@ -54,6 +54,32 @@ ausgelieferten 0.42.0, dem der Normaliser aus PR #383 ganz fehlt). Er
 bleibt als Messung gegen `c423880` gültig; die reinen `&`-Zeilen in der
 K4-Aufschlüsselung und in der Fail-open-Tabelle beschreiben den
 Vor-Fix-Stand der Trigger-Ebene, nicht den heutigen.
+
+**Empfehlung 3 (`98ad072f` als struktureller Blocker für K1) ist inzwischen
+umgesetzt und ausgeliefert:** `src/runtime/command-normalize.ts` gewinnt
+eine reine Pro-Segment-Sicht (`segmentViewOf`/`CommandSegment`, eigenes
+Ziel + komponiertes effektives Ziel), und `src/runtime/intercept.ts`
+wertet eine `${REPO}`/`${BRANCH}`/`at_head`-tragende Policy jetzt pro
+distinktem, vom Segment attribuierten Repository-Kontext aus, additiv zum
+cwd-Kontext, der NIE fällt (`resolveAttributedContexts`, Entscheidung
+D-021 in `.ai/runs/2026-08-02-per-repo-gate-scoping-redesign/03-decisions.md`
+— vier unabhängige Review-Runden maßen je einen eigenen Fail-open in
+einer früheren REPLACE-Variante der Attribution, bevor der additive
+Entwurf strukturell dagegen immun gemacht wurde). Das schließt K1s
+eigentliche Beobachtung ("die Modelle sind komplementär, nicht
+redundant, 6 von 8 Formen divergent") NICHT durch Konsolidierung der
+beiden Extraktionsmodule — `bash-prefix-parse.cdTarget` und
+`command-normalize`s neue Segment-Sicht bleiben zwei getrennte Module —
+sondern macht die Divergenz für den `${REPO}`/`${BRANCH}`/`at_head`-Kanal
+ungefährlich: eine falsch (oder gar nicht) attribuierte Zielangabe kann
+das cwd-Requirement nie ersetzen, nur ergänzen. Gemessen, nicht nur
+behauptet: `scripts/measure-additive-attribution-matrix.mjs`
+(`npm run measure:additive-attribution-matrix -- --control <dir>`) fährt
+6 Trennzeichen x 8 Formen = 48 Zellen gegen den ausgelieferten 0.43.0-
+Kontrollbau und meldete 0/48 Zellen schwächer als 0.43.0 bei diesem Lauf.
+Der `cdTarget`-Kanal von `bash-prefix-parse.ts` selbst (Risk-Gate-Kontext,
+nicht die `${REPO}`/`${BRANCH}`-Builtins) ist von `98ad072f` unberührt und
+bleibt K1s offene Beobachtung.
 
 ## Kurzfassung
 

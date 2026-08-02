@@ -189,6 +189,81 @@ To use this with a different check, change the `slop-detector` call
 in `run:` and the ledger tag prefix. The hook wiring, the trigger
 regex, the `within:` value, all transfer.
 
+## Per-policy target resolution: which repository do `${REPO}`/`${BRANCH}`/`at_head` resolve against?
+
+Any policy whose `requires.ledger_tag` references `${REPO}` or `${BRANCH}`,
+or that sets `requires.at_head: true`, is evaluated per REPOSITORY, not
+once per event (task `98ad072f`). Most policy authors never need to think
+about this — Recipe B above already gets it "for free" — but it matters
+the moment a `bash_match` trigger can fire on a command that names a git
+repository other than the session's own cwd (`git -C <path>`, `env -C
+<path> git ...`, a leading `cd <path> &&`).
+
+**Additive, not exclusive.** The session's own cwd is ALWAYS one of the
+contexts evaluated — never dropped, regardless of what a command names
+elsewhere. When a trigger-satisfying segment ALSO names a distinct,
+resolvable target (its own `-C`/`env -C`/`--git-dir`, or a target
+inherited from a preceding `cd` earlier in the same command), that
+target's context is evaluated TOO, side by side with cwd's — the policy's
+`requires:` must be satisfied against BOTH for the command to pass. A
+single `git -C <B> push` from a checkout of repo A therefore now demands
+evidence in EACH repository the command touches, not just the one the
+session started in.
+
+**When a target gets attributed.** The engine re-tests the policy's own
+`bash_match` against each segment of the command individually (the same
+segmentation the trigger already matched against). A segment is
+attributed a target when it is itself one of the segments that satisfies
+the trigger AND it names — or inherits — a resolvable directory:
+
+- its own invocation carries exactly one recognised repo-relocating
+  option (`-C`, `--git-dir`, or a wrapping `env -C`/`--chdir`), or
+- no such option of its own, but a `cd <path>` segment earlier in the
+  SAME command genuinely persists to it (real bash semantics — a `cd`
+  inside a subshell, before a `cd -`, or before a pipe stage does not
+  count; see `command-normalize.ts`'s `CommandSegment.effectiveTarget`
+  doc comment for the exact composition rules).
+
+**Fallback to cwd only (no distinct second context).** A command still
+evaluates against the session's cwd alone — identical to a policy with no
+attribution at all — whenever:
+
+- the policy has no `bash_match` trigger (an MCP-tool-triggered policy:
+  attribution is a Bash-command concept only);
+- the whole-command match came ONLY from the ampersand-aware third
+  normalisation arm (a bare `&` boundary the primary segmentation cannot
+  itself split on) — no individual segment can be attributed;
+- the trigger matched the WHOLE, unsplit command text (a malformed
+  `bash_match` regex, or one whose match genuinely spans more than one
+  segment) rather than any single segment;
+- the named target's own composition is unattributable — a relative
+  `-C`/`--git-dir` value after a preceding `cd` (composing the real path
+  is deliberately not this module's job), a `~`-prefixed value, a quoted
+  or command-substitution value, `--work-tree` on its own (it does not
+  relocate the git-dir, so it never proves a target), or more than one
+  repo-relocating option in the same invocation (git composes those
+  cumulatively; the module refuses to guess which one wins);
+- the named target resolves to the SAME repository identity as cwd (a
+  subdirectory of the cwd repo reached via `-C`, or a symlink into it) —
+  this collapses into the single cwd context rather than a spurious
+  duplicate;
+- the named target is not inside any git repository at all.
+
+**The cross-repo consequence.** Because attribution is additive, holding
+evidence for ONLY the target repository named by a `-C`/`cd` is no longer
+enough to satisfy a per-repo policy — the session's own cwd repo needs its
+own evidence too, and vice versa. If your workflow legitimately runs
+`git -C <other-repo> ...` (a monorepo helper script, a multi-repo release
+script, CI tooling), record the evidence (e.g. `harness preflight`) in
+BOTH repositories before the gated verb, not only the one the command
+names.
+
+**The bound.** A single event naming more than 4 distinct repository
+targets for one policy fails CLOSED — one deny (or the policy's own
+`warn`/`require_approval` enforcement) naming the ambiguity, without
+querying the ledger for any of them — rather than silently evaluating an
+unbounded number of contexts.
+
 ## Recipe C: operator-only unconditional deny (no self-satisfiable `requires:`)
 
 Recipes A and B are **process gates** (tripwire 4): they name a
