@@ -6,28 +6,37 @@
 // command is about to run on a branch whose current tip exactly matches
 // a merged-tip fact the producer recorded (see hook-post-merge-gate-record.ts).
 //
-// Evaluation order — deliberate, and pinned by the self-lock test suite:
+// Evaluation order — deliberate, and pinned by the self-lock test suite
+// (task 19356be7 REVERSED the original escape-first ordering; the escape
+// allowlist no longer short-circuits the whole command):
 //
 //   1. Parse stdin. Malformed JSON, a non-Bash tool, or an empty command
 //      all ALLOW immediately (nothing to classify).
 //   2. Pause sentinel (operator kill-switch) — same convention as every
 //      other pack hook.
-//   3. ESCAPE ALLOWLIST — checked BEFORE manifest load, pack lookup, or
-//      any ledger query. `git switch`/`checkout`/`pull`/`fetch`,
-//      `git branch -d`/`-D`, `git stash list`/`show`, and any
-//      `harness ...` command ALWAYS pass, unconditionally, with NO
-//      dependency on whether the manifest or the ledger are reachable.
-//      This is the recovery path the deny message itself recommends; it
-//      must never be starved by an unrelated failure (the incident class
-//      this guards against: a different gate once got blocked alongside
-//      its own recovery command, and only the operator could unstick it).
-//   4. CURATED MUTATION MATCH — commands outside the curated list
-//      (git commit/add/push/merge/rebase/cherry-pick/revert/reset/
-//      stash pop|apply, gh pr create/merge) pass through untouched.
-//   5. Manifest load, pack-enabled check, git-context resolution
+//   3. GATE-ELIGIBILITY CLASSIFICATION (`isGateEligibleCommand`) — checked
+//      BEFORE manifest load, pack lookup, or any ledger query: the curated
+//      mutation matcher (git commit/add/push/merge/rebase/cherry-pick/
+//      revert/reset/stash pop|apply, gh pr create/merge), applied after
+//      harness-attached quoted-heredoc bodies are stripped. Commands it
+//      does not match ALLOW immediately, with NO dependency on whether the
+//      manifest or the ledger are reachable — that unconditionally covers
+//      the whole recovery path the deny message recommends (`git switch`/
+//      `checkout`/`pull`/`fetch`, `git branch -d`/`-D`, `git stash list`/
+//      `show`, bare `harness ...` commands including report heredocs),
+//      because none of those are curated mutations (verb disjointness,
+//      pinned). The recovery path must never be starved by an unrelated
+//      failure (the incident class this guards against: a different gate
+//      once got blocked alongside its own recovery command, and only the
+//      operator could unstick it).
+//      DENY WINS when a command mixes both: `harness preflight && git
+//      push origin master` — the documented normal workflow spelling —
+//      used to skip the gate entirely under escape-first (task 19356be7,
+//      measured); it is now classified by its mutation half.
+//   4. Manifest load, pack-enabled check, git-context resolution
 //      (detached HEAD / no-repo ALLOWS — nothing to compare), then the
 //      ledger query.
-//   6. DENY only when the current branch tip exactly matches a recorded
+//   5. DENY only when the current branch tip exactly matches a recorded
 //      `post-merge-gate:merged:<repo>:<branch>:<sha>` fact.
 //
 // Fail posture: OPEN. A manifest-load failure or a degraded ledger both
@@ -38,8 +47,8 @@
 // post-merge-gate-runtime.ts's header for the full rationale.
 
 import {
-  isCuratedMutationCommand,
   isEscapeCommand,
+  isGateEligibleCommand,
   MERGED_TAG_PREFIX,
   mergedTagMatchKey,
   PACK_NAME,
@@ -188,7 +197,9 @@ function blockJson(
       ` moves the tip and this check no longer applies.\n` +
       `\n` +
       `Escape hatches (always allowed, independent of this gate): git switch/checkout, git pull/fetch,` +
-      ` git branch -d/-D, git stash list/show, and any \`harness ...\` command.`;
+      ` git branch -d/-D, git stash list/show, and any \`harness ...\` command — each as its OWN command.` +
+      ` Chaining one of them with a history-mutating command does not exempt the mutation: run the` +
+      ` recovery steps separately.`;
   }
   return JSON.stringify({
     decision: "block",
@@ -253,18 +264,24 @@ export async function runPackHookPostMergeGateCli(
     return { exitCode: 0, blocked: false, diagnostic };
   }
 
-  // ESCAPE ALLOWLIST — checked FIRST, unconditionally, before manifest
-  // load, pack lookup, or any ledger query. See module header.
-  if (isEscapeCommand(command)) {
-    const diagnostic = `escape command matched; allowing regardless of ledger/manifest state`;
+  // GATE-ELIGIBILITY CLASSIFICATION — checked FIRST, before manifest
+  // load, pack lookup, or any ledger query, so every non-eligible command
+  // (the whole recovery path included) can never be starved by an
+  // unreachable manifest/ledger. Deny wins over the escape vocabulary
+  // when a command mixes both (task 19356be7). See module header.
+  if (!isGateEligibleCommand(command)) {
+    const diagnostic = isEscapeCommand(command)
+      ? `command is not in the curated v1 deny-scope (recovery/escape vocabulary matched); allowing regardless of ledger/manifest state`
+      : `command is not in the curated v1 deny-scope; allowing`;
     note(diagnostic);
     return { exitCode: 0, blocked: false, diagnostic };
   }
-
-  if (!isCuratedMutationCommand(command)) {
-    const diagnostic = `command is not in the curated v1 deny-scope; allowing`;
-    note(diagnostic);
-    return { exitCode: 0, blocked: false, diagnostic };
+  if (isEscapeCommand(command)) {
+    // Observability only — the decision is already made: a command that
+    // chains recovery vocabulary WITH a curated mutation is judged by its
+    // mutation half (the escape-first ordering this replaced let exactly
+    // these chains skip the gate).
+    note("recovery/escape vocabulary present but a curated mutation is chained; deny-scope wins (task 19356be7)");
   }
 
   // Fail-open manifest load (opposite of branch-protection's fail-closed):

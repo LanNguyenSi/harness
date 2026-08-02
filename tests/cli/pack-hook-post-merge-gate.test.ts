@@ -87,11 +87,14 @@ const SHA_MERGED = "a".repeat(40);
 const SHA_OTHER = "b".repeat(40);
 
 // ---------------------------------------------------------------------------
-// Self-lock table (03-decisions.md): the escape allowlist must ALWAYS pass,
-// including when the ledger cannot be reached at all — checked BEFORE any
-// manifest load or ledger query. Innocent neighbours (the curated mutation
-// list) must stay denied on the exact same fixture. Mirrors
-// tests/cli/init-full-template-kill-switch-deny.test.ts's it.each pattern.
+// Self-lock table (03-decisions.md, re-pinned for task 19356be7): every
+// command in the recovery vocabulary must ALWAYS pass as its own command,
+// including when the ledger cannot be reached at all — the gate-eligibility
+// classification runs BEFORE any manifest load or ledger query, and none of
+// these verbs are curated mutations (verb disjointness). Innocent
+// neighbours (the curated mutation list) must stay denied on the exact same
+// fixture. Mirrors tests/cli/init-full-template-kill-switch-deny.test.ts's
+// it.each pattern.
 // ---------------------------------------------------------------------------
 
 const ESCAPE_COMMANDS = [
@@ -178,27 +181,54 @@ describe("runPackHookPostMergeGateCli — escape self-lock table", () => {
   );
 });
 
-// Coordinator review follow-up (post-merge-gate): the escape-first ordering
-// (checked before the curated-mutation match and before any manifest/ledger
-// access — module header + docs/policy-packs/post-merge-gate.md "Known
-// gaps: Chained-escape bypass") is a BINDING decision, not an incidental
-// implementation detail. Neither test above actually proves the ORDERING —
-// every escape command in ESCAPE_COMMANDS is pure escape (never also
-// curated), and every innocent neighbour is pure curated (never also
-// escape), so a hook that checked curated-match first and escape second
-// would still pass both tables. The two tests below use a command that is
-// BOTH escape AND curated at once — the only shape that actually
-// distinguishes "escape checked first" from "escape checked after (or
-// instead of) curated" — and would go red if a future edit reordered the
-// checks or moved the escape check behind the ledger query.
-describe("runPackHookPostMergeGateCli — escape-first ordering guard (pins the binding decision)", () => {
-  it("a command that is BOTH escape and curated is allowed, and the ledger is never queried", async () => {
+// Task 19356be7: DENY WINS over the escape vocabulary — the REVERSAL of
+// the original escape-first binding decision, itself now the binding
+// decision, pinned by the only shape that can distinguish the two
+// orderings: a command that is BOTH escape and curated at once. Under
+// escape-first every one of these chains skipped the gate entirely
+// (`harness preflight && git push origin master` is the documented normal
+// workflow spelling, not an edge case). These pins are the task's
+// MUTATION PROBE: re-adding an `isEscapeCommand(command)` short-circuit
+// ahead of the deny classification turns them red.
+describe("runPackHookPostMergeGateCli — deny-wins precedence (task 19356be7 pinned decision table)", () => {
+  // The four measured lines from the task description, verbatim, plus the
+  // reversed chain order and a `;` spelling. Expected decision per line
+  // under the chosen variant (deny-wins): BLOCKED whenever the tip
+  // matches the recorded merged fact.
+  it.each([
+    "git push origin master",
+    "git switch master && git push origin master",
+    "git stash list && git push origin master",
+    "harness preflight && git push origin master",
+    "git commit -am x && git switch main",
+    "harness preflight; git push origin master",
+  ])("blocks %s on a merged tip — a chained escape verb no longer exempts the mutation", async (cmd) => {
+    const repo = makeRepoFixture("svc", "feat/cool", SHA_MERGED);
+    const { stream: out, output: outBuf } = captureStream();
+    const result = await runPackHookPostMergeGateCli({
+      stdin: streamFrom(eventJson({ cwd: repo, tool_input: { command: cmd } })),
+      stdout: out,
+      stderr: captureStream().stream,
+      manifest: manifestWithPack(),
+      ledgerQuery: async () => [mergedEntry("svc", "feat/cool", SHA_MERGED)],
+    });
+    expect(result.blocked).toBe(true);
+    expect(JSON.parse(outBuf()).decision).toBe("block");
+  });
+
+  // The deny message's own recommended recovery chain must stay free, and
+  // must stay free STRUCTURALLY — allowed before the ledger is ever
+  // consulted, even when a merged fact exists and the ledger would be
+  // reachable. Lockout would be worse than the gap.
+  it.each([
+    "git switch master && git pull --ff-only",
+    "git switch master && git pull --ff-only && git branch -d feat/cool",
+    "git fetch origin && git switch master",
+  ])("the documented recovery chain %s stays free without any ledger query", async (cmd) => {
     const repo = makeRepoFixture("svc", "feat/cool", SHA_MERGED);
     let ledgerQueryCalls = 0;
     const result = await runPackHookPostMergeGateCli({
-      stdin: streamFrom(
-        eventJson({ cwd: repo, tool_input: { command: "harness pause && git commit -am x" } }),
-      ),
+      stdin: streamFrom(eventJson({ cwd: repo, tool_input: { command: cmd } })),
       stdout: captureStream().stream,
       stderr: captureStream().stream,
       manifest: manifestWithPack(),
@@ -211,24 +241,54 @@ describe("runPackHookPostMergeGateCli — escape-first ordering guard (pins the 
     expect(ledgerQueryCalls).toBe(0);
   });
 
-  // Documented behavior (docs/policy-packs/post-merge-gate.md "Known gaps:
-  // Chained-escape bypass"), pinned here so it fails loud instead of
-  // silently drifting if the matcher is ever changed. Order reversed from
-  // the test above (mutation FIRST, escape SECOND) — same allow outcome
-  // either way, because the escape matcher scans the WHOLE command string,
-  // not just its first clause.
-  it("chained mutation-then-escape is allowed (documented gap, not a bug): git commit && git switch", async () => {
+  // Deadlock guard (decision D2): the understanding gate demands exactly
+  // this heredoc shape, so a report BODY mentioning mutation verbs as
+  // text must never make the approve call gate-eligible. The body below
+  // hits both a `\n`-anchored deny verb and a `&&`-anchored one.
+  it("allows `harness approve understanding` with a quoted-heredoc report body that mentions git push, without any ledger query", async () => {
+    const repo = makeRepoFixture("svc", "feat/cool", SHA_MERGED);
+    let ledgerQueryCalls = 0;
+    const command = [
+      "harness approve understanding <<'UNDERSTANDING_REPORT'",
+      "## Understanding Report",
+      "",
+      "Verification:",
+      "git push origin master",
+      "&& git commit -m x",
+      "UNDERSTANDING_REPORT",
+    ].join("\n");
+    const result = await runPackHookPostMergeGateCli({
+      stdin: streamFrom(eventJson({ cwd: repo, tool_input: { command } })),
+      stdout: captureStream().stream,
+      stderr: captureStream().stream,
+      manifest: manifestWithPack(),
+      ledgerQuery: async () => {
+        ledgerQueryCalls += 1;
+        return [mergedEntry("svc", "feat/cool", SHA_MERGED)];
+      },
+    });
+    expect(result.blocked).toBe(false);
+    expect(ledgerQueryCalls).toBe(0);
+  });
+
+  // The strip is harness-scoped: a quoted heredoc body handed to a shell
+  // interpreter REALLY executes (bash ground truth, decision D2) and must
+  // stay blocked, exactly as it is today.
+  it("still blocks a quoted heredoc whose consumer executes the body: bash <<'EOF' ... git push ... EOF", async () => {
     const repo = makeRepoFixture("svc", "feat/cool", SHA_MERGED);
     const result = await runPackHookPostMergeGateCli({
       stdin: streamFrom(
-        eventJson({ cwd: repo, tool_input: { command: "git commit -am x && git switch main" } }),
+        eventJson({
+          cwd: repo,
+          tool_input: { command: "bash <<'EOF'\ngit push origin master\nEOF" },
+        }),
       ),
       stdout: captureStream().stream,
       stderr: captureStream().stream,
       manifest: manifestWithPack(),
       ledgerQuery: async () => [mergedEntry("svc", "feat/cool", SHA_MERGED)],
     });
-    expect(result.blocked).toBe(false);
+    expect(result.blocked).toBe(true);
   });
 });
 

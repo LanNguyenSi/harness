@@ -29,10 +29,22 @@
 //     scope" section). Read-only git (status/log/diff/branch) and
 //     unrelated shell are never touched.
 //
-//   - The escape allowlist is checked FIRST in the blocker, unconditionally,
-//     before manifest load or any ledger query — see hook-post-merge-gate.ts.
-//     This module only supplies the matcher; the ordering guarantee lives
-//     in the hook, not here.
+//   - DENY WINS over the escape allowlist (task 19356be7, REVERSES the
+//     original escape-first decision): the blocker classifies a command as
+//     gate-eligible iff the curated mutation matcher fires on the command
+//     AFTER harness-attached quoted-heredoc bodies are stripped
+//     (`isGateEligibleCommand` below). The escape allowlist no longer
+//     short-circuits the whole command — under escape-first, any chained
+//     command containing an escape verb anywhere (`harness preflight &&
+//     git push origin master`, the documented normal workflow) skipped the
+//     gate entirely. Measured before changing: the task's three candidate
+//     shapes (per-segment, deny-wins, escape-at-start-only) are 0-divergent
+//     over a 62-row corpus — a consequence of the pinned verb disjointness
+//     between the escape and deny lists — so the simplest (deny-wins) is
+//     implemented. The recovery-never-starved property is preserved
+//     structurally: a non-eligible command is allowed before any manifest
+//     load or ledger query, exactly where the escape short-circuit used to
+//     sit (see hook-post-merge-gate.ts for the ordering).
 //
 //   - Fails OPEN (allows) when the ledger is unreachable, unlike
 //     branch-protection's fail-closed posture: without the ledger,
@@ -118,39 +130,52 @@ export const CURATED_MUTATION_BASH_RE =
 
 /**
  * Escape allowlist, git verbs (03-decisions.md): the exact recovery path
- * the deny message recommends, plus read-only stash inspection. Checked
- * BEFORE the curated-mutation match and before any manifest/ledger access
- * — see hook-post-merge-gate.ts for the ordering guarantee.
+ * the deny message recommends, plus read-only stash inspection. Since task
+ * 19356be7 this list no longer short-circuits the blocker — the deny
+ * match decides gate-eligibility, and every one of these verbs stays free
+ * simply because it is not a curated mutation (verb disjointness, pinned).
+ * The list remains the deny message's recovery vocabulary and a
+ * diagnostics aid.
  *
  * Task 76671e5a, DELIBERATELY LEFT on the old (no bare-`&`) boundary
- * alphabet: this is an ALLOW-list, not a deny/trigger, so broadening it is
- * the LOOSER — dangerous — direction. `isEscapeCommand` (below) is checked
- * FIRST and unconditionally by `hook-post-merge-gate.ts`, before the
- * curated-mutation deny match; widening this alternation would let MORE
- * commands skip the gate entirely, the opposite of what `d834a065` and the
- * broadenings above are for. Pinned by a regression test asserting this
- * regex's source never gains the `&|` boundary token.
+ * alphabet: this is an ALLOW-side matcher, so broadening it is the LOOSER
+ * direction. Its remaining consumers (diagnostics, docs interpolation)
+ * still must not silently widen what reads as "recovery". Pinned by a
+ * regression test asserting this regex's source never gains the `&|`
+ * boundary token.
  */
 export const ESCAPE_GIT_BASH_RE =
   /(?:^|\n|;|\||&&|\()\s*(?:\w+=\S+\s+)*git(?:\s+-C\s+\S+)?\s+(?:switch\b|checkout\b|pull\b|fetch\b|branch\s+-(?:d|D)\b|stash\s+(?:list|show)\b)/;
 
 /**
- * Escape allowlist, harness verbs (03-decisions.md): any invocation of
- * harness's own CLI (recovery commands like `harness session-start
- * branch-check`, diagnostics, a future self-check) always passes,
- * regardless of spelling — mirrors the `npx` / absolute-path /
- * `./node_modules/.bin` robustness the `deny-kill-switch-bash` regex in
+ * Escape allowlist, harness verbs (03-decisions.md): names any invocation
+ * of harness's own CLI (recovery commands like `harness session-start
+ * branch-check`, diagnostics, a future self-check), regardless of
+ * spelling — mirrors the `npx` / absolute-path / `./node_modules/.bin`
+ * robustness the `deny-kill-switch-bash` regex in
  * `src/cli/init/templates.ts` already established for the same class of
- * bypass concern.
+ * bypass concern. Since task 19356be7 its two jobs are (1) the deny
+ * message's / diagnostics' vocabulary (a bare harness command stays free
+ * via verb disjointness, not via a short-circuit) and (2) heredoc
+ * ATTRIBUTION: `stripHarnessHeredocBodies` below reuses it as the single
+ * source of truth for "this simple command is a harness invocation".
  *
  * Task 76671e5a: DELIBERATELY LEFT narrow, same reasoning as
- * `ESCAPE_GIT_BASH_RE` immediately above — an allow-list, checked first and
- * unconditionally, so broadening its boundary alphabet would only ever
- * widen the bypass surface.
+ * `ESCAPE_GIT_BASH_RE` immediately above — an allow-side matcher, so
+ * broadening its boundary alphabet is the loosening direction (and would
+ * now also widen which heredoc bodies get stripped).
  */
 export const ESCAPE_HARNESS_BASH_RE = /(?:^|\n|;|\||&&|\()\s*(?:\w+=\S+\s+)*(?:npx\s+|\S*\/)?harness\b/;
 
-/** True when `command` matches any escape pattern. Checked first, unconditionally. */
+/**
+ * True when `command` matches any escape pattern. Since task 19356be7
+ * this is DIAGNOSTICS ONLY — the blocker's decision is
+ * `isGateEligibleCommand` below; when escape and deny both match, deny
+ * wins. (Under the original escape-first ordering this function was the
+ * blocker's first, unconditional check, which let `harness preflight &&
+ * git push origin master` — the documented normal workflow — skip the
+ * gate entirely.)
+ */
 export function isEscapeCommand(command: string): boolean {
   return ESCAPE_GIT_BASH_RE.test(command) || ESCAPE_HARNESS_BASH_RE.test(command);
 }
@@ -158,6 +183,102 @@ export function isEscapeCommand(command: string): boolean {
 /** True when `command` matches the curated v1 deny-scope. */
 export function isCuratedMutationCommand(command: string): boolean {
   return CURATED_MUTATION_BASH_RE.test(command);
+}
+
+/**
+ * Heredoc operators with a QUOTED (or backslash-escaped) delimiter —
+ * `<<'X'`, `<<"X"`, `<<\X`, plus the `<<-` variants. Bash performs NO
+ * expansion and NO command substitution in such bodies, so as bash syntax
+ * they are pure stdin data. The `(?<!<)`/`(?!<)` guards exclude the `<<<`
+ * herestring operator (matching it would mis-consume following LINES as a
+ * body that bash never frames, an under-block). UNQUOTED delimiters are
+ * deliberately not matched: their bodies expand `$(...)`, which really
+ * executes (measured: a curated mutation inside `<<UR` + `$(...)` runs).
+ */
+const QUOTED_HEREDOC_OP_RE = /(?<!<)<<(-?)(?!<)\s*(?:'([^']+)'|"([^"]+)"|\\([^\s<>'"\\]+))/g;
+
+/**
+ * Simple-command boundary alphabet used ONLY to attribute a heredoc
+ * operator to the command that consumes it (text between the last
+ * boundary on the operator line and the `<<`). Matches the deny regex's
+ * own anchor set minus `\n` (attribution never crosses lines).
+ */
+const ATTRIBUTION_BOUNDARY_RE = /&&|&|;|\||\(/;
+
+/**
+ * Strip the BODIES (and terminator lines) of quoted-delimiter heredocs
+ * that are attached to a harness invocation, returning the remaining
+ * command text for deny classification. Task 19356be7, decision D2.
+ *
+ * WHY: with deny-wins precedence (see `isGateEligibleCommand`), an
+ * `harness approve understanding <<'UNDERSTANDING_REPORT'` call would
+ * become gate-eligible whenever the report BODY mentions a mutation verb
+ * at a boundary position — but that body is data on harness's stdin,
+ * never executed by bash. Blocking it would deadlock the understanding
+ * gate (which demands exactly this heredoc) against this gate;
+ * live-reproduced 2026-08-02 against the solution-acceptance push gate,
+ * where an Understanding Report containing a push literal was denied as
+ * if it were a push.
+ *
+ * WHY HARNESS-ONLY: a quoted heredoc body is inert as BASH syntax, but
+ * the consuming command can still execute it as a script — `bash <<'EOF'
+ * ... git push ... EOF` really runs the push (measured, bash ground
+ * truth) and is gate-eligible today; a general strip would free it. The
+ * harness CLI never executes its stdin as shell, so the strip is scoped
+ * to heredocs whose consuming simple command matches
+ * `ESCAPE_HARNESS_BASH_RE`. Non-harness inert heredocs (`cat <<'DOC'`)
+ * stay in the existing accepted false-positive class — status quo, not
+ * widened, not narrowed (general heredoc awareness is task 5b1b24fb).
+ *
+ * Mechanics: line-wise. The operator LINE itself is always kept (a chain
+ * after the operator — `... <<'UR' && git push` — sits on that line and
+ * stays visible; bash starts the body only on the NEXT line). Body lines
+ * are consumed up to the first line that equals the delimiter (`<<-`:
+ * after stripping leading tabs; a trailing `\r` is tolerated so a CRLF
+ * terminator cannot silently push the strip past real commands). An
+ * unterminated heredoc consumes to end of string — bash frames it the
+ * same way. Whole-line removal can never merge two half-tokens into a
+ * new match.
+ */
+export function stripHarnessHeredocBodies(command: string): string {
+  if (!command.includes("<<")) return command;
+  const lines = command.split("\n");
+  const out: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i]!;
+    out.push(line);
+    const ops = [...line.matchAll(QUOTED_HEREDOC_OP_RE)].filter((op) => {
+      const tail = line.slice(0, op.index).split(ATTRIBUTION_BOUNDARY_RE).pop() ?? "";
+      return ESCAPE_HARNESS_BASH_RE.test(tail);
+    });
+    i++;
+    for (const op of ops) {
+      const dashed = op[1] === "-";
+      const delim = op[2] ?? op[3] ?? op[4]!;
+      while (i < lines.length) {
+        const body = lines[i]!;
+        let cmp = dashed ? body.replace(/^\t+/, "") : body;
+        if (cmp.endsWith("\r")) cmp = cmp.slice(0, -1);
+        i++;
+        if (cmp === delim) break;
+      }
+    }
+  }
+  return out.join("\n");
+}
+
+/**
+ * The blocker's single classification entry point (task 19356be7): a
+ * command is gate-eligible iff the curated mutation matcher fires after
+ * harness-attached quoted-heredoc bodies are stripped. Everything else —
+ * recovery commands, read-only git, unrelated shell, harness invocations
+ * including report heredocs — is allowed by the hook BEFORE any manifest
+ * load or ledger query, preserving the recovery-never-starved property
+ * the escape-first ordering used to provide.
+ */
+export function isGateEligibleCommand(command: string): boolean {
+  return isCuratedMutationCommand(stripHarnessHeredocBodies(command));
 }
 
 /**
