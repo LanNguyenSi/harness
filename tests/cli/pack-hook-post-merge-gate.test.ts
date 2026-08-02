@@ -271,6 +271,30 @@ describe("runPackHookPostMergeGateCli — deny-wins precedence (task 19356be7 pi
     expect(ledgerQueryCalls).toBe(0);
   });
 
+  // The stderr note is the only signal in operator logs that deny-scope
+  // beat a chained recovery verb; without it, post-incident triage cannot
+  // tell "plain mutation blocked" from "chained escape overridden".
+  // Mutation-confirmed as previously uncovered (disabling the branch left
+  // the suite green).
+  it("logs the deny-wins note only when recovery vocabulary was actually present", async () => {
+    const repo = makeRepoFixture("svc", "feat/cool", SHA_MERGED);
+    const run = async (command: string): Promise<string> => {
+      const { stream: err, output: errOut } = captureStream();
+      await runPackHookPostMergeGateCli({
+        stdin: streamFrom(eventJson({ cwd: repo, tool_input: { command } })),
+        stdout: captureStream().stream,
+        stderr: err,
+        manifest: manifestWithPack(),
+        ledgerQuery: async () => [mergedEntry("svc", "feat/cool", SHA_MERGED)],
+      });
+      return errOut();
+    };
+    expect(await run("harness preflight && git push origin master")).toContain(
+      "deny-scope wins (task 19356be7)",
+    );
+    expect(await run("git push origin master")).not.toContain("deny-scope wins");
+  });
+
   // The strip is harness-scoped: a quoted heredoc body handed to a shell
   // interpreter REALLY executes (bash ground truth, decision D2) and must
   // stay blocked, exactly as it is today.

@@ -38,11 +38,14 @@
 //      when the CURRENT branch tip still equals a recorded merged tip
 //      for this repo+branch — an exact sha match, not ancestry, so a new
 //      commit (moving the tip) or a recycled branch name (a different
-//      tip) both fall silently outside the gate. An ESCAPE ALLOWLIST
-//      (git switch/checkout/pull/fetch, git branch -d/-D, git stash
-//      list/show, any `harness ...` command) is checked FIRST, before
-//      any manifest load or ledger query, so the recovery path can never
-//      be starved by an unrelated failure.
+//      tip) both fall silently outside the gate. GATE-ELIGIBILITY is
+//      classified FIRST, before any manifest load or ledger query, so
+//      the recovery vocabulary (git switch/checkout/pull/fetch, git
+//      branch -d/-D, git stash list/show, any `harness ...` command) can
+//      never be starved by an unrelated failure — none of those verbs is
+//      a curated mutation. Task 19356be7: DENY WINS when one command
+//      chains recovery vocabulary with a curated mutation; the escape
+//      list no longer short-circuits the whole command string.
 //
 // Fails OPEN when the ledger is unreachable (unlike branch-protection's
 // fail-closed posture): without the ledger, "merged" and "not merged"
@@ -147,7 +150,7 @@ function buildHooks(): Hook[] {
       blocking: "hard",
       budget_ms: 5000,
       description:
-        "Blocker: deny curated history-mutating Bash commands (git commit/add/push/merge/rebase/cherry-pick/revert/reset/stash pop|apply, gh pr create/merge) when the current branch tip matches a recorded merged tip. An escape allowlist (git switch/checkout/pull/fetch, git branch -d/-D, git stash list/show, any `harness ...` command) is checked first, unconditionally. Fails open when the ledger is unreachable.",
+        "Blocker: deny curated history-mutating Bash commands (git commit/add/push/merge/rebase/cherry-pick/revert/reset/stash pop|apply, gh pr create/merge) when the current branch tip matches a recorded merged tip. The recovery vocabulary (git switch/checkout/pull/fetch, git branch -d/-D, git stash list/show, any `harness ...` command) always passes as its own command, classified before any manifest or ledger access; chaining one of those with a curated mutation does NOT exempt the mutation. Fails open when the ledger is unreachable.",
     },
   ];
 }
@@ -263,7 +266,9 @@ ${runtime}${runtime === "codex" ? " (UNSUPPORTED — see \"Known gaps\" below; b
   (\`harness preflight && git push\`, \`git commit -am x && git switch
   main\`) skipped the gate entirely. The blocker now classifies by the
   curated mutation match alone (deny wins; measured 0-divergent from
-  per-clause evaluation thanks to the escape/deny verb disjointness).
+  per-clause evaluation thanks to the escape/deny verb disjointness —
+  escape-at-start-only was measured and rejected, it still exempts three
+  of the four lines this closed).
   Residual, measured and accepted: a deny verb as quoted TEXT in a
   chain (\`git pull && echo 'a && git push'\`) is gate-eligible even
   though bash never runs it — the existing accepted false-positive

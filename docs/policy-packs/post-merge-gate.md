@@ -227,13 +227,31 @@ binary; this pack has no version probe registered. Declaring
   `git commit -am x && git switch main`) skipped the gate entirely. The
   blocker now classifies by the curated mutation match alone (deny wins;
   measured 0-divergent from per-segment evaluation thanks to the
-  escape/deny verb disjointness). Residual cost, measured and accepted: a
-  deny verb appearing as quoted TEXT in a chain (`git pull && echo 'a &&
-  git push'`) is now gate-eligible even though bash never runs it — the
-  same existing accepted false-positive class as `echo "a&git push"`,
-  no longer rescued by a chained escape verb. Real blocks from this only
-  occur while the branch tip equals a recorded merged tip, and the
-  recovery vocabulary stays free.
+  escape/deny verb disjointness — variant (c), escape-at-start-only, was
+  measured and REJECTED because it still exempts three of the four pinned
+  lines). Residual cost, measured and accepted: a deny verb appearing as
+  quoted TEXT in a chain (`git pull && echo 'a && git push'`) is now
+  gate-eligible even though bash never runs it — the same existing
+  accepted false-positive class as `echo "a&git push"`, no longer rescued
+  by a chained escape verb. Real blocks from this only occur while the
+  branch tip equals a recorded merged tip, and the recovery vocabulary
+  stays free.
+- **The heredoc strip is a scanner, not a shell**: `stripHarnessHeredocBodies`
+  tracks quote state, concatenated delimiter words (`<<'U'"R"`), `<<-`,
+  `<<<`, and command-substitution boundaries, and it consumes the bodies of
+  ALL operators on a line in bash's own order so a `<<A <<'B'` pair cannot
+  make the expanding body vanish. It is still an approximation. Its failure
+  direction is an UNDER-block (a wrongly-consumed body hides lines bash
+  really runs), so anything it cannot resolve — an unterminated quote, a
+  delimiter bash would expand — strips NOTHING from the whole command.
+  Shapes that defeated the first, regex-based version are pinned as
+  regression tests. General heredoc/quote awareness for every `bash_match`
+  surface remains task `5b1b24fb`.
+- **Attribution crosses a bare `&`**: `sleep 0 & harness note <<'EOF'` is
+  attributed to the harness invocation, because bash really does start a
+  new command there. This is the one shape where the new classifier is
+  more permissive than the old escape-first one; bash runs no mutation in
+  it (the body is harness stdin). Pinned, not incidental.
 - **Inverted trust-boundary residual**: a merged fact written by any
   means other than the producer (e.g. directly via
   `mcp__grounding-mcp__ledger_add`) that happens to exactly match the

@@ -684,9 +684,11 @@ policy_packs:
   # blocker denies curated history-mutating commands (git commit/add/push/
   # merge/rebase/cherry-pick/revert/reset/stash pop|apply, gh pr create/
   # merge) while the current branch tip still exactly matches that
-  # recorded tip. An escape allowlist (git switch/checkout/pull/fetch,
-  # git branch -d/-D, git stash list/show, any `harness ...` command) is
-  # checked first, unconditionally, before any manifest or ledger access.
+  # recorded tip. The recovery vocabulary (git switch/checkout/pull/fetch,
+  # git branch -d/-D, git stash list/show, any `harness ...` command)
+  # always passes as its OWN command, classified before any manifest or
+  # ledger access. Chaining one of those with a curated mutation does NOT
+  # exempt the mutation (task 19356be7).
   # Fails OPEN (unlike branch-protection) when the ledger is unreachable.
   # DISABLED by default: a fresh gate, opt in once you've reviewed the
   # curated command list for your workflow. Full reference:

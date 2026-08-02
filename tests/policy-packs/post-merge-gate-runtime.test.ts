@@ -315,10 +315,12 @@ describe("ESCAPE_GIT_BASH_RE / ESCAPE_HARNESS_BASH_RE / isEscapeCommand", () => 
 // curated mutation matcher fires (after harness-attached quoted-heredoc
 // stripping); the escape vocabulary no longer short-circuits the whole
 // command. Variant chosen by measurement (.ai/runs/
-// 2026-08-02-post-merge-gate-escape-precedence/03-decisions.md): the
-// task's three candidate shapes — per-segment, deny-wins, escape-at-start
-// — are 0-divergent over a 62-row corpus because of the verb disjointness
-// pinned above, so the simplest (deny-wins) is implemented.
+// 2026-08-02-post-merge-gate-escape-precedence/03-decisions.md):
+// per-segment evaluation and deny-wins are 0-divergent over a 69-row
+// corpus because of the verb disjointness pinned above, so the simplest
+// (deny-wins) is implemented. Escape-at-start-only was measured and
+// REJECTED — it diverges on 26 rows and still exempts three of the four
+// lines pinned below.
 // ---------------------------------------------------------------------------
 
 describe("isGateEligibleCommand (task 19356be7) — pinned decision table", () => {
@@ -413,9 +415,16 @@ describe("stripHarnessHeredocBodies", () => {
     expect(stripHarnessHeredocBodies(cmd)).toBe(cmd.split("\n")[0]);
   });
 
-  it("handles <<- with tab-indented terminator", () => {
-    const cmd = "harness approve understanding <<-'UR'\n\tgit push\n\tUR";
-    expect(stripHarnessHeredocBodies(cmd)).toBe("harness approve understanding <<-'UR'");
+  // A line AFTER the terminator is what makes this discriminating. The
+  // earlier version of this test stopped at the terminator, so with the
+  // tab-strip deleted the loop simply ran to end-of-string and produced the
+  // SAME single operator line — the test could not fail (reviewer finding;
+  // mutation-confirmed: deleting the `\t` strip left the whole suite green).
+  it("handles <<- with tab-indented terminator, and resumes at the line after it", () => {
+    const cmd = "harness approve understanding <<-'UR'\n\tgit push\n\tUR\ngit status";
+    expect(stripHarnessHeredocBodies(cmd)).toBe(
+      "harness approve understanding <<-'UR'\ngit status",
+    );
   });
 
   it("tolerates a CRLF terminator line (strip must not run past it into real commands)", () => {
@@ -460,6 +469,76 @@ describe("stripHarnessHeredocBodies", () => {
   it("consumes multiple harness heredocs on one operator line sequentially", () => {
     const cmd = "harness thing <<'A' <<'B'\nbody a\nA\nbody b\nB\ngit status";
     expect(stripHarnessHeredocBodies(cmd)).toBe("harness thing <<'A' <<'B'\ngit status");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Review round 1: the strip's failure direction is UNDER-block — anything it
+// wrongly treats as a heredoc body disappears from classification, so lines
+// bash really executes stop being seen. A regex over the raw line could not
+// tell a real operator from the TEXT `"see <<'EOF' syntax"`. These six shapes
+// were each verified against real bash (PATH-stubbed sandbox: a curated
+// mutation genuinely runs in every one of them) and must stay gate-eligible.
+// ---------------------------------------------------------------------------
+
+describe("stripHarnessHeredocBodies — quote-aware scanning (under-block guards)", () => {
+  it.each([
+    [
+      "a `<<` inside double quotes is text, not an operator",
+      "harness note --msg \"see <<'EOF' syntax\"\ngit push origin master",
+    ],
+    [
+      "a `<<` inside single quotes is text, not an operator",
+      "harness note --msg 'see <<\"EOF\" syntax'\ngit push origin master",
+    ],
+    [
+      "a fake operator in quotes must not swallow the real delimiter",
+      "harness note --msg \"fixed <<'X'\" <<'UR'\nbody\nUR\ngit push origin master",
+    ],
+    [
+      "paired unquoted+quoted heredocs keep the EXPANDING body visible",
+      "harness x <<A <<'B'\n$(git push origin master)\nA\nbody-b\nB\ngit status",
+    ],
+    [
+      "split-quote delimiter <<'U'\"R\" is the single delimiter UR",
+      "harness x <<'U'\"R\"\nbody\nUR\ngit push origin master",
+    ],
+    [
+      "a command substitution is not the heredoc's consumer",
+      "bash $(harness-x 2>/dev/null) <<'EOF'\ngit push origin master\nEOF",
+    ],
+  ])("stays gate-eligible: %s", (_label, cmd) => {
+    expect(isGateEligibleCommand(cmd)).toBe(true);
+  });
+
+  it("an unterminated quote on the operator line strips nothing at all (fail-safe)", () => {
+    const cmd = "harness note --msg \"oops <<'UR'\nbody\nUR\ngit push origin master";
+    expect(stripHarnessHeredocBodies(cmd)).toBe(cmd);
+  });
+
+  it("a delimiter bash would expand is unresolvable, so nothing is stripped", () => {
+    const cmd = "harness x <<$VAR\ngit push origin master\nEOF";
+    expect(stripHarnessHeredocBodies(cmd)).toBe(cmd);
+  });
+
+  it("a <<< herestring frames no body and never consumes following lines", () => {
+    const cmd = "harness note <<<'text'\ngit push origin master";
+    expect(stripHarnessHeredocBodies(cmd)).toBe(cmd);
+    expect(isGateEligibleCommand(cmd)).toBe(true);
+  });
+
+  // Attribution through a bare `&`: bash really does start a new command
+  // there, so the harness invocation after it really is this heredoc's
+  // consumer, and its body really is harness stdin (measured: bash runs no
+  // mutation). This is the ONE shape where the new classifier is more
+  // permissive than the old escape-first one — pinned so the choice is
+  // visible and mutation-testable rather than incidental. Note this does
+  // NOT widen ESCAPE_HARNESS_BASH_RE itself (pinned narrow above); the
+  // attribution scanner decides segment boundaries on its own.
+  it("attributes a heredoc across a bare `&` to the harness invocation that consumes it", () => {
+    const cmd = "sleep 0 & harness note <<'EOF'\ngit push origin master\nEOF";
+    expect(stripHarnessHeredocBodies(cmd)).toBe("sleep 0 & harness note <<'EOF'");
+    expect(isGateEligibleCommand(cmd)).toBe(false);
   });
 });
 

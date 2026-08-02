@@ -37,11 +37,14 @@
 //     short-circuits the whole command — under escape-first, any chained
 //     command containing an escape verb anywhere (`harness preflight &&
 //     git push origin master`, the documented normal workflow) skipped the
-//     gate entirely. Measured before changing: the task's three candidate
-//     shapes (per-segment, deny-wins, escape-at-start-only) are 0-divergent
-//     over a 62-row corpus — a consequence of the pinned verb disjointness
-//     between the escape and deny lists — so the simplest (deny-wins) is
-//     implemented. The recovery-never-starved property is preserved
+//     gate entirely. Measured before changing, over a 69-row corpus with
+//     bash ground truth: per-segment evaluation and deny-wins are
+//     0-divergent — a consequence of the pinned verb disjointness between
+//     the escape and deny lists — so the simplest (deny-wins) is
+//     implemented. The third candidate, escape-at-start-only, was measured
+//     and REJECTED: it diverges on 26 rows and still exempts three of the
+//     four lines this task exists to close (`git switch master && git push
+//     origin master` and friends). The recovery-never-starved property is preserved
 //     structurally: a non-eligible command is allowed before any manifest
 //     load or ledger query, exactly where the escape short-circuit used to
 //     sit (see hook-post-merge-gate.ts for the ordering).
@@ -186,24 +189,170 @@ export function isCuratedMutationCommand(command: string): boolean {
 }
 
 /**
- * Heredoc operators with a QUOTED (or backslash-escaped) delimiter —
- * `<<'X'`, `<<"X"`, `<<\X`, plus the `<<-` variants. Bash performs NO
- * expansion and NO command substitution in such bodies, so as bash syntax
- * they are pure stdin data. The `(?<!<)`/`(?!<)` guards exclude the `<<<`
- * herestring operator (matching it would mis-consume following LINES as a
- * body that bash never frames, an under-block). UNQUOTED delimiters are
- * deliberately not matched: their bodies expand `$(...)`, which really
- * executes (measured: a curated mutation inside `<<UR` + `$(...)` runs).
+ * One heredoc operator found on a command line.
+ *
+ * `strip` is true only for operators whose body is BOTH inert as bash
+ * syntax (quoted delimiter: no expansion, no command substitution) AND
+ * consumed by a harness invocation (which never executes its stdin as
+ * shell). Every other operator is still RECORDED — its body has to be
+ * skipped in the right order so a later strippable operator lines its
+ * body up correctly — but its lines are kept for classification.
  */
-const QUOTED_HEREDOC_OP_RE = /(?<!<)<<(-?)(?!<)\s*(?:'([^']+)'|"([^"]+)"|\\([^\s<>'"\\]+))/g;
+interface HeredocOperator {
+  delimiter: string;
+  /** `<<-` form: leading tabs are stripped before the terminator compare. */
+  dashed: boolean;
+  strip: boolean;
+}
+
+/** Characters that end one simple command and start the next, for attribution. */
+const SEGMENT_BOUNDARY_CHARS = new Set([";", "|", "&", "(", ")", "`"]);
 
 /**
- * Simple-command boundary alphabet used ONLY to attribute a heredoc
- * operator to the command that consumes it (text between the last
- * boundary on the operator line and the `<<`). Matches the deny regex's
- * own anchor set minus `\n` (attribution never crosses lines).
+ * Quote-aware scan of ONE line for heredoc operators, in source order.
+ *
+ * Returns `null` when the line contains something this scanner cannot
+ * resolve (an unterminated quote inside a delimiter word, or a delimiter
+ * that would be shell-expanded). The caller then strips NOTHING at all —
+ * fail-safe, because every strip mistake is an UNDER-block (lines bash
+ * really executes would vanish from classification).
+ *
+ * Why a scanner and not a regex (reviewer finding, 2026-08-02; each shape
+ * verified against real bash): a regex over the raw line cannot tell a
+ * heredoc operator from the TEXT `"see <<'EOF' syntax"`, so it consumed
+ * every following line — including real mutations — as a phantom body.
+ * The same blindness made a fake operator inside quotes swallow the real
+ * delimiter, and paired quoted+unquoted operators (`<<A <<'B'`) mis-order
+ * the bodies so an unquoted body — where `$(...)` really expands — got
+ * dropped. Tracking quote state fixes all of those in one pass.
  */
-const ATTRIBUTION_BOUNDARY_RE = /&&|&|;|\||\(/;
+function scanHeredocOperators(line: string): HeredocOperator[] | null {
+  const ops: HeredocOperator[] = [];
+  let quote: "'" | '"' | null = null;
+  let segmentStart = 0;
+  let i = 0;
+  while (i < line.length) {
+    const ch = line[i]!;
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      i++;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === "\\") {
+        i += 2;
+        continue;
+      }
+      if (ch === '"') quote = null;
+      i++;
+      continue;
+    }
+    if (ch === "\\") {
+      i += 2;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      i++;
+      continue;
+    }
+    if (SEGMENT_BOUNDARY_CHARS.has(ch)) {
+      // A new simple command starts here, so attribution restarts. `)` and
+      // a backtick count too: in `bash $(harness-x) <<'EOF'` the consumer
+      // is `bash`, not the substitution's contents — without this the tail
+      // read as a harness invocation and the body was wrongly stripped.
+      i++;
+      segmentStart = i;
+      continue;
+    }
+    if (ch === "<" && line[i + 1] === "<") {
+      if (line[i + 2] === "<") {
+        // `<<<` herestring: its word sits on this line, it frames no body.
+        i += 3;
+        continue;
+      }
+      const tail = line.slice(segmentStart, i);
+      let j = i + 2;
+      let dashed = false;
+      if (line[j] === "-") {
+        dashed = true;
+        j++;
+      }
+      while (line[j] === " " || line[j] === "\t") j++;
+      const word = readDelimiterWord(line, j);
+      if (word === null) return null;
+      ops.push({
+        delimiter: word.value,
+        dashed,
+        strip: word.quoted && ESCAPE_HARNESS_BASH_RE.test(tail),
+      });
+      i = word.end;
+      continue;
+    }
+    i++;
+  }
+  return quote === null ? ops : null;
+}
+
+/**
+ * Read a heredoc delimiter word starting at `start`, concatenating the
+ * adjacent quoted / escaped / bare parts exactly as bash does — `<<'U'"R"`
+ * is the single delimiter `UR`, and because SOME part was quoted the body
+ * is non-expanding. Returns `null` for anything unresolvable: an
+ * unterminated quote, an empty word, or a bare part containing `$` or a
+ * backtick (bash would expand those, so the real delimiter is unknowable
+ * from the text alone).
+ */
+function readDelimiterWord(
+  line: string,
+  start: number,
+): { value: string; quoted: boolean; end: number } | null {
+  let i = start;
+  let value = "";
+  let quoted = false;
+  while (i < line.length) {
+    const ch = line[i]!;
+    if (ch === "'") {
+      const end = line.indexOf("'", i + 1);
+      if (end === -1) return null;
+      value += line.slice(i + 1, end);
+      quoted = true;
+      i = end + 1;
+      continue;
+    }
+    if (ch === '"') {
+      let j = i + 1;
+      let buf = "";
+      while (j < line.length && line[j] !== '"') {
+        if (line[j] === "\\" && j + 1 < line.length) {
+          buf += line[j + 1]!;
+          j += 2;
+          continue;
+        }
+        buf += line[j]!;
+        j++;
+      }
+      if (j >= line.length) return null;
+      value += buf;
+      quoted = true;
+      i = j + 1;
+      continue;
+    }
+    if (ch === "\\") {
+      if (i + 1 >= line.length) return null;
+      value += line[i + 1]!;
+      quoted = true;
+      i += 2;
+      continue;
+    }
+    if (/[\s;|&<>()`]/.test(ch)) break;
+    if (ch === "$") return null;
+    value += ch;
+    i++;
+  }
+  if (value === "") return null;
+  return { value, quoted, end: i };
+}
 
 /**
  * Strip the BODIES (and terminator lines) of quoted-delimiter heredocs
@@ -230,15 +379,25 @@ const ATTRIBUTION_BOUNDARY_RE = /&&|&|;|\||\(/;
  * stay in the existing accepted false-positive class — status quo, not
  * widened, not narrowed (general heredoc awareness is task 5b1b24fb).
  *
- * Mechanics: line-wise. The operator LINE itself is always kept (a chain
- * after the operator — `... <<'UR' && git push` — sits on that line and
- * stays visible; bash starts the body only on the NEXT line). Body lines
- * are consumed up to the first line that equals the delimiter (`<<-`:
- * after stripping leading tabs; a trailing `\r` is tolerated so a CRLF
+ * Mechanics: line-wise, driven by `scanHeredocOperators`. The operator
+ * LINE itself is always kept (a chain after the operator — `... <<'UR' &&
+ * git push` — sits on that line and stays visible; bash starts the body
+ * only on the NEXT line). Bodies of ALL operators on a line are skipped in
+ * source order, because that is the order bash assigns them, but only a
+ * strippable operator's lines are dropped — the rest are put back, so a
+ * `<<A <<'B'` pair cannot make the unquoted (expanding) body disappear.
+ * Body lines run up to the first line equal to the delimiter (`<<-`: after
+ * stripping leading tabs; a trailing `\r` is tolerated so a CRLF
  * terminator cannot silently push the strip past real commands). An
- * unterminated heredoc consumes to end of string — bash frames it the
- * same way. Whole-line removal can never merge two half-tokens into a
- * new match.
+ * unterminated heredoc consumes to end of string — bash frames it the same
+ * way. Whole-line removal can never merge two half-tokens into a new
+ * match.
+ *
+ * Fail-safe: an unparseable operator line strips NOTHING from the whole
+ * command (every strip mistake would be an under-block). No length cap —
+ * measured 0.75 ms on a 209 KB / 20,000-line heredoc against a 5,000 ms
+ * hook budget — and a cap would reintroduce the deadlock for a large
+ * report.
  */
 export function stripHarnessHeredocBodies(command: string): string {
   if (!command.includes("<<")) return command;
@@ -248,21 +407,20 @@ export function stripHarnessHeredocBodies(command: string): string {
   while (i < lines.length) {
     const line = lines[i]!;
     out.push(line);
-    const ops = [...line.matchAll(QUOTED_HEREDOC_OP_RE)].filter((op) => {
-      const tail = line.slice(0, op.index).split(ATTRIBUTION_BOUNDARY_RE).pop() ?? "";
-      return ESCAPE_HARNESS_BASH_RE.test(tail);
-    });
+    const ops = scanHeredocOperators(line);
+    if (ops === null) return command;
     i++;
     for (const op of ops) {
-      const dashed = op[1] === "-";
-      const delim = op[2] ?? op[3] ?? op[4]!;
+      const consumed: string[] = [];
       while (i < lines.length) {
-        const body = lines[i]!;
-        let cmp = dashed ? body.replace(/^\t+/, "") : body;
+        const raw = lines[i]!;
+        let cmp = op.dashed ? raw.replace(/^\t+/, "") : raw;
         if (cmp.endsWith("\r")) cmp = cmp.slice(0, -1);
         i++;
-        if (cmp === delim) break;
+        consumed.push(raw);
+        if (cmp === op.delimiter) break;
       }
+      if (!op.strip) out.push(...consumed);
     }
   }
   return out.join("\n");
