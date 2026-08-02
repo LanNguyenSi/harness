@@ -868,39 +868,38 @@ export type AttributedContextsResult =
  * runs inside B — see `tests/runtime/intercept-cli.test.ts`'s "leading-cd
  * is now a deliverable" block.
  *
- * D-011 (CRITICAL fix, fix round, run 2026-08-02-per-repo-gate-scoping-
- * redesign): REPLACE-vs-ADDITIVE is decided per satisfying segment by
- * `seg.ownTarget`, not uniformly:
- *   - `seg.ownTarget !== null` (the segment names its OWN explicit REPO-
- *     RELOCATING target — `-C`/`env -C`/`--git-dir` ONLY; `--work-tree`
- *     is deliberately EXCLUDED, D-017 fix round 2 — `command-
- *     normalize.ts`'s `CommandSegment.ownTarget` doc comment has the full
- *     rationale: `--work-tree` sets the working tree but does not
- *     relocate `--git-dir`, so it never proves which repo the invocation
- *     operates on) → REPLACE: static analysis PROVES this ONE invocation
- *     operates there; only that target's context is added (the pre-fix
- *     behaviour, unchanged).
- *   - `seg.ownTarget === null && seg.effectiveTarget !== null` (the
- *     target was INHERITED from a preceding `cd`, never this segment's
- *     own) → ADDITIVE: the cwd context is added TOO, alongside the
- *     inherited target's. Whether a `cd` genuinely persists to THIS
- *     specific segment depends on shell control flow
- *     `command-normalize.ts`'s static, string-only model cannot fully
- *     verify (subshells, pipes, `cd -`, a later `cd` — see that module's
- *     own D-014 fix). Both review passes of this fix round MEASURED a
- *     complete gate bypass through exactly this gap against the shipped
- *     binary (a forged `.git/HEAD` directory + a non-persisting `cd` —
- *     `(cd <forged> ; …) && git push`, `cd <forged> | git push`, `cd
- *     <forged> && cd - && git push` — each let bash run the gated verb at
- *     the REAL cwd while the engine attributed to `<forged>` alone,
- *     satisfying the gate from a STALE tag the agent never earned for the
- *     real target). Demanding BOTH contexts makes every remaining gap in
- *     that shell model fail CLOSED (over-demand cwd, never under-demand
- *     it) instead of fail-open — this is what makes "restrictive-or-
- *     identical only" (01-plan.md, D-002) actually TRUE rather than an
- *     unenforced claim. `seg.effectiveTarget === null` (fully
- *     unattributable — D-003) still adds ONLY the cwd context, same as
- *     before this fix — there is no foreign target to be additive WITH.
+ * D-021 (UNIVERSAL-ADDITIVE, operator decision, fix round, run
+ * 2026-08-02-per-repo-gate-scoping-redesign): attribution is uniformly
+ * ADDITIVE, never REPLACE. Every satisfying segment with an attributable
+ * target — `seg.effectiveTarget !== null`, whether it came from the
+ * segment's OWN explicit repo-relocating flag (`-C`/`env -C`/`--git-dir`;
+ * `--work-tree` is excluded from ever producing a target at all, D-017)
+ * or was INHERITED from a preceding `cd` — demands the cwd context AND
+ * that target's own context, side by side; `seg.ownTarget` is not
+ * consulted for this decision. Any unsatisfied context blocks the whole
+ * event (the existing per-context evaluation machinery below is
+ * unchanged). `seg.effectiveTarget === null` (fully unattributable —
+ * D-003) still adds ONLY the cwd context — there is no foreign target to
+ * be additive WITH.
+ *
+ * Demanding cwd unconditionally makes the engine structurally immune to
+ * misattribution of the foreign target: no gap in `command-normalize.ts`'s
+ * static, string-only model of shell control flow (subshells, pipes,
+ * `cd -`, a later `cd`, an unmodeled git flag composition) can ever make a
+ * gate WEAKER than the shipped, cwd-only engine, because cwd's own demand
+ * is never dropped — only added to. This replaces an earlier REPLACE-for-
+ * own-target design (D-011) that trusted a statically extracted own
+ * target as proof of "this one invocation operates there"; four
+ * independent review passes each measured a live bypass of that
+ * invariant against the shipped binary (a forged `.git/HEAD` directory
+ * reached through, respectively, a non-persisting `cd`, `--work-tree`,
+ * more than one repo-relocating flag, and a tilde-valued flag not counted
+ * by the multi-flag guard) — see `03-decisions.md` D-011/D-017/D-018/
+ * D-019/D-020/D-021 for the full history. The static-analysis-proves-it
+ * invariant those bypasses each disproved is not carried forward here.
+ * Cost accepted by the operator: a legitimate `git -C B` from cwd A now
+ * demands BOTH A's and B's context, where the pre-D-021 engine demanded
+ * only B's.
  *
  * D-012: a target reached through a symlink resolves to its REAL
  * (realpath'd) repository identity, not the symlink's own lexical
@@ -970,12 +969,12 @@ function resolveAttributedContexts(
       continue;
     }
 
-    // D-011: an INHERITED target (not this segment's own explicit flag)
-    // additionally demands the cwd context — see this function's own doc
-    // comment for why. An OWN target (seg.ownTarget !== null) stays
-    // REPLACE: only the loop body below (the target's own context) is
-    // added for it, unchanged from before this fix.
-    if (seg.ownTarget === null) addCwdOnce();
+    // D-021 (UNIVERSAL-ADDITIVE, operator decision after the four-pass
+    // halt — see this function's own doc comment): the cwd context is
+    // demanded UNCONDITIONALLY here, regardless of whether the target came
+    // from the segment's own explicit flag or was inherited from a
+    // preceding `cd`. `seg.ownTarget` is no longer read for this decision.
+    addCwdOnce();
 
     const resolvedLexical = path.resolve(cwdBuiltins.CWD, seg.effectiveTarget);
     const resolved = realpathOrSelf(resolvedLexical);
