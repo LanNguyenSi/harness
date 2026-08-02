@@ -871,10 +871,15 @@ export type AttributedContextsResult =
  * D-011 (CRITICAL fix, fix round, run 2026-08-02-per-repo-gate-scoping-
  * redesign): REPLACE-vs-ADDITIVE is decided per satisfying segment by
  * `seg.ownTarget`, not uniformly:
- *   - `seg.ownTarget !== null` (the segment names its OWN explicit target
- *     — `-C`/`env -C`/`--work-tree`/`--git-dir`) → REPLACE: static
- *     analysis PROVES this ONE invocation operates there; only that
- *     target's context is added (the pre-fix behaviour, unchanged).
+ *   - `seg.ownTarget !== null` (the segment names its OWN explicit REPO-
+ *     RELOCATING target — `-C`/`env -C`/`--git-dir` ONLY; `--work-tree`
+ *     is deliberately EXCLUDED, D-017 fix round 2 — `command-
+ *     normalize.ts`'s `CommandSegment.ownTarget` doc comment has the full
+ *     rationale: `--work-tree` sets the working tree but does not
+ *     relocate `--git-dir`, so it never proves which repo the invocation
+ *     operates on) → REPLACE: static analysis PROVES this ONE invocation
+ *     operates there; only that target's context is added (the pre-fix
+ *     behaviour, unchanged).
  *   - `seg.ownTarget === null && seg.effectiveTarget !== null` (the
  *     target was INHERITED from a preceding `cd`, never this segment's
  *     own) → ADDITIVE: the cwd context is added TOO, alongside the

@@ -3061,6 +3061,247 @@ describe("runInterceptCli — 98ad072f FIX ROUND: D-011 critical bypass closure 
     });
   });
 
+  // Pass-2 review CRITICAL (pre-existing since the T-002 base, not
+  // introduced by the D-011 additive fix — D-016 halt-counter accounting
+  // in 03-decisions.md): `git --work-tree=<B>` was folded into the same
+  // `ownTarget` bucket as `-C`/`--git-dir`, so `resolveAttributedContexts`'
+  // REPLACE branch (D-011) attributed to B alone and dropped the cwd
+  // demand — even though `--work-tree` sets a git invocation's working
+  // tree but does NOT relocate `--git-dir`, so `push`/`log`/`status`/`tag`
+  // genuinely still operate on the CWD repo. Orchestrator's own
+  // reproduction against the pre-fix HEAD (see 05-review-findings.md):
+  // `git --work-tree=<repoB> push` with only B's evidence on record
+  // ALLOWED; with only A's (cwd's) evidence on record it DENIED — exactly
+  // backwards. `command-normalize.ts`'s `peelGitGlobalOptions` now tracks
+  // a SEPARATE `relocateTargetDir`, fed only by `-C`/`--git-dir`, never
+  // `--work-tree` — see that function's own doc comment.
+  describe("D-017: --work-tree is not a repo-identity own-target (pass 2 CRITICAL, fix round 2)", () => {
+    const A_SHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const B_SHA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    function ledgerWithEntries(contents: string[]): LedgerClient {
+      const entries = contents.map((content, i) => ({
+        id: `e${i}`,
+        content,
+        createdAt: new Date().toISOString(),
+      }));
+      return {
+        async query() {
+          return { kind: "ok", entries };
+        },
+        async record() {
+          /* no-op */
+        },
+      };
+    }
+
+    // Synthetic, REPO-scoped probe policy: no shipped FULL_TEMPLATE policy
+    // gates a bare `git tag` by `${REPO}`/`${BRANCH}` today — the closest
+    // shipped policy, `dogfood-before-release`, matches `git tag v*` but
+    // keys its `ledger_tag` on `${SESSION_ID}`, not repo identity, so it
+    // cannot demonstrate cross-repo attribution at all. Mirrors
+    // `PREFLIGHT_PUSH_POLICY`'s own simple inline `bash_match` style
+    // (module-level `PREFLIGHT_PUSH_POLICY` above, line ~507), verb
+    // swapped to `tag`.
+    const PREFLIGHT_TAG_POLICY: Policy = {
+      name: "preflight-before-tag-d017-probe",
+      description: "gate git tag on a per-repo preflight tag (synthetic verb-coverage probe)",
+      trigger: { event: "PreToolUse", match: "Bash", bash_match: "git\\s+tag" },
+      requires: { ledger_tag: "preflight:${REPO}" },
+      hook: "require-preflight-evidence",
+      enforcement: "block",
+    } as Policy;
+
+    describe("push (BRANCH-scoped, at_head + within — the orchestrator's own repro)", () => {
+      it("only B's evidence on record: DENIES, demanding cwd A's tag (never weaker than shipped)", async () => {
+        const cwdRepo = makeRepoFixtureWithSha("worktree-cwd-a", "a-branch", A_SHA);
+        const foreignB = makeRepoFixtureWithSha("worktree-foreign-b", "b-branch", B_SHA);
+        const ledger = ledgerWithEntries([`preflight:b-branch head:${B_SHA} — evidence for B only`]);
+
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: `git --work-tree=${foreignB} push` },
+              session_id: "sess-d017-push-deny",
+              cwd: cwdRepo,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+          ledger,
+        });
+
+        expect(result.blocked).toBe(true);
+        expect(result.decisions).toHaveLength(1);
+        // The DEMANDED tag is cwd A's own branch tag, never B's — a
+        // pre-fix engine attributed to B alone and would have shown
+        // "preflight:b-branch" here (satisfied by the ledger above, so it
+        // would have ALLOWED).
+        expect(result.decisions[0]!.ledgerTag).toBe("preflight:a-branch");
+        expect(result.decisions[0]!.outcome).toBe("deny");
+
+        // "never weaker than shipped": the SAME ledger, driven against a
+        // bare `git push` with no `--work-tree` at all — what the shipped,
+        // cwd-only engine would have evaluated — denies with the
+        // IDENTICAL reason. `--work-tree` cannot make an otherwise-denied
+        // push become satisfiable.
+        const baseline = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: "git push" },
+              session_id: "sess-d017-push-deny",
+              cwd: cwdRepo,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+          ledger: { query: ledger.query, async record() {} },
+        });
+        expect(baseline.decisions).toHaveLength(1);
+        expect(baseline.decisions[0]!.outcome).toBe("deny");
+        expect(result.decisions[0]!.reason).toBe(baseline.decisions[0]!.reason);
+      });
+
+      it("A's own evidence on record: ALLOWS (the exact orchestrator repro row that must flip from the pre-fix DENY)", async () => {
+        const cwdRepo = makeRepoFixtureWithSha("worktree-cwd-a2", "a-branch", A_SHA);
+        const foreignB = makeRepoFixtureWithSha("worktree-foreign-b2", "b-branch", B_SHA);
+        const ledger = ledgerWithEntries([`preflight:a-branch head:${A_SHA} — evidence for A`]);
+
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: `git --work-tree=${foreignB} push` },
+              session_id: "sess-d017-push-allow",
+              cwd: cwdRepo,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+          ledger,
+        });
+
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]!.ledgerTag).toBe("preflight:a-branch");
+        expect(result.decisions[0]!.outcome).toBe("allow");
+        expect(result.blocked).toBe(false);
+      });
+    });
+
+    describe.each([
+      ["log", PREFLIGHT_INVESTIGATION_POLICY],
+      ["status", PREFLIGHT_INVESTIGATION_POLICY],
+      ["tag", PREFLIGHT_TAG_POLICY],
+    ] as const)("%s (REPO-scoped, no at_head/within)", (verb, policy) => {
+      it(`only B's evidence on record: DENIES, demanding cwd A's tag`, async () => {
+        const cwdRepo = makeRepoFixture(`worktree-cwd-a-${verb}`, "main");
+        const foreignB = makeRepoFixture(`worktree-foreign-b-${verb}`, "main");
+        const ledger = ledgerWithEntries([
+          `preflight:worktree-foreign-b-${verb} — evidence for B only`,
+        ]);
+
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: `git --work-tree=${foreignB} ${verb}` },
+              session_id: `sess-d017-${verb}-deny`,
+              cwd: cwdRepo,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([policy]),
+          ledger,
+        });
+
+        expect(result.blocked).toBe(true);
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]!.ledgerTag).toBe(`preflight:worktree-cwd-a-${verb}`);
+        expect(result.decisions[0]!.outcome).toBe("deny");
+      });
+
+      it(`A's own evidence on record: ALLOWS`, async () => {
+        const cwdRepo = makeRepoFixture(`worktree-cwd-a2-${verb}`, "main");
+        const foreignB = makeRepoFixture(`worktree-foreign-b2-${verb}`, "main");
+        const ledger = ledgerWithEntries([
+          `preflight:worktree-cwd-a2-${verb} — evidence for A`,
+        ]);
+
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: `git --work-tree=${foreignB} ${verb}` },
+              session_id: `sess-d017-${verb}-allow`,
+              cwd: cwdRepo,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([policy]),
+          ledger,
+        });
+
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]!.ledgerTag).toBe(`preflight:worktree-cwd-a2-${verb}`);
+        expect(result.decisions[0]!.outcome).toBe("allow");
+        expect(result.blocked).toBe(false);
+      });
+    });
+
+    // Pass-2 adopted missing test: the combo case. `--git-dir` IS
+    // repo-relocating (own-target REPLACE, D-011, unaffected by this fix);
+    // `--work-tree` on the SAME invocation must not compete with it.
+    // cwd is a THIRD, unrelated repo so the own-target (A, via --git-dir)
+    // is genuinely foreign to cwd too — a single decision naming A proves
+    // attribution followed --git-dir, not cwd and not the work-tree (B).
+    it("git --git-dir=<A>/.git --work-tree=<B> status, cwd=C: attribution follows A, never B or cwd", async () => {
+      const repoA = makeRepoFixture("gitdir-combo-a", "main");
+      const repoB = makeRepoFixture("worktree-combo-b", "main");
+      const cwdRepoC = makeRepoFixture("gitdir-combo-cwd-c", "main");
+      const ledger = ledgerWithEntries(["preflight:gitdir-combo-a — evidence for A"]);
+
+      const result = await runInterceptCli({
+        stdin: streamFrom(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: {
+              command: `git --git-dir=${path.join(repoA, ".git")} --work-tree=${repoB} status`,
+            },
+            session_id: "sess-d017-combo",
+            cwd: cwdRepoC,
+          }),
+        ),
+        stdout: captureStream().stream,
+        stderr: captureStream().stream,
+        manifest: fakeManifest([PREFLIGHT_INVESTIGATION_POLICY]),
+        ledger,
+      });
+
+      // Own-target REPLACE (D-011, unaffected here): exactly one decision,
+      // naming A — not B (work-tree, D-017's own fix) and not the cwd
+      // repo C either (own-target replaces the cwd demand for a git
+      // invocation naming its own explicit repo-relocating target).
+      expect(result.decisions).toHaveLength(1);
+      expect(result.decisions[0]!.ledgerTag).toBe("preflight:gitdir-combo-a");
+      expect(result.decisions[0]!.extractValues.REPO).toBe("gitdir-combo-a");
+      expect(result.decisions[0]!.outcome).toBe("allow");
+      expect(result.blocked).toBe(false);
+    });
+  });
+
   describe("D-012: a target reached through a symlink resolves to its REAL repository identity", () => {
     it("git -C <symlink X -> Y> status demands Y's tag, not X's", async () => {
       const repoCwd = makeRepoFixture("symlink-cwd", "main");

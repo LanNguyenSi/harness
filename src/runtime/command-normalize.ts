@@ -502,29 +502,44 @@ export interface CommandSegment {
   text: string;
   /**
    * This segment's OWN explicit target, named by ITS OWN invocation
-   * only — a git invocation's `-C` / `--work-tree` / `--git-dir` (or the
-   * SAME invocation's wrapping `env -C`, git-own-target-prioritised the
-   * same way `NormalizedCommand.targetDir` already is), or, for a
-   * recognised bare `cd <path>` segment, the parsed path. `null` when this
-   * segment names no target of its own (not a git invocation, not a `cd`
-   * segment, or a bare git invocation) OR the named value is one of this
-   * view's unattributable forms: `~`-prefixed, carrying a stray quote
+   * only — a git invocation's REPO-RELOCATING global option ONLY: `-C` /
+   * `--git-dir` (or the SAME invocation's wrapping `env -C`, git-own-
+   * target-prioritised the same way `NormalizedCommand.targetDir` already
+   * is) — or, for a recognised bare `cd <path>` segment, the parsed path.
+   * Deliberately EXCLUDES `--work-tree` (D-017, fix round 2, run
+   * `2026-08-02-per-repo-gate-scoping-redesign`): `--work-tree` sets a
+   * git invocation's working tree but does NOT relocate its `--git-dir`
+   * search, so `git --work-tree=<B> push`/`log`/`status` still operate on
+   * whatever repo the invocation's ACTUAL directory names, never `<B>`
+   * alone — folding it into this field as though it were repo-identity-
+   * bearing (the pre-fix behaviour) let `resolveAttributedContexts`
+   * (`src/runtime/intercept.ts`, D-011) REPLACE the cwd demand with `<B>`'s
+   * on the strength of a flag that never moved the invocation there,
+   * measured as a live cross-repo fail-open. `null` when this segment
+   * names no repo-relocating target of its own (not a git invocation, not
+   * a `cd` segment, a bare git invocation, or a git invocation whose ONLY
+   * target-bearing flag is `--work-tree`) OR the named value is one of
+   * this view's unattributable forms: `~`-prefixed, carrying a stray quote
    * character (the tokeniser is not quote-aware — a quoted value is
    * captured WITH its quote character(s) still attached, not a real
    * path), containing a command-substitution marker (`$(` or a backtick),
    * or — for `cd` specifically — a bare `cd` with no argument or a `cd`
    * with a flag (`cd -P /x`, three tokens instead of two). ALSO `null`
    * when the SAME invocation names a git target via BOTH a relative own
-   * `-C` / `--work-tree` / `--git-dir` AND a wrapping `env -C` / `--chdir`
-   * base (`env -C /tmp/base git -C sub status`) — a mixed, internally
-   * ambiguous composition, unattributable for the same reason a relative
-   * own target after a preceding `cd` is (see `effectiveTarget` below);
-   * this is the ONE case where `ownTarget` itself, not just
-   * `effectiveTarget`, is nulled by a composition rule rather than by the
-   * raw value being unrecognisable on its own. A relative value (including
-   * `-C .`) and an absolute value are both otherwise preserved here
-   * verbatim, unresolved against any cwd — that resolution is a future
-   * consumer's job, not this module's.
+   * `-C` / `--git-dir` AND a wrapping `env -C` / `--chdir` base (`env -C
+   * /tmp/base git -C sub status`) — a mixed, internally ambiguous
+   * composition, unattributable for the same reason a relative own target
+   * after a preceding `cd` is (see `effectiveTarget` below); this is the
+   * ONE case where `ownTarget` itself, not just `effectiveTarget`, is
+   * nulled by a composition rule rather than by the raw value being
+   * unrecognisable on its own. A relative value (including `-C .`) and an
+   * absolute value are both otherwise preserved here verbatim, unresolved
+   * against any cwd — that resolution is a future consumer's job, not
+   * this module's. `git --git-dir=<A>/.git --work-tree=<B> ...`: this
+   * field is `<A>` (the `.git` parent) — `--git-dir` wins regardless of
+   * which flag appears first in the invocation, because `--work-tree`
+   * never contributes to this field at all, not because of any ordering
+   * rule between the two.
    */
   ownTarget: string | null;
   /**
@@ -548,8 +563,10 @@ export interface CommandSegment {
    *     raw relative value itself (deferred to a future consumer to
    *     resolve against the real cwd).
    * A same-invocation mixed `env -C <base>` + relative own `-C`/
-   * `--work-tree`/`--git-dir` composition (see `ownTarget` above) is
-   * `null` here TOO — checked BEFORE the cd-basis rules above and
+   * `--git-dir` composition (see `ownTarget` above — `--work-tree` is
+   * EXCLUDED from this mix entirely, D-017: it never sets `ownTarget`, so
+   * it can never trigger this ambiguity either) is `null` here TOO —
+   * checked BEFORE the cd-basis rules above and
    * independently of them: `env -C /tmp/base git -C sub status` never
    * becomes `/tmp/base/sub` (real path joining, deliberately not this
    * module's job — same reasoning as the cd-basis K1 case) NOR does it
@@ -859,22 +876,24 @@ function classifyCdSegment(segmentText: string): CdSegmentClass {
  * Compute one segment's `ownTarget` / `effectiveTarget` (task `98ad072f`
  * groundwork, `segmentViewOf` / `CommandSegment`) and the cd-basis to
  * carry into the NEXT segment, from: this segment's own canonicalisation
- * result (already computed by the shared walk for the OLD aggregate —
- * `targetDir` / `isGit`, unmodified here), whether THIS segment is itself
- * a recognised `cd <path>` segment, and the cd-basis carried in from
- * whatever preceded it. Implements `CommandSegment.effectiveTarget`'s doc
- * comment verbatim; see that comment for the consumer-facing statement of
- * these rules.
+ * result (already computed by the shared walk — `identityTargetDir` /
+ * `identityTargetBase` / `isGit`, unmodified here; NOT the OLD aggregate's
+ * `targetDir`/`targetBase`, which still includes `--work-tree` — D-017,
+ * fix round 2), whether THIS segment is itself a recognised `cd <path>`
+ * segment, and the cd-basis carried in from whatever preceded it.
+ * Implements `CommandSegment.effectiveTarget`'s doc comment verbatim; see
+ * that comment for the consumer-facing statement of these rules.
  */
 function computeSegmentTarget(
   segmentText: string,
-  canon: { targetDir: string | null; targetBase: string | null; isGit: boolean },
+  canon: { identityTargetDir: string | null; identityTargetBase: string | null; isGit: boolean },
   incomingCdBasis: string | null,
 ): { ownTarget: string | null; effectiveTarget: string | null; outgoingCdBasis: string | null } {
-  // Same-invocation `env -C`/`--chdir` base + a RELATIVE own git target
-  // (orchestrator follow-up after the initial T-002 round, still task
-  // `98ad072f` groundwork): `canon.targetBase` is non-null EXACTLY in this
-  // mixed case — see `canonicalizeSegment`'s own `targetBase` computation,
+  // Same-invocation `env -C`/`--chdir` base + a RELATIVE own git
+  // REPO-RELOCATING target (`-C`/`--git-dir` — orchestrator follow-up
+  // after the initial T-002 round, still task `98ad072f` groundwork):
+  // `canon.identityTargetBase` is non-null EXACTLY in this mixed case —
+  // see `canonicalizeSegment`'s own `identityTargetBase` computation,
   // reused here unmodified, never when there is no wrapping `env -C` on
   // the SAME invocation. `env -C /tmp/base git -C sub status` must NOT
   // hand a future consumer `ownTarget`/`effectiveTarget: "sub"` (raw,
@@ -889,13 +908,18 @@ function computeSegmentTarget(
   // composition rule below refuses to compose `cd T && git -C sub` into
   // `T/sub`); noted here as a possible LATER precision gain, not built in
   // this slice. A bare git invocation with an `env -C` base and no
-  // relative own target (`env -C /abs git status`) is UNAFFECTED — the
-  // ordinary `canon.targetDir` extraction below already folds that in
-  // (`gitOpts.targetDir ?? envTargetDir`), and `canon.targetBase` stays
-  // `null` for that shape (no relative own git target to be relative TO).
-  // A `cd`-shaped segment never reaches this branch: it never matches
-  // `GIT_TOKEN_RE`, so `canon.isGit` is always `false` for one.
-  if (canon.isGit && canon.targetBase !== null) {
+  // relative own REPO-RELOCATING target (`env -C /abs git status`) is
+  // UNAFFECTED — the ordinary `canon.identityTargetDir` extraction below
+  // already folds that in (`gitOpts.relocateTargetDir ?? envTargetDir`),
+  // and `canon.identityTargetBase` stays `null` for that shape (no
+  // relative own repo-relocating target to be relative TO). A `--work-
+  // tree`-only invocation (no `-C`/`--git-dir` on the same call) is NEVER
+  // "mixed" here even when wrapped by `env -C`: `relocateTargetDir` is
+  // `null` for it, so `identityTargetDir` falls through to `envTargetDir`
+  // (or stays `null`) and `identityTargetBase` stays `null` — D-017, this
+  // is the fix. A `cd`-shaped segment never reaches this branch: it never
+  // matches `GIT_TOKEN_RE`, so `canon.isGit` is always `false` for one.
+  if (canon.isGit && canon.identityTargetBase !== null) {
     return { ownTarget: null, effectiveTarget: null, outgoingCdBasis: incomingCdBasis };
   }
 
@@ -918,7 +942,7 @@ function computeSegmentTarget(
   }
 
   const cdArg = cdClass.kind === "cd" ? cdClass.arg : null;
-  const rawOwn = cdArg !== null ? cdArg : canon.isGit ? canon.targetDir : null;
+  const rawOwn = cdArg !== null ? cdArg : canon.isGit ? canon.identityTargetDir : null;
   const ownTarget =
     rawOwn !== null && !isTildeTarget(rawOwn) && !isUnattributableTargetValue(rawOwn)
       ? rawOwn
@@ -1509,11 +1533,32 @@ function canonicalizeSegment(segmentText: string): {
   text: string;
   targetDir: string | null;
   targetBase: string | null;
+  /**
+   * D-017 (fix round 2, run 2026-08-02-per-repo-gate-scoping-redesign):
+   * this segment's own REPO-RELOCATING target only — `-C` / `--git-dir`
+   * (or the same invocation's wrapping `env -C` / `--chdir`), NEVER
+   * `--work-tree`. Consumed by `computeSegmentTarget` for `ownTarget` /
+   * `effectiveTarget` instead of `targetDir` above (which stays the OLD,
+   * unconsumed aggregate's extraction, `--work-tree` included, unchanged
+   * by this fix). `null` under the exact same conditions `targetDir`
+   * would be, MINUS the `--work-tree`-only case, which is `null` here
+   * even when `targetDir` captured it.
+   */
+  identityTargetDir: string | null;
+  /** Same relationship to `targetBase` that `identityTargetDir` has to `targetDir`. */
+  identityTargetBase: string | null;
   isGit: boolean;
 } {
   const tokens = tokenizeWithOffsets(segmentText);
   if (tokens.length === 0) {
-    return { text: segmentText, targetDir: null, targetBase: null, isGit: false };
+    return {
+      text: segmentText,
+      targetDir: null,
+      targetBase: null,
+      identityTargetDir: null,
+      identityTargetBase: null,
+      isGit: false,
+    };
   }
 
   let idx = 0;
@@ -1574,7 +1619,14 @@ function canonicalizeSegment(segmentText: string): {
 
   const headTok = tokens[idx]?.text;
   if (headTok === undefined) {
-    return { text: segmentText, targetDir: null, targetBase: null, isGit: false };
+    return {
+      text: segmentText,
+      targetDir: null,
+      targetBase: null,
+      identityTargetDir: null,
+      identityTargetBase: null,
+      isGit: false,
+    };
   }
 
   if (GIT_TOKEN_RE.test(headTok)) {
@@ -1584,7 +1636,14 @@ function canonicalizeSegment(segmentText: string): {
     if (gitOpts.malformed || gitOpts.idx >= tokens.length) {
       // Malformed global option (missing required value) or no subcommand
       // token left: nothing safe to canonicalise. Leave untouched.
-      return { text: segmentText, targetDir: null, targetBase: null, isGit: false };
+      return {
+        text: segmentText,
+        targetDir: null,
+        targetBase: null,
+        identityTargetDir: null,
+        identityTargetBase: null,
+        isGit: false,
+      };
     }
 
     const subcommandTok = tokens[gitOpts.idx]!;
@@ -1600,7 +1659,25 @@ function canonicalizeSegment(segmentText: string): {
       !path.isAbsolute(gitOpts.targetDir)
         ? envTargetDir
         : null;
-    return { text: rewritten, targetDir, targetBase, isGit: true };
+    // D-017: the identity pair mirrors targetDir/targetBase's composition
+    // exactly, but is fed by `relocateTargetDir` (repo-relocating flags
+    // only — `-C`/`--git-dir`, never `--work-tree`) instead of
+    // `gitOpts.targetDir` (which still includes `--work-tree`).
+    const identityTargetDir = gitOpts.relocateTargetDir ?? envTargetDir;
+    const identityTargetBase =
+      gitOpts.relocateTargetDir !== null &&
+      envTargetDir !== null &&
+      !path.isAbsolute(gitOpts.relocateTargetDir)
+        ? envTargetDir
+        : null;
+    return {
+      text: rewritten,
+      targetDir,
+      targetBase,
+      identityTargetDir,
+      identityTargetBase,
+      isGit: true,
+    };
   }
 
   if (NON_GIT_HEAD_TOKENS.has(headTok)) {
@@ -1632,16 +1709,37 @@ function canonicalizeSegment(segmentText: string): {
       // just the head would silently drop whatever wrapper preceded it for
       // no benefit. Leave untouched, same fail-safe shape as the git
       // malformed/no-subcommand case above.
-      return { text: segmentText, targetDir: null, targetBase: null, isGit: false };
+      return {
+        text: segmentText,
+        targetDir: null,
+        targetBase: null,
+        identityTargetDir: null,
+        identityTargetBase: null,
+        isGit: false,
+      };
     }
     const rewritten = tokens
       .slice(idx)
       .map((t) => t.text)
       .join(" ");
-    return { text: rewritten, targetDir: null, targetBase: null, isGit: false };
+    return {
+      text: rewritten,
+      targetDir: null,
+      targetBase: null,
+      identityTargetDir: null,
+      identityTargetBase: null,
+      isGit: false,
+    };
   }
 
-  return { text: segmentText, targetDir: null, targetBase: null, isGit: false };
+  return {
+    text: segmentText,
+    targetDir: null,
+    targetBase: null,
+    identityTargetDir: null,
+    identityTargetBase: null,
+    isGit: false,
+  };
 }
 
 /**
@@ -1909,46 +2007,75 @@ function parentIfDotGit(dir: string): string {
  * adjacent to `git`), tracking the first `-C` / `--work-tree` /
  * `--git-dir` target directory encountered (excluding a `~`-prefixed
  * value — F5, treated as if absent, but still consumed as an option so
- * parsing continues past it). `malformed: true` means a value-requiring
- * option was missing its value — the caller bails without rewriting
- * rather than guess.
+ * parsing continues past it) as `targetDir` — the OLD, UNCONSUMED
+ * aggregate's own extraction (module header STATUS note), UNCHANGED by
+ * the fix below. `malformed: true` means a value-requiring option was
+ * missing its value — the caller bails without rewriting rather than
+ * guess.
+ *
+ * `relocateTargetDir` (D-017, fix round 2, run `2026-08-02-per-repo-
+ * gate-scoping-redesign`): a SEPARATE tracker, fed ONLY by the
+ * repo-relocating flags `-C` and `--git-dir` — NEVER `--work-tree`.
+ * `--work-tree` sets the working tree but does NOT relocate git's
+ * `--git-dir` search; `git push`/`log`/`status` under `--work-tree=<B>`
+ * alone still operate on whatever repo the CURRENT directory (or an
+ * actual `-C`/`--git-dir`) names, not `<B>`. Pass-2 review measured this
+ * as a live cross-repo fail-open once `--work-tree` was folded into the
+ * same `targetDir` bucket as `-C`/`--git-dir` and that bucket fed
+ * `CommandSegment.ownTarget`'s REPLACE attribution (`computeSegmentTarget`
+ * below, `src/runtime/intercept.ts`'s `resolveAttributedContexts`,
+ * D-011): `git --work-tree=<B> push`, cwd = A, was attributed to B alone,
+ * dropping the cwd demand a real `git push` there still has to satisfy.
+ * `relocateTargetDir` is what `computeSegmentTarget` now consults for a
+ * git segment's `ownTarget` — see that function and `canonicalizeSegment`
+ * below. Kept as a distinct field (a whitelist of repo-relocating flags),
+ * not a `--work-tree` special-case, so a future path-valued-but-repo-
+ * neutral git global option cannot silently reopen this class by being
+ * folded into `targetDir` the way `--work-tree` originally was.
  */
 function peelGitGlobalOptions(
   tokens: Token[],
   startIdx: number,
-): { idx: number; targetDir: string | null; malformed: boolean } {
+): { idx: number; targetDir: string | null; relocateTargetDir: string | null; malformed: boolean } {
   let idx = startIdx;
   let targetDir: string | null = null;
+  let relocateTargetDir: string | null = null;
   while (idx < tokens.length) {
     const t = tokens[idx]!.text;
     if (t === "-C") {
       const dir = tokens[idx + 1]?.text;
-      if (dir === undefined) return { idx, targetDir, malformed: true };
+      if (dir === undefined) return { idx, targetDir, relocateTargetDir, malformed: true };
       if (targetDir === null && !isTildeTarget(dir)) targetDir = dir;
+      if (relocateTargetDir === null && !isTildeTarget(dir)) relocateTargetDir = dir;
       idx += 2;
       continue;
     }
     if (t === "-c") {
-      if (tokens[idx + 1] === undefined) return { idx, targetDir, malformed: true };
+      if (tokens[idx + 1] === undefined) return { idx, targetDir, relocateTargetDir, malformed: true };
       idx += 2;
       continue;
     }
     if (t === "--git-dir") {
       const dir = tokens[idx + 1]?.text;
-      if (dir === undefined) return { idx, targetDir, malformed: true };
+      if (dir === undefined) return { idx, targetDir, relocateTargetDir, malformed: true };
       if (targetDir === null && !isTildeTarget(dir)) targetDir = parentIfDotGit(dir);
+      if (relocateTargetDir === null && !isTildeTarget(dir)) relocateTargetDir = parentIfDotGit(dir);
       idx += 2;
       continue;
     }
     if (t.startsWith("--git-dir=")) {
       const dir = t.slice("--git-dir=".length);
       if (targetDir === null && !isTildeTarget(dir)) targetDir = parentIfDotGit(dir);
+      if (relocateTargetDir === null && !isTildeTarget(dir)) relocateTargetDir = parentIfDotGit(dir);
       idx += 1;
       continue;
     }
     if (t === "--work-tree") {
+      // D-017: `--work-tree` still feeds the OLD `targetDir` aggregate
+      // (unchanged, unconsumed by any gate) but deliberately NEVER
+      // `relocateTargetDir` — see this function's own doc comment.
       const dir = tokens[idx + 1]?.text;
-      if (dir === undefined) return { idx, targetDir, malformed: true };
+      if (dir === undefined) return { idx, targetDir, relocateTargetDir, malformed: true };
       if (targetDir === null && !isTildeTarget(dir)) targetDir = dir;
       idx += 2;
       continue;
@@ -1968,7 +2095,7 @@ function peelGitGlobalOptions(
       continue;
     }
     if (t === "--namespace") {
-      if (tokens[idx + 1] === undefined) return { idx, targetDir, malformed: true };
+      if (tokens[idx + 1] === undefined) return { idx, targetDir, relocateTargetDir, malformed: true };
       idx += 2;
       continue;
     }
@@ -1982,5 +2109,5 @@ function peelGitGlobalOptions(
     }
     break;
   }
-  return { idx, targetDir, malformed: false };
+  return { idx, targetDir, relocateTargetDir, malformed: false };
 }
