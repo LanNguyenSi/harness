@@ -684,6 +684,16 @@ describe("write-flag guards: round-1 findings (task fdee7d0f)", () => {
     expect(isReadOnlyBashCommand(cmd)).toBe(false);
   });
 
+  // Double-decode shapes: blocked through the RAW arm of the raw-OR-decoded
+  // test, which is why re-adding the removed second decode no longer changes
+  // the outcome. Pinned so the coverage is explicit either way.
+  it.each(["tree -\"'-o'\" d", "tree -$'\\x27-o\\x27' d"])(
+    "blocks a doubly-quoted tree output flag: %s",
+    (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    },
+  );
+
   it("keeps a genuinely read-only tree invocation read-only", () => {
     expect(isReadOnlyBashCommand("tree -L 2 src")).toBe(true);
   });

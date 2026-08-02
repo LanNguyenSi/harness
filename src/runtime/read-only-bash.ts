@@ -423,7 +423,15 @@ function isTreeWriteToken(raw: string): boolean {
   // Pass the RAW token through: isOutputWriteToken owns the single decode.
   // Decoding here too would decode TWICE, and decode(decode(x)) goes past
   // bash whenever the first pass leaves a quote behind (`-"'o'"` -> `-'o'`
-  // -> `-o`), which measured as a BLOCKED -> READONLY regression.
+  // -> `-o`).
+  //
+  // Measured honestly: since the guards became raw-OR-decoded, re-adding
+  // the second decode no longer changes any classification I could find —
+  // the raw arm already matches `-"'o'"` (it starts with one `-` and
+  // contains `o`). A mutation restoring the double decode leaves the suite
+  // green, and that is the structural fix absorbing the mistake rather than
+  // a gap in the tests. Single-decode stays because it is what bash does;
+  // do not rely on the raw arm to keep covering for it.
   return isOutputWriteToken(raw);
 }
 
