@@ -566,6 +566,28 @@ export interface CommandSegment {
    * silently keep inheriting whatever basis existed BEFORE that `cd`,
    * since the shell genuinely changed directory to somewhere this module
    * cannot name.
+   *
+   * FULL reset-trigger list (D-014, fix round, run 2026-08-02-per-repo-
+   * gate-scoping-redesign — corrects this comment, which previously named
+   * only the unattributable-`cd`-value case above): the running basis
+   * resets to `null` — rather than the pre-fix behaviour of silently
+   * carrying an earlier basis forward unchanged — for ALL of: a bare `cd`
+   * with no argument, `cd -`, any other flagged `cd` (`cd -P /tmp/x`),
+   * `pushd`, `popd` (see `classifyCdSegment`), and the unattributable-
+   * `cd`-value case documented above. TWO of the reset triggers are NOT
+   * decided by this per-segment composition at all — they depend on the
+   * BOUNDARY a segment sits behind, which only the caller
+   * (`segmentAndCanonicalize`'s own walk) can see: the basis never
+   * crosses a bare `|` (each side of a pipe is bash's own subshell), and
+   * it resets after any segment whose text contains a `)` (a subshell
+   * close — `BOUNDARY_RE` has no `)` boundary of its own, so this is a
+   * substring check on the segment that happens to end there, not paren-
+   * depth tracking). See `segmentAndCanonicalize`'s own comment at its
+   * `computeSegmentTarget` call site for those two. NOT covered by any of
+   * this (same ceiling as before this fix round, unchanged): a `cd`
+   * inside a NESTED subshell that never closes within the command
+   * string's visible boundaries, and any construct outside this module's
+   * documented NOT-SUPPORTED list in the module header.
    */
   effectiveTarget: string | null;
 }
@@ -782,38 +804,55 @@ function isUnattributableTargetValue(value: string): boolean {
 }
 
 /**
- * Recognise a segment that is EXACTLY a bare `cd <path>` invocation and
- * nothing else — no flags, no extra arguments, `<path>` a single
- * whitespace-delimited token — for `segmentViewOf`'s cd-basis tracking
- * (task `98ad072f` groundwork). Returns the raw path text (still possibly
- * `~`-prefixed, quoted, or substitution-bearing — the caller applies the
- * SAME `isTildeTarget` / `isUnattributableTargetValue` filters used for a
- * git invocation's own target) when the shape matches, `null` otherwise: a
- * bare `cd` with no argument, a `cd` with a flag (`cd -P /tmp/x` — three
- * tokens, not two), and anything else this module does not track
- * (`pushd` / `popd`, a `cd` inside a subshell — module header) all return
- * `null` the same way.
- *
- * Deliberately narrower than `bash-prefix-parse.ts`'s own
- * `consumeLeadingCd`: that parser is quote-aware and also tolerates a
- * LEADING `VAR=value` before the `cd` (used only for the OLD aggregate's
- * `targetDir` fallback, computed once over the WHOLE command string, not
- * per segment — see `leadingCd` in `segmentAndCanonicalize`). This
- * function is segment-local and does not replicate that tolerance: a `cd`
- * segment preceded by an assignment (`A=1 cd /tmp/T && git status`) is NOT
- * recognised here (`tokenizeWithOffsets` yields three tokens, not two) and
- * falls through as "not cd-shaped" — the running cd-basis is left
- * UNCHANGED rather than guessed at, a narrower ceiling than the old
- * aggregate carries for that one construction, named here rather than
- * left implicit.
+ * Classification of a segment for `segmentViewOf`'s cd-basis tracking
+ * (task `98ad072f` groundwork; RESET variant added D-014, fix round,
+ * run `2026-08-02-per-repo-gate-scoping-redesign`):
+ *   - `{ kind: "cd", arg }` — a bare `cd <path>` invocation and nothing
+ *     else (no flags, no extra arguments, `<path>` a single
+ *     whitespace-delimited token). `arg` is the raw path text (still
+ *     possibly `~`-prefixed, quoted, or substitution-bearing — the caller
+ *     applies the SAME `isTildeTarget` / `isUnattributableTargetValue`
+ *     filters used for a git invocation's own target).
+ *   - `{ kind: "reset" }` — a segment that GENUINELY changes the shell's
+ *     directory to somewhere this module cannot (or should not) name as a
+ *     basis for a LATER segment: a bare `cd` with no argument (goes to
+ *     `$HOME`), `cd -` (goes to `$OLDPWD`), any OTHER flagged `cd` (`cd -P
+ *     /tmp/x`, `cd -L .` — three-or-more tokens; this module does not
+ *     resolve what `-P`/`-L`/`-e`/`-@` do to the destination), and `pushd`
+ *     / `popd` (directory-stack navigation this module does not track at
+ *     all, unlike `bash-prefix-parse.ts`'s own scope — module header). D-014
+ *     fix round: these previously fell through to "not cd-shaped" below,
+ *     which left the running basis UNCHANGED (silently INHERITING whatever
+ *     preceded them) — wrong, since the shell demonstrably did change
+ *     directory; `computeSegmentTarget`'s caller now resets the basis to
+ *     `null` for these instead.
+ *   - `{ kind: "none" }` — anything else: not a recognised `cd` shape at
+ *     all (a `pushd -0` `cd`-adjacent typo, an ordinary command, or a `cd`
+ *     preceded by an assignment — `bash-prefix-parse.ts`'s own
+ *     `consumeLeadingCd` tolerates a leading `VAR=value`, quoting, for the
+ *     OLD aggregate's `targetDir` fallback; this segment-local function
+ *     deliberately does not replicate that tolerance, a narrower ceiling
+ *     than the old aggregate carries for that one construction, named
+ *     here rather than left implicit). The running cd-basis passes through
+ *     UNCHANGED for this kind — this module has no evidence the shell's
+ *     directory changed, so it does not guess either way.
  */
-function parseCdSegmentTarget(segmentText: string): string | null {
+type CdSegmentClass =
+  | { kind: "cd"; arg: string }
+  | { kind: "reset" }
+  | { kind: "none" };
+
+function classifyCdSegment(segmentText: string): CdSegmentClass {
   const tokens = tokenizeWithOffsets(segmentText);
-  if (tokens.length !== 2) return null;
-  if (tokens[0]!.text !== "cd") return null;
+  if (tokens.length === 0) return { kind: "none" };
+  const head = tokens[0]!.text;
+  if (head === "pushd" || head === "popd") return { kind: "reset" };
+  if (head !== "cd") return { kind: "none" };
+  if (tokens.length === 1) return { kind: "reset" }; // bare `cd`, no argument
+  if (tokens.length > 2) return { kind: "reset" }; // flagged cd: `cd -P /tmp/x`
   const arg = tokens[1]!.text;
-  if (arg.length === 0 || arg.startsWith("-")) return null;
-  return arg;
+  if (arg.length === 0 || arg.startsWith("-")) return { kind: "reset" }; // `cd -`, `cd -P` alone
+  return { kind: "cd", arg };
 }
 
 /**
@@ -860,7 +899,25 @@ function computeSegmentTarget(
     return { ownTarget: null, effectiveTarget: null, outgoingCdBasis: incomingCdBasis };
   }
 
-  const cdArg = parseCdSegmentTarget(segmentText);
+  const cdClass = classifyCdSegment(segmentText);
+
+  // D-014 (fix round, run 2026-08-02-per-repo-gate-scoping-redesign): a
+  // segment that GENUINELY changes directory to somewhere this module
+  // cannot name (bare `cd`, `cd -`, a flagged `cd`, `pushd`, `popd`)
+  // RESETS the running basis to `null` for every later segment, rather
+  // than the pre-fix behaviour of leaving it unchanged (silently
+  // INHERITING whatever preceded it, as though the shell had not moved at
+  // all). This segment names nothing itself either. A PRECISION fix, not
+  // the security fix: `src/runtime/intercept.ts`'s D-011 additive
+  // attribution rule means an inherited target always also demands the
+  // cwd context, so an over-cautious reset here can only make a LATER
+  // segment fall back to cwd-only evaluation — identical to the shipped
+  // baseline for an unattributable form (D-003), never a fail-open.
+  if (cdClass.kind === "reset") {
+    return { ownTarget: null, effectiveTarget: null, outgoingCdBasis: null };
+  }
+
+  const cdArg = cdClass.kind === "cd" ? cdClass.arg : null;
   const rawOwn = cdArg !== null ? cdArg : canon.isGit ? canon.targetDir : null;
   const ownTarget =
     rawOwn !== null && !isTildeTarget(rawOwn) && !isUnattributableTargetValue(rawOwn)
@@ -869,7 +926,15 @@ function computeSegmentTarget(
 
   let effectiveTarget: string | null;
   if (ownTarget === null) {
-    effectiveTarget = incomingCdBasis;
+    // D-014: a recognised `cd <path>` segment whose OWN value came out
+    // unattributable (tilde/quoted/substitution) RESETS rather than
+    // inherits — the shell genuinely changed directory to somewhere this
+    // module cannot name, so silently keeping an earlier basis in place
+    // would be a confidently-wrong carry-forward, exactly the class this
+    // whole module exists to avoid. A segment that is NOT cd-shaped at
+    // all (`cdArg === null`, `cdClass.kind === "none"`) still inherits —
+    // this module has no evidence the shell moved, so it does not guess.
+    effectiveTarget = cdArg !== null ? null : incomingCdBasis;
   } else if (path.isAbsolute(ownTarget)) {
     effectiveTarget = ownTarget;
   } else {
@@ -925,10 +990,24 @@ export function normalizeCommand(command: string): NormalizedCommand {
  * command, and as the never-throws fallback (mirrors `normalizeCommand`'s
  * own defensive backstop — see its doc comment above).
  *
- * Computed inside the SAME segment walk `normalizeCommand` already runs
- * (`segmentAndCanonicalize`, `collectSegments: true`) — no additional pass
- * over the command string, so this stays O(length) the same way
- * `normalizeCommand` does. The ampersand-aware second pass
+ * THIS function's OWN call into `segmentAndCanonicalize` (`collectSegments:
+ * true`) is one walk, O(length) — the "no additional pass" claim is scoped
+ * to that ONE call, not to a caller's total work. CORRECTED (D-015, fix
+ * round, run 2026-08-02-per-repo-gate-scoping-redesign) — the prior wording
+ * here read "no additional pass over the command string" without that
+ * scoping, which a reader could take as "calling this costs nothing beyond
+ * `normalizeCommand`'s own walk." Measured false: `normalizeCommand(cmd)`
+ * and `segmentViewOf(cmd)` are two SEPARATE top-level calls, each running
+ * its own full `segmentAndCanonicalize` pass over the SAME string — a
+ * caller needing both (as `src/cli/policy/intercept.ts` does, for
+ * `normalized`/`truncated` and the segment view respectively) pays TWO
+ * walks, not one; measured +206% at the `MAX_NORMALIZE_LENGTH` bound
+ * (2.73 → 8.36 ms), harmless against the 1000 ms hook budget but not free.
+ * As of the same fix round, the one production caller only pays this
+ * second walk lazily, when some matching policy actually needs it (see
+ * `InterceptOptions.commandSegmentsThunk` in `src/runtime/intercept.ts`) —
+ * but that laziness lives in the CALLER, not in this function, which still
+ * does exactly one walk every time it runs. The ampersand-aware second pass
  * (`normalizeCommandAmpAware`) NEVER collects a segment view (always calls
  * `segmentAndCanonicalize` with `collectSegments: false`) — see that
  * function's own comment for why a directory extracted under the
@@ -1043,9 +1122,14 @@ function normalizeCommandInner(command: string): NormalizedCommand {
  *
  * `collectSegments` (task `98ad072f` groundwork, T-002): when `true`, ALSO
  * builds the per-segment view `segmentViewOf` returns (`CommandSegment[]`)
- * inside this SAME walk — no additional pass over `command`, just a
- * bounded amount of extra work per segment already being visited (see
- * `computeSegmentTarget`). `normalizeCommandInner` and
+ * inside this SAME walk — no SECOND walk INSIDE this one function call,
+ * just a bounded amount of extra work per segment already being visited
+ * (see `computeSegmentTarget`). Scoped claim only (D-015 correction, fix
+ * round, run 2026-08-02-per-repo-gate-scoping-redesign): this says nothing
+ * about a CALLER that invokes this function twice with different
+ * `collectSegments` values on the same string — see `segmentViewOf`'s own
+ * doc comment, corrected in the same fix round, for the measured cost of
+ * exactly that. `normalizeCommandInner` and
  * `normalizeCommandAmpAware` both pass `false`: the OLD aggregate never
  * needed this, and the amp-aware pass deliberately never exposes a segment
  * view at all (see that function's own comment). `segments` is `null` on
@@ -1114,13 +1198,42 @@ function segmentAndCanonicalize(
       // task `98ad072f` groundwork (T-002): O(1) extra work per segment
       // already being visited — see `segmentAndCanonicalize`'s own doc
       // comment for why this is not a second pass over `command`.
-      const seg = computeSegmentTarget(segmentText, result, cdBasis);
+      //
+      // D-014 (fix round, run 2026-08-02-per-repo-gate-scoping-redesign),
+      // two bash-truthfulness corrections applied around the call, not
+      // inside `computeSegmentTarget` itself (both are about WHICH basis
+      // crosses a BOUNDARY, not about one segment's own composition):
+      //
+      //   - a running cd-basis never crosses a bare `|` — each side of a
+      //     pipeline is bash's own subshell, so a `cd` on one side cannot
+      //     affect the other (measured bypass: `cd <forged> | git push`
+      //     really runs `git push` at the real cwd, never `<forged>`).
+      //     The segment immediately after a `|` is handed `null` as its
+      //     incoming basis, as though nothing preceded it.
+      //   - the OUTGOING basis resets to `null` whenever THIS segment's
+      //     own text contains a `)` (a subshell close riding along after
+      //     `BOUNDARY_RE`'s bare `(` boundary — this alphabet has no `)`
+      //     boundary of its own, see its header comment — so a subshell's
+      //     `cd` genuinely stops applying once the subshell exits: `(cd
+      //     <forged> ; echo hi) && git push` must not let `<forged>` reach
+      //     `git push`). THIS segment's own `effectiveTarget` is computed
+      //     from the UNCHANGED incoming basis first — a segment ending in
+      //     `)` (e.g. the `git status)` tail of `(cd A && git status)`)
+      //     still correctly attributes to A for itself, exactly as it
+      //     should while still inside the subshell; only what carries
+      //     FORWARD to the next segment is affected. A simple substring
+      //     check, not paren-depth tracking: conservative, precision-only
+      //     under D-011 (see `computeSegmentTarget`'s own D-014 note) — an
+      //     over-eager reset here can only make a later segment fall back
+      //     to cwd-only, never a fail-open.
+      const incomingBasis = precedingBoundaryToken === "|" ? null : cdBasis;
+      const seg = computeSegmentTarget(segmentText, result, incomingBasis);
       segments.push({
         text: result.text,
         ownTarget: seg.ownTarget,
         effectiveTarget: seg.effectiveTarget,
       });
-      cdBasis = seg.outgoingCdBasis;
+      cdBasis = segmentText.includes(")") ? null : seg.outgoingCdBasis;
     }
     if (result.isGit) {
       if (result.targetDir === null) {

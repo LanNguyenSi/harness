@@ -513,20 +513,35 @@ export async function runInterceptCli(
   const normalizedCommand: NormalizedCommand | undefined =
     bashCommand === null ? undefined : normalizeCommand(bashCommand);
   // Per-segment view for `intercept()`'s per-policy attribution (task
-  // `98ad072f`, T-003) — computed once here from the SAME `bashCommand`
-  // `normalizedCommand` above already uses, mirroring that field's own
-  // resolved-by-the-wrapper / computed-once-per-event pattern rather than
-  // making every per-repo-builtins policy call `segmentViewOf` itself.
-  // Pure string work (no filesystem), so — unlike the amp-aware thunk
-  // below — there is no reason to defer it behind a thunk: the cost is in
-  // the same class as `normalizeCommand`'s own eager call just above.
-  // `undefined` (no Bash command on this event) and `null` (returned by
-  // `segmentViewOf` itself when the command exceeded
-  // `MAX_NORMALIZE_LENGTH`) both mean "no segment view" and are threaded
-  // through as-is; `intercept()` treats both the same way (see
-  // `InterceptOptions.commandSegments`'s own doc comment).
-  const commandSegments: CommandSegment[] | null | undefined =
-    bashCommand === null ? undefined : segmentViewOf(bashCommand);
+  // `98ad072f`, T-003) — deferred behind a memoised thunk, mirroring
+  // `ampNormalizedCommandThunk` below (D-015 fix round, run
+  // 2026-08-02-per-repo-gate-scoping-redesign, correcting this comment's
+  // own prior claim). CORRECTED: this is NOT "the same class as
+  // `normalizeCommand`'s own eager call just above" — `segmentViewOf` runs
+  // its OWN full segmentation walk over `bashCommand` (`command-
+  // normalize.ts`'s `segmentAndCanonicalize`, a SEPARATE call from the one
+  // `normalizeCommand` just made on the SAME string), and computing it
+  // unconditionally, for every Bash event, regardless of whether any
+  // policy in the manifest even uses `${REPO}`/`${BRANCH}`/`at_head`, was
+  // measured as a real, avoidable second pass — +206% at
+  // `MAX_NORMALIZE_LENGTH` (2.73 → 8.36 ms; see `segmentViewOf`'s own doc
+  // comment in `command-normalize.ts`). Threading it as a self-memoising
+  // thunk instead — the exact shape `ampNormalizedCommandThunk` below
+  // already uses for the same reason — lets `intercept()`'s
+  // `usesPerRepoBuiltins` gate decide whether the walk happens at all: a
+  // manifest with none of those policies never calls `segmentViewOf`, and
+  // a manifest that DOES still only pays the cost once per event, on
+  // first use, not once per Bash event regardless of need.
+  let commandSegmentsCache: CommandSegment[] | null | undefined;
+  const commandSegmentsThunk: (() => CommandSegment[] | null) | undefined =
+    bashCommand === null
+      ? undefined
+      : () => {
+          if (commandSegmentsCache === undefined) {
+            commandSegmentsCache = segmentViewOf(bashCommand);
+          }
+          return commandSegmentsCache;
+        };
   // Memoised thunk for the ampersand-aware SECOND normalisation pass
   // (task aabbad63). Unlike `normalizedCommand` above — eagerly computed
   // once per Bash event, because `policyMatchesEvent`'s first two arms
@@ -667,7 +682,9 @@ export async function runInterceptCli(
       ...(riskContext && { riskContext }),
       ...(normalizedCommand && { normalizedCommand }),
       ...(ampNormalizedCommandThunk && { ampNormalizedCommandThunk }),
-      ...(commandSegments !== undefined && { commandSegments }),
+      ...(commandSegmentsThunk && { commandSegmentsThunk }),
+      ...(process.env.HARNESS_REPO !== undefined && { repoOverridden: true }),
+      ...(process.env.HARNESS_BRANCH !== undefined && { branchOverridden: true }),
     });
   } finally {
     // Tear down the pooled grounding-mcp session (no-op for injected test
