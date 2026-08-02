@@ -7,7 +7,12 @@ import { parse as parseYaml } from "yaml";
 import { realLedgerClient, runInterceptCli } from "../../src/cli/policy/intercept.js";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import { normalizeCommandAmpAware } from "../../src/runtime/command-normalize.js";
-import { policyMatchesEvent, type LedgerClient, type ToolEvent } from "../../src/runtime/intercept.js";
+import {
+  policyMatchesEvent,
+  type LedgerClient,
+  type PolicyDecision,
+  type ToolEvent,
+} from "../../src/runtime/intercept.js";
 import {
   parseManifest,
   type EnvironmentResolver,
@@ -918,6 +923,277 @@ describe("runInterceptCli — Risk Gate git context stays cwd-derived even when 
     expect(result.decisions).toHaveLength(1);
     expect(result.decisions[0]?.environment?.name).toBe("production");
     expect(result.blocked).toBe(true);
+  });
+});
+
+// Task 98ad072f (run 2026-08-02-per-repo-gate-scoping-redesign), T-001:
+// the three regressions measured against the FIRST (rejected) attempt at
+// per-command target-repo resolution — see
+// .ai/runs/2026-07-27-gate-target-repo-resolution/05-review-findings.md
+// (critical row, first "high | security" row, and the Pass 2/3 rows) and
+// D-016 in that run's 03-decisions.md. Written FIRST, BEFORE the redesign
+// (T-002/T-003) exists, so the new per-policy attribution can be built
+// against a red-first, then-green baseline instead of retrofitted.
+//
+// A command's git invocation(s) already carry a fully-tested target
+// extraction (`command-normalize.ts`'s `targetDir`), but it is
+// deliberately UNWIRED — see that module's STATUS header and the cwd-only
+// comment on `cwdGitContext` in `src/cli/policy/intercept.ts`. These three
+// tests pin that today's behaviour stays cwd-only regardless of what a
+// command's OWN git invocation(s) name, so a reintroduction of ANY
+// per-event global target — including the simplest possible one, wiring
+// `targetDir` straight into `cwdGitContext` — cannot land unnoticed. The
+// orchestrator's mutant at
+// `.ai/runs/2026-08-02-per-repo-gate-scoping-redesign/mutants/global-target-dir.patch`
+// does exactly that.
+//
+// Command-shape note: `command-normalize.ts`'s OWN `targetDir` already
+// refuses to resolve (falls back to `null`) when a command mixes a
+// PER-INVOCATION-targeted git call (`-C`/`--work-tree`/`--git-dir`/
+// `env -C`) with an unrelated bare invocation across `&&`/`;` — see its
+// module header's "every invocation agrees" rule — but NOT across `|`/
+// `||`, which it treats as staying in the same effective directory (its
+// own comment: "never a bare `|`, which stays in the SAME directory").
+// That asymmetry is exactly the historical shape of this run's Pass 2/3
+// findings ("closed for `&&`, still open for `|` and `||`"). Each test
+// below is written to pin TODAY's cwd-only behaviour across all four
+// separators regardless of that asymmetry; which sub-cases actually flip
+// under the orchestrator's naive mutant is documented per test.
+describe("runInterceptCli — 98ad072f mandatory regression pins (written FIRST against master 98ecb1b, per-repo gate-scoping redesign)", () => {
+  let cleanups: Array<() => void> = [];
+  afterEach(() => {
+    for (const c of cleanups) c();
+    cleanups = [];
+  });
+
+  function makeRepoFixture(name: string, branch: string): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-98ad072f-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const repo = path.join(root, name);
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+    return repo;
+  }
+
+  const emptyQuery: LedgerClient["query"] = async () => ({ kind: "ok", entries: [] });
+
+  // (a) Risk Gate (F1-shaped): a `when: environment.name: production`
+  // policy — the same shape as the shipped `gate-prod-destructive` /
+  // `gate-prod-destructive-approval` templates — still fires although a
+  // target-naming git read on a FOREIGN branch precedes the gated
+  // command. Superset of the existing F1 pin above (which covers only
+  // `&&`): `it.each` over all four separators.
+  //
+  // Measured (see this task's implementer report): under the
+  // orchestrator's mutant, the `&&`/`;` sub-cases stay green (command-
+  // normalize's own git-vs-non-git disagreement rule already nulls
+  // `targetDir` for those two), but `|`/`||` flip red — `targetDir` leaks
+  // through for those two separators today, exactly the historical Pass
+  // 2/3 asymmetry noted above.
+  describe("(a) Risk Gate: when: environment-production still fires despite a target-naming git read", () => {
+    const PROD_BRANCH_RESOLVER: EnvironmentResolver = {
+      name: "prod-branch",
+      environment: "production",
+      signals: { branch_patterns: ["main"] },
+    };
+
+    const GATE_PROD_DESTRUCTIVE: Policy = {
+      name: "gate-prod-destructive",
+      description: "block destructive actions classified as production",
+      trigger: { event: "PreToolUse", match: "Bash" },
+      when: { "environment.name": "production" },
+      requires: { ledger_tag: "risk-override:${SESSION_ID}" },
+      hook: "risk-gate",
+      enforcement: "block",
+    } as Policy;
+
+    it.each(["&&", ";", "|", "||"])(
+      "separator %s: fires (decision + audit row + block) with a foreign-branch git read ahead of the gated command",
+      async (sep) => {
+        const repoA = makeRepoFixture("prod-cwd-repo", "main");
+        const repoB = makeRepoFixture("prod-decoy-repo", "feature/x");
+        const recordCalls: PolicyDecision[] = [];
+        const ledger: LedgerClient = {
+          query: emptyQuery,
+          async record(decision) {
+            recordCalls.push(decision);
+          },
+        };
+        const { stream: out, output: outText } = captureStream();
+        const { stream: err } = captureStream();
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: `git -C ${repoB} log ${sep} echo hi` },
+              session_id: "sess-98ad072f-a",
+              cwd: repoA,
+            }),
+          ),
+          stdout: out,
+          stderr: err,
+          manifest: makeManifest({
+            policies: [GATE_PROD_DESTRUCTIVE],
+            resolvers: [PROD_BRANCH_RESOLVER],
+          }),
+          ledger,
+        });
+
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]?.environment?.name).toBe("production");
+        expect(result.decisions[0]?.outcome).toBe("deny");
+        expect(result.blocked).toBe(true);
+        // Deny payload actually emitted on the hook's stdout contract.
+        expect(outText()).toContain('"permissionDecision":"deny"');
+        // Audit row actually written, not just an in-memory decision.
+        expect(recordCalls).toHaveLength(1);
+        expect(recordCalls[0]?.policyName).toBe("gate-prod-destructive");
+        expect(recordCalls[0]?.environment?.name).toBe("production");
+      },
+    );
+  });
+
+  // (b) Push gate: a targeted (leading-`cd`) read chained with `git push`
+  // in ONE command demands the CWD repo's `${BRANCH}` tag, satisfied only
+  // via `currentHeadSha` resolved from the CWD repo — never the read
+  // target's branch or HEAD. The ledger entry below is deliberately
+  // STALE (outside the policy's `within: 10m` window) and satisfiable
+  // ONLY through the `at_head` bypass matching the CWD repo's sha, so an
+  // "allow" here is only possible when BOTH `${BRANCH}` and
+  // `currentHeadSha` were resolved from the cwd repo, not the decoy.
+  //
+  // Measured: this sub-case flips under the orchestrator's mutant (the
+  // leading-`cd` idiom carries no per-invocation override anywhere in the
+  // chain, so command-normalize's own "every invocation agrees" check
+  // does not null `targetDir` out — unlike the `-C`-only push combination,
+  // which command-normalize already refuses to resolve today).
+  describe("(b) push gate: targeted read + push in one command stays cwd-derived (tag AND currentHeadSha)", () => {
+    const CWD_SHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const DECOY_SHA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    function makeRepoFixtureWithSha(name: string, branch: string, sha: string): string {
+      const repo = makeRepoFixture(name, branch);
+      const refPath = path.join(repo, ".git", "refs", "heads", branch);
+      fs.mkdirSync(path.dirname(refPath), { recursive: true });
+      fs.writeFileSync(refPath, `${sha}\n`);
+      return repo;
+    }
+
+    const PREFLIGHT_PUSH_POLICY: Policy = {
+      name: "preflight-before-push",
+      description: "gate pushes on a per-branch preflight tag (real trigger regex)",
+      trigger: {
+        event: "PreToolUse",
+        match: "Bash",
+        bash_match: policyBashMatch("preflight-before-push"),
+      },
+      requires: { ledger_tag: "preflight:${BRANCH}", within: "10m", at_head: true },
+      hook: "require-preflight-push-evidence",
+      enforcement: "block",
+    } as Policy;
+
+    it("demands preflight:<cwd branch>, satisfied only via the cwd repo's HEAD sha", async () => {
+      const cwdRepo = makeRepoFixtureWithSha("push-cwd-repo", "cwd-branch", CWD_SHA);
+      const decoyRepo = makeRepoFixtureWithSha("push-decoy-repo", "decoy-branch", DECOY_SHA);
+
+      const staleHeadMatched = {
+        id: "e1",
+        content: `preflight:cwd-branch head:${CWD_SHA} — stale but head-pinned`,
+        createdAt: new Date(Date.now() - 3600_000).toISOString(),
+      };
+      const recordCalls: PolicyDecision[] = [];
+      const ledger: LedgerClient = {
+        async query() {
+          return { kind: "ok", entries: [staleHeadMatched] };
+        },
+        async record(decision) {
+          recordCalls.push(decision);
+        },
+      };
+
+      const { stream: out } = captureStream();
+      const { stream: err } = captureStream();
+      const result = await runInterceptCli({
+        stdin: streamFrom(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: `cd ${decoyRepo} && git log && git push` },
+            session_id: "sess-98ad072f-b",
+            cwd: cwdRepo,
+          }),
+        ),
+        stdout: out,
+        stderr: err,
+        manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+        ledger,
+      });
+
+      expect(result.decisions).toHaveLength(1);
+      expect(result.decisions[0]!.ledgerTag).toBe("preflight:cwd-branch");
+      expect(result.decisions[0]!.outcome).toBe("allow");
+      expect(result.decisions[0]!.reason).toContain(CWD_SHA.slice(0, 7));
+      expect(result.blocked).toBe(false);
+      expect(recordCalls).toHaveLength(1);
+      expect(recordCalls[0]?.ledgerTag).toBe("preflight:cwd-branch");
+    });
+  });
+
+  // (c) Non-git gated verb: a targeted git read chained with the real
+  // `review-before-merge-bash` trigger (`gh pr merge`) over each of the
+  // four separators demands the CWD repo's `${BRANCH}` tag, never the
+  // decoy's — the exact shape of the Pass 2/3 finding ("an explicit `-C`
+  // target still leaking into a later non-git gated verb").
+  //
+  // Measured: `&&`/`;` stay green under the orchestrator's mutant
+  // (command-normalize already nulls `targetDir` for a `-C`-targeted git
+  // call mixed with an unrelated non-git command across those two
+  // separators); `|`/`||` flip red (the documented "stays in the SAME
+  // directory" pipe exemption lets `targetDir` leak through), reproducing
+  // the historical asymmetry exactly.
+  describe("(c) merge verb: targeted read chained via &&, ;, |, || demands the CWD repo's tag (it.each)", () => {
+    const GH_MERGE_POLICY: Policy = {
+      name: "review-before-merge-bash",
+      description: "block gh pr merge without a ledger tag (real trigger regex)",
+      trigger: {
+        event: "PreToolUse",
+        match: "Bash",
+        bash_match: policyBashMatch("review-before-merge-bash"),
+      },
+      requires: { ledger_tag: "review:${BRANCH}" },
+      hook: "h",
+      enforcement: "block",
+    } as Policy;
+
+    it.each(["&&", ";", "|", "||"])(
+      "separator %s: a foreign-branch git read chained with gh pr merge demands review:<cwd branch>, never the decoy's",
+      async (sep) => {
+        const cwdRepo = makeRepoFixture("merge-cwd-repo", "cwd-merge-branch");
+        const decoyRepo = makeRepoFixture("merge-decoy-repo", "decoy-merge-branch");
+        const { stream: out } = captureStream();
+        const { stream: err } = captureStream();
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: `git -C ${decoyRepo} log ${sep} gh pr merge 1` },
+              session_id: "sess-98ad072f-c",
+              cwd: cwdRepo,
+            }),
+          ),
+          stdout: out,
+          stderr: err,
+          manifest: fakeManifest([GH_MERGE_POLICY]),
+          ledger: { query: emptyQuery, async record() {} },
+        });
+
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]!.ledgerTag).toBe("review:cwd-merge-branch");
+        expect(result.decisions[0]!.extractValues.BRANCH).toBe("cwd-merge-branch");
+      },
+    );
   });
 });
 
