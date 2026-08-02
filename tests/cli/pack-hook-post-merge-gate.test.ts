@@ -241,20 +241,17 @@ describe("runPackHookPostMergeGateCli — deny-wins precedence (task 19356be7 pi
     expect(ledgerQueryCalls).toBe(0);
   });
 
-  // Deadlock guard (decision D2): the understanding gate demands exactly
-  // this heredoc shape, so a report BODY mentioning mutation verbs as
-  // text must never make the approve call gate-eligible. The body below
-  // hits both a `\n`-anchored deny verb and a `&&`-anchored one.
-  it("allows `harness approve understanding` with a quoted-heredoc report body that mentions git push, without any ledger query", async () => {
+  // ACCEPTED RESIDUAL (decision D5/D6): a harness report heredoc whose
+  // body carries a mutation verb IS blocked on a merged tip. The strip
+  // that avoided this was removed after two review rounds found two
+  // families of under-blocks in it. Over-block direction, and the
+  // recommended recovery stays free (pinned above).
+  it("blocks a harness report heredoc whose body mentions a mutation, on a merged tip", async () => {
     const repo = makeRepoFixture("svc", "feat/cool", SHA_MERGED);
-    let ledgerQueryCalls = 0;
     const command = [
       "harness approve understanding <<'UNDERSTANDING_REPORT'",
-      "## Understanding Report",
-      "",
       "Verification:",
       "git push origin master",
-      "&& git commit -m x",
       "UNDERSTANDING_REPORT",
     ].join("\n");
     const result = await runPackHookPostMergeGateCli({
@@ -262,13 +259,9 @@ describe("runPackHookPostMergeGateCli — deny-wins precedence (task 19356be7 pi
       stdout: captureStream().stream,
       stderr: captureStream().stream,
       manifest: manifestWithPack(),
-      ledgerQuery: async () => {
-        ledgerQueryCalls += 1;
-        return [mergedEntry("svc", "feat/cool", SHA_MERGED)];
-      },
+      ledgerQuery: async () => [mergedEntry("svc", "feat/cool", SHA_MERGED)],
     });
-    expect(result.blocked).toBe(false);
-    expect(ledgerQueryCalls).toBe(0);
+    expect(result.blocked).toBe(true);
   });
 
   // The stderr note is the only signal in operator logs that deny-scope
@@ -295,9 +288,11 @@ describe("runPackHookPostMergeGateCli — deny-wins precedence (task 19356be7 pi
     expect(await run("git push origin master")).not.toContain("deny-scope wins");
   });
 
-  // The strip is harness-scoped: a quoted heredoc body handed to a shell
-  // interpreter REALLY executes (bash ground truth, decision D2) and must
-  // stay blocked, exactly as it is today.
+  // Regression pin against a reintroduced heredoc strip: a quoted heredoc
+  // body handed to a shell interpreter REALLY executes (bash ground truth),
+  // so this must stay blocked no matter how the classifier evolves. Both
+  // strip designs tried in this task freed shapes of this family; that is
+  // why the strip was removed (decision D5).
   it("still blocks a quoted heredoc whose consumer executes the body: bash <<'EOF' ... git push ... EOF", async () => {
     const repo = makeRepoFixture("svc", "feat/cool", SHA_MERGED);
     const result = await runPackHookPostMergeGateCli({

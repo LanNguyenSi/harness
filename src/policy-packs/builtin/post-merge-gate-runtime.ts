@@ -31,13 +31,12 @@
 //
 //   - DENY WINS over the escape allowlist (task 19356be7, REVERSES the
 //     original escape-first decision): the blocker classifies a command as
-//     gate-eligible iff the curated mutation matcher fires on the command
-//     AFTER harness-attached quoted-heredoc bodies are stripped
+//     gate-eligible iff the curated mutation matcher fires
 //     (`isGateEligibleCommand` below). The escape allowlist no longer
 //     short-circuits the whole command — under escape-first, any chained
 //     command containing an escape verb anywhere (`harness preflight &&
 //     git push origin master`, the documented normal workflow) skipped the
-//     gate entirely. Measured before changing, over a 69-row corpus with
+//     gate entirely. Measured before changing, over a 66-row corpus with
 //     bash ground truth: per-segment evaluation and deny-wins are
 //     0-divergent — a consequence of the pinned verb disjointness between
 //     the escape and deny lists — so the simplest (deny-wins) is
@@ -157,16 +156,14 @@ export const ESCAPE_GIT_BASH_RE =
  * spelling — mirrors the `npx` / absolute-path / `./node_modules/.bin`
  * robustness the `deny-kill-switch-bash` regex in
  * `src/cli/init/templates.ts` already established for the same class of
- * bypass concern. Since task 19356be7 its two jobs are (1) the deny
- * message's / diagnostics' vocabulary (a bare harness command stays free
- * via verb disjointness, not via a short-circuit) and (2) heredoc
- * ATTRIBUTION: `stripHarnessHeredocBodies` below reuses it as the single
- * source of truth for "this simple command is a harness invocation".
+ * bypass concern. Since task 19356be7 its only job is the deny message's
+ * / diagnostics' vocabulary: a bare harness command stays free through
+ * verb disjointness with the curated deny list, not through a
+ * short-circuit.
  *
  * Task 76671e5a: DELIBERATELY LEFT narrow, same reasoning as
  * `ESCAPE_GIT_BASH_RE` immediately above — an allow-side matcher, so
- * broadening its boundary alphabet is the loosening direction (and would
- * now also widen which heredoc bodies get stripped).
+ * broadening its boundary alphabet is the loosening direction.
  */
 export const ESCAPE_HARNESS_BASH_RE = /(?:^|\n|;|\||&&|\()\s*(?:\w+=\S+\s+)*(?:npx\s+|\S*\/)?harness\b/;
 
@@ -189,254 +186,39 @@ export function isCuratedMutationCommand(command: string): boolean {
 }
 
 /**
- * One heredoc operator found on a command line.
- *
- * `strip` is true only for operators whose body is BOTH inert as bash
- * syntax (quoted delimiter: no expansion, no command substitution) AND
- * consumed by a harness invocation (which never executes its stdin as
- * shell). Every other operator is still RECORDED — its body has to be
- * skipped in the right order so a later strippable operator lines its
- * body up correctly — but its lines are kept for classification.
- */
-interface HeredocOperator {
-  delimiter: string;
-  /** `<<-` form: leading tabs are stripped before the terminator compare. */
-  dashed: boolean;
-  strip: boolean;
-}
-
-/** Characters that end one simple command and start the next, for attribution. */
-const SEGMENT_BOUNDARY_CHARS = new Set([";", "|", "&", "(", ")", "`"]);
-
-/**
- * Quote-aware scan of ONE line for heredoc operators, in source order.
- *
- * Returns `null` when the line contains something this scanner cannot
- * resolve (an unterminated quote inside a delimiter word, or a delimiter
- * that would be shell-expanded). The caller then strips NOTHING at all —
- * fail-safe, because every strip mistake is an UNDER-block (lines bash
- * really executes would vanish from classification).
- *
- * Why a scanner and not a regex (reviewer finding, 2026-08-02; each shape
- * verified against real bash): a regex over the raw line cannot tell a
- * heredoc operator from the TEXT `"see <<'EOF' syntax"`, so it consumed
- * every following line — including real mutations — as a phantom body.
- * The same blindness made a fake operator inside quotes swallow the real
- * delimiter, and paired quoted+unquoted operators (`<<A <<'B'`) mis-order
- * the bodies so an unquoted body — where `$(...)` really expands — got
- * dropped. Tracking quote state fixes all of those in one pass.
- */
-function scanHeredocOperators(line: string): HeredocOperator[] | null {
-  const ops: HeredocOperator[] = [];
-  let quote: "'" | '"' | null = null;
-  let segmentStart = 0;
-  let i = 0;
-  while (i < line.length) {
-    const ch = line[i]!;
-    if (quote === "'") {
-      if (ch === "'") quote = null;
-      i++;
-      continue;
-    }
-    if (quote === '"') {
-      if (ch === "\\") {
-        i += 2;
-        continue;
-      }
-      if (ch === '"') quote = null;
-      i++;
-      continue;
-    }
-    if (ch === "\\") {
-      i += 2;
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      i++;
-      continue;
-    }
-    if (SEGMENT_BOUNDARY_CHARS.has(ch)) {
-      // A new simple command starts here, so attribution restarts. `)` and
-      // a backtick count too: in `bash $(harness-x) <<'EOF'` the consumer
-      // is `bash`, not the substitution's contents — without this the tail
-      // read as a harness invocation and the body was wrongly stripped.
-      i++;
-      segmentStart = i;
-      continue;
-    }
-    if (ch === "<" && line[i + 1] === "<") {
-      if (line[i + 2] === "<") {
-        // `<<<` herestring: its word sits on this line, it frames no body.
-        i += 3;
-        continue;
-      }
-      const tail = line.slice(segmentStart, i);
-      let j = i + 2;
-      let dashed = false;
-      if (line[j] === "-") {
-        dashed = true;
-        j++;
-      }
-      while (line[j] === " " || line[j] === "\t") j++;
-      const word = readDelimiterWord(line, j);
-      if (word === null) return null;
-      ops.push({
-        delimiter: word.value,
-        dashed,
-        strip: word.quoted && ESCAPE_HARNESS_BASH_RE.test(tail),
-      });
-      i = word.end;
-      continue;
-    }
-    i++;
-  }
-  return quote === null ? ops : null;
-}
-
-/**
- * Read a heredoc delimiter word starting at `start`, concatenating the
- * adjacent quoted / escaped / bare parts exactly as bash does — `<<'U'"R"`
- * is the single delimiter `UR`, and because SOME part was quoted the body
- * is non-expanding. Returns `null` for anything unresolvable: an
- * unterminated quote, an empty word, or a bare part containing `$` or a
- * backtick (bash would expand those, so the real delimiter is unknowable
- * from the text alone).
- */
-function readDelimiterWord(
-  line: string,
-  start: number,
-): { value: string; quoted: boolean; end: number } | null {
-  let i = start;
-  let value = "";
-  let quoted = false;
-  while (i < line.length) {
-    const ch = line[i]!;
-    if (ch === "'") {
-      const end = line.indexOf("'", i + 1);
-      if (end === -1) return null;
-      value += line.slice(i + 1, end);
-      quoted = true;
-      i = end + 1;
-      continue;
-    }
-    if (ch === '"') {
-      let j = i + 1;
-      let buf = "";
-      while (j < line.length && line[j] !== '"') {
-        if (line[j] === "\\" && j + 1 < line.length) {
-          buf += line[j + 1]!;
-          j += 2;
-          continue;
-        }
-        buf += line[j]!;
-        j++;
-      }
-      if (j >= line.length) return null;
-      value += buf;
-      quoted = true;
-      i = j + 1;
-      continue;
-    }
-    if (ch === "\\") {
-      if (i + 1 >= line.length) return null;
-      value += line[i + 1]!;
-      quoted = true;
-      i += 2;
-      continue;
-    }
-    if (/[\s;|&<>()`]/.test(ch)) break;
-    if (ch === "$") return null;
-    value += ch;
-    i++;
-  }
-  if (value === "") return null;
-  return { value, quoted, end: i };
-}
-
-/**
- * Strip the BODIES (and terminator lines) of quoted-delimiter heredocs
- * that are attached to a harness invocation, returning the remaining
- * command text for deny classification. Task 19356be7, decision D2.
- *
- * WHY: with deny-wins precedence (see `isGateEligibleCommand`), an
- * `harness approve understanding <<'UNDERSTANDING_REPORT'` call would
- * become gate-eligible whenever the report BODY mentions a mutation verb
- * at a boundary position — but that body is data on harness's stdin,
- * never executed by bash. Blocking it would deadlock the understanding
- * gate (which demands exactly this heredoc) against this gate;
- * live-reproduced 2026-08-02 against the solution-acceptance push gate,
- * where an Understanding Report containing a push literal was denied as
- * if it were a push.
- *
- * WHY HARNESS-ONLY: a quoted heredoc body is inert as BASH syntax, but
- * the consuming command can still execute it as a script — `bash <<'EOF'
- * ... git push ... EOF` really runs the push (measured, bash ground
- * truth) and is gate-eligible today; a general strip would free it. The
- * harness CLI never executes its stdin as shell, so the strip is scoped
- * to heredocs whose consuming simple command matches
- * `ESCAPE_HARNESS_BASH_RE`. Non-harness inert heredocs (`cat <<'DOC'`)
- * stay in the existing accepted false-positive class — status quo, not
- * widened, not narrowed (general heredoc awareness is task 5b1b24fb).
- *
- * Mechanics: line-wise, driven by `scanHeredocOperators`. The operator
- * LINE itself is always kept (a chain after the operator — `... <<'UR' &&
- * git push` — sits on that line and stays visible; bash starts the body
- * only on the NEXT line). Bodies of ALL operators on a line are skipped in
- * source order, because that is the order bash assigns them, but only a
- * strippable operator's lines are dropped — the rest are put back, so a
- * `<<A <<'B'` pair cannot make the unquoted (expanding) body disappear.
- * Body lines run up to the first line equal to the delimiter (`<<-`: after
- * stripping leading tabs; a trailing `\r` is tolerated so a CRLF
- * terminator cannot silently push the strip past real commands). An
- * unterminated heredoc consumes to end of string — bash frames it the same
- * way. Whole-line removal can never merge two half-tokens into a new
- * match.
- *
- * Fail-safe: an unparseable operator line strips NOTHING from the whole
- * command (every strip mistake would be an under-block). No length cap —
- * measured 0.75 ms on a 209 KB / 20,000-line heredoc against a 5,000 ms
- * hook budget — and a cap would reintroduce the deadlock for a large
- * report.
- */
-export function stripHarnessHeredocBodies(command: string): string {
-  if (!command.includes("<<")) return command;
-  const lines = command.split("\n");
-  const out: string[] = [];
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i]!;
-    out.push(line);
-    const ops = scanHeredocOperators(line);
-    if (ops === null) return command;
-    i++;
-    for (const op of ops) {
-      const consumed: string[] = [];
-      while (i < lines.length) {
-        const raw = lines[i]!;
-        let cmp = op.dashed ? raw.replace(/^\t+/, "") : raw;
-        if (cmp.endsWith("\r")) cmp = cmp.slice(0, -1);
-        i++;
-        consumed.push(raw);
-        if (cmp === op.delimiter) break;
-      }
-      if (!op.strip) out.push(...consumed);
-    }
-  }
-  return out.join("\n");
-}
-
-/**
  * The blocker's single classification entry point (task 19356be7): a
- * command is gate-eligible iff the curated mutation matcher fires after
- * harness-attached quoted-heredoc bodies are stripped. Everything else —
- * recovery commands, read-only git, unrelated shell, harness invocations
- * including report heredocs — is allowed by the hook BEFORE any manifest
- * load or ledger query, preserving the recovery-never-starved property
- * the escape-first ordering used to provide.
+ * command is gate-eligible iff the curated mutation matcher fires.
+ * Everything else — the whole recovery vocabulary, read-only git,
+ * unrelated shell — is allowed by the hook BEFORE any manifest load or
+ * ledger query, preserving the recovery-never-starved property the
+ * escape-first ordering used to provide.
+ *
+ * A thin wrapper over `isCuratedMutationCommand` by DELIBERATE choice,
+ * not by accident. An earlier iteration of this task pre-processed the
+ * command here, stripping the bodies of quoted-delimiter heredocs fed to
+ * a harness invocation, so that an `harness approve understanding <<'…'`
+ * report body mentioning a mutation verb would not become gate-eligible.
+ * Two review rounds found two successive families of UNDER-blocks in that
+ * pre-processing (bodies consumed that bash really executes), both rooted
+ * in the same cause: deciding where a heredoc body BEGINS requires
+ * re-implementing bash's quote and word grammar on the permissive side of
+ * a security boundary. Tasks `dbc6d303` and `5b1b24fb` had already been
+ * halted for that same reason. It was therefore removed rather than
+ * patched a third time; see
+ * `.ai/runs/2026-08-02-post-merge-gate-escape-precedence/03-decisions.md`
+ * D5/D6 for the measurement history, and task `5b1b24fb` for the real
+ * fix, which belongs at the `bash_match` layer for every surface at once.
+ *
+ * Accepted consequence, OVER-block direction: a harness report heredoc
+ * whose body carries a boundary-anchored mutation verb IS gate-eligible.
+ * It only denies while the branch tip equals a recorded merged tip, and
+ * `git switch <default>` — the gate's own recommended recovery — stays
+ * free. Same residual class as the quoted-text false positives this
+ * change already accepts. Do NOT reintroduce a strip here without a
+ * design that does not re-derive bash's grammar.
  */
 export function isGateEligibleCommand(command: string): boolean {
-  return isCuratedMutationCommand(stripHarnessHeredocBodies(command));
+  return isCuratedMutationCommand(command);
 }
 
 /**

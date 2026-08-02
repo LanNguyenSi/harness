@@ -87,8 +87,7 @@ The pack contributes two hooks to `settings.json`:
    `blocking: hard`) on `Bash`, in this order:
    1. **Gate-eligibility classification**, checked FIRST, unconditionally,
       before any manifest load or ledger query: the curated mutation
-      match (see "Deny scope" below), applied after quoted-heredoc bodies
-      attached to a harness invocation are stripped. Commands outside the
+      match (see "Deny scope" below). Commands outside the
       deny scope pass through untouched — which unconditionally covers
       the whole recovery vocabulary (see "Escape hatches" below). **Deny
       wins** when one command chains recovery vocabulary with a curated
@@ -135,10 +134,9 @@ are ever gate-eligible):
 - `git branch -d`, `git branch -D`
 - `git stash list`, `git stash show`
 - any `harness ...` invocation (any spelling: `npx harness ...`,
-  `/usr/local/bin/harness ...`, `./node_modules/.bin/harness ...`),
-  including report heredocs (`harness approve understanding <<'...'`) —
-  a quoted-delimiter heredoc body fed to harness is stdin data, never
-  bash commands, and is stripped before deny classification.
+  `/usr/local/bin/harness ...`, `./node_modules/.bin/harness ...`).
+  NOTE: this covers the harness command itself, not the CONTENT of a
+  heredoc fed to it — see the accepted over-block in "Known gaps".
 
 Since task 19356be7, chaining a recovery verb with a curated mutation
 does **not** exempt the mutation: `harness preflight && git push origin
@@ -236,22 +234,21 @@ binary; this pack has no version probe registered. Declaring
   by a chained escape verb. Real blocks from this only occur while the
   branch tip equals a recorded merged tip, and the recovery vocabulary
   stays free.
-- **The heredoc strip is a scanner, not a shell**: `stripHarnessHeredocBodies`
-  tracks quote state, concatenated delimiter words (`<<'U'"R"`), `<<-`,
-  `<<<`, and command-substitution boundaries, and it consumes the bodies of
-  ALL operators on a line in bash's own order so a `<<A <<'B'` pair cannot
-  make the expanding body vanish. It is still an approximation. Its failure
-  direction is an UNDER-block (a wrongly-consumed body hides lines bash
-  really runs), so anything it cannot resolve — an unterminated quote, a
-  delimiter bash would expand — strips NOTHING from the whole command.
-  Shapes that defeated the first, regex-based version are pinned as
-  regression tests. General heredoc/quote awareness for every `bash_match`
-  surface remains task `5b1b24fb`.
-- **Attribution crosses a bare `&`**: `sleep 0 & harness note <<'EOF'` is
-  attributed to the harness invocation, because bash really does start a
-  new command there. This is the one shape where the new classifier is
-  more permissive than the old escape-first one; bash runs no mutation in
-  it (the body is harness stdin). Pinned, not incidental.
+- **Harness report heredocs are gate-eligible (accepted over-block)**:
+  `harness approve understanding <<'UR' … UR` is classified by its full
+  text, so a report BODY mentioning a curated mutation verb at a boundary
+  position makes the call gate-eligible. Only denies while the pack is
+  enabled AND the branch tip equals a recorded merged tip; `git switch
+  <default>` stays free, so it is an annoyance, not a lockout. An earlier
+  iteration of this change stripped such bodies before classification;
+  two review rounds found two successive families of UNDER-blocks in that
+  stripping (bodies consumed that bash really executes), both rooted in
+  having to re-derive bash's quote and word grammar to find where a body
+  begins. Tasks `dbc6d303` and `5b1b24fb` had already been halted for the
+  same cause, so the mechanism was removed instead of patched again. Task
+  `5b1b24fb` owns the real fix, at the `bash_match` layer for every
+  surface at once. **Do not reintroduce a strip here** without a design
+  that does not re-derive bash's grammar.
 - **Inverted trust-boundary residual**: a merged fact written by any
   means other than the producer (e.g. directly via
   `mcp__grounding-mcp__ledger_add`) that happens to exactly match the

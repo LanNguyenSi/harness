@@ -211,11 +211,8 @@ ${runtime}${runtime === "codex" ? " (UNSUPPORTED — see \"Known gaps\" below; b
    \`Bash\`: checked in this order —
    a. **Gate-eligibility classification first, unconditionally** (before
       any manifest load or ledger query): the curated mutation matcher
-      \`${CURATED_MUTATION_BASH_RE.source}\`, applied after quoted-heredoc
-      bodies attached to a harness invocation are stripped (report
-      heredocs like \`harness approve understanding <<'...'\` are stdin
-      data, not commands). Commands it does not match pass through
-      untouched — that unconditionally covers the whole recovery
+      \`${CURATED_MUTATION_BASH_RE.source}\`. Commands it
+      does not match pass through untouched — that unconditionally covers the whole recovery
       vocabulary (\`${ESCAPE_GIT_BASH_RE.source}\` and
       \`${ESCAPE_HARNESS_BASH_RE.source}\`), since none of those verbs are
       curated mutations. **Deny wins over the recovery vocabulary** when

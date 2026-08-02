@@ -345,6 +345,24 @@ describe("post-merge-gate comment: escape-first precedence is not taught anywher
     ],
   ];
 
+  // The `--help` text is the fifth operator-visible surface and was the one
+  // the round-1 sweep left unpinned: reverting it to the escape-first
+  // wording left the ENTIRE suite green (mutation-confirmed). It is not a
+  // YAML comment block, so it gets its own shape rather than joining
+  // SURFACES above.
+  it("harness pack hook post-merge-gate --help no longer claims the escape list is checked first", () => {
+    const text = readFileSync(new URL("../../src/cli/index.ts", import.meta.url), "utf8");
+    const start = text.indexOf('.command("post-merge-gate")');
+    expect(start, "post-merge-gate command not found").toBeGreaterThanOrEqual(0);
+    const block = text
+      .slice(start, text.indexOf(".option(", start))
+      .replace(/\s*\+\s*\n\s*"/g, "")
+      .replace(/\s+/g, " ");
+    expect(block).not.toMatch(/checked first, unconditionally/i);
+    expect(block).not.toMatch(/escape allowlist/i);
+    expect(block).toMatch(/does NOT exempt the mutation/);
+  });
+
   it.each(SURFACES)("%s no longer claims the escape list is checked first", (_label, read) => {
     const text = read();
     // Only assert on the post-merge-gate comment block, so an unrelated
