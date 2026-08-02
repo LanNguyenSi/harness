@@ -775,28 +775,27 @@ describe("runInterceptCli — REPO / BRANCH builtins resolve from event.cwd", ()
     expect(result.decisions[0]!.ledgerTag).toBe("preflight:main");
   });
 
-  // Explicit regression pin for the split decided in run
-  // 2026-07-27-gate-target-repo-resolution: a command naming a FOREIGN
-  // target repository (`git -C <B>`) resolves ${REPO}/${BRANCH} from the
-  // CWD's own repository, never the named target, so a future
-  // reintroduction of a per-command target-directory resolution cannot
-  // land unnoticed. A per-command resolution was built and reviewed on
-  // this same run but removed before shipping (three consecutive review
-  // rounds each found a different way it leaked into the wrong
-  // evaluation) — see CHANGELOG.md and command-normalize.ts's module
-  // header for the full account.
-  // All four spellings the removed resolution understood are pinned, not
-  // just `git -C`. A reviewer demonstrated that a reintroduction limited
-  // to the leading-`cd` target — the spelling that looks safest, since a
-  // `cd` genuinely persists for the rest of the command — leaves a
-  // single-spelling pin entirely green.
+  // Pin for the unattributable-fallback rule (98ad072f, D-003): this
+  // policy's trigger is `match: "Bash"` with NO `bash_match`, so it
+  // matches the EVENT as a whole and no segment can satisfy it — the
+  // per-policy attribution added in T-003 therefore never applies, and
+  // ${REPO}/${BRANCH} resolve from the cwd for every target-naming
+  // spelling. (The shipped preflight-before-investigation policy DOES
+  // carry a bash_match and IS attributed — that behaviour is pinned in
+  // the T-003 describe blocks below. Historical context for the four
+  // spellings: the 07-27 run's removed per-event resolution understood
+  // exactly these, see CHANGELOG.md.)
+  // All four spellings stay pinned, not just `git -C`, so a future
+  // change that widens attribution to whole-event triggers — the
+  // fail-open direction for policies whose template semantics assume the
+  // session repo — cannot land on a single-spelling pin staying green.
   it.each([
     ["git -C", (b: string) => `git -C ${b} status`],
     ["env -C", (b: string) => `env -C ${b} git status`],
     ["--work-tree/--git-dir", (b: string) => `git --work-tree=${b} --git-dir=${b}/.git status`],
     ["leading cd", (b: string) => `cd ${b} && git status`],
   ])(
-    "%s: a command naming a foreign target repo resolves ${REPO}/${BRANCH} to the cwd repo, not the named target",
+    "%s: a policy without bash_match (whole-event trigger) keeps cwd-derived ${REPO}/${BRANCH} despite a foreign target",
     async (_spelling, build) => {
       const repoA = makeRepoFixture("split-cwd-repo", "main");
       const repoB = makeRepoFixture("split-foreign-target", "feature/other");
@@ -825,21 +824,20 @@ describe("runInterceptCli — REPO / BRANCH builtins resolve from event.cwd", ()
 
 // F1 fix (CRITICAL, review round 2026-07-27): the Risk Gate's git context
 // (feeding `environments.resolvers[].signals.branch_patterns`) must
-// resolve from the hook's own cwd, NEVER from a command's TARGET repo. A
-// git-target-aware `${REPO}`/`${BRANCH}` was built and reviewed on this
-// same run (a `git -C` / `env -C` / `--work-tree` awareness) but was
-// removed before shipping — see `src/cli/policy/intercept.ts` and
-// `CHANGELOG.md`; `${REPO}`/`${BRANCH}` are cwd-only again. During that
-// run's development, `resolverGit` briefly fell back to the SAME
-// target-aware git context ${REPO}/${BRANCH} used at the time, so a
-// `production` + `branch_patterns: [main]` resolver classified the
-// environment from the COMMAND's target repo's branch instead of the cwd
-// repo's — a command like `git -C <repo-on-feature/x> log && rm -rf
-// /data` silently skipped the resolver (and every `when:`-gated policy
-// keyed on it) because the resolver read feature/x's branch, not the cwd
-// repo's `main`. Fixed before that version ever shipped; this suite
-// pins `resolverGit` staying cwd-only regardless of what the trigger
-// normaliser's own (now-unwired) target-directory extraction finds.
+// resolve from the hook's own cwd, NEVER from a command's TARGET repo.
+// During the 07-27 run's development, `resolverGit` briefly fell back to
+// a target-aware git context, so a `production` + `branch_patterns:
+// [main]` resolver classified the environment from the COMMAND's target
+// repo's branch instead of the cwd repo's — a command like `git -C
+// <repo-on-feature/x> log && rm -rf /data` silently skipped the resolver
+// (and every `when:`-gated policy keyed on it) because the resolver read
+// feature/x's branch, not the cwd repo's `main`. Fixed before that
+// version ever shipped. Since 98ad072f (T-003), `${REPO}`/`${BRANCH}`
+// ARE per-policy attributed to the trigger-satisfying segment's target —
+// but the Risk Gate context is a separate, deliberately untouched path:
+// this suite pins `resolverGit` staying cwd-only regardless of any
+// target the segment view or the (still-unwired) aggregate extraction
+// finds.
 describe("runInterceptCli — Risk Gate git context stays cwd-derived even when a target-naming git invocation precedes the gated command (F1 regression, review round 2026-07-27)", () => {
   let cleanups: Array<() => void> = [];
   afterEach(() => {
