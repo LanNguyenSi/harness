@@ -1346,6 +1346,21 @@ describe("segmentViewOf", () => {
         command: "git --git-dir=/tmp/repoX/.git --work-tree=/tmp/repoOTHER status",
         expectedTarget: "/tmp/repoX",
       },
+      // D-018 (fix round 3, pass-3 CRITICAL) rows, adopted per the review's
+      // "extend the D-017 differential table" missing test: more than one
+      // repo-relocating option is unattributable, never a first-token
+      // guess — so a future regression that reinstates first-wins flips
+      // these two rows from `null` back to a real path.
+      {
+        label: "-C <B> -C <A> (two -C, DIVERGENT: unattributable, D-018)",
+        command: "git -C /tmp/repoB -C /tmp/repoA status",
+        expectedTarget: null,
+      },
+      {
+        label: "-C <X> + --git-dir=<X>/.git (idempotent SAME value: stays X, D-018)",
+        command: "git -C /tmp/repoX --git-dir=/tmp/repoX/.git status",
+        expectedTarget: "/tmp/repoX",
+      },
     ];
     for (const c of cases) {
       it(`${c.label}: "${c.command}" -> ownTarget/effectiveTarget = ${JSON.stringify(c.expectedTarget)}`, () => {
@@ -1355,6 +1370,97 @@ describe("segmentViewOf", () => {
         expect(segs![0]!.effectiveTarget).toBe(c.expectedTarget);
       });
     }
+  });
+
+  // D-018 (fix round 3, pass-3 CRITICAL, run 2026-08-02-per-repo-gate-
+  // scoping-redesign): pass 3 measured (against real git 2.34.1) that
+  // `git -C <forge> -C <realA> push` was attributed to the FIRST `-C`
+  // (`<forge>`) while git composes ALL `-C`/`--git-dir` options
+  // cumulatively and actually runs in `<realA>` — letting an agent name a
+  // decoy repo first and have a gate's evidence demand follow it instead
+  // of the repo the verb truly targets. The fix confines the own-target
+  // REPLACE (`relocateTargetDir`) to invocations naming EXACTLY ONE
+  // resolved repo-relocating option; two or more (in any combination, or
+  // via a wrapping `env -C` that diverges from git's own flag) fall back
+  // to unattributable (`null`) — the same cwd-fallback shape D-003
+  // already documents for every other unattributable form, never worse
+  // than the shipped cwd-only engine.
+  describe("D-018: more than one repo-relocating option is unattributable, not a first-token guess (fix round 3, pass-3 CRITICAL)", () => {
+    it("git -C <B> -C <A> status -> null (RED before the fix: was <B>, the first -C, not what real git runs in)", () => {
+      const segs = segmentViewOf("git -C /tmp/repoB -C /tmp/repoA status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+    });
+
+    it("git -C <B> -C ../A status -> null (second -C RELATIVE: still two options, not composed to a guessed path)", () => {
+      const segs = segmentViewOf("git -C /tmp/repoB -C ../A status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+    });
+
+    it("git -C <B> --git-dir=<A>/.git status -> null (-C then --git-dir, divergent)", () => {
+      const segs = segmentViewOf("git -C /tmp/repoB --git-dir=/tmp/repoA/.git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+    });
+
+    it("git --git-dir=<A>/.git -C <B> status -> null (--git-dir then -C, order-independent, divergent)", () => {
+      const segs = segmentViewOf("git --git-dir=/tmp/repoA/.git -C /tmp/repoB status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+    });
+
+    it("git --git-dir=<A>/.git --git-dir=<B>/.git status -> null (--git-dir doubled, divergent)", () => {
+      const segs = segmentViewOf("git --git-dir=/tmp/repoA/.git --git-dir=/tmp/repoB/.git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+    });
+
+    it("env -C <A> git -C <B> status -> null (env -C wrap diverges from git's own absolute -C)", () => {
+      const segs = segmentViewOf("env -C /tmp/repoA git -C /tmp/repoB status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe(null);
+      expect(segs![0]!.effectiveTarget).toBe(null);
+    });
+
+    it("env -C <A> git -C <A> status -> A (env -C wrap AGREES with git's own -C: idempotent, not ambiguous)", () => {
+      const segs = segmentViewOf("env -C /tmp/repoA git -C /tmp/repoA status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe("/tmp/repoA");
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoA");
+    });
+
+    it("git -C <X> -C <X> status -> X (same value repeated: idempotent, not ambiguous)", () => {
+      const segs = segmentViewOf("git -C /tmp/repoX -C /tmp/repoX status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe("/tmp/repoX");
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoX");
+    });
+
+    it("git -C <X> status (single -C, unaffected regression check) -> X", () => {
+      const segs = segmentViewOf("git -C /tmp/repoX status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe("/tmp/repoX");
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoX");
+    });
+
+    it("git --git-dir=<X>/.git status (single --git-dir, unaffected regression check) -> X", () => {
+      const segs = segmentViewOf("git --git-dir=/tmp/repoX/.git status");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.ownTarget).toBe("/tmp/repoX");
+      expect(segs![0]!.effectiveTarget).toBe("/tmp/repoX");
+    });
+
+    it("cwd=A, -C B -C A push: cd-basis unaffected, still falls through to whatever preceding cd named (none here) -> null, same as bare unattributable", () => {
+      const segs = segmentViewOf("git -C /tmp/repoB -C /tmp/repoA push");
+      expect(segs).not.toBeNull();
+      expect(segs![0]!.effectiveTarget).toBe(null);
+    });
   });
 
   describe("multi-segment cd-basis propagation across every BOUNDARY_RE separator", () => {

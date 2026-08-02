@@ -3520,4 +3520,227 @@ describe("runInterceptCli — 98ad072f FIX ROUND: D-011 critical bypass closure 
       }
     });
   });
+
+  // Pass-3 review CRITICAL (pre-existing since the T-002 base, not
+  // introduced by either fix round — D-016/D-018 halt-counter accounting
+  // in 03-decisions.md): orchestrator's own reproduction against REAL git
+  // 2.34.1. cwd = realProtectedA, ledger holds only a forged
+  // `preflight:forge-branch` tag:
+  //
+  //   git push                          -> deny  preflight:a-branch (correct)
+  //   git -C <forge> -C <realA> push    -> ALLOW preflight:forge-branch (BYPASS)
+  //
+  // git composes multiple `-C` cumulatively (later absolute wins) and
+  // actually runs in `<realA>` (== cwd here); the pre-fix engine
+  // attributed to the FIRST `-C` (`<forge>`) and REPLACEd the cwd demand.
+  // `peelGitGlobalOptions`'s `relocateTargetDir` now nulls out whenever
+  // more than one resolved repo-relocating option is present (D-018),
+  // falling back to the cwd context — exactly the shipped, cwd-only
+  // engine's own demand, never a forged first-token tag.
+  describe("D-018: more than one repo-relocating option falls back to cwd, never a first-token guess (pass 3 CRITICAL, fix round 3, last autonomous)", () => {
+    const A_SHA = "cccccccccccccccccccccccccccccccccccccccc";
+
+    function ledgerWithEntries(contents: string[]): LedgerClient {
+      const entries = contents.map((content, i) => ({
+        id: `e${i}`,
+        content,
+        createdAt: new Date().toISOString(),
+      }));
+      return {
+        async query() {
+          return { kind: "ok", entries };
+        },
+        async record() {
+          /* no-op */
+        },
+      };
+    }
+
+    const PREFLIGHT_TAG_POLICY: Policy = {
+      name: "preflight-before-tag-d018-probe",
+      description: "gate git tag on a per-repo preflight tag (synthetic verb-coverage probe)",
+      trigger: { event: "PreToolUse", match: "Bash", bash_match: "git\\s+tag" },
+      requires: { ledger_tag: "preflight:${REPO}" },
+      hook: "require-preflight-evidence",
+      enforcement: "block",
+    } as Policy;
+
+    describe("push (BRANCH-scoped, at_head + within — the orchestrator's own repro shape: cwd IS the second -C target)", () => {
+      it("only the forged first -C's evidence on record: DENIES, demanding cwd/second-C's OWN tag (never the first-token guess)", async () => {
+        const cwdRealA = makeRepoFixtureWithSha("multic-cwd-real-a", "a-branch", A_SHA);
+        const forgedB = makeRepoFixture("multic-forged-b", "forge-branch");
+        const ledger = ledgerWithEntries(["preflight:forge-branch — evidence for the forged first -C only"]);
+
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: `git -C ${forgedB} -C ${cwdRealA} push` },
+              session_id: "sess-d018-push-deny",
+              cwd: cwdRealA,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+          ledger,
+        });
+
+        expect(result.blocked).toBe(true);
+        expect(result.decisions).toHaveLength(1);
+        // A pre-fix engine attributed to the FIRST -C (forgedB) and would
+        // show "preflight:forge-branch" here, satisfied by the ledger
+        // above, so it would have ALLOWED — the exact bypass measured.
+        expect(result.decisions[0]!.ledgerTag).toBe("preflight:a-branch");
+        expect(result.decisions[0]!.outcome).toBe("deny");
+
+        // "never weaker than shipped": the SAME ledger, driven against a
+        // bare `git push` with no -C at all (what the shipped, cwd-only
+        // engine would have evaluated), denies with the IDENTICAL reason.
+        const baseline = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: "git push" },
+              session_id: "sess-d018-push-deny",
+              cwd: cwdRealA,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+          ledger: { query: ledger.query, async record() {} },
+        });
+        expect(baseline.decisions).toHaveLength(1);
+        expect(baseline.decisions[0]!.outcome).toBe("deny");
+        expect(result.decisions[0]!.reason).toBe(baseline.decisions[0]!.reason);
+      });
+
+      it("cwd/second-C's own evidence on record: ALLOWS (the exact orchestrator repro row that must flip from the pre-fix ALLOW-on-forgery)", async () => {
+        const cwdRealA = makeRepoFixtureWithSha("multic-cwd-real-a2", "a-branch", A_SHA);
+        const forgedB = makeRepoFixture("multic-forged-b2", "forge-branch");
+        const ledger = ledgerWithEntries([`preflight:a-branch head:${A_SHA} — evidence for the real cwd`]);
+
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: `git -C ${forgedB} -C ${cwdRealA} push` },
+              session_id: "sess-d018-push-allow",
+              cwd: cwdRealA,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([PREFLIGHT_PUSH_POLICY]),
+          ledger,
+        });
+
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]!.ledgerTag).toBe("preflight:a-branch");
+        expect(result.decisions[0]!.outcome).toBe("allow");
+        expect(result.blocked).toBe(false);
+      });
+    });
+
+    describe.each([
+      ["log", PREFLIGHT_INVESTIGATION_POLICY],
+      ["status", PREFLIGHT_INVESTIGATION_POLICY],
+      ["tag", PREFLIGHT_TAG_POLICY],
+    ] as const)("%s (REPO-scoped, no at_head/within)", (verb, policy) => {
+      it(`only the forged first -C's evidence on record: DENIES, demanding cwd's own tag`, async () => {
+        const cwdRepo = makeRepoFixture(`multic-cwd-${verb}`, "main");
+        const forgedRepo = makeRepoFixture(`multic-forged-${verb}`, "main");
+        const ledger = ledgerWithEntries([`preflight:multic-forged-${verb} — evidence for the forged first -C only`]);
+
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: `git -C ${forgedRepo} -C ${cwdRepo} ${verb}` },
+              session_id: `sess-d018-${verb}-deny`,
+              cwd: cwdRepo,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([policy]),
+          ledger,
+        });
+
+        expect(result.blocked).toBe(true);
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]!.ledgerTag).toBe(`preflight:multic-cwd-${verb}`);
+        expect(result.decisions[0]!.outcome).toBe("deny");
+      });
+
+      it(`cwd's own evidence on record: ALLOWS`, async () => {
+        const cwdRepo = makeRepoFixture(`multic-cwd-a2-${verb}`, "main");
+        const forgedRepo = makeRepoFixture(`multic-forged-a2-${verb}`, "main");
+        const ledger = ledgerWithEntries([`preflight:multic-cwd-a2-${verb} — evidence for cwd`]);
+
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: `git -C ${forgedRepo} -C ${cwdRepo} ${verb}` },
+              session_id: `sess-d018-${verb}-allow`,
+              cwd: cwdRepo,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([policy]),
+          ledger,
+        });
+
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]!.ledgerTag).toBe(`preflight:multic-cwd-a2-${verb}`);
+        expect(result.decisions[0]!.outcome).toBe("allow");
+        expect(result.blocked).toBe(false);
+      });
+    });
+
+    // Same class via `-C` + `--git-dir`, both orderings — order-independent,
+    // never a first-token guess either way. `slug` is filesystem-safe (no
+    // spaces — an unquoted space in a fixture's own path would corrupt the
+    // git command line under test, a test-harness bug distinct from the
+    // thing under test); `label` is the human-readable describe title only.
+    describe.each([
+      ["-C then --git-dir", "c-then-gitdir", (forged: string, real: string) => `git -C ${forged} --git-dir=${path.join(real, ".git")} status`],
+      ["--git-dir then -C", "gitdir-then-c", (forged: string, real: string) => `git --git-dir=${path.join(forged, ".git")} -C ${real} status`],
+    ] as const)("%s (divergent combo, order-independent)", (_label, slug, buildCommand) => {
+      it("falls back to cwd's own tag, not either flag's target", async () => {
+        const cwdRepo = makeRepoFixture(`multic-combo-cwd-${slug}`, "main");
+        const forgedRepo = makeRepoFixture(`multic-combo-forged-${slug}`, "main");
+        const ledger = ledgerWithEntries([`preflight:multic-combo-forged-${slug} — evidence for the forged flag only`]);
+
+        const result = await runInterceptCli({
+          stdin: streamFrom(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: buildCommand(forgedRepo, cwdRepo) },
+              session_id: `sess-d018-combo-${slug}`,
+              cwd: cwdRepo,
+            }),
+          ),
+          stdout: captureStream().stream,
+          stderr: captureStream().stream,
+          manifest: fakeManifest([PREFLIGHT_INVESTIGATION_POLICY]),
+          ledger,
+        });
+
+        expect(result.blocked).toBe(true);
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]!.ledgerTag).toBe(`preflight:multic-combo-cwd-${slug}`);
+        expect(result.decisions[0]!.outcome).toBe("deny");
+      });
+    });
+  });
 });

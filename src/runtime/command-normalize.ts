@@ -540,6 +540,23 @@ export interface CommandSegment {
    * which flag appears first in the invocation, because `--work-tree`
    * never contributes to this field at all, not because of any ordering
    * rule between the two.
+   *
+   * ALSO `null` (D-018, fix round 3, pass-3 CRITICAL) when the invocation
+   * carries MORE THAN ONE recognised, resolved repo-relocating option:
+   * two-or-more `-C`, `-C` combined with `--git-dir`, `--git-dir` twice,
+   * or a same-invocation `env -C`/`--chdir` wrap whose target diverges
+   * from git's own ABSOLUTE `-C`/`--git-dir` target. Real git composes
+   * every one of these cumulatively (a later absolute value wins); this
+   * module does not encode that composition (same "not this module's
+   * job" reasoning as the relative-mix case above) and instead falls back
+   * to unattributable rather than trust the first flag it saw — `git -C
+   * <forge> -C <realA> push` actually runs in `<realA>`, but a first-
+   * flag-wins reading named `<forge>`, letting an agent redirect a gate's
+   * demanded evidence away from the repo the verb truly targets (measured
+   * against real git 2.34.1). An EXACT repeat of the same already-
+   * recorded value (`-C X -C X`, `env -C X git -C X`) is not new
+   * information and does not trigger this — see `peelGitGlobalOptions`'s
+   * `noteRelocatingOption` for the precise counting rule.
    */
   ownTarget: string | null;
   /**
@@ -1663,7 +1680,34 @@ function canonicalizeSegment(segmentText: string): {
     // exactly, but is fed by `relocateTargetDir` (repo-relocating flags
     // only — `-C`/`--git-dir`, never `--work-tree`) instead of
     // `gitOpts.targetDir` (which still includes `--work-tree`).
-    const identityTargetDir = gitOpts.relocateTargetDir ?? envTargetDir;
+    //
+    // D-018 (fix round 3): a same-invocation wrapping `env -C`/`--chdir`
+    // PLUS the git invocation's OWN absolute repo-relocating flag are two
+    // repo-relocating options on one invocation, the same "more than one"
+    // class `noteRelocatingOption` (in `peelGitGlobalOptions`) closes for
+    // git's own flags — extended here across the `env -C` wrap. When they
+    // diverge (different resolved directories), git's own flag DOES
+    // deterministically win in reality, but this module deliberately does
+    // not encode that composition rule (`computeSegmentTarget`'s own
+    // comment on why path composition is out of scope) — `null` (cwd
+    // fallback, D-003) rather than keep preferring git's own flag as
+    // before this fix. An identical pair (`env -C X git -C X ...`) is the
+    // same idempotent-repeat allowance as `noteRelocatingOption`'s single-
+    // function case, so it stays `X`, not `null`. The pre-existing
+    // RELATIVE-own-target + env-base mix is untouched by this check —
+    // `identityTargetBase` below already resolves that class fully to
+    // `null` via `computeSegmentTarget`'s early return; this new check
+    // only has any effect when `gitOpts.relocateTargetDir` is ABSOLUTE
+    // (`path.isAbsolute` guards it out for the relative case, the same
+    // condition `identityTargetBase` below already uses).
+    const relocateEnvDiverges =
+      gitOpts.relocateTargetDir !== null &&
+      envTargetDir !== null &&
+      path.isAbsolute(gitOpts.relocateTargetDir) &&
+      gitOpts.relocateTargetDir !== envTargetDir;
+    const identityTargetDir = relocateEnvDiverges
+      ? null
+      : (gitOpts.relocateTargetDir ?? envTargetDir);
     const identityTargetBase =
       gitOpts.relocateTargetDir !== null &&
       envTargetDir !== null &&
@@ -2032,6 +2076,28 @@ function parentIfDotGit(dir: string): string {
  * not a `--work-tree` special-case, so a future path-valued-but-repo-
  * neutral git global option cannot silently reopen this class by being
  * folded into `targetDir` the way `--work-tree` originally was.
+ *
+ * D-018 (fix round 3, pass-3 CRITICAL): `relocateTargetDir` is set ONLY
+ * when the invocation carries EXACTLY ONE recognised, fully-resolved
+ * repo-relocating option (a single `-C` or a single `--git-dir`/
+ * `--git-dir=`). Pass-3 review measured (against real git 2.34.1) that
+ * `git -C <forge> -C <realA> push` attributes to the FIRST `-C` here
+ * while git composes ALL of them cumulatively and actually operates in
+ * `<realA>` — the same first-token-wins gap spans `-C` combined with
+ * `--git-dir`. `noteRelocatingOption` below counts every RESOLVED
+ * (non-`~`) occurrence of either flag across the whole invocation; the
+ * second (or later) occurrence forces `relocateTargetDir` to `null` and
+ * LOCKS it there for the rest of this call — UNLESS its value is an
+ * exact repeat of the one already recorded (idempotent, e.g. `-C X -C
+ * X`), which is not new information and does not trigger the lock. This
+ * is a deliberate under-approximation of git's real `-C`-chains-relative-
+ * to-the-previous-`-C` composition rule (the module has never encoded
+ * that, by design — see `computeSegmentTarget`'s own comment on why
+ * composing paths is not this module's job): ANY invocation this module
+ * cannot resolve to a single, unambiguous flag falls back to `null` here,
+ * which downstream (`computeSegmentTarget`) means "no own target" and the
+ * cwd context is demanded instead — exactly the shipped, pre-this-run
+ * semantics, never a forged first-token guess.
  */
 function peelGitGlobalOptions(
   tokens: Token[],
@@ -2040,13 +2106,37 @@ function peelGitGlobalOptions(
   let idx = startIdx;
   let targetDir: string | null = null;
   let relocateTargetDir: string | null = null;
+  let relocateResolvedCount = 0;
+  let relocateAmbiguous = false;
+
+  // D-018: record one repo-relocating flag's resolved value (`null` for a
+  // `~`-prefixed value, which — same as the pre-fix code — never sets or
+  // counts against `relocateTargetDir` at all, D-003's "treated as if
+  // absent"). The SECOND (or later) resolved occurrence nulls and LOCKS
+  // `relocateTargetDir`, unless it is an exact repeat of the value
+  // already recorded (idempotent, e.g. `-C X -C X` or `-C X --git-dir
+  // X/.git`), which stays a single value rather than tripping the lock —
+  // "im Zweifel null" still applies to every OTHER two-or-more case.
+  function noteRelocatingOption(resolved: string | null): void {
+    if (resolved === null) return;
+    relocateResolvedCount += 1;
+    if (relocateAmbiguous) return;
+    if (relocateResolvedCount === 1) {
+      relocateTargetDir = resolved;
+      return;
+    }
+    if (resolved === relocateTargetDir) return; // idempotent repeat
+    relocateTargetDir = null;
+    relocateAmbiguous = true;
+  }
+
   while (idx < tokens.length) {
     const t = tokens[idx]!.text;
     if (t === "-C") {
       const dir = tokens[idx + 1]?.text;
       if (dir === undefined) return { idx, targetDir, relocateTargetDir, malformed: true };
       if (targetDir === null && !isTildeTarget(dir)) targetDir = dir;
-      if (relocateTargetDir === null && !isTildeTarget(dir)) relocateTargetDir = dir;
+      noteRelocatingOption(isTildeTarget(dir) ? null : dir);
       idx += 2;
       continue;
     }
@@ -2059,14 +2149,14 @@ function peelGitGlobalOptions(
       const dir = tokens[idx + 1]?.text;
       if (dir === undefined) return { idx, targetDir, relocateTargetDir, malformed: true };
       if (targetDir === null && !isTildeTarget(dir)) targetDir = parentIfDotGit(dir);
-      if (relocateTargetDir === null && !isTildeTarget(dir)) relocateTargetDir = parentIfDotGit(dir);
+      noteRelocatingOption(isTildeTarget(dir) ? null : parentIfDotGit(dir));
       idx += 2;
       continue;
     }
     if (t.startsWith("--git-dir=")) {
       const dir = t.slice("--git-dir=".length);
       if (targetDir === null && !isTildeTarget(dir)) targetDir = parentIfDotGit(dir);
-      if (relocateTargetDir === null && !isTildeTarget(dir)) relocateTargetDir = parentIfDotGit(dir);
+      noteRelocatingOption(isTildeTarget(dir) ? null : parentIfDotGit(dir));
       idx += 1;
       continue;
     }
