@@ -2,8 +2,15 @@ import { describe, expect, it } from "vitest";
 import { decodeShellWord } from "../../src/runtime/shell-word.js";
 
 // Task fdee7d0f. Every expectation below is bash's own answer, obtained by
-// running `printf '%s' <word>` in a real shell — not by reading the
-// implementation back to itself.
+// running `printf '%s' <word>` in a real shell (through `od -c` where the
+// result contains non-printing bytes) — not by reading the implementation
+// back to itself.
+//
+// That claim has failed twice on escape edges, both times because I asserted
+// what I expected bash to do instead of running it: `$'\0144elete'` (octal
+// digit count) and `$'\xz'` (whether the backslash survives). Both are now
+// the measured values and carry their od -c evidence inline. Treat any new
+// escape case here as unverified until it has been run.
 
 describe("decodeShellWord — literal words pass through", () => {
   it.each(["-delete", "--output=out.txt", "data.txt", "", "-o", "sort"])(
@@ -55,8 +62,11 @@ describe("decodeShellWord — ANSI-C escapes", () => {
     expect(decodeShellWord("$'\\q'")).toBe("\\q");
   });
 
-  it("treats a hex escape with no digits literally", () => {
-    expect(decodeShellWord("$'\\xz'")).toBe("xz");
+  it("keeps the backslash on a hex escape with no digits, as bash does", () => {
+    // `printf '%s' $'\xz' | od -c` -> `\  x  z` (3 chars). An earlier
+    // version of this case asserted "xz" and was wrong about bash, which is
+    // the second time this file's provenance claim failed on an escape edge.
+    expect(decodeShellWord("$'\\xz'")).toBe("\\xz");
   });
 });
 
@@ -106,6 +116,37 @@ describe("decodeShellWord — unresolvable words fall back to the raw token", ()
       expect(() => decodeShellWord(w)).not.toThrow();
     }
   });
+});
+
+describe("decodeShellWord — $\"...\" locale quoting", () => {
+  // With no translation catalog bash returns the contents unchanged with the
+  // quotes removed, so it decodes exactly like a double-quoted run.
+  // Measured: `printf '%s' -$"delete"` -> `-delete`.
+  it.each([
+    ['$"delete"', "delete"],
+    ['-$"delete"', "-delete"],
+    ['--$"compile"', "--compile"],
+    ['--outp$"ut"=o.txt', "--output=o.txt"],
+  ])("decodes %s to %s", (raw, expected) => {
+    expect(decodeShellWord(raw)).toBe(expected);
+  });
+
+  it("falls back to the raw word on an unterminated locale quote", () => {
+    expect(decodeShellWord('$"unterminated')).toBe('$"unterminated');
+  });
+});
+
+describe("decodeShellWord — the catch path keeps the never-throws guarantee", () => {
+  // String.fromCodePoint throws RangeError above U+10FFFF, so the guarantee
+  // must hold through the THROW, not only through the null-return path.
+  // Without this the `catch` could be replaced by `return ""` unnoticed.
+  it.each(["$'\\UFFFFFFFF'", "$'\\U110000'"])(
+    "returns %s unchanged instead of throwing",
+    (raw) => {
+      expect(() => decodeShellWord(raw)).not.toThrow();
+      expect(decodeShellWord(raw)).toBe(raw);
+    },
+  );
 });
 
 describe("decodeShellWord — expansions are deliberately NOT performed", () => {

@@ -16,10 +16,19 @@
 //
 //   - There, the model gated a PERMISSIVE decision: every construct it
 //     failed to model became a silent pass-through, i.e. a new bypass.
-//   - Here, callers use the decoded value on the RESTRICTIVE side — to
-//     recognise MORE tokens as write flags, never fewer. An incomplete
-//     decode therefore yields today's behaviour (a detection this codebase
-//     already misses), never a new fail-open.
+//   - Here, callers test their predicate on the raw token OR the decoded
+//     one and take either match, so decoding can only ADD a match, never
+//     remove one. An incomplete decode therefore yields today's behaviour
+//     (a detection this codebase already misses), never a new fail-open.
+//
+// That `raw || decoded` shape is load-bearing and must not be "simplified"
+// to testing the decoded value alone. This module shipped once with the
+// simplified form and the guarantee above stated as an ARGUMENT; review
+// measured it false at three of five call sites, because those predicates
+// exclude `--` by construction and a token like `-"-out"=x` decodes out of
+// the branch that used to match it (`sort -"-out"=x` went BLOCKED ->
+// READONLY, artefact-confirmed). Testing both makes the property hold by
+// construction rather than by reasoning.
 //
 // A caller that wants to use this on the permissive side (to EXEMPT
 // something) is outside the rule and must be measured on its own terms.
@@ -104,6 +113,20 @@ function decodeInner(word: string): string | null {
       i = run.next;
       continue;
     }
+    if (ch === "$" && word[i + 1] === '"') {
+      // `$"..."` is locale translation. With no catalog loaded bash returns
+      // the contents unchanged with the quotes removed, so the value is the
+      // same as a plain double-quoted run. Measured: `printf '%s' -$"delete"`
+      // -> `-delete`. Without this branch the `$` was emitted literally and
+      // the decode SUCCEEDED with a wrong value, so the raw-token fallback
+      // never fired — five artefact-confirmed writes slipped through
+      // (review round 1).
+      const run = readDoubleQuoted(word, i + 2);
+      if (run === null) return null;
+      out += run.value;
+      i = run.next;
+      continue;
+    }
     if (ch === "$" && word[i + 1] === "'") {
       const run = readAnsiC(word, i + 2);
       if (run === null) return null;
@@ -180,8 +203,10 @@ function readAnsiC(word: string, start: number): { value: string; next: number }
         j++;
       }
       if (hex.length === 0) {
-        // Not a valid escape; bash emits the characters literally.
-        out += nxt;
+        // Not a valid escape. Bash keeps the BACKSLASH as well as the
+        // character: `printf '%s' $'\xz'` emits `\xz` (3 chars, verified
+        // with od -c). An earlier version dropped the backslash.
+        out += "\\" + nxt;
         i += 2;
         continue;
       }

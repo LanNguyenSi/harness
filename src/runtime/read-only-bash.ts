@@ -392,7 +392,16 @@ export function isReadOnlyBashPipeline(command: string): boolean {
  * does not start with `-` and is therefore never matched.
  */
 function isOutputWriteToken(raw: string): boolean {
-  const t = decodeShellWord(raw);
+  // Monotone BY CONSTRUCTION (review round 1, decision D3): testing
+  // raw OR decoded means decoding can only ADD a match, never remove
+  // one. The earlier shape (test the decoded value alone) was measured
+  // to LOSE matches here, because these predicates exclude `--` by
+  // construction and a token like `-"-out"=x` decodes out of the
+  // cluster branch entirely.
+  return checkOutputWrite(raw) || checkOutputWrite(decodeShellWord(raw));
+}
+
+function checkOutputWrite(t: string): boolean {
   if (t === "--output" || t.startsWith("--output=")) return true;
   // Short flag or cluster: single leading '-' (not '--'), containing
   // lowercase 'o'. Catches -o, -oFILE, -no, -rno, -rnofoo, etc.
@@ -411,8 +420,11 @@ function isOutputWriteToken(raw: string): boolean {
  * honest status rather than a claim of coverage.
  */
 function isTreeWriteToken(raw: string): boolean {
-  const t = decodeShellWord(raw);
-  return isOutputWriteToken(t);
+  // Pass the RAW token through: isOutputWriteToken owns the single decode.
+  // Decoding here too would decode TWICE, and decode(decode(x)) goes past
+  // bash whenever the first pass leaves a quote behind (`-"'o'"` -> `-'o'`
+  // -> `-o`), which measured as a BLOCKED -> READONLY regression.
+  return isOutputWriteToken(raw);
 }
 
 /**
@@ -433,7 +445,16 @@ function isTreeWriteToken(raw: string): boolean {
  * read is acceptable, under-blocking a write is not.
  */
 function isSortWriteToken(raw: string): boolean {
-  const t = decodeShellWord(raw);
+  // Monotone BY CONSTRUCTION (review round 1, decision D3): testing
+  // raw OR decoded means decoding can only ADD a match, never remove
+  // one. The earlier shape (test the decoded value alone) was measured
+  // to LOSE matches here, because these predicates exclude `--` by
+  // construction and a token like `-"-out"=x` decodes out of the
+  // cluster branch entirely.
+  return checkSortWrite(raw) || checkSortWrite(decodeShellWord(raw));
+}
+
+function checkSortWrite(t: string): boolean {
   if (t === "--compress-program" || t.startsWith("--compress-program=")) return true;
   if (t === "--temporary-directory" || t.startsWith("--temporary-directory=")) return true;
   if (t === "--output" || t.startsWith("--output=")) return true;
@@ -450,7 +471,16 @@ function isSortWriteToken(raw: string): boolean {
  * all contain uppercase `C` after the leading dash and are write vectors.
  */
 function isFileWriteToken(raw: string): boolean {
-  const t = decodeShellWord(raw);
+  // Monotone BY CONSTRUCTION (review round 1, decision D3): testing
+  // raw OR decoded means decoding can only ADD a match, never remove
+  // one. The earlier shape (test the decoded value alone) was measured
+  // to LOSE matches here, because these predicates exclude `--` by
+  // construction and a token like `-"-out"=x` decodes out of the
+  // cluster branch entirely.
+  return checkFileWrite(raw) || checkFileWrite(decodeShellWord(raw));
+}
+
+function checkFileWrite(t: string): boolean {
   if (t === "--compile" || t.startsWith("--compile=")) return true;
   // Short flag or cluster: single leading '-' (not '--'), containing
   // uppercase 'C'. Lowercase 'c' is intentionally not matched.
@@ -503,7 +533,7 @@ function classifyTokens(tokens: readonly string[]): boolean {
       if (t === undefined) break;
       // `env -S` / `--split-string` re-parses a string into a command:
       // forfeit read-only classification (fail closed).
-      if (ENV_SPLIT_STRING_FLAGS.test(t)) return false;
+      if ((ENV_SPLIT_STRING_FLAGS.test(t) || ENV_SPLIT_STRING_FLAGS.test(decodeShellWord(t)))) return false;
       if (t === "--") { i += 1; break; }
       if (ENV_VALUE_FLAGS.has(t)) { i += 2; continue; }
       if (ENV_LEADING_FLAGS.has(t)) { i += 1; continue; }
@@ -532,7 +562,7 @@ function classifyTokens(tokens: readonly string[]): boolean {
     // to bash, and all five really deleted while classifying as read-only
     // (task fdee7d0f, measured with a canary file per form). Set membership
     // on the RAW token is what they defeated.
-    return !tokens.slice(1).some((t) => FIND_WRITE_FLAGS.has(decodeShellWord(t)));
+    return !tokens.slice(1).some((t) => (FIND_WRITE_FLAGS.has(t) || FIND_WRITE_FLAGS.has(decodeShellWord(t))));
   }
 
   // `sort` is read-only ONLY when none of its argv tokens are write or
