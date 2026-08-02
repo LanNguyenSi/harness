@@ -557,12 +557,32 @@ describe("read-only Bash pipeline classifier (isReadOnlyBashPipeline)", () => {
 // `o`). The fix decodes the token before every one of these comparisons, so
 // the surviving-by-accident cases stop depending on that accident.
 //
-// NOT COVERED, named rather than implied: this closes the QUOTING half of
-// the long-flag surface only. GNU long-option ABBREVIATION is a separate,
-// orthogonal channel and stays open — `sort --out=x`, `sort --o=x` and
-// `sort --outp=x` were each measured creating their output file while
-// classifying read-only, both before and after this change, because the
-// guards match full spellings. Tracked as its own follow-up.
+// NOT COVERED, named rather than implied. Two channels stay open, both
+// measured, neither made worse by this change:
+//
+// 1. GNU long-option ABBREVIATION. `sort --out=x`, `sort --o=x` and
+//    `sort --outp=x` were each measured creating their output file while
+//    classifying read-only, before and after, because the guards match full
+//    spellings. Orthogonal to quoting.
+//
+// 2. NUL escapes inside `$'...'`. bash TRUNCATES a `$'...'` run at a NUL and
+//    drops a NUL sitting between runs; `decodeShellWord` emits a literal
+//    U+0000 and keeps accumulating, so the decoded value never equals the
+//    flag bash actually passes. Artefact-confirmed bypasses (canary deleted
+//    / file created), all five NUL spellings `\0 \000 \x00 \u0000
+//    \U00000000`:
+//      find . -name c $'-delete\0XYZ'      find . -name c -$'\0'delete
+//      sort $'--output\0' o.txt data.txt   file $'--compile\0X' -m magic
+//    plus the same through the `env` and `command` recursions. Master fails
+//    open identically, so this is a pre-existing gap this change does not
+//    close and does not widen; the raw-token fallback cannot help, because
+//    the raw form matches nothing either.
+//
+// The `$'...'` cases pinned in this file cover the NON-NUL spellings only.
+// Deliberately NOT fixed here: modelling NUL truncation would be a third
+// round of teaching this decoder one more bash rule, and the run's halt
+// criterion (03-decisions.md D2, written before fix round 1) says to stop
+// growing the model and file it instead.
 // ---------------------------------------------------------------------------
 
 describe("write-flag guards see through shell quoting (task fdee7d0f)", () => {
@@ -684,10 +704,13 @@ describe("write-flag guards: round-1 findings (task fdee7d0f)", () => {
     expect(isReadOnlyBashCommand(cmd)).toBe(false);
   });
 
-  // Double-decode shapes: blocked through the RAW arm of the raw-OR-decoded
-  // test, which is why re-adding the removed second decode no longer changes
-  // the outcome. Pinned so the coverage is explicit either way.
-  it.each(["tree -\"'-o'\" d", "tree -$'\\x27-o\\x27' d"])(
+  // Double-decode shapes. NOTE (round 2): an earlier version of this comment
+  // said re-adding the second decode changes nothing because the raw arm
+  // covers it. Measured false over 201,252 inputs — it moves 180 of them,
+  // all fail-open. `-"-o"=x` below is the discriminating case: it dies
+  // under BOTH the double-decode mutant and the decoded-only mutant, which
+  // the three long-flag tree cases above cannot detect.
+  it.each(["tree -\"'-o'\" d", "tree -$'\\x27-o\\x27' d", 'tree -"-o"=x d', 'tree -"-out" d'])(
     "blocks a doubly-quoted tree output flag: %s",
     (cmd) => {
       expect(isReadOnlyBashCommand(cmd)).toBe(false);
@@ -702,7 +725,13 @@ describe("write-flag guards: round-1 findings (task fdee7d0f)", () => {
   // accident: a quoted operand that decodes EXACTLY to a write flag is
   // blocked even though it is a read. Over-blocking a read is the accepted
   // direction. Verified NOT to extend to the shapes most likely to hurt.
-  it.each(["find . -name '-delete'", 'find . -name "-exec"'])(
+  it.each([
+    "find . -name '-delete'",
+    'find . -name "-exec"',
+    "find . -newer '-exec'",
+    "sort -k1 '-o'",
+    "file '-C'",
+  ])(
     "ACCEPTED over-block: %s",
     (cmd) => {
       expect(isReadOnlyBashCommand(cmd)).toBe(false);
