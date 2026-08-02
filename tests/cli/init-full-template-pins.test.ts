@@ -328,3 +328,57 @@ describe("profile templates: expire_on_bash_match round-trips to functioning reg
     expect(matchers.some((re) => re.test("git push origin feat/foo"))).toBe(false);
   });
 });
+
+// Task 19356be7 drift pin, generated-manifest half. `harness init` writes
+// FULL_TEMPLATE into the operator's own harness.yaml, and
+// docs/examples/full-manifest.yaml is the shipped copy-paste reference —
+// both carried a post-merge-gate comment claiming the escape allowlist is
+// "checked first, unconditionally" long after the blocker stopped working
+// that way. An operator reading either file would conclude that chaining a
+// recovery verb still exempts a mutation.
+describe("post-merge-gate comment: escape-first precedence is not taught anywhere operators read", () => {
+  const SURFACES: Array<[string, () => string]> = [
+    ["FULL_TEMPLATE", () => FULL_TEMPLATE],
+    [
+      "docs/examples/full-manifest.yaml",
+      () => readFileSync(new URL("../../docs/examples/full-manifest.yaml", import.meta.url), "utf8"),
+    ],
+  ];
+
+  // The `--help` text is the fifth operator-visible surface and was the one
+  // the round-1 sweep left unpinned: reverting it to the escape-first
+  // wording left the ENTIRE suite green (mutation-confirmed). It is not a
+  // YAML comment block, so it gets its own shape rather than joining
+  // SURFACES above.
+  it("harness pack hook post-merge-gate --help no longer claims the escape list is checked first", () => {
+    const text = readFileSync(new URL("../../src/cli/index.ts", import.meta.url), "utf8");
+    const start = text.indexOf('.command("post-merge-gate")');
+    expect(start, "post-merge-gate command not found").toBeGreaterThanOrEqual(0);
+    const block = text
+      .slice(start, text.indexOf(".option(", start))
+      .replace(/\s*\+\s*\n\s*"/g, "")
+      .replace(/\s+/g, " ");
+    expect(block).not.toMatch(/checked first, unconditionally/i);
+    expect(block).not.toMatch(/escape allowlist/i);
+    expect(block).toMatch(/does NOT exempt the mutation/);
+  });
+
+  it.each(SURFACES)("%s no longer claims the escape list is checked first", (_label, read) => {
+    const text = read();
+    // Only assert on the post-merge-gate comment block, so an unrelated
+    // pack's wording can never satisfy or break this pin.
+    const start = text.indexOf("# post-merge-gate (");
+    expect(start, "post-merge-gate comment block not found").toBeGreaterThanOrEqual(0);
+    const raw = text.slice(start, text.indexOf("- name: post-merge-gate", start));
+    // FLATTEN before matching. These are wrapped YAML comments, so any
+    // phrase can straddle a `\n  # ` continuation — a per-line or raw
+    // match silently goes blind exactly when the wording is longest (the
+    // same trap the boundary-alphabet guard above documents).
+    const block = raw.replace(/\s*\n\s*#\s?/g, " ").replace(/\s+/g, " ");
+    expect(block).not.toMatch(/checked first, unconditionally/i);
+    expect(block).not.toMatch(/escape allowlist/i);
+    // Positive half: the block must state the new precedence, so deleting
+    // the whole comment cannot pass this test by vacuity.
+    expect(block).toMatch(/does NOT exempt the mutation/);
+  });
+});

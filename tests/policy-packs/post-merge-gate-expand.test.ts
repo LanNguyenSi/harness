@@ -53,6 +53,31 @@ describe("post-merge-gate pack expansion", () => {
     expect(md).toContain("Fail posture");
   });
 
+  // Task 19356be7 drift pin. The precedence reversal (deny wins; the escape
+  // list no longer short-circuits the whole command) has to reach the
+  // OPERATOR-VISIBLE surfaces, not just the module comments: the blocker
+  // hook's `description` is written verbatim into the user's settings.json.
+  // Review found five surfaces still teaching escape-first AFTER the docs
+  // already declared the gap closed — two of them in the same file as the
+  // correctly-updated instructions text. Pin both directions so the stale
+  // claim cannot silently reappear.
+  it("neither the blocker hook description nor instructions.md still teaches escape-first precedence", () => {
+    const m = buildManifest([{ name: "post-merge-gate" }]);
+    const r = expandPolicyPacks(m);
+    const blocker = r.hooks.find((h) => h.event === "PreToolUse");
+    const description = blocker?.description ?? "";
+    const md = r.files[0]?.content ?? "";
+
+    expect(description).not.toMatch(/checked first, unconditionally/i);
+    expect(description).not.toMatch(/escape allowlist/i);
+    expect(md).not.toMatch(/checked first, unconditionally/i);
+
+    // …and positively states the new precedence, so an empty/renamed field
+    // cannot satisfy this test by vacuity.
+    expect(description).toMatch(/does NOT exempt the mutation/);
+    expect(md).toMatch(/[Dd]eny wins/);
+  });
+
   it("skips the pack when enabled:false", () => {
     const m = buildManifest([{ name: "post-merge-gate", enabled: false }]);
     const r = expandPolicyPacks(m);

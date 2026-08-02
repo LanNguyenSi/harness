@@ -85,11 +85,14 @@ The pack contributes two hooks to `settings.json`:
 
 2. **PreToolUse blocker** (`harness pack hook post-merge-gate`,
    `blocking: hard`) on `Bash`, in this order:
-   1. **Escape allowlist**, checked FIRST, unconditionally, before any
-      manifest load or ledger query (see "Escape hatches" below).
-   2. **Curated mutation match** (see "Deny scope" below); commands
-      outside the list pass through untouched.
-   3. **Ledger check**: denies only when the current branch tip exactly
+   1. **Gate-eligibility classification**, checked FIRST, unconditionally,
+      before any manifest load or ledger query: the curated mutation
+      match (see "Deny scope" below). Commands outside the
+      deny scope pass through untouched — which unconditionally covers
+      the whole recovery vocabulary (see "Escape hatches" below). **Deny
+      wins** when one command chains recovery vocabulary with a curated
+      mutation (task 19356be7).
+   2. **Ledger check**: denies only when the current branch tip exactly
       equals a recorded merged-tip fact for this repo+branch.
 
 ## Tip-match semantics (no ancestry, no expiry)
@@ -120,16 +123,27 @@ never touched.
 
 ## Escape hatches
 
-Checked **first**, unconditionally — before any manifest load or ledger
-query, so the recovery path this gate itself recommends can never be
-starved by an unrelated failure:
+Every command in the recovery vocabulary passes unconditionally **as its
+own command** — before any manifest load or ledger query, so the recovery
+path this gate itself recommends can never be starved by an unrelated
+failure (structurally: none of these verbs are curated mutations, so none
+are ever gate-eligible):
 
 - `git switch`, `git checkout`
 - `git pull`, `git fetch`
 - `git branch -d`, `git branch -D`
 - `git stash list`, `git stash show`
 - any `harness ...` invocation (any spelling: `npx harness ...`,
-  `/usr/local/bin/harness ...`, `./node_modules/.bin/harness ...`)
+  `/usr/local/bin/harness ...`, `./node_modules/.bin/harness ...`).
+  NOTE: this covers the harness command itself, not the CONTENT of a
+  heredoc fed to it — see the accepted over-block in "Known gaps".
+
+Since task 19356be7, chaining a recovery verb with a curated mutation
+does **not** exempt the mutation: `harness preflight && git push origin
+master` is judged by its push half. (The original escape-first ordering
+matched the escape list against the whole command string, which let
+exactly that documented preflight-then-push workflow — and any
+`<escape> && <mutation>` chain — skip the gate entirely.)
 
 The deny message's own recommended recovery is:
 
@@ -204,13 +218,37 @@ binary; this pack has no version probe registered. Declaring
   runs).
 - **Curated scope, not every Bash command**: destructive non-git
   mutation on a just-merged branch is out of v1 scope.
-- **Chained-escape bypass**: escape-first matches against the WHOLE
-  command string, not per-clause, so a curated mutation chained with an
-  escape verb (e.g. `git commit -am x && git switch main`) is fully
-  ALLOWED — the escape wins for the entire compound command. Same
-  accepted class as the regex-vs-shell-eval residual above (`eval`,
-  heredoc, `sh -c`); the alternative (per-clause splitting) would need a
-  real shell parser.
+- **Chained-escape bypass — CLOSED by task 19356be7** (kept here because
+  older docs and messages referenced it): escape-first used to match the
+  escape list against the WHOLE command string, so a curated mutation
+  chained with an escape verb (`harness preflight && git push`,
+  `git commit -am x && git switch main`) skipped the gate entirely. The
+  blocker now classifies by the curated mutation match alone (deny wins;
+  measured 0-divergent from per-segment evaluation thanks to the
+  escape/deny verb disjointness — variant (c), escape-at-start-only, was
+  measured and REJECTED because it still exempts three of the four pinned
+  lines). Residual cost, measured and accepted: a deny verb appearing as
+  quoted TEXT in a chain (`git pull && echo 'a && git push'`) is now
+  gate-eligible even though bash never runs it — the same existing
+  accepted false-positive class as `echo "a&git push"`, no longer rescued
+  by a chained escape verb. Real blocks from this only occur while the
+  branch tip equals a recorded merged tip, and the recovery vocabulary
+  stays free.
+- **Harness report heredocs are gate-eligible (accepted over-block)**:
+  `harness approve understanding <<'UR' … UR` is classified by its full
+  text, so a report BODY mentioning a curated mutation verb at a boundary
+  position makes the call gate-eligible. Only denies while the pack is
+  enabled AND the branch tip equals a recorded merged tip; `git switch
+  <default>` stays free, so it is an annoyance, not a lockout. An earlier
+  iteration of this change stripped such bodies before classification;
+  two review rounds found two successive families of UNDER-blocks in that
+  stripping (bodies consumed that bash really executes), both rooted in
+  having to re-derive bash's quote and word grammar to find where a body
+  begins. Tasks `dbc6d303` and `5b1b24fb` had already been halted for the
+  same cause, so the mechanism was removed instead of patched again. Task
+  `5b1b24fb` owns the real fix, at the `bash_match` layer for every
+  surface at once. **Do not reintroduce a strip here** without a design
+  that does not re-derive bash's grammar.
 - **Inverted trust-boundary residual**: a merged fact written by any
   means other than the producer (e.g. directly via
   `mcp__grounding-mcp__ledger_add`) that happens to exactly match the

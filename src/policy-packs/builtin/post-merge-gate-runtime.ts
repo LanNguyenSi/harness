@@ -29,10 +29,24 @@
 //     scope" section). Read-only git (status/log/diff/branch) and
 //     unrelated shell are never touched.
 //
-//   - The escape allowlist is checked FIRST in the blocker, unconditionally,
-//     before manifest load or any ledger query — see hook-post-merge-gate.ts.
-//     This module only supplies the matcher; the ordering guarantee lives
-//     in the hook, not here.
+//   - DENY WINS over the escape allowlist (task 19356be7, REVERSES the
+//     original escape-first decision): the blocker classifies a command as
+//     gate-eligible iff the curated mutation matcher fires
+//     (`isGateEligibleCommand` below). The escape allowlist no longer
+//     short-circuits the whole command — under escape-first, any chained
+//     command containing an escape verb anywhere (`harness preflight &&
+//     git push origin master`, the documented normal workflow) skipped the
+//     gate entirely. Measured before changing, over a 66-row corpus with
+//     bash ground truth: per-segment evaluation and deny-wins are
+//     0-divergent — a consequence of the pinned verb disjointness between
+//     the escape and deny lists — so the simplest (deny-wins) is
+//     implemented. The third candidate, escape-at-start-only, was measured
+//     and REJECTED: it diverges on 26 rows and still exempts three of the
+//     four lines this task exists to close (`git switch master && git push
+//     origin master` and friends). The recovery-never-starved property is preserved
+//     structurally: a non-eligible command is allowed before any manifest
+//     load or ledger query, exactly where the escape short-circuit used to
+//     sit (see hook-post-merge-gate.ts for the ordering).
 //
 //   - Fails OPEN (allows) when the ledger is unreachable, unlike
 //     branch-protection's fail-closed posture: without the ledger,
@@ -118,39 +132,50 @@ export const CURATED_MUTATION_BASH_RE =
 
 /**
  * Escape allowlist, git verbs (03-decisions.md): the exact recovery path
- * the deny message recommends, plus read-only stash inspection. Checked
- * BEFORE the curated-mutation match and before any manifest/ledger access
- * — see hook-post-merge-gate.ts for the ordering guarantee.
+ * the deny message recommends, plus read-only stash inspection. Since task
+ * 19356be7 this list no longer short-circuits the blocker — the deny
+ * match decides gate-eligibility, and every one of these verbs stays free
+ * simply because it is not a curated mutation (verb disjointness, pinned).
+ * The list remains the deny message's recovery vocabulary and a
+ * diagnostics aid.
  *
  * Task 76671e5a, DELIBERATELY LEFT on the old (no bare-`&`) boundary
- * alphabet: this is an ALLOW-list, not a deny/trigger, so broadening it is
- * the LOOSER — dangerous — direction. `isEscapeCommand` (below) is checked
- * FIRST and unconditionally by `hook-post-merge-gate.ts`, before the
- * curated-mutation deny match; widening this alternation would let MORE
- * commands skip the gate entirely, the opposite of what `d834a065` and the
- * broadenings above are for. Pinned by a regression test asserting this
- * regex's source never gains the `&|` boundary token.
+ * alphabet: this is an ALLOW-side matcher, so broadening it is the LOOSER
+ * direction. Its remaining consumers (diagnostics, docs interpolation)
+ * still must not silently widen what reads as "recovery". Pinned by a
+ * regression test asserting this regex's source never gains the `&|`
+ * boundary token.
  */
 export const ESCAPE_GIT_BASH_RE =
   /(?:^|\n|;|\||&&|\()\s*(?:\w+=\S+\s+)*git(?:\s+-C\s+\S+)?\s+(?:switch\b|checkout\b|pull\b|fetch\b|branch\s+-(?:d|D)\b|stash\s+(?:list|show)\b)/;
 
 /**
- * Escape allowlist, harness verbs (03-decisions.md): any invocation of
- * harness's own CLI (recovery commands like `harness session-start
- * branch-check`, diagnostics, a future self-check) always passes,
- * regardless of spelling — mirrors the `npx` / absolute-path /
- * `./node_modules/.bin` robustness the `deny-kill-switch-bash` regex in
+ * Escape allowlist, harness verbs (03-decisions.md): names any invocation
+ * of harness's own CLI (recovery commands like `harness session-start
+ * branch-check`, diagnostics, a future self-check), regardless of
+ * spelling — mirrors the `npx` / absolute-path / `./node_modules/.bin`
+ * robustness the `deny-kill-switch-bash` regex in
  * `src/cli/init/templates.ts` already established for the same class of
- * bypass concern.
+ * bypass concern. Since task 19356be7 its only job is the deny message's
+ * / diagnostics' vocabulary: a bare harness command stays free through
+ * verb disjointness with the curated deny list, not through a
+ * short-circuit.
  *
  * Task 76671e5a: DELIBERATELY LEFT narrow, same reasoning as
- * `ESCAPE_GIT_BASH_RE` immediately above — an allow-list, checked first and
- * unconditionally, so broadening its boundary alphabet would only ever
- * widen the bypass surface.
+ * `ESCAPE_GIT_BASH_RE` immediately above — an allow-side matcher, so
+ * broadening its boundary alphabet is the loosening direction.
  */
 export const ESCAPE_HARNESS_BASH_RE = /(?:^|\n|;|\||&&|\()\s*(?:\w+=\S+\s+)*(?:npx\s+|\S*\/)?harness\b/;
 
-/** True when `command` matches any escape pattern. Checked first, unconditionally. */
+/**
+ * True when `command` matches any escape pattern. Since task 19356be7
+ * this is DIAGNOSTICS ONLY — the blocker's decision is
+ * `isGateEligibleCommand` below; when escape and deny both match, deny
+ * wins. (Under the original escape-first ordering this function was the
+ * blocker's first, unconditional check, which let `harness preflight &&
+ * git push origin master` — the documented normal workflow — skip the
+ * gate entirely.)
+ */
 export function isEscapeCommand(command: string): boolean {
   return ESCAPE_GIT_BASH_RE.test(command) || ESCAPE_HARNESS_BASH_RE.test(command);
 }
@@ -158,6 +183,42 @@ export function isEscapeCommand(command: string): boolean {
 /** True when `command` matches the curated v1 deny-scope. */
 export function isCuratedMutationCommand(command: string): boolean {
   return CURATED_MUTATION_BASH_RE.test(command);
+}
+
+/**
+ * The blocker's single classification entry point (task 19356be7): a
+ * command is gate-eligible iff the curated mutation matcher fires.
+ * Everything else — the whole recovery vocabulary, read-only git,
+ * unrelated shell — is allowed by the hook BEFORE any manifest load or
+ * ledger query, preserving the recovery-never-starved property the
+ * escape-first ordering used to provide.
+ *
+ * A thin wrapper over `isCuratedMutationCommand` by DELIBERATE choice,
+ * not by accident. An earlier iteration of this task pre-processed the
+ * command here, stripping the bodies of quoted-delimiter heredocs fed to
+ * a harness invocation, so that an `harness approve understanding <<'…'`
+ * report body mentioning a mutation verb would not become gate-eligible.
+ * Two review rounds found two successive families of UNDER-blocks in that
+ * pre-processing (bodies consumed that bash really executes), both rooted
+ * in the same cause: deciding where a heredoc body BEGINS requires
+ * re-implementing bash's quote and word grammar on the permissive side of
+ * a security boundary. Tasks `dbc6d303` and `5b1b24fb` had already been
+ * halted for that same reason. It was therefore removed rather than
+ * patched a third time; see
+ * `.ai/runs/2026-08-02-post-merge-gate-escape-precedence/03-decisions.md`
+ * D5/D6 for the measurement history, and task `5b1b24fb` for the real
+ * fix, which belongs at the `bash_match` layer for every surface at once.
+ *
+ * Accepted consequence, OVER-block direction: a harness report heredoc
+ * whose body carries a boundary-anchored mutation verb IS gate-eligible.
+ * It only denies while the branch tip equals a recorded merged tip, and
+ * `git switch <default>` — the gate's own recommended recovery — stays
+ * free. Same residual class as the quoted-text false positives this
+ * change already accepts. Do NOT reintroduce a strip here without a
+ * design that does not re-derive bash's grammar.
+ */
+export function isGateEligibleCommand(command: string): boolean {
+  return isCuratedMutationCommand(command);
 }
 
 /**

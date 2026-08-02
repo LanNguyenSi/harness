@@ -1454,9 +1454,10 @@ export function buildProgram(opts: RunOptions = {}): Command {
       "PreToolUse blocker for the post-merge-gate pack: read tool-event JSON from stdin, and on a curated " +
         "history-mutating Bash command (git commit/add/push/merge/rebase/cherry-pick/revert/reset/stash " +
         "pop|apply, gh pr create/merge) emit a deny envelope when the current branch tip matches a recorded " +
-        "merged-tip fact. An escape allowlist (git switch/checkout/pull/fetch, git branch -d/-D, git stash " +
-        "list/show, any `harness ...` command) is checked first, unconditionally. Fails open when the ledger " +
-        "is unreachable.",
+        "merged-tip fact. The recovery vocabulary (git switch/checkout/pull/fetch, git branch -d/-D, git stash " +
+        "list/show, any `harness ...` command) always passes as its own command, classified before any manifest " +
+        "or ledger access; chaining one of those with a curated mutation does NOT exempt the mutation. Fails " +
+        "open when the ledger is unreachable.",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")

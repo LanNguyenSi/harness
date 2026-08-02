@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   buildMergedTagContent,
-  CURATED_MUTATION_BASH_RE,
   ESCAPE_GIT_BASH_RE,
   ESCAPE_HARNESS_BASH_RE,
   extractExitCode,
@@ -10,6 +9,7 @@ import {
   GH_PR_MERGE_BASH_RE,
   isCuratedMutationCommand,
   isEscapeCommand,
+  isGateEligibleCommand,
   matchGhMergeSuccessText,
   MERGED_TAG_PREFIX,
   mergedTagMatchKey,
@@ -210,15 +210,18 @@ describe("CURATED_MUTATION_BASH_RE / isCuratedMutationCommand", () => {
   });
 });
 
-// Self-lock table 2/2: the escape allowlist. Checked FIRST by the blocker
-// (hook-post-merge-gate.ts), unconditionally. Must-allow includes the
-// exact recovery commands the deny message recommends plus robustness
-// variants (npx / absolute path / node_modules/.bin) for the harness verb,
+// Self-lock table 2/2: the escape vocabulary. Since task 19356be7 it is
+// diagnostics + deny-message vocabulary, no longer a blocker
+// short-circuit — but its shape stays pinned: it must include the exact
+// recovery commands the deny message recommends plus robustness variants
+// (npx / absolute path / node_modules/.bin) for the harness verb,
 // mirroring the deny-kill-switch-bash regex precedent in
 // src/cli/init/templates.ts. Innocent neighbours (the curated mutation
-// commands) must stay OUTSIDE the escape allowlist — an escape command
-// must never also be classified as curated mutation, or the "escape wins"
-// design would silently widen the deny-scope's exemptions.
+// commands) must stay OUTSIDE the escape vocabulary, and — load-bearing
+// for the deny-wins design — an escape verb must never also classify as a
+// curated mutation: that verb DISJOINTNESS is what keeps the whole
+// recovery vocabulary unconditionally free without any escape
+// short-circuit (see the isGateEligibleCommand table below).
 describe("ESCAPE_GIT_BASH_RE / ESCAPE_HARNESS_BASH_RE / isEscapeCommand", () => {
   it.each([
     "git switch main",
@@ -259,11 +262,13 @@ describe("ESCAPE_GIT_BASH_RE / ESCAPE_HARNESS_BASH_RE / isEscapeCommand", () => 
     expect(isEscapeCommand(cmd)).toBe(false);
   });
 
-  it("every escape command that also happens to look like a mutation still classifies as escape-first (design contract, not a regex property)", () => {
+  it("escape/deny verb disjointness holds for git branch -d (load-bearing since task 19356be7: recovery verbs stay free BECAUSE they are never curated mutations)", () => {
     // git branch -d is deliberately outside the curated mutation list
     // entirely (branch deletion isn't in the curated set), so there is no
     // actual overlap today — this test pins that invariant explicitly so
-    // a future edit to either list trips it if it ever changes.
+    // a future edit to either list trips it if it ever changes. Under
+    // deny-wins precedence this disjointness is what keeps every recovery
+    // verb unconditionally free without an escape short-circuit.
     expect(isCuratedMutationCommand("git branch -d feat/x")).toBe(false);
     expect(isEscapeCommand("git branch -d feat/x")).toBe(true);
   });
@@ -300,6 +305,107 @@ describe("ESCAPE_GIT_BASH_RE / ESCAPE_HARNESS_BASH_RE / isEscapeCommand", () => 
     expect(isEscapeCommand("sleep 0 & git switch main")).toBe(false);
     expect(isEscapeCommand("A=x&harness pause")).toBe(false);
     expect(isEscapeCommand("sleep 0 & harness pause")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 19356be7: the blocker's decision function. Deny wins whenever the
+// curated mutation matcher fires; the escape vocabulary no longer
+// short-circuits the whole command. Variant chosen by measurement
+// (.ai/runs/2026-08-02-post-merge-gate-escape-precedence/03-decisions.md):
+// per-segment evaluation and deny-wins are 0-divergent over the corpus
+// because of the verb disjointness pinned above, so the simplest
+// (deny-wins) is implemented. Escape-at-start-only was measured and
+// REJECTED — it diverges on 26 rows and still exempts three of the four
+// lines pinned below.
+// ---------------------------------------------------------------------------
+
+describe("isGateEligibleCommand (task 19356be7) — pinned decision table", () => {
+  // The four measured lines from the task description, verbatim. Expected
+  // decision per line under the chosen deny-wins variant. This pin (with
+  // its hook-level twin in tests/cli/pack-hook-post-merge-gate.test.ts) is
+  // the task's mutation probe: restoring escape-first precedence — any
+  // construction where isEscapeCommand over the whole string preempts the
+  // deny match — flips the three chained lines back to false.
+  it.each([
+    ["git push origin master", true],
+    ["git switch master && git push origin master", true],
+    ["git stash list && git push origin master", true],
+    ["harness preflight && git push origin master", true],
+  ] as const)("task table: %s -> eligible=%s", (cmd, eligible) => {
+    expect(isGateEligibleCommand(cmd)).toBe(eligible);
+  });
+
+  it.each([
+    "git switch master && git pull --ff-only",
+    "git switch master && git pull --ff-only && git branch -d task/x",
+    "git fetch origin && git switch master",
+    "harness preflight",
+    "npx harness preflight",
+    "git stash list",
+    "git status",
+    "echo done",
+  ])("recovery / neutral command %s is never gate-eligible", (cmd) => {
+    expect(isGateEligibleCommand(cmd)).toBe(false);
+  });
+
+  // ACCEPTED RESIDUAL, decision D6 — pinned so it is a recorded choice
+  // rather than an oversight, and so that reintroducing a heredoc strip
+  // here has to face this test consciously.
+  //
+  // A harness report heredoc whose BODY carries a boundary-anchored
+  // mutation verb IS gate-eligible. An earlier iteration of this task
+  // stripped such bodies to avoid it; two review rounds found two
+  // successive families of UNDER-blocks in that stripping (bodies
+  // consumed that bash really executes), both rooted in having to
+  // re-derive bash's quote and word grammar to find where a body begins.
+  // Tasks `dbc6d303` and `5b1b24fb` had already been halted for the same
+  // cause, so it was removed instead of patched a third time (D5).
+  //
+  // Direction is OVER-block: it only denies while the branch tip equals a
+  // recorded merged tip, and `git switch <default>` — the gate's own
+  // recommended recovery — stays free (pinned above). Same residual class
+  // as the quoted-text false positives below. Task `5b1b24fb` owns the
+  // real fix, at the `bash_match` layer for every surface at once.
+  it("ACCEPTED RESIDUAL: a harness report heredoc whose body mentions mutations is gate-eligible", () => {
+    const cmd = [
+      "harness approve understanding <<'UNDERSTANDING_REPORT'",
+      "Verification:",
+      "git push origin master",
+      "UNDERSTANDING_REPORT",
+    ].join("\n");
+    expect(isGateEligibleCommand(cmd)).toBe(true);
+    // The recovery the deny message recommends is unaffected, so this is
+    // an annoyance, never a lockout.
+    expect(isGateEligibleCommand("git switch master")).toBe(false);
+  });
+
+  // Shapes where a "body" really executes. These were the guards against
+  // over-stripping; with no strip they are trivially eligible, but they
+  // stay as the regression pin that a reintroduced strip must not free.
+  it.each([
+    "bash <<'EOF'\ngit push origin master\nEOF", // consumer executes the body
+    "sh <<'S'\ngit push origin master\nS",
+    "harness approve understanding <<UR\n$(git push origin master)\nUR", // UNQUOTED: $() expands
+    "harness approve understanding <<'UR' && git push origin master\nbody\nUR", // chain on the operator line
+    "cat <<'DOC'\nx\nDOC\ngit push origin master", // mutation after the body, top level
+    // Round-2 under-block shapes: a strip that trusts a quote-blind tail
+    // match frees these while bash really runs the mutation.
+    "bash -s \"note; harness\" <<'EOF'\ngit push origin master\nEOF",
+    "bash -s $(true) harness <<'EOF'\ngit push origin master\nEOF",
+  ])("a real mutation behind heredoc syntax stays gate-eligible: %s", (cmd) => {
+    expect(isGateEligibleCommand(cmd)).toBe(true);
+  });
+
+  // Measured, accepted cost of deny-wins (03-decisions.md D3): a deny verb
+  // as quoted TEXT in a chain is no longer rescued by the chained escape
+  // verb — same class as the standalone `echo "a&git push"` over-block
+  // pinned above, and bash-verified as never executing the verb.
+  it.each([
+    "git pull && echo 'a && git push'",
+    "git switch master && echo 'x; git push'",
+  ])("accepted cost: quoted-text deny verb in an escape chain is gate-eligible: %s", (cmd) => {
+    expect(isGateEligibleCommand(cmd)).toBe(true);
   });
 });
 
