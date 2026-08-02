@@ -516,6 +516,25 @@ describe("stripHarnessHeredocBodies — quote-aware scanning (under-block guards
     expect(stripHarnessHeredocBodies(cmd)).toBe(cmd);
   });
 
+  // The fail-safe is WHOLE-COMMAND, not per-line: one unparseable line
+  // abandons every strip, including strips already made on earlier lines.
+  // Without this case the two behaviours are indistinguishable — a
+  // command whose ONLY unparseable line has no strippable sibling looks
+  // identical either way (mutation-confirmed: swapping the bail for a
+  // per-line skip left the whole suite green). Here the deny verb lives
+  // inside the earlier, strippable body, so the two diverge: bailing keeps
+  // it visible (over-block, the safe direction), skipping hides it.
+  it("one unparseable line abandons strips already made on earlier lines", () => {
+    const cmd = [
+      "harness approve understanding <<'UR'",
+      "git push origin master",
+      "UR",
+      "harness note --msg \"oops <<'X'",
+    ].join("\n");
+    expect(stripHarnessHeredocBodies(cmd)).toBe(cmd);
+    expect(isGateEligibleCommand(cmd)).toBe(true);
+  });
+
   it("a delimiter bash would expand is unresolvable, so nothing is stripped", () => {
     const cmd = "harness x <<$VAR\ngit push origin master\nEOF";
     expect(stripHarnessHeredocBodies(cmd)).toBe(cmd);
