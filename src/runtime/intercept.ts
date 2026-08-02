@@ -6,6 +6,7 @@
 // Side effects (stdin, stdout, ledger I/O) live in the thin CLI entrypoint
 // that wraps this.
 
+import * as path from "node:path";
 import {
   evaluateExtract,
   evaluateRequires,
@@ -25,14 +26,16 @@ import { renderAgentFacing } from "./agent-facing.js";
 import {
   normalizeCommand,
   normalizeCommandAmpAware,
+  segmentViewOf,
   type AmpAwareNormalizedCommand,
+  type CommandSegment,
   type NormalizedCommand,
 } from "./command-normalize.js";
 import {
   resolveEnvironment,
   type EnvironmentResolution,
 } from "./environment-resolver.js";
-import type { GitRepoContext } from "./git-context.js";
+import { resolveGitContext, type GitRepoContext } from "./git-context.js";
 import { POLICY_DECISION_TYPE } from "./ledger-record.js";
 import { classifyRisk, type RiskProfile } from "./risk-classifier.js";
 import { resolveSessionId } from "./session-id.js";
@@ -250,6 +253,29 @@ export interface InterceptOptions {
    * at every call site rather than assuming it self-enforces.
    */
   ampNormalizedCommandThunk?: () => AmpAwareNormalizedCommand;
+  /**
+   * Precomputed per-segment view (`command-normalize.ts`'s
+   * `segmentViewOf`) of a Bash event's `tool_input.command`, threaded in
+   * by `runInterceptCli` the same resolved-by-the-wrapper pattern as
+   * `normalizedCommand` above (task `98ad072f`, T-003) — computed ONCE
+   * per event from the SAME `bashCommand` `normalizedCommand` already
+   * uses, and reused by `intercept()`'s per-policy attribution below
+   * instead of every per-repo-builtins policy recomputing it. `null`
+   * mirrors `segmentViewOf`'s own contract: the command exceeded
+   * `MAX_NORMALIZE_LENGTH`, so no segment view exists (treated as `[]` —
+   * unattributable, cwd builtins, identical to a command with no
+   * `bash_match` trigger at all). Optional: omitted by non-Bash events
+   * and by callers/tests that don't supply one, in which case
+   * `intercept()` computes it lazily itself, once per call, ONLY if some
+   * matching policy actually needs it (see `usesPerRepoBuiltins` below) —
+   * so a manifest with no `${REPO}`/`${BRANCH}`/`at_head` policy never
+   * pays this cost even when uninjected.
+   *
+   * SAME INVARIANT as `normalizedCommand` / `ampNormalizedCommandThunk`
+   * above: not checked against `event` at runtime; the one production
+   * caller derives it from the identical event, same as those two.
+   */
+  commandSegments?: CommandSegment[] | null;
   /**
    * Destination for audit-write failure diagnostics. Defaults to
    * `process.stderr` when omitted. Goes to stderr so Claude Code's
@@ -663,6 +689,194 @@ function filterEntriesByTag(
   );
 }
 
+/**
+ * Which of a policy's own trigger-satisfying segments name a target — the
+ * attribution sibling of `policyMatchesEvent` (task `98ad072f`, T-003).
+ * Re-tests the policy's OWN `bash_match` regex against each segment's
+ * `text` in isolation: every shipped `bash_match` alternation includes a
+ * `^` branch, so testing it against one segment's canonicalised text
+ * alone (no leading boundary character — see `CommandSegment.text`'s own
+ * doc comment) is well-defined. Returns every segment that matches on its
+ * own — usually one, occasionally several (D-004: a decoy read and a cwd
+ * read chained in one command can each independently satisfy the SAME
+ * trigger).
+ *
+ * Never changes WHETHER a policy matches — `policyMatchesEvent` already
+ * decided that from the WHOLE command (raw-or-normalised-or-amp-
+ * normalised), unchanged by this function. This only narrows down WHICH
+ * segment(s), if any, are individually responsible for the match, so
+ * `intercept()` below knows which segment's target — if any — to resolve
+ * the `${REPO}`/`${BRANCH}`/`currentHeadSha` builtins from instead of the
+ * event's own cwd. `[]` when the policy has no `bash_match` trigger (an
+ * MCP-tool-name-triggered policy — no segment concept applies), when its
+ * regex is malformed (mirrors `policyMatchesEvent`'s own defensive
+ * `try/catch`), or when the whole-command match came ONLY from the
+ * ampersand-aware third arm: `segments` here is always built from the
+ * PRIMARY (`BOUNDARY_RE`) segmentation, which — by construction — cannot
+ * itself contain the bare-`&` split the amp arm relies on, so an amp-
+ * only match finds no individually-matching segment and this returns
+ * `[]` (D-003: cwd builtins, identical to shipped).
+ */
+export function attributeTriggerSegments(
+  policy: Policy,
+  segments: readonly CommandSegment[],
+): CommandSegment[] {
+  if (policy.trigger.bash_match === undefined) return [];
+  let re: RegExp;
+  try {
+    re = new RegExp(policy.trigger.bash_match);
+  } catch {
+    return [];
+  }
+  return segments.filter((seg) => re.test(seg.text));
+}
+
+/**
+ * Does a policy's `requires:` reference the per-repo `${REPO}`/`${BRANCH}`
+ * builtins, or ask for `at_head`? Only these policies pay the per-policy
+ * attribution cost below — every other matching policy keeps the plain,
+ * per-event cwd builtins `options.builtins` already carries, byte-
+ * identical to before this task. D-005: `at_head` is included even when
+ * `ledger_tag` itself doesn't reference `${REPO}`/`${BRANCH}`, because
+ * `at_head` compares against `currentHeadSha`, which this task resolves
+ * from the SAME per-policy context — splitting the two would check
+ * `at_head` against the cwd's HEAD while `${REPO}` (if present elsewhere)
+ * named a different repo, the worse inconsistency D-005 rejects.
+ */
+function usesPerRepoBuiltins(policy: Policy): boolean {
+  const requires = policy.requires;
+  if (requires === undefined) return false;
+  return (
+    requires.at_head === true ||
+    requires.ledger_tag.includes("${REPO}") ||
+    requires.ledger_tag.includes("${BRANCH}")
+  );
+}
+
+/** One `${REPO}`/`${BRANCH}`/`currentHeadSha` context a policy is evaluated against. */
+interface AttributedContext {
+  builtins: ExtractBuiltins;
+  currentHeadSha: string | undefined;
+}
+
+/**
+ * Resolve the distinct `${REPO}`/`${BRANCH}`/`currentHeadSha` contexts a
+ * `usesPerRepoBuiltins` policy must be evaluated against (task `98ad072f`,
+ * T-003, `01-plan.md` Proposed Approach items 2-4). The engine trusts a
+ * trigger-satisfying segment's `effectiveTarget` UNIFORMLY — no special
+ * case for whether the target came from the segment's own explicit `-C`/
+ * `--work-tree`/`--git-dir`/`env -C`, or was inherited from a preceding
+ * `cd`: `CommandSegment.effectiveTarget` already IS the directory that
+ * segment's own invocation genuinely runs in (bash semantics), and a
+ * `cd <B> && <verb>` chain really does run `<verb>` inside B regardless
+ * of what else appears between the `cd` and it (orchestrator decision
+ * D-010, 2026-08-02: an earlier revision of this function additionally
+ * distrusted an inherited target whenever a DIFFERENT invocation
+ * intervened between the `cd` and the satisfying segment — REJECTED:
+ * that coupling has no basis in bash's own semantics, is dodgeable by
+ * inserting any harmless read between the `cd` and the gated verb, and
+ * carried its own unverified `cd`-recognition gap. The `cd <B> && git
+ * log && git push` shape this was meant to guard is not a regression at
+ * all under this design — `git push` genuinely runs inside B — see
+ * `tests/runtime/intercept-cli.test.ts`'s "leading-cd is now a
+ * deliverable" block).
+ *
+ * Always returns at least one entry — the event's own cwd builtins/
+ * `currentHeadSha`, unchanged — so a policy with no attributable foreign
+ * target (no `bash_match`, no individually-matching segment, only an
+ * amp-arm-only match, an unattributable composition, a target resolving
+ * to the SAME directory as cwd, or a target outside any git repo — D-003)
+ * is evaluated EXACTLY as it is today, with the EXACT SAME
+ * `options.builtins` object reference (no clone), keeping that the
+ * byte-identical common case. Returns more than one entry only when
+ * D-004 applies: several of the policy's own trigger-satisfying segments
+ * resolve to genuinely different repositories (deduped by resolved
+ * `{repo, branch, sha}` identity, not by path string, so two spellings of
+ * the same repo are one context, not two).
+ *
+ * `resolveGitContextMemo` is a per-`intercept()`-call cache keyed by the
+ * RESOLVED absolute path (never module-level state — no cross-event
+ * caching), so several policies (or several satisfying segments) naming
+ * the same foreign path within one event pay the `fs` cost once, not
+ * once per policy per segment.
+ */
+function resolveAttributedContexts(
+  policy: Policy,
+  segments: readonly CommandSegment[],
+  cwdBuiltins: ExtractBuiltins,
+  cwdCurrentHeadSha: string | undefined,
+  resolveGitContextMemo: Map<string, GitRepoContext>,
+): AttributedContext[] {
+  const cwdContext: AttributedContext = { builtins: cwdBuiltins, currentHeadSha: cwdCurrentHeadSha };
+  const satisfying = attributeTriggerSegments(policy, segments);
+  if (satisfying.length === 0) return [cwdContext];
+
+  const seenSignatures = new Set<string>();
+  const contexts: AttributedContext[] = [];
+  const addCwdOnce = (): void => {
+    if (seenSignatures.has("cwd")) return;
+    seenSignatures.add("cwd");
+    contexts.push(cwdContext);
+  };
+
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i]!;
+    if (!satisfying.includes(seg)) continue;
+    if (seg.effectiveTarget === null) {
+      addCwdOnce();
+      continue;
+    }
+
+    const resolved = path.resolve(cwdBuiltins.CWD, seg.effectiveTarget);
+    if (resolved === cwdBuiltins.CWD) {
+      addCwdOnce();
+      continue;
+    }
+
+    let gitCtx = resolveGitContextMemo.get(resolved);
+    if (gitCtx === undefined) {
+      gitCtx = resolveGitContext(resolved);
+      resolveGitContextMemo.set(resolved, gitCtx);
+    }
+    if (gitCtx.repo.length === 0) {
+      // D-003: outside any repo → cwd fallback, not a distinct context.
+      addCwdOnce();
+      continue;
+    }
+
+    const signature = [gitCtx.repo, gitCtx.branch, gitCtx.sha].join("|");
+    if (seenSignatures.has(signature)) continue;
+    seenSignatures.add(signature);
+    contexts.push({
+      builtins: { ...cwdBuiltins, REPO: gitCtx.repo, BRANCH: gitCtx.branch },
+      currentHeadSha: gitCtx.sha.length > 0 ? gitCtx.sha : undefined,
+    });
+  }
+
+  // Defensive fallback: every satisfying segment existed but somehow none
+  // was added above (should not happen — every branch above adds either
+  // the cwd context or a foreign one). Never leave a matched, per-repo-
+  // builtins policy with zero contexts to evaluate against.
+  return contexts.length > 0 ? contexts : [cwdContext];
+}
+
+/**
+ * Lazily resolve the event's per-segment view for attribution, computed
+ * at most once per `intercept()` call. Prefers the caller-supplied
+ * `options.commandSegments` (the resolved-by-the-wrapper pattern
+ * `normalizedCommand` already uses); falls back to computing it directly
+ * from the event's own command for standalone callers/tests that don't
+ * inject one. `null` (truncated — see `segmentViewOf`) and "no Bash
+ * command on this event" both collapse to `[]`, the same "nothing to
+ * attribute, cwd builtins" shape as a policy with no `bash_match` at all.
+ */
+function resolveCommandSegments(options: InterceptOptions): CommandSegment[] {
+  if (options.commandSegments !== undefined) return options.commandSegments ?? [];
+  const command = extractShellCommand(options.event);
+  if (command === null) return [];
+  return segmentViewOf(command) ?? [];
+}
+
 export async function intercept(
   options: InterceptOptions,
 ): Promise<InterceptResult> {
@@ -717,38 +931,69 @@ export async function intercept(
     }
   }
 
+  // Per-policy attribution (task `98ad072f`, T-003): `segmentsForAttribution`
+  // is resolved at most once, lazily, only if some matching policy actually
+  // uses `${REPO}`/`${BRANCH}`/`at_head` — a manifest with none of those
+  // (every Phase 4/5/6-only manifest) never computes it.
+  // `resolveGitContextMemo` is this call's own, non-module-level cache
+  // (task constraint: no eager/global filesystem work) — see
+  // `resolveAttributedContexts`'s own comment.
+  let segmentsForAttribution: CommandSegment[] | undefined;
+  const resolveGitContextMemo = new Map<string, GitRepoContext>();
+
   const decisions: PolicyDecision[] = [];
   for (const policy of matching) {
-    const base = await evaluateOnePolicy(policy, options);
-    // Attach the per-event Risk Gate verdicts so `harness audit` /
-    // `explain --trace` can replay the classification + environment
-    // that the `when:` match was made against. Also carry the
-    // unclassifiedFallback flag (M7) when the when: evaluation set it
-    // to true; leave the field absent otherwise so decisions from
-    // manifests without a `when:` policy stay byte-identical.
-    const whenFallback = whenFallbackMap.get(policy.name);
-    const decision: PolicyDecision = enriched
-      ? {
-          ...base,
-          risk: enriched.risk,
-          environment: enriched.environment,
-          ...(whenFallback === true ? { whenUnclassifiedFallback: true } : {}),
-        }
-      : base;
-    decisions.push(decision);
-    try {
-      await options.ledger.record(
-        decision,
-        resolveSessionId(event.session_id),
-      );
-    } catch (err) {
-      // Audit-write failure must not block; the decision is still applied.
-      // Surface the failure to stderr so a persistently-failing recorder
-      // does not silently leave `harness audit` / `explain --trace` blind.
-      // Goes to stderr to keep the stdout deny-JSON contract intact.
-      (options.stderr ?? process.stderr).write(
-        `harness runtime intercept: audit-write failed for ${decision.policyName}: ${err instanceof Error ? err.message : String(err)}\n`,
-      );
+    const contexts: AttributedContext[] = usesPerRepoBuiltins(policy)
+      ? resolveAttributedContexts(
+          policy,
+          (segmentsForAttribution ??= resolveCommandSegments(options)),
+          options.builtins,
+          options.currentHeadSha,
+          resolveGitContextMemo,
+        )
+      : [{ builtins: options.builtins, currentHeadSha: options.currentHeadSha }];
+
+    for (const context of contexts) {
+      // Same object reference as `options` on the (overwhelmingly common)
+      // single-cwd-context path — no clone, byte-identical to the
+      // pre-attribution call shape. Only a genuinely foreign context
+      // builds a shallow override.
+      const contextOptions: InterceptOptions =
+        context.builtins === options.builtins &&
+        context.currentHeadSha === options.currentHeadSha
+          ? options
+          : { ...options, builtins: context.builtins, currentHeadSha: context.currentHeadSha };
+      const base = await evaluateOnePolicy(policy, contextOptions);
+      // Attach the per-event Risk Gate verdicts so `harness audit` /
+      // `explain --trace` can replay the classification + environment
+      // that the `when:` match was made against. Also carry the
+      // unclassifiedFallback flag (M7) when the when: evaluation set it
+      // to true; leave the field absent otherwise so decisions from
+      // manifests without a `when:` policy stay byte-identical.
+      const whenFallback = whenFallbackMap.get(policy.name);
+      const decision: PolicyDecision = enriched
+        ? {
+            ...base,
+            risk: enriched.risk,
+            environment: enriched.environment,
+            ...(whenFallback === true ? { whenUnclassifiedFallback: true } : {}),
+          }
+        : base;
+      decisions.push(decision);
+      try {
+        await options.ledger.record(
+          decision,
+          resolveSessionId(event.session_id),
+        );
+      } catch (err) {
+        // Audit-write failure must not block; the decision is still applied.
+        // Surface the failure to stderr so a persistently-failing recorder
+        // does not silently leave `harness audit` / `explain --trace` blind.
+        // Goes to stderr to keep the stdout deny-JSON contract intact.
+        (options.stderr ?? process.stderr).write(
+          `harness runtime intercept: audit-write failed for ${decision.policyName}: ${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      }
     }
   }
 

@@ -30,7 +30,9 @@ import {
   MAX_NORMALIZE_LENGTH,
   normalizeCommand,
   normalizeCommandAmpAware,
+  segmentViewOf,
   type AmpAwareNormalizedCommand,
+  type CommandSegment,
   type NormalizedCommand,
 } from "../../runtime/command-normalize.js";
 import { extractShellCommand, SHELL_ALIASES } from "../../runtime/tool-name-aliases.js";
@@ -410,27 +412,30 @@ export async function runInterceptCli(
   // literal `preflight:`. An explicit env var still wins: it is the
   // operator's deliberate override of the derived value.
   //
-  // Deliberately CWD-ONLY, not target-directory-aware: a command that
-  // explicitly names a different repository (`git -C <B>`, `env -C
-  // <B>`, a leading `cd <B> &&`) still resolves ${REPO}/${BRANCH} from
-  // the hook's own cwd, so a preflight recorded for repo A still
-  // authorises a command that explicitly reads repo B — unchanged from
-  // the shipped 0.42.0 behaviour. A per-command target-directory
-  // resolution was built and reviewed (run
-  // 2026-07-27-gate-target-repo-resolution) but removed before shipping:
-  // three consecutive review rounds each found a different way one
-  // global `targetDir` per event leaked into the wrong evaluation (Risk
-  // Gate risk declassification; a push-gate multi-invocation fail-open;
-  // a non-git gated verb sharing a chain with a targeted git call, first
-  // via `&&`, then still open via `|` / `||`). Each fix was partial
-  // because a single per-event `targetDir` cannot express "this
-  // invocation targets repo B, but the gated verb after it runs in the
-  // caller's cwd" — the correct fix attributes a target to the SEGMENT
-  // that satisfies a policy's own trigger, which needs the policy
-  // builtins to become per-policy, not per-event. The extraction itself
-  // (`command-normalize.ts`'s `targetDir`/`targetBase`) stays in the
-  // tree, fully tested, as the foundation for that redesign — tracked as
-  // follow-up task `98ad072f`.
+  // `cwdGitContext` below is the DEFAULT / FALLBACK builtins basis, not
+  // the only one used anymore (task `98ad072f`, T-003). A command that
+  // explicitly names a different repository (`git -C <B>`, `env -C <B>`,
+  // a leading `cd <B> &&`) still resolves `builtins.REPO`/`.BRANCH` (and
+  // `currentHeadSha`, below) from THIS cwd for the majority of policies —
+  // any policy whose `requires:` doesn't reference `${REPO}`/`${BRANCH}`/
+  // `at_head` stays exactly on this cwd-only path, as does any policy
+  // whose own trigger-satisfying segment names no foreign target. Only a
+  // MATCHED policy that (a) uses `${REPO}`/`${BRANCH}`/`at_head` and (b)
+  // whose own `bash_match`-satisfying segment names a different,
+  // resolvable git repository gets a per-policy override — resolved
+  // lazily, inside `intercept()`, from the `commandSegments` view threaded
+  // below, never from this `cwdGitContext`. A prior attempt (run
+  // `2026-07-27-gate-target-repo-resolution`) tried a single global
+  // `targetDir` per event instead and was removed before shipping: three
+  // consecutive review rounds each found a different way one event-wide
+  // target leaked into the wrong evaluation (Risk Gate risk
+  // declassification; a push-gate multi-invocation fail-open; a non-git
+  // gated verb sharing a chain with a targeted git call). This
+  // `cwdGitContext` variable, and the `builtins` object built from it
+  // below, remain exactly what they were before this task — the resolved
+  // fallback every policy without a foreign attribution still uses,
+  // including the Risk Gate's own `resolverGit` further down, which
+  // this task does not touch at all.
   const cwd = resolvePolicyCwd(event, opts.codexCommandCwd);
   const cwdGitContext = resolveGitContext(cwd);
   // Computed once here (not per-policy) so `intercept()` below can thread
@@ -507,6 +512,21 @@ export async function runInterceptCli(
   const bashCommand = isCodexShellTool(event.tool_name) ? extractShellCommand(event) : null;
   const normalizedCommand: NormalizedCommand | undefined =
     bashCommand === null ? undefined : normalizeCommand(bashCommand);
+  // Per-segment view for `intercept()`'s per-policy attribution (task
+  // `98ad072f`, T-003) — computed once here from the SAME `bashCommand`
+  // `normalizedCommand` above already uses, mirroring that field's own
+  // resolved-by-the-wrapper / computed-once-per-event pattern rather than
+  // making every per-repo-builtins policy call `segmentViewOf` itself.
+  // Pure string work (no filesystem), so — unlike the amp-aware thunk
+  // below — there is no reason to defer it behind a thunk: the cost is in
+  // the same class as `normalizeCommand`'s own eager call just above.
+  // `undefined` (no Bash command on this event) and `null` (returned by
+  // `segmentViewOf` itself when the command exceeded
+  // `MAX_NORMALIZE_LENGTH`) both mean "no segment view" and are threaded
+  // through as-is; `intercept()` treats both the same way (see
+  // `InterceptOptions.commandSegments`'s own doc comment).
+  const commandSegments: CommandSegment[] | null | undefined =
+    bashCommand === null ? undefined : segmentViewOf(bashCommand);
   // Memoised thunk for the ampersand-aware SECOND normalisation pass
   // (task aabbad63). Unlike `normalizedCommand` above — eagerly computed
   // once per Bash event, because `policyMatchesEvent`'s first two arms
@@ -647,6 +667,7 @@ export async function runInterceptCli(
       ...(riskContext && { riskContext }),
       ...(normalizedCommand && { normalizedCommand }),
       ...(ampNormalizedCommandThunk && { ampNormalizedCommandThunk }),
+      ...(commandSegments !== undefined && { commandSegments }),
     });
   } finally {
     // Tear down the pooled grounding-mcp session (no-op for injected test

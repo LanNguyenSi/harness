@@ -43,10 +43,28 @@
 // last preceding `cd <path>` segment (see `CommandSegment`'s own doc
 // comment for the composition rules and its own not-covered list, which
 // is narrower in places than `targetDir`/`targetBase` above — e.g. no
-// `VAR=value cd <path>` tolerance). Still NOT WIRED TO ANY GATE — no
-// consumer reads it yet; that wiring is `98ad072f`'s NEXT slice, T-003.
-// `normalizeCommand`'s own `targetDir`/`targetBase` are UNCHANGED by this
-// addition — byte-identical in every pre-existing test.
+// `VAR=value cd <path>` tolerance). `normalizeCommand`'s own `targetDir`/
+// `targetBase` are UNCHANGED by this addition — byte-identical in every
+// pre-existing test.
+//
+// UPDATE (task `98ad072f`, T-003, this run): `segmentViewOf` /
+// `CommandSegment` — NOT `normalizeCommand`'s own `targetDir`/`targetBase`
+// above, which stay exactly as unwired as before this slice — IS now
+// wired to a gate: `src/runtime/intercept.ts`'s `attributeTriggerSegments`
+// re-tests a matched policy's own `bash_match` regex against each
+// segment's `text`, and, for a policy whose `requires:` uses
+// `${REPO}`/`${BRANCH}`/`at_head`, resolves those builtins (and
+// `currentHeadSha`) from the trigger-satisfying segment's
+// `effectiveTarget` instead of the event's cwd — lazily, memoised per
+// resolved path, never touching `resolverGit`/`riskContext`. Trust in
+// `effectiveTarget` is UNIFORM — no distinction between a segment's own
+// explicit target and one inherited from a preceding `cd` (orchestrator
+// decision D-010: an initial revision distinguished the two and was
+// rejected — bash itself draws no such distinction, a `cd <B> && <verb>`
+// chain genuinely runs `<verb>` inside B). See that module's own comments
+// (`attributeTriggerSegments`, `resolveAttributedContexts`) for the
+// consumption rules; this module's OWN extraction and ambiguity rules
+// below are unchanged by being consumed.
 //
 // MEASUREMENT RULE (task 47297478): before measuring THIS module's
 // extraction across builds with an ad-hoc corpus, read the per-arm-gate
@@ -426,10 +444,13 @@ export interface NormalizedCommand {
    * that disagree, or the only named value is `~`-prefixed (see the
    * module header's target-directory-extraction rules).
    *
-   * NOT WIRED TO ANY GATE (see the module header's STATUS paragraph):
-   * extracted and fully tested, pending a redesign that attributes a
-   * target per-policy instead of per-event — follow-up task
-   * `98ad072f`.
+   * STILL NOT WIRED TO ANY GATE (see the module header's STATUS
+   * paragraph): extracted and fully tested, but task `98ad072f`'s
+   * per-policy redesign (T-003) attributes a target from the per-segment
+   * `segmentViewOf` view below instead of this whole-command aggregate —
+   * a single per-event `targetDir` cannot express "this invocation
+   * targets repo B, but the gated verb after it runs in the caller's
+   * cwd," which is exactly the property the redesign needs.
    */
   targetDir: string | null;
   /**
@@ -458,14 +479,14 @@ export interface NormalizedCommand {
 
 /**
  * One boundary-delimited segment's canonicalised text plus its own and
- * "effective" target directory (task `98ad072f` groundwork, T-002 of run
- * `2026-08-02-per-repo-gate-scoping-redesign`) — the foundation for a
- * future redesign that attributes a target to the SPECIFIC segment
- * satisfying a policy's own `bash_match` trigger, instead of the single,
- * whole-command `targetDir` / `targetBase` on `NormalizedCommand` above.
- * Produced by `segmentViewOf`. NOT WIRED TO ANY GATE — no consumer reads
- * this yet (see the module header's STATUS/UPDATE note); that wiring is a
- * separate, later slice (T-003).
+ * "effective" target directory (task `98ad072f`, T-002 of run
+ * `2026-08-02-per-repo-gate-scoping-redesign`) — attributes a target to
+ * the SPECIFIC segment satisfying a policy's own `bash_match` trigger,
+ * instead of the single, whole-command `targetDir` / `targetBase` on
+ * `NormalizedCommand` above. Produced by `segmentViewOf`. WIRED as of
+ * T-003, this run: `src/runtime/intercept.ts`'s `attributeTriggerSegments`
+ * / `resolveAttributedContexts` are the consumer (see the module header's
+ * STATUS/UPDATE note for the exact contract).
  */
 export interface CommandSegment {
   /**
