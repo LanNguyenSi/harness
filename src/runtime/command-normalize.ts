@@ -501,6 +501,17 @@ export interface CommandSegment {
    */
   text: string;
   /**
+   * D-021 (UNIVERSAL-ADDITIVE, run 2026-08-02-per-repo-gate-scoping-
+   * redesign): the only remaining consumer of this field is
+   * `computeSegmentTarget`'s own internal `effectiveTarget` derivation
+   * (below) — `src/runtime/intercept.ts`'s `resolveAttributedContexts`
+   * (the gate) reads `effectiveTarget` only and no longer consults
+   * `ownTarget` at all. Kept as a public, separately-populated field
+   * (part of the T-002 API) rather than folded away, since a future
+   * consumer distinguishing "this segment's OWN explicit target" from
+   * "the directory it composes to once an incoming `cd` basis is
+   * accounted for" is exactly what the two-field split exists for.
+   *
    * This segment's OWN explicit target, named by ITS OWN invocation
    * only — a git invocation's REPO-RELOCATING global option ONLY: `-C` /
    * `--git-dir` (or the SAME invocation's wrapping `env -C`, git-own-
@@ -557,6 +568,18 @@ export interface CommandSegment {
    * recorded value (`-C X -C X`, `env -C X git -C X`) is not new
    * information and does not trigger this — see `peelGitGlobalOptions`'s
    * `noteRelocatingOption` for the precise counting rule.
+   *
+   * D-021 (UNIVERSAL-ADDITIVE, operator decision, run 2026-08-02-per-
+   * repo-gate-scoping-redesign): the D-017/D-018 exclusions above (only a
+   * SINGLE recognised repo-relocating flag sets this field; `--work-tree`
+   * never does) are PRECISION, not the safety mechanism, since
+   * `src/runtime/intercept.ts`'s `resolveAttributedContexts` no longer
+   * REPLACES the cwd demand with this field's value — it ADDS to it, and
+   * the cwd demand is never dropped regardless of what this field
+   * resolves to. What these exclusions still prevent is a SPURIOUS extra
+   * demand (over-attributing a target the invocation does not actually,
+   * unambiguously name), not a dropped one — see that function's own doc
+   * comment for the full D-021 rationale.
    */
   ownTarget: string | null;
   /**
@@ -2098,6 +2121,19 @@ function parentIfDotGit(dir: string): string {
  * which downstream (`computeSegmentTarget`) means "no own target" and the
  * cwd context is demanded instead — exactly the shipped, pre-this-run
  * semantics, never a forged first-token guess.
+ *
+ * D-021 (UNIVERSAL-ADDITIVE, operator decision, run 2026-08-02-per-repo-
+ * gate-scoping-redesign): both the D-017 `--work-tree` exclusion and the
+ * D-018 multi-option lock above were originally the SAFETY mechanism
+ * (the thing standing between an attacker-composed invocation and a
+ * forged REPLACE attribution); under D-021, `src/runtime/intercept.ts`'s
+ * `resolveAttributedContexts` never replaces the cwd demand at all, so
+ * neither exclusion can be bypassed into a weaker-than-shipped gate any
+ * more — the cwd demand is never dropped regardless of what
+ * `relocateTargetDir` resolves to. Both stay in place as PRECISION
+ * (avoiding a spurious extra demand for an ambiguous or non-relocating
+ * target), not as the security boundary; see `resolveAttributedContexts`
+ * itself for where that boundary now lives.
  */
 function peelGitGlobalOptions(
   tokens: Token[],

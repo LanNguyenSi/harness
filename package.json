@@ -46,6 +46,7 @@
     "check:no-only": "node scripts/check-no-only.mjs",
     "measure:bash-prefix-parse": "node scripts/measure-bash-prefix-parse.mjs",
     "measure:command-normalize": "node scripts/measure-command-normalize.mjs",
+    "measure:additive-attribution-matrix": "node scripts/measure-additive-attribution-matrix.mjs",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

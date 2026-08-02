@@ -3942,4 +3942,120 @@ describe("runInterceptCli — 98ad072f FIX ROUND: D-011 critical bypass closure 
       expect(cwdDecision?.reason).toBe(baseline.decisions[0]!.reason);
     });
   });
+
+  // Review pass 5 (LOW, missing test, adopted into T-005): proves
+  // `findGitEntry`'s own upward walk (`src/runtime/git-context.ts`) is what
+  // collapses a relative `-C <subdir>` naming a plain subdirectory of the
+  // cwd repo (no `.git` of its own) into the SAME repository identity as
+  // cwd — one decision, not two. `sub` has no own `.git`, so
+  // `resolveGitContext` walks up from it and lands on cwd's own `.git`;
+  // the resulting `[repo, branch, sha]` signature matches cwd's
+  // (D-015), so `resolveAttributedContexts` dedupes the two into one
+  // `addCwdOnce()` call rather than emitting a spurious second context —
+  // distinct from the D-012 symlink test above (a symlink to a DIFFERENT
+  // repo) and the "positive controls" `-C .` / `-C <cwd absolute>` cases
+  // (the repo root itself, not a subdirectory reached via an upward walk).
+  describe("D-015 collapse via findGitEntry's upward walk: a relative -C <subdir-of-cwd-repo> (no own .git) is ONE cwd decision, not two", () => {
+    it("git -C sub status: sub has no own .git, walks up to cwd's own .git, collapses to a single cwd-tagged decision", async () => {
+      const cwdRepo = makeRepoFixture("collapse-sub-cwd", "main");
+      fs.mkdirSync(path.join(cwdRepo, "sub", "nested"), { recursive: true });
+
+      function ledgerWithEntries(contents: string[]): LedgerClient {
+        const entries = contents.map((content, i) => ({
+          id: `e${i}`,
+          content,
+          createdAt: new Date().toISOString(),
+        }));
+        return {
+          async query() {
+            return { kind: "ok", entries };
+          },
+          async record() {
+            /* no-op */
+          },
+        };
+      }
+
+      const result = await runInterceptCli({
+        stdin: streamFrom(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: "git -C sub status" },
+            session_id: "sess-collapse-sub",
+            cwd: cwdRepo,
+          }),
+        ),
+        stdout: captureStream().stream,
+        stderr: captureStream().stream,
+        manifest: fakeManifest([PREFLIGHT_INVESTIGATION_POLICY]),
+        ledger: ledgerWithEntries(["preflight:collapse-sub-cwd — evidence for cwd"]),
+      });
+
+      expect(result.decisions).toHaveLength(1);
+      expect(result.decisions[0]!.ledgerTag).toBe("preflight:collapse-sub-cwd");
+      expect(result.decisions[0]!.outcome).toBe("allow");
+      expect(result.blocked).toBe(false);
+    });
+  });
+
+  // Review pass 5 (LOW, missing test, adopted into T-005): D-013's bound
+  // ("more than MAX_ATTRIBUTED_CONTEXTS distinct targets") routes through
+  // `outcomeForFailedRequires(policy.enforcement)` (`boundedContextsDecision`
+  // above `intercept()`), the SAME enforcement-to-outcome mapping every
+  // other failed-evaluation branch in this module uses — never a
+  // hardcoded deny. This pins the OTHER enforcement arm: a `warn`-
+  // enforcement per-repo policy past the bound resolves to `warn`, not
+  // `deny`, and never blocks — respecting `outcomeForFailedRequires`
+  // exactly as a `block`-enforcement policy's bound (pinned above, "D-013:
+  // distinct attributed contexts are bounded") resolves to `deny`. Zero
+  // ledger queries either way (the bound engages before any query), so
+  // this is never weaker than shipped (which also never blocks on a
+  // `warn`-enforcement policy).
+  describe("D-013 bound respects a warn-enforcement policy: warns, never denies, never blocks", () => {
+    it(`more than ${MAX_ATTRIBUTED_CONTEXTS} distinct targets on a warn-enforcement policy: warns, zero ledger queries, not blocked`, async () => {
+      const repoCwd = makeRepoFixture("bound-warn-cwd", "main");
+      const targets = Array.from({ length: MAX_ATTRIBUTED_CONTEXTS + 2 }, (_, i) =>
+        makeRepoFixture(`bound-warn-target-${i}`, "main"),
+      );
+      const WARN_INVESTIGATION_POLICY: Policy = {
+        ...PREFLIGHT_INVESTIGATION_POLICY,
+        name: "preflight-before-investigation-warn",
+        enforcement: "warn",
+      };
+      let queryCount = 0;
+      const ledger: LedgerClient = {
+        async query() {
+          queryCount += 1;
+          return { kind: "ok", entries: [] };
+        },
+        async record() {
+          /* no-op */
+        },
+      };
+
+      const result = await runInterceptCli({
+        stdin: streamFrom(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: targets.map((t) => `git -C ${t} status`).join(" && ") },
+            session_id: "sess-bound-warn",
+            cwd: repoCwd,
+          }),
+        ),
+        stdout: captureStream().stream,
+        stderr: captureStream().stream,
+        manifest: fakeManifest([WARN_INVESTIGATION_POLICY]),
+        ledger,
+      });
+
+      expect(queryCount).toBe(0);
+      expect(result.decisions).toHaveLength(1);
+      expect(result.decisions[0]!.outcome).toBe("warn");
+      expect(result.decisions[0]!.enforcement).toBe("warn");
+      expect(result.decisions[0]!.reason).toContain("ambiguous");
+      expect(result.blocked).toBe(false);
+    });
+  });
 });
