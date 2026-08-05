@@ -316,6 +316,15 @@ describe("queryLedgerByTag", () => {
      * Capability-aware fake: implements tools/list with a configurable
      * inputSchema for ledger_summary. tools/call records the args it
      * received so the test can assert what got pushed server-side.
+     *
+     * task e9b4b5c3 (review follow-up on task dc578d67): also writes
+     * `process.env.LIST_MARKER_FILE` (when set) from inside the tools/list
+     * branch that actually ANSWERS the request. This is the positive half
+     * of the marker-file pin: the "falls back to client-side filtering..."
+     * test below asserts the marker file exists, pairing with the
+     * back-compat hot-path test's `toBe(false)` assertion (whose fixture
+     * deliberately never answers tools/list) to pin the env-var name and
+     * the write path from both sides.
      */
     const captureServer = (
       payload: object,
@@ -336,6 +345,7 @@ process.stdin.on("data", (d) => {
     if (msg.method === "initialize") {
       process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\\n");
     } else if (msg.method === "tools/list") {
+      if (process.env.LIST_MARKER_FILE) fs.writeFileSync(process.env.LIST_MARKER_FILE, "1");
       const props = {};
       for (const k of ${JSON.stringify(supportedArgs)}) props[k] = { type: "string" };
       process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { tools: [{ name: "ledger_summary", inputSchema: { type: "object", properties: props } }] } }) + "\\n");
@@ -381,6 +391,15 @@ process.stdin.on("data", (d) => {
         "args.json",
       );
       cleanups.push(() => fs.rmSync(path.dirname(captureFile), { recursive: true, force: true }));
+      // Sits next to captureFile, so the same cleanup covers it. This
+      // fixture's tools/list branch actually ANSWERS (unlike the
+      // back-compat hot-path test's fixture below, which deliberately
+      // never responds), so it is the positive half of the marker-file
+      // pin (task e9b4b5c3): asserting `toBe(true)` here pins the
+      // LIST_MARKER_FILE env-var name and the write path from the side
+      // where tools/list fires, pairing with that test's `toBe(false)`
+      // from the side where it must not.
+      const listMarker = path.join(path.dirname(captureFile), "tools-list-seen");
       const script = makeScript(
         captureServer(
           { sessionId: "sess-1", counts: {}, entries: { facts: [], hypotheses: [], rejected: [], unknowns: [] } },
@@ -389,13 +408,14 @@ process.stdin.on("data", (d) => {
       );
       const result = await queryLedgerByTag({
         mcpCommand: [script],
-        mcpEnv: { CAPTURE_FILE: captureFile },
+        mcpEnv: { CAPTURE_FILE: captureFile, LIST_MARKER_FILE: listMarker },
         sessionId: "sess-1",
         sinceIso: "2026-05-01T08:00:00Z",
         contentPrefix: "policy_decision:",
         timeoutMs: 8000,
       });
       expect(result.kind).toBe("ok");
+      expect(fs.existsSync(listMarker)).toBe(true);
       const captured = JSON.parse(fs.readFileSync(captureFile, "utf8"));
       // The unsupported args must NOT be sent — old server would zod-reject them.
       expect(captured.sinceIso).toBeUndefined();
@@ -722,15 +742,16 @@ process.stdin.on("data", (d) => {
       if (first.status === "degraded") {
         expect(first.reason).toContain("timeout after 250ms");
       }
-      // The latch: this must NOT wait another 250ms (let alone 8000ms).
-      const t0 = performance.now();
+      // The latch: this must resolve without a new round-trip. Proven by
+      // the reason string below, not by a wall-clock budget (removed —
+      // task e9b4b5c3 review follow-up on task dc578d67; a wall-clock
+      // budget here was redundant with, and weaker than, the structural
+      // assertion it sat next to).
       const second = await session.callTool("ledger_add", { sessionId: "s" });
-      const elapsed = performance.now() - t0;
       expect(second.status).toBe("degraded");
       if (second.status === "degraded") {
         expect(second.reason).toContain("timed out earlier in this session");
       }
-      expect(elapsed).toBeLessThan(500);
     } finally {
       session.dispose();
     }
@@ -902,18 +923,17 @@ process.stdin.on("data", (d) => {
         expect(first.reason).toContain("timeout after 100ms");
       }
       // The latch must fire from the override-triggered timeout too, and
-      // this second call (no override) must not wait out any budget at
-      // all — proving the latch, not a second independent timeout, is
-      // what resolved it.
-      const t0 = performance.now();
+      // this second call (no override) must not perform a new round-trip
+      // at all — proven by the reason string below, not by a wall-clock
+      // budget (removed — task e9b4b5c3 review follow-up on task
+      // dc578d67; a wall-clock budget here was redundant with, and
+      // weaker than, the structural assertion it sat next to).
       const second = await session.callTool("ledger_add", { sessionId: "s" });
-      const elapsed = performance.now() - t0;
       expect(second.status).toBe("degraded");
       if (second.status === "degraded") {
         expect(second.reason).toContain("timed out earlier in this session");
         expect(second.reason).toContain("(100ms)");
       }
-      expect(elapsed).toBeLessThan(500);
     } finally {
       session.dispose();
     }
