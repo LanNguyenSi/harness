@@ -211,7 +211,21 @@ describe("read-only Bash classifier", () => {
       // naming variant of the bare --registry flag above.
       "npm view lodash --@scope:registry=http://e.x",
       "npm audit --@myorg:registry=http://e.x",
-      "npm audit --@myorg:registry http://e.x",
+      // Separated-value form of the scoped flag, deliberately on a
+      // NON-audit subcommand (`view`, not `audit`). Review round 3
+      // (task 769d5452) found the audit-subcommand spelling of this case
+      // (`npm audit --@myorg:registry http://e.x`) inert under a
+      // NPM_REGISTRY_FLAG_RE mutation: `npm audit`'s own positive-shape
+      // check already rejects any bare positional token after `audit`
+      // (see the `sub === "audit"` branch below), so `http://e.x` was
+      // blocked by THAT check regardless of the registry guard, and the
+      // assertion stayed green even with the scoped-registry guard
+      // deleted. `npm view` has no such positional-token check, so this
+      // spelling exercises NPM_REGISTRY_FLAG_RE's separated-value branch
+      // on its own — verified by mutation: rolling the regex back to
+      // /^--registry(=|$)/ flips this and both glued scoped forms, and
+      // dropping only the separated-value branch flips exactly this one.
+      "npm view lodash --@myorg:registry http://e.x",
     ])("blocks %s (untrusted registry/config source flag)", (cmd) => {
       expect(isReadOnlyBashCommand(cmd)).toBe(false);
     });
