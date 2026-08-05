@@ -60,13 +60,25 @@ const SENTINEL_PATH = sentinelPath(REAL_GENERATED_DIR);
 interface SentinelSnapshot {
   existed: boolean;
   content: string | null;
+  // Whether REAL_GENERATED_DIR itself was already on disk before this test
+  // ran. beforeEach's `fs.mkdirSync(REAL_GENERATED_DIR, { recursive: true })`
+  // creates that directory on any machine where the operator has never run
+  // the real harness CLI (nothing else in this repo's default test run
+  // touches it, guarded by HARNESS_ALLOW_REAL_GENERATED_DIR in loader.ts).
+  // Only the sentinel FILE inside it was being torn down below, leaving an
+  // empty `harness.generated` directory behind in the operator's real home
+  // after every `npm run test:integration` run. Tracking this here lets
+  // restoreSentinel remove exactly what beforeEach created, mirroring the
+  // sentinel-file restore instead of adding a separate cleanup step.
+  generatedDirExisted: boolean;
 }
 
 function snapshotSentinel(): SentinelSnapshot {
+  const generatedDirExisted = fs.existsSync(REAL_GENERATED_DIR);
   try {
-    return { existed: true, content: fs.readFileSync(SENTINEL_PATH, "utf8") };
+    return { existed: true, content: fs.readFileSync(SENTINEL_PATH, "utf8"), generatedDirExisted };
   } catch {
-    return { existed: false, content: null };
+    return { existed: false, content: null, generatedDirExisted };
   }
 }
 
@@ -82,6 +94,18 @@ function restoreSentinel(snap: SentinelSnapshot): void {
     }
   } catch {
     /* best-effort; the operator can manually clean up if this fails */
+  }
+  if (!snap.generatedDirExisted) {
+    // Undo beforeEach's mkdirSync so the directory does not outlive the
+    // test the same way the sentinel file above does not. rmdirSync is
+    // non-recursive and only succeeds on an empty directory, so if
+    // anything besides our sentinel landed inside during the run, it is
+    // left alone rather than force-deleted.
+    try {
+      fs.rmdirSync(REAL_GENERATED_DIR);
+    } catch {
+      /* not empty, already gone, or other benign race; best-effort */
+    }
   }
 }
 
