@@ -3,7 +3,7 @@ type: runbook
 title: Understanding-gate lockout recovery
 description: Operator procedure to unblock a session locked by the understanding-before-execution PreToolUse gate via `harness approve understanding`, including the 6-tier session-id resolution and the expiry semantics that re-arm the gate.
 tags: [runbook, understanding-gate, lockout, recovery, operator]
-timestamp: 2026-07-16T02:26:27Z
+timestamp: 2026-08-05T15:28:20Z
 sources:
   - src/cli/approve/understanding.ts
   - src/cli/index.ts
@@ -14,6 +14,8 @@ sources:
   - src/policy-packs/builtin/understanding-before-execution-runtime.ts
   - src/policy-packs/builtin/understanding-before-execution.ts
   - src/cli/pack/hook-post-tool-use.ts
+  - src/cli/pack/hook-pre-tool-use.ts
+  - src/cli/pack/hook-codex-pre-tool-use.ts
   - docs/policy-packs/understanding-before-execution.md
 ---
 
@@ -22,6 +24,8 @@ sources:
 ## Symptom
 
 Every `Edit` / `Write` / `Bash` call is refused by the `understanding-before-execution` pack's PreToolUse blocker (`harness pack hook pre-tool-use` on the Claude side; the Codex variant matches `apply_patch|Bash|shell|exec_command|functions.exec_command`). Block contract: exit 2 with the reason on stderr. The agent cannot clear this itself: the historic ledger tag `understanding-approved:<sessionId>` no longer satisfies the gate (agent-tasks/88ca4bb3 closed the self-approval backdoor; `matchLedgerEntries` is audit-only now), and the agent has no filesystem path into `harness.generated/` because the same hook gates Edit/Write/Bash.
+
+**Since task `823837fd` (PR #396, merged 2026-08-05, unreleased — not yet in a tagged version): the block message itself can narrow the diagnosis before any recovery step runs.** When the session has NO persisted Understanding Report at all (`report.report === null`, i.e. only a failed parse attempt exists, never when a fixed report is merely pending approval), both PreToolUse blockers (`src/cli/pack/hook-pre-tool-use.ts`, `src/cli/pack/hook-codex-pre-tool-use.ts`) look up the session's latest parse-error log via the same `findLatestParseError` lookup step 4 below describes for the approve CLI, and — if it names malformed sections — append a sentence to the agent-facing deny reason naming each one as `<Display Name> (<key>)` (e.g. `Prior Art (priorArt)`), shared verbatim by both runtimes via `renderMalformedSectionsNotice` (`src/cli/approve/understanding.ts`). This tells a blocked agent WHICH sections of its last attempt were prose instead of a markdown list, instead of just "no approved report" — and gives the operator the same information by reading the transcript, without needing to run `harness approve understanding` first just to see the parse-error summary.
 
 ## Why the gate is closed
 
@@ -44,14 +48,14 @@ Recovery is **operator-only**, from a shell the hooks do not gate (the `!`-shell
    harness approve understanding
    ```
 
-   Flags (`src/cli/index.ts:1480-1495`): `--session <id>`, `--task <ids...>` (variadic; also comma-joined `--task a,b,c`), `--reports-dir <path>`, `--approved-by <actor>` (default `harness-approve-cli`), `--force`, `--config <path>`, `--project <name>`.
+   Flags (`src/cli/index.ts:1571-1586`): `--session <id>`, `--task <ids...>` (variadic; also comma-joined `--task a,b,c`), `--reports-dir <path>`, `--approved-by <actor>` (default `harness-approve-cli`), `--force`, `--config <path>`, `--project <name>`.
 
-2. **Session-id resolution** — the bare command works because the id is resolved through a 6-tier precedence chain (`resolveApprovalSessionId`, `src/runtime/session-id.ts:241`; used by `src/cli/approve/understanding.ts:513`):
+2. **Session-id resolution** — the bare command works because the id is resolved through a 6-tier precedence chain (`resolveApprovalSessionId`, `src/runtime/session-id.ts:241`; used by `src/cli/approve/understanding.ts:582`):
    1. explicit `--session` flag
    2. `$CLAUDE_CODE_SESSION_ID` (the variable Claude Code actually exports; read first so the runtime's id beats a hand-exported legacy value)
    3. `$CLAUDE_SESSION_ID` (legacy peer)
    4. `$CODEX_SESSION_ID` (live Codex session)
-   5. `<generatedDir>/.pending-approval` — staged by the PreToolUse blocker on every block/ask (Claude path: `src/cli/policy/intercept.ts:531`; Codex path: `src/cli/pack/hook-codex-pre-tool-use.ts:320`) and by `harness session-start preflight` on every run with a resolved id (`src/cli/session-start/index.ts`). Deleted after a successful resolve **and** marker write, so a stale id cannot be revived; a failed marker write keeps it for retry.
+   5. `<generatedDir>/.pending-approval` — staged by the PreToolUse blocker on every block/ask (Claude path: `src/cli/pack/hook-pre-tool-use.ts:531`; Codex path: `src/cli/pack/hook-codex-pre-tool-use.ts:356`) and by `harness session-start preflight` on every run with a resolved id (`src/cli/session-start/index.ts`). Deleted after a successful resolve **and** marker write, so a stale id cannot be revived; a failed marker write keeps it for retry.
    6. the freshest persisted report under the reports dir whose JSON `sessionId` is non-null **and** whose `approvalStatus` is `pending` (approved/expired reports belong to finished cycles and are never adopted, harness/56f51f2b). The CLI prints a loud "session id was GUESSED" warning naming the report file — verify it is your live session before trusting the marker.
 
    All six empty → `HarnessExitError`, no guess. Fastest fix per the error text: run `harness preflight` once (it stages `.pending-approval` as a side effect), then re-run `harness approve understanding`.
@@ -71,9 +75,9 @@ Recovery is **operator-only**, from a shell the hooks do not gate (the `!`-shell
 
 ## Expiry semantics: what re-arms the gate
 
-Configured per pack via `config.approval_lifecycle` (parsed by `parseApprovalLifecycle`, runtime lines 576-664; task-scope machinery lines 742-905):
+Configured per pack via `config.approval_lifecycle` (parsed by `parseApprovalLifecycle`, runtime lines 703-767; task-scope machinery lines 874-1063):
 
-- **`expire_on_tool_match`** (exact MCP tool names, no wildcards): when a listed tool completes, the `harness pack hook post-tool-use` PostToolUse hook deletes the **session** marker, deletes the finished task's **`task-<taskId>`** marker (when `tool_input.taskId` is present), and flips the persisted report `approved` → `expired` so the fallback can't silently re-satisfy the gate. Default list when the block is absent (`DEFAULT_EXPIRE_ON_TOOL_MATCH`, `src/policy-packs/builtin/understanding-before-execution.ts:235`): `mcp__agent-tasks__task_finish`, `task_abandon`, `pull_requests_merge`, `tasks_transition` (transition only expires when `tool_input.status === "done"`). PostToolUse fires only for tools that actually ran.
+- **`expire_on_tool_match`** (exact MCP tool names, no wildcards): when a listed tool completes, the `harness pack hook post-tool-use` PostToolUse hook deletes the **session** marker, deletes the finished task's **`task-<taskId>`** marker (when `tool_input.taskId` is present), and flips the persisted report `approved` → `expired` so the fallback can't silently re-satisfy the gate. Default list when the block is absent (`DEFAULT_EXPIRE_ON_TOOL_MATCH`, `src/policy-packs/builtin/understanding-before-execution.ts:295`): `mcp__agent-tasks__task_finish`, `task_abandon`, `pull_requests_merge`, `tasks_transition` (transition only expires when `tool_input.status === "done"`). PostToolUse fires only for tools that actually ran.
 - **`expire_on_bash_match`** (regex list vs `Bash` `tool_input.command`, e.g. `gh pr merge`): same expiry effects; an invalid regex is skipped with a warning.
 - **`max_age`** (duration string like `"4h"`): `checkApprovalMarker` treats a marker whose `approvedAt` is older as expired (`matched:false`, detail `expired: age Xm > max Ym`). Applies uniformly to task-scoped and session-scoped markers (`checkOperatorApprovalMarkers` is shared by the Claude and Codex hooks). Omitted = no TTL. A marker with an unreadable body skips the freshness check (existence wins).
 - **`{ mode: "session" }`**: explicit legacy opt-out — no expiry hook is emitted at all; one approval lasts the session.

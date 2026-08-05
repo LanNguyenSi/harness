@@ -3,7 +3,7 @@ type: overview
 title: Shell quote models, measured divergence against bash
 description: The policy engine has three independent shell-word models plus a raw-regex trigger layer. This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-08-02T20:15:00Z
+timestamp: 2026-08-05T15:28:20Z
 sources:
   - src/runtime/command-normalize.ts
   - src/cli/init/composer.ts
@@ -40,15 +40,29 @@ zieht sie erst nach erneutem `harness init --template full --force`
 Fehlalarm-Korpus mitgemessen (3 vorbestehende + 6 neue Fehlalarme); die in
 Empfehlung 1 offen gelassene Präzisionsseite (K4, 75/75 ungemessen) läuft
 als Folge-Task `b150745c`, die gemeinsame `decodeShellWord`-Primitive aus
-Empfehlung 2 als `fdee7d0f`. **Nicht mitgeschlossen und als `76671e5a`
-offen:** drei Policy-Pack-Runtime-Regexe (`CURATED_MUTATION_BASH_RE`,
-`GH_PR_MERGE_BASH_RE`, `DEFAULT_PUSH_BASH_RE`) tragen dieselbe `&`-Lücke
-auf ausgelieferten Gate-Flächen; bewusst nicht gesweept, weil
-Geschwister-Regexe im selben Pack Allow-Listen sind, wo Verbreitern eine
-Gate LOCKERT. Die benachbarte `command-normalize`-Boundary-Lücke
-(`A=x&env -C /tmp git status`, deren naiver `&`-in-`BOUNDARY_RE`-Fix 140
-von 140 gequotete Wert-Formen regressiert) ist als `aabbad63` gefilt und
-bleibt offen. Der Rest der Messung bezieht sich weiterhin auf master
+Empfehlung 2 als `fdee7d0f`. **`76671e5a` ist inzwischen umgesetzt und
+ausgeliefert, in v0.44.0:** die drei Policy-Pack-Runtime-Regexe
+(`CURATED_MUTATION_BASH_RE`, `GH_PR_MERGE_BASH_RE` in
+`src/policy-packs/builtin/post-merge-gate-runtime.ts`,
+`DEFAULT_PUSH_BASH_RE` in `src/policy-packs/builtin/solution-acceptance-runtime.ts`)
+UND dieses Repos eigener `dogfood/harness.yaml`-`dogfood-recency`-Trigger
+erkennen jetzt ebenfalls einzelnes `&` als Boundary (`&&` bleibt
+subsumiert, kein Verlust gemessen über einen 49.999-String-Korpus mit
+bestandener Positivkontrolle). Bewusst weiterhin NICHT gesweept:
+`ESCAPE_GIT_BASH_RE`/`ESCAPE_HARNESS_BASH_RE` (Allow-Listen im selben
+Pack, wo Verbreitern eine Gate LOCKERT statt sie zu härten). **Die
+benachbarte `command-normalize`-Boundary-Lücke** (`A=x&env -C /tmp git
+status`, deren naiver `&`-in-`BOUNDARY_RE`-Fix 140 von 140 gequotete
+Wert-Formen regressiert) **ist als `aabbad63` ebenfalls inzwischen
+geschlossen, in v0.44.0 — aber NICHT durch Verbreitern von
+`BOUNDARY_RE`** (der naive Fix bleibt zurückgezogen, unverändert seit der
+Messung unten), **sondern durch einen zweiten, unabhängigen
+Normalisierungs-Pass**: `src/runtime/command-normalize.ts` gewinnt
+`AMP_BOUNDARY_RE`/`normalizeCommandAmpAware`, den `policyMatchesEvent`
+(`src/runtime/intercept.ts`) als DRITTEN Arm konsultiert — nur wenn sowohl
+der rohe als auch der primär normalisierte Test verfehlen — und der damit
+strikt additiv über den beiden bestehenden Armen liegt, ohne
+`BOUNDARY_RE` selbst anzufassen. Der Rest der Messung bezieht sich weiterhin auf master
 `c423880` (= master nach PR #383, vor PR #385; NICHT identisch mit dem
 ausgelieferten 0.42.0, dem der Normaliser aus PR #383 ganz fehlt). Er
 bleibt als Messung gegen `c423880` gültig; die reinen `&`-Zeilen in der
@@ -80,6 +94,27 @@ Kontrollbau und meldete 0/48 Zellen schwächer als 0.43.0 bei diesem Lauf.
 Der `cdTarget`-Kanal von `bash-prefix-parse.ts` selbst (Risk-Gate-Kontext,
 nicht die `${REPO}`/`${BRANCH}`-Builtins) ist von `98ad072f` unberührt und
 bleibt K1s offene Beobachtung.
+
+**Empfehlung 2, Teil (der read-only-Flag-Kanal, `fdee7d0f`) ist umgesetzt
+und ausgeliefert — als "slice 1", PR #392, nur für diesen einen der drei
+Aufrufstellen.** Neues `src/runtime/shell-word.ts` exportiert
+`decodeShellWord` (reine Quote-Entfernung + Escape-Dekodierung: ANSI-C
+`\xHH`/`\NNN`/`\uHHHH`, quote-eigene Backslash-Regeln, Lauf-Verkettung —
+KEINE `$VAR`/`$()`/Backtick/`~`/Glob-Expansion) und wird jetzt vor jedem
+Schreib-Flag-Vergleich in `read-only-bash.ts` angewandt (`find`, `sort`,
+`file`), stets nur auf der RESTRIKTIVEN Seite (erkennt mehr Tokens als
+Schreib-Flag, nie weniger). Das schließt K5s drei gemessenen Fail-opens
+punktgenau: `find . -"delete"`, `find . -'delete'`, `find . -\delete`
+(plus, laut Fix-Beleg, zwei weitere Schreibweisen und die `sort`/`file`-
+Geschwisterfälle) klassifizieren nicht mehr als read-only. **Was das
+NICHT schließt:** die anderen beiden Aufrufstellen der Empfehlung —
+`bash-prefix-parse`s Wert-Dekodierung (K2) und `command-normalize`s
+Peeling (K3) — importieren `decodeShellWord` (Stand dieser Prüfung)
+NICHT; K2 und K3 bleiben also offen, unverändert gegenüber der Messung
+unten. Damit ist auch der in Empfehlung 2 genannte Reihenfolge-Vorbehalt
+(`cdTarget`-Kanal erst nach `98ad072f`) noch nicht relevant geworden —
+`98ad072f` ist zwar inzwischen gelandet, aber `bash-prefix-parse`s
+Wert-Dekodierung selbst hat diese Primitive noch nicht bekommen.
 
 ## Kurzfassung
 
@@ -128,9 +163,9 @@ Ausgaben und sind nur paarweise überlappend messbar.
 
 | Modul | Ausgabe | verdrahtet an |
 |---|---|---|
-| `command-normalize.ts` | `normalized` | `bash_match` raw-OR-normalized (`src/runtime/intercept.ts:346-349`) |
+| `command-normalize.ts` | `normalized` | `bash_match` raw-OR-normalized-OR-amp-normalized (`src/runtime/intercept.ts:442-478`, dritter Arm seit `aabbad63`) |
 | | `targetDir`/`targetBase` | nichts (grep-verifiziert) |
-| `bash-prefix-parse.ts` | `inlineEnv`, `cdTarget` | Risk-Gate-Kontext (`src/cli/policy/intercept.ts:508-531`) |
+| `bash-prefix-parse.ts` | `inlineEnv`, `cdTarget` | Risk-Gate-Kontext (`src/cli/policy/intercept.ts:636-658`) |
 | `read-only-bash.ts` | Boolean | Risk-Floor, Understanding-Gate-PreToolUse (2 Hooks), Write-Guard |
 
 Die Matrix ist daher als **drei überlappende Zwei-Wege-Vergleiche**
@@ -382,4 +417,4 @@ sticht sie alle im Verhältnis Wirkung zu Aufwand.
 - Eine Maschine (WSL2, bash 5.x, GNU findutils). `&`-Backgrounding,
   Job-Control und `find -delete` können anderswo abweichen.
 - Die Resolver-Probe rekonstruiert den Merge-Pfad aus
-  `src/cli/policy/intercept.ts:525-531`, statt den echten PreToolUse-Hook zu fahren.
+  `src/cli/policy/intercept.ts:643-658`, statt den echten PreToolUse-Hook zu fahren.

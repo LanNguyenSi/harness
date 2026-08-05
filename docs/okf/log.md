@@ -2,6 +2,22 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-08-05T15:42:36Z, full-bundle re-verification sweep (tasks 3c43de1a
+  PR #398 + 3c150880): all 9 docs re-checked claim-by-claim against
+  harness 0.44.0 (master 65761ff) after the 0.43.0/0.44.0 policy-engine
+  churn. Content corrections in seven: policy-engine-producer-wiring
+  (98ad072f/D-021 attribution account, 0.43.0/0.44.0 version history),
+  codex-adapter-parity-gaps (10 citations, one CHANGELOG version
+  mislabel), quote-model-divergence (76671e5a + aabbad63 shipped in
+  0.44.0, fdee7d0f slice 1 documented), understanding-gate-lockout-
+  recovery (PR #396 malformedSections surfacing, wrong-file citation
+  fixed, 2 sources added), debug-verb-selection (dry-run REPO/BRANCH
+  under-prediction since 98ad072f), manifest-validation-scope (3
+  citations +4 off), pause-vs-gate-kill-switch (7 citations). Verified
+  content-accurate and re-stamped only: evidence-ledger-trust-boundary,
+  gate-fail-posture-matrix; review then added the post-merge-gate tag
+  to the former and an in-tree D-021 pointer to the latter. Reviewer
+  negative control: pre-change clone 35 warnings, post-change 0.
 - 2026-07-18T05:00:00Z, scoped re-verification (task init-mcp-wiring-claude-code/T-004):
   `okf-kit check` flagged 2 files stale (source mtime after doc timestamp).
   `debug-verb-selection.md` — flagged for `src/cli/doctor/index.ts`, which
