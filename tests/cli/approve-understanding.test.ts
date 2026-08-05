@@ -2,7 +2,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { approveUnderstanding, dedupeTaskIds } from "../../src/cli/approve/understanding.js";
+import {
+  approveUnderstanding,
+  dedupeTaskIds,
+  findLatestParseError,
+  renderMalformedSectionsNotice,
+} from "../../src/cli/approve/understanding.js";
 import { buildProgram } from "../../src/cli/index.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
 import { REPORTS_DIR_ENV } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
@@ -196,12 +201,15 @@ describe("approveUnderstanding", () => {
     }
   });
 
-  it("names malformed sections in the parse-error summary when the log carries them (task 823837fd)", async () => {
+  it("does not duplicate malformed sections when the log's `message` field already names them inline (0.4.10 shape, task 823837fd review Fix 5)", async () => {
     // The log format `@lannguyensi/understanding-gate` >= 0.4.10 writes
     // (and harness's own stdin-report.ts writer since 7e29e5d7): a
     // (list) section that was PRESENT but whose body was prose, not a
     // markdown list, is named in `malformedSections` as a subset of
-    // `missing`.
+    // `missing`, AND the `message` field already annotates each one
+    // inline ("priorArt (present but not a markdown list -- ...)").
+    // findLatestParseError must not append the same names a second time
+    // in one line when `summary` was taken from `message` verbatim.
     const reportsParent = fs.mkdtempSync(path.join(os.tmpdir(), "ug-with-malformed-"));
     const reportsDir = path.join(reportsParent, "reports");
     const parseErrorsDir = path.join(reportsParent, "parse-errors");
@@ -216,6 +224,45 @@ describe("approveUnderstanding", () => {
         malformedSections: ["priorArt", "risks"],
         message:
           "Missing required sections: priorArt (present but not a markdown list -- use '- ' or '1.' items), risks (present but not a markdown list -- use '- ' or '1.' items)",
+      })}\n--- raw ---\noriginal assistant text\n`,
+    );
+    try {
+      const result = await approveUnderstanding({
+        manifest: manifest(),
+        session: "sess-1",
+        reportsDir,
+        generatedDir: path.join(reportsParent, "harness.generated"),
+        ledgerAdd: async () => ({ ok: true }),
+      });
+      expect(result.persistedReport.ok).toBe(false);
+      if (result.persistedReport.ok) return;
+      expect(result.persistedReport.reason).toMatch(
+        /Missing required sections: priorArt \(present but not a markdown list/,
+      );
+      expect(result.persistedReport.reason).not.toMatch(
+        /; malformed \(present but not a markdown list\): priorArt, risks/,
+      );
+    } finally {
+      fs.rmSync(reportsParent, { recursive: true, force: true });
+    }
+  });
+
+  it("still appends the malformed-sections clause when the log has no `message` field (reason/fallback branch, task 823837fd review Fix 5)", async () => {
+    // Without a `message` field, `summary` is built from `reason` (or the
+    // raw first line), neither of which mentions the malformed sections
+    // on its own — the append is still needed there.
+    const reportsParent = fs.mkdtempSync(path.join(os.tmpdir(), "ug-with-malformed-reason-only-"));
+    const reportsDir = path.join(reportsParent, "reports");
+    const parseErrorsDir = path.join(reportsParent, "parse-errors");
+    fs.mkdirSync(reportsDir);
+    fs.mkdirSync(parseErrorsDir);
+    fs.writeFileSync(
+      path.join(parseErrorsDir, "2026-05-13T19-02-25-498Z-831a51.log"),
+      `${JSON.stringify({
+        sessionId: "sess-1",
+        reason: "missing_sections",
+        missing: ["priorArt", "risks"],
+        malformedSections: ["priorArt", "risks"],
       })}\n--- raw ---\noriginal assistant text\n`,
     );
     try {
@@ -265,6 +312,31 @@ describe("approveUnderstanding", () => {
       expect(result.persistedReport.reason).not.toMatch(/malformed/);
     } finally {
       fs.rmSync(reportsParent, { recursive: true, force: true });
+    }
+  });
+
+  it("filters a mixed-type malformedSections array down to string entries only (task 823837fd review Fix 8)", () => {
+    // Pins the `.filter((m): m is string => typeof m === "string")` guard
+    // at findLatestParseError: a log's `malformedSections` field is
+    // untrusted JSON and could carry non-string noise (a future package
+    // version, a hand-edited log, a partial write). Non-string entries
+    // must be dropped rather than surfacing as "undefined"/"null" in an
+    // agent- or operator-facing sentence.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ug-mixed-malformed-"));
+    try {
+      fs.writeFileSync(
+        path.join(dir, "2026-05-13T19-02-25-498Z-831a51.log"),
+        `${JSON.stringify({
+          sessionId: "sess-1",
+          reason: "missing_sections",
+          malformedSections: ["priorArt", 42, null],
+        })}\n--- raw ---\noriginal assistant text\n`,
+      );
+      const result = findLatestParseError(dir, "sess-1");
+      expect(result).not.toBeNull();
+      expect(result?.malformedSections).toEqual(["priorArt"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -1870,5 +1942,31 @@ describe("approveUnderstanding — report capture from stdin (task 61fd36db)", (
       ledgerAdd: async () => ({ ok: true }),
     });
     expect(result.stdinReport).toBeUndefined();
+  });
+});
+
+describe("renderMalformedSectionsNotice (task 823837fd review Fix 3/Fix 4)", () => {
+  it("returns null for an empty sections list", () => {
+    expect(renderMalformedSectionsNotice([])).toBeNull();
+  });
+
+  it("maps camelCase section keys to their display name, paired with the raw key", () => {
+    // Fix 3: an agent-facing sentence printing raw camelCase keys right
+    // next to renderReportSchemaHint's display-name bullets ("Prior Art
+    // (list)") read as two vocabularies for the same section. The keys
+    // are now paired with their display name, e.g. "Prior Art (priorArt)".
+    const notice = renderMalformedSectionsNotice(["priorArt", "risks"]);
+    expect(notice).toBe(
+      "Your previous Understanding Report attempt had malformed sections " +
+        "(present but not a markdown list): Prior Art (priorArt), Risks (risks).",
+    );
+  });
+
+  it("falls back to the raw key unchanged for an unrecognised section key", () => {
+    const notice = renderMalformedSectionsNotice(["someFutureSection"]);
+    expect(notice).toBe(
+      "Your previous Understanding Report attempt had malformed sections " +
+        "(present but not a markdown list): someFutureSection.",
+    );
   });
 });

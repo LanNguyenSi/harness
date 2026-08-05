@@ -38,6 +38,7 @@ import { resolveApprovalSessionId } from "../../runtime/session-id.js";
 import type { Manifest, McpServer } from "../../schema/index.js";
 import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
 import { loadManifest, resolvePaths, type LoaderOptions } from "../loader.js";
+import { describeSectionKey } from "../pack/understanding-report-schema-hint.js";
 import { persistStdinReport, type StdinReportOutcome } from "./stdin-report.js";
 
 export interface ApproveUnderstandingOptions extends LoaderOptions {
@@ -338,6 +339,15 @@ export function findLatestParseError(dir: string, sessionId: string): ParseError
     let summary = (header.split("\n")[0] ?? "").trim();
     let headerSessionId: string | null = null;
     let malformedSections: string[] = [];
+    // Tracks whether `summary` was taken verbatim from the package's own
+    // `message` field: `@lannguyensi/understanding-gate` >= 0.4.10 already
+    // annotates each malformed (list) section inline in that string
+    // ("Prior Art (list) (present but not a markdown list -- use '- ' or
+    // '1.' items)"). Appending the same names again below would duplicate
+    // them in one line; the append is only useful when `summary` came from
+    // the `reason` fallback or the raw first-line fallback, neither of
+    // which mentions the malformed sections on its own.
+    let summaryFromMessage = false;
     try {
       const parsed = JSON.parse(header) as Record<string, unknown>;
       if (typeof parsed["sessionId"] === "string") {
@@ -350,6 +360,7 @@ export function findLatestParseError(dir: string, sessionId: string): ParseError
       }
       if (typeof parsed["message"] === "string" && parsed["message"].length > 0) {
         summary = parsed["message"] as string;
+        summaryFromMessage = true;
       } else if (typeof parsed["reason"] === "string") {
         const missing = Array.isArray(parsed["missing"])
           ? ` (missing: ${(parsed["missing"] as unknown[]).filter((m) => typeof m === "string").join(", ")})`
@@ -360,12 +371,40 @@ export function findLatestParseError(dir: string, sessionId: string): ParseError
       /* keep the first-line fallback; headerSessionId stays null */
     }
     if (headerSessionId !== sessionId) continue;
-    if (malformedSections.length > 0) {
+    if (malformedSections.length > 0 && !summaryFromMessage) {
       summary = `${summary}; malformed (present but not a markdown list): ${malformedSections.join(", ")}`;
     }
     return { filePath: cand.filePath, summary, malformedSections };
   }
   return null;
+}
+
+/**
+ * Render the agent-facing "your previous report had malformed sections"
+ * sentence from a `ParseErrorSummary.malformedSections` list, or `null`
+ * when there is nothing to say. Shared by both PreToolUse hooks
+ * (hook-pre-tool-use.ts, hook-codex-pre-tool-use.ts, task 823837fd
+ * review) so the sentence is defined once instead of duplicated
+ * byte-identically in each runtime — same extraction shape as
+ * `checkOperatorApprovalMarkers` (understanding-before-execution-runtime.ts),
+ * a marker-check helper both hooks already call instead of
+ * re-implementing.
+ *
+ * Section keys are mapped to their display name via `describeSectionKey`
+ * (`Prior Art (priorArt)` rather than the bare camelCase key) so the
+ * sentence reads consistently with `renderReportSchemaHint`'s section
+ * bullets in the same block reason, instead of mixing two vocabularies
+ * for the same section. The CLI's own one-line summary
+ * (`findLatestParseError` above) intentionally stays on raw keys — it is
+ * operator-facing and matches the parse-error log verbatim.
+ */
+export function renderMalformedSectionsNotice(sections: string[]): string | null {
+  if (sections.length === 0) return null;
+  const named = sections.map((s) => describeSectionKey(s)).join(", ");
+  return (
+    `Your previous Understanding Report attempt had malformed sections ` +
+    `(present but not a markdown list): ${named}.`
+  );
 }
 
 /**
