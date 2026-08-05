@@ -129,6 +129,32 @@ describe("write-guard — forge-attempt matrix (the load-bearing anti-forgery pr
     expect(bash("cd ~/.local/state/agent-grounding/solution-verdicts-decoy").blocked).toBe(true);
   });
 
+  it("pins two pre-existing, documented residuals from the module header (task 769d5452): case-variance and a trailing backslash both pass through undetected TODAY", () => {
+    // Same form as the tilde-decoy residual pin above: this records CURRENT
+    // behavior, not a desired one. Both are named and accepted in the module
+    // header's "Known-open residual" note (this file, header comment) as
+    // pre-existing, not introduced by the cd-target check. Neither is
+    // endorsed — a future fix that case-folds `isInsideDir`'s comparison, or
+    // that strips a trailing backslash before resolving the cd target, would
+    // (and should) flip these to blocked=true; verified by transient mutation
+    // during this task (see task 769d5452 report), not asserted here.
+    //
+    // Case-variance: `SOLUTION-VERDICTS` navigates into the (real, lowercase)
+    // dir on a case-insensitive filesystem (e.g. default macOS APFS), but
+    // both `isInsideDir` (case-sensitive `path.relative`) and the textual
+    // check (case-sensitive `includes`) compare case-sensitively, so neither
+    // fires and `cd`'s read-only fast path is taken.
+    expect(bash("cd /home/u/.local/state/agent-grounding/SOLUTION-VERDICTS").blocked).toBe(false);
+    expect(bash("cd /home/u/.local/state/agent-grounding/Solution-Verdicts").blocked).toBe(false);
+    // Trailing backslash: `cd <DIR>\` still lands in the dir under bash
+    // (verified against bash 3.2.57, per the module header), but the literal
+    // trailing backslash makes the token resolve to a different (sibling,
+    // non-existent) path than `dir` itself, so `isInsideDir` returns false
+    // and, since no unresolvable-expansion character matches either, `cd`'s
+    // read-only fast path is taken.
+    expect(bash(`cd ${DIR}\\`).blocked).toBe(false);
+  });
+
   it("does not flag `cd -` or a bare `cd` (no statically resolvable destination)", () => {
     expect(bash("cd -").blocked).toBe(false);
     expect(bash("cd").blocked).toBe(false);
@@ -180,6 +206,40 @@ describe("write-guard — forge-attempt matrix (the load-bearing anti-forgery pr
     // the same widening closes it here too.
     const parent = "/home/u/.local/state/agent-grounding";
     expect(bash(`cd ${parent}/solution-verdict{s,}`).blocked).toBe(true);
+  });
+
+  it("allows ordinary brace/comma cd paths unrelated to the verdict dir (task 769d5452 positive pin)", () => {
+    // `{` `}` `,` are in CD_TARGET_UNRESOLVABLE_CHARS, so each of these takes
+    // `cd`'s cdTargetUnresolvable branch (same as the verdict-dir brace forms
+    // above) rather than the read-only fast path — but bashReferencesVerdictDir
+    // finds no literal-leaf, tail, or leaf-word match for any of them, so they
+    // are NOT blocked. Pinned because a future tightening of either
+    // CD_TARGET_UNRESOLVABLE_CHARS or the glob/brace leaf-word fallback could
+    // silently block normal navigation; verified by transient mutation during
+    // this task (routing any unresolvable cd target straight to blocked=true
+    // flips all three) — see task 769d5452 report, not asserted here.
+    expect(bash("cd ~/{src,test}").blocked).toBe(false);
+    expect(bash("cd /tmp/{a,b}").blocked).toBe(false);
+    expect(bash("cd /tmp/a,b").blocked).toBe(false);
+  });
+
+  it("blocks `cd /repo/{solution,notes}`: the DELIBERATE, accepted over-block from the leaf-word fallback (task 769d5452 pin)", () => {
+    // Neither path segment is the verdict dir or anywhere near it — this is
+    // an ordinary, unrelated `cd`. It blocks anyway because the brace
+    // triggers bashReferencesVerdictDir's glob/brace fallback
+    // (src/policy-packs/builtin/solution-acceptance-runtime.ts, the
+    // "ACCEPTED COST of including `{` here" comment above its `if
+    // (/[*?[{]/.test(command))` check), and "solution" is one of the leaf's
+    // >=6-char words ("solution-verdicts" -> "solution" + "verdicts"). That
+    // comment names this exact command as a measured example and explains
+    // why it is accepted: dropping `{` from the trigger class would reopen
+    // the `solution-verdict{s,}` split-leaf hole, which fails OPEN, whereas
+    // this over-block fails SAFE. Pinned here so it reads as a recorded
+    // decision, not a regression, the next time someone re-derives it.
+    // Verified by transient mutation during this task (dropping `{` from
+    // that trigger class flips this to blocked=false) — see task 769d5452
+    // report, not asserted here.
+    expect(bash("cd /repo/{solution,notes}").blocked).toBe(true);
   });
 
   it("blocks shell-glob redirect targets that obscure the leaf (overwrite forge)", () => {
