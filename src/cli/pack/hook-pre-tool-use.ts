@@ -21,6 +21,7 @@
 // secondary safety net for solo users, and `harness explain --trace`
 // (Phase 4 #6) surfaces the runtime audit trail when configured.
 
+import * as path from "node:path";
 import {
   queryLedgerByTag,
   type LedgerEntry,
@@ -33,6 +34,7 @@ import {
   matchLedgerEntries,
   type ApprovalCheckResult,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
+import { findLatestParseError } from "../approve/understanding.js";
 import {
   resolveGeneratedDir,
   writePendingApproval,
@@ -167,6 +169,7 @@ function blockJson(
   ux: PolicyUx | undefined,
   sessionId: string,
   escapeHint?: string | null,
+  malformedSections?: string[],
 ): string {
   // When the pack config declares `ux:`, the agent-facing surface
   // becomes the plain-language `{ cannot, required, run }` shape, and
@@ -193,6 +196,18 @@ function blockJson(
     const schemaHint = renderReportSchemaHint();
     const producersBlock = renderProducers(producers, { SESSION_ID: sessionId });
     reasonText = `Understanding Gate: ${reason}. Tool: ${toolName}. ${suffix}\n${schemaHint}${producersBlock}`;
+  }
+  // Name the malformed sections from the session's own latest parse-error
+  // log, when it carries any (task 823837fd, follow-up to 7e29e5d7): a
+  // (list) heading that WAS present but whose body was prose instead of
+  // markdown list items. Without this an agent whose report almost
+  // parsed sees the same generic "no approved report" block as one that
+  // never attempted a report at all. Appended after the ux/legacy
+  // envelope (both are the "what to do" recipe; this is "what went wrong
+  // last time") and before the escape hint (the most immediate
+  // remediation, kept last).
+  if (malformedSections && malformedSections.length > 0) {
+    reasonText = `${reasonText}\n\nYour previous Understanding Report attempt had malformed sections (present but not a markdown list): ${malformedSections.join(", ")}.`;
   }
   // A targeted remediation hint for an approve-like command that tripped the
   // escape matcher's metachar guard. Appended last so it reads after the
@@ -484,6 +499,18 @@ export async function runPackHookPreToolUseCli(
     };
   }
 
+  // Best-effort lookup of the session's latest parse-error log (task
+  // 823837fd): the standalone Stop hook / `harness approve understanding`
+  // stdin-report path writes one to `<reports-parent>/parse-errors/` when
+  // the agent's report failed to parse. Reused here (findLatestParseError
+  // already swallows I/O errors, same contract as the approve-time
+  // lookup) so a blocked agent whose report almost parsed can be told
+  // WHICH sections were malformed, not just "no approved report".
+  const latestParseError = findLatestParseError(
+    path.join(path.dirname(reportsDir), "parse-errors"),
+    sessionId,
+  );
+
   // Audit-only ledger probe: the ledger row is still recorded by
   // `harness approve understanding`, and we surface its presence in
   // the diagnostic so an operator chasing a flapping gate can see the
@@ -595,7 +622,7 @@ export async function runPackHookPreToolUseCli(
   );
   const escapeHint = approveEscapeHint(toolName, commandStr);
   stdout.write(
-    `${blockJson(toolName, "no approved Understanding Report for this session", configProducers, configUx, sessionId, escapeHint)}\n`,
+    `${blockJson(toolName, "no approved Understanding Report for this session", configProducers, configUx, sessionId, escapeHint, latestParseError?.malformedSections)}\n`,
   );
   return {
     exitCode: 0,

@@ -1721,3 +1721,71 @@ describe("pack hook pre-tool-use blocker — recovery git-commit exemption after
     expect(result.approvalCheck.source).toBe("persisted-report");
   });
 });
+
+describe("pack hook pre-tool-use blocker — malformed-sections surfacing (task 823837fd)", () => {
+  function writeParseErrorLog(
+    parseErrorsDir: string,
+    name: string,
+    body: Record<string, unknown>,
+  ): void {
+    fs.mkdirSync(parseErrorsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(parseErrorsDir, name),
+      `${JSON.stringify(body, null, 2)}\n\n--- raw ---\noriginal assistant text\n`,
+    );
+  }
+
+  it("names the malformed sections in the block reason when the session's latest parse-error log carries them", async () => {
+    const reportsParent = fs.mkdtempSync(path.join(tmp, "hook-malformed-"));
+    const reportsDir = path.join(reportsParent, "reports");
+    const parseErrorsDir = path.join(reportsParent, "parse-errors");
+    writeParseErrorLog(parseErrorsDir, "err.log", {
+      sessionId: "sess-1",
+      reason: "missing_sections",
+      missing: ["Prior Art (list)", "Risks (list)"],
+      malformedSections: ["Prior Art (list)", "Risks (list)"],
+      message:
+        "Missing required sections: Prior Art (list) (present but not a markdown list -- use '- ' or '1.' items), Risks (list) (present but not a markdown list -- use '- ' or '1.' items)",
+    });
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event()),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    const decision = JSON.parse(stdout.read().trim()) as { reason: string };
+    expect(decision.reason).toMatch(
+      /malformed sections \(present but not a markdown list\): Prior Art \(list\), Risks \(list\)/,
+    );
+  });
+
+  it("does not mention malformed sections when the session's parse-error log has none", async () => {
+    const reportsParent = fs.mkdtempSync(path.join(tmp, "hook-no-malformed-"));
+    const reportsDir = path.join(reportsParent, "reports");
+    const parseErrorsDir = path.join(reportsParent, "parse-errors");
+    writeParseErrorLog(parseErrorsDir, "err.log", {
+      sessionId: "sess-1",
+      reason: "missing_sections",
+      missing: ["Prior Art (list)"],
+      message: "Missing required sections: Prior Art (list)",
+    });
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event()),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    const decision = JSON.parse(stdout.read().trim()) as { reason: string };
+    expect(decision.reason).not.toMatch(/malformed sections/);
+  });
+});

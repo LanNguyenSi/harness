@@ -960,3 +960,67 @@ describe("pack hook codex-pre-tool-use blocker — recovery git-commit exemption
     expect(result.approvalCheck.source).toBe("none");
   });
 });
+
+describe("pack hook codex-pre-tool-use blocker — malformed-sections surfacing (task 823837fd)", () => {
+  function writeParseErrorLog(
+    parseErrorsDir: string,
+    name: string,
+    body: Record<string, unknown>,
+  ): void {
+    fs.mkdirSync(parseErrorsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(parseErrorsDir, name),
+      `${JSON.stringify(body, null, 2)}\n\n--- raw ---\noriginal assistant text\n`,
+    );
+  }
+
+  it("names the malformed sections in the stderr block reason when the session's latest parse-error log carries them", async () => {
+    const reportsParent = fs.mkdtempSync(path.join(tmp, "codex-malformed-"));
+    const reportsDir = path.join(reportsParent, "reports");
+    const parseErrorsDir = path.join(reportsParent, "parse-errors");
+    writeParseErrorLog(parseErrorsDir, "err.log", {
+      sessionId: "sess-codex",
+      reason: "missing_sections",
+      missing: ["Prior Art (list)", "Risks (list)"],
+      malformedSections: ["Prior Art (list)", "Risks (list)"],
+      message:
+        "Missing required sections: Prior Art (list) (present but not a markdown list -- use '- ' or '1.' items), Risks (list) (present but not a markdown list -- use '- ' or '1.' items)",
+    });
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event()),
+      stderr: stderr.stream,
+      reportsDir,
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(stderr.read()).toMatch(
+      /malformed sections \(present but not a markdown list\): Prior Art \(list\), Risks \(list\)/,
+    );
+  });
+
+  it("does not mention malformed sections when the session's parse-error log has none", async () => {
+    const reportsParent = fs.mkdtempSync(path.join(tmp, "codex-no-malformed-"));
+    const reportsDir = path.join(reportsParent, "reports");
+    const parseErrorsDir = path.join(reportsParent, "parse-errors");
+    writeParseErrorLog(parseErrorsDir, "err.log", {
+      sessionId: "sess-codex",
+      reason: "missing_sections",
+      missing: ["Prior Art (list)"],
+      message: "Missing required sections: Prior Art (list)",
+    });
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event()),
+      stderr: stderr.stream,
+      reportsDir,
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(stderr.read()).not.toMatch(/malformed sections/);
+  });
+});

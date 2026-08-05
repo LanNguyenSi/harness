@@ -255,10 +255,22 @@ async function writeLedgerTag(
   });
 }
 
-interface ParseErrorSummary {
+export interface ParseErrorSummary {
   filePath: string;
   /** One-line human-readable summary suitable for inlining in the CLI reason. */
   summary: string;
+  /**
+   * Section keys the log's `malformedSections` field named: a (list)
+   * heading that WAS present but whose body was prose instead of markdown
+   * list items (`@lannguyensi/understanding-gate` >= 0.4.10, agent-tasks
+   * be98cd96). Empty when the field is absent/empty on the log (older
+   * package pin, or an unrelated parse-error reason). `summary` already
+   * has this named, appended as its own clause; this is exposed
+   * separately too so a caller that wants to build its own sentence
+   * (e.g. the PreToolUse hooks' agent-facing block reason, task
+   * 823837fd) does not have to re-parse the log.
+   */
+  malformedSections: string[];
 }
 
 /**
@@ -279,8 +291,17 @@ interface ParseErrorSummary {
  * `sessionId` are now skipped entirely. Logs missing a `sessionId` field
  * (or whose header is not JSON) are also skipped, since we cannot
  * attribute them.
+ *
+ * `malformedSections` (task 823837fd, follow-up to 7e29e5d7): when the
+ * log's JSON header carries a non-empty `malformedSections` array (a
+ * (list) section that was present but not a markdown list), the returned
+ * `summary` names those sections explicitly so the CLI's one-line reason
+ * does not read as a bare "missing" when the agent actually wrote
+ * *something* under the heading. Exported so the PreToolUse hooks
+ * (hook-pre-tool-use.ts, hook-codex-pre-tool-use.ts) can reuse the same
+ * lookup + attribution logic rather than re-implementing the header scan.
  */
-function findLatestParseError(dir: string, sessionId: string): ParseErrorSummary | null {
+export function findLatestParseError(dir: string, sessionId: string): ParseErrorSummary | null {
   let names: string[];
   try {
     names = fs.readdirSync(dir);
@@ -316,10 +337,16 @@ function findLatestParseError(dir: string, sessionId: string): ParseErrorSummary
     const header = raw.split("\n--- raw ---")[0] ?? raw;
     let summary = (header.split("\n")[0] ?? "").trim();
     let headerSessionId: string | null = null;
+    let malformedSections: string[] = [];
     try {
       const parsed = JSON.parse(header) as Record<string, unknown>;
       if (typeof parsed["sessionId"] === "string") {
         headerSessionId = parsed["sessionId"] as string;
+      }
+      if (Array.isArray(parsed["malformedSections"])) {
+        malformedSections = (parsed["malformedSections"] as unknown[]).filter(
+          (m): m is string => typeof m === "string",
+        );
       }
       if (typeof parsed["message"] === "string" && parsed["message"].length > 0) {
         summary = parsed["message"] as string;
@@ -333,7 +360,10 @@ function findLatestParseError(dir: string, sessionId: string): ParseErrorSummary
       /* keep the first-line fallback; headerSessionId stays null */
     }
     if (headerSessionId !== sessionId) continue;
-    return { filePath: cand.filePath, summary };
+    if (malformedSections.length > 0) {
+      summary = `${summary}; malformed (present but not a markdown list): ${malformedSections.join(", ")}`;
+    }
+    return { filePath: cand.filePath, summary, malformedSections };
   }
   return null;
 }

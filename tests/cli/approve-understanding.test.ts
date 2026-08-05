@@ -196,6 +196,78 @@ describe("approveUnderstanding", () => {
     }
   });
 
+  it("names malformed sections in the parse-error summary when the log carries them (task 823837fd)", async () => {
+    // The log format `@lannguyensi/understanding-gate` >= 0.4.10 writes
+    // (and harness's own stdin-report.ts writer since 7e29e5d7): a
+    // (list) section that was PRESENT but whose body was prose, not a
+    // markdown list, is named in `malformedSections` as a subset of
+    // `missing`.
+    const reportsParent = fs.mkdtempSync(path.join(os.tmpdir(), "ug-with-malformed-"));
+    const reportsDir = path.join(reportsParent, "reports");
+    const parseErrorsDir = path.join(reportsParent, "parse-errors");
+    fs.mkdirSync(reportsDir);
+    fs.mkdirSync(parseErrorsDir);
+    fs.writeFileSync(
+      path.join(parseErrorsDir, "2026-05-13T19-02-25-498Z-831a51.log"),
+      `${JSON.stringify({
+        sessionId: "sess-1",
+        reason: "missing_sections",
+        missing: ["priorArt", "risks"],
+        malformedSections: ["priorArt", "risks"],
+        message:
+          "Missing required sections: priorArt (present but not a markdown list -- use '- ' or '1.' items), risks (present but not a markdown list -- use '- ' or '1.' items)",
+      })}\n--- raw ---\noriginal assistant text\n`,
+    );
+    try {
+      const result = await approveUnderstanding({
+        manifest: manifest(),
+        session: "sess-1",
+        reportsDir,
+        generatedDir: path.join(reportsParent, "harness.generated"),
+        ledgerAdd: async () => ({ ok: true }),
+      });
+      expect(result.persistedReport.ok).toBe(false);
+      if (result.persistedReport.ok) return;
+      expect(result.persistedReport.reason).toMatch(
+        /malformed \(present but not a markdown list\): priorArt, risks/,
+      );
+    } finally {
+      fs.rmSync(reportsParent, { recursive: true, force: true });
+    }
+  });
+
+  it("does not append a malformed-sections clause when the log's field is absent", async () => {
+    const reportsParent = fs.mkdtempSync(path.join(os.tmpdir(), "ug-plain-parse-err-"));
+    const reportsDir = path.join(reportsParent, "reports");
+    const parseErrorsDir = path.join(reportsParent, "parse-errors");
+    fs.mkdirSync(reportsDir);
+    fs.mkdirSync(parseErrorsDir);
+    fs.writeFileSync(
+      path.join(parseErrorsDir, "2026-05-13T19-02-25-498Z-831a51.log"),
+      `${JSON.stringify({
+        sessionId: "sess-1",
+        reason: "missing_sections",
+        missing: ["currentUnderstanding"],
+        message: "Missing required sections: currentUnderstanding",
+      })}\n--- raw ---\noriginal assistant text\n`,
+    );
+    try {
+      const result = await approveUnderstanding({
+        manifest: manifest(),
+        session: "sess-1",
+        reportsDir,
+        generatedDir: path.join(reportsParent, "harness.generated"),
+        ledgerAdd: async () => ({ ok: true }),
+      });
+      expect(result.persistedReport.ok).toBe(false);
+      if (result.persistedReport.ok) return;
+      expect(result.persistedReport.reason).toMatch(/Missing required sections: currentUnderstanding/);
+      expect(result.persistedReport.reason).not.toMatch(/malformed/);
+    } finally {
+      fs.rmSync(reportsParent, { recursive: true, force: true });
+    }
+  });
+
   it("filters parse-errors to the current session: stale logs from other sessions never leak", async () => {
     // Regression for agent-tasks/b13205b2: a previous-session parse-error
     // log would surface in the current operator's approve output and read

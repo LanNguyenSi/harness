@@ -20,6 +20,7 @@
 // stderr). The package's optional standalone blocker remains a safety
 // net for solo users; the harness blocker is strictly more powerful.
 
+import * as path from "node:path";
 import { queryLedgerByTag, type LedgerEntry } from "../../policies/index.js";
 import {
   checkOperatorApprovalMarkers,
@@ -28,6 +29,7 @@ import {
   matchLedgerEntries,
   type ApprovalCheckResult,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
+import { findLatestParseError } from "../approve/understanding.js";
 import {
   resolveGeneratedDir,
   writePendingApproval,
@@ -297,6 +299,17 @@ export async function runPackHookCodexPreToolUseCli(
     return allowResult(report.detail, "persisted-report", stderr);
   }
 
+  // Best-effort lookup of the session's latest parse-error log (task
+  // 823837fd), mirroring the Claude hook (hook-pre-tool-use.ts): the
+  // standalone Stop hook / `harness approve understanding` stdin-report
+  // path writes one to `<reports-parent>/parse-errors/` when the agent's
+  // report failed to parse. Reused so a blocked agent whose report
+  // almost parsed can be told WHICH sections were malformed.
+  const latestParseError = findLatestParseError(
+    path.join(path.dirname(reportsDir), "parse-errors"),
+    sessionId,
+  );
+
   // Audit-only ledger probe.
   const ledger = await checkLedger(manifest, sessionId, opts);
 
@@ -375,9 +388,16 @@ export async function runPackHookCodexPreToolUseCli(
     stderr,
     "harness pack hook codex",
   );
-  const agentFacing = configUx
+  let agentFacing = configUx
     ? renderAgentFacing(configUx, { SESSION_ID: sessionId, TOOL_NAME: toolName })
     : `Run \`harness approve understanding\` once you have produced and confirmed an Understanding Report.\n${renderReportSchemaHint()}`;
+  // Name the malformed sections from the session's own latest parse-error
+  // log, when it carries any (task 823837fd, follow-up to 7e29e5d7):
+  // mirrors the Claude hook's append (hook-pre-tool-use.ts) so the two
+  // runtimes show the agent the same information.
+  if (latestParseError && latestParseError.malformedSections.length > 0) {
+    agentFacing = `${agentFacing}\n\nYour previous Understanding Report attempt had malformed sections (present but not a markdown list): ${latestParseError.malformedSections.join(", ")}.`;
+  }
   const diagnostic = configUx
     ? `harness pack hook codex: BLOCK: ${reason}.\n${agentFacing}`
     : `harness pack hook codex: BLOCK: ${reason}. Tool: ${toolName}. ${agentFacing}`;
