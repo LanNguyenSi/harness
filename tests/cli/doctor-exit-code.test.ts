@@ -8,6 +8,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { run } from "../../src/cli/index.js";
+import { HermeticSpawnViolationError } from "../../src/runtime/hermetic-spawn-guard.js";
 
 let cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -169,5 +170,51 @@ describe("harness doctor — exit code wired to report.errorCount (task a07b379a
     expect(stdout).toContain(`deleted: ${rogueDir}`);
     expect(stdout).toContain("rogue evidence-ledger DBs remaining: 0");
     expect(fs.existsSync(rogueDir)).toBe(false);
+  });
+});
+
+describe("harness doctor: hermetic spawn guard re-throw at the run() boundary (task f9fd9cb9, reviewer finding-set of task 325ace29)", () => {
+  it("`doctor` without --shallow (no injected npmBinExec seam exists on RunOptions) propagates HermeticSpawnViolationError out of run(), not folded into exit code 70", async () => {
+    // run()'s catch (src/cli/index.ts) has
+    // `if (err instanceof HermeticSpawnViolationError) throw err;` before
+    // the generic handling that folds every other error into
+    // `return 70`. The analogous re-throw in runInteractive's outer catch
+    // is tested (tests/cli/init-interactive.test.ts, "wiring claude-code
+    // ... WITHOUT an injected mcpExec ..."), but this run()-level branch
+    // had no direct test.
+    //
+    // Call-path: `RunOptions` deliberately has no `npmBinExec` seam
+    // (task 325ace29 review finding F2, documented on `realNpmExec` in
+    // src/cli/doctor/npm-bin-path.ts), and the `doctor` CLI action does
+    // not thread one through either. So a CLI-level `run({ argv:
+    // ["doctor", ...] })` WITHOUT `--shallow` is the only way to reach
+    // `realNpmExec` (and therefore the hermetic-spawn guard) through
+    // `run()`. `doctor()` (src/cli/doctor/index.ts) calls
+    // `checkNpmBinPath` unconditionally as its first async step whenever
+    // `!opts.shallow`, before any MCP or CLI version probe, so a minimal
+    // manifest with no declared tools already reaches it.
+    const home = tempHome();
+    const configPath = writeCleanManifest(home);
+    let stdout = "";
+    let stderr = "";
+    let caught: unknown;
+    try {
+      await run({
+        argv: ["doctor", "--config", configPath],
+        stdout: (s) => { stdout += s; },
+        stderr: (s) => { stderr += s; },
+        rogueLedgerScanOptions: { homeDir: home, cwd: home },
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(HermeticSpawnViolationError);
+    expect((caught as Error).message).toMatch(/Refusing to spawn a REAL "npm prefix -g"/);
+    // Never folded into the generic "return 70" branch: that branch
+    // writes `${err.message}\n` to stderr before returning, and the
+    // doctor prose report (only produced after the throwing call) never
+    // gets written to stdout either.
+    expect(stdout).toBe("");
+    expect(stderr).toBe("");
   });
 });
