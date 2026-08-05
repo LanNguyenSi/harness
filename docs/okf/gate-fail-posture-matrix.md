@@ -65,10 +65,11 @@ Above `MAX_NORMALIZE_LENGTH` (100,000 characters), `normalizeCommand` (`src/runt
 DISTINCT repository a trigger-satisfying command segment names (its own
 `-C`/`env -C`/`--git-dir`, or a target inherited from a genuinely
 persisting `cd`) — the session's own cwd context is ALWAYS also
-evaluated, never dropped (`resolveAttributedContexts`; see D-021 in
-`.ai/runs/2026-08-02-per-repo-gate-scoping-redesign/03-decisions.md` for
-the four-review-pass history behind that "always add, never replace"
-rule). This section covers only the FALLBACK side of that resolution,
+evaluated, never dropped (`resolveAttributedContexts`; the "always add, never replace" rule
+D-021 and its four-review-pass history are restated in-tree at
+`src/runtime/command-normalize.ts:507-576` — the original decision
+record under `.ai/runs/2026-08-02-per-repo-gate-scoping-redesign/` is
+local run state and not shipped with the repo). This section covers only the FALLBACK side of that resolution,
 since it is the part that changes this matrix's own fail-posture story:
 
 - **A composition the module cannot resolve to a single, unambiguous
