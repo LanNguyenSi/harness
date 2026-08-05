@@ -20,6 +20,7 @@
 // stderr). The package's optional standalone blocker remains a safety
 // net for solo users; the harness blocker is strictly more powerful.
 
+import * as path from "node:path";
 import { queryLedgerByTag, type LedgerEntry } from "../../policies/index.js";
 import {
   checkOperatorApprovalMarkers,
@@ -28,6 +29,7 @@ import {
   matchLedgerEntries,
   type ApprovalCheckResult,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
+import { findLatestParseError, renderMalformedSectionsNotice } from "../approve/understanding.js";
 import {
   resolveGeneratedDir,
   writePendingApproval,
@@ -375,9 +377,36 @@ export async function runPackHookCodexPreToolUseCli(
     stderr,
     "harness pack hook codex",
   );
-  const agentFacing = configUx
+  let agentFacing = configUx
     ? renderAgentFacing(configUx, { SESSION_ID: sessionId, TOOL_NAME: toolName })
     : `Run \`harness approve understanding\` once you have produced and confirmed an Understanding Report.\n${renderReportSchemaHint()}`;
+  // Best-effort lookup of the session's latest parse-error log (task
+  // 823837fd, follow-up gate task 823837fd review), mirroring the Claude
+  // hook (hook-pre-tool-use.ts): the standalone Stop hook / `harness
+  // approve understanding` stdin-report path writes one to
+  // `<reports-parent>/parse-errors/` when the agent's report failed to
+  // parse. Gated on `report.report === null` (no persisted report at
+  // all for this session): a report that WAS persisted but is merely
+  // pending approval must not surface a stale parse-error from an
+  // earlier, already-fixed attempt; mirrors the CLI's own gate (`if
+  // (!latest)`, approve/understanding.ts). Moved here, right before the
+  // block render and after every exemption early-return above, so the
+  // lookup only runs on the path that actually renders it (pure code
+  // motion from its previous location right after `checkPersistedReport`).
+  const latestParseError =
+    report.report === null
+      ? findLatestParseError(path.join(path.dirname(reportsDir), "parse-errors"), sessionId)
+      : null;
+  // Name the malformed sections from that log, when it carries any:
+  // shared with the Claude hook's identical append via
+  // `renderMalformedSectionsNotice` (approve/understanding.ts) so the two
+  // runtimes cannot drift apart byte-for-byte.
+  const malformedNotice = renderMalformedSectionsNotice(
+    latestParseError?.malformedSections ?? [],
+  );
+  if (malformedNotice) {
+    agentFacing = `${agentFacing}\n\n${malformedNotice}`;
+  }
   const diagnostic = configUx
     ? `harness pack hook codex: BLOCK: ${reason}.\n${agentFacing}`
     : `harness pack hook codex: BLOCK: ${reason}. Tool: ${toolName}. ${agentFacing}`;

@@ -35,6 +35,49 @@ export const UNDERSTANDING_REPORT_REQUIRED_SECTIONS = [
   "Prior Art (list)",
 ] as const;
 
+// Derives a display label's camelCase parser key, e.g.
+// "Out Of Scope (list)" -> "outOfScope". Intentionally the SAME
+// conversion `scripts/check-ug-schema-drift.mjs`'s `labelToCamelKey`
+// already uses to diff this file's display names against the upstream
+// package's real `SECTIONS[].key` values in CI; reusing the rule here
+// (rather than hand-maintaining a second, independently-typed camelCase
+// array next to UNDERSTANDING_REPORT_REQUIRED_SECTIONS) means there is
+// exactly one list to keep in sync with the parser, not two that could
+// silently diverge from EACH OTHER even while both still matched
+// upstream individually.
+function labelToCamelKey(label: string): string {
+  const stripped = label.replace(/\s*\([^)]*\)\s*$/, "").trim();
+  const parts = stripped.split(/\s+/);
+  return parts
+    .map((part, idx) =>
+      idx === 0
+        ? part.charAt(0).toLowerCase() + part.slice(1)
+        : part.charAt(0).toUpperCase() + part.slice(1),
+    )
+    .join("");
+}
+
+/**
+ * Map a parser section key (e.g. `"priorArt"`) to an agent-facing label
+ * that pairs it with its display name (e.g. `"Prior Art (priorArt)"`),
+ * for surfaces that name a SPECIFIC section (like a malformed-sections
+ * notice) right next to this file's display-name hint (task 823837fd
+ * review: printing the raw camelCase key alone next to
+ * `renderReportSchemaHint`'s "Prior Art (list)" bullets read as two
+ * unrelated vocabularies for the same section). Falls back to the raw
+ * key unchanged when it is not one of the recognised keys, so a future
+ * parser section this mirror has not caught up with yet degrades
+ * gracefully instead of throwing.
+ */
+export function describeSectionKey(key: string): string {
+  const match = UNDERSTANDING_REPORT_REQUIRED_SECTIONS.find(
+    (label) => labelToCamelKey(label) === key,
+  );
+  if (!match) return key;
+  const label = match.replace(/\s*\((?:paragraph|list)\)$/, "");
+  return `${label} (${key})`;
+}
+
 /**
  * Render a compact, agent-readable hint listing the canonical sections
  * the `@lannguyensi/understanding-gate` parser expects. Suitable for

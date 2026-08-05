@@ -38,6 +38,7 @@ import { resolveApprovalSessionId } from "../../runtime/session-id.js";
 import type { Manifest, McpServer } from "../../schema/index.js";
 import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
 import { loadManifest, resolvePaths, type LoaderOptions } from "../loader.js";
+import { describeSectionKey } from "../pack/understanding-report-schema-hint.js";
 import { persistStdinReport, type StdinReportOutcome } from "./stdin-report.js";
 
 export interface ApproveUnderstandingOptions extends LoaderOptions {
@@ -255,10 +256,22 @@ async function writeLedgerTag(
   });
 }
 
-interface ParseErrorSummary {
+export interface ParseErrorSummary {
   filePath: string;
   /** One-line human-readable summary suitable for inlining in the CLI reason. */
   summary: string;
+  /**
+   * Section keys the log's `malformedSections` field named: a (list)
+   * heading that WAS present but whose body was prose instead of markdown
+   * list items (`@lannguyensi/understanding-gate` >= 0.4.10, agent-tasks
+   * be98cd96). Empty when the field is absent/empty on the log (older
+   * package pin, or an unrelated parse-error reason). `summary` already
+   * has this named, appended as its own clause; this is exposed
+   * separately too so a caller that wants to build its own sentence
+   * (e.g. the PreToolUse hooks' agent-facing block reason, task
+   * 823837fd) does not have to re-parse the log.
+   */
+  malformedSections: string[];
 }
 
 /**
@@ -279,8 +292,17 @@ interface ParseErrorSummary {
  * `sessionId` are now skipped entirely. Logs missing a `sessionId` field
  * (or whose header is not JSON) are also skipped, since we cannot
  * attribute them.
+ *
+ * `malformedSections` (task 823837fd, follow-up to 7e29e5d7): when the
+ * log's JSON header carries a non-empty `malformedSections` array (a
+ * (list) section that was present but not a markdown list), the returned
+ * `summary` names those sections explicitly so the CLI's one-line reason
+ * does not read as a bare "missing" when the agent actually wrote
+ * *something* under the heading. Exported so the PreToolUse hooks
+ * (hook-pre-tool-use.ts, hook-codex-pre-tool-use.ts) can reuse the same
+ * lookup + attribution logic rather than re-implementing the header scan.
  */
-function findLatestParseError(dir: string, sessionId: string): ParseErrorSummary | null {
+export function findLatestParseError(dir: string, sessionId: string): ParseErrorSummary | null {
   let names: string[];
   try {
     names = fs.readdirSync(dir);
@@ -316,13 +338,29 @@ function findLatestParseError(dir: string, sessionId: string): ParseErrorSummary
     const header = raw.split("\n--- raw ---")[0] ?? raw;
     let summary = (header.split("\n")[0] ?? "").trim();
     let headerSessionId: string | null = null;
+    let malformedSections: string[] = [];
+    // Tracks whether `summary` was taken verbatim from the package's own
+    // `message` field: `@lannguyensi/understanding-gate` >= 0.4.10 already
+    // annotates each malformed (list) section inline in that string
+    // ("Prior Art (list) (present but not a markdown list -- use '- ' or
+    // '1.' items)"). Appending the same names again below would duplicate
+    // them in one line; the append is only useful when `summary` came from
+    // the `reason` fallback or the raw first-line fallback, neither of
+    // which mentions the malformed sections on its own.
+    let summaryFromMessage = false;
     try {
       const parsed = JSON.parse(header) as Record<string, unknown>;
       if (typeof parsed["sessionId"] === "string") {
         headerSessionId = parsed["sessionId"] as string;
       }
+      if (Array.isArray(parsed["malformedSections"])) {
+        malformedSections = (parsed["malformedSections"] as unknown[]).filter(
+          (m): m is string => typeof m === "string",
+        );
+      }
       if (typeof parsed["message"] === "string" && parsed["message"].length > 0) {
         summary = parsed["message"] as string;
+        summaryFromMessage = true;
       } else if (typeof parsed["reason"] === "string") {
         const missing = Array.isArray(parsed["missing"])
           ? ` (missing: ${(parsed["missing"] as unknown[]).filter((m) => typeof m === "string").join(", ")})`
@@ -333,9 +371,40 @@ function findLatestParseError(dir: string, sessionId: string): ParseErrorSummary
       /* keep the first-line fallback; headerSessionId stays null */
     }
     if (headerSessionId !== sessionId) continue;
-    return { filePath: cand.filePath, summary };
+    if (malformedSections.length > 0 && !summaryFromMessage) {
+      summary = `${summary}; malformed (present but not a markdown list): ${malformedSections.join(", ")}`;
+    }
+    return { filePath: cand.filePath, summary, malformedSections };
   }
   return null;
+}
+
+/**
+ * Render the agent-facing "your previous report had malformed sections"
+ * sentence from a `ParseErrorSummary.malformedSections` list, or `null`
+ * when there is nothing to say. Shared by both PreToolUse hooks
+ * (hook-pre-tool-use.ts, hook-codex-pre-tool-use.ts, task 823837fd
+ * review) so the sentence is defined once instead of duplicated
+ * byte-identically in each runtime; same extraction shape as
+ * `checkOperatorApprovalMarkers` (understanding-before-execution-runtime.ts),
+ * a marker-check helper both hooks already call instead of
+ * re-implementing.
+ *
+ * Section keys are mapped to their display name via `describeSectionKey`
+ * (`Prior Art (priorArt)` rather than the bare camelCase key) so the
+ * sentence reads consistently with `renderReportSchemaHint`'s section
+ * bullets in the same block reason, instead of mixing two vocabularies
+ * for the same section. The CLI's own one-line summary
+ * (`findLatestParseError` above) intentionally stays on raw keys; it is
+ * operator-facing and matches the parse-error log verbatim.
+ */
+export function renderMalformedSectionsNotice(sections: string[]): string | null {
+  if (sections.length === 0) return null;
+  const named = sections.map((s) => describeSectionKey(s)).join(", ");
+  return (
+    `Your previous Understanding Report attempt had malformed sections ` +
+    `(present but not a markdown list): ${named}.`
+  );
 }
 
 /**

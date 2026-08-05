@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Both PreToolUse hooks (Claude and Codex) now tell a blocked agent WHICH
+  Understanding Report sections were malformed on their last attempt: a
+  `(list)` heading that was present but held prose instead of markdown
+  list items, with an agent-facing sentence naming each section as
+  `<Display Name> (<key>)` (e.g. `Prior Art (priorArt)`), paired with
+  `renderReportSchemaHint`'s existing display-name vocabulary rather than
+  the bare camelCase key the parser itself uses (task `823837fd`, review
+  Fix 3). The sentence is only appended when the session has NO persisted
+  report at all, never when a fixed report is merely pending operator
+  approval (review Fix 1), and is defined once and shared by both hooks
+  via `renderMalformedSectionsNotice` (`src/cli/approve/understanding.ts`,
+  review Fix 4) instead of two byte-identical copies.
+- `harness approve understanding`'s one-line parse-error summary
+  (`findLatestParseError`) likewise names malformed sections when the
+  operator-facing reason is not already sourced from the package's own
+  `message` field, which annotates them inline since
+  `@lannguyensi/understanding-gate` 0.4.10 (review Fix 5).
+- `@lannguyensi/understanding-gate` lockfile refreshed to 0.4.10 (the
+  `malformedSections` `ParseError` field this surfacing depends on);
+  the declared range stays `^0.4.9`.
+
 ## [0.44.0] - 2026-08-03
 
 ### Security

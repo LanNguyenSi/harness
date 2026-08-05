@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { parseReport } from "@lannguyensi/understanding-gate";
 import { runPackHookCodexPreToolUseCli } from "../../src/cli/pack/hook-codex-pre-tool-use.js";
 import type { LedgerEntry } from "../../src/policies/index.js";
 import {
@@ -958,5 +959,168 @@ describe("pack hook codex-pre-tool-use blocker — recovery git-commit exemption
     });
     expect(result.blocked).toBe(true);
     expect(result.approvalCheck.source).toBe("none");
+  });
+});
+
+describe("pack hook codex-pre-tool-use blocker: malformed-sections surfacing (task 823837fd)", () => {
+  function writeParseErrorLog(
+    parseErrorsDir: string,
+    name: string,
+    body: Record<string, unknown>,
+  ): void {
+    fs.mkdirSync(parseErrorsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(parseErrorsDir, name),
+      `${JSON.stringify(body, null, 2)}\n\n--- raw ---\noriginal assistant text\n`,
+    );
+  }
+
+  // Derived from an ACTUAL `parseReport` call (task 823837fd review Fix 2)
+  // rather than hand-written, so this fixture cannot drift from what the
+  // producer really emits: the real parser returns camelCase section
+  // keys ("risks", "priorArt"), never the display names
+  // ("Risks (list)", "Prior Art (list)") `renderReportSchemaHint` shows
+  // an agent; a prior version of this fixture used the display names,
+  // which the producer never emits and the hooks would never see in
+  // practice.
+  function malformedSectionsParseError(): {
+    missing: string[];
+    malformedSections: string[];
+    message: string;
+  } {
+    const markdown = [
+      "# Understanding Report",
+      "",
+      "## Current Understanding",
+      "I understand the task.",
+      "",
+      "## Intended Outcome",
+      "Ship the fix.",
+      "",
+      "## Derived Todos",
+      "- do the thing",
+      "",
+      "## Acceptance Criteria",
+      "- it works",
+      "",
+      "## Assumptions",
+      "- none",
+      "",
+      "## Open Questions",
+      "- none",
+      "",
+      "## Out Of Scope",
+      "- nothing",
+      "",
+      "## Risks",
+      "This is prose instead of a list.",
+      "",
+      "## Verification Plan",
+      "- ran tests",
+      "",
+      "## Prior Art",
+      "Also prose here, not a list.",
+      "",
+    ].join("\n");
+    const result = parseReport(markdown, { mode: "grill_me" });
+    if (result.ok) {
+      throw new Error("test fixture markdown unexpectedly parsed cleanly");
+    }
+    return {
+      missing: result.error.missing,
+      malformedSections: result.error.malformedSections ?? [],
+      message: result.error.message,
+    };
+  }
+
+  it("names the malformed sections in the stderr block reason when the session's latest parse-error log carries them", async () => {
+    const reportsParent = fs.mkdtempSync(path.join(tmp, "codex-malformed-"));
+    const reportsDir = path.join(reportsParent, "reports");
+    const parseErrorsDir = path.join(reportsParent, "parse-errors");
+    const { missing, malformedSections, message } = malformedSectionsParseError();
+    writeParseErrorLog(parseErrorsDir, "err.log", {
+      sessionId: "sess-codex",
+      reason: "missing_sections",
+      missing,
+      malformedSections,
+      message,
+    });
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event()),
+      stderr: stderr.stream,
+      reportsDir,
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    // The agent-facing sentence maps each raw key to its display name
+    // (task 823837fd review Fix 3): "Risks (risks)", "Prior Art
+    // (priorArt)", not the bare camelCase keys.
+    expect(stderr.read()).toMatch(
+      /malformed sections \(present but not a markdown list\): Risks \(risks\), Prior Art \(priorArt\)/,
+    );
+  });
+
+  it("does not mention malformed sections when the session's parse-error log has none", async () => {
+    const reportsParent = fs.mkdtempSync(path.join(tmp, "codex-no-malformed-"));
+    const reportsDir = path.join(reportsParent, "reports");
+    const parseErrorsDir = path.join(reportsParent, "parse-errors");
+    writeParseErrorLog(parseErrorsDir, "err.log", {
+      sessionId: "sess-codex",
+      reason: "missing_sections",
+      missing: ["Prior Art (list)"],
+      message: "Missing required sections: Prior Art (list)",
+    });
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event()),
+      stderr: stderr.stream,
+      reportsDir,
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(stderr.read()).not.toMatch(/malformed sections/);
+  });
+
+  it("does not mention malformed sections when a persisted report already exists for the session, even if only pending (task 823837fd review Fix 1)", async () => {
+    // Regression repro: `checkPersistedReport` returns `approved: false`
+    // BOTH for "no report at all" and "report pending operator
+    // approval"; so an agent who FIXED their report (a new, well-formed
+    // one now sits pending) and is waiting for `harness approve
+    // understanding` must NOT still be told their earlier, superseded
+    // parse-error attempt had malformed sections. Gate matches the CLI's
+    // own `if (!latest)` gate (approve/understanding.ts:836):
+    // malformed-sections lookup only fires when NO persisted report
+    // exists for the session at all (`report.report === null`).
+    const reportsParent = fs.mkdtempSync(path.join(tmp, "codex-malformed-pending-report-"));
+    const reportsDir = path.join(reportsParent, "reports");
+    const parseErrorsDir = path.join(reportsParent, "parse-errors");
+    const { missing, malformedSections, message } = malformedSectionsParseError();
+    writeParseErrorLog(parseErrorsDir, "err.log", {
+      sessionId: "sess-codex",
+      reason: "missing_sections",
+      missing,
+      malformedSections,
+      message,
+    });
+    writeReport(reportsDir, "rpt.json", {
+      sessionId: "sess-codex",
+      approvalStatus: "pending",
+    });
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event()),
+      stderr: stderr.stream,
+      reportsDir,
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    expect(stderr.read()).not.toMatch(/malformed sections/);
   });
 });
