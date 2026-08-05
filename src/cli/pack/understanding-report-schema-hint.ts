@@ -39,7 +39,7 @@ export const UNDERSTANDING_REPORT_REQUIRED_SECTIONS = [
 // "Out Of Scope (list)" -> "outOfScope". Intentionally the SAME
 // conversion `scripts/check-ug-schema-drift.mjs`'s `labelToCamelKey`
 // already uses to diff this file's display names against the upstream
-// package's real `SECTIONS[].key` values in CI — reusing the rule here
+// package's real `SECTIONS[].key` values in CI; reusing the rule here
 // (rather than hand-maintaining a second, independently-typed camelCase
 // array next to UNDERSTANDING_REPORT_REQUIRED_SECTIONS) means there is
 // exactly one list to keep in sync with the parser, not two that could

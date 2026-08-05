@@ -137,7 +137,7 @@ function malformedSectionsParseError(): {
 const MALFORMED_SENTENCE_RE =
   /Your previous Understanding Report attempt had malformed sections \(present but not a markdown list\): [^\n]+\./;
 
-describe("malformed-sections notice — Claude/Codex hook parity (task 823837fd review Fix 4)", () => {
+describe("malformed-sections notice, Claude/Codex hook parity (task 823837fd review Fix 4)", () => {
   it("both hooks emit the byte-identical sentence for the same session's parse-error fixture", async () => {
     const sessionId = "sess-parity";
     const { missing, malformedSections, message } = malformedSectionsParseError();
@@ -170,7 +170,7 @@ describe("malformed-sections notice — Claude/Codex hook parity (task 823837fd 
     const claudeMatch = claudeDecision.reason.match(MALFORMED_SENTENCE_RE);
     expect(claudeMatch).not.toBeNull();
 
-    // Codex hook — identical sessionId, identical parse-error fixture.
+    // Codex hook, identical sessionId, identical parse-error fixture.
     const codexParent = fs.mkdtempSync(path.join(tmp, "codex-"));
     const codexReportsDir = path.join(codexParent, "reports");
     writeParseErrorLog(path.join(codexParent, "parse-errors"), "err.log", parseErrorBody);
@@ -189,9 +189,9 @@ describe("malformed-sections notice — Claude/Codex hook parity (task 823837fd 
     const codexMatch = codexStderr.read().match(MALFORMED_SENTENCE_RE);
     expect(codexMatch).not.toBeNull();
 
-    // The extracted sentence itself — not the surrounding envelope, which
+    // The extracted sentence itself, not the surrounding envelope, which
     // legitimately differs between the two runtimes (JSON reason vs.
-    // plain stderr text) — must be byte-identical.
+    // plain stderr text), must be byte-identical.
     expect(claudeMatch![0]).toBe(codexMatch![0]);
     expect(claudeMatch![0]).toBe(
       "Your previous Understanding Report attempt had malformed sections " +

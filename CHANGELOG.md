@@ -10,9 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 
 - Both PreToolUse hooks (Claude and Codex) now tell a blocked agent WHICH
-  Understanding Report sections were malformed on their last attempt — a
+  Understanding Report sections were malformed on their last attempt: a
   `(list)` heading that was present but held prose instead of markdown
-  list items — with an agent-facing sentence naming each section as
+  list items, with an agent-facing sentence naming each section as
   `<Display Name> (<key>)` (e.g. `Prior Art (priorArt)`), paired with
   `renderReportSchemaHint`'s existing display-name vocabulary rather than
   the bare camelCase key the parser itself uses (task `823837fd`, review

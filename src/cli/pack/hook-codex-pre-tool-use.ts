@@ -388,7 +388,7 @@ export async function runPackHookCodexPreToolUseCli(
   // parse. Gated on `report.report === null` (no persisted report at
   // all for this session): a report that WAS persisted but is merely
   // pending approval must not surface a stale parse-error from an
-  // earlier, already-fixed attempt — mirrors the CLI's own gate (`if
+  // earlier, already-fixed attempt; mirrors the CLI's own gate (`if
   // (!latest)`, approve/understanding.ts). Moved here, right before the
   // block render and after every exemption early-return above, so the
   // lookup only runs on the path that actually renders it (pure code

@@ -385,7 +385,7 @@ export function findLatestParseError(dir: string, sessionId: string): ParseError
  * when there is nothing to say. Shared by both PreToolUse hooks
  * (hook-pre-tool-use.ts, hook-codex-pre-tool-use.ts, task 823837fd
  * review) so the sentence is defined once instead of duplicated
- * byte-identically in each runtime — same extraction shape as
+ * byte-identically in each runtime; same extraction shape as
  * `checkOperatorApprovalMarkers` (understanding-before-execution-runtime.ts),
  * a marker-check helper both hooks already call instead of
  * re-implementing.
@@ -395,7 +395,7 @@ export function findLatestParseError(dir: string, sessionId: string): ParseError
  * sentence reads consistently with `renderReportSchemaHint`'s section
  * bullets in the same block reason, instead of mixing two vocabularies
  * for the same section. The CLI's own one-line summary
- * (`findLatestParseError` above) intentionally stays on raw keys — it is
+ * (`findLatestParseError` above) intentionally stays on raw keys; it is
  * operator-facing and matches the parse-error log verbatim.
  */
 export function renderMalformedSectionsNotice(sections: string[]): string | null {

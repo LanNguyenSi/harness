@@ -250,7 +250,7 @@ describe("approveUnderstanding", () => {
   it("still appends the malformed-sections clause when the log has no `message` field (reason/fallback branch, task 823837fd review Fix 5)", async () => {
     // Without a `message` field, `summary` is built from `reason` (or the
     // raw first line), neither of which mentions the malformed sections
-    // on its own — the append is still needed there.
+    // on its own; the append is still needed there.
     const reportsParent = fs.mkdtempSync(path.join(os.tmpdir(), "ug-with-malformed-reason-only-"));
     const reportsDir = path.join(reportsParent, "reports");
     const parseErrorsDir = path.join(reportsParent, "parse-errors");

@@ -962,7 +962,7 @@ describe("pack hook codex-pre-tool-use blocker — recovery git-commit exemption
   });
 });
 
-describe("pack hook codex-pre-tool-use blocker — malformed-sections surfacing (task 823837fd)", () => {
+describe("pack hook codex-pre-tool-use blocker: malformed-sections surfacing (task 823837fd)", () => {
   function writeParseErrorLog(
     parseErrorsDir: string,
     name: string,
@@ -980,7 +980,7 @@ describe("pack hook codex-pre-tool-use blocker — malformed-sections surfacing 
   // producer really emits: the real parser returns camelCase section
   // keys ("risks", "priorArt"), never the display names
   // ("Risks (list)", "Prior Art (list)") `renderReportSchemaHint` shows
-  // an agent — a prior version of this fixture used the display names,
+  // an agent; a prior version of this fixture used the display names,
   // which the producer never emits and the hooks would never see in
   // practice.
   function malformedSectionsParseError(): {
@@ -1089,7 +1089,7 @@ describe("pack hook codex-pre-tool-use blocker — malformed-sections surfacing 
   it("does not mention malformed sections when a persisted report already exists for the session, even if only pending (task 823837fd review Fix 1)", async () => {
     // Regression repro: `checkPersistedReport` returns `approved: false`
     // BOTH for "no report at all" and "report pending operator
-    // approval" — so an agent who FIXED their report (a new, well-formed
+    // approval"; so an agent who FIXED their report (a new, well-formed
     // one now sits pending) and is waiting for `harness approve
     // understanding` must NOT still be told their earlier, superseded
     // parse-error attempt had malformed sections. Gate matches the CLI's
