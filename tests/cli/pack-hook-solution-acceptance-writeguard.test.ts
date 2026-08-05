@@ -129,29 +129,39 @@ describe("write-guard — forge-attempt matrix (the load-bearing anti-forgery pr
     expect(bash("cd ~/.local/state/agent-grounding/solution-verdicts-decoy").blocked).toBe(true);
   });
 
-  it("pins two pre-existing, documented residuals from the module header (task 769d5452): case-variance and a trailing backslash both pass through undetected TODAY", () => {
+  it("pins the pre-existing case-variance residual from the module header (task 769d5452): case-variant spellings pass through undetected TODAY", () => {
     // Same form as the tilde-decoy residual pin above: this records CURRENT
-    // behavior, not a desired one. Both are named and accepted in the module
-    // header's "Known-open residual" note (this file, header comment) as
-    // pre-existing, not introduced by the cd-target check. Neither is
-    // endorsed — a future fix that case-folds `isInsideDir`'s comparison, or
-    // that strips a trailing backslash before resolving the cd target, would
-    // (and should) flip these to blocked=true; verified by transient mutation
+    // behavior, not a desired one. Named and accepted in the module header's
+    // "Known-open residual" note (src/cli/pack/hook-solution-acceptance-writeguard.ts)
+    // as pre-existing, not introduced by the cd-target check. Not endorsed —
+    // a future fix that case-folds `isInsideDir`'s comparison would (and
+    // should) flip these to blocked=true; verified by transient mutation
     // during this task (see task 769d5452 report), not asserted here.
     //
-    // Case-variance: `SOLUTION-VERDICTS` navigates into the (real, lowercase)
-    // dir on a case-insensitive filesystem (e.g. default macOS APFS), but
-    // both `isInsideDir` (case-sensitive `path.relative`) and the textual
-    // check (case-sensitive `includes`) compare case-sensitively, so neither
-    // fires and `cd`'s read-only fast path is taken.
+    // `SOLUTION-VERDICTS` navigates into the (real, lowercase) dir on a
+    // case-insensitive filesystem (e.g. default macOS APFS), but both
+    // `isInsideDir` (case-sensitive `path.relative`) and the textual check
+    // (case-sensitive `includes`) compare case-sensitively, so neither fires
+    // and `cd`'s read-only fast path is taken.
     expect(bash("cd /home/u/.local/state/agent-grounding/SOLUTION-VERDICTS").blocked).toBe(false);
     expect(bash("cd /home/u/.local/state/agent-grounding/Solution-Verdicts").blocked).toBe(false);
-    // Trailing backslash: `cd <DIR>\` still lands in the dir under bash
-    // (verified against bash 3.2.57, per the module header), but the literal
-    // trailing backslash makes the token resolve to a different (sibling,
-    // non-existent) path than `dir` itself, so `isInsideDir` returns false
-    // and, since no unresolvable-expansion character matches either, `cd`'s
-    // read-only fast path is taken.
+  });
+
+  it("pins the pre-existing trailing-backslash residual from the module header (task 769d5452): `cd <DIR>\\` passes through undetected TODAY", () => {
+    // Split from the case-variance pin so a partial future fix identifies
+    // itself: the two residuals live in DIFFERENT mechanisms and must fail
+    // independently. Same record-not-endorse form as above — a future fix
+    // that strips a trailing backslash before resolving the cd target would
+    // (and should) flip this to blocked=true.
+    //
+    // `cd <DIR>\` at end of input still lands in the dir under bash (verified
+    // directly against bash 3.2.57 during this task; before a newline the
+    // trailing backslash is a line continuation instead, so the residual
+    // holds only for the exact end-of-input spelling asserted here). The
+    // literal trailing backslash makes the token resolve to a different
+    // (sibling, non-existent) path than `dir` itself, so `isInsideDir`
+    // returns false and, since no unresolvable-expansion character matches
+    // either, `cd`'s read-only fast path is taken.
     expect(bash(`cd ${DIR}\\`).blocked).toBe(false);
   });
 
@@ -213,7 +223,10 @@ describe("write-guard — forge-attempt matrix (the load-bearing anti-forgery pr
     // `cd`'s cdTargetUnresolvable branch (same as the verdict-dir brace forms
     // above) rather than the read-only fast path — but bashReferencesVerdictDir
     // finds no literal-leaf, tail, or leaf-word match for any of them, so they
-    // are NOT blocked. Pinned because a future tightening of either
+    // are NOT blocked. Note `cd /tmp/a,b` never even enters the glob/brace
+    // leaf-word fallback: a bare comma is in CD_TARGET_UNRESOLVABLE_CHARS but
+    // not in the /[*?[{]/ trigger, so it pins the unresolvable-routing path,
+    // distinct from the two brace cases. Pinned because a future tightening of either
     // CD_TARGET_UNRESOLVABLE_CHARS or the glob/brace leaf-word fallback could
     // silently block normal navigation; verified by transient mutation during
     // this task (routing any unresolvable cd target straight to blocked=true
