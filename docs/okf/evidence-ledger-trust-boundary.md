@@ -3,7 +3,7 @@ type: invariant
 title: Evidence-ledger trust boundary
 description: The agent-writable evidence ledger is audit-only for the builtin enforcement gates; only operator- or trusted-process-authored filesystem markers (read via the shared symlink-rejecting reader in src/io/read-regular-file.ts) open them, while custom requires.ledger_tag policies are process gates by design.
 tags: [evidence-ledger, trust-boundary, approvals, security]
-timestamp: 2026-07-20T10:05:00Z
+timestamp: 2026-08-05T15:17:57Z
 sources:
   - src/io/read-regular-file.ts
   - src/policy-packs/builtin/understanding-before-execution-runtime.ts

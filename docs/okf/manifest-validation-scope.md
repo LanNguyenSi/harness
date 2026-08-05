@@ -3,7 +3,7 @@ type: invariant
 title: Managed mutations validate the whole manifest
 description: harness add/remove schema-validate the ENTIRE proposed harness.yaml (no baseline diff), so a pre-existing schema error anywhere blocks an unrelated call; add's asset gate DOES baseline-diff, so pre-existing asset errors warn instead of block, while remove runs no asset checks at all.
 tags: [add, remove, validation, manifest, footgun]
-timestamp: 2026-07-16T02:26:27Z
+timestamp: 2026-08-05T15:17:57Z
 sources:
   - src/cli/add/index.ts
   - src/cli/remove/index.ts
@@ -18,7 +18,7 @@ sources:
 
 `harness add <type> <name>` and `harness remove <type> <name>` never validate just the entry being changed. Both apply the mutation to the full YAML text (`applyAdd` / `applyRemove` on a `parseDocument` of the whole file) and then validate the **entire resulting manifest**. There are two distinct gates with **different scopes**, and conflating them is what makes the errors confusing:
 
-1. **Schema gate** (add AND remove): `validateBeforeWrite(parseYaml(proposed))` — a thin wrapper around `parseManifest` (`src/io/validate-before-write.ts:12-28`) that zod-parses the whole document. **No baseline comparison.** A pre-existing schema error anywhere in `harness.yaml` (a typo'd key under `.strict()`, a duplicate `tools.mcp`/`tools.cli` name from `ToolsSchema.superRefine` at `src/schema/tools.ts:70-87`, a duplicate hook/policy name, a policy referencing an undeclared hook via `ManifestSchema.superRefine` at `src/schema/index.ts:39-49`, a workflow step naming a missing review template at `:50-63`, or a wrong `version:`) blocks an otherwise-valid add or remove of a completely unrelated entry. Error text: `proposed manifest fails schema validation:` followed by `path: message` lines that name the *broken* entry, not the one you touched.
+1. **Schema gate** (add AND remove): `validateBeforeWrite(parseYaml(proposed))` — a thin wrapper around `parseManifest` (`src/io/validate-before-write.ts:12-28`) that zod-parses the whole document. **No baseline comparison.** A pre-existing schema error anywhere in `harness.yaml` (a typo'd key under `.strict()`, a duplicate `tools.mcp`/`tools.cli` name from `ToolsSchema.superRefine` at `src/schema/tools.ts:70-87`, a duplicate hook/policy name, a policy referencing an undeclared hook via `ManifestSchema.superRefine` at `src/schema/index.ts:43-53`, a workflow step naming a missing review template at `:54-67`, or a wrong `version:`) blocks an otherwise-valid add or remove of a completely unrelated entry. Error text: `proposed manifest fails schema validation:` followed by `path: message` lines that name the *broken* entry, not the one you touched.
 
 2. **Asset gate** (add ONLY, `src/cli/add/index.ts:76-119`): `runAssetChecks(parseManifest(parseYaml(proposed)))` also runs against the **full manifest**, but its result is **diffed against a baseline**. Add re-runs the identical checks on the *original* manifest (`:91-104`) and keys each error-severity diagnostic as `severity|path|message` (`:98`). Only diagnostics **not present in the baseline set** block (`newErrors`, `:106-119`, error text `proposed manifest fails asset validation:`). Pre-existing asset errors are demoted to a warning on the result — `harness manifest has N pre-existing asset error(s) unrelated to this add; run `harness validate` to see them` (`:121-127`) — and the add proceeds. So for asset problems the true semantics is: **pre-existing does NOT block, newly-introduced does.**
 
@@ -38,7 +38,7 @@ Why the baseline diff is stable across the mutation: `applyAdd` **appends** to t
 - Schema gate, add: `src/cli/add/index.ts:67-74` (pre-lock) and `:141-147` (post-lock recheck).
 - Asset gate + baseline diff, add: `src/cli/add/index.ts:76-127` (`proposedErrors` `:82-85`, `baselineKeys` `:91-104`, `newErrors`/`preExistingErrors` split `:106-111`, block `:113-119`, warning `:121-127`).
 - Schema gate, remove: `src/cli/remove/index.ts:93-99` (pre-lock) and `:120-126` (post-lock recheck). `--force` on a hook referenced by policies only skips the human-readable pre-check (`:70-77`); the schema gate still rejects the resulting dangling `policy.hook` reference (`:88-92`).
-- Whole-manifest parse both gates share: `validateBeforeWrite` → `parseManifest` (`src/io/validate-before-write.ts:12-28`, `src/schema/index.ts:109-122`).
+- Whole-manifest parse both gates share: `validateBeforeWrite` → `parseManifest` (`src/io/validate-before-write.ts:12-28`, `src/schema/index.ts:113-126`).
 - Fail-closed backstop: if the *original* manifest cannot even be `parseManifest`'d when computing the baseline, `baselineKeys` stays empty and **every** proposed asset error counts as new, i.e. on a broken base the asset gate blocks on everything (`src/cli/add/index.ts:99-104`). In practice `applyAdd`/the schema gate throw first, so this branch is rare.
 
 ## What breaks it

@@ -3,7 +3,7 @@ type: runbook
 title: Kill switches — pause vs gate disable
 description: harness has two distinct operator kill switches — `harness pause` (sentinel file, silences ALL hooks temporarily, operator-only enforced in code) vs `harness gate disable` (surgically removes matching hook groups from settings.json with a reversible snapshot); when to use which, exact flags, restore paths, and trust caveats.
 tags: [runbook, pause, gate-disable, kill-switch, operator]
-timestamp: 2026-08-01T13:15:00Z
+timestamp: 2026-08-05T15:28:20Z
 sources:
   - src/runtime/pause-sentinel.ts
   - src/runtime/command-normalize.ts
@@ -29,15 +29,15 @@ harness has TWO separate kill-switch mechanisms. Do not conflate them: `pause` i
 | Situation | Use |
 |---|---|
 | Lockout recovery, debug A/B test, incident hotfix, short window | `harness pause --for <duration>` (all hooks dormant, auto-resumes) |
-| One specific hard-blocking hook must go, e.g. the understanding-before-execution PreToolUse gate blocks every Bash call INCLUDING its own recovery command `harness approve understanding` (the motivating case, task 8fcddb26, comment at `src/cli/index.ts:2206-2211`) | `harness gate disable --matcher <substring>` (removes only matching hook groups, reversible snapshot) |
-| Permanently turn a policy off | NEITHER. Edit `policies[].enabled` in the manifest (or `policy_packs[].enabled: false`) — persistent, diff-able, source-controlled. Stated in the `harness pause` command help (`src/cli/index.ts:2555-2556`) and `docs/for-humans.md:343-352` |
-| "Move fast on a prototype branch" | A branch-aware policy with a `when:` clause, not a session-wide pause (`docs/for-humans.md:348-349`) |
+| One specific hard-blocking hook must go, e.g. the understanding-before-execution PreToolUse gate blocks every Bash call INCLUDING its own recovery command `harness approve understanding` (the motivating case, task 8fcddb26, comment at `src/cli/index.ts:2628-2633`) | `harness gate disable --matcher <substring>` (removes only matching hook groups, reversible snapshot) |
+| Permanently turn a policy off | NEITHER. Edit `policies[].enabled` in the manifest (or `policy_packs[].enabled: false`) — persistent, diff-able, source-controlled. Stated in the `harness pause` command help (`src/cli/index.ts:2994-2995`) and `docs/for-humans.md:391-393` |
+| "Move fast on a prototype branch" | A branch-aware policy with a `when:` clause, not a session-wide pause (`docs/for-humans.md:394-395`) |
 
 ## Mechanism 1: `harness pause` / `harness resume` (sentinel)
 
 **What it is.** One JSON file at `<generatedDir>/.harness-paused` (`SENTINEL_BASENAME` in `src/runtime/pause-sentinel.ts:37`). `generatedDir` is `harness.generated/` next to the manifest in use, or `<homeDir>/harness.generated` with an override (`src/io/generated-dir.ts`). While the sentinel exists and is unexpired, EVERY PreToolUse/PostToolUse hook calls `maybeAnnouncePause()` (`src/runtime/pause-sentinel.ts:164`), emits one stderr line (`harness <hook>: PAUSED since Xm ago (reason: ...); auto-resumes in Ym. Run \`harness resume\` to re-enable.`) and short-circuits to allow without evaluating gate logic. On the first hook fire AFTER expiry the sentinel is silently deleted (auto-resume) and gating resumes.
 
-**Commands** (registered in `src/cli/index.ts:2550-2648`):
+**Commands** (registered in `src/cli/index.ts:2988-3087`):
 - `harness pause --for <duration>` — e.g. `5m`, `1h`, `PT30S`; default 15 minutes (`DEFAULT_PAUSE_SECONDS = 15 * 60`, `src/cli/pause/index.ts:36`).
 - `harness pause --indefinite` — refuses unless the separate verbose flag `--i-am-the-operator-and-accept-no-auto-resume` is also passed; the flag's verbosity is deliberate friction (`src/cli/pause/index.ts:269-281`).
 - `--reason <text>` — recorded in the sentinel and announced on each hook fire.
@@ -68,7 +68,7 @@ Measured 2026-07-27 (task `ea8becf5`): the cheapest member of that class was not
 
 **Audit trail.** Pause/resume write `harness-paused:<pausedAt>` / `harness-resumed:<pausedAt>` facts to the evidence ledger via grounding-mcp, under the synthetic session bucket `default` (`OPERATOR_LEDGER_SESSION`, `src/cli/pause/index.ts:48`) since no agent session id exists in an operator shell. `harness audit --since 24h` surfaces them. Ledger failure does not block the pause; it is reported as `ledger: ⚠ skipped`.
 
-**Trust caveat.** The sentinel is plain JSON with NO signature (`docs/for-humans.md:363-375`). Neither the CLI checks nor the PreToolUse deny-policy layer above is a true boundary against an agent that already has Write access under `harness.generated/` (see "Known gap" above). Defence: deny agent writes to `harness.generated/` (blanket deny is simplest; the agent surface normally never needs to write there). Fail-open note: a malformed sentinel is treated as absent (never escalates to a block), but a forged `expiresAt` that is not a non-empty string or null is rejected as malformed rather than silently read as indefinite (`normalizeSentinel`, `src/runtime/pause-sentinel.ts:72-92`).
+**Trust caveat.** The sentinel is plain JSON with NO signature (`docs/for-humans.md:409-425`). Neither the CLI checks nor the PreToolUse deny-policy layer above is a true boundary against an agent that already has Write access under `harness.generated/` (see "Known gap" above). Defence: deny agent writes to `harness.generated/` (blanket deny is simplest; the agent surface normally never needs to write there). Fail-open note: a malformed sentinel is treated as absent (never escalates to a block), but a forged `expiresAt` that is not a non-empty string or null is rejected as malformed rather than silently read as indefinite (`normalizeSentinel`, `src/runtime/pause-sentinel.ts:83-103`).
 
 ## Mechanism 2: `harness gate disable` / `harness gate enable` (settings.json surgery)
 
