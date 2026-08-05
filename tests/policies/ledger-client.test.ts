@@ -312,24 +312,44 @@ describe("queryLedgerByTag", () => {
   });
 
   describe("Phase 5 #5: server-side filter pushdown", () => {
+    // task e9b4b5c3 (review fix round): hoisted so the fixture template's
+    // env read and every mcpEnv object below (both the positive-control and
+    // the hot-path test) key off one literal. Renaming the env var only
+    // here — with nothing left to independently rename in either test —
+    // closes the gap where the hot-path test's own `mcpEnv` copy of the
+    // name could silently drift from the fixture's without either test
+    // going red.
+    const LIST_MARKER_ENV = "LIST_MARKER_FILE";
+
     /**
      * Capability-aware fake: implements tools/list with a configurable
      * inputSchema for ledger_summary. tools/call records the args it
      * received so the test can assert what got pushed server-side.
      *
      * task e9b4b5c3 (review follow-up on task dc578d67): also writes
-     * `process.env.LIST_MARKER_FILE` (when set) from inside the tools/list
-     * branch that actually ANSWERS the request. This is the positive half
-     * of the marker-file pin: the "falls back to client-side filtering..."
-     * test below asserts the marker file exists, pairing with the
-     * back-compat hot-path test's `toBe(false)` assertion (whose fixture
-     * deliberately never answers tools/list) to pin the env-var name and
-     * the write path from both sides.
+     * `process.env[LIST_MARKER_ENV]` (when set) from inside the tools/list
+     * branch, before deciding whether to answer it. This is the marker-file
+     * pin: the "falls back to client-side filtering..." test below asserts
+     * the marker file exists (tools/list is advertised and answered), while
+     * the back-compat hot-path test — which reuses this same fixture via
+     * `respondToList: false` — asserts it does NOT exist (tools/list is
+     * recorded but deliberately never answered). Both tests now share one
+     * fixture and one env-var constant, so neither a renamed env var nor a
+     * deleted marker write can defuse one test without also failing the
+     * other.
      */
     const captureServer = (
       payload: object,
       supportedArgs: string[] = ["sessionId"],
-    ): string => `#!/usr/bin/env node
+      respondToList = true,
+    ): string => {
+      const listBranch = respondToList
+        ? `const props = {};
+      for (const k of ${JSON.stringify(supportedArgs)}) props[k] = { type: "string" };
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { tools: [{ name: "ledger_summary", inputSchema: { type: "object", properties: props } }] } }) + "\\n");`
+        : `// Record only. Deliberately no response, so a detector that runs here
+      // still hangs exactly as it did before this marker was added.`;
+      return `#!/usr/bin/env node
 const fs = require("fs");
 const captureFile = process.env.CAPTURE_FILE;
 let buf = "";
@@ -345,10 +365,8 @@ process.stdin.on("data", (d) => {
     if (msg.method === "initialize") {
       process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\\n");
     } else if (msg.method === "tools/list") {
-      if (process.env.LIST_MARKER_FILE) fs.writeFileSync(process.env.LIST_MARKER_FILE, "1");
-      const props = {};
-      for (const k of ${JSON.stringify(supportedArgs)}) props[k] = { type: "string" };
-      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { tools: [{ name: "ledger_summary", inputSchema: { type: "object", properties: props } }] } }) + "\\n");
+      if (process.env[${JSON.stringify(LIST_MARKER_ENV)}]) fs.writeFileSync(process.env[${JSON.stringify(LIST_MARKER_ENV)}], "1");
+      ${listBranch}
     } else if (msg.method === "tools/call" && msg.params && msg.params.name === "ledger_summary") {
       if (captureFile) fs.writeFileSync(captureFile, JSON.stringify(msg.params.arguments));
       const payload = ${JSON.stringify(payload)};
@@ -358,6 +376,7 @@ process.stdin.on("data", (d) => {
   }
 });
 `;
+    };
 
     it("pushes sinceIso + contentPrefix server-side when advertised by tools/list", async () => {
       const captureFile = path.join(
@@ -373,7 +392,11 @@ process.stdin.on("data", (d) => {
       );
       const result = await queryLedgerByTag({
         mcpCommand: [script],
-        mcpEnv: { CAPTURE_FILE: captureFile },
+        // Explicit empty string (not omitted) so a real LIST_MARKER_FILE
+        // sitting in the ambient process.env cannot leak into this child —
+        // mcpEnv is spread onto {...process.env, ...mcpEnv}, and the
+        // fixture's write guard treats an empty string as unset.
+        mcpEnv: { CAPTURE_FILE: captureFile, [LIST_MARKER_ENV]: "" },
         sessionId: "sess-1",
         sinceIso: "2026-05-01T08:00:00Z",
         contentPrefix: "policy_decision:",
@@ -394,9 +417,10 @@ process.stdin.on("data", (d) => {
       // Sits next to captureFile, so the same cleanup covers it. This
       // fixture's tools/list branch actually ANSWERS (unlike the
       // back-compat hot-path test's fixture below, which deliberately
-      // never responds), so it is the positive half of the marker-file
-      // pin (task e9b4b5c3): asserting `toBe(true)` here pins the
-      // LIST_MARKER_FILE env-var name and the write path from the side
+      // never responds — both now share this same `captureServer` fixture
+      // via the `respondToList` flag), so it is the positive half of the
+      // marker-file pin (task e9b4b5c3): asserting `toBe(true)` here pins
+      // the LIST_MARKER_ENV env-var name and the write path from the side
       // where tools/list fires, pairing with that test's `toBe(false)`
       // from the side where it must not.
       const listMarker = path.join(path.dirname(captureFile), "tools-list-seen");
@@ -408,7 +432,7 @@ process.stdin.on("data", (d) => {
       );
       const result = await queryLedgerByTag({
         mcpCommand: [script],
-        mcpEnv: { CAPTURE_FILE: captureFile, LIST_MARKER_FILE: listMarker },
+        mcpEnv: { CAPTURE_FILE: captureFile, [LIST_MARKER_ENV]: listMarker },
         sessionId: "sess-1",
         sinceIso: "2026-05-01T08:00:00Z",
         contentPrefix: "policy_decision:",
@@ -438,6 +462,13 @@ process.stdin.on("data", (d) => {
       // `elapsed < 2000` budget measured 2113ms once on a loaded machine and
       // failed spuriously.
       //
+      // task e9b4b5c3 (review fix round): reuses the shared `captureServer`
+      // fixture above (`respondToList: false`) instead of an inline copy of
+      // the same script, and the shared `LIST_MARKER_ENV` constant instead
+      // of a locally-typed env-var name. Deleting the marker write, or
+      // renaming the env var, now breaks this test AND the positive-control
+      // test above together — neither can be silently defused alone.
+      //
       // The per-test timeout below is load-bearing for the DIAGNOSTIC, not for
       // the happy path (which takes well under a second). A regressed run
       // issues tools/list, gets no answer, and burns the full 8000ms client
@@ -446,35 +477,16 @@ process.stdin.on("data", (d) => {
       // assertion, so the failure would say nothing about tools/list. Giving
       // the test more room than the client budget lets the probe complete and
       // fail on the marker with a message that names the actual regression.
-      const script = makeScript(`#!/usr/bin/env node
-const fs = require("fs");
-let buf = "";
-process.stdin.on("data", (d) => {
-  buf += d.toString();
-  let nl = buf.indexOf("\\n");
-  while (nl !== -1) {
-    const line = buf.slice(0, nl);
-    buf = buf.slice(nl + 1);
-    if (!line.trim()) { nl = buf.indexOf("\\n"); continue; }
-    let msg;
-    try { msg = JSON.parse(line); } catch { nl = buf.indexOf("\\n"); continue; }
-    if (msg.method === "initialize") {
-      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\\n");
-    } else if (msg.method === "tools/list") {
-      // Record only. Deliberately no response, so a detector that runs here
-      // still hangs exactly as it did before this marker was added.
-      fs.writeFileSync(process.env.LIST_MARKER_FILE, "1");
-    } else if (msg.method === "tools/call" && msg.params && msg.params.name === "ledger_summary") {
-      fs.writeFileSync(process.env.CAPTURE_FILE, JSON.stringify(msg.params.arguments));
-      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: JSON.stringify({ sessionId: "sess-1", counts: {}, entries: { facts: [], hypotheses: [], rejected: [], unknowns: [] } }) }] } }) + "\\n");
-    }
-    nl = buf.indexOf("\\n");
-  }
-});
-`);
+      const script = makeScript(
+        captureServer(
+          { sessionId: "sess-1", counts: {}, entries: { facts: [], hypotheses: [], rejected: [], unknowns: [] } },
+          ["sessionId"],
+          false, // respondToList: hot path must never advertise tools/list
+        ),
+      );
       const result = await queryLedgerByTag({
         mcpCommand: [script],
-        mcpEnv: { CAPTURE_FILE: captureFile, LIST_MARKER_FILE: listMarker },
+        mcpEnv: { CAPTURE_FILE: captureFile, [LIST_MARKER_ENV]: listMarker },
         sessionId: "sess-1",
         timeoutMs: 8000,
       });
@@ -729,6 +741,15 @@ process.stdin.on("data", (d) => {
     // spirit: session default for the ok path, a real per-call override
     // for the trigger, and the trigger's timeout still latches the
     // session for `second` below.
+    //
+    // Per-test timeout mirrors the hot-path idiom above (~:441): the
+    // session's own budget here is 8000ms, above vitest's 5000ms default
+    // testTimeout. If the latch regresses, `second` performs a real
+    // round-trip that can itself burn up to 8000ms on top of `query` and
+    // `first` above, so a bare vitest timeout could fire before the
+    // `second.reason` assertion below ever runs. The wider per-test timeout
+    // lets a latch regression surface as that named reason-string mismatch
+    // instead of a bare "Test timed out in 5000ms".
     const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 8000 });
     try {
       const query = await session.querySummary({ sessionId: "s" });
@@ -746,7 +767,10 @@ process.stdin.on("data", (d) => {
       // the reason string below, not by a wall-clock budget (removed —
       // task e9b4b5c3 review follow-up on task dc578d67; a wall-clock
       // budget here was redundant with, and weaker than, the structural
-      // assertion it sat next to).
+      // assertion it sat next to). The latch's documented ~1x-timeoutMs
+      // session cost bound is intentionally left unasserted here (wall-clock
+      // proved flaky) and is implied only by the early-return's position
+      // before ensureInitialized().
       const second = await session.callTool("ledger_add", { sessionId: "s" });
       expect(second.status).toBe("degraded");
       if (second.status === "degraded") {
@@ -755,7 +779,7 @@ process.stdin.on("data", (d) => {
     } finally {
       session.dispose();
     }
-  });
+  }, 12000);
 
   it("isolates a mid-session death: later calls degrade, earlier results stand, nothing throws", async () => {
     const { openLedgerSession } = await import("../../src/policies/ledger-client.js");
@@ -911,6 +935,15 @@ process.stdin.on("data", (d) => {
     const { openLedgerSession } = await import("../../src/policies/ledger-client.js");
     const script = makeScript(neverRespondsAddServer());
     // Session default is generous; only the per-call override is tight.
+    //
+    // Per-test timeout mirrors the hot-path idiom above (~:441): the
+    // session's own budget here is 8000ms, above vitest's 5000ms default
+    // testTimeout. If the latch regresses, `second` performs a real
+    // round-trip that can itself burn up to 8000ms on top of `first` above,
+    // so a bare vitest timeout could fire before the `second.reason`
+    // assertions below ever run. The wider per-test timeout lets a latch
+    // regression surface as that named reason-string mismatch instead of a
+    // bare "Test timed out in 5000ms".
     const session = openLedgerSession({ mcpCommand: [script], timeoutMs: 8000 });
     try {
       const first = await session.callTool(
@@ -927,7 +960,10 @@ process.stdin.on("data", (d) => {
       // at all — proven by the reason string below, not by a wall-clock
       // budget (removed — task e9b4b5c3 review follow-up on task
       // dc578d67; a wall-clock budget here was redundant with, and
-      // weaker than, the structural assertion it sat next to).
+      // weaker than, the structural assertion it sat next to). The latch's
+      // documented ~1x-timeoutMs session cost bound is intentionally left
+      // unasserted here (wall-clock proved flaky) and is implied only by
+      // the early-return's position before ensureInitialized().
       const second = await session.callTool("ledger_add", { sessionId: "s" });
       expect(second.status).toBe("degraded");
       if (second.status === "degraded") {
@@ -937,5 +973,5 @@ process.stdin.on("data", (d) => {
     } finally {
       session.dispose();
     }
-  });
+  }, 12000);
 });
