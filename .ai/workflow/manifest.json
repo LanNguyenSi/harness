@@ -1,6 +1,6 @@
 {
   "kit": "orchestrator-workflow",
-  "version": "0.6.0",
+  "version": "0.14.0",
   "harnesses": [
     "claude"
   ],
@@ -11,19 +11,19 @@
     "reviewer": "opus"
   },
   "files": {
-    ".ai/workflow/templates/00-goal.md": "3824173810ff0150477b7a574533590d39397640d3f6262ca46fe6e5dc8ee1b7",
+    ".ai/workflow/templates/00-goal.md": "455d3946cc42146255f0dc1147f51ec5e52afe89a5232aef863898a6eb4261b3",
     ".ai/workflow/templates/01-plan.md": "0b69aa09ccf24b3c7a09c209d30c09eb9814096ed18fb7fe18e67e4b8be42ad4",
-    ".ai/workflow/templates/02-tasks.md": "74d3572a5355c1f624d0d28ddc222a9a742ae3045c712c45555367d2f9be11dc",
+    ".ai/workflow/templates/02-tasks.md": "ce475c1fb98d2d44b22b940199ba9e467690cdd7c9484f0670b7437857cec74e",
     ".ai/workflow/templates/03-decisions.md": "74af5ea8bed3990308a5a3e7fa0deb47634fbf6033694c1fa86b91839a1ef6a5",
     ".ai/workflow/templates/04-implementation-summary.md": "3e4975102f576779d91e0b5a7e5776f054ed652a300b05089e606125c0de074f",
-    ".ai/workflow/templates/05-review-findings.md": "0a1ea53a84afed7837068b5ac83b98ded7933400a688fa072f2c6b55082da25d",
-    ".ai/workflow/templates/06-handoff.md": "1bc82ce48a675986be754b3b75e8a65edb4f19971ecb07ef57534a9f8110097a",
+    ".ai/workflow/templates/05-review-findings.md": "1a00a1ddb35c30058771437b27b242afbe3cb47ada3b4454a824594dfc79a1e0",
+    ".ai/workflow/templates/06-handoff.md": "47023d4aaabf4b1ecd6b309f7572b20f84ed3494d686d92e2fc8af5ac66d7a7a",
     ".ai/runs/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    ".claude/skills/orchestrator-workflow/SKILL.md": "4f3388db96a48281d9e8c78555e9dae72ebc699e236474d7278e708b94c3874d",
-    ".claude/agents/explorer.md": "1ad638b3c57925354c63a15b8a3757e21606a12c20db8ac9953fc692faccc1ab",
-    ".claude/agents/task-slicer.md": "47ac151b0f39304bcaacf185e435247e5418b9b3182be55b2c18d5911f15e96b",
+    ".claude/skills/orchestrator-workflow/SKILL.md": "90b3e6e23fca3039f4cd9f9106405b339eede8265cd6d729bb06efc43235e538",
+    ".claude/agents/explorer.md": "1063cad26d2e68e2503c4d1d51b3725e1be981e38e543f796410290a813ea51b",
+    ".claude/agents/task-slicer.md": "7c8dc7e4c705e13e1e6d7c70073c3f91afc9d7f5e2a7a19dc889bf1fef5c6b8b",
     ".claude/agents/implementer.md": "f83526eb9f51c35dd8ab275fade8fc2ba585f4b6f13bfa22dd1e47a97f4157a9",
-    ".claude/agents/reviewer.md": "3e9623db02ab865942e3f5904eb7c4932a609633bd2841cca45927958c3e59ce"
+    ".claude/agents/reviewer.md": "b9f2f68d880ffa5c08d5b3f66e76f037476150e2a56c894d0199b2876f6ec932"
   },
   "installedAt": "2026-06-22T19:21:24.768Z"
 }
