@@ -18,7 +18,11 @@ deliberately do not duplicate them.
   not single `&`, which defeated every bash_match gate including an
   operator-only deny, closed at template level in v0.43.0 (task
   `d834a065`); an existing `full` install picks it up only after re-running
-  `harness init --template full --force`.
+  `harness init --template full --force`. In v0.44.0 the same fix reached
+  the pack regexes and this repo's own dogfood trigger (task `76671e5a`),
+  and a second, independent normalization pass, consulted as a third
+  additive matching arm, closed the adjacent command-normalize boundary
+  gap (task `aabbad63`).
 - [Debug verb selection](debug-verb-selection.md), which harness verb answers
   which "why did my policy (not) fire" question: ledger-replay vs
   live-hypothetical vs static-prediction vs stage-isolation vs end-to-end.
@@ -26,9 +30,10 @@ deliberately do not duplicate them.
 ## Modules
 
 - [Codex runtime adapter, parity gaps vs Claude Code](codex-adapter-parity-gaps.md),
-  what the Codex adapter emits, the enumerated behavioral gaps (headline: no
-  Codex PostToolUse hook, so expire_on_tool_match never fires there), and the
-  Codex wire-format contract.
+  what the Codex adapter emits, the enumerated behavioral gaps (the former
+  headline gap, no Codex PostToolUse hook, is closed by task `a1348c89`;
+  current top gap is the un-translated permission-profile/sandbox stanza,
+  gap 4), and the Codex wire-format contract.
 
 ## Invariants
 
@@ -37,7 +42,9 @@ deliberately do not duplicate them.
   operator- or trusted-process-authored filesystem markers open them.
 - [Policy engine needs its producers wired](policy-engine-producer-wiring.md),
   a policy only ever blocks if grounding-mcp is wired under tools.mcp[];
-  version-sensitive (0.35.0 apply refusal, 0.39.0 pooled ledger session).
+  version-sensitive (0.35.0 apply refusal, 0.39.0 pooled ledger session,
+  0.43.0/0.44.0 raw-or-normalised bash_match matching plus per-repository
+  `${REPO}`/`${BRANCH}`/`at_head` attribution, universal-additive).
 - [Managed mutations validate the whole manifest](manifest-validation-scope.md),
   add/remove schema-validate the entire proposed harness.yaml; add's asset
   gate baseline-diffs so only newly-introduced asset errors block.
