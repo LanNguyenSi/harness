@@ -73,6 +73,249 @@ describe("read-only Bash classifier", () => {
     });
   });
 
+  // task 5b5d1022: two measured false positives — a path-qualified `git`
+  // binary and git's own global options — were classified as write
+  // (blocked) even though the underlying command is provably read-only.
+  describe("path-qualified git binary (task 5b5d1022, Fall 1)", () => {
+    it.each([
+      "/usr/bin/git status",
+      "/usr/local/bin/git log",
+    ])("allows %s (ABSOLUTE path, matched by basename)", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(true);
+    });
+
+    // Review round 2, Rule 4 (MEDIUM): the read-only DECISION's own binary
+    // regex was narrowed to bare `git` plus ABSOLUTE paths only — a
+    // RELATIVE path (`./git`, `bin/git`) is treated as a DIFFERENT binary
+    // an agent could have placed there, not the real `git`. Negative
+    // controls, INVERTED from round 1's (now-incorrect) positive pin: both
+    // of these still name a read-only-LOOKING subcommand, but must now
+    // block because the binary itself is untrusted.
+    it.each([
+      "./git diff",
+      "bin/git show HEAD",
+      "../git log",
+    ])("blocks %s (RELATIVE path: a different, agent-controlled binary, not the real git)", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+
+    it.each([
+      "/usr/bin/git push",
+      "./git commit -m wip",
+    ])("still blocks %s (write subcommand, independent of the binary-path fix)", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+
+    it.each([
+      "mygit status",
+      "git-foo status",
+      "gitk",
+      "gitk status",
+    ])("does NOT treat %s as git (negative control: not a git basename)", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+  });
+
+  describe("git global options before the subcommand (task 5b5d1022, Fall 2)", () => {
+    // Round 2 note: `-c`, `--exec-path[=<dir>]`, and `--git-dir[=<dir>]`
+    // moved OUT of this "peeled, stays read-only" list into the dedicated
+    // forfeiture describe block below (Rules 1-3a) — they no longer skip
+    // past the subcommand check, they end classification outright. This
+    // list keeps only the global options that remain SAFE to peel.
+    it.each([
+      "git -C /tmp status",
+      "git --work-tree=/tmp/repo status",
+      "git --work-tree /tmp/repo status",
+      "git --no-pager status",
+      "git --no-pager log",
+      "git -p status",
+      "git --paginate status",
+      "git --namespace=foo status",
+      "git --namespace foo status",
+      "git --literal-pathspecs status",
+      "git --no-replace-objects status",
+      // more than one global option in sequence
+      "git -C /tmp --no-pager status",
+      "git --no-pager -C /tmp status",
+    ])("allows %s (global option skipped, real subcommand is read-only)", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(true);
+    });
+
+    it.each([
+      "git -C /tmp push",
+      "git --no-pager push",
+      "git --work-tree=/tmp push",
+    ])("still blocks %s (global option present, real subcommand is a write)", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+
+    it("blocks `git -C /tmp/repo push` (write subcommand under -C)", () => {
+      expect(isReadOnlyBashCommand("git -C /tmp/repo push")).toBe(false);
+    });
+
+    it("allows `git -C push status` (write-looking token is -C's VALUE, not the subcommand; status is in the strict -C subset)", () => {
+      expect(isReadOnlyBashCommand("git -C push status")).toBe(true);
+    });
+
+    it.each([
+      // Malformed: a value-taking global option with nothing after it.
+      // Fails closed rather than guessing at a subcommand. `-c` and
+      // `--git-dir` are ALSO independently forfeited by Rules 1/3a below
+      // regardless of whether a value follows — listed here too since the
+      // missing-value path was their original (still correct) reasoning
+      // before round 2 added the blanket forfeiture on top.
+      "git -C",
+      "git -c",
+      "git --git-dir",
+      "git --work-tree",
+      "git --namespace",
+    ])("blocks %s (value-taking option missing its value: fail closed)", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+
+    it("combines with the path-qualified fix: /usr/bin/git -C /tmp status", () => {
+      expect(isReadOnlyBashCommand("/usr/bin/git -C /tmp status")).toBe(true);
+    });
+
+    it("combines with the path-qualified fix, write form: /usr/bin/git -C /tmp push", () => {
+      expect(isReadOnlyBashCommand("/usr/bin/git -C /tmp push")).toBe(false);
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // Task 5b5d1022, REVIEW ROUND 2: an adversarial re-review of the round-1
+  // fix above found real-git-executed false negatives — round 1's
+  // "conservative widening" peeled `-c`, `--exec-path`, and `--git-dir`
+  // past the subcommand check the same as harmless options like
+  // `--no-pager`, but each of those three lets an otherwise read-only-
+  // looking invocation execute a command or mutate a DIFFERENT repository.
+  // Every case below was verified against the REAL git binary by the
+  // review (a canary/marker file the injected program would touch, or a
+  // second scratch repo whose branch/tag/remote genuinely changed) — see
+  // the task's own measured-flip list. Rules 1-3b in
+  // `src/runtime/read-only-bash.ts` fix these; this block pins every
+  // measured flip as a negative control (base build said true, these must
+  // now say false) plus the legitimate forms that must stay green.
+  // ---------------------------------------------------------------------
+  describe("git -c: config override forfeits classification outright (task 5b5d1022, review round 2, Rule 1 CRITICAL)", () => {
+    it.each([
+      // `-c core.fsmonitor=...` runs an arbitrary program as a hook on a
+      // plain `git status`. Real-git-executed (review's falsification).
+      "git -c core.fsmonitor=/tmp/evil.sh status",
+      // `-c diff.external=...` runs an arbitrary program on `git diff`.
+      "git -c diff.external=/tmp/evil.sh diff",
+      // `-c core.sshCommand=...` runs an arbitrary program as the SSH
+      // transport for `git fetch`.
+      "git -c core.sshCommand=/tmp/evil.sh fetch",
+      // `-c credential.helper=...` runs an arbitrary program as the
+      // credential helper for `git ls-remote`.
+      "git -c credential.helper=/tmp/evil.sh ls-remote https://example.com/repo.git",
+      // `-c gpg.program=...` runs an arbitrary program in place of gpg for
+      // `git log` (signature verification).
+      "git -c gpg.program=/tmp/evil.sh log",
+      // `-c include.path=<file>` pulls in an ENTIRE OTHER config file,
+      // which can itself set any of the executing keys above — a denylist
+      // of dangerous key NAMES cannot close this.
+      "git -c include.path=/tmp/evil.gitconfig status",
+      // Git config keys are matched CASE-INSENSITIVELY: the uppercase
+      // spelling of the same dangerous key fires identically, which is
+      // exactly why a denylist of key spellings (AC-Fall-2's originally
+      // proposed `git -c user.name=x status` exemption) is not viable.
+      "git -c CORE.FSMONITOR=/tmp/evil.sh status",
+      // The AC-Fall-2 spelling itself: still blocked (see this task's own
+      // spec-conflict note — AC-Fall-2 named this as a form to unblock,
+      // but AC4's "prove every newly-allowed form is read-only" cannot be
+      // satisfied for an arbitrary `-c` key, so it stays blocked).
+      "git -c user.name=x status",
+      // `-c` still forfeits when it is NOT the first global option, or
+      // when combined with an otherwise-safe one.
+      "git --no-pager -c core.fsmonitor=/tmp/evil.sh status",
+      "git -c core.fsmonitor=/tmp/evil.sh -C /tmp status",
+    ])("blocks %s (arbitrary, case-insensitive-keyed git config, some keys execute)", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+  });
+
+  describe("git --exec-path: PATH poisoning for every child process forfeits classification (task 5b5d1022, review round 2, Rule 2 HIGH)", () => {
+    it.each([
+      // `--exec-path=<dir>` prepends <dir> to PATH for every child git
+      // spawns; real-git-executed, `<dir>/ssh` ran for the SSH transport.
+      "git --exec-path=/tmp/evil ls-remote https://example.com/repo.git",
+      "git --exec-path=/tmp/evil fetch",
+      // Even a subcommand with no obvious transport step forfeits: the
+      // classifier cannot enumerate every helper git might resolve.
+      "git --exec-path=/tmp/evil status",
+      // Bare (non-glued) spelling forfeits too, not just the glued form.
+      "git --exec-path status",
+      "git --exec-path ls-remote https://example.com/repo.git",
+    ])("blocks %s (PATH poisoned for every child process git spawns)", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+  });
+
+  describe("git --git-dir: repo relocation forfeits classification outright (task 5b5d1022, review round 2, Rule 3a HIGH)", () => {
+    it.each([
+      // `--git-dir=<other>/.git` really mutated a DIFFERENT repository's
+      // remote config; real-git-executed.
+      "git --git-dir=/other/.git remote set-url origin https://example.com/evil.git",
+      // Really deleted a branch in the OTHER repository.
+      "git --git-dir=/other/.git branch -D main",
+      // Separate-token spelling forfeits identically to the glued form.
+      "git --git-dir /other/.git branch -D main",
+      // Even a read-only-looking subcommand forfeits: --git-dir's reach
+      // is not conditioned on which subcommand follows.
+      "git --git-dir=/other/.git status",
+    ])("blocks %s (relocates which repository the WHOLE invocation targets)", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+  });
+
+  describe("git -C: repo relocation narrows the allowed subcommand set instead of forfeiting outright (task 5b5d1022, review round 2, Rule 3b HIGH)", () => {
+    it.each([
+      // Really deleted the branch in the OTHER repository.
+      "git -C /other/repo branch -D main",
+      // Really created the tag in the OTHER repository.
+      "git -C /other/repo tag v1",
+      // Really rewrote the remote in the OTHER repository.
+      "git -C /other/repo remote set-url origin https://example.com/evil.git",
+      // Really fetched into the OTHER repository's remote-tracking refs.
+      "git -C /other/repo fetch",
+    ])("blocks %s (branch/tag/remote/fetch excluded from the strict -C subset)", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+
+    it.each([
+      // The bare forms of the same four subcommands, WITHOUT -C, are
+      // unaffected by this rule — they stay on the wider allowlist (the
+      // pre-existing, separately-tracked, out-of-scope bare-form gap).
+      "git branch",
+      "git tag",
+      "git remote -v",
+      "git fetch origin",
+      // -C combined with a subcommand that IS still in the strict subset.
+      "git -C /tmp status",
+      "git -C /tmp log",
+      "git -C /tmp diff",
+      "git -C /tmp show HEAD",
+    ])("allows %s (either no -C, or -C with a subcommand still in the strict subset)", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(true);
+    });
+  });
+
+  describe("legitimate wins stay green (task 5b5d1022, review round 2 regression guard)", () => {
+    it.each([
+      "git -C /tmp status",
+      "git --no-pager log",
+      "git -p status",
+      "git --literal-pathspecs status",
+      "git --no-replace-objects status",
+      "/usr/bin/git status",
+      "git --work-tree=/tmp/repo status",
+    ])("allows %s", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(true);
+    });
+  });
+
   describe("gh read-only verbs", () => {
     it.each([
       "gh pr view 240",

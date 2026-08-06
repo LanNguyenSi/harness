@@ -3,6 +3,9 @@ import { parse as parseYaml } from "yaml";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import {
   AMP_BOUNDARY_RE,
+  GIT_GLOBAL_BOOLEAN_FLAGS,
+  GIT_GLOBAL_GLUED_VALUE_OPTION_NAMES,
+  GIT_GLOBAL_VALUE_FLAGS,
   MAX_NORMALIZE_LENGTH,
   normalizeCommand,
   normalizeCommandAmpAware,
@@ -303,6 +306,33 @@ describe("normalizeCommand", () => {
           expect(re.test(normalized)).toBe(true);
         });
       }
+    });
+  });
+
+  // task 5b5d1022 drift guard: `read-only-bash.ts` imports
+  // `GIT_GLOBAL_VALUE_FLAGS` / `GIT_GLOBAL_GLUED_VALUE_OPTION_NAMES` /
+  // `GIT_GLOBAL_BOOLEAN_FLAGS` (not this module's own peeling logic) to
+  // skip past a git invocation's own global options before reading its
+  // subcommand, so a false positive like `git -C /tmp status` no longer
+  // blocks a provably read-only command. This proves every name in each
+  // exported set is ACTUALLY recognised by `peelGitGlobalOptions` here —
+  // the flag is dropped and `status` lands directly after `git` in
+  // `normalized` — so the two modules cannot silently drift apart on
+  // which git global options exist.
+  describe("GIT_GLOBAL_* exported names agree with peelGitGlobalOptions (task 5b5d1022 drift guard)", () => {
+    it.each([...GIT_GLOBAL_VALUE_FLAGS])(
+      "%s <value> (separate-token value) is peeled",
+      (name) => {
+        expect(normalizeCommand(`git ${name} some-value status`).normalized).toBe("git status");
+      },
+    );
+
+    it.each([...GIT_GLOBAL_BOOLEAN_FLAGS])("%s (no value) is peeled", (name) => {
+      expect(normalizeCommand(`git ${name} status`).normalized).toBe("git status");
+    });
+
+    it.each([...GIT_GLOBAL_GLUED_VALUE_OPTION_NAMES])("%s=<value> (glued value) is peeled", (name) => {
+      expect(normalizeCommand(`git ${name}=some-value status`).normalized).toBe("git status");
     });
   });
 

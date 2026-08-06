@@ -424,10 +424,28 @@
 import * as path from "node:path";
 import { parseBashPrefix } from "./bash-prefix-parse.js";
 import {
+  GIT_GLOBAL_BOOLEAN_FLAGS,
+  GIT_GLOBAL_GLUED_VALUE_OPTION_NAMES,
+  GIT_GLOBAL_VALUE_FLAGS,
+  GIT_TOKEN_RE,
+} from "./git-global-options.js";
+import {
   ENV_LEADING_FLAGS,
   ENV_SPLIT_STRING_FLAGS,
   ENV_VALUE_FLAGS,
 } from "./read-only-bash.js";
+
+// Task 5b5d1022, review round 2 (module-cycle removal): `GIT_TOKEN_RE` and
+// the three `GIT_GLOBAL_*` option-name sets now LIVE in the leaf module
+// `./git-global-options.js`, imported above for this module's own use in
+// `peelGitGlobalOptions` / `canonicalizeSegment` below. Re-exported here
+// under their original names so this module's existing external consumers
+// (`src/runtime/bash-match-registry.ts`,
+// `tests/runtime/command-normalize.test.ts`) keep importing them from
+// `command-normalize.js` unchanged — see that leaf module's own header for
+// why the extraction was needed and what "single source of truth" now
+// means for these four names.
+export { GIT_GLOBAL_BOOLEAN_FLAGS, GIT_GLOBAL_GLUED_VALUE_OPTION_NAMES, GIT_GLOBAL_VALUE_FLAGS, GIT_TOKEN_RE };
 
 export interface NormalizedCommand {
   /**
@@ -658,18 +676,14 @@ interface Token {
 
 const VAR_ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
-/**
- * The `git` token itself, matched by BASENAME so a path-qualified
- * invocation (`/usr/bin/git`, `./git`) is recognised too (F4 fix).
- * Anchored to the WHOLE token (not a substring) so `mygit` / `git-foo`
- * still correctly fail to match — `\S*` only ever contributes characters
- * immediately before a literal `/`, never before `git` directly.
- * Exported (fix round 2, finding F3) so
- * `tests/runtime/bash-match-head-token-drift.test.ts` can couple this
- * module's covered set to what FULL_TEMPLATE's shipped `bash_match`
- * policies actually key on today, instead of a test-owned duplicate.
- */
-export const GIT_TOKEN_RE = /^(?:\S*\/)?git$/;
+// `GIT_TOKEN_RE` (matches by BASENAME so a path-qualified invocation like
+// `/usr/bin/git`/`./git` is recognised too, anchored to the WHOLE token so
+// `mygit`/`git-foo` still correctly fail to match) now lives in the leaf
+// module `./git-global-options.js` (task 5b5d1022, review round 2 — module-
+// cycle removal) and is imported/re-exported above, unchanged, so
+// `tests/runtime/bash-match-head-token-drift.test.ts` and
+// `src/runtime/bash-match-registry.ts` keep working against
+// `command-normalize.js`'s export of the same name.
 
 /**
  * The three OTHER head tokens this module covers (D-001, run
@@ -2069,6 +2083,19 @@ function parentIfDotGit(dir: string): string {
   return dir;
 }
 
+// `GIT_GLOBAL_VALUE_FLAGS` (value-taking, separate-token global options:
+// `-C`, `-c`, `--git-dir`, `--work-tree`, `--namespace`),
+// `GIT_GLOBAL_GLUED_VALUE_OPTION_NAMES` (the subset of those that ALSO
+// accept a glued `--name=value` spelling, plus `--exec-path`), and
+// `GIT_GLOBAL_BOOLEAN_FLAGS` (pure toggles, plus bare `--exec-path`) now
+// live in the leaf module `./git-global-options.js` (task 5b5d1022, review
+// round 2 — module-cycle removal) and are imported/re-exported above,
+// unchanged, so `tests/runtime/command-normalize.test.ts` keeps importing
+// them from `command-normalize.js`. See that leaf module's own header for
+// what "single source of truth" means for these names now that
+// `read-only-bash.ts`'s read-only DECISION no longer peels every one of
+// them uniformly.
+
 /**
  * Peel git's own global options (dropping them so the subcommand becomes
  * adjacent to `git`), tracking the first `-C` / `--work-tree` /
@@ -2212,14 +2239,6 @@ function peelGitGlobalOptions(
       idx += 1;
       continue;
     }
-    if (t === "--no-pager" || t === "-p" || t === "--paginate") {
-      idx += 1;
-      continue;
-    }
-    if (t === "--exec-path" || t.startsWith("--exec-path=")) {
-      idx += 1;
-      continue;
-    }
     if (t === "--namespace") {
       if (tokens[idx + 1] === undefined) return { idx, targetDir, relocateTargetDir, malformed: true };
       idx += 2;
@@ -2229,7 +2248,12 @@ function peelGitGlobalOptions(
       idx += 1;
       continue;
     }
-    if (t === "--literal-pathspecs" || t === "--no-replace-objects") {
+    // Pure boolean toggles (no value at all) — derived from the exported
+    // `GIT_GLOBAL_BOOLEAN_FLAGS` (task 5b5d1022) rather than re-listing
+    // each flag name here a second time, plus `--exec-path`'s glued
+    // spelling, which is likewise a single token with no value this
+    // function extracts.
+    if (GIT_GLOBAL_BOOLEAN_FLAGS.has(t) || t.startsWith("--exec-path=")) {
       idx += 1;
       continue;
     }

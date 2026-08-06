@@ -56,6 +56,11 @@
 // parallel classifier in the future, it should mirror this allowlist
 // verbatim, not diverge.
 
+import {
+  GIT_GLOBAL_BOOLEAN_FLAGS,
+  GIT_GLOBAL_GLUED_VALUE_OPTION_NAMES,
+  GIT_GLOBAL_VALUE_FLAGS,
+} from "./git-global-options.js";
 import { decodeShellWord } from "./shell-word.js";
 
 /**
@@ -186,11 +191,45 @@ export const ENV_SPLIT_STRING_FLAGS = /^(-S.*|--split-string(=.*)?)$/;
  */
 
 /**
+ * Rule 4 (MEDIUM, task 5b5d1022, review round 2). This read-only
+ * DECISION's OWN binary-recognition regex for `git` — deliberately
+ * NARROWER than `command-normalize.ts`'s `GIT_TOKEN_RE` (re-exported from
+ * the leaf module `./git-global-options.js`, left unchanged by this task:
+ * that module's broader match feeds trigger-matching/canonicalization, a
+ * different job with a different risk profile, out of this task's scope).
+ * Matches bare `git` or an ABSOLUTE path ending in `/git` ONLY —
+ * `/usr/bin/git`, `/usr/local/bin/git` — never a RELATIVE path (`./git`,
+ * `bin/git`, `../git`). Round 1 widened this classifier's own binary
+ * check to `GIT_TOKEN_RE`'s basename match (any path, relative or
+ * absolute), and round 2's review measured why that over-widened: an
+ * agent controls its own cwd and can place an ARBITRARY binary at any
+ * relative path it names `git` — a different binary entirely, not the
+ * real `git` a bare or absolute-path invocation resolves. Trusting that
+ * other binary the same as the real one would let ITS behaviour
+ * masquerade as a proven-read-only git invocation. An absolute path is
+ * different: the agent still names it, but it names one specific,
+ * non-ambiguous filesystem location an operator can audit directly — the
+ * same trust level the unqualified `git` (PATH-resolved) form already
+ * carried before round 1.
+ */
+const GIT_READ_ONLY_BIN_RE = /^(?:\/\S*\/)?git$/;
+
+/**
  * `git` subcommands that do not mutate the working tree, index, or
  * any ref. `git fetch` is included because it only writes to the
  * remote-tracking branches, never touches local refs or the working
  * tree; same for `git ls-remote`. `git config` is excluded: with
  * arguments it can set values.
+ *
+ * HONEST LIMIT (task 5b5d1022, review round 2 — out of THIS task's scope,
+ * left untouched per the task boundary): a BARE invocation of `branch`,
+ * `tag`, `remote`, or `fetch` — no `-C`, no `--git-dir` — classifies
+ * read-only here even though each can mutate state (`git branch -D main`
+ * deletes a branch at the invoking repo's own origin/master). That gap
+ * predates this task and is tracked separately. What THIS task's `-C`
+ * handling adds is narrower: once `-C` lets the agent aim one of these four
+ * at an ARBITRARY OTHER repository, it drops out of the allowed set — see
+ * `GIT_STRICT_QUERY_SUBS` below.
  */
 const GIT_READ_ONLY_SUBS: ReadonlySet<string> = new Set([
   "status", "log", "diff", "show", "branch", "tag",
@@ -199,6 +238,235 @@ const GIT_READ_ONLY_SUBS: ReadonlySet<string> = new Set([
   "reflog", "cat-file", "check-ref-format", "for-each-ref",
   "name-rev", "merge-base", "show-ref",
 ]);
+
+/**
+ * Rule 3b (HIGH, task 5b5d1022, review round 2): the STRICT subset of
+ * `GIT_READ_ONLY_SUBS` required once the invocation carries a `-C <dir>`
+ * global option — `-C` can point the WHOLE invocation at an entirely
+ * different repository than the one the operator/agent believes it is
+ * auditing; the invoking cwd never has to agree with `<dir>` at all.
+ * `branch`, `tag`, `remote`, and `fetch` are EXCLUDED from this subset even
+ * though their BARE (no `-C`) forms stay on the wider `GIT_READ_ONLY_SUBS`
+ * above — that bare-form gap is the pre-existing, already-tracked,
+ * OUT-OF-SCOPE issue named on `GIT_READ_ONLY_SUBS`'s own comment, not
+ * reopened here. What `-C` adds ON TOP of that bare gap is the ability to
+ * aim any of these four at a repository the agent was never asked to
+ * touch: each of `branch -D`, `tag`, `remote set-url`, and `fetch` mutates
+ * state (a ref, a config entry, or the remote-tracking namespace) once
+ * `-C` names an attacker-chosen target — measured, real-git-executed,
+ * against all four in the review's falsification pass (`git -C
+ * /other/repo branch -D main` really deleted the branch in the OTHER
+ * repo; `-C /other/repo tag v1`; `-C /other/repo fetch`; the `--git-dir`
+ * spelling of the same reach forfeits classification outright, see
+ * `isGitDirToken` below, so it never reaches this subset check at all).
+ * "Read-only only in their bare forms" is exactly why these four stay on
+ * `GIT_READ_ONLY_SUBS` for a `-C`-less invocation but drop out the moment
+ * `-C` is present.
+ *
+ * `--work-tree` and `--namespace` are deliberately NOT treated as
+ * repo-relocating for this check (see `isRepoRelocatingToken` below for
+ * why), mirroring `command-normalize.ts`'s own `relocateTargetDir`
+ * distinction, which likewise tracks only `-C`/`--git-dir` and never
+ * `--work-tree`.
+ */
+const GIT_STRICT_QUERY_SUBS: ReadonlySet<string> = new Set(
+  [...GIT_READ_ONLY_SUBS].filter(
+    (sub) => sub !== "branch" && sub !== "tag" && sub !== "remote" && sub !== "fetch",
+  ),
+);
+
+/**
+ * `GIT_GLOBAL_GLUED_VALUE_OPTION_NAMES` as an array, hoisted to module
+ * scope. Before task 5b5d1022's review round 2 this array was rebuilt on
+ * EVERY call to `peelGitGlobalOptionNames` (`[...GIT_GLOBAL_GLUED_VALUE_OPTION_NAMES]`
+ * inside the loop below) specifically to dodge a TDZ hazard: this module
+ * and `command-normalize.ts` used to import these `GIT_GLOBAL_*` sets from
+ * EACH OTHER, a genuine circular import, and a module-top-level read of an
+ * imported binding in a cycle can run before the other module has reached
+ * the line that defines it, depending on which module an entry point
+ * happens to import first (`ReferenceError: Cannot access '...' before
+ * initialization`, measured in both import orders plus the built dist
+ * CLI). The cycle is gone now — both this module and `command-normalize.ts`
+ * import `GIT_GLOBAL_*` from the dependency-free leaf module
+ * `./git-global-options.js` instead of from each other — so a module-scope
+ * reference to an imported `GIT_GLOBAL_*` binding is safe again, and
+ * rebuilding this array on every call was pure waste once the hazard it
+ * existed to dodge was gone.
+ */
+const GIT_GLOBAL_GLUED_VALUE_OPTION_NAME_LIST: readonly string[] = [
+  ...GIT_GLOBAL_GLUED_VALUE_OPTION_NAMES,
+];
+
+/**
+ * Skip past a git invocation's own global options — `-C <dir>`, `-c
+ * <k=v>`, `--git-dir[= ]<dir>`, `--work-tree[= ]<dir>`, `--no-pager`,
+ * `-p` / `--paginate`, `--exec-path[=<path>]`, `--namespace[= ]<ns>`,
+ * `--literal-pathspecs`, `--no-replace-objects` — so the token used for
+ * the `GIT_READ_ONLY_SUBS` lookup is git's ACTUAL subcommand, never a
+ * global option. Before this (task 5b5d1022), `isReadOnlyBashCommand`
+ * read `tokens[1]` directly as the subcommand: `git -C /tmp status`
+ * misread `-C` itself as the subcommand, failed the `GIT_READ_ONLY_SUBS`
+ * lookup, and blocked a provably read-only command.
+ *
+ * NOT ALL of these names reach this function with equal treatment any
+ * more (task 5b5d1022, review round 2): `isReadOnlyBashCommand`'s git
+ * branch below checks `-c` (`isGitConfigOverrideToken`), `--exec-path`
+ * (`isExecPathToken`), and `--git-dir` (`isGitDirToken`) FIRST and returns
+ * `false` outright when any of them is present anywhere in the invocation
+ * — those three never reach a "peel past it" treatment for the read-only
+ * DECISION. This function still recognises all of `GIT_GLOBAL_VALUE_FLAGS`
+ * (including `-c`/`--git-dir`) for the CANONICALIZATION-style peeling job
+ * `command-normalize.ts` also does, since a forfeiting token upstream means
+ * this function is never actually reached with one of those three present
+ * in practice — but it does not assume that invariant itself, so it stays
+ * total (never throws, never infinite-loops) regardless of call order.
+ *
+ * The option NAMES are imported from the leaf module `./git-global-
+ * options.js` (not hand-copied here a second time); this function never
+ * needs the VALUE a value-taking option carries, only that it consumed one
+ * token (or two) — the VALUE extraction stays local to
+ * `command-normalize.ts`'s own `peelGitGlobalOptions`, out of this task's
+ * scope.
+ *
+ * A value-taking option (`GIT_GLOBAL_VALUE_FLAGS`) ALWAYS consumes the
+ * token immediately after it as its value, whatever that token looks
+ * like — so `git -c x=y push` still lands on `push` as the subcommand,
+ * never on `y`: a global option's value can never be misread as, or
+ * swallow, the write subcommand that follows it. (`-c` forfeits before
+ * this matters in practice, per Rule 1 above, but the property holds
+ * regardless.)
+ *
+ * Returns the index of the first token after the recognised global
+ * options — git's real subcommand, or `tokens.length` for a bare
+ * invocation ending in global options only — or `null` when a
+ * value-taking option's value is missing (`git -C` with nothing after
+ * it): malformed, so the caller fails closed instead of guessing at a
+ * subcommand.
+ */
+function peelGitGlobalOptionNames(tokens: readonly string[], startIdx: number): number | null {
+  let idx = startIdx;
+  while (idx < tokens.length) {
+    const t = tokens[idx];
+    if (t === undefined) break;
+    if (GIT_GLOBAL_VALUE_FLAGS.has(t)) {
+      if (tokens[idx + 1] === undefined) return null;
+      idx += 2;
+      continue;
+    }
+    if (GIT_GLOBAL_GLUED_VALUE_OPTION_NAME_LIST.some((name) => t.startsWith(`${name}=`))) {
+      idx += 1;
+      continue;
+    }
+    if (GIT_GLOBAL_BOOLEAN_FLAGS.has(t)) {
+      idx += 1;
+      continue;
+    }
+    break;
+  }
+  return idx;
+}
+
+/**
+ * Rule 1 (CRITICAL, task 5b5d1022, review round 2 — adversarial re-review
+ * of the round-1 fix). `git -c <key>=<value>` loads ARBITRARY git config
+ * for the invocation, and several config keys EXECUTE a program as a side
+ * effect of an otherwise-innocuous-looking subcommand: `core.fsmonitor`,
+ * `core.sshCommand`, `diff.external`, `credential.helper`, and
+ * `gpg.program` all run an external command, and `include.path` pulls in
+ * an ENTIRE OTHER config file (which can itself set any of the above) —
+ * all measured, real-git-executed, on a plain `git status` in the review's
+ * falsification pass (e.g. `git -c core.fsmonitor=/tmp/evil.sh status`
+ * really ran the script). Git config KEYS are matched CASE-INSENSITIVELY
+ * (`-c CORE.FSMONITOR=...` fires identically to `-c core.fsmonitor=...`,
+ * also measured), so a denylist of dangerous key spellings is not a viable
+ * fix — this is why `-c` FORFEITS the whole invocation's read-only
+ * classification outright rather than being peeled past like the other
+ * git global options above: whatever key/value follows it, this classifier
+ * cannot vouch for what it does. Exact token equality only (not a prefix
+ * check): `-c` never has a glued spelling (unlike `--exec-path=<dir>`),
+ * and a token that merely CONTAINS `-c` (a subcommand argument, say) is
+ * not this flag.
+ */
+function isGitConfigOverrideToken(t: string): boolean {
+  return t === "-c";
+}
+
+/**
+ * Rule 2 (HIGH, task 5b5d1022, review round 2). `--exec-path[=<dir>]`
+ * makes git prepend `<dir>` to `PATH` for EVERY child process it spawns
+ * for the rest of the invocation. Measured, real-git-executed: `git
+ * --exec-path=<dir> ls-remote <url>` ran `<dir>/ssh` (the SSH transport
+ * helper git resolved from the poisoned PATH), and the same for `fetch`
+ * and even the otherwise-read-only-looking bare `status`. A read-only
+ * subcommand can shell out to a transport, credential, or pager helper
+ * without that helper naming itself anywhere else in the argv this
+ * classifier inspects, so both the bare (prints the configured exec path)
+ * and glued (sets it) spellings forfeit classification outright.
+ */
+function isExecPathToken(t: string): boolean {
+  return t === "--exec-path" || t.startsWith("--exec-path=");
+}
+
+/**
+ * Rule 3a (HIGH, task 5b5d1022, review round 2). `--git-dir[=<dir>]`
+ * relocates which repository the WHOLE invocation targets — the same
+ * cross-repository reach as `-C` (see `isRepoRelocatingToken` /
+ * `GIT_STRICT_QUERY_SUBS` for `-C`'s own, narrower treatment). Unlike
+ * `-C`, this classifier forfeits `--git-dir` outright rather than
+ * carving out a stricter subcommand subset for it: measured,
+ * real-git-executed, `git --git-dir=/other/.git remote set-url origin
+ * <url>` and `git --git-dir=/other/.git branch -D main` both really
+ * mutated a repository OTHER than the invoking cwd's own.
+ */
+function isGitDirToken(t: string): boolean {
+  return t === "--git-dir" || t.startsWith("--git-dir=");
+}
+
+/**
+ * Rule 3b (HIGH, task 5b5d1022, review round 2). `-C <dir>` is the ONE
+ * repo-relocating global option this classifier still allows to be
+ * PEELED (not forfeited outright) — it is what the task's own headline
+ * case (`git -C /tmp status`) needs to keep working — but its presence
+ * narrows which subcommands stay read-only to `GIT_STRICT_QUERY_SUBS`
+ * instead of the full `GIT_READ_ONLY_SUBS`. Exact token equality only:
+ * `-C` has no glued spelling recognised by real git as a global option
+ * (unlike `-c`, it is not in `GIT_GLOBAL_GLUED_VALUE_OPTION_NAMES`
+ * either).
+ *
+ * `--work-tree` and `--namespace` are DELIBERATELY excluded from this
+ * check (this function does not test for them at all), even though the
+ * task description asked to consider whether they "carry the same reach":
+ * they do not. `--work-tree` changes where WORKING-TREE FILE paths
+ * resolve but does not relocate git's OWN `--git-dir` search — a write
+ * subcommand under `--work-tree` alone still targets whatever repository
+ * ORDINARY discovery from the invoking directory finds, the SAME
+ * repository a bare invocation without any global option would touch, not
+ * an attacker-chosen one; none of `branch`/`tag`/`remote`/`fetch` even
+ * consults the working tree. `--namespace` scopes which
+ * `refs/namespaces/<ns>/` prefix is addressed within the SAME `.git`
+ * directory; it does not relocate which physical repository is targeted
+ * either. Neither carries `-C`'s "point anywhere on the filesystem" reach,
+ * so `git --work-tree=<dir> status` stays peelable (by
+ * `peelGitGlobalOptionNames`) and classified against the FULL
+ * `GIT_READ_ONLY_SUBS`, unaffected by this check.
+ */
+function isRepoRelocatingToken(t: string): boolean {
+  return t === "-C";
+}
+
+/**
+ * `true` when ANY token in `tokens` matches `check`, checked against BOTH
+ * the raw token and its `decodeShellWord` decoding — same `raw || decoded`
+ * shape as every other write-flag guard in this module (see
+ * `isOutputWriteToken`'s own comment for why testing both, rather than the
+ * decoded value alone, is the direction that can only ADD a match, never
+ * lose one): `-c` spelled `-"c"`, `-'c'`, `--exec-path` spelled
+ * `--exec-"path"`, etc. must not defeat Rules 1-3b's forfeiture/subset
+ * checks above.
+ */
+function hasMatchingToken(tokens: readonly string[], check: (t: string) => boolean): boolean {
+  return tokens.some((t) => check(t) || check(decodeShellWord(t)));
+}
 
 /**
  * `gh` (GitHub CLI) noun + verb pairs that read state without writing.
@@ -609,7 +877,45 @@ function classifyTokens(tokens: readonly string[]): boolean {
   // tight: `<bin> --version <thing>` could exfiltrate or mis-route.
   if (tokens.length === 2 && VERSION_OR_HELP_FLAGS.has(sub)) return true;
 
-  if (bin === "git") return GIT_READ_ONLY_SUBS.has(sub);
+  // `GIT_READ_ONLY_BIN_RE` matches by BASENAME, restricted to bare `git` or
+  // an ABSOLUTE path ending in `/git` (task 5b5d1022, review round 2,
+  // MEDIUM finding — see that constant's own comment for why this is
+  // NARROWER than `command-normalize.ts`'s `GIT_TOKEN_RE`). `mygit`,
+  // `git-foo`, `gitk`, and any RELATIVE path (`./git`, `bin/git`) do NOT
+  // match, so they fall through to the default `false` below.
+  if (GIT_READ_ONLY_BIN_RE.test(bin)) {
+    const argTokens = tokens.slice(1);
+
+    // Rule 1 (CRITICAL): `-c` forfeits outright, wherever it appears in
+    // the invocation. See `isGitConfigOverrideToken`'s own comment.
+    if (hasMatchingToken(argTokens, isGitConfigOverrideToken)) return false;
+
+    // Rule 2 (HIGH): `--exec-path[=<dir>]` forfeits outright. See
+    // `isExecPathToken`'s own comment.
+    if (hasMatchingToken(argTokens, isExecPathToken)) return false;
+
+    // Rule 3a (HIGH): `--git-dir[=<dir>]` forfeits outright. See
+    // `isGitDirToken`'s own comment.
+    if (hasMatchingToken(argTokens, isGitDirToken)) return false;
+
+    const subIdx = peelGitGlobalOptionNames(tokens, 1);
+    if (subIdx === null) return false; // malformed global option: fail closed
+    const gitSub = tokens[subIdx] ?? "";
+
+    // Rule 3b (HIGH): `-C <dir>` relocates which repository the WHOLE
+    // invocation targets. Keeping the headline case (`git -C /tmp status`)
+    // working means `-C` cannot simply forfeit like `--git-dir` above —
+    // instead, once it is present, the subcommand must fall in the
+    // STRICT subset `GIT_STRICT_QUERY_SUBS` rather than the full
+    // `GIT_READ_ONLY_SUBS`. See that constant's own comment for exactly
+    // which four subcommands are excluded and why, and
+    // `isRepoRelocatingToken`'s own comment for why `--work-tree` /
+    // `--namespace` do NOT trigger this stricter subset.
+    if (hasMatchingToken(argTokens, isRepoRelocatingToken)) {
+      return GIT_STRICT_QUERY_SUBS.has(gitSub);
+    }
+    return GIT_READ_ONLY_SUBS.has(gitSub);
+  }
 
   if (bin === "gh") {
     if (!GH_READ_ONLY_NOUNS.has(sub)) return false;

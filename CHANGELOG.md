@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `read-only-bash` no longer misclassifies genuinely read-only git
+  commands as write-capable (task `5b5d1022`), and a review-round-2
+  adversarial re-review closed real-git-executed false negatives the
+  round-1 fix had introduced by peeling too much. The read-only DECISION
+  now treats git's own global options in three different ways, not one:
+  - **Peeled (classification proceeds to the real subcommand):**
+    `--no-pager`, `-p`/`--paginate`, `--literal-pathspecs`,
+    `--no-replace-objects`, `--work-tree[=<dir>]`, `--namespace[=<ns>]`.
+    None of these can execute an external program or relocate which
+    repository the invocation targets, so skipping past them to read the
+    real subcommand is safe.
+  - **Peeled, but narrows the allowed subcommand set:** `-C <dir>`. It
+    genuinely relocates which repository the WHOLE invocation targets —
+    the invoking cwd never has to agree with `<dir>` — so once it is
+    present, `branch`/`tag`/`remote`/`fetch` (mutating once aimed at an
+    arbitrary repository, even though their bare, `-C`-less forms stay
+    read-only) drop out of the allowed set; the rest of the read-only
+    subcommand list (`status`, `log`, `diff`, `show`, ...) is unaffected,
+    so the headline case `git -C /tmp status` keeps working.
+  - **Forfeits classification outright, wherever it appears:** `-c`
+    (loads arbitrary, case-insensitively-keyed git config — `-c
+    core.fsmonitor=...`, `-c core.sshCommand=...`, `-c diff.external=...`,
+    `-c credential.helper=...`, and `-c gpg.program=...` each run an
+    external program as a side effect of an otherwise read-only-looking
+    subcommand, and `-c include.path=<file>` pulls in an entire other
+    config file that can itself set any of those; a denylist of dangerous
+    key spellings is not viable since git config keys are
+    case-insensitive), `--exec-path[=<dir>]` (prepends `<dir>` to `PATH`
+    for every child process git spawns for the rest of the invocation —
+    a transport, credential, or pager helper can run without naming
+    itself anywhere else in the argv), and `--git-dir[=<dir>]` (relocates
+    which repository the invocation targets, the same reach as `-C`, but
+    without `-C`'s accompanying narrower-subcommand carve-out). Every one
+    of these three was measured, real-git-executed, running an injected
+    program or mutating a different repository while classifying as
+    read-only under the round-1 fix.
+
+  A path-qualified git binary is recognized too, but ONLY when the path
+  is bare `git` or ABSOLUTE (`/usr/bin/git status`) — a RELATIVE path
+  (`./git status`, `bin/git status`) is treated as a possibly different,
+  agent-controlled binary and stays unrecognized as `git` at all,
+  narrower than `command-normalize.ts`'s own basename match (used there
+  for canonicalization/trigger-matching, a different, non-security-
+  classifying job that still recognizes any path). The option-name sets
+  are exported from the new leaf module `src/runtime/git-global-
+  options.ts` (moved out of `command-normalize.ts`, which re-exports them
+  unchanged for existing consumers) as the source of truth for which
+  names ARE git global options — not, any more, for what every consumer
+  does with a match, since `read-only-bash.ts` and `command-normalize.ts`
+  now treat several of them differently by design (content-pinned by
+  `tests/runtime/git-global-options.test.ts`, drift-guarded against
+  `command-normalize.ts`'s own peeling by
+  `tests/runtime/command-normalize.test.ts`). This also removes the
+  circular import the two modules previously had on each other (and the
+  TDZ hazard and per-call array rebuild that cycle required as a
+  workaround). Malformed missing-value forms (`git -C` with nothing
+  after it) still fail closed, and `mygit`/`git-foo`/`gitk` still stay
+  unrecognized. The `isEscapeCommand` whitespace-class issue (task
+  `5b1b24fb`) and the pre-existing bare-form gap (`git branch -D main`
+  without `-C` classifying read-only at the invoking repo's own
+  origin/master) are both untouched, out of this task's scope.
+
 ### Added
 
 - Both PreToolUse hooks (Claude and Codex) now tell a blocked agent WHICH
