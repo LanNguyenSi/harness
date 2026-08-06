@@ -19,9 +19,10 @@ deliberately do not duplicate them.
   operator-only deny, closed at template level in v0.43.0 (task
   `d834a065`); an existing `full` install picks it up only after re-running
   `harness init --template full --force`. In v0.44.0 the same fix reached
-  the policy-pack runtime regexes (task `76671e5a`) and a third, additive
-  normalization pass closed the adjacent command-normalize boundary gap
-  (task `aabbad63`).
+  the pack regexes and this repo's own dogfood trigger (task `76671e5a`),
+  and a second, independent normalization pass, consulted as a third
+  additive matching arm, closed the adjacent command-normalize boundary
+  gap (task `aabbad63`).
 - [Debug verb selection](debug-verb-selection.md), which harness verb answers
   which "why did my policy (not) fire" question: ledger-replay vs
   live-hypothetical vs static-prediction vs stage-isolation vs end-to-end.
@@ -29,8 +30,8 @@ deliberately do not duplicate them.
 ## Modules
 
 - [Codex runtime adapter, parity gaps vs Claude Code](codex-adapter-parity-gaps.md),
-  what the Codex adapter emits, the enumerated behavioral gaps (former
-  headline gap — no Codex PostToolUse hook — closed by task `a1348c89`;
+  what the Codex adapter emits, the enumerated behavioral gaps (the former
+  headline gap, no Codex PostToolUse hook, is closed by task `a1348c89`;
   current top gap is the un-translated permission-profile/sandbox stanza,
   gap 4), and the Codex wire-format contract.
 
@@ -43,7 +44,7 @@ deliberately do not duplicate them.
   a policy only ever blocks if grounding-mcp is wired under tools.mcp[];
   version-sensitive (0.35.0 apply refusal, 0.39.0 pooled ledger session,
   0.43.0/0.44.0 raw-or-normalised bash_match matching plus per-repository
-  `${REPO}`/`${BRANCH}`/`at_head` attribution).
+  `${REPO}`/`${BRANCH}`/`at_head` attribution, universal-additive).
 - [Managed mutations validate the whole manifest](manifest-validation-scope.md),
   add/remove schema-validate the entire proposed harness.yaml; add's asset
   gate baseline-diffs so only newly-introduced asset errors block.
