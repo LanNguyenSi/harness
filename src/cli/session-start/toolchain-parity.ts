@@ -14,7 +14,12 @@
 //   (b) compares the local LIVE toolchain state against every peer
 //       snapshot file already in that directory;
 //   (c) reports drift as stderr warning lines plus a single
-//       `toolchain-parity:ok` / `toolchain-parity:drift:<n>` ledger fact.
+//       `toolchain-parity:ok` / `toolchain-parity:drift:<n>` ledger fact,
+//       with a `:unparseable-peer:<n>` suffix appended whenever one or more
+//       peer files failed to parse as JSON (task 690fba7c, follow-up from
+//       the agent-memory 06d09cde incident: an unparseable peer snapshot is
+//       a real corruption/drift signal and must not vanish from `drift:N`
+//       as if it had been a complete comparison).
 //
 // Transport of the snapshot files BETWEEN machines is entirely
 // agent-memory-sync's job (agent-memory PR #64, already shipped) — this
@@ -611,6 +616,21 @@ export interface SessionStartToolchainParityResult {
   peersCompared: number;
   /** Total drift items found across every compared peer. */
   driftCount: number;
+  /**
+   * Peer files present in the machine-state directory that failed to parse
+   * as valid JSON (readable but not JSON, or JSON that fails the minimal
+   * `profile`/`timestamp` shape check) and were therefore excluded from
+   * `driftCount`/`peersCompared`. A non-zero count here means `driftCount`
+   * reflects a PARTIAL comparison, not a full one — see the
+   * `:unparseable-peer:<n>` ledger-content suffix this drives.
+   *
+   * The contrapositive does NOT hold: peers whose file could not be READ
+   * at all (EACCES, EISDIR, ...) are skipped by the unreadable branch and
+   * are not counted here, so the absence of the suffix does not prove a
+   * complete comparison. That branch is scoped to the follow-up hardening
+   * round (task c1b5ade5).
+   */
+  unparseablePeerCount: number;
   /** Resolved session id. */
   sessionId: string;
   sessionSource: "flag" | "stdin" | "env" | "transcript" | "default";
@@ -641,12 +661,14 @@ export async function runSessionStartToolchainParity(
     sessionId: string,
     sessionSource: SessionStartToolchainParityResult["sessionSource"],
     reason?: string,
+    unparseablePeerCount = 0,
   ): SessionStartToolchainParityResult => ({
     exitCode: 0,
     wrote,
     profile,
     peersCompared,
     driftCount,
+    unparseablePeerCount,
     sessionId,
     sessionSource,
     ...(reason !== undefined && { reason }),
@@ -767,6 +789,11 @@ export async function runSessionStartToolchainParity(
 
   let peersCompared = 0;
   let driftTotal = 0;
+  // Peer files that were present but failed to parse as valid JSON —
+  // AC2 (task 690fba7c): these must not vanish silently from `drift:N`, so
+  // their (file-derived) labels are surfaced both as a distinct stderr tag
+  // and as a `:unparseable-peer:<n>` suffix on the ledger fact below.
+  const unparseablePeers: string[] = [];
   for (const fileName of peerFiles) {
     const filePath = path.join(machineStateDir, fileName);
     let raw: string;
@@ -778,7 +805,20 @@ export async function runSessionStartToolchainParity(
     }
     const parsed = parseSnapshotJson(raw);
     if (!parsed.ok) {
+      // The profile field itself failed to parse, so the filename (minus
+      // its `.json` suffix) is the best available peer identifier — it is
+      // exactly `sanitizeProfileName(profile)` for any file this producer
+      // itself wrote. Files this producer did NOT write are untrusted
+      // input (the machine-state dir is populated cross-machine by sync),
+      // so the label is re-sanitized before it is interpolated into the
+      // greppable stderr tag: a crafted filename must not be able to
+      // forge a standalone parity line. The `|| fileName` keeps a
+      // degenerate name like a literal `.json` from producing an empty
+      // label.
+      const peerLabel = sanitizeProfileName(fileName.replace(/\.json$/, "") || fileName);
       note(`peer snapshot ${fileName} is corrupt: ${parsed.reason}`);
+      note(`parity:unparseable-peer:${peerLabel}`);
+      unparseablePeers.push(peerLabel);
       continue;
     }
     const comparison = compareToPeer(localSnapshot, parsed.snapshot, now);
@@ -796,10 +836,19 @@ export async function runSessionStartToolchainParity(
   if (peersCompared === 0) {
     const reason = `no comparable peer snapshots (all ${peerFiles.length} peer file(s) in ${machineStateDir} were unreadable/corrupt)`;
     note(reason);
-    return done(false, profile, 0, 0, sessionId, sessionSource, reason);
+    return done(false, profile, 0, 0, sessionId, sessionSource, reason, unparseablePeers.length);
   }
 
-  const content = driftTotal === 0 ? "toolchain-parity:ok" : `toolchain-parity:drift:${driftTotal}`;
+  // AC2 (task 690fba7c): a non-zero `unparseablePeers` count means the
+  // comparison below is PARTIAL, so it is appended to the ledger fact
+  // itself — the artifact an operator is most likely to read after the
+  // fact via `harness audit` — not just to the stderr notes above. Absent
+  // any unparseable peer, `content` is byte-identical to the pre-existing
+  // format (AC3: no behaviour change for the all-valid-peers case).
+  const unparseableSuffix =
+    unparseablePeers.length > 0 ? `:unparseable-peer:${unparseablePeers.length}` : "";
+  const content =
+    (driftTotal === 0 ? "toolchain-parity:ok" : `toolchain-parity:drift:${driftTotal}`) + unparseableSuffix;
 
   let writeLedger = opts.writeLedger;
   if (!writeLedger) {
@@ -809,7 +858,7 @@ export async function runSessionStartToolchainParity(
     if (!resolved.ok) {
       const reason = `${resolved.reason}; cannot record ${content}`;
       note(reason);
-      return done(false, profile, peersCompared, driftTotal, sessionId, sessionSource, reason);
+      return done(false, profile, peersCompared, driftTotal, sessionId, sessionSource, reason, unparseablePeers.length);
     }
     writeLedger = resolved.write;
   }
@@ -818,7 +867,7 @@ export async function runSessionStartToolchainParity(
   if (!result.ok) {
     const reason = `ledger write failed: ${result.reason ?? "unknown error"}`;
     note(reason);
-    return done(false, profile, peersCompared, driftTotal, sessionId, sessionSource, reason);
+    return done(false, profile, peersCompared, driftTotal, sessionId, sessionSource, reason, unparseablePeers.length);
   }
   note(`recorded ${content} for session ${sessionId}`);
   if (sessionSource === "default") {
@@ -828,5 +877,5 @@ export async function runSessionStartToolchainParity(
         "$CLAUDE_SESSION_ID, or pass --session <id> for manual / scripted use to keep the audit trail useful.",
     );
   }
-  return done(true, profile, peersCompared, driftTotal, sessionId, sessionSource);
+  return done(true, profile, peersCompared, driftTotal, sessionId, sessionSource, undefined, unparseablePeers.length);
 }
