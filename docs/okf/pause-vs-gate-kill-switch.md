@@ -3,7 +3,7 @@ type: runbook
 title: Kill switches — pause vs gate disable
 description: harness has two distinct operator kill switches — `harness pause` (sentinel file, silences ALL hooks temporarily, operator-only enforced in code) vs `harness gate disable` (surgically removes matching hook groups from settings.json with a reversible snapshot); when to use which, exact flags, restore paths, and trust caveats.
 tags: [runbook, pause, gate-disable, kill-switch, operator]
-timestamp: 2026-08-05T15:28:20Z
+timestamp: 2026-08-06T17:59:39Z
 sources:
   - src/runtime/pause-sentinel.ts
   - src/runtime/command-normalize.ts
@@ -18,6 +18,7 @@ sources:
   - src/runtime/intercept.ts
   - src/cli/validate/checks.ts
   - docs/for-humans.md
+  - CHANGELOG.md
 ---
 
 # Kill switches: `harness pause` vs `harness gate disable`
@@ -60,7 +61,7 @@ Measured 2026-07-27 (task `ea8becf5`): the cheapest member of that class was not
 
 **Correction, measured 2026-08-01 (task `287fefaf`): "wrapper-hardened" is not the same as "hard against trigger evasion", and for `deny-kill-switch-bypass` the cheapest known bypass is now one CHARACTER, not one word.** The boundary alternation every shipped `bash_match` uses is `(^|\n|;|\||&&|\()`: it knows `&&` but not single `&`. bash starts a new command after `&`, the regex sees no boundary there, and normalisation is never consulted because the trigger already missed. Measured against `docs/examples/full-manifest.yaml` through the real prediction path, with the plain `harness pause` form as a per-policy positive control and a PATH shim proving the verb really executes: `A=x&harness pause` and `sleep 0 & harness pause` both reach no deny. The second form needs no assignment prefix at all, so this is not a quote-model or wrapper problem and the `432db3d3` hardening does not touch it. One qualifier so the severity is not overread: neither form is read-only, so the understanding gate still blocks them in an unapproved session; the bypass is live post-approval. Full measurement and the other affected gates: [Shell quote models, measured divergence against bash](quote-model-divergence.md).
 
-**Fixed in v0.43.0 (task `d834a065`):** `&` is now a boundary in every shipped `policies[].trigger.bash_match`, so `A=x&harness pause` and `sleep 0 & harness pause` deny again. This is a template-level change: an existing `full` install still carries the old `&&`-only triggers until its manifest is regenerated: `harness init --template full --force` (which overwrites the manifest wholesale, so re-apply any local edits) or hand-widen the three triggers per the Scope paragraph below. The three policy-pack runtime regexes were deliberately NOT swept in this fix and still carry the gap on live gate surfaces (follow-up `76671e5a`, kept separate because their sibling regexes are allow-lists where widening would loosen a gate).
+**Fixed in v0.43.0 (task `d834a065`):** `&` is now a boundary in every shipped `policies[].trigger.bash_match`, so `A=x&harness pause` and `sleep 0 & harness pause` deny again. This is a template-level change: an existing `full` install still carries the old `&&`-only triggers until its manifest is regenerated: `harness init --template full --force` (which overwrites the manifest wholesale, so re-apply any local edits) or hand-widen the three triggers per the Scope paragraph below. The three policy-pack runtime regexes were deliberately NOT swept in this fix, kept separate because their sibling regexes are allow-lists where widening would loosen a gate (follow-up `76671e5a`). **That gap is now closed too, shipped in v0.44.0:** `CURATED_MUTATION_BASH_RE` / `GH_PR_MERGE_BASH_RE` (`src/policy-packs/builtin/post-merge-gate-runtime.ts`), `DEFAULT_PUSH_BASH_RE` (`src/policy-packs/builtin/solution-acceptance-runtime.ts`), and this repo's own `dogfood/harness.yaml` `dogfood-recency` trigger all recognize a bare `&` as a boundary now, same subsumes-`&&` treatment as the template fix above (CHANGELOG.md 0.44.0 entry; commit `6d1cf50`, PR #390, `Refs: 76671e5a-a0dd-4360-8f1f-55b71ceb7308`). Full measurement and detail: [Shell quote models, measured divergence against bash](quote-model-divergence.md).
 
 **Scope.** These three policies ship ONLY in `harness init --template full`. `solo` and `team` templates carry no policy-layer protection against these bypasses at all, only the CLI checks in `src/cli/pause/index.ts`, which (per above) a `! `-prefixed shell cannot legitimately satisfy anyway, but which an ordinary agent Bash call also cannot get past without the env-stripping trick this doc documents. Existing `full`-template installs do not pick these up automatically: `harness apply` does not retroactively add new default policies to an already-materialized manifest; re-run `harness init --template full` (or hand-add the three policy/hook pairs from `src/cli/init/templates.ts`).
 

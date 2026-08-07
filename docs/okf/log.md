@@ -2,6 +2,19 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-08-06T17:59:39Z, targeted correction (task af7e61d9): the 2026-08-05
+  sweep below re-stamped pause-vs-gate-kill-switch's 7 citations but missed
+  a semantic drift `okf-kit check` cannot see (source-mtime staleness only,
+  not inter-doc contradiction): its `76671e5a` follow-up reference still
+  read as an open gap ("still carry the gap... kept separate") after
+  76671e5a shipped in v0.44.0, contradicting quote-model-divergence.md and
+  index.md, which already had it right. Verified against primary sources,
+  not just the sibling doc: CHANGELOG.md's 0.44.0 entry ("closing follow-up
+  `76671e5a`") and commit `6d1cf50` (PR #390, `Refs:
+  76671e5a-a0dd-4360-8f1f-55b71ceb7308`, tag `v0.44.0` contains it).
+  Corrected the one paragraph, added CHANGELOG.md to sources, re-stamped.
+  Found during task 9cd546a1's index re-verification, sliced out separately
+  since that task was scoped to index.md only.
 - 2026-08-05T15:42:36Z, full-bundle re-verification sweep (tasks 3c43de1a
   PR #398 + 3c150880): all 9 docs re-checked claim-by-claim against
   harness 0.44.0 (master 65761ff) after the 0.43.0/0.44.0 policy-engine
