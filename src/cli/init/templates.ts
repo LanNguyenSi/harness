@@ -172,7 +172,11 @@ hooks:
   # already there, warning on drift (version mismatches, missing
   # packages, node/OW-Kit drift, MCP-name differences). Purely advisory —
   # no policy consumes the \`toolchain-parity:\` ledger fact this writes,
-  # it exists for \`harness audit\`/operator visibility only. DISABLED by
+  # it exists for \`harness audit\`/operator visibility only. If a policy
+  # ever does consume it, match with the \`:unparseable-peer:<n>\` suffix
+  # in mind: requires-matching is substring-based, so a bare
+  # \`toolchain-parity:ok\` tag would also match \`ok:unparseable-peer:2\`
+  # (a partial comparison). DISABLED by
   # default (no \`toolchain_parity:\` block above): opt in with
   # \`toolchain_parity: { enabled: true }\` (machine_state_dir/profile/
   # workspace_root all have sane defaults — see docs/CLI.md). No external

@@ -419,10 +419,74 @@ describe("runSessionStartToolchainParity — corrupt peer file", () => {
     expect(result.wrote).toBe(true);
     expect(result.peersCompared).toBe(1);
     expect(result.driftCount).toBe(0);
-    expect(writes).toEqual(["toolchain-parity:ok"]);
+    // AC2: an unparseable peer file must not vanish from the ledger fact —
+    // it is appended as a `:unparseable-peer:<n>` suffix rather than
+    // letting `toolchain-parity:ok` misreport a full comparison.
+    expect(result.unparseablePeerCount).toBe(1);
+    expect(writes).toEqual(["toolchain-parity:ok:unparseable-peer:1"]);
+    // AC1: a visible warn line, same `harness session-start toolchain-parity:`
+    // prefix as every other note here (not a silent skip).
     expect(errOut()).toMatch(/peer snapshot broken\.json is corrupt/);
+    // AC2 companion-output signal, keyed on the file-derived peer label.
+    expect(errOut()).toMatch(/parity:unparseable-peer:broken/);
     // The corrupt file itself must be left untouched.
     expect(fs.readFileSync(path.join(dir, "broken.json"), "utf8")).toBe("{not valid json");
+  });
+
+  it("aggregates multiple unparseable peers into one :unparseable-peer:<n> suffix", async () => {
+    // Pins that <n> is a real count, not a boolean flag: two corrupt
+    // peers plus one valid one must yield exactly `:unparseable-peer:2`.
+    const dir = tmpDir("harness-tcp-corrupt-agg-");
+    fs.writeFileSync(path.join(dir, "broken-a.json"), "{not valid json", "utf8");
+    fs.writeFileSync(path.join(dir, "broken-b.json"), "also not json", "utf8");
+    writeSnapshotFile(dir, "peer-ok.json", {
+      profile: "peer-ok",
+      timestamp: new Date(NOW.getTime() - 1 * 60_000).toISOString(),
+      node: "v22.1.0",
+      npmGlobals: { "@lannguyensi/harness": "0.41.0" },
+      owKitVersion: "0.12.0",
+      mcpServers: ["agent-tasks", "grounding-mcp"],
+    });
+
+    const writes: string[] = [];
+    const { stream: err } = captureStream();
+    const result = await runSessionStartToolchainParity({
+      ...baseCollectors(),
+      stdin: streamFrom(JSON.stringify({ session_id: "sess-1", cwd: "/tmp" })),
+      stderr: err,
+      manifest: manifestWithConfig({ enabled: true, machine_state_dir: dir, profile: "local-machine" }),
+      writeLedger: async (args) => {
+        writes.push(args.content);
+        return { ok: true };
+      },
+    });
+
+    expect(result.peersCompared).toBe(1);
+    expect(result.unparseablePeerCount).toBe(2);
+    expect(writes).toEqual(["toolchain-parity:ok:unparseable-peer:2"]);
+  });
+
+  it("sanitizes a hostile peer filename before interpolating it into the stderr tag", async () => {
+    // The machine-state dir is populated cross-machine by sync, so peer
+    // filenames are untrusted input. A filename embedding a newline plus
+    // the note prefix must not be able to forge a standalone parity line
+    // in stderr; the label goes through sanitizeProfileName first.
+    const dir = tmpDir("harness-tcp-corrupt-hostile-");
+    const hostile = "evil\nharness session-start toolchain-parity: ok against FAKE.json";
+    fs.writeFileSync(path.join(dir, hostile), "{not valid json", "utf8");
+
+    const { stream: err, output: errOut } = captureStream();
+    const result = await runSessionStartToolchainParity({
+      ...baseCollectors(),
+      stdin: streamFrom(JSON.stringify({ session_id: "sess-1", cwd: "/tmp" })),
+      stderr: err,
+      manifest: manifestWithConfig({ enabled: true, machine_state_dir: dir, profile: "local-machine" }),
+      writeLedger: async () => ({ ok: true }),
+    });
+
+    expect(result.unparseablePeerCount).toBe(1);
+    expect(errOut().split("\n")).not.toContain("harness session-start toolchain-parity: ok against FAKE");
+    expect(errOut()).toMatch(/parity:unparseable-peer:evil-harness/);
   });
 
   it("reports 'no comparable peer snapshots' when every peer file is corrupt", async () => {
@@ -440,8 +504,72 @@ describe("runSessionStartToolchainParity — corrupt peer file", () => {
 
     expect(result.wrote).toBe(false);
     expect(result.peersCompared).toBe(0);
+    expect(result.unparseablePeerCount).toBe(1);
     expect(result.reason).toMatch(/no comparable peer snapshots/);
     expect(errOut()).toMatch(/no comparable peer snapshots/);
+    expect(errOut()).toMatch(/parity:unparseable-peer:broken/);
+  });
+
+  it("negative control: a valid-only peer set produces no unparseable-peer warning and an unchanged ledger-fact format", async () => {
+    const dir = tmpDir("harness-tcp-corrupt-negctrl-");
+    writeSnapshotFile(dir, "peer-ok.json", {
+      profile: "peer-ok",
+      timestamp: new Date(NOW.getTime() - 1 * 60_000).toISOString(),
+      node: "v22.1.0",
+      npmGlobals: { "@lannguyensi/harness": "0.41.0" },
+      owKitVersion: "0.12.0",
+      mcpServers: ["agent-tasks", "grounding-mcp"],
+    });
+
+    const writes: string[] = [];
+    const { stream: err, output: errOut } = captureStream();
+    const result = await runSessionStartToolchainParity({
+      ...baseCollectors(),
+      stdin: streamFrom(JSON.stringify({ session_id: "sess-1", cwd: "/tmp" })),
+      stderr: err,
+      manifest: manifestWithConfig({ enabled: true, machine_state_dir: dir, profile: "local-machine" }),
+      writeLedger: async (args) => {
+        writes.push(args.content);
+        return { ok: true };
+      },
+    });
+
+    expect(result.wrote).toBe(true);
+    expect(result.peersCompared).toBe(1);
+    expect(result.unparseablePeerCount).toBe(0);
+    expect(writes).toEqual(["toolchain-parity:ok"]);
+    expect(errOut()).not.toMatch(/unparseable-peer/);
+    expect(errOut()).not.toMatch(/is corrupt/);
+  });
+
+  it("appends the unparseable-peer suffix to a drift fact too, alongside the remaining valid peer's drift", async () => {
+    const dir = tmpDir("harness-tcp-corrupt-plus-drift-");
+    fs.writeFileSync(path.join(dir, "broken.json"), "<<<<<<< HEAD\nconflict\n=======\n>>>>>>> branch\n", "utf8");
+    writeSnapshotFile(dir, "peer-drift.json", {
+      profile: "peer-drift",
+      timestamp: new Date(NOW.getTime() - 1 * 60_000).toISOString(),
+      node: "v20.0.0",
+      npmGlobals: { "@lannguyensi/harness": "0.41.0" },
+      owKitVersion: "0.12.0",
+      mcpServers: ["agent-tasks", "grounding-mcp"],
+    });
+
+    const writes: string[] = [];
+    const { stream: err } = captureStream();
+    const result = await runSessionStartToolchainParity({
+      ...baseCollectors(),
+      stdin: streamFrom(JSON.stringify({ session_id: "sess-1", cwd: "/tmp" })),
+      stderr: err,
+      manifest: manifestWithConfig({ enabled: true, machine_state_dir: dir, profile: "local-machine" }),
+      writeLedger: async (args) => {
+        writes.push(args.content);
+        return { ok: true };
+      },
+    });
+
+    expect(result.driftCount).toBe(1);
+    expect(result.unparseablePeerCount).toBe(1);
+    expect(writes).toEqual(["toolchain-parity:drift:1:unparseable-peer:1"]);
   });
 });
 

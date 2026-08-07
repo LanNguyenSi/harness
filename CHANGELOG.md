@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The `toolchain-parity` ledger fact now carries unparseable peer snapshots
+  instead of silently absorbing them into a shrunken comparison (task
+  `690fba7c`, consumer hardening motivated by the agent-memory `06d09cde`
+  incident where a corrupted `machine-state/<profile>.json` — inline git
+  conflict markers, not valid JSON — made the drift count quietly fall from
+  `drift:22` to `drift:5` with no warning). A peer file that fails
+  `parseSnapshotJson` now also logs a `parity:unparseable-peer:<file-derived
+  label>` stderr line, and the run's ledger fact gains a
+  `:unparseable-peer:<n>` suffix (e.g. `toolchain-parity:drift:7:unparseable-peer:2`)
+  whenever one or more peer files were skipped this way, so an unparseable
+  peer never makes `drift:N` look like a complete comparison. (Peers whose
+  file cannot be READ at all are a separate branch scoped to task
+  `c1b5ade5`; the absence of the suffix alone therefore does not prove
+  completeness.) The file-derived label is sanitized before interpolation —
+  peer filenames arrive cross-machine via sync and are untrusted, so a
+  crafted name cannot forge a standalone parity line in stderr — and falls
+  back to the raw filename when stripping `.json` would leave it empty. The
+  existing "peer snapshot `<file>` is corrupt" warn line is unchanged;
+  valid-only peer sets keep the exact pre-existing `toolchain-parity:ok` /
+  `toolchain-parity:drift:<n>` format (no behaviour change). Four new tests
+  (negative control, corrupt-peer-plus-drift, multi-peer aggregation
+  pinning `:unparseable-peer:2`, hostile-filename sanitization) plus two
+  existing cases extended.
 - Both PreToolUse hooks (Claude and Codex) now tell a blocked agent WHICH
   Understanding Report sections were malformed on their last attempt: a
   `(list)` heading that was present but held prose instead of markdown

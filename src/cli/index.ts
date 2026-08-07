@@ -2595,7 +2595,9 @@ export function buildProgram(opts: RunOptions = {}): Command {
         "toolchain snapshot (node version, npm globals, OW-Kit version, MCP server names) to " +
         "`<machine_state_dir>/<profile>.json`, compares it against every OTHER snapshot file already " +
         "in that directory, and records a `toolchain-parity:ok` / `toolchain-parity:drift:<n>` fact " +
-        "to the evidence ledger. Purely advisory — never blocking, and never touches a peer's file. " +
+        "(with a `:unparseable-peer:<n>` suffix whenever a peer file failed to parse as JSON, so an " +
+        "unparseable peer never silently vanishes from the comparison) to the evidence ledger. " +
+        "Purely advisory — never blocking, and never touches a peer's file. " +
         "Cross-machine transport of the snapshot files is agent-memory-sync's job, not this command's.",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
