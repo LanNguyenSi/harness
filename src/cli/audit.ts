@@ -76,6 +76,7 @@ const VALID_OUTCOMES: AuditOutcome[] = [
   "require_approval",
   "deny",
   "warn-degraded",
+  "deny-degraded",
 ];
 
 function isValidOutcome(v: string): v is AuditOutcome {

@@ -445,14 +445,40 @@ The Phase 4 decision space is `allow` / `deny`, selected by
 | `require_approval` | Action is blocked until matching approval evidence exists in the ledger. |
 | `deny` | Action is blocked. |
 
-**Degraded mode.** When the evidence ledger is unreachable (grounding-mcp
-absent or unresponsive), a `require_approval` / `deny` policy cannot be
-evaluated and the decision degrades to a non-blocking `warn-degraded`:
-the tool call proceeds and the un-evaluated policy is recorded. This is
-the same fail-open contract Phase 4 already applies to `block` policies
-(`ROADMAP.md` Phase 4), the Risk Gate does not invent a stricter one.
-An operator who needs the gate to fail closed must keep grounding-mcp
-healthy; `harness doctor` surfaces an unreachable ledger.
+**Degraded mode.** (Revised by task f1aea826; the paragraph below replaces
+the original fail-open-for-every-tier contract.) When the evidence ledger
+cannot answer (grounding-mcp absent, unresponsive, or past its timeout
+budget), the evaluator cannot form a real verdict — and what happens next
+is now derived from the policy's own `enforcement:`. A `warn` policy
+degrades to the non-blocking `warn-degraded` exactly as before:
+advisory friction never bricks the session. A `block` or
+`require_approval` policy fails CLOSED with the blocking `deny-degraded`
+outcome: a gate whose purpose is preventing a specific irreversible
+incident must not open because its evidence became unreadable (measured
+2026-08-06: a 1-100ms ledger timeout flipped a `git push` deny to ALLOW
+while every broken-ledger-path shape correctly denied). The
+`deny-degraded` envelope names the degraded cause instead of a missing
+tag — producing the required evidence cannot unblock an unreadable
+ledger — plus the recovery path (`harness doctor`, retry) and the
+opt-out. The decision is recorded to the audit trail; when the pooled
+connection's timeout latch would drop exactly that row, the client
+retries once over a fresh session (same timeout budget, never more than
+one extra spawn per invocation).
+
+Operators who prefer the previous availability-first behaviour set
+`risk.degraded_fail_posture: fail_open` in the manifest, which restores
+the old mapping (every degraded evaluation → non-blocking
+`warn-degraded`) for every tier. The default is `preserve_enforcement`.
+
+Two boundaries this contract cannot reach: the OUTER hook layer treats a
+hook that exceeds its own `budget_ms` as allow (harness hook contract),
+so hook budgets must stay comfortably above the ledger timeout or the
+fail-closed decision is never delivered; and a wedged fail-closed gate
+whose fix itself needs the gate (the deadlock case, task 78b95a63) has
+two designed escapes: the `fail_open` opt-out (named in the envelope's
+recovery text) and the operator-only `harness pause` kill switch, which
+is honoured BEFORE manifest load and therefore silences the policy
+gates even when the manifest or ledger is exactly what is broken.
 
 `require_approval` reuses the Phase 6 approval mechanism unchanged: a
 ledger tag (working name `risk-approved:${SESSION_ID}`) written by a

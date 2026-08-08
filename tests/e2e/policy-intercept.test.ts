@@ -87,6 +87,15 @@ interface FakeGroundingMcpOptions {
    * O(1) connections per intercept, not 2 per matching policy).
    */
   startLog?: string;
+  /**
+   * Delay (ms) before answering `ledger_summary`, while `initialize` and
+   * `ledger_add` keep answering instantly. With a delay above the
+   * client's timeout budget this simulates the measured 2026-08-06
+   * degraded shape (task f1aea826): the QUERY times out and latches the
+   * pooled session, but grounding-mcp itself is healthy — a fresh
+   * session's `ledger_add` succeeds immediately.
+   */
+  summaryDelayMs?: number;
 }
 
 /**
@@ -100,11 +109,13 @@ function makeFakeGroundingMcp(opts: FakeGroundingMcpOptions = {}): string {
   const facts = opts.entries ?? [];
   const invocationLog = opts.invocationLog ?? "";
   const startLog = opts.startLog ?? "";
+  const summaryDelayMs = opts.summaryDelayMs ?? 0;
   const script = `#!/usr/bin/env node
 const fs = require("fs");
 const FACTS = ${JSON.stringify(facts)};
 const INVOCATION_LOG = ${JSON.stringify(invocationLog)};
 const START_LOG = ${JSON.stringify(startLog)};
+const SUMMARY_DELAY_MS = ${JSON.stringify(summaryDelayMs)};
 if (START_LOG) {
   fs.appendFileSync(START_LOG, JSON.stringify({ pid: process.pid, ts: Date.now() }) + "\\n");
 }
@@ -138,7 +149,8 @@ process.stdin.on("data", (d) => {
           counts: { facts: FACTS.length, hypotheses: 0, rejected: 0, unknowns: 0 },
           entries: { facts: FACTS, hypotheses: [], rejected: [], unknowns: [] },
         };
-        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: JSON.stringify(payload) }] } }) + "\\n");
+        const reply = () => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: JSON.stringify(payload) }] } }) + "\\n");
+        if (SUMMARY_DELAY_MS > 0) { setTimeout(reply, SUMMARY_DELAY_MS); } else { reply(); }
       } else if (toolName === "ledger_add") {
         // Acknowledge so recordPolicyDecision doesn't time out. The decision
         // record itself is not under test here; we just need the round-trip
@@ -172,6 +184,12 @@ interface WriteManifestOptions {
    * tests to drive K matching policies through one intercept invocation.
    */
   extraPolicies?: Array<{ name: string; tagPrefix: string }>;
+  /**
+   * Emits a `risk.degraded_fail_posture` block (task f1aea826). Omitted
+   * by default so most tests pin the schema default
+   * (`preserve_enforcement`, fail closed for block tier).
+   */
+  degradedFailPosture?: "preserve_enforcement" | "fail_open";
 }
 
 function writeManifest(opts: WriteManifestOptions): string {
@@ -184,8 +202,11 @@ function writeManifest(opts: WriteManifestOptions): string {
   // Keep this manifest minimal but schema-valid. `policy intercept` only
   // touches `tools.mcp[name=grounding-mcp]`, `policies`, and `hooks` (for
   // the policy's `hook:` cross-reference). Everything else is filler.
+  const riskBlock = opts.degradedFailPosture
+    ? `\nrisk:\n  degraded_fail_posture: ${opts.degradedFailPosture}\n`
+    : "";
   const yaml = `version: 1
-
+${riskBlock}
 grounding:
   session:
     auto_start: false
@@ -418,10 +439,12 @@ describe("policy intercept: manifest-driven E2E flow", () => {
     expect(errText).toContain("registered policy events: PreToolUse");
   });
 
-  it("falls back to warn-degraded when the configured grounding-mcp exits non-zero", async () => {
+  it("fails CLOSED as deny-degraded when the configured grounding-mcp exits non-zero (block tier, task f1aea826)", async () => {
     // Reuse the broken-mcp shape from dogfood/broken-mcp.sh: a script that
-    // immediately writes to stderr and exits 1. The runtime contract says
-    // an unreachable ledger degrades to warn-equivalent, not block.
+    // immediately writes to stderr and exits 1. Pre-0.45 this degraded to
+    // the non-blocking warn-degraded for EVERY tier; a block-enforcement
+    // policy now fails closed instead — an unreadable evidence source
+    // must not open an incident-preventing gate.
     const dir = makeTmpDir("harness-broken-mcp-");
     const brokenScript = path.join(dir, "broken-grounding-mcp.sh");
     fs.writeFileSync(
@@ -442,20 +465,133 @@ describe("policy intercept: manifest-driven E2E flow", () => {
       configPath: manifestPath,
     });
 
-    // Degraded ledger -> default enforcement is "warn-degraded", which
-    // does NOT emit blockJson. Exit 0, stdout empty, so Claude Code does
-    // not block. (Phase 4 acceptance: ledger unreachable -> warn, not
-    // block, so a corrupted ledger does not silently freeze every PR.)
     expect(result.exitCode).toBe(0);
+    expect(result.blocked).toBe(true);
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.outcome).toBe("deny-degraded");
+    // Anchor on the ledger-unreachable branch specifically (a regression
+    // routing through template-unresolved would carry a different reason).
+    expect(result.decisions[0]?.reason).toMatch(/grounding-mcp/);
+    // Degraded-specific envelope, not the missing-evidence wording: the
+    // operator must not debug a phantom missing tag.
+    const parsed = JSON.parse(stdoutOut().trim());
+    expect(parsed.decision).toBe("block");
+    expect(parsed.reason).toContain("could not be read");
+    expect(parsed.reason).toContain("degraded_fail_posture");
+    expect(parsed.reason).not.toContain("To satisfy:");
+  });
+
+  it("risk.degraded_fail_posture: fail_open restores the pre-0.45 non-blocking behaviour through the real manifest parse", async () => {
+    const dir = makeTmpDir("harness-broken-mcp-optout-");
+    const brokenScript = path.join(dir, "broken-grounding-mcp.sh");
+    fs.writeFileSync(
+      brokenScript,
+      "#!/bin/sh\necho 'broken-mcp: simulated startup failure' >&2\nexit 1\n",
+      "utf8",
+    );
+    fs.chmodSync(brokenScript, 0o755);
+
+    const manifestPath = writeManifest({
+      groundingMcpCommand: [brokenScript],
+      degradedFailPosture: "fail_open",
+    });
+    const { stream: stdout, output: stdoutOut } = captureStream();
+    const { stream: stderr } = captureStream();
+
+    const result = await runInterceptCli({
+      stdin: streamFrom(JSON.stringify(PR_MERGE_EVENT)),
+      stdout,
+      stderr,
+      configPath: manifestPath,
+    });
+
     expect(result.blocked).toBe(false);
     expect(stdoutOut()).toBe("");
-    expect(result.decisions).toHaveLength(1);
     expect(result.decisions[0]?.outcome).toBe("warn-degraded");
-    // Anchor on the ledger-unreachable branch specifically. A regression
-    // that silently routed warn-degraded through template-unresolved or
-    // requires-eval-threw would still match outcome="warn-degraded";
-    // the reason string is what pins us to the spawn-failure branch.
-    expect(result.decisions[0]?.reason).toMatch(/grounding-mcp/);
+  });
+
+  it("fails CLOSED on a genuine ledger TIMEOUT (hanging grounding-mcp, the measured 2026-08-06 shape)", async () => {
+    // The audit that motivated task f1aea826 measured: --ledger-timeout
+    // <=100ms flipped a git-push deny to ALLOW while broken-path shapes
+    // correctly denied. This pins the timeout branch itself, not just the
+    // spawn-failure branch: summary hangs past the 150ms budget.
+    const mcp = makeFakeGroundingMcp({ entries: [], summaryDelayMs: 10_000 });
+    const manifestPath = writeManifest({
+      groundingMcpCommand: ["node", mcp],
+      groundingTimeoutMs: 150,
+    });
+    const { stream: stdout, output: stdoutOut } = captureStream();
+    const { stream: stderr } = captureStream();
+
+    const result = await runInterceptCli({
+      stdin: streamFrom(JSON.stringify(PR_MERGE_EVENT)),
+      stdout,
+      stderr,
+      configPath: manifestPath,
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.decisions[0]?.outcome).toBe("deny-degraded");
+    expect(result.decisions[0]?.reason).toMatch(/timeout/i);
+    const parsed = JSON.parse(stdoutOut().trim());
+    expect(parsed.reason).toContain("could not be read");
+  });
+
+  it("lands the degraded decision in the audit trail via ONE fresh-session retry (task f1aea826 AC4)", async () => {
+    // The pooled session's timeout latch previously guaranteed the exact
+    // decision that most needs an audit row (a degraded deny) lost it:
+    // the query timeout latched the session and the audit write
+    // short-circuited to degraded. The client now retries ONCE over a
+    // fresh subprocess. The fake answers ledger_add instantly while
+    // ledger_summary hangs, mirroring the measured healthy-mcp/slow-call
+    // shape, so the retry must land the row.
+    const logDir = makeTmpDir("harness-mcp-retry-log-");
+    const invocationLog = path.join(logDir, "calls.jsonl");
+    const startLog = path.join(logDir, "starts.jsonl");
+    const mcp = makeFakeGroundingMcp({
+      entries: [],
+      summaryDelayMs: 10_000,
+      invocationLog,
+      startLog,
+    });
+    const manifestPath = writeManifest({
+      groundingMcpCommand: ["node", mcp],
+      groundingTimeoutMs: 150,
+    });
+    const { stream: stdout } = captureStream();
+    const { stream: stderr, output: stderrOut } = captureStream();
+
+    const result = await runInterceptCli({
+      stdin: streamFrom(JSON.stringify(PR_MERGE_EVENT)),
+      stdout,
+      stderr,
+      configPath: manifestPath,
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.decisions[0]?.outcome).toBe("deny-degraded");
+
+    // Exactly TWO spawns: the pooled session (latched by the summary
+    // timeout) plus the single audit-retry session. Not one per record,
+    // not unbounded.
+    const starts = fs.readFileSync(startLog, "utf8").trim().split("\n");
+    expect(starts).toHaveLength(2);
+
+    // The deny-degraded decision reached the ledger despite the latch.
+    const calls = fs
+      .readFileSync(invocationLog, "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    const adds = calls.filter((c) => c.tool === "ledger_add");
+    expect(adds.length).toBeGreaterThanOrEqual(1);
+    const recorded = JSON.parse(
+      String(adds[0].args.content).slice(String(adds[0].args.content).indexOf(" ") + 1),
+    );
+    expect(recorded.name).toBe("review-before-merge");
+    expect(recorded.outcome).toBe("deny-degraded");
+    // And the loud-failure line must be gone: the retry SUCCEEDED.
+    expect(stderrOut()).not.toContain("audit-write failed");
   });
 });
 
@@ -583,10 +719,11 @@ describe("policy intercept: pooled grounding-mcp connection", () => {
   });
 
   it("degrades ALL matching policies off one cached round-trip when the ledger is unreachable", async () => {
-    // Broken mcp + 2 matching policies: the cached degraded summary fans
-    // out to every policy as warn-degraded (fail-open by contract), and
-    // nothing blocks. Old behavior retried per policy; the pooled client
-    // deliberately does not.
+    // Broken mcp + 2 matching block-tier policies: the cached degraded
+    // summary still fans out to every policy off ONE round-trip (the
+    // pooled client deliberately does not retry queries per policy), and
+    // since task f1aea826 that fan-out is deny-degraded for block tier —
+    // the FIRST policy in manifest order owns the degraded envelope.
     const dir = makeTmpDir("harness-broken-mcp-pool-");
     const brokenScript = path.join(dir, "broken-grounding-mcp.sh");
     fs.writeFileSync(
@@ -609,12 +746,14 @@ describe("policy intercept: pooled grounding-mcp connection", () => {
       configPath: manifestPath,
     });
 
-    expect(result.blocked).toBe(false);
-    expect(stdoutOut()).toBe("");
+    expect(result.blocked).toBe(true);
     expect(result.decisions).toHaveLength(2);
     expect(result.decisions.map((d) => d.outcome)).toEqual([
-      "warn-degraded",
-      "warn-degraded",
+      "deny-degraded",
+      "deny-degraded",
     ]);
+    const parsed = JSON.parse(stdoutOut().trim());
+    expect(parsed.reason).toContain("review-before-merge");
+    expect(parsed.reason).not.toContain("audit-before-merge");
   });
 });

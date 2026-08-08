@@ -9,6 +9,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- **SECURITY: block/require_approval policies now fail CLOSED when their
+  evidence source is degraded, instead of silently mapping to the
+  never-blocking `warn-degraded`** (task `f1aea826`). Measured 2026-08-06 on
+  0.44.0 (isolated probe home, `git push` event without its preflight tag):
+  a healthy ledger denied, every broken-ledger shape (ENOTDIR, corrupt file,
+  directory) denied, but `--ledger-timeout` at 1/25/50/100 ms flipped the
+  same event to **ALLOW**, because the timeout path mapped to
+  `warn-degraded`, which `isBlockingDecision` never treats as blocking.
+  `evaluateOnePolicy`'s degraded family (ledger timeout/spawn failure,
+  unresolved template variables, invalid `within`, thrown evaluator,
+  schema-invariant branch) now routes through a tier-aware
+  `degradedOutcome`: `warn` policies keep the non-blocking `warn-degraded`
+  (availability first, unchanged), `block`/`require_approval` policies
+  produce the NEW blocking `deny-degraded` outcome. The `deny-degraded`
+  envelope deliberately bypasses the policy's `ux:` surface and names the
+  degraded cause, the recovery path, and the opt-out, so nobody debugs a
+  phantom missing tag on an unreadable ledger. **ACCEPTED SEMANTIC CHANGE
+  an upgrading operator should know about:** a degraded ledger (including
+  "grounding-mcp not declared in manifest" under block-tier policies) now
+  DENIES where it silently allowed; the explicit manifest opt-out
+  `risk.degraded_fail_posture: fail_open` (schema default
+  `preserve_enforcement`, `src/schema/risk.ts`) restores the pre-0.45
+  availability-first mapping for every tier, and the operator-only
+  `harness pause` kill switch remains the deadlock escape (it is honoured
+  BEFORE manifest load). Audit completeness rides along: the pooled
+  ledger session's timeout latch previously guaranteed that exactly the
+  degraded deny lost its own audit row (every post-timeout call on that
+  session short-circuits), so `realLedgerClient.record` now retries once
+  over a fresh session with the same timeout budget (never more than one
+  extra spawn per invocation, deliberately no longer timeout: stalling the
+  deny path past the outer hook budget would convert the deny into the
+  hook-timeout allow). New outcome threaded through every consumer:
+  `harness audit` `VALID_OUTCOMES`, `explain`/`audit` `--outcome` filters,
+  and the verbose stderr diagnostic (`deny-degraded (ledger unreachable;
+  failing closed per enforcement tier)`); `smoke` assertions classify it
+  as deny via the unchanged envelope path. NOT closed here, named so no
+  doc overclaims: the OUTER hook-budget layer (a hook exceeding its
+  `budget_ms` is allow by harness contract) stays fail-open and is not
+  reachable from this repo's schema; keep hook budgets comfortably above
+  the ledger timeout. docs/risk-gate.md "Degraded mode" and
+  docs/okf/gate-fail-posture-matrix.md rewritten to the new contract;
+  the two pre-0.45 pins asserting warn-degraded-never-blocks for block
+  tier were rewritten deliberately alongside (unit + e2e), plus new
+  fixtures: require_approval+timeout blocks, warn+timeout allows,
+  fail_open opt-out restores the old mapping end-to-end through the real
+  manifest parse, genuine-timeout e2e (hanging fake grounding-mcp), and
+  an AC4 e2e pinning exactly TWO subprocess spawns with the
+  `deny-degraded` row landed in the ledger despite the latch.
+
 - nanoid bumped 3.3.16 → 3.3.18 via `npm audit fix` (lockfile-only, no source
   change), closing GHSA-2v37-7h3g-55p8 / CVE-2026-67213 (High, CVSS 8.2:
   `customAlphabet`/`customRandom` loop indefinitely when `size` is 0; affected

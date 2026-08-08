@@ -370,7 +370,10 @@ describe("runInterceptCli — Phase 5 #3: --verbose stderr diagnostics", () => {
     expect(errOutput()).toBe("");
   });
 
-  it("--verbose on warn-degraded: stderr names the ledger reason", async () => {
+  it("--verbose on deny-degraded (block tier + degraded ledger): stderr names the fail-closed posture", async () => {
+    // Task f1aea826: a block-enforcement policy under a degraded ledger
+    // now fails CLOSED, so the verbose diagnostic carries the new
+    // deny-degraded header and stdout carries the block envelope.
     const { stream: out, output: outOutput } = captureStream();
     const { stream: err, output: errOutput } = captureStream();
     await runInterceptCli({
@@ -378,6 +381,28 @@ describe("runInterceptCli — Phase 5 #3: --verbose stderr diagnostics", () => {
       stdout: out,
       stderr: err,
       manifest: fakeManifest([REVIEW_POLICY]),
+      ledger: degradedLedger,
+      verbose: true,
+    });
+    const parsed = JSON.parse(outOutput().trim());
+    expect(parsed.decision).toBe("block");
+    const errText = errOutput();
+    expect(errText).toContain(
+      "deny-degraded (ledger unreachable; failing closed per enforcement tier)",
+    );
+    expect(errText).toContain("grounding-mcp timeout after 5000ms");
+  });
+
+  it("--verbose on warn-degraded (warn tier + degraded ledger): stderr names the ledger reason, nothing blocks", async () => {
+    const { stream: out, output: outOutput } = captureStream();
+    const { stream: err, output: errOutput } = captureStream();
+    await runInterceptCli({
+      stdin: streamFrom(denyEvent),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([
+        { ...REVIEW_POLICY, enforcement: "warn" } as typeof REVIEW_POLICY,
+      ]),
       ledger: degradedLedger,
       verbose: true,
     });

@@ -69,12 +69,27 @@ export interface ToolEvent {
 //                      unreachable, unresolved template, bad `within`);
 //                      never blocks. Distinct from `warn`: `warn` is a
 //                      real verdict, `warn-degraded` is "could not decide".
+//                      Since task f1aea826 this outcome is produced only
+//                      for `enforcement: warn` policies (or for every
+//                      policy under the explicit
+//                      `risk.degraded_fail_posture: fail_open` opt-out).
+//   deny-degraded    — the SAME "could not decide" family, but the
+//                      policy's enforcement is `block` or
+//                      `require_approval`: the gate exists to prevent a
+//                      specific irreversible incident, so an unreadable
+//                      evidence source fails CLOSED (task f1aea826).
+//                      Distinct from `deny` (a real verdict against
+//                      present-but-unsatisfying evidence) so audit rows,
+//                      `--outcome` filters, and the deny envelope can
+//                      tell "the ledger said no" from "the ledger could
+//                      not be read, denied on posture".
 export type PolicyOutcome =
   | "allow"
   | "warn"
   | "require_approval"
   | "deny"
-  | "warn-degraded";
+  | "warn-degraded"
+  | "deny-degraded";
 
 export interface PolicyDecision {
   policyName: string;
@@ -513,11 +528,47 @@ function outcomeForFailedRequires(
  *     `requires:` (an operator runs `harness approve risk`); once the
  *     tag is on record the requires evaluation passes and the outcome
  *     is `allow` instead.
+ *   - `deny-degraded` aborts (task f1aea826): it is only ever produced
+ *     for `block` / `require_approval` policies under the default
+ *     `preserve_enforcement` posture (see `degradedOutcome`), so its
+ *     presence alone means "an incident-preventing gate could not read
+ *     its evidence" — fail closed.
  *   - `allow` / `warn` / `warn-degraded` never abort.
  */
 function isBlockingDecision(d: PolicyDecision): boolean {
   if (d.outcome === "deny") return d.enforcement === "block";
+  if (d.outcome === "deny-degraded") return true;
   return d.outcome === "require_approval";
+}
+
+/**
+ * Outcome for a policy whose `requires` could NOT be evaluated at all —
+ * degraded/thrown ledger query, unresolved template variables, invalid
+ * `within`, thrown `evaluateRequires`, or the defensive
+ * schema-invariant branch. The fail posture is derived from the
+ * policy's own `enforcement:` (task f1aea826):
+ *
+ *   warn                        → `warn-degraded` (availability first,
+ *                                 unchanged: advisory friction never
+ *                                 bricks the session)
+ *   block / require_approval    → `deny-degraded` (fail closed: a gate
+ *                                 against an irreversible incident must
+ *                                 not open because its evidence source
+ *                                 is unreadable)
+ *
+ * The manifest-level opt-out `risk.degraded_fail_posture: fail_open`
+ * restores the pre-0.45 availability-first mapping (`warn-degraded`
+ * for every tier). The hand-built-manifest case (`options.manifest.risk`
+ * absent, only possible past `harness validate`) defaults to the
+ * fail-closed posture, matching the schema default.
+ */
+function degradedOutcome(
+  policy: Policy,
+  manifest: Manifest,
+): Extract<PolicyOutcome, "warn-degraded" | "deny-degraded"> {
+  if (policy.enforcement === "warn") return "warn-degraded";
+  const posture = manifest.risk?.degraded_fail_posture ?? "preserve_enforcement";
+  return posture === "fail_open" ? "warn-degraded" : "deny-degraded";
 }
 
 /**
@@ -571,21 +622,23 @@ async function evaluateOnePolicy(
     // Defensive branch only, for a manifest that bypassed
     // `harness validate` (hand-built Policy object, stale cached parse).
     //
-    // Deliberately `warn-degraded`, not `deny`: this is the SAME "could
-    // not decide" fail-open family as the other `warn-degraded` returns
-    // in this function (unresolved template variables, a degraded
-    // ledger query, an invalid `within`, a throwing `evaluateRequires`)
-    // — the contract for all of them is "the evaluator could not form a
-    // real verdict, so it never blocks and never silently allows either;
-    // it is loud instead" (recorded to the audit ledger and returned as
-    // a non-`allow`, non-`deny` outcome). Failing this branch `deny`
-    // would treat an internal schema-invariant violation as if it were a
-    // deliberate `operator_only: true` policy authored by the operator,
-    // which it is not — the two must stay observably distinct.
+    // Deliberately NOT a plain `deny`: this is the SAME "could not
+    // decide" family as the other degraded returns in this function
+    // (unresolved template variables, a degraded ledger query, an
+    // invalid `within`, a throwing `evaluateRequires`) — the contract
+    // for all of them is "the evaluator could not form a real verdict",
+    // routed through `degradedOutcome` so the policy's own enforcement
+    // decides the fail posture (task f1aea826): `warn` stays the
+    // non-blocking `warn-degraded`, `block`/`require_approval` fail
+    // closed as `deny-degraded`. Failing this branch as plain `deny`
+    // would treat an internal schema-invariant violation as if it were
+    // a deliberate `operator_only: true` policy authored by the
+    // operator, which it is not — `deny-degraded` keeps the two
+    // observably distinct in every audit row and envelope.
     return {
       policyName: policy.name,
       enforcement: policy.enforcement,
-      outcome: "warn-degraded",
+      outcome: degradedOutcome(policy, options.manifest),
       reason:
         "policy declares neither requires: nor operator_only: true (schema invariant violated)",
       extractValues: extract.values,
@@ -605,7 +658,7 @@ async function evaluateOnePolicy(
     return {
       policyName: policy.name,
       enforcement: policy.enforcement,
-      outcome: "warn-degraded",
+      outcome: degradedOutcome(policy, options.manifest),
       reason: `template variables unresolved: ${unresolved.join(", ")}`,
       extractValues: extract.values,
       ledgerTag,
@@ -632,7 +685,7 @@ async function evaluateOnePolicy(
     return {
       policyName: policy.name,
       enforcement: policy.enforcement,
-      outcome: "warn-degraded",
+      outcome: degradedOutcome(policy, options.manifest),
       reason: queryResult.reason,
       extractValues: extract.values,
       ledgerTag,
@@ -649,7 +702,7 @@ async function evaluateOnePolicy(
       return {
         policyName: policy.name,
         enforcement: policy.enforcement,
-        outcome: "warn-degraded",
+        outcome: degradedOutcome(policy, options.manifest),
         reason: `invalid within: ${requires.within}`,
         extractValues: extract.values,
         ledgerTag,
@@ -677,7 +730,7 @@ async function evaluateOnePolicy(
     return {
       policyName: policy.name,
       enforcement: policy.enforcement,
-      outcome: "warn-degraded",
+      outcome: degradedOutcome(policy, options.manifest),
       reason: `requires eval threw: ${(err as Error).message}`,
       extractValues: extract.values,
       ledgerTag,
@@ -1284,7 +1337,26 @@ export async function intercept(
     // `run:` is the canonical remedy surface and rendering both would
     // give the agent two different command suggestions.
     let reasonText: string;
-    if (blockingPolicy?.ux) {
+    if (blocking.outcome === "deny-degraded") {
+      // Degraded-specific envelope (task f1aea826). Deliberately takes
+      // precedence over the policy's `ux:` surface: the operator-curated
+      // ux text describes the MISSING-evidence case ("run the producer,
+      // then retry"), which is actively misleading here — the evidence
+      // could not be READ, so producing the tag cannot unblock anything
+      // until the ledger is reachable again. The envelope must name the
+      // real cause (the transport-level reason), the posture (this
+      // enforcement tier fails closed on unreadable evidence), a recovery
+      // path, and the opt-out, so nobody debugs a phantom missing tag.
+      reasonText =
+        `${blocking.policyName}: required evidence could not be read ` +
+        `(evidence ledger degraded: ${blocking.reason}). ` +
+        `This ${blocking.enforcement} policy fails closed while its evidence ` +
+        `source is unreadable; producing the required tag will not unblock it ` +
+        `until the ledger is reachable again. Recovery: check grounding-mcp ` +
+        `(harness doctor), then retry. Operators can restore the ` +
+        `availability-first behaviour with risk.degraded_fail_posture: ` +
+        `fail_open in the manifest. Session: ${sessionId}.`;
+    } else if (blockingPolicy?.ux) {
       // The ux surface is operator-curated plain language. The
       // unclassifiedFallback flag rides the audit record (recorded above
       // and surfaced by `harness audit` and `explain --trace`) so operators

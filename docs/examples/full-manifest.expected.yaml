@@ -531,6 +531,7 @@ risk:
             - destructive
             - infrastructure_change
           severity: critical
+  degraded_fail_posture: preserve_enforcement
 environments:
   resolvers:
     - name: production-signals

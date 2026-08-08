@@ -144,7 +144,11 @@ function hookSuffix(hookName: string | undefined): string {
  */
 function formatDecisionDiagnostic(decision: PolicyDecision, hookName?: string): string {
   const header = `harness policy intercept${hookSuffix(hookName)}: ${decision.policyName}: ${decision.outcome}${
-    decision.outcome === "warn-degraded" ? " (ledger unreachable)" : ""
+    decision.outcome === "warn-degraded"
+      ? " (ledger unreachable)"
+      : decision.outcome === "deny-degraded"
+        ? " (ledger unreachable; failing closed per enforcement tier)"
+        : ""
   }`;
   const lines: string[] = [header];
   lines.push(`  ledger_tag: ${decision.ledgerTag}`);
@@ -257,6 +261,22 @@ export function realLedgerClient(
   const stderr = opts.stderr ?? process.stderr;
   let session: LedgerSession | null = null;
   const summaryCache = new Map<string, Promise<LedgerQueryResult>>();
+  // One fresh-session retry for audit writes per client instance (task
+  // f1aea826, AC4). The pooled session carries a session-wide timeout
+  // latch: a single slow QUERY (the very condition that now produces a
+  // blocking `deny-degraded`) short-circuits every later call on the
+  // same session, including the audit write for that decision — so the
+  // one decision that most needs an audit row was guaranteed to lose it.
+  // A single bounded retry over a fresh subprocess lands the row whenever
+  // grounding-mcp itself is healthy (the measured 2026-08-06 case: only
+  // the artificial 1ms query budget latched; follow-up calls answered
+  // fine). Deliberately NOT retried with a longer timeout and NOT more
+  // than once: the record happens on the deny path BEFORE the envelope
+  // is emitted, and stalling past the outer hook budget would convert
+  // the deny into the hook-timeout allow — the exact failure this task
+  // closes. If the retry also fails, the existing loud-stderr contract
+  // stands (audit degradation never blocks, docs/okf matrix).
+  let recordRetryUsed = false;
   const getSession = (): LedgerSession =>
     (session ??= openLedgerSession({
       mcpCommand: command,
@@ -284,11 +304,25 @@ export function realLedgerClient(
       return cached;
     },
     async record(decision, sessionId): Promise<void> {
-      const result = await recordPolicyDecisionOnSession(
+      let result = await recordPolicyDecisionOnSession(
         getSession(),
         decision,
         sessionId,
       );
+      if (!result.ok && !recordRetryUsed) {
+        // Latched-session recovery (see recordRetryUsed above): drop the
+        // pooled session and retry ONCE over a fresh subprocess with the
+        // same timeout budget. Queries are unaffected — their per-session
+        // summary promise is already cached by the time any record runs.
+        recordRetryUsed = true;
+        session?.dispose();
+        session = null;
+        result = await recordPolicyDecisionOnSession(
+          getSession(),
+          decision,
+          sessionId,
+        );
+      }
       // A failed audit-write must not block the tool — the decision is
       // still applied — but it must not be silent either: an unrecorded
       // decision is invisible to `harness audit` / `explain --trace`.

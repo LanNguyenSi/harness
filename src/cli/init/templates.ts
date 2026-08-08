@@ -900,6 +900,14 @@ policy_packs:
 # each policy's \`when:\` clauses against the result. Full design and the
 # decision model: docs/risk-gate.md.
 risk:
+  # Fail posture when a policy's evidence cannot be READ (ledger timeout,
+  # spawn failure, unresolved template): with \`preserve_enforcement\`
+  # (the default, shown here for discoverability) block/require_approval
+  # policies fail CLOSED (\`deny-degraded\`) while warn policies stay
+  # non-blocking. Set \`fail_open\` to restore the pre-0.45
+  # availability-first behaviour where EVERY degraded evaluation was a
+  # non-blocking \`warn-degraded\`. See docs/okf/gate-fail-posture-matrix.md.
+  degraded_fail_posture: preserve_enforcement
   classifiers:
     - name: dangerous-shell
       tool: Bash

@@ -777,11 +777,18 @@ describe("intercept — bash_match", () => {
   });
 });
 
-describe("intercept — degraded ledger", () => {
-  it("returns warn-degraded outcome and does NOT block", async () => {
+// Task f1aea826: the degraded family ("could not evaluate requires") is
+// tier-aware. block/require_approval fail CLOSED (`deny-degraded`, blocks);
+// warn keeps the availability-first `warn-degraded` (never blocks);
+// `risk.degraded_fail_posture: fail_open` restores the old mapping for
+// every tier. The pre-0.45 pins asserting warn-degraded-never-blocks for a
+// block-enforcement policy were rewritten here deliberately, together with
+// docs/risk-gate.md and docs/okf/gate-fail-posture-matrix.md.
+describe("intercept — degraded ledger (fail posture per enforcement tier)", () => {
+  it("block enforcement + degraded ledger fails CLOSED as deny-degraded", async () => {
     const ledger = makeLedger({
       kind: "degraded",
-      reason: "ledger db missing",
+      reason: "grounding-mcp timeout after 1ms",
     });
     const result = await intercept({
       manifest: manifest([REVIEW_POLICY]),
@@ -790,14 +797,94 @@ describe("intercept — degraded ledger", () => {
       builtins: BUILTINS,
       now: NOW,
     });
+    expect(result.decisions[0]?.outcome).toBe("deny-degraded");
+    expect(result.decisions[0]?.reason).toBe("grounding-mcp timeout after 1ms");
+    expect(result.blockJson).not.toBeNull();
+    // Degraded-specific envelope: names the unreadable evidence source
+    // and the recovery/opt-out path, and must NOT read like the
+    // missing-evidence deny (no "To satisfy:" producer hint — producing
+    // the tag cannot unblock an unreadable ledger).
+    const reason = result.blockJson?.reason ?? "";
+    expect(reason).toContain("could not be read");
+    expect(reason).toContain("grounding-mcp timeout after 1ms");
+    expect(reason).toContain("degraded_fail_posture");
+    expect(reason).not.toContain("To satisfy:");
+    // The degraded decision is still submitted to the audit trail.
+    expect(ledger.recordCalls).toEqual([
+      { decisionName: "review-before-merge", sessionId: "sess-1" },
+    ]);
+  });
+
+  it("require_approval enforcement + degraded ledger also fails CLOSED", async () => {
+    const ledger = makeLedger({
+      kind: "degraded",
+      reason: "grounding-mcp timeout after 1ms",
+    });
+    const result = await intercept({
+      manifest: manifest([{ ...REVIEW_POLICY, enforcement: "require_approval" } as Policy]),
+      event: MERGE_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.decisions[0]?.outcome).toBe("deny-degraded");
+    expect(result.blockJson).not.toBeNull();
+  });
+
+  it("warn enforcement + degraded ledger keeps the non-blocking warn-degraded", async () => {
+    const ledger = makeLedger({
+      kind: "degraded",
+      reason: "grounding-mcp timeout after 1ms",
+    });
+    const result = await intercept({
+      manifest: manifest([{ ...REVIEW_POLICY, enforcement: "warn" } as Policy]),
+      event: MERGE_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
     expect(result.decisions[0]?.outcome).toBe("warn-degraded");
-    expect(result.decisions[0]?.reason).toBe("ledger db missing");
+    expect(result.blockJson).toBeNull();
+  });
+
+  it("risk.degraded_fail_posture: fail_open restores the availability-first mapping for block tier", async () => {
+    const ledger = makeLedger({
+      kind: "degraded",
+      reason: "grounding-mcp timeout after 1ms",
+    });
+    const result = await intercept({
+      manifest: makeManifest({
+        policies: [REVIEW_POLICY],
+        degradedFailPosture: "fail_open",
+      }),
+      event: MERGE_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.decisions[0]?.outcome).toBe("warn-degraded");
+    expect(result.blockJson).toBeNull();
+  });
+
+  it("healthy ledger with satisfying evidence still allows (no fail-closed regression)", async () => {
+    const ledger = makeLedger({ kind: "ok", entries: [matchingEntry] });
+    const result = await intercept({
+      manifest: manifest([REVIEW_POLICY]),
+      event: MERGE_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.decisions[0]?.outcome).toBe("allow");
     expect(result.blockJson).toBeNull();
   });
 });
 
 describe("intercept — unresolved template variables", () => {
-  it("flags warn-degraded when an extract source is missing", async () => {
+  it("fails CLOSED as deny-degraded for block enforcement when an extract source is missing", async () => {
+    // Same tier-aware family as the degraded-ledger case: an event that
+    // matches the trigger but defeats extraction must not slip past a
+    // block-tier gate (task f1aea826).
     const ledger = makeLedger({ kind: "ok", entries: [] });
     const result = await intercept({
       manifest: manifest([REVIEW_POLICY]),
@@ -806,10 +893,23 @@ describe("intercept — unresolved template variables", () => {
       builtins: BUILTINS,
       now: NOW,
     });
-    expect(result.decisions[0]?.outcome).toBe("warn-degraded");
+    expect(result.decisions[0]?.outcome).toBe("deny-degraded");
     expect(result.decisions[0]?.reason).toContain("PR_NUMBER");
-    expect(result.blockJson).toBeNull();
+    expect(result.blockJson).not.toBeNull();
     expect(ledger.queryCalls).toEqual([]);
+  });
+
+  it("stays non-blocking warn-degraded for warn enforcement", async () => {
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([{ ...REVIEW_POLICY, enforcement: "warn" } as Policy]),
+      event: { ...MERGE_EVENT, tool_input: {} },
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.decisions[0]?.outcome).toBe("warn-degraded");
+    expect(result.blockJson).toBeNull();
   });
 });
 
@@ -1332,12 +1432,14 @@ describe("intercept — operator_only unconditional deny (task 2cc73f55)", () =>
     expect(ledger.queryCalls).toEqual([{ tag: "review:42", sessionId: "sess-1" }]);
   });
 
-  it("schema-invariant-violated defensive branch: neither requires nor operator_only degrades to warn-degraded, not a crash", async () => {
+  it("schema-invariant-violated defensive branch: block tier degrades to deny-degraded, not a crash and not an allow", async () => {
     // Unreachable through `parseManifest` (the schema's superRefine
     // requires one or the other), but a hand-built Policy object (a test
     // double, a manifest loaded via a bypassed/legacy code path) could
     // still reach `intercept()` in this shape. Must degrade loudly, not
-    // throw and not silently allow.
+    // throw — and since task f1aea826 a block-tier policy in this state
+    // fails CLOSED (`deny-degraded`), observably distinct from a
+    // deliberate `operator_only` deny in every audit row and envelope.
     const noContractPolicy: Policy = policy({
       name: "no-contract",
       description: "neither requires nor operator_only",
@@ -1353,9 +1455,9 @@ describe("intercept — operator_only unconditional deny (task 2cc73f55)", () =>
       builtins: BUILTINS,
       now: NOW,
     });
-    expect(result.decisions[0]?.outcome).toBe("warn-degraded");
+    expect(result.decisions[0]?.outcome).toBe("deny-degraded");
     expect(result.decisions[0]?.reason).toMatch(/schema invariant violated/);
-    expect(result.blockJson).toBeNull();
+    expect(result.blockJson).not.toBeNull();
     expect(ledger.queryCalls).toEqual([]);
   });
 });

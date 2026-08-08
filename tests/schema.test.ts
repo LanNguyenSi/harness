@@ -111,7 +111,25 @@ describe("parseManifest — happy path", () => {
     expect(m.policies).toEqual([]);
     expect(m.policy_packs).toEqual([]);
     expect(m.risk.classifiers).toEqual([]);
+    // Task f1aea826: the degraded fail posture defaults to fail-closed
+    // for block/require_approval tiers; the opt-out must be explicit.
+    expect(m.risk.degraded_fail_posture).toBe("preserve_enforcement");
     expect(m.environments.resolvers).toEqual([]);
+  });
+
+  it("accepts the explicit risk.degraded_fail_posture opt-out and rejects unknown values", () => {
+    const m = parseManifest({
+      version: 1,
+      risk: { degraded_fail_posture: "fail_open" },
+    });
+    expect(m.risk.degraded_fail_posture).toBe("fail_open");
+    expect(m.risk.classifiers).toEqual([]);
+    expect(() =>
+      parseManifest({
+        version: 1,
+        risk: { degraded_fail_posture: "fail_closed_sometimes" },
+      }),
+    ).toThrow(/invalid enum|Invalid enum|invalid_value/i);
   });
 
   it("accepts a string command for tools.mcp[].command", () => {
