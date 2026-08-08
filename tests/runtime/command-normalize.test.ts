@@ -6,6 +6,7 @@ import {
   MAX_NORMALIZE_LENGTH,
   normalizeCommand,
   normalizeCommandAmpAware,
+  normalizeCommandQuoteAware,
   segmentViewOf,
 } from "../../src/runtime/command-normalize.js";
 import { parseManifest } from "../../src/schema/index.js";
@@ -1098,6 +1099,270 @@ describe("normalizeCommandAmpAware (task aabbad63: closes the bare-& gating gap 
       const re = policyBashMatch("deny-kill-switch-bypass");
       const command = "nice FOO='x & y' harness pause";
       expect(re.test(normalizeCommand(command).normalized)).toBe(true);
+    });
+  });
+});
+
+// Task cf3dff51: closes the COMPUTATION half of the shell-boundary-inside-
+// a-quoted-value residual pinned above ("13e55484: quoted-assignment
+// continuation does not change anything else" -> "a boundary character
+// INSIDE the quoted value stays a bypass") via a THIRD, additive
+// normalisation pass, `normalizeCommandQuoteAware` — built as a NEW
+// function rather than an in-place edit of `BOUNDARY_RE` /
+// `segmentAndCanonicalize`, per the module header's HALT CRITERION
+// paragraph (quoted verbatim there): an in-place edit was PROVEN, before
+// any implementation code was written, to flip the "accepted over-block:
+// a quoted assignment inside TEXT after a boundary char now matches" pin
+// two paragraphs above from a match to a lost match. NOT YET WIRED to
+// `policyMatchesEvent` (`src/runtime/intercept.ts`) — this task's file
+// scope is `src/runtime/command-normalize.ts` + this test file only, so
+// wiring (a fourth `policyMatchesEvent` disjunct, mirroring
+// `normalizeCommandAmpAware`'s own wiring for task aabbad63) is a named
+// follow-up, not done here. Measured at the real hook entry point
+// (`runInterceptCli`, isolated harness home, PATH-shim-verified bash
+// execution, two gated verbs) BEFORE any implementation code: the bypass
+// is real and this task's own baseline; the SAME measurement re-run
+// AFTER this change shows NO CHANGE at that entry point, precisely
+// because nothing consults this new function yet — see the implementer
+// report for the full measurement tables. This describe block instead
+// pins the closure at the level this task's file scope can actually
+// reach: `normalizeCommandQuoteAware`'s own output against the shipped
+// `bash_match` regex.
+describe("normalizeCommandQuoteAware (task cf3dff51: closes the BOUNDARY_RE quoted-value-boundary residual via a third, additive normalisation pass — groundwork, NOT YET wired to any gate)", () => {
+  const pushRe = policyBashMatch("preflight-before-push");
+  const killRe = policyBashMatch("deny-kill-switch-bypass");
+
+  // The exact residual: one of BOUNDARY_RE's own boundary characters, sat
+  // inside a quoted assignment value with a whitespace split right after
+  // it — the shape that defeats BOTH the raw regex's own `\S+`-bounded
+  // assignment-value token (which happily swallows a boundary char that
+  // is NOT followed by whitespace, so `VAR='a;b'` — no space — already
+  // gates via the raw arm alone, see the "still gates without an internal
+  // space" describe block below) and the primary pass's quote-unaware
+  // segmentation. `;`/`|`/`&&`/`(` each need the explicit space to expose
+  // the gap; a literal newline IS whitespace, so it exposes the same gap
+  // with or without one — both forms are measured bypasses (see the
+  // implementer report's baseline table) and both are pinned here.
+  describe("closes the measured bypass: a shell-boundary character inside a quoted assignment value", () => {
+    const cases: Array<{ label: string; command: string; re: RegExp }> = [
+      { label: "semicolon, git push", command: "VAR='a; b' git push origin master", re: pushRe },
+      { label: "pipe, git push", command: "VAR='a| b' git push origin master", re: pushRe },
+      { label: "double-ampersand, git push", command: "VAR='a&& b' git push origin master", re: pushRe },
+      { label: "open-paren, git push", command: "VAR='a( b' git push origin master", re: pushRe },
+      { label: "literal newline (spaced), git push", command: "VAR='a\n b' git push origin master", re: pushRe },
+      { label: "literal newline (no extra space), git push", command: "VAR='a\nb' git push origin master", re: pushRe },
+      { label: "semicolon, kill switch", command: "VAR='a; b' harness pause", re: killRe },
+      { label: "pipe, kill switch", command: "VAR='a| b' harness pause", re: killRe },
+      { label: "double-ampersand, kill switch", command: "VAR='a&& b' harness pause", re: killRe },
+      { label: "open-paren, kill switch", command: "VAR='a( b' harness pause", re: killRe },
+      { label: "literal newline, kill switch", command: "VAR='a\n b' harness pause", re: killRe },
+    ];
+    for (const c of cases) {
+      it(`${c.label}: ${JSON.stringify(c.command)} is unmatched by raw/normalizeCommand/normalizeCommandAmpAware and matched by normalizeCommandQuoteAware`, () => {
+        expect(c.re.test(c.command), "raw unexpectedly matches").toBe(false);
+        expect(
+          c.re.test(normalizeCommand(c.command).normalized),
+          "the EXISTING (BOUNDARY_RE) pass unexpectedly matches -- its own code must be untouched by this task",
+        ).toBe(false);
+        expect(
+          c.re.test(normalizeCommandAmpAware(c.command).normalized),
+          "the amp-aware pass unexpectedly matches",
+        ).toBe(false);
+        expect(
+          c.re.test(normalizeCommandQuoteAware(c.command).normalized),
+          "the quote-aware pass does not close the residual",
+        ).toBe(true);
+      });
+    }
+
+    // Characterisation, not itself a bypass claim: WITHOUT the internal
+    // whitespace split, the whole quoted value is one raw whitespace-
+    // delimited token, so the RAW regex's own `\S+` already swallows the
+    // boundary character as an opaque part of that one token and the
+    // command gates via the raw arm alone -- unaffected by this task
+    // either way. Pinned so a future reader does not mistake "no space"
+    // spellings for part of the closed residual.
+    it("without an internal whitespace split, the same boundary characters already gated via the raw arm (unaffected either way)", () => {
+      const tight = "VAR='a;b' git push origin master";
+      expect(pushRe.test(tight), "raw arm should already cover the no-space form").toBe(true);
+    });
+  });
+
+  // Every additional match this pass finds BEYOND the target corpus above
+  // is a TRUE positive -- a real invocation bash would actually execute
+  // for the whole raw string, not merely printed/quoted text. Measured
+  // (module header's cf3dff51 UPDATE paragraph carries the fuller
+  // narrative, including the one case where this pass matches LESS than
+  // `normalizeCommand`, immediately below this block).
+  describe("matches beyond the target corpus are true positives, not a new over-block class", () => {
+    it("VAR='a; b' git status && echo done: the SECOND command in the chain, unaffected by the assignment, still matches via this pass alone", () => {
+      const statusRe = policyBashMatch("preflight-before-investigation");
+      const command = "VAR='a; b' git status && echo done";
+      expect(statusRe.test(command)).toBe(false);
+      expect(statusRe.test(normalizeCommand(command).normalized)).toBe(false);
+      expect(statusRe.test(normalizeCommandQuoteAware(command).normalized)).toBe(true);
+    });
+
+    it("echo hi; VAR='a; b' git push origin master: a real invocation prefixed by an unrelated command, matches via this pass alone", () => {
+      const command = "echo hi; VAR='a; b' git push origin master";
+      expect(pushRe.test(command)).toBe(false);
+      expect(pushRe.test(normalizeCommand(command).normalized)).toBe(false);
+      expect(pushRe.test(normalizeCommandQuoteAware(command).normalized)).toBe(true);
+    });
+  });
+
+  // MEASURED FINDING, stated here as an executable pin so it cannot
+  // silently drift: this pass does NOT reproduce the "accepted over-
+  // block: a quoted assignment inside TEXT after a boundary char now
+  // matches" case pinned in the 13e55484 describe block above. Quote-
+  // aware merging keeps the whole `echo "..."` argument as ONE segment
+  // starting with the unrecognised head token `echo`, so this function's
+  // output is byte-identical to the raw input; `normalizeCommand`'s own,
+  // separate, unchanged-by-this-task match for the SAME string is
+  // unaffected either way (both matter independently under raw-OR-*).
+  describe("does not reproduce the pre-existing accepted-over-block class (measured, corrects an earlier pre-measurement draft of this comment)", () => {
+    it('echo "a; VAR=\'x y\' git push" stays byte-identical under this pass, unlike normalizeCommand', () => {
+      const command = "echo \"a; VAR='x y' git push\"";
+      expect(normalizeCommandQuoteAware(command).normalized).toBe(command);
+      expect(pushRe.test(normalizeCommandQuoteAware(command).normalized)).toBe(false);
+      // normalizeCommand's own, pre-existing behaviour for this exact
+      // string is pinned and asserted true in the 13e55484 describe block
+      // above; re-asserted here only to make the DIVERGENCE between the
+      // two passes explicit at the point that matters.
+      expect(pushRe.test(normalizeCommand(command).normalized)).toBe(true);
+    });
+  });
+
+  // Differential / never-lose-a-match proof (task requirement: 0 lost
+  // matches over an adversarial corpus). Reuses the SAME corpus arrays
+  // already defined earlier in this file (the 13e55484 never-unmatch
+  // corpus, the aabbad63 bare-& closures, and the amp-pass's own known
+  // false-positive cost cases) rather than a hand-copied duplicate, so a
+  // future edit to any of those cannot silently drift out of sync with
+  // this proof. For every entry that ALREADY matches via raw OR
+  // normalizeCommand OR normalizeCommandAmpAware, it must STILL match via
+  // that SAME union once normalizeCommandQuoteAware is added — true by
+  // construction here (none of those three functions' code changed), but
+  // asserted directly rather than left to "by construction" alone.
+  describe("differential: 0 lost matches across the pre-existing regression corpora", () => {
+    const priorCorpus: Array<{ command: string; re: RegExp }> = [
+      // 13e55484 never-unmatch corpus (see that describe block above).
+      { command: "git status", re: policyBashMatch("preflight-before-investigation") },
+      { command: "env git status", re: policyBashMatch("preflight-before-investigation") },
+      { command: "FOO=bar git status", re: policyBashMatch("preflight-before-investigation") },
+      { command: "VAR='a git status", re: policyBashMatch("preflight-before-investigation") },
+      { command: "git push origin master", re: pushRe },
+      { command: "VAR='hello world' git push origin master", re: pushRe },
+      { command: "env VAR='a b' git push origin master", re: pushRe },
+      { command: "VAR='a b'\"c d\" git push origin master", re: pushRe },
+      { command: "A='x y' B=\"z w\" git push origin master", re: pushRe },
+      { command: "VAR='a\tb' nice git push origin master", re: pushRe },
+      // 13e55484 review round 1 differential pins (ANSI-C phantom-open,
+      // wrapper-swallow, path-qualified-head-glued-to-quote).
+      { command: "A=$'don\\'t' env git push origin master # '", re: pushRe },
+      { command: "A=$'don\\'t' env harness pause # '", re: killRe },
+      { command: "env VAR='a git push origin master' foo", re: pushRe },
+      { command: "VAR='a /usr/bin/git' git push origin master", re: pushRe },
+      // aabbad63 bare-& closures (amp-aware pass only).
+      { command: "A=x&env -C /tmp git status", re: policyBashMatch("preflight-before-investigation") },
+      { command: "echo hi & nice git status", re: policyBashMatch("preflight-before-investigation") },
+      { command: 'echo "x & nice git push"', re: pushRe },
+    ];
+    // The load-bearing check: every entry, run against the CURRENT
+    // (post-this-task) code for the three PRE-EXISTING functions, still
+    // matches via that same three-arm union. This is what would actually
+    // catch a mistake in this task's own diff (e.g. the new `quoteAware`
+    // parameter added to `segmentAndCanonicalize` accidentally changing
+    // behaviour for the `quoteAware: false` callers, which is every
+    // pre-existing call site) -- "0 lost matches" is not a property of OR
+    // semantics in the abstract, it is a property of THIS diff not having
+    // broken any of the three untouched-in-principle functions in
+    // practice.
+    it("every entry still matches the three PRE-EXISTING arms' union under the current (post-task) code", () => {
+      for (const c of priorCorpus) {
+        const oldMatch =
+          c.re.test(c.command) ||
+          c.re.test(normalizeCommand(c.command).normalized) ||
+          c.re.test(normalizeCommandAmpAware(c.command).normalized);
+        expect(oldMatch, `lost match: ${c.command}`).toBe(true);
+      }
+    });
+  });
+
+  // Engagement assurance (13e55484 round-1 lesson, restated: a property
+  // scoped to the WHOLE corpus proved nothing there because pre-existing
+  // wrapper spellings alone satisfied it; this assurance is scoped to the
+  // NEW family this pass exists for, mirroring that fix exactly).
+  describe("engagement assurance: the target-bypass family matches ONLY via normalizeCommandQuoteAware (>=10 entries)", () => {
+    it("every target-bypass corpus entry matches ONLY via this pass, never raw/normalizeCommand/normalizeCommandAmpAware", () => {
+      const family = [
+        "VAR='a; b' git push origin master",
+        "VAR='a| b' git push origin master",
+        "VAR='a&& b' git push origin master",
+        "VAR='a( b' git push origin master",
+        "VAR='a\n b' git push origin master",
+        "VAR='a\nb' git push origin master",
+        "VAR='a; b' harness pause",
+        "VAR='a| b' harness pause",
+        "VAR='a&& b' harness pause",
+        "VAR='a( b' harness pause",
+      ];
+      expect(family.length).toBeGreaterThanOrEqual(10);
+      for (const command of family) {
+        const re = command.includes("harness pause") ? killRe : pushRe;
+        expect(re.test(command), `raw unexpectedly matches: ${command}`).toBe(false);
+        expect(
+          re.test(normalizeCommand(command).normalized),
+          `existing pass unexpectedly matches: ${command}`,
+        ).toBe(false);
+        expect(
+          re.test(normalizeCommandAmpAware(command).normalized),
+          `amp-aware pass unexpectedly matches: ${command}`,
+        ).toBe(false);
+        expect(
+          re.test(normalizeCommandQuoteAware(command).normalized),
+          `quote-aware pass no longer closes: ${command}`,
+        ).toBe(true);
+      }
+    });
+  });
+
+  describe("return type carries no targetDir/targetBase (same hard constraint as normalizeCommandAmpAware)", () => {
+    it("the returned object has exactly {normalized, truncated} -- no targetDir/targetBase key at all", () => {
+      const result = normalizeCommandQuoteAware("git -C /x log 2>&1");
+      expect(Object.keys(result).sort()).toEqual(["normalized", "truncated"]);
+      expect("targetDir" in result).toBe(false);
+      expect("targetBase" in result).toBe(false);
+    });
+  });
+
+  describe("MAX_NORMALIZE_LENGTH bound (same contract as normalizeCommand)", () => {
+    it("skips normalisation and reports truncated:true above the length bound", () => {
+      const big = "a".repeat(MAX_NORMALIZE_LENGTH + 1);
+      const result = normalizeCommandQuoteAware(big);
+      expect(result.truncated).toBe(true);
+      expect(result.normalized).toBe(big);
+    });
+
+    it("does not truncate at exactly the bound", () => {
+      const atBound = "a".repeat(MAX_NORMALIZE_LENGTH);
+      expect(normalizeCommandQuoteAware(atBound).truncated).toBe(false);
+    });
+  });
+
+  describe("never throws (same fail-safe contract as normalizeCommand)", () => {
+    it("returns the empty string unchanged for an empty command", () => {
+      expect(normalizeCommandQuoteAware("")).toEqual({ normalized: "", truncated: false });
+    });
+
+    it("returns a non-string input coerced to the empty-string fallback (defensive)", () => {
+      // @ts-expect-error deliberately probing the runtime guard with a non-string
+      expect(normalizeCommandQuoteAware(null)).toEqual({ normalized: "", truncated: false });
+    });
+
+    it("an unterminated quote with no further boundary does not throw or hang (falls back to one segment)", () => {
+      const command = "VAR='a; b git push origin master";
+      expect(() => normalizeCommandQuoteAware(command)).not.toThrow();
     });
   });
 });
