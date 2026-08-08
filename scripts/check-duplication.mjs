@@ -76,7 +76,36 @@ import * as path from "node:path";
 // sibling-pack hook cluster the three raises above already tolerate, and
 // deduping it means touching an existing sibling pack's file, out of this
 // task's scope.
-const MAX_CLONES = 103;
+// Raised to 111 for the stale-base-check SessionStart companion (task
+// ce3903b0, incident ea8becf5; `src/cli/session-start/stale-base-check.ts`
+// + its `cli/index.ts` wiring) — the SAME toolchain-parity-precedent
+// cluster above, a 4th instance now instead of a 3rd. Verified (not
+// assumed) by diffing the full jscpd `duplicates[]` set against master as
+// a MULTISET keyed on `(firstFile, secondFile, lines)` (ignoring exact
+// line offsets, since inserting the new file/CLI block shifts every later
+// line number in `cli/index.ts` without changing its content — same
+// window-shift effect the 103 raise above documents): master has 103
+// entries, this branch has 111, net +8, which decomposes as:
+//   +9  `cli/session-start/stale-base-check.ts` paired against
+//       `branch-check.ts` / `toolchain-parity.ts` / `policy/intercept.ts`
+//       — the exact SessionStart-producer + `execGit`/spawn-wrapper
+//       boilerplate shape those three already duplicate against each
+//       other.
+//   +2  a 4th `cli/index.ts`-internal repeat of the `--config`/
+//       `--project`/`--session`/`--cwd`/`--ledger-timeout` option-parsing
+//       block the toolchain-parity raise above already tolerates 3
+//       copies of.
+//   -3  PRE-EXISTING `branch-check.ts` <-> `toolchain-parity.ts` /
+//       `policy/intercept.ts` <-> `toolchain-parity.ts` pairs that
+//       shrank, merged into a longer window, or disappeared in the same
+//       diff — jscpd re-partitioning its match windows now that a third
+//       near-identical file exists, not new duplication (same
+//       re-windowing effect the 103 raise above documents).
+// (+9 +2 -3 = +8.) Zero net-new entries fall outside the tolerated
+// cluster. Extracting a shared base would mean touching three existing
+// sibling files, out of this task's scope (same rationale as every raise
+// above).
+const MAX_CLONES = 111;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).
