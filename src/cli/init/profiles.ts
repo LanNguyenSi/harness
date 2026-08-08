@@ -28,6 +28,18 @@ export const SOLO_TEMPLATE = `# ~/.harness/harness.yaml (legacy: ~/.claude/harne
 # fires. No agent-tasks loop (use --template team if you want PR
 # review-gating).
 #
+# INTENTIONAL (operator decision 2026-08-08, task adf037c1): this profile
+# does NOT carry the full template's operator_only kill-switch policies
+# (deny-kill-switch-bypass / deny-session-env-strip /
+# deny-pause-sentinel-forgery), so \`harness doctor\` on a fresh solo (or
+# team) install reports all three as template drift and exits non-zero.
+# That is the profile-independent security floor by design, not a bug: a
+# solo/team operator who genuinely does not want kill-switch protection
+# acknowledges it via \`doctor.ignore_template_drift\`. Do NOT "fix" the
+# doctor failure by narrowing the drift check to the full profile — that
+# would silently remove the floor. (checkTemplatePolicyDrift, pinned by
+# the cross-profile test in tests/cli/doctor.test.ts.)
+#
 # Adapt the paths under \`command:\` to your install layout, or move
 # host-specific paths to ~/.harness/machines/<host>.harness.overrides.yaml.
 
@@ -112,6 +124,14 @@ export const TEAM_TEMPLATE = `# ~/.harness/harness.yaml (legacy: ~/.claude/harne
 # review:<pr-number> exists for the current grounding session, the
 # standard team workflow where every PR gets a review-subagent pass
 # before it can land.
+#
+# INTENTIONAL (operator decision 2026-08-08, task adf037c1): like the solo
+# profile, this template does NOT carry the full template's operator_only
+# kill-switch policies, so \`harness doctor\` on a fresh team install
+# reports all three as template drift and exits non-zero. That is the
+# profile-independent security floor by design; acknowledge it via
+# \`doctor.ignore_template_drift\` if a team deliberately opts out. See the
+# SOLO_TEMPLATE header note and checkTemplatePolicyDrift.
 #
 # Adapt the paths under \`command:\` to your install layout, or move
 # host-specific paths to ~/.harness/machines/<host>.harness.overrides.yaml.

@@ -59,6 +59,11 @@ function manifestWithMcp(entries: string): string {
   return `version: 1
 hooks: []
 policies: []
+doctor:
+  ignore_template_drift:
+    - deny-kill-switch-bypass
+    - deny-session-env-strip
+    - deny-pause-sentinel-forgery
 tools:
   mcp:
 ${entries}

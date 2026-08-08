@@ -285,6 +285,19 @@ function formatRiskGateSection(report: DoctorReport): string[] {
   return out;
 }
 
+// Template-policy drift section (task adf037c1): shipped operator_only
+// security policies missing from an aged installed manifest. Render only
+// when something is missing — a caught-up manifest stays silent, like the
+// Risk Gate section.
+function formatTemplateDriftSection(report: DoctorReport): string[] {
+  const { errors, warnings } = report.templateDrift;
+  if (errors.length === 0 && warnings.length === 0) return [];
+  const out: string[] = ["", "Template drift (shipped security policies)"];
+  for (const m of errors) out.push(`  ✗ ${m}`);
+  for (const w of warnings) out.push(`  ⚠ ${w}`);
+  return out;
+}
+
 function formatCodexTargetSection(report: DoctorReport): string[] {
   if (!report.codexTarget) return [];
   const out: string[] = ["", "Target: codex"];
@@ -395,6 +408,7 @@ export function format(report: DoctorReport): string {
   lines.push(...formatPolicyPacksSection(report));
   lines.push(...formatWorkflowsSection(report));
   lines.push(...formatRiskGateSection(report));
+  lines.push(...formatTemplateDriftSection(report));
   lines.push(...formatGroundingSection(report));
   lines.push(...formatClaudeMcpSection(report));
   lines.push(...formatCodexTargetSection(report));

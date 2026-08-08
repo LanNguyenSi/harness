@@ -3,7 +3,10 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
-import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
+import {
+  FULL_TEMPLATE,
+  shippedOperatorOnlyPolicyNames,
+} from "../../src/cli/init/templates.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
 // Drift guard: the policy + policy_packs sections of FULL_TEMPLATE (emitted
@@ -153,6 +156,27 @@ describe("FULL_TEMPLATE ↔ docs/examples/full-manifest.yaml — drift guard", (
         enabled: counterpart.enabled,
         config: counterpart.config,
       });
+    }
+  });
+
+  // Task adf037c1: the drift check's notion of "shipped security policies"
+  // is derived from FULL_TEMPLATE via shippedOperatorOnlyPolicyNames().
+  // Pin the exact set so a template rename/removal of a kill-switch policy
+  // (which would silently shrink what the drift check enforces) turns this
+  // test red rather than weakening the check unnoticed.
+  it("shippedOperatorOnlyPolicyNames() is exactly the three kill-switch policies", () => {
+    expect([...shippedOperatorOnlyPolicyNames()].sort()).toEqual([
+      "deny-kill-switch-bypass",
+      "deny-pause-sentinel-forgery",
+      "deny-session-env-strip",
+    ]);
+  });
+
+  it("every name in the shipped operator_only set is genuinely operator_only in the template", () => {
+    const full = loadFullTemplateManifest();
+    const byName = new Map(full.policies.map((p) => [p.name, p]));
+    for (const name of shippedOperatorOnlyPolicyNames()) {
+      expect(byName.get(name)?.operator_only).toBe(true);
     }
   });
 });

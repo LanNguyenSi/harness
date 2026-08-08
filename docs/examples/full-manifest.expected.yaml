@@ -614,3 +614,5 @@ audit:
       replacement: <REDACTED>
 toolchain_parity:
   enabled: false
+doctor:
+  ignore_template_drift: []

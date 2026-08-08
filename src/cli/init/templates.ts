@@ -942,6 +942,8 @@ environments:
         kube_namespace_patterns: [prod, production]
 `;
 
+import { parse as parseYaml } from "yaml";
+import { parseManifest } from "../../schema/index.js";
 import { SOLO_TEMPLATE, TEAM_TEMPLATE } from "./profiles.js";
 
 export type TemplateName = "minimal" | "full" | "solo" | "team";
@@ -957,4 +959,31 @@ export function getTemplate(name: TemplateName): string {
     case "minimal":
       return MINIMAL_TEMPLATE;
   }
+}
+
+/**
+ * The NAMES of `operator_only` (kill-switch / security) policies the
+ * current full template ships (task adf037c1). Parsed from FULL_TEMPLATE
+ * itself — the single source of truth, kept honest by
+ * tests/cli/init-full-template-parity.test.ts — so this set can never
+ * drift from what `harness init --template full` actually writes; adding a
+ * new operator_only policy to the template automatically extends it.
+ *
+ * Scope is deliberately operator_only-only (operator decision 2026-08-08):
+ * these are the profile-independent security floor (the kill-switch
+ * defenses) whose silent absence from an aged manifest is the incident
+ * this drift check exists to surface. Non-operator_only full-template
+ * policies are intentionally NOT enumerated here — flagging a solo/team
+ * install for lacking full-only convenience policies it never had would be
+ * noise. Memoized: the parse is pure and FULL_TEMPLATE is a build constant.
+ */
+let shippedOperatorOnlyCache: readonly string[] | undefined;
+export function shippedOperatorOnlyPolicyNames(): readonly string[] {
+  if (shippedOperatorOnlyCache === undefined) {
+    const manifest = parseManifest(parseYaml(FULL_TEMPLATE));
+    shippedOperatorOnlyCache = manifest.policies
+      .filter((p) => p.operator_only === true)
+      .map((p) => p.name);
+  }
+  return shippedOperatorOnlyCache;
 }

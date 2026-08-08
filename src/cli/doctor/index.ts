@@ -24,6 +24,7 @@ import {
   checkPolicyRiskWithoutEnvScope,
   checkSolutionAcceptanceKnobIgnored,
   checkSolutionAcceptanceProducer,
+  checkTemplatePolicyDrift,
   createDefaultGitIgnoreProbe,
   type GitIgnoreProbe,
 } from "../validate/checks.js";
@@ -51,6 +52,7 @@ import {
   type PolicyPackUnresolved,
   type PolicyPacksSection,
   type RiskGateSection,
+  type TemplateDriftSection,
   type ToolsSection,
 } from "./types.js";
 
@@ -681,6 +683,23 @@ function buildRiskGate(manifest: Manifest): RiskGateSection {
 }
 
 /**
+ * Template-policy drift (task adf037c1): shipped operator_only security
+ * policies missing from an aged installed manifest. Delegates to the
+ * shared validate check so `harness doctor` and `harness validate` stay
+ * in parity. Each Diagnostic is a missing kill-switch defense and maps to
+ * errorCount (see countDiagnostics), the doctor-convention signal that a
+ * dogfood/CI run should fail until the manifest is caught up or the name
+ * is explicitly acknowledged under doctor.ignore_template_drift.
+ */
+function buildTemplateDrift(manifest: Manifest): TemplateDriftSection {
+  const diags = checkTemplatePolicyDrift(manifest);
+  return {
+    errors: diags.filter((d) => d.severity === "error").map((d) => d.message),
+    warnings: diags.filter((d) => d.severity === "warning").map((d) => d.message),
+  };
+}
+
+/**
  * Grounding wiring health (task 129e1b94). Only meaningful when an enabled
  * `grounding-mcp` entry exists — callers skip the section otherwise. Checks:
  *   1. The evidence-ledger path (the value `harness apply` projects as
@@ -819,6 +838,11 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
     else if (d.severity === "warning") warningCount++;
   }
   warningCount += report.riskGate.warnings.length;
+  // Template-policy drift: each missing-or-downgraded shipped operator_only
+  // security policy is a real defense gap → errorCount; stale opt-out
+  // entries are warn-only (task adf037c1).
+  errorCount += report.templateDrift.errors.length;
+  warningCount += report.templateDrift.warnings.length;
   if (report.grounding !== undefined) {
     warningCount += report.grounding.warnings.length;
   }
@@ -928,6 +952,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   );
   const workflows = buildWorkflows(manifest);
   const riskGate = buildRiskGate(manifest);
+  const templateDrift = buildTemplateDrift(manifest);
   const groundingServer =
     manifest.tools.mcp.find(
       (m) => m.name === GROUNDING_MCP_SERVER_NAME && m.enabled !== false,
@@ -973,6 +998,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     policyPacks,
     workflows,
     riskGate,
+    templateDrift,
     ...(grounding !== undefined ? { grounding } : {}),
     ...(claudeMcp !== undefined ? { claudeMcp } : {}),
     rogueLedgerDbs,

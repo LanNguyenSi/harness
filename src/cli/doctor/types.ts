@@ -240,6 +240,26 @@ export interface GroundingSection {
   warnings: string[];
 }
 
+/**
+ * Template-policy drift (task adf037c1). `errors` names shipped
+ * `operator_only` (kill-switch / security) policies this installed
+ * manifest either lacks entirely or carries in a DOWNGRADED (no longer
+ * operator_only) shape — a defense an aged manifest never received or
+ * silently weakened, since `harness apply` does not retroactively add or
+ * repair default policies. Each rolls into `errorCount` (a real defense
+ * gap, doctor-convention exit failure). `warnings` names stale
+ * `doctor.ignore_template_drift` entries that match no shipped policy and
+ * therefore suppress nothing; each rolls into `warningCount`. Names
+ * acknowledged via a valid `doctor.ignore_template_drift` entry are
+ * filtered out of `errors` upstream.
+ */
+export interface TemplateDriftSection {
+  /** Missing-or-downgraded shipped operator_only policies (each → errorCount). */
+  errors: string[];
+  /** Stale/typo'd ignore_template_drift entries that suppress nothing (each → warningCount). */
+  warnings: string[];
+}
+
 export interface DoctorReport {
   manifestPath: string;
   manifestVersion: number;
@@ -268,6 +288,15 @@ export interface DoctorReport {
   workflows: WorkflowsSectionReport;
   /** Phase 7 #6 — Risk Gate wiring health (classifiers / resolvers / `when:`). */
   riskGate: RiskGateSection;
+  /**
+   * Template-policy drift (task adf037c1): shipped operator_only security
+   * policies missing-or-downgraded in this installed manifest (`errors`)
+   * and stale `doctor.ignore_template_drift` entries (`warnings`). Always
+   * present; both arrays empty when the manifest carries every shipped
+   * kill-switch policy in operator_only form (or has acknowledged the gap
+   * via a valid doctor.ignore_template_drift entry).
+   */
+  templateDrift: TemplateDriftSection;
   /**
    * Grounding wiring health (task 129e1b94). Absent when no enabled
    * grounding-mcp entry is declared.
