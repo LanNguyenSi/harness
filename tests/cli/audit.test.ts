@@ -163,6 +163,31 @@ describe("audit — filters", () => {
     expect(result.decisions.every((d) => d.outcome === "deny")).toBe(true);
   });
 
+  it("--outcome deny-degraded is a valid filter and matches seeded rows (task f1aea826)", async () => {
+    // Pins the VALID_OUTCOMES sync: before this row existed, passing the
+    // new outcome value returned EX_USAGE while the runtime happily
+    // recorded such rows.
+    const withDegradedDeny = [
+      ...FIXTURE,
+      decisionEntry(
+        {
+          policyName: "review-before-merge",
+          outcome: "deny-degraded",
+          reason: "grounding-mcp timeout after 1ms",
+        },
+        "2026-04-30T11:50:00.000Z",
+      ),
+    ];
+    const result = await audit({
+      configPath: MANIFEST_PATH,
+      outcome: "deny-degraded",
+      now: NOW,
+      fetchLedger: async () => ({ kind: "ok", entries: withDegradedDeny }),
+    });
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.outcome).toBe("deny-degraded");
+  });
+
   it("filters compose: --policy + --outcome + --since", async () => {
     const result = await audit({
       configPath: MANIFEST_PATH,

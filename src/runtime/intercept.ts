@@ -534,8 +534,14 @@ function outcomeForFailedRequires(
  *     presence alone means "an incident-preventing gate could not read
  *     its evidence" — fail closed.
  *   - `allow` / `warn` / `warn-degraded` never abort.
+ *
+ * Exported for the CLI wrapper's pending-approval staging
+ * (`src/cli/policy/intercept.ts`), which must agree with the runtime on
+ * WHICH decision is the first blocking one — a hand-rolled copy there
+ * drifted when `deny-degraded` was added (review 2026-08-08, low
+ * finding). Keep this the single definition.
  */
-function isBlockingDecision(d: PolicyDecision): boolean {
+export function isBlockingDecision(d: PolicyDecision): boolean {
   if (d.outcome === "deny") return d.enforcement === "block";
   if (d.outcome === "deny-degraded") return true;
   return d.outcome === "require_approval";
@@ -569,6 +575,31 @@ function degradedOutcome(
   if (policy.enforcement === "warn") return "warn-degraded";
   const posture = manifest.risk?.degraded_fail_posture ?? "preserve_enforcement";
   return posture === "fail_open" ? "warn-degraded" : "deny-degraded";
+}
+
+/**
+ * Control characters (C0 range plus DEL), built via fromCharCode so the
+ * source file itself stays free of raw control bytes. Matches what the
+ * envelope sanitiser collapses to a single space.
+ */
+const ENVELOPE_CONTROL_CHARS = new RegExp(
+  `[${String.fromCharCode(0)}-${String.fromCharCode(31)}${String.fromCharCode(127)}]+`,
+  "g",
+);
+
+/**
+ * Bound and clean a transport-level reason before it is interpolated
+ * into the agent-facing deny-degraded envelope. The string can embed
+ * output captured from the grounding-mcp SUBPROCESS (`exitDiagnostic`
+ * in `src/policies/ledger-client.ts` appends the child's last stderr
+ * line), i.e. untrusted content that previously only reached stderr
+ * and the audit ledger, never model-visible text. The full, untouched
+ * string still goes to the audit row and the stderr diagnostic; only
+ * the envelope interpolation is bounded.
+ */
+function sanitizeEnvelopeReason(reason: string): string {
+  const stripped = reason.replace(ENVELOPE_CONTROL_CHARS, " ");
+  return stripped.length > 200 ? `${stripped.slice(0, 200)}...` : stripped;
 }
 
 /**
@@ -1343,19 +1374,27 @@ export async function intercept(
       // ux text describes the MISSING-evidence case ("run the producer,
       // then retry"), which is actively misleading here — the evidence
       // could not be READ, so producing the tag cannot unblock anything
-      // until the ledger is reachable again. The envelope must name the
-      // real cause (the transport-level reason), the posture (this
-      // enforcement tier fails closed on unreadable evidence), a recovery
-      // path, and the opt-out, so nobody debugs a phantom missing tag.
+      // until the ledger is reachable again. The envelope names the real
+      // cause (the transport-level reason, sanitised — it embeds output
+      // from the grounding-mcp subprocess) and the posture, so nobody
+      // debugs a phantom missing tag.
+      //
+      // The `risk.degraded_fail_posture: fail_open` opt-out is
+      // deliberately NOT named here (review 2026-08-08, high finding):
+      // this text is fed back to the very agent that was just blocked,
+      // and nothing prevents that agent from editing the manifest — a
+      // deny that includes its own disable recipe is not a gate. The
+      // opt-out lives on operator surfaces only: the stderr diagnostic
+      // (`formatDecisionDiagnostic`), docs/risk-gate.md, and the OKF
+      // fail-posture matrix. Same reasoning as the producer-neutrality
+      // norm above and the operator-only framing of `harness pause`.
       reasonText =
         `${blocking.policyName}: required evidence could not be read ` +
-        `(evidence ledger degraded: ${blocking.reason}). ` +
+        `(evidence ledger degraded: ${sanitizeEnvelopeReason(blocking.reason)}). ` +
         `This ${blocking.enforcement} policy fails closed while its evidence ` +
         `source is unreadable; producing the required tag will not unblock it ` +
-        `until the ledger is reachable again. Recovery: check grounding-mcp ` +
-        `(harness doctor), then retry. Operators can restore the ` +
-        `availability-first behaviour with risk.degraded_fail_posture: ` +
-        `fail_open in the manifest. Session: ${sessionId}.`;
+        `until the ledger is reachable again. Ask your operator to check ` +
+        `grounding-mcp (harness doctor), then retry. Session: ${sessionId}.`;
     } else if (blockingPolicy?.ux) {
       // The ux surface is operator-curated plain language. The
       // unclassifiedFallback flag rides the audit record (recorded above

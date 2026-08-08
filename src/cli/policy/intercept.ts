@@ -15,6 +15,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   intercept,
+  isBlockingDecision,
   recordPolicyDecisionOnSession,
   resolveGitContext,
   resolveKubeContext,
@@ -143,11 +144,16 @@ function hookSuffix(hookName: string | undefined): string {
  * policy name so concurrent fires (rare but possible) stay readable.
  */
 function formatDecisionDiagnostic(decision: PolicyDecision, hookName?: string): string {
+  // The deny-degraded suffix names the fail_open opt-out ON PURPOSE and
+  // ONLY here: stderr is the operator's surface. The agent-facing deny
+  // envelope deliberately omits it (see the deny-degraded branch in
+  // `runtime/intercept.ts` — a deny that includes its own disable recipe
+  // is not a gate).
   const header = `harness policy intercept${hookSuffix(hookName)}: ${decision.policyName}: ${decision.outcome}${
     decision.outcome === "warn-degraded"
       ? " (ledger unreachable)"
       : decision.outcome === "deny-degraded"
-        ? " (ledger unreachable; failing closed per enforcement tier)"
+        ? " (ledger unreachable; failing closed per enforcement tier; operator opt-out: risk.degraded_fail_posture: fail_open)"
         : ""
   }`;
   const lines: string[] = [header];
@@ -261,21 +267,33 @@ export function realLedgerClient(
   const stderr = opts.stderr ?? process.stderr;
   let session: LedgerSession | null = null;
   const summaryCache = new Map<string, Promise<LedgerQueryResult>>();
-  // One fresh-session retry for audit writes per client instance (task
-  // f1aea826, AC4). The pooled session carries a session-wide timeout
-  // latch: a single slow QUERY (the very condition that now produces a
-  // blocking `deny-degraded`) short-circuits every later call on the
-  // same session, including the audit write for that decision — so the
-  // one decision that most needs an audit row was guaranteed to lose it.
-  // A single bounded retry over a fresh subprocess lands the row whenever
+  // One fresh-session retry for audit writes per client instance,
+  // reserved for `deny-degraded` decisions (task f1aea826, AC4; review
+  // 2026-08-08 tightened both the reservation and the budget). The
+  // pooled session carries a session-wide timeout latch: a single slow
+  // QUERY (the very condition that produces a blocking `deny-degraded`)
+  // short-circuits every later call on the same session, including the
+  // audit write for that decision — so the one row that most needs to
+  // land was guaranteed to be lost. A fresh subprocess lands it whenever
   // grounding-mcp itself is healthy (the measured 2026-08-06 case: only
   // the artificial 1ms query budget latched; follow-up calls answered
-  // fine). Deliberately NOT retried with a longer timeout and NOT more
-  // than once: the record happens on the deny path BEFORE the envelope
-  // is emitted, and stalling past the outer hook budget would convert
-  // the deny into the hook-timeout allow — the exact failure this task
-  // closes. If the retry also fails, the existing loud-stderr contract
-  // stands (audit degradation never blocks, docs/okf matrix).
+  // fine).
+  //
+  // Bounds, stated precisely because the record runs on the deny path
+  // BEFORE the envelope is emitted and any stall risks the outer
+  // hook-timeout-is-allow contract: the retry is (a) reserved for
+  // decisions whose outcome is `deny-degraded` — an allow/warn row
+  // failing first must not consume it — (b) taken at most once per
+  // client instance, and (c) run on a session whose OWN timeout is
+  // `retryTimeoutMs` = max(250ms, timeoutMs/4), so its two calls
+  // (initialize + ledger_add) add at most timeoutMs/2 on top of the
+  // query's timeoutMs: worst-case ledger stall ≤ 1.5x timeoutMs, not
+  // the 2x an unbounded fresh session would allow. The fresh session
+  // replaces the latched one, so later audit writes in the same
+  // invocation inherit the working transport (and its tighter budget).
+  // If the retry also fails, the loud-stderr contract stands (audit
+  // degradation never blocks, docs/okf matrix).
+  const retryTimeoutMs = Math.max(250, Math.floor(timeoutMs / 4));
   let recordRetryUsed = false;
   const getSession = (): LedgerSession =>
     (session ??= openLedgerSession({
@@ -288,9 +306,12 @@ export function realLedgerClient(
       // Cache the Promise (not the value) so concurrent queries for the
       // same session dedupe onto one in-flight round-trip. A degraded
       // result is cached too — deliberately: a first-query timeout
-      // degrades ALL K policies to warn-degraded (fail-open, matching the
-      // documented ledger-unreachable contract) instead of retrying per
-      // policy, which would reintroduce the fan-out. Staleness: our own
+      // degrades ALL K policies off the one cached round-trip instead of
+      // retrying per policy, which would reintroduce the fan-out. (What
+      // a degraded evaluation MEANS is tier-dependent since task
+      // f1aea826: warn policies stay non-blocking `warn-degraded`,
+      // block/require_approval fail closed as `deny-degraded`.)
+      // Staleness: our own
       // `record` rows are filtered out by the evaluator by design; an
       // EXTERNAL writer landing evidence mid-loop would make a later
       // policy deny where a fresh query would allow — a fail-closed,
@@ -309,16 +330,25 @@ export function realLedgerClient(
         decision,
         sessionId,
       );
-      if (!result.ok && !recordRetryUsed) {
-        // Latched-session recovery (see recordRetryUsed above): drop the
-        // pooled session and retry ONCE over a fresh subprocess with the
-        // same timeout budget. Queries are unaffected — their per-session
-        // summary promise is already cached by the time any record runs.
+      if (
+        !result.ok &&
+        decision.outcome === "deny-degraded" &&
+        !recordRetryUsed
+      ) {
+        // Latched-session recovery (bounds documented at retryTimeoutMs
+        // above): drop the pooled session and retry ONCE over a fresh
+        // subprocess with the tighter retry budget. Queries are
+        // unaffected — their per-session summary promise is already
+        // cached by the time any record runs.
         recordRetryUsed = true;
         session?.dispose();
-        session = null;
+        session = openLedgerSession({
+          mcpCommand: command,
+          ...(env && { mcpEnv: env }),
+          timeoutMs: retryTimeoutMs,
+        });
         result = await recordPolicyDecisionOnSession(
-          getSession(),
+          session,
           decision,
           sessionId,
         );
@@ -340,13 +370,32 @@ export function realLedgerClient(
   };
 }
 
-function degradedLedgerClient(reason: string): LedgerClient {
+function degradedLedgerClient(
+  reason: string,
+  stderr: NodeJS.WritableStream,
+  hookName?: string,
+): LedgerClient {
   return {
     async query(): Promise<LedgerQueryResult> {
       return { kind: "degraded", reason };
     },
-    async record(): Promise<void> {
-      /* no-op when ledger is unavailable */
+    async record(decision): Promise<void> {
+      // No transport exists, so no audit row can ever land. Stay silent
+      // for non-blocking rows (a manifest without grounding-mcp would
+      // otherwise emit one line per policy per tool event), but a
+      // BLOCKING decision with no audit row must not also be invisible
+      // (review 2026-08-08: previously a deny-degraded produced neither
+      // a row nor an audit-write-failed line on this path).
+      if (
+        decision.outcome === "deny" ||
+        decision.outcome === "deny-degraded" ||
+        decision.outcome === "require_approval"
+      ) {
+        stderr.write(
+          `harness policy intercept${hookSuffix(hookName)}: blocking decision for ` +
+            `${decision.policyName} has NO audit row (${reason})\n`,
+        );
+      }
     },
   };
 }
@@ -412,7 +461,11 @@ export async function runInterceptCli(
     const server = findGroundingMcp(manifest);
     ledger = server
       ? realLedgerClient(server, opts)
-      : degradedLedgerClient("grounding-mcp not declared in manifest");
+      : degradedLedgerClient(
+          "grounding-mcp not declared in manifest",
+          stderr,
+          opts.hookName,
+        );
   }
 
   // For the SESSION_ID builtin we keep the empty-string fallback rather
@@ -733,14 +786,18 @@ export async function runInterceptCli(
   // the producer side knows the live session id (it just received it on
   // the hook event), but `harness approve risk` runs from the operator's
   // `!`-shell where `$CLAUDE_SESSION_ID` is unset, so it has to read the
-  // marker. `deny` decisions are deliberately not staged: `harness approve
-  // risk` cannot unblock a `deny`, and writing a marker the verb cannot
-  // act on would just lie about the recoverability of the block. The
-  // "first blocking decision" check (rather than `.some()`) matters when
-  // two `when:`-bearing policies fire on the same event: the runtime's
-  // `intercept()` picks the first blocking decision (`runtime/intercept.ts:511`),
-  // so a `deny`-first / `require_approval`-second order produces an
-  // unrecoverable block; we mustn't stage in that case either.
+  // marker. `deny` and `deny-degraded` decisions are deliberately not
+  // staged: `harness approve risk` cannot unblock either (a deny is a
+  // real verdict, a deny-degraded means the evidence source is
+  // unreadable, so no approval tag could even be read), and writing a
+  // marker the verb cannot act on would just lie about the
+  // recoverability of the block. The "first blocking decision" check
+  // (rather than `.some()`) matters when two `when:`-bearing policies
+  // fire on the same event: the runtime's `intercept()` picks the first
+  // blocking decision (its `isBlockingDecision`, imported here so the
+  // two surfaces cannot drift — review 2026-08-08), so a blocking-first
+  // / `require_approval`-second order produces an unrecoverable block;
+  // we mustn't stage in that case either.
   //
   // Best-effort: a staging-write failure must never escalate a gate block
   // into a thrown hook error. `resolveGeneratedDir` is skipped (along
@@ -748,11 +805,7 @@ export async function runInterceptCli(
   // exercise the policy logic with injected manifests and no on-disk
   // path, and the test path is also the only place an empty
   // `eventSessionId` is interesting.
-  const firstBlocking = result.decisions.find(
-    (d) =>
-      (d.outcome === "deny" && d.enforcement === "block") ||
-      d.outcome === "require_approval",
-  );
+  const firstBlocking = result.decisions.find(isBlockingDecision);
   if (
     result.blockJson &&
     eventSessionId !== undefined &&

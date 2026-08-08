@@ -190,6 +190,12 @@ interface WriteManifestOptions {
    * (`preserve_enforcement`, fail closed for block tier).
    */
   degradedFailPosture?: "preserve_enforcement" | "fail_open";
+  /**
+   * Enforcement of the base `review-before-merge` policy (default
+   * `block`). Used by the retry-allocation test, which needs a
+   * NON-blocking (warn) decision recorded BEFORE a blocking one.
+   */
+  baseEnforcement?: "block" | "warn" | "require_approval";
 }
 
 function writeManifest(opts: WriteManifestOptions): string {
@@ -262,7 +268,7 @@ policies:
     requires:
       ledger_tag: "review:\${PR_NUMBER}"
     hook: policy-intercept-pretooluse
-    enforcement: block
+    enforcement: ${opts.baseEnforcement ?? "block"}
 `;
   const extras = (opts.extraPolicies ?? [])
     .map(
@@ -477,7 +483,11 @@ describe("policy intercept: manifest-driven E2E flow", () => {
     const parsed = JSON.parse(stdoutOut().trim());
     expect(parsed.decision).toBe("block");
     expect(parsed.reason).toContain("could not be read");
-    expect(parsed.reason).toContain("degraded_fail_posture");
+    // Operator-only knowledge stays off the agent-facing envelope
+    // (review 2026-08-08, high finding): no opt-out recipe, no producer
+    // hint — the agent is told to involve the operator.
+    expect(parsed.reason).toContain("Ask your operator");
+    expect(parsed.reason).not.toContain("degraded_fail_posture");
     expect(parsed.reason).not.toContain("To satisfy:");
   });
 
@@ -514,11 +524,16 @@ describe("policy intercept: manifest-driven E2E flow", () => {
     // The audit that motivated task f1aea826 measured: --ledger-timeout
     // <=100ms flipped a git-push deny to ALLOW while broken-path shapes
     // correctly denied. This pins the timeout branch itself, not just the
-    // spawn-failure branch: summary hangs past the 150ms budget.
+    // spawn-failure branch: summary hangs past the budget. The budget is
+    // 1500ms (not the audit's 1-100ms) because the retry session must
+    // cold-start a node subprocess within timeoutMs/4 on a possibly
+    // loaded CI runner — the DELAY (10s) is what forces the timeout, so
+    // the generous budget does not weaken what is being pinned (review
+    // 2026-08-08, flake finding).
     const mcp = makeFakeGroundingMcp({ entries: [], summaryDelayMs: 10_000 });
     const manifestPath = writeManifest({
       groundingMcpCommand: ["node", mcp],
-      groundingTimeoutMs: 150,
+      groundingTimeoutMs: 1500,
     });
     const { stream: stdout, output: stdoutOut } = captureStream();
     const { stream: stderr } = captureStream();
@@ -554,9 +569,13 @@ describe("policy intercept: manifest-driven E2E flow", () => {
       invocationLog,
       startLog,
     });
+    // 2000ms budget → the retry session's own budget is 500ms per call
+    // (timeoutMs/4), enough for a node cold start plus initialize plus
+    // ledger_add even on a loaded runner; the 10s summary delay is what
+    // forces the query timeout regardless (review 2026-08-08).
     const manifestPath = writeManifest({
       groundingMcpCommand: ["node", mcp],
-      groundingTimeoutMs: 150,
+      groundingTimeoutMs: 2000,
     });
     const { stream: stdout } = captureStream();
     const { stream: stderr, output: stderrOut } = captureStream();
@@ -592,6 +611,64 @@ describe("policy intercept: manifest-driven E2E flow", () => {
     expect(recorded.outcome).toBe("deny-degraded");
     // And the loud-failure line must be gone: the retry SUCCEEDED.
     expect(stderrOut()).not.toContain("audit-write failed");
+  });
+
+  it("reserves the audit retry for the deny-degraded row: a warn row failing first does not consume it", async () => {
+    // Manifest order: warn policy first, block policy second. Under a
+    // latched session BOTH records fail on the first attempt, in that
+    // order. The retry must not be spent on the warn-degraded row
+    // (review 2026-08-08: previously first-failure-wins could burn the
+    // single retry on a non-blocking decision and drop the deny row).
+    const logDir = makeTmpDir("harness-mcp-retry-alloc-log-");
+    const invocationLog = path.join(logDir, "calls.jsonl");
+    const startLog = path.join(logDir, "starts.jsonl");
+    const mcp = makeFakeGroundingMcp({
+      entries: [],
+      summaryDelayMs: 10_000,
+      invocationLog,
+      startLog,
+    });
+    const manifestPath = writeManifest({
+      groundingMcpCommand: ["node", mcp],
+      groundingTimeoutMs: 2000,
+      baseEnforcement: "warn",
+      extraPolicies: [{ name: "audit-before-merge", tagPrefix: "audit" }],
+    });
+    const { stream: stdout } = captureStream();
+    const { stream: stderr, output: stderrOut } = captureStream();
+
+    const result = await runInterceptCli({
+      stdin: streamFrom(JSON.stringify(PR_MERGE_EVENT)),
+      stdout,
+      stderr,
+      configPath: manifestPath,
+    });
+
+    expect(result.decisions.map((d) => d.outcome)).toEqual([
+      "warn-degraded",
+      "deny-degraded",
+    ]);
+    expect(result.blocked).toBe(true);
+
+    // Two spawns: pooled (latched) + the ONE retry, taken by the
+    // deny-degraded row, not the earlier-failing warn row.
+    const starts = fs.readFileSync(startLog, "utf8").trim().split("\n");
+    expect(starts).toHaveLength(2);
+    const calls = fs
+      .readFileSync(invocationLog, "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    const adds = calls.filter((c) => c.tool === "ledger_add");
+    const recordedOutcomes = adds.map(
+      (c) =>
+        JSON.parse(
+          String(c.args.content).slice(String(c.args.content).indexOf(" ") + 1),
+        ).outcome,
+    );
+    expect(recordedOutcomes).toEqual(["deny-degraded"]);
+    // The warn row's write failure stays loud.
+    expect(stderrOut()).toContain("audit-write failed for review-before-merge");
   });
 });
 

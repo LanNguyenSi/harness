@@ -1,6 +1,7 @@
 export {
   attributeTriggerSegments,
   intercept,
+  isBlockingDecision,
   policyMatchesEvent,
   type ClaudeDenyJson,
   type InterceptOptions,

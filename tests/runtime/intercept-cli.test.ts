@@ -387,10 +387,38 @@ describe("runInterceptCli — Phase 5 #3: --verbose stderr diagnostics", () => {
     const parsed = JSON.parse(outOutput().trim());
     expect(parsed.decision).toBe("block");
     const errText = errOutput();
+    // The stderr header is the OPERATOR surface and therefore names the
+    // opt-out; the agent-facing envelope must not (review 2026-08-08,
+    // high finding — pinned as absence in tests/runtime/intercept.test.ts
+    // and as presence here).
     expect(errText).toContain(
-      "deny-degraded (ledger unreachable; failing closed per enforcement tier)",
+      "deny-degraded (ledger unreachable; failing closed per enforcement tier; operator opt-out: risk.degraded_fail_posture: fail_open)",
     );
     expect(errText).toContain("grounding-mcp timeout after 5000ms");
+    const parsedAgain = JSON.parse(outOutput().trim());
+    expect(parsedAgain.reason).not.toContain("fail_open");
+  });
+
+  it("degradedLedgerClient (no grounding-mcp in manifest): blocking decision gets a NO-audit-row stderr line", async () => {
+    // With no transport at all there is no audit row and previously no
+    // signal either (silent no-op record). A blocking decision without
+    // an audit row must be loud (review 2026-08-08). No injected ledger:
+    // runInterceptCli falls back to degradedLedgerClient because
+    // fakeManifest declares no grounding-mcp server.
+    const { stream: out, output: outOutput } = captureStream();
+    const { stream: err, output: errOutput } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(denyEvent),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([REVIEW_POLICY]),
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.decisions[0]?.outcome).toBe("deny-degraded");
+    const parsed = JSON.parse(outOutput().trim());
+    expect(parsed.decision).toBe("block");
+    expect(errOutput()).toContain("has NO audit row");
+    expect(errOutput()).toContain("grounding-mcp not declared in manifest");
   });
 
   it("--verbose on warn-degraded (warn tier + degraded ledger): stderr names the ledger reason, nothing blocks", async () => {

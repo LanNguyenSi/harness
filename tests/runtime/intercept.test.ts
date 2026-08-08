@@ -801,13 +801,19 @@ describe("intercept — degraded ledger (fail posture per enforcement tier)", ()
     expect(result.decisions[0]?.reason).toBe("grounding-mcp timeout after 1ms");
     expect(result.blockJson).not.toBeNull();
     // Degraded-specific envelope: names the unreadable evidence source
-    // and the recovery/opt-out path, and must NOT read like the
+    // and the operator recovery path, and must NOT read like the
     // missing-evidence deny (no "To satisfy:" producer hint — producing
-    // the tag cannot unblock an unreadable ledger).
+    // the tag cannot unblock an unreadable ledger). The fail_open
+    // opt-out must be ABSENT from this agent-facing text (review
+    // 2026-08-08, high finding: a deny that includes its own disable
+    // recipe is not a gate); it lives on the stderr diagnostic only,
+    // pinned in tests/runtime/intercept-cli.test.ts.
     const reason = result.blockJson?.reason ?? "";
     expect(reason).toContain("could not be read");
     expect(reason).toContain("grounding-mcp timeout after 1ms");
-    expect(reason).toContain("degraded_fail_posture");
+    expect(reason).toContain("Ask your operator");
+    expect(reason).not.toContain("degraded_fail_posture");
+    expect(reason).not.toContain("fail_open");
     expect(reason).not.toContain("To satisfy:");
     // The degraded decision is still submitted to the audit trail.
     expect(ledger.recordCalls).toEqual([
@@ -877,6 +883,65 @@ describe("intercept — degraded ledger (fail posture per enforcement tier)", ()
     });
     expect(result.decisions[0]?.outcome).toBe("allow");
     expect(result.blockJson).toBeNull();
+  });
+
+  it("deny-degraded envelope takes precedence over the policy's ux: surface", async () => {
+    // The operator-curated ux text describes the MISSING-evidence case
+    // ("run the producer, then retry"), which is misleading when the
+    // evidence could not be READ. Swapping the branch order in
+    // intercept()'s envelope construction must turn this red (the
+    // review 2026-08-08 found the precedence entirely unpinned).
+    const uxPolicy: Policy = {
+      ...REVIEW_POLICY,
+      ux: {
+        cannot: "You cannot merge this PR yet.",
+        required: ["a review entry for this PR"],
+        run: ["harness record review --pr ${PR_NUMBER}"],
+      },
+    } as Policy;
+    const ledger = makeLedger({
+      kind: "degraded",
+      reason: "grounding-mcp timeout after 1ms",
+    });
+    const result = await intercept({
+      manifest: manifest([uxPolicy]),
+      event: MERGE_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.decisions[0]?.outcome).toBe("deny-degraded");
+    const reason = result.blockJson?.reason ?? "";
+    expect(reason).toContain("could not be read");
+    expect(reason).not.toContain("You cannot merge this PR yet.");
+    expect(reason).not.toContain("harness record review");
+  });
+
+  it("bounds and strips the transport reason in the envelope (untrusted subprocess output)", async () => {
+    // exitDiagnostic appends the grounding-mcp child's last stderr line
+    // to the degraded reason; that string is untrusted and now reaches
+    // model-visible text for the first time. The envelope interpolation
+    // is bounded to 200 chars and control characters collapse to a
+    // space; the decision's own reason keeps the raw string for the
+    // audit row and stderr diagnostic. (Control chars are built via
+    // fromCharCode so this test file itself stays free of raw bytes.)
+    const bell = String.fromCharCode(7);
+    const newline = String.fromCharCode(10);
+    const noisy = `spawn failed: bell${bell}${newline}line2 ${"x".repeat(400)}`;
+    const ledger = makeLedger({ kind: "degraded", reason: noisy });
+    const result = await intercept({
+      manifest: manifest([REVIEW_POLICY]),
+      event: MERGE_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.decisions[0]?.reason).toBe(noisy);
+    const reason = result.blockJson?.reason ?? "";
+    expect(reason).not.toContain(bell);
+    expect(reason).not.toContain(newline);
+    expect(reason).toContain("spawn failed: bell line2");
+    expect(reason).not.toContain("x".repeat(201));
   });
 });
 

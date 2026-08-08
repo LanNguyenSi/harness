@@ -69,6 +69,12 @@ function summariseHooks(hooks: HookPair[]): string {
  * then allow if at least one policy-shaped hook fired without a deny
  * stdout, else `null` (no policy hook in the stream, so the assertion
  * is N/A and must be reported as a miss).
+ *
+ * `deny-degraded` (task f1aea826) is classified as deny by this same
+ * ordering: it emits the stdout block envelope, and the deny check runs
+ * BEFORE the stderr `warn-degraded` substring check — that ordering is
+ * load-bearing, since a deny-degraded event's stderr diagnostic line
+ * does not contain the string "warn-degraded" anyway.
  */
 export function classifyDecision(
   hooks: HookPair[],

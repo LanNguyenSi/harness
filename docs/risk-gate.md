@@ -459,26 +459,44 @@ incident must not open because its evidence became unreadable (measured
 while every broken-ledger-path shape correctly denied). The
 `deny-degraded` envelope names the degraded cause instead of a missing
 tag — producing the required evidence cannot unblock an unreadable
-ledger — plus the recovery path (`harness doctor`, retry) and the
-opt-out. The decision is recorded to the audit trail; when the pooled
-connection's timeout latch would drop exactly that row, the client
-retries once over a fresh session (same timeout budget, never more than
-one extra spawn per invocation).
+ledger — plus the operator-facing recovery path (`harness doctor`,
+retry). The opt-out is deliberately NOT named in the agent-facing
+envelope (a deny that includes its own disable recipe is not a gate);
+it appears on the stderr diagnostic and in this doc.
+
+The audit row is best-effort, stated precisely: when the ledger is
+reachable at all, the row lands — if necessary via ONE fresh-session
+retry reserved for `deny-degraded` rows, whose own budget is capped at
+a quarter of the ledger timeout (floor 250ms) so the retry can never
+stretch the deny path by more than ~half a timeout on top of the
+query's own. A write that survives the retry is reported on stderr and
+never changes the decision. With grounding-mcp absent from the manifest
+altogether there is no transport and therefore no audit row at all: the
+deny is visible only in the envelope and a dedicated "has NO audit row"
+stderr line.
 
 Operators who prefer the previous availability-first behaviour set
 `risk.degraded_fail_posture: fail_open` in the manifest, which restores
 the old mapping (every degraded evaluation → non-blocking
 `warn-degraded`) for every tier. The default is `preserve_enforcement`.
 
-Two boundaries this contract cannot reach: the OUTER hook layer treats a
+Boundaries this contract cannot reach: the OUTER hook layer treats a
 hook that exceeds its own `budget_ms` as allow (harness hook contract),
 so hook budgets must stay comfortably above the ledger timeout or the
-fail-closed decision is never delivered; and a wedged fail-closed gate
-whose fix itself needs the gate (the deadlock case, task 78b95a63) has
-two designed escapes: the `fail_open` opt-out (named in the envelope's
-recovery text) and the operator-only `harness pause` kill switch, which
-is honoured BEFORE manifest load and therefore silences the policy
-gates even when the manifest or ledger is exactly what is broken.
+fail-closed decision is never delivered; malformed event JSON and a
+failed manifest load remain allow-with-stderr at the CLI wrapper, so
+the posture is only as fail-closed as manifest integrity; and a wedged
+fail-closed gate whose fix itself needs the gate (the deadlock case,
+task 78b95a63) has two designed escapes: the `fail_open` opt-out and
+the operator-only `harness pause` kill switch, which is honoured BEFORE
+manifest load and therefore silences the policy gates even when the
+manifest or ledger is exactly what is broken.
+
+One adjacent liveness note: the policy schema also admits
+`Stop`/`SubagentStop`/`UserPromptSubmit` triggers. A block-tier policy
+on such an event would, under a persistently degraded ledger, emit its
+block on every attempt — the same deadlock family as above, escaped the
+same two ways. No shipped template policy uses those events.
 
 `require_approval` reuses the Phase 6 approval mechanism unchanged: a
 ledger tag (working name `risk-approved:${SESSION_ID}`) written by a

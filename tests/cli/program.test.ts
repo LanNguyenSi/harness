@@ -201,7 +201,7 @@ describe("CLI program — list + explain commands", () => {
     const r = await exec(["explain", "--last", "--decision", "bogus", "--config", FULL_MANIFEST]);
     expect(r.code).toBe(64);
     expect(r.stderr).toMatch(
-      /--decision must be one of allow, warn, require_approval, deny, warn-degraded/,
+      /--decision must be one of allow, warn, require_approval, deny, warn-degraded, deny-degraded/,
     );
   });
 });
