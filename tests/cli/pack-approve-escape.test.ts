@@ -284,6 +284,46 @@ describe("bash-blank divergence (task 623640a5)", () => {
     }
   });
 
+  it("rejects every non-bash-blank \\s codepoint MID command-part in the heredoc shape (HEREDOC_COMMAND_PART_ALLOWED_RE pin, review 2026-08-08)", () => {
+    // Distinct from the harness/approve-separator loop above: this
+    // codepoint sits AFTER `commandPartIsClean`'s own prefix check
+    // (between "understanding" and "--force"), so only
+    // HEREDOC_COMMAND_PART_ALLOWED_RE (the heredoc-only whitelist) can
+    // reject it. A revert of ONLY that whitelist back to a generic `\s`
+    // char class (while sites A and C stay fixed) left this exact
+    // position untested — a single-line command with the same codepoint
+    // is already rejected by commandPartIsClean's prefix regex, so the
+    // gap was heredoc-only and silent.
+    for (const cp of NON_BASH_BLANK_CODEPOINTS) {
+      if (LOOP_EXCLUDED.has(cp)) continue;
+      const ch = String.fromCodePoint(cp);
+      const label = `U+${cp.toString(16).toUpperCase().padStart(4, "0")}`;
+      const command = `harness approve understanding${ch}--force <<'X'\nbody\nX`;
+      expect(isEscapeCommand(command), label).toBe(false);
+    }
+  });
+
+  it("rejects a non-bash-blank \\s codepoint glued directly before the heredoc intro (right-trim site pin, review 2026-08-08)", () => {
+    // The command part is right-trimmed before the whitelist check runs
+    // (to drop a real trailing bash blank between the command and
+    // `<<`). That trim must only ever remove `[ \t]`: a generic
+    // `.trimEnd()` would strip a non-bash-blank codepoint here too,
+    // hiding it from the whitelist as if it were an insignificant
+    // separator bash also treats as blank — which it does not (bash
+    // glues it onto the preceding word instead).
+    for (const cp of NON_BASH_BLANK_CODEPOINTS) {
+      if (LOOP_EXCLUDED.has(cp)) continue;
+      const ch = String.fromCodePoint(cp);
+      const label = `U+${cp.toString(16).toUpperCase().padStart(4, "0")}`;
+      expect(isEscapeCommand(`harness approve understanding${ch}<<'X'\nbody\nX`), label).toBe(
+        false,
+      );
+      expect(isEscapeCommand(`harness approve understanding ${ch}<<'X'\nbody\nX`), label).toBe(
+        false,
+      );
+    }
+  });
+
   it("still accepts real bash blanks (TAB, SPACE) in every position above (no regression)", () => {
     for (const cp of BASH_BLANK_CODEPOINTS) {
       const ch = String.fromCodePoint(cp);

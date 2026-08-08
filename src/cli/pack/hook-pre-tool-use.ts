@@ -242,6 +242,11 @@ function blockJson(
 function approveEscapeHint(toolName: string, command: string): string | null {
   if (toolName !== "Bash") return null;
   const trimmed = command.trim();
+  // This `\s` is deliberately broader than isEscapeCommand's `[ \t]`-only
+  // bash-blank matcher (task 623640a5 review): it only gates whether to
+  // SHOW the discoverability hint, not whether to accept the command as
+  // the escape, so being permissive here is safe. Do not narrow it to
+  // `[ \t]` to "match" the matcher.
   if (!/^harness\s+approve\b/.test(trimmed)) return null;
   if (isEscapeCommand(trimmed)) return null;
   return (

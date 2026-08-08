@@ -939,6 +939,35 @@ describe("pack hook pre-tool-use blocker — operator-approval escape commands (
     );
   });
 
+  it("still appends the re-run-bare hint for the bash-blank-divergence shapes newly blocked by task 623640a5's review fixes", async () => {
+    // Regression guard: fail-closed (rejecting these non-bash-blank
+    // heredoc shapes) must not turn into a silent lockout. A non-bash-
+    // blank codepoint (NBSP here) glued mid-command-part or right before
+    // the heredoc intro is now DENIED by isEscapeCommand, but the
+    // command still starts with `harness approve`, so the discoverability
+    // hint (module doc: two accepted shapes) must still surface.
+    const nbsp = " ";
+    for (const command of [
+      `harness approve understanding${nbsp}--force <<'X'\nbody\nX`,
+      `harness approve understanding${nbsp}<<'X'\nbody\nX`,
+    ]) {
+      const stdout = bufferStream();
+      const stderr = bufferStream();
+      const result = await runPackHookPreToolUseCli({
+        manifest: manifestWithPack(),
+        stdin: readableFromString(event({ tool_name: "Bash", tool_input: { command } })),
+        stdout: stdout.stream,
+        stderr: stderr.stream,
+        reportsDir: path.join(tmp, "no-reports"),
+        ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+      });
+      expect(result.blocked, command).toBe(true);
+      const decision = JSON.parse(stdout.read().trim()) as { reason: string };
+      expect(decision.reason, command).toContain("looks like a `harness approve` command");
+      expect(decision.reason, command).toContain("Two shapes are accepted");
+    }
+  });
+
   it("does NOT append the approve hint when a non-approve command is blocked", async () => {
     const stdout = bufferStream();
     const stderr = bufferStream();

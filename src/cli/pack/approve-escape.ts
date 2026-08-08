@@ -40,25 +40,22 @@
 /** Metacharacters rejected in the executable (non-heredoc-body) part. */
 const COMMAND_META_RE = /[;&|<>]/;
 
-/**
- * bash's actual lexical blank set: SPACE and TAB, nothing else.
- * Ground-truthed against GNU bash with a PATH-stub harness (task
- * 623640a5): of the 25 codepoints JS's generic `\s` class matches, only
- * these two are stripped by bash as an insignificant separator between
- * tokens on a line. Every other one (NBSP U+00A0 and 20 further Unicode
- * space-separator/line-separator/BOM codepoints; VT/FF too) glues onto
- * the adjacent token as an ordinary word-constituent character instead.
- * `\s` used to accept those characters here as if bash agreed they were
- * whitespace, which let a report heredoc's delimiter word, as bash
- * actually reads it, diverge from the word this matcher extracts (see
- * `parseApproveReportHeredoc` below for the exploitable shape that
- * produced). Every regex in this module that means "a separator bash
- * will actually treat as blank here" uses `[ \t]`, never `\s`. LF and CR
- * are deliberately excluded from this class: LF already splits lines
- * before any of these regexes run, and CR is rejected by an explicit
- * check in both callers, so neither needs blank-class treatment here.
- */
-
+// bash's actual lexical blank set: SPACE and TAB, nothing else.
+// Ground-truthed against GNU bash with a PATH-stub harness (task
+// 623640a5): of the 25 codepoints JS's generic `\s` class matches, only
+// these two are stripped by bash as an insignificant separator between
+// tokens on a line. Every other one (NBSP U+00A0 and 20 further Unicode
+// space-separator/line-separator/BOM codepoints; VT/FF too) glues onto
+// the adjacent token as an ordinary word-constituent character instead.
+// `\s` used to accept those characters here as if bash agreed they were
+// whitespace, which let a report heredoc's delimiter word, as bash
+// actually reads it, diverge from the word this matcher extracts (see
+// `parseApproveReportHeredoc` below for the exploitable shape that
+// produced). Every regex in this module that means "a separator bash
+// will actually treat as blank here" uses `[ \t]`, never `\s`. LF and CR
+// are deliberately excluded from this class: LF already splits lines
+// before any of these regexes run, and CR is rejected by an explicit
+// check in both callers, so neither needs blank-class treatment here.
 function commandPartIsClean(part: string): boolean {
   if (COMMAND_META_RE.test(part)) return false;
   if (part.includes("`") || part.includes("$(")) return false;
@@ -118,7 +115,14 @@ export function parseApproveReportHeredoc(
   // heredoc a line early.
   const m = /^(.*?)<<[ \t]*'([A-Z_][A-Z0-9_]*)'[ \t]*$/.exec(head);
   if (!m) return null;
-  const commandPart = m[1]!.trimEnd();
+  // [ \t]-only right-trim (not the generic .trimEnd(), which strips every
+  // JS `\s` codepoint): a non-bash-blank character immediately before
+  // `<<` must reach heredocCommandPartIsClean's whitelist so it gets
+  // rejected there, not be silently stripped away first as if it were an
+  // insignificant separator bash would also treat as blank (task
+  // 623640a5 review). See the bash-blank comment above
+  // `commandPartIsClean`.
+  const commandPart = m[1]!.replace(/[ \t]*$/, "");
   const delimiter = m[2]!;
   if (!heredocCommandPartIsClean(commandPart)) return null;
   const rest = trimmed.slice(nl + 1).split("\n");
@@ -129,7 +133,12 @@ export function parseApproveReportHeredoc(
   const termIdx = rest.findIndex((line) => line === delimiter);
   if (termIdx === -1) return null;
   const after = rest.slice(termIdx + 1);
-  if (!after.every((line) => line.trim() === "")) return null;
+  // [ \t]-only blank check (not the generic .trim(), which treats every
+  // JS `\s` codepoint as blank): a post-terminator line made only of
+  // non-bash-blank whitespace (e.g. NBSP, U+2028) is NOT inert to bash.
+  // PATH-stub-verified (task 623640a5 review) that bash actually looks
+  // up and attempts to execute such a line as a real command.
+  if (!after.every((line) => /^[ \t]*$/.test(line))) return null;
   return {
     command: commandPart,
     delimiter,
