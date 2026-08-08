@@ -742,13 +742,17 @@ describe("normalizeCommand", () => {
       expect(pushRe.test(cmd)).toBe(false);
       expect(pushRe.test(normalizeCommand(cmd).normalized)).toBe(false);
     });
-    it("a boundary character INSIDE the quoted value stays a bypass (quote-unaware BOUNDARY_RE splits first; measured still-open residual)", () => {
+    it("a boundary character INSIDE the quoted value stays a bypass via THIS pass (quote-unaware BOUNDARY_RE splits first; task cf3dff51 closes it via a separate pass instead, see below)", () => {
       // BOUNDARY_RE segments the command BEFORE tokenisation and has no
       // quote awareness, so `VAR='a; b' git push` splits at the `;` and
-      // neither resulting segment carries a recognisable invocation.
-      // Same class as the closure but a different mechanism (segmenting,
-      // not tokenising); halt criterion 1 puts BOUNDARY_RE out of this
-      // task's budget, so the residual is pinned instead of closed.
+      // neither resulting segment carries a recognisable invocation. This
+      // pin is about `normalizeCommand` (THIS pass) specifically and stays
+      // exactly as it was: task cf3dff51 (see the "normalizeCommandQuoteAware"
+      // describe block further down this file) closes the underlying
+      // COMPUTATION via a separate, additive pass rather than editing this
+      // one in place -- deliberately, per that task's own halt criterion --
+      // so `normalizeCommand`'s own output for this exact string is
+      // unaffected and this assertion keeps holding.
       const cmd = "VAR='a; b' git push origin master";
       expect(pushRe.test(cmd)).toBe(false);
       expect(pushRe.test(normalizeCommand(cmd).normalized)).toBe(false);
