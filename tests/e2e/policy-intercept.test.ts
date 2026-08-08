@@ -520,6 +520,32 @@ describe("policy intercept: manifest-driven E2E flow", () => {
     expect(result.decisions[0]?.outcome).toBe("warn-degraded");
   });
 
+  it("the operator hint does not fire under the fail_open opt-out (negative control)", async () => {
+    const dir = makeTmpDir("harness-broken-mcp-optout-hint-");
+    const brokenScript = path.join(dir, "broken-grounding-mcp.sh");
+    fs.writeFileSync(
+      brokenScript,
+      "#!/bin/sh\necho 'broken-mcp: simulated startup failure' >&2\nexit 1\n",
+      "utf8",
+    );
+    fs.chmodSync(brokenScript, 0o755);
+    const manifestPath = writeManifest({
+      groundingMcpCommand: [brokenScript],
+      degradedFailPosture: "fail_open",
+    });
+    const { stream: stdout } = captureStream();
+    const { stream: stderr, output: stderrOut } = captureStream();
+    await runInterceptCli({
+      stdin: streamFrom(JSON.stringify(PR_MERGE_EVENT)),
+      stdout,
+      stderr,
+      configPath: manifestPath,
+    });
+    // warn-degraded (opt-out) => no deny-degraded => no hint line. The
+    // negative control that keeps the hint's .find predicate narrow.
+    expect(stderrOut()).not.toContain("Operator recovery");
+  });
+
   it("fails CLOSED on a genuine ledger TIMEOUT (hanging grounding-mcp, the measured 2026-08-06 shape)", async () => {
     // The audit that motivated task f1aea826 measured: --ledger-timeout
     // <=100ms flipped a git-push deny to ALLOW while broken-path shapes
@@ -536,7 +562,7 @@ describe("policy intercept: manifest-driven E2E flow", () => {
       groundingTimeoutMs: 1500,
     });
     const { stream: stdout, output: stdoutOut } = captureStream();
-    const { stream: stderr } = captureStream();
+    const { stream: stderr, output: stderrOut } = captureStream();
 
     const result = await runInterceptCli({
       stdin: streamFrom(JSON.stringify(PR_MERGE_EVENT)),
@@ -550,6 +576,14 @@ describe("policy intercept: manifest-driven E2E flow", () => {
     expect(result.decisions[0]?.reason).toMatch(/timeout/i);
     const parsed = JSON.parse(stdoutOut().trim());
     expect(parsed.reason).toContain("could not be read");
+    // Default-verbosity operator hint fires on the real ledger-timeout
+    // path (round 3: previously pinned only on the no-transport path)
+    // and carries the decision's OWN reason, not a hardcoded cause.
+    const errText = stderrOut();
+    expect(errText).toContain("deny-degraded (evidence could not be evaluated");
+    expect(errText).toMatch(/Operator recovery.*harness doctor/);
+    expect(errText).toMatch(/timeout/i);
+    expect(errText).not.toContain("fail_open");
   });
 
   it("lands the degraded decision in the audit trail via ONE fresh-session retry (task f1aea826 AC4)", async () => {
@@ -815,7 +849,7 @@ describe("policy intercept: pooled grounding-mcp connection", () => {
     });
 
     const { stream: stdout, output: stdoutOut } = captureStream();
-    const { stream: stderr } = captureStream();
+    const { stream: stderr, output: stderrOut2 } = captureStream();
     const result = await runInterceptCli({
       stdin: streamFrom(JSON.stringify(PR_MERGE_EVENT)),
       stdout,
@@ -832,5 +866,10 @@ describe("policy intercept: pooled grounding-mcp connection", () => {
     const parsed = JSON.parse(stdoutOut().trim());
     expect(parsed.reason).toContain("review-before-merge");
     expect(parsed.reason).not.toContain("audit-before-merge");
+    // Exactly ONE operator hint line per event, even with two
+    // deny-degraded decisions (pins the .find against a future
+    // .filter/forEach widening).
+    const hintCount = (stderrOut2().match(/Operator recovery/g) ?? []).length;
+    expect(hintCount).toBe(1);
   });
 });

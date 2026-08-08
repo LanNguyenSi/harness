@@ -27,13 +27,18 @@ These four things bite people who skip ahead to the YAML:
    for the future contract.
 
 2. **`grounding-mcp` must be wired in `tools.mcp[]`, or every policy
-   silently degrades to warn-mode.** The `requires` evaluator queries
-   the evidence ledger through grounding-mcp; without it, no policy
-   ever blocks. Since `v0.35.0`, `harness apply` refuses outright when
-   the manifest declares `policies:` without `grounding-mcp` wired
-   under `tools.mcp` (previously it applied and the policies silently
-   degraded to warn-mode at runtime, with only a `harness validate`
-   warning to catch it); wire `grounding-mcp` or drop the policies.
+   evaluation degrades — and what that means depends on the policy's
+   `enforcement:` tier (task f1aea826).** The `requires` evaluator
+   queries the evidence ledger through grounding-mcp; without it, a
+   `warn` policy degrades to the non-blocking `warn-degraded`, while a
+   `block`/`require_approval` policy fails CLOSED (`deny-degraded`) and
+   DENIES every matching event until the producer is wired — see
+   docs/okf/gate-fail-posture-matrix.md. Since `v0.35.0`, `harness
+   apply` refuses outright when the manifest declares `policies:`
+   without `grounding-mcp` wired under `tools.mcp` (in the pre-0.35 era
+   it applied and every policy silently degraded to the then-universal
+   warn-mode, with only a `harness validate` warning to catch it);
+   wire `grounding-mcp` or drop the policies.
 
 3. **Hook wiring is not auto-generated for custom policies.** The
    `harness init` wizard only knows about its five named patterns

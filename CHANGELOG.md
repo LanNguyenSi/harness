@@ -66,14 +66,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `harness audit` `VALID_OUTCOMES`, `explain`/`audit` `--outcome` filters,
   the verbose stderr diagnostic (which names the outcome, the unreachable
   ledger, the fail-closed posture and the operator opt-out), a NEW
-  unconditional one-line stderr operator hint per degraded-denied event
-  (pointing at `harness doctor` and the docs, deliberately without the
-  opt-out literal on the default channel), and the
+  default-verbosity one-line stderr operator hint per degraded-denied
+  event (carrying the decision's OWN sanitised reason, since
+  deny-degraded has five causes and only one of them is the ledger — a
+  hardcoded ledger-fault wording sent operators of the other four to a
+  green `harness doctor`; pointing at doctor and the docs, deliberately
+  without the opt-out literal on the default channel, and suppressed
+  under verbose where the full diagnostic supersedes it), and the
   `checkPolicyGroundingMcp` validate/apply warning, whose pre-0.45
   "every policy will fire in degraded warn-mode" wording described the
   inverse of the new block-tier behaviour and is now tier-aware and
   test-pinned; `smoke` assertions classify the new outcome as deny via
-  the unchanged envelope path. NOT closed here, named so no
+  the unchanged envelope path. The stale-contract sweep is mechanical
+  now: `tests/no-stale-fail-posture-claims.test.ts` fails the suite if
+  the pre-0.45 phrasings reappear under `src/` or `docs/` outside a
+  small annotated allowlist (three review rounds each found a fresh
+  such surface — docs quoting message literals verbatim was the root
+  cause, so the updated docs now describe messages instead of quoting
+  them); the same sweep updated docs/writing-custom-policies.md,
+  docs/CLI.md, docs/examples/pandora-bootstrap.md, the OKF
+  producer-wiring bundle, the ledger-client module header, the init
+  composer's wizard advisory, and marked the superseded ROADMAP Phase 4
+  acceptance bullets. NOT closed here, named so no
   doc overclaims: the OUTER hook-budget layer (a hook exceeding its
   `budget_ms` is allow by harness contract) stays fail-open and is not
   reachable from this repo's schema; keep hook budgets comfortably above

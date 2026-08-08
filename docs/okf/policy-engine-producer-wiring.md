@@ -2,8 +2,8 @@
 type: invariant
 title: Policy engine needs its producers wired
 description: A `policies:` entry only ever blocks if grounding-mcp is wired under `tools.mcp[]`; since v0.35.0 `harness apply` hard-refuses the misconfig, and since v0.39.0 a pooled per-intercept ledger session stops hook-timeout fail-open under load. Since 0.43.0/0.44.0 `bash_match` triggers match raw-or-normalised (three additive arms) and `${REPO}`/`${BRANCH}`/`at_head` are attributed per repository, universal-additive.
-tags: [policies, grounding-mcp, warn-mode, footgun, versions, bash_match, per-repo-attribution]
-timestamp: 2026-08-08T06:20:00Z
+tags: [policies, grounding-mcp, degraded-fail-posture, footgun, versions, bash_match, per-repo-attribution]
+timestamp: 2026-08-08T07:15:00Z
 sources:
   - src/cli/validate/checks.ts
   - src/cli/apply/apply.ts
@@ -28,8 +28,8 @@ Evaluation order per PreToolUse event (all in `src/runtime/intercept.ts`): `trig
 
 ## Where it's enforced
 
-- **`harness validate` — warning only.** `checkPolicyGroundingMcp` (`src/cli/validate/checks.ts:238-250`): if `manifest.policies.length > 0` and no `tools.mcp` entry named `grounding-mcp`, emits severity `warning`, message "policies declared but grounding-mcp not wired: every policy will fire in degraded warn-mode at runtime; see docs/ARCHITECTURE.md §6".
-- **`harness apply` — hard refusal (since v0.35.0).** `src/cli/apply/apply.ts:531-546` runs the same `checkPolicyGroundingMcp` in apply's gate phase and throws `HarnessExitError` (EX_FAIL): "Wire grounding-mcp under tools.mcp, or remove the policies." The code comment names the rationale (discovery H3): "validate only WARNS on this; apply must fail loud so an operator who runs apply without validate cannot ship the degraded config." Documented in `docs/CLI.md` Notes: "Since `v0.35.0`: `harness apply` fails loud (refuses) when the manifest declares `policies:` without `grounding-mcp` wired under `tools.mcp`".
+- **`harness validate` — warning only.** `checkPolicyGroundingMcp` (`src/cli/validate/checks.ts`): if `manifest.policies.length > 0` and no `tools.mcp` entry named `grounding-mcp`, emits a severity `warning` whose message states the tier-split consequence (warn policies degrade non-blocking, block/require_approval policies DENY every matching event until the producer is wired, `risk.degraded_fail_posture: fail_open` as the availability opt-out) and points at this bundle's gate-fail-posture-matrix.md. The exact wording is pinned by the apply test and deliberately not quoted here — quoting message literals in docs is how this bundle went stale twice (review 2026-08-08, rounds 2-3).
+- **`harness apply` — hard refusal (since v0.35.0).** `src/cli/apply/apply.ts` runs the same `checkPolicyGroundingMcp` in apply's gate phase and throws `HarnessExitError` (EX_FAIL) telling the operator to wire grounding-mcp under tools.mcp or remove the policies; the code comment carries the tier-aware rationale (validate only WARNS; apply must fail loud so an operator who runs apply without validate cannot ship the misconfigured manifest either way). Documented in `docs/CLI.md` Notes: "Since `v0.35.0`: `harness apply` fails loud (refuses) when the manifest declares `policies:` without `grounding-mcp` wired under `tools.mcp`".
 - **Adjacent, stricter check for the consumer pack:** `checkSolutionAcceptanceProducer` (`src/cli/validate/checks.ts:269-300`) makes solution-acceptance-enabled-without-grounding-mcp a validate **error**, because there the failure direction inverts: the producer (`solution_evaluate`) can never write a verdict, so the completion-gate deadlocks on a permanent deny (fail-closed), rather than fail-open.
 
 Name matching is by `name === "grounding-mcp"` only; neither the checks nor `findGroundingMcp` consult `enabled` (`enabled: z.boolean().default(true)` on MCP entries, `src/schema/tools.ts:20`). An `enabled: false` grounding-mcp entry therefore satisfies the apply gate while not being projected into the runtime's `mcpServers` — the agent-side producer verbs (`mcp__grounding-mcp__ledger_add` etc.) are then unavailable even though the gate side can still spawn the server from the manifest command.

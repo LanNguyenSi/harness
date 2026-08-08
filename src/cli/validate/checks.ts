@@ -242,9 +242,9 @@ export function checkPolicyGroundingMcp(manifest: Manifest): Diagnostic[] {
   // Tier-aware wording since task f1aea826: this is the LAST surface
   // before an operator ships a manifest whose block/require_approval
   // policies will hard-deny every matching event (deny-degraded), the
-  // inverse of the pre-0.45 silent warn-mode this message used to
-  // describe. The wording is pinned by a test so it cannot drift from
-  // the runtime contract again (review 2026-08-08, round 2).
+  // inverse of the pre-0.45 silent non-blocking fallback this message
+  // used to describe. The wording is pinned by a test so it cannot
+  // drift from the runtime contract again (review 2026-08-08, round 2).
   return [
     {
       severity: "warning",

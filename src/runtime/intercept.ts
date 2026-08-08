@@ -596,8 +596,12 @@ const ENVELOPE_CONTROL_CHARS = new RegExp(
  * and the audit ledger, never model-visible text. The full, untouched
  * string still goes to the audit row and the stderr diagnostic; only
  * the envelope interpolation is bounded.
+ *
+ * Exported for the CLI wrapper's unconditional deny-degraded operator
+ * hint (review 2026-08-08, round 3), which interpolates the same
+ * untrusted reason into its one-line stderr surface.
  */
-function sanitizeEnvelopeReason(reason: string): string {
+export function sanitizeEnvelopeReason(reason: string): string {
   const stripped = reason.replace(ENVELOPE_CONTROL_CHARS, " ");
   return stripped.length > 200 ? `${stripped.slice(0, 200)}...` : stripped;
 }

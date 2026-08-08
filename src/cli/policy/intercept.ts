@@ -19,6 +19,7 @@ import {
   recordPolicyDecisionOnSession,
   resolveGitContext,
   resolveKubeContext,
+  sanitizeEnvelopeReason,
   type LedgerClient,
   type PolicyDecision,
   type RiskGateContext,
@@ -858,25 +859,34 @@ export async function runInterceptCli(
     stderr.write(formatNoMatchHint(event, manifest, opts.hookName));
   }
 
-  // Degraded-deny operator hint. Always (not gated on --verbose), ONE
-  // line per event: the envelope deliberately tells the agent only to
-  // involve the operator, and the full diagnostic (which names the
-  // fail_open opt-out) is verbose-only — without this line an operator
-  // whose fleet wedges on a degraded ledger has no default-verbosity
-  // pointer at all (review 2026-08-08, round 2). Deliberately does NOT
-  // name the opt-out knob itself: hook stderr can be surfaced to the
-  // model in some harness configurations, so the default channel points
-  // at the operator docs and the verbose diagnostic instead of carrying
-  // the disable recipe (deviation from the review's suggested fix,
-  // recorded in the run's 03-decisions.md).
+  // Degraded-deny operator hint. Default-verbosity, ONE line per event:
+  // the envelope deliberately tells the agent only to involve the
+  // operator, and the full diagnostic (which names the fail_open
+  // opt-out) is verbose-only — without this line an operator whose
+  // fleet wedges on a degraded ledger has no default-verbosity pointer
+  // at all (review 2026-08-08, round 2). Two deliberate properties:
+  //   - It carries the decision's OWN reason (sanitised: it can embed
+  //     grounding-mcp subprocess output) instead of asserting a ledger
+  //     fault — deny-degraded has five causes and only one of them is
+  //     the ledger; a hardcoded "ledger unreadable" sent operators of
+  //     the other four down a false doctor-path (round 3, medium).
+  //   - It does NOT name the opt-out knob: hook stderr can be surfaced
+  //     to the model in some harness configurations, so the default
+  //     channel points at the operator docs and the verbose diagnostic
+  //     instead of carrying the disable recipe (deviation from round
+  //     2's suggested fix, recorded in the run's 03-decisions.md).
+  // Suppressed under --verbose, where formatDecisionDiagnostic already
+  // prints the same reason with more context.
   const firstDegradedDeny = result.decisions.find(
     (d) => d.outcome === "deny-degraded",
   );
-  if (firstDegradedDeny) {
+  if (firstDegradedDeny && !verbose) {
     stderr.write(
       `harness policy intercept${hookSuffix(opts.hookName)}: ${firstDegradedDeny.policyName}: ` +
-        `deny-degraded (evidence ledger unreadable; failing closed). Operator recovery: ` +
-        `harness doctor; details and the availability opt-out: docs/risk-gate.md ` +
+        `deny-degraded (evidence could not be evaluated: ` +
+        `${sanitizeEnvelopeReason(firstDegradedDeny.reason)}); failing closed. ` +
+        `Operator recovery: check the reason above, then harness doctor if it names ` +
+        `the ledger; details and the availability opt-out: docs/risk-gate.md ` +
         `("Degraded mode") or rerun with HARNESS_POLICY_VERBOSE=1\n`,
     );
   }

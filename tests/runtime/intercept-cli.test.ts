@@ -432,6 +432,44 @@ describe("runInterceptCli — Phase 5 #3: --verbose stderr diagnostics", () => {
     expect(errOutput()).not.toContain("fail_open");
   });
 
+  it("operator hint carries the decision's OWN reason (template-unresolved, not a hardcoded ledger fault)", async () => {
+    // deny-degraded has five causes and only one is the ledger; round 3
+    // caught the hint hardcoding "evidence ledger unreadable" for all
+    // five, sending operators of the other four to a green harness
+    // doctor. Non-verbose on purpose: the hint is the default channel.
+    const { stream: out } = captureStream();
+    const { stream: err, output: errOutput } = captureStream();
+    await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({ ...JSON.parse(denyEvent), tool_input: {} }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([REVIEW_POLICY]),
+      ledger: allowLedger,
+    });
+    const errText = errOutput();
+    expect(errText).toContain("deny-degraded (evidence could not be evaluated");
+    expect(errText).toContain("template variables unresolved");
+    expect(errText).not.toContain("evidence ledger unreadable");
+    expect(errText).not.toContain("fail_open");
+  });
+
+  it("operator hint does not fire for a warn-tier degraded decision (negative control, non-verbose)", async () => {
+    const { stream: out } = captureStream();
+    const { stream: err, output: errOutput } = captureStream();
+    await runInterceptCli({
+      stdin: streamFrom(denyEvent),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([
+        { ...REVIEW_POLICY, enforcement: "warn" } as typeof REVIEW_POLICY,
+      ]),
+      ledger: degradedLedger,
+    });
+    expect(errOutput()).not.toContain("Operator recovery");
+  });
+
   it("auditRetryTimeoutMs pins the retry budget formula (quarter timeout, 250ms floor)", () => {
     // Round-1 finding 2 was an unbounded retry reusing the full budget;
     // round 2 noted nothing would go red if that regressed. This pins
