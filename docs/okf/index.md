@@ -41,10 +41,12 @@ deliberately do not duplicate them.
   agent-writable ledger is audit-only for builtin enforcement gates; only
   operator- or trusted-process-authored filesystem markers open them.
 - [Policy engine needs its producers wired](policy-engine-producer-wiring.md),
-  a policy only ever blocks if grounding-mcp is wired under tools.mcp[];
-  version-sensitive (0.35.0 apply refusal, 0.39.0 pooled ledger session,
-  0.43.0/0.44.0 raw-or-normalised bash_match matching plus per-repository
-  `${REPO}`/`${BRANCH}`/`at_head` attribution, universal-additive).
+  a policy is only ever POSITIVELY satisfied if grounding-mcp is wired under
+  tools.mcp[]; an unwired producer denies block/require_approval tiers
+  (deny-degraded, task f1aea826); version-sensitive (0.35.0 apply refusal,
+  0.39.0 pooled ledger session, 0.43.0/0.44.0 raw-or-normalised bash_match
+  matching plus per-repository `${REPO}`/`${BRANCH}`/`at_head` attribution,
+  universal-additive).
 - [Managed mutations validate the whole manifest](manifest-validation-scope.md),
   add/remove schema-validate the entire proposed harness.yaml; add's asset
   gate baseline-diffs so only newly-introduced asset errors block.

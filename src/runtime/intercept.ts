@@ -594,12 +594,14 @@ const ENVELOPE_CONTROL_CHARS = new RegExp(
  * in `src/policies/ledger-client.ts` appends the child's last stderr
  * line), i.e. untrusted content that previously only reached stderr
  * and the audit ledger, never model-visible text. The full, untouched
- * string still goes to the audit row and the stderr diagnostic; only
- * the envelope interpolation is bounded.
+ * string still goes to the audit row and the verbose diagnostic; only
+ * the envelope interpolation and the default-verbosity operator hint
+ * are bounded.
  *
- * Exported for the CLI wrapper's unconditional deny-degraded operator
- * hint (review 2026-08-08, round 3), which interpolates the same
- * untrusted reason into its one-line stderr surface.
+ * Exported for the CLI wrapper's deny-degraded operator hint (review
+ * 2026-08-08, round 3; default-verbosity only, suppressed under
+ * verbose), which interpolates the same untrusted reason into its
+ * one-line stderr surface.
  */
 export function sanitizeEnvelopeReason(reason: string): string {
   const stripped = reason.replace(ENVELOPE_CONTROL_CHARS, " ");

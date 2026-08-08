@@ -535,12 +535,16 @@ describe("policy intercept: manifest-driven E2E flow", () => {
     });
     const { stream: stdout } = captureStream();
     const { stream: stderr, output: stderrOut } = captureStream();
-    await runInterceptCli({
+    const result = await runInterceptCli({
       stdin: streamFrom(JSON.stringify(PR_MERGE_EVENT)),
       stdout,
       stderr,
       configPath: manifestPath,
     });
+    // Positive half so the control cannot pass vacuously (round 4): the
+    // opt-out really took effect and produced the non-blocking outcome.
+    expect(result.decisions[0]?.outcome).toBe("warn-degraded");
+    expect(result.blocked).toBe(false);
     // warn-degraded (opt-out) => no deny-degraded => no hint line. The
     // negative control that keeps the hint's .find predicate narrow.
     expect(stderrOut()).not.toContain("Operator recovery");

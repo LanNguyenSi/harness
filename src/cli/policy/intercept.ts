@@ -154,7 +154,7 @@ function formatDecisionDiagnostic(decision: PolicyDecision, hookName?: string): 
     decision.outcome === "warn-degraded"
       ? " (ledger unreachable)"
       : decision.outcome === "deny-degraded"
-        ? " (ledger unreachable; failing closed per enforcement tier; operator opt-out: risk.degraded_fail_posture: fail_open)"
+        ? " (evidence could not be evaluated; failing closed per enforcement tier; operator opt-out: risk.degraded_fail_posture: fail_open)"
         : ""
   }`;
   const lines: string[] = [header];

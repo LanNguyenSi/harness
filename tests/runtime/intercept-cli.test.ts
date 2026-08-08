@@ -390,11 +390,16 @@ describe("runInterceptCli — Phase 5 #3: --verbose stderr diagnostics", () => {
     // The stderr header is the OPERATOR surface and therefore names the
     // opt-out; the agent-facing envelope must not (review 2026-08-08,
     // high finding — pinned as absence in tests/runtime/intercept.test.ts
-    // and as presence here).
+    // and as presence here). Header wording is cause-neutral because
+    // deny-degraded has five causes and only one is the ledger (round 5);
+    // the true cause follows on the block's own `reason:` line.
     expect(errText).toContain(
-      "deny-degraded (ledger unreachable; failing closed per enforcement tier; operator opt-out: risk.degraded_fail_posture: fail_open)",
+      "deny-degraded (evidence could not be evaluated; failing closed per enforcement tier; operator opt-out: risk.degraded_fail_posture: fail_open)",
     );
     expect(errText).toContain("grounding-mcp timeout after 5000ms");
+    // Under verbose the one-line hint is suppressed (the diagnostic
+    // supersedes it) — deleting the `!verbose` guard must turn this red.
+    expect(errText).not.toContain("Operator recovery");
     const parsedAgain = JSON.parse(outOutput().trim());
     expect(parsedAgain.reason).not.toContain("fail_open");
   });
@@ -458,7 +463,7 @@ describe("runInterceptCli — Phase 5 #3: --verbose stderr diagnostics", () => {
   it("operator hint does not fire for a warn-tier degraded decision (negative control, non-verbose)", async () => {
     const { stream: out } = captureStream();
     const { stream: err, output: errOutput } = captureStream();
-    await runInterceptCli({
+    const result = await runInterceptCli({
       stdin: streamFrom(denyEvent),
       stdout: out,
       stderr: err,
@@ -467,6 +472,9 @@ describe("runInterceptCli — Phase 5 #3: --verbose stderr diagnostics", () => {
       ]),
       ledger: degradedLedger,
     });
+    // Positive half so the control cannot pass vacuously (round 4): the
+    // degraded warn-tier decision was actually produced.
+    expect(result.decisions[0]?.outcome).toBe("warn-degraded");
     expect(errOutput()).not.toContain("Operator recovery");
   });
 

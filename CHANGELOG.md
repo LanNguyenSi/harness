@@ -77,13 +77,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   "every policy will fire in degraded warn-mode" wording described the
   inverse of the new block-tier behaviour and is now tier-aware and
   test-pinned; `smoke` assertions classify the new outcome as deny via
-  the unchanged envelope path. The stale-contract sweep is mechanical
-  now: `tests/no-stale-fail-posture-claims.test.ts` fails the suite if
-  the pre-0.45 phrasings reappear under `src/` or `docs/` outside a
-  small annotated allowlist (three review rounds each found a fresh
-  such surface — docs quoting message literals verbatim was the root
-  cause, so the updated docs now describe messages instead of quoting
-  them); the same sweep updated docs/writing-custom-policies.md,
+  the unchanged envelope path. A stale-contract drift guard now runs in
+  the suite: `tests/no-stale-fail-posture-claims.test.ts` fails if the
+  pre-0.45 phrasings OR the round-4-enumerated restatement shapes
+  ("ledger degradation → warn-degraded" untiered, "only ever blocks if
+  grounding-mcp", the untiered fail-open framing) reappear under `src/`
+  or `docs/` outside a per-phrase allowlist with freshness checks and
+  one positive control per needle. Honest bound, stated in the guard
+  itself: it is a literal/pattern grep pinning every phrasing four
+  review rounds actually found, not a semantic checker — a future
+  paraphrase avoiding all needles still needs eyes (four review rounds
+  each found a fresh such surface; docs quoting message literals
+  verbatim was the recurring root cause, so the updated docs now
+  describe messages instead of quoting them); the same sweep updated
+  docs/writing-custom-policies.md,
   docs/CLI.md, docs/examples/pandora-bootstrap.md, the OKF
   producer-wiring bundle, the ledger-client module header, the init
   composer's wizard advisory, and marked the superseded ROADMAP Phase 4
