@@ -7,6 +7,7 @@ import {
   checkPolicyPackSources,
 } from "../../policy-packs/index.js";
 import { expandHome } from "../../runtime/expand-home.js";
+import { shippedOperatorOnlyPolicyNames } from "../init/templates.js";
 import type { Manifest } from "../../schema/index.js";
 import type { Diagnostic } from "./types.js";
 
@@ -454,6 +455,52 @@ export function checkPolicyRiskWithoutEnvScope(manifest: Manifest): Diagnostic[]
           `environment. See docs/risk-gate.md.`,
       });
     }
+  }
+  return diags;
+}
+
+// Template-policy drift (task adf037c1): an installed harness.yaml ages in
+// place — `harness apply` never retroactively adds newly-shipped default
+// policies to an already-materialized manifest, so security policies
+// introduced after install reach only fresh installs. The measured
+// incident: a 0.44.0 machine whose manifest predated the kill-switch
+// defenses (deny-kill-switch-bypass / deny-session-env-strip /
+// deny-pause-sentinel-forgery) had the documented `harness pause` bypass
+// live as ALLOW, with nothing surfacing the gap.
+//
+// Scope (operator decision 2026-08-08): compare only the shipped
+// `operator_only` (kill-switch / security) policy names — the
+// profile-independent security floor — against the installed manifest.
+// A missing one is an ERROR (this is a real, exploitable defense gap),
+// distinct from a merely-cosmetic drift; non-operator_only policies are
+// intentionally not compared so solo/team installs are not nagged for
+// full-only convenience policies they never carried.
+//
+// Deliberate opt-out (operator decision 2026-08-08): a name listed in
+// `doctor.ignore_template_drift` is suppressed. This is NOT a
+// `policies[].enabled` flag — such a flag would be read here but ignored
+// by the runtime engine, so an operator would believe a policy disabled
+// while it still fired. The ignore-list only ever silences THIS report
+// line and changes no enforcement, so its meaning is honest.
+export function checkTemplatePolicyDrift(manifest: Manifest): Diagnostic[] {
+  const present = new Set(manifest.policies.map((p) => p.name));
+  const ignored = new Set(manifest.doctor.ignore_template_drift);
+  const diags: Diagnostic[] = [];
+  for (const name of shippedOperatorOnlyPolicyNames()) {
+    if (present.has(name) || ignored.has(name)) continue;
+    diags.push({
+      severity: "error",
+      path: "policies",
+      message:
+        `shipped operator_only security policy "${name}" is missing from ` +
+        `this manifest — a defense the current template ships but this ` +
+        `(older) install never received, so the gate it enforces is silently ` +
+        `absent. Re-add the "${name}" policy + its hook from the full ` +
+        `template (\`harness init --template full\` in a scratch dir and copy ` +
+        `the block, or hand-add per docs/okf/pause-vs-gate-kill-switch.md), ` +
+        `or, if you deliberately do not want it, list "${name}" under ` +
+        `doctor.ignore_template_drift to acknowledge the opt-out.`,
+    });
   }
   return diags;
 }

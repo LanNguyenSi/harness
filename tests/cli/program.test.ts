@@ -231,6 +231,11 @@ describe("CLI program — doctor command", () => {
         `version: 1
 hooks: []
 policies: []
+doctor:
+  ignore_template_drift:
+    - deny-kill-switch-bypass
+    - deny-session-env-strip
+    - deny-pause-sentinel-forgery
 tools:
   builtin:
     known: [Read]

@@ -9,6 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- **SECURITY: `harness doctor` now detects template-policy drift, an
+  installed manifest that lacks a shipped `operator_only` kill-switch
+  security policy** (task `adf037c1`). Measured 2026-08-06: a 0.44.0
+  machine whose `~/.harness/harness.yaml` predated the kill-switch
+  defenses (`deny-kill-switch-bypass`, `deny-session-env-strip`,
+  `deny-pause-sentinel-forgery`) had the documented `harness pause`
+  bypass live as ALLOW, with nothing surfacing the gap: `harness apply`
+  never retroactively adds newly-shipped default policies to an
+  already-materialized manifest, so security policies introduced after
+  install reach only fresh installs. Doctor's new "Template drift
+  (shipped security policies)" section compares the installed manifest
+  against `shippedOperatorOnlyPolicyNames()` (the `operator_only` set
+  parsed from `FULL_TEMPLATE` itself, kept honest by the full-template
+  parity test), so it can never drift from what `harness init --template
+  full` writes and automatically extends when a new operator_only policy
+  is added. Each missing policy is an ERROR (doctor exits non-zero, the
+  standard CI/dogfood signal), naming the policy and the rehydration
+  path. Scope is the `operator_only` security floor regardless of profile
+  (a solo/team install missing kill-switch protection is flagged too;
+  that is the security core, per operator decision 2026-08-08), and it
+  does NOT nag about full-only convenience policies a smaller profile
+  never carried. Deliberate opt-out: `doctor.ignore_template_drift:
+  [<policy-name>, ...]` in the manifest, a NEW minimal `doctor:` schema
+  section that silences only the doctor report line and changes no
+  enforcement. This is deliberately NOT a `policies[].enabled: false`
+  flag: the runtime policy engine has no such concept, so an operator
+  setting it would believe a policy disabled while it still fired (a
+  footgun the CLI help + docs already implied but no code backed). The
+  original AC's two-severity split (operator_only error vs cosmetic
+  warning) was consciously narrowed to a single operator_only error tier
+  per the same operator scope decision, since cosmetic policies are no
+  longer compared. Shared `checkTemplatePolicyDrift` in
+  `src/cli/validate/checks.ts` (doctor-only surface today; validate is
+  about internal consistency, not external-reference comparison, so it is
+  intentionally not wired to fail `harness validate`/`apply`).
+  docs/okf/pause-vs-gate-kill-switch.md documents the drift check and the
+  opt-out; fixtures cover missing/present/opt-out/partial, and a parity
+  test pins the shipped set so a template rename reddens rather than
+  silently shrinking the check.
+
 - **SECURITY: read-only Bash classifier no longer treats mutating
   argument forms of allowlisted git subcommands as read-only** (task
   `9d1fff1b`). `GIT_READ_ONLY_SUBS` (`src/runtime/read-only-bash.ts`)

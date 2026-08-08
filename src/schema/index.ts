@@ -10,6 +10,7 @@ import { RiskSchema } from "./risk.js";
 import { ToolsSchema } from "./tools.js";
 import { ToolchainParitySchema } from "./toolchain-parity.js";
 import { AuditSchema } from "./audit.js";
+import { DoctorSchema } from "./doctor.js";
 import { ReviewTemplatesSchema, WorkflowsSchema } from "./workflows.js";
 
 export const SUPPORTED_MANIFEST_VERSION = 1;
@@ -38,6 +39,9 @@ export const ManifestSchema = z
     // Optional, default-OFF: `harness session-start toolchain-parity`
     // snapshot + peer-drift-compare config. See ./toolchain-parity.ts.
     toolchain_parity: ToolchainParitySchema.default({}),
+    // Optional: `harness doctor` config, e.g. the deliberate-opt-out
+    // list for the template-policy-drift check. See ./doctor.ts.
+    doctor: DoctorSchema.default({}),
   })
   .strict()
   .superRefine((manifest, ctx) => {
@@ -137,5 +141,6 @@ export * from "./toolchain-parity.js";
 export * from "./environments.js";
 export * from "./workflows.js";
 export * from "./audit.js";
+export * from "./doctor.js";
 export * from "./extract.js";
 export * from "./requires.js";
