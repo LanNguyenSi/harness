@@ -214,11 +214,12 @@ describe("init — team profile", () => {
     expect(policy?.ux?.run).toEqual(['harness record review --pr ${PR_NUMBER} "<summary>"']);
   });
 
-  it("wires grounding-mcp so the review-before-merge policy does not degrade to warn-mode", async () => {
+  it("wires grounding-mcp so the review-before-merge policy evaluates against a real ledger", async () => {
     // Memory `feedback_harness_policies_warn_mode`: a manifest with
-    // policies: that doesn't declare grounding-mcp in tools.mcp silently
-    // lets all policies through. The team profile must include
-    // grounding-mcp explicitly to honour the gate.
+    // policies: that doesn't declare grounding-mcp in tools.mcp cannot
+    // evaluate evidence (pre-0.45 that silently let all policies
+    // through; since task f1aea826 block-tier policies deny instead).
+    // The team profile must include grounding-mcp explicitly.
     await callInit({ homeDir: tmpHome, template: "team" });
     const v = validate({ configPath: manifestPath });
     const hasPolicyWarning = v.diagnostics.some(

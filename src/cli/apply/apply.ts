@@ -529,10 +529,14 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   }
 
   // grounding-mcp policy-degradation gate (discovery H3): a manifest with
-  // policies but no grounding-mcp under tools.mcp would deploy policies that
-  // silently degrade to warn-mode at runtime (the allow-everything footgun).
-  // validate only WARNS on this; apply must fail loud so an operator who runs
-  // apply without validate cannot ship the degraded config.
+  // policies but no grounding-mcp under tools.mcp deploys policies whose
+  // every evaluation degrades at runtime. Since task f1aea826 that means
+  // warn policies degrade non-blocking while block/require_approval
+  // policies DENY every matching event (deny-degraded) — no longer the
+  // pre-0.45 allow-everything footgun, but a config that hard-blocks
+  // until the producer is wired. validate only WARNS on this; apply must
+  // fail loud so an operator who runs apply without validate cannot ship
+  // the misconfigured manifest either way.
   const groundingIssues = checkPolicyGroundingMcp(manifest);
   if (groundingIssues.length > 0) {
     throw new HarnessExitError(

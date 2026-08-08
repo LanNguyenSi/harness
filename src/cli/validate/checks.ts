@@ -239,12 +239,18 @@ export function checkPolicyGroundingMcp(manifest: Manifest): Diagnostic[] {
   if (manifest.policies.length === 0) return [];
   const wired = manifest.tools.mcp.some((m) => m.name === "grounding-mcp");
   if (wired) return [];
+  // Tier-aware wording since task f1aea826: this is the LAST surface
+  // before an operator ships a manifest whose block/require_approval
+  // policies will hard-deny every matching event (deny-degraded), the
+  // inverse of the pre-0.45 silent non-blocking fallback this message
+  // used to describe. The wording is pinned by a test so it cannot
+  // drift from the runtime contract again (review 2026-08-08, round 2).
   return [
     {
       severity: "warning",
       path: "policies",
       message:
-        "policies declared but grounding-mcp not wired: every policy will fire in degraded warn-mode at runtime; see docs/ARCHITECTURE.md §6",
+        "policies declared but grounding-mcp not wired: warn policies degrade non-blocking (warn-degraded), but block/require_approval policies will DENY every matching event (deny-degraded) until the producer is wired; risk.degraded_fail_posture: fail_open restores the availability-first behaviour — see docs/okf/gate-fail-posture-matrix.md",
     },
   ];
 }

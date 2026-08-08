@@ -418,18 +418,22 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
 
   // H3 gate auto-repair: `harness apply` hard-fails (checkPolicyGroundingMcp)
   // when manifest.policies.length > 0 AND grounding-mcp is absent from
-  // tools.mcp — policies would silently degrade to warn-mode (allow-everything
-  // footgun). Mirror the exact same predicate here: if the Custom selection
-  // carries any policy and the operator did not pick grounding-mcp explicitly,
-  // auto-wire it so the emitted manifest passes apply without a HarnessExitError.
-  // An informational advisory replaces the per-policy "requires a producer"
-  // warnings that would otherwise fire for the grounding-mcp–coupled policies.
+  // tools.mcp — every policy evaluation would degrade at runtime (since
+  // task f1aea826 that means block/require_approval policies DENY every
+  // matching event, warn policies degrade non-blocking; before 0.45 it
+  // was the universal warn-mode allow-everything footgun). Mirror the
+  // exact same predicate here: if the Custom selection carries any
+  // policy and the operator did not pick grounding-mcp explicitly,
+  // auto-wire it so the emitted manifest passes apply without a
+  // HarnessExitError. An informational advisory replaces the per-policy
+  // "requires a producer" warnings that would otherwise fire for the
+  // grounding-mcp–coupled policies.
   let autoAddedGroundingMcp = false;
   if (sel.policies.length > 0 && !mcpSet.has("grounding-mcp")) {
     mcpSet.add("grounding-mcp");
     autoAddedGroundingMcp = true;
     warnings.push(
-      "auto-wired grounding-mcp to tools.mcp (required by the selected policies: without it harness apply rejects the manifest and policies degrade to warn-mode at runtime).",
+      "auto-wired grounding-mcp to tools.mcp (required by the selected policies: without it harness apply rejects the manifest).",
     );
   }
 

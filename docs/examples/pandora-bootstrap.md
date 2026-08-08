@@ -37,9 +37,7 @@ harness adopt ~/.claude/settings.json --yes
 Two things the bare `adopt` does not yet handle:
 
 1. The merge-gate hook (`harness policy intercept`) and the `review-before-merge` policy.
-2. Declaring `grounding-mcp` so the policy engine has a ledger to query. Without this declaration, `harness validate` warns:
-
-   > policies declared but grounding-mcp not wired: every policy will fire in degraded warn-mode at runtime
+2. Declaring `grounding-mcp` so the policy engine has a ledger to query. Without this declaration, `harness validate` warns that the policies cannot evaluate their evidence — since task f1aea826 the warning spells out the tier split (warn policies degrade non-blocking, block/require_approval policies deny every matching event until the producer is wired) instead of the old universal non-blocking fallback. The transcript below predates that wording; the shape of the flow is unchanged.
 
 The final manifest at `~/.harness/harness.yaml`:
 

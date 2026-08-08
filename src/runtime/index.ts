@@ -1,7 +1,9 @@
 export {
   attributeTriggerSegments,
   intercept,
+  isBlockingDecision,
   policyMatchesEvent,
+  sanitizeEnvelopeReason,
   type ClaudeDenyJson,
   type InterceptOptions,
   type InterceptResult,

@@ -1946,6 +1946,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     "require_approval",
     "deny",
     "warn-degraded",
+    "deny-degraded",
   ] as const;
   type DecisionFilter = (typeof VALID_DECISION_FILTERS)[number];
   const isDecisionFilter = (v: string): v is DecisionFilter =>
@@ -2113,7 +2114,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .option("--policy <name>", "filter to a single policy by name")
     .option(
       "--outcome <outcome>",
-      "filter by decision outcome (allow / warn / require_approval / deny / warn-degraded)",
+      "filter by decision outcome (allow / warn / require_approval / deny / warn-degraded / deny-degraded)",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")

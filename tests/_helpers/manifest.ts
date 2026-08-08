@@ -26,6 +26,13 @@ export interface MakeManifestOptions {
   classifiers?: RiskClassifier[];
   /** Risk Gate environment resolvers — `environments.resolvers[]` (Phase 7 #4/#5). */
   resolvers?: EnvironmentResolver[];
+  /**
+   * `risk.degraded_fail_posture` (task f1aea826). Omitted by default so
+   * tests exercise the same hand-built-manifest fallback the runtime
+   * defends (absent field = `preserve_enforcement`, matching the schema
+   * default); pass `"fail_open"` to pin the availability-first opt-out.
+   */
+  degradedFailPosture?: "preserve_enforcement" | "fail_open";
 }
 
 const DEFAULT_HOOK = {
@@ -47,7 +54,12 @@ export function makeManifest(opts: MakeManifestOptions = {}): Manifest {
     memory: {} as Manifest["memory"],
     hooks: opts.hooks ?? [DEFAULT_HOOK],
     policies: opts.policies ?? [],
-    risk: { classifiers: opts.classifiers ?? [] },
+    risk: {
+      classifiers: opts.classifiers ?? [],
+      ...(opts.degradedFailPosture && {
+        degraded_fail_posture: opts.degradedFailPosture,
+      }),
+    },
     environments: { resolvers: opts.resolvers ?? [] },
   } as Manifest;
 }

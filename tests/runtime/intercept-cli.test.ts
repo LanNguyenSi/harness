@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
-import { realLedgerClient, runInterceptCli } from "../../src/cli/policy/intercept.js";
+import { auditRetryTimeoutMs, realLedgerClient, runInterceptCli } from "../../src/cli/policy/intercept.js";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import { normalizeCommandAmpAware } from "../../src/runtime/command-normalize.js";
 import {
@@ -370,7 +370,10 @@ describe("runInterceptCli — Phase 5 #3: --verbose stderr diagnostics", () => {
     expect(errOutput()).toBe("");
   });
 
-  it("--verbose on warn-degraded: stderr names the ledger reason", async () => {
+  it("--verbose on deny-degraded (block tier + degraded ledger): stderr names the fail-closed posture", async () => {
+    // Task f1aea826: a block-enforcement policy under a degraded ledger
+    // now fails CLOSED, so the verbose diagnostic carries the new
+    // deny-degraded header and stdout carries the block envelope.
     const { stream: out, output: outOutput } = captureStream();
     const { stream: err, output: errOutput } = captureStream();
     await runInterceptCli({
@@ -381,9 +384,129 @@ describe("runInterceptCli — Phase 5 #3: --verbose stderr diagnostics", () => {
       ledger: degradedLedger,
       verbose: true,
     });
+    const parsed = JSON.parse(outOutput().trim());
+    expect(parsed.decision).toBe("block");
+    const errText = errOutput();
+    // The stderr header is the OPERATOR surface and therefore names the
+    // opt-out; the agent-facing envelope must not (review 2026-08-08,
+    // high finding — pinned as absence in tests/runtime/intercept.test.ts
+    // and as presence here). Header wording is cause-neutral because
+    // deny-degraded has five causes and only one is the ledger (round 5);
+    // the true cause follows on the block's own `reason:` line.
+    expect(errText).toContain(
+      "deny-degraded (evidence could not be evaluated; failing closed per enforcement tier; operator opt-out: risk.degraded_fail_posture: fail_open)",
+    );
+    expect(errText).toContain("grounding-mcp timeout after 5000ms");
+    // Under verbose the one-line hint is suppressed (the diagnostic
+    // supersedes it) — deleting the `!verbose` guard must turn this red.
+    expect(errText).not.toContain("Operator recovery");
+    const parsedAgain = JSON.parse(outOutput().trim());
+    expect(parsedAgain.reason).not.toContain("fail_open");
+  });
+
+  it("degradedLedgerClient (no grounding-mcp in manifest): blocking decision gets a NO-audit-row stderr line", async () => {
+    // With no transport at all there is no audit row and previously no
+    // signal either (silent no-op record). A blocking decision without
+    // an audit row must be loud (review 2026-08-08). No injected ledger:
+    // runInterceptCli falls back to degradedLedgerClient because
+    // fakeManifest declares no grounding-mcp server.
+    const { stream: out, output: outOutput } = captureStream();
+    const { stream: err, output: errOutput } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(denyEvent),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([REVIEW_POLICY]),
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.decisions[0]?.outcome).toBe("deny-degraded");
+    const parsed = JSON.parse(outOutput().trim());
+    expect(parsed.decision).toBe("block");
+    // The no-transport envelope keeps the same operator-only discipline
+    // as the ledger-timeout one (round 2: only the timeout path pinned
+    // the absence).
+    expect(parsed.reason).not.toContain("fail_open");
+    expect(parsed.reason).not.toContain("degraded_fail_posture");
+    expect(errOutput()).toContain("has NO audit row");
+    expect(errOutput()).toContain("grounding-mcp not declared in manifest");
+    // Unconditional (non-verbose) one-line operator hint per
+    // degraded-denied event; the opt-out literal stays OFF this default
+    // channel (docs + verbose diagnostic carry it).
+    expect(errOutput()).toContain("Operator recovery");
+    expect(errOutput()).toContain("harness doctor");
+    expect(errOutput()).not.toContain("fail_open");
+  });
+
+  it("operator hint carries the decision's OWN reason (template-unresolved, not a hardcoded ledger fault)", async () => {
+    // deny-degraded has five causes and only one is the ledger; round 3
+    // caught the hint hardcoding "evidence ledger unreadable" for all
+    // five, sending operators of the other four to a green harness
+    // doctor. Non-verbose on purpose: the hint is the default channel.
+    const { stream: out } = captureStream();
+    const { stream: err, output: errOutput } = captureStream();
+    await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({ ...JSON.parse(denyEvent), tool_input: {} }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([REVIEW_POLICY]),
+      ledger: allowLedger,
+    });
+    const errText = errOutput();
+    expect(errText).toContain("deny-degraded (evidence could not be evaluated");
+    expect(errText).toContain("template variables unresolved");
+    expect(errText).not.toContain("evidence ledger unreadable");
+    expect(errText).not.toContain("fail_open");
+  });
+
+  it("operator hint does not fire for a warn-tier degraded decision (negative control, non-verbose)", async () => {
+    const { stream: out } = captureStream();
+    const { stream: err, output: errOutput } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(denyEvent),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([
+        { ...REVIEW_POLICY, enforcement: "warn" } as typeof REVIEW_POLICY,
+      ]),
+      ledger: degradedLedger,
+    });
+    // Positive half so the control cannot pass vacuously (round 4): the
+    // degraded warn-tier decision was actually produced.
+    expect(result.decisions[0]?.outcome).toBe("warn-degraded");
+    expect(errOutput()).not.toContain("Operator recovery");
+  });
+
+  it("auditRetryTimeoutMs pins the retry budget formula (quarter timeout, 250ms floor)", () => {
+    // Round-1 finding 2 was an unbounded retry reusing the full budget;
+    // round 2 noted nothing would go red if that regressed. This pins
+    // the formula itself.
+    expect(auditRetryTimeoutMs(5000)).toBe(1250);
+    expect(auditRetryTimeoutMs(2000)).toBe(500);
+    expect(auditRetryTimeoutMs(1000)).toBe(250);
+    expect(auditRetryTimeoutMs(100)).toBe(250);
+    expect(auditRetryTimeoutMs(1)).toBe(250);
+  });
+
+  it("--verbose on warn-degraded (warn tier + degraded ledger): stderr names the ledger reason, nothing blocks", async () => {
+    const { stream: out, output: outOutput } = captureStream();
+    const { stream: err, output: errOutput } = captureStream();
+    await runInterceptCli({
+      stdin: streamFrom(denyEvent),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest([
+        { ...REVIEW_POLICY, enforcement: "warn" } as typeof REVIEW_POLICY,
+      ]),
+      ledger: degradedLedger,
+      verbose: true,
+    });
     expect(outOutput()).toBe("");
     const errText = errOutput();
-    expect(errText).toContain("warn-degraded (ledger unreachable)");
+    expect(errText).toContain(
+      "warn-degraded (evidence could not be evaluated; non-blocking per warn tier or fail_open opt-out)",
+    );
     expect(errText).toContain("grounding-mcp timeout after 5000ms");
   });
 

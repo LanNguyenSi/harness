@@ -75,9 +75,35 @@ export const RiskClassifierSchema = z
   })
   .strict();
 
+// Fail posture of block/require_approval policies when their evidence
+// source is DEGRADED (ledger timeout, spawn failure, unresolved template,
+// invalid `within`, thrown evaluator) — i.e. the evaluator could not form
+// a real verdict at all (task f1aea826).
+//
+//   preserve_enforcement (default) — a policy whose enforcement is
+//     `block` or `require_approval` fails CLOSED (`deny-degraded`): the
+//     gate exists to prevent a specific irreversible incident, so "could
+//     not read the evidence" must not open it. `warn` policies keep the
+//     availability-first `warn-degraded` (never blocks).
+//   fail_open — the pre-0.45 behaviour: EVERY degraded evaluation maps
+//     to the non-blocking `warn-degraded`, regardless of enforcement.
+//     Explicit operator opt-out for availability-first setups.
+//
+// This knob covers only the policy engine's own degraded paths. The
+// OUTER hook-budget layer (a hook that exceeds its budget is allow by
+// harness contract) is a separate fail-open surface this schema cannot
+// reach — see docs/okf/gate-fail-posture-matrix.md.
+export const DegradedFailPostureSchema = z.enum([
+  "preserve_enforcement",
+  "fail_open",
+]);
+
 export const RiskSchema = z
   .object({
     classifiers: z.array(RiskClassifierSchema).default([]),
+    degraded_fail_posture: DegradedFailPostureSchema.default(
+      "preserve_enforcement",
+    ),
   })
   .strict()
   .superRefine((risk, ctx) => {
@@ -94,6 +120,7 @@ export const RiskSchema = z
     });
   });
 
+export type DegradedFailPosture = z.infer<typeof DegradedFailPostureSchema>;
 export type RiskSeverity = z.infer<typeof RiskSeveritySchema>;
 export type RiskCategory = z.infer<typeof RiskCategorySchema>;
 export type RiskClassifier = z.infer<typeof RiskClassifierSchema>;

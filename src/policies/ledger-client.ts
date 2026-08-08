@@ -4,10 +4,14 @@
 // init / notifications/initialized / tools/call handshake, and returns
 // ledger entries normalised to harness's LedgerEntry shape (see
 // src/policies/requires.ts). Any failure path resolves to
-// `{ kind: "degraded", reason }` so the policy evaluator can fall back to
-// warn-mode per ROADMAP §"Phase 4 — Policy layer" acceptance: "When the
-// evidence ledger is unreachable, policy evaluation defaults to
-// enforcement: warn-equivalent behaviour".
+// `{ kind: "degraded", reason }` — this TRANSPORT layer never decides
+// what degradation means. The policy evaluator routes a degraded result
+// through `degradedOutcome` (src/runtime/intercept.ts, task f1aea826):
+// `warn` policies degrade to the non-blocking `warn-degraded`,
+// `block`/`require_approval` policies fail CLOSED as `deny-degraded`.
+// (The original Phase 4 acceptance — unreachable ledger defaults to
+// warn-equivalent for every tier — is superseded; see the note in
+// docs/ROADMAP.md and docs/okf/gate-fail-posture-matrix.md.)
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { LedgerEntry } from "./requires.js";

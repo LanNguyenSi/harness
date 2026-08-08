@@ -9,6 +9,119 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- **SECURITY: block/require_approval policies now fail CLOSED when their
+  evidence source is degraded, instead of silently mapping to the
+  never-blocking `warn-degraded`** (task `f1aea826`). Measured 2026-08-06 on
+  0.44.0 (isolated probe home, `git push` event without its preflight tag):
+  a healthy ledger denied, every broken-ledger shape (ENOTDIR, corrupt file,
+  directory) denied, but `--ledger-timeout` at 1/25/50/100 ms flipped the
+  same event to **ALLOW**, because the timeout path mapped to
+  `warn-degraded`, which `isBlockingDecision` never treats as blocking.
+  `evaluateOnePolicy`'s degraded family (ledger timeout/spawn failure,
+  unresolved template variables, invalid `within`, thrown evaluator,
+  schema-invariant branch) now routes through a tier-aware
+  `degradedOutcome`: `warn` policies keep the non-blocking `warn-degraded`
+  (availability first, unchanged), `block`/`require_approval` policies
+  produce the NEW blocking `deny-degraded` outcome. The `deny-degraded`
+  envelope deliberately bypasses the policy's `ux:` surface and names the
+  degraded cause (sanitised: the transport reason embeds subprocess
+  output, so the envelope interpolation is bounded to 200 chars with
+  control characters stripped) plus an operator-facing recovery path, so
+  nobody debugs a phantom missing tag on an unreadable ledger. The
+  fail_open opt-out is deliberately ABSENT from that agent-facing text
+  (review finding: a deny that includes its own disable recipe is not a
+  gate, and nothing prevents the blocked agent from editing the
+  manifest); it is named on the operator surfaces instead: the verbose
+  stderr diagnostic, docs/risk-gate.md, and the OKF fail-posture matrix.
+  **ACCEPTED SEMANTIC CHANGE
+  an upgrading operator should know about:** a degraded ledger (including
+  "grounding-mcp not declared in manifest" under block-tier policies) now
+  DENIES where it silently allowed; the explicit manifest opt-out
+  `risk.degraded_fail_posture: fail_open` (schema default
+  `preserve_enforcement`, `src/schema/risk.ts`) restores the pre-0.45
+  availability-first mapping for every tier, and the operator-only
+  `harness pause` kill switch remains the deadlock escape (it is honoured
+  BEFORE manifest load); the shipped init template documents the knob as
+  a COMMENTED-OUT line on purpose (the schema is strict, so an emitted
+  key would make the manifest unreadable by a pre-0.45 binary, and a
+  manifest load failure is allow at the hook layer: on a mixed-version
+  fleet that would turn a downgrade into a silent full fail-open). Audit
+  completeness rides along, best-effort and precisely bounded: the pooled
+  ledger session's timeout latch previously guaranteed that exactly the
+  degraded deny lost its own audit row (every post-timeout call on that
+  session short-circuits), so `realLedgerClient.record` now retries once
+  per invocation over a fresh session, RESERVED for `deny-degraded` rows
+  (an allow/warn row failing first cannot consume it) and capped at
+  max(250ms, timeoutMs/4) per call — two calls, so the added stall is at
+  most half a timeout once the ledger timeout is >=1s, and bounded at
+  500ms absolute below that, where the floor dominates (the formula is
+  pinned as the exported `auditRetryTimeoutMs`); a longer or unreserved
+  retry would stall the deny path toward the outer hook budget, where a
+  hook timeout is conventionally allow. With grounding-mcp absent from the manifest
+  altogether there is no transport at all: a BLOCKING decision on that
+  path now emits a dedicated "has NO audit row" stderr line instead of
+  the previous silent no-op. `isBlockingDecision` is now exported and
+  shared with the CLI wrapper's pending-approval staging, which had a
+  drifted hand-rolled copy. New outcome threaded through every consumer:
+  `harness audit` `VALID_OUTCOMES`, `explain`/`audit` `--outcome` filters,
+  the verbose stderr diagnostic (which names the outcome, the fail-closed
+  posture and the operator opt-out, cause-neutrally — the true cause
+  follows on its own reason line), a NEW
+  default-verbosity one-line stderr operator hint per degraded-denied
+  event (carrying the decision's OWN sanitised reason, since
+  deny-degraded has five causes and only one of them is the ledger — a
+  hardcoded ledger-fault wording sent operators of the other four to a
+  green `harness doctor`; pointing at doctor and the docs, deliberately
+  without the opt-out literal on the default channel, and suppressed
+  under verbose where the full diagnostic supersedes it), and the
+  `checkPolicyGroundingMcp` validate/apply warning, whose pre-0.45
+  "every policy will fire in degraded warn-mode" wording described the
+  inverse of the new block-tier behaviour and is now tier-aware and
+  test-pinned; `smoke` assertions classify the new outcome as deny via
+  the unchanged envelope path. A stale-contract drift guard now runs in
+  the suite: `tests/no-stale-fail-posture-claims.test.ts` fails if the
+  pre-0.45 phrasings OR the round-4-enumerated restatement shapes
+  ("ledger degradation → warn-degraded" untiered, "only ever blocks if
+  grounding-mcp", the untiered fail-open framing) reappear under `src/`
+  or `docs/` outside a per-phrase allowlist with freshness checks and
+  one positive control per needle. Honest bound, stated in the guard
+  itself: it is a literal/pattern grep pinning the mechanically
+  greppable phrasings the review rounds found, not a semantic checker —
+  wrong-modality claims were fixed by hand and are not pinned, and a
+  future paraphrase avoiding all needles still needs eyes (four review rounds
+  each found a fresh such surface; docs quoting message literals
+  verbatim was the recurring root cause, so the updated docs now
+  describe messages instead of quoting them); the same sweep updated
+  docs/writing-custom-policies.md,
+  docs/CLI.md, docs/examples/pandora-bootstrap.md, the OKF
+  producer-wiring bundle, the ledger-client module header, the init
+  composer's wizard advisory, and marked the superseded ROADMAP Phase 4
+  acceptance bullets. NOT closed here, named so no
+  doc overclaims: the OUTER hook-budget layer (a hook exceeding its
+  `budget_ms` is allow by harness contract) stays fail-open and is not
+  reachable from this repo's schema; keep hook budgets comfortably above
+  the ledger timeout (the shipped template's 1000-2000ms budgets vs the
+  5000ms grounding-mcp health timeout mean the HANG shape can still blow
+  the hook budget before the deny lands; a validate/doctor consistency
+  check is filed as a follow-up task), and malformed event JSON or a
+  failed manifest load remain allow-with-stderr at the CLI wrapper.
+  docs/risk-gate.md "Degraded mode",
+  docs/okf/gate-fail-posture-matrix.md,
+  docs/okf/policy-engine-producer-wiring.md and
+  docs/okf/debug-verb-selection.md rewritten to the new contract;
+  the two pre-0.45 pins asserting warn-degraded-never-blocks for block
+  tier were rewritten deliberately alongside (unit + e2e), plus new
+  fixtures: require_approval+timeout blocks, warn+timeout allows,
+  fail_open opt-out restores the old mapping end-to-end through the real
+  manifest parse, genuine-timeout e2e (hanging fake grounding-mcp), an
+  AC4 e2e pinning exactly TWO subprocess spawns with the `deny-degraded`
+  row landed in the ledger despite the latch, retry allocation (a warn
+  row failing first does not consume the deny row's retry),
+  envelope-over-ux precedence, envelope sanitisation, the opt-out's
+  absence from the envelope and presence on stderr, the no-transport
+  "has NO audit row" line, and `--outcome deny-degraded` accepted by
+  audit/explain filters.
+
 - nanoid bumped 3.3.16 → 3.3.18 via `npm audit fix` (lockfile-only, no source
   change), closing GHSA-2v37-7h3g-55p8 / CVE-2026-67213 (High, CVSS 8.2:
   `customAlphabet`/`customRandom` loop indefinitely when `size` is 0; affected

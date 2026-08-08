@@ -777,11 +777,18 @@ describe("intercept — bash_match", () => {
   });
 });
 
-describe("intercept — degraded ledger", () => {
-  it("returns warn-degraded outcome and does NOT block", async () => {
+// Task f1aea826: the degraded family ("could not evaluate requires") is
+// tier-aware. block/require_approval fail CLOSED (`deny-degraded`, blocks);
+// warn keeps the availability-first `warn-degraded` (never blocks);
+// `risk.degraded_fail_posture: fail_open` restores the old mapping for
+// every tier. The pre-0.45 pins asserting warn-degraded-never-blocks for a
+// block-enforcement policy were rewritten here deliberately, together with
+// docs/risk-gate.md and docs/okf/gate-fail-posture-matrix.md.
+describe("intercept — degraded ledger (fail posture per enforcement tier)", () => {
+  it("block enforcement + degraded ledger fails CLOSED as deny-degraded", async () => {
     const ledger = makeLedger({
       kind: "degraded",
-      reason: "ledger db missing",
+      reason: "grounding-mcp timeout after 1ms",
     });
     const result = await intercept({
       manifest: manifest([REVIEW_POLICY]),
@@ -790,14 +797,170 @@ describe("intercept — degraded ledger", () => {
       builtins: BUILTINS,
       now: NOW,
     });
+    expect(result.decisions[0]?.outcome).toBe("deny-degraded");
+    expect(result.decisions[0]?.reason).toBe("grounding-mcp timeout after 1ms");
+    expect(result.blockJson).not.toBeNull();
+    // Degraded-specific envelope: names the unreadable evidence source
+    // and the operator recovery path, and must NOT read like the
+    // missing-evidence deny (no "To satisfy:" producer hint — producing
+    // the tag cannot unblock an unreadable ledger). The fail_open
+    // opt-out must be ABSENT from this agent-facing text (review
+    // 2026-08-08, high finding: a deny that includes its own disable
+    // recipe is not a gate); it lives on the stderr diagnostic only,
+    // pinned in tests/runtime/intercept-cli.test.ts.
+    const reason = result.blockJson?.reason ?? "";
+    expect(reason).toContain("could not be read");
+    expect(reason).toContain("grounding-mcp timeout after 1ms");
+    expect(reason).toContain("Ask your operator");
+    expect(reason).not.toContain("degraded_fail_posture");
+    expect(reason).not.toContain("fail_open");
+    expect(reason).not.toContain("To satisfy:");
+    // The degraded decision is still submitted to the audit trail.
+    expect(ledger.recordCalls).toEqual([
+      { decisionName: "review-before-merge", sessionId: "sess-1" },
+    ]);
+  });
+
+  it("require_approval enforcement + degraded ledger also fails CLOSED", async () => {
+    const ledger = makeLedger({
+      kind: "degraded",
+      reason: "grounding-mcp timeout after 1ms",
+    });
+    const result = await intercept({
+      manifest: manifest([{ ...REVIEW_POLICY, enforcement: "require_approval" } as Policy]),
+      event: MERGE_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.decisions[0]?.outcome).toBe("deny-degraded");
+    expect(result.blockJson).not.toBeNull();
+  });
+
+  it("warn enforcement + degraded ledger keeps the non-blocking warn-degraded", async () => {
+    const ledger = makeLedger({
+      kind: "degraded",
+      reason: "grounding-mcp timeout after 1ms",
+    });
+    const result = await intercept({
+      manifest: manifest([{ ...REVIEW_POLICY, enforcement: "warn" } as Policy]),
+      event: MERGE_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
     expect(result.decisions[0]?.outcome).toBe("warn-degraded");
-    expect(result.decisions[0]?.reason).toBe("ledger db missing");
     expect(result.blockJson).toBeNull();
+  });
+
+  it("risk.degraded_fail_posture: fail_open restores the availability-first mapping for block tier", async () => {
+    const ledger = makeLedger({
+      kind: "degraded",
+      reason: "grounding-mcp timeout after 1ms",
+    });
+    const result = await intercept({
+      manifest: makeManifest({
+        policies: [REVIEW_POLICY],
+        degradedFailPosture: "fail_open",
+      }),
+      event: MERGE_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.decisions[0]?.outcome).toBe("warn-degraded");
+    expect(result.blockJson).toBeNull();
+  });
+
+  it("healthy ledger with satisfying evidence still allows (no fail-closed regression)", async () => {
+    const ledger = makeLedger({ kind: "ok", entries: [matchingEntry] });
+    const result = await intercept({
+      manifest: manifest([REVIEW_POLICY]),
+      event: MERGE_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.decisions[0]?.outcome).toBe("allow");
+    expect(result.blockJson).toBeNull();
+  });
+
+  it("deny-degraded envelope takes precedence over the policy's ux: surface", async () => {
+    // The operator-curated ux text describes the MISSING-evidence case
+    // ("run the producer, then retry"), which is misleading when the
+    // evidence could not be READ. Swapping the branch order in
+    // intercept()'s envelope construction must turn this red (the
+    // review 2026-08-08 found the precedence entirely unpinned).
+    const uxPolicy: Policy = {
+      ...REVIEW_POLICY,
+      ux: {
+        cannot: "You cannot merge this PR yet.",
+        required: ["a review entry for this PR"],
+        run: ["harness record review --pr ${PR_NUMBER}"],
+      },
+    } as Policy;
+    const ledger = makeLedger({
+      kind: "degraded",
+      reason: "grounding-mcp timeout after 1ms",
+    });
+    const result = await intercept({
+      manifest: manifest([uxPolicy]),
+      event: MERGE_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.decisions[0]?.outcome).toBe("deny-degraded");
+    const reason = result.blockJson?.reason ?? "";
+    expect(reason).toContain("could not be read");
+    expect(reason).not.toContain("You cannot merge this PR yet.");
+    expect(reason).not.toContain("harness record review");
+  });
+
+  it("bounds and strips the transport reason in the envelope (untrusted subprocess output)", async () => {
+    // exitDiagnostic appends the grounding-mcp child's last stderr line
+    // to the degraded reason; that string is untrusted and now reaches
+    // model-visible text for the first time. The envelope interpolation
+    // is bounded to 200 chars and control characters collapse to a
+    // space; the decision's own reason keeps the raw string for the
+    // audit row and stderr diagnostic. (Control chars are built via
+    // fromCharCode so this test file itself stays free of raw bytes.)
+    // Boundary chars of the sanitiser's class: NUL (0x00) and US (0x1F)
+    // bound the C0 range, DEL (0x7F) is the lone high member; an
+    // off-by-one in the fromCharCode-built range would ship green
+    // without them (review 2026-08-08, round 2).
+    const bell = String.fromCharCode(7);
+    const newline = String.fromCharCode(10);
+    const nul = String.fromCharCode(0);
+    const us = String.fromCharCode(31);
+    const del = String.fromCharCode(127);
+    const noisy = `spawn failed: bell${bell}${newline}line2${nul}${us}${del}x ${"x".repeat(400)}`;
+    const ledger = makeLedger({ kind: "degraded", reason: noisy });
+    const result = await intercept({
+      manifest: manifest([REVIEW_POLICY]),
+      event: MERGE_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.decisions[0]?.reason).toBe(noisy);
+    const reason = result.blockJson?.reason ?? "";
+    expect(reason).not.toContain(bell);
+    expect(reason).not.toContain(newline);
+    expect(reason).not.toContain(nul);
+    expect(reason).not.toContain(us);
+    expect(reason).not.toContain(del);
+    // The three adjacent boundary controls collapse to ONE space.
+    expect(reason).toContain("spawn failed: bell line2 x");
+    expect(reason).not.toContain("x".repeat(201));
   });
 });
 
 describe("intercept — unresolved template variables", () => {
-  it("flags warn-degraded when an extract source is missing", async () => {
+  it("fails CLOSED as deny-degraded for block enforcement when an extract source is missing", async () => {
+    // Same tier-aware family as the degraded-ledger case: an event that
+    // matches the trigger but defeats extraction must not slip past a
+    // block-tier gate (task f1aea826).
     const ledger = makeLedger({ kind: "ok", entries: [] });
     const result = await intercept({
       manifest: manifest([REVIEW_POLICY]),
@@ -806,10 +969,23 @@ describe("intercept — unresolved template variables", () => {
       builtins: BUILTINS,
       now: NOW,
     });
-    expect(result.decisions[0]?.outcome).toBe("warn-degraded");
+    expect(result.decisions[0]?.outcome).toBe("deny-degraded");
     expect(result.decisions[0]?.reason).toContain("PR_NUMBER");
-    expect(result.blockJson).toBeNull();
+    expect(result.blockJson).not.toBeNull();
     expect(ledger.queryCalls).toEqual([]);
+  });
+
+  it("stays non-blocking warn-degraded for warn enforcement", async () => {
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([{ ...REVIEW_POLICY, enforcement: "warn" } as Policy]),
+      event: { ...MERGE_EVENT, tool_input: {} },
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.decisions[0]?.outcome).toBe("warn-degraded");
+    expect(result.blockJson).toBeNull();
   });
 });
 
@@ -1332,12 +1508,14 @@ describe("intercept — operator_only unconditional deny (task 2cc73f55)", () =>
     expect(ledger.queryCalls).toEqual([{ tag: "review:42", sessionId: "sess-1" }]);
   });
 
-  it("schema-invariant-violated defensive branch: neither requires nor operator_only degrades to warn-degraded, not a crash", async () => {
+  it("schema-invariant-violated defensive branch: block tier degrades to deny-degraded, not a crash and not an allow", async () => {
     // Unreachable through `parseManifest` (the schema's superRefine
     // requires one or the other), but a hand-built Policy object (a test
     // double, a manifest loaded via a bypassed/legacy code path) could
     // still reach `intercept()` in this shape. Must degrade loudly, not
-    // throw and not silently allow.
+    // throw — and since task f1aea826 a block-tier policy in this state
+    // fails CLOSED (`deny-degraded`), observably distinct from a
+    // deliberate `operator_only` deny in every audit row and envelope.
     const noContractPolicy: Policy = policy({
       name: "no-contract",
       description: "neither requires nor operator_only",
@@ -1353,9 +1531,9 @@ describe("intercept — operator_only unconditional deny (task 2cc73f55)", () =>
       builtins: BUILTINS,
       now: NOW,
     });
-    expect(result.decisions[0]?.outcome).toBe("warn-degraded");
+    expect(result.decisions[0]?.outcome).toBe("deny-degraded");
     expect(result.decisions[0]?.reason).toMatch(/schema invariant violated/);
-    expect(result.blockJson).toBeNull();
+    expect(result.blockJson).not.toBeNull();
     expect(ledger.queryCalls).toEqual([]);
   });
 });

@@ -3,7 +3,7 @@ type: overview
 title: Debug verb selection — which harness verb answers which question
 description: Decision guide mapping "why did my policy (not) fire" questions to the right harness debug verb — ledger-replay vs live-hypothetical vs static-prediction vs stage-isolation vs end-to-end — with each verb's key discriminators and fail-postures.
 tags: [debugging, cli, audit, explain, dry-run, smoke]
-timestamp: 2026-08-05T15:28:20Z
+timestamp: 2026-08-08T06:20:00Z
 sources:
   - docs/for-agents.md
   - docs/CLI.md
@@ -45,7 +45,7 @@ The harness ships nine read-side debug verbs plus one end-to-end runner. They di
 
 ## audit — replay recorded decisions over a time window
 
-`harness audit [--since 1h] [--policy <name>] [--outcome <o>] [--session <id>] [--json]` replays `policy_decision` rows from the evidence ledger for a time window, one row per decision (timestamp, policy, outcome, reason), sorted chronologically (src/cli/index.ts, `command("audit")`; src/cli/audit.ts). Default window is 24h (`DEFAULT_SINCE = "24h"` in src/cli/audit.ts); `--outcome` accepts `allow / warn / require_approval / deny / warn-degraded`. `--session <id>` selects the grounding session, defaulting to `$CLAUDE_SESSION_ID` then `'default'`. Use it for the coarse question "did anything fire, and what was denied" — it shows outcomes, not reasoning depth (docs/for-agents.md, "The audit triumvirate").
+`harness audit [--since 1h] [--policy <name>] [--outcome <o>] [--session <id>] [--json]` replays `policy_decision` rows from the evidence ledger for a time window, one row per decision (timestamp, policy, outcome, reason), sorted chronologically (src/cli/index.ts, `command("audit")`; src/cli/audit.ts). Default window is 24h (`DEFAULT_SINCE = "24h"` in src/cli/audit.ts); `--outcome` accepts `allow / warn / require_approval / deny / warn-degraded / deny-degraded` (the last added by task f1aea826 for degraded-ledger denials). `--session <id>` selects the grounding session, defaulting to `$CLAUDE_SESSION_ID` then `'default'`. Use it for the coarse question "did anything fire, and what was denied" — it shows outcomes, not reasoning depth (docs/for-agents.md, "The audit triumvirate").
 
 ## explain — the LAST RECORDED evaluation, from the ledger
 

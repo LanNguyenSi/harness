@@ -59,8 +59,9 @@ function summariseHooks(hooks: HookPair[]): string {
  * Claude Code 2.1+ envelope (`decision:"block"` AND
  * `hookSpecificOutput.permissionDecision:"deny"`). On `allow`, stdout
  * is empty. On `warn-degraded`, stdout is empty AND stderr carries the
- * Phase 5 #3 diagnostic line (`warn-degraded (ledger unreachable)`)
- * when HARNESS_POLICY_VERBOSE is on. `harness smoke` sets that env var
+ * Phase 5 #3 diagnostic line (headed `warn-degraded (evidence could not
+ * be evaluated; ...)`, the literal outcome name being what the check
+ * below matches) when HARNESS_POLICY_VERBOSE is on. `harness smoke` sets that env var
  * unconditionally when spawning claude, so the warn branch is
  * observable.
  *
@@ -69,6 +70,12 @@ function summariseHooks(hooks: HookPair[]): string {
  * then allow if at least one policy-shaped hook fired without a deny
  * stdout, else `null` (no policy hook in the stream, so the assertion
  * is N/A and must be reported as a miss).
+ *
+ * `deny-degraded` (task f1aea826) is classified as deny by this same
+ * ordering: it emits the stdout block envelope, and the deny check runs
+ * BEFORE the stderr `warn-degraded` substring check — that ordering is
+ * load-bearing, since a deny-degraded event's stderr diagnostic line
+ * does not contain the string "warn-degraded" anyway.
  */
 export function classifyDecision(
   hooks: HookPair[],
