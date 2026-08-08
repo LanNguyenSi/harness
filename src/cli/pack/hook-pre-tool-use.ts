@@ -229,19 +229,29 @@ function blockJson(
   });
 }
 
-// Codepoints the command carries that JS's generic `\s` class matches but
-// bash does NOT treat as a blank separator here (task 623640a5 review,
-// anti-lockout finding): every one of them glues onto the adjacent token
-// instead of being stripped as insignificant whitespace, which is exactly
-// what let a report heredoc's real delimiter (as bash reads it) diverge
-// from the word isEscapeCommand extracts. Scans the RAW command (not a
-// `.trim()`'d copy — trimming would silently eat a leading/trailing
-// occurrence before it could be named). Returns the codepoints in `U+XXXX`
-// form, ascending, deduplicated; empty when the command carries none.
+// Codepoints in the STRUCTURALLY relevant part of the command (the whole
+// command when there is no heredoc, otherwise only the intro line up to
+// the first newline) that JS's generic `\s` class matches but bash does
+// NOT treat as a blank separator here (task 623640a5 review, anti-lockout
+// finding): every one of them glues onto the adjacent token instead of
+// being stripped as insignificant whitespace, which is exactly what let a
+// report heredoc's real delimiter (as bash reads it) diverge from the
+// word isEscapeCommand extracts. Deliberately scoped to the intro line,
+// not the heredoc BODY (review 2026-08-08 round 2): the body is free-form
+// Understanding Report markdown, where an NBSP or em-space is ordinary,
+// legitimate prose whitespace, not a matcher-defeating character, so
+// naming one there would misattribute an independent block's cause to
+// inert body text an agent never needs to touch. Scans the RAW intro line
+// (not a `.trim()`'d copy, since trimming would silently eat a leading or
+// trailing occurrence before it could be named). Returns the codepoints
+// in `U+XXXX` form, ascending, deduplicated; empty when the intro line
+// carries none.
 function findNonBashBlankWhitespace(command: string): string[] {
+  const nl = command.indexOf("\n");
+  const introLine = nl === -1 ? command : command.slice(0, nl);
   const codepoints = new Set<number>();
-  for (const ch of command) {
-    if (ch === " " || ch === "\t" || ch === "\n") continue;
+  for (const ch of introLine) {
+    if (ch === " " || ch === "\t") continue;
     if (/^\s$/.test(ch)) codepoints.add(ch.codePointAt(0)!);
   }
   return [...codepoints]

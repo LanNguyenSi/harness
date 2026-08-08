@@ -25,14 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   insignificant trailing whitespace, so the matcher extracted delimiter
   `X`; bash instead glues the NBSP onto the quoted word, so its real
   delimiter is `X`+NBSP, and the body line `X`+NBSP (matching the
-  matcher's delimiter, not bash's) closes the heredoc one line early —
+  matcher's delimiter, not bash's) closes the heredoc one line early:
   the following body line then runs as a real top-level command
   (`git push origin master` in the measured repro) instead of staying
   inert report text. Fix: every regex in the module that means "a
-  separator bash will actually treat as blank here" — the heredoc-intro
+  separator bash will actually treat as blank here" (the heredoc-intro
   trailing/leading whitespace, the `harness`/`approve` separator, the
   heredoc command-part whitelist, the command-part right-trim, and the
-  post-terminator blank-line check — now uses `[ \t]`, never `\s`.
+  post-terminator blank-line check) now uses `[ \t]`, never `\s`.
   Behavior change operators should know about: a `harness approve`
   heredoc carrying a non-bash-blank codepoint in one of those positions
   used to be accepted as a clean escape and routed to the normal
@@ -46,8 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   invisible whitespace gets a reason instead of silently retrying the
   same bytes. New regression tests: `tests/cli/pack-approve-escape.test.ts`
   (the full 25/23 codepoint enumeration measured against the live JS `\s`
-  class, the NBSP incident itself, and a mechanical guard — module source
-  with comments/strings stripped — asserting no future regex in the
+  class, the NBSP incident itself, and a mechanical guard, module source
+  with comments/strings stripped, asserting no future regex in the
   module can reintroduce a bare `\s` token, mutation-verified to actually
   redden); `tests/cli/pack-hook-pre-tool-use.test.ts` (the hint still
   surfaces for the newly-blocked shapes, now naming the codepoint; a

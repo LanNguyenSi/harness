@@ -14,10 +14,26 @@ const APPROVE_ESCAPE_SOURCE_URL = new URL(
 
 // Strip `//` line comments, `/* */` block comments, and quoted/template
 // string literals from a TS source string, leaving (approximately) just
-// code. Regex literals are deliberately left untouched — those are
-// exactly what the guard test below inspects. Comments are stripped
-// FIRST so a quote character inside a comment cannot be mistaken for the
-// start of a string literal.
+// code, so the guard test below can check regex literals for a bare
+// `\s` without also flagging one mentioned in prose. Comments are
+// stripped FIRST so a quote character inside a comment cannot be
+// mistaken for the start of a string literal.
+//
+// Known blind spots, not fixed (this is a coarse textual strip, not a
+// real parser): a quote-delimited span INSIDE a regex literal (e.g. the
+// `'...'` piece of approve-escape.ts's own heredoc-delimiter regex in
+// `parseApproveReportHeredoc`) is stripped by the same string-literal
+// alternative below, so a `\s` planted inside such a span disappears
+// before the guard test ever sees it (verified: mutating that exact
+// span to end in `\s'` still leaves the guard test green). A `//`
+// occurring INSIDE a same-line string literal (e.g. a URL) is also
+// mistaken for a line comment, since line-comment stripping runs first
+// and chops the rest of that line, string content included. The guard
+// test below is therefore a rough backstop, not a proof: the PRIMARY
+// protection against the bash-blank-divergence class is the "bash-blank
+// divergence" describe block above, which pins actual runtime BEHAVIOR
+// (every non-bash-blank codepoint of the 23-member enumeration rejected
+// at every call site), not source text.
 function stripCommentsAndStrings(source: string): string {
   const noBlockComments = source.replace(/\/\*[\s\S]*?\*\//g, "");
   const noLineComments = noBlockComments.replace(/\/\/[^\n]*/g, "");
@@ -376,12 +392,15 @@ describe("mechanical guard — no bare `\\s` token in approve-escape.ts (task 62
   // Fix-by-fix closure of the bash-blank divergence does not stop the
   // class from reopening: a FUTURE regex added to this module could
   // reintroduce JS's generic `\s` class where bash's actual blank set
-  // (`[ \t]`) is meant, and nothing short of reading every new regex by
-  // eye would catch it. This is the mechanical backstop: read the
-  // module's own source, strip comments and string literals (the prose
-  // above legitimately talks ABOUT `\s`), and assert the remaining code
-  // — which still contains every real regex literal, since those are
-  // never stripped — contains no `\s` token at all.
+  // (`[ \t]`) is meant. This is a mechanical backstop for the common
+  // case (a bare `\s` typed into a character class or alternation), read
+  // the module's own source, strip comments and string literals (the
+  // prose above legitimately talks ABOUT `\s`), and assert the
+  // remaining code contains no `\s` token at all. It is not a
+  // guarantee: see `stripCommentsAndStrings`'s own comment above for the
+  // two documented blind spots and why the behavioral enumeration in
+  // the "bash-blank divergence" describe block above this one is the
+  // primary protection, not this text-level check.
   it("the module's code (comments and string literals stripped) contains no `\\s` token", () => {
     const source = readFileSync(APPROVE_ESCAPE_SOURCE_URL, "utf8");
     const code = stripCommentsAndStrings(source);
