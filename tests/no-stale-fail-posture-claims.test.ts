@@ -14,11 +14,14 @@ import { describe, expect, it } from "vitest";
 // This guard catches BOTH variants under `src/` and `docs/` outside the
 // per-phrase allowlist below.
 //
-// HONEST COVERAGE CLAIM (review 2026-08-08, round 4): this is a
-// literal/pattern grep, not a semantic checker. It pins every phrasing
-// any review round actually found, plus the restatement shapes round 4
-// enumerated. A future paraphrase that avoids all needles still needs
-// eyes — the guard reduces the class, it does not abolish prose review.
+// HONEST COVERAGE CLAIM (review 2026-08-08, rounds 4-5): this is a
+// literal/pattern grep, not a semantic checker. It pins the
+// mechanically greppable phrasings the review rounds found (the old
+// vocabulary, the round-4 restatement shapes, the round-5 doctor
+// wording); wrong-modality claims (like a doc calling a suppressed
+// surface "unconditional") were fixed by hand and are NOT pinned. A
+// future paraphrase that avoids all needles still needs eyes — the
+// guard reduces the class, it does not abolish prose review.
 interface Needle {
   label: string;
   test: (text: string) => boolean;
@@ -51,6 +54,13 @@ const NEEDLES: Needle[] = [
     label: "warn-degraded ... fail-open for the",
     test: (t) => /warn-degraded[^.]{0,60}fail-open for the/i.test(t),
   },
+  // "ledger-backed gates degrade to warn" — the untiered doctor wording
+  // (round 5; lived in src/ unseen by four review rounds). The (?!-)
+  // keeps tier-aware "degrade to warn-degraded" phrasings expressible.
+  {
+    label: "gates degrade to warn (untiered)",
+    test: (t) => /gates? degrades? to warn(?!-)/i.test(t),
+  },
 ];
 
 // Per-PHRASE allowlist (round 4: a per-file allowlist granted
@@ -67,12 +77,10 @@ const ALLOWLIST = new Map<string, { labels: string[]; freshness: boolean }>([
     // explicit SUPERSEDED-by-f1aea826 notes.
     { labels: ["warn-mode"], freshness: true },
   ],
-  [
-    path.join("docs", "ARCHITECTURE.md"),
-    // Self-declared historical document; exempt without a freshness
-    // pin so it may drop the phrasing at any time.
-    { labels: ["warn-mode", "no policy ever blocks"], freshness: false },
-  ],
+  // docs/ARCHITECTURE.md deliberately carries NO entry (round 5): it
+  // currently matches no needle, and a blanket freshness-exempt entry
+  // would be a permanent pass on a live document. If a future edit
+  // legitimately needs an exemption, add it with freshness: true.
   [
     path.join("docs", "writing-custom-policies.md"),
     // One PAST-TENSE pre-0.35-era reference inside a tier-aware bullet.
@@ -111,7 +119,13 @@ function scanTree(root: string, rel: string): string[] {
 
 describe("pre-0.45 fail-posture claims must not reappear under src/ or docs/", () => {
   it("finds zero stale-contract phrasings outside the per-phrase allowlist", () => {
-    expect([...scanTree(REPO_ROOT, "src"), ...scanTree(REPO_ROOT, "docs")]).toEqual([]);
+    expect([
+      ...scanTree(REPO_ROOT, "src"),
+      ...scanTree(REPO_ROOT, "docs"),
+      // dogfood/ ships fixture manifests whose comments narrate the
+      // contract (round 5 found a stale one there, outside the roots).
+      ...scanTree(REPO_ROOT, "dogfood"),
+    ]).toEqual([]);
   });
 
   it("allowlist freshness: each pinned entry still matches the needle it is allowlisted FOR (a stale entry must fail, not silently over-allow)", () => {
@@ -136,6 +150,7 @@ describe("pre-0.45 fail-posture claims must not reappear under src/ or docs/", (
       ["c.md", "ledger degradation → `warn-degraded`, audit-write failure\n"],
       ["d.md", "A policies entry only ever blocks if grounding-mcp is wired\n"],
       ["e.md", "a degraded query yields warn-degraded for the policy, fail-open for the requires engine\n"],
+      ["f.ts", "// so ledger-backed gates degrade to warn at runtime\n"],
     ];
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stale-posture-guard-"));
     try {

@@ -150,9 +150,12 @@ function formatDecisionDiagnostic(decision: PolicyDecision, hookName?: string): 
   // envelope deliberately omits it (see the deny-degraded branch in
   // `runtime/intercept.ts` — a deny that includes its own disable recipe
   // is not a gate).
+  // Both degraded arms are cause-neutral: the degraded family has five
+  // causes and only one of them is the ledger; the true cause follows
+  // on the block's own `reason:` line (review 2026-08-08, rounds 3+5).
   const header = `harness policy intercept${hookSuffix(hookName)}: ${decision.policyName}: ${decision.outcome}${
     decision.outcome === "warn-degraded"
-      ? " (ledger unreachable)"
+      ? " (evidence could not be evaluated; non-blocking per warn tier or fail_open opt-out)"
       : decision.outcome === "deny-degraded"
         ? " (evidence could not be evaluated; failing closed per enforcement tier; operator opt-out: risk.degraded_fail_posture: fail_open)"
         : ""

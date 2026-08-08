@@ -738,7 +738,10 @@ function buildGrounding(
     ledgerPathWritable = false;
     warnings.push(
       `evidence-ledger path ${ledgerPath} is not writable (and not creatable) — ` +
-        `grounding-mcp cannot persist evidence, so ledger-backed gates degrade to warn`,
+        `grounding-mcp cannot persist evidence; warn policies degrade non-blocking, ` +
+        `block/require_approval policies DENY matching events (deny-degraded) while ` +
+        `their evidence is unreadable (risk.degraded_fail_posture: fail_open restores ` +
+        `the availability-first behaviour)`,
     );
   }
 

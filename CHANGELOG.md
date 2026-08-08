@@ -64,8 +64,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   shared with the CLI wrapper's pending-approval staging, which had a
   drifted hand-rolled copy. New outcome threaded through every consumer:
   `harness audit` `VALID_OUTCOMES`, `explain`/`audit` `--outcome` filters,
-  the verbose stderr diagnostic (which names the outcome, the unreachable
-  ledger, the fail-closed posture and the operator opt-out), a NEW
+  the verbose stderr diagnostic (which names the outcome, the fail-closed
+  posture and the operator opt-out, cause-neutrally — the true cause
+  follows on its own reason line), a NEW
   default-verbosity one-line stderr operator hint per degraded-denied
   event (carrying the decision's OWN sanitised reason, since
   deny-degraded has five causes and only one of them is the ledger — a
@@ -84,9 +85,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   grounding-mcp", the untiered fail-open framing) reappear under `src/`
   or `docs/` outside a per-phrase allowlist with freshness checks and
   one positive control per needle. Honest bound, stated in the guard
-  itself: it is a literal/pattern grep pinning every phrasing four
-  review rounds actually found, not a semantic checker — a future
-  paraphrase avoiding all needles still needs eyes (four review rounds
+  itself: it is a literal/pattern grep pinning the mechanically
+  greppable phrasings the review rounds found, not a semantic checker —
+  wrong-modality claims were fixed by hand and are not pinned, and a
+  future paraphrase avoiding all needles still needs eyes (four review rounds
   each found a fresh such surface; docs quoting message literals
   verbatim was the recurring root cause, so the updated docs now
   describe messages instead of quoting them); the same sweep updated

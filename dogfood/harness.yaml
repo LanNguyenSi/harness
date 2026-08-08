@@ -10,7 +10,8 @@
 #
 # This fixture declares policies without grounding-mcp on purpose, to exercise
 # the validate/doctor warnings. `harness apply` deliberately REJECTS that
-# combination (policies would degrade to warn-mode at runtime), so run this
+# combination (every evaluation would degrade at runtime: warn policies
+# non-blocking, block/require_approval policies denying), so run this
 # manifest through `harness validate` / `harness doctor`, not `harness apply`.
 
 version: 1

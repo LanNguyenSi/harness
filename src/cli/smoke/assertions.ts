@@ -59,8 +59,9 @@ function summariseHooks(hooks: HookPair[]): string {
  * Claude Code 2.1+ envelope (`decision:"block"` AND
  * `hookSpecificOutput.permissionDecision:"deny"`). On `allow`, stdout
  * is empty. On `warn-degraded`, stdout is empty AND stderr carries the
- * Phase 5 #3 diagnostic line (`warn-degraded (ledger unreachable)`)
- * when HARNESS_POLICY_VERBOSE is on. `harness smoke` sets that env var
+ * Phase 5 #3 diagnostic line (headed `warn-degraded (evidence could not
+ * be evaluated; ...)`, the literal outcome name being what the check
+ * below matches) when HARNESS_POLICY_VERBOSE is on. `harness smoke` sets that env var
  * unconditionally when spawning claude, so the warn branch is
  * observable.
  *

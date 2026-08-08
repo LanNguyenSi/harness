@@ -504,7 +504,9 @@ describe("runInterceptCli — Phase 5 #3: --verbose stderr diagnostics", () => {
     });
     expect(outOutput()).toBe("");
     const errText = errOutput();
-    expect(errText).toContain("warn-degraded (ledger unreachable)");
+    expect(errText).toContain(
+      "warn-degraded (evidence could not be evaluated; non-blocking per warn tier or fail_open opt-out)",
+    );
     expect(errText).toContain("grounding-mcp timeout after 5000ms");
   });
 
