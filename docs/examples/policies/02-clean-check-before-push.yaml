@@ -37,7 +37,8 @@ hooks:
     match: "Bash"
     bash_match: "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b"
     blocking: hard
-    budget_ms: 2000
+    # 15s outer timeout clears the grounding-mcp ledger worst-case so the deny lands before Claude cancels the hook (task 7bf47554)
+    budget_ms: 15000
 
 policies:
   - name: clean-check-before-push
