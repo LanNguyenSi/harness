@@ -229,6 +229,26 @@ function blockJson(
   });
 }
 
+// Codepoints the command carries that JS's generic `\s` class matches but
+// bash does NOT treat as a blank separator here (task 623640a5 review,
+// anti-lockout finding): every one of them glues onto the adjacent token
+// instead of being stripped as insignificant whitespace, which is exactly
+// what let a report heredoc's real delimiter (as bash reads it) diverge
+// from the word isEscapeCommand extracts. Scans the RAW command (not a
+// `.trim()`'d copy — trimming would silently eat a leading/trailing
+// occurrence before it could be named). Returns the codepoints in `U+XXXX`
+// form, ascending, deduplicated; empty when the command carries none.
+function findNonBashBlankWhitespace(command: string): string[] {
+  const codepoints = new Set<number>();
+  for (const ch of command) {
+    if (ch === " " || ch === "\t" || ch === "\n") continue;
+    if (/^\s$/.test(ch)) codepoints.add(ch.codePointAt(0)!);
+  }
+  return [...codepoints]
+    .sort((a, b) => a - b)
+    .map((cp) => `U+${cp.toString(16).toUpperCase().padStart(4, "0")}`);
+}
+
 // When a blocked Bash command clearly INTENDS to be the operator-approval
 // escape (`harness approve ...`) but trips the deliberately strict
 // isEscapeCommand matcher because it carries shell metacharacters (a pipe,
@@ -249,7 +269,7 @@ function approveEscapeHint(toolName: string, command: string): string | null {
   // `[ \t]` to "match" the matcher.
   if (!/^harness\s+approve\b/.test(trimmed)) return null;
   if (isEscapeCommand(trimmed)) return null;
-  return (
+  let hint =
     "This looks like a `harness approve` command, but it was blocked because it carries shell " +
     "metacharacters (a pipe, `;`/`&&`/`||` chaining, `<`/`>` redirection, or command substitution) " +
     "in the executable part, or a malformed report heredoc. Two shapes are accepted: " +
@@ -257,8 +277,22 @@ function approveEscapeHint(toolName: string, command: string): string | null {
     "(2) with the Understanding Report attached for capture: " +
     "`harness approve understanding <<'UNDERSTANDING_REPORT'` followed by the report markdown and a " +
     "final line containing exactly `UNDERSTANDING_REPORT`, with nothing after it. " +
-    "Re-run in one of those shapes, then approve the prompt."
-  );
+    "Re-run in one of those shapes, then approve the prompt.";
+  // Anti-lockout (task 623640a5 review): an agent that emitted an
+  // invisible or non-ASCII whitespace codepoint (e.g. a non-breaking
+  // space) sees a command that reads as clean, so the generic hint above
+  // gives it no signal that whitespace is the actual cause — it just
+  // resends the same bytes and stays blocked. Name the offending
+  // codepoint(s) explicitly whenever the command carries one.
+  const invisible = findNonBashBlankWhitespace(command);
+  if (invisible.length > 0) {
+    const plural = invisible.length > 1;
+    hint +=
+      ` It also contains ${plural ? "invisible or non-ASCII whitespace characters" : "an invisible or non-ASCII whitespace character"} ` +
+      `(${invisible.join(", ")}) where an ordinary space or tab was expected; bash does not treat ` +
+      `${plural ? "them" : "it"} as a separator here. Replace ${plural ? "them" : "it"} with a real space or tab and re-run.`;
+  }
+  return hint;
 }
 
 // The Claude Code PreToolUse "ask" envelope: surface the normal interactive

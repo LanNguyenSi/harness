@@ -965,7 +965,56 @@ describe("pack hook pre-tool-use blocker — operator-approval escape commands (
       const decision = JSON.parse(stdout.read().trim()) as { reason: string };
       expect(decision.reason, command).toContain("looks like a `harness approve` command");
       expect(decision.reason, command).toContain("Two shapes are accepted");
+      expect(decision.reason, command).toContain("U+00A0");
     }
+  });
+
+  it("names the invisible codepoint in the hint (anti-lockout, task 623640a5 review): an NBSP-carrying command's hint tells the agent WHY, not just THAT, it was blocked", async () => {
+    // Without this, an agent that emitted a non-breaking space sees a
+    // command that reads as clean and has no signal that whitespace is
+    // the cause — it would just resend the same bytes and stay blocked.
+    // Built via fromCodePoint (not a literal glyph in source) so the
+    // character can never be silently miscopied as an ordinary space.
+    const nbsp = String.fromCodePoint(0x00a0);
+    const command = `harness approve understanding <<'X'${nbsp}\nX${nbsp}\ngit push origin master\nX`;
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event({ tool_name: "Bash", tool_input: { command } })),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    const decision = JSON.parse(stdout.read().trim()) as { reason: string };
+    expect(decision.reason).toContain("looks like a `harness approve` command");
+    expect(decision.reason).toContain("invisible or non-ASCII whitespace character");
+    expect(decision.reason).toContain("U+00A0");
+    expect(decision.reason).toContain("ordinary space or tab was expected");
+  });
+
+  it("does NOT name a codepoint in the hint when the block has nothing to do with whitespace (no false positive)", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        event({
+          tool_name: "Bash",
+          tool_input: { command: "harness approve understanding | tee /tmp/log" },
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    const decision = JSON.parse(stdout.read().trim()) as { reason: string };
+    expect(decision.reason).not.toContain("invisible or non-ASCII whitespace character");
+    expect(decision.reason).not.toMatch(/U\+[0-9A-F]{4}/);
   });
 
   it("does NOT append the approve hint when a non-approve command is blocked", async () => {

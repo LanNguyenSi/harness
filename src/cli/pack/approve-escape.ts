@@ -44,18 +44,22 @@ const COMMAND_META_RE = /[;&|<>]/;
 // Ground-truthed against GNU bash with a PATH-stub harness (task
 // 623640a5): of the 25 codepoints JS's generic `\s` class matches, only
 // these two are stripped by bash as an insignificant separator between
-// tokens on a line. Every other one (NBSP U+00A0 and 20 further Unicode
-// space-separator/line-separator/BOM codepoints; VT/FF too) glues onto
-// the adjacent token as an ordinary word-constituent character instead.
-// `\s` used to accept those characters here as if bash agreed they were
-// whitespace, which let a report heredoc's delimiter word, as bash
-// actually reads it, diverge from the word this matcher extracts (see
-// `parseApproveReportHeredoc` below for the exploitable shape that
-// produced). Every regex in this module that means "a separator bash
-// will actually treat as blank here" uses `[ \t]`, never `\s`. LF and CR
-// are deliberately excluded from this class: LF already splits lines
-// before any of these regexes run, and CR is rejected by an explicit
-// check in both callers, so neither needs blank-class treatment here.
+// tokens on a line. Setting LF and CR aside (see below), the remaining
+// 21 (NBSP U+00A0 and 18 further Unicode space-separator/line-separator/
+// BOM codepoints; VT/FF too) glue onto the adjacent token as an ordinary
+// word-constituent character instead. `\s` used to accept those
+// characters here as if bash agreed they were whitespace, which let a
+// report heredoc's delimiter word, as bash actually reads it, diverge
+// from the word this matcher extracts (see `parseApproveReportHeredoc`
+// below for the exploitable shape that produced). Every regex in this
+// module that means "a separator bash will actually treat as blank
+// here" uses `[ \t]`, never `\s`. LF and CR (the last 2 of the 23
+// non-bash-blank codepoints) are deliberately excluded from this class:
+// LF already splits lines before any of these regexes run, and CR is
+// rejected by an explicit check in both callers, so neither needs
+// blank-class treatment here. (25 total - 2 bash blanks = 23 non-bash-
+// blank; 23 - 2 LF/CR = 21 = 1 NBSP + 18 further + 2 VT/FF; enumeration
+// and exact figures pinned in tests/cli/pack-approve-escape.test.ts.)
 function commandPartIsClean(part: string): boolean {
   if (COMMAND_META_RE.test(part)) return false;
   if (part.includes("`") || part.includes("$(")) return false;

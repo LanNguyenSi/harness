@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { readPipedStdin } from "../../src/cli/approve/stdin-report.js";
@@ -5,6 +6,23 @@ import {
   isEscapeCommand,
   parseApproveReportHeredoc,
 } from "../../src/cli/pack/approve-escape.js";
+
+const APPROVE_ESCAPE_SOURCE_URL = new URL(
+  "../../src/cli/pack/approve-escape.ts",
+  import.meta.url,
+);
+
+// Strip `//` line comments, `/* */` block comments, and quoted/template
+// string literals from a TS source string, leaving (approximately) just
+// code. Regex literals are deliberately left untouched — those are
+// exactly what the guard test below inspects. Comments are stripped
+// FIRST so a quote character inside a comment cannot be mistaken for the
+// start of a string literal.
+function stripCommentsAndStrings(source: string): string {
+  const noBlockComments = source.replace(/\/\*[\s\S]*?\*\//g, "");
+  const noLineComments = noBlockComments.replace(/\/\/[^\n]*/g, "");
+  return noLineComments.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g, "");
+}
 
 const REPORT_BODY = [
   "## Understanding Report",
@@ -351,6 +369,42 @@ describe("bash-blank divergence (task 623640a5)", () => {
     const command = `harness approve understanding <<'X'${nbsp}\nX${nbsp}\ngit push origin master\nX`;
     expect(isEscapeCommand(command)).toBe(false);
     expect(parseApproveReportHeredoc(command)).toBeNull();
+  });
+});
+
+describe("mechanical guard — no bare `\\s` token in approve-escape.ts (task 623640a5 review)", () => {
+  // Fix-by-fix closure of the bash-blank divergence does not stop the
+  // class from reopening: a FUTURE regex added to this module could
+  // reintroduce JS's generic `\s` class where bash's actual blank set
+  // (`[ \t]`) is meant, and nothing short of reading every new regex by
+  // eye would catch it. This is the mechanical backstop: read the
+  // module's own source, strip comments and string literals (the prose
+  // above legitimately talks ABOUT `\s`), and assert the remaining code
+  // — which still contains every real regex literal, since those are
+  // never stripped — contains no `\s` token at all.
+  it("the module's code (comments and string literals stripped) contains no `\\s` token", () => {
+    const source = readFileSync(APPROVE_ESCAPE_SOURCE_URL, "utf8");
+    const code = stripCommentsAndStrings(source);
+    expect(code.includes("\\s")).toBe(false);
+  });
+
+  // Liveness proof (not just a passing assertion above): mutate a COPY of
+  // the real module source in memory, adding a `\s` to an existing regex
+  // literal exactly the way a future regression would, and prove the same
+  // strip-and-check logic actually turns red on it. Guards against the
+  // check above being vacuously true (e.g. because the strip step
+  // accidentally eats the whole file).
+  it("guard liveness: turns red when a `\\s` token is injected into a copy of the module", () => {
+    const source = readFileSync(APPROVE_ESCAPE_SOURCE_URL, "utf8");
+    const mutated = source.replace(
+      "const COMMAND_META_RE = /[;&|<>]/;",
+      "const COMMAND_META_RE = /[;&|<>\\s]/;",
+    );
+    // Fails loudly (rather than silently passing on a no-op replace) if
+    // the anchor text above ever drifts out of sync with the real source.
+    expect(mutated, "mutation anchor not found in approve-escape.ts").not.toBe(source);
+    const mutatedCode = stripCommentsAndStrings(mutated);
+    expect(mutatedCode.includes("\\s")).toBe(true);
   });
 });
 
