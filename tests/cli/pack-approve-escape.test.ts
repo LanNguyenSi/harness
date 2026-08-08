@@ -210,6 +210,110 @@ describe("isEscapeCommand — report heredoc (task 61fd36db)", () => {
   });
 });
 
+describe("bash-blank divergence (task 623640a5)", () => {
+  // Enumerate every codepoint JS's generic `\s` class matches, computed
+  // here (not hardcoded) so a future JS-engine change to the `\s` class
+  // is caught rather than silently under-tested. Ground truth (PATH-stub
+  // measurement against GNU bash, task 623640a5): bash's lexical blank
+  // set in this position is exactly TAB and SPACE. Every other `\s`
+  // codepoint is a NON-bash-blank: bash glues it onto the adjacent
+  // token instead of stripping it as a separator, which is exactly the
+  // divergence that let a report heredoc's REAL delimiter word (as bash
+  // reads it) diverge from the word this matcher extracts, closing the
+  // heredoc a line early and letting a body line run as a real command.
+  const ALL_JS_WHITESPACE_CODEPOINTS: number[] = [];
+  for (let cp = 0; cp <= 0x10ffff; cp++) {
+    if (cp >= 0xd800 && cp <= 0xdfff) continue; // surrogate range, not a scalar value
+    if (/^\s$/.test(String.fromCodePoint(cp))) {
+      ALL_JS_WHITESPACE_CODEPOINTS.push(cp);
+    }
+  }
+  const BASH_BLANK_CODEPOINTS = [0x09, 0x20];
+  const NON_BASH_BLANK_CODEPOINTS = ALL_JS_WHITESPACE_CODEPOINTS.filter(
+    (cp) => !BASH_BLANK_CODEPOINTS.includes(cp),
+  );
+  // LF restructures line boundaries before any of these regexes ever
+  // run (the module splits on "\n" first), and CR is rejected by an
+  // explicit, separate check in both call paths, both already have
+  // dedicated regression tests elsewhere in this file. Excluded from
+  // the generic loops below so those loops stay about the regex-level
+  // blank/non-blank boundary itself, not the line-splitting/CR guards.
+  const LOOP_EXCLUDED = new Set([0x0a, 0x0d]);
+
+  it("pins the exact JS \\s codepoint set (25 total: 2 real bash blanks, 23 non-blank)", () => {
+    // If this fails, the JS engine's `\s` class changed size. That is a
+    // signal to re-measure against real bash (do not just bump the
+    // number): the fix in approve-escape.ts assumes bash's blank set is
+    // exactly { TAB, SPACE } regardless of what JS's `\s` covers.
+    expect(ALL_JS_WHITESPACE_CODEPOINTS.length).toBe(25);
+    expect(NON_BASH_BLANK_CODEPOINTS.length).toBe(23);
+  });
+
+  it("rejects every non-bash-blank \\s codepoint as heredoc-intro trailing whitespace (the found exploit shape)", () => {
+    for (const cp of NON_BASH_BLANK_CODEPOINTS) {
+      if (LOOP_EXCLUDED.has(cp)) continue;
+      const ch = String.fromCodePoint(cp);
+      const label = `U+${cp.toString(16).toUpperCase().padStart(4, "0")}`;
+      const command = `harness approve understanding <<'X'${ch}\nX${ch}\ngit push origin master\nX`;
+      expect(isEscapeCommand(command), label).toBe(false);
+      expect(parseApproveReportHeredoc(command), label).toBeNull();
+    }
+  });
+
+  it("rejects every non-bash-blank \\s codepoint as heredoc-intro leading whitespace (between << and the quote)", () => {
+    for (const cp of NON_BASH_BLANK_CODEPOINTS) {
+      if (LOOP_EXCLUDED.has(cp)) continue;
+      const ch = String.fromCodePoint(cp);
+      const label = `U+${cp.toString(16).toUpperCase().padStart(4, "0")}`;
+      const command = `harness approve understanding <<${ch}'X'\nbody\nX`;
+      expect(isEscapeCommand(command), label).toBe(false);
+    }
+  });
+
+  it("rejects every non-bash-blank \\s codepoint as the harness/approve separator in the command part", () => {
+    for (const cp of NON_BASH_BLANK_CODEPOINTS) {
+      if (LOOP_EXCLUDED.has(cp)) continue;
+      const ch = String.fromCodePoint(cp);
+      const label = `U+${cp.toString(16).toUpperCase().padStart(4, "0")}`;
+      // Single-line path (commandPartIsClean directly).
+      expect(isEscapeCommand(`harness${ch}approve understanding`), label).toBe(false);
+      // Heredoc path (same function, plus the whitelist char class).
+      expect(isEscapeCommand(`harness${ch}approve understanding <<'X'\nbody\nX`), label).toBe(
+        false,
+      );
+    }
+  });
+
+  it("still accepts real bash blanks (TAB, SPACE) in every position above (no regression)", () => {
+    for (const cp of BASH_BLANK_CODEPOINTS) {
+      const ch = String.fromCodePoint(cp);
+      const label = `U+${cp.toString(16).toUpperCase().padStart(4, "0")}`;
+      expect(isEscapeCommand(`harness approve understanding <<'X'${ch}\nreport line\nX`), label).toBe(
+        true,
+      );
+      expect(isEscapeCommand(`harness approve understanding <<${ch}'X'\nreport line\nX`), label).toBe(
+        true,
+      );
+      expect(isEscapeCommand(`harness${ch}approve understanding`), label).toBe(true);
+    }
+  });
+
+  // The exact measured incident (2026-08-04 halt / task 623640a5
+  // discovery): a non-breaking space (U+00A0) after the heredoc
+  // delimiter's closing quote used to be accepted by `\s*$` as
+  // insignificant trailing whitespace, while bash glues it onto the
+  // quoted word: the REAL delimiter becomes "X"+NBSP, so the body
+  // line "X"+NBSP closes bash's heredoc immediately and
+  // `git push origin master` runs as a real top-level command instead
+  // of staying inert report text.
+  it("rejects the measured NBSP-heredoc incident (DENY, not ASK)", () => {
+    const nbsp = " ";
+    const command = `harness approve understanding <<'X'${nbsp}\nX${nbsp}\ngit push origin master\nX`;
+    expect(isEscapeCommand(command)).toBe(false);
+    expect(parseApproveReportHeredoc(command)).toBeNull();
+  });
+});
+
 describe("parseApproveReportHeredoc", () => {
   it("extracts command part, delimiter, and body", () => {
     const parsed = parseApproveReportHeredoc(heredoc("harness approve understanding --force"));

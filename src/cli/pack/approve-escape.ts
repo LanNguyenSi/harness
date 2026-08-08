@@ -40,10 +40,29 @@
 /** Metacharacters rejected in the executable (non-heredoc-body) part. */
 const COMMAND_META_RE = /[;&|<>]/;
 
+/**
+ * bash's actual lexical blank set: SPACE and TAB, nothing else.
+ * Ground-truthed against GNU bash with a PATH-stub harness (task
+ * 623640a5): of the 25 codepoints JS's generic `\s` class matches, only
+ * these two are stripped by bash as an insignificant separator between
+ * tokens on a line. Every other one (NBSP U+00A0 and 20 further Unicode
+ * space-separator/line-separator/BOM codepoints; VT/FF too) glues onto
+ * the adjacent token as an ordinary word-constituent character instead.
+ * `\s` used to accept those characters here as if bash agreed they were
+ * whitespace, which let a report heredoc's delimiter word, as bash
+ * actually reads it, diverge from the word this matcher extracts (see
+ * `parseApproveReportHeredoc` below for the exploitable shape that
+ * produced). Every regex in this module that means "a separator bash
+ * will actually treat as blank here" uses `[ \t]`, never `\s`. LF and CR
+ * are deliberately excluded from this class: LF already splits lines
+ * before any of these regexes run, and CR is rejected by an explicit
+ * check in both callers, so neither needs blank-class treatment here.
+ */
+
 function commandPartIsClean(part: string): boolean {
   if (COMMAND_META_RE.test(part)) return false;
   if (part.includes("`") || part.includes("$(")) return false;
-  return /^harness\s+approve\b/.test(part);
+  return /^harness[ \t]+approve\b/.test(part);
 }
 
 // The heredoc command part is held to a WHITELIST, not the blacklist
@@ -57,7 +76,7 @@ function commandPartIsClean(part: string): boolean {
 // everything else (backslashes, quotes, `$`, parens, globs) fails
 // closed. The single-line shape keeps the blacklist for back-compat:
 // it admits no `<` at all, so this divergence class cannot arise there.
-const HEREDOC_COMMAND_PART_ALLOWED_RE = /^[A-Za-z0-9_\s,./=:@~-]*$/;
+const HEREDOC_COMMAND_PART_ALLOWED_RE = /^[A-Za-z0-9_ \t,./=:@~-]*$/;
 
 function heredocCommandPartIsClean(part: string): boolean {
   if (!HEREDOC_COMMAND_PART_ALLOWED_RE.test(part)) return false;
@@ -90,8 +109,14 @@ export function parseApproveReportHeredoc(
   if (head.includes("\r")) return null;
   // Lazy `.*?` + end-anchor: a second redirect after the heredoc intro
   // forces the intro into the command part, where the metachar check
-  // rejects it.
-  const m = /^(.*?)<<\s*'([A-Z_][A-Z0-9_]*)'\s*$/.exec(head);
+  // rejects it. `[ \t]*` (not `\s*`) around the delimiter word: see the
+  // bash-blank comment above `commandPartIsClean` (task 623640a5): a
+  // non-bash-blank character here (e.g. NBSP) used to be accepted as
+  // insignificant trailing/leading whitespace, while bash actually glues
+  // it onto the quoted word, widening the REAL heredoc delimiter beyond
+  // what this capture group extracts and letting a body line close the
+  // heredoc a line early.
+  const m = /^(.*?)<<[ \t]*'([A-Z_][A-Z0-9_]*)'[ \t]*$/.exec(head);
   if (!m) return null;
   const commandPart = m[1]!.trimEnd();
   const delimiter = m[2]!;
