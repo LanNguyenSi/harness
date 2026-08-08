@@ -9,6 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- **SECURITY: read-only Bash classifier no longer treats mutating
+  argument forms of allowlisted git subcommands as read-only** (task
+  `9d1fff1b`). `GIT_READ_ONLY_SUBS` (`src/runtime/read-only-bash.ts`)
+  was a bare-form allowlist of subcommand NAMES; measured against real
+  git 2.50.1, six argument forms of those names mutate while classifying
+  read-only: `git branch -D <b>` (deletes a branch), `git tag <name>`
+  (creates a tag), `git remote set-url` (rewrites config), `git fetch
+  <url> <refspec>` (writes an arbitrary local ref), `git diff
+  --output=<path>` (creates/overwrites a file; `log`/`show` accept the
+  same option), and `git reflog expire`/`delete` (destroys reflog
+  entries). All four consumers of the classifier — the risk-classifier
+  read-only severity floor, both PreToolUse understanding-gate hooks, and
+  the solution-acceptance write-guard — funnel through the same
+  `classifyTokens`, so all four are corrected by the single fix and none
+  needed a consumer-side change (measured: the full pack + risk-classifier
+  suites, 602 tests, unchanged). The `bin === "git"` branch now applies a
+  per-subcommand POSITIVE argument-form check (`isReadOnlyGitInvocation`):
+  branch/tag are read-only only with no non-flag operand (every mutation
+  needs the branch/tag name; branch also denies the glued no-operand
+  writes like `--set-upstream-to=`); remote only for the `show`/`get-url`
+  verbs or bare `-v`; fetch only for bare or a single remote (a second
+  positional or a `:` refspec blocks); reflog only for bare/`show`/flag
+  forms (expire/delete/drop are always the first arg); diff/log/show
+  forfeit on `--output`. The choice is positive-shape, not a write-flag
+  denylist, so a git argument this floor has not reasoned about
+  over-blocks (annoying) instead of laundering a write (unsafe) — the
+  same fail-closed stance as the existing `npm audit` guard, and
+  deliberately NOT the enumerate-every-exception shape whose repeated
+  failure halted the neighbouring task 5b5d1022. Literal verb/flag
+  comparisons use the repo's raw-or-decoded form (task fdee7d0f) so a
+  quoted spelling (`git remote se"t-url"`) fails the positive match and
+  blocks rather than slipping through. Explicitly out of scope (separate
+  tasks): global-option / path-qualified git (`git -C <d>`, 5b5d1022),
+  GNU long-option abbreviations (dd055c1d), and env-var exec equivalents.
+  25 negative tests pin the mutating forms (reproduced by
+  `scratchpad/git-repro.sh`), positive controls pin the bare forms plus
+  the read corpus (`rev-parse --git-dir`, `ls-files -c`, `log -c HEAD`,
+  `show -c HEAD`, `diff --stat`, `status --short`); a mutation probe
+  confirms reverting to the bare-name allowlist reddens 29 tests.
+
 - **SECURITY: block/require_approval policies now fail CLOSED when their
   evidence source is degraded, instead of silently mapping to the
   never-blocking `warn-degraded`** (task `f1aea826`). Measured 2026-08-06 on

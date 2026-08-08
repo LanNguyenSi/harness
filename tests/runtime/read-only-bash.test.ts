@@ -73,6 +73,91 @@ describe("read-only Bash classifier", () => {
     });
   });
 
+  // Task 9d1fff1b: allowlisted git subcommands that MUTATE once given
+  // arguments. All six forms were reproduced against real git 2.50.1
+  // (scratchpad/git-repro.sh: branch deleted, tag created, config
+  // rewritten, file created, reflog emptied, local ref written). Pinned
+  // as negative tests so a regression to the bare-name allowlist reddens
+  // at least one of these.
+  describe("git argument forms that mutate (must block — 9d1fff1b)", () => {
+    it.each([
+      "git branch -D main",
+      "git branch -d main",
+      "git branch --delete main",
+      "git branch -m old new",
+      "git branch newbranch",
+      "git branch --set-upstream-to=origin/main",
+      "git branch --unset-upstream",
+      "git tag v1",
+      "git tag -a v1 -m msg",
+      "git tag -d v1",
+      "git remote add origin https://example.com/a.git",
+      "git remote set-url origin https://example.com/b.git",
+      "git remote remove origin",
+      "git remote rename a b",
+      "git remote prune origin",
+      "git remote update",
+      "git fetch origin main:main",
+      "git fetch https://example.com/a.git HEAD:refs/heads/x",
+      "git fetch origin +refs/heads/*:refs/remotes/o/*",
+      "git diff --output=/tmp/x.patch HEAD~1 HEAD",
+      "git log --output=/tmp/x.txt",
+      "git show --output=/tmp/x.txt HEAD",
+      "git reflog expire --expire=now --all",
+      "git reflog delete main@{0}",
+      "git reflog drop",
+    ])("blocks %s", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+
+    // Positive controls: the BARE forms and genuine read invocations of
+    // the same subcommands must stay read-only (AC2), including the AC5
+    // read corpus that flows through the same classifier.
+    it.each([
+      "git branch",
+      "git branch -a",
+      "git branch -vv",
+      "git branch --list",
+      "git tag",
+      "git tag -l",
+      "git tag -n5",
+      "git remote",
+      "git remote -v",
+      "git remote show origin",
+      "git remote get-url origin",
+      "git reflog",
+      "git reflog show",
+      "git reflog show HEAD",
+      "git reflog -n 5",
+      "git diff",
+      "git log",
+      "git show",
+      "git status",
+      // AC5 read corpus (must classify read-only unchanged).
+      "git rev-parse --git-dir",
+      "git ls-files -c",
+      "git log -c HEAD",
+      "git show -c HEAD",
+      "git diff --stat",
+      "git status --short",
+      "git fetch origin",
+    ])("allows %s", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(true);
+    });
+
+    // Shell-quoting must not launder a write past the positive shape
+    // (repo convention, task fdee7d0f): quoting the verb/flag can only
+    // fail the positive match and thus BLOCK, never admit.
+    it.each([
+      'git remote se"t-url" origin x',
+      "git remote 'set-url' origin x",
+      'git branch -"D" main',
+      'git reflog ex"pire" --all',
+    ])("blocks quoted write form %s", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+  });
+
   describe("gh read-only verbs", () => {
     it.each([
       "gh pr view 240",
