@@ -125,6 +125,14 @@ export const TEAM_TEMPLATE = `# ~/.harness/harness.yaml (legacy: ~/.claude/harne
 # standard team workflow where every PR gets a review-subagent pass
 # before it can land.
 #
+# INTENTIONAL (operator decision 2026-08-08, task adf037c1): like the solo
+# profile, this template does NOT carry the full template's operator_only
+# kill-switch policies, so \`harness doctor\` on a fresh team install
+# reports all three as template drift and exits non-zero. That is the
+# profile-independent security floor by design; acknowledge it via
+# \`doctor.ignore_template_drift\` if a team deliberately opts out. See the
+# SOLO_TEMPLATE header note and checkTemplatePolicyDrift.
+#
 # Adapt the paths under \`command:\` to your install layout, or move
 # host-specific paths to ~/.harness/machines/<host>.harness.overrides.yaml.
 

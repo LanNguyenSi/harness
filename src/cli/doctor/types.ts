@@ -290,9 +290,11 @@ export interface DoctorReport {
   riskGate: RiskGateSection;
   /**
    * Template-policy drift (task adf037c1): shipped operator_only security
-   * policies missing from this installed manifest. Always present; empty
-   * `missing` when the manifest carries every shipped kill-switch policy
-   * (or has acknowledged the gap via doctor.ignore_template_drift).
+   * policies missing-or-downgraded in this installed manifest (`errors`)
+   * and stale `doctor.ignore_template_drift` entries (`warnings`). Always
+   * present; both arrays empty when the manifest carries every shipped
+   * kill-switch policy in operator_only form (or has acknowledged the gap
+   * via a valid doctor.ignore_template_drift entry).
    */
   templateDrift: TemplateDriftSection;
   /**
