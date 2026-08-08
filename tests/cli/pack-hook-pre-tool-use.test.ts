@@ -939,6 +939,114 @@ describe("pack hook pre-tool-use blocker — operator-approval escape commands (
     );
   });
 
+  it("still appends the re-run-bare hint for the bash-blank-divergence shapes newly blocked by task 623640a5's review fixes", async () => {
+    // Regression guard: fail-closed (rejecting these non-bash-blank
+    // heredoc shapes) must not turn into a silent lockout. A non-bash-
+    // blank codepoint (NBSP here) glued mid-command-part or right before
+    // the heredoc intro is now DENIED by isEscapeCommand, but the
+    // command still starts with `harness approve`, so the discoverability
+    // hint (module doc: two accepted shapes) must still surface.
+    const nbsp = " ";
+    for (const command of [
+      `harness approve understanding${nbsp}--force <<'X'\nbody\nX`,
+      `harness approve understanding${nbsp}<<'X'\nbody\nX`,
+    ]) {
+      const stdout = bufferStream();
+      const stderr = bufferStream();
+      const result = await runPackHookPreToolUseCli({
+        manifest: manifestWithPack(),
+        stdin: readableFromString(event({ tool_name: "Bash", tool_input: { command } })),
+        stdout: stdout.stream,
+        stderr: stderr.stream,
+        reportsDir: path.join(tmp, "no-reports"),
+        ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+      });
+      expect(result.blocked, command).toBe(true);
+      const decision = JSON.parse(stdout.read().trim()) as { reason: string };
+      expect(decision.reason, command).toContain("looks like a `harness approve` command");
+      expect(decision.reason, command).toContain("Two shapes are accepted");
+      expect(decision.reason, command).toContain("U+00A0");
+    }
+  });
+
+  it("names the invisible codepoint in the hint (anti-lockout, task 623640a5 review): an NBSP-carrying command's hint tells the agent WHY, not just THAT, it was blocked", async () => {
+    // Without this, an agent that emitted a non-breaking space sees a
+    // command that reads as clean and has no signal that whitespace is
+    // the cause — it would just resend the same bytes and stay blocked.
+    // Built via fromCodePoint (not a literal glyph in source) so the
+    // character can never be silently miscopied as an ordinary space.
+    const nbsp = String.fromCodePoint(0x00a0);
+    const command = `harness approve understanding <<'X'${nbsp}\nX${nbsp}\ngit push origin master\nX`;
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event({ tool_name: "Bash", tool_input: { command } })),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    const decision = JSON.parse(stdout.read().trim()) as { reason: string };
+    expect(decision.reason).toContain("looks like a `harness approve` command");
+    expect(decision.reason).toContain("invisible or non-ASCII whitespace character");
+    expect(decision.reason).toContain("U+00A0");
+    expect(decision.reason).toContain("ordinary space or tab was expected");
+  });
+
+  it("does NOT name a codepoint in the hint when the block has nothing to do with whitespace (no false positive)", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        event({
+          tool_name: "Bash",
+          tool_input: { command: "harness approve understanding | tee /tmp/log" },
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    const decision = JSON.parse(stdout.read().trim()) as { reason: string };
+    expect(decision.reason).not.toContain("invisible or non-ASCII whitespace character");
+    expect(decision.reason).not.toMatch(/U\+[0-9A-F]{4}/);
+  });
+
+  it("does NOT name a codepoint when the NBSP is inert report-body prose, not on the command/intro line (review 2026-08-08 round 2)", async () => {
+    // The command is blocked for an INDEPENDENT reason here (trailing
+    // content after the heredoc terminator, the smuggle shape), and the
+    // only non-bash-blank codepoint anywhere in the command sits inside
+    // the report BODY as ordinary markdown prose. Naming a codepoint in
+    // this case would misattribute the block to whitespace an agent
+    // never needs to touch; the intro line itself is clean.
+    const nbsp = String.fromCodePoint(0x00a0);
+    const command =
+      `harness approve understanding <<'X'\n` +
+      `## Some report prose with a non${nbsp}breaking space\n` +
+      `X\n` +
+      `rm -rf /tmp/x`;
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event({ tool_name: "Bash", tool_input: { command } })),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+    const decision = JSON.parse(stdout.read().trim()) as { reason: string };
+    expect(decision.reason).toContain("looks like a `harness approve` command");
+    expect(decision.reason).not.toContain("invisible or non-ASCII whitespace character");
+    expect(decision.reason).not.toMatch(/U\+[0-9A-F]{4}/);
+  });
+
   it("does NOT append the approve hint when a non-approve command is blocked", async () => {
     const stdout = bufferStream();
     const stderr = bufferStream();

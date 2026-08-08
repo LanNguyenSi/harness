@@ -9,6 +9,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- **SECURITY: the operator-approval escape matcher (`isEscapeCommand`,
+  `src/cli/pack/approve-escape.ts`) used JS's generic `\s` whitespace
+  class where bash's actual lexical blank set was meant, letting a
+  non-bash-blank codepoint move a report heredoc's real delimiter word
+  (as bash reads it) away from the word the matcher extracts** (task
+  `623640a5`). Ground-truthed against GNU bash with a PATH-stub harness:
+  of the 25 codepoints JS's `\s` class matches, only TAB and SPACE are
+  bash lexical blanks; the other 23 (NBSP U+00A0, LF, CR, VT, FF, and 18
+  further Unicode space-separator/line-separator/BOM codepoints) glue
+  onto the adjacent token instead of being stripped as an insignificant
+  separator. Measured exploit shape (the 2026-08-04 halt that opened this
+  task): a non-breaking space right after a report heredoc's `<<'X'`
+  intro closing quote was accepted by the matcher's `\s*$` as
+  insignificant trailing whitespace, so the matcher extracted delimiter
+  `X`; bash instead glues the NBSP onto the quoted word, so its real
+  delimiter is `X`+NBSP, and the body line `X`+NBSP (matching the
+  matcher's delimiter, not bash's) closes the heredoc one line early:
+  the following body line then runs as a real top-level command
+  (`git push origin master` in the measured repro) instead of staying
+  inert report text. Fix: every regex in the module that means "a
+  separator bash will actually treat as blank here" (the heredoc-intro
+  trailing/leading whitespace, the `harness`/`approve` separator, the
+  heredoc command-part whitelist, the command-part right-trim, and the
+  post-terminator blank-line check) now uses `[ \t]`, never `\s`.
+  Behavior change operators should know about: a `harness approve`
+  heredoc carrying a non-bash-blank codepoint in one of those positions
+  used to be accepted as a clean escape and routed to the normal
+  interactive ASK permission prompt; it is now DENIED outright (fails
+  closed to the ordinary understanding-gate block), since ASK implied a
+  false equivalence to the safe heredoc shape. The PreToolUse
+  discoverability hint (`approveEscapeHint`,
+  `src/cli/pack/hook-pre-tool-use.ts`) now also names the offending
+  codepoint (e.g. "contains U+00A0 ... where an ordinary space or tab was
+  expected") when a blocked command carries one, so an agent that emitted
+  invisible whitespace gets a reason instead of silently retrying the
+  same bytes. New regression tests: `tests/cli/pack-approve-escape.test.ts`
+  (the full 25/23 codepoint enumeration measured against the live JS `\s`
+  class, the NBSP incident itself, and a mechanical guard, module source
+  with comments/strings stripped, asserting no future regex in the
+  module can reintroduce a bare `\s` token, mutation-verified to actually
+  redden); `tests/cli/pack-hook-pre-tool-use.test.ts` (the hint still
+  surfaces for the newly-blocked shapes, now naming the codepoint; a
+  negative control confirms an ordinary metacharacter block names no
+  codepoint).
+
 - **SECURITY: `harness doctor` now detects template-policy drift, an
   installed manifest that lacks a shipped `operator_only` kill-switch
   security policy** (task `adf037c1`). Measured 2026-08-06: a 0.44.0

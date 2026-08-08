@@ -229,6 +229,36 @@ function blockJson(
   });
 }
 
+// Codepoints in the STRUCTURALLY relevant part of the command (the whole
+// command when there is no heredoc, otherwise only the intro line up to
+// the first newline) that JS's generic `\s` class matches but bash does
+// NOT treat as a blank separator here (task 623640a5 review, anti-lockout
+// finding): every one of them glues onto the adjacent token instead of
+// being stripped as insignificant whitespace, which is exactly what let a
+// report heredoc's real delimiter (as bash reads it) diverge from the
+// word isEscapeCommand extracts. Deliberately scoped to the intro line,
+// not the heredoc BODY (review 2026-08-08 round 2): the body is free-form
+// Understanding Report markdown, where an NBSP or em-space is ordinary,
+// legitimate prose whitespace, not a matcher-defeating character, so
+// naming one there would misattribute an independent block's cause to
+// inert body text an agent never needs to touch. Scans the RAW intro line
+// (not a `.trim()`'d copy, since trimming would silently eat a leading or
+// trailing occurrence before it could be named). Returns the codepoints
+// in `U+XXXX` form, ascending, deduplicated; empty when the intro line
+// carries none.
+function findNonBashBlankWhitespace(command: string): string[] {
+  const nl = command.indexOf("\n");
+  const introLine = nl === -1 ? command : command.slice(0, nl);
+  const codepoints = new Set<number>();
+  for (const ch of introLine) {
+    if (ch === " " || ch === "\t") continue;
+    if (/^\s$/.test(ch)) codepoints.add(ch.codePointAt(0)!);
+  }
+  return [...codepoints]
+    .sort((a, b) => a - b)
+    .map((cp) => `U+${cp.toString(16).toUpperCase().padStart(4, "0")}`);
+}
+
 // When a blocked Bash command clearly INTENDS to be the operator-approval
 // escape (`harness approve ...`) but trips the deliberately strict
 // isEscapeCommand matcher because it carries shell metacharacters (a pipe,
@@ -242,9 +272,14 @@ function blockJson(
 function approveEscapeHint(toolName: string, command: string): string | null {
   if (toolName !== "Bash") return null;
   const trimmed = command.trim();
+  // This `\s` is deliberately broader than isEscapeCommand's `[ \t]`-only
+  // bash-blank matcher (task 623640a5 review): it only gates whether to
+  // SHOW the discoverability hint, not whether to accept the command as
+  // the escape, so being permissive here is safe. Do not narrow it to
+  // `[ \t]` to "match" the matcher.
   if (!/^harness\s+approve\b/.test(trimmed)) return null;
   if (isEscapeCommand(trimmed)) return null;
-  return (
+  let hint =
     "This looks like a `harness approve` command, but it was blocked because it carries shell " +
     "metacharacters (a pipe, `;`/`&&`/`||` chaining, `<`/`>` redirection, or command substitution) " +
     "in the executable part, or a malformed report heredoc. Two shapes are accepted: " +
@@ -252,8 +287,22 @@ function approveEscapeHint(toolName: string, command: string): string | null {
     "(2) with the Understanding Report attached for capture: " +
     "`harness approve understanding <<'UNDERSTANDING_REPORT'` followed by the report markdown and a " +
     "final line containing exactly `UNDERSTANDING_REPORT`, with nothing after it. " +
-    "Re-run in one of those shapes, then approve the prompt."
-  );
+    "Re-run in one of those shapes, then approve the prompt.";
+  // Anti-lockout (task 623640a5 review): an agent that emitted an
+  // invisible or non-ASCII whitespace codepoint (e.g. a non-breaking
+  // space) sees a command that reads as clean, so the generic hint above
+  // gives it no signal that whitespace is the actual cause — it just
+  // resends the same bytes and stays blocked. Name the offending
+  // codepoint(s) explicitly whenever the command carries one.
+  const invisible = findNonBashBlankWhitespace(command);
+  if (invisible.length > 0) {
+    const plural = invisible.length > 1;
+    hint +=
+      ` It also contains ${plural ? "invisible or non-ASCII whitespace characters" : "an invisible or non-ASCII whitespace character"} ` +
+      `(${invisible.join(", ")}) where an ordinary space or tab was expected; bash does not treat ` +
+      `${plural ? "them" : "it"} as a separator here. Replace ${plural ? "them" : "it"} with a real space or tab and re-run.`;
+  }
+  return hint;
 }
 
 // The Claude Code PreToolUse "ask" envelope: surface the normal interactive
