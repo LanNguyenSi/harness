@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- nanoid bumped 3.3.16 → 3.3.18 via `npm audit fix` (lockfile-only, no source
+  change), closing GHSA-2v37-7h3g-55p8 / CVE-2026-67213 (High, CVSS 8.2:
+  `customAlphabet`/`customRandom` loop indefinitely when `size` is 0; affected
+  range < 3.3.17). Dev-only transitive (vitest → vite → postcss → nanoid);
+  postcss's declared `^3.3.16` already admits the fix, so no `package.json`
+  change and no override introduced (the same shape as the 0.42.0 entry that
+  carried nanoid 3.3.12 → 3.3.16 for the postcss advisory). harness source
+  never calls nanoid, so the advisory's mechanism is not reachable from the
+  shipped CLI; the practical effect is `npm audit` back to 0 findings and this
+  repo's own preflight npm-audit check unblocked. Note the structural residue
+  the 0.42.0 entry already accepted: postcss's range floor (3.3.16) is below
+  the patched 3.3.17, so only the lockfile pin holds the fix (conscious
+  no-override decision, unchanged). (task `b81e8e09`)
+
 ### Added
 
 - The `toolchain-parity` ledger fact now carries unparseable peer snapshots
