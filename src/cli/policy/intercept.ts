@@ -32,10 +32,12 @@ import {
   MAX_NORMALIZE_LENGTH,
   normalizeCommand,
   normalizeCommandAmpAware,
+  normalizeCommandQuoteAware,
   segmentViewOf,
   type AmpAwareNormalizedCommand,
   type CommandSegment,
   type NormalizedCommand,
+  type QuoteAwareNormalizedCommand,
 } from "../../runtime/command-normalize.js";
 import { extractShellCommand, SHELL_ALIASES } from "../../runtime/tool-name-aliases.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
@@ -668,18 +670,33 @@ export async function runInterceptCli(
     bashCommand === null
       ? undefined
       : () => (ampNormalizedCommandCache ??= normalizeCommandAmpAware(bashCommand));
+  // Memoised thunk for the quote-aware THIRD normalisation pass (task
+  // cf3dff51) — the SAME shape as `ampNormalizedCommandThunk` immediately
+  // above, for the same reason: `policyMatchesEvent`'s fourth arm calls
+  // this only when a policy's regex has already missed the raw command,
+  // `normalizedCommand`, AND the amp-aware pass, so most events never
+  // reach it at all; computing it eagerly here would pay its
+  // segmentation cost on the common path for every Bash call regardless
+  // of whether any policy ends up needing it.
+  let quoteNormalizedCommandCache: QuoteAwareNormalizedCommand | undefined;
+  const quoteNormalizedCommandThunk: (() => QuoteAwareNormalizedCommand) | undefined =
+    bashCommand === null
+      ? undefined
+      : () => (quoteNormalizedCommandCache ??= normalizeCommandQuoteAware(bashCommand));
   // Above `MAX_NORMALIZE_LENGTH`, `normalizeCommand` skips normalisation
   // entirely and `truncated` comes back `true`. Raw matching still
   // applies regardless (`policyMatchesEvent`'s raw-OR-normalised-OR-amp-
-  // normalised construction), so an oversized command only loses the
-  // ADDITIONAL normalised-form coverage — but that skip must not be
-  // silent, so one stderr line reports it here, keeping the module itself
-  // pure and I/O-free. This one line also covers the amp-aware SECOND
-  // pass (`normalizeCommandAmpAware`, task `aabbad63`, fix round 1 finding
-  // F6): it shares the identical `MAX_NORMALIZE_LENGTH` bound over the
-  // identical `bashCommand`, so its own `truncated` can never disagree
+  // normalised-OR-quote-normalised construction), so an oversized command
+  // only loses the ADDITIONAL normalised-form coverage — but that skip
+  // must not be silent, so one stderr line reports it here, keeping the
+  // module itself pure and I/O-free. This one line also covers the
+  // amp-aware SECOND pass (`normalizeCommandAmpAware`, task `aabbad63`,
+  // fix round 1 finding F6) and the quote-aware THIRD pass
+  // (`normalizeCommandQuoteAware`, task `cf3dff51`): both share the
+  // identical `MAX_NORMALIZE_LENGTH` bound over the identical
+  // `bashCommand`, so neither one's own `truncated` can ever disagree
   // with `normalizedCommand`'s for this call — no separate stderr line
-  // names the amp pass's own skip, nor does one need to.
+  // names either pass's own skip, nor does one need to.
   if (normalizedCommand?.truncated === true) {
     stderr.write(
       `harness policy intercept${hookSuffix(opts.hookName)}: Bash command exceeds ${MAX_NORMALIZE_LENGTH} chars; normalised-form matching skipped for this call (raw match only)\n`,
@@ -787,6 +804,7 @@ export async function runInterceptCli(
       ...(riskContext && { riskContext }),
       ...(normalizedCommand && { normalizedCommand }),
       ...(ampNormalizedCommandThunk && { ampNormalizedCommandThunk }),
+      ...(quoteNormalizedCommandThunk && { quoteNormalizedCommandThunk }),
       ...(commandSegmentsThunk && { commandSegmentsThunk }),
       ...(process.env.HARNESS_REPO !== undefined && { repoOverridden: true }),
       ...(process.env.HARNESS_BRANCH !== undefined && { branchOverridden: true }),
