@@ -204,9 +204,20 @@ hooks:
     # need to ship a per-policy shell script under ~/.claude/hooks/ for
     # the team setup; operators with custom logic can swap in their own
     # script path.
+    #
+    # budget_ms: 15000 (task 7bf47554, fix round 2), not the earlier
+    # 2000: \`intercept()\` writes this policy's decision to the evidence
+    # ledger before returning (src/runtime/intercept.ts,
+    # \`options.ledger.record(...)\`), a live grounding-mcp round-trip on
+    # the critical path, and review-before-merge additionally queries the
+    # ledger for its verdict first. Measured worst case
+    # (health.timeout_ms=5000 + a deny-degraded audit-write retry) is
+    # ~10.8-13.75s; see the full budget-note comment above
+    # \`require-review-evidence\` in src/cli/init/templates.ts for the
+    # derivation this mirrors.
     command: harness policy intercept
     blocking: hard
-    budget_ms: 2000
+    budget_ms: 15000
 
 policies:
   - name: review-before-merge

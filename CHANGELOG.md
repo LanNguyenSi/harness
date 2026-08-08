@@ -90,6 +90,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   audit-retry margin — a lightweight stand-in for the fuller drift-guard
   task `d20a7e0c` is tracking.
 
+  **Fix round 2 continued, same task: the raise above was itself
+  incomplete.** Review found two more `harness init` surfaces still
+  shipping the identical blocking `harness policy intercept` hooks at
+  their pre-fix 1000-2000ms budgets — the same fail-open gap, reachable
+  through a different init path than `--template full`: the
+  `harness init --interactive` Custom composer's `HOOK_FOR_POLICY` table
+  (`src/cli/init/composer.ts`, five hook rows backing its six reference
+  policies) and the `team` profile template's `require-review-evidence`
+  hook (`src/cli/init/profiles.ts`'s `TEAM_TEMPLATE`). Raised both to the
+  same uniform 15000ms. The `solo` profile template ships no blocking
+  `harness policy intercept` hook at all (no agent-tasks-coupled or
+  Bash-triggered evidence policy in that profile), so there is nothing to
+  raise there; a new negative-control test pins that this is by design,
+  not an oversight. With this, the "every blocking ledger-consulting
+  hook" framing above is now accurate across every manifest-emitting
+  `harness init` surface, not only `FULL_TEMPLATE`. Also strengthened
+  `tests/runtime/hook-budget-ledger-margin.test.ts`: it now asserts the
+  same margin invariant against the Custom composer's full policy
+  selection and `TEAM_TEMPLATE` too (mutation-probe confirmed: reverting
+  either surface's budget back to its pre-fix value turns exactly that
+  surface's new assertion red, while every other assertion — including
+  the other surface's — stays green), asserts the `SOLO_TEMPLATE`
+  negative control, and adds a hard 15000ms floor assertion alongside the
+  existing formula-derived margin check. The formula alone
+  (`health.timeout_ms` + 2x `auditRetryTimeoutMs`, ~8s for the shipped
+  5000ms grounding-mcp timeout) understates the measured ~10.8-13.75s
+  subprocess wall-time worst case, so a partial regression into
+  [8000ms, 13000ms) would still pass a formula-only check; the new hard
+  floor (pinned to the same ~10.8-13.75s measurement this task's budget
+  note above and `src/cli/init/templates.ts` both cite) closes that gap,
+  with its own control test pinning the discrimination at a 10000ms
+  probe value.
+
 - **SECURITY: the operator-approval escape matcher (`isEscapeCommand`,
   `src/cli/pack/approve-escape.ts`) used JS's generic `\s` whitespace
   class where bash's actual lexical blank set was meant, letting a
