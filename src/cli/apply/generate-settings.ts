@@ -17,6 +17,9 @@
 //     after schema-defaulting). Always-emit is the conservative choice
 //     against an unknown runtime default; an explicit value is consumed
 //     identically whether or not the runtime would have defaulted to it.
+//     UNIT: Claude Code's settings.json `timeout` is documented in SECONDS,
+//     not milliseconds like the manifest's `budget_ms`; see
+//     `hookTimeoutSeconds` below for the conversion and its history.
 //   - `path_match` and `bash_match` are NOT projected. Claude Code's
 //     settings.json `matcher` filters only on the tool name, so there is
 //     no native settings.json field for "additional filter when this hook
@@ -384,6 +387,31 @@ function buildGroups(hooks: Hook[]): SettingsHookGroup[] {
   return groups;
 }
 
+/**
+ * Convert the manifest's `budget_ms` (milliseconds) into the seconds unit
+ * both runtime projections' `timeout` field expects.
+ *
+ * Claude Code's settings.json hook `timeout` is documented in seconds
+ * ("Seconds before canceling", https://code.claude.com/docs/en/hooks), NOT
+ * milliseconds like the manifest's `budget_ms`. Before this helper existed,
+ * `toSettingsCommand` emitted `h.budget_ms` unconverted, so every Claude
+ * hook kill-timer was 1000x too large (a 1000-2000ms template budget became
+ * a 1000-2000 SECOND, 16-33 minute, Claude Code timeout). Codex's
+ * projection (generate-codex-config.ts) already converted correctly; this
+ * helper is the single source of truth both projections now share so they
+ * cannot diverge again.
+ *
+ * `Math.ceil` never rounds a budget down to 0s. The floor (2s for `harness
+ * policy intercept`, 1s otherwise) matches Codex's existing floor rationale
+ * (generate-codex-config.ts): the policy-intercept engine's own ledger
+ * round-trip regularly needs slightly longer than a bare 1s floor would
+ * allow.
+ */
+export function hookTimeoutSeconds(h: Hook): number {
+  const minimumSeconds = h.command.trim() === "harness policy intercept" ? 2 : 1;
+  return Math.max(minimumSeconds, Math.ceil(h.budget_ms / 1000));
+}
+
 function toSettingsCommand(h: Hook): SettingsHookCommand {
-  return { type: "command", command: h.command, timeout: h.budget_ms };
+  return { type: "command", command: h.command, timeout: hookTimeoutSeconds(h) };
 }

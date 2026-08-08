@@ -9,6 +9,120 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- **SECURITY: `harness apply`'s generated Claude Code `settings.json` hook
+  `timeout` was emitted in the manifest's `budget_ms` unit unconverted, so
+  every Claude-hook kill-timer was 1000x too large** (task `7bf47554`).
+  Claude Code's settings.json hook `timeout` is documented in SECONDS
+  ("Seconds before canceling",
+  https://code.claude.com/docs/en/hooks); the manifest's `budget_ms` is
+  milliseconds. `toSettingsCommand` (`src/cli/apply/generate-settings.ts`)
+  emitted `timeout: h.budget_ms` with no unit conversion, so a template
+  budget of 1000-2000ms silently became a Claude Code timeout of
+  1000-2000 SECONDS (16-33 minutes) instead of 1-2 seconds, meaning
+  hard-blocking enforcement hooks (e.g. `harness policy intercept`) could
+  hang for tens of minutes before Claude Code cancelled them, rather than
+  failing fast. The sibling Codex projection
+  (`src/cli/apply/generate-codex-config.ts`) already converted correctly
+  (`Math.ceil(budget_ms / 1000)` with a policy-intercept floor); the
+  Claude Code projection now shares that exact formula via a single
+  extracted helper, `hookTimeoutSeconds` (`generate-settings.ts`), so the
+  two runtime projections cannot diverge on this again. `harness adopt`'s
+  reverse projection (`src/cli/adopt/index.ts`'s `buildHookEntry`), which
+  read a live settings.json `timeout` back into the manifest's
+  `budget_ms`, is fixed symmetrically (`* 1000`) so the adopt<->apply
+  round-trip stays lossless; `timeout` remains deliberately excluded from
+  the adopt drift key, so the ms/seconds rounding asymmetry a non-1000-
+  multiple `budget_ms` introduces (e.g. 1500ms -> 2s -> 2000ms) does not
+  register as phantom drift or duplicate-adopt a hook. New/updated tests:
+  `tests/cli/apply/generate-settings.test.ts` pins the corrected
+  conversion (including the 2s/1s floors) and asserts both runtime
+  projections emit the identical seconds value for the same hook;
+  `tests/cli/adopt.test.ts` adds an explicit apply-then-adopt round-trip
+  test for the 1500ms rounding-asymmetry case, asserting zero drift.
+
+  **Fix round 2, same task: the corrected 1-2s outer timeout above was
+  ITSELF a fail-open regression, not purely a safety fix.** Review found
+  that `harness policy intercept`'s blocking, ledger-consulting hooks —
+  every `requires:`-based policy (the require-*-evidence / risk-gate
+  policies) AND, via the engine's unconditional per-decision audit write
+  (`intercept()`'s `options.ledger.record(...)` call, run for every
+  matched policy including the pure pattern-deny `operator_only` kill
+  switches), every other blocking `harness policy intercept` hook too —
+  can legitimately need up to the grounding-mcp server's own
+  `health.timeout_ms` (5000ms by default) for a single ledger query, plus
+  a further deny-degraded audit-write retry bounded by
+  `auditRetryTimeoutMs` (`src/cli/policy/intercept.ts`), for a measured
+  worst case of ~10.8-13.75s. The now-CORRECT 1-2s Claude Code outer
+  timeout sits well UNDER that: on a merely slow or hung ledger (not a
+  clean, fast failure), Claude Code kills the `harness policy intercept`
+  subprocess before its `deny`/`deny-degraded` JSON reaches stdout, and a
+  killed PreToolUse hook is treated as ALLOW — silently turning a
+  correctly-computed fail-closed verdict into an unintended fail-open one.
+  The same shape applies to the three builtin policy-pack blockers
+  (`branch-protection`, `understanding-before-execution`,
+  `post-merge-gate`), whose own ledger probes are bounded by the identical
+  `health.timeout_ms` with effectively zero margin against their own
+  budget_ms=5000 outer timeout. Fixed by raising every blocking (`blocking:
+  "hard"`), ledger-consulting hook's `budget_ms` to 15000 (a 15s outer
+  timeout) in `src/cli/init/templates.ts` (FULL_TEMPLATE's eleven
+  `harness policy intercept` hooks, uniformly — deliberately including the
+  three pattern-deny kill-switch hooks, both because their audit write
+  waits on the same ledger round-trip and because `generate-settings.ts`'s
+  `buildGroups` dedupes same-matcher hooks by `(command, timeout)`, so a
+  non-uniform budget would split one Claude Code invocation per Bash call
+  into several redundant ones), `docs/examples/full-manifest.yaml` /
+  `.expected.yaml` (the one hook there that actually routes through
+  `harness policy intercept`), and the three builtin policy packs
+  (`src/policy-packs/builtin/branch-protection.ts`,
+  `understanding-before-execution.ts` — both the Claude and Codex
+  variants — `post-merge-gate.ts`). 15000ms clears the measured
+  ~10.8-13.75s worst case with margin. Trade-off, stated plainly: a gated
+  action can now visibly freeze for up to ~15s when the evidence ledger is
+  down or hanging, instead of failing fast (and silently open) at 1-2s —
+  this IS the intended fail-closed posture the Risk Gate's
+  `degraded_fail_posture: preserve_enforcement` default (task `f1aea826`)
+  already commits to; the pre-existing 1-2s budget just never gave that
+  posture enough time to actually land. New test:
+  `tests/runtime/hook-budget-ledger-margin.test.ts` pins, against the real
+  shipped `FULL_TEMPLATE` and the real policy-pack `resolve()` output
+  (not a hardcoded hook-name list), that every blocking ledger-consulting
+  hook's outer timeout clears `health.timeout_ms` plus the deny-degraded
+  audit-retry margin — a lightweight stand-in for the fuller drift-guard
+  task `d20a7e0c` is tracking.
+
+  **Fix round 2 continued, same task: the raise above was itself
+  incomplete.** Review found two more `harness init` surfaces still
+  shipping the identical blocking `harness policy intercept` hooks at
+  their pre-fix 1000-2000ms budgets — the same fail-open gap, reachable
+  through a different init path than `--template full`: the
+  `harness init --interactive` Custom composer's `HOOK_FOR_POLICY` table
+  (`src/cli/init/composer.ts`, five hook rows backing its six reference
+  policies) and the `team` profile template's `require-review-evidence`
+  hook (`src/cli/init/profiles.ts`'s `TEAM_TEMPLATE`). Raised both to the
+  same uniform 15000ms. The `solo` profile template ships no blocking
+  `harness policy intercept` hook at all (no agent-tasks-coupled or
+  Bash-triggered evidence policy in that profile), so there is nothing to
+  raise there; a new negative-control test pins that this is by design,
+  not an oversight. With this, the "every blocking ledger-consulting
+  hook" framing above is now accurate across every manifest-emitting
+  `harness init` surface, not only `FULL_TEMPLATE`. Also strengthened
+  `tests/runtime/hook-budget-ledger-margin.test.ts`: it now asserts the
+  same margin invariant against the Custom composer's full policy
+  selection and `TEAM_TEMPLATE` too (mutation-probe confirmed: reverting
+  either surface's budget back to its pre-fix value turns exactly that
+  surface's new assertion red, while every other assertion — including
+  the other surface's — stays green), asserts the `SOLO_TEMPLATE`
+  negative control, and adds a hard 15000ms floor assertion alongside the
+  existing formula-derived margin check. The formula alone
+  (`health.timeout_ms` + 2x `auditRetryTimeoutMs`, ~8s for the shipped
+  5000ms grounding-mcp timeout) understates the measured ~10.8-13.75s
+  subprocess wall-time worst case, so a partial regression into
+  [8000ms, 13000ms) would still pass a formula-only check; the new hard
+  floor (pinned to the same ~10.8-13.75s measurement this task's budget
+  note above and `src/cli/init/templates.ts` both cite) closes that gap,
+  with its own control test pinning the discrimination at a 10000ms
+  probe value.
+
 - **SECURITY: the operator-approval escape matcher (`isEscapeCommand`,
   `src/cli/pack/approve-escape.ts`) used JS's generic `\s` whitespace
   class where bash's actual lexical blank set was meant, letting a

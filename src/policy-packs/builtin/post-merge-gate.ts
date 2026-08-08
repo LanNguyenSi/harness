@@ -148,7 +148,18 @@ function buildHooks(): Hook[] {
       match: "Bash",
       command: BLOCKER_COMMAND,
       blocking: "hard",
-      budget_ms: 5000,
+      // 15000 (task 7bf47554): the blocker's own ledger query
+      // (queryLedgerByTag, src/cli/pack/hook-post-merge-gate.ts) is bounded
+      // by the grounding-mcp server's own `health.timeout_ms` (default
+      // 5000ms) — the same number the old budget_ms=5000 used for the
+      // outer Claude Code kill-timeout, leaving no margin. This gate
+      // already fails OPEN by design on a genuinely unreachable ledger
+      // (unlike branch-protection); raising the outer timeout does not
+      // change that posture, it only gives a merely-SLOW (not dead) ledger
+      // room to answer before the outer timeout could fire first and kill
+      // the subprocess mid-query, consistent with the other ledger-backed
+      // pack blockers.
+      budget_ms: 15000,
       description:
         "Blocker: deny curated history-mutating Bash commands (git commit/add/push/merge/rebase/cherry-pick/revert/reset/stash pop|apply, gh pr create/merge) when the current branch tip matches a recorded merged tip. The recovery vocabulary (git switch/checkout/pull/fetch, git branch -d/-D, git stash list/show, any `harness ...` command) always passes as its own command, classified before any manifest or ledger access; chaining one of those with a curated mutation does NOT exempt the mutation. Fails open when the ledger is unreachable.",
     },

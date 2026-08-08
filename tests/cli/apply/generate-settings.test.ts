@@ -5,9 +5,11 @@ import {
   buildMemoryRouterHook,
   generateSettings,
   generateSettingsWithWarnings,
+  hookTimeoutSeconds,
 } from "../../../src/cli/apply/generate-settings.js";
+import { generateCodexConfig } from "../../../src/cli/apply/generate-codex-config.js";
 import { manifestProjection, parseSettingsHooks } from "../../../src/cli/adopt/derive.js";
-import { parseManifest, type Manifest, type McpServer } from "../../../src/schema/index.js";
+import { parseManifest, type Hook, type Manifest, type McpServer } from "../../../src/schema/index.js";
 
 function manifestOf(hooks: unknown[], mcp: unknown[] = []): Manifest {
   return parseManifest({
@@ -206,7 +208,9 @@ describe("generateSettings", () => {
     const out = generateSettings(m);
     const bashGroup = out.hooks.PreToolUse?.find((g) => g.matcher === "Bash");
     expect(bashGroup?.hooks).toHaveLength(2);
-    expect(bashGroup?.hooks.map((h) => h.timeout).sort()).toEqual([1000, 5000]);
+    // budget_ms 1000 -> ceil(1000/1000)=1, floored to the policy-intercept
+    // minimum of 2s; budget_ms 5000 -> ceil(5000/1000)=5. Still distinct.
+    expect(bashGroup?.hooks.map((h) => h.timeout).sort()).toEqual([2, 5]);
   });
 
   it("emits one event key per distinct event with the right matcher/command tuples", () => {
@@ -239,18 +243,18 @@ describe("generateSettings", () => {
     expect(Object.keys(out.hooks)).toEqual(["PreToolUse", "SessionStart"]);
 
     expect(out.hooks.SessionStart).toEqual([
-      { hooks: [{ type: "command", command: "/hooks/git-preflight.sh", timeout: 30000 }] },
+      { hooks: [{ type: "command", command: "/hooks/git-preflight.sh", timeout: 30 }] },
     ]);
 
     // PreToolUse has 2 matchers, sorted ascending: "Bash" before "mcp__..."
     expect(out.hooks.PreToolUse).toEqual([
       {
         matcher: "Bash",
-        hooks: [{ type: "command", command: "/hooks/dogfood.sh", timeout: 2000 }],
+        hooks: [{ type: "command", command: "/hooks/dogfood.sh", timeout: 2 }],
       },
       {
         matcher: "mcp__agent-tasks__pull_requests_merge",
-        hooks: [{ type: "command", command: "/hooks/review.sh", timeout: 2000 }],
+        hooks: [{ type: "command", command: "/hooks/review.sh", timeout: 2 }],
       },
     ]);
   });
@@ -279,8 +283,8 @@ describe("generateSettings", () => {
       {
         matcher: "Bash",
         hooks: [
-          { type: "command", command: "/cmd-a.sh", timeout: 30000 },
-          { type: "command", command: "/cmd-b.sh", timeout: 30000 },
+          { type: "command", command: "/cmd-a.sh", timeout: 30 },
+          { type: "command", command: "/cmd-b.sh", timeout: 30 },
         ],
       },
     ]);
@@ -298,7 +302,7 @@ describe("generateSettings", () => {
     ]);
     const out = generateSettings(m);
     expect(out.hooks.SessionStart).toEqual([
-      { hooks: [{ type: "command", command: "/s.sh", timeout: 30000 }] },
+      { hooks: [{ type: "command", command: "/s.sh", timeout: 30 }] },
     ]);
     expect(out.hooks.SessionStart?.[0]).not.toHaveProperty("matcher");
   });
@@ -324,12 +328,12 @@ describe("generateSettings", () => {
     expect(out.hooks.SessionStart?.[0]?.hooks[0]).toEqual({
       type: "command",
       command: "/d.sh",
-      timeout: DEFAULT_BUDGET_MS,
+      timeout: DEFAULT_BUDGET_MS / 1000,
     });
     expect(out.hooks.Stop?.[0]?.hooks[0]).toEqual({
       type: "command",
       command: "/c.sh",
-      timeout: 5000,
+      timeout: 5,
     });
   });
 
@@ -483,6 +487,87 @@ describe("generateSettings", () => {
     const out = generateSettings(m);
     expect(out.hooks.SessionStart).toHaveLength(1);
     expect(out.hooks.SessionStart?.[0]).not.toHaveProperty("matcher");
+  });
+});
+
+// task 7bf47554: Claude Code's settings.json hook `timeout` is documented
+// in SECONDS (https://code.claude.com/docs/en/hooks, "Seconds before
+// canceling"), not milliseconds like the manifest's `budget_ms`. Before
+// this fix `toSettingsCommand` emitted `h.budget_ms` unconverted, so every
+// Claude-hook kill-timer was 1000x too large (a 1000-2000ms template
+// budget silently became a 1000-2000 SECOND, 16-33 minute, Claude Code
+// timeout). These tests pin the corrected conversion and its parity with
+// the (already-correct) Codex projection.
+describe("hookTimeoutSeconds (Claude-hook-timeout-was-1000x, task 7bf47554)", () => {
+  function hook(budget_ms: number, command = "/hooks/h.sh"): Hook {
+    return {
+      name: "h",
+      event: "PreToolUse",
+      command,
+      blocking: false,
+      budget_ms,
+    };
+  }
+
+  it("converts budget_ms=10000 to timeout=10 seconds (acceptance criterion 1)", () => {
+    expect(hookTimeoutSeconds(hook(10_000))).toBe(10);
+  });
+
+  it("converts budget_ms=1000 to timeout=1 second", () => {
+    expect(hookTimeoutSeconds(hook(1_000))).toBe(1);
+  });
+
+  it("floors `harness policy intercept` hooks at 2 seconds even for a tiny budget_ms", () => {
+    expect(hookTimeoutSeconds(hook(1, "harness policy intercept"))).toBe(2);
+    expect(hookTimeoutSeconds(hook(1_000, "harness policy intercept"))).toBe(2);
+  });
+
+  it("floors non-policy-intercept hooks at 1 second even for a sub-second budget_ms", () => {
+    expect(hookTimeoutSeconds(hook(1))).toBe(1);
+  });
+
+  it("rounds up a non-multiple-of-1000 budget_ms (ceil, never truncates to 0)", () => {
+    expect(hookTimeoutSeconds(hook(1500))).toBe(2);
+    expect(hookTimeoutSeconds(hook(2001))).toBe(3);
+  });
+
+  it("this test goes RED under the pre-fix 1:1 (ms-as-seconds) behaviour", () => {
+    // Mutation probe (not a normal regression pin): simulates reverting
+    // hookTimeoutSeconds to the original `h.budget_ms` passthrough bug.
+    // If this assertion could pass under `naiveOneToOne`, the test above
+    // would not actually be catching the unit bug.
+    const naiveOneToOne = (h: Hook): number => h.budget_ms;
+    expect(naiveOneToOne(hook(10_000))).not.toBe(hookTimeoutSeconds(hook(10_000)));
+    expect(hookTimeoutSeconds(hook(10_000))).toBe(10);
+  });
+
+  it("generateSettings and generateCodexConfig emit the identical seconds value for the same hook (acceptance criterion 3)", () => {
+    const cases: { budget_ms: number; command: string }[] = [
+      { budget_ms: 10_000, command: "/hooks/plain.sh" },
+      { budget_ms: 1_000, command: "/hooks/plain.sh" },
+      { budget_ms: 1_500, command: "/hooks/plain.sh" },
+      { budget_ms: 1, command: "harness policy intercept" },
+      { budget_ms: 2_000, command: "harness policy intercept" },
+      { budget_ms: DEFAULT_BUDGET_MS, command: "/hooks/plain.sh" },
+    ];
+    for (const { budget_ms, command } of cases) {
+      const m = parseManifest({
+        version: 1,
+        tools: { mcp: [], cli: [], skills: { enabled: [], source_dirs: [] }, builtin: { known: [] } },
+        memory: { directories: [] },
+        hooks: [
+          { name: "cmp", event: "SessionStart", command, blocking: false, budget_ms },
+        ],
+        policies: [],
+      });
+      const settingsTimeout = generateSettings(m).hooks.SessionStart?.[0]?.hooks[0]?.timeout;
+      const { content } = generateCodexConfig(m);
+      const codexMatch = content.match(/timeout = (\d+)/);
+      expect(codexMatch).not.toBeNull();
+      const codexTimeout = Number(codexMatch![1]);
+      expect(settingsTimeout).toBe(codexTimeout);
+      expect(settingsTimeout).toBe(hookTimeoutSeconds(hook(budget_ms, command)));
+    }
   });
 });
 
@@ -687,7 +772,7 @@ describe("generateSettings — memory.router projection (PR #203)", () => {
     expect(group).toBeDefined();
     expect(group?.matcher).toBeUndefined();
     expect(group?.hooks).toEqual([
-      { type: "command", command: "memory-router-user-prompt-submit", timeout: 5000 },
+      { type: "command", command: "memory-router-user-prompt-submit", timeout: 5 },
     ]);
   });
 

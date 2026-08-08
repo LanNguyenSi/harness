@@ -374,7 +374,11 @@ function buildHookEntry(
   // explicitly if they want enforcement. (Blocking is harness-internal —
   // settings.json has no equivalent field — so it is genuinely not
   // inferable from the adopted source; `timeout` IS captured and becomes
-  // `budget_ms`, matching apply's 1:1 projection, task 059b669c.)
+  // `budget_ms`, task 059b669c.) UNIT: `d.timeout` is settings.json's
+  // SECONDS value (see DerivedHook.timeout in ./derive.ts); `budget_ms` is
+  // milliseconds, so it is multiplied by 1000 here, the inverse of
+  // apply's `hookTimeoutSeconds` (generate-settings.ts), fixed alongside
+  // this in task 7bf47554.
   const entry: {
     name: string;
     event: string;
@@ -389,6 +393,6 @@ function buildHookEntry(
     blocking: false,
   };
   if (d.match !== undefined) entry.match = d.match;
-  if (d.timeout !== undefined) entry.budget_ms = d.timeout;
+  if (d.timeout !== undefined) entry.budget_ms = d.timeout * 1000;
   return entry;
 }

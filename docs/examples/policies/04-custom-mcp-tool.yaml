@@ -27,7 +27,8 @@ hooks:
     command: harness policy intercept
     match: "mcp__myorg-ops__deploy_service"
     blocking: hard
-    budget_ms: 2000
+    # 15s outer timeout clears the grounding-mcp ledger worst-case so the deny lands before Claude cancels the hook (task 7bf47554)
+    budget_ms: 15000
 
 policies:
   - name: deploy-needs-readiness

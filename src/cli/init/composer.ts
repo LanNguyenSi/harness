@@ -178,6 +178,25 @@ interface PolicySpec {
   };
 }
 
+// Budget note (task 7bf47554, fix round 2): every blocking `harness policy
+// intercept` hook below carries budget_ms: 15000 (a 15s Claude Code outer
+// kill-timeout, generate-settings.ts's hookTimeoutSeconds), matching
+// FULL_TEMPLATE's uniform 15000ms floor (src/cli/init/templates.ts, see
+// the full budget-note comment above its `require-review-evidence` entry
+// for the derivation). Short version: `intercept()` writes every matched
+// policy's decision to the evidence ledger before returning
+// (src/runtime/intercept.ts, `options.ledger.record(...)`), a live
+// grounding-mcp round-trip on the critical path for every one of these
+// hooks, and a `requires:`-based policy additionally queries the ledger
+// for its verdict first. Measured worst case (health.timeout_ms=5000 +
+// a deny-degraded audit-write retry) is ~10.8-13.75s; a lower per-hook
+// budget lets Claude Code kill the subprocess before its deny JSON
+// reaches stdout, silently turning a fail-closed verdict into an
+// unintended allow. Kept uniform across all five rows for the same
+// dedup-safety reason FULL_TEMPLATE documents: generate-settings.ts's
+// buildGroups collapses same-matcher hooks by (command, timeout), so a
+// non-uniform budget would split one Claude Code invocation per Bash
+// call into several redundant ones.
 const HOOK_FOR_POLICY: Record<CustomPolicyKey, HookSpec> = {
   "review-before-merge": {
     name: "require-review-evidence",
@@ -185,7 +204,7 @@ const HOOK_FOR_POLICY: Record<CustomPolicyKey, HookSpec> = {
     match: "mcp__agent-tasks__pull_requests_merge",
     command: "harness policy intercept",
     blocking: "hard",
-    budget_ms: 2000,
+    budget_ms: 15000,
   },
   "preflight-before-investigation": {
     name: "require-preflight-evidence",
@@ -195,7 +214,7 @@ const HOOK_FOR_POLICY: Record<CustomPolicyKey, HookSpec> = {
       "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* (status|log|diff|branch)\\b",
     command: "harness policy intercept",
     blocking: "hard",
-    budget_ms: 1000,
+    budget_ms: 15000,
   },
   "review-subagent-before-pr-create": {
     name: "require-review-subagent-evidence",
@@ -203,7 +222,7 @@ const HOOK_FOR_POLICY: Record<CustomPolicyKey, HookSpec> = {
     match: "mcp__agent-tasks__pull_requests_create",
     command: "harness policy intercept",
     blocking: "hard",
-    budget_ms: 2000,
+    budget_ms: 15000,
   },
   "preflight-before-push": {
     name: "require-preflight-push-evidence",
@@ -212,7 +231,7 @@ const HOOK_FOR_POLICY: Record<CustomPolicyKey, HookSpec> = {
     bash_match: "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b",
     command: "harness policy intercept",
     blocking: "hard",
-    budget_ms: 1000,
+    budget_ms: 15000,
   },
   "dogfood-before-release": {
     name: "require-dogfood-evidence",
@@ -222,7 +241,7 @@ const HOOK_FOR_POLICY: Record<CustomPolicyKey, HookSpec> = {
       "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*(npm publish\\b|git( -C \\S+)* tag v)",
     command: "harness policy intercept",
     blocking: "hard",
-    budget_ms: 2000,
+    budget_ms: 15000,
   },
   // two-reviewers-required shares review-before-merge's hook; the policy
   // intercept engine evaluates both policies under the same trigger and
@@ -235,7 +254,7 @@ const HOOK_FOR_POLICY: Record<CustomPolicyKey, HookSpec> = {
     match: "mcp__agent-tasks__pull_requests_merge",
     command: "harness policy intercept",
     blocking: "hard",
-    budget_ms: 2000,
+    budget_ms: 15000,
   },
 };
 
