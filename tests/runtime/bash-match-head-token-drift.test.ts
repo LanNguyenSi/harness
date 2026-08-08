@@ -6,14 +6,17 @@ import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import { parseManifest } from "../../src/schema/index.js";
+import { GIT_TOKEN_RE, NON_GIT_HEAD_TOKENS } from "../../src/runtime/command-normalize.js";
 import {
   DOCUMENTED_UNCOVERED_HEAD_TOKENS,
   extractBashMatchFacts,
   type BashMatchFacts,
 } from "../../src/runtime/bash-match-facts.js";
 import {
+  PLAUSIBLE_NON_GATED_HEAD_TOKENS,
   REGISTERED_HEAD_TOKEN_SETS,
   checkRegisteredSets,
+  sourceHas,
 } from "../../src/runtime/bash-match-registry.js";
 
 // MIGRATED (task `074acf5d`, run `2026-07-28-manifest-facts-drift-guard`)
@@ -282,6 +285,24 @@ describe("bash_match facts drift guard (migrated onto src/runtime/bash-match-fac
     expect(checkRegisteredSets(liveFacts())).toEqual([]);
   });
 
+  it("task 209e6dc4 point 6, verified against the REAL registrations, not a fixture: both real entries in REGISTERED_HEAD_TOKEN_SETS carry the ACTUAL imported constant by reference (identity, not a copy) — a registration naming a module/id with no matching exported constant is a TS2304 compile error, structurally impossible to express, so there is nothing further to assert on the runtime shape here beyond confirming today's two registrations really do hold the real bindings and not independently-constructed lookalikes", () => {
+    const gitSet = REGISTERED_HEAD_TOKEN_SETS.find((r) => r.id === "GIT_TOKEN_RE")!;
+    const nonGitSet = REGISTERED_HEAD_TOKEN_SETS.find((r) => r.id === "NON_GIT_HEAD_TOKENS")!;
+    expect(gitSet.source).toEqual({ kind: "regex", re: GIT_TOKEN_RE });
+    expect(gitSet.source.kind === "regex" && gitSet.source.re).toBe(GIT_TOKEN_RE);
+    expect(nonGitSet.source.kind === "set" && nonGitSet.source.set).toBe(NON_GIT_HEAD_TOKENS);
+  });
+
+  it("task 209e6dc4 point 5: every entry in PLAUSIBLE_NON_GATED_HEAD_TOKENS is individually pinned against the LIVE manifest — none of them is actually gated by any shipped bash_match policy today. A future policy starting to gate one of these words turns this test red, forcing a conscious update instead of a silent drift (previously 5 of 8 entries were exercised by no test at all)", () => {
+    const facts = liveFacts();
+    for (const token of PLAUSIBLE_NON_GATED_HEAD_TOKENS) {
+      expect(
+        facts.gatedHeadTokens.has(token),
+        `expected "${token}" (from PLAUSIBLE_NON_GATED_HEAD_TOKENS) to NOT be a live gated head token`,
+      ).toBe(false);
+    }
+  });
+
   describe("per-policy head-token facts (diagnostic detail preserved from the pre-migration guard)", () => {
     const facts = liveFacts();
     for (const policyFact of facts.policies) {
@@ -299,11 +320,11 @@ describe("bash_match facts drift guard (migrated onto src/runtime/bash-match-fac
             )!;
 
             if (cls === "git") {
-              expect(gitSet.has(token)).toBe(true);
-              expect(nonGitSet.has(token)).toBe(false);
+              expect(sourceHas(gitSet.source, token)).toBe(true);
+              expect(sourceHas(nonGitSet.source, token)).toBe(false);
             } else if (cls === "non-git-set") {
-              expect(nonGitSet.has(token)).toBe(true);
-              expect(gitSet.has(token)).toBe(false);
+              expect(sourceHas(nonGitSet.source, token)).toBe(true);
+              expect(sourceHas(gitSet.source, token)).toBe(false);
             } else {
               // documented-uncovered: genuinely NOT covered by any
               // registered set today. If this ever starts failing
@@ -313,8 +334,8 @@ describe("bash_match facts drift guard (migrated onto src/runtime/bash-match-fac
               // bash-match-facts.ts) consciously; do not just delete the
               // assertion.
               expect(DOCUMENTED_UNCOVERED_HEAD_TOKENS.has(token)).toBe(true);
-              expect(nonGitSet.has(token)).toBe(false);
-              expect(gitSet.has(token)).toBe(false);
+              expect(sourceHas(nonGitSet.source, token)).toBe(false);
+              expect(sourceHas(gitSet.source, token)).toBe(false);
             }
           });
         }
