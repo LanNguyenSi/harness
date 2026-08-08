@@ -129,6 +129,21 @@ function policyMatchesTool(
     // with the runtime, which is also cwd-only for `${REPO}`/`${BRANCH}` —
     // see `src/cli/policy/intercept.ts`'s comment above `cwdGitContext` for
     // why a per-command target directory is deliberately not consulted.
+    //
+    // NAMED RESIDUAL (task cf3dff51, not fixed here): `policyMatchesEvent`
+    // gained a FOURTH arm, `normalizeCommandQuoteAware` (a quote-aware
+    // BOUNDARY_RE segmenter closing `VAR='a; b' git push origin master` and
+    // its `|`/`&&`/`(`/newline siblings — task 13e55484's pinned gap). This
+    // function was deliberately NOT extended to try that fourth form in the
+    // same task — the wiring change was scoped narrowly to `policy
+    // intercept`'s own matcher (`src/runtime/intercept.ts`) — so `harness
+    // dry-run` currently predicts NOT-MATCHED for a command `policy
+    // intercept` actually blocks via the quote-aware arm, reintroducing
+    // EXACTLY the parity contradiction this comment's first sentence
+    // describes, for this one additional family. Flagged rather than fixed
+    // silently or left implicit; closing it is a small, well-understood
+    // follow-up (add `!re.test(normalizeCommandQuoteAware(args.command).normalized)`
+    // to the condition below, matching the amp-aware precedent exactly).
     if (
       !re.test(args.command) &&
       !re.test(normalizeCommand(args.command).normalized) &&

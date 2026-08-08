@@ -81,6 +81,58 @@
 // on bash actually running the verb, per the same never-fold-into-a-zero
 // discipline.
 //
+// UPDATE (task cf3dff51): closes the quoted-shell-boundary residual named
+// in the "DELIBERATELY NOT SUPPORTED" list below (`VAR='a; b' git push` —
+// task 13e55484's pinned gap). A HALT criterion, written before any
+// implementation code, forced the closing mechanism into an ADDITIVE,
+// fully independent third normalisation pass (`normalizeCommandQuoteAware`
+// / `findNextBoundaryQuoteAware`, defined near `findNextBoundary` below)
+// rather than an in-place edit of `BOUNDARY_RE` / `segmentAndCanonicalize`
+// itself. First round of this task built and fully tested the new pass but
+// left it UNWIRED (the wiring — a `policyMatchesEvent` fourth disjunct in
+// `src/runtime/intercept.ts` — touched a file outside that round's
+// assigned scope). The orchestrator EXTENDED the scope for a second round
+// specifically to include that one wiring point (not a general re-open of
+// scope), so `normalizeCommandQuoteAware` IS now `policyMatchesEvent`'s
+// fourth arm, mirroring `normalizeCommandAmpAware`'s own wiring (task
+// aabbad63) exactly — see that function's own doc comment and
+// `src/runtime/intercept.ts`'s `policyMatchesEvent` for the wired shape.
+// STILL NOT covered: `src/cli/dry-run.ts`'s own, independently-copied
+// raw-OR-normalised-OR-amp-normalised matcher (the `harness dry-run` debug
+// verb, which predicts `policyMatchesEvent`'s verdict without running it)
+// was NOT extended to also try the quote-aware form — named residual, not
+// silently left implicit; see that file's own comment for why parity with
+// the real matcher matters there specifically, and this run's implementer
+// report for why it stayed out of the extended scope.
+//
+// THE HALT CRITERION (decided and written down before writing the first
+// line of this pass's implementation, mirroring 13e55484's own "ONE-
+// DIRECTIONAL GUARD" structure): quote-aware segmentation MUST be built as
+// a NEW, independent function — never as an in-place edit of the EXISTING,
+// already-wired primary pass (`BOUNDARY_RE` / `findNextBoundary` /
+// `segmentAndCanonicalize`'s behaviour for `normalizeCommand`). If closing
+// this residual is ever found to require editing that existing pass in
+// place instead of adding a new one, HALT and fall back to documentation-
+// only (pin the residual, as this header already does for its NOT-
+// SUPPORTED siblings) rather than risk a two-directional regression. This
+// is not a hypothetical: this task PROVED the trigger before writing any
+// code, by reading `tests/runtime/command-normalize.test.ts`'s pinned
+// "accepted over-block: a quoted assignment inside TEXT after a boundary
+// char now matches" case — `echo "a; VAR='x y' git push"` — which matches
+// TODAY only because `BOUNDARY_RE`'s quote-unawareness un-splits `VAR='x
+// y' git push` into its own segment. An in-place quote-aware edit of the
+// SAME pass would un-split it the other way (merge it back into the outer
+// `echo "..."` segment, which is not itself a recognised invocation) and
+// flip that already-accepted, already-WIRED pin from match to no-match —
+// a genuine lost match under this module's own no-lost-matches discipline
+// (see AMP_BOUNDARY_RE's own comment for why that discipline exists at
+// all), not merely a lost false positive. Building a separate, additive
+// pass instead means the existing primary pass — and every pin resting on
+// it, including that exact one — stays byte-for-byte untouched; see
+// `normalizeCommandQuoteAware`'s own comment for the differential
+// measurement that confirms this by construction rather than by
+// inspection alone.
+//
 // THE TRIGGER-MATCHING GAP THIS CLOSES: every `bash_match` policy trigger
 // (`src/cli/init/templates.ts`, `docs/examples/full-manifest.yaml`) is a
 // single regex tested against the UNPARSED command string, anchored on a
@@ -265,13 +317,32 @@
 //     agent writes and then executes.
 //   - `pushd`/`popd`, and a `cd` inside a nested subshell
 //     (`(cd X && ...)`) — mirrors `bash-prefix-parse.ts`'s own scope.
-//   - A shell-boundary character INSIDE a quoted assignment VALUE
-//     (`VAR='a; b' git push` — task 13e55484's pinned residual):
-//     `BOUNDARY_RE` splits segments BEFORE tokenisation and is quote-
-//     unaware, so the quoted value is cut at the `;` and neither
-//     resulting segment carries a recognisable invocation. Closing this
-//     means a quote-aware segmenter, a different (and riskier) change
-//     than the assignment-value continuation that task shipped.
+//   - CLOSED (was: a shell-boundary character INSIDE a quoted assignment
+//     VALUE — `VAR='a; b' git push`, task 13e55484's pinned residual, no
+//     longer belongs in a NOT-SUPPORTED list). Task cf3dff51: a quote-
+//     aware THIRD normalisation pass, `normalizeCommandQuoteAware`
+//     (defined near `findNextBoundary` below), built as a new, additive
+//     pass rather than an in-place edit of `BOUNDARY_RE` /
+//     `segmentAndCanonicalize` (see the module header's HALT CRITERION
+//     paragraph and that function's own comment for why), now wired as
+//     `policyMatchesEvent`'s FOURTH arm (`src/runtime/intercept.ts`,
+//     mirroring `normalizeCommandAmpAware`'s own wiring, task aabbad63).
+//     Closes `;`, `|`, `&&`, `(`, and a literal newline, each with an
+//     internal whitespace split inside the quoted value (the exact
+//     `VAR='a; b' git push` shape) — measured 12/12 at the real
+//     `runInterceptCli` hook entry point (isolated harness home,
+//     PATH-shim-verified bash execution, two gated verbs). Over-block
+//     surface: MEASURED, not assumed, against an adversarial probe —
+//     every ADDITIONAL match this pass adds beyond raw /
+//     `normalizeCommand` / `normalizeCommandAmpAware` is a TRUE positive
+//     (a real invocation bash would actually execute); no NEW over-block
+//     CLASS distinct from `consumeAssignment`'s own, already-reviewed
+//     precision limits (the "master false positive" class already pinned
+//     elsewhere in the test file) was found. See `normalizeCommandQuoteAware`'s
+//     own doc comment for the full mechanism and reasoning. STILL open:
+//     `src/cli/dry-run.ts`'s independently-copied matcher was not extended
+//     to try this fourth form — named residual, see that file's own
+//     comment.
 //   - A quoted assignment VALUE containing the literal word `git`/`gh`/
 //     `npm`/`harness` as its own token (`VAR='a git b' git push`): the
 //     continuation's one-directional guard abandons rather than risk
@@ -1138,6 +1209,30 @@ export interface AmpAwareNormalizedCommand {
  * common (already-matched) path.
  */
 export function normalizeCommandAmpAware(command: string): AmpAwareNormalizedCommand {
+  return normalizeWithGuards(command, (c) => segmentAndCanonicalize(c, AMP_BOUNDARY_RE, false).normalized);
+}
+
+/**
+ * Shared empty/length/throw guard clauses for a normalisation pass whose
+ * public return shape is exactly `{ normalized, truncated }` — no
+ * `targetDir`/`targetBase` (task cf3dff51 extraction: before this,
+ * `normalizeCommandAmpAware` and `normalizeCommandQuoteAware` carried
+ * byte-identical copies of this wrapper, which `npm run check:duplication`
+ * — a jscpd clone-count fitness function, see that script's own header
+ * comment for the precedent this follows — flagged as new duplication
+ * against the pinned baseline; extracted rather than raising the pin,
+ * per that script's own stated preference). `normalizeCommand` itself is
+ * NOT this shape (its return type also carries `targetDir`/`targetBase`)
+ * and keeps its own, separate guard clauses — deliberately not folded in
+ * here, since unifying THREE different return shapes behind one generic
+ * helper would obscure more than the ~10 duplicated lines it would save.
+ * `compute` is called only once `command` has passed both guards, so it
+ * never needs to re-check emptiness or the length bound itself.
+ */
+function normalizeWithGuards(
+  command: string,
+  compute: (command: string) => string,
+): { normalized: string; truncated: boolean } {
   if (typeof command !== "string" || command.length === 0) {
     return { normalized: typeof command === "string" ? command : "", truncated: false };
   }
@@ -1145,10 +1240,7 @@ export function normalizeCommandAmpAware(command: string): AmpAwareNormalizedCom
     return { normalized: command, truncated: true };
   }
   try {
-    return {
-      normalized: segmentAndCanonicalize(command, AMP_BOUNDARY_RE, false).normalized,
-      truncated: false,
-    };
+    return { normalized: compute(command), truncated: false };
   } catch {
     return { normalized: command, truncated: false };
   }
@@ -1157,6 +1249,124 @@ export function normalizeCommandAmpAware(command: string): AmpAwareNormalizedCom
 function normalizeCommandInner(command: string): NormalizedCommand {
   const { normalized, targetDir, targetBase } = segmentAndCanonicalize(command, BOUNDARY_RE, false);
   return { normalized, targetDir, targetBase, truncated: false };
+}
+
+/**
+ * Return type of `normalizeCommandQuoteAware` — same shape and same
+ * reasoning as `AmpAwareNormalizedCommand` above: no `targetDir`/
+ * `targetBase`, so no consumer can read one extracted under quote-aware
+ * segmentation by mistake. Unlike the amp-aware pass, THIS alphabet is
+ * exactly `BOUNDARY_RE`'s own (no new boundary characters, only new
+ * quote-tracking around the existing ones), so the reason for omitting
+ * these fields is different: `computeSegmentTarget` / `classifyCdSegment`
+ * / `canonicalizeSegment` all assume `tokenizeWithOffsets`'s whitespace
+ * tokenisation lines up with the segment boundaries `findNextBoundary`
+ * produces, which is still true for the boundary ALPHABET itself but is
+ * now also entangled with `consumeAssignment`'s OWN, separate quote
+ * tracking (per-token, inside one segment) once segments can be wider and
+ * carry an unbalanced quote at their edges in new ways this task's own
+ * corpus does not exhaustively characterise for `targetDir` purposes —
+ * left unexplored rather than guessed at, mirroring the amp-aware pass's
+ * own "not this task's job" scoping.
+ */
+export interface QuoteAwareNormalizedCommand {
+  /** Same contract as `NormalizedCommand.normalized`, under quote-aware segmentation. */
+  normalized: string;
+  /** Same contract as `NormalizedCommand.truncated`. */
+  truncated: boolean;
+}
+
+/**
+ * Quote-aware THIRD normalisation pass (task cf3dff51). Segments the
+ * command under `BOUNDARY_RE`'s own alphabet — same characters as the
+ * primary pass, no widening — but tracks single/double-quote state while
+ * scanning (`findNextBoundaryQuoteAware` below) so a boundary character
+ * sitting INSIDE a quoted assignment value is no longer treated as a real
+ * segment split. Closes the gap the module header's "DELIBERATELY NOT
+ * SUPPORTED" list and `BOUNDARY_RE`'s own comment both name: `VAR='a; b'
+ * git push` (task 13e55484's pinned residual) — `BOUNDARY_RE` used to cut
+ * the segment at the `;`, landing squarely between the two halves of one
+ * quoted value, so neither resulting piece carried a recognisable
+ * invocation and `consumeAssignment`'s own multi-token quote continuation
+ * (built for exactly this shape) never got the chance to run: it operates
+ * AFTER segmentation, on tokens WITHIN one segment, and the quoted value
+ * was never in one segment to begin with. Once quote-aware segmentation
+ * keeps the value whole, `consumeAssignment` needs no changes at all — it
+ * already reconstructs a multi-token quoted value correctly; this pass
+ * only fixes what gets handed to it as ONE segment in the first place.
+ *
+ * BUILT AS A NEW, INDEPENDENT PASS RATHER THAN AN IN-PLACE EDIT OF
+ * `BOUNDARY_RE` / `segmentAndCanonicalize` — this is the module header's
+ * HALT CRITERION, restated here at the point it governs: quote-aware
+ * segmentation can MERGE a segment the primary pass currently splits, and
+ * that merge cuts in BOTH directions — it can turn a previously-missed
+ * bypass into a match (the fix), but it can just as easily turn a
+ * previously-accepted, ALREADY-WIRED over-block into a miss (a
+ * regression). Measured, not hypothetical: `tests/runtime/command-
+ * normalize.test.ts`'s "accepted over-block: a quoted assignment inside
+ * TEXT after a boundary char now matches" pin — `echo "a; VAR='x y' git
+ * push"` — matches via `normalizeCommand` TODAY only because `BOUNDARY_RE`
+ * splits it at the `;`, landing `VAR='x y' git push` at a segment start
+ * where the assignment continuation turns it into a match. An in-place
+ * quote-aware edit of THAT pass would un-split it back into the outer
+ * `echo "..."` segment — not itself a recognised invocation — and flip
+ * that pin to a lost match, in violation of the raw-OR-normalised-OR-amp-
+ * aware-OR-(this) never-lose-a-match discipline every other pass in this
+ * module already honours. Building this as a SEPARATE pass instead means
+ * `normalizeCommand`'s own segmentation, and every test resting on it —
+ * including that exact one — is untouched by this task; see this file's
+ * own test suite for the differential proof (every case the first three
+ * arms already matched still matches, by construction, because none of
+ * those three arms' code changed at all).
+ *
+ * WIRED to `policyMatchesEvent` (`src/runtime/intercept.ts`) as its
+ * FOURTH arm — same shape as `normalizeCommandAmpAware`'s own third-arm
+ * wiring (task aabbad63): consulted only after the raw command,
+ * `normalizedCommand`, and the amp-aware pass have all missed, via a
+ * memoised thunk (`InterceptOptions.quoteNormalizedCommandThunk`,
+ * `src/cli/policy/intercept.ts`'s `quoteNormalizedCommandThunk`) so the
+ * segmentation cost is paid at most once per event, on the common
+ * (already-matched) path it costs nothing at all. Wiring landed in a
+ * SECOND round of this task, after the orchestrator extended the first
+ * round's file scope specifically for this one wiring point — the first
+ * round shipped this function fully built and tested but genuinely
+ * unwired (an inert security fix, called out explicitly as the wrong
+ * shipped state in that round's own report) — `src/cli/dry-run.ts`'s own,
+ * independently-copied matcher was deliberately NOT extended in the same
+ * round (out of the extended scope too) and stays a named residual — see
+ * that file's own comment.
+ *
+ * THIS PASS'S OWN OVER-BLOCK SURFACE is measured and named in the test
+ * file rather than assumed — and the measurement CORRECTS an earlier,
+ * pre-measurement guess that used to sit in this comment: it does NOT
+ * reproduce the `echo "a; VAR='x y' git push"` accepted over-block named
+ * above. Quote-aware merging keeps that whole `echo "..."` segment
+ * together, starting with the unrecognised head token `echo`, so this
+ * function's output for it is byte-identical to the raw input
+ * (`normalizeCommand`'s OWN, separate, unchanged-by-this-task match for
+ * that same string is unaffected either way). Measured against a broader
+ * adversarial probe, both at this function's own level and again at
+ * `policyMatchesEvent`'s wired level (a bash-shim-verified corpus of
+ * chained/prefixed/subshell-wrapped genuine invocations plus candidate
+ * over-block shapes — entirely quoted `echo`/`printf` arguments that only
+ * PRINT the spelling): every additional match this pass adds beyond raw /
+ * `normalizeCommand` / `normalizeCommandAmpAware` is a TRUE positive (a
+ * real invocation bash would actually execute); no NEW over-block class
+ * distinct from `consumeAssignment`'s own, already-reviewed precision
+ * limits was found. This function shares `canonicalizeSegment` /
+ * `consumeAssignment` completely unchanged with the other passes — only
+ * the segmentation boundary decision differs — which is also the
+ * structural reason a longer (merged) segment can only REVEAL a match
+ * those functions would already accept from a shorter view, never
+ * fabricate a new kind of one; see the module header's cf3dff51 UPDATE
+ * paragraph for the fuller statement of this reasoning and its
+ * "not a formal proof" caveat.
+ */
+export function normalizeCommandQuoteAware(command: string): QuoteAwareNormalizedCommand {
+  return normalizeWithGuards(
+    command,
+    (c) => segmentAndCanonicalize(c, BOUNDARY_RE, false, true).normalized,
+  );
 }
 
 /**
@@ -1199,11 +1409,25 @@ function normalizeCommandInner(command: string): NormalizedCommand {
  * view at all (see that function's own comment). `segments` is `null` on
  * the returned object when `collectSegments` is `false`, an array
  * (possibly empty) otherwise.
+ *
+ * `quoteAware` (task cf3dff51, default `false` — every PRE-EXISTING call
+ * site is unchanged, positionally omitting this parameter): selects
+ * `findNextBoundaryQuoteAware` instead of `findNextBoundary` as the one
+ * thing this walk asks to find the next segment split. Everything else in
+ * this function — `canonicalizeSegment`, the target-directory bookkeeping,
+ * the `collectSegments` per-segment view — is IDENTICAL either way; only
+ * WHERE a segment ends changes. Only `normalizeCommandQuoteAware` passes
+ * `true`; see that function's own comment for why this had to be a new
+ * parameter on the SHARED walk rather than a wholly separate function
+ * (reuse, same reasoning `AMP_BOUNDARY_RE`'s parameterisation on
+ * `boundaryRe` already established) and for the HALT CRITERION that ruled
+ * out editing `findNextBoundary` itself in place instead.
  */
 function segmentAndCanonicalize(
   command: string,
   boundaryRe: RegExp,
   collectSegments: boolean,
+  quoteAware = false,
 ): {
   normalized: string;
   targetDir: string | null;
@@ -1253,7 +1477,9 @@ function segmentAndCanonicalize(
   // least one boundary token's length each iteration a boundary is
   // found, and the loop stops once none remain.
   for (;;) {
-    const boundary = findNextBoundary(command, i, boundaryRe);
+    const boundary = quoteAware
+      ? findNextBoundaryQuoteAware(command, i, boundaryRe)
+      : findNextBoundary(command, i, boundaryRe);
     const segEnd = boundary ? boundary.start : n;
     const segmentText = command.slice(i, segEnd);
     const result = canonicalizeSegment(segmentText);
@@ -1447,6 +1673,208 @@ function findNextBoundary(
 }
 
 /**
+ * Quote-aware sibling of `findNextBoundary` (task cf3dff51): the earliest
+ * boundary token at or after `from` that sits OUTSIDE any open single- or
+ * double-quoted run, under the SAME `boundaryRe` alphabet the caller
+ * already scans with — no new boundary characters, only quote-tracking
+ * around the existing ones. `null` when no such boundary exists (either
+ * none remain at all, or every remaining candidate sits inside quoting
+ * that never closes before the string ends — the same conservative "no
+ * further split" fallback `consumeAssignment`'s own unterminated-quote
+ * case already uses, restated here for whole-string segmentation instead
+ * of one token).
+ *
+ * TWO-PHASE, NOT a per-character regex probe (task cf3dff51, latency fix
+ * round — this replaces this function's first shipped implementation,
+ * which called a sticky-regex `.exec()` at EVERY character position;
+ * measured ~2x `normalizeCommand`'s own cost on a large, quote-free
+ * command, because a JS-to-native regex-engine round trip at every single
+ * character is far more expensive than the SAME regex engine's own
+ * internal forward scan across many characters in one call — exactly what
+ * `findNextBoundary` already does for the primary, non-quote-aware pass).
+ * This version instead COMPOSES `findNextBoundary` (unchanged, still the
+ * quote-UNAWARE fast forward scanner) with `QuoteScanner` (below): repeat
+ * — find the next quote-unaware CANDIDATE boundary via `findNextBoundary`
+ * (one native regex scan, however far away the candidate is), then walk
+ * ONLY the span between the previous position and that candidate,
+ * character-by-character, through `QuoteScanner` (below) to learn whether
+ * a quote is open at the candidate's position; if not, the candidate IS
+ * the real boundary — return it; if so, the candidate is inside a quote
+ * (exactly the `VAR='a; b' git push` shape this pass exists to see
+ * through), step through the candidate token's own characters too (never
+ * quote-relevant — `BOUNDARY_RE`'s alphabet contains no `'`/`"`/`\` — so
+ * this is a correctness no-op, only here so the running quote/escape
+ * state stays byte-for-byte identical to a full character-by-character
+ * walk) and continue the search from just past it. For a typical command
+ * (few boundary characters, most of them outside any quote) this pays
+ * for ONE `findNextBoundary` native scan per REAL segment plus one plain
+ * (non-regex) character walk of the same total length `findNextBoundary`
+ * would have scanned internally anyway — no longer one regex call per
+ * character. `null` when no such boundary exists (either none remain at
+ * all — `findNextBoundary` itself returns `null` — or every remaining
+ * candidate sits inside quoting that never closes before the string ends,
+ * the same conservative "no further split" fallback `consumeAssignment`'s
+ * own unterminated-quote case already uses, restated here for whole-
+ * string segmentation instead of one token).
+ *
+ * `QuoteScanner` (below) is the SAME quote/escape state machine
+ * `consumeAssignment`'s own per-token loop uses (three states — `""`,
+ * `'`, `"` — same POSIX approximation: outside quotes `\` escapes the
+ * next char, `'...'` closes only at an UNESCAPED-by-construction `'`
+ * (single quotes never honour backslash escapes at all), `"..."` closes
+ * at an unescaped `"`). Extracted into a shared class (task cf3dff51 fix
+ * round: `npm run check:duplication`'s jscpd scan flagged the two
+ * independently-written copies of this loop as new duplication against
+ * the pinned baseline; see that script's own header comment for why
+ * extraction, not raising the pin, is the stated preference) rather than
+ * duplicated a second time. Generalised from per-token to whole-string
+ * scope by THIS function, not by the scanner itself: `consumeAssignment`
+ * only ever sees one already-whitespace-tokenised segment at a time; this
+ * function walks the RAW command text directly, whitespace included, so
+ * it can tell whether a `;`/`|`/`&&`/`(`/`\n` character sits inside a
+ * quote that a later whitespace-delimited token will re-enter (exactly
+ * the shape `VAR='a; b' git push` needs: the space after `;` is itself
+ * INSIDE the quoted run, not a token boundary this function cares about
+ * at all — only the eventual UNQUOTED position matters).
+ *
+ * Reuses the MODULE-LEVEL `BOUNDARY_QUOTE_SCANNER` instance (`.reset()`
+ * at the top of each call — see that constant's and `reset()`'s own
+ * comments) instead of allocating a fresh `QuoteScanner` per call, and
+ * calls `findNextBoundary` with the CALLER-SUPPLIED `boundaryRe` object
+ * directly rather than a sticky clone — `findNextBoundary` already resets
+ * `lastIndex` itself on every call (its own comment documents exactly
+ * this discipline for the primary pass sharing the SAME `BOUNDARY_RE`
+ * object), so composing it here needs no extra care. Called once per
+ * segment (not once per character) by `segmentAndCanonicalize`'s loop;
+ * the character walk itself still visits each character in the
+ * `[from, end-of-match-or-string)` span exactly once IN TOTAL across all
+ * calls for one command (split across the phase-1 "verify" loop and the
+ * phase-2 "step through the false candidate" loop, never both for the
+ * same character), keeping the whole walk O(length), same complexity
+ * class `findNextBoundary`'s own comment establishes for the primary
+ * pass — this rewrite changes the CONSTANT factor, not the asymptotic
+ * class.
+ */
+function findNextBoundaryQuoteAware(
+  s: string,
+  from: number,
+  boundaryRe: RegExp,
+): { start: number; token: string } | null {
+  BOUNDARY_QUOTE_SCANNER.reset();
+  let pos = from;
+  const n = s.length;
+  for (;;) {
+    const candidate = findNextBoundary(s, pos, boundaryRe);
+    if (candidate === null) return null;
+    // Phase 1: verify quote-safety by walking ONLY the span strictly
+    // BEFORE the candidate — mirrors the original per-character scan,
+    // which never steps through the boundary token's own characters
+    // before deciding whether to return it.
+    for (let i = pos; i < candidate.start; i++) {
+      BOUNDARY_QUOTE_SCANNER.step(s[i]!);
+    }
+    if (BOUNDARY_QUOTE_SCANNER.state === "") {
+      return candidate;
+    }
+    // Phase 2: the candidate sits inside an open quote — not a real
+    // boundary. Step through ITS OWN characters too (a correctness
+    // no-op, see this function's own comment) so the running state stays
+    // exactly what a full character-by-character walk would have
+    // produced, then resume the search just past it.
+    const tokenEnd = candidate.start + candidate.token.length;
+    for (let i = candidate.start; i < tokenEnd; i++) {
+      BOUNDARY_QUOTE_SCANNER.step(s[i]!);
+    }
+    if (tokenEnd >= n) return null;
+    pos = tokenEnd;
+  }
+}
+
+/**
+ * Mutable single-/double-quote + backslash-escape state machine (task
+ * cf3dff51 extraction — see `findNextBoundaryQuoteAware`'s own comment for
+ * why this was pulled out of two independently-written copies rather than
+ * left duplicated). POSIX-approximated semantics, shared verbatim by both
+ * consumers: outside quotes `\` escapes the next character; `'...'`
+ * closes only at a literal `'` (single quotes never honour backslash
+ * escapes — the `escaped` branch below is unreachable whenever
+ * `state === "'"`, by construction: `step` checks `this.escaped` BEFORE
+ * checking `this.state`, so an escape flagged one character earlier is
+ * always consumed first, but nothing inside the `state === "'"` branch
+ * itself ever SETS `escaped`, so it can never observe a `\` as anything
+ * other than a literal character); `"..."` closes at an unescaped `"`. A
+ * mutable class rather than a pure step function returning a new state
+ * object: this module runs on every Bash/Edit/Write tool call (module
+ * header) and both consumers step through EVERY character of a segment or
+ * token, so one allocation per scan (not one per character) matters for
+ * the same "allocation-light" reason the module header states elsewhere.
+ */
+class QuoteScanner {
+  state: "" | "'" | '"' = "";
+  private escaped = false;
+
+  /** Advance the state machine by exactly one character. */
+  step(c: string): void {
+    if (this.escaped) {
+      this.escaped = false;
+      return;
+    }
+    if (this.state === "'") {
+      if (c === "'") this.state = "";
+      return;
+    }
+    if (this.state === '"') {
+      if (c === "\\") this.escaped = true;
+      else if (c === '"') this.state = "";
+      return;
+    }
+    // state === ""
+    if (c === "\\") this.escaped = true;
+    else if (c === "'" || c === '"') this.state = c;
+  }
+
+  /**
+   * Reset to the initial `""` / not-escaped state — behaviourally
+   * IDENTICAL to discarding this instance and constructing a fresh one
+   * (task cf3dff51, latency fix round: lets `findNextBoundaryQuoteAware`
+   * reuse ONE module-level instance across every segment of a command
+   * instead of allocating a new one per segment — see that function's own
+   * comment for the measured latency this closes).
+   */
+  reset(): void {
+    this.state = "";
+    this.escaped = false;
+  }
+
+  /**
+   * Clear a pending escape without consuming a character. Used only by
+   * `consumeAssignment`, at a whitespace-tokenised TOKEN boundary: a
+   * backslash pending at a token's end would otherwise escape the
+   * separating whitespace itself (task b093911d's class, deliberately
+   * NOT continued — see that function's own comment). `state` is never
+   * touched by this — an open quote genuinely stays open across
+   * whitespace, only a dangling escape does not.
+   */
+  resetEscape(): void {
+    this.escaped = false;
+  }
+}
+
+/**
+ * Module-level `QuoteScanner` instance reused by `findNextBoundaryQuoteAware`
+ * across every segment of every command (task cf3dff51, latency fix
+ * round) — `.reset()` at the top of each call makes reusing this single
+ * instance behaviourally IDENTICAL to `new QuoteScanner()` per call (see
+ * `reset()`'s own doc comment), just without the allocation. Placed here,
+ * textually AFTER `class QuoteScanner`, because a top-level `const`
+ * initialiser referencing a class runs in real module-evaluation order —
+ * `findNextBoundaryQuoteAware` itself sits ABOVE this point in the file
+ * but is a hoisted function declaration whose BODY only runs when called,
+ * by which time this line has already executed.
+ */
+const BOUNDARY_QUOTE_SCANNER = new QuoteScanner();
+
+/**
  * Consume one leading `VAR=value` assignment starting at `idx`, returning
  * the index of the first token AFTER it. Task 13e55484: the VALUE may be
  * quoted and span multiple whitespace-split tokens (`VAR='hello world'`),
@@ -1506,35 +1934,19 @@ function findNextBoundary(
  * pinned.
  */
 function consumeAssignment(tokens: Token[], idx: number): number {
-  let state: "" | "'" | '"' = "";
-  let escaped = false;
+  const quote = new QuoteScanner();
   for (let i = idx; i < tokens.length; i++) {
     const text = tokens[i]!.text;
     if (i > idx && (GIT_TOKEN_RE.test(text) || NON_GIT_HEAD_TOKENS.has(text))) {
       return idx + 1;
     }
     for (let k = 0; k < text.length; k++) {
-      const c = text[k]!;
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (state === "'") {
-        if (c === "'") state = "";
-        continue;
-      }
-      if (state === '"') {
-        if (c === "\\") escaped = true;
-        else if (c === '"') state = "";
-        continue;
-      }
-      if (c === "\\") escaped = true;
-      else if (c === "'" || c === '"') state = c;
+      quote.step(text[k]!);
     }
     // A backslash pending at a token's end would escape the separating
     // whitespace itself — b093911d's class, not continued here.
-    escaped = false;
-    if (state === "") return i + 1;
+    quote.resetEscape();
+    if (quote.state === "") return i + 1;
   }
   // Ran out of tokens with a quote still open: unterminated. Preserve the
   // pre-task behaviour exactly (consume only the assignment's first token).

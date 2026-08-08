@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { auditRetryTimeoutMs, realLedgerClient, runInterceptCli } from "../../src/cli/policy/intercept.js";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
-import { normalizeCommandAmpAware } from "../../src/runtime/command-normalize.js";
+import { normalizeCommandAmpAware, normalizeCommandQuoteAware } from "../../src/runtime/command-normalize.js";
 import {
   policyMatchesEvent,
   MAX_ATTRIBUTED_CONTEXTS,
@@ -40,9 +40,18 @@ import { makeManifest } from "../_helpers/manifest.js";
 // `InterceptCliOptions` has no injection seam for the amp normaliser
 // itself, so this is the only way to count real production calls without
 // restructuring the production code to add one.
+//
+// Task cf3dff51: `normalizeCommandQuoteAware` gets the SAME call-through
+// counting seam, for the SAME reason, once it was wired into
+// `policyMatchesEvent`'s fourth arm — see the mirrored describe blocks
+// below this file's amp-aware ones.
 vi.mock("../../src/runtime/command-normalize.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/runtime/command-normalize.js")>();
-  return { ...actual, normalizeCommandAmpAware: vi.fn(actual.normalizeCommandAmpAware) };
+  return {
+    ...actual,
+    normalizeCommandAmpAware: vi.fn(actual.normalizeCommandAmpAware),
+    normalizeCommandQuoteAware: vi.fn(actual.normalizeCommandQuoteAware),
+  };
 });
 
 // Read the real `bash_match` straight out of FULL_TEMPLATE instead of a
@@ -2485,6 +2494,190 @@ describe("runInterceptCli — the amp normalisation pass computes at most ONCE p
     expect(result.decisions).toHaveLength(2);
     expect(result.decisions.every((d) => d.outcome === "deny")).toBe(true);
     expect(mockedAmpAware).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Task cf3dff51: `policyMatchesEvent`'s fourth, quote-aware matching arm —
+// mirrors the "policyMatchesEvent — ampersand-aware third normalisation
+// arm" describe block above exactly (same seam, same real-trigger-regex
+// discipline), for the residual named in `src/runtime/command-
+// normalize.ts`'s module header (task 13e55484's pinned gap): a shell-
+// boundary character sitting INSIDE a quoted assignment value with a
+// whitespace split right after it (`VAR='a; b' git push origin master`).
+describe("policyMatchesEvent — quote-aware fourth normalisation arm (task cf3dff51)", () => {
+  const REAL_PUSH_MATCH_QA = policyBashMatch("preflight-before-push");
+  const REAL_PUSH_POLICY_QA: Policy = {
+    name: "preflight-before-push",
+    description: "gate git push on a per-branch preflight tag (real trigger regex)",
+    trigger: { event: "PreToolUse", match: "Bash", bash_match: REAL_PUSH_MATCH_QA },
+    requires: { ledger_tag: "preflight:${BRANCH}" },
+    hook: "h",
+    enforcement: "block",
+  } as Policy;
+
+  function realKillSwitchPolicyQA(): Policy {
+    const parsed = parseManifest(parseYaml(FULL_TEMPLATE));
+    const policy = parsed.policies.find((p) => p.name === "deny-kill-switch-bypass");
+    if (!policy) throw new Error("deny-kill-switch-bypass missing from FULL_TEMPLATE");
+    return policy;
+  }
+
+  function eventFor(command: string): ToolEvent {
+    return {
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command },
+    };
+  }
+
+  describe("the measured quoted-boundary bypasses now match against the real trigger regex", () => {
+    const cases: Array<{ label: string; command: string; policy: () => Policy }> = [
+      { label: "semicolon", command: "VAR='a; b' git push origin master", policy: () => REAL_PUSH_POLICY_QA },
+      { label: "pipe", command: "VAR='a| b' git push origin master", policy: () => REAL_PUSH_POLICY_QA },
+      { label: "double-ampersand", command: "VAR='a&& b' git push origin master", policy: () => REAL_PUSH_POLICY_QA },
+      { label: "open-paren", command: "VAR='a( b' git push origin master", policy: () => REAL_PUSH_POLICY_QA },
+      { label: "literal newline", command: "VAR='a\n b' git push origin master", policy: () => REAL_PUSH_POLICY_QA },
+      { label: "semicolon, kill switch", command: "VAR='a; b' harness pause", policy: realKillSwitchPolicyQA },
+    ];
+    for (const c of cases) {
+      it(`${c.label}: "${JSON.stringify(c.command)}" matches`, () => {
+        expect(policyMatchesEvent(c.policy(), eventFor(c.command))).toBe(true);
+      });
+    }
+  });
+
+  describe("laziness: the fourth arm is consulted only after the raw, existing-normalised, AND amp-aware forms all miss", () => {
+    it("the quote thunk is NEVER called when the raw command already matches", () => {
+      let calls = 0;
+      const thunk = (): { normalized: string; truncated: boolean } => {
+        calls += 1;
+        throw new Error("must not be called: raw command already matched");
+      };
+      const matched = policyMatchesEvent(REAL_PUSH_POLICY_QA, eventFor("git push origin master"), undefined, undefined, thunk);
+      expect(matched).toBe(true);
+      expect(calls).toBe(0);
+    });
+
+    it("the quote thunk is NEVER called when the raw form misses but the EXISTING normalised form matches", () => {
+      let calls = 0;
+      const thunk = (): { normalized: string; truncated: boolean } => {
+        calls += 1;
+        throw new Error("must not be called: the existing normalised pass already matched");
+      };
+      const matched = policyMatchesEvent(
+        REAL_PUSH_POLICY_QA,
+        eventFor("env FOO=bar git push origin master"), // raw misses, BOUNDARY_RE-normalised form matches
+        undefined,
+        undefined,
+        thunk,
+      );
+      expect(matched).toBe(true);
+      expect(calls).toBe(0);
+    });
+
+    it("the quote thunk is NEVER called when the raw form misses but the amp-aware form matches", () => {
+      let calls = 0;
+      const thunk = (): { normalized: string; truncated: boolean } => {
+        calls += 1;
+        throw new Error("must not be called: the amp-aware pass already matched");
+      };
+      const matched = policyMatchesEvent(
+        REAL_PUSH_POLICY_QA,
+        eventFor("echo hi & nice git push origin master"),
+        undefined,
+        undefined,
+        thunk,
+      );
+      expect(matched).toBe(true);
+      expect(calls).toBe(0);
+    });
+
+    it("the quote thunk IS called when the raw, existing-normalised, and amp-aware forms all miss", () => {
+      let calls = 0;
+      const command = "VAR='a; b' git push origin master";
+      const thunk = () => {
+        calls += 1;
+        return normalizeCommandQuoteAware(command);
+      };
+      const matched = policyMatchesEvent(REAL_PUSH_POLICY_QA, eventFor(command), undefined, undefined, thunk);
+      expect(matched).toBe(true);
+      expect(calls).toBe(1);
+    });
+
+    it("a memoising thunk (the shape runInterceptCli builds) computes the quote-aware pass only ONCE across two different policies for the same event", () => {
+      let realCalls = 0;
+      let cache: { normalized: string; truncated: boolean } | undefined;
+      const command = "VAR='a; b' git push origin master";
+      const thunk = (): { normalized: string; truncated: boolean } =>
+        (cache ??= ((): { normalized: string; truncated: boolean } => {
+          realCalls += 1;
+          return normalizeCommandQuoteAware(command);
+        })());
+      const event = eventFor(command);
+      const policyA: Policy = { ...REAL_PUSH_POLICY_QA, name: "policy-a" };
+      const policyB: Policy = { ...REAL_PUSH_POLICY_QA, name: "policy-b" };
+      expect(policyMatchesEvent(policyA, event, undefined, undefined, thunk)).toBe(true);
+      expect(policyMatchesEvent(policyB, event, undefined, undefined, thunk)).toBe(true);
+      expect(realCalls).toBe(1);
+    });
+  });
+});
+
+// Task cf3dff51: mirrors "runInterceptCli — the amp normalisation pass
+// computes at most ONCE per event" above exactly, for the production,
+// memoised `quoteNormalizedCommandThunk` (`src/cli/policy/intercept.ts`).
+describe("runInterceptCli — the quote-aware normalisation pass computes at most ONCE per event", () => {
+  const REAL_PUSH_MATCH_QA_ONCE = policyBashMatch("preflight-before-push");
+
+  /** Two differently-named policies sharing one bash_match regex, so both reach the fourth arm for the same event. */
+  function twinPoliciesQA(bashMatch: string, ledgerTag: string): [Policy, Policy] {
+    const base: Policy = {
+      name: "policy-a",
+      description: "real trigger regex, duplicated under two names",
+      trigger: { event: "PreToolUse", match: "Bash", bash_match: bashMatch },
+      requires: { ledger_tag: ledgerTag },
+      hook: "h",
+      enforcement: "block",
+    } as Policy;
+    return [base, { ...base, name: "policy-b" }];
+  }
+
+  const emptyLedgerQuoteOnce: LedgerClient = {
+    async query() {
+      return { kind: "ok", entries: [] };
+    },
+    async record() {
+      /* no-op */
+    },
+  };
+
+  it("computes the quote-aware pass exactly ONCE for a Bash event even when TWO policies both need it", async () => {
+    const mockedQuoteAware = vi.mocked(normalizeCommandQuoteAware);
+    mockedQuoteAware.mockClear();
+    const { stream: out } = captureStream();
+    const { stream: err } = captureStream();
+    // The raw form, the primary (BOUNDARY_RE) normalised form, AND the
+    // amp-aware form all miss this command; only the fourth, quote-aware
+    // arm matches (the target shape this task closes).
+    const command = "VAR='a; b' git push origin master";
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+          session_id: "sess-cf3dff51-once",
+          cwd: "/tmp/harness-cf3dff51-test-cwd",
+        }),
+      ),
+      stdout: out,
+      stderr: err,
+      manifest: fakeManifest(twinPoliciesQA(REAL_PUSH_MATCH_QA_ONCE, "preflight:${BRANCH}")),
+      ledger: emptyLedgerQuoteOnce,
+    });
+    expect(result.decisions).toHaveLength(2);
+    expect(result.decisions.every((d) => d.outcome === "deny")).toBe(true);
+    expect(mockedQuoteAware).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -27,10 +27,12 @@ import { renderAgentFacing } from "./agent-facing.js";
 import {
   normalizeCommand,
   normalizeCommandAmpAware,
+  normalizeCommandQuoteAware,
   segmentViewOf,
   type AmpAwareNormalizedCommand,
   type CommandSegment,
   type NormalizedCommand,
+  type QuoteAwareNormalizedCommand,
 } from "./command-normalize.js";
 import {
   resolveEnvironment,
@@ -270,6 +272,33 @@ export interface InterceptOptions {
    */
   ampNormalizedCommandThunk?: () => AmpAwareNormalizedCommand;
   /**
+   * Memoised thunk resolving the quote-aware THIRD normalisation pass for
+   * the SAME Bash event's `tool_input.command` (task cf3dff51,
+   * `src/runtime/command-normalize.ts`'s `normalizeCommandQuoteAware`).
+   * `policyMatchesEvent`'s FOURTH arm calls this ONLY when a policy's
+   * regex has already missed the raw command, `normalizedCommand`, AND
+   * `ampNormalizedCommandThunk` above — mirrors `ampNormalizedCommandThunk`
+   * exactly (same memoise-once-per-event-via-thunk shape, same reason:
+   * "compute at most once per event" without paying the cost on the
+   * common, already-matched path).
+   *
+   * Optional: omitted by non-Bash events and by callers/tests that don't
+   * supply one, in which case `policyMatchesEvent` falls back to calling
+   * `normalizeCommandQuoteAware` directly per policy (correct, just not
+   * de-duplicated) — the same fallback shape `normalizedCommand` /
+   * `ampNormalizedCommandThunk` already have.
+   *
+   * SAME INVARIANT as `normalizedCommand` / `ampNormalizedCommandThunk`
+   * above: this is NOT checked against `event` at runtime. Nothing
+   * verifies the thunk passed in was actually derived from THIS event's
+   * own `tool_input.command`. Safe today because there is exactly one
+   * production caller (`runInterceptCli`), which builds the thunk from
+   * the SAME `event` it then passes to `intercept()` — keep this pairing
+   * manual-but-obvious at every call site rather than assuming it
+   * self-enforces.
+   */
+  quoteNormalizedCommandThunk?: () => QuoteAwareNormalizedCommand;
+  /**
    * Precomputed per-segment view (`command-normalize.ts`'s
    * `segmentViewOf`) of a Bash event's `tool_input.command`, EAGERLY
    * supplied (task `98ad072f`, T-003). `null` mirrors `segmentViewOf`'s
@@ -437,12 +466,19 @@ function enrichEnvelope(
  * for why laziness matters here specifically. Omitted callers fall back
  * to calling `normalizeCommandAmpAware` directly, same shape as the
  * `precomputedNormalizedCommand` fallback above.
+ *
+ * `quoteNormalizedCommandThunk` (task cf3dff51) is the SAME thunk pattern
+ * again, for the quote-aware THIRD normalisation pass — see
+ * `InterceptOptions.quoteNormalizedCommandThunk`. Omitted callers fall
+ * back to calling `normalizeCommandQuoteAware` directly, same shape as
+ * the two fallbacks above.
  */
 export function policyMatchesEvent(
   policy: Policy,
   event: ToolEvent,
   precomputedNormalizedCommand?: NormalizedCommand,
   ampNormalizedCommandThunk?: () => AmpAwareNormalizedCommand,
+  quoteNormalizedCommandThunk?: () => QuoteAwareNormalizedCommand,
 ): boolean {
   if (policy.trigger.event !== event.hook_event_name) return false;
   if (policy.trigger.match !== undefined) {
@@ -463,22 +499,27 @@ export function policyMatchesEvent(
     } catch {
       return false;
     }
-    // Raw-OR-normalised-OR-amp-normalised (D-003, run 2026-07-27-gate-
-    // target-repo-resolution; third arm added task aabbad63): test the
-    // RAW command first — cheap, and byte-identical to the pre-fix
-    // behaviour — then, only if that fails, the primary NORMALISED
-    // command (wrapper prefixes peeled, git global options dropped,
-    // whitespace collapsed, BOUNDARY_RE segmentation) — then, only if
-    // THAT also fails, the ampersand-aware second pass (AMP_BOUNDARY_RE
-    // segmentation, closing the bare-`&` family BOUNDARY_RE cannot see:
-    // `A=x&env -C /tmp git status`, `echo hi & nice git status`).
-    // Strictly additive at every step: a command that matched today
-    // keeps matching via the raw test alone; the primary normalised form
-    // can only ADD a match (env/nice/command wrappers, extra git global
+    // Raw-OR-normalised-OR-amp-normalised-OR-quote-normalised (D-003, run
+    // 2026-07-27-gate-target-repo-resolution; third arm added task
+    // aabbad63; fourth arm added task cf3dff51): test the RAW command
+    // first — cheap, and byte-identical to the pre-fix behaviour — then,
+    // only if that fails, the primary NORMALISED command (wrapper
+    // prefixes peeled, git global options dropped, whitespace collapsed,
+    // BOUNDARY_RE segmentation) — then, only if THAT also fails, the
+    // ampersand-aware second pass (AMP_BOUNDARY_RE segmentation, closing
+    // the bare-`&` family BOUNDARY_RE cannot see: `A=x&env -C /tmp git
+    // status`, `echo hi & nice git status`) — then, only if THAT also
+    // fails, the quote-aware third pass (BOUNDARY_RE's own alphabet, but
+    // quote-tracking, closing a shell-boundary character sitting INSIDE a
+    // quoted assignment value: `VAR='a; b' git push origin master`).
+    // Strictly additive at every step: a command that matched today keeps
+    // matching via the raw test alone; the primary normalised form can
+    // only ADD a match (env/nice/command wrappers, extra git global
     // options, doubled whitespace); the amp-aware form can only add a
-    // FURTHER match on top of those two, never remove one either of them
-    // already found. Replacing the matcher input instead of OR-ing it in
-    // risks silently REMOVING an existing match if some pass ever
+    // FURTHER match on top of those two; the quote-aware form can only
+    // add a FOURTH match on top of all three, never remove one any of the
+    // others already found. Replacing the matcher input instead of OR-ing
+    // it in risks silently REMOVING an existing match if some pass ever
     // mangles a shape — the fail-open direction for a gate — so this
     // stays additive rather than a substitution at every arm.
     if (!re.test(command)) {
@@ -487,7 +528,12 @@ export function policyMatchesEvent(
         const amp = ampNormalizedCommandThunk
           ? ampNormalizedCommandThunk()
           : normalizeCommandAmpAware(command);
-        if (!re.test(amp.normalized)) return false;
+        if (!re.test(amp.normalized)) {
+          const quoted = quoteNormalizedCommandThunk
+            ? quoteNormalizedCommandThunk()
+            : normalizeCommandQuoteAware(command);
+          if (!re.test(quoted.normalized)) return false;
+        }
       }
     }
   }
@@ -1221,6 +1267,7 @@ export async function intercept(
         event,
         options.normalizedCommand,
         options.ampNormalizedCommandThunk,
+        options.quoteNormalizedCommandThunk,
       )
     ) {
       continue;
