@@ -121,7 +121,10 @@ describe("read-only Bash classifier", () => {
       "git fetch --upload-pack /tmp/evil.sh /tmp/repo",
       "git ls-remote --upload-pack=/tmp/evil.sh /tmp/repo",
       "git ls-remote ext::sh -c touch",
-      "git fetch ext::sh -c touch",
+      // Single-positional so the `::` danger arm is what blocks it (a
+      // 2-positional form would be caught by fetch's count rule anyway,
+      // review round 2: keep this test load-bearing for the `::` arm).
+      "git fetch ext::sh",
       // Review round 1: no-positional glued branch writes — the ONLY
       // forms that exercise the raw-or-decoded arm of isBranchWriteFlag
       // (the structural no-positional rule cannot see them).
@@ -135,7 +138,10 @@ describe("read-only Bash classifier", () => {
       // Review round 1: end-of-options handling — the operand after `--`
       // must count as positional.
       "git tag -- -weirdtag",
-      "git branch -- newbranch",
+      // Dash-leading operand so the pre-fix all-flags rule would have
+      // MISclassified it as no-positional (review round 2: makes the
+      // branch `--` path load-bearing, not just the tag/reflog ones).
+      "git branch -- -newbranch",
       "git reflog -- expire",
       // Review round 1: the tag-keyword fetch form (three positionals).
       "git fetch origin tag v1",
