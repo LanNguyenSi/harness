@@ -29,7 +29,7 @@
 
 import type { Hook, Manifest } from "../../schema/index.js";
 import { expandCodexHookMatchPattern } from "../../runtime/tool-name-aliases.js";
-import { buildMemoryRouterHook } from "./generate-settings.js";
+import { buildMemoryRouterHook, hookTimeoutSeconds } from "./generate-settings.js";
 
 export interface CodexConfigResult {
   content: string;
@@ -126,11 +126,6 @@ function eventKey(event: string): string {
   }
 }
 
-function codexTimeoutSeconds(h: Hook): number {
-  const minimumSeconds = h.command.trim() === "harness policy intercept" ? 2 : 1;
-  return Math.max(minimumSeconds, Math.ceil(h.budget_ms / 1000));
-}
-
 // Hook names safe to splice into the emitted command literal as
 // `--hook <name>`. Restricted to a quote/space/metachar-free charset so
 // the projection never produces a shell-broken command, even though the
@@ -150,7 +145,10 @@ function emitCommandHook(h: Hook): string {
   const fields = [
     `type = "command"`,
     `command = ${tomlString(commandWithHookTag(h))}`,
-    `timeout = ${codexTimeoutSeconds(h)}`,
+    // Shared with generate-settings.ts's Claude Code projection
+    // (`hookTimeoutSeconds`) so the two runtime projections cannot diverge
+    // on the ms->seconds conversion or the policy-intercept floor again.
+    `timeout = ${hookTimeoutSeconds(h)}`,
   ];
   return `{ ${fields.join(", ")} }`;
 }

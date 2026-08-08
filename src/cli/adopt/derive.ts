@@ -20,12 +20,21 @@ export interface DerivedHook {
   command: string;
   match?: string;
   /**
-   * settings.json hook `timeout`, captured verbatim (task 059b669c).
-   * apply emits `timeout: budget_ms` 1:1 (generate-settings.ts,
-   * toSettingsCommand), so carrying it back into `budget_ms` keeps the
-   * adopt→apply round-trip drift-free by construction. Deliberately NOT
-   * part of the drift key (`keyOf`): a timeout-only edit must not turn
-   * into an add-only "new hook" adoption of a duplicate entry.
+   * settings.json hook `timeout`, captured verbatim in Claude Code's own
+   * unit: SECONDS (task 059b669c; unit fix task 7bf47554: Claude Code's
+   * settings.json `timeout` is documented in seconds, NOT milliseconds
+   * like the manifest's `budget_ms`). apply's `hookTimeoutSeconds`
+   * (generate-settings.ts) converts `budget_ms` -> seconds via
+   * `Math.ceil(budget_ms / 1000)` (with a policy-intercept floor); the
+   * consumer of this field (`buildHookEntry` in ./index.ts) applies the
+   * inverse `* 1000` when writing it back into `budget_ms`, so the
+   * adopt→apply round-trip stays drift-free by construction for any
+   * captured timeout that already respects apply's floor. Deliberately
+   * NOT part of the drift key (`keyOf`): a timeout-only edit must not
+   * turn into an add-only "new hook" adoption of a duplicate entry. This
+   * also absorbs the rounding asymmetry a non-multiple-of-1000 budget_ms
+   * can introduce (e.g. budget_ms 1500 -> timeout 2s -> budget_ms 2000 on
+   * a subsequent adopt), which must never itself register as drift.
    */
   timeout?: number;
 }

@@ -857,28 +857,67 @@ describe("apply -> adopt round-trip for the grounding projection", () => {
 });
 
 describe("adopt — round-trip fidelity (task 059b669c)", () => {
-  it("captures a settings hook `timeout` into budget_ms and apply round-trips it", async () => {
+  it("captures a settings hook `timeout` (seconds) into budget_ms (ms) and apply round-trips it (task 7bf47554 unit fix)", async () => {
+    // settings.json `timeout` is Claude Code's own unit: SECONDS. adopt
+    // must multiply by 1000 to land in the manifest's `budget_ms`
+    // (milliseconds); apply's `hookTimeoutSeconds` divides back
+    // (ceil(budget_ms/1000)) for the round-trip.
     writeSettings({
       SessionStart: [
         {
           matcher: "",
-          hooks: [{ type: "command", command: "/tmp/extra.sh", timeout: 45000 }],
+          hooks: [{ type: "command", command: "/tmp/extra.sh", timeout: 45 }],
         },
       ],
     });
     const r = await runAdopt(settingsPath, { configPath: manifestPath, yes: true });
     expect(r.outcome).toBe("applied");
     const raw = readManifest() as { hooks: { name: string; budget_ms?: number }[] };
-    expect(raw.hooks[0]).toMatchObject({ name: "extra", budget_ms: 45000 });
+    expect(raw.hooks[0]).toMatchObject({ name: "extra", budget_ms: 45_000 });
     // Full circle: re-projecting the adopted manifest emits the same
-    // timeout (apply's toSettingsCommand is 1:1 with budget_ms), so the
+    // seconds value back out (apply's hookTimeoutSeconds is the exact
+    // inverse of adopt's `* 1000` for a budget_ms that is itself a clean
+    // multiple of 1000 and already respects apply's floor), so the
     // adopt→apply round-trip is lossless for this field.
     const manifest = parseManifest(raw);
     const { root } = generateSettingsWithWarnings(manifest);
     expect(root.hooks["SessionStart"]?.[0]?.hooks[0]).toMatchObject({
       command: "/tmp/extra.sh",
-      timeout: 45000,
+      timeout: 45,
     });
+  });
+
+  it("apply→adopt round-trip: a budget_ms that rounds asymmetrically (1500 -> 2s -> 2000ms) produces NO phantom drift (task 7bf47554)", async () => {
+    // Simulates a real `harness apply` followed by `harness adopt`: a
+    // manifest hook with budget_ms=1500 is NOT a clean multiple of 1000,
+    // so apply's `hookTimeoutSeconds` rounds it UP to timeout=2 (a 2000ms
+    // equivalent). `timeout` deliberately stays outside the drift key
+    // (`keyOf`), so re-adopting that generated settings.json must NOT
+    // misread the 1500-vs-2000 asymmetry as a "different" hook and
+    // duplicate-adopt it acceptance criterion 2).
+    fs.writeFileSync(
+      manifestPath,
+      `version: 1
+tools:
+  mcp: []
+  cli: []
+  skills: { enabled: [], source_dirs: [] }
+  builtin: { known: [] }
+memory: { directories: [] }
+hooks:
+  - { name: declared, event: SessionStart, command: /tmp/declared.sh, blocking: false, budget_ms: 1500 }
+policies: []
+`,
+    );
+    const manifest = parseManifest(readManifest());
+    const { root } = generateSettingsWithWarnings(manifest);
+    expect(root.hooks["SessionStart"]?.[0]?.hooks[0]?.timeout).toBe(2);
+    writeSettings(root.hooks);
+    const before = fs.readFileSync(manifestPath, "utf8");
+    const r = await runAdopt(settingsPath, { configPath: manifestPath, yes: true });
+    expect(r.outcome).toBe("no-drift");
+    expect(r.hookDriftCount).toBe(0);
+    expect(fs.readFileSync(manifestPath, "utf8")).toBe(before);
   });
 
   it("ignores a malformed settings `timeout` (must-pass control: no budget_ms captured)", async () => {
@@ -918,7 +957,7 @@ policies: []
       SessionStart: [
         {
           matcher: "",
-          hooks: [{ type: "command", command: "/tmp/declared.sh", timeout: 99000 }],
+          hooks: [{ type: "command", command: "/tmp/declared.sh", timeout: 99 }],
         },
       ],
     });

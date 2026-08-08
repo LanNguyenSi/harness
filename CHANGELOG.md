@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- **SECURITY: `harness apply`'s generated Claude Code `settings.json` hook
+  `timeout` was emitted in the manifest's `budget_ms` unit unconverted, so
+  every Claude-hook kill-timer was 1000x too large** (task `7bf47554`).
+  Claude Code's settings.json hook `timeout` is documented in SECONDS
+  ("Seconds before canceling",
+  https://code.claude.com/docs/en/hooks); the manifest's `budget_ms` is
+  milliseconds. `toSettingsCommand` (`src/cli/apply/generate-settings.ts`)
+  emitted `timeout: h.budget_ms` with no unit conversion, so a template
+  budget of 1000-2000ms silently became a Claude Code timeout of
+  1000-2000 SECONDS (16-33 minutes) instead of 1-2 seconds, meaning
+  hard-blocking enforcement hooks (e.g. `harness policy intercept`) could
+  hang for tens of minutes before Claude Code cancelled them, rather than
+  failing fast. The sibling Codex projection
+  (`src/cli/apply/generate-codex-config.ts`) already converted correctly
+  (`Math.ceil(budget_ms / 1000)` with a policy-intercept floor); the
+  Claude Code projection now shares that exact formula via a single
+  extracted helper, `hookTimeoutSeconds` (`generate-settings.ts`), so the
+  two runtime projections cannot diverge on this again. `harness adopt`'s
+  reverse projection (`src/cli/adopt/index.ts`'s `buildHookEntry`), which
+  read a live settings.json `timeout` back into the manifest's
+  `budget_ms`, is fixed symmetrically (`* 1000`) so the adopt<->apply
+  round-trip stays lossless; `timeout` remains deliberately excluded from
+  the adopt drift key, so the ms/seconds rounding asymmetry a non-1000-
+  multiple `budget_ms` introduces (e.g. 1500ms -> 2s -> 2000ms) does not
+  register as phantom drift or duplicate-adopt a hook. New/updated tests:
+  `tests/cli/apply/generate-settings.test.ts` pins the corrected
+  conversion (including the 2s/1s floors) and asserts both runtime
+  projections emit the identical seconds value for the same hook;
+  `tests/cli/adopt.test.ts` adds an explicit apply-then-adopt round-trip
+  test for the 1500ms rounding-asymmetry case, asserting zero drift.
+
 - **SECURITY: the operator-approval escape matcher (`isEscapeCommand`,
   `src/cli/pack/approve-escape.ts`) used JS's generic `\s` whitespace
   class where bash's actual lexical blank set was meant, letting a
