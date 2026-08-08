@@ -52,19 +52,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   session short-circuits), so `realLedgerClient.record` now retries once
   per invocation over a fresh session, RESERVED for `deny-degraded` rows
   (an allow/warn row failing first cannot consume it) and capped at
-  timeoutMs/4 (floor 250ms) per call, so the retry adds at most half a
-  timeout on top of the query's own; a longer or unreserved retry would
-  stall the deny path toward the outer hook budget, where a hook timeout
-  is conventionally allow. With grounding-mcp absent from the manifest
+  max(250ms, timeoutMs/4) per call — two calls, so the added stall is at
+  most half a timeout once the ledger timeout is >=1s, and bounded at
+  500ms absolute below that, where the floor dominates (the formula is
+  pinned as the exported `auditRetryTimeoutMs`); a longer or unreserved
+  retry would stall the deny path toward the outer hook budget, where a
+  hook timeout is conventionally allow. With grounding-mcp absent from the manifest
   altogether there is no transport at all: a BLOCKING decision on that
   path now emits a dedicated "has NO audit row" stderr line instead of
   the previous silent no-op. `isBlockingDecision` is now exported and
   shared with the CLI wrapper's pending-approval staging, which had a
   drifted hand-rolled copy. New outcome threaded through every consumer:
   `harness audit` `VALID_OUTCOMES`, `explain`/`audit` `--outcome` filters,
-  and the verbose stderr diagnostic (`deny-degraded (ledger unreachable;
-  failing closed per enforcement tier)`); `smoke` assertions classify it
-  as deny via the unchanged envelope path. NOT closed here, named so no
+  the verbose stderr diagnostic (which names the outcome, the unreachable
+  ledger, the fail-closed posture and the operator opt-out), a NEW
+  unconditional one-line stderr operator hint per degraded-denied event
+  (pointing at `harness doctor` and the docs, deliberately without the
+  opt-out literal on the default channel), and the
+  `checkPolicyGroundingMcp` validate/apply warning, whose pre-0.45
+  "every policy will fire in degraded warn-mode" wording described the
+  inverse of the new block-tier behaviour and is now tier-aware and
+  test-pinned; `smoke` assertions classify the new outcome as deny via
+  the unchanged envelope path. NOT closed here, named so no
   doc overclaims: the OUTER hook-budget layer (a hook exceeding its
   `budget_ms` is allow by harness contract) stays fail-open and is not
   reachable from this repo's schema; keep hook budgets comfortably above

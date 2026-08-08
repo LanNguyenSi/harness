@@ -285,15 +285,19 @@ export function realLedgerClient(
   // decisions whose outcome is `deny-degraded` — an allow/warn row
   // failing first must not consume it — (b) taken at most once per
   // client instance, and (c) run on a session whose OWN timeout is
-  // `retryTimeoutMs` = max(250ms, timeoutMs/4), so its two calls
-  // (initialize + ledger_add) add at most timeoutMs/2 on top of the
-  // query's timeoutMs: worst-case ledger stall ≤ 1.5x timeoutMs, not
-  // the 2x an unbounded fresh session would allow. The fresh session
-  // replaces the latched one, so later audit writes in the same
-  // invocation inherit the working transport (and its tighter budget).
-  // If the retry also fails, the loud-stderr contract stands (audit
-  // degradation never blocks, docs/okf matrix).
-  const retryTimeoutMs = Math.max(250, Math.floor(timeoutMs / 4));
+  // `auditRetryTimeoutMs(timeoutMs)` = max(250ms, timeoutMs/4). Its two
+  // calls (initialize + ledger_add) therefore add at most
+  // 2 * max(250ms, timeoutMs/4) on top of the query's timeoutMs — that
+  // is <=timeoutMs/2 (total <=1.5x) once timeoutMs >= 1s, while below
+  // 1s the 250ms floor dominates and the ADD is bounded at 500ms
+  // absolute (review 2026-08-08 round 2: at the audit's 1-100ms probe
+  // settings that is a multiple of the query budget, but a trivial
+  // absolute cost). The fresh session replaces the latched one, so
+  // later audit writes in the same invocation inherit the working
+  // transport (and its tighter budget). If the retry also fails, the
+  // loud-stderr contract stands (audit degradation never blocks,
+  // docs/okf matrix).
+  const retryTimeoutMs = auditRetryTimeoutMs(timeoutMs);
   let recordRetryUsed = false;
   const getSession = (): LedgerSession =>
     (session ??= openLedgerSession({
@@ -370,6 +374,18 @@ export function realLedgerClient(
   };
 }
 
+/**
+ * Per-call budget of the audit-retry session (task f1aea826, review
+ * round 2): a quarter of the ledger timeout with a 250ms floor (a fresh
+ * node subprocess must cold-start + initialize within it). Exported as a
+ * pure function so the FORMULA itself is pinned by a unit test — the
+ * round-1 finding this bounds was precisely that an unbounded retry
+ * reused the full budget, and nothing would go red if that regressed.
+ */
+export function auditRetryTimeoutMs(timeoutMs: number): number {
+  return Math.max(250, Math.floor(timeoutMs / 4));
+}
+
 function degradedLedgerClient(
   reason: string,
   stderr: NodeJS.WritableStream,
@@ -385,12 +401,10 @@ function degradedLedgerClient(
       // otherwise emit one line per policy per tool event), but a
       // BLOCKING decision with no audit row must not also be invisible
       // (review 2026-08-08: previously a deny-degraded produced neither
-      // a row nor an audit-write-failed line on this path).
-      if (
-        decision.outcome === "deny" ||
-        decision.outcome === "deny-degraded" ||
-        decision.outcome === "require_approval"
-      ) {
+      // a row nor an audit-write-failed line on this path). Blocking-ness
+      // is the runtime's own isBlockingDecision — round 2 caught a third
+      // hand-rolled copy of that predicate here.
+      if (isBlockingDecision(decision)) {
         stderr.write(
           `harness policy intercept${hookSuffix(hookName)}: blocking decision for ` +
             `${decision.policyName} has NO audit row (${reason})\n`,
@@ -842,6 +856,29 @@ export async function runInterceptCli(
   // hook contract on stdout is preserved.
   if (result.decisions.length === 0 && manifest.policies.length > 0) {
     stderr.write(formatNoMatchHint(event, manifest, opts.hookName));
+  }
+
+  // Degraded-deny operator hint. Always (not gated on --verbose), ONE
+  // line per event: the envelope deliberately tells the agent only to
+  // involve the operator, and the full diagnostic (which names the
+  // fail_open opt-out) is verbose-only — without this line an operator
+  // whose fleet wedges on a degraded ledger has no default-verbosity
+  // pointer at all (review 2026-08-08, round 2). Deliberately does NOT
+  // name the opt-out knob itself: hook stderr can be surfaced to the
+  // model in some harness configurations, so the default channel points
+  // at the operator docs and the verbose diagnostic instead of carrying
+  // the disable recipe (deviation from the review's suggested fix,
+  // recorded in the run's 03-decisions.md).
+  const firstDegradedDeny = result.decisions.find(
+    (d) => d.outcome === "deny-degraded",
+  );
+  if (firstDegradedDeny) {
+    stderr.write(
+      `harness policy intercept${hookSuffix(opts.hookName)}: ${firstDegradedDeny.policyName}: ` +
+        `deny-degraded (evidence ledger unreadable; failing closed). Operator recovery: ` +
+        `harness doctor; details and the availability opt-out: docs/risk-gate.md ` +
+        `("Degraded mode") or rerun with HARNESS_POLICY_VERBOSE=1\n`,
+    );
   }
 
   if (verbose) {

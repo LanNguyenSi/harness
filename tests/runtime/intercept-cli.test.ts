@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
-import { realLedgerClient, runInterceptCli } from "../../src/cli/policy/intercept.js";
+import { auditRetryTimeoutMs, realLedgerClient, runInterceptCli } from "../../src/cli/policy/intercept.js";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import { normalizeCommandAmpAware } from "../../src/runtime/command-normalize.js";
 import {
@@ -417,8 +417,30 @@ describe("runInterceptCli — Phase 5 #3: --verbose stderr diagnostics", () => {
     expect(result.decisions[0]?.outcome).toBe("deny-degraded");
     const parsed = JSON.parse(outOutput().trim());
     expect(parsed.decision).toBe("block");
+    // The no-transport envelope keeps the same operator-only discipline
+    // as the ledger-timeout one (round 2: only the timeout path pinned
+    // the absence).
+    expect(parsed.reason).not.toContain("fail_open");
+    expect(parsed.reason).not.toContain("degraded_fail_posture");
     expect(errOutput()).toContain("has NO audit row");
     expect(errOutput()).toContain("grounding-mcp not declared in manifest");
+    // Unconditional (non-verbose) one-line operator hint per
+    // degraded-denied event; the opt-out literal stays OFF this default
+    // channel (docs + verbose diagnostic carry it).
+    expect(errOutput()).toContain("Operator recovery");
+    expect(errOutput()).toContain("harness doctor");
+    expect(errOutput()).not.toContain("fail_open");
+  });
+
+  it("auditRetryTimeoutMs pins the retry budget formula (quarter timeout, 250ms floor)", () => {
+    // Round-1 finding 2 was an unbounded retry reusing the full budget;
+    // round 2 noted nothing would go red if that regressed. This pins
+    // the formula itself.
+    expect(auditRetryTimeoutMs(5000)).toBe(1250);
+    expect(auditRetryTimeoutMs(2000)).toBe(500);
+    expect(auditRetryTimeoutMs(1000)).toBe(250);
+    expect(auditRetryTimeoutMs(100)).toBe(250);
+    expect(auditRetryTimeoutMs(1)).toBe(250);
   });
 
   it("--verbose on warn-degraded (warn tier + degraded ledger): stderr names the ledger reason, nothing blocks", async () => {

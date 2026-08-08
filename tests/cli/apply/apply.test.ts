@@ -1873,9 +1873,12 @@ describe("apply — grounding-mcp policy-degradation gate (discovery H3)", () =>
     await expect(apply({ homeDir: tmpHome })).rejects.toMatchObject({
       name: "HarnessExitError",
       exitCode: 1,
-      // Name the degradation AND the actionable fix AND point at validate.
+      // Name the tier-aware degradation (task f1aea826: block-tier
+      // hard-denies, no longer silent warn-mode) AND the actionable fix
+      // AND point at validate. Pins the message so it cannot drift from
+      // the runtime contract again (review 2026-08-08, round 2).
       message: expect.stringMatching(
-        /grounding-mcp not wired.*degraded warn-mode.*Wire grounding-mcp under tools\.mcp.*harness validate/s,
+        /grounding-mcp not wired.*will DENY every matching event \(deny-degraded\).*Wire grounding-mcp under tools\.mcp.*harness validate/s,
       ),
     });
   });

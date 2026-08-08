@@ -466,10 +466,11 @@ it appears on the stderr diagnostic and in this doc.
 
 The audit row is best-effort, stated precisely: when the ledger is
 reachable at all, the row lands — if necessary via ONE fresh-session
-retry reserved for `deny-degraded` rows, whose own budget is capped at
-a quarter of the ledger timeout (floor 250ms) so the retry can never
-stretch the deny path by more than ~half a timeout on top of the
-query's own. A write that survives the retry is reported on stderr and
+retry reserved for `deny-degraded` rows, whose own per-call budget is
+max(250ms, timeoutMs/4) — two calls (initialize + ledger_add), so the
+added stall is at most half a timeout once the ledger timeout is >=1s;
+below that the 250ms floor dominates and the add is bounded at 500ms
+absolute. A write that survives the retry is reported on stderr and
 never changes the decision. With grounding-mcp absent from the manifest
 altogether there is no transport and therefore no audit row at all: the
 deny is visible only in the envelope and a dedicated "has NO audit row"

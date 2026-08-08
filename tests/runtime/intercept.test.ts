@@ -925,9 +925,16 @@ describe("intercept — degraded ledger (fail posture per enforcement tier)", ()
     // space; the decision's own reason keeps the raw string for the
     // audit row and stderr diagnostic. (Control chars are built via
     // fromCharCode so this test file itself stays free of raw bytes.)
+    // Boundary chars of the sanitiser's class: NUL (0x00) and US (0x1F)
+    // bound the C0 range, DEL (0x7F) is the lone high member; an
+    // off-by-one in the fromCharCode-built range would ship green
+    // without them (review 2026-08-08, round 2).
     const bell = String.fromCharCode(7);
     const newline = String.fromCharCode(10);
-    const noisy = `spawn failed: bell${bell}${newline}line2 ${"x".repeat(400)}`;
+    const nul = String.fromCharCode(0);
+    const us = String.fromCharCode(31);
+    const del = String.fromCharCode(127);
+    const noisy = `spawn failed: bell${bell}${newline}line2${nul}${us}${del}x ${"x".repeat(400)}`;
     const ledger = makeLedger({ kind: "degraded", reason: noisy });
     const result = await intercept({
       manifest: manifest([REVIEW_POLICY]),
@@ -940,7 +947,11 @@ describe("intercept — degraded ledger (fail posture per enforcement tier)", ()
     const reason = result.blockJson?.reason ?? "";
     expect(reason).not.toContain(bell);
     expect(reason).not.toContain(newline);
-    expect(reason).toContain("spawn failed: bell line2");
+    expect(reason).not.toContain(nul);
+    expect(reason).not.toContain(us);
+    expect(reason).not.toContain(del);
+    // The three adjacent boundary controls collapse to ONE space.
+    expect(reason).toContain("spawn failed: bell line2 x");
     expect(reason).not.toContain("x".repeat(201));
   });
 });
