@@ -111,7 +111,17 @@ function buildHooks(runtime: Runtime): Hook[] {
       match: blockerMatch,
       command: BLOCKER_COMMAND,
       blocking: "hard",
-      budget_ms: 5000,
+      // 15000 (task 7bf47554): the blocker's own ledger query
+      // (queryLedgerByTag, src/cli/pack/hook-branch-protection.ts) is
+      // bounded by the grounding-mcp server's own `health.timeout_ms`
+      // (default 5000ms) — the SAME number the old budget_ms=5000 used for
+      // the outer Claude Code kill-timeout, leaving no margin at all: a
+      // ledger that is merely slow (not dead) could race the outer
+      // timeout and have its subprocess killed before the fail-closed
+      // "blocked: true" JSON reaches stdout, which Claude Code then reads
+      // as allow. 15000ms gives the query room to complete (or genuinely
+      // fail) before the outer timeout can fire first.
+      budget_ms: 15000,
       description: `Blocker: deny ${blockerMatch} on protected branches unless a fresh branch:non-protected tag exists in the ledger or the operator-only override marker (harness approve branch-protection) is present.`,
     },
   ];

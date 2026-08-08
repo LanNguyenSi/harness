@@ -585,7 +585,17 @@ function buildHooks(
         match: PRE_TOOL_USE_MATCH_CODEX,
         command: wrap(COMMAND_PRE_TOOL_USE_CODEX),
         blocking: "hard",
-        budget_ms: 5000,
+        // 15000 (task 7bf47554): `checkLedger` (src/cli/pack/hook-codex-
+        // pre-tool-use.ts) runs an unconditional, ledger-consulting audit
+        // probe on every invocation — even when the filesystem marker
+        // already resolved the decision — bounded by the grounding-mcp
+        // server's own `health.timeout_ms` (default 5000ms), the same
+        // number budget_ms=5000 used for the outer Claude/Codex
+        // kill-timeout, leaving no margin against a merely-slow (not
+        // dead) ledger. See src/cli/init/templates.ts's budget note above
+        // require-review-evidence for the full fail-open mechanism this
+        // guards against.
+        budget_ms: 15000,
         description:
           "Codex adapter: block apply_patch and Codex shell tools until an approved Understanding Report exists for the session. Consults both the evidence-ledger tag and the persisted JSON report.",
       },
@@ -702,7 +712,10 @@ function buildHooks(
       match: PRE_TOOL_USE_MATCH_CLAUDE,
       command: wrap(PRE_TOOL_USE_COMMAND_CLAUDE),
       blocking: "hard",
-      budget_ms: 5000,
+      // 15000: same rationale as the Codex sibling above (checkLedger in
+      // src/cli/pack/hook-pre-tool-use.ts is the same unconditional
+      // ledger-consulting audit probe, same health.timeout_ms bound).
+      budget_ms: 15000,
       description:
         "Block Edit/Write/Bash until an approved Understanding Report exists for the session. Consults both the evidence-ledger tag (understanding-approved:${SESSION_ID}) and the persisted JSON report.",
     },

@@ -164,7 +164,7 @@ hooks:
     command: harness policy intercept
     match: Bash
     blocking: hard
-    budget_ms: 2000
+    budget_ms: 15000
 policies:
   - name: review-before-merge
     description: Block PR merges unless a ledger entry tagged review:<pr-number> exists for this session.

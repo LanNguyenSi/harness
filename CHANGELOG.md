@@ -40,6 +40,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `tests/cli/adopt.test.ts` adds an explicit apply-then-adopt round-trip
   test for the 1500ms rounding-asymmetry case, asserting zero drift.
 
+  **Fix round 2, same task: the corrected 1-2s outer timeout above was
+  ITSELF a fail-open regression, not purely a safety fix.** Review found
+  that `harness policy intercept`'s blocking, ledger-consulting hooks —
+  every `requires:`-based policy (the require-*-evidence / risk-gate
+  policies) AND, via the engine's unconditional per-decision audit write
+  (`intercept()`'s `options.ledger.record(...)` call, run for every
+  matched policy including the pure pattern-deny `operator_only` kill
+  switches), every other blocking `harness policy intercept` hook too —
+  can legitimately need up to the grounding-mcp server's own
+  `health.timeout_ms` (5000ms by default) for a single ledger query, plus
+  a further deny-degraded audit-write retry bounded by
+  `auditRetryTimeoutMs` (`src/cli/policy/intercept.ts`), for a measured
+  worst case of ~10.8-13.75s. The now-CORRECT 1-2s Claude Code outer
+  timeout sits well UNDER that: on a merely slow or hung ledger (not a
+  clean, fast failure), Claude Code kills the `harness policy intercept`
+  subprocess before its `deny`/`deny-degraded` JSON reaches stdout, and a
+  killed PreToolUse hook is treated as ALLOW — silently turning a
+  correctly-computed fail-closed verdict into an unintended fail-open one.
+  The same shape applies to the three builtin policy-pack blockers
+  (`branch-protection`, `understanding-before-execution`,
+  `post-merge-gate`), whose own ledger probes are bounded by the identical
+  `health.timeout_ms` with effectively zero margin against their own
+  budget_ms=5000 outer timeout. Fixed by raising every blocking (`blocking:
+  "hard"`), ledger-consulting hook's `budget_ms` to 15000 (a 15s outer
+  timeout) in `src/cli/init/templates.ts` (FULL_TEMPLATE's eleven
+  `harness policy intercept` hooks, uniformly — deliberately including the
+  three pattern-deny kill-switch hooks, both because their audit write
+  waits on the same ledger round-trip and because `generate-settings.ts`'s
+  `buildGroups` dedupes same-matcher hooks by `(command, timeout)`, so a
+  non-uniform budget would split one Claude Code invocation per Bash call
+  into several redundant ones), `docs/examples/full-manifest.yaml` /
+  `.expected.yaml` (the one hook there that actually routes through
+  `harness policy intercept`), and the three builtin policy packs
+  (`src/policy-packs/builtin/branch-protection.ts`,
+  `understanding-before-execution.ts` — both the Claude and Codex
+  variants — `post-merge-gate.ts`). 15000ms clears the measured
+  ~10.8-13.75s worst case with margin. Trade-off, stated plainly: a gated
+  action can now visibly freeze for up to ~15s when the evidence ledger is
+  down or hanging, instead of failing fast (and silently open) at 1-2s —
+  this IS the intended fail-closed posture the Risk Gate's
+  `degraded_fail_posture: preserve_enforcement` default (task `f1aea826`)
+  already commits to; the pre-existing 1-2s budget just never gave that
+  posture enough time to actually land. New test:
+  `tests/runtime/hook-budget-ledger-margin.test.ts` pins, against the real
+  shipped `FULL_TEMPLATE` and the real policy-pack `resolve()` output
+  (not a hardcoded hook-name list), that every blocking ledger-consulting
+  hook's outer timeout clears `health.timeout_ms` plus the deny-degraded
+  audit-retry margin — a lightweight stand-in for the fuller drift-guard
+  task `d20a7e0c` is tracking.
+
 - **SECURITY: the operator-approval escape matcher (`isEscapeCommand`,
   `src/cli/pack/approve-escape.ts`) used JS's generic `\s` whitespace
   class where bash's actual lexical blank set was meant, letting a

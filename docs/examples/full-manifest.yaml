@@ -215,12 +215,22 @@ hooks:
   # gate-prod-destructive policies. Uses the `harness policy intercept`
   # entrypoint directly — the interceptor classifies risk and resolves
   # the environment before evaluating the policies' `when:` clauses.
+  # budget_ms 15000 (task 7bf47554): the generic `harness policy intercept`
+  # engine's own ledger query + deny-degraded audit-retry can take up to
+  # ~10.8-13.75s against the default grounding-mcp health.timeout_ms=5000;
+  # a lower Claude Code outer timeout risks killing the subprocess before
+  # its deny JSON reaches stdout, which Claude Code then treats as allow.
+  # See src/cli/init/templates.ts's identical `risk-gate` hook for the full
+  # rationale (this is the only hook in this schema-coverage fixture that
+  # actually routes through `harness policy intercept`; the other hooks
+  # above are illustrative external `~/.claude/hooks/*.sh` scripts, out of
+  # this task's scope).
   - name: risk-gate
     event: PreToolUse
     match: "Bash"
     command: harness policy intercept
     blocking: hard
-    budget_ms: 2000
+    budget_ms: 15000
 
 policies:
   - name: review-before-merge

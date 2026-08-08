@@ -193,12 +193,63 @@ hooks:
     # suite, a fundamentally heavier operation this hook never performs).
     budget_ms: 10000
 
+  # Budget note (task 7bf47554, follow-up to the ms/seconds unit fix
+  # f2d2a29): every \`harness policy intercept\` hook below down through
+  # \`risk-gate\` carries \`budget_ms: 15000\`, i.e. a Claude Code outer
+  # kill-timeout of \`ceil(15000/1000) = 15\` seconds (generate-settings.ts's
+  # \`hookTimeoutSeconds\`). This is deliberately UNIFORM across all eleven of
+  # them, for two independent reasons:
+  #
+  # 1. FAIL-CLOSED MARGIN. \`harness policy intercept\` evaluates its FULL
+  #    \`policies:\` list against the incoming event (src/runtime/intercept.ts,
+  #    \`intercept()\`), not just the one named policy this hook happens to
+  #    also register. Every policy in that evaluation loop that reaches a
+  #    verdict has its decision written to the evidence ledger via
+  #    \`options.ledger.record()\` BEFORE \`intercept()\` returns and stdout is
+  #    flushed (intercept.ts ~L1362-1377) — this includes \`operator_only\`
+  #    policies (the three kill-switch denies below), whose VERDICT needs no
+  #    ledger read but whose AUDIT WRITE is still a live grounding-mcp
+  #    round-trip on the critical path. A \`requires:\`-based policy (the
+  #    require-*-evidence / risk-gate policies) additionally QUERIES the
+  #    ledger for its verdict (intercept.ts's \`evaluateOnePolicy\`,
+  #    ~L752-777) and, on a \`deny-degraded\` outcome, may retry the audit
+  #    write once more on a fresh session (\`realLedgerClient\`,
+  #    src/cli/policy/intercept.ts ~L276-306). Measured worst case with the
+  #    grounding-mcp health.timeout_ms=5000 default: query (~5s) + one
+  #    fresh-session deny-degraded retry (initialize + ledger_add, each
+  #    bounded by \`auditRetryTimeoutMs(5000)\` ~=1.25s) is ~10.8-13.75s. If
+  #    Claude Code's outer timeout fires FIRST, it kills the subprocess
+  #    before the deny JSON reaches stdout — a hook that Claude Code cannot
+  #    read in time is treated as ALLOW, silently turning a computed,
+  #    fail-closed \`deny\`/\`deny-degraded\` verdict into an unintended
+  #    fail-open one. 15000ms clears the measured worst case with margin,
+  #    for BOTH the evidence-requiring policies (their own query+retry) AND
+  #    the pure pattern-deny policies (bounded lower, ~1x
+  #    health.timeout_ms=~5s via the mandatory record() alone, but still
+  #    above the pre-fix 1-2s floor).
+  # 2. DEDUP-SAFETY. \`generate-settings.ts\`'s \`buildGroups\` collapses
+  #    multiple manifest hooks that share the same \`match\` (settings.json's
+  #    tool-name matcher — \`bash_match\` is NOT projected there) AND the same
+  #    \`(command, timeout)\` fingerprint into ONE settings.json hook entry,
+  #    specifically so Claude Code spawns \`harness policy intercept\` ONCE
+  #    per matching tool call instead of once per manifest hook name (the
+  #    comment on \`buildGroups\` names this explicitly: avoiding "redundant
+  #    Node bootstraps and ledger queries per tool call"). All nine
+  #    \`match: "Bash"\` hooks below share one settings.json matcher group;
+  #    giving them a NON-uniform budget_ms would make their computed
+  #    \`timeout\` values diverge, split that one group into several entries,
+  #    and reintroduce exactly the redundant-invocation cost the dedup
+  #    exists to avoid — on top of leaving whichever entry keeps a low
+  #    timeout still exposed to the fail-open risk above. Keeping all
+  #    eleven at the identical 15000ms budget_ms preserves the existing
+  #    one-invocation-per-matcher-group collapse (previously they all
+  #    collapsed onto the shared 2s floor; now they collapse onto 15s).
   - name: require-review-evidence
     event: PreToolUse
     match: "mcp__agent-tasks__pull_requests_merge"
     command: harness policy intercept
     blocking: hard
-    budget_ms: 2000
+    budget_ms: 15000
 
   # Tool-agnostic parallel of require-review-evidence for operators on the
   # gh-cli workflow (\`gh pr merge\`) instead of agent-tasks MCP. Same generic
@@ -212,7 +263,7 @@ hooks:
     bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
     command: harness policy intercept
     blocking: hard
-    budget_ms: 2000
+    budget_ms: 15000
 
   - name: require-dogfood-evidence
     event: PreToolUse
@@ -220,7 +271,7 @@ hooks:
     bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*(npm publish\\b|git( -C \\S+)* tag v)'
     command: harness policy intercept
     blocking: hard
-    budget_ms: 2000
+    budget_ms: 15000
 
   - name: require-preflight-evidence
     event: PreToolUse
@@ -228,14 +279,14 @@ hooks:
     bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* (status|log|diff|branch)\\b'
     command: harness policy intercept
     blocking: hard
-    budget_ms: 1000
+    budget_ms: 15000
 
   - name: require-review-subagent-evidence
     event: PreToolUse
     match: "mcp__agent-tasks__pull_requests_create"
     command: harness policy intercept
     blocking: hard
-    budget_ms: 2000
+    budget_ms: 15000
 
   # Bash-surface parallel of require-review-subagent-evidence for operators
   # who open PRs with \`gh pr create\` instead of agent-tasks MCP. The matching
@@ -249,7 +300,7 @@ hooks:
     bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr create\\b'
     command: harness policy intercept
     blocking: hard
-    budget_ms: 2000
+    budget_ms: 15000
 
   - name: require-preflight-push-evidence
     event: PreToolUse
@@ -257,7 +308,7 @@ hooks:
     bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b'
     command: harness policy intercept
     blocking: hard
-    budget_ms: 1000
+    budget_ms: 15000
 
   # deny-kill-switch-bash / deny-session-env-strip-bash / deny-sentinel-write-bash
   # (task cf1fde6d): \`harness pause\` / \`harness resume\` refuse to run inside an
@@ -276,7 +327,13 @@ hooks:
     bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S*\\s+)*(?:npx\\s+|\\S*/)?harness\\s+(["\\x27]?)(?:pause|resume|gate\\s+(["\\x27]?)(?:disable|enable)\\4)\\3(?![\\w-])'
     command: harness policy intercept
     blocking: hard
-    budget_ms: 1000
+    # 15000, not a smaller pattern-only budget: see the budget note above
+    # require-review-evidence. This policy's own verdict (operator_only)
+    # needs no ledger read, but intercept()'s audit-record call for that
+    # verdict is still a live grounding-mcp round-trip on the critical
+    # path, AND this hook shares its settings.json matcher group with the
+    # evidence-requiring Bash hooks above (dedup-safety).
+    budget_ms: 15000
 
   - name: deny-session-env-strip-bash
     event: PreToolUse
@@ -284,7 +341,8 @@ hooks:
     bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S*\\s+)*(env\\b[^;\\n|&]*-u\\s*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b|env\\b[^;\\n|&]*--unset(?:=|\\s+)(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b|unset\\s+(\\S+\\s+)*(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)\\b|(CLAUDE_CODE_SESSION_ID|CLAUDE_SESSION_ID|CODEX_SESSION_ID)=(?=\\s))'
     command: harness policy intercept
     blocking: hard
-    budget_ms: 1000
+    # 15000: same rationale as deny-kill-switch-bash immediately above.
+    budget_ms: 15000
 
   # Known gap, deliberately not faked as coverage: this only catches the
   # obvious shell shapes (\`> .harness-paused\`, \`tee .harness-paused\`,
@@ -304,7 +362,8 @@ hooks:
     bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S*\\s+)*(tee|cp)\\b[^;\\n|&]*\\.harness-paused\\b|>{1,2}\\s*\\S*\\.harness-paused\\b'
     command: harness policy intercept
     blocking: hard
-    budget_ms: 1000
+    # 15000: same rationale as deny-kill-switch-bash above.
+    budget_ms: 15000
 
   # risk-gate (Phase 7 #6): the Risk Gate enforcement hook. The
   # gate-prod-destructive policies below reference it. Same generic
@@ -317,7 +376,8 @@ hooks:
     match: "Bash"
     command: harness policy intercept
     blocking: hard
-    budget_ms: 2000
+    # 15000: same rationale as the budget note above require-review-evidence.
+    budget_ms: 15000
 
   # Optional: runtime-reality drift gate (NOT enabled by default).
   # Blocks destructive runtime commands (compose down/restart, systemctl,
