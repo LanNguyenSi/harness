@@ -1107,32 +1107,33 @@ describe("normalizeCommandAmpAware (task aabbad63: closes the bare-& gating gap 
   });
 });
 
-// Task cf3dff51: closes the COMPUTATION half of the shell-boundary-inside-
-// a-quoted-value residual pinned above ("13e55484: quoted-assignment
-// continuation does not change anything else" -> "a boundary character
-// INSIDE the quoted value stays a bypass") via a THIRD, additive
-// normalisation pass, `normalizeCommandQuoteAware` — built as a NEW
-// function rather than an in-place edit of `BOUNDARY_RE` /
-// `segmentAndCanonicalize`, per the module header's HALT CRITERION
-// paragraph (quoted verbatim there): an in-place edit was PROVEN, before
-// any implementation code was written, to flip the "accepted over-block:
-// a quoted assignment inside TEXT after a boundary char now matches" pin
-// two paragraphs above from a match to a lost match. NOT YET WIRED to
-// `policyMatchesEvent` (`src/runtime/intercept.ts`) — this task's file
-// scope is `src/runtime/command-normalize.ts` + this test file only, so
-// wiring (a fourth `policyMatchesEvent` disjunct, mirroring
-// `normalizeCommandAmpAware`'s own wiring for task aabbad63) is a named
-// follow-up, not done here. Measured at the real hook entry point
-// (`runInterceptCli`, isolated harness home, PATH-shim-verified bash
-// execution, two gated verbs) BEFORE any implementation code: the bypass
-// is real and this task's own baseline; the SAME measurement re-run
-// AFTER this change shows NO CHANGE at that entry point, precisely
-// because nothing consults this new function yet — see the implementer
-// report for the full measurement tables. This describe block instead
-// pins the closure at the level this task's file scope can actually
-// reach: `normalizeCommandQuoteAware`'s own output against the shipped
-// `bash_match` regex.
-describe("normalizeCommandQuoteAware (task cf3dff51: closes the BOUNDARY_RE quoted-value-boundary residual via a third, additive normalisation pass — groundwork, NOT YET wired to any gate)", () => {
+// Task cf3dff51: closes the shell-boundary-inside-a-quoted-value residual
+// pinned above ("13e55484: quoted-assignment continuation does not change
+// anything else" -> "a boundary character INSIDE the quoted value stays a
+// bypass") via a THIRD, additive normalisation pass,
+// `normalizeCommandQuoteAware`, built as a NEW function rather than an
+// in-place edit of `BOUNDARY_RE` / `segmentAndCanonicalize`, per the
+// module header's HALT CRITERION paragraph (quoted verbatim there): an
+// in-place edit was PROVEN, before any implementation code was written,
+// to flip the "accepted over-block: a quoted assignment inside TEXT after
+// a boundary char now matches" pin two paragraphs above from a match to a
+// lost match.
+//
+// WIRED into `policyMatchesEvent` (`src/runtime/intercept.ts`) as its
+// FOURTH arm (round 2 of this task), mirroring `normalizeCommandAmpAware`'s
+// own wiring for task aabbad63. See `tests/runtime/intercept-cli.test.ts`'s
+// "policyMatchesEvent - quote-aware fourth normalisation arm" and
+// "runInterceptCli - the quote-aware normalisation pass computes at most
+// ONCE per event" describe blocks for that wiring's own coverage. Measured
+// at the real hook entry point (`runInterceptCli`, isolated harness home,
+// PATH-shim-verified bash execution, two gated verbs): the bypass named
+// above is CLOSED in production, 12/12 target spellings gate, versus 0/12
+// before wiring. See the implementer report for the full measurement
+// tables. This describe block pins the closure at the function level:
+// `normalizeCommandQuoteAware`'s own output against the shipped
+// `bash_match` regex, the same assertions that already held true both
+// before and after the wiring landed.
+describe("normalizeCommandQuoteAware (task cf3dff51: closes the BOUNDARY_RE quoted-value-boundary residual via a third, additive normalisation pass, wired as policyMatchesEvent's fourth arm)", () => {
   const pushRe = policyBashMatch("preflight-before-push");
   const killRe = policyBashMatch("deny-kill-switch-bypass");
 
