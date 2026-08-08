@@ -521,6 +521,92 @@ describe("real git — reproduces the incident (task ce3903b0, ea8becf5)", () =>
       });
     },
   );
+
+  it(
+    "PINS THE INVARIANT: compares against FETCH_HEAD, never a local tracking ref (review finding, task ce3903b0) " +
+      "-- fixture breaks the default fetch refspec so refs/remotes/origin/master CANNOT be refreshed as a fetch " +
+      "side effect, unlike every other real-git test above",
+    async () => {
+      // Every OTHER real-git test in this file clones normally, so
+      // `remote.origin.fetch` keeps its default
+      // `+refs/heads/*:refs/remotes/origin/*` mapping -- which means
+      // `git fetch origin master` ALSO refreshes refs/remotes/origin/master
+      // as an ordinary git side effect (documented in the module header).
+      // That side effect would silently mask a regression that swapped
+      // FETCH_HEAD for the tracking ref in realCheckStaleBase: the
+      // tracking ref would happen to be just as fresh as FETCH_HEAD in
+      // those fixtures, so a mutant reading the tracking ref instead would
+      // still pass. This fixture deliberately UNSETS that refspec so the
+      // tracking ref is GUARANTEED to stay stale after our fetch -- the
+      // one fixture shape in this suite that can actually catch that
+      // regression.
+      const root = tmpDir("harness-sbc-fetchhead-pin-");
+      const bareDir = path.join(root, "origin.git");
+      fs.mkdirSync(bareDir);
+      execFileSync("git", ["init", "--bare", "-q", "-b", "master"], { cwd: bareDir });
+
+      const cloneDir = path.join(root, "clone");
+      execFileSync("git", ["clone", "-q", bareDir, cloneDir]);
+      gitConfig(cloneDir);
+      fs.writeFileSync(path.join(cloneDir, "README.md"), "hello\n");
+      gitCommitAll(cloneDir, "init");
+      execFileSync("git", ["push", "-q", "-u", "origin", "master"], { cwd: cloneDir });
+      execFileSync("git", ["config", "--unset-all", "remote.origin.fetch"], { cwd: cloneDir });
+
+      execFileSync("git", ["checkout", "-q", "-b", "task/x"], { cwd: cloneDir });
+      fs.writeFileSync(path.join(cloneDir, "work.txt"), "agent work\n");
+      gitCommitAll(cloneDir, "agent work");
+
+      const releaserDir = path.join(root, "releaser");
+      execFileSync("git", ["clone", "-q", bareDir, releaserDir]);
+      gitConfig(releaserDir);
+      fs.writeFileSync(path.join(releaserDir, "RELEASE.md"), "release\n");
+      gitCommitAll(releaserDir, "release commit");
+      execFileSync("git", ["push", "-q", "origin", "master"], { cwd: releaserDir });
+
+      // Prove the fixture actually sets the trap it claims to, BEFORE
+      // exercising the production check: fetch once directly, confirm the
+      // tracking ref did NOT move, and confirm a tracking-ref-based count
+      // would (wrongly) report 0 -- the exact regression this test pins
+      // against.
+      const trackingRefShaBefore = execFileSync(
+        "git",
+        ["rev-parse", "refs/remotes/origin/master"],
+        { cwd: cloneDir, encoding: "utf8" },
+      ).trim();
+      execFileSync("git", ["fetch", "--no-tags", "--", "origin", "master"], { cwd: cloneDir });
+      const trackingRefShaAfter = execFileSync(
+        "git",
+        ["rev-parse", "refs/remotes/origin/master"],
+        { cwd: cloneDir, encoding: "utf8" },
+      ).trim();
+      expect(trackingRefShaAfter).toBe(trackingRefShaBefore); // still stale
+      const naiveBehindViaTrackingRef = execFileSync(
+        "git",
+        ["rev-list", "--count", "task/x..refs/remotes/origin/master"],
+        { cwd: cloneDir, encoding: "utf8" },
+      ).trim();
+      expect(naiveBehindViaTrackingRef).toBe("0"); // the wrong answer
+
+      await withRealSpawnAllowed(async () => {
+        const { stream: err } = captureStream();
+        const result = await runSessionStartStaleBaseCheck({
+          stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: cloneDir })),
+          stderr: err,
+          manifest: manifestWithConfig({ enabled: true, default_branch: "master" }),
+          writeLedger: async () => ({ ok: true }),
+        });
+        // The production check MUST report the branch as behind -- via
+        // FETCH_HEAD, this run's own live fetch -- not 0 (what the
+        // permanently-stale tracking ref says in this fixture). A mutation
+        // swapping FETCH_HEAD for the tracking ref in realCheckStaleBase's
+        // rev-list/log calls turns this assertion from 1 back into 0;
+        // verified by an actual mutation probe (task ce3903b0 implementer
+        // report).
+        expect(result.behindCount).toBe(1);
+      });
+    },
+  );
 });
 
 describe("real git — offline / no-remote / no-credentials degrade cleanly (AC4)", () => {
@@ -652,13 +738,23 @@ describe("real git — offline / no-remote / no-credentials degrade cleanly (AC4
 // ===========================================================================
 
 describe("hot-path isolation (AC3: no network on PreToolUse)", () => {
-  it("runtime/intercept.ts (the `harness policy intercept` PreToolUse entrypoint) never references stale-base-check", () => {
-    const src = fs.readFileSync(path.join(REPO_ROOT, "src", "runtime", "intercept.ts"), "utf8");
-    expect(src).not.toMatch(/stale-base-check/);
-    expect(src).not.toMatch(/StaleBaseCheck/);
+  // The actual PreToolUse entrypoint is TWO files: the thin CLI wrapper
+  // `src/cli/policy/intercept.ts` (`runInterceptCli`, wired to `harness
+  // policy intercept` in cli/index.ts) delegates to the runtime engine
+  // `src/runtime/intercept.ts`. Both are checked: the wrapper lives under
+  // `src/cli/`, the SAME layer stale-base-check.ts lives in, so — unlike
+  // the engine below — .dependency-cruiser.cjs's layering rules do not
+  // structurally forbid it from importing this module; this is the only
+  // guardrail for that specific file.
+  it("neither the `harness policy intercept` CLI wrapper (src/cli/policy/intercept.ts) nor the runtime engine (src/runtime/intercept.ts) references stale-base-check", () => {
+    for (const rel of ["cli/policy/intercept.ts", "runtime/intercept.ts"]) {
+      const src = fs.readFileSync(path.join(REPO_ROOT, "src", rel), "utf8");
+      expect(src, `${rel} must not reference stale-base-check`).not.toMatch(/stale-base-check/);
+      expect(src, `${rel} must not reference StaleBaseCheck`).not.toMatch(/StaleBaseCheck/);
+    }
   });
 
-  it("no file under src/runtime/ IMPORTS stale-base-check (structurally impossible per .dependency-cruiser.cjs's runtime-no-upward-imports rule; this is an independent literal check of the same invariant — a plain mention in a doc comment, e.g. hermetic-spawn-guard.ts naming this module's guarded call site, is not a violation)", () => {
+  it("no file under src/runtime/ (the engine layer) IMPORTS stale-base-check (structurally impossible per .dependency-cruiser.cjs's runtime-no-upward-imports rule — that rule protects ONLY the src/runtime/ -> src/cli/ edge, not a src/cli/ -> src/cli/ edge such as the intercept CLI wrapper checked above; this is an independent literal check of the runtime-layer half of the invariant — a plain mention in a doc comment, e.g. hermetic-spawn-guard.ts naming this module's guarded call site, is not a violation)", () => {
     const runtimeDir = path.join(REPO_ROOT, "src", "runtime");
     const importPattern = /(?:from\s+["'][^"']*stale-base-check[^"']*["']|require\(\s*["'][^"']*stale-base-check[^"']*["']\s*\))/;
     const offenders: string[] = [];
