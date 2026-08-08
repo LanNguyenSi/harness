@@ -246,13 +246,15 @@ function assertStandaloneWord(pattern: string, word: string, policyName: string)
 }
 
 /**
- * "Is `token` gated by ANY shipped `bash_match` policy?" — the one-call
- * question both incidents got wrong. Real caller (F8, fix round):
- * `bash-match-registry.ts`'s `checkRegisteredSets` covers-purity check,
- * which asks this once per declared `member` of every
- * "covers-gated-head-tokens" registration. Takes only the `gatedHeadTokens`
- * slice of `BashMatchFacts` (not the full shape) so a caller holding the
- * same narrowed `Pick` `checkRegisteredSets` accepts can call this directly
+ * "Is `token` gated by ANY shipped `bash_match` policy?", the one-call
+ * question both incidents got wrong. Real caller (task 209e6dc4 redesign):
+ * `bash-match-registry.ts`'s `checkRegisteredSets`, via its
+ * `isLegitimatelyCoverable` helper, a source-based probe over the live
+ * gated-head-token vocabulary (and `PLAUSIBLE_NON_GATED_HEAD_TOKENS`),
+ * never a per-declared-`member` walk; the registration surface no longer
+ * has a `members` field to walk. Takes only the `gatedHeadTokens` slice of
+ * `BashMatchFacts` (not the full shape) so a caller holding the same
+ * narrowed `Pick` `checkRegisteredSets` accepts can call this directly
  * without widening its own parameter type.
  */
 export function isHeadTokenGated(
