@@ -186,11 +186,14 @@ export const ENV_SPLIT_STRING_FLAGS = /^(-S.*|--split-string(=.*)?)$/;
  */
 
 /**
- * `git` subcommands that do not mutate the working tree, index, or
- * any ref. `git fetch` is included because it only writes to the
- * remote-tracking branches, never touches local refs or the working
- * tree; same for `git ls-remote`. `git config` is excluded: with
- * arguments it can set values.
+ * `git` subcommands whose NAME is a prerequisite for read-only
+ * classification. Membership here is necessary but NOT sufficient:
+ * several of these subcommands mutate once given arguments (task
+ * 9d1fff1b, measured against real git 2.50.1), so `isReadOnlyGitInvocation`
+ * below applies a per-subcommand argument-form check on top of this set.
+ * A name not in this set is a write (block) unconditionally.
+ *
+ * `git config` is excluded: with arguments it can set values.
  */
 const GIT_READ_ONLY_SUBS: ReadonlySet<string> = new Set([
   "status", "log", "diff", "show", "branch", "tag",
@@ -199,6 +202,177 @@ const GIT_READ_ONLY_SUBS: ReadonlySet<string> = new Set([
   "reflog", "cat-file", "check-ref-format", "for-each-ref",
   "name-rev", "merge-base", "show-ref",
 ]);
+
+/**
+ * Tokens that make ANY git invocation write or execute, independent of
+ * the subcommand — so the check is applied globally, above the
+ * per-subcommand switch (task 9d1fff1b, review round 1, all measured
+ * against git 2.50.1):
+ *
+ *   - `--output=<path>` / `--output <path>` creates/truncates a file at
+ *     OPTION-PARSE time (git's shared `diff_opt_parse` -> `xfopen`), not
+ *     just in diff/log/show: measured writing a file on `git rev-list
+ *     --output`, `git shortlog --output`, and `git blame --output` too,
+ *     all of which are otherwise-read-only subcommands. Scoping the
+ *     forfeit to a subcommand list would need re-auditing on every git
+ *     version for which parsers reach that handler; a global forfeit
+ *     does not, and no read-only git subcommand uses `--output` as a
+ *     read flag. Detected on the exact long form so `--output-indicator-new=`
+ *     and `--oneline` are unaffected.
+ *   - `--upload-pack=<path>` / `--exec=<path>` / `--receive-pack=<path>`
+ *     run an operator-named binary: measured `git fetch
+ *     --upload-pack=<script> <local-repo>` executing the script.
+ *   - a NON-flag positional containing `::` is the `ext::`/`fd::`
+ *     transport-helper form, which runs a local program (protocol.ext
+ *     defaults to `user`, i.e. allowed for a direct CLI call). Blocked
+ *     defensively — it did not execute on the probe machine's git config,
+ *     but the vector is config/version-dependent and cheap to close.
+ *     Checked only on positionals so a `--format='%h::%s'` read stays
+ *     read-only (the `::` is inside a flag, not a remote position).
+ */
+function isGitDangerousToken(raw: string): boolean {
+  const hit = (t: string): boolean => {
+    if (t === "--output" || t.startsWith("--output=")) return true;
+    if (t === "--upload-pack" || t.startsWith("--upload-pack=")) return true;
+    if (t === "--exec" || t.startsWith("--exec=")) return true;
+    if (t === "--receive-pack" || t.startsWith("--receive-pack=")) return true;
+    if (!t.startsWith("-") && t.includes("::")) return true;
+    return false;
+  };
+  // raw-OR-decoded (repo convention, task fdee7d0f): decoding can only
+  // ADD a match, so a quoted `--"output"=x` / `ext"::"x` cannot slip past.
+  return hit(raw) || hit(decodeShellWord(raw));
+}
+
+/**
+ * Branch write flags that need NO positional operand (the positional
+ * write forms — `git branch -D main`, `git branch newname` — are
+ * already caught structurally by the "no non-flag operand" rule in
+ * `isReadOnlyGitInvocation`). These glued/standalone forms mutate
+ * config or descriptions of the CURRENT branch without a positional,
+ * so the structural rule alone would miss them. Closed set from git's
+ * branch(1) manual.
+ */
+const BRANCH_WRITE_FLAGS: ReadonlySet<string> = new Set([
+  "-d", "-D", "--delete", "-m", "-M", "--move", "-c", "-C", "--copy",
+  "-u", "--set-upstream-to", "--unset-upstream", "--edit-description",
+  "--set-upstream", "-f", "--force",
+]);
+
+function isBranchWriteFlag(raw: string): boolean {
+  const hit = (t: string): boolean =>
+    BRANCH_WRITE_FLAGS.has(t) ||
+    t.startsWith("--set-upstream-to=") ||
+    t.startsWith("--set-upstream=");
+  return hit(raw) || hit(decodeShellWord(raw));
+}
+
+/**
+ * `git remote` verbs that read without writing. Positive allow-list:
+ * `add`/`remove`/`rm`/`rename`/`set-url`/`set-head`/`set-branches`/
+ * `prune`/`update` all mutate and are therefore simply absent, so a
+ * future write verb this floor has not reasoned about fails closed.
+ * `show` and `get-url` contact/print only; `-v`/`--verbose` (a leading
+ * dash) is bare listing.
+ */
+const REMOTE_READ_ONLY_VERBS: ReadonlySet<string> = new Set(["show", "get-url"]);
+
+/**
+ * Per-subcommand argument-form check for a git subcommand whose NAME is
+ * already in `GIT_READ_ONLY_SUBS`. Returns true only when the specific
+ * argument form is provably read-only; anything else fails closed
+ * (task 9d1fff1b). The design is POSITIVE per subcommand (enumerate the
+ * read-only shapes) rather than a denylist of write shapes: a git
+ * argument this floor has not reasoned about then over-blocks (annoying)
+ * instead of laundering a write (unsafe) — the same choice the module
+ * header states and the `npm audit` guard already makes.
+ *
+ * `args` is the token list AFTER the subcommand (i.e. `tokens.slice(2)`).
+ */
+function isReadOnlyGitInvocation(sub: string, args: readonly string[]): boolean {
+  // Global write/exec vectors reachable from many subcommands' shared
+  // option parser and transport layer (--output, --upload-pack, ext::,
+  // ...). Checked first so they apply to EVERY read-only subcommand,
+  // including the ones the switch below returns `true` for unconditionally.
+  if (args.some(isGitDangerousToken)) return false;
+
+  // End-of-options: everything after a bare `--` is an OPERAND, never a
+  // flag, so fold it into the positional view. Without this, `git tag --
+  // <name>` would read as an all-flag form. (git itself rejects a
+  // dash-leading refname, so `git tag -- -x` errors rather than writing,
+  // but the classifier should not depend on git's refname rules to stay
+  // sound.)
+  const ddIndex = args.indexOf("--");
+  const flagScope = ddIndex === -1 ? args : args.slice(0, ddIndex);
+  const operandTail = ddIndex === -1 ? [] : args.slice(ddIndex + 1);
+  const isPositional = (t: string): boolean => !t.startsWith("-");
+  const noPositional = (): boolean =>
+    operandTail.length === 0 && flagScope.every((t) => !isPositional(t));
+
+  switch (sub) {
+    // Creating/deleting/moving a branch or tag ALWAYS takes a non-flag
+    // operand (the branch/tag name), so "no non-flag operand" blocks
+    // every positional write form structurally; the flag check adds the
+    // few glued no-positional branch writes (--set-upstream-to=, etc.).
+    // A bare `git branch` / `git tag` and pure-flag listings stay
+    // read-only. `git tag` needs no flag denylist: every tag mutation
+    // (create/delete/annotate) requires the tag-name operand.
+    case "branch":
+      return noPositional() && !flagScope.some(isBranchWriteFlag);
+    case "tag":
+      return noPositional();
+
+    // `git remote`: bare, `-v`/flags, or the read-only verbs show/get-url.
+    // Any other first non-flag token (add/set-url/prune/update/...) blocks.
+    case "remote": {
+      const verb = flagScope.find(isPositional) ?? operandTail[0];
+      return verb === undefined || REMOTE_READ_ONLY_VERBS.has(verb);
+    }
+
+    // `git fetch`: bare or a single positional (a remote name or URL) is
+    // floored read-only, matching the pre-existing fetch contract — it
+    // writes remote-tracking refs, FETCH_HEAD, and auto-followed / `--tags`
+    // tag refs, and `--prune` deletes remote-tracking refs; all of that is
+    // consciously accepted here (measured, not "remote-tracking only" as an
+    // earlier comment claimed). The escalation this task closes is the
+    // arbitrary-LOCAL-ref write via a refspec: `git fetch <remote>
+    // <src>:<localdst>` — a SECOND positional. So block on >=2 positionals.
+    // (`--refmap` cannot carry a lone write: git dies "only meaningful with
+    // command-line refspec(s)" without a positional refspec — measured.)
+    // A single positional URL contains `:` (https://, git@host:) and is
+    // correctly NOT blocked; the ext:: transport is caught by the global
+    // danger check above. Separated flag values (`--depth 5`) inflate the
+    // positional count and conservatively over-block; use `--depth=5`.
+    case "fetch": {
+      const positionalCount =
+        flagScope.filter(isPositional).length + operandTail.length;
+      return positionalCount <= 1;
+    }
+
+    // `git reflog`: the write verbs expire/delete/drop are always the
+    // FIRST arg. Read-only iff bare, explicit `show`, or a flag-led form
+    // (`git reflog -n 5`). A leading ref (`git reflog HEAD`, read-only)
+    // is conservatively blocked — acceptable over-block. `--`-prefixed:
+    // fall through to the operand so `git reflog -- expire` cannot pass.
+    case "reflog": {
+      const head = args[0] === "--" ? operandTail[0] : args[0];
+      return head === undefined || head === "show" || head.startsWith("-");
+    }
+
+    // Every other subcommand in GIT_READ_ONLY_SUBS reads without a
+    // ref/tree/index/config mutation for all argument forms (status,
+    // ls-files, ls-remote, rev-parse, cat-file, ...). The two ways such a
+    // subcommand could still write or execute — the shared `--output`
+    // file handler and the `ext::`/`--upload-pack` transport execution —
+    // are already forfeited by the global `isGitDangerousToken` check
+    // above (measured on rev-list/shortlog/blame --output and ls-remote/
+    // fetch upload-pack); config- and env-borne vectors (GIT_EXTERNAL_DIFF,
+    // core.fsmonitor, protocol.ext.allow) are invisible to an argv
+    // classifier and out of scope for this task.
+    default:
+      return true;
+  }
+}
 
 /**
  * `gh` (GitHub CLI) noun + verb pairs that read state without writing.
@@ -609,7 +783,10 @@ function classifyTokens(tokens: readonly string[]): boolean {
   // tight: `<bin> --version <thing>` could exfiltrate or mis-route.
   if (tokens.length === 2 && VERSION_OR_HELP_FLAGS.has(sub)) return true;
 
-  if (bin === "git") return GIT_READ_ONLY_SUBS.has(sub);
+  if (bin === "git") {
+    if (!GIT_READ_ONLY_SUBS.has(sub)) return false;
+    return isReadOnlyGitInvocation(sub, tokens.slice(2));
+  }
 
   if (bin === "gh") {
     if (!GH_READ_ONLY_NOUNS.has(sub)) return false;

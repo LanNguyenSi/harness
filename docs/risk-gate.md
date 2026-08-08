@@ -172,6 +172,28 @@ Some bins are classified read-only only when their write flags are absent
 - `file`: read-only when neither `-C` / `--compile` nor a short-flag
   cluster containing uppercase `C` appears. Lowercase `-c` (magic-file
   check) is benign and is not blocked.
+- `git`: a subcommand name in the read-only set is necessary but not
+  sufficient — several mutate once given arguments (task `9d1fff1b`,
+  measured against git 2.50.1). `isReadOnlyGitInvocation` applies a
+  positive per-subcommand argument-form check: `branch`/`tag` read-only
+  only with no non-flag operand (`git branch`, `git tag -l`; blocked:
+  `git branch -D main`, `git tag v1`, and glued no-operand branch writes
+  like `--set-upstream-to=`); `remote` only for the `show`/`get-url`
+  verbs or a bare `-v` (blocked: `add`/`set-url`/`prune`/`update`);
+  `fetch` only for bare or a single remote/URL (blocked: a second
+  positional refspec, which can write an arbitrary local ref); `reflog`
+  only for bare/`show`/flag-led forms (blocked: `expire`/`delete`/`drop`).
+  Two vectors reach git's SHARED option parser / transport and are
+  forfeited for EVERY git subcommand: `--output=<path>` (creates a file
+  at parse time, on rev-list/shortlog/blame as well as diff/log/show) and
+  `--upload-pack=`/`--exec=`/`--receive-pack=`/`ext::` (run a local
+  binary). Conservative cost (over-blocked reads, use flag-only or glued
+  `--flag=value` forms to stay floored): tag/branch listing with a
+  pathspec or `--contains <ref>`, `git reflog <ref>`, `git fetch <remote>
+  <ref>` and separated fetch flag values (`--depth 5`). Out of scope
+  (separate tasks): path-qualified `git -C <dir>` (5b5d1022), GNU
+  long-option abbreviations (dd055c1d), and config/env-borne vectors
+  (`GIT_EXTERNAL_DIFF`, `protocol.ext.allow`).
 
 Two more entries floor a whole class of commands that were previously
 unclassified and, on a production-resolved session (checked-out `main`
