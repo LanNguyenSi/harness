@@ -29,10 +29,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   branch/tag are read-only only with no non-flag operand (every mutation
   needs the branch/tag name; branch also denies the glued no-operand
   writes like `--set-upstream-to=`); remote only for the `show`/`get-url`
-  verbs or bare `-v`; fetch only for bare or a single remote (a second
-  positional or a `:` refspec blocks); reflog only for bare/`show`/flag
-  forms (expire/delete/drop are always the first arg); diff/log/show
-  forfeit on `--output`. The choice is positive-shape, not a write-flag
+  verbs or bare `-v`; fetch only for bare or a single remote/URL (a
+  second positional refspec blocks — the escalation to an arbitrary
+  local ref); reflog only for bare/`show`/flag forms (expire/delete/drop
+  are always the first arg); everything after a bare `--` is folded into
+  the positional view. Two write/exec vectors reach git's SHARED option
+  parser and transport layer and are therefore forfeited GLOBALLY, above
+  the per-subcommand switch, for every allowlisted git subcommand (review
+  round 1, measured against git 2.50.1): `--output=<path>` creates a file
+  at option-parse time — measured writing on `rev-list`/`shortlog`/`blame`
+  as well as diff/log/show — and `--upload-pack=`/`--exec=`/`--receive-pack=`
+  plus `ext::`/`fd::` positional transports run an operator-named binary
+  locally (measured `git fetch --upload-pack=<script> <repo>` executing
+  the script). The choice is positive-shape, not a write-flag
   denylist, so a git argument this floor has not reasoned about
   over-blocks (annoying) instead of laundering a write (unsafe) — the
   same fail-closed stance as the existing `npm audit` guard, and
@@ -43,11 +52,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   blocks rather than slipping through. Explicitly out of scope (separate
   tasks): global-option / path-qualified git (`git -C <d>`, 5b5d1022),
   GNU long-option abbreviations (dd055c1d), and env-var exec equivalents.
-  25 negative tests pin the mutating forms (reproduced by
-  `scratchpad/git-repro.sh`), positive controls pin the bare forms plus
-  the read corpus (`rev-parse --git-dir`, `ls-files -c`, `log -c HEAD`,
-  `show -c HEAD`, `diff --stat`, `status --short`); a mutation probe
-  confirms reverting to the bare-name allowlist reddens 29 tests.
+  negative tests pin the mutating forms (reproduced against git 2.50.1),
+  positive controls pin the bare forms plus the read corpus (`rev-parse
+  --git-dir`, `ls-files -c`, `log -c HEAD`, `show -c HEAD`, `diff --stat`,
+  `status --short`, and single-positional `fetch`/`ls-remote` from a URL);
+  a mutation probe confirms reverting to the bare-name allowlist reddens
+  the negative suite, and a per-arm probe confirms each raw-or-decoded
+  decode arm is load-bearing (deleting it reddens a quoted no-positional
+  write form). The over-blocked read forms (`git tag -l 'v*'`,
+  `git branch --contains HEAD`, separated fetch flag values, ...) are the
+  accepted conservative cost, documented in `docs/risk-gate.md`.
 
 - **SECURITY: block/require_approval policies now fail CLOSED when their
   evidence source is degraded, instead of silently mapping to the

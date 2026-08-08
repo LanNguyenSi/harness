@@ -106,6 +106,39 @@ describe("read-only Bash classifier", () => {
       "git reflog expire --expire=now --all",
       "git reflog delete main@{0}",
       "git reflog drop",
+      // Review round 1: --output writes a file at git's OPTION-PARSE time,
+      // so it is a write vector on EVERY revision walker, not just
+      // diff/log/show. Measured on git 2.50.1 (scratchpad/git-repro2.sh):
+      // all three created a file.
+      "git rev-list --output=/tmp/x.txt HEAD",
+      "git shortlog --output=/tmp/x.txt HEAD",
+      "git blame --output=/tmp/x.txt README.md",
+      // Review round 1: transport-level local execution. `--upload-pack`
+      // ran an operator-named binary (measured, canary created); ext::/fd::
+      // transport helpers run a local program (config-dependent, blocked
+      // defensively). Both the glued and separated flag forms.
+      "git fetch --upload-pack=/tmp/evil.sh /tmp/repo",
+      "git fetch --upload-pack /tmp/evil.sh /tmp/repo",
+      "git ls-remote --upload-pack=/tmp/evil.sh /tmp/repo",
+      "git ls-remote ext::sh -c touch",
+      "git fetch ext::sh -c touch",
+      // Review round 1: no-positional glued branch writes — the ONLY
+      // forms that exercise the raw-or-decoded arm of isBranchWriteFlag
+      // (the structural no-positional rule cannot see them).
+      "git branch --edit-description",
+      "git branch -f",
+      "git branch --force",
+      // Review round 1: flag-before-verb write forms (exercise
+      // find(isPositional) / operandTail, not args[0]).
+      "git remote -v update",
+      "git remote set-head origin -a",
+      // Review round 1: end-of-options handling — the operand after `--`
+      // must count as positional.
+      "git tag -- -weirdtag",
+      "git branch -- newbranch",
+      "git reflog -- expire",
+      // Review round 1: the tag-keyword fetch form (three positionals).
+      "git fetch origin tag v1",
     ])("blocks %s", (cmd) => {
       expect(isReadOnlyBashCommand(cmd)).toBe(false);
     });
@@ -141,6 +174,13 @@ describe("read-only Bash classifier", () => {
       "git diff --stat",
       "git status --short",
       "git fetch origin",
+      // Review round 1: a single-positional fetch from a URL is read-only;
+      // the earlier `:`-in-positional rule wrongly blocked it (every URL
+      // contains `:`). One positional can only be a remote/URL, never a
+      // local-ref-writing refspec (git needs remote AND refspec).
+      "git fetch https://example.com/a.git",
+      "git ls-remote https://example.com/a.git",
+      "git ls-remote origin",
     ])("allows %s", (cmd) => {
       expect(isReadOnlyBashCommand(cmd)).toBe(true);
     });
@@ -154,6 +194,18 @@ describe("read-only Bash classifier", () => {
       'git branch -"D" main',
       'git reflog ex"pire" --all',
     ])("blocks quoted write form %s", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+
+    // Review round 1: these are the ONLY forms that actually exercise the
+    // raw-or-decoded decode arms (no positional to catch them structurally,
+    // and the flag is quoted so the raw literal misses). The per-arm
+    // mutation probe (delete each `decodeShellWord` arm) must redden here.
+    it.each([
+      'git branch --"set-upstream-to"=origin/main',
+      'git diff --"output"=/tmp/x',
+      'git rev-list --"output"=/tmp/x HEAD',
+    ])("blocks quoted no-positional write form %s", (cmd) => {
       expect(isReadOnlyBashCommand(cmd)).toBe(false);
     });
   });
