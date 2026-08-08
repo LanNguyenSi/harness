@@ -31,6 +31,12 @@
 //     `process.version`, so this one is especially load-bearing to keep
 //     hermetic)
 //   - `realNpmGlobalsSpawn` (spawns `npm ls -g --depth=0 --json`)
+// A ninth was added under the stale-base-check task (ce3903b0, incident
+// ea8becf5), in src/cli/session-start/stale-base-check.ts:
+//   - `realCheckStaleBase` (spawns `git fetch`/`rev-list`/`log` — the only
+//     one of the nine that touches the network; tests either inject
+//     `runCheck` or opt into the real path via HARNESS_ALLOW_REAL_SPAWN=1
+//     against a LOCAL fixture repo, never a real network host)
 // Naming them here (instead of just a count) is deliberate (review
 // finding F5, task T-007): a bare count silently drifts every time a new
 // call site is added and nobody remembers to bump it. See the guard call

@@ -83,6 +83,7 @@ import { runSessionStartPreflight } from "./session-start/index.js";
 import { writePendingApproval } from "../runtime/pending-approval.js";
 import { runSessionStartBranchCheck } from "./session-start/branch-check.js";
 import { runSessionStartToolchainParity } from "./session-start/toolchain-parity.js";
+import { runSessionStartStaleBaseCheck } from "./session-start/stale-base-check.js";
 import { runPackHookBranchProtectionCli } from "./pack/hook-branch-protection.js";
 import { runPackHookSolutionAcceptanceCli } from "./pack/hook-solution-acceptance.js";
 import { runPackHookSolutionAcceptanceWriteguardCli } from "./pack/hook-solution-acceptance-writeguard.js";
@@ -2626,6 +2627,45 @@ export function buildProgram(opts: RunOptions = {}): Command {
         if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
       }
       await runSessionStartToolchainParity(cliOpts);
+    });
+  sessionStart
+    .command("stale-base-check")
+    .description(
+      "SessionStart producer (opt-in via `stale_base_check.enabled: true`; task ce3903b0, incident " +
+        "ea8becf5): runs a LIVE `git fetch` of the remote default branch (never trusting the local " +
+        "origin/<default> ref, which can itself be stale — that is the exact bug this closes) and, when " +
+        "the current branch's base is behind, writes a WARNING to stderr naming how many commits behind, " +
+        "how old the missing work is, and the recovery command. Records a `stale-base:ok` / " +
+        "`stale-base:behind:<n>` fact to the evidence ledger (audit-only — no gate consumes it). " +
+        "Purely advisory: never blocks, and degrades cleanly (no fact written) when offline, the remote " +
+        "or default branch can't be resolved, or credentials are missing. blocking:false — every failure " +
+        "path logs to stderr and exits 0.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option(
+      "--session <id>",
+      "explicit session id (overrides stdin event + env)",
+    )
+    .option("--cwd <path>", "override cwd resolution (default: stdin event.cwd then process.cwd())")
+    .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
+    .action(async (options: {
+      config?: string;
+      project?: string;
+      session?: string;
+      cwd?: string;
+      ledgerTimeout?: string;
+    }) => {
+      const cliOpts: Parameters<typeof runSessionStartStaleBaseCheck>[0] = {};
+      if (options.config) cliOpts.configPath = options.config;
+      if (options.project) cliOpts.project = options.project;
+      if (options.session) cliOpts.session = options.session;
+      if (options.cwd) cliOpts.cwd = options.cwd;
+      if (options.ledgerTimeout) {
+        const n = Number.parseInt(options.ledgerTimeout, 10);
+        if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
+      }
+      await runSessionStartStaleBaseCheck(cliOpts);
     });
 
   // `harness gate` — operator escape hatch for hard-blocking hooks.
