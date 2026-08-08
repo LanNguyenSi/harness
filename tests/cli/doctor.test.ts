@@ -8,6 +8,10 @@ import {
   resolveGitIgnoreProbe,
 } from "../../src/cli/doctor/index.js";
 import { format } from "../../src/cli/doctor/format.js";
+import { checkTemplatePolicyDrift } from "../../src/cli/validate/checks.js";
+import { getTemplate } from "../../src/cli/init/templates.js";
+import { parseManifest } from "../../src/schema/index.js";
+import { parse as parseYaml } from "yaml";
 import { VERSION } from "../../src/version.js";
 import type { McpProbe, McpProbeResult } from "../../src/probes/mcp.js";
 import type { McpServer } from "../../src/schema/index.js";
@@ -2352,14 +2356,14 @@ policies: []
       homeOverride: home,
       shallow: true,
     });
-    expect(report.templateDrift.missing).toHaveLength(3);
+    expect(report.templateDrift.errors).toHaveLength(3);
     expect(report.errorCount).toBeGreaterThanOrEqual(3);
     for (const name of [
       "deny-kill-switch-bypass",
       "deny-session-env-strip",
       "deny-pause-sentinel-forgery",
     ]) {
-      expect(report.templateDrift.missing.some((m) => m.includes(name))).toBe(true);
+      expect(report.templateDrift.errors.some((m) => m.includes(name))).toBe(true);
     }
     const text = format(report);
     expect(text).toContain("Template drift (shipped security policies)");
@@ -2380,7 +2384,7 @@ ${KILL_SWITCH_POLICIES}`,
       homeOverride: home,
       shallow: true,
     });
-    expect(report.templateDrift.missing).toHaveLength(0);
+    expect(report.templateDrift.errors).toHaveLength(0);
     expect(format(report)).not.toContain("Template drift");
   });
 
@@ -2404,7 +2408,7 @@ doctor:
       homeOverride: home,
       shallow: true,
     });
-    expect(report.templateDrift.missing).toHaveLength(0);
+    expect(report.templateDrift.errors).toHaveLength(0);
     expect(report.errorCount).toBe(0);
   });
 
@@ -2435,10 +2439,94 @@ policies:
       shallow: true,
     });
     // The present one is not flagged; the two absent ones are.
-    expect(report.templateDrift.missing).toHaveLength(2);
-    expect(report.templateDrift.missing.some((m) => m.includes("deny-kill-switch-bypass"))).toBe(false);
-    expect(report.templateDrift.missing.some((m) => m.includes("deny-session-env-strip"))).toBe(true);
-    expect(report.templateDrift.missing.some((m) => m.includes("deny-pause-sentinel-forgery"))).toBe(true);
+    expect(report.templateDrift.errors).toHaveLength(2);
+    expect(report.templateDrift.errors.some((m) => m.includes("deny-kill-switch-bypass"))).toBe(false);
+    expect(report.templateDrift.errors.some((m) => m.includes("deny-session-env-strip"))).toBe(true);
+    expect(report.templateDrift.errors.some((m) => m.includes("deny-pause-sentinel-forgery"))).toBe(true);
     expect(report.errorCount).toBeGreaterThanOrEqual(2);
+  });
+
+  // Review finding 2026-08-08: a kill-switch policy PRESENT by name but no
+  // longer operator_only (the historical requires-shape a ledger write can
+  // satisfy, or enforcement:warn) is a real bypass — name-presence alone
+  // must not pass it as no-drift.
+  it("flags a present-but-downgraded kill-switch policy (operator_only dropped)", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks:
+  - name: deny-kill-switch-bash
+    event: PreToolUse
+    command: harness policy intercept
+    blocking: hard
+policies:
+  - name: deny-kill-switch-bypass
+    description: downgraded copy — name kept, operator_only dropped, requires shape restored
+    trigger: { event: PreToolUse, match: "Bash", bash_match: "x" }
+    requires: { ledger_tag: "kill-switch-ok:\${SESSION_ID}" }
+    hook: deny-kill-switch-bash
+    enforcement: block
+doctor:
+  ignore_template_drift:
+    - deny-session-env-strip
+    - deny-pause-sentinel-forgery
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+    });
+    // Only the downgraded one is flagged (the other two are opted out).
+    expect(report.templateDrift.errors).toHaveLength(1);
+    expect(report.templateDrift.errors[0]).toContain("deny-kill-switch-bypass");
+    expect(report.templateDrift.errors[0]).toContain("DOWNGRADED");
+    expect(report.errorCount).toBeGreaterThanOrEqual(1);
+  });
+
+  // Review finding 2026-08-08: a stale/typo'd opt-out entry suppresses
+  // nothing and must be surfaced (warning, not error) so a rename cannot
+  // silently strand an acknowledgement — and it must NOT suppress a real
+  // missing policy.
+  it("warns on a stale ignore_template_drift entry without suppressing real drift", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+doctor:
+  ignore_template_drift:
+    - deny-kill-switch-bypass
+    - deny-session-env-strip
+    - deny-pause-sentinel-forgery
+    - not-a-real-policy-name
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+    });
+    // The three real names are opted out (no errors); the bogus entry warns.
+    expect(report.templateDrift.errors).toHaveLength(0);
+    expect(report.templateDrift.warnings).toHaveLength(1);
+    expect(report.templateDrift.warnings[0]).toContain("not-a-real-policy-name");
+    expect(report.errorCount).toBe(0);
+    expect(report.warningCount).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("checkTemplatePolicyDrift — cross-profile floor (task adf037c1)", () => {
+  // Pins the operator decision (2026-08-08) that the kill-switch drift is
+  // reported REGARDLESS of profile: solo/team ship none of the three, so a
+  // fresh install of either must report all three as drift. Guards against
+  // a future 'fix' that silently narrows the check to the full profile and
+  // removes the profile-independent security floor.
+  it("reports all three kill-switch policies as drift for solo and team, none for full", () => {
+    const drift = (tpl: "full" | "solo" | "team"): number =>
+      checkTemplatePolicyDrift(parseManifest(parseYaml(getTemplate(tpl)))).filter(
+        (d) => d.severity === "error",
+      ).length;
+    expect(drift("solo")).toBe(3);
+    expect(drift("team")).toBe(3);
+    expect(drift("full")).toBe(0);
   });
 });

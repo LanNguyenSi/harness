@@ -241,17 +241,23 @@ export interface GroundingSection {
 }
 
 /**
- * Template-policy drift (task adf037c1). Each entry names a shipped
- * `operator_only` (kill-switch / security) policy that the current full
- * template ships but this installed manifest lacks — a defense an aged
- * manifest never received, since `harness apply` does not retroactively
- * add newly-shipped default policies. Each rolls into `errorCount` (a real
- * defense gap, doctor-convention exit failure). Names listed under
- * `doctor.ignore_template_drift` are already filtered out upstream.
+ * Template-policy drift (task adf037c1). `errors` names shipped
+ * `operator_only` (kill-switch / security) policies this installed
+ * manifest either lacks entirely or carries in a DOWNGRADED (no longer
+ * operator_only) shape — a defense an aged manifest never received or
+ * silently weakened, since `harness apply` does not retroactively add or
+ * repair default policies. Each rolls into `errorCount` (a real defense
+ * gap, doctor-convention exit failure). `warnings` names stale
+ * `doctor.ignore_template_drift` entries that match no shipped policy and
+ * therefore suppress nothing; each rolls into `warningCount`. Names
+ * acknowledged via a valid `doctor.ignore_template_drift` entry are
+ * filtered out of `errors` upstream.
  */
 export interface TemplateDriftSection {
-  /** Operator-facing messages, one per missing shipped operator_only policy. */
-  missing: string[];
+  /** Missing-or-downgraded shipped operator_only policies (each → errorCount). */
+  errors: string[];
+  /** Stale/typo'd ignore_template_drift entries that suppress nothing (each → warningCount). */
+  warnings: string[];
 }
 
 export interface DoctorReport {

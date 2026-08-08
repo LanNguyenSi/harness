@@ -476,31 +476,83 @@ export function checkPolicyRiskWithoutEnvScope(manifest: Manifest): Diagnostic[]
 // intentionally not compared so solo/team installs are not nagged for
 // full-only convenience policies they never carried.
 //
+// Two drift shapes are reported, both real aged-manifest bypasses:
+//   - MISSING: the shipped operator_only policy name is absent entirely.
+//   - DOWNGRADED: a policy of that name IS present but is no longer
+//     operator_only (task 2cc73f55's history: these exact policies once
+//     shipped with a `requires.ledger_tag` shape a ledger write could
+//     satisfy; a manifest that kept the name but not operator_only:true
+//     has a bypassable kill-switch). Name-presence alone would pass it as
+//     no-drift, which is exactly the class this check exists to catch
+//     (review finding 2026-08-08). operator_only:true is the single
+//     sufficient predicate: the schema's superRefine forces enforcement
+//     block for operator_only policies, so any downgrade (warn, a
+//     requires: shape, operator_only dropped) fails this test.
+//
 // Deliberate opt-out (operator decision 2026-08-08): a name listed in
-// `doctor.ignore_template_drift` is suppressed. This is NOT a
-// `policies[].enabled` flag — such a flag would be read here but ignored
-// by the runtime engine, so an operator would believe a policy disabled
-// while it still fired. The ignore-list only ever silences THIS report
-// line and changes no enforcement, so its meaning is honest.
+// `doctor.ignore_template_drift` is skipped ENTIRELY (both shapes). This
+// is NOT a `policies[].enabled` flag — such a flag would be read here but
+// ignored by the runtime engine, so an operator would believe a policy
+// disabled while it still fired. The ignore-list only ever silences THIS
+// report and changes no enforcement, so its meaning is honest. A
+// stale/typo'd ignore entry (matching no shipped name) is itself
+// surfaced as a warning so a dead opt-out cannot silently stop
+// suppressing after a future rename.
 export function checkTemplatePolicyDrift(manifest: Manifest): Diagnostic[] {
-  const present = new Set(manifest.policies.map((p) => p.name));
+  const byName = new Map(manifest.policies.map((p) => [p.name, p]));
   const ignored = new Set(manifest.doctor.ignore_template_drift);
+  const shipped = shippedOperatorOnlyPolicyNames();
   const diags: Diagnostic[] = [];
-  for (const name of shippedOperatorOnlyPolicyNames()) {
-    if (present.has(name) || ignored.has(name)) continue;
-    diags.push({
-      severity: "error",
-      path: "policies",
-      message:
-        `shipped operator_only security policy "${name}" is missing from ` +
-        `this manifest — a defense the current template ships but this ` +
-        `(older) install never received, so the gate it enforces is silently ` +
-        `absent. Re-add the "${name}" policy + its hook from the full ` +
-        `template (\`harness init --template full\` in a scratch dir and copy ` +
-        `the block, or hand-add per docs/okf/pause-vs-gate-kill-switch.md), ` +
-        `or, if you deliberately do not want it, list "${name}" under ` +
-        `doctor.ignore_template_drift to acknowledge the opt-out.`,
-    });
+  for (const name of shipped) {
+    if (ignored.has(name)) continue;
+    const installed = byName.get(name);
+    if (installed === undefined) {
+      diags.push({
+        severity: "error",
+        path: "policies",
+        message:
+          `shipped operator_only security policy "${name}" is missing from ` +
+          `this manifest, a defense the current template ships but this ` +
+          `(older) install never received, so the gate it enforces is silently ` +
+          `absent. Re-add the "${name}" policy + its hook from the full ` +
+          `template (\`harness init --template full\` in a scratch dir and copy ` +
+          `the block, or hand-add per docs/okf/pause-vs-gate-kill-switch.md), ` +
+          `or, if you deliberately do not want it, list "${name}" under ` +
+          `doctor.ignore_template_drift to acknowledge the opt-out.`,
+      });
+    } else if (installed.operator_only !== true) {
+      diags.push({
+        severity: "error",
+        path: "policies",
+        message:
+          `security policy "${name}" is present but DOWNGRADED: the shipped ` +
+          `template makes it \`operator_only: true\` (an unconditional deny no ` +
+          `in-session evidence can satisfy), but this manifest's copy is not, ` +
+          `so its kill-switch is bypassable (e.g. a \`requires:\` shape a ledger ` +
+          `write satisfies, or \`enforcement: warn\`). Restore \`operator_only: ` +
+          `true\` from the full template, or list "${name}" under ` +
+          `doctor.ignore_template_drift if this weakening is deliberate.`,
+      });
+    }
+  }
+  // Stale/typo'd opt-out entries: named in ignore_template_drift but not a
+  // shipped operator_only policy, so they suppress nothing. Warn (not
+  // error) — fail-safe already (the operator keeps seeing any real drift),
+  // this only surfaces the dead config so a rename doesn't silently strand
+  // an acknowledgement.
+  const shippedSet = new Set(shipped);
+  for (const name of manifest.doctor.ignore_template_drift) {
+    if (!shippedSet.has(name)) {
+      diags.push({
+        severity: "warning",
+        path: "doctor.ignore_template_drift",
+        message:
+          `doctor.ignore_template_drift lists "${name}", which is not a ` +
+          `shipped operator_only policy name — it suppresses nothing. Remove ` +
+          `the entry, or fix the name (a policy rename can strand an ` +
+          `acknowledgement here).`,
+      });
+    }
   }
   return diags;
 }

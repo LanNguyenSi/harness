@@ -290,10 +290,11 @@ function formatRiskGateSection(report: DoctorReport): string[] {
 // when something is missing — a caught-up manifest stays silent, like the
 // Risk Gate section.
 function formatTemplateDriftSection(report: DoctorReport): string[] {
-  const missing = report.templateDrift.missing;
-  if (missing.length === 0) return [];
+  const { errors, warnings } = report.templateDrift;
+  if (errors.length === 0 && warnings.length === 0) return [];
   const out: string[] = ["", "Template drift (shipped security policies)"];
-  for (const m of missing) out.push(`  ✗ ${m}`);
+  for (const m of errors) out.push(`  ✗ ${m}`);
+  for (const w of warnings) out.push(`  ⚠ ${w}`);
   return out;
 }
 

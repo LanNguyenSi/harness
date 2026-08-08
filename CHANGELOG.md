@@ -26,7 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   full` writes and automatically extends when a new operator_only policy
   is added. Each missing policy is an ERROR (doctor exits non-zero, the
   standard CI/dogfood signal), naming the policy and the rehydration
-  path. Scope is the `operator_only` security floor regardless of profile
+  path. A same-named-but-DOWNGRADED policy (present but no longer
+  `operator_only: true`, e.g. the historical `requires.ledger_tag` shape
+  a ledger write can satisfy, or `enforcement: warn`) is flagged as a
+  distinct error too: name-presence alone would pass a bypassable
+  kill-switch as no-drift, the exact aged-manifest class this check
+  targets. A stale/typo'd `doctor.ignore_template_drift` entry matching
+  no shipped name is surfaced as a warning so a policy rename cannot
+  silently strand an opt-out. Scope is the `operator_only` security floor regardless of profile
   (a solo/team install missing kill-switch protection is flagged too;
   that is the security core, per operator decision 2026-08-08), and it
   does NOT nag about full-only convenience policies a smaller profile

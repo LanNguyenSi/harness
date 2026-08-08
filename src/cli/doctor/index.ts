@@ -692,7 +692,11 @@ function buildRiskGate(manifest: Manifest): RiskGateSection {
  * is explicitly acknowledged under doctor.ignore_template_drift.
  */
 function buildTemplateDrift(manifest: Manifest): TemplateDriftSection {
-  return { missing: checkTemplatePolicyDrift(manifest).map((d) => d.message) };
+  const diags = checkTemplatePolicyDrift(manifest);
+  return {
+    errors: diags.filter((d) => d.severity === "error").map((d) => d.message),
+    warnings: diags.filter((d) => d.severity === "warning").map((d) => d.message),
+  };
 }
 
 /**
@@ -834,9 +838,11 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
     else if (d.severity === "warning") warningCount++;
   }
   warningCount += report.riskGate.warnings.length;
-  // Template-policy drift: each missing shipped operator_only security
-  // policy is a real defense gap → errorCount (task adf037c1).
-  errorCount += report.templateDrift.missing.length;
+  // Template-policy drift: each missing-or-downgraded shipped operator_only
+  // security policy is a real defense gap → errorCount; stale opt-out
+  // entries are warn-only (task adf037c1).
+  errorCount += report.templateDrift.errors.length;
+  warningCount += report.templateDrift.warnings.length;
   if (report.grounding !== undefined) {
     warningCount += report.grounding.warnings.length;
   }
