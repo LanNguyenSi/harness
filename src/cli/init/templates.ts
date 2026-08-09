@@ -780,7 +780,7 @@ policies:
       required:
         - "the OPERATOR to run \`harness pause\`/\`harness resume\` themselves, from a terminal outside your agent session, never a direct write to the sentinel file"
       run:
-        - "Stop. Do not write, redirect, tee, or copy anything to .harness-paused. Ask the OPERATOR to do that themselves, from their own terminal, if the session genuinely needs gates silenced. This gate is an unconditional deny (operator_only: true); see docs/okf/pause-vs-gate-kill-switch.md for the honest trust model and the residual bash_match coverage gap."
+        - "Stop. Do not write, redirect, tee, or copy anything to .harness-paused. Ask the OPERATOR to silence the gates themselves, from their own terminal, using the operator-only command named under Required, if the session genuinely needs it. This gate is an unconditional deny (operator_only: true); see docs/okf/pause-vs-gate-kill-switch.md for the honest trust model and the residual bash_match coverage gap."
 
 # Full inherits the Solo/Team understanding-gate stack: the Stop hook
 # persists each Understanding Report and the PreToolUse pre-tool-use

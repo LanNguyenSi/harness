@@ -31,19 +31,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   point back at the commands already named in their `cannot`/`required` text
   instead of repeating the verbs in the actionable `run:` list.
   `deny-session-env-strip`'s `run:` line did not name either verb and is
-  unchanged. New/updated tests: `tests/cli/init-no-agent-facing-pause-hint.test.ts`
-  is a new repo-wide guard that walks every `ux.run` line across
-  `FULL_TEMPLATE`, `SOLO_TEMPLATE`, `TEAM_TEMPLATE`, and
-  `docs/examples/full-manifest.yaml`, failing if any shipped agent-facing
-  `run:` entry names `pause`/`resume` as a course of action (a "see also"
-  citation to `docs/okf/pause-vs-gate-kill-switch.md` is allow-listed as
-  non-actionable), plus a dedicated assertion that `gate-prod-destructive`'s
-  `ux.run` has exactly its two legitimate entries left; regenerated
-  `docs/examples/full-manifest.expected.yaml` (the `harness describe` golden
-  fixture) to match; the existing `tests/cli/init-full-template-parity.test.ts`
-  / `tests/cli/init-templates-ux-parity.test.ts` deep-equality checks between
-  `FULL_TEMPLATE` and `docs/examples/full-manifest.yaml` confirm the two
-  sources stayed in lockstep.
+  unchanged. Fix round 1 (Finding 3, reviewer-flagged): reworded
+  `deny-pause-sentinel-forgery`'s `run:` line again — its first rewording's
+  "Ask the OPERATOR to do that themselves" had an ambiguous antecedent (the
+  nearest noun phrase was the just-forbidden sentinel write, not the
+  operator's actual recovery action); it now points explicitly at "the
+  operator-only command named under Required" instead, without
+  reintroducing `pause`/`resume` into the `run:` text itself.
+
+  New/updated tests: `tests/cli/init-no-agent-facing-pause-hint.test.ts` is
+  a repo-wide guard over every agent-facing `ux.run` line the init/describe
+  surface can emit: `manifest.policies[].ux.run` AND
+  `manifest.policy_packs[].config.ux.run` (understanding-before-execution,
+  branch-protection, post-merge-gate) across `FULL_TEMPLATE`,
+  `SOLO_TEMPLATE`, `TEAM_TEMPLATE`, and `docs/examples/full-manifest.yaml`,
+  plus the Custom composer (`composeCustom()` in
+  `src/cli/init/composer.ts`, `harness init --interactive`'s Custom
+  profile) with every composable pack and policy selected. Fix round 1
+  (Finding 1, reviewer-flagged as a MEDIUM coverage gap) added the
+  `policy_packs`/composer coverage and the `harness gate disable`/`harness
+  gate enable` sibling-verb check — the original guard only walked
+  `manifest.policies[].ux.run`, so a kill-switch hint reworded into a
+  policy pack's `ux.run` (or into the Custom composer's own copy) would
+  have passed both this guard and the pre-existing parity tests
+  unnoticed. Each scanned source also now asserts it found at least one
+  `ux.run` line (Finding 2): before the round-1 fix, `SOLO_TEMPLATE` has
+  zero top-level `policies:` entries, so that arm silently scanned zero
+  lines under the original narrower guard and could not have caught
+  anything. A "see also" citation to
+  `docs/okf/pause-vs-gate-kill-switch.md` stays allow-listed as
+  non-actionable, and a dedicated assertion pins that
+  `gate-prod-destructive`'s `ux.run` has exactly its two legitimate
+  entries left. Regenerated `docs/examples/full-manifest.expected.yaml`
+  (the `harness describe` golden fixture) to match. Coverage note
+  (Finding 4, reviewer-flagged as inaccurate): the existing
+  `tests/cli/init-full-template-parity.test.ts` is the test that
+  deep-equality-checks `FULL_TEMPLATE` against
+  `docs/examples/full-manifest.yaml` (including each policy_pack's
+  `config`, so its `ux.run` too); `tests/cli/init-templates-ux-parity.test.ts`
+  is a separate drift guard that instead pins `FULL_TEMPLATE` /
+  `SOLO_TEMPLATE` / `TEAM_TEMPLATE` / the Custom composer's policy_pack
+  `ux` against the canonical `defaultUx()` functions in
+  `src/policy-packs/builtin/*.ts`, not against `full-manifest.yaml`.
 
 - **SECURITY: `harness apply`'s generated Claude Code `settings.json` hook
   `timeout` was emitted in the manifest's `budget_ms` unit unconverted, so

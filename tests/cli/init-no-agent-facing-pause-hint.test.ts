@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import { SOLO_TEMPLATE, TEAM_TEMPLATE } from "../../src/cli/init/profiles.js";
+import { COMPOSABLE_PACKS, COMPOSABLE_POLICIES, composeCustom } from "../../src/cli/init/composer.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
 // Regression guard for task 70781cf6: the agent-facing deny envelope of
@@ -25,22 +26,67 @@ import { parseManifest, type Manifest } from "../../src/schema/index.js";
 // every shipped init template and the reference manifest, is agent-facing
 // and therefore in scope.
 //
+// COVERAGE (fix round 1, Finding 1): `ux.run` reaches the agent through
+// THREE distinct rendering paths, all via the same `renderAgentFacing`
+// engine, and the original guard only walked the first:
+//   (a) `manifest.policies[].ux.run` — the reference/Risk-Gate policies.
+//   (b) `manifest.policy_packs[].config.ux.run` — the built-in policy
+//       packs (understanding-before-execution, branch-protection,
+//       post-merge-gate) carry their own `ux` block under `config`,
+//       structurally separate from `policies[]`.
+//   (c) the Custom composer (`harness init --interactive`, composeCustom()
+//       in src/cli/init/composer.ts) assembles its own `ux.run` text for
+//       five reference policies and the two composable packs, entirely in
+//       memory and independently of FULL_TEMPLATE/SOLO_TEMPLATE/
+//       TEAM_TEMPLATE/full-manifest.yaml. tests/cli/init-templates-ux-parity.test.ts
+//       already imports composeCustom for its own drift checks; this guard
+//       follows the same pattern.
+// agentFacingRunLines() below walks (a) and (b) for every SOURCES entry;
+// the fifth SOURCES entry exercises the composer with every composable
+// pack and policy selected, so (c) is covered too.
+//
 // One legitimate, non-actionable exception is allow-listed: the "see also"
 // link to docs/okf/pause-vs-gate-kill-switch.md, which the three
 // kill-switch deny policies' own `run:` text points operators/readers at
 // for the honest trust model. That is a doc citation, not a recommendation
 // to run pause/resume, and its filename happens to contain the substring
 // "pause".
+//
+// LIMITATION (documented, not fixed here): this is a literal-vocabulary
+// guard, not a semantic one. KILL_SWITCH_WORD also catches the sibling
+// kill switches `harness gate disable` / `harness gate enable` (same
+// silence-every-gate effect as pause/resume), but a paraphrase that avoids
+// all of these literal words — e.g. "silence every gate" — is NOT caught.
+// Finding 3 of task 70781cf6's fix round 1 reworded exactly such a line by
+// hand, with reviewer sign-off; this guard cannot substitute for that
+// review, only for the specific vocabulary it checks.
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..", "..");
 const REFERENCE_YAML = path.join(REPO_ROOT, "docs", "examples", "full-manifest.yaml");
 
 const ALLOWED_DOC_LINK = "docs/okf/pause-vs-gate-kill-switch.md";
-const KILL_SWITCH_WORD = /\b(pause|resume)\b/i;
+const KILL_SWITCH_WORD = /\b(pause|resume)\b|\bgate\s+(?:disable|enable)\b/i;
 
 function stripAllowedDocLink(text: string): string {
   return text.split(ALLOWED_DOC_LINK).join("");
+}
+
+// Finding 1(b): manifest.policy_packs[].config.ux.run. `config` is an
+// untyped `Record<string, unknown>` in the schema (each pack owns its own
+// config shape), so `ux`/`run` are read defensively rather than assumed.
+function packUxRunLines(manifest: Manifest): Array<{ policy: string; line: string }> {
+  const out: Array<{ policy: string; line: string }> = [];
+  for (const pack of manifest.policy_packs) {
+    const ux = pack.config.ux;
+    if (!ux || typeof ux !== "object") continue;
+    const run = (ux as { run?: unknown }).run;
+    if (!Array.isArray(run)) continue;
+    for (const line of run) {
+      if (typeof line === "string") out.push({ policy: `pack:${pack.name}`, line });
+    }
+  }
+  return out;
 }
 
 function agentFacingRunLines(manifest: Manifest): Array<{ policy: string; line: string }> {
@@ -51,6 +97,7 @@ function agentFacingRunLines(manifest: Manifest): Array<{ policy: string; line: 
       out.push({ policy: policy.name, line });
     }
   }
+  out.push(...packUxRunLines(manifest));
   return out;
 }
 
@@ -62,14 +109,39 @@ const SOURCES: Array<{ name: string; load: () => Manifest }> = [
     name: "docs/examples/full-manifest.yaml",
     load: () => parseManifest(parseYaml(fs.readFileSync(REFERENCE_YAML, "utf8"))),
   },
+  {
+    // Finding 1(c): the Custom composer builds its manifest in memory. Pick
+    // every composable pack and policy so every ux.run line the composer
+    // can emit is scanned in one pass, not just whatever a default
+    // selection would happen to include.
+    name: "composeCustom(all packs + policies)",
+    load: () => {
+      const composed = composeCustom({
+        packs: COMPOSABLE_PACKS.map((p) => p.key),
+        mcps: [],
+        policies: COMPOSABLE_POLICIES.map((p) => p.key),
+      });
+      return parseManifest(parseYaml(composed.yaml));
+    },
+  },
 ];
 
 describe("no agent-facing ux.run line recommends the pause/resume kill switch (task 70781cf6)", () => {
   it.each(SOURCES)(
     "$name: no policy's ux.run line names pause or resume as a course of action",
-    ({ load }) => {
+    ({ name, load }) => {
       const manifest = load();
-      const offenders = agentFacingRunLines(manifest).filter(({ line }) =>
+      const lines = agentFacingRunLines(manifest);
+      // Finding 2: an empty scan is not a passing scan — it means the
+      // guard checked nothing. Before Finding 1's fix, SOLO_TEMPLATE had
+      // zero top-level `policies:` entries, so this arm scanned zero lines
+      // and could never have caught anything; it is only checked (via its
+      // policy_packs[].config.ux.run) starting with this fix.
+      expect(
+        lines.length,
+        `${name}: scanned zero ux.run lines — the guard verified nothing`,
+      ).toBeGreaterThan(0);
+      const offenders = lines.filter(({ line }) =>
         KILL_SWITCH_WORD.test(stripAllowedDocLink(line)),
       );
       expect(
