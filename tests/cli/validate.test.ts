@@ -1572,6 +1572,36 @@ ${opts.hooksYaml ?? "hooks: []\n"}${opts.policyPacksYaml ?? ""}policies: []
     expect(marginDiags(result.diagnostics)).toHaveLength(1);
   });
 
+  // Fix round 1, finding 3 (review 2026-08-09): a shell metacharacter
+  // glued directly onto the subcommand with no whitespace — a chained
+  // `; next-command` or a wrapping double quote from `sh -c "..."` — used
+  // to under-match under the whitespace-or-end-only trailing boundary.
+  it("matcher fix: a semicolon-chained invocation (`...intercept; echo done`) is still classified and checked", () => {
+    const home = fixtureWithGroundingMcp({
+      timeoutMs: 5000,
+      hooksYaml: DIRECT_HOOK(1000, "harness policy intercept; echo done"),
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(marginDiags(result.diagnostics)).toHaveLength(1);
+  });
+
+  it('matcher fix: a quote-wrapped invocation (`sh -c "...intercept"`) is still classified and checked', () => {
+    const home = fixtureWithGroundingMcp({
+      timeoutMs: 5000,
+      hooksYaml: DIRECT_HOOK(1000, 'sh -c "harness policy intercept"'),
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(marginDiags(result.diagnostics)).toHaveLength(1);
+  });
+
   it("an unrelated command (not `policy intercept`) with a low budget_ms is not flagged", () => {
     const home = fixtureWithGroundingMcp({
       timeoutMs: 5000,

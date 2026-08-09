@@ -568,7 +568,10 @@ export function checkTemplatePolicyDrift(manifest: Manifest): Diagnostic[] {
 // own pending verdict) and once by the ledger round-trip it is waiting
 // on. `budget_ms` below `requiredHookBudgetMs(health.timeout_ms)`
 // (src/cli/policy/intercept.ts — see that function's doc comment for the
-// full derivation from `realLedgerClient`'s own two round-trip shapes)
+// full derivation from `realLedgerClient`'s own two round-trip shapes,
+// INCLUDING the "KNOWN RESIDUAL" paragraph there: this check guarantees
+// delivery on the pure-timeout hang shape only, not on a query() that
+// degrades via a non-timeout ledger error and then hangs on record())
 // means a merely SLOW (not even hard-down) ledger can get the hook
 // killed before its fail-closed `deny` / `deny-degraded` JSON reaches
 // stdout — silently turning the verdict into an unintended allow,
@@ -614,6 +617,18 @@ function escapeRegExp(s: string): string {
  * (src/cli/policy/intercept.ts) for the pack-hook subcommand names,
  * which that function does not itself cover (it only recognises `policy
  * intercept`).
+ *
+ * Trailing-boundary note (review 2026-08-09, fix round 1, finding 3):
+ * `isPolicyInterceptCommand` widened ITS trailing boundary to also accept
+ * a semicolon/quote glued directly onto the subcommand word, because it
+ * classifies OPERATOR-authored `manifest.hooks[]` commands. This
+ * function's callers only ever see the exact, harness-generated pack
+ * command strings (`BLOCKER_COMMAND` constants in the
+ * `src/policy-packs/builtin/*.ts` sources) — a fixed, known set this
+ * codebase controls byte-for-byte — so the narrower whitespace-or-end
+ * boundary here is deliberately left as is rather than mirrored; there is
+ * no operator-authored input on this path for a glued shell metacharacter
+ * to appear in.
  */
 function commandInvokesSubcommand(command: string, subcommand: string): boolean {
   const pattern = subcommand.split(/\s+/).map(escapeRegExp).join("\\s+");
@@ -624,11 +639,53 @@ function isLedgerConsultingPackCommand(command: string): boolean {
   return LEDGER_CONSULTING_PACK_SUBCOMMANDS.some((s) => commandInvokesSubcommand(command, s));
 }
 
-function collectLedgerConsultingBlockingHooks(manifest: Manifest): Hook[] {
-  const direct = manifest.hooks.filter(
-    (h) => h.blocking === "hard" && isPolicyInterceptCommand(h.command),
-  );
-  const fromPacks: Hook[] = [];
+// The one pack subcommand among LEDGER_CONSULTING_PACK_SUBCOMMANDS whose
+// OWN degraded-ledger handling fails OPEN (allow) rather than closed —
+// see hook-post-merge-gate.ts's explicit "Fail posture: OPEN" header
+// comment and its `post-merge-gate fails open, allowing` diagnostics.
+// `branch-protection` / `pre-tool-use` (understanding-before-execution) /
+// `codex-pre-tool-use` all fail CLOSED absent ledger evidence (a missing
+// or degraded query reads as "no evidence", which those hooks block or
+// ask on, not allow). Tracked separately so the diagnostic below can
+// stop attributing a fail-closed verdict this hook never produces to it
+// (review 2026-08-09, fix round 1, finding 2).
+const FAIL_OPEN_ON_DEGRADED_PACK_SUBCOMMAND = "pack hook post-merge-gate";
+
+/**
+ * A ledger-consulting blocking hook, tagged with the shape of ledger
+ * traffic it actually performs — used only to pick the right explanatory
+ * text in `checkHookBudgetLedgerMargin`'s diagnostic message below, never
+ * to change the numeric threshold (`required` stays the same
+ * `requiredHookBudgetMs(health.timeout_ms)` floor for every hook here;
+ * see that message's own comment for why a per-kind lower bound isn't
+ * derived instead).
+ */
+interface LedgerConsultingHook {
+  hook: Hook;
+  /**
+   * True for a direct `manifest.hooks[]` entry invoking `harness policy
+   * intercept` — the ledger client whose `query()` + deny-degraded
+   * `record()` retry `requiredHookBudgetMs`'s 2T+3R is actually derived
+   * from. False for a pack-contributed blocker, which only ever calls
+   * `queryLedgerByTag` (open session, one `querySummary`, dispose) —
+   * `src/cli/pack/hook-branch-protection.ts`,
+   * `hook-codex-pre-tool-use.ts`, `hook-pre-tool-use.ts`,
+   * `hook-post-merge-gate.ts` — never `ledger_add`, so it has no
+   * deny-degraded audit-retry step of its own and its real worst case is
+   * bounded at up to 2×timeout_ms, not 2T+3R.
+   */
+  isPolicyInterceptHook: boolean;
+  /** True only for the post-merge-gate pack subcommand (see the constant
+   * above) — its own decision on a degraded/unreachable ledger is to
+   * allow, not deny. */
+  isFailOpenOnDegraded: boolean;
+}
+
+function collectLedgerConsultingBlockingHooks(manifest: Manifest): LedgerConsultingHook[] {
+  const direct: LedgerConsultingHook[] = manifest.hooks
+    .filter((h) => h.blocking === "hard" && isPolicyInterceptCommand(h.command))
+    .map((hook) => ({ hook, isPolicyInterceptHook: true, isFailOpenOnDegraded: false }));
+  const fromPacks: LedgerConsultingHook[] = [];
   for (const pack of manifest.policy_packs) {
     if (!pack.enabled) continue;
     for (const runtime of KNOWN_RUNTIMES) {
@@ -639,7 +696,14 @@ function collectLedgerConsultingBlockingHooks(manifest: Manifest): Hook[] {
       if (!resolved) continue;
       for (const hook of resolved.contribution.hooks) {
         if (hook.blocking === "hard" && isLedgerConsultingPackCommand(hook.command)) {
-          fromPacks.push(hook);
+          fromPacks.push({
+            hook,
+            isPolicyInterceptHook: false,
+            isFailOpenOnDegraded: commandInvokesSubcommand(
+              hook.command,
+              FAIL_OPEN_ON_DEGRADED_PACK_SUBCOMMAND,
+            ),
+          });
         }
       }
     }
@@ -661,7 +725,8 @@ export function checkHookBudgetLedgerMargin(manifest: Manifest): Diagnostic[] {
   const required = requiredHookBudgetMs(ledgerTimeoutMs);
   const seen = new Set<string>();
   const diags: Diagnostic[] = [];
-  for (const hook of collectLedgerConsultingBlockingHooks(manifest)) {
+  for (const entry of collectLedgerConsultingBlockingHooks(manifest)) {
+    const { hook, isPolicyInterceptHook, isFailOpenOnDegraded } = entry;
     // Both KNOWN_RUNTIMES resolutions of an enabled pack commonly yield a
     // hook with the same (name, budget_ms) pair — only the match/command
     // wording differs per runtime. De-dupe so one misconfigured budget
@@ -670,20 +735,53 @@ export function checkHookBudgetLedgerMargin(manifest: Manifest): Diagnostic[] {
     if (seen.has(key)) continue;
     seen.add(key);
     if (hook.budget_ms >= required) continue;
+    const preamble =
+      `hook "${hook.name}" carries budget_ms=${hook.budget_ms}, below the ${required}ms this ` +
+      `manifest's grounding-mcp health.timeout_ms=${ledgerTimeoutMs}ms requires (2×timeout_ms ` +
+      `+ 3× the deny-degraded audit-retry budget — see requiredHookBudgetMs in ` +
+      `src/cli/policy/intercept.ts for the derivation`;
+    let message: string;
+    if (isPolicyInterceptHook) {
+      message =
+        `${preamble}, INCLUDING that function's "KNOWN RESIDUAL" paragraph: clearing ${required}ms ` +
+        `only guarantees the fail-closed verdict on the pure-timeout hang shape, not on a ledger ` +
+        `query that errors non-timeout and then hangs on the audit write). A merely SLOW (not even ` +
+        `hard-down) ledger can get this blocking hook killed by the runtime's outer hook timeout ` +
+        `before its fail-closed deny JSON reaches stdout — both Claude Code and Codex then read the ` +
+        `kill as allow, defeating the deny-degraded fix (task f1aea826) on exactly this hang shape. ` +
+        `Raise budget_ms to at least ${required}, or lower tools.mcp.grounding-mcp.health.timeout_ms ` +
+        `(which lowers this requirement too, at the cost of a stricter ledger-latency budget); see ` +
+        `docs/okf/gate-fail-posture-matrix.md.`;
+    } else {
+      // Pack-contributed blocker: only queries the ledger (no ledger_add,
+      // no deny-degraded audit retry of its own), so the 2T+3R floor
+      // above is a deliberately conservative carryover from the direct
+      // `harness policy intercept` threshold, not this hook's own
+      // derived worst case (which is bounded at up to 2×timeout_ms for
+      // the query alone) — kept uniform rather than a separately-tested,
+      // lower per-kind bound (review 2026-08-09, fix round 1, finding 2).
+      const consequence = isFailOpenOnDegraded
+        ? `this hook's OWN decision on a degraded or unreachable ledger is to fail OPEN (allow), ` +
+          `not deny — see hook-post-merge-gate.ts's "Fail posture: OPEN" note — so a hook killed by ` +
+          `the runtime's outer timeout here reaches the same allow outcome its own degraded-handling ` +
+          `would already choose. It is still flagged here so a merely SLOW (not even hard-down) ` +
+          `ledger cannot needlessly stall the gate up to its outer timeout, not because a fail-closed ` +
+          `verdict is at risk`
+        : `a merely SLOW (not even hard-down) ledger can still get this hook killed by the runtime's ` +
+          `outer hook timeout before it can even complete that query, defeating its own fail-closed ` +
+          `default on exactly this hang shape`;
+      message =
+        `${preamble}). This pack-contributed hook only QUERIES the ledger (queryLedgerByTag: open ` +
+        `session, one querySummary, dispose) — it never calls ledger_add, so it has no ` +
+        `deny-degraded audit-retry step of its own; ${consequence}. Raise budget_ms to at least ` +
+        `${required}, or lower tools.mcp.grounding-mcp.health.timeout_ms (which lowers this ` +
+        `requirement too, at the cost of a stricter ledger-latency budget); see ` +
+        `docs/okf/gate-fail-posture-matrix.md.`;
+    }
     diags.push({
       severity: "error",
       path: `hooks[${hook.name}].budget_ms`,
-      message:
-        `hook "${hook.name}" carries budget_ms=${hook.budget_ms}, below the ${required}ms this ` +
-        `manifest's grounding-mcp health.timeout_ms=${ledgerTimeoutMs}ms requires (2×timeout_ms ` +
-        `+ 3× the deny-degraded audit-retry budget — see requiredHookBudgetMs in ` +
-        `src/cli/policy/intercept.ts for the derivation). A merely SLOW (not even hard-down) ledger ` +
-        `can get this blocking hook killed by the runtime's outer hook timeout before its fail-closed ` +
-        `deny JSON reaches stdout — both Claude Code and Codex then read the kill as allow, ` +
-        `defeating the deny-degraded fix (task f1aea826) on exactly this hang shape. Raise budget_ms ` +
-        `to at least ${required}, or lower tools.mcp.grounding-mcp.health.timeout_ms (which lowers ` +
-        `this requirement too, at the cost of a stricter ledger-latency budget); see ` +
-        `docs/okf/gate-fail-posture-matrix.md.`,
+      message,
     });
   }
   return diags;

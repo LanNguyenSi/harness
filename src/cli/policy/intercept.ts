@@ -422,14 +422,24 @@ export function auditRetryTimeoutMs(timeoutMs: number): number {
  * `policy` and `intercept` as adjacent, whitespace-separated tokens,
  * preceded by start-of-string / whitespace / a path separator (so
  * `mypolicy intercept` inside one longer token cannot match) and followed
- * by whitespace or end-of-string. A false negative here degrades to the
- * pre-existing verbatim behaviour (the hook is simply not classified as
- * ledger-consulting, so the margin check has nothing to say about it) —
- * not a runtime bypass; the dispatch this check advises about is
- * unaffected either way.
+ * by whitespace, end-of-string, or a semicolon/quote character (`;`, `"`,
+ * `'`) immediately abutting the word — the shape a chained shell command
+ * (`harness policy intercept; echo done`) or an embedded `sh -c
+ * "harness policy intercept"` wrapper produces, where nothing whitespace
+ * separates `intercept` from the next token (review 2026-08-09, fix round
+ * 1, finding 3). Still not exhaustive: a trailing `)`, `|`, `&`, or
+ * backtick immediately abutting the word (e.g. `$(harness policy
+ * intercept)`) is a KNOWN, deliberately-unclosed gap — widening further
+ * risks matching inside an unrelated longer token with no whitespace
+ * boundary at all, and the shapes above already cover the realistic
+ * manifest-authoring patterns this matcher exists for. A false negative
+ * here degrades to the pre-existing verbatim behaviour (the hook is
+ * simply not classified as ledger-consulting, so the margin check has
+ * nothing to say about it) — not a runtime bypass; the dispatch this
+ * check advises about is unaffected either way.
  */
 export function isPolicyInterceptCommand(command: string): boolean {
-  return /(?:^|[\s/\\])policy\s+intercept(?:\s|$)/.test(command);
+  return /(?:^|[\s/\\])policy\s+intercept(?:\s|$|[;"'])/.test(command);
 }
 
 /**
@@ -440,6 +450,20 @@ export function isPolicyInterceptCommand(command: string): boolean {
  * halves are pinned against the real client in
  * tests/e2e/policy-intercept.test.ts ("hook-budget-ledger-margin
  * derivation (task d20a7e0c)").
+ *
+ * SCOPE, stated precisely (review 2026-08-09, fix round 1): this is the
+ * worst case on the PURE-TIMEOUT HANG SHAPE — the shape where the
+ * `query()` call that degrades does so by tripping `LedgerSession`'s own
+ * session-wide `timedOut` latch (src/policies/ledger-client.ts), which is
+ * what lets the retry sequence below start from an INSTANT first
+ * `record()` attempt. A query() that instead degrades via a NON-timeout
+ * path — `ledger_summary` coming back a genuine JSON-RPC error, an
+ * unparseable payload, or a payload missing the `entries` shape
+ * (`querySummary`'s non-timeout `degraded` branches in
+ * src/policies/ledger-client.ts) — never sets that latch, so it falls
+ * OUTSIDE this bound. See the KNOWN RESIDUAL paragraph at the end of this
+ * comment; do not read this function, or the `checkHookBudgetLedgerMargin`
+ * diagnostic it backs, as a blanket worst-case guarantee.
  *
  * `T` = the ledger's own per-call budget (`health.timeout_ms`, defaulted
  * to 5000 exactly like `realLedgerClient` itself). `R` =
@@ -456,27 +480,51 @@ export function isPolicyInterceptCommand(command: string): boolean {
  *      still time out on the following `ledger_summary` — the case a
  *      naive "1×T" assumption undercounts.
  *
- *   2. the deny-degraded audit retry — up to 3×R. Once query() degrades,
- *      the pooled session's `timedOut` latch makes the FIRST `record()`
- *      attempt on it instant (see `realLedgerClient`'s own doc comment
- *      above). The ONE reserved retry then opens a FRESH session budgeted
- *      at R and calls `recordPolicyDecisionOnSession`
- *      (src/runtime/ledger-record.ts), which can spend up to three
- *      independent R-bounded round-trips before it can report success or
- *      give up: the fresh session's own `initialize` handshake, the first
- *      `ledger_add` attempt at `type: "policy_decision"`, and — only
- *      reached when that attempt comes back a genuine JSON-RPC error
- *      rather than a transport timeout (an older/incompatible
- *      grounding-mcp rejecting the newer type) — the legacy
- *      `type: "fact"` fallback `ledger_add`.
+ *   2. the deny-degraded audit retry — up to 3×R. On the pure-timeout
+ *      hang shape, the pooled session's `timedOut` latch (tripped by the
+ *      query()-side timeout itself) makes the FIRST `record()` attempt on
+ *      it instant (see `realLedgerClient`'s own doc comment above). The
+ *      ONE reserved retry then opens a FRESH session budgeted at R and
+ *      calls `recordPolicyDecisionOnSession` (src/runtime/ledger-
+ *      record.ts), which can spend up to three independent R-bounded
+ *      round-trips before it can report success or give up: the fresh
+ *      session's own `initialize` handshake, the first `ledger_add`
+ *      attempt at `type: "policy_decision"`, and — only reached when that
+ *      attempt comes back a genuine JSON-RPC error rather than a
+ *      transport timeout (an older/incompatible grounding-mcp rejecting
+ *      the newer type) — the legacy `type: "fact"` fallback `ledger_add`.
  *
  * query() must complete (or degrade) before any policy decision — and so
  * any record() — is computed (`intercept()`'s per-policy loop in
  * src/runtime/intercept.ts awaits `evaluateOnePolicy`, which calls
  * `ledger.query`, before it calls `ledger.record`), and the retry only
- * starts after the first (instant) record attempt already failed, so the
- * two stages are SEQUENTIAL within one hook invocation: worst case
- * = 2T + 3R.
+ * starts after the first record() attempt on the pooled session already
+ * failed, so the two stages are SEQUENTIAL within one hook invocation:
+ * worst case ON THE PURE-TIMEOUT HANG SHAPE = 2T + 3R.
+ *
+ * KNOWN RESIDUAL (review 2026-08-09, fix round 1): when `query()` instead
+ * degrades via one of the NON-timeout branches named in the SCOPE
+ * paragraph above, the pooled session's `timedOut` latch is never set, so
+ * `record()`'s own first attempt is a REAL round-trip too — up to T for
+ * the `type: "policy_decision"` `ledger_add` attempt, plus another up to
+ * T for the legacy `type: "fact"` fallback if that attempt is itself
+ * rejected non-timeout — BEFORE the 3R retry sequence even starts. Worst
+ * case on this "error-then-hang" shape is therefore up to 4T + 3R, not
+ * 2T + 3R: 23750ms at the shipped T=5000 default, against this
+ * function's 13750ms. This formula is DELIBERATELY NOT raised to
+ * 4T + 3R: doing so would fail `checkHookBudgetLedgerMargin` against the
+ * shipped, reviewer-confirmed-clean fresh-init budget of 15000ms
+ * (src/cli/init/templates.ts, task 7bf47554/#414 — out of scope here) at
+ * the same T=5000 default, since 15000 < 23750. The guard this function
+ * backs GUARANTEES delivery of the fail-closed verdict on the
+ * pure-timeout hang shape, but NOT on this error-then-hang shape.
+ * Unlike an earlier draft of this note, this residual is NOT confined to
+ * one runtime projection: Claude Code and Codex both convert `budget_ms`
+ * into the outer hook-kill seconds via the identical `hookTimeoutSeconds`
+ * helper (src/cli/apply/generate-settings.ts, shared by
+ * generate-codex-config.ts) since task 7bf47554/#414, so a manifest at
+ * the shipped defaults is equally exposed on both — this was checked
+ * against both generators' current source, not assumed.
  */
 export function requiredHookBudgetMs(ledgerTimeoutMs: number): number {
   return 2 * ledgerTimeoutMs + 3 * auditRetryTimeoutMs(ledgerTimeoutMs);
