@@ -5,10 +5,13 @@ import * as path from "node:path";
 import {
   checkPolicyPackConfigs,
   checkPolicyPackSources,
+  KNOWN_RUNTIMES,
+  resolveBuiltin,
 } from "../../policy-packs/index.js";
 import { expandHome } from "../../runtime/expand-home.js";
 import { shippedOperatorOnlyPolicyNames } from "../init/templates.js";
-import type { Manifest } from "../../schema/index.js";
+import { isPolicyInterceptCommand, requiredHookBudgetMs } from "../policy/intercept.js";
+import type { Hook, Manifest } from "../../schema/index.js";
 import type { Diagnostic } from "./types.js";
 
 export interface CheckOptions {
@@ -557,6 +560,135 @@ export function checkTemplatePolicyDrift(manifest: Manifest): Diagnostic[] {
   return diags;
 }
 
+// Hook-budget-vs-ledger-timeout margin (task d20a7e0c, follow-up to
+// f1aea826/7bf47554). A blocking (`blocking: "hard"`) hook that consults
+// the evidence ledger before it can write its own decision is bounded
+// TWICE: once by its own `budget_ms` (the runtime's outer kill-timeout —
+// Claude Code and Codex both treat a KILLED hook as ALLOW, never as its
+// own pending verdict) and once by the ledger round-trip it is waiting
+// on. `budget_ms` below `requiredHookBudgetMs(health.timeout_ms)`
+// (src/cli/policy/intercept.ts — see that function's doc comment for the
+// full derivation from `realLedgerClient`'s own two round-trip shapes)
+// means a merely SLOW (not even hard-down) ledger can get the hook
+// killed before its fail-closed `deny` / `deny-degraded` JSON reaches
+// stdout — silently turning the verdict into an unintended allow,
+// defeating the deny-degraded fix (task f1aea826) on exactly the hang
+// shape it exists to close.
+//
+// Two hook populations are checked, both GENERICALLY — unlike
+// tests/runtime/hook-budget-ledger-margin.test.ts's pre-d20a7e0c version,
+// which hand-imported three specific pack modules and pinned a hardcoded
+// 15000ms floor instead of scaling with the manifest's own
+// health.timeout_ms:
+//   1. `manifest.hooks[]` entries that invoke `harness policy intercept`
+//      (recognised via `isPolicyInterceptCommand`, robust to how the
+//      operator or a local build spells the leading token — see that
+//      function's own doc comment for why a verbatim string compare
+//      under-recognises real manifests).
+//   2. Every hook an ENABLED `manifest.policy_packs[]` entry resolves to,
+//      for every runtime `harness apply` can target (`KNOWN_RUNTIMES`) —
+//      iterating whichever packs the operator actually has enabled
+//      through the shared `resolveBuiltin` registry lookup, not a
+//      hand-maintained list of specific pack modules. Only the subset
+//      whose command names one of the LEDGER_CONSULTING_PACK_SUBCOMMANDS
+//      below is checked: `solution-acceptance` / `solution-acceptance-
+//      writeguard` are DELIBERATELY excluded — they gate on a filesystem
+//      verdict marker the producer writes, never a live ledger
+//      round-trip (see solution-acceptance.ts's own header comment), so
+//      flagging them here would be a false positive.
+const LEDGER_CONSULTING_PACK_SUBCOMMANDS = [
+  "pack hook branch-protection",
+  "pack hook pre-tool-use",
+  "pack hook codex-pre-tool-use",
+  "pack hook post-merge-gate",
+] as const;
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Does `command` invoke `subcommand` as adjacent, whitespace-separated
+ * tokens, regardless of a leading interpreter/env-var prefix or a
+ * trailing flag? Mirrors `isPolicyInterceptCommand`'s own reasoning
+ * (src/cli/policy/intercept.ts) for the pack-hook subcommand names,
+ * which that function does not itself cover (it only recognises `policy
+ * intercept`).
+ */
+function commandInvokesSubcommand(command: string, subcommand: string): boolean {
+  const pattern = subcommand.split(/\s+/).map(escapeRegExp).join("\\s+");
+  return new RegExp(`(?:^|[\\s/\\\\])${pattern}(?:\\s|$)`).test(command);
+}
+
+function isLedgerConsultingPackCommand(command: string): boolean {
+  return LEDGER_CONSULTING_PACK_SUBCOMMANDS.some((s) => commandInvokesSubcommand(command, s));
+}
+
+function collectLedgerConsultingBlockingHooks(manifest: Manifest): Hook[] {
+  const direct = manifest.hooks.filter(
+    (h) => h.blocking === "hard" && isPolicyInterceptCommand(h.command),
+  );
+  const fromPacks: Hook[] = [];
+  for (const pack of manifest.policy_packs) {
+    if (!pack.enabled) continue;
+    for (const runtime of KNOWN_RUNTIMES) {
+      const resolved = resolveBuiltin(pack, runtime);
+      // Unresolvable packs (unknown source / unknown builtin name) are
+      // already flagged separately by checkPolicyPacks; nothing to
+      // classify here.
+      if (!resolved) continue;
+      for (const hook of resolved.contribution.hooks) {
+        if (hook.blocking === "hard" && isLedgerConsultingPackCommand(hook.command)) {
+          fromPacks.push(hook);
+        }
+      }
+    }
+  }
+  return [...direct, ...fromPacks];
+}
+
+export function checkHookBudgetLedgerMargin(manifest: Manifest): Diagnostic[] {
+  const grounding = manifest.tools.mcp.find(
+    (m) => m.name === "grounding-mcp" && m.enabled !== false,
+  );
+  // No wired producer: `harness policy intercept` falls back to the
+  // instant `degradedLedgerClient` (no subprocess, no wait), and a pack
+  // blocker with no grounding-mcp entry to query is a separate,
+  // already-reported misconfiguration (checkPolicyGroundingMcp). No live
+  // ledger round-trip exists here for a margin to protect.
+  if (!grounding) return [];
+  const ledgerTimeoutMs = grounding.health?.timeout_ms ?? 5000;
+  const required = requiredHookBudgetMs(ledgerTimeoutMs);
+  const seen = new Set<string>();
+  const diags: Diagnostic[] = [];
+  for (const hook of collectLedgerConsultingBlockingHooks(manifest)) {
+    // Both KNOWN_RUNTIMES resolutions of an enabled pack commonly yield a
+    // hook with the same (name, budget_ms) pair — only the match/command
+    // wording differs per runtime. De-dupe so one misconfigured budget
+    // is reported once, not twice.
+    const key = `${hook.name}:${hook.budget_ms}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (hook.budget_ms >= required) continue;
+    diags.push({
+      severity: "error",
+      path: `hooks[${hook.name}].budget_ms`,
+      message:
+        `hook "${hook.name}" carries budget_ms=${hook.budget_ms}, below the ${required}ms this ` +
+        `manifest's grounding-mcp health.timeout_ms=${ledgerTimeoutMs}ms requires (2×timeout_ms ` +
+        `+ 3× the deny-degraded audit-retry budget — see requiredHookBudgetMs in ` +
+        `src/cli/policy/intercept.ts for the derivation). A merely SLOW (not even hard-down) ledger ` +
+        `can get this blocking hook killed by the runtime's outer hook timeout before its fail-closed ` +
+        `deny JSON reaches stdout — both Claude Code and Codex then read the kill as allow, ` +
+        `defeating the deny-degraded fix (task f1aea826) on exactly this hang shape. Raise budget_ms ` +
+        `to at least ${required}, or lower tools.mcp.grounding-mcp.health.timeout_ms (which lowers ` +
+        `this requirement too, at the cost of a stricter ledger-latency budget); see ` +
+        `docs/okf/gate-fail-posture-matrix.md.`,
+    });
+  }
+  return diags;
+}
+
 // Phase 6 #2: surface pack-resolution problems at lint time, not at
 // `harness apply` time. Delegates to the shared `checkPolicyPackSources`
 // so the apply path (which now also fails loudly on these conditions)
@@ -614,6 +746,7 @@ export function runAssetChecks(
     ...checkPolicyPackConfigsAsDiagnostics(manifest),
     ...checkPolicyRiskWithoutEnvScope(manifest),
     ...checkPolicySelfAttestation(manifest),
+    ...checkHookBudgetLedgerMargin(manifest),
   ];
 }
 

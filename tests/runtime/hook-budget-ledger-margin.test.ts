@@ -43,6 +43,25 @@
 // evidence policy in that profile), so it is checked as a negative
 // control: the intended profile-independent floor is "raise it if you ship
 // it", not "every profile must ship one".
+//
+// UPDATE (task d20a7e0c): the `T + 2*auditRetryTimeoutMs` formula this file
+// originally used to derive `REQUIRED_SECONDS` UNDERSTATED the real worst
+// case (review 2026-08-08 measured ~10787ms wall time against the 5000ms
+// default, against a naive-formula prediction of ~7500ms) — see
+// `requiredHookBudgetMs`'s own doc comment in `src/cli/policy/intercept.ts`
+// for the corrected `2*health.timeout_ms + 3*auditRetryTimeoutMs` derivation
+// this file now sources `REQUIRED_SECONDS` from. That correction closes the
+// gap `HARD_FLOOR_BUDGET_MS` below existed to backstop; the hard floor is
+// kept anyway as an extra, still-real measured safety margin (15000ms > the
+// corrected ~13750ms requirement at the shipped 5000ms ledger timeout), not
+// because the formula is still wrong. This file also gained a sibling,
+// GENERIC guard (`checkHookBudgetLedgerMargin`, `src/cli/validate/
+// checks.ts`, exercised via `harness validate` / `harness doctor`) that
+// checks the same invariant against an ARBITRARY manifest's OWN
+// `health.timeout_ms` and OWN enabled `policy_packs[]`, instead of this
+// file's fixed set of hand-imported template/pack surfaces — the trailing
+// describe block below closes the loop by running it against the very
+// manifests this file already builds.
 
 import { parse as parseYaml } from "yaml";
 import { describe, expect, it } from "vitest";
@@ -54,7 +73,11 @@ import {
   type CustomSelection,
 } from "../../src/cli/init/composer.js";
 import { parseManifest, type Hook, type Manifest } from "../../src/schema/index.js";
-import { auditRetryTimeoutMs } from "../../src/cli/policy/intercept.js";
+import {
+  isPolicyInterceptCommand,
+  requiredHookBudgetMs,
+} from "../../src/cli/policy/intercept.js";
+import { checkHookBudgetLedgerMargin } from "../../src/cli/validate/checks.js";
 import { resolve as resolveBranchProtection } from "../../src/policy-packs/builtin/branch-protection.js";
 import { resolve as resolvePostMergeGate } from "../../src/policy-packs/builtin/post-merge-gate.js";
 import { resolve as resolveUnderstandingBeforeExecution } from "../../src/policy-packs/builtin/understanding-before-execution.js";
@@ -98,14 +121,15 @@ function outerTimeoutSeconds(budgetMs: number): number {
 
 /**
  * Worst-case ledger round-trip a blocking hook may have to complete before
- * it can write its decision: the query's own budget (`health.timeout_ms`)
- * plus a deny-degraded audit-write retry's two calls (initialize +
- * ledger_add), each bounded by `auditRetryTimeoutMs` — the same bound
- * `realLedgerClient`'s own doc comment states (src/cli/policy/intercept.ts,
- * the block above `auditRetryTimeoutMs`'s call sites).
+ * it can write its decision, in outer (Claude Code / Codex) timeout
+ * seconds. Delegates to `requiredHookBudgetMs` (src/cli/policy/
+ * intercept.ts) — see that function's doc comment for the full
+ * `2*health.timeout_ms + 3*auditRetryTimeoutMs` derivation (task d20a7e0c;
+ * supersedes this file's original, understated `T + 2*auditRetryTimeoutMs`
+ * formula).
  */
 function requiredMarginSeconds(ledgerTimeoutMs: number): number {
-  return Math.ceil((ledgerTimeoutMs + 2 * auditRetryTimeoutMs(ledgerTimeoutMs)) / 1000);
+  return Math.ceil(requiredHookBudgetMs(ledgerTimeoutMs) / 1000);
 }
 
 const fullManifest = loadFullTemplateManifest();
@@ -114,22 +138,22 @@ const LEDGER_TIMEOUT_MS = groundingMcp?.health?.timeout_ms ?? 5000;
 const REQUIRED_SECONDS = requiredMarginSeconds(LEDGER_TIMEOUT_MS);
 
 /**
- * HARD FLOOR (task 7bf47554, fix round 2 of fix round 2): the formula-based
- * `REQUIRED_SECONDS` above (health.timeout_ms + 2x auditRetryTimeoutMs =
- * ~8s for the shipped 5000ms grounding-mcp health timeout) UNDERSTATES the
- * measured real-world worst case. `src/cli/init/templates.ts`'s budget-note
- * comment above `require-review-evidence` (and this task's CHANGELOG entry)
- * both pin the measured subprocess wall-time worst case at ~10.8-13.75s —
- * a live ledger query PLUS a fresh-session deny-degraded retry (initialize
- * + ledger_add) is slower in practice than the formula's idealised sum.
- * 15000ms (the value every surface in this file is pinned to) is the
- * actual shipped floor with real margin over that ~13.75s figure, not just
- * over the ~8s formula. Asserting the formula alone would let a partial
- * regression into [8000, 13000]ms — clearing REQUIRED_SECONDS but still
- * under the measured worst case — pass green; this constant closes that
- * gap. Tightening this number is exactly the fuller drift-guard task
- * d20a7e0c is tracking (a general schema-level minimum, not one hardcoded
- * here); until that lands, this is the enforced floor.
+ * HARD FLOOR (task 7bf47554, fix round 2 of fix round 2; formula corrected
+ * by task d20a7e0c). `REQUIRED_SECONDS` above now derives from
+ * `requiredHookBudgetMs`'s `2*health.timeout_ms + 3*auditRetryTimeoutMs`
+ * formula (~13750ms / 14s for the shipped 5000ms grounding-mcp health
+ * timeout) — a correction of this file's original, understated
+ * `health.timeout_ms + 2*auditRetryTimeoutMs` (~8s) estimate, which review
+ * 2026-08-08 measured against a REAL ~10787ms wall time. 15000ms (the value
+ * every surface in this file is pinned to) still carries real margin above
+ * even the CORRECTED ~13750ms figure, not just the original ~8s formula —
+ * this constant keeps that extra, measured safety margin asserted
+ * explicitly rather than relying on the formula's own margin alone.
+ * Tightening or retiring this constant is a separate, deliberate decision
+ * about the shipped template defaults themselves (out of scope for
+ * d20a7e0c, which fixed the FORMULA and added the generic validate/doctor
+ * guard below, not the shipped numbers — see task d20a7e0c's own scope
+ * note: "Template-Default-Teil dieses Tasks ist ERLEDIGT").
  */
 const HARD_FLOOR_BUDGET_MS = 15000;
 
@@ -163,8 +187,15 @@ function assertHookMeetsHardFloor(hook: Hook): void {
 }
 
 function blockingInterceptHooks(manifest: Manifest): Hook[] {
+  // isPolicyInterceptCommand (task d20a7e0c) rather than a verbatim
+  // `h.command.trim() === "harness policy intercept"` compare: every
+  // manifest this file loads is a harness-generated template/composer
+  // surface, so the literal always matches either way — using the shared
+  // classifier here keeps this file dogfooding the SAME matcher
+  // `checkHookBudgetLedgerMargin` (validate/checks.ts) relies on for
+  // operator-authored manifests, instead of a second, narrower copy.
   return manifest.hooks.filter(
-    (h) => h.command.trim() === "harness policy intercept" && h.blocking === "hard",
+    (h) => isPolicyInterceptCommand(h.command) && h.blocking === "hard",
   );
 }
 
@@ -268,19 +299,53 @@ describe("blocking ledger-consulting hooks clear the ledger's worst-case round-t
     expect(outerTimeoutSeconds(staleHook.budget_ms)).toBeLessThan(REQUIRED_SECONDS);
   });
 
-  it("control: a hook at 10000ms budget clears the ~8s formula margin but still fails the 15000ms hard floor (the partial-regression band the hard floor exists to catch)", () => {
+  it("control: a hook at 14000ms budget clears the (now corrected, ~13750ms) formula margin but still fails the 15000ms hard floor (the narrow partial-regression band the hard floor exists to catch)", () => {
+    // Pre-d20a7e0c this control used 10000ms against the UNDERSTATED ~8s
+    // formula; the corrected formula (2*5000 + 3*1250 = 13750ms, 14s) puts
+    // 10000ms below the formula itself now, so it no longer demonstrates a
+    // "clears the formula but not the hard floor" band. 14000ms sits in
+    // that (now much narrower — [13750, 15000)ms) band instead.
     const partialRegressionHook: Hook = {
       name: "control-only-partial",
       event: "PreToolUse",
       command: "harness policy intercept",
       blocking: "hard",
-      budget_ms: 10000,
+      budget_ms: 14000,
     };
-    // Clears the looser formula...
+    // Clears the corrected formula...
     expect(outerTimeoutSeconds(partialRegressionHook.budget_ms)).toBeGreaterThanOrEqual(
       REQUIRED_SECONDS,
     );
     // ...but NOT the hard, measurement-derived floor.
     expect(partialRegressionHook.budget_ms).toBeLessThan(HARD_FLOOR_BUDGET_MS);
+  });
+});
+
+// Generic guard (task d20a7e0c): checkHookBudgetLedgerMargin
+// (src/cli/validate/checks.ts, wired into `harness validate` /
+// `harness doctor`) checks the SAME invariant as this file's hand-imported,
+// per-surface assertions above, but generically — it reads an arbitrary
+// manifest's OWN `tools.mcp[grounding-mcp].health.timeout_ms` and iterates
+// its OWN enabled `policy_packs[]` through the shared `resolveBuiltin`
+// registry lookup, rather than this file's fixed list of specifically-
+// imported template/pack modules. Running it against the very manifests
+// built above closes the loop: the shipped defaults these hand-written
+// assertions already pin also satisfy the durable, general-purpose guard
+// an operator's OWN (differently-shaped) manifest gets checked against.
+describe("checkHookBudgetLedgerMargin — the generic guard agrees with the per-surface pins above (task d20a7e0c)", () => {
+  it("FULL_TEMPLATE reports zero hook-budget-margin diagnostics", () => {
+    expect(checkHookBudgetLedgerMargin(fullManifest)).toEqual([]);
+  });
+
+  it("TEAM_TEMPLATE reports zero hook-budget-margin diagnostics", () => {
+    expect(checkHookBudgetLedgerMargin(loadTeamTemplateManifest())).toEqual([]);
+  });
+
+  it("the Custom composer's full selection reports zero hook-budget-margin diagnostics", () => {
+    expect(checkHookBudgetLedgerMargin(loadComposerManifest())).toEqual([]);
+  });
+
+  it("SOLO_TEMPLATE (no grounding-mcp ledger-consulting hooks) reports zero diagnostics", () => {
+    expect(checkHookBudgetLedgerMargin(loadSoloTemplateManifest())).toEqual([]);
   });
 });

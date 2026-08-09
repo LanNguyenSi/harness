@@ -2514,6 +2514,94 @@ doctor:
   });
 });
 
+// Hook-budget-vs-ledger-timeout margin (task d20a7e0c, follow-up to
+// f1aea826/7bf47554). Delegates to checkHookBudgetLedgerMargin
+// (validate/checks.ts, unit-tested there); this section pins the doctor
+// surface — errorCount + `format()` rendering — mirroring the
+// template-policy-drift describe block immediately above.
+describe("doctor — hook-budget-vs-ledger-timeout margin (task d20a7e0c)", () => {
+  function fixtureWithGroundingMcp(opts: {
+    timeoutMs?: number;
+    hooksYaml?: string;
+    policyPacksYaml?: string;
+  }): string {
+    const timeoutMs = opts.timeoutMs ?? 5000;
+    return makeFixture({
+      "harness.yaml": `version: 1
+${SILENCE_DRIFT}tools:
+  mcp:
+    - name: grounding-mcp
+      command: ["/usr/bin/true"]
+      health:
+        verb: ledger_summary
+        timeout_ms: ${timeoutMs}
+${opts.hooksYaml ?? "hooks: []\n"}${opts.policyPacksYaml ?? ""}policies: []
+`,
+    });
+  }
+
+  const DIRECT_HOOK = (budgetMs: number): string =>
+    `hooks:
+  - name: review-before-merge-hook
+    event: PreToolUse
+    match: "mcp__agent-tasks__pull_requests_merge"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: ${budgetMs}
+`;
+
+  it("reports an under-budgeted hook as an error, naming the hook and rolling into errorCount + format()", async () => {
+    const home = fixtureWithGroundingMcp({ timeoutMs: 5000, hooksYaml: DIRECT_HOOK(5000) });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+      claudeMcpExec: NO_CLAUDE_CLI,
+    });
+    expect(report.hookBudgetLedgerMargin.errors).toHaveLength(1);
+    expect(report.hookBudgetLedgerMargin.errors[0]).toContain("review-before-merge-hook");
+    // Both numbers named, matching the validate-side AC.
+    expect(report.hookBudgetLedgerMargin.errors[0]).toContain("budget_ms=5000");
+    expect(report.hookBudgetLedgerMargin.errors[0]).toContain("health.timeout_ms=5000ms");
+    expect(report.errorCount).toBeGreaterThanOrEqual(1);
+    const text = format(report);
+    expect(text).toContain("Hook budget vs ledger timeout margin");
+    expect(text).toContain("review-before-merge-hook");
+  });
+
+  it("reports no margin errors when the hook clears the derived requirement", async () => {
+    const home = fixtureWithGroundingMcp({ timeoutMs: 5000, hooksYaml: DIRECT_HOOK(15000) });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+      claudeMcpExec: NO_CLAUDE_CLI,
+    });
+    expect(report.hookBudgetLedgerMargin.errors).toHaveLength(0);
+    expect(format(report)).not.toContain("Hook budget vs ledger timeout margin");
+  });
+
+  it("generic over packs: an enabled branch-protection pack is flagged (via doctor) when a raised ledger timeout outgrows its shipped budget", async () => {
+    const home = fixtureWithGroundingMcp({
+      timeoutMs: 10000,
+      policyPacksYaml: `policy_packs:
+  - name: branch-protection
+    source: builtin
+    enabled: true
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+      claudeMcpExec: NO_CLAUDE_CLI,
+    });
+    expect(
+      report.hookBudgetLedgerMargin.errors.some((m) => m.includes("policy-pack:branch-protection")),
+    ).toBe(true);
+  });
+});
+
 describe("checkTemplatePolicyDrift — cross-profile floor (task adf037c1)", () => {
   // Pins the operator decision (2026-08-08) that the kill-switch drift is
   // reported REGARDLESS of profile: solo/team ship none of the three, so a

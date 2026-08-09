@@ -28,7 +28,16 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { runInterceptCli } from "../../src/cli/policy/intercept.js";
+import {
+  auditRetryTimeoutMs,
+  realLedgerClient,
+  requiredHookBudgetMs,
+  runInterceptCli,
+} from "../../src/cli/policy/intercept.js";
+import { openLedgerSession } from "../../src/policies/index.js";
+import { recordPolicyDecisionOnSession } from "../../src/runtime/ledger-record.js";
+import { makeDecision } from "../_helpers/decision.js";
+import type { McpServer } from "../../src/schema/index.js";
 
 let cleanups: Array<() => void> = [];
 let savedVerboseEnv: string | undefined;
@@ -96,6 +105,30 @@ interface FakeGroundingMcpOptions {
    * session's `ledger_add` succeeds immediately.
    */
   summaryDelayMs?: number;
+  /**
+   * Delay (ms) before answering `initialize` (task d20a7e0c —
+   * hook-budget-ledger-margin derivation). Every session (pooled AND any
+   * audit-retry session) performs its own `initialize` handshake, so this
+   * delay applies per spawned subprocess, not per call.
+   */
+  initDelayMs?: number;
+  /**
+   * Delay (ms) before answering EVERY `ledger_add` call (task d20a7e0c).
+   * Independent of `summaryDelayMs`, which only delays `ledger_summary`.
+   */
+  addDelayMs?: number;
+  /**
+   * When true, the FIRST `ledger_add` call in this process whose
+   * `arguments.type === "policy_decision"` gets a JSON-RPC error
+   * (after `addDelayMs`) instead of a success — forcing
+   * `recordPolicyDecisionOnSession`'s legacy `type: "fact"` fallback
+   * retry (task d20a7e0c — models an older/incompatible grounding-mcp
+   * rejecting the newer enum value). Every OTHER `ledger_add` call
+   * (including the fallback itself) succeeds normally. Scoped per
+   * spawned process — a fresh session's fake instance always sees its
+   * own first `policy_decision` add as "first".
+   */
+  rejectFirstPolicyDecisionAdd?: boolean;
 }
 
 /**
@@ -110,12 +143,19 @@ function makeFakeGroundingMcp(opts: FakeGroundingMcpOptions = {}): string {
   const invocationLog = opts.invocationLog ?? "";
   const startLog = opts.startLog ?? "";
   const summaryDelayMs = opts.summaryDelayMs ?? 0;
+  const initDelayMs = opts.initDelayMs ?? 0;
+  const addDelayMs = opts.addDelayMs ?? 0;
+  const rejectFirstPolicyDecisionAdd = opts.rejectFirstPolicyDecisionAdd ?? false;
   const script = `#!/usr/bin/env node
 const fs = require("fs");
 const FACTS = ${JSON.stringify(facts)};
 const INVOCATION_LOG = ${JSON.stringify(invocationLog)};
 const START_LOG = ${JSON.stringify(startLog)};
 const SUMMARY_DELAY_MS = ${JSON.stringify(summaryDelayMs)};
+const INIT_DELAY_MS = ${JSON.stringify(initDelayMs)};
+const ADD_DELAY_MS = ${JSON.stringify(addDelayMs)};
+const REJECT_FIRST_POLICY_DECISION_ADD = ${JSON.stringify(rejectFirstPolicyDecisionAdd)};
+let policyDecisionAddsSeen = 0;
 if (START_LOG) {
   fs.appendFileSync(START_LOG, JSON.stringify({ pid: process.pid, ts: Date.now() }) + "\\n");
 }
@@ -131,7 +171,8 @@ process.stdin.on("data", (d) => {
     let msg;
     try { msg = JSON.parse(line); } catch { nl = buf.indexOf("\\n"); continue; }
     if (msg.method === "initialize") {
-      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\\n");
+      const replyInit = () => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\\n");
+      if (INIT_DELAY_MS > 0) { setTimeout(replyInit, INIT_DELAY_MS); } else { replyInit(); }
     } else if (msg.method === "tools/list") {
       // Forward-compat: queryLedgerByTag only calls tools/list when a
       // sinceIso/contentPrefix filter is requested. Responding with an
@@ -152,10 +193,24 @@ process.stdin.on("data", (d) => {
         const reply = () => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: JSON.stringify(payload) }] } }) + "\\n");
         if (SUMMARY_DELAY_MS > 0) { setTimeout(reply, SUMMARY_DELAY_MS); } else { reply(); }
       } else if (toolName === "ledger_add") {
-        // Acknowledge so recordPolicyDecision doesn't time out. The decision
-        // record itself is not under test here; we just need the round-trip
-        // to complete.
-        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: '{"ok":true}' }] } }) + "\\n");
+        const isPolicyDecision = msg.params.arguments && msg.params.arguments.type === "policy_decision";
+        let rejectThisOne = false;
+        if (isPolicyDecision) {
+          policyDecisionAddsSeen += 1;
+          if (REJECT_FIRST_POLICY_DECISION_ADD && policyDecisionAddsSeen === 1) rejectThisOne = true;
+        }
+        const replyAdd = () => {
+          if (rejectThisOne) {
+            process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, error: { code: -32602, message: "unsupported type: policy_decision" } }) + "\\n");
+          } else {
+            // Acknowledge so recordPolicyDecision doesn't time out. The
+            // decision record itself is not under test here; we just need
+            // the round-trip to complete (or, for the reject case above,
+            // to trigger the legacy fact-type retry).
+            process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: '{"ok":true}' }] } }) + "\\n");
+          }
+        };
+        if (ADD_DELAY_MS > 0) { setTimeout(replyAdd, ADD_DELAY_MS); } else { replyAdd(); }
       } else {
         // Unknown tools/call name: reply with a JSON-RPC error rather than
         // hanging. The caller's "ledger_summary error: ..." degraded path
@@ -875,5 +930,99 @@ describe("policy intercept: pooled grounding-mcp connection", () => {
     // .filter/forEach widening).
     const hintCount = (stderrOut2().match(/Operator recovery/g) ?? []).length;
     expect(hintCount).toBe(1);
+  });
+});
+
+// Hook-budget-ledger-margin derivation (task d20a7e0c). `requiredHookBudgetMs`
+// (src/cli/policy/intercept.ts) claims a blocking, ledger-consulting hook's
+// worst-case wall time is `2*health.timeout_ms + 3*auditRetryTimeoutMs`,
+// derived from two SEPARATE round-trip shapes inside `realLedgerClient`:
+// query() can cost up to 2×T (a slow-but-alive server near-maxing BOTH the
+// `initialize` handshake and the `ledger_summary` call), and the
+// deny-degraded audit retry can cost up to 3×R (the fresh retry session's
+// own `initialize`, the first `ledger_add` attempt, and — only when that
+// attempt is rejected outright rather than timing out — the legacy
+// `type: "fact"` fallback `ledger_add`). This file already spawns a real
+// fake grounding-mcp subprocess and drives the real client against it
+// (see the module header); these two tests measure each shape in
+// isolation against the REAL `realLedgerClient` / `recordPolicyDecisionOnSession`,
+// rather than trusting the formula's arithmetic alone.
+describe("hook-budget-ledger-margin derivation (task d20a7e0c)", () => {
+  it("query() worst case is bounded by ~2×health.timeout_ms, not the naive 1×T a pre-d20a7e0c formula assumed", async () => {
+    // T=2000ms. initDelayMs=1200ms leaves ~800ms slack under T for the
+    // real node cold-start + IPC handshake to land even on a loaded
+    // runner (comfortably inside the existing 500ms-window precedent
+    // this file's other tests already treat as "enough for a cold start
+    // + a round-trip"). summaryDelayMs forces the SECOND call to
+    // actually hit the timeout.
+    const T = 2000;
+    const initDelayMs = 1200;
+    const mcp = makeFakeGroundingMcp({
+      entries: [],
+      initDelayMs,
+      summaryDelayMs: 10_000,
+    });
+    const server = {
+      name: "grounding-mcp",
+      command: ["node", mcp],
+      enabled: true,
+    } as unknown as McpServer;
+    const { stream: stderr } = captureStream();
+    const client = realLedgerClient(server, { ledgerTimeoutMs: T, stderr });
+
+    const start = Date.now();
+    const result = await client.query("review", "sess-derivation-query");
+    const elapsed = Date.now() - start;
+    client.dispose?.();
+
+    expect(result.kind).toBe("degraded");
+    // Clearly more than 1×T (2000ms): refutes the naive "query costs at
+    // most T" assumption the pre-d20a7e0c formula made — the init stage
+    // genuinely adds real wall time on top of the query's own timeout.
+    expect(elapsed).toBeGreaterThan(T * 1.3);
+    // Bounded near initDelayMs + T (~3200ms), not unboundedly larger.
+    expect(elapsed).toBeLessThan(initDelayMs + T + 2000);
+  });
+
+  it("the deny-degraded audit retry's worst case is bounded by ~3×R: fresh-session initialize + first ledger_add attempt + legacy fact-type fallback, each independently costing real time", async () => {
+    // T=4000ms -> R = auditRetryTimeoutMs(4000) = max(250, 1000) = 1000ms.
+    // perStageDelayMs=700ms leaves ~300ms slack under R per stage.
+    const T = 4000;
+    const R = auditRetryTimeoutMs(T);
+    const perStageDelayMs = 700;
+    const mcp = makeFakeGroundingMcp({
+      entries: [],
+      initDelayMs: perStageDelayMs,
+      addDelayMs: perStageDelayMs,
+      rejectFirstPolicyDecisionAdd: true,
+    });
+    const session = openLedgerSession({ mcpCommand: ["node", mcp], timeoutMs: R });
+
+    const start = Date.now();
+    const result = await recordPolicyDecisionOnSession(
+      session,
+      makeDecision({ policyName: "review-before-merge", outcome: "deny-degraded" }),
+      "sess-derivation-retry",
+    );
+    const elapsed = Date.now() - start;
+    session.dispose();
+
+    // The legacy fact-type fallback landed — the row was NOT lost.
+    expect(result.ok).toBe(true);
+    // Clearly more than 2 stages' worth (1400ms): a session that only
+    // paid for (init + one add) would land well under this, so this
+    // demonstrates the THIRD (fallback) round-trip genuinely costs real
+    // time too, not just the first two.
+    expect(elapsed).toBeGreaterThan(2 * perStageDelayMs);
+    // Bounded near 3×R (~3000ms), not unboundedly larger.
+    expect(elapsed).toBeLessThan(3 * R + 1500);
+  });
+
+  it("requiredHookBudgetMs(T) = 2T + 3*auditRetryTimeoutMs(T) — the arithmetic the two measurements above substantiate", () => {
+    const T = 5000;
+    expect(requiredHookBudgetMs(T)).toBe(2 * T + 3 * auditRetryTimeoutMs(T));
+    // Pinned concrete value at the shipped default: 2*5000 + 3*1250 =
+    // 13750 (comment 2's own "~13750ms bei T=5000" derivation).
+    expect(requiredHookBudgetMs(T)).toBe(13750);
   });
 });

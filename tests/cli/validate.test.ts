@@ -1473,6 +1473,195 @@ policies:
   });
 });
 
+// checkHookBudgetLedgerMargin (task d20a7e0c, follow-up to f1aea826/
+// 7bf47554): a blocking, ledger-consulting hook whose budget_ms cannot
+// clear the derived worst-case ledger round-trip (requiredHookBudgetMs
+// in src/cli/policy/intercept.ts) can get killed by the runtime's outer
+// hook timeout before it writes its fail-closed verdict — silently
+// turning a deny into an allow. AC1: an inconsistent fixture reports the
+// gap with BOTH numbers (budget_ms and the ledger's health.timeout_ms)
+// in the message text. AC2: a consistent fixture stays silent.
+describe("validate — checkHookBudgetLedgerMargin (task d20a7e0c)", () => {
+  function fixtureWithGroundingMcp(opts: {
+    timeoutMs?: number;
+    hooksYaml?: string;
+    policyPacksYaml?: string;
+  }): string {
+    const timeoutMs = opts.timeoutMs ?? 5000;
+    const yaml = `version: 1
+tools:
+  mcp:
+    - name: grounding-mcp
+      command: ["/usr/bin/true"]
+      health:
+        verb: ledger_summary
+        timeout_ms: ${timeoutMs}
+${opts.hooksYaml ?? "hooks: []\n"}${opts.policyPacksYaml ?? ""}policies: []
+`;
+    return writeFixture({ "harness.yaml": yaml });
+  }
+
+  function marginDiags(diagnostics: Array<{ path: string; message: string; severity: string }>) {
+    return diagnostics.filter((d) => d.path.endsWith(".budget_ms") && d.path.startsWith("hooks["));
+  }
+
+  const DIRECT_HOOK = (budgetMs: number, command = "harness policy intercept"): string =>
+    `hooks:
+  - name: review-before-merge-hook
+    event: PreToolUse
+    match: "mcp__agent-tasks__pull_requests_merge"
+    command: ${command}
+    blocking: hard
+    budget_ms: ${budgetMs}
+`;
+
+  it("AC1: an inconsistent budget_ms/timeout_ms fixture reports the gap with BOTH numbers in the text", () => {
+    const home = fixtureWithGroundingMcp({ timeoutMs: 5000, hooksYaml: DIRECT_HOOK(5000) });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const hits = marginDiags(result.diagnostics);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.severity).toBe("error");
+    expect(hits[0]?.path).toBe("hooks[review-before-merge-hook].budget_ms");
+    // Both numbers named: the hook's own (undersized) budget_ms and the
+    // ledger's health.timeout_ms it must clear a multiple of.
+    expect(hits[0]?.message).toContain("budget_ms=5000");
+    expect(hits[0]?.message).toContain("health.timeout_ms=5000ms");
+    // The derived requirement (2*5000 + 3*auditRetryTimeoutMs(5000) =
+    // 10000 + 3*1250 = 13750) is also named so the operator knows the
+    // target, not just that today's value is wrong.
+    expect(hits[0]?.message).toContain("13750");
+  });
+
+  it("AC2: a consistent fixture (shipped 15000ms default at the shipped 5000ms ledger timeout) stays silent", () => {
+    const home = fixtureWithGroundingMcp({ timeoutMs: 5000, hooksYaml: DIRECT_HOOK(15000) });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(marginDiags(result.diagnostics)).toEqual([]);
+  });
+
+  it("matcher fix: a node-path invocation of the subcommand is still classified and checked", () => {
+    const home = fixtureWithGroundingMcp({
+      timeoutMs: 5000,
+      hooksYaml: DIRECT_HOOK(1000, "node /opt/harness/dist/cli/index.js policy intercept"),
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(marginDiags(result.diagnostics)).toHaveLength(1);
+  });
+
+  it("matcher fix: an env-prefixed invocation with a trailing --hook flag is still classified and checked", () => {
+    const home = fixtureWithGroundingMcp({
+      timeoutMs: 5000,
+      hooksYaml: DIRECT_HOOK(1000, "FOO=bar harness policy intercept --hook review-before-merge-hook"),
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(marginDiags(result.diagnostics)).toHaveLength(1);
+  });
+
+  it("an unrelated command (not `policy intercept`) with a low budget_ms is not flagged", () => {
+    const home = fixtureWithGroundingMcp({
+      timeoutMs: 5000,
+      hooksYaml: DIRECT_HOOK(100, "/usr/bin/some-other-tool"),
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(marginDiags(result.diagnostics)).toEqual([]);
+  });
+
+  it("a non-hard blocking hook with a low budget_ms is not flagged", () => {
+    const home = fixtureWithGroundingMcp({
+      timeoutMs: 5000,
+      hooksYaml: `hooks:
+  - name: soft-policy-hook
+    event: PreToolUse
+    match: "Bash"
+    command: harness policy intercept
+    blocking: soft
+    budget_ms: 100
+`,
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(marginDiags(result.diagnostics)).toEqual([]);
+  });
+
+  it("no grounding-mcp wired: not flagged even at an obviously-undersized budget_ms", () => {
+    const home = writeFixture({
+      "harness.yaml": `version: 1
+${DIRECT_HOOK(100)}policies: []
+`,
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(marginDiags(result.diagnostics)).toEqual([]);
+  });
+
+  it("generic over packs: an enabled branch-protection pack's blocker is checked WITHOUT any hooks[] entry, and flags when a raised ledger timeout outgrows the shipped pack budget", () => {
+    // Shipped pack budget is 15000ms (task 7bf47554), which clears the
+    // default 5000ms ledger's 13750ms requirement — but NOT a manifest
+    // that raises tools.mcp.grounding-mcp.health.timeout_ms without
+    // raising the pack's own (fixed, non-manifest-configurable)
+    // budget_ms in lockstep: required = 2*10000 + 3*2500 = 27500ms > 15000.
+    const home = fixtureWithGroundingMcp({
+      timeoutMs: 10000,
+      policyPacksYaml: `policy_packs:
+  - name: branch-protection
+    source: builtin
+    enabled: true
+`,
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const hits = marginDiags(result.diagnostics);
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.some((h) => h.path.includes("policy-pack:branch-protection"))).toBe(true);
+  });
+
+  it("negative control: an enabled solution-acceptance pack is NOT flagged even under the same raised ledger timeout (file-marker based, no ledger round-trip)", () => {
+    const home = fixtureWithGroundingMcp({
+      timeoutMs: 10000,
+      policyPacksYaml: `policy_packs:
+  - name: solution-acceptance
+    source: builtin
+    enabled: true
+`,
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const hits = marginDiags(result.diagnostics);
+    expect(hits.some((h) => h.path.includes("solution-acceptance"))).toBe(false);
+  });
+});
+
 describe("validate — --json", () => {
   it("registers the --json flag on the validate command", () => {
     const program = buildProgram();

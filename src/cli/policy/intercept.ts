@@ -392,6 +392,96 @@ export function auditRetryTimeoutMs(timeoutMs: number): number {
   return Math.max(250, Math.floor(timeoutMs / 4));
 }
 
+/**
+ * Recognise a hook `command` string as an invocation of `harness policy
+ * intercept`'s subcommand, regardless of how the leading interpreter /
+ * binary token is spelled: a bare `harness policy intercept`, a node-path
+ * form (`node /abs/path/dist/cli/index.js policy intercept`, e.g. a local
+ * dev build), an `npx` form (`npx harness policy intercept`), a leading
+ * inline env-var assignment (`FOO=bar harness policy intercept` — the
+ * same shape `understanding-before-execution.ts`'s `wrap()` helper
+ * prefixes pack-contributed commands with), or a trailing flag
+ * (`harness policy intercept --hook <name>`, the tag
+ * `generate-codex-config.ts#commandWithHookTag` appends).
+ *
+ * Every OTHER call site that needs to recognise this subcommand in this
+ * codebase today (`generate-settings.ts#hookTimeoutSeconds`,
+ * `generate-codex-config.ts#commandWithHookTag`) still compares
+ * `command.trim() === "harness policy intercept"` VERBATIM — deliberately
+ * left unchanged (task d20a7e0c scope: the hook-timeout projection
+ * contract those two own is out of scope). For THEM a missed match only
+ * changes a floor/flag on a command harness itself emits byte-for-byte,
+ * so the single canonical spelling is enough. This matcher exists for a
+ * caller (the validate/doctor hook-budget-vs-ledger-timeout guard, task
+ * d20a7e0c) where under-recognition is a false NEGATIVE on a security
+ * check against an OPERATOR-authored `manifest.hooks[]` entry, which is
+ * under no obligation to spell the command exactly the way harness's own
+ * generators do.
+ *
+ * Deliberately narrow, not a shell parser: matches the two literal words
+ * `policy` and `intercept` as adjacent, whitespace-separated tokens,
+ * preceded by start-of-string / whitespace / a path separator (so
+ * `mypolicy intercept` inside one longer token cannot match) and followed
+ * by whitespace or end-of-string. A false negative here degrades to the
+ * pre-existing verbatim behaviour (the hook is simply not classified as
+ * ledger-consulting, so the margin check has nothing to say about it) —
+ * not a runtime bypass; the dispatch this check advises about is
+ * unaffected either way.
+ */
+export function isPolicyInterceptCommand(command: string): boolean {
+  return /(?:^|[\s/\\])policy\s+intercept(?:\s|$)/.test(command);
+}
+
+/**
+ * Minimum `budget_ms` a blocking, ledger-consulting hook needs to clear
+ * the worst-case wall time `realLedgerClient` (below) can spend before it
+ * writes its own fail-closed decision — derived from that function's OWN
+ * two round-trip shapes, not a measured-then-eyeballed constant. Both
+ * halves are pinned against the real client in
+ * tests/e2e/policy-intercept.test.ts ("hook-budget-ledger-margin
+ * derivation (task d20a7e0c)").
+ *
+ * `T` = the ledger's own per-call budget (`health.timeout_ms`, defaulted
+ * to 5000 exactly like `realLedgerClient` itself). `R` =
+ * `auditRetryTimeoutMs(T)`, the audit-retry session's own per-call budget.
+ *
+ *   1. query() — up to 2×T. `LedgerSession.querySummary`
+ *      (src/policies/ledger-client.ts) performs `ensureInitialized()`
+ *      (the `initialize` handshake, its own T-bounded wait) and, only
+ *      once THAT resolves, the actual `ledger_summary` `tools/call` (a
+ *      SEPARATE T-bounded wait). A ledger that is merely SLOW rather than
+ *      hard-down (the threat class docs/risk-gate.md and this file's own
+ *      `deny-degraded` diagnostics already name, distinct from an
+ *      instantly-refusing one) can answer `initialize` just under T and
+ *      still time out on the following `ledger_summary` — the case a
+ *      naive "1×T" assumption undercounts.
+ *
+ *   2. the deny-degraded audit retry — up to 3×R. Once query() degrades,
+ *      the pooled session's `timedOut` latch makes the FIRST `record()`
+ *      attempt on it instant (see `realLedgerClient`'s own doc comment
+ *      above). The ONE reserved retry then opens a FRESH session budgeted
+ *      at R and calls `recordPolicyDecisionOnSession`
+ *      (src/runtime/ledger-record.ts), which can spend up to three
+ *      independent R-bounded round-trips before it can report success or
+ *      give up: the fresh session's own `initialize` handshake, the first
+ *      `ledger_add` attempt at `type: "policy_decision"`, and — only
+ *      reached when that attempt comes back a genuine JSON-RPC error
+ *      rather than a transport timeout (an older/incompatible
+ *      grounding-mcp rejecting the newer type) — the legacy
+ *      `type: "fact"` fallback `ledger_add`.
+ *
+ * query() must complete (or degrade) before any policy decision — and so
+ * any record() — is computed (`intercept()`'s per-policy loop in
+ * src/runtime/intercept.ts awaits `evaluateOnePolicy`, which calls
+ * `ledger.query`, before it calls `ledger.record`), and the retry only
+ * starts after the first (instant) record attempt already failed, so the
+ * two stages are SEQUENTIAL within one hook invocation: worst case
+ * = 2T + 3R.
+ */
+export function requiredHookBudgetMs(ledgerTimeoutMs: number): number {
+  return 2 * ledgerTimeoutMs + 3 * auditRetryTimeoutMs(ledgerTimeoutMs);
+}
+
 function degradedLedgerClient(
   reason: string,
   stderr: NodeJS.WritableStream,
