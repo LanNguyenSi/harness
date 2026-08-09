@@ -640,6 +640,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   the patched 3.3.17, so only the lockfile pin holds the fix (conscious
   no-override decision, unchanged). (task `b81e8e09`)
 
+### Changed
+
+- Audited `src/runtime/recovery-git-commit.ts`'s three JS `\s`-based
+  tokenizers (the `git\s+commit` anchor and `tokenize`'s leading-skip and
+  token-continuation checks) against the same JS-`\s`-vs-bash-blank
+  divergence class `623640a5` closed elsewhere — reviewer residual from
+  that task. Measured against real bash and git (PATH-stub): unlike
+  `623640a5`, this module's over-split is safe by construction, not a
+  fix. No production change; the safe direction is pinned in
+  `tests/runtime/recovery-git-commit.test.ts` with live bash+git evidence
+  for every call site plus a hermetic pin across all 23 non-bash-blank
+  `\s` codepoints. (task `822a508d`)
+
 ### Fixed
 
 - **`harness dry-run`'s `bash_match` prediction under-predicted the quoted-shell-boundary family (`VAR='a; b' git push origin master`) that `harness policy intercept` already blocks** (task `f561e44c`, follow-up to `cf3dff51`). Task `cf3dff51` wired `normalizeCommandQuoteAware` into `policyMatchesEvent` (`src/runtime/intercept.ts`) as a fourth matching arm but, scoped narrowly to that one wiring point, deliberately left `dry-run`'s own independently-copied matcher (`src/cli/dry-run.ts`) untouched — reintroducing the debug-verb/runtime parity gap that file's own comment (and `docs/okf/debug-verb-selection.md`) has warned about since task `ea8becf5`. `policyMatchesTool` now tries the same fourth, quote-aware OR-arm, literally duplicated to mirror the amp-aware arm's own precedent (no shared-helper seam exists for this OR-chain yet). Debug-verb-only fix, no gate touched; `dry-run` was under-predicting, the fail-safe direction. New parity fixture: `tests/cli/dry-run.test.ts` asserts `dry-run` and `policyMatchesEvent` agree, entry for entry, across the 12 `cf3dff51` target spellings (`;`, `|`, `&&`, `(`, and a literal newline in both spaced/unspaced forms, on `git push` and the operator-only kill switch).
