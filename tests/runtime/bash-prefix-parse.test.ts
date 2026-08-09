@@ -136,6 +136,78 @@ describe("parseBashPrefix", () => {
       expect(parseBashPrefix("switch main && rm").branchTarget).toBe(null);
       expect(parseBashPrefix("checkout main && rm").branchTarget).toBe(null);
     });
+
+    // Fix round 1 (reviewer MEDIUM finding, task 341e024b): a quoted
+    // branch name used to be read INCLUDING the quote characters
+    // (`branchTarget` = the 6-char string `"main"`), which never matches
+    // a `branch_patterns` entry like `main` and silently defeated the
+    // gate. The quoted forms must now strip the quotes.
+    it("strips double quotes from a quoted branch literal", () => {
+      const r = parseBashPrefix('git switch "main" && rm -rf /tmp/x');
+      expect(r.branchTarget).toBe("main");
+    });
+
+    it("strips single quotes from a quoted branch literal", () => {
+      const r = parseBashPrefix("git switch 'main' && rm -rf /tmp/x");
+      expect(r.branchTarget).toBe("main");
+    });
+
+    it("strips quotes from a quoted branch literal with `git checkout`", () => {
+      expect(parseBashPrefix('git checkout "main" && rm -rf /tmp/x').branchTarget).toBe(
+        "main",
+      );
+      expect(parseBashPrefix("git checkout 'main' && rm -rf /tmp/x").branchTarget).toBe(
+        "main",
+      );
+    });
+
+    it("strips quotes from a quoted, slashed branch literal", () => {
+      expect(parseBashPrefix('git switch "task/foo" && rm').branchTarget).toBe("task/foo");
+      expect(parseBashPrefix("git switch 'task/foo' && rm").branchTarget).toBe("task/foo");
+    });
+
+    it("handles a quoted branch literal after a leading `-C <path>`", () => {
+      const r = parseBashPrefix('git -C /some/repo switch "main" && rm -rf /tmp/x');
+      expect(r.branchTarget).toBe("main");
+    });
+
+    it("does not guess a `$VAR` branch name inside double quotes", () => {
+      expect(parseBashPrefix('git switch "$BRANCH" && rm').branchTarget).toBe(null);
+      expect(parseBashPrefix('git switch "${BRANCH}" && rm').branchTarget).toBe(null);
+      expect(parseBashPrefix('git switch "release/$X" && rm').branchTarget).toBe(null);
+    });
+
+    it("takes a `$`-containing single-quoted branch literally (single quotes never interpolate)", () => {
+      // Deliberately different from the double-quoted case above: real
+      // bash never interpolates inside single quotes, so the literal
+      // text — however unusual as a branch name — is exactly what git
+      // would receive. It simply will not match a normal
+      // `branch_patterns` entry.
+      expect(parseBashPrefix("git switch '$BRANCH' && rm").branchTarget).toBe("$BRANCH");
+    });
+
+    it("bails cleanly on an unterminated quoted branch literal", () => {
+      expect(parseBashPrefix("git switch \"main && rm -rf /tmp/x").branchTarget).toBe(null);
+      expect(parseBashPrefix("git switch 'main && rm -rf /tmp/x").branchTarget).toBe(null);
+    });
+
+    it("does not match an empty quoted branch literal", () => {
+      expect(parseBashPrefix('git switch "" && rm').branchTarget).toBe(null);
+      expect(parseBashPrefix("git switch '' && rm").branchTarget).toBe(null);
+    });
+
+    it("requires the trailing separator for a quoted branch literal too", () => {
+      expect(parseBashPrefix('git switch "main" rm -rf /tmp/x').branchTarget).toBe(null);
+    });
+
+    it("captures only the first branch target across a chained double switch (first-switch-wins, documented limit)", () => {
+      // Deliberately NOT resolving the second switch — see the module
+      // doc's "LIMIT" note on `consumeLeadingGitSwitch`. This pins the
+      // current (first-wins) behavior so a future change to it is a
+      // conscious, reviewed decision rather than an accidental drift.
+      const r = parseBashPrefix("git switch dev && git switch main && rm -rf /tmp/x");
+      expect(r.branchTarget).toBe("dev");
+    });
   });
 
   describe("combined prefixes", () => {

@@ -24,17 +24,38 @@
 //      supported. No `pushd`, no subshell `(cd X && ...)`, no `bash -c`.
 //   3. git branch switch: a single leading `git [-C <path>]
 //      (switch|checkout) <branch> [&&|;] ...` (task 341e024b). The
-//      `<branch>` must be a plain, literal token — a `-`-prefixed first
-//      argument (`-`, `--`, `-b`, ...; this is how `git checkout --
-//      <path>`'s file-restore form is excluded) or a `$VAR`/`${VAR}`
+//      `<branch>` must be a plain, literal token, unquoted OR quoted
+//      (single- or double-quoted, surrounding quotes stripped — same
+//      quoted-literal handling `cd`'s path token gets, task 341e024b fix
+//      round 1: a quoted `"main"`/`'main'` used to read as the literal
+//      6-character string `"main"` including the quote characters,
+//      which never matches a `branch_patterns` entry like `main` and so
+//      silently defeated the gate). A `-`-prefixed first argument (`-`,
+//      `--`, `-b`, ...; this is how `git checkout -- <path>`'s
+//      file-restore form is excluded) or an unquoted `$VAR`/`${VAR}`
 //      shell variable is left unresolved (`branchTarget: null`) rather
-//      than guessed. The optional `-C <path>` is recognized so it does
-//      not block the match, but its value is discarded: the ONLY thing
-//      this idiom feeds the resolver is the branch name being switched
-//      TO (see `src/cli/policy/intercept.ts`'s merge, which is
-//      upgrade-only — unlike the `cd` merge below, a resolved branch
-//      target here can only push the resolved environment to something
-//      MORE dangerous, never less).
+//      than guessed; a DOUBLE-quoted token whose content contains a `$`
+//      is treated the same way (not guessed) since double quotes DO
+//      interpolate in real bash and this parser does not evaluate the
+//      shell environment — a single-quoted token is always taken
+//      literally, since single quotes never interpolate. The optional
+//      `-C <path>` is recognized so it does not block the match, but its
+//      value is discarded: the ONLY thing this idiom feeds the resolver
+//      is the branch name being switched TO (see
+//      `src/cli/policy/intercept.ts`'s merge, which is upgrade-only —
+//      unlike the `cd` merge below, a resolved branch target here can
+//      only push the resolved environment to something MORE dangerous,
+//      never less).
+//
+//      LIMIT, stated so a maintainer does not over-trust this idiom's
+//      coverage: only the FIRST leading branch switch is captured. A
+//      chained `git switch dev && git switch main && rm ...` resolves
+//      `branchTarget` as `dev`, never `main` — multi-switch parsing
+//      (walking past the first `&&` to find a SECOND switch) is
+//      deliberately not built; it would widen the parser's surface
+//      toward the false-positive class task dbc6d303 already measured
+//      (branch-shaped tokens picked up from further into a command that
+//      is not actually a chained branch hop).
 //
 // The clauses may appear in any order relative to each other (`cd /x &&
 // VAR=v cmd`, `VAR=v cd /x && cmd`, `cd /x && git switch main && cmd`,
@@ -270,19 +291,29 @@ function skipPathToken(s: string, i: number): number | null {
  *     `git checkout -- <path>` (git's file-restore form — no branch is
  *     switched at all) as one case of the general rule "a flag is not a
  *     branch name", rather than special-casing `--` alone.
- *   - A `$VAR` / `${VAR}` first argument: a shell variable, not a
- *     literal branch name. Resolving it would require evaluating the
- *     shell environment, which this parser does not do (see module
- *     doc).
+ *   - An unquoted `$VAR` / `${VAR}` first argument: a shell variable,
+ *     not a literal branch name. Resolving it would require evaluating
+ *     the shell environment, which this parser does not do (see module
+ *     doc). A DOUBLE-quoted token whose content contains a `$` is
+ *     excluded the same way (double quotes interpolate in real bash); a
+ *     single-quoted token is never excluded on this basis (single
+ *     quotes never interpolate, so its content is always the literal
+ *     branch name).
  *   - A missing trailing `&&` / `;` separator, mirroring
  *     `consumeLeadingCd`'s identical rule: `git switch main` alone, with
  *     nothing following, has no "rest of command" for the branch
  *     candidate to apply to.
  *
- * The branch token itself is read as a single unquoted word up to the
- * next whitespace/`;`/`&` — real git branch names cannot contain
- * whitespace, so this covers slashed names (`task/foo`, `release/1.2`)
- * without needing a quoted form.
+ * The branch token itself is read as a single word up to the next
+ * whitespace/`;`/`&` (unquoted — this covers slashed names like
+ * `task/foo`, `release/1.2`, since branch names cannot contain
+ * whitespace), OR, when the token opens with `'` or `"`, as a quoted
+ * literal with the surrounding quotes stripped (task 341e024b fix round
+ * 1) — mirroring `consumeLeadingCd`'s / `skipPathToken`'s quoted-token
+ * handling, since a whitespace-free branch name can still be quoted by
+ * the operator (`git switch "main"`), and an unstripped quote character
+ * left inside the extracted token would never match a plain
+ * `branch_patterns` entry.
  *
  * The optional leading `-C <path>` is recognized so it does not block
  * the match, but its value is discarded — see the module doc's form 3
@@ -305,13 +336,31 @@ function consumeLeadingGitSwitch(s: string, start: number): { branch: string; ne
   if (afterVerb === null) return null;
   i = skipWs(s, afterVerb);
   if (i >= s.length) return null;
-  // A `-`-prefixed or `$`-prefixed first argument is not a plain branch
-  // name — do not guess (see doc comment above).
+  // A `-`-prefixed or unquoted `$`-prefixed first argument is not a
+  // plain branch name — do not guess (see doc comment above).
   if (s[i] === "-" || s[i] === "$") return null;
-  const branchStart = i;
-  while (i < s.length && !WS.test(s[i]!) && s[i] !== ";" && s[i] !== "&") i++;
-  const branch = s.slice(branchStart, i);
-  if (branch.length === 0) return null;
+  let branch: string;
+  if (s[i] === "'" || s[i] === '"') {
+    // Quoted branch literal (task 341e024b fix round 1): strip the
+    // surrounding quotes, mirroring `consumeLeadingCd`'s path handling.
+    // A DOUBLE-quoted token containing `$` is left unresolved (real
+    // bash interpolates inside double quotes; this parser does not
+    // evaluate the shell environment) — a SINGLE-quoted token is always
+    // literal, since single quotes never interpolate.
+    const quote = s[i]!;
+    const end = s.indexOf(quote, i + 1);
+    if (end < 0) return null;
+    const content = s.slice(i + 1, end);
+    if (quote === '"' && content.includes("$")) return null;
+    if (content.length === 0) return null;
+    branch = content;
+    i = end + 1;
+  } else {
+    const branchStart = i;
+    while (i < s.length && !WS.test(s[i]!) && s[i] !== ";" && s[i] !== "&") i++;
+    branch = s.slice(branchStart, i);
+    if (branch.length === 0) return null;
+  }
   i = skipWs(s, i);
   if (s[i] === "&" && s[i + 1] === "&") {
     return { branch, next: i + 2 };

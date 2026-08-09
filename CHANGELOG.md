@@ -690,6 +690,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   the new upgrade-only branch signal alongside the pre-existing
   bidirectional `cd` one.
 
+  Fix round 1 (reviewer-flagged, `accept_with_notes`): the upgrade-only
+  merge itself was verified sound (no downgrade path), but two gaps
+  remained. **MEDIUM (security):** a QUOTED branch name bypassed the
+  gate entirely — `consumeLeadingGitSwitch` read the branch token
+  INCLUDING the quote characters, so `git switch "main" && rm -rf <path>`
+  extracted `branchTarget` as the literal 6-character string `"main"`,
+  which never matches a `branch_patterns` entry like `main`, so no
+  upgrade fired and the destructive command ran ungated — identical in
+  effect to the pre-fix unquoted case above. The sibling `cd`-target
+  parser already stripped quotes (`skipPathToken`/`consumeLeadingCd`);
+  this was an inconsistency, and the module doc's given reason for
+  skipping a quoted branch form ("real git branch names cannot contain
+  whitespace, so this covers slashed names without needing a quoted
+  form") was itself wrong — a whitespace-free branch name can still be
+  quoted by the operator. `consumeLeadingGitSwitch` now reads a single-
+  or double-quoted branch token the same way `skipPathToken` reads a
+  quoted path: literal content, quotes stripped. A `$`-containing
+  DOUBLE-quoted branch argument is still left unresolved (real bash
+  interpolates inside double quotes, consistent with the existing
+  unquoted-`$VAR` rule); a SINGLE-quoted one is always literal, since
+  single quotes never interpolate in real bash. New e2e fixtures in
+  `tests/runtime/intercept-cli-bash-prefix.test.ts` pin `git switch
+  "main"` / `git switch 'main'` / `git checkout "main"` from a non-prod
+  cwd now denying, a quoted switch away from `main` still not
+  downgrading, and a double-quoted `"$BRANCH"` still not guessed; new
+  parser-unit coverage in `tests/runtime/bash-prefix-parse.test.ts`
+  covers the quote-stripping itself, the double-quote-`$` exclusion, the
+  single-quote-`$` literal case, unterminated/empty quoted literals, and
+  the missing-separator rule for a quoted branch. Mutation-probed:
+  disabling the quote-stripping branch turns exactly the 12 new e2e/unit
+  assertions red.
+
+  **LOW (maintainability):** `ENV_RANK` in `src/cli/policy/intercept.ts`
+  is a hand-maintained copy of `ENV_PRECEDENCE` in
+  `src/runtime/environment-resolver.ts`; the `Record<MatchableEnvironment,
+  number>` type catches an added/removed environment but not a REORDER,
+  which could silently invert the upgrade-only direction. A new drift
+  guard, `tests/runtime/intercept-env-rank-drift-guard.test.ts`, measures
+  `ENV_PRECEDENCE`'s real order live via `resolveEnvironment` (four
+  resolvers, one per environment, each on a different signal kind so all
+  four can fire on one probe envelope at once; the conflict winner reveals
+  the true order by elimination) and, for every adjacent pair in that
+  measured order, round-trips `runInterceptCli` to confirm
+  `applyBranchSwitchUpgrade`'s `ENV_RANK`-driven behavior agrees.
+  Mutation-probed: swapping two adjacent entries in `ENV_PRECEDENCE`
+  (without touching `ENV_RANK`) turns exactly the affected pair's two
+  assertions red.
+
+  **LOW, documentation only (not built):** a chained double switch (`git
+  switch dev && git switch main && rm ...`) resolves `branchTarget` as
+  `dev` (first-switch-wins), missing `main`. Multi-switch parsing was
+  deliberately NOT added — it would widen the parser's surface toward the
+  false-positive class task `dbc6d303` already measured. The module doc
+  on `consumeLeadingGitSwitch` and `docs/risk-gate.md` now state this
+  limit explicitly so it is not over-trusted.
+
 ### Changed
 
 - Audited `src/runtime/recovery-git-commit.ts`'s three JS `\s`-based

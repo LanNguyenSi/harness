@@ -344,6 +344,18 @@ never less — switching away from a production branch never downgrades
 an already-production classification. `git checkout -- <path>` (a file
 restore, not a branch change) and an unresolvable `$VAR`/`${VAR}`
 branch argument set no branch signal at all, rather than being guessed.
+The branch argument may be unquoted or quoted (`git switch "main"` /
+`git switch 'main'`, task 341e024b fix round 1) — surrounding quotes are
+stripped before matching, since an operator can quote a whitespace-free
+branch name and an unstripped quote character would never match a plain
+`branch_patterns` entry like `main`. A `$`-containing DOUBLE-quoted
+branch argument is still left unresolved (real bash interpolates inside
+double quotes; a SINGLE-quoted one is always taken literally, since
+single quotes never interpolate). Only the FIRST leading branch switch
+in a command is captured — a chained `git switch dev && git switch main
+&& ...` resolves the candidate as `dev`, never `main`; multi-switch
+parsing is deliberately not built (see the parser's own module doc for
+the false-positive-class rationale).
 
 `kube_context_patterns` are operator-authored regexes compiled at
 resolution time. As with `risk.classifiers[].patterns`, harness does
