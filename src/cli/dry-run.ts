@@ -5,7 +5,11 @@ import {
   type ExtractBuiltins,
   type ExtractEventContext,
 } from "../policies/index.js";
-import { normalizeCommand, normalizeCommandAmpAware } from "../runtime/command-normalize.js";
+import {
+  normalizeCommand,
+  normalizeCommandAmpAware,
+  normalizeCommandQuoteAware,
+} from "../runtime/command-normalize.js";
 import { resolveGitContext } from "../runtime/git-context.js";
 import type { Hook, Manifest, Policy } from "../schema/index.js";
 import { EX_USAGE, HarnessExitError } from "./exit-codes.js";
@@ -114,40 +118,40 @@ function policyMatchesTool(
     } catch {
       return { matched: false, reason: `trigger.bash_match is not a valid regex` };
     }
-    // Raw-OR-normalised-OR-amp-normalised, mirroring `policyMatchesEvent`'s
-    // real evaluation path exactly (third arm added task aabbad63): dry-run
-    // used to test only the RAW command, so it predicted `env -C /tmp git
-    // status` as NOT matching `preflight-before-investigation` while
-    // `policy intercept` actually blocks it — a debug verb contradicting the
-    // runtime it exists to predict (its own comment above and
-    // docs/okf/debug-verb-selection.md both assert parity). Leaving out the
-    // amp-aware third arm here would reintroduce that SAME class of
-    // contradiction for the bare-`&` family (`A=x&env -C /tmp git status`,
-    // `echo hi & nice git status`): `policy intercept` now blocks those via
-    // `normalizeCommandAmpAware`, so dry-run must try it too. The REPO/
-    // BRANCH half of this file (`builtinsFor`, cwd-only) stays in parity
-    // with the runtime, which is also cwd-only for `${REPO}`/`${BRANCH}` —
-    // see `src/cli/policy/intercept.ts`'s comment above `cwdGitContext` for
-    // why a per-command target directory is deliberately not consulted.
+    // Raw-OR-normalised-OR-amp-normalised-OR-quote-normalised, mirroring
+    // `policyMatchesEvent`'s real evaluation path exactly (third arm added
+    // task aabbad63; fourth arm added task f561e44c): dry-run used to test
+    // only the RAW command, so it predicted `env -C /tmp git status` as NOT
+    // matching `preflight-before-investigation` while `policy intercept`
+    // actually blocks it — a debug verb contradicting the runtime it exists
+    // to predict (its own comment above and docs/okf/debug-verb-selection.md
+    // both assert parity). Leaving out the amp-aware third arm here would
+    // reintroduce that SAME class of contradiction for the bare-`&` family
+    // (`A=x&env -C /tmp git status`, `echo hi & nice git status`): `policy
+    // intercept` now blocks those via `normalizeCommandAmpAware`, so dry-run
+    // must try it too. The REPO/BRANCH half of this file (`builtinsFor`,
+    // cwd-only) stays in parity with the runtime, which is also cwd-only for
+    // `${REPO}`/`${BRANCH}` — see `src/cli/policy/intercept.ts`'s comment
+    // above `cwdGitContext` for why a per-command target directory is
+    // deliberately not consulted.
     //
-    // NAMED RESIDUAL (task cf3dff51, not fixed here): `policyMatchesEvent`
-    // gained a FOURTH arm, `normalizeCommandQuoteAware` (a quote-aware
-    // BOUNDARY_RE segmenter closing `VAR='a; b' git push origin master` and
-    // its `|`/`&&`/`(`/newline siblings — task 13e55484's pinned gap). This
-    // function was deliberately NOT extended to try that fourth form in the
-    // same task — the wiring change was scoped narrowly to `policy
-    // intercept`'s own matcher (`src/runtime/intercept.ts`) — so `harness
-    // dry-run` currently predicts NOT-MATCHED for a command `policy
-    // intercept` actually blocks via the quote-aware arm, reintroducing
-    // EXACTLY the parity contradiction this comment's first sentence
-    // describes, for this one additional family. Flagged rather than fixed
-    // silently or left implicit; closing it is a small, well-understood
-    // follow-up (add `!re.test(normalizeCommandQuoteAware(args.command).normalized)`
-    // to the condition below, matching the amp-aware precedent exactly).
+    // FOURTH ARM (task f561e44c, closes the cf3dff51 follow-up): task
+    // cf3dff51 wired `normalizeCommandQuoteAware` (a quote-aware BOUNDARY_RE
+    // segmenter closing `VAR='a; b' git push origin master` and its
+    // `|`/`&&`/`(`/newline siblings — task 13e55484's pinned gap) as
+    // `policyMatchesEvent`'s FOURTH arm, but deliberately left this function
+    // untouched (scope was narrowed to `src/runtime/intercept.ts` alone),
+    // reintroducing EXACTLY the parity contradiction this comment's first
+    // sentence describes, for that one family. Closed here by adding the
+    // same fourth OR-arm, literally duplicated rather than extracted to a
+    // shared helper — mirroring the amp-aware arm's own literal-duplication
+    // shape immediately above (no shared-helper precedent exists yet for
+    // this OR-chain to follow instead).
     if (
       !re.test(args.command) &&
       !re.test(normalizeCommand(args.command).normalized) &&
-      !re.test(normalizeCommandAmpAware(args.command).normalized)
+      !re.test(normalizeCommandAmpAware(args.command).normalized) &&
+      !re.test(normalizeCommandQuoteAware(args.command).normalized)
     ) {
       return {
         matched: false,

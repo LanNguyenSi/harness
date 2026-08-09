@@ -5,6 +5,9 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { dryRun } from "../../src/cli/dry-run.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
+import { loadManifest } from "../../src/cli/loader.js";
+import { policyMatchesEvent, type ToolEvent } from "../../src/runtime/intercept.js";
+import type { Policy } from "../../src/schema/index.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..", "..");
@@ -222,5 +225,116 @@ memory:
       { path: "~/notes", scope: "user" },
       { path: "${PROJECT}/memory", scope: "project" },
     ]);
+  });
+});
+
+// Task f561e44c: dry-run's bash_match check gains a fourth, quote-aware
+// arm (`normalizeCommandQuoteAware`), mirroring `policyMatchesEvent`'s own
+// fourth arm (task cf3dff51) exactly, the same parity rationale as the
+// "raw-OR-normalised" (F8) and "amp-aware third arm" (aabbad63) describe
+// blocks above. Before this fix, dry-run predicted NOT-MATCHED for the
+// quoted-shell-boundary family (`VAR='a; b' git push origin master`) while
+// `harness policy intercept` actually blocks it via the quote-aware pass —
+// the same debug-verb/runtime contradiction those two prior fixes closed
+// for their own families, reintroduced here for this one.
+describe("dry-run — bash_match trigger matching gains the quote-aware fourth arm (task f561e44c)", () => {
+  // The 12 cf3dff51 target spellings: each of the 5 shell-boundary
+  // characters BOUNDARY_RE itself recognises (`;`, `|`, `&&`, `(`, and a
+  // literal newline in both its spaced and unspaced forms — 6 spellings in
+  // total) sitting INSIDE a quoted assignment value, crossed with the two
+  // gated verbs cf3dff51 measured against at the real hook entry point
+  // (`git push`, the operator-only kill switch `harness pause`).
+  const BOUNDARY_FORMS = [
+    { label: "semicolon", quoted: "a; b" },
+    { label: "pipe", quoted: "a| b" },
+    { label: "double-ampersand", quoted: "a&& b" },
+    { label: "open-paren", quoted: "a( b" },
+    { label: "literal newline (spaced)", quoted: "a\n b" },
+    { label: "literal newline (no extra space)", quoted: "a\nb" },
+  ] as const;
+
+  const TARGETS: Array<{ label: string; command: string; policyName: string }> = [];
+  for (const f of BOUNDARY_FORMS) {
+    TARGETS.push({
+      label: `${f.label}, git push`,
+      command: `VAR='${f.quoted}' git push origin master`,
+      policyName: "preflight-before-push",
+    });
+    TARGETS.push({
+      label: `${f.label}, kill switch`,
+      command: `VAR='${f.quoted}' harness pause`,
+      policyName: "deny-kill-switch-bypass",
+    });
+  }
+
+  it("enumerates exactly the 12 cf3dff51 target spellings", () => {
+    expect(TARGETS.length).toBe(12);
+  });
+
+  for (const t of TARGETS) {
+    it(`predicts a match for ${t.label}: ${JSON.stringify(t.command)}, the same way policy intercept does`, () => {
+      const r = dryRun("look around", {
+        configPath: FULL_MANIFEST,
+        tool: "Bash",
+        toolArgs: JSON.stringify({ command: t.command }),
+      });
+      const matched = r.report.matchingPolicies.map((p) => p.name);
+      expect(matched).toContain(t.policyName);
+    });
+  }
+
+  it("still predicts a match via the raw arm alone without an internal whitespace split (unaffected by the new arm)", () => {
+    const r = dryRun("look around", {
+      configPath: FULL_MANIFEST,
+      tool: "Bash",
+      toolArgs: JSON.stringify({ command: "VAR='a;b' git push origin master" }),
+    });
+    const matched = r.report.matchingPolicies.map((p) => p.name);
+    expect(matched).toContain("preflight-before-push");
+  });
+});
+
+// Direct parity fixture (acceptance criterion 2): dry-run's prediction and
+// the real `policyMatchesEvent` matcher (`src/runtime/intercept.ts`) must
+// AGREE, entry for entry, for the SAME 12 forms against the SAME manifest
+// policies — not merely each independently asserted `true` (the describe
+// block above), which could still silently diverge from the runtime if a
+// future edit changed one matcher's arm order/logic without the other's.
+describe("dry-run vs policyMatchesEvent — quote-aware fourth arm parity fixture (task f561e44c)", () => {
+  const { manifest } = loadManifest({ configPath: FULL_MANIFEST });
+  const pushPolicy = manifest.policies.find((p) => p.name === "preflight-before-push");
+  const killSwitchPolicy = manifest.policies.find((p) => p.name === "deny-kill-switch-bypass");
+  if (!pushPolicy || !killSwitchPolicy) {
+    throw new Error(
+      "docs/examples/full-manifest.yaml is missing preflight-before-push or deny-kill-switch-bypass",
+    );
+  }
+
+  const quotedForms = ["a; b", "a| b", "a&& b", "a( b", "a\n b", "a\nb"];
+  const cases: Array<{ command: string; policy: Policy }> = [
+    ...quotedForms.map((q) => ({ command: `VAR='${q}' git push origin master`, policy: pushPolicy })),
+    ...quotedForms.map((q) => ({ command: `VAR='${q}' harness pause`, policy: killSwitchPolicy })),
+  ];
+
+  it("agrees with policyMatchesEvent for all 12 target forms (equal verdict, not just both independently true)", () => {
+    expect(cases.length).toBe(12);
+    for (const c of cases) {
+      const event: ToolEvent = {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: c.command },
+      };
+      const runtimeVerdict = policyMatchesEvent(c.policy, event);
+      const r = dryRun("look around", {
+        configPath: FULL_MANIFEST,
+        tool: "Bash",
+        toolArgs: JSON.stringify({ command: c.command }),
+      });
+      const dryRunVerdict = r.report.matchingPolicies.some((p) => p.name === c.policy.name);
+      expect(runtimeVerdict, `policyMatchesEvent should match: ${c.command}`).toBe(true);
+      expect(dryRunVerdict, `dry-run should agree with policyMatchesEvent: ${c.command}`).toBe(
+        runtimeVerdict,
+      );
+    }
   });
 });
