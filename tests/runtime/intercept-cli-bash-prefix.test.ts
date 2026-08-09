@@ -7,6 +7,15 @@
 //      was invisible to the resolver until this fix.
 //
 // Both events MUST land on `decision:"block"` now.
+//
+// The `git switch`/`checkout` describe block further below (task
+// 341e024b) covers the sibling idiom: a leading branch switch in the
+// SAME command, which used to run under the pre-switch (often `unknown`)
+// label. Measured before the fix (isolated probe, harness 0.44.0):
+// `git switch main && rm -rf <path>` and the `checkout` equivalent both
+// classified `critical` / `unknown` / ALLOW, while the `cd
+// <repo-on-main> && rm -rf <path>` comparison form (above) already
+// denied. See that task's spec for the full measurement table.
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -232,5 +241,280 @@ describe("runInterceptCli — Bash prefix parsing for Risk Gate resolver", () =>
     });
     expect(result.blocked).toBe(true);
     expect(JSON.parse(output().trim()).decision).toBe("block");
+  });
+});
+
+// Task 341e024b — leading `git switch`/`checkout <branch>` as a branch
+// candidate for the Risk Gate resolver, upgrade-only (see
+// `applyBranchSwitchUpgrade` in src/cli/policy/intercept.ts). Uses the
+// spec's own destructive verb (`rm -rf <path>`) rather than the
+// `terraform destroy` classifier above, so a separate classifier is
+// declared for this block.
+const RM_CLASSIFIER: RiskClassifier = {
+  name: "dangerous-rm",
+  tool: "Bash",
+  patterns: [{ pattern: "rm\\s+-rf", categories: ["destructive"], severity: "critical" }],
+};
+
+const rmManifest: Manifest = makeManifest({
+  policies: [GATE_PROD],
+  classifiers: [RM_CLASSIFIER],
+  resolvers: [PROD_RESOLVER],
+});
+
+describe("runInterceptCli — git switch/checkout branch candidate (task 341e024b)", () => {
+  it("AC1: `git switch main && rm -rf <path>` from a non-prod cwd blocks (upgrade)", async () => {
+    const nonProdRepo = makeGitRepo("feature/work");
+    const { stream, output } = captureStdout();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "git switch main && rm -rf /var/lib/appdata" },
+          session_id: "sess-341e-1",
+          cwd: nonProdRepo,
+        }),
+      ),
+      stdout: stream,
+      manifest: rmManifest,
+      ledger: emptyLedger,
+      env: {},
+    });
+    expect(result.blocked).toBe(true);
+    const parsed = JSON.parse(output().trim());
+    expect(parsed.decision).toBe("block");
+    expect(parsed.reason).toContain("gate-prod-destructive");
+  });
+
+  it("AC2: `git checkout main && rm -rf <path>` from a non-prod cwd blocks (upgrade)", async () => {
+    const nonProdRepo = makeGitRepo("feature/work");
+    const { stream, output } = captureStdout();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "git checkout main && rm -rf /var/lib/appdata" },
+          session_id: "sess-341e-2",
+          cwd: nonProdRepo,
+        }),
+      ),
+      stdout: stream,
+      manifest: rmManifest,
+      ledger: emptyLedger,
+      env: {},
+    });
+    expect(result.blocked).toBe(true);
+    const parsed = JSON.parse(output().trim());
+    expect(parsed.decision).toBe("block");
+  });
+
+  it("AC3: `git switch task/foo && rm -rf <path>` from a repo ON main still blocks (no downgrade)", async () => {
+    // cwd is already on `main` (production). Switching to a non-prod
+    // branch in the same command must NOT downgrade the already-resolved
+    // production classification — fail-closed stays fail-closed.
+    const prodRepo = makeGitRepo("main");
+    const { stream, output } = captureStdout();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "git switch task/foo && rm -rf /var/lib/appdata" },
+          session_id: "sess-341e-3",
+          cwd: prodRepo,
+        }),
+      ),
+      stdout: stream,
+      manifest: rmManifest,
+      ledger: emptyLedger,
+      env: {},
+    });
+    expect(result.blocked).toBe(true);
+    const parsed = JSON.parse(output().trim());
+    expect(parsed.decision).toBe("block");
+  });
+
+  it("AC4: `git checkout -- <path> && rm -rf <path>` sets no branch signal (file-restore, not a switch)", async () => {
+    // cwd is on a non-prod branch and stays there: `checkout -- <path>`
+    // is a file restore, not a branch change, so this must resolve
+    // exactly as if the `git checkout --` prefix were absent — ALLOW.
+    const nonProdRepo = makeGitRepo("feature/work");
+    const { stream, output } = captureStdout();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "git checkout -- src/foo.ts && rm -rf /var/lib/appdata" },
+          session_id: "sess-341e-4",
+          cwd: nonProdRepo,
+        }),
+      ),
+      stdout: stream,
+      manifest: rmManifest,
+      ledger: emptyLedger,
+      env: {},
+    });
+    expect(result.blocked).toBe(false);
+    expect(output()).toBe("");
+  });
+
+  it("AC5: `git switch $BRANCH && rm -rf <path>` (unresolvable) is not guessed", async () => {
+    // cwd stays on a non-prod branch; a variable branch name must not be
+    // treated as a literal branch. The literal string "$BRANCH" would
+    // never match `branch_patterns: ["main", "release/*"]` anyway, so
+    // this asserts the parser does not resolve it at all (never reaches
+    // the resolver as a candidate branch), not merely that the literal
+    // text happens not to match.
+    const nonProdRepo = makeGitRepo("feature/work");
+    const { stream, output } = captureStdout();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "git switch $BRANCH && rm -rf /var/lib/appdata" },
+          session_id: "sess-341e-5",
+          cwd: nonProdRepo,
+        }),
+      ),
+      stdout: stream,
+      manifest: rmManifest,
+      ledger: emptyLedger,
+      env: {},
+    });
+    expect(result.blocked).toBe(false);
+    expect(output()).toBe("");
+  });
+});
+
+// Fix round 1 (reviewer MEDIUM finding, task 341e024b): a quoted branch
+// name bypassed the gate entirely before this round. Measured (this
+// worktree, pre-fix): `git switch "main" && rm -rf <path>` and the
+// single-quoted equivalent both classified `critical` severity /
+// `unknown` environment / ALLOW — `consumeLeadingGitSwitch` read the
+// branch token INCLUDING the quote characters (`branchTarget` = the
+// 6-char string `"main"`), which never matches `branch_patterns:
+// ["main"]`, so no upgrade fired and the destructive command ran
+// ungated, identically to the pre-fix `git switch main` (unquoted) case
+// AC1/AC2 above already cover.
+describe("runInterceptCli — quoted git switch/checkout branch (task 341e024b fix round 1)", () => {
+  it('blocks `git switch "main" && rm -rf <path>` from a non-prod cwd (double-quoted, upgrade)', async () => {
+    const nonProdRepo = makeGitRepo("feature/work");
+    const { stream, output } = captureStdout();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: 'git switch "main" && rm -rf /var/lib/appdata' },
+          session_id: "sess-341e-quoted-1",
+          cwd: nonProdRepo,
+        }),
+      ),
+      stdout: stream,
+      manifest: rmManifest,
+      ledger: emptyLedger,
+      env: {},
+    });
+    expect(result.blocked).toBe(true);
+    const parsed = JSON.parse(output().trim());
+    expect(parsed.decision).toBe("block");
+    expect(parsed.reason).toContain("gate-prod-destructive");
+  });
+
+  it("blocks `git switch 'main' && rm -rf <path>` from a non-prod cwd (single-quoted, upgrade)", async () => {
+    const nonProdRepo = makeGitRepo("feature/work");
+    const { stream, output } = captureStdout();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "git switch 'main' && rm -rf /var/lib/appdata" },
+          session_id: "sess-341e-quoted-2",
+          cwd: nonProdRepo,
+        }),
+      ),
+      stdout: stream,
+      manifest: rmManifest,
+      ledger: emptyLedger,
+      env: {},
+    });
+    expect(result.blocked).toBe(true);
+    const parsed = JSON.parse(output().trim());
+    expect(parsed.decision).toBe("block");
+    expect(parsed.reason).toContain("gate-prod-destructive");
+  });
+
+  it('blocks `git checkout "main" && rm -rf <path>` from a non-prod cwd (double-quoted checkout, upgrade)', async () => {
+    const nonProdRepo = makeGitRepo("feature/work");
+    const { stream, output } = captureStdout();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: 'git checkout "main" && rm -rf /var/lib/appdata' },
+          session_id: "sess-341e-quoted-3",
+          cwd: nonProdRepo,
+        }),
+      ),
+      stdout: stream,
+      manifest: rmManifest,
+      ledger: emptyLedger,
+      env: {},
+    });
+    expect(result.blocked).toBe(true);
+    expect(JSON.parse(output().trim()).decision).toBe("block");
+  });
+
+  it('does NOT downgrade `git switch "task/foo" && rm -rf <path>` from a repo ON main (quoted switch away from prod)', async () => {
+    // Same as AC3 above, but with the switch-away branch quoted: the
+    // upgrade-only merge must still hold, quoting must not open a
+    // downgrade path either.
+    const prodRepo = makeGitRepo("main");
+    const { stream, output } = captureStdout();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: 'git switch "task/foo" && rm -rf /var/lib/appdata' },
+          session_id: "sess-341e-quoted-4",
+          cwd: prodRepo,
+        }),
+      ),
+      stdout: stream,
+      manifest: rmManifest,
+      ledger: emptyLedger,
+      env: {},
+    });
+    expect(result.blocked).toBe(true);
+    expect(JSON.parse(output().trim()).decision).toBe("block");
+  });
+
+  it('does NOT guess `git switch "$BRANCH" && rm -rf <path>` (unresolvable, quoted double-quote interpolation)', async () => {
+    const nonProdRepo = makeGitRepo("feature/work");
+    const { stream, output } = captureStdout();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: 'git switch "$BRANCH" && rm -rf /var/lib/appdata' },
+          session_id: "sess-341e-quoted-5",
+          cwd: nonProdRepo,
+        }),
+      ),
+      stdout: stream,
+      manifest: rmManifest,
+      ledger: emptyLedger,
+      env: {},
+    });
+    expect(result.blocked).toBe(false);
+    expect(output()).toBe("");
   });
 });

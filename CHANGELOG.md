@@ -640,6 +640,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   the patched 3.3.17, so only the lockfile pin holds the fix (conscious
   no-override decision, unchanged). (task `b81e8e09`)
 
+- **SECURITY: the Risk Gate's environment resolver ignored a `git
+  switch`/`checkout <branch>` at the head of a Bash command, so a
+  same-command branch hop onto a production branch ran under the
+  PRE-switch (often `unknown`) label** (task `341e024b`). Measured
+  2026-08-06 (isolated probe home, harness 0.44.0, cwd on a non-production
+  branch): `git switch main && rm -rf <path>` and the `git checkout main`
+  equivalent both classified `critical` severity / `unknown` environment /
+  **ALLOW**, while the comparison `cd <repo-on-main> && rm -rf <path>` form
+  already denied — the branch resolver only ever read `.git/HEAD` at the
+  hook's cwd (or, since the `cd`-target fix below, a leading `cd <path>`'s
+  target), never a `git switch`/`checkout` argument. Alltagsrelevant: the
+  post-merge convention of switching back to the default branch before
+  continuing work is exactly this shape (`git switch main && rm -rf
+  node_modules && npm ci`), so it ran ungated while the identical work with
+  a leading `cd` did not.
+
+  `src/runtime/bash-prefix-parse.ts`'s `parseBashPrefix` now also extracts
+  a `branchTarget` from a leading `git [-C <path>] (switch|checkout)
+  <branch> [&&|;]`, mirroring the existing `cdTarget` extraction (a new
+  `consumeLeadingGitSwitch`, sharing the same command-head-only, two-pass,
+  no-shell-simulation discipline the module's `cdTarget`/`inlineEnv`
+  parsing already has — task `1a8a103d`). Deliberately conservative,
+  unlike `cdTarget`'s bidirectional risk (which can raise OR lower the
+  resolved environment depending on the target, a pre-existing, documented
+  asymmetry — G5, task `98ad072f`/2026-07-27 — untouched by this task):
+  `git checkout -- <path>` (a file restore, not a branch change) and an
+  unresolvable `$VAR`/`${VAR}` branch argument set NO branch signal — never
+  guessed. `src/cli/policy/intercept.ts`'s new `applyBranchSwitchUpgrade`
+  merges the parsed branch candidate against the existing `resolverGit`
+  (cwd- or cd-target-based) UPGRADE-ONLY: both are run through the same
+  `resolveEnvironment` call with identical env/kube inputs, and the
+  switch-target branch is only adopted when it resolves to a MORE
+  dangerous environment than the base; a switch AWAY from a production
+  branch never downgrades an already-production classification.
+
+  5 new end-to-end fixtures in `tests/runtime/intercept-cli-bash-prefix.test.ts`
+  pin the acceptance criteria (`git switch main`/`git checkout main` from
+  a non-prod cwd now deny; `git switch <non-prod-branch>` from a repo
+  already on `main` still denies — no downgrade; `git checkout --
+  <path>` and `git switch $BRANCH` set no signal and stay allow), plus
+  unit coverage for the parser itself in
+  `tests/runtime/bash-prefix-parse.test.ts` (slashed branch names, the
+  optional `-C <path>` skip, the flag/variable/missing-separator
+  exclusions, and — falling out of the existing two-pass loop for free —
+  a leading `cd <path> && git switch <branch>` chain resolving both
+  candidates). Existing `cdTarget`/inline-env fixtures are unchanged and
+  green. `docs/risk-gate.md`'s "Environment resolvers" section documents
+  the new upgrade-only branch signal alongside the pre-existing
+  bidirectional `cd` one.
+
+  Fix round 1 (reviewer-flagged, `accept_with_notes`): the upgrade-only
+  merge itself was verified sound (no downgrade path), but two gaps
+  remained. **MEDIUM (security):** a QUOTED branch name bypassed the
+  gate entirely — `consumeLeadingGitSwitch` read the branch token
+  INCLUDING the quote characters, so `git switch "main" && rm -rf <path>`
+  extracted `branchTarget` as the literal 6-character string `"main"`,
+  which never matches a `branch_patterns` entry like `main`, so no
+  upgrade fired and the destructive command ran ungated — identical in
+  effect to the pre-fix unquoted case above. The sibling `cd`-target
+  parser already stripped quotes (`skipPathToken`/`consumeLeadingCd`);
+  this was an inconsistency, and the module doc's given reason for
+  skipping a quoted branch form ("real git branch names cannot contain
+  whitespace, so this covers slashed names without needing a quoted
+  form") was itself wrong — a whitespace-free branch name can still be
+  quoted by the operator. `consumeLeadingGitSwitch` now reads a single-
+  or double-quoted branch token the same way `skipPathToken` reads a
+  quoted path: literal content, quotes stripped. A `$`-containing
+  DOUBLE-quoted branch argument is still left unresolved (real bash
+  interpolates inside double quotes, consistent with the existing
+  unquoted-`$VAR` rule); a SINGLE-quoted one is always literal, since
+  single quotes never interpolate in real bash. New e2e fixtures in
+  `tests/runtime/intercept-cli-bash-prefix.test.ts` pin `git switch
+  "main"` / `git switch 'main'` / `git checkout "main"` from a non-prod
+  cwd now denying, a quoted switch away from `main` still not
+  downgrading, and a double-quoted `"$BRANCH"` still not guessed; new
+  parser-unit coverage in `tests/runtime/bash-prefix-parse.test.ts`
+  covers the quote-stripping itself, the double-quote-`$` exclusion, the
+  single-quote-`$` literal case, unterminated/empty quoted literals, and
+  the missing-separator rule for a quoted branch. Mutation-probed:
+  disabling the quote-stripping branch turns exactly the 12 new e2e/unit
+  assertions red.
+
+  **LOW (maintainability):** `ENV_RANK` in `src/cli/policy/intercept.ts`
+  is a hand-maintained copy of `ENV_PRECEDENCE` in
+  `src/runtime/environment-resolver.ts`; the `Record<MatchableEnvironment,
+  number>` type catches an added/removed environment but not a REORDER,
+  which could silently invert the upgrade-only direction. A new drift
+  guard, `tests/runtime/intercept-env-rank-drift-guard.test.ts`, measures
+  `ENV_PRECEDENCE`'s real order live via `resolveEnvironment` (four
+  resolvers, one per environment, each on a different signal kind so all
+  four can fire on one probe envelope at once; the conflict winner reveals
+  the true order by elimination) and, for every adjacent pair in that
+  measured order, round-trips `runInterceptCli` to confirm
+  `applyBranchSwitchUpgrade`'s `ENV_RANK`-driven behavior agrees.
+  Mutation-probed: swapping two adjacent entries in `ENV_PRECEDENCE`
+  (without touching `ENV_RANK`) turns exactly the affected pair's two
+  assertions red.
+
+  **LOW, documentation only (not built):** a chained double switch (`git
+  switch dev && git switch main && rm ...`) resolves `branchTarget` as
+  `dev` (first-switch-wins), missing `main`. Multi-switch parsing was
+  deliberately NOT added — it would widen the parser's surface toward the
+  false-positive class task `dbc6d303` already measured. The module doc
+  on `consumeLeadingGitSwitch` and `docs/risk-gate.md` now state this
+  limit explicitly so it is not over-trusted.
+
 ### Changed
 
 - Audited `src/runtime/recovery-git-commit.ts`'s three JS `\s`-based
