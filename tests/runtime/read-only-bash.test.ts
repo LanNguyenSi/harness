@@ -714,15 +714,13 @@ describe("read-only Bash pipeline classifier (isReadOnlyBashPipeline)", () => {
 // `o`). The fix decodes the token before every one of these comparisons, so
 // the surviving-by-accident cases stop depending on that accident.
 //
-// NOT COVERED, named rather than implied. Two channels stay open, both
-// measured, neither made worse by this change:
+// NOT COVERED, named rather than implied. One channel stays open, measured,
+// not made worse by this change; the other channel named here at the time
+// (GNU long-option ABBREVIATION) is now CLOSED — see task dd055c1d below,
+// which fixes it and pins its own artefact-confirmed test cases in a
+// dedicated section further down this file.
 //
-// 1. GNU long-option ABBREVIATION. `sort --out=x`, `sort --o=x` and
-//    `sort --outp=x` were each measured creating their output file while
-//    classifying read-only, before and after, because the guards match full
-//    spellings. Orthogonal to quoting.
-//
-// 2. NUL escapes inside `$'...'`. bash TRUNCATES a `$'...'` run at a NUL and
+// 1. NUL escapes inside `$'...'`. bash TRUNCATES a `$'...'` run at a NUL and
 //    drops a NUL sitting between runs; `decodeShellWord` emits a literal
 //    U+0000 and keeps accumulating, so the decoded value never equals the
 //    flag bash actually passes. Artefact-confirmed bypasses (canary deleted
@@ -901,6 +899,199 @@ describe("write-flag guards: round-1 findings (task fdee7d0f)", () => {
     "find . -path './-ok'",
     'sort -"n" data.txt',
   ])("over-blocking does NOT extend to: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task dd055c1d: GNU/BSD `getopt_long` accepts any UNAMBIGUOUS ABBREVIATION
+// of a long option name, not just its full spelling. The pre-fix guards
+// compared full spellings only (`--output`, `--compress-program`,
+// `--temporary-directory`, `--compile`), so every abbreviation fell through
+// and classified read-only while genuinely writing or executing. This is the
+// channel task fdee7d0f named in its NOT-COVERED section above and left
+// open.
+//
+// Ground truth is the created/executed artefact, not the exit code, measured
+// against BOTH variants installed on the measurement machine: BSD sort
+// (macOS 26 `/usr/bin/sort`), GNU coreutils sort 9.11 (Homebrew `gsort`),
+// and `file` 5.41 (`/usr/bin/file`, one upstream codebase shared by macOS
+// and Linux, so a second "variant" install adds no signal). `tree` (GNU
+// tree 2.3.2, Homebrew, not previously installed on any machine this file
+// was verified on) was also measured directly: it has no long spelling of
+// `-o` at all and accepts NO abbreviation of any long option whatsoever
+// (`--opt-toggle` works, `--opt` — a genuine prefix of a real tree option —
+// errors `Invalid argument`), so the abbreviation fix is a no-op for tree in
+// practice; it is still exercised below at the classifier level because
+// `isTreeWriteToken` shares `isOutputWriteToken` with `sort`.
+//
+// Measured minimum unambiguous prefix (identical on BSD and GNU sort):
+//   --output               -> --o   (1 char past `--`)
+//   --compress-program     -> --co  (2 chars; `--c` alone is ambiguous with
+//                                    `--check` on both binaries and ERRORS,
+//                                    it does not run as compress-program)
+//   --temporary-directory  -> --t   (1 char past `--`)
+//   --compile (file)       -> --co  (2 chars; `--c` alone is ambiguous with
+//                                    `--checking-printout` and ERRORS)
+// ---------------------------------------------------------------------------
+
+describe("write-flag guards see through long-option ABBREVIATION (task dd055c1d)", () => {
+  // AC1: sort --output abbreviations. Artefact-confirmed on BOTH BSD sort
+  // and GNU coreutils sort 9.11 (gsort): the output file was created for
+  // every one of these forms, on both binaries, before this fix classified
+  // them read-only.
+  it.each([
+    "sort --out=x.txt data.txt",
+    "sort --o=x.txt data.txt",
+    "sort --outp=x.txt data.txt",
+    "sort --ou=x.txt data.txt",
+    "sort --outpu=x.txt data.txt",
+    "sort --out x.txt data.txt", // separated form
+    "sort --o x.txt data.txt",
+  ])("blocks the abbreviated sort output flag: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // AC2 (compress-program): every abbreviation from the measured minimum
+  // (`--co`) to the full spelling. Artefact: an executed PROGRAM (a shell
+  // script that touches a canary file) ran on both BSD sort and gsort when
+  // invoked through `--co=./prog`.
+  it.each([
+    "sort --co=/tmp/evil data.txt",
+    "sort --com=/tmp/evil data.txt",
+    "sort --comp=/tmp/evil data.txt",
+    "sort --compr=/tmp/evil data.txt",
+    "sort --compre=/tmp/evil data.txt",
+    "sort --compres=/tmp/evil data.txt",
+    "sort --compress=/tmp/evil data.txt",
+    "sort --compress-=/tmp/evil data.txt",
+    "sort --compress-p=/tmp/evil data.txt",
+    "sort --compress-pr=/tmp/evil data.txt",
+  ])("blocks the abbreviated sort compress-program flag: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // AC2 (temporary-directory): artefact-confirmed on BSD sort — forcing an
+  // external merge (`-S 1K` against 5000 lines) with `--t=./dir` produced
+  // thousands of scratch files inside the named directory.
+  it.each([
+    "sort --t=/tmp data.txt",
+    "sort --te=/tmp data.txt",
+    "sort --tem=/tmp data.txt",
+    "sort --temp=/tmp data.txt",
+    "sort --tempo=/tmp data.txt",
+    "sort --tempor=/tmp data.txt",
+    "sort --tempora=/tmp data.txt",
+    "sort --temporar=/tmp data.txt",
+    "sort --temporary=/tmp data.txt",
+    "sort --temporary-=/tmp data.txt",
+    "sort --temporary-d=/tmp data.txt",
+    "sort --temporary-di=/tmp data.txt",
+    "sort --temporary-dir=/tmp data.txt",
+    "sort --temporary-director=/tmp data.txt",
+  ])("blocks the abbreviated sort temporary-directory flag: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // AC2 (file --compile): artefact-confirmed on macOS /usr/bin/file — every
+  // form from `--co` up created the compiled magic-cache file (`.mgc`).
+  it.each([
+    "file --co -m /tmp/magic",
+    "file --com -m /tmp/magic",
+    "file --comp -m /tmp/magic",
+    "file --compi -m /tmp/magic",
+    "file --compil -m /tmp/magic",
+  ])("blocks the abbreviated file compile flag: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // tree shares isOutputWriteToken with sort. Measured: real tree rejects
+  // this form outright (it does not support abbreviation at all), so this
+  // pins classifier-level, conservative coverage rather than a live bypass.
+  it.each(["tree --o list.txt", "tree --out list.txt /dir"])(
+    "blocks the abbreviated tree output flag (classifier-level; real tree rejects the form outright): %s",
+    (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    },
+  );
+
+  // Quoting + abbreviation combined: the abbreviation check runs on BOTH the
+  // raw and decoded arms (repo convention, fdee7d0f decision D3), so a
+  // quoted abbreviated flag must block too. Exercises the decoded arm
+  // specifically — the raw token alone (`--"o"=x`) is not a prefix of
+  // `--output` (it contains literal quote characters), so only the decoded
+  // arm (`--o=x`) can catch it; a mutation deleting the decoded arm reddens
+  // this case while the plain-abbreviation cases above stay green.
+  it.each(['sort --"o"=x.txt data.txt', 'sort --"co"=/tmp/evil data.txt', 'file --"co" -m /tmp/magic'])(
+    "blocks a quoted abbreviated write flag: %s",
+    (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    },
+  );
+
+  // AC3: negative controls. These stay read-only, and the reason is not
+  // "the guard forgot them" but a conscious choice matching measured real
+  // binary behaviour, enumerated here rather than left implicit.
+  describe("negative controls: unaffected reads (AC3)", () => {
+    // `--c` alone is measured AMBIGUOUS on real sort (between --check and
+    // --compress-program) and on real file (between --checking-printout and
+    // --compile): the real binary ERRORS and does not run as either
+    // meaning, so it does not reach the measured-minimum threshold (2 chars)
+    // and is correctly left unclassified rather than blocked. This is the
+    // over-block boundary named in AC3: shortening the threshold to 1 char
+    // would additionally block `--c`, which cannot actually write (it
+    // cannot run at all), so the guard deliberately does not.
+    it.each(["sort --c FILE", "sort --c=x FILE", "file --c -m magic"])(
+      "leaves the ambiguous (real-binary-rejected) prefix unclassified: %s",
+      (cmd) => {
+        expect(isReadOnlyBashCommand(cmd)).toBe(true);
+      },
+    );
+
+    // `--che`/`--check`-family abbreviations of file's UNRELATED read-only
+    // `--checking-printout` flag are not prefixes of `--compile` (they
+    // diverge at the 2nd character, 'h' vs 'o') and stay read-only.
+    // Artefact-confirmed: no `.mgc` cache file was created for either form.
+    it.each(["file --che -m magic", "file --checking-printout -m magic"])(
+      "does not extend to file's unrelated --checking-printout family: %s",
+      (cmd) => {
+        expect(isReadOnlyBashCommand(cmd)).toBe(true);
+      },
+    );
+
+    // sort's UNRELATED `--key`/`-k` long option (`-k`, `--key=KEYDEF`) does
+    // not share a prefix with any write flag ('k' matches none of 'o', 'c',
+    // 't') and stays read-only, abbreviated or not.
+    it.each(["sort --k=1,1 FILE", "sort --key=1,1 FILE", "sort -k1,1 FILE"])(
+      "does not extend to sort's unrelated --key family: %s",
+      (cmd) => {
+        expect(isReadOnlyBashCommand(cmd)).toBe(true);
+      },
+    );
+
+    // sort's UNRELATED `--files0-from` long option starts with 'f', shares
+    // no prefix with any of the three guarded write flags, and stays
+    // read-only (already pinned above without abbreviation; repeated here
+    // for AC3 completeness against the new guard specifically).
+    it("does not extend to sort's unrelated --files0-from flag", () => {
+      expect(isReadOnlyBashCommand("sort --files0-from=list FILE")).toBe(true);
+    });
+  });
+
+  // AC4 (monotonicity): the same read-only corpus used throughout this file
+  // must still classify read-only after this change — a spot check across
+  // bins, not a re-run of the whole suite (the whole suite IS the full
+  // monotonicity check when run before/after this diff).
+  it.each([
+    "sort FILE",
+    "sort -n FILE",
+    "sort --files0-from=list FILE",
+    "sort -S 2T FILE",
+    "tree DIR",
+    "tree -L 2 src/",
+    "file FILE",
+    "file -i foo.txt",
+  ])("monotonicity: still read-only after the fix: %s", (cmd) => {
     expect(isReadOnlyBashCommand(cmd)).toBe(true);
   });
 });
