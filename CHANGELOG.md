@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- **SECURITY (LOW): `isEscapeCommand`'s top-level `command.trim()`
+  (`src/cli/pack/approve-escape.ts`) stripped a TRAILING report-heredoc line
+  made only of a non-bash-blank whitespace codepoint (e.g. NBSP, U+2028)
+  before the 623640a5 `after.every(/^[ \t]*$/)` post-terminator check ever
+  saw it, making that check unreachable through the public API for exactly
+  the shape it exists to reject** (task `508a2d81`, a residual the
+  623640a5 fold self-disclosed). PATH-stub verified against real bash: such
+  a line is not inert — bash attempts to execute it as a real command.
+  Fix: the top-level trim now strips only TAB, SPACE, LF, and CR from the
+  string's boundaries (never the full JS `\s`/Unicode-whitespace class), so
+  every other `\s` codepoint survives to the after-check.
 - **SECURITY: the agent-facing deny envelope of the built-in `gate-prod-destructive`
   Risk Gate policy named the session-wide kill switch (`harness pause --for
   <duration>` / `harness resume`) as a way to unblock a denied critical

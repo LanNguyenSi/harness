@@ -84,6 +84,30 @@ function heredocCommandPartIsClean(part: string): boolean {
   return commandPartIsClean(part);
 }
 
+// Top-level boundary trim for the whole incoming command, used by both
+// `isEscapeCommand` and `parseApproveReportHeredoc` before any parsing
+// starts. MUST NOT be the generic `.trim()` (task 508a2d81, residual of
+// 623640a5): `.trim()` strips every JS `\s` codepoint from the string's
+// edges, which deletes a TRAILING line made only of a non-bash-blank
+// whitespace codepoint (NBSP, U+2028, VT, FF, ...) before the
+// `after.every(/^[ \t]*$/)` check a few lines below ever gets to see it
+// — making that check unreachable through the public API for exactly the
+// shape it exists to reject. Only TAB (0x09), SPACE (0x20), LF (0x0A),
+// and CR (0x0D) are stripped here, and that is provably safe: TAB/SPACE
+// are bash's actual lexical blanks (see the comment above
+// `commandPartIsClean`), and a boundary run made of nothing but LF/CR
+// can never hide non-blank content — it only ever produces additional,
+// already-inert empty lines (LF is the line separator the module splits
+// on; CR is independently rejected wherever it appears, mid-string or
+// not, by the explicit `\r` checks in both callers below). Every OTHER
+// `\s` codepoint is left untouched so it survives to the after-check
+// (or, for a leading occurrence, so it correctly fails the strict
+// `harness[ \t]+approve` / heredoc-intro matching instead of being
+// silently normalized away as if it were insignificant).
+function trimCommandBoundary(command: string): string {
+  return command.replace(/^[ \t\r\n]+/, "").replace(/[ \t\r\n]+$/, "");
+}
+
 export interface ApproveReportHeredoc {
   /** The executable command part (first line, heredoc intro stripped). */
   command: string;
@@ -101,7 +125,7 @@ export interface ApproveReportHeredoc {
 export function parseApproveReportHeredoc(
   command: string,
 ): ApproveReportHeredoc | null {
-  const trimmed = command.trim();
+  const trimmed = trimCommandBoundary(command);
   const nl = trimmed.indexOf("\n");
   if (nl === -1) return null;
   const head = trimmed.slice(0, nl);
@@ -155,7 +179,7 @@ export function parseApproveReportHeredoc(
  * header for the accepted shapes and the rationale for strictness.
  */
 export function isEscapeCommand(command: string): boolean {
-  const trimmed = command.trim();
+  const trimmed = trimCommandBoundary(command);
   if (!trimmed.includes("\n")) {
     if (trimmed.includes("\r")) return false;
     return commandPartIsClean(trimmed);

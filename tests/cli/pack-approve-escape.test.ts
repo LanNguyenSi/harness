@@ -388,6 +388,52 @@ describe("bash-blank divergence (task 623640a5)", () => {
   });
 });
 
+describe("top-level trim residual (task 508a2d81) — after.every check reachability", () => {
+  // 623640a5 fixed the after.every check's own regex (`/^[ \t]*$/`, never
+  // `\s`) but left the TOP-LEVEL `command.trim()` that runs before any
+  // line-splitting. `.trim()` strips every JS `\s` codepoint from the
+  // string's edges, so a TRAILING line made only of a non-bash-blank
+  // whitespace codepoint (NBSP, U+2028, ...) was deleted before
+  // after.every ever ran — making the fixed check unreachable through
+  // the public API for exactly the shape it exists to reject. PATH-stub
+  // measured against real GNU bash (this task's implementation notes):
+  // such a line is NOT inert — bash looks it up and attempts to execute
+  // it as a real command (`command not found`, exit 127), the same as
+  // any other body line after the heredoc has closed.
+  const NBSP = " ";
+  const LINE_SEPARATOR = " ";
+
+  it("rejects a report heredoc with a non-bash-blank post-terminator tail (the found exploit shape)", () => {
+    for (const [label, ch] of [
+      ["NBSP", NBSP],
+      ["U+2028", LINE_SEPARATOR],
+    ] as const) {
+      const command = `harness approve understanding <<'X'\nbody\nX\n${ch}`;
+      expect(isEscapeCommand(command), label).toBe(false);
+      expect(parseApproveReportHeredoc(command), label).toBeNull();
+    }
+  });
+
+  it("rejects the same tail even with a trailing real newline after it", () => {
+    for (const [label, ch] of [
+      ["NBSP", NBSP],
+      ["U+2028", LINE_SEPARATOR],
+    ] as const) {
+      const command = `harness approve understanding <<'X'\nbody\nX\n${ch}\n`;
+      expect(isEscapeCommand(command), label).toBe(false);
+    }
+  });
+
+  it("still accepts a real [ \\t]-only post-terminator tail (matches bash's actual no-op; no regression)", () => {
+    expect(isEscapeCommand(`harness approve understanding <<'X'\nbody\nX\n  \n`)).toBe(true);
+  });
+
+  it("does not regress a plain trailing LF on a single-line command (LF is line structure, never hides content)", () => {
+    expect(isEscapeCommand("harness approve understanding\n")).toBe(true);
+    expect(isEscapeCommand("  harness approve understanding  \n\n")).toBe(true);
+  });
+});
+
 describe("mechanical guard — no bare `\\s` token in approve-escape.ts (task 623640a5 review)", () => {
   // Fix-by-fix closure of the bash-blank divergence does not stop the
   // class from reopening: a FUTURE regex added to this module could
