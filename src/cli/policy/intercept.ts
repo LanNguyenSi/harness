@@ -427,7 +427,14 @@ export function auditRetryTimeoutMs(timeoutMs: number): number {
  * (`harness policy intercept; echo done`) or an embedded `sh -c
  * "harness policy intercept"` wrapper produces, where nothing whitespace
  * separates `intercept` from the next token (review 2026-08-09, fix round
- * 1, finding 3). Still not exhaustive: a trailing `)`, `|`, `&`, or
+ * 1, finding 3). The quote arm accepts more than it strictly should: a
+ * quote glued directly onto the word (`intercept'or'`) also matches, even
+ * though a shell concatenates that into a different, longer identifier
+ * (`interceptor`). This is a deliberate, harmless OVER-flag — at worst a
+ * spurious validate/doctor diagnostic on an exotic command, never a missed
+ * real hook — accepted because the same quote boundary is load-bearing for
+ * the legitimate `sh -c "...intercept"` wrapper above. Still not
+ * exhaustive: a trailing `)`, `|`, `&`, or
  * backtick immediately abutting the word (e.g. `$(harness policy
  * intercept)`) is a KNOWN, deliberately-unclosed gap — widening further
  * risks matching inside an unrelated longer token with no whitespace
