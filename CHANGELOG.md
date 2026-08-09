@@ -640,6 +640,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   the patched 3.3.17, so only the lockfile pin holds the fix (conscious
   no-override decision, unchanged). (task `b81e8e09`)
 
+- **SECURITY: the Risk Gate's environment resolver ignored a `git
+  switch`/`checkout <branch>` at the head of a Bash command, so a
+  same-command branch hop onto a production branch ran under the
+  PRE-switch (often `unknown`) label** (task `341e024b`). Measured
+  2026-08-06 (isolated probe home, harness 0.44.0, cwd on a non-production
+  branch): `git switch main && rm -rf <path>` and the `git checkout main`
+  equivalent both classified `critical` severity / `unknown` environment /
+  **ALLOW**, while the comparison `cd <repo-on-main> && rm -rf <path>` form
+  already denied — the branch resolver only ever read `.git/HEAD` at the
+  hook's cwd (or, since the `cd`-target fix below, a leading `cd <path>`'s
+  target), never a `git switch`/`checkout` argument. Alltagsrelevant: the
+  post-merge convention of switching back to the default branch before
+  continuing work is exactly this shape (`git switch main && rm -rf
+  node_modules && npm ci`), so it ran ungated while the identical work with
+  a leading `cd` did not.
+
+  `src/runtime/bash-prefix-parse.ts`'s `parseBashPrefix` now also extracts
+  a `branchTarget` from a leading `git [-C <path>] (switch|checkout)
+  <branch> [&&|;]`, mirroring the existing `cdTarget` extraction (a new
+  `consumeLeadingGitSwitch`, sharing the same command-head-only, two-pass,
+  no-shell-simulation discipline the module's `cdTarget`/`inlineEnv`
+  parsing already has — task `1a8a103d`). Deliberately conservative,
+  unlike `cdTarget`'s bidirectional risk (which can raise OR lower the
+  resolved environment depending on the target, a pre-existing, documented
+  asymmetry — G5, task `98ad072f`/2026-07-27 — untouched by this task):
+  `git checkout -- <path>` (a file restore, not a branch change) and an
+  unresolvable `$VAR`/`${VAR}` branch argument set NO branch signal — never
+  guessed. `src/cli/policy/intercept.ts`'s new `applyBranchSwitchUpgrade`
+  merges the parsed branch candidate against the existing `resolverGit`
+  (cwd- or cd-target-based) UPGRADE-ONLY: both are run through the same
+  `resolveEnvironment` call with identical env/kube inputs, and the
+  switch-target branch is only adopted when it resolves to a MORE
+  dangerous environment than the base; a switch AWAY from a production
+  branch never downgrades an already-production classification.
+
+  5 new end-to-end fixtures in `tests/runtime/intercept-cli-bash-prefix.test.ts`
+  pin the acceptance criteria (`git switch main`/`git checkout main` from
+  a non-prod cwd now deny; `git switch <non-prod-branch>` from a repo
+  already on `main` still denies — no downgrade; `git checkout --
+  <path>` and `git switch $BRANCH` set no signal and stay allow), plus
+  unit coverage for the parser itself in
+  `tests/runtime/bash-prefix-parse.test.ts` (slashed branch names, the
+  optional `-C <path>` skip, the flag/variable/missing-separator
+  exclusions, and — falling out of the existing two-pass loop for free —
+  a leading `cd <path> && git switch <branch>` chain resolving both
+  candidates). Existing `cdTarget`/inline-env fixtures are unchanged and
+  green. `docs/risk-gate.md`'s "Environment resolvers" section documents
+  the new upgrade-only branch signal alongside the pre-existing
+  bidirectional `cd` one.
+
 ### Changed
 
 - Audited `src/runtime/recovery-git-commit.ts`'s three JS `\s`-based

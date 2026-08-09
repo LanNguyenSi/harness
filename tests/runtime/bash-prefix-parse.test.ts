@@ -71,6 +71,73 @@ describe("parseBashPrefix", () => {
     });
   });
 
+  describe("git switch/checkout branch (task 341e024b)", () => {
+    it("parses `git switch <branch> && rest`", () => {
+      const r = parseBashPrefix("git switch main && rm -rf /tmp/x");
+      expect(r.branchTarget).toBe("main");
+    });
+
+    it("parses `git checkout <branch> && rest`", () => {
+      const r = parseBashPrefix("git checkout main && rm -rf /tmp/x");
+      expect(r.branchTarget).toBe("main");
+    });
+
+    it("parses `git switch <branch>; rest` (semicolon separator)", () => {
+      const r = parseBashPrefix("git switch main; rm -rf /tmp/x");
+      expect(r.branchTarget).toBe("main");
+    });
+
+    it("supports slashed branch names", () => {
+      const r = parseBashPrefix("git switch task/foo && rm -rf /tmp/x");
+      expect(r.branchTarget).toBe("task/foo");
+    });
+
+    it("skips an optional leading `-C <path>`", () => {
+      const r = parseBashPrefix("git -C /some/repo switch main && rm -rf /tmp/x");
+      expect(r.branchTarget).toBe("main");
+    });
+
+    it("does not treat `git checkout -- <path>` (file restore) as a branch signal", () => {
+      const r = parseBashPrefix("git checkout -- src/foo.ts && rm -rf /tmp/x");
+      expect(r.branchTarget).toBe(null);
+    });
+
+    it("does not guess a `$VAR` branch name", () => {
+      const r = parseBashPrefix("git switch $BRANCH && rm -rf /tmp/x");
+      expect(r.branchTarget).toBe(null);
+    });
+
+    it("does not guess a `${VAR}` branch name", () => {
+      const r = parseBashPrefix("git switch ${BRANCH} && rm -rf /tmp/x");
+      expect(r.branchTarget).toBe(null);
+    });
+
+    it("does not guess `git checkout -` (previous branch)", () => {
+      const r = parseBashPrefix("git checkout - && rm -rf /tmp/x");
+      expect(r.branchTarget).toBe(null);
+    });
+
+    it("does not guess a branch-creation flag as a branch name", () => {
+      expect(parseBashPrefix("git switch -c newbranch && rm").branchTarget).toBe(null);
+      expect(parseBashPrefix("git checkout -b newbranch && rm").branchTarget).toBe(null);
+    });
+
+    it("returns null when the separator is missing (nothing to gate)", () => {
+      const r = parseBashPrefix("git switch main rm -rf /tmp/x");
+      expect(r.branchTarget).toBe(null);
+    });
+
+    it("does not match commands that merely START with 'git' (github, gitk)", () => {
+      expect(parseBashPrefix("github switch main && rm").branchTarget).toBe(null);
+      expect(parseBashPrefix("gitk switch main && rm").branchTarget).toBe(null);
+    });
+
+    it("does not match a bare 'checkout'/'switch' without a leading 'git'", () => {
+      expect(parseBashPrefix("switch main && rm").branchTarget).toBe(null);
+      expect(parseBashPrefix("checkout main && rm").branchTarget).toBe(null);
+    });
+  });
+
   describe("combined prefixes", () => {
     it("parses inline-env then cd in either order", () => {
       const a = parseBashPrefix("A=1 cd /tmp/x && terraform destroy");
@@ -92,19 +159,25 @@ describe("parseBashPrefix", () => {
       const r = parseBashPrefix("cd /tmp/x && cd /tmp/y && rm");
       expect(r.cdTarget).toBe("/tmp/x");
     });
+
+    it("parses a leading cd followed by a git switch (both candidates)", () => {
+      const r = parseBashPrefix("cd /tmp/x && git switch main && rm -rf /tmp/x");
+      expect(r.cdTarget).toBe("/tmp/x");
+      expect(r.branchTarget).toBe("main");
+    });
   });
 
   describe("degenerate input", () => {
     it("returns empty for empty / whitespace-only command", () => {
-      expect(parseBashPrefix("")).toEqual({ inlineEnv: {}, cdTarget: null });
-      expect(parseBashPrefix("   \t  ")).toEqual({ inlineEnv: {}, cdTarget: null });
+      expect(parseBashPrefix("")).toEqual({ inlineEnv: {}, cdTarget: null, branchTarget: null });
+      expect(parseBashPrefix("   \t  ")).toEqual({ inlineEnv: {}, cdTarget: null, branchTarget: null });
     });
 
     it("returns empty for non-string input", () => {
       // @ts-expect-error testing runtime guard
-      expect(parseBashPrefix(undefined)).toEqual({ inlineEnv: {}, cdTarget: null });
+      expect(parseBashPrefix(undefined)).toEqual({ inlineEnv: {}, cdTarget: null, branchTarget: null });
       // @ts-expect-error testing runtime guard
-      expect(parseBashPrefix(null)).toEqual({ inlineEnv: {}, cdTarget: null });
+      expect(parseBashPrefix(null)).toEqual({ inlineEnv: {}, cdTarget: null, branchTarget: null });
     });
   });
 });

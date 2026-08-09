@@ -1,35 +1,50 @@
 // Risk Gate resolver input — Bash command-prefix parser.
 //
-// Two normal POSIX shell idioms slip past the production environment
-// resolver when only `process.env` and the hook's starting cwd are
-// inspected:
+// Three normal POSIX shell idioms slip past the production environment
+// resolver when only `process.env` and the hook's starting cwd (and, for
+// the branch, its current `.git/HEAD`) are inspected:
 //
 //   DATABASE_URL=postgres://prod terraform destroy   # inline env
 //   cd /repos/prod-infra && terraform destroy        # working-dir hop
+//   git switch main && rm -rf node_modules && ...    # branch hop
 //
 // The hook intercept sees Claude Code's process env and starting cwd, so
-// `env_var_patterns` and `branch_patterns` miss both signals and the
+// `env_var_patterns` and `branch_patterns` miss all three signals and the
 // gate silently treats a prod mutation as non-prod.
 //
 // This parser extracts the leading idioms from a Bash command string so
 // the resolver layer can merge them into its inputs before
-// `environments.resolvers[]` runs. Two POSIX forms are supported in v1
-// (kept narrow on purpose, see follow-up scope in the originating task):
+// `environments.resolvers[]` runs. Three POSIX forms are supported in v1
+// (kept narrow on purpose, see follow-up scope in the originating tasks):
 //
 //   1. Inline env: leading `\w+=value` tokens. Values may be unquoted,
 //      single-quoted (literal), or double-quoted (literal, no $
 //      interpolation in v1).
 //   2. cd prefix: a single leading `cd <path> [&&|;] ...`. Quoted paths
 //      supported. No `pushd`, no subshell `(cd X && ...)`, no `bash -c`.
+//   3. git branch switch: a single leading `git [-C <path>]
+//      (switch|checkout) <branch> [&&|;] ...` (task 341e024b). The
+//      `<branch>` must be a plain, literal token — a `-`-prefixed first
+//      argument (`-`, `--`, `-b`, ...; this is how `git checkout --
+//      <path>`'s file-restore form is excluded) or a `$VAR`/`${VAR}`
+//      shell variable is left unresolved (`branchTarget: null`) rather
+//      than guessed. The optional `-C <path>` is recognized so it does
+//      not block the match, but its value is discarded: the ONLY thing
+//      this idiom feeds the resolver is the branch name being switched
+//      TO (see `src/cli/policy/intercept.ts`'s merge, which is
+//      upgrade-only — unlike the `cd` merge below, a resolved branch
+//      target here can only push the resolved environment to something
+//      MORE dangerous, never less).
 //
-// The two clauses may appear in either order (`cd /x && VAR=v cmd` and
-// `VAR=v cd /x && cmd` both parse); the parser walks up to two passes
-// before giving up.
+// The clauses may appear in any order relative to each other (`cd /x &&
+// VAR=v cmd`, `VAR=v cd /x && cmd`, `cd /x && git switch main && cmd`,
+// ...); the parser walks up to two passes before giving up.
 //
 // On a syntactically broken prefix (unterminated quote, missing `&&`
-// after `cd <path>`) the parser falls through cleanly: the malformed
-// prefix is not consumed, the resolver-side fallback to process env /
-// hook cwd holds. There are no thrown errors from this module.
+// after `cd <path>` / a switch-or-checkout branch) the parser falls
+// through cleanly: the malformed prefix is not consumed, the
+// resolver-side fallback to process env / hook cwd holds. There are no
+// thrown errors from this module.
 //
 // MEASUREMENT RULE (task 47297478): any claim about this parser's
 // CD-TARGET extraction versus another build (lost or gained `cdTarget`
@@ -38,7 +53,7 @@
 // ad-hoc corpora in the b093911d run reported "0 lost" while being
 // structurally unable to report a loss; that tool's self-test rebuilds
 // exactly that failure and demands the gate catch it. The tool does NOT
-// measure `inlineEnv` extraction — claims about inline-env behavior
+// measure `inlineEnv` or `branchTarget` extraction — claims about those
 // have no instrument yet and need their own measurement.
 
 /** Parsed leading-prefix result. */
@@ -47,6 +62,13 @@ export interface BashPrefix {
   inlineEnv: Record<string, string>;
   /** Path argument of a leading `cd <path> &&|;`, or null when none. */
   cdTarget: string | null;
+  /**
+   * Branch argument of a leading `git [-C <path>] (switch|checkout)
+   * <branch> &&|;`, or null when none — including when the branch
+   * argument is a `-`-prefixed flag/file-restore form or an
+   * unresolvable `$VAR` (see module doc, form 3). Task 341e024b.
+   */
+  branchTarget: string | null;
 }
 
 /**
@@ -56,13 +78,17 @@ export interface BashPrefix {
  */
 export function parseBashPrefix(command: string): BashPrefix {
   if (typeof command !== "string" || command.length === 0) {
-    return { inlineEnv: {}, cdTarget: null };
+    return { inlineEnv: {}, cdTarget: null, branchTarget: null };
   }
   const inlineEnv: Record<string, string> = {};
   let cdTarget: string | null = null;
+  let branchTarget: string | null = null;
   let cursor = 0;
-  // Two passes catch `cd /x && VAR=v cmd` and `VAR=v cd /x && cmd`. A
-  // third pass would only fire on a redundant prefix; bail to keep this
+  // Two passes catch e.g. `cd /x && VAR=v cmd`, `VAR=v cd /x && cmd`, and
+  // `cd /x && git switch main && cmd` (the last resolves fully within a
+  // single pass — cd then switch are tried back to back below — the
+  // second pass just confirms nothing more is left to consume). A third
+  // pass would only fire on a redundant prefix; bail to keep this
   // bounded.
   for (let pass = 0; pass < 2; pass++) {
     const before = cursor;
@@ -74,9 +100,16 @@ export function parseBashPrefix(command: string): BashPrefix {
         cursor = cd.next;
       }
     }
+    if (branchTarget === null) {
+      const sw = consumeLeadingGitSwitch(command, cursor);
+      if (sw !== null) {
+        branchTarget = sw.branch;
+        cursor = sw.next;
+      }
+    }
     if (cursor === before) break;
   }
-  return { inlineEnv, cdTarget };
+  return { inlineEnv, cdTarget, branchTarget };
 }
 
 const WS = /\s/;
@@ -184,6 +217,107 @@ function consumeLeadingCd(s: string, start: number): { path: string; next: numbe
   }
   if (s[i] === ";") {
     return { path, next: i + 1 };
+  }
+  return null;
+}
+
+/**
+ * Match a literal keyword at `i` on a word boundary — immediately
+ * followed by whitespace or end-of-string, never a partial-word match
+ * (`"git"` must not match inside `"github"`, `"switch"` must not match
+ * inside `"switching"`). Returns the cursor just past the keyword on
+ * success, or null.
+ */
+function matchKeyword(s: string, i: number, word: string): number | null {
+  if (s.slice(i, i + word.length) !== word) return null;
+  const after = i + word.length;
+  if (after < s.length && !WS.test(s[after]!)) return null;
+  return after;
+}
+
+/**
+ * Skip a single path token (quoted or unquoted) starting at `i`.
+ * Returns the cursor just past it, or null on an unterminated quote or
+ * an empty token. Deliberately a separate copy of `consumeLeadingCd`'s
+ * path-reading rules rather than a shared helper: this function's only
+ * caller (`consumeLeadingGitSwitch`'s `-C <path>` skip) discards the
+ * value, `consumeLeadingCd`'s does not, and factoring them together was
+ * judged not worth the risk to `consumeLeadingCd`'s existing,
+ * separately-measured behavior for a value nothing here uses.
+ */
+function skipPathToken(s: string, i: number): number | null {
+  if (s[i] === "'") {
+    const end = s.indexOf("'", i + 1);
+    return end < 0 ? null : end + 1;
+  }
+  if (s[i] === '"') {
+    const end = s.indexOf('"', i + 1);
+    return end < 0 ? null : end + 1;
+  }
+  const start = i;
+  while (i < s.length && !WS.test(s[i]!) && s[i] !== ";" && s[i] !== "&") i++;
+  return i > start ? i : null;
+}
+
+/**
+ * Consume a single leading `git [-C <path>] (switch|checkout) <branch>
+ * [&&|;]` clause (task 341e024b). Returns `{branch, next}` on success,
+ * or null when the prefix does not match — including these deliberate
+ * exclusions, which return null WITHOUT guessing a branch:
+ *
+ *   - A `-`-prefixed first argument after `switch`/`checkout` (`-`,
+ *     `--`, `-b`, `-c`, `-C`, `--force`, ...). This specifically covers
+ *     `git checkout -- <path>` (git's file-restore form — no branch is
+ *     switched at all) as one case of the general rule "a flag is not a
+ *     branch name", rather than special-casing `--` alone.
+ *   - A `$VAR` / `${VAR}` first argument: a shell variable, not a
+ *     literal branch name. Resolving it would require evaluating the
+ *     shell environment, which this parser does not do (see module
+ *     doc).
+ *   - A missing trailing `&&` / `;` separator, mirroring
+ *     `consumeLeadingCd`'s identical rule: `git switch main` alone, with
+ *     nothing following, has no "rest of command" for the branch
+ *     candidate to apply to.
+ *
+ * The branch token itself is read as a single unquoted word up to the
+ * next whitespace/`;`/`&` — real git branch names cannot contain
+ * whitespace, so this covers slashed names (`task/foo`, `release/1.2`)
+ * without needing a quoted form.
+ *
+ * The optional leading `-C <path>` is recognized so it does not block
+ * the match, but its value is discarded — see the module doc's form 3
+ * for why only the branch name matters to the caller.
+ */
+function consumeLeadingGitSwitch(s: string, start: number): { branch: string; next: number } | null {
+  let i = skipWs(s, start);
+  const afterGit = matchKeyword(s, i, "git");
+  if (afterGit === null) return null;
+  i = skipWs(s, afterGit);
+  const afterDashC = matchKeyword(s, i, "-C");
+  if (afterDashC !== null) {
+    i = skipWs(s, afterDashC);
+    const skipped = skipPathToken(s, i);
+    if (skipped === null) return null;
+    i = skipWs(s, skipped);
+  }
+  let afterVerb = matchKeyword(s, i, "switch");
+  if (afterVerb === null) afterVerb = matchKeyword(s, i, "checkout");
+  if (afterVerb === null) return null;
+  i = skipWs(s, afterVerb);
+  if (i >= s.length) return null;
+  // A `-`-prefixed or `$`-prefixed first argument is not a plain branch
+  // name — do not guess (see doc comment above).
+  if (s[i] === "-" || s[i] === "$") return null;
+  const branchStart = i;
+  while (i < s.length && !WS.test(s[i]!) && s[i] !== ";" && s[i] !== "&") i++;
+  const branch = s.slice(branchStart, i);
+  if (branch.length === 0) return null;
+  i = skipWs(s, i);
+  if (s[i] === "&" && s[i + 1] === "&") {
+    return { branch, next: i + 2 };
+  }
+  if (s[i] === ";") {
+    return { branch, next: i + 1 };
   }
   return null;
 }

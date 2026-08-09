@@ -14,18 +14,21 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  buildActionEnvelope,
   intercept,
   isBlockingDecision,
   recordPolicyDecisionOnSession,
+  resolveEnvironment,
   resolveGitContext,
   resolveKubeContext,
   sanitizeEnvelopeReason,
+  type GitRepoContext,
   type LedgerClient,
   type PolicyDecision,
   type RiskGateContext,
   type ToolEvent,
 } from "../../runtime/index.js";
-import type { Manifest, McpServer } from "../../schema/index.js";
+import type { Manifest, MatchableEnvironment, McpServer } from "../../schema/index.js";
 import { resolveGeneratedDir, writePendingApproval } from "../../runtime/pending-approval.js";
 import { parseBashPrefix } from "../../runtime/bash-prefix-parse.js";
 import {
@@ -244,6 +247,67 @@ function resolvePolicyCwd(event: ToolEvent, codexCommandCwd?: string): string {
     if (procCwd) return procCwd;
   }
   return process.cwd();
+}
+
+// Mirrors `ENV_PRECEDENCE` in `../../runtime/environment-resolver.ts`
+// (most-dangerous-first). Kept as a local, small, duplicate table
+// instead of importing that module's private const, so this file stays
+// a read-only consumer of `resolveEnvironment`'s public API rather than
+// reaching into its internals. `unknown` is deliberately ranked lowest:
+// resolving to no signal at all must never look like an "upgrade" over
+// a branch that DID fire a resolver.
+const ENV_RANK: Record<MatchableEnvironment, number> = {
+  production: 0,
+  staging: 1,
+  dev: 2,
+  local: 3,
+  unknown: 4,
+};
+
+/**
+ * Branch-switch, upgrade-only merge (task 341e024b): a leading `git
+ * switch <branch>` / `git checkout <branch>` names the branch the REST
+ * of the command actually runs against, the same way a leading `cd
+ * <path>` names a different working directory (see `resolverGit`'s own
+ * comment at the call site). Unlike that `cd` merge — which fully
+ * REPLACES the git context and can move the resolved environment in
+ * EITHER direction (G5, pre-existing, out of scope for this task) —
+ * this merge is deliberately asymmetric: it only ever pushes the
+ * resolved environment to something MORE dangerous, never less.
+ *
+ * Both the base git context and the switch-target candidate (same repo
+ * / sha, only `branch` differs) are run through the SAME
+ * `resolveEnvironment` call with IDENTICAL env / kube inputs, so any
+ * difference in the result is attributable to the branch alone. The
+ * more dangerous of the two (`ENV_RANK` order) wins; a switch AWAY from
+ * a production branch never downgrades — when the candidate resolves to
+ * something equally or less dangerous, `baseGit` is returned unchanged.
+ */
+function applyBranchSwitchUpgrade(
+  event: ToolEvent,
+  manifest: Manifest,
+  cwd: string,
+  baseGit: GitRepoContext,
+  branchTarget: string | null,
+  inputs: { env: Record<string, string | undefined>; kubeContext: string; kubeNamespace: string },
+  user: string,
+  host: string,
+  now: Date | undefined,
+): GitRepoContext {
+  if (branchTarget === null || branchTarget === baseGit.branch) return baseGit;
+  const candidateGit: GitRepoContext = { ...baseGit, branch: branchTarget };
+  const effectiveNow = now ?? new Date();
+  const baseResolution = resolveEnvironment(
+    buildActionEnvelope(event, { cwd, git: baseGit, user, host, now: effectiveNow }),
+    manifest.environments.resolvers,
+    inputs,
+  );
+  const candidateResolution = resolveEnvironment(
+    buildActionEnvelope(event, { cwd, git: candidateGit, user, host, now: effectiveNow }),
+    manifest.environments.resolvers,
+    inputs,
+  );
+  return ENV_RANK[candidateResolution.name] < ENV_RANK[baseResolution.name] ? candidateGit : baseGit;
 }
 
 /**
@@ -868,21 +932,23 @@ export async function runInterceptCli(
             namespace: opts.kubeNamespace ?? "",
           }
         : resolveKubeContext();
-    // Two POSIX Bash idioms (`VAR=value command`, `cd <path> && command`)
-    // were invisible to the resolver before: the env resolver read
-    // `process.env` and the branch resolver read `.git/HEAD` under the
-    // hook's starting cwd, so a prod signal smuggled through either
-    // idiom silently passed the gate. Parse the leading prefix once from
-    // the Bash command and merge the result into the resolver inputs
-    // only. ${CWD} always names the hook's own cwd; ${REPO}/${BRANCH}
-    // (`cwdGitContext` above, feeding `builtins`) are cwd-only too — see
-    // the comment above `cwdGitContext`'s declaration. The Risk Gate
-    // resolver's git base, `resolverGit` below, is its own independent
-    // narrow parse: it recognises only a leading `cd`, never `git -C` /
-    // `--work-tree` / `--git-dir` / `env -C`. Bottom line: `resolverGit`
-    // must never read anything other than `cwdGitContext`, or the
-    // leading-`cd` target within THIS same narrow parse — this feeds
-    // `when:`-clause risk classification, not ledger-tag namespacing.
+    // Three POSIX Bash idioms (`VAR=value command`, `cd <path> &&
+    // command`, and — since task 341e024b — `git switch|checkout
+    // <branch> && command`) were invisible to the resolver before: the
+    // env resolver read `process.env` and the branch resolver read
+    // `.git/HEAD` under the hook's starting cwd, so a prod signal
+    // smuggled through any of the three idioms silently passed the
+    // gate. Parse the leading prefix once from the Bash command and
+    // merge the result into the resolver inputs only. ${CWD} always
+    // names the hook's own cwd; ${REPO}/${BRANCH} (`cwdGitContext`
+    // above, feeding `builtins`) are cwd-only too — see the comment
+    // above `cwdGitContext`'s declaration. The Risk Gate resolver's git
+    // base, `resolverGit` below, is its own independent narrow parse: it
+    // recognises only a leading `cd`, never `git -C` / `--work-tree` /
+    // `--git-dir` / `env -C`. Bottom line: `resolverGit` must never read
+    // anything other than `cwdGitContext`, or the leading-`cd` target
+    // within THIS same narrow parse — this feeds `when:`-clause risk
+    // classification, not ledger-tag namespacing.
     //
     // G5 (review round 2, 2026-07-27): that leading-`cd` parse is itself
     // still a live declassification lever, PRE-EXISTING and NOT changed
@@ -899,7 +965,13 @@ export async function runInterceptCli(
     // branch, as in the example above) — `resolverGit` trusts whichever
     // of the two the command happens to name, with no independent check
     // that the `cd` target is the repo the destructive command actually
-    // runs against.
+    // runs against. The `git switch`/`checkout` merge added below
+    // (`gitForRisk`, via `applyBranchSwitchUpgrade`) deliberately does
+    // NOT share this bidirectional-risk shape: it is a SEPARATE,
+    // upgrade-only step layered on top of `resolverGit`, not a change to
+    // `resolverGit` itself — a switch away from a production branch can
+    // never downgrade what `resolverGit` (cwd- or cd-based) already
+    // resolved.
     const bashPrefix =
       event.tool_name === "Bash"
         ? (() => {
@@ -924,11 +996,28 @@ export async function runInterceptCli(
       // win over process.env (matches POSIX `VAR=value cmd` semantics).
       return { ...base, ...bashPrefix.inlineEnv };
     })();
-    riskContext = {
-      git: resolverGit,
+    const riskUser = safeOs(() => os.userInfo().username);
+    const riskHost = safeOs(() => os.hostname());
+    // A leading `git switch`/`checkout <branch>` (task 341e024b) is
+    // merged on top of `resolverGit` above — upgrade-only, see
+    // `applyBranchSwitchUpgrade`'s own doc comment for why this one is
+    // NOT a straight replacement the way the `cd` merge is.
+    const gitForRisk = applyBranchSwitchUpgrade(
+      event,
+      manifest,
       cwd,
-      user: safeOs(() => os.userInfo().username),
-      host: safeOs(() => os.hostname()),
+      resolverGit,
+      bashPrefix?.branchTarget ?? null,
+      { env: resolverEnv, kubeContext: kube.context, kubeNamespace: kube.namespace },
+      riskUser,
+      riskHost,
+      opts.now,
+    );
+    riskContext = {
+      git: gitForRisk,
+      cwd,
+      user: riskUser,
+      host: riskHost,
       env: resolverEnv,
       kubeContext: kube.context,
       kubeNamespace: kube.namespace,
