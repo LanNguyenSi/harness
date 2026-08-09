@@ -97,13 +97,14 @@
 // fourth arm, mirroring `normalizeCommandAmpAware`'s own wiring (task
 // aabbad63) exactly — see that function's own doc comment and
 // `src/runtime/intercept.ts`'s `policyMatchesEvent` for the wired shape.
-// STILL NOT covered: `src/cli/dry-run.ts`'s own, independently-copied
+// UPDATE (task f561e44c): `src/cli/dry-run.ts`'s own, independently-copied
 // raw-OR-normalised-OR-amp-normalised matcher (the `harness dry-run` debug
 // verb, which predicts `policyMatchesEvent`'s verdict without running it)
-// was NOT extended to also try the quote-aware form — named residual, not
-// silently left implicit; see that file's own comment for why parity with
-// the real matcher matters there specifically, and this run's implementer
-// report for why it stayed out of the extended scope.
+// was left out of the wiring above (named residual, not silently left
+// implicit) and, as a result, under-predicted the quote-aware family. This
+// follow-up task added the same fourth OR-arm to that matcher too, so
+// `harness dry-run` and `policy intercept` now agree on this family — see
+// that file's own comment for the fix and its parity-fixture test.
 //
 // THE HALT CRITERION (decided and written down before writing the first
 // line of this pass's implementation, mirroring 13e55484's own "ONE-
@@ -339,10 +340,11 @@
 //     CLASS distinct from `consumeAssignment`'s own, already-reviewed
 //     precision limits (the "master false positive" class already pinned
 //     elsewhere in the test file) was found. See `normalizeCommandQuoteAware`'s
-//     own doc comment for the full mechanism and reasoning. STILL open:
-//     `src/cli/dry-run.ts`'s independently-copied matcher was not extended
-//     to try this fourth form — named residual, see that file's own
-//     comment.
+//     own doc comment for the full mechanism and reasoning. CLOSED (task
+//     f561e44c): `src/cli/dry-run.ts`'s independently-copied matcher was
+//     initially not extended to try this fourth form — named residual — but
+//     that follow-up task added the same fourth OR-arm there too, see that
+//     file's own comment.
 //   - A quoted assignment VALUE containing the literal word `git`/`gh`/
 //     `npm`/`harness` as its own token (`VAR='a git b' git push`): the
 //     continuation's one-directional guard abandons rather than risk
@@ -1333,7 +1335,8 @@ export interface QuoteAwareNormalizedCommand {
  * unwired (an inert security fix, called out explicitly as the wrong
  * shipped state in that round's own report) — `src/cli/dry-run.ts`'s own,
  * independently-copied matcher was deliberately NOT extended in the same
- * round (out of the extended scope too) and stays a named residual — see
+ * round (out of the extended scope too) and stayed a named residual until
+ * task f561e44c closed it by adding the same fourth OR-arm there too — see
  * that file's own comment.
  *
  * THIS PASS'S OWN OVER-BLOCK SURFACE is measured and named in the test
