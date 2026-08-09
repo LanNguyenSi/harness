@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- **SECURITY: the agent-facing deny envelope of the built-in `gate-prod-destructive`
+  Risk Gate policy named the session-wide kill switch (`harness pause --for
+  <duration>` / `harness resume`) as a way to unblock a denied critical
+  production mutation** (task `70781cf6`). `ux.run` is the exact "what to do
+  next" text the blocked agent reads (`renderAgentFacing`,
+  `src/runtime/intercept.ts`); handing that same agent a recipe for silencing
+  every gate in the session is a full bypass instruction addressed to the
+  party who was just blocked, not to the operator who alone can act on it.
+  Removed the kill-switch line from `gate-prod-destructive`'s `ux.run` in both
+  `src/cli/init/templates.ts` (`FULL_TEMPLATE`) and
+  `docs/examples/full-manifest.yaml`; the two remaining `run:` entries (choose
+  a non-destructive alternative, or ask the operator for a deliberate `harness
+  approve risk --force` override) stay unchanged and fully actionable. The
+  operator-facing recovery path is not lost: `harness pause`'s own refusal
+  message already explains the correct route (a terminal genuinely outside the
+  agent session). While auditing every other shipped `ux.run` line for the
+  same class of leak, the `deny-kill-switch-bypass` and
+  `deny-pause-sentinel-forgery` policies' `run:` text also named `pause`/
+  `resume` as something the operator could be asked to do; reworded both to
+  point back at the commands already named in their `cannot`/`required` text
+  instead of repeating the verbs in the actionable `run:` list.
+  `deny-session-env-strip`'s `run:` line did not name either verb and is
+  unchanged. New/updated tests: `tests/cli/init-no-agent-facing-pause-hint.test.ts`
+  is a new repo-wide guard that walks every `ux.run` line across
+  `FULL_TEMPLATE`, `SOLO_TEMPLATE`, `TEAM_TEMPLATE`, and
+  `docs/examples/full-manifest.yaml`, failing if any shipped agent-facing
+  `run:` entry names `pause`/`resume` as a course of action (a "see also"
+  citation to `docs/okf/pause-vs-gate-kill-switch.md` is allow-listed as
+  non-actionable), plus a dedicated assertion that `gate-prod-destructive`'s
+  `ux.run` has exactly its two legitimate entries left; regenerated
+  `docs/examples/full-manifest.expected.yaml` (the `harness describe` golden
+  fixture) to match; the existing `tests/cli/init-full-template-parity.test.ts`
+  / `tests/cli/init-templates-ux-parity.test.ts` deep-equality checks between
+  `FULL_TEMPLATE` and `docs/examples/full-manifest.yaml` confirm the two
+  sources stayed in lockstep.
+
 - **SECURITY: `harness apply`'s generated Claude Code `settings.json` hook
   `timeout` was emitted in the manifest's `budget_ms` unit unconverted, so
   every Claude-hook kill-timer was 1000x too large** (task `7bf47554`).

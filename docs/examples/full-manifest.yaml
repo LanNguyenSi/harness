@@ -478,7 +478,6 @@ policies:
       run:
         - "Choose a non-destructive alternative, or ask the OPERATOR to run the command themselves, outside the agent."
         - "Operator override (deliberate): the OPERATOR runs `harness approve risk --force <reason>` from their own shell (`! ` prefix in Claude Code, with --i-am-the-operator to acknowledge a non-TTY invocation)."
-        - "Session-wide kill switch: the OPERATOR runs `harness pause --for <duration>` instead, from a terminal outside this agent session (every gate silences until the sentinel expires or `harness resume` runs); you cannot run `harness pause`/`harness resume` yourself, that is denied at the Bash-tool level."
   - name: gate-prod-destructive-approval
     description: Require operator approval for high-severity destructive shell actions against a production target.
     trigger:
@@ -557,7 +556,7 @@ policies:
       required:
         - "the OPERATOR to run this from a terminal genuinely outside your agent session, not a `! `-prefixed Claude Code shell, which inherits this session's env and stdin and does not count"
       run:
-        - "Stop. Explain to the operator what you were trying to do and why, and let THEM decide whether to pause/resume/toggle a gate from their own terminal. This is the only way to unblock this gate: it is an unconditional deny (operator_only: true) that no in-session evidence — a ledger write, a marker file, a flag — can ever satisfy; the only remaining gap is bash_match's regex coverage of exotic shell shapes, not this evaluation (see docs/okf/pause-vs-gate-kill-switch.md)."
+        - "Stop. Explain to the operator what you were trying to do and why, and let THEM decide whether to run that command from their own terminal. This is the only way to unblock this gate: it is an unconditional deny (operator_only: true) that no in-session evidence — a ledger write, a marker file, a flag — can ever satisfy; the only remaining gap is bash_match's regex coverage of exotic shell shapes, not this evaluation (see docs/okf/pause-vs-gate-kill-switch.md)."
 
   - name: deny-session-env-strip
     description: Deny Bash attempts to strip or unset the agent-session env vars that harness pause/resume check ($CLAUDE_CODE_SESSION_ID, $CLAUDE_SESSION_ID, $CODEX_SESSION_ID). Closes the one-liner that otherwise defeats refuseIfAgentShell.
@@ -589,7 +588,7 @@ policies:
       required:
         - "the OPERATOR to run `harness pause`/`harness resume` themselves, from a terminal outside your agent session, never a direct write to the sentinel file"
       run:
-        - "Stop. Do not write, redirect, tee, or copy anything to .harness-paused. Ask the OPERATOR to run harness pause / harness resume themselves if the session genuinely needs gates silenced. This gate is an unconditional deny (operator_only: true); see docs/okf/pause-vs-gate-kill-switch.md for the honest trust model and the residual bash_match coverage gap."
+        - "Stop. Do not write, redirect, tee, or copy anything to .harness-paused. Ask the OPERATOR to do that themselves, from their own terminal, if the session genuinely needs gates silenced. This gate is an unconditional deny (operator_only: true); see docs/okf/pause-vs-gate-kill-switch.md for the honest trust model and the residual bash_match coverage gap."
 
 policy_packs:
   - name: understanding-before-execution
