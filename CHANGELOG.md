@@ -188,6 +188,174 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   with its own control test pinning the discrimination at a 10000ms
   probe value.
 
+- **SECURITY: `harness validate` / `harness doctor` now ENFORCE the
+  hook-budget-vs-ledger-timeout margin task `7bf47554` above only pinned
+  by hand against the shipped defaults** (task `d20a7e0c`). Everything
+  `7bf47554` fixed was a one-time, hardcoded raise of specific budgets on
+  specific manifest-emitting surfaces (`FULL_TEMPLATE`, the Custom
+  composer, `TEAM_TEMPLATE`, three builtin policy packs); nothing stopped
+  an aged manifest, a hand-authored `harness.yaml`, or a manifest that
+  simply raises `tools.mcp.grounding-mcp.health.timeout_ms` from silently
+  regressing back into the fail-open gap — a merely SLOW (not even
+  hard-down) evidence ledger getting a blocking `harness policy
+  intercept` / policy-pack hook killed by the runtime's outer hook
+  timeout before its fail-closed `deny`/`deny-degraded` JSON reaches
+  stdout, which both Claude Code and Codex then read as an unintended
+  ALLOW.
+
+  Two fixes:
+
+  1. **Corrected margin formula.** `7bf47554`'s own hardcoded 15000ms
+     floor existed because its formula (`health.timeout_ms` +
+     2x`auditRetryTimeoutMs`, ~7500ms at the shipped 5000ms default)
+     UNDERSTATED the measured ~10.8-13.75s real-world worst case. Re-
+     deriving from `realLedgerClient`'s actual two round-trip shapes
+     (`src/cli/policy/intercept.ts`) explains the gap and closes it
+     properly: `query()` can cost up to **2x** `health.timeout_ms` (a
+     slow-but-alive server can independently near-max BOTH the
+     `initialize` handshake and the following `ledger_summary` call
+     before the second one finally times out — not just 1x), and the
+     deny-degraded audit retry can cost up to **3x**
+     `auditRetryTimeoutMs` (the fresh retry session's own `initialize`,
+     the first `ledger_add` attempt, and — only when that attempt is
+     rejected outright by an older/incompatible grounding-mcp rather
+     than timing out — the legacy `type: "fact"` fallback `ledger_add`).
+     The corrected formula, `requiredHookBudgetMs(T) = 2T +
+     3*auditRetryTimeoutMs(T)` (new export, `src/cli/policy/
+     intercept.ts`), evaluates to 13750ms at the shipped 5000ms default —
+     within `7bf47554`'s own cited ~10.8-13.75s measurement range, unlike
+     the ~7500ms the old formula gave. Both round-trip shapes are
+     measured independently against the REAL `realLedgerClient` /
+     `recordPolicyDecisionOnSession` (not just asserted) in
+     `tests/e2e/policy-intercept.test.ts`'s new "hook-budget-ledger-margin
+     derivation" suite, via a fake grounding-mcp subprocess that can
+     independently delay `initialize`, `ledger_summary`, and
+     `ledger_add`, and can force the legacy fact-type fallback.
+
+  2. **Durable, generic validate/doctor guard.** New
+     `checkHookBudgetLedgerMargin` (`src/cli/validate/checks.ts`, wired
+     into both `harness validate` and `harness doctor`) checks the
+     corrected formula against an ARBITRARY manifest's OWN
+     `tools.mcp[grounding-mcp].health.timeout_ms` — not the shipped
+     5000ms default — and against every ENABLED `policy_packs[]` entry's
+     resolved hooks via the shared `resolveBuiltin` registry lookup, for
+     every runtime `harness apply` can target, instead of
+     `7bf47554`'s test hand-importing three specific pack modules. A pack
+     whose blocker gates on a filesystem verdict marker rather than a
+     live ledger round-trip (`solution-acceptance` /
+     `solution-acceptance-writeguard`) is correctly excluded — flagging
+     it would be a false positive. An under-budgeted hook is reported as
+     an `error` naming both the hook's own `budget_ms` and the ledger's
+     `health.timeout_ms` (plus the derived requirement), so e.g. an
+     operator who raises `health.timeout_ms` without raising a
+     pack-shipped hook's fixed `budget_ms` in lockstep is now caught at
+     lint time instead of silently reopening the gap. Also fixes the
+     matcher this check (and, incidentally,
+     `tests/runtime/hook-budget-ledger-margin.test.ts`'s own
+     `blockingInterceptHooks`) uses to recognise a `harness policy
+     intercept` hook: the new `isPolicyInterceptCommand`
+     (`src/cli/policy/intercept.ts`) matches the subcommand tokens
+     regardless of a leading interpreter/env-var prefix (`node
+     /path/to/dist/cli/index.js policy intercept`, `npx harness policy
+     intercept`, `FOO=bar harness policy intercept`) or a trailing flag
+     (`harness policy intercept --hook <name>`), instead of the verbatim
+     `command.trim() === "harness policy intercept"` compare every other
+     call site in this codebase still (deliberately, out of this task's
+     scope) uses — an operator-authored `manifest.hooks[]` entry is under
+     no obligation to spell the command exactly the way harness's own
+     generators do, and under-recognition here is a false NEGATIVE on a
+     security check. Fix round 1 (review 2026-08-09) additionally widens
+     `isPolicyInterceptCommand`'s TRAILING boundary to also accept a
+     semicolon or quote character glued directly onto the subcommand word
+     with no whitespace (`harness policy intercept; echo done`, `sh -c
+     "harness policy intercept"`), which the whitespace-or-end-only
+     boundary shipped in this task's first commit missed; a trailing `)`,
+     `|`, `&`, or backtick immediately abutting the word remains a known,
+     deliberately-unclosed gap (documented in the function's own doc
+     comment) rather than a runtime bypass — a missed match here only
+     means the hook is not classified as ledger-consulting for THIS
+     check, never a change to what the hook actually does at runtime.
+
+  **Fix round 1 (review 2026-08-09): two corrections to this task's own
+  first commit, made in the name of not overclaiming what the guard
+  above actually guarantees.**
+
+  - **The `2T + 3R` formula's "worst case" claim is scoped to the
+    pure-timeout hang shape, not every degradation shape.** The formula
+    (and the diagnostic message above) previously read as an unqualified
+    worst-case bound. It is not one: `query()`'s `2T` half assumes the
+    pooled `LedgerSession`'s session-wide `timedOut` latch trips (making
+    the FIRST `record()` attempt instant, per `realLedgerClient`'s own
+    doc comment) — true only when `query()` degrades via an actual
+    timeout. A `query()` that instead degrades via a NON-timeout path
+    (`ledger_summary` returning a genuine JSON-RPC error, an unparseable
+    payload, or a payload missing the `entries` shape —
+    `LedgerSession.querySummary`'s non-timeout `degraded` branches,
+    `src/policies/ledger-client.ts`) never sets that latch, so the first
+    `record()` attempt afterwards is a REAL round-trip too — up to
+    another `2T` (the `type: "policy_decision"` attempt plus a possible
+    legacy `type: "fact"` fallback) BEFORE the `3R` retry sequence even
+    starts. Worst case on this "error-then-hang" shape is therefore up to
+    `4T + 3R` — 23750ms at the shipped `T=5000` default, against this
+    guard's `13750ms` floor. The formula is DELIBERATELY NOT raised to
+    `4T + 3R`: doing so would fail `checkHookBudgetLedgerMargin` against
+    the shipped, reviewer-confirmed-clean fresh-init budget of `15000ms`
+    (task `7bf47554`/#414, out of this task's scope) at the same
+    `T=5000` default, since `15000 < 23750`. Instead, `requiredHookBudgetMs`'s
+    doc comment (`src/cli/policy/intercept.ts`) and the
+    `checkHookBudgetLedgerMargin` diagnostic message now both name this
+    residual explicitly as a KNOWN, un-closed gap rather than implying a
+    guarantee neither actually gives — the guard backs delivery of the
+    fail-closed verdict on the pure-timeout hang shape only. This
+    residual is NOT confined to one runtime projection: Claude Code and
+    Codex both convert `budget_ms` into the outer hook-kill seconds via
+    the identical `hookTimeoutSeconds` helper
+    (`src/cli/apply/generate-settings.ts`, shared by
+    `generate-codex-config.ts`) since task `7bf47554`/#414, so a manifest
+    at the shipped defaults is equally exposed on both — checked against
+    both generators' current source for this note, not assumed.
+
+  - **The diagnostic message no longer attributes a `3× deny-degraded
+    audit-retry budget` to hooks that never run one.** The four
+    ledger-consulting pack blockers (`branch-protection`,
+    `understanding-before-execution`'s `pre-tool-use` /
+    `codex-pre-tool-use`, `post-merge-gate`) only ever call
+    `queryLedgerByTag` (open session, one `querySummary`, dispose) — they
+    never call `ledger_add`, so they have no deny-degraded audit-retry
+    step of their own; their real worst case is bounded at up to
+    `2×timeout_ms` for the query alone, not `2T + 3R`. The shared
+    `${required}ms` floor is kept identical across direct
+    `harness policy intercept` hooks and these pack blockers on purpose
+    (a deliberately conservative carryover, not a separately-derived and
+    separately-tested per-kind bound), but the message text explaining
+    WHY now differs per hook kind instead of asserting a retry sequence
+    that does not exist for the pack blockers. `post-merge-gate`
+    specifically already fails OPEN (allow) on a degraded or unreachable
+    ledger by its own design (`src/cli/pack/hook-post-merge-gate.ts`'s
+    "Fail posture: OPEN" note, and its own `budget_ms: 15000` comment in
+    `src/policy-packs/builtin/post-merge-gate.ts` already said as much)
+    — a hook killed by the outer timeout there reaches the same allow
+    outcome its own degraded-handling would already choose, so this
+    check is kept for it only to stop a merely-slow-but-alive ledger from
+    needlessly stalling the gate, not because a fail-closed verdict is at
+    risk. `src/cli/validate/checks.ts` now tags each collected hook with
+    its ledger-traffic shape (`isPolicyInterceptHook`,
+    `isFailOpenOnDegraded`) to pick the right explanatory text; the
+    numeric threshold, hook selection, and severity are all unchanged.
+
+  `tests/runtime/hook-budget-ledger-margin.test.ts`'s original
+  hand-imported per-surface assertions are updated to source their margin
+  bound from the corrected formula (previously understated) and gain a
+  new describe block running the generic `checkHookBudgetLedgerMargin`
+  guard against the very same shipped manifests, closing the loop the
+  file's own comment named as future work. New/updated tests:
+  `tests/cli/validate.test.ts` (fixture pairs for AC1/AC2 plus the
+  matcher-fix, pack-genericity, and negative-control cases, plus fix
+  round 1's semicolon-chained and quote-wrapped matcher cases),
+  `tests/cli/doctor.test.ts` (doctor-surface parity + `format()`
+  rendering), `tests/runtime/hook-budget-ledger-margin.test.ts`,
+  `tests/e2e/policy-intercept.test.ts`.
+
 - **SECURITY: the operator-approval escape matcher (`isEscapeCommand`,
   `src/cli/pack/approve-escape.ts`) used JS's generic `\s` whitespace
   class where bash's actual lexical blank set was meant, letting a

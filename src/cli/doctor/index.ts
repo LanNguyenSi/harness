@@ -21,6 +21,7 @@ import { checkPolicyPackVersions } from "../../policy-packs/version-check.js";
 import { checkPolicyPackUxDrift } from "../../policy-packs/ux-drift-check.js";
 import { DEFAULT_RUNTIME } from "../../policy-packs/runtime.js";
 import {
+  checkHookBudgetLedgerMargin,
   checkPolicyRiskWithoutEnvScope,
   checkSolutionAcceptanceKnobIgnored,
   checkSolutionAcceptanceProducer,
@@ -45,6 +46,7 @@ import {
   type CliEntryReport,
   type DoctorReport,
   type DoctorTarget,
+  type HookBudgetLedgerMarginSection,
   type HookEntryReport,
   type ManifestSection,
   type McpVersionReport,
@@ -700,6 +702,19 @@ function buildTemplateDrift(manifest: Manifest): TemplateDriftSection {
 }
 
 /**
+ * Hook-budget-vs-ledger-timeout margin (task d20a7e0c). Delegates to the
+ * shared validate check so `harness doctor` and `harness validate` stay
+ * in parity, mirroring `buildTemplateDrift` immediately above.
+ * `checkHookBudgetLedgerMargin` only ever emits `error`-severity
+ * diagnostics (an under-budgeted blocking hook is always a real
+ * fail-open gap, never a stylistic warning), so every message maps
+ * straight to `errors`.
+ */
+function buildHookBudgetLedgerMargin(manifest: Manifest): HookBudgetLedgerMarginSection {
+  return { errors: checkHookBudgetLedgerMargin(manifest).map((d) => d.message) };
+}
+
+/**
  * Grounding wiring health (task 129e1b94). Only meaningful when an enabled
  * `grounding-mcp` entry exists — callers skip the section otherwise. Checks:
  *   1. The evidence-ledger path (the value `harness apply` projects as
@@ -843,6 +858,10 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // entries are warn-only (task adf037c1).
   errorCount += report.templateDrift.errors.length;
   warningCount += report.templateDrift.warnings.length;
+  // Hook-budget-vs-ledger-timeout margin (task d20a7e0c): every entry is
+  // a real fail-open gap, mirroring templateDrift.errors immediately
+  // above.
+  errorCount += report.hookBudgetLedgerMargin.errors.length;
   if (report.grounding !== undefined) {
     warningCount += report.grounding.warnings.length;
   }
@@ -953,6 +972,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const workflows = buildWorkflows(manifest);
   const riskGate = buildRiskGate(manifest);
   const templateDrift = buildTemplateDrift(manifest);
+  const hookBudgetLedgerMargin = buildHookBudgetLedgerMargin(manifest);
   const groundingServer =
     manifest.tools.mcp.find(
       (m) => m.name === GROUNDING_MCP_SERVER_NAME && m.enabled !== false,
@@ -999,6 +1019,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     workflows,
     riskGate,
     templateDrift,
+    hookBudgetLedgerMargin,
     ...(grounding !== undefined ? { grounding } : {}),
     ...(claudeMcp !== undefined ? { claudeMcp } : {}),
     rogueLedgerDbs,

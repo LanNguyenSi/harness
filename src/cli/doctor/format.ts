@@ -298,6 +298,19 @@ function formatTemplateDriftSection(report: DoctorReport): string[] {
   return out;
 }
 
+// Hook-budget-vs-ledger-timeout margin section (task d20a7e0c): blocking,
+// ledger-consulting hooks whose budget_ms cannot clear the derived
+// worst-case ledger round-trip. Render only when something is under-
+// budgeted — a compliant manifest stays silent, like the template-drift
+// section immediately above.
+function formatHookBudgetLedgerMarginSection(report: DoctorReport): string[] {
+  const { errors } = report.hookBudgetLedgerMargin;
+  if (errors.length === 0) return [];
+  const out: string[] = ["", "Hook budget vs ledger timeout margin"];
+  for (const m of errors) out.push(`  ✗ ${m}`);
+  return out;
+}
+
 function formatCodexTargetSection(report: DoctorReport): string[] {
   if (!report.codexTarget) return [];
   const out: string[] = ["", "Target: codex"];
@@ -409,6 +422,7 @@ export function format(report: DoctorReport): string {
   lines.push(...formatWorkflowsSection(report));
   lines.push(...formatRiskGateSection(report));
   lines.push(...formatTemplateDriftSection(report));
+  lines.push(...formatHookBudgetLedgerMarginSection(report));
   lines.push(...formatGroundingSection(report));
   lines.push(...formatClaudeMcpSection(report));
   lines.push(...formatCodexTargetSection(report));
