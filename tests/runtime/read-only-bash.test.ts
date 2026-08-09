@@ -373,6 +373,30 @@ describe("read-only Bash classifier", () => {
       expect(isReadOnlyBashCommand(cmd)).toBe(false);
     });
 
+    it.each([
+      // Task 2dfdf472: `hasNpmUntrustedSourceFlag` compared RAW tokens
+      // only (unlike every other write/danger guard in this file, which
+      // already tests raw-OR-decoded). Shell-quoting the flag name hides
+      // it from `NPM_REGISTRY_FLAG_RE`/`NPM_UNSCOPED_UNTRUSTED_FLAGS`
+      // while bash still strips the quotes before npm ever sees the
+      // argv — measured: `echo npm audit --"registry"=x` prints
+      // `npm audit --registry=x` verbatim. Each of these reaches npm as
+      // the exact unquoted flag from the block above.
+      "npm audit --\"registry\"=http://evil.example/",
+      "npm audit --reg\"istry\"=http://evil.example/",
+      "npm audit --'registry'=http://evil.example/",
+      "npm audit --\"userconfig\"=/tmp/evil.npmrc",
+      "npm ls --\"registry\"=http://evil.example/",
+      "npm view lodash --\"userconfig\"=/tmp/evil.npmrc",
+      "npm outdated --\"globalconfig\"=/tmp/evil.npmrc",
+      // Scoped form, quoted two different ways.
+      "npm audit --@myorg:reg\"istry\"=http://e.x",
+      "npm audit --\"@myorg:registry\"=http://e.x",
+      "npm view lodash --\"@myorg:registry\"=http://e.x",
+    ])("blocks %s (quoted spelling of the untrusted registry/config source flag)", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+
     it("floors `npm audit -fix` deliberately: verified npm behavior is a parse error, not the mutating fix arm", () => {
       // Single dash, not the `fix` subcommand or a recognized flag cluster.
       // Verified npm 11.17.0 behavior: `Unknown cli config "--fix"`, and npm
