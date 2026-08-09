@@ -558,8 +558,9 @@ export function isReadOnlyBashPipeline(command: string): boolean {
 
 /**
  * Returns true when `t` (with any trailing `=VALUE` glue stripped) is a
- * GNU/BSD `getopt_long` ABBREVIATION of `fullFlag`: a proper prefix of
- * `fullFlag`, at least `minPrefixLen` characters past the leading `--`.
+ * GNU/BSD `getopt_long` ABBREVIATION of `fullFlag`: a prefix (including
+ * the full spelling) of `fullFlag`, at least `minPrefixLen` characters
+ * past the leading `--`.
  * `getopt_long` accepts ANY prefix of a long option name that resolves
  * unambiguously against the rest of that binary's option table (`sort
  * --out=x` runs as `--output=x`) — see the per-call-site comments below
