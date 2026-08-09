@@ -557,13 +557,60 @@ export function isReadOnlyBashPipeline(command: string): boolean {
 }
 
 /**
+ * Returns true when `t` (with any trailing `=VALUE` glue stripped) is a
+ * GNU/BSD `getopt_long` ABBREVIATION of `fullFlag`: a prefix (including
+ * the full spelling) of `fullFlag`, at least `minPrefixLen` characters
+ * past the leading `--`.
+ * `getopt_long` accepts ANY prefix of a long option name that resolves
+ * unambiguously against the rest of that binary's option table (`sort
+ * --out=x` runs as `--output=x`) — see the per-call-site comments below
+ * for the measured minimum (task dd055c1d, this run: BSD sort on macOS
+ * 26 `/usr/bin/sort`, GNU coreutils sort 9.11 via Homebrew `gsort`, and
+ * `file` 5.41 `/usr/bin/file`; all measured with the created artefact —
+ * an output file, a temp file, or a canary touched by an executed
+ * `--compress-program` — as ground truth, not the exit code).
+ *
+ * Per the module's fail-closed contract (spec dd055c1d): rebuilding the
+ * FULL ambiguity table (which prefixes collide with every OTHER long
+ * option the binary happens to have) is deliberately NOT attempted.
+ * Instead this is a TRUE prefix test against one named flag, gated at
+ * the measured minimum length — a length shorter than that measured
+ * minimum was observed "ambiguous" (rejected, not executed) on at least
+ * one of the binaries tested, so treating it as a write would be
+ * speculative, not conservative. A true-prefix test can never fire on
+ * an unrelated option: two different flags' names diverge at some
+ * character, and the shorter one stops matching there (`--che` is not a
+ * prefix of `--compile`, `--k` is not a prefix of `--output`), so this
+ * cannot spuriously catch an abbreviation of a different, benign flag —
+ * confirmed for every write flag this fix guards (no other long option
+ * on any measured binary shares a prefix at or past the measured
+ * minimum).
+ */
+function isLongOptionAbbreviation(t: string, fullFlag: string, minPrefixLen: number): boolean {
+  const eq = t.indexOf("=");
+  const name = eq === -1 ? t : t.slice(0, eq);
+  if (name.length < 2 + minPrefixLen) return false;
+  return fullFlag.startsWith(name);
+}
+
+/**
  * Returns true when a token is the output-redirect write flag shared by
- * `sort` and `tree`: `-o` / `--output`. Cluster detection: in a cluster
- * like `-rno`, getopt assigns the cluster remainder (or the next argv
- * token when nothing follows within the cluster) as the output-file
- * path, so any short cluster containing lowercase `o` after the leading
- * dash is a write vector. Conservative: a filename token like `foo.txt`
- * does not start with `-` and is therefore never matched.
+ * `sort` and `tree`: `-o` / `--output`, INCLUDING an unambiguous
+ * abbreviation of the long form (`--o`, `--ou`, `--out`, ... — measured
+ * minimum 1 character past `--`, both BSD and GNU sort, task dd055c1d).
+ * Cluster detection: in a cluster like `-rno`, getopt assigns the
+ * cluster remainder (or the next argv token when nothing follows within
+ * the cluster) as the output-file path, so any short cluster containing
+ * lowercase `o` after the leading dash is a write vector. Conservative:
+ * a filename token like `foo.txt` does not start with `-` and is
+ * therefore never matched.
+ *
+ * `tree` itself was measured (GNU tree 2.3.2 via Homebrew) to accept NO
+ * abbreviation of ANY of its long options at all — `--opt-toggle` works,
+ * `--opt` errors `Invalid argument` — so `-o`/`--output` has no long
+ * form and no abbreviation vector on tree either way; the abbreviation
+ * branch added here is inert-but-harmless for tree and load-bearing for
+ * sort, which shares this function via `isTreeWriteToken`'s delegation.
  */
 function isOutputWriteToken(raw: string): boolean {
   // Monotone BY CONSTRUCTION (review round 1, decision D3): testing
@@ -576,7 +623,11 @@ function isOutputWriteToken(raw: string): boolean {
 }
 
 function checkOutputWrite(t: string): boolean {
-  if (t === "--output" || t.startsWith("--output=")) return true;
+  // Exact `--output` and any unambiguous abbreviation of it
+  // (`--o`..`--outpu`), glued (`=VALUE`) or bare. See
+  // `isLongOptionAbbreviation` for the measured minimum (1 char past
+  // `--`) and why a true-prefix test cannot catch an unrelated flag.
+  if (isLongOptionAbbreviation(t, "--output", 1)) return true;
   // Short flag or cluster: single leading '-' (not '--'), containing
   // lowercase 'o'. Catches -o, -oFILE, -no, -rno, -rnofoo, etc.
   return t.startsWith("-") && !t.startsWith("--") && t.slice(1).includes("o");
@@ -587,11 +638,24 @@ function checkOutputWrite(t: string): boolean {
  * file-writing vector is the output redirect `-o` / `--output`; it has
  * no exec or temp-dir flags, so this delegates to `isOutputWriteToken`.
  *
- * NOT MEASURED against a real `tree` (task fdee7d0f): the binary is not
- * installed on the machine this was verified on, so the quoted-spelling
- * family could only be confirmed for `find`, `sort` and `file`. The fix
- * below is applied here on the same reasoning, but this sentence is the
- * honest status rather than a claim of coverage.
+ * Quoted-spelling family (task fdee7d0f): NOT MEASURED against a real
+ * `tree` at the time — the binary was not installed on that machine, so
+ * the quoted-spelling family could only be confirmed for `find`, `sort`
+ * and `file`. That fix was applied here on the same reasoning, without
+ * direct tree confirmation.
+ *
+ * Long-option ABBREVIATION family (task dd055c1d): NOW MEASURED, GNU
+ * tree 2.3.2 (Homebrew). Result: tree's argument parser accepts NO
+ * abbreviation of ANY long option — `--opt-toggle` (a real tree option)
+ * works verbatim, but `--opt`, a genuine prefix of it, errors `Invalid
+ * argument`. tree also has no long spelling of `-o` at all (`--o`,
+ * `--out`, `--output` all error the same way — checked directly, not
+ * inferred). So the abbreviation branch `isOutputWriteToken` now carries
+ * is inert for tree: no real tree invocation can reach it, because tree
+ * rejects every abbreviated long flag outright, before this classifier
+ * is ever consulted. It stays wired through the shared function anyway,
+ * both because sort needs it and because a future tree release adding
+ * `getopt_long`-style abbreviation would then be covered for free.
  */
 function isTreeWriteToken(raw: string): boolean {
   // Pass the RAW token through: isOutputWriteToken owns the single decode.
@@ -625,6 +689,17 @@ function isTreeWriteToken(raw: string): boolean {
  * (output) or uppercase `T` (temp dir) is a write vector. This can
  * over-block a few benign size values (e.g. `-S2T`); over-blocking a
  * read is acceptable, under-blocking a write is not.
+ *
+ * Each long-form vector also matches an unambiguous GNU/BSD
+ * `getopt_long` ABBREVIATION of its full spelling, not just the exact
+ * word (task dd055c1d): `sort --out=x`, `--o=x`, and `--outp=x` were all
+ * measured writing their output file on both BSD sort (macOS) and GNU
+ * coreutils sort 9.11 (`gsort`) while the pre-fix guard compared only
+ * the full `--output` spelling. Measured minimums (both variants agree):
+ * `--o` for `--output` (1 char), `--co` for `--compress-program` (2
+ * chars — `--c` alone is ambiguous with `--check` on both binaries and
+ * errors rather than running), `--t` for `--temporary-directory` (1
+ * char). See `isLongOptionAbbreviation`.
  */
 function isSortWriteToken(raw: string): boolean {
   // Monotone BY CONSTRUCTION (review round 1, decision D3): testing
@@ -637,9 +712,12 @@ function isSortWriteToken(raw: string): boolean {
 }
 
 function checkSortWrite(t: string): boolean {
-  if (t === "--compress-program" || t.startsWith("--compress-program=")) return true;
-  if (t === "--temporary-directory" || t.startsWith("--temporary-directory=")) return true;
-  if (t === "--output" || t.startsWith("--output=")) return true;
+  // Exact spellings and unambiguous abbreviations (measured minimums:
+  // `--co`, `--t`, `--o` — see `isSortWriteToken`'s docstring and
+  // `isLongOptionAbbreviation`).
+  if (isLongOptionAbbreviation(t, "--compress-program", 2)) return true;
+  if (isLongOptionAbbreviation(t, "--temporary-directory", 1)) return true;
+  if (isLongOptionAbbreviation(t, "--output", 1)) return true;
   // Short flag or cluster: '-' (not '--') containing 'o' (output) or
   // uppercase 'T' (temp dir).
   return t.startsWith("-") && !t.startsWith("--") && /[oT]/.test(t.slice(1));
@@ -651,6 +729,17 @@ function checkSortWrite(t: string): boolean {
  * Lowercase `-c` checks the magic file without writing; only uppercase
  * `C` triggers a write. Cluster detection: `-bC`, `-Cb`, and `-bCx`
  * all contain uppercase `C` after the leading dash and are write vectors.
+ *
+ * Also matches an unambiguous GNU `getopt_long` ABBREVIATION of
+ * `--compile` (task dd055c1d): `file --co`/`--com`/... were measured
+ * creating the compiled magic-cache file (macOS `/usr/bin/file` 5.41)
+ * while the pre-fix guard compared only the exact `--compile` spelling.
+ * Measured minimum is `--co` (2 chars) — `--c` alone is ambiguous with
+ * `--checking-printout` and errors rather than running; `--che`, the
+ * shortest unambiguous abbreviation of `--checking-printout` (a
+ * read-only flag), is NOT a prefix of `--compile` and so is unaffected
+ * (measured: `file --che` does not create the cache file). See
+ * `isLongOptionAbbreviation`.
  */
 function isFileWriteToken(raw: string): boolean {
   // Monotone BY CONSTRUCTION (review round 1, decision D3): testing
@@ -663,7 +752,10 @@ function isFileWriteToken(raw: string): boolean {
 }
 
 function checkFileWrite(t: string): boolean {
-  if (t === "--compile" || t.startsWith("--compile=")) return true;
+  // Exact `--compile` and any unambiguous abbreviation of it (`--co`..
+  // `--compil`) — see this function's docstring and
+  // `isLongOptionAbbreviation`.
+  if (isLongOptionAbbreviation(t, "--compile", 2)) return true;
   // Short flag or cluster: single leading '-' (not '--'), containing
   // uppercase 'C'. Lowercase 'c' is intentionally not matched.
   return t.startsWith("-") && !t.startsWith("--") && t.slice(1).includes("C");
