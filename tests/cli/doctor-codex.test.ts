@@ -8,6 +8,7 @@ import { doctor } from "../../src/cli/doctor/index.js";
 import { format } from "../../src/cli/doctor/format.js";
 import type { McpProbe, McpProbeResult } from "../../src/probes/mcp.js";
 import type { McpServer } from "../../src/schema/index.js";
+import { STUB_NPM_BIN_EXEC_UNKNOWN } from "../_helpers/npm-bin-exec.js";
 
 let cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -67,7 +68,7 @@ describe("doctor --target codex", () => {
       mcpProbe: new FakeProbe(),
       versionProbe: () => null,
       pathEnv: "",
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
       target: "codex",
       codexCheckOptions: {
         manifestDir: home,
@@ -116,7 +117,7 @@ describe("doctor --target codex", () => {
       mcpProbe: new FakeProbe(),
       versionProbe: () => null,
       pathEnv: "/nonexistent/dir",
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
       target: "codex",
       codexCheckOptions: {
         manifestDir: home,
@@ -153,7 +154,7 @@ describe("doctor --target codex", () => {
       mcpProbe: new FakeProbe(),
       versionProbe: () => null,
       pathEnv: "",
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
       target: "codex",
       codexCheckOptions: {
         manifestDir: home,
@@ -182,7 +183,7 @@ describe("doctor --target codex", () => {
       mcpProbe: new FakeProbe(),
       versionProbe: () => null,
       pathEnv: "",
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
       target: "codex",
       codexCheckOptions: {
         manifestDir: home,
@@ -211,7 +212,7 @@ describe("doctor --target codex", () => {
       mcpProbe: new FakeProbe(),
       versionProbe: () => null,
       pathEnv: "",
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
       target: "codex",
       codexCheckOptions: {
         manifestDir: home,
@@ -239,7 +240,7 @@ describe("doctor --target codex", () => {
       mcpProbe: new FakeProbe(),
       versionProbe: () => null,
       pathEnv: "",
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
       target: "codex",
       codexCheckOptions: {
         manifestDir: home,
@@ -264,7 +265,7 @@ describe("doctor --target codex", () => {
       mcpProbe: new FakeProbe(),
       versionProbe: () => null,
       pathEnv: "",
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
 
     expect(report.codexTarget).toBeUndefined();

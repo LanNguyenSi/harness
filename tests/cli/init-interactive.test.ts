@@ -7,28 +7,18 @@ import {
   type InteractivePrompts,
   type RunInteractiveOptions,
 } from "../../src/cli/init/interactive.js";
-import type { NpmExec } from "../../src/cli/doctor/npm-bin-path.js";
 import { HermeticSpawnViolationError } from "../../src/runtime/hermetic-spawn-guard.js";
+import { STUB_NPM_BIN_EXEC_WARN as STUB_NPM_BIN_EXEC } from "../_helpers/npm-bin-exec.js";
 
 // Stub for `npm prefix -g` (task npm-prefix-g-hermeticity-guard/T-004).
 // Every call in this file goes through the `runInteractive` wrapper below
 // instead of the SDK export directly, so init()'s post-write bin-resolution
 // check (src/cli/doctor/npm-bin-path.ts) never spawns a real npm process.
-// Real `npm prefix -g` returns `code: 0` plus a genuine prefix path (verified
-// against this repo's npm), which resolves to status "ok" or "warn"
-// depending on PATH — the stub mirrors that "code 0 + a path" shape rather
-// than a blanket `{ code: 1 }`, which would read as status "unknown" and
-// could shift binResolutionClean / binResolutionErrorCount assertions (see
-// checkNpmBinPath's status contract). The stubbed prefix is a path
-// guaranteed not to exist on any test host, so checkBinResolution's
-// PATH-shadow hint — which stats real files under `<prefix>/bin` — never
-// fires by coincidence: deterministic "warn", no side effects, no
-// dependency on what happens to live under a real machine's npm prefix.
-const STUB_NPM_BIN_EXEC: NpmExec = async () => ({
-  code: 0,
-  stdout: "/nonexistent-npm-global-prefix-for-hermetic-tests\n",
-  stderr: "",
-});
+// Real `npm prefix -g` returns `code: 0` plus a genuine prefix path, which
+// resolves to status "ok" or "warn" depending on PATH — deliberately the
+// "warn" stub variant (see tests/_helpers/npm-bin-exec.ts for why: a
+// blanket `{ code: 1 }` "unknown" stub would shift binResolutionClean /
+// binResolutionErrorCount assertions here).
 
 // Thin wrapper so every one of this file's ~60 `runInteractive(...)` call
 // sites gets `npmBinExec` injected without editing each one individually.

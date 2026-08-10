@@ -7,6 +7,7 @@ import { init } from "../../src/cli/init/index.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
 import { validateBeforeWrite } from "../../src/io/validate-before-write.js";
 import { validate } from "../../src/cli/validate/index.js";
+import { STUB_NPM_BIN_EXEC_UNKNOWN as STUB_NPM_BIN_EXEC } from "../_helpers/npm-bin-exec.js";
 
 let tmpHome: string;
 let manifestPath: string;
@@ -26,8 +27,6 @@ afterEach(() => {
 // dedicated "bin-resolution check" describe block further down injects
 // its own `npmBinExec` per-test where the return value is asserted on,
 // and calls `init()` directly rather than through this wrapper.
-const STUB_NPM_BIN_EXEC = async () => ({ code: 1, stdout: "", stderr: "stub" });
-
 function callInit(opts: Parameters<typeof init>[0] = {}): ReturnType<typeof init> {
   return init({ npmBinExec: STUB_NPM_BIN_EXEC, ...opts });
 }
@@ -310,7 +309,7 @@ tools:
       content,
       contentLabel: "custom",
       pathEnv: "/usr/bin",
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC,
     });
     expect(r.binResolutionErrorCount).toBe(1);
     expect(r.stderr).toContain("ghost-mcp");
@@ -340,7 +339,7 @@ tools:
       content,
       contentLabel: "custom",
       pathEnv: binDir,
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC,
     });
     expect(r.binResolutionErrorCount).toBe(0);
     fs.rmSync(binDir, { recursive: true, force: true });
