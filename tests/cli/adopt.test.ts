@@ -15,8 +15,8 @@ import {
 } from "../../src/cli/adopt/derive.js";
 import { generateSettingsWithWarnings } from "../../src/cli/apply/generate-settings.js";
 import { init } from "../../src/cli/init/index.js";
-import type { NpmExec } from "../../src/cli/doctor/npm-bin-path.js";
 import { parseManifest } from "../../src/schema/index.js";
+import { STUB_NPM_BIN_EXEC_WARN } from "../_helpers/npm-bin-exec.js";
 
 let tmpHome: string;
 let manifestPath: string;
@@ -34,26 +34,17 @@ let registryPath: string;
 // spawns a real `npm prefix -g` unless a fake exec is injected (init/index.ts
 // InitOptions.npmBinExec, threaded to checkBinResolution/checkNpmBinPath).
 // The minimal template declares zero `tools.mcp[]` / `tools.cli[]` entries,
-// so this stub's return value is never actually consulted by
-// checkBinResolution's per-binary loop in this file. The fixture's job is
-// hermeticity, not realism (review finding F4, task T-007): the stubbed
-// prefix is a path guaranteed not to exist on any test host, so nothing
-// downstream that stats real files under `<prefix>/bin` (e.g. doctor's
-// PATH-shadow hint) can accidentally observe real host state — a prior
-// version of this stub used `/usr/local`, which resolves to `/usr/local/bin`
-// and exists on most macOS hosts.
-const STUB_NPM_BIN_EXEC: NpmExec = async () => ({
-  code: 0,
-  stdout: "/nonexistent-npm-global-prefix-for-hermetic-tests\n",
-  stderr: "",
-});
+// so STUB_NPM_BIN_EXEC_WARN's return value is never actually consulted by
+// checkBinResolution's per-binary loop in this file; the stub exists for
+// hermeticity, not realism (review finding F4, task T-007; variants
+// documented in tests/_helpers/npm-bin-exec.ts).
 
 beforeEach(async () => {
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-adopt-"));
   manifestPath = path.join(tmpHome, "harness.yaml");
   settingsPath = path.join(tmpHome, "settings.json");
   registryPath = path.join(tmpHome, ".claude.json");
-  await init({ homeDir: tmpHome, npmBinExec: STUB_NPM_BIN_EXEC }); // minimal — empty hooks
+  await init({ homeDir: tmpHome, npmBinExec: STUB_NPM_BIN_EXEC_WARN }); // minimal — empty hooks
 });
 
 afterEach(() => {

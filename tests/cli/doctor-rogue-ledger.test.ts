@@ -11,6 +11,7 @@ import {
 } from "../../src/cli/doctor/rogue-ledger.js";
 import type { McpProbe, McpProbeResult } from "../../src/probes/mcp.js";
 import type { McpServer } from "../../src/schema/index.js";
+import { STUB_NPM_BIN_EXEC_UNKNOWN } from "../_helpers/npm-bin-exec.js";
 
 let cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -150,7 +151,7 @@ describe("doctor — rogue evidence-ledger scan", () => {
       mcpProbe: new FakeProbe(),
       versionProbe: () => null,
       pathEnv: "",
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
       rogueLedgerScanOptions: { homeDir: home, cwd: home },
     });
 
@@ -182,7 +183,7 @@ describe("doctor — rogue evidence-ledger scan", () => {
       mcpProbe: new FakeProbe(),
       versionProbe: () => null,
       pathEnv: "",
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
       rogueLedgerScanOptions: { homeDir: home, cwd: home },
     });
     // Inject a quote-containing path into the report and re-render.
@@ -205,7 +206,7 @@ describe("doctor — rogue evidence-ledger scan", () => {
       mcpProbe: new FakeProbe(),
       versionProbe: () => null,
       pathEnv: "",
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
       rogueLedgerScanOptions: { homeDir: home, cwd },
     });
 
@@ -227,7 +228,7 @@ describe("doctor — rogue evidence-ledger scan", () => {
       mcpProbe: new FakeProbe(),
       versionProbe: () => null,
       pathEnv: "",
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
       rogueLedgerScanOptions: { homeDir: home, cwd },
     });
 

@@ -8,14 +8,10 @@ import { init } from "../../src/cli/init/index.js";
 import { packAdd, packList, packRemove } from "../../src/cli/pack/index.js";
 import { applyPackAdd, applyPackRemove, planPackRemove } from "../../src/cli/pack/mutate.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
+import { STUB_NPM_BIN_EXEC_UNKNOWN as STUB_NPM_BIN_EXEC } from "../_helpers/npm-bin-exec.js";
 
 let tmpHome: string;
 let manifestPath: string;
-
-// Stubbed npm-bin probe so the fixture-setup `init()` below never spawns a
-// real `npm prefix -g` (this file's tests don't assert on bin-resolution
-// output; only the manifest side-effect of `init` matters here).
-const STUB_NPM_BIN_EXEC = async () => ({ code: 1, stdout: "", stderr: "stub" });
 
 beforeEach(async () => {
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-pack-"));

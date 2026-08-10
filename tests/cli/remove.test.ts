@@ -6,15 +6,11 @@ import { parse as parseYaml } from "yaml";
 import { init } from "../../src/cli/init/index.js";
 import { remove } from "../../src/cli/remove/index.js";
 import { applyRemove, planRemove } from "../../src/cli/remove/mutate.js";
+import { STUB_NPM_BIN_EXEC_UNKNOWN as STUB_NPM_BIN_EXEC } from "../_helpers/npm-bin-exec.js";
 
 let tmpHome: string;
 let manifestPath: string;
 let hooksDir: string;
-
-// Stubbed npm-bin probe so the fixture-setup `init()` below never spawns a
-// real `npm prefix -g` (this file's tests don't assert on bin-resolution
-// output; only the manifest side-effect of `init` matters here).
-const STUB_NPM_BIN_EXEC = async () => ({ code: 1, stdout: "", stderr: "stub" });
 
 beforeEach(async () => {
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-remove-"));

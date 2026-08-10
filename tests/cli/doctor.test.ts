@@ -16,6 +16,7 @@ import { VERSION } from "../../src/version.js";
 import type { McpProbe, McpProbeResult } from "../../src/probes/mcp.js";
 import type { McpServer } from "../../src/schema/index.js";
 import type { ClaudeMcpExec } from "../../src/io/claude-mcp.js";
+import { STUB_NPM_BIN_EXEC_UNKNOWN } from "../_helpers/npm-bin-exec.js";
 
 let cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -98,7 +99,7 @@ tools:
       // Stub npm bin probe so this test stays env-independent (the
       // real probe shells out to `npm prefix -g` and can drift the
       // section count based on whether npm is installed in CI).
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     const text = format(report);
     expect(text).toMatch(/Manifest\n/);
@@ -144,7 +145,7 @@ ${SILENCE_DRIFT}tools:
       mcpProbe: probe,
       pathEnv: "",
       claudeMcpExec: NO_CLAUDE_CLI,
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     const text = format(report);
     expect(text).toContain("codebase-oracle");
@@ -170,7 +171,7 @@ tools:
       mcpProbe: new FakeProbe({}),
       pathEnv: "",
       claudeMcpExec: NO_CLAUDE_CLI,
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     expect(report.tools.mcp[0]?.outcome.kind).toBe("missing-verb");
     expect(format(report)).toContain("unknown — no health verb declared");
@@ -198,7 +199,7 @@ ${SILENCE_DRIFT}tools:
       }),
       pathEnv: "",
       claudeMcpExec: NO_CLAUDE_CLI,
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     expect(report.tools.mcp[0]?.outcome.kind).toBe("no-response");
     expect(report.errorCount).toBe(1);
@@ -227,7 +228,7 @@ tools:
       mcpProbe: new FakeProbe({ alpha: { kind: "healthy", latencyMs: 89 } }),
       pathEnv: "",
       claudeMcpExec: NO_CLAUDE_CLI,
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     expect(format(report)).toContain("✓ alpha  healthy in 89ms");
   });
@@ -272,7 +273,7 @@ tools:
         }
       })(),
       pathEnv: "",
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
       claudeMcpExec: NO_CLAUDE_CLI,
     });
     const ghost = report.tools.mcp.find((m) => m.name === "ghost-mcp");
@@ -521,7 +522,7 @@ tools:
       pathEnv: "/nonexistent",
       versionProbe: () => null,
       claudeMcpExec: NO_CLAUDE_CLI,
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     expect(report.errorCount).toBeGreaterThanOrEqual(2);
     expect(report.warningCount).toBeGreaterThanOrEqual(1);
@@ -698,7 +699,7 @@ policies:
       // exit) so the new check (task 4ddd78ed) does not add an
       // env-dependent warning to the count assertion below. The real
       // probe is covered by its own test file with all three branches.
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     return report;
   }
@@ -1622,7 +1623,7 @@ ${mcpBlock}
       versionProbe: () => "v0.1.0\n",
       pathEnv: "",
       claudeMcpExec: NO_CLAUDE_CLI,
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     expect(report.tools.mcpVersions).toEqual([]);
   });
@@ -1640,7 +1641,7 @@ ${mcpBlock}
       versionProbe: (cmd) => (cmd[0] === "my-mcp-bin" ? "my-mcp-bin v0.6.1\n" : null),
       pathEnv: "",
       claudeMcpExec: NO_CLAUDE_CLI,
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     expect(report.tools.mcpVersions).toEqual([
       { name: "ok-mcp", status: "ok", message: "v0.6.1 ≥ 0.5.0" },
@@ -1665,7 +1666,7 @@ ${mcpBlock}
       versionProbe: () => "stale-bin v0.2.0\n",
       pathEnv: "",
       claudeMcpExec: NO_CLAUDE_CLI,
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     expect(report.tools.mcpVersions).toEqual([
       {
@@ -1694,7 +1695,7 @@ ${mcpBlock}
         throw new Error("versionProbe must not be invoked for a disabled server");
       },
       pathEnv: "",
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     expect(report.tools.mcpVersions).toEqual([]);
   });
@@ -1718,7 +1719,7 @@ ${mcpBlock}
       versionProbe: (cmd) => (cmd[0] === "garbled-bin" ? "no number in here\n" : null),
       pathEnv: "",
       claudeMcpExec: NO_CLAUDE_CLI,
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     const byName = Object.fromEntries(report.tools.mcpVersions.map((v) => [v.name, v]));
     expect(byName["probe-fail"]?.status).toBe("warn");
@@ -1745,7 +1746,7 @@ ${mcpBlock}
       },
       pathEnv: "",
       claudeMcpExec: NO_CLAUDE_CLI,
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     expect(received).toEqual(["custom-bin", "--print-version"]);
     expect(report.tools.mcpVersions[0]?.status).toBe("ok");
@@ -1777,7 +1778,7 @@ tools:
       mcpProbe: new FakeProbe({}),
       versionProbe: () => "v9.9.9\n",
       pathEnv: "",
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     expect(report.hooks[0]?.version).toBeUndefined();
   });
@@ -1801,7 +1802,7 @@ tools:
         return "my-hook-bin v0.2.0\n";
       },
       pathEnv: "",
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     expect(received).toEqual(["my-hook-bin", "--version"]);
     expect(report.hooks[0]?.version).toEqual({
@@ -1828,7 +1829,7 @@ tools:
       mcpProbe: new FakeProbe({}),
       versionProbe: () => "my-hook-bin v0.6.0\n",
       pathEnv: "",
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     expect(report.hooks[0]?.version).toEqual({
       status: "ok",
@@ -1880,7 +1881,7 @@ ${routerBlock}
       mcpProbe: new FakeProbe({}),
       versionProbe: () => "v0.9.0\n",
       pathEnv: "",
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     expect(report.memory.routerVersion).toBeUndefined();
   });
@@ -1897,7 +1898,7 @@ ${routerBlock}
       mcpProbe: new FakeProbe({}),
       versionProbe: () => "router v0.1.0\n",
       pathEnv: "",
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     expect(report.memory.routerVersion).toEqual({
       status: "warn",
@@ -1920,7 +1921,7 @@ ${routerBlock}
       mcpProbe: new FakeProbe({}),
       versionProbe: () => "router v0.6.0\n",
       pathEnv: "",
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     expect(report.memory.routerVersion).toEqual({
       status: "ok",
@@ -1942,7 +1943,7 @@ ${routerBlock}
         throw new Error("versionProbe must not be invoked when the router executable is missing");
       },
       pathEnv: "",
-      npmBinExec: async () => ({ code: 1, stdout: "", stderr: "stub" }),
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     expect(report.memory.routerVersion).toBeUndefined();
   });

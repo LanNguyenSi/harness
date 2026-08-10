@@ -15,6 +15,7 @@ import { doctor } from "../../src/cli/doctor/index.js";
 import { format } from "../../src/cli/doctor/format.js";
 import type { ClaudeMcpExec } from "../../src/io/claude-mcp.js";
 import { HermeticSpawnViolationError } from "../../src/runtime/hermetic-spawn-guard.js";
+import { STUB_NPM_BIN_EXEC_UNKNOWN as STUB_NPM_BIN_EXEC } from "../_helpers/npm-bin-exec.js";
 
 let cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -32,10 +33,6 @@ function makeFixture(files: Record<string, string>): string {
   }
   return home;
 }
-
-// Stubbed npm-bin probe so every test in this file stays fully hermetic
-// (mirrors doctor.test.ts's "Appendix D structure" stub).
-const STUB_NPM_BIN_EXEC = async () => ({ code: 1, stdout: "", stderr: "stub" });
 
 function execWithStdout(stdout: string): ClaudeMcpExec {
   return async () => ({ code: 0, stdout, stderr: "", enoent: false, timedOut: false });
