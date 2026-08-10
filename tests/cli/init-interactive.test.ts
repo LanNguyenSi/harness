@@ -8,7 +8,7 @@ import {
   type RunInteractiveOptions,
 } from "../../src/cli/init/interactive.js";
 import { HermeticSpawnViolationError } from "../../src/runtime/hermetic-spawn-guard.js";
-import { STUB_NPM_BIN_EXEC_WARN as STUB_NPM_BIN_EXEC } from "../_helpers/npm-bin-exec.js";
+import { STUB_NPM_BIN_EXEC_WARN } from "../_helpers/npm-bin-exec.js";
 
 // Stub for `npm prefix -g` (task npm-prefix-g-hermeticity-guard/T-004).
 // Every call in this file goes through the `runInteractive` wrapper below
@@ -25,7 +25,7 @@ import { STUB_NPM_BIN_EXEC_WARN as STUB_NPM_BIN_EXEC } from "../_helpers/npm-bin
 // A test that needs different npm behavior can still override it by setting
 // its own `npmBinExec` in `opts` (spread after the default below).
 function runInteractive(opts: RunInteractiveOptions = {}): ReturnType<typeof runInteractiveReal> {
-  return runInteractiveReal({ npmBinExec: STUB_NPM_BIN_EXEC, ...opts });
+  return runInteractiveReal({ npmBinExec: STUB_NPM_BIN_EXEC_WARN, ...opts });
 }
 
 // Helper: build a mock prompts pack that returns queued answers in order
@@ -1099,7 +1099,7 @@ describe("interactive wizard — Team path", () => {
     // Review finding F6 (task T-007): the title promises a "PATH-shadow-free
     // hint" but this file previously never asserted the PATH-shadow hint's
     // absence. It stays absent here because the stubbed npm prefix
-    // (STUB_NPM_BIN_EXEC, top of file) resolves to a directory guaranteed
+    // (STUB_NPM_BIN_EXEC_WARN, top of file) resolves to a directory guaranteed
     // not to exist, so pathShadowHint's fs.existsSync check (src/cli/doctor/
     // index.ts) never fires.
     expect(cap.stderr()).not.toContain("export PATH=");

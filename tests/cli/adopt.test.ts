@@ -16,7 +16,7 @@ import {
 import { generateSettingsWithWarnings } from "../../src/cli/apply/generate-settings.js";
 import { init } from "../../src/cli/init/index.js";
 import { parseManifest } from "../../src/schema/index.js";
-import { STUB_NPM_BIN_EXEC_WARN as STUB_NPM_BIN_EXEC } from "../_helpers/npm-bin-exec.js";
+import { STUB_NPM_BIN_EXEC_WARN } from "../_helpers/npm-bin-exec.js";
 
 let tmpHome: string;
 let manifestPath: string;
@@ -34,17 +34,17 @@ let registryPath: string;
 // spawns a real `npm prefix -g` unless a fake exec is injected (init/index.ts
 // InitOptions.npmBinExec, threaded to checkBinResolution/checkNpmBinPath).
 // The minimal template declares zero `tools.mcp[]` / `tools.cli[]` entries,
-// so this stub's return value is never actually consulted by
-// checkBinResolution's per-binary loop in this file — the "warn" variant is
-// used regardless (see tests/_helpers/npm-bin-exec.ts) for hermeticity, not
-// realism (review finding F4, task T-007).
+// so STUB_NPM_BIN_EXEC_WARN's return value is never actually consulted by
+// checkBinResolution's per-binary loop in this file; the stub exists for
+// hermeticity, not realism (review finding F4, task T-007; variants
+// documented in tests/_helpers/npm-bin-exec.ts).
 
 beforeEach(async () => {
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-adopt-"));
   manifestPath = path.join(tmpHome, "harness.yaml");
   settingsPath = path.join(tmpHome, "settings.json");
   registryPath = path.join(tmpHome, ".claude.json");
-  await init({ homeDir: tmpHome, npmBinExec: STUB_NPM_BIN_EXEC }); // minimal — empty hooks
+  await init({ homeDir: tmpHome, npmBinExec: STUB_NPM_BIN_EXEC_WARN }); // minimal — empty hooks
 });
 
 afterEach(() => {

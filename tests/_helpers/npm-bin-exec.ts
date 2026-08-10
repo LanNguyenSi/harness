@@ -2,7 +2,7 @@
 // (src/cli/doctor/npm-bin-path.ts) an injectable `exec` seam so tests never
 // spawn a real `npm prefix -g`. Every caller that reaches that seam --
 // `doctor()`, `init()`, `runInteractive()` -- threads it through as
-// `npmBinExec`. Ten test files ended up hand-rolling the same two literal
+// `npmBinExec`. Eleven test files ended up hand-rolling the same two literal
 // stub shapes (task-followup: unify the stub-shape duplication axis).
 // Centralising them here keeps the two supported `checkNpmBinPath` outcomes
 // (`unknown`, `warn`) each defined exactly once.
