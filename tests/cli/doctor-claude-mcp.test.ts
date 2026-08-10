@@ -275,6 +275,7 @@ describe("doctor — dead settings.json mcpServers block", () => {
       pathEnv: "",
       npmBinExec: STUB_NPM_BIN_EXEC,
       claudeMcpExec: execWithStdout("alpha: /usr/bin/true - ✔ Connected"),
+      envOverride: {},
     });
     expect(report.claudeMcp?.deadSettingsBlockNames).toEqual(["alpha"]);
     expect(
@@ -302,6 +303,7 @@ describe("doctor — dead settings.json mcpServers block", () => {
       pathEnv: "",
       npmBinExec: STUB_NPM_BIN_EXEC,
       claudeMcpExec: execWithStdout("alpha: /usr/bin/true - ✔ Connected"),
+      envOverride: {},
     });
     expect(report.claudeMcp?.deadSettingsBlockNames).toEqual([]);
     expect(
@@ -321,6 +323,57 @@ describe("doctor — dead settings.json mcpServers block", () => {
       pathEnv: "",
       npmBinExec: STUB_NPM_BIN_EXEC,
       claudeMcpExec: execWithStdout("alpha: /usr/bin/true - ✔ Connected"),
+      envOverride: {},
+    });
+    expect(report.claudeMcp?.deadSettingsBlockNames).toEqual([]);
+  });
+
+  it("reads $CLAUDE_CONFIG_DIR/settings.json when CLAUDE_CONFIG_DIR is set", async () => {
+    const home = makeFixture({
+      "harness.yaml": manifestWithMcp(
+        `    - name: alpha\n      command: [/usr/bin/true]\n      enabled: true`,
+      ),
+    });
+    const configDir = makeFixture({
+      "settings.json": JSON.stringify({
+        mcpServers: { alpha: { command: "/usr/bin/true" } },
+      }),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC,
+      claudeMcpExec: execWithStdout("alpha: /usr/bin/true - ✔ Connected"),
+      envOverride: { CLAUDE_CONFIG_DIR: configDir },
+    });
+    expect(report.claudeMcp?.deadSettingsBlockNames).toEqual(["alpha"]);
+    expect(
+      report.claudeMcp?.warnings.some((w) =>
+        w.includes(path.join(configDir, "settings.json")),
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores ~/.claude/settings.json when CLAUDE_CONFIG_DIR points elsewhere", async () => {
+    const home = makeFixture({
+      "harness.yaml": manifestWithMcp(
+        `    - name: alpha\n      command: [/usr/bin/true]\n      enabled: true`,
+      ),
+      // A dead block in the home location that MUST be ignored: with
+      // CLAUDE_CONFIG_DIR set, Claude Code does not read this file.
+      ".claude/settings.json": JSON.stringify({
+        mcpServers: { alpha: { command: "/usr/bin/true" } },
+      }),
+    });
+    const configDir = makeFixture({});
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC,
+      claudeMcpExec: execWithStdout("alpha: /usr/bin/true - ✔ Connected"),
+      envOverride: { CLAUDE_CONFIG_DIR: configDir },
     });
     expect(report.claudeMcp?.deadSettingsBlockNames).toEqual([]);
   });
