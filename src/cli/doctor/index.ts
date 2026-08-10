@@ -105,6 +105,13 @@ export interface DoctorOptions extends LoaderOptions {
    * enabled `tools.mcp[]` entry — see `buildClaudeMcpRegistration`.
    */
   claudeMcpExec?: ClaudeMcpExec;
+  /**
+   * Test-injection knob for env-dependent path resolution — today only the
+   * dead settings.json `mcpServers` block check, which honors
+   * `CLAUDE_CONFIG_DIR`. Defaults to `process.env`; tests inject `{}` (or
+   * a fake config dir) to stay hermetic against the operator's real env.
+   */
+  envOverride?: NodeJS.ProcessEnv;
 }
 
 export { isDoctorTarget, KNOWN_DOCTOR_TARGETS };
@@ -993,6 +1000,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
           home,
           shallow: !!opts.shallow,
           ...(opts.claudeMcpExec !== undefined ? { claudeMcpExec: opts.claudeMcpExec } : {}),
+          ...(opts.envOverride !== undefined ? { env: opts.envOverride } : {}),
         })
       : undefined;
   const manifestSec = manifestSection(manifest);

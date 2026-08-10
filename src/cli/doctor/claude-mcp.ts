@@ -78,15 +78,36 @@ export interface ClaudeMcpRegistrationSection {
 }
 
 export interface BuildClaudeMcpRegistrationOptions {
-  /** Operator home dir, for locating `~/.claude/settings.json`. Same `home` doctor threads through the other checks. */
+  /** Operator home dir, the `~/.claude/settings.json` fallback location when `CLAUDE_CONFIG_DIR` is unset. Same `home` doctor threads through the other checks. */
   home: string;
+  /**
+   * Env for `CLAUDE_CONFIG_DIR` resolution in the dead settings.json
+   * block check. Defaults to `process.env`; tests inject `{}` or a fake
+   * config dir to stay hermetic against the operator's real env.
+   */
+  env?: NodeJS.ProcessEnv;
   shallow?: boolean;
   /** Test-injection knob; production omits this and the real `claude` CLI is spawned. */
   claudeMcpExec?: ClaudeMcpExec;
 }
 
 /**
- * Read `~/.claude/settings.json`'s `mcpServers` block (if any) and return
+ * Resolve the settings.json path the dead-block check reads. Mirrors the
+ * precedence `resolveClaudeUserRegistryPath` in `src/io/claude-mcp.ts`
+ * applies for the registry file: a non-empty `CLAUDE_CONFIG_DIR` wins
+ * (`$CLAUDE_CONFIG_DIR/settings.json`), otherwise it is
+ * `~/.claude/settings.json` under the operator home.
+ */
+function resolveSettingsPath(home: string, env: NodeJS.ProcessEnv): string {
+  const configDir = env["CLAUDE_CONFIG_DIR"];
+  if (typeof configDir === "string" && configDir.length > 0) {
+    return path.join(configDir, "settings.json");
+  }
+  return path.join(home, ".claude", "settings.json");
+}
+
+/**
+ * Read the resolved settings.json's `mcpServers` block (if any) and return
  * the harness-owned names still present in it. Owned = the current
  * manifest's `tools.mcp[].name` (any entry, enabled or not — a server
  * disabled after being registered once can still have left a dead entry)
@@ -101,8 +122,7 @@ export interface BuildClaudeMcpRegistrationOptions {
  * `mcpServers` value all resolve to "nothing to report" — those failure
  * modes are surfaced by other doctor/validate checks, not duplicated here.
  */
-function findDeadSettingsMcpNames(manifest: Manifest, home: string): string[] {
-  const settingsPath = path.join(home, ".claude", "settings.json");
+function findDeadSettingsMcpNames(manifest: Manifest, settingsPath: string): string[] {
   let raw: string;
   try {
     raw = fs.readFileSync(settingsPath, "utf8");
@@ -224,10 +244,11 @@ export async function buildClaudeMcpRegistration(
     }
   }
 
-  const deadSettingsBlockNames = findDeadSettingsMcpNames(manifest, opts.home);
+  const settingsPath = resolveSettingsPath(opts.home, opts.env ?? process.env);
+  const deadSettingsBlockNames = findDeadSettingsMcpNames(manifest, settingsPath);
   if (deadSettingsBlockNames.length > 0) {
     warnings.push(
-      `~/.claude/settings.json still declares a dead \`mcpServers\` block for ` +
+      `${settingsPath} still declares a dead \`mcpServers\` block for ` +
         `${deadSettingsBlockNames.join(", ")} — Claude Code does not read this block; ` +
         "re-run `harness init --interactive` to migrate it away",
     );
