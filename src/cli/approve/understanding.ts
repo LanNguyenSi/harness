@@ -28,6 +28,12 @@ import {
   writeApprovalMarker,
   writeTaskApprovalMarker,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
+import {
+  type ModeConfigSource,
+  PACK_NAME as UNDERSTANDING_PACK_NAME,
+  resolveMode,
+  toPackageMode,
+} from "../../policy-packs/builtin/understanding-before-execution.js";
 import { sha256Hex } from "../../runtime/approval-signing.js";
 import { addLedgerFact } from "../../runtime/ledger-add.js";
 import {
@@ -169,6 +175,15 @@ export interface ApproveUnderstandingResult {
    * a wrong claim file can be spotted before it lands in the marker.
    */
   taskMarkers: TaskMarkerOutcome[];
+  /**
+   * `resolveMode`'s own warning (invalid `config.mode` in `harness.yaml`,
+   * or an invalid `UNDERSTANDING_GATE_MODE` env value) surfaced verbatim
+   * (task 5d73d78d review LOW, fix-round-3). Absent when the resolution
+   * was clean. This mirrors what the Codex `UserPromptSubmit` injector
+   * already writes to stderr for the exact same `resolveMode` call — this
+   * command used to compute the same warning and drop it silently.
+   */
+  modeWarning?: string;
   /**
    * Outcome of capturing a report passed on stdin (`reportMarkdown`).
    * Absent when no report was supplied. `ok: true` means the markdown
@@ -668,6 +683,42 @@ export async function approveUnderstanding(
     manifestLoadError = err instanceof Error ? err.message : String(err);
   }
 
+  // Gap-fill mode for a stdin report that declares none of its own
+  // (harness task 5d73d78d): resolve via `resolveMode` (Env >
+  // config.mode > DEFAULT_MODE — this IS a live runtime consumer, unlike
+  // `resolve()`/`buildHooks`'s generation path; see `MODE_ENV`'s doc
+  // comment in understanding-before-execution.ts for why the two differ),
+  // from whatever manifest is available, so a report captured via this
+  // path is validated against the operator's actually-configured mode
+  // instead of a hardcoded "fast_confirm" regardless of harness.yaml. A
+  // missing manifest, or a manifest without the pack declared, resolves
+  // the same as an empty `config:` block — resolveMode still applies
+  // Env > DEFAULT_MODE in that case.
+  //
+  // A pack entry that IS declared but `enabled: false` is treated the
+  // SAME as undeclared (task 5d73d78d review LOW-10): a disabled pack's
+  // hooks never ran, so its `config.mode` is not "the operator's live
+  // mode" in any sense this gap-fill should honor. The synthesized
+  // fallback only needs `name` + `config` (resolveMode's minimal
+  // `ModeConfigSource` shape) — `source`/`enabled` would otherwise have
+  // to be invented for a pack entry that, by construction, was never
+  // matched.
+  const declaredPack: ModeConfigSource = manifest?.policy_packs.find(
+    (p) => p.name === UNDERSTANDING_PACK_NAME && p.enabled !== false,
+  ) ?? { name: UNDERSTANDING_PACK_NAME, config: {} };
+  // Task 5d73d78d review LOW (fix-round-3): `resolveMode`'s own warning
+  // (an invalid `config.mode` or `UNDERSTANDING_GATE_MODE` value) used to
+  // be dropped on the floor here — only `.mode` was read. The Codex
+  // `UserPromptSubmit` injector (hook-codex-user-prompt-submit.ts)
+  // already surfaces the identical warning shape to stderr on this same
+  // `resolveMode` call; this path silently swallowed it, so an operator
+  // with a typo'd `config.mode` got no signal at all from `harness
+  // approve understanding`. Surfaced via `modeWarning` on the result so
+  // the CLI can print it the same way the marker/ledger/report lines are
+  // printed.
+  const modeResolution = resolveMode(declaredPack);
+  const resolvedMode = toPackageMode(modeResolution.mode);
+
   // Report capture from stdin (task 61fd36db): persist BEFORE the
   // lookup below so this very approve run selects, validates, and flips
   // the report the agent just attached. Session-bound via the resolved
@@ -679,6 +730,7 @@ export async function approveUnderstanding(
       reportsDir,
       sessionId,
       now: opts.now ?? new Date(),
+      mode: resolvedMode,
     });
   }
 
@@ -717,6 +769,55 @@ export async function approveUnderstanding(
     }
   }
 
+  // Task 5d73d78d review HIGH-2: a stdin report that was REJECTED (failed
+  // to parse, e.g. because it does not meet the resolved mode's schema —
+  // typically a fast_confirm-shaped report submitted against a
+  // grill_me-configured host, see `resolvedMode` above) AND left no
+  // persisted report to fall back on must not fall through to `{ skipped:
+  // true }` above. "skipped" means "nothing was submitted to check"; here
+  // something WAS submitted and it was refused. Before this fix, that
+  // case still landed on `{ skipped: true }` (no `latest` report exists
+  // yet, since persistStdinReport never wrote one), which is not an `ok:
+  // false` validation outcome, so the enforced short-circuit below never
+  // triggered and the marker was written anyway — silently approving a
+  // session whose only report attempt was rejected.
+  //
+  // Fix-round-3 HIGH (5d73d78d review, verification round 2): the
+  // original guard checked only `!latest`, but `latest` can also be a
+  // sessionId-null report ADOPTED via `selectReportForSession`'s
+  // `tolerantFallback: "uncompleted"` mode above (any pending, sessionId-
+  // less report younger than `TOLERANT_FALLBACK_MAX_AGE_MS`). A rejected
+  // stdin submission with such a leftover sitting on disk used to sail
+  // through unconstrained: `latest` was truthy so this override never
+  // fired, the ADOPTED (unrelated) report's own — already-valid — content
+  // passed `validatePersistedReport` instead, and `rewriteReportApproved`
+  // below then stamped the live session's id onto that foreign report and
+  // wrote the marker: a session whose actual submission was refused got
+  // silently approved anyway. The condition now also treats a fallback-
+  // adopted `latest` as "nothing THIS session can claim":
+  // `selection.fallbackAdopted` is `true` exactly when the match was NOT
+  // a strict sessionId match.
+  //
+  // The deliberate carve-out for a genuine EARLIER same-session
+  // submission stays: when `latest` is a STRICT sessionId match
+  // (`selection.fallbackAdopted === false`), that report's own content
+  // validation above already governs the outcome and this block does not
+  // override it.
+  if (
+    typeof opts.reportMarkdown === "string" &&
+    opts.reportMarkdown.trim().length > 0 &&
+    stdinReport !== undefined &&
+    stdinReport.ok === false &&
+    (!latest || selection.fallbackAdopted)
+  ) {
+    validation = {
+      ok: false,
+      field: "stdinReport",
+      reason: stdinReport.reason,
+      enforced: !opts.force,
+    };
+  }
+
   // Short-circuit before any side effect if validation rejects and the
   // operator did not pass --force. No marker, no ledger tag, no report
   // flip — the gate stays closed and the audit trail records no
@@ -733,6 +834,7 @@ export async function approveUnderstanding(
       sessionId,
       sessionSource,
       ...(newestReportPath !== undefined ? { newestReportPath } : {}),
+      ...(modeResolution.warning !== null ? { modeWarning: modeResolution.warning } : {}),
       marker: {
         ok: false,
         reason: `validation failed (${validation.field}): ${validation.reason}`,
@@ -958,6 +1060,7 @@ export async function approveUnderstanding(
     sessionId,
     sessionSource,
     ...(newestReportPath !== undefined ? { newestReportPath } : {}),
+    ...(modeResolution.warning !== null ? { modeWarning: modeResolution.warning } : {}),
     marker: markerResult,
     taskMarkers,
     ...(stdinReport !== undefined ? { stdinReport } : {}),

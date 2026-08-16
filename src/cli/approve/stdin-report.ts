@@ -19,7 +19,7 @@
 
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import { parseReport } from "@lannguyensi/understanding-gate";
+import { parseReport, type UnderstandingGateMode } from "@lannguyensi/understanding-gate";
 import { atomicWriteFile } from "../../io/atomic-write.js";
 
 export type StdinReportOutcome =
@@ -35,6 +35,20 @@ export interface PersistStdinReportArgs {
   sessionId: string;
   /** Clock injection for deterministic tests. */
   now: Date;
+  /**
+   * Gap-fill mode default, used only when the report's own `**Metadata**`
+   * block declares none. Callers with pack-config context (the real
+   * `approve understanding` CLI path) should pass the harness-resolved
+   * mode (Env > config.mode > DEFAULT_MODE — see
+   * `resolveMode`/`toPackageMode` in
+   * policy-packs/builtin/understanding-before-execution.ts) so a report
+   * that omits `mode:` still gets validated against the operator's
+   * actually-configured mode instead of silently defaulting to
+   * `fast_confirm` regardless of `config.mode` (harness task 5d73d78d).
+   * Defaults to `"fast_confirm"` — the pre-fix behaviour — for callers
+   * without pack-config context.
+   */
+  mode?: UnderstandingGateMode;
 }
 
 /** Mirror of the standalone package's slug rule (persistence.ts). */
@@ -136,7 +150,7 @@ export function persistStdinReport(args: PersistStdinReportArgs): StdinReportOut
   const result = parseReport(args.markdown, {
     taskId: args.sessionId,
     createdAt: args.now.toISOString(),
-    mode: "fast_confirm",
+    mode: args.mode ?? "fast_confirm",
     riskLevel: "medium",
   });
 

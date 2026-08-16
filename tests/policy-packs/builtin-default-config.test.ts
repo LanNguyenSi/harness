@@ -87,6 +87,26 @@ describe("resolveBuiltinDefaultConfig", () => {
     expect(result?.ux).toEqual(defaultUx("grill_me"));
   });
 
+  it("understanding-before-execution: ignores UNDERSTANDING_GATE_MODE — resolves from config.mode alone (task 5d73d78d review HIGH-3)", () => {
+    // `harness doctor`'s UX-drift comparison and `harness pack reseed`
+    // both read this function to know what the manifest's `config.ux`
+    // SHOULD say. If it consulted the live env, an operator who happens
+    // to have UNDERSTANDING_GATE_MODE exported in the shell they ran
+    // `harness doctor` from would see false drift (or a `pack reseed`
+    // would write different content) purely because of ambient shell
+    // state, independent of what harness.yaml actually declares.
+    const saved = process.env["UNDERSTANDING_GATE_MODE"];
+    process.env["UNDERSTANDING_GATE_MODE"] = "fast_confirm";
+    try {
+      const pack = packWith("understanding-before-execution", { mode: "strict" });
+      const result = resolveBuiltinDefaultConfig(pack);
+      expect(result?.ux).toEqual(defaultUx("strict"));
+    } finally {
+      if (saved === undefined) delete process.env["UNDERSTANDING_GATE_MODE"];
+      else process.env["UNDERSTANDING_GATE_MODE"] = saved;
+    }
+  });
+
   it("branch-protection: ux only, no canonical producers", () => {
     const pack = packWith("branch-protection");
     const result = resolveBuiltinDefaultConfig(pack);

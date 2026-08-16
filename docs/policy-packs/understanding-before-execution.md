@@ -142,6 +142,119 @@ reseeded config.ux, config.producers for policy_packs entry "understanding-befor
 
 The mode lives under `config:` rather than at the top level because it is pack-specific. Other packs will define their own `config:` shape.
 
+#### Mode resolution and enforcement (harness task `5d73d78d`)
+
+Before this task, `config.mode` only drove prose: the audit-copy
+`instructions.md` and `harness doctor`'s UX-drift comparison read it
+correctly, but the ACTUAL enforcement never received it:
+
+- The Claude-runtime `UserPromptSubmit` injector and `Stop` capture are bins
+  shipped by `@lannguyensi/understanding-gate`
+  (`understanding-gate-claude-hook` / `understanding-gate-claude-stop`).
+  Harness invoked them bare — no `UNDERSTANDING_GATE_MODE` env var — so the
+  package's own resolver (env → `/grill` prompt marker → default
+  `fast_confirm`) always fell through to its default, regardless of
+  `config.mode`.
+- `harness approve understanding`'s stdin-heredoc capture path
+  (`persistStdinReport`) filled in a report's missing `mode` field with a
+  hardcoded `"fast_confirm"` literal, also independent of `config.mode`.
+
+A `config.mode: grill_me` manifest therefore validated agent reports as
+`fast_confirm` in practice — `derivedTodos` / `acceptanceCriteria` /
+`priorArt` were never enforced — while `instructions.md` and `harness
+doctor` both reported `grill_me` as if it were in effect.
+
+**Two resolvers, two different contracts — not one.** A first fix round
+routed every consumer through a single env-aware resolver; a review
+fix-round split it in two, because that single resolver let an operator's
+*ambient* shell state leak into artefacts that must only ever reflect
+`harness.yaml`:
+
+| Resolver | Priority | Used by |
+|---|---|---|
+| `resolveModeFromConfig()` | `config.mode` > default (`grill_me`) — **never reads the env var** | The GENERATION path: `resolve()`/`buildHooks` (what `harness apply` bakes into `settings.json` and `instructions.md`), and `resolveBuiltinDefaultConfig()` in `registry.ts` (`harness doctor`'s UX-drift comparison, `harness pack reseed`). |
+| `resolveMode()` | `UNDERSTANDING_GATE_MODE` env var > `config.mode` > default (`grill_me`) | LIVE runtime consumers that resolve at invocation time, with the real process environment available: `harness approve understanding`'s stdin-report gap-fill (`approve/understanding.ts`), and the Codex `UserPromptSubmit` injector (`harness pack hook codex-user-prompt-submit`). |
+
+The env var name (`UNDERSTANDING_GATE_MODE`) is the same one
+`@lannguyensi/understanding-gate` reads on its own (its "ENV wins because
+operators set it consciously" rule) — harness does not invent a second
+name for the same concept. Why generation must NOT read it: `harness
+apply`/`harness pack reseed` write an artefact that then persists,
+frozen, until the NEXT apply/reseed. If that write depended on whatever
+happened to be exported in the operator's shell at that moment, the
+artefact would drift from `config.mode` the instant the shell's env
+changed — silently reopening the exact class of bug this task closes, one
+layer up, and making `harness doctor` flag false "drift" purely because
+of ambient state. Live consumers are different: `approve understanding`
+and the Codex injector run once, at the moment they are invoked, with the
+real environment in front of them, so honoring a one-off
+`UNDERSTANDING_GATE_MODE=... harness approve understanding` override is
+exactly the intended, momentary escape hatch.
+
+`buildHooks` (the generation path) still bakes the resolved mode into the
+two npm-backed Claude bin commands via the same env-var *name*
+(`wrapMode`) — but the *value* baked in is `resolveModeFromConfig`'s
+config-only result, frozen at apply time, and the prefix is **omitted
+entirely** when that resolved mode already coerces to the package's own
+default (`fast_confirm`). Baking it unconditionally (the first round's
+behavior) made the package's own in-prompt `/grill` / "grill me"
+per-prompt escalation marker permanently dead: the package's own
+resolver (`pickMode`) checks its env var FIRST and returns before ever
+reaching the marker check, so a permanently-set
+`UNDERSTANDING_GATE_MODE=fast_confirm` silently defeated the one
+per-prompt escalation mechanism the package ships. Omitting the prefix
+when the effective mode is already `fast_confirm` changes nothing about
+the outcome (the package already defaults to `fast_confirm` on its own)
+while restoring the marker's liveness on a `fast_confirm`-effective host;
+a `grill_me`/`strict`-resolved mode still gets the unconditional prefix.
+
+**Rejection enforcement.** `harness approve understanding`'s stdin-report
+path also now genuinely REFUSES the approval marker when the submitted
+report is rejected under the resolved mode (e.g. a `fast_confirm`-shaped
+report submitted against a `grill_me`-configured host) and no report
+matching this session id exists — no marker, no ledger tag, no report
+flip, unless `--force` (mirroring the pre-existing
+`priorArt`-content-validation short-circuit; a forced bypass is stamped
+`:forced:stdinReport` into the ledger tag for audit). The first fix round
+resolved the correct mode but still wrote the marker in this case: a
+rejected submission with no fallback report fell through to a `{ skipped:
+true }` validation outcome rather than `ok: false`, so the enforcement
+short-circuit never triggered. A second review round then found that
+"matching this session id" also had to exclude the sessionId-null
+tolerant fallback's adoptions: a rejected submission with only a fresh,
+unrelated, sessionId-less leftover report on disk was silently riding on
+that leftover's already-valid content and getting it stamped with the
+live session's id — the guard now treats a fallback-adopted report the
+same as no report at all.
+
+**Upgrade note — corrected blast radius.** The mode actually enforced now
+matches `config.mode` in all three possible cases, not only the one the
+first round's changelog entry called out:
+
+- `config.mode: fast_confirm` — was already effectively `fast_confirm`;
+  unaffected except for the marker-liveness fix above.
+- `config.mode: grill_me` / `strict` — now genuinely enforced; was
+  silently `fast_confirm`.
+- **No `config:` block at all, or a `config:` block with no `mode:`
+  key** — now genuinely enforced at `grill_me` (the package default).
+  This is the WIDEST blast radius of the three, and the one the first
+  round's upgrade note did not mention: every unconfigured host is
+  affected, not only hosts with an explicit non-`fast_confirm` setting.
+
+For any host in the latter two buckets, previously-accepted reports
+missing `derivedTodos` / `acceptanceCriteria` / `priorArt` are now
+rejected until the agent supplies them. This is a real behavior change
+for such hosts, not a bug in the fix: it closes the gap between the
+declared (or default) config and what was actually running.
+
+`strict` has no upstream equivalent — `@lannguyensi/understanding-gate`'s
+own mode type is two-valued (`fast_confirm` | `grill_me`). Where the
+resolved mode must cross into the package (the env var, and the
+stdin-heredoc gap-fill), `toPackageMode()` coerces `strict` to `grill_me`
+(the closest available rigor); this does not change what `strict` means
+inside harness itself (`modeFriction`, `understandingApprovalRequirement`
+are untouched).
+
 ### Source
 
 `source: builtin` resolves to the pack definition that ships with harness itself. Future values (`path:./packs/foo`, `npm:@scope/pack@1.2.3`, `git:https://...`) are reserved for community-authored packs and are **not** part of the v1 vocabulary; they parse as an opaque string today and will gain dedicated resolution in Phase 6 #3 (the `harness pack add` validate-on-write step) or later.

@@ -198,40 +198,129 @@ describe("expandPolicyPacks", () => {
     expect(pre?.match).toBe("Edit|Write|Bash");
   });
 
-  it("emits unwrapped hook commands when no reportsDir is supplied", () => {
+  it("emits commands prefixed with UNDERSTANDING_GATE_MODE (default grill_me) when no reportsDir is supplied", () => {
+    // Stop + UserPromptSubmit are the npm-backed bins
+    // (@lannguyensi/understanding-gate); both are prefixed with
+    // UNDERSTANDING_GATE_MODE, resolved from config.mode alone —
+    // resolveModeFromConfig, config.mode > DEFAULT_MODE, NEVER the env var
+    // at generation time (task 5d73d78d review HIGH-3; see a dedicated
+    // test below) — so the mode the package enforces matches what
+    // harness.yaml configured instead of silently defaulting to the
+    // package's own fast_confirm fallback. DEFAULT_MODE (grill_me) is
+    // not the package's own default, so the prefix is present here; a
+    // config.mode that resolves to fast_confirm omits it instead (task
+    // 5d73d78d review MEDIUM-7, its own test below) so the package's
+    // in-prompt "/grill" marker escalation stays reachable.
+    // PreToolUse is harness's own CLI and does not consult mode at all.
     const m = buildManifest([{ name: "understanding-before-execution" }]);
     const r = expandPolicyPacks(m);
     expect(r.hooks.find((h) => h.event === "Stop")?.command).toBe(
-      "understanding-gate-claude-stop",
+      "UNDERSTANDING_GATE_MODE='grill_me' understanding-gate-claude-stop",
     );
     expect(r.hooks.find((h) => h.event === "PreToolUse")?.command).toBe(
       "harness pack hook pre-tool-use",
+    );
+    expect(r.hooks.find((h) => h.event === "UserPromptSubmit")?.command).toBe(
+      "UNDERSTANDING_GATE_MODE='grill_me' understanding-gate-claude-hook",
+    );
+  });
+
+  it("also prefixes Stop + PreToolUse commands with UNDERSTANDING_GATE_REPORT_DIR when reportsDir is supplied (mode prefix stays outermost)", () => {
+    const m = buildManifest([{ name: "understanding-before-execution" }]);
+    const r = expandPolicyPacks(m, undefined, {
+      reportsDir: "/home/u/.claude/.understanding-gate/reports",
+    });
+    // Stop hook (writer) and PreToolUse hook (reader) both get the
+    // reports-dir env prefix so they round-trip the same dir as the
+    // operator's `harness approve understanding` invocation.
+    expect(r.hooks.find((h) => h.event === "Stop")?.command).toBe(
+      "UNDERSTANDING_GATE_MODE='grill_me' UNDERSTANDING_GATE_REPORT_DIR='/home/u/.claude/.understanding-gate/reports' understanding-gate-claude-stop",
+    );
+    expect(r.hooks.find((h) => h.event === "PreToolUse")?.command).toBe(
+      "UNDERSTANDING_GATE_REPORT_DIR='/home/u/.claude/.understanding-gate/reports' harness pack hook pre-tool-use",
+    );
+    // UserPromptSubmit injector does not write/read the reports dir, so
+    // it never gets that prefix — but it still carries the mode prefix
+    // here (config resolves to grill_me, not the package's fast_confirm
+    // default — see MEDIUM-7's own test below for the omitted case).
+    expect(r.hooks.find((h) => h.event === "UserPromptSubmit")?.command).toBe(
+      "UNDERSTANDING_GATE_MODE='grill_me' understanding-gate-claude-hook",
+    );
+  });
+
+  it("resolves UNDERSTANDING_GATE_MODE from an explicit config.mode: grill_me", () => {
+    // Distinct from the DEFAULT_MODE-fallback case above: pins that an
+    // EXPLICIT non-fast_confirm config.mode value (not just the default)
+    // also resolves through to the emitted prefix.
+    const m = buildManifest([
+      { name: "understanding-before-execution", config: { mode: "grill_me" } },
+    ]);
+    const r = expandPolicyPacks(m);
+    expect(r.hooks.find((h) => h.event === "Stop")?.command).toBe(
+      "UNDERSTANDING_GATE_MODE='grill_me' understanding-gate-claude-stop",
+    );
+    expect(r.hooks.find((h) => h.event === "UserPromptSubmit")?.command).toBe(
+      "UNDERSTANDING_GATE_MODE='grill_me' understanding-gate-claude-hook",
+    );
+  });
+
+  it("config.mode: fast_confirm emits the hook commands with NO mode prefix (task 5d73d78d review MEDIUM-7)", () => {
+    // Before this fix, the prefix was baked unconditionally, which made
+    // @lannguyensi/understanding-gate's own in-prompt "/grill" / "grill
+    // me" escalation marker permanently dead on a fast_confirm-effective
+    // host: the package's pickMode() checks its env var FIRST and never
+    // reaches the marker check when it is set at all, even to the value
+    // that already matches the package's own default. Omitting the
+    // prefix here restores the marker's liveness without changing the
+    // EFFECTIVE default (the package already defaults to fast_confirm on
+    // its own).
+    const m = buildManifest([
+      { name: "understanding-before-execution", config: { mode: "fast_confirm" } },
+    ]);
+    const r = expandPolicyPacks(m);
+    expect(r.hooks.find((h) => h.event === "Stop")?.command).toBe(
+      "understanding-gate-claude-stop",
     );
     expect(r.hooks.find((h) => h.event === "UserPromptSubmit")?.command).toBe(
       "understanding-gate-claude-hook",
     );
   });
 
-  it("prefixes Stop + PreToolUse commands with UNDERSTANDING_GATE_REPORT_DIR when reportsDir is supplied", () => {
-    const m = buildManifest([{ name: "understanding-before-execution" }]);
-    const r = expandPolicyPacks(m, undefined, {
-      reportsDir: "/home/u/.claude/.understanding-gate/reports",
-    });
-    // Stop hook (writer) and PreToolUse hook (reader) both get the env
-    // prefix so they round-trip the same dir as the operator's
-    // `harness approve understanding` invocation.
+  it("coerces config.mode: strict to UNDERSTANDING_GATE_MODE=grill_me (the package has no strict variant)", () => {
+    const m = buildManifest([
+      { name: "understanding-before-execution", config: { mode: "strict" } },
+    ]);
+    const r = expandPolicyPacks(m);
     expect(r.hooks.find((h) => h.event === "Stop")?.command).toBe(
-      "UNDERSTANDING_GATE_REPORT_DIR='/home/u/.claude/.understanding-gate/reports' understanding-gate-claude-stop",
+      "UNDERSTANDING_GATE_MODE='grill_me' understanding-gate-claude-stop",
     );
-    expect(r.hooks.find((h) => h.event === "PreToolUse")?.command).toBe(
-      "UNDERSTANDING_GATE_REPORT_DIR='/home/u/.claude/.understanding-gate/reports' harness pack hook pre-tool-use",
-    );
-    // UserPromptSubmit injector does not write/read the reports dir,
-    // so we keep its command unprefixed (smaller surface, no needless
-    // env in the visible command).
-    expect(r.hooks.find((h) => h.event === "UserPromptSubmit")?.command).toBe(
-      "understanding-gate-claude-hook",
-    );
+  });
+
+  it("UNDERSTANDING_GATE_MODE env var does NOT affect the generation path — only config.mode does (task 5d73d78d review HIGH-3)", () => {
+    // Before the HIGH-3 fix, `resolve()`/`buildHooks` resolved mode via
+    // the SAME env-aware resolver the live runtime consumers use, so
+    // whatever an operator happened to have exported in the shell they
+    // ran `harness apply`/`harness doctor` from would silently override
+    // `config.mode` in the GENERATED artefact — which then persists,
+    // frozen, until the next apply, independent of the env var's value
+    // at any later point. This pins the fix: an exported env var with a
+    // DIFFERENT value than config.mode has zero effect on the resolved
+    // command; only config.mode (and DEFAULT_MODE as its fallback)
+    // drives generation.
+    const saved = process.env["UNDERSTANDING_GATE_MODE"];
+    process.env["UNDERSTANDING_GATE_MODE"] = "fast_confirm";
+    try {
+      const m = buildManifest([
+        { name: "understanding-before-execution", config: { mode: "grill_me" } },
+      ]);
+      const r = expandPolicyPacks(m);
+      expect(r.hooks.find((h) => h.event === "Stop")?.command).toBe(
+        "UNDERSTANDING_GATE_MODE='grill_me' understanding-gate-claude-stop",
+      );
+    } finally {
+      if (saved === undefined) delete process.env["UNDERSTANDING_GATE_MODE"];
+      else process.env["UNDERSTANDING_GATE_MODE"] = saved;
+    }
   });
 
   it("npm-backed Claude hooks declare a min_version floor pointing at understanding-gate --version", () => {

@@ -94,3 +94,66 @@ describe("persistStdinReport — malformedSections in the parse-error log payloa
     expect(header.sessionId).toBe("sess-with-field");
   });
 });
+
+describe("persistStdinReport — args.mode actually drives which schema the report is validated against (task 5d73d78d review HIGH-1a)", () => {
+  // The exact 5-bullet shape @lannguyensi/understanding-gate's
+  // fast_confirm prompt emits: no `# Understanding Report` heading, no
+  // `## Metadata` block (mode is entirely gap-filled by the caller's
+  // `args.mode`). Parses cleanly under the fast_confirm-relaxed schema;
+  // fails under the full grill_me schema (missing derivedTodos /
+  // acceptanceCriteria / openQuestions / risks / priorArt) — this
+  // dependency on `args.mode` reaching `parseReport`'s `defaults.mode` is
+  // exactly what mutants M4 (ignore args.mode) and M5 (caller drops the
+  // mode arg) would break silently if nothing exercised it (the pre-fix
+  // test suite for this file never referenced `mode` at all).
+  const FAST_CONFIRM_BULLETS = [
+    "- I understood the task as: pin args.mode's effect on schema selection.",
+    "- I will do: persist a five-bullet fast_confirm-shaped report.",
+    "- I will not touch: the parse-error log format.",
+    "- I will verify by: asserting ok vs. rejected per mode.",
+    "- Assumptions: the heredoc arrives verbatim.",
+  ].join("\n");
+
+  it("mode: 'fast_confirm' — the bullets-only report is accepted", () => {
+    const reportsDir = reportsDirIn(tmp);
+    const result = persistStdinReport({
+      markdown: FAST_CONFIRM_BULLETS,
+      reportsDir,
+      sessionId: "sess-mode-fc",
+      now: new Date("2026-08-16T10:00:00Z"),
+      mode: "fast_confirm",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const persisted = JSON.parse(fs.readFileSync(result.filePath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(persisted.mode).toBe("fast_confirm");
+  });
+
+  it("mode: 'grill_me' — the SAME bullets-only report is rejected (missing required grill_me sections)", () => {
+    const reportsDir = reportsDirIn(tmp);
+    const result = persistStdinReport({
+      markdown: FAST_CONFIRM_BULLETS,
+      reportsDir,
+      sessionId: "sess-mode-gm",
+      now: new Date("2026-08-16T10:00:00Z"),
+      mode: "grill_me",
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/did not parse/);
+  });
+
+  it("mode omitted — defaults to fast_confirm (pre-fix / no-pack-config-context behaviour), the bullets-only report is accepted", () => {
+    const reportsDir = reportsDirIn(tmp);
+    const result = persistStdinReport({
+      markdown: FAST_CONFIRM_BULLETS,
+      reportsDir,
+      sessionId: "sess-mode-default",
+      now: new Date("2026-08-16T10:00:00Z"),
+    });
+    expect(result.ok).toBe(true);
+  });
+});

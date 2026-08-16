@@ -5,8 +5,11 @@
 // (its `core/parser.js` SECTIONS array). Harness inlines the section
 // names here so the gate's block message tells the agent exactly what
 // to produce — without this, a freeform prose report parses to "Missing
-// required sections" and the audit trail is silently empty even though
-// the gate-approval marker still gets written.
+// required sections" and the audit trail is silently empty. (Since the
+// task 5d73d78d review HIGH-2 fix, a malformed report also refuses the
+// gate-approval marker unless the operator passes --force; this used to
+// read "even though the gate-approval marker still gets written", true
+// only before that fix.)
 //
 // Drift risk: if the standalone parser adds, renames, or reorders
 // sections, this constant goes out of sync. Mitigation:
@@ -98,8 +101,16 @@ export function renderReportSchemaHint(): string {
   // one pair implied exhaustiveness. The bullets below show the canonical
   // names; the parser's alias-tolerance is a quiet bonus, not something
   // the agent needs to choose between.
+  // Task 5d73d78d review MEDIUM (fix-round-3): this closing sentence used
+  // to claim the gate-approval marker "still gets written" for a
+  // malformed report. That was true before the HIGH-2 enforcement fix
+  // (harness approve understanding's stdin-report path silently approved
+  // a rejected submission); it is now false and would teach the agent
+  // the wrong recovery model. The marker is REFUSED for a malformed
+  // stdin submission (unless the operator passes --force), same as any
+  // other validation failure.
   const intro =
-    "Report format (parsed by `@lannguyensi/understanding-gate`): markdown with these ten sections, any heading level (#, ##, ###), names case-insensitive. Sections marked (list) need markdown list items ('- ' or '1.') in the body — a prose paragraph under a (list) heading is rejected the same as a missing section. Missing any section produces a parse-error under `.understanding-gate/parse-errors/` and the audit trail is empty even though the gate-approval marker still gets written.";
+    "Report format (parsed by `@lannguyensi/understanding-gate`): markdown with these ten sections, any heading level (#, ##, ###), names case-insensitive. Sections marked (list) need markdown list items ('- ' or '1.') in the body — a prose paragraph under a (list) heading is rejected the same as a missing section. Missing any section produces a parse-error under `.understanding-gate/parse-errors/`, and the approval marker is REFUSED (no ledger tag, no report flip) unless the operator passes --force.";
   const bullets = UNDERSTANDING_REPORT_REQUIRED_SECTIONS.map((s) => `  - ${s}`).join("\n");
   // Submission recipe (task 61fd36db): the Stop-hook producer fires only
   // at END of turn — after `harness approve understanding` already ran —

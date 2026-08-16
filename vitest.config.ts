@@ -78,7 +78,14 @@ export default defineConfig({
     // "Residual exposure" note. Full rationale, the
     // seven-vs-four-entry-point finding, and the allowlist itself live in
     // the setup file.
-    setupFiles: ["./tests/_helpers/hermetic-spawn-allowlist.ts"],
+    // scrub-ambient-env.ts (task 5d73d78d review MEDIUM-5): deletes
+    // UNDERSTANDING_GATE_MODE before every test so the suite's pass/fail
+    // does not depend on whether the operator/CI shell happens to have
+    // it exported — see that file's own doc comment.
+    setupFiles: [
+      "./tests/_helpers/hermetic-spawn-allowlist.ts",
+      "./tests/_helpers/scrub-ambient-env.ts",
+    ],
     maxWorkers: 6,
     coverage: {
       provider: "v8",
