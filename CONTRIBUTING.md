@@ -17,15 +17,28 @@ Thanks for your interest. harness is a declarative control plane for agent harne
    npm install
    npm run build
    npm test
-   npm run check:boundaries   # import layering (dependency-cruiser, .dependency-cruiser.cjs)
-   npm run check:duplication  # clone-count pin (jscpd, scripts/check-duplication.mjs)
+   npm run check:boundaries          # import layering (dependency-cruiser, .dependency-cruiser.cjs)
+   npm run check:duplication         # clone-count pin (jscpd, scripts/check-duplication.mjs)
+   npm run check:changelog-coverage  # every non-skipped commit since the last tag needs a citable entry (scripts/check-changelog-coverage.mjs)
    ```
 
-   The last two are architecture fitness functions CI enforces: layering
-   is schema → policies → runtime → policy-packs → cli (grandfathered
-   shared-util edges are listed in the config), and the duplication pin
-   fails when `src/` grows a new clone — extract instead, or raise the
-   pin with a justification in the same PR.
+   `check:boundaries` and `check:duplication` are architecture fitness
+   functions CI enforces: layering is schema → policies → runtime →
+   policy-packs → cli (grandfathered shared-util edges are listed in the
+   config), and the duplication pin fails when `src/` grows a new clone —
+   extract instead, or raise the pin with a justification in the same PR.
+
+   `check:changelog-coverage` enforces that every commit since the last
+   tag is cited in the `## [Unreleased]` section (or, on a release-prep
+   branch, in the not-yet-tagged rolled-up version section above it):
+   reference the commit's 8-hex task id (`` `<id8>` ``), its PR number
+   (`#NNN`), a GHSA advisory id, or — for a commit already pushed without
+   a citable token — the commit's own SHA. A commit whose
+   conventional-commit type is `chore`, `ci`, `docs`, `refactor`, `style`,
+   or `test` needs no entry. This applies to EVERY commit pushed to a
+   branch under review, not just the eventual squash-merge subject — a
+   `pull_request` CI run grades the whole branch, including review-round
+   commits, so give each one a task id (or a skipped type) as you make it.
 
 4. For schema or hook changes, dogfood against the `dogfood/` examples and verify the gate behaviour does not regress.
 5. Open the PR with a clear summary, motivation, and test plan.

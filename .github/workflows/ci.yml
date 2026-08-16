@@ -13,6 +13,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history + tags: check:changelog-coverage compares
+          # `git log <last-tag>..HEAD` against CHANGELOG.md's Unreleased
+          # section, so it needs the tag and the commits since it.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -51,6 +56,17 @@ jobs:
         # compiler), so it never mistakes a `.only` inside a string,
         # comment, or test name for a real describe/it/test call.
         run: npm run check:no-only
+
+      - name: Changelog coverage
+        # scripts/check-changelog-coverage.mjs — every release-notable
+        # commit since the last tag must be linked from CHANGELOG.md's
+        # [Unreleased] section (task id / #PR / GHSA id / SHA cite); the
+        # skip convention for test/docs/ci/style/refactor/chore commits is
+        # documented in the script header. Fails fast BEFORE Build so a
+        # release can't be cut with silently missing notes (the pre-0.42.0
+        # failure mode; release.yml additionally hard-stops on empty
+        # extracted notes).
+        run: npm run check:changelog-coverage
 
       - name: Build
         run: npm run build
