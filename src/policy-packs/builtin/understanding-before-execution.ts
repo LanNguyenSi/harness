@@ -49,6 +49,23 @@ const MODES: readonly Mode[] = ["fast_confirm", "grill_me", "strict"];
 export const DEFAULT_MODE: Mode = "grill_me";
 
 /**
+ * Env var carrying an operator-set mode override. Resolution priority is
+ * Env > `config.mode` (harness.yaml) > {@link DEFAULT_MODE} — see
+ * {@link resolveMode}. Also the exact name `@lannguyensi/understanding-gate`
+ * reads on its own (package `src/mode.ts`: "ENV wins because operators set
+ * it consciously"); `buildHooks` below forwards the resolved value under
+ * this same name to the package-owned Claude-runtime bins
+ * (`understanding-gate-claude-hook` / `understanding-gate-claude-stop`) so
+ * the mode the agent is actually held to matches `config.mode`, closing a
+ * config-drift gap where the two resolvers previously agreed on nothing
+ * (harness task 5d73d78d): the package bins never received this env var,
+ * so an unset ENV + a prompt with no `/grill` marker always fell through
+ * to the package's own default (`fast_confirm`), regardless of what
+ * `config.mode` said.
+ */
+export const MODE_ENV = "UNDERSTANDING_GATE_MODE";
+
+/**
  * The agent-facing `required:` phrase for the understanding-gate deny
  * envelope, derived from the configured mode. Only `strict` forces
  * `requiresHumanApproval` (see {@link modeFriction}); in `fast_confirm`
@@ -273,17 +290,60 @@ function prefixCommandWithReportsDir(
   return `${REPORTS_DIR_ENV}=${shellQuoteSingle(reportsDir)} ${command}`;
 }
 
+/**
+ * Resolve the pack's effective mode. Priority: {@link MODE_ENV} (env) >
+ * `pack.config.mode` (harness.yaml) > {@link DEFAULT_MODE}. An invalid
+ * value at either the env or the config layer is skipped (with a
+ * warning) rather than short-circuiting straight to the default, so a
+ * typo'd env var does not also stomp on an otherwise-valid YAML setting.
+ * Env wins over YAML deliberately: it is the same precedence
+ * `@lannguyensi/understanding-gate` gives its own env-vs-marker
+ * resolution, and it is how an operator (or CI) does a one-off override
+ * without editing harness.yaml.
+ */
 export function resolveMode(pack: PolicyPack): {
   mode: Mode;
   warning: string | null;
 } {
+  const warnings: string[] = [];
+  const envRaw = process.env[MODE_ENV];
+  if (envRaw !== undefined && envRaw !== "") {
+    if (isMode(envRaw)) return { mode: envRaw, warning: null };
+    warnings.push(
+      `${MODE_ENV}=${JSON.stringify(envRaw)}: unrecognised value, ignoring. Allowed: ${MODES.join(", ")}.`,
+    );
+  }
   const raw = pack.config["mode"];
-  if (raw === undefined) return { mode: DEFAULT_MODE, warning: null };
-  if (isMode(raw)) return { mode: raw, warning: null };
-  const warning = `policy_packs[${pack.name}].config.mode: unrecognised value ${JSON.stringify(
-    raw,
-  )}, falling back to "${DEFAULT_MODE}". Allowed: ${MODES.join(", ")}.`;
-  return { mode: DEFAULT_MODE, warning };
+  if (raw === undefined) {
+    return { mode: DEFAULT_MODE, warning: warnings[0] ?? null };
+  }
+  if (isMode(raw)) {
+    return { mode: raw, warning: warnings[0] ?? null };
+  }
+  warnings.push(
+    `policy_packs[${pack.name}].config.mode: unrecognised value ${JSON.stringify(
+      raw,
+    )}, falling back to "${DEFAULT_MODE}". Allowed: ${MODES.join(", ")}.`,
+  );
+  return { mode: DEFAULT_MODE, warning: warnings.join(" ") };
+}
+
+/**
+ * Map harness's {@link Mode} (which includes `strict`) onto the two-value
+ * mode `@lannguyensi/understanding-gate` itself understands
+ * (`fast_confirm` | `grill_me`; package `src/schema/types.ts`). The
+ * package has no `strict` variant of its own; `grill_me` is the closest
+ * available approximation (full Report, Prior Art enforced) — passing
+ * `strict` through unmapped would mean the package silently ignores the
+ * env override (it only recognises its own two literals) and falls back
+ * to its own default, `fast_confirm`, i.e. the exact drift this task
+ * closes for `grill_me`, just unfixed for `strict`. This does not change
+ * what `strict` means inside harness (modeFriction/
+ * understandingApprovalRequirement are untouched); it only picks what to
+ * tell the external package, which cannot represent `strict` at all.
+ */
+export function toPackageMode(mode: Mode): "fast_confirm" | "grill_me" {
+  return mode === "fast_confirm" ? "fast_confirm" : "grill_me";
 }
 
 // Default tools that mark task-completion boundaries when the operator
@@ -546,19 +606,27 @@ function resolvePostToolUseBoundaries(pack: PolicyPack): PostToolUseBoundaries {
 function buildHooks(
   runtime: Runtime,
   pack: PolicyPack,
+  mode: Mode,
   opts: ResolvePackOptions = {},
 ): Hook[] {
-  // Per-mode hook commands are identical (the mode is passed via the
-  // package's UNDERSTANDING_GATE_MODE env var, set elsewhere — out of
-  // scope for Phase 6 #2). What changes per mode is the instructions.md
-  // content + the actual injected prompt (owned by the npm package).
+  // Per-mode hook commands are otherwise identical: the mode reaches the
+  // package-owned Claude bins (BIN_USER_PROMPT_SUBMIT_CLAUDE,
+  // BIN_STOP_CLAUDE) via the `UNDERSTANDING_GATE_MODE` env-var prefix
+  // below (`wrapMode`), resolved by `resolveMode` (Env > config.mode >
+  // DEFAULT_MODE) and coerced through `toPackageMode` for the package's
+  // two-value enum — see both functions' doc comments (harness task
+  // 5d73d78d). What changes per mode beyond that is the instructions.md
+  // content + the actual injected prompt (owned by the npm package,
+  // itself keyed off this same env var).
   //
-  // When `opts.reportsDir` is set (the apply path), each command is
+  // When `opts.reportsDir` is set (the apply path), each command is ALSO
   // prefixed with `UNDERSTANDING_GATE_REPORT_DIR=<absolute>` so all hooks
   // — including the standalone-package Stop bin which honors the same
   // env var — write/read the same directory.
   const wrap = (cmd: string): string =>
     prefixCommandWithReportsDir(cmd, opts.reportsDir);
+  const wrapMode = (cmd: string): string =>
+    `${MODE_ENV}=${shellQuoteSingle(toPackageMode(mode))} ${cmd}`;
   if (runtime === "codex") {
     return [
       {
@@ -687,7 +755,7 @@ function buildHooks(
     {
       name: `${HOOK_NAME_PREFIX}:user-prompt-submit`,
       event: "UserPromptSubmit",
-      command: BIN_USER_PROMPT_SUBMIT_CLAUDE,
+      command: wrapMode(BIN_USER_PROMPT_SUBMIT_CLAUDE),
       blocking: false,
       budget_ms: 5000,
       min_version: UG_MIN_VERSION,
@@ -698,7 +766,7 @@ function buildHooks(
     {
       name: `${HOOK_NAME_PREFIX}:stop`,
       event: "Stop",
-      command: wrap(BIN_STOP_CLAUDE),
+      command: wrapMode(wrap(BIN_STOP_CLAUDE)),
       blocking: false,
       budget_ms: 5000,
       min_version: UG_MIN_VERSION,
@@ -920,7 +988,7 @@ export function resolve(
   opts: ResolvePackOptions = {},
 ): { contribution: PackContribution; warnings: string[] } {
   const { mode, warning } = resolveMode(pack);
-  const hooks = buildHooks(runtime, pack, opts);
+  const hooks = buildHooks(runtime, pack, mode, opts);
   const instructionsContent = buildInstructions(pack, mode, runtime);
   const files: PackContributionFile[] = [
     {

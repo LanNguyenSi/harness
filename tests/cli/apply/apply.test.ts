@@ -1456,18 +1456,30 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
     for (const groups of Object.values(settings.hooks)) {
       for (const g of groups) for (const h of g.hooks) allCommands.push(h.command);
     }
-    expect(allCommands).toContain("understanding-gate-claude-hook");
+    // The Claude UserPromptSubmit injector and Stop capture are the
+    // npm-backed bins (@lannguyensi/understanding-gate); both now ALWAYS
+    // carry an `UNDERSTANDING_GATE_MODE=<resolved>` prefix (harness task
+    // 5d73d78d: config.mode used to only drive prose, never the mode the
+    // package actually enforced). Unconfigured here, so it resolves to
+    // DEFAULT_MODE (grill_me).
+    const userPromptSubmitCommand = allCommands.find((c) =>
+      c.endsWith("understanding-gate-claude-hook"),
+    );
+    expect(userPromptSubmitCommand).toBe(
+      "UNDERSTANDING_GATE_MODE='grill_me' understanding-gate-claude-hook",
+    );
     // Phase 6 #4: harness owns the PreToolUse blocker (consults BOTH
     // ledger + persisted report). The package's own bin still works for
     // solo users but the pack now wires harness's stronger blocker.
-    // The Stop and PreToolUse hooks carry an
+    // The Stop and PreToolUse hooks ALSO carry an
     // `UNDERSTANDING_GATE_REPORT_DIR=<manifest-anchored>` env prefix so
     // the standalone Stop bin (writer) and harness's blocker (reader)
-    // resolve the same persisted-report dir regardless of cwd.
+    // resolve the same persisted-report dir regardless of cwd — the mode
+    // prefix stays outermost (see the UserPromptSubmit assertion above).
     const stopCommand = allCommands.find((c) => c.endsWith("understanding-gate-claude-stop"));
     expect(stopCommand).toBeDefined();
     expect(stopCommand).toMatch(
-      /^UNDERSTANDING_GATE_REPORT_DIR='[^']+\/\.understanding-gate\/reports' understanding-gate-claude-stop$/,
+      /^UNDERSTANDING_GATE_MODE='grill_me' UNDERSTANDING_GATE_REPORT_DIR='[^']+\/\.understanding-gate\/reports' understanding-gate-claude-stop$/,
     );
     const preToolUseCommand = allCommands.find((c) => c.endsWith("harness pack hook pre-tool-use"));
     expect(preToolUseCommand).toBeDefined();

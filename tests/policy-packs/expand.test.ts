@@ -198,40 +198,87 @@ describe("expandPolicyPacks", () => {
     expect(pre?.match).toBe("Edit|Write|Bash");
   });
 
-  it("emits unwrapped hook commands when no reportsDir is supplied", () => {
+  it("emits commands prefixed only with UNDERSTANDING_GATE_MODE (default grill_me) when no reportsDir is supplied", () => {
+    // Stop + UserPromptSubmit are the npm-backed bins
+    // (@lannguyensi/understanding-gate); both are ALWAYS prefixed with
+    // UNDERSTANDING_GATE_MODE, resolved from config.mode (Env > config.mode
+    // > DEFAULT_MODE — see resolveMode), so the mode the package enforces
+    // matches what harness.yaml configured instead of silently defaulting
+    // to the package's own fast_confirm fallback (harness task 5d73d78d).
+    // PreToolUse is harness's own CLI and does not consult mode at all.
     const m = buildManifest([{ name: "understanding-before-execution" }]);
     const r = expandPolicyPacks(m);
     expect(r.hooks.find((h) => h.event === "Stop")?.command).toBe(
-      "understanding-gate-claude-stop",
+      "UNDERSTANDING_GATE_MODE='grill_me' understanding-gate-claude-stop",
     );
     expect(r.hooks.find((h) => h.event === "PreToolUse")?.command).toBe(
       "harness pack hook pre-tool-use",
     );
     expect(r.hooks.find((h) => h.event === "UserPromptSubmit")?.command).toBe(
-      "understanding-gate-claude-hook",
+      "UNDERSTANDING_GATE_MODE='grill_me' understanding-gate-claude-hook",
     );
   });
 
-  it("prefixes Stop + PreToolUse commands with UNDERSTANDING_GATE_REPORT_DIR when reportsDir is supplied", () => {
+  it("also prefixes Stop + PreToolUse commands with UNDERSTANDING_GATE_REPORT_DIR when reportsDir is supplied (mode prefix stays outermost)", () => {
     const m = buildManifest([{ name: "understanding-before-execution" }]);
     const r = expandPolicyPacks(m, undefined, {
       reportsDir: "/home/u/.claude/.understanding-gate/reports",
     });
-    // Stop hook (writer) and PreToolUse hook (reader) both get the env
-    // prefix so they round-trip the same dir as the operator's
-    // `harness approve understanding` invocation.
+    // Stop hook (writer) and PreToolUse hook (reader) both get the
+    // reports-dir env prefix so they round-trip the same dir as the
+    // operator's `harness approve understanding` invocation.
     expect(r.hooks.find((h) => h.event === "Stop")?.command).toBe(
-      "UNDERSTANDING_GATE_REPORT_DIR='/home/u/.claude/.understanding-gate/reports' understanding-gate-claude-stop",
+      "UNDERSTANDING_GATE_MODE='grill_me' UNDERSTANDING_GATE_REPORT_DIR='/home/u/.claude/.understanding-gate/reports' understanding-gate-claude-stop",
     );
     expect(r.hooks.find((h) => h.event === "PreToolUse")?.command).toBe(
       "UNDERSTANDING_GATE_REPORT_DIR='/home/u/.claude/.understanding-gate/reports' harness pack hook pre-tool-use",
     );
-    // UserPromptSubmit injector does not write/read the reports dir,
-    // so we keep its command unprefixed (smaller surface, no needless
-    // env in the visible command).
+    // UserPromptSubmit injector does not write/read the reports dir, so
+    // it never gets that prefix — but it still carries the mode prefix,
+    // unconditionally.
     expect(r.hooks.find((h) => h.event === "UserPromptSubmit")?.command).toBe(
-      "understanding-gate-claude-hook",
+      "UNDERSTANDING_GATE_MODE='grill_me' understanding-gate-claude-hook",
     );
+  });
+
+  it("resolves UNDERSTANDING_GATE_MODE from config.mode when the operator sets one", () => {
+    const m = buildManifest([
+      { name: "understanding-before-execution", config: { mode: "fast_confirm" } },
+    ]);
+    const r = expandPolicyPacks(m);
+    expect(r.hooks.find((h) => h.event === "Stop")?.command).toBe(
+      "UNDERSTANDING_GATE_MODE='fast_confirm' understanding-gate-claude-stop",
+    );
+    expect(r.hooks.find((h) => h.event === "UserPromptSubmit")?.command).toBe(
+      "UNDERSTANDING_GATE_MODE='fast_confirm' understanding-gate-claude-hook",
+    );
+  });
+
+  it("coerces config.mode: strict to UNDERSTANDING_GATE_MODE=grill_me (the package has no strict variant)", () => {
+    const m = buildManifest([
+      { name: "understanding-before-execution", config: { mode: "strict" } },
+    ]);
+    const r = expandPolicyPacks(m);
+    expect(r.hooks.find((h) => h.event === "Stop")?.command).toBe(
+      "UNDERSTANDING_GATE_MODE='grill_me' understanding-gate-claude-stop",
+    );
+  });
+
+  it("UNDERSTANDING_GATE_MODE env var overrides config.mode in the resolved command (Env > YAML)", () => {
+    const saved = process.env["UNDERSTANDING_GATE_MODE"];
+    process.env["UNDERSTANDING_GATE_MODE"] = "fast_confirm";
+    try {
+      const m = buildManifest([
+        { name: "understanding-before-execution", config: { mode: "grill_me" } },
+      ]);
+      const r = expandPolicyPacks(m);
+      expect(r.hooks.find((h) => h.event === "Stop")?.command).toBe(
+        "UNDERSTANDING_GATE_MODE='fast_confirm' understanding-gate-claude-stop",
+      );
+    } finally {
+      if (saved === undefined) delete process.env["UNDERSTANDING_GATE_MODE"];
+      else process.env["UNDERSTANDING_GATE_MODE"] = saved;
+    }
   });
 
   it("npm-backed Claude hooks declare a min_version floor pointing at understanding-gate --version", () => {

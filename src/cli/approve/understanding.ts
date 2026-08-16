@@ -28,6 +28,11 @@ import {
   writeApprovalMarker,
   writeTaskApprovalMarker,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
+import {
+  PACK_NAME as UNDERSTANDING_PACK_NAME,
+  resolveMode,
+  toPackageMode,
+} from "../../policy-packs/builtin/understanding-before-execution.js";
 import { sha256Hex } from "../../runtime/approval-signing.js";
 import { addLedgerFact } from "../../runtime/ledger-add.js";
 import {
@@ -35,7 +40,7 @@ import {
   resolveGeneratedDir,
 } from "../../runtime/pending-approval.js";
 import { resolveApprovalSessionId } from "../../runtime/session-id.js";
-import type { Manifest, McpServer } from "../../schema/index.js";
+import type { Manifest, McpServer, PolicyPack } from "../../schema/index.js";
 import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
 import { loadManifest, resolvePaths, type LoaderOptions } from "../loader.js";
 import { describeSectionKey } from "../pack/understanding-report-schema-hint.js";
@@ -668,6 +673,24 @@ export async function approveUnderstanding(
     manifestLoadError = err instanceof Error ? err.message : String(err);
   }
 
+  // Gap-fill mode for a stdin report that declares none of its own
+  // (harness task 5d73d78d): resolve the SAME way `resolve()` does for
+  // hook generation (Env > config.mode > DEFAULT_MODE), from whatever
+  // manifest is available, so a report captured via this path is
+  // validated against the operator's actually-configured mode instead of
+  // a hardcoded "fast_confirm" regardless of harness.yaml. A missing
+  // manifest, or a manifest without the pack declared, resolves the same
+  // as an empty `config:` block — resolveMode still applies Env >
+  // DEFAULT_MODE in that case.
+  const declaredPack: PolicyPack =
+    manifest?.policy_packs.find((p) => p.name === UNDERSTANDING_PACK_NAME) ?? {
+      name: UNDERSTANDING_PACK_NAME,
+      source: "builtin",
+      enabled: true,
+      config: {},
+    };
+  const resolvedMode = toPackageMode(resolveMode(declaredPack).mode);
+
   // Report capture from stdin (task 61fd36db): persist BEFORE the
   // lookup below so this very approve run selects, validates, and flips
   // the report the agent just attached. Session-bound via the resolved
@@ -679,6 +702,7 @@ export async function approveUnderstanding(
       reportsDir,
       sessionId,
       now: opts.now ?? new Date(),
+      mode: resolvedMode,
     });
   }
 

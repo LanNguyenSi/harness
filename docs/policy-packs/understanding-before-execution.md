@@ -142,6 +142,55 @@ reseeded config.ux, config.producers for policy_packs entry "understanding-befor
 
 The mode lives under `config:` rather than at the top level because it is pack-specific. Other packs will define their own `config:` shape.
 
+#### Mode resolution and enforcement (harness task `5d73d78d`)
+
+Effective mode is resolved with priority **`UNDERSTANDING_GATE_MODE` env var >
+`config.mode` > default (`grill_me`)** — `resolveMode()` in
+`src/policy-packs/builtin/understanding-before-execution.ts`. The env var is
+the same name `@lannguyensi/understanding-gate` reads on its own (its `ENV
+wins because operators set it consciously` rule); harness does not invent a
+second name for the same concept.
+
+Before this task, `config.mode` only drove prose: the audit-copy
+`instructions.md` and `harness doctor`'s UX-drift comparison read it
+correctly, but the ACTUAL enforcement never received it:
+
+- The Claude-runtime `UserPromptSubmit` injector and `Stop` capture are bins
+  shipped by `@lannguyensi/understanding-gate`
+  (`understanding-gate-claude-hook` / `understanding-gate-claude-stop`).
+  Harness invoked them bare — no `UNDERSTANDING_GATE_MODE` env var — so the
+  package's own resolver (env → `/grill` prompt marker → default
+  `fast_confirm`) always fell through to its default, regardless of
+  `config.mode`.
+- `harness approve understanding`'s stdin-heredoc capture path
+  (`persistStdinReport`) filled in a report's missing `mode` field with a
+  hardcoded `"fast_confirm"` literal, also independent of `config.mode`.
+
+A `config.mode: grill_me` manifest therefore validated agent reports as
+`fast_confirm` in practice — `derivedTodos` / `acceptanceCriteria` /
+`priorArt` were never enforced — while `instructions.md` and `harness
+doctor` both reported `grill_me` as if it were in effect. Both bin
+invocations and the stdin-heredoc gap-fill now receive the resolved mode
+(`buildHooks`'s `wrapMode`, and `approve/understanding.ts` resolving
+against the loaded manifest respectively), so the mode `harness.yaml`
+declares is the mode actually enforced.
+
+**Upgrade note:** any host with `config.mode: grill_me` (or any explicit
+non-`fast_confirm` value) configured starts genuinely enforcing that
+friction level after this fix — `derivedTodos`, `acceptanceCriteria`, and
+`priorArt` become required where they were previously silently accepted as
+missing. This is a real behavior change for such hosts, not a bug in the
+fix: it closes the gap between the declared config and what was actually
+running.
+
+`strict` has no upstream equivalent — `@lannguyensi/understanding-gate`'s
+own mode type is two-valued (`fast_confirm` | `grill_me`). Where the
+resolved mode must cross into the package (the env var, and the
+stdin-heredoc gap-fill), `toPackageMode()` coerces `strict` to `grill_me`
+(the closest available rigor); this does not change what `strict` means
+inside harness itself (`modeFriction`, `understandingApprovalRequirement`
+are untouched).
+
 ### Source
 
 `source: builtin` resolves to the pack definition that ships with harness itself. Future values (`path:./packs/foo`, `npm:@scope/pack@1.2.3`, `git:https://...`) are reserved for community-authored packs and are **not** part of the v1 vocabulary; they parse as an opaque string today and will gain dedicated resolution in Phase 6 #3 (the `harness pack add` validate-on-write step) or later.
