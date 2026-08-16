@@ -31,12 +31,14 @@ export interface Classification {
 
 export function extractUnreleased(changelogText: string): string | null;
 
+export function extractCoverageText(changelogText: string, lastTag: string): string;
+
 export function parseCommits(rawLog: string): CommitRecord[];
 
 export function commitType(subject: string): string | null;
 
 export function linkTokens(commit: CommitRecord): LinkTokens;
 
-export function classifyCommits(commits: CommitRecord[], unreleasedText: string | null): Classification;
+export function classifyCommits(commits: CommitRecord[], coverageText: string | null): Classification;
 
 export function main(repoDir?: string): void;

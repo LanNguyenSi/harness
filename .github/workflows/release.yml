@@ -38,9 +38,17 @@ jobs:
         # blank lines) and the release would silently ship with an empty
         # body. Abort instead — convert [Unreleased] into the version
         # section before tagging.
+        #
+        # VERSION comes in via `env:` rather than being interpolated
+        # straight into the run: script (as the pre-existing awk step
+        # above still does): an `env:`-bound `${{ }}` becomes a plain
+        # environment variable, so its value is shell-data, never
+        # spliced into the script's syntax.
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           if ! grep -q '[^[:space:]]' release_notes.md; then
-            echo "::error::release_notes.md is empty — CHANGELOG.md has no populated '## [${{ steps.version.outputs.version }}]' section. Convert [Unreleased] into it before tagging."
+            echo "::error::release_notes.md is empty — CHANGELOG.md has no populated '## [$VERSION]' section. Convert [Unreleased] into it before tagging."
             exit 1
           fi
 
