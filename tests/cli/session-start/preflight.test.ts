@@ -1035,19 +1035,39 @@ describe("hostile repo names stay contained in logDir (task a48b9729)", () => {
     // of the '../../etc' spelling. '.' is in the safe alphabet, so it
     // survives sanitization — as a name fragment, never a path hop.
     const repo = makeRepoFixture("...");
-    const logDir = makeLogDirFixture();
+    // A dedicated, private parent (NOT the shared os tmpdir) so "did
+    // anything land outside logDir" can be asserted exactly rather than
+    // prefix-filtered. Filtering the parent listing by the 'preflight-'
+    // prefix (the prior version of this test) could never catch a real
+    // escape: the whole filename is ONE path segment joined onto logDir
+    // (`${FAIL_LOG_PREFIX}${sanitized}-...`), so a traversal hop is only
+    // reachable at all if a '/' survived sanitization inside that segment
+    // — and a '..' segment produced that way would pop exactly the
+    // segment carrying the 'preflight-' prefix, leaving a surviving
+    // sibling entry that does NOT start with 'preflight-' either. Listing
+    // the whole private parent closes that blind spot.
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-escape-"));
+    cleanups.push(() => fs.rmSync(parent, { recursive: true, force: true }));
+    const logDir = path.join(parent, "logs");
 
     const files = await runWithCwd(repo, logDir);
 
     expect(files).toHaveLength(1);
     expect(files[0]).toMatch(/^preflight-\.\.\.-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f]{4}\.json$/);
     expect(fs.statSync(path.join(logDir, files[0]!)).isFile()).toBe(true);
-    // No fail-log escaped NEXT TO logDir (what a traversal hop would
-    // have produced). Scoped to the fail-log prefix because the parent
-    // is the SHARED os tmpdir — other concurrently running suites
-    // legitimately create unrelated entries there.
-    const escapees = fs.readdirSync(path.dirname(logDir)).filter((n) => n.startsWith("preflight-"));
-    expect(escapees).toEqual([]);
+    // logDir must be the parent's ONLY entry: any escapee would show up
+    // as a second, sibling entry. NOTE on what this does and does not
+    // prove: a real directory basename can never contain '/' on POSIX, so
+    // no fixture in this suite (including this one) can drive `repo`
+    // through the '/'-survives-sanitization vector described above — that
+    // vector is closed by construction (repo is a resolved
+    // path.basename(), see the describe-block comment above). This
+    // assertion is defense-in-depth against a future change to that
+    // construction, not a live sanitizeForFilename mutation catcher; the
+    // metacharacter test below (backslash/space/'$' -> '-', pinned via an
+    // exact filename match) is what actually goes red if
+    // sanitizeForFilename regresses to an identity function.
+    expect(fs.readdirSync(parent)).toEqual(["logs"]);
   });
 
   it("separator- and metacharacter-laden basenames are flattened to the safe alphabet", async () => {

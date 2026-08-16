@@ -364,7 +364,11 @@ function persistFailLog(
     fs.mkdirSync(logDir, { recursive: true });
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const unique = randomBytes(2).toString("hex");
-    filePath = path.join(logDir, `${FAIL_LOG_PREFIX}${sanitizeForFilename(repo)}-${timestamp}-${unique}.json`);
+    // Cap the sanitized basename so a very long repo/worktree name can't blow past filesystem name-length limits.
+    filePath = path.join(
+      logDir,
+      `${FAIL_LOG_PREFIX}${sanitizeForFilename(repo).slice(0, 100)}-${timestamp}-${unique}.json`,
+    );
     fs.writeFileSync(filePath, `${JSON.stringify(json, null, 2)}\n`, "utf8");
   } catch (err) {
     return { ok: false, reason: (err as Error).message };
