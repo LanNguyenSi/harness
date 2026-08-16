@@ -44,6 +44,7 @@
     "check:boundaries": "depcruise --config .dependency-cruiser.cjs src",
     "check:duplication": "node scripts/check-duplication.mjs",
     "check:no-only": "node scripts/check-no-only.mjs",
+    "check:changelog-coverage": "node scripts/check-changelog-coverage.mjs",
     "measure:bash-prefix-parse": "node scripts/measure-bash-prefix-parse.mjs",
     "measure:command-normalize": "node scripts/measure-command-normalize.mjs",
     "measure:additive-attribution-matrix": "node scripts/measure-additive-attribution-matrix.mjs",
