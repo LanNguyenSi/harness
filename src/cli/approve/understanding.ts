@@ -176,6 +176,15 @@ export interface ApproveUnderstandingResult {
    */
   taskMarkers: TaskMarkerOutcome[];
   /**
+   * `resolveMode`'s own warning (invalid `config.mode` in `harness.yaml`,
+   * or an invalid `UNDERSTANDING_GATE_MODE` env value) surfaced verbatim
+   * (task 5d73d78d review LOW, fix-round-3). Absent when the resolution
+   * was clean. This mirrors what the Codex `UserPromptSubmit` injector
+   * already writes to stderr for the exact same `resolveMode` call — this
+   * command used to compute the same warning and drop it silently.
+   */
+  modeWarning?: string;
+  /**
    * Outcome of capturing a report passed on stdin (`reportMarkdown`).
    * Absent when no report was supplied. `ok: true` means the markdown
    * parsed and was persisted pending + session-bound; the
@@ -697,7 +706,18 @@ export async function approveUnderstanding(
   const declaredPack: ModeConfigSource = manifest?.policy_packs.find(
     (p) => p.name === UNDERSTANDING_PACK_NAME && p.enabled !== false,
   ) ?? { name: UNDERSTANDING_PACK_NAME, config: {} };
-  const resolvedMode = toPackageMode(resolveMode(declaredPack).mode);
+  // Task 5d73d78d review LOW (fix-round-3): `resolveMode`'s own warning
+  // (an invalid `config.mode` or `UNDERSTANDING_GATE_MODE` value) used to
+  // be dropped on the floor here — only `.mode` was read. The Codex
+  // `UserPromptSubmit` injector (hook-codex-user-prompt-submit.ts)
+  // already surfaces the identical warning shape to stderr on this same
+  // `resolveMode` call; this path silently swallowed it, so an operator
+  // with a typo'd `config.mode` got no signal at all from `harness
+  // approve understanding`. Surfaced via `modeWarning` on the result so
+  // the CLI can print it the same way the marker/ledger/report lines are
+  // printed.
+  const modeResolution = resolveMode(declaredPack);
+  const resolvedMode = toPackageMode(modeResolution.mode);
 
   // Report capture from stdin (task 61fd36db): persist BEFORE the
   // lookup below so this very approve run selects, validates, and flips
@@ -760,9 +780,27 @@ export async function approveUnderstanding(
   // yet, since persistStdinReport never wrote one), which is not an `ok:
   // false` validation outcome, so the enforced short-circuit below never
   // triggered and the marker was written anyway — silently approving a
-  // session whose only report attempt was rejected. Scoped to `!latest`
-  // deliberately: when a persisted report DOES exist for this session
-  // (e.g. an earlier, valid submission), that report's own content
+  // session whose only report attempt was rejected.
+  //
+  // Fix-round-3 HIGH (5d73d78d review, verification round 2): the
+  // original guard checked only `!latest`, but `latest` can also be a
+  // sessionId-null report ADOPTED via `selectReportForSession`'s
+  // `tolerantFallback: "uncompleted"` mode above (any pending, sessionId-
+  // less report younger than `TOLERANT_FALLBACK_MAX_AGE_MS`). A rejected
+  // stdin submission with such a leftover sitting on disk used to sail
+  // through unconstrained: `latest` was truthy so this override never
+  // fired, the ADOPTED (unrelated) report's own — already-valid — content
+  // passed `validatePersistedReport` instead, and `rewriteReportApproved`
+  // below then stamped the live session's id onto that foreign report and
+  // wrote the marker: a session whose actual submission was refused got
+  // silently approved anyway. The condition now also treats a fallback-
+  // adopted `latest` as "nothing THIS session can claim":
+  // `selection.fallbackAdopted` is `true` exactly when the match was NOT
+  // a strict sessionId match.
+  //
+  // The deliberate carve-out for a genuine EARLIER same-session
+  // submission stays: when `latest` is a STRICT sessionId match
+  // (`selection.fallbackAdopted === false`), that report's own content
   // validation above already governs the outcome and this block does not
   // override it.
   if (
@@ -770,7 +808,7 @@ export async function approveUnderstanding(
     opts.reportMarkdown.trim().length > 0 &&
     stdinReport !== undefined &&
     stdinReport.ok === false &&
-    !latest
+    (!latest || selection.fallbackAdopted)
   ) {
     validation = {
       ok: false,
@@ -796,6 +834,7 @@ export async function approveUnderstanding(
       sessionId,
       sessionSource,
       ...(newestReportPath !== undefined ? { newestReportPath } : {}),
+      ...(modeResolution.warning !== null ? { modeWarning: modeResolution.warning } : {}),
       marker: {
         ok: false,
         reason: `validation failed (${validation.field}): ${validation.reason}`,
@@ -1021,6 +1060,7 @@ export async function approveUnderstanding(
     sessionId,
     sessionSource,
     ...(newestReportPath !== undefined ? { newestReportPath } : {}),
+    ...(modeResolution.warning !== null ? { modeWarning: modeResolution.warning } : {}),
     marker: markerResult,
     taskMarkers,
     ...(stdinReport !== undefined ? { stdinReport } : {}),

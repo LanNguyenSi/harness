@@ -1954,6 +1954,106 @@ describe("approveUnderstanding — report capture from stdin (task 61fd36db)", (
     expect(result.ledger.tag).toContain(":forced:stdinReport");
   });
 
+  it("a rejected stdin submission does not silently ride on a fresh sessionId-null leftover adopted via the tolerant fallback (task 5d73d78d review HIGH-2, fix-round-3)", async () => {
+    // Live-repro shape from verification round 2: a sessionId-null
+    // pending report sits on disk, fresh enough for
+    // selectReportForSession's tolerantFallback: "uncompleted" mode to
+    // adopt it. Before this fix, `!latest` alone gated the HIGH-2
+    // override; `latest` was truthy here (the fallback adoption), so the
+    // override never fired. The adopted report's own trivially-valid
+    // (mode-less) content then passed validation, and the marker got
+    // written — stamping this session's id onto an unrelated leftover
+    // report despite the actual submission being rejected.
+    const reportsDir = reportsDirIn(tmp);
+    const leftoverPath = path.join(reportsDir, "leftover.json");
+    fs.writeFileSync(
+      leftoverPath,
+      `${JSON.stringify({ approvalStatus: "pending", createdAt: "2026-07-10T09:56:00.000Z" })}\n`,
+    );
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-stdin-bypass",
+      reportsDir,
+      generatedDir: path.join(tmp, "harness.generated"),
+      reportMarkdown: "just some prose, not a report",
+      now: new Date("2026-07-10T10:00:00Z"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+
+    expect(result.stdinReport?.ok).toBe(false);
+    expect(result.marker.ok).toBe(false);
+    if (result.marker.ok) return;
+    expect(result.marker.reason).toMatch(/validation failed \(stdinReport\)/);
+    expect(result.ledger.ok).toBe(false);
+    expect(result.persistedReport.ok).toBe(false);
+    const v = result.validation;
+    expect("ok" in v && v.ok === false && v.field === "stdinReport" && v.enforced).toBe(true);
+
+    // The leftover itself must be untouched: still pending, no sessionId
+    // stamped, not approved.
+    const after = JSON.parse(fs.readFileSync(leftoverPath, "utf8")) as Record<string, unknown>;
+    expect(after.approvalStatus).toBe("pending");
+    expect(after.sessionId).toBeUndefined();
+  });
+
+  it("--force still writes the marker (and flips the adopted leftover) for a rejected stdin submission with only a fallback-adoptable leftover (HIGH-2 escape hatch stays functional, fix-round-3)", async () => {
+    const reportsDir = reportsDirIn(tmp);
+    const leftoverPath = path.join(reportsDir, "leftover.json");
+    fs.writeFileSync(
+      leftoverPath,
+      `${JSON.stringify({ approvalStatus: "pending", createdAt: "2026-07-10T09:56:00.000Z" })}\n`,
+    );
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-stdin-bypass-force",
+      reportsDir,
+      generatedDir: path.join(tmp, "harness.generated"),
+      reportMarkdown: "just some prose, not a report",
+      now: new Date("2026-07-10T10:00:00Z"),
+      ledgerAdd: async () => ({ ok: true }),
+      force: true,
+    });
+    expect(result.stdinReport?.ok).toBe(false);
+    expect(result.marker.ok).toBe(true);
+    const v = result.validation;
+    expect("ok" in v && v.ok === false && v.field === "stdinReport" && v.enforced === false).toBe(
+      true,
+    );
+    expect(result.ledger.tag).toContain(":forced:stdinReport");
+  });
+
+  it("a strict same-session earlier valid report still governs approval even when THIS call's stdin submission is rejected (HIGH-2 carve-out preserved, fix-round-3)", async () => {
+    // The carve-out this fix must NOT break: `selection.fallbackAdopted`
+    // is false here (the prior report carries this exact sessionId, a
+    // STRICT match), so the HIGH-2 override must stay off and the prior
+    // report's own content governs approval, same as before this fix.
+    const reportsDir = reportsDirIn(tmp);
+    const priorPath = path.join(reportsDir, "prior.json");
+    fs.writeFileSync(
+      priorPath,
+      `${JSON.stringify({
+        sessionId: "sess-carveout",
+        approvalStatus: "pending",
+        createdAt: "2026-07-10T09:00:00.000Z",
+      })}\n`,
+    );
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-carveout",
+      reportsDir,
+      generatedDir: path.join(tmp, "harness.generated"),
+      reportMarkdown: "just some prose, not a report",
+      now: new Date("2026-07-10T10:00:00Z"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.stdinReport?.ok).toBe(false);
+    expect(result.marker.ok).toBe(true);
+    expect(result.persistedReport.ok).toBe(true);
+    if (!result.persistedReport.ok) return;
+    expect(result.persistedReport.filePath).toBe(priorPath);
+    expect(result.persistedReport.fallbackAdopted).toBeUndefined();
+  });
+
   it("enforces grill_me validation on a stdin report (hollow priorArt refuses the marker)", async () => {
     const reportsDir = reportsDirIn(tmp);
     const hollow = VALID_GRILL_ME.replace(
@@ -2100,6 +2200,39 @@ describe("approveUnderstanding — mode gap-fill for a stdin report declaring no
     });
     expect(result.stdinReport?.ok).toBe(false);
     expect(result.marker.ok).toBe(false);
+  });
+
+  it("surfaces resolveMode's own config.mode warning via result.modeWarning instead of dropping it (task 5d73d78d review LOW, fix-round-3)", async () => {
+    // Before this fix, `resolveMode(declaredPack).warning` was computed
+    // (resolveMode ran) but never read — only `.mode` was. An operator
+    // with a typo'd config.mode got no signal at all from `harness
+    // approve understanding`, unlike the Codex UserPromptSubmit injector
+    // which already writes the identical warning shape to stderr.
+    const reportsDir = reportsDirIn(tmp);
+    const result = await approveUnderstanding({
+      manifest: packManifest({ mode: "fastConfirm" }), // typo: not a recognised mode
+      session: "sess-mode-warning",
+      reportsDir,
+      generatedDir: path.join(tmp, "harness.generated"),
+      now: new Date("2026-07-10T10:00:00Z"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.modeWarning).toBeDefined();
+    expect(result.modeWarning).toMatch(/config\.mode: unrecognised value/);
+    expect(result.modeWarning).toMatch(/falling back to "grill_me"/);
+  });
+
+  it("modeWarning is absent when config.mode is unset (clean resolution)", async () => {
+    const reportsDir = reportsDirIn(tmp);
+    const result = await approveUnderstanding({
+      manifest: manifest(), // no policy_packs entry — clean, DEFAULT_MODE
+      session: "sess-mode-clean",
+      reportsDir,
+      generatedDir: path.join(tmp, "harness.generated"),
+      now: new Date("2026-07-10T10:00:00Z"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.modeWarning).toBeUndefined();
   });
 });
 

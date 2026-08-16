@@ -1,3 +1,4 @@
+import { pickMode } from "@lannguyensi/understanding-gate";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_MODE,
@@ -138,5 +139,25 @@ describe("toPackageMode — interop with @lannguyensi/understanding-gate's two-v
 
   it("coerces strict to grill_me — the package has no strict variant of its own", () => {
     expect(toPackageMode("strict")).toBe("grill_me");
+  });
+});
+
+describe("pin: @lannguyensi/understanding-gate's own pickMode default (task 5d73d78d review MEDIUM, fix-round-3)", () => {
+  // MEDIUM-7's prefix-omission (buildHooks' `wrapMode`, understanding-
+  // before-execution.ts) hangs on an UNGUARDED assumption about the
+  // installed npm package's OWN default: the prefix is omitted exactly
+  // when the harness-resolved mode coerces to "fast_confirm", because
+  // that is what the package's `pickMode()` already falls back to on its
+  // own (no env, no in-prompt marker) — so omitting the env var changes
+  // nothing about the EFFECTIVE mode. That assumption is not pinned
+  // anywhere against the actual installed package: nothing here fails if
+  // a future minor bump changes `pickMode`'s own default away from
+  // "fast_confirm". This hermetic (no network, no live agent) test
+  // imports the real installed `pickMode` and pins its no-env/no-marker
+  // default, so such a bump fails loudly here instead of silently
+  // reopening the in-prompt `/grill` escalation regression MEDIUM-7 was
+  // written to prevent.
+  it("pickMode(\"\", {}) still defaults to fast_confirm on the installed package", () => {
+    expect(pickMode("", {})).toBe("fast_confirm");
   });
 });

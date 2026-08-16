@@ -211,15 +211,21 @@ a `grill_me`/`strict`-resolved mode still gets the unconditional prefix.
 **Rejection enforcement.** `harness approve understanding`'s stdin-report
 path also now genuinely REFUSES the approval marker when the submitted
 report is rejected under the resolved mode (e.g. a `fast_confirm`-shaped
-report submitted against a `grill_me`-configured host) and no other
-persisted report exists for the session — no marker, no ledger tag, no
-report flip, unless `--force` (mirroring the pre-existing
+report submitted against a `grill_me`-configured host) and no report
+matching this session id exists — no marker, no ledger tag, no report
+flip, unless `--force` (mirroring the pre-existing
 `priorArt`-content-validation short-circuit; a forced bypass is stamped
 `:forced:stdinReport` into the ledger tag for audit). The first fix round
 resolved the correct mode but still wrote the marker in this case: a
 rejected submission with no fallback report fell through to a `{ skipped:
 true }` validation outcome rather than `ok: false`, so the enforcement
-short-circuit never triggered.
+short-circuit never triggered. A second review round then found that
+"matching this session id" also had to exclude the sessionId-null
+tolerant fallback's adoptions: a rejected submission with only a fresh,
+unrelated, sessionId-less leftover report on disk was silently riding on
+that leftover's already-valid content and getting it stamped with the
+live session's id — the guard now treats a fallback-adopted report the
+same as no report at all.
 
 **Upgrade note — corrected blast radius.** The mode actually enforced now
 matches `config.mode` in all three possible cases, not only the one the

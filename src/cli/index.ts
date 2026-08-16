@@ -1658,6 +1658,9 @@ export function buildProgram(opts: RunOptions = {}): Command {
           lines.push("  agent ($CLAUDE_CODE_SESSION_ID / $CLAUDE_SESSION_ID / $CODEX_SESSION_ID); if it differs, re-run");
           lines.push("  with --session <live-id>.");
         }
+        if (result.modeWarning) {
+          lines.push(`mode:    ⚠ ${result.modeWarning}`);
+        }
         if (result.marker.ok) {
           lines.push(`marker:  ✓ ${result.marker.filePath} (canonical gate signal)`);
         } else {
@@ -1709,9 +1712,23 @@ export function buildProgram(opts: RunOptions = {}): Command {
             if (result.stdinReport.parseErrorLogPath) {
               lines.push(`  raw text + parser reasons kept at ${result.stdinReport.parseErrorLogPath}`);
             }
-            lines.push(
-              "  the approval itself proceeds below; re-run with a schema-conform report to persist the audit trail.",
-            );
+            // Task 5d73d78d review MEDIUM (fix-round-3): this line used to
+            // print unconditionally, but since HIGH-2 a rejected stdin
+            // submission with nothing else to fall back on REFUSES the
+            // approval (marker.ok === false) — "the approval itself
+            // proceeds below" was then simply false. It only still holds
+            // when a genuine earlier same-session report (the HIGH-2
+            // carve-out) governs approval instead, i.e. when the marker
+            // WAS written despite this submission being rejected.
+            if (result.marker.ok) {
+              lines.push(
+                "  the approval itself proceeds below; re-run with a schema-conform report to persist the audit trail.",
+              );
+            } else {
+              lines.push(
+                "  the approval is REFUSED — no marker, no ledger tag, no report flip; see `validation` below for why.",
+              );
+            }
           }
         }
         if (result.persistedReport.ok) {
