@@ -49,19 +49,47 @@ const MODES: readonly Mode[] = ["fast_confirm", "grill_me", "strict"];
 export const DEFAULT_MODE: Mode = "grill_me";
 
 /**
- * Env var carrying an operator-set mode override. Resolution priority is
- * Env > `config.mode` (harness.yaml) > {@link DEFAULT_MODE} — see
- * {@link resolveMode}. Also the exact name `@lannguyensi/understanding-gate`
- * reads on its own (package `src/mode.ts`: "ENV wins because operators set
- * it consciously"); `buildHooks` below forwards the resolved value under
- * this same name to the package-owned Claude-runtime bins
- * (`understanding-gate-claude-hook` / `understanding-gate-claude-stop`) so
- * the mode the agent is actually held to matches `config.mode`, closing a
- * config-drift gap where the two resolvers previously agreed on nothing
- * (harness task 5d73d78d): the package bins never received this env var,
- * so an unset ENV + a prompt with no `/grill` marker always fell through
- * to the package's own default (`fast_confirm`), regardless of what
- * `config.mode` said.
+ * Env var carrying an operator-set mode override. Also the exact name
+ * `@lannguyensi/understanding-gate` reads on its own (package
+ * `src/mode.ts`: "ENV wins because operators set it consciously").
+ *
+ * Two DIFFERENT resolution contracts read this name, deliberately (task
+ * 5d73d78d, review HIGH-3 fix-round):
+ *
+ *   - The GENERATION path — {@link resolve}/`buildHooks`, and
+ *     `resolveBuiltinDefaultConfig` in `../registry.ts` (consumed by
+ *     `harness doctor`'s UX-drift comparison and `harness pack reseed`) —
+ *     resolves mode via {@link resolveModeFromConfig}, which reads ONLY
+ *     `pack.config.mode`. It never consults this env var. Generation runs
+ *     at `harness apply` / `harness doctor` / `harness pack reseed` time,
+ *     writing artefacts (settings.json hook commands, instructions.md,
+ *     reseeded config) that persist until the NEXT apply; if that write
+ *     depended on whatever happened to be exported in the operator's
+ *     shell at that moment, the artefact would silently drift from
+ *     `config.mode` the instant the shell's env changed — exactly the
+ *     class of bug this task closes for the OTHER resolver (see below),
+ *     re-opened one layer up. `buildHooks` DOES still bake this env var
+ *     into the two npm-backed Claude bin commands it emits (`wrapMode`)
+ *     — but the value baked in is the GENERATION-time config-resolved
+ *     mode, frozen at apply time, not a live env read.
+ *   - LIVE runtime consumers — {@link resolveMode} (used by
+ *     `approve/understanding.ts`'s stdin-report gap-fill, and by the
+ *     Codex `UserPromptSubmit` injector,
+ *     `src/cli/pack/hook-codex-user-prompt-submit.ts`) — resolve mode at
+ *     INVOCATION time, with the live process environment actually
+ *     available, so Env > `config.mode` > {@link DEFAULT_MODE} is the
+ *     correct priority there: this is what makes a one-off
+ *     `UNDERSTANDING_GATE_MODE=fast_confirm harness approve understanding`
+ *     override work without editing harness.yaml, mirroring the npm
+ *     package's own env-wins rule for the exact same reason.
+ *
+ * Before task 5d73d78d, NEITHER resolver read `config.mode` for
+ * enforcement at all — the package-owned Claude bins were invoked bare
+ * (no env var), and `persistStdinReport`'s gap-fill default was a
+ * hardcoded `"fast_confirm"` literal — so a host with `config.mode:
+ * grill_me` was silently enforced as `fast_confirm` regardless. See
+ * `docs/policy-packs/understanding-before-execution.md`'s "Mode
+ * resolution and enforcement" section for the full narrative.
  */
 export const MODE_ENV = "UNDERSTANDING_GATE_MODE";
 
@@ -291,41 +319,80 @@ function prefixCommandWithReportsDir(
 }
 
 /**
- * Resolve the pack's effective mode. Priority: {@link MODE_ENV} (env) >
- * `pack.config.mode` (harness.yaml) > {@link DEFAULT_MODE}. An invalid
- * value at either the env or the config layer is skipped (with a
- * warning) rather than short-circuiting straight to the default, so a
- * typo'd env var does not also stomp on an otherwise-valid YAML setting.
- * Env wins over YAML deliberately: it is the same precedence
- * `@lannguyensi/understanding-gate` gives its own env-vs-marker
- * resolution, and it is how an operator (or CI) does a one-off override
- * without editing harness.yaml.
+ * Minimal shape the mode resolvers below need: they only ever read
+ * `pack.config` (and `pack.name`, for the warning text) — never
+ * `source`/`enabled`/`description`/`min_version`. Narrowed from the full
+ * {@link PolicyPack} (task 5d73d78d review LOW-10) so a caller that has
+ * to SYNTHESISE a fallback pack object (an undeclared or disabled pack —
+ * see `approve/understanding.ts`'s `declaredPack`) is not forced to also
+ * invent values for fields the resolvers never look at.
  */
-export function resolveMode(pack: PolicyPack): {
+export type ModeConfigSource = Pick<PolicyPack, "name" | "config">;
+
+/**
+ * Resolve the pack's effective mode from `pack.config.mode` alone —
+ * `pack.config.mode` (harness.yaml) > {@link DEFAULT_MODE}. Never reads
+ * {@link MODE_ENV}. This is the GENERATION-path resolver: see
+ * {@link MODE_ENV}'s doc comment for why the artefacts this function's
+ * callers write (hook commands, instructions.md, reseeded config) must
+ * not depend on the live process environment. Used by {@link resolve} /
+ * `buildHooks` below, and by `resolveBuiltinDefaultConfig` in
+ * `../registry.ts`.
+ */
+export function resolveModeFromConfig(pack: ModeConfigSource): {
   mode: Mode;
   warning: string | null;
 } {
-  const warnings: string[] = [];
-  const envRaw = process.env[MODE_ENV];
-  if (envRaw !== undefined && envRaw !== "") {
-    if (isMode(envRaw)) return { mode: envRaw, warning: null };
-    warnings.push(
-      `${MODE_ENV}=${JSON.stringify(envRaw)}: unrecognised value, ignoring. Allowed: ${MODES.join(", ")}.`,
-    );
-  }
   const raw = pack.config["mode"];
-  if (raw === undefined) {
-    return { mode: DEFAULT_MODE, warning: warnings[0] ?? null };
+  if (raw === undefined) return { mode: DEFAULT_MODE, warning: null };
+  if (isMode(raw)) return { mode: raw, warning: null };
+  const warning = `policy_packs[${pack.name}].config.mode: unrecognised value ${JSON.stringify(
+    raw,
+  )}, falling back to "${DEFAULT_MODE}". Allowed: ${MODES.join(", ")}.`;
+  return { mode: DEFAULT_MODE, warning };
+}
+
+/**
+ * Resolve the pack's effective mode for a LIVE runtime consumer. Priority:
+ * {@link MODE_ENV} (env) > `pack.config.mode` (harness.yaml) >
+ * {@link DEFAULT_MODE} — see {@link MODE_ENV}'s doc comment for which
+ * callers this is (and is not) correct for. An invalid value at either
+ * the env or the config layer is skipped (with a warning) rather than
+ * short-circuiting straight to the default, so a typo'd env var does not
+ * also stomp on an otherwise-valid YAML setting. The config layer is
+ * VALIDATED (and its warning surfaced) even when a valid env value
+ * already resolved `mode` (task 5d73d78d review LOW-8): otherwise a
+ * config.mode typo would go unreported for as long as an operator happens
+ * to have a valid env override exported, resurfacing silently the moment
+ * they unset it. Env wins over YAML deliberately: it is the same
+ * precedence `@lannguyensi/understanding-gate` gives its own
+ * env-vs-marker resolution, and it is how an operator (or CI) does a
+ * one-off override without editing harness.yaml.
+ *
+ * The env value is trimmed and lower-cased before matching (task 5d73d78d
+ * review LOW-9), aligned with the npm package's own normalisation of the
+ * same env var (`pickMode`, package `src/mode.ts`:
+ * `env.UNDERSTANDING_GATE_MODE?.trim().toLowerCase()`) — so
+ * `UNDERSTANDING_GATE_MODE=' Grill_Me '` resolves the same way on both
+ * sides of the interop boundary instead of harness rejecting a value the
+ * package would have accepted.
+ */
+export function resolveMode(pack: ModeConfigSource): {
+  mode: Mode;
+  warning: string | null;
+} {
+  const configResult = resolveModeFromConfig(pack);
+  const envRaw = process.env[MODE_ENV];
+  if (envRaw === undefined || envRaw === "") return configResult;
+  const normalizedEnv = envRaw.trim().toLowerCase();
+  if (isMode(normalizedEnv)) {
+    return { mode: normalizedEnv, warning: configResult.warning };
   }
-  if (isMode(raw)) {
-    return { mode: raw, warning: warnings[0] ?? null };
-  }
-  warnings.push(
-    `policy_packs[${pack.name}].config.mode: unrecognised value ${JSON.stringify(
-      raw,
-    )}, falling back to "${DEFAULT_MODE}". Allowed: ${MODES.join(", ")}.`,
-  );
-  return { mode: DEFAULT_MODE, warning: warnings.join(" ") };
+  const envWarning = `${MODE_ENV}=${JSON.stringify(envRaw)}: unrecognised value, ignoring. Allowed: ${MODES.join(", ")}.`;
+  return {
+    mode: configResult.mode,
+    warning: configResult.warning ? `${envWarning} ${configResult.warning}` : envWarning,
+  };
 }
 
 /**
@@ -612,12 +679,13 @@ function buildHooks(
   // Per-mode hook commands are otherwise identical: the mode reaches the
   // package-owned Claude bins (BIN_USER_PROMPT_SUBMIT_CLAUDE,
   // BIN_STOP_CLAUDE) via the `UNDERSTANDING_GATE_MODE` env-var prefix
-  // below (`wrapMode`), resolved by `resolveMode` (Env > config.mode >
-  // DEFAULT_MODE) and coerced through `toPackageMode` for the package's
-  // two-value enum — see both functions' doc comments (harness task
-  // 5d73d78d). What changes per mode beyond that is the instructions.md
-  // content + the actual injected prompt (owned by the npm package,
-  // itself keyed off this same env var).
+  // below (`wrapMode`), resolved by `resolveModeFromConfig` (config.mode >
+  // DEFAULT_MODE — this is the GENERATION path, it does NOT read the env
+  // var; see {@link MODE_ENV}'s doc comment for why) and coerced through
+  // `toPackageMode` for the package's two-value enum. What changes per
+  // mode beyond that is the instructions.md content + the actual injected
+  // prompt (owned by the npm package, itself keyed off this same env var
+  // at ITS OWN, later, live-invocation time).
   //
   // When `opts.reportsDir` is set (the apply path), each command is ALSO
   // prefixed with `UNDERSTANDING_GATE_REPORT_DIR=<absolute>` so all hooks
@@ -625,8 +693,25 @@ function buildHooks(
   // env var — write/read the same directory.
   const wrap = (cmd: string): string =>
     prefixCommandWithReportsDir(cmd, opts.reportsDir);
-  const wrapMode = (cmd: string): string =>
-    `${MODE_ENV}=${shellQuoteSingle(toPackageMode(mode))} ${cmd}`;
+  // Task 5d73d78d review MEDIUM-7: omit the prefix entirely when the
+  // resolved mode already coerces to the package's OWN default
+  // (`fast_confirm`). Baking `UNDERSTANDING_GATE_MODE=fast_confirm`
+  // unconditionally (as this did before this fix) made the package's
+  // in-prompt `/grill` / "grill me" escalation marker permanently dead:
+  // `pickMode()` (package `src/mode.ts`) checks its env var FIRST and
+  // returns immediately on a match, never reaching the marker check —
+  // so an operator on a `fast_confirm`-effective host could never
+  // escalate a single prompt to `grill_me` via the marker, even though
+  // the package ships exactly that mechanism. Leaving the command
+  // unprefixed changes nothing about the EFFECTIVE default (the
+  // package's own fallback is already `fast_confirm`) while restoring
+  // the marker's liveness; a `grill_me`/`strict`-resolved mode still
+  // gets the unconditional prefix, same as before.
+  const wrapMode = (cmd: string): string => {
+    const pkgMode = toPackageMode(mode);
+    if (pkgMode === "fast_confirm") return cmd;
+    return `${MODE_ENV}=${shellQuoteSingle(pkgMode)} ${cmd}`;
+  };
   if (runtime === "codex") {
     return [
       {
@@ -987,7 +1072,10 @@ export function resolve(
   runtime: Runtime = DEFAULT_RUNTIME,
   opts: ResolvePackOptions = {},
 ): { contribution: PackContribution; warnings: string[] } {
-  const { mode, warning } = resolveMode(pack);
+  // GENERATION path (task 5d73d78d review HIGH-3): config-only, no env —
+  // see {@link MODE_ENV}'s doc comment for why apply-time artefacts must
+  // not depend on the live process environment.
+  const { mode, warning } = resolveModeFromConfig(pack);
   const hooks = buildHooks(runtime, pack, mode, opts);
   const instructionsContent = buildInstructions(pack, mode, runtime);
   const files: PackContributionFile[] = [

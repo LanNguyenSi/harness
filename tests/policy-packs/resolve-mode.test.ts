@@ -3,6 +3,7 @@ import {
   DEFAULT_MODE,
   MODE_ENV,
   resolveMode,
+  resolveModeFromConfig,
   toPackageMode,
 } from "../../src/policy-packs/builtin/understanding-before-execution.js";
 import { parseManifest, type PolicyPack } from "../../src/schema/index.js";
@@ -14,9 +15,17 @@ import { parseManifest, type PolicyPack } from "../../src/schema/index.js";
 // npm-backed Claude bins, and harness's own stdin-report gap-fill default
 // in approve/understanding.ts — never received the configured value at
 // all and silently behaved as `fast_confirm` regardless of what the
-// operator configured. These tests pin the resolution priority (Env >
-// config.mode > DEFAULT_MODE) and the interop coercion for `strict`, a
-// harness-only mode the npm package cannot represent.
+// operator configured.
+//
+// A review fix-round (HIGH-3) then split mode resolution into TWO
+// functions with DIFFERENT contracts: `resolveModeFromConfig` (config
+// only — the GENERATION path: `resolve()`/`buildHooks`, and
+// `registry.ts`'s `resolveBuiltinDefaultConfig`) and `resolveMode` (Env >
+// config.mode > DEFAULT_MODE — LIVE runtime consumers only:
+// `approve/understanding.ts`'s stdin gap-fill, and the Codex
+// `UserPromptSubmit` injector). These tests pin BOTH contracts, plus the
+// interop coercion for `strict`, a harness-only mode the npm package
+// cannot represent.
 
 function packWith(config: Record<string, unknown>): PolicyPack {
   const m = parseManifest({
@@ -80,6 +89,44 @@ describe("resolveMode — priority Env > config.mode > DEFAULT_MODE", () => {
     process.env[MODE_ENV] = "";
     const pack = packWith({ mode: "strict" });
     expect(resolveMode(pack)).toEqual({ mode: "strict", warning: null });
+  });
+
+  it("still reports a config.mode typo warning even when a valid env value already resolved the mode (LOW-8)", () => {
+    process.env[MODE_ENV] = "fast_confirm";
+    const pack = packWith({ mode: "fastConfirm" }); // typo — not a valid Mode value
+    const result = resolveMode(pack);
+    expect(result.mode).toBe("fast_confirm"); // env still wins on the VALUE
+    expect(result.warning).toMatch(/config\.mode: unrecognised value/); // but the typo is still surfaced
+  });
+
+  it("trims and lower-cases the env value before matching, aligned with the npm package's own normalisation (LOW-9)", () => {
+    process.env[MODE_ENV] = " Grill_Me ";
+    const pack = packWith({ mode: "fast_confirm" });
+    const result = resolveMode(pack);
+    expect(result.mode).toBe("grill_me");
+    expect(result.warning).toBeNull();
+  });
+});
+
+describe("resolveModeFromConfig — config-only (no Env layer); the GENERATION-path resolver (task 5d73d78d review HIGH-3)", () => {
+  it("ignores UNDERSTANDING_GATE_MODE entirely, even when it is set to a DIFFERENT value than config.mode", () => {
+    process.env[MODE_ENV] = "fast_confirm";
+    const pack = packWith({ mode: "grill_me" });
+    expect(resolveModeFromConfig(pack)).toEqual({ mode: "grill_me", warning: null });
+  });
+
+  it("falls back to DEFAULT_MODE when config.mode is unset, regardless of env", () => {
+    process.env[MODE_ENV] = "fast_confirm";
+    const pack = packWith({});
+    expect(resolveModeFromConfig(pack)).toEqual({ mode: DEFAULT_MODE, warning: null });
+  });
+
+  it("still warns on an invalid config.mode, independent of env", () => {
+    process.env[MODE_ENV] = "grill_me";
+    const pack = packWith({ mode: "fastConfirm" });
+    const result = resolveModeFromConfig(pack);
+    expect(result.mode).toBe(DEFAULT_MODE);
+    expect(result.warning).toMatch(/config\.mode: unrecognised value/);
   });
 });
 

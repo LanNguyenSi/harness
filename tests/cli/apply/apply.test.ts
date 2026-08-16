@@ -1457,11 +1457,15 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
       for (const g of groups) for (const h of g.hooks) allCommands.push(h.command);
     }
     // The Claude UserPromptSubmit injector and Stop capture are the
-    // npm-backed bins (@lannguyensi/understanding-gate); both now ALWAYS
-    // carry an `UNDERSTANDING_GATE_MODE=<resolved>` prefix (harness task
-    // 5d73d78d: config.mode used to only drive prose, never the mode the
-    // package actually enforced). Unconfigured here, so it resolves to
-    // DEFAULT_MODE (grill_me).
+    // npm-backed bins (@lannguyensi/understanding-gate); both carry an
+    // `UNDERSTANDING_GATE_MODE=<resolved>` prefix (harness task 5d73d78d:
+    // config.mode used to only drive prose, never the mode the package
+    // actually enforced) resolved from config.mode ALONE (never the live
+    // env — task 5d73d78d review HIGH-3, see the dedicated test below).
+    // Unconfigured here, so it resolves to DEFAULT_MODE (grill_me), which
+    // is not the package's own fast_confirm default, so the prefix is
+    // present (a fast_confirm-resolved mode omits it instead — task
+    // 5d73d78d review MEDIUM-7, covered in tests/policy-packs/expand.test.ts).
     const userPromptSubmitCommand = allCommands.find((c) =>
       c.endsWith("understanding-gate-claude-hook"),
     );
@@ -1515,6 +1519,45 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
 
     const preToolUseGroup = settings.hooks["PreToolUse"]?.[0];
     expect(preToolUseGroup?.matcher).toBe("Edit|Write|Bash");
+  });
+
+  it("apply bakes UNDERSTANDING_GATE_MODE from config.mode alone — an exported env var with a DIFFERENT value has no effect (task 5d73d78d review HIGH-3)", async () => {
+    // Repro for the HIGH-3 review finding: before this fix, `harness
+    // apply` resolved the pack's mode the SAME env-aware way the live
+    // runtime consumers do, so an operator's ambient
+    // UNDERSTANDING_GATE_MODE (exported for an unrelated `harness approve
+    // understanding` override, or left over from a previous shell
+    // session) would silently override `config.mode` in the GENERATED
+    // settings.json — an artefact that then persists, frozen, until the
+    // next apply, regardless of what the env var says at any later
+    // point. This pins: config.mode: grill_me + an exported
+    // UNDERSTANDING_GATE_MODE=fast_confirm still bakes the grill_me
+    // prefix.
+    const saved = process.env["UNDERSTANDING_GATE_MODE"];
+    process.env["UNDERSTANDING_GATE_MODE"] = "fast_confirm";
+    try {
+      writePolicyPackManifest([
+        { name: "understanding-before-execution", config: { mode: "grill_me" } },
+      ]);
+      const r = await apply({ homeDir: tmpHome });
+      expect(r.outcome).toBe("applied");
+      const settings = JSON.parse(fs.readFileSync(settingsPath(), "utf8")) as {
+        hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>;
+      };
+      const allCommands: string[] = [];
+      for (const groups of Object.values(settings.hooks)) {
+        for (const g of groups) for (const h of g.hooks) allCommands.push(h.command);
+      }
+      const userPromptSubmitCommand = allCommands.find((c) =>
+        c.endsWith("understanding-gate-claude-hook"),
+      );
+      expect(userPromptSubmitCommand).toBe(
+        "UNDERSTANDING_GATE_MODE='grill_me' understanding-gate-claude-hook",
+      );
+    } finally {
+      if (saved === undefined) delete process.env["UNDERSTANDING_GATE_MODE"];
+      else process.env["UNDERSTANDING_GATE_MODE"] = saved;
+    }
   });
 
   it("projects an absolute SOLUTION_VERDICT_DIR from grounding-mcp env onto both solution-acceptance hook commands", async () => {

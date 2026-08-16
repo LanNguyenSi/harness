@@ -29,6 +29,7 @@ import {
   writeTaskApprovalMarker,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import {
+  type ModeConfigSource,
   PACK_NAME as UNDERSTANDING_PACK_NAME,
   resolveMode,
   toPackageMode,
@@ -40,7 +41,7 @@ import {
   resolveGeneratedDir,
 } from "../../runtime/pending-approval.js";
 import { resolveApprovalSessionId } from "../../runtime/session-id.js";
-import type { Manifest, McpServer, PolicyPack } from "../../schema/index.js";
+import type { Manifest, McpServer } from "../../schema/index.js";
 import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
 import { loadManifest, resolvePaths, type LoaderOptions } from "../loader.js";
 import { describeSectionKey } from "../pack/understanding-report-schema-hint.js";
@@ -674,21 +675,28 @@ export async function approveUnderstanding(
   }
 
   // Gap-fill mode for a stdin report that declares none of its own
-  // (harness task 5d73d78d): resolve the SAME way `resolve()` does for
-  // hook generation (Env > config.mode > DEFAULT_MODE), from whatever
-  // manifest is available, so a report captured via this path is
-  // validated against the operator's actually-configured mode instead of
-  // a hardcoded "fast_confirm" regardless of harness.yaml. A missing
-  // manifest, or a manifest without the pack declared, resolves the same
-  // as an empty `config:` block — resolveMode still applies Env >
-  // DEFAULT_MODE in that case.
-  const declaredPack: PolicyPack =
-    manifest?.policy_packs.find((p) => p.name === UNDERSTANDING_PACK_NAME) ?? {
-      name: UNDERSTANDING_PACK_NAME,
-      source: "builtin",
-      enabled: true,
-      config: {},
-    };
+  // (harness task 5d73d78d): resolve via `resolveMode` (Env >
+  // config.mode > DEFAULT_MODE — this IS a live runtime consumer, unlike
+  // `resolve()`/`buildHooks`'s generation path; see `MODE_ENV`'s doc
+  // comment in understanding-before-execution.ts for why the two differ),
+  // from whatever manifest is available, so a report captured via this
+  // path is validated against the operator's actually-configured mode
+  // instead of a hardcoded "fast_confirm" regardless of harness.yaml. A
+  // missing manifest, or a manifest without the pack declared, resolves
+  // the same as an empty `config:` block — resolveMode still applies
+  // Env > DEFAULT_MODE in that case.
+  //
+  // A pack entry that IS declared but `enabled: false` is treated the
+  // SAME as undeclared (task 5d73d78d review LOW-10): a disabled pack's
+  // hooks never ran, so its `config.mode` is not "the operator's live
+  // mode" in any sense this gap-fill should honor. The synthesized
+  // fallback only needs `name` + `config` (resolveMode's minimal
+  // `ModeConfigSource` shape) — `source`/`enabled` would otherwise have
+  // to be invented for a pack entry that, by construction, was never
+  // matched.
+  const declaredPack: ModeConfigSource = manifest?.policy_packs.find(
+    (p) => p.name === UNDERSTANDING_PACK_NAME && p.enabled !== false,
+  ) ?? { name: UNDERSTANDING_PACK_NAME, config: {} };
   const resolvedMode = toPackageMode(resolveMode(declaredPack).mode);
 
   // Report capture from stdin (task 61fd36db): persist BEFORE the
@@ -739,6 +747,37 @@ export async function approveUnderstanding(
       const v = validatePersistedReport(parsed);
       validation = v.ok ? v : { ...v, enforced: !opts.force };
     }
+  }
+
+  // Task 5d73d78d review HIGH-2: a stdin report that was REJECTED (failed
+  // to parse, e.g. because it does not meet the resolved mode's schema —
+  // typically a fast_confirm-shaped report submitted against a
+  // grill_me-configured host, see `resolvedMode` above) AND left no
+  // persisted report to fall back on must not fall through to `{ skipped:
+  // true }` above. "skipped" means "nothing was submitted to check"; here
+  // something WAS submitted and it was refused. Before this fix, that
+  // case still landed on `{ skipped: true }` (no `latest` report exists
+  // yet, since persistStdinReport never wrote one), which is not an `ok:
+  // false` validation outcome, so the enforced short-circuit below never
+  // triggered and the marker was written anyway — silently approving a
+  // session whose only report attempt was rejected. Scoped to `!latest`
+  // deliberately: when a persisted report DOES exist for this session
+  // (e.g. an earlier, valid submission), that report's own content
+  // validation above already governs the outcome and this block does not
+  // override it.
+  if (
+    typeof opts.reportMarkdown === "string" &&
+    opts.reportMarkdown.trim().length > 0 &&
+    stdinReport !== undefined &&
+    stdinReport.ok === false &&
+    !latest
+  ) {
+    validation = {
+      ok: false,
+      field: "stdinReport",
+      reason: stdinReport.reason,
+      enforced: !opts.force,
+    };
   }
 
   // Short-circuit before any side effect if validation rejects and the

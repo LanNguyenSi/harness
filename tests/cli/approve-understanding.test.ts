@@ -57,6 +57,60 @@ function writeReport(name: string, body: Record<string, unknown>): string {
   return full;
 }
 
+// Module scope (not describe-local) so both the "report capture from
+// stdin" describe block below AND the "mode gap-fill" describe block
+// (task 5d73d78d review HIGH-1c) can reuse the same full, ten-section
+// grill_me-shaped fixture.
+const VALID_GRILL_ME = [
+  "## Understanding Report",
+  "",
+  "**Metadata**",
+  "",
+  "taskId: t-61fd36db",
+  "mode: grill_me",
+  "riskLevel: low",
+  "",
+  "**Current Understanding**",
+  "",
+  "The Stop-hook producer fires after approve already ran.",
+  "",
+  "**Intended Outcome**",
+  "",
+  "approve captures the report from stdin and flips it in the same run.",
+  "",
+  "**Derived Todos**",
+  "",
+  "- capture on stdin",
+  "",
+  "**Acceptance Criteria**",
+  "",
+  "- report line shows the flip, not skipped",
+  "",
+  "**Assumptions**",
+  "",
+  "- heredoc reaches the CLI verbatim",
+  "",
+  "**Open Questions**",
+  "",
+  "- none",
+  "",
+  "**Out Of Scope**",
+  "",
+  "- gate policy changes",
+  "",
+  "**Risks**",
+  "",
+  "- escape matcher must stay strict",
+  "",
+  "**Verification Plan**",
+  "",
+  "- vitest + live dogfood",
+  "",
+  "**Prior Art**",
+  "",
+  "- searched harness + understanding-gate for an existing capture path; none works same-turn; extend approve",
+].join("\n");
+
 describe("approveUnderstanding", () => {
   it("flips the latest matching report to approved + writes the ledger tag", async () => {
     const filePath = writeReport("rpt.json", {
@@ -1771,56 +1825,6 @@ describe("approveUnderstanding — report sessionId binding (harness/0dce3880 fr
 });
 
 describe("approveUnderstanding — report capture from stdin (task 61fd36db)", () => {
-  const VALID_GRILL_ME = [
-    "## Understanding Report",
-    "",
-    "**Metadata**",
-    "",
-    "taskId: t-61fd36db",
-    "mode: grill_me",
-    "riskLevel: low",
-    "",
-    "**Current Understanding**",
-    "",
-    "The Stop-hook producer fires after approve already ran.",
-    "",
-    "**Intended Outcome**",
-    "",
-    "approve captures the report from stdin and flips it in the same run.",
-    "",
-    "**Derived Todos**",
-    "",
-    "- capture on stdin",
-    "",
-    "**Acceptance Criteria**",
-    "",
-    "- report line shows the flip, not skipped",
-    "",
-    "**Assumptions**",
-    "",
-    "- heredoc reaches the CLI verbatim",
-    "",
-    "**Open Questions**",
-    "",
-    "- none",
-    "",
-    "**Out Of Scope**",
-    "",
-    "- gate policy changes",
-    "",
-    "**Risks**",
-    "",
-    "- escape matcher must stay strict",
-    "",
-    "**Verification Plan**",
-    "",
-    "- vitest + live dogfood",
-    "",
-    "**Prior Art**",
-    "",
-    "- searched harness + understanding-gate for an existing capture path; none works same-turn; extend approve",
-  ].join("\n");
-
   function reportsDirIn(root: string): string {
     const dir = path.join(root, "ug", "reports");
     fs.mkdirSync(dir, { recursive: true });
@@ -1882,7 +1886,16 @@ describe("approveUnderstanding — report capture from stdin (task 61fd36db)", (
     expect(result.persistedReport.filePath).toBe(result.stdinReport.filePath);
   });
 
-  it("degrades loudly on unparseable stdin: parse-error log + reason, approval still proceeds", async () => {
+  it("degrades loudly on unparseable stdin AND refuses the marker when no other persisted report exists (task 5d73d78d review HIGH-2)", async () => {
+    // Before the HIGH-2 fix, a rejected stdin report with no fallback
+    // persisted report landed on `validation: { skipped: true }` (no
+    // `latest` to validate), which is not an `ok: false` outcome, so the
+    // enforced short-circuit never fired and the marker was written
+    // anyway — silently approving a session whose only report attempt
+    // was refused. This is a genuinely unparseable submission (no
+    // sections at all), so it fails under either mode; see the
+    // "sub-grill_me report" tests below for the specific config.mode:
+    // grill_me schema-mismatch shape this finding was actually about.
     const reportsDir = reportsDirIn(tmp);
     const result = await approveUnderstanding({
       manifest: manifest(),
@@ -1901,12 +1914,44 @@ describe("approveUnderstanding — report capture from stdin (task 61fd36db)", (
     const log = fs.readFileSync(result.stdinReport.parseErrorLogPath!, "utf8");
     expect(log).toContain('"sessionId": "sess-stdin-3"');
     expect(log).toContain("--- raw ---");
-    // Marker (the approval itself) still lands.
-    expect(result.marker.ok).toBe(true);
-    // No report flip — and the reason names the fresh parse-error.
+    // Marker (the approval itself) is REFUSED — no silent approval of a
+    // session whose only report attempt was rejected.
+    expect(result.marker.ok).toBe(false);
+    if (result.marker.ok) return;
+    expect(result.marker.reason).toMatch(/validation failed \(stdinReport\)/);
+    expect(result.ledger.ok).toBe(false);
+    // No report flip. The enforced short-circuit (shared with the
+    // existing priorArt-validation path above) reports a generic
+    // "skipped: <field> validation failed" reason here rather than the
+    // detailed parse-error pointer — that detail is still available via
+    // `result.stdinReport.parseErrorLogPath`, asserted above.
     expect(result.persistedReport.ok).toBe(false);
     if (result.persistedReport.ok) return;
-    expect(result.persistedReport.reason).toMatch(/parse-error/);
+    expect(result.persistedReport.reason).toBe("skipped: stdinReport validation failed");
+    const v = result.validation;
+    expect("ok" in v && v.ok === false && v.field === "stdinReport" && v.enforced).toBe(true);
+  });
+
+  it("--force still writes the marker for a rejected stdin report with no fallback (HIGH-2 escape hatch stays functional)", async () => {
+    const reportsDir = reportsDirIn(tmp);
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-stdin-3-force",
+      reportsDir,
+      generatedDir: path.join(tmp, "harness.generated"),
+      reportMarkdown: "just some prose, not a report",
+      now: new Date("2026-07-10T10:00:00Z"),
+      ledgerAdd: async () => ({ ok: true }),
+      force: true,
+    });
+    expect(result.stdinReport?.ok).toBe(false);
+    expect(result.marker.ok).toBe(true);
+    const v = result.validation;
+    expect("ok" in v && v.ok === false && v.field === "stdinReport" && v.enforced === false).toBe(
+      true,
+    );
+    // Forced bypass is stamped into the ledger tag for audit.
+    expect(result.ledger.tag).toContain(":forced:stdinReport");
   });
 
   it("enforces grill_me validation on a stdin report (hollow priorArt refuses the marker)", async () => {
@@ -1942,6 +1987,119 @@ describe("approveUnderstanding — report capture from stdin (task 61fd36db)", (
       ledgerAdd: async () => ({ ok: true }),
     });
     expect(result.stdinReport).toBeUndefined();
+  });
+});
+
+describe("approveUnderstanding — mode gap-fill for a stdin report declaring no mode of its own (task 5d73d78d review HIGH-1b/HIGH-1c/LOW-10)", () => {
+  function reportsDirIn(root: string): string {
+    const dir = path.join(root, "ug", "reports");
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  function packManifest(config: Record<string, unknown>, enabled = true): Manifest {
+    return parseManifest({
+      version: 1,
+      policy_packs: [{ name: "understanding-before-execution", config, enabled }],
+    });
+  }
+
+  // The exact 5-bullet shape @lannguyensi/understanding-gate's
+  // fast_confirm prompt emits (no `# Understanding Report` heading, no
+  // `## Metadata` block — mode is entirely gap-filled). Parses under the
+  // fast_confirm-relaxed schema; fails under the full grill_me schema
+  // (missing derivedTodos/acceptanceCriteria/openQuestions/risks/priorArt),
+  // which is exactly the config-drift shape this task's HIGH-2 finding
+  // was about: a fast_confirm-shaped report submitted against a
+  // grill_me-configured host.
+  const FAST_CONFIRM_BULLETS = [
+    "- I understood the task as: verify config.mode-driven mode gap-fill end to end.",
+    "- I will do: submit a five-bullet fast_confirm-shaped report on stdin.",
+    "- I will not touch: the ledger schema.",
+    "- I will verify by: asserting the persisted report's mode field / rejection.",
+    "- Assumptions: the heredoc arrives verbatim.",
+  ].join("\n");
+
+  it("config.mode: fast_confirm — a mode-less fast_confirm-shaped report is accepted and persists mode: fast_confirm", async () => {
+    const reportsDir = reportsDirIn(tmp);
+    const result = await approveUnderstanding({
+      manifest: packManifest({ mode: "fast_confirm" }),
+      session: "sess-gapfill-fc",
+      reportsDir,
+      generatedDir: path.join(tmp, "harness.generated"),
+      reportMarkdown: FAST_CONFIRM_BULLETS,
+      now: new Date("2026-07-10T10:00:00Z"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.stdinReport?.ok).toBe(true);
+    if (result.stdinReport?.ok !== true) return;
+    const persisted = JSON.parse(
+      fs.readFileSync(result.stdinReport.filePath, "utf8"),
+    ) as Record<string, unknown>;
+    expect(persisted.mode).toBe("fast_confirm");
+    expect(result.marker.ok).toBe(true);
+  });
+
+  it("config.mode: grill_me — the SAME mode-less fast_confirm-shaped report is refused, and no marker is written (HIGH-2)", async () => {
+    const reportsDir = reportsDirIn(tmp);
+    const result = await approveUnderstanding({
+      manifest: packManifest({ mode: "grill_me" }),
+      session: "sess-gapfill-gm",
+      reportsDir,
+      generatedDir: path.join(tmp, "harness.generated"),
+      reportMarkdown: FAST_CONFIRM_BULLETS,
+      now: new Date("2026-07-10T10:00:00Z"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.stdinReport?.ok).toBe(false);
+    expect(result.marker.ok).toBe(false);
+    const v = result.validation;
+    expect("ok" in v && v.ok === false && v.field === "stdinReport" && v.enforced).toBe(true);
+  });
+
+  it("an undeclared pack (manifest carries no policy_packs entry for it) gap-fills DEFAULT_MODE (grill_me), not fast_confirm (HIGH-1c)", async () => {
+    // A FULL grill_me-shaped report with no `mode:` line in its own
+    // Metadata block: parses successfully under grill_me's schema (all
+    // ten sections present), so this pins the resolved DEFAULT — not
+    // merely "some mode that happens to reject the fixture".
+    const modeless = VALID_GRILL_ME.replace(/\nmode: grill_me/, "");
+    expect(modeless).not.toContain("mode:");
+    const reportsDir = reportsDirIn(tmp);
+    const result = await approveUnderstanding({
+      manifest: manifest(), // default manifest: policy_packs: [] — pack undeclared
+      session: "sess-gapfill-undeclared",
+      reportsDir,
+      generatedDir: path.join(tmp, "harness.generated"),
+      reportMarkdown: modeless,
+      now: new Date("2026-07-10T10:00:00Z"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.stdinReport?.ok).toBe(true);
+    if (result.stdinReport?.ok !== true) return;
+    const persisted = JSON.parse(
+      fs.readFileSync(result.stdinReport.filePath, "utf8"),
+    ) as Record<string, unknown>;
+    expect(persisted.mode).toBe("grill_me");
+  });
+
+  it("a DECLARED but disabled pack (enabled: false) is treated the same as undeclared — its config.mode does not drive gap-fill (LOW-10)", async () => {
+    // The pack entry explicitly declares config.mode: fast_confirm, but
+    // enabled: false. If that config.mode still drove gap-fill, the
+    // fast_confirm-bullets fixture below would be ACCEPTED (same as the
+    // first test in this block). Instead it must fall back to
+    // DEFAULT_MODE (grill_me), for which the fixture is rejected.
+    const reportsDir = reportsDirIn(tmp);
+    const result = await approveUnderstanding({
+      manifest: packManifest({ mode: "fast_confirm" }, /* enabled */ false),
+      session: "sess-gapfill-disabled",
+      reportsDir,
+      generatedDir: path.join(tmp, "harness.generated"),
+      reportMarkdown: FAST_CONFIRM_BULLETS,
+      now: new Date("2026-07-10T10:00:00Z"),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.stdinReport?.ok).toBe(false);
+    expect(result.marker.ok).toBe(false);
   });
 });
 

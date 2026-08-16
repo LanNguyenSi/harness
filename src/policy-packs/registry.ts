@@ -19,7 +19,7 @@ import {
   defaultUx as understandingBeforeExecutionDefaultUx,
   PACK_NAME as UNDERSTANDING_BEFORE_EXECUTION,
   resolve as resolveUnderstandingBeforeExecution,
-  resolveMode as resolveUnderstandingBeforeExecutionMode,
+  resolveModeFromConfig as resolveUnderstandingBeforeExecutionMode,
   VERSION_COMMAND as UNDERSTANDING_BEFORE_EXECUTION_VERSION_COMMAND,
   type ResolvePackOptions,
 } from "./builtin/understanding-before-execution.js";
@@ -140,6 +140,17 @@ export function resolveBuiltinVersionCommand(
  * (`harness doctor`'s divergence warning) and `harness pack reseed`
  * (task 68b9ad9c) — the single source both read from so the two stay
  * in lockstep by construction.
+ *
+ * Mode is resolved via `resolveModeFromConfig` (config.mode only, no
+ * `UNDERSTANDING_GATE_MODE` env — task 5d73d78d review HIGH-3): both
+ * consumers here compare against / reseed the MANIFEST's own declared
+ * state, the same generation-time artefact `resolve()`/`buildHooks`
+ * produce. Reading the live env here would make `harness doctor` flag
+ * false drift (or `harness pack reseed` write different content)
+ * whenever the operator happens to have the env var exported in the
+ * shell they ran the command from — the same class of apply-time/live
+ * drift `MODE_ENV`'s own doc comment (understanding-before-execution.ts)
+ * explains for the sibling generation path.
  */
 export interface BuiltinDefaultConfig {
   ux?: PolicyUx;
