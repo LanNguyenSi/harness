@@ -18,6 +18,7 @@
 // so a failing preflight must leave the gate shut, not satisfy it.
 
 import { execFile } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -345,10 +346,13 @@ function rotateFailLogDir(logDir: string): void {
 
 /**
  * Persist the not-ready `preflight run --json` payload (pretty-printed)
- * to `<logDir>/preflight-<repo>-<timestamp>.json`, then rotate the
- * directory. Never throws: a write or rotation failure degrades to
- * `{ ok: false, reason }` so the caller can note() and keep going — the
- * SessionStart producer must exit 0 on every path.
+ * to `<logDir>/preflight-<repo>-<timestamp>-<hex4>.json`, then rotate the
+ * directory. The 4-hex suffix disambiguates writes that land in the same
+ * millisecond (the ISO timestamp's resolution), where the second write
+ * would otherwise silently overwrite the first. Never throws: a write or
+ * rotation failure degrades to `{ ok: false, reason }` so the caller can
+ * note() and keep going — the SessionStart producer must exit 0 on every
+ * path.
  */
 function persistFailLog(
   json: PreflightJson,
@@ -359,7 +363,12 @@ function persistFailLog(
   try {
     fs.mkdirSync(logDir, { recursive: true });
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    filePath = path.join(logDir, `${FAIL_LOG_PREFIX}${sanitizeForFilename(repo)}-${timestamp}.json`);
+    const unique = randomBytes(2).toString("hex");
+    // Cap the sanitized basename so a very long repo/worktree name can't blow past filesystem name-length limits.
+    filePath = path.join(
+      logDir,
+      `${FAIL_LOG_PREFIX}${sanitizeForFilename(repo).slice(0, 100)}-${timestamp}-${unique}.json`,
+    );
     fs.writeFileSync(filePath, `${JSON.stringify(json, null, 2)}\n`, "utf8");
   } catch (err) {
     return { ok: false, reason: (err as Error).message };
