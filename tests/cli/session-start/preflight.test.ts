@@ -2,7 +2,34 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+
+// ── Suite-wide homedir safety net (task a48b9729) ──────────────────────
+// The producer's fail-log default is `os.homedir()`-based
+// (`~/.harness/logs`). Every not-ready test is REQUIRED to inject a tmp
+// `logDir` (see makeLogDirFixture), but a forgotten injection used to
+// write into the operator's REAL home. Pin homedir() for this suite's
+// whole module graph so that mistake lands in a throwaway tmp home
+// instead. The pin lives here (not in a global vitest setup) because the
+// default-logDir seam is specific to this suite; everything else in
+// node:os stays the real implementation.
+// vi.hoisted: the vi.mock factory below is hoisted above all imports, so
+// the pinned path must be computed without importing os/fs.
+const PINNED_HOME = vi.hoisted(() => {
+  const base = (process.env["TMPDIR"] ?? "/tmp").replace(/\/+$/, "");
+  return `${base}/harness-sspf-pinned-home-${process.pid}`;
+});
+
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  const homedir = () => PINNED_HOME;
+  return { ...actual, homedir, default: { ...actual, homedir } };
+});
+
+afterAll(() => {
+  fs.rmSync(PINNED_HOME, { recursive: true, force: true });
+});
+
 import {
   preflightChildEnv,
   runSessionStartPreflight,
@@ -881,5 +908,230 @@ describe("not-ready fail-log persistence (task T-001)", () => {
     expect(result.reason).not.toContain("; log:");
     // A dedicated note explains the write failure without throwing.
     expect(errOut()).toContain("preflight fail-log write failed");
+  });
+});
+
+// ── Fail-log hardening (task a48b9729) ─────────────────────────────────
+describe("homedir safety net (suite-wide pin)", () => {
+  const notReady = async (): Promise<RunPreflightResult> => ({
+    ok: true,
+    json: { ready: false, confidence: 0.2, checks: [{ name: "x", status: "fail" }] },
+  });
+
+  it("pins os.homedir() to the throwaway tmp home for this suite's module graph", () => {
+    expect(os.homedir()).toBe(PINNED_HOME);
+    expect(PINNED_HOME).not.toBe("");
+  });
+
+  it("NEGATIVE CONTROL: a not-ready run that FORGETS to inject logDir writes under the pinned tmp home, never the real one", async () => {
+    const repo = makeRepoFixture("forgotten-injection");
+    const { stream: err } = captureStream();
+    const pinnedLogDir = path.join(PINNED_HOME, ".harness", "logs");
+    // No `logDir` option — exactly the mistake the net exists for.
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: err,
+      runPreflight: notReady,
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(false);
+    const files = fs.readdirSync(pinnedLogDir).filter((n) => n.startsWith("preflight-forgotten-injection-"));
+    expect(files).toHaveLength(1);
+    expect(result.reason).toContain(`; log: ${path.join(pinnedLogDir, files[0]!)}`);
+  });
+});
+
+describe("rotation boundaries (task a48b9729)", () => {
+  const failOnce = async (): Promise<RunPreflightResult> => ({
+    ok: true,
+    json: { ready: false, confidence: 0.3, checks: [{ name: "x", status: "fail" }] },
+  });
+
+  /** Seed `n` rotation-eligible files with deterministic ascending mtimes. */
+  function seed(logDir: string, n: number): void {
+    const baseMs = Date.parse("2020-01-01T00:00:00.000Z");
+    for (let i = 0; i < n; i++) {
+      const p = path.join(logDir, `preflight-bound-old-${String(i).padStart(2, "0")}.json`);
+      fs.writeFileSync(p, "{}");
+      const t = new Date(baseMs + i * 1000);
+      fs.utimesSync(p, t, t);
+    }
+  }
+
+  it("exactly 20 files after the write: NO rotation (19 pre-existing + 1 new all survive)", async () => {
+    const repo = makeRepoFixture("bound");
+    const logDir = makeLogDirFixture();
+    seed(logDir, 19);
+    const { stream: err } = captureStream();
+    await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: err,
+      logDir,
+      runPreflight: failOnce,
+      writeLedger: async () => ({ ok: true }),
+    });
+    const remaining = fs.readdirSync(logDir).filter((n) => n.startsWith("preflight-") && n.endsWith(".json"));
+    expect(remaining).toHaveLength(20);
+    // Every seeded file survived — nothing was evicted at exactly the cap.
+    for (let i = 0; i < 19; i++) {
+      expect(remaining).toContain(`preflight-bound-old-${String(i).padStart(2, "0")}.json`);
+    }
+  });
+
+  it("21 files after the write: EXACTLY the single oldest is evicted", async () => {
+    const repo = makeRepoFixture("bound");
+    const logDir = makeLogDirFixture();
+    seed(logDir, 20);
+    const { stream: err } = captureStream();
+    await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: err,
+      logDir,
+      runPreflight: failOnce,
+      writeLedger: async () => ({ ok: true }),
+    });
+    const remaining = fs.readdirSync(logDir).filter((n) => n.startsWith("preflight-") && n.endsWith(".json"));
+    expect(remaining).toHaveLength(20);
+    expect(remaining).not.toContain("preflight-bound-old-00.json");
+    // old-01..old-19 plus the just-written file all survive.
+    for (let i = 1; i < 20; i++) {
+      expect(remaining).toContain(`preflight-bound-old-${String(i).padStart(2, "0")}.json`);
+    }
+    expect(remaining.filter((n) => /^preflight-bound-\d{4}-/.test(n))).toHaveLength(1);
+  });
+});
+
+describe("hostile repo names stay contained in logDir (task a48b9729)", () => {
+  // The task names the spellings '../../etc' and 'a/b'. Those literal
+  // strings are UNREACHABLE through the public seam by construction:
+  // sanitizeForFilename is module-private, and `repo` arrives as
+  // path.basename(findGitEntry(cwd).worktreeRoot) where findGitEntry
+  // path.resolve()s its input first — a resolved path's basename can
+  // never contain a separator or be a `..` segment. So these tests pin
+  // the guarantee those spellings are ABOUT (the fail-log lands as one
+  // direct child of logDir, named only from the sanitized
+  // [a-zA-Z0-9._-] alphabet) with the closest hostile basenames a real
+  // filesystem can produce; sanitizeForFilename stays defense-in-depth
+  // behind the resolve+basename structure.
+  const failOnce = async (): Promise<RunPreflightResult> => ({
+    ok: true,
+    json: { ready: false, confidence: 0.1, checks: [{ name: "x", status: "fail" }] },
+  });
+
+  async function runWithCwd(cwd: string, logDir: string): Promise<string[]> {
+    const { stream: err } = captureStream();
+    await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd })),
+      stderr: err,
+      logDir,
+      runPreflight: failOnce,
+      writeLedger: async () => ({ ok: true }),
+    });
+    return fs.readdirSync(logDir);
+  }
+
+  it("a dots-only repo basename ('...') stays a plain name segment inside logDir", async () => {
+    // '...' is a legal directory name and the closest creatable relative
+    // of the '../../etc' spelling. '.' is in the safe alphabet, so it
+    // survives sanitization — as a name fragment, never a path hop.
+    const repo = makeRepoFixture("...");
+    const logDir = makeLogDirFixture();
+
+    const files = await runWithCwd(repo, logDir);
+
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(/^preflight-\.\.\.-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f]{4}\.json$/);
+    expect(fs.statSync(path.join(logDir, files[0]!)).isFile()).toBe(true);
+    // No fail-log escaped NEXT TO logDir (what a traversal hop would
+    // have produced). Scoped to the fail-log prefix because the parent
+    // is the SHARED os tmpdir — other concurrently running suites
+    // legitimately create unrelated entries there.
+    const escapees = fs.readdirSync(path.dirname(logDir)).filter((n) => n.startsWith("preflight-"));
+    expect(escapees).toEqual([]);
+  });
+
+  it("separator- and metacharacter-laden basenames are flattened to the safe alphabet", async () => {
+    // `a\\b c$d` IS a legal POSIX directory name (backslash, space, `$`);
+    // every non-[a-zA-Z0-9._-] byte must flatten to '-'.
+    const repo = makeRepoFixture("a\\b c$d");
+    const logDir = makeLogDirFixture();
+
+    const files = await runWithCwd(repo, logDir);
+
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(/^preflight-a-b-c-d-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f]{4}\.json$/);
+  });
+});
+
+describe("sub-ms collision suffix (task a48b9729, the single src change)", () => {
+  it("two not-ready persists in the SAME millisecond produce two files, not one overwrite", async () => {
+    const repo = makeRepoFixture("same-ms");
+    const logDir = makeLogDirFixture();
+    // Freeze ONLY Date so both writes compute the identical timestamp —
+    // deterministic in both directions: without the 4-hex suffix the
+    // second write overwrites the first (1 file), with it both survive.
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-08-16T12:00:00.123Z") });
+    try {
+      for (let i = 0; i < 2; i++) {
+        const { stream: err } = captureStream();
+        await runSessionStartPreflight({
+          stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+          stderr: err,
+          logDir,
+          runPreflight: async () => ({
+            ok: true,
+            json: { ready: false, confidence: 0.2, checks: [{ name: "x", status: "fail" }] },
+          }),
+          writeLedger: async () => ({ ok: true }),
+        });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+    const files = fs.readdirSync(logDir);
+    expect(files).toHaveLength(2);
+    for (const f of files) {
+      expect(f).toMatch(/^preflight-same-ms-2026-08-16T12-00-00-123Z-[0-9a-f]{4}\.json$/);
+    }
+    expect(files[0]).not.toBe(files[1]);
+  });
+});
+
+describe("multiple failing checks (task a48b9729)", () => {
+  it("caps each failing check at 3 detail lines and joins them under one '; failing:' list", async () => {
+    const repo = makeRepoFixture("multi-fail");
+    const logDir = makeLogDirFixture();
+    const { stream: err, output: errOut } = captureStream();
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: err,
+      logDir,
+      runPreflight: async () => ({
+        ok: true,
+        json: {
+          ready: false,
+          confidence: 0.35,
+          checks: [
+            { name: "npm-test", status: "fail", details: ["t1", "t2", "t3", "t4"] },
+            { name: "ok-check", status: "pass" },
+            { name: "secret-scan", status: "fail", details: ["s1", "s2", "s3", "s4"] },
+            { name: "lint", status: "fail" },
+          ],
+        },
+      }),
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(false);
+    // ONE '; failing:' list, comma-joined, each failing check capped at
+    // its first 3 detail lines; passing checks absent; a details-less
+    // failing check degrades to its bare name.
+    expect(result.reason).toContain(
+      "; failing: npm-test (t1 | t2 | t3), secret-scan (s1 | s2 | s3), lint",
+    );
+    expect(result.reason).not.toContain("t4");
+    expect(result.reason).not.toContain("s4");
+    expect(result.reason).not.toContain("ok-check");
+    expect((result.reason?.match(/; failing:/g) ?? []).length).toBe(1);
+    expect(errOut()).toContain("npm-test (t1 | t2 | t3), secret-scan (s1 | s2 | s3), lint");
   });
 });
