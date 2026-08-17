@@ -92,9 +92,13 @@ describe("checkUnderstandingModeEnvDivergence — pure function", () => {
     expect(result).toBeDefined();
     expect(result?.envMode).toBe("fast_confirm");
     expect(result?.configMode).toBe("grill_me");
-    expect(result?.message).toContain("UNDERSTANDING_GATE_MODE=fast_confirm");
-    expect(result?.message).toContain(
-      "policy_packs[understanding-before-execution].config.mode=grill_me",
+    expect(result?.message).toBe(
+      "UNDERSTANDING_GATE_MODE=fast_confirm diverges from config.mode=grill_me",
+    );
+    // Valid, explicit `config.mode: grill_me` in the fixture: the effective
+    // value IS what harness.yaml declares, so the attribution stays.
+    expect(result?.detail).toContainEqual(
+      expect.stringContaining("effective config.mode=grill_me (from harness.yaml)"),
     );
   });
 
@@ -106,6 +110,49 @@ describe("checkUnderstandingModeEnvDivergence — pure function", () => {
     expect(result).toEqual(
       expect.objectContaining({ envMode: "fast_confirm", configMode: "grill_me" }),
     );
+  });
+
+  it("advisory fires for the strict mode value too", () => {
+    const manifest = packWith({ mode: "grill_me" });
+    const result = checkUnderstandingModeEnvDivergence(manifest, {
+      UNDERSTANDING_GATE_MODE: "strict",
+    });
+    expect(result).toEqual(
+      expect.objectContaining({ envMode: "strict", configMode: "grill_me" }),
+    );
+  });
+
+  // Reviewer finding (Fix-Runde 2): the previous "agree after normalisation"
+  // case above only proves normalisation doesn't cause a FALSE POSITIVE:
+  // a mutant that drops the `.trim().toLowerCase()` call entirely still
+  // passes it, because an un-normalised " Grill_Me " also fails `isMode`
+  // and the function bails out to `undefined` via the SAME early return,
+  // for a different reason. This case defends normalisation from the other
+  // side: a raw env value that only resolves to a *diverging* recognised
+  // Mode once normalised. Drop the normalisation and `isMode(" Fast_Confirm
+  // ")` is false, so the function would wrongly return `undefined` (no
+  // advisory) instead of firing.
+  it("advisory fires with the normalised env mode when the raw env value carries whitespace/case noise", () => {
+    const manifest = packWith({ mode: "grill_me" });
+    const result = checkUnderstandingModeEnvDivergence(manifest, {
+      UNDERSTANDING_GATE_MODE: " Fast_Confirm ",
+    });
+    expect(result).toBeDefined();
+    expect(result?.envMode).toBe("fast_confirm");
+    expect(result?.configMode).toBe("grill_me");
+  });
+
+  it("drops the harness.yaml attribution when config.mode itself is invalid (resolver fell back to the default)", () => {
+    const manifest = packWith({ mode: "bogus_mode" });
+    const result = checkUnderstandingModeEnvDivergence(manifest, {
+      UNDERSTANDING_GATE_MODE: "strict",
+    });
+    expect(result).toBeDefined();
+    expect(result?.configMode).toBe("grill_me");
+    expect(result?.detail).toContainEqual(
+      expect.stringContaining("effective config.mode=grill_me"),
+    );
+    expect(result?.detail.some((line) => line.includes("(from harness.yaml)"))).toBe(false);
   });
 });
 
@@ -148,25 +195,40 @@ policy_packs:
 }
 
 describe("doctor — understanding-gate mode env/config divergence (Environment section)", () => {
-  it("adds a warning and renders the Environment section when env diverges from config.mode", async () => {
+  it("adds exactly one warning (and no error) and renders the Environment section when env diverges from config.mode", async () => {
     const home = makeFixture({ "harness.yaml": manifestWithUnderstandingPack("grill_me") });
-    const report = await doctor({
-      configPath: path.join(home, "harness.yaml"),
-      homeOverride: home,
-      versionProbe: () => null,
-      pathEnv: "",
-      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
-      envOverride: { UNDERSTANDING_GATE_MODE: "fast_confirm" },
-    });
-    expect(report.understandingModeEnv).toBeDefined();
-    expect(report.understandingModeEnv?.envMode).toBe("fast_confirm");
-    expect(report.understandingModeEnv?.configMode).toBe("grill_me");
-    expect(report.warningCount).toBeGreaterThanOrEqual(1);
+    const runDoctor = (envOverride: NodeJS.ProcessEnv) =>
+      doctor({
+        configPath: path.join(home, "harness.yaml"),
+        homeOverride: home,
+        versionProbe: () => null,
+        pathEnv: "",
+        npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+        envOverride,
+      });
 
-    const text = format(report);
+    // Same fixture, same doctor() call, only the env override differs:
+    // isolates the advisory's OWN contribution to the counts. A bare
+    // `warningCount >= 1` against the diverging run alone would pass even
+    // if the advisory never actually incremented anything: this fixture
+    // is not warning-free to begin with (the stubbed npm/MCP setup and
+    // manifest shape produce their own baseline warnings), so the
+    // assertion has to be a delta against a same-fixture baseline, not an
+    // absolute floor.
+    const baseline = await runDoctor({});
+    const diverging = await runDoctor({ UNDERSTANDING_GATE_MODE: "fast_confirm" });
+
+    expect(baseline.understandingModeEnv).toBeUndefined();
+    expect(diverging.understandingModeEnv).toBeDefined();
+    expect(diverging.understandingModeEnv?.envMode).toBe("fast_confirm");
+    expect(diverging.understandingModeEnv?.configMode).toBe("grill_me");
+
+    expect(diverging.warningCount).toBe(baseline.warningCount + 1);
+    expect(diverging.errorCount).toBe(baseline.errorCount);
+
+    const text = format(diverging);
     expect(text).toMatch(/\nEnvironment\n/);
-    expect(text).toContain("UNDERSTANDING_GATE_MODE=fast_confirm");
-    expect(text).toContain("config.mode=grill_me");
+    expect(text).toContain("UNDERSTANDING_GATE_MODE=fast_confirm diverges from config.mode=grill_me");
   });
 
   it("adds no warning and omits the section when the env var is unset", async () => {

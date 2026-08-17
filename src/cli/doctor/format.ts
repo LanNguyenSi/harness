@@ -78,6 +78,7 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
   }
   if (modeEnv) {
     out.push(`  ⚠ ${modeEnv.message}`);
+    for (const line of modeEnv.detail) out.push(`      ${line}`);
   }
   return out;
 }

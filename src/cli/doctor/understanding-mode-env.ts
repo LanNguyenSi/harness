@@ -46,7 +46,20 @@ export interface UnderstandingModeEnvDivergence {
   envMode: Mode;
   /** `policy_packs[understanding-before-execution].config.mode`, resolved via the config-only (GENERATION-path) resolver. */
   configMode: Mode;
+  /**
+   * Short headline, rendered as the `⚠` line itself. Mirrors the
+   * npm-global-bin-off-PATH advisory's rendering idiom (`format.ts`'s
+   * Environment section): a one-line headline plus indented {@link detail}
+   * lines underneath, instead of one long sentence crammed onto the `⚠`
+   * line.
+   */
   message: string;
+  /**
+   * 2-3 indented lines rendered directly under {@link message} by
+   * `format.ts`. Carries the explanation and remediation the old
+   * single-line `message` used to carry inline.
+   */
+  detail: string[];
 }
 
 /**
@@ -79,18 +92,26 @@ export function checkUnderstandingModeEnvDivergence(
   const normalizedEnv = envRaw.trim().toLowerCase();
   if (!isMode(normalizedEnv)) return undefined;
 
-  const { mode: configMode } = resolveModeFromConfig(pack);
+  const { mode: configMode, warning: configWarning } = resolveModeFromConfig(pack);
   if (normalizedEnv === configMode) return undefined;
+
+  // `configMode` is the RESOLVED (effective) value, not necessarily what's
+  // literally written in harness.yaml: when `resolveModeFromConfig` itself
+  // had to fall back (an unset or unrecognised `config.mode`, signalled by
+  // a non-null `configWarning`), attributing it to "(from harness.yaml)"
+  // would be a false verbatim claim. Drop the parenthetical in that case;
+  // the value is still the correct effective mode, just not YAML-sourced.
+  const attribution = configWarning ? "" : " (from harness.yaml)";
 
   return {
     envMode: normalizedEnv,
     configMode,
-    message:
-      `${MODE_ENV}=${normalizedEnv} is set in the operator environment and diverges from ` +
-      `policy_packs[${UNDERSTANDING_PACK_NAME}].config.mode=${configMode} (harness.yaml). ` +
-      "The env value wins for live runtime consumers (\`harness approve understanding\`'s " +
-      "stdin-report gap-fill, the Codex UserPromptSubmit injector), so enforcement is " +
-      `effectively "${normalizedEnv}", not the "${configMode}" harness.yaml declares. If this ` +
-      `is not a deliberate one-off override, unset ${MODE_ENV} in your shell profile.`,
+    message: `${MODE_ENV}=${normalizedEnv} diverges from config.mode=${configMode}`,
+    detail: [
+      "live runtime consumers (`harness approve understanding`'s stdin-report gap-fill, the " +
+        `Codex UserPromptSubmit injector) read the env, so enforcement is effectively "${normalizedEnv}"`,
+      `effective config.mode=${configMode}${attribution}`,
+      `if this is not a deliberate one-off override, unset ${MODE_ENV} in your shell profile`,
+    ],
   };
 }

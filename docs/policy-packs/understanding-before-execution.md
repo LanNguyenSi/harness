@@ -220,7 +220,9 @@ from `policy_packs[understanding-before-execution].config.mode`, naming
 both values so the operator can see at a glance which mode is actually
 being enforced. This check is agent-unreachable by design (it only
 reads the operator's own process environment) and renders in doctor's
-`Environment` section.
+`Environment` section. It only fires when the pack itself is declared
+AND enabled: a pack that never runs has no live enforcement for the env
+var to downgrade, so there is nothing to warn about.
 
 **Rejection enforcement.** `harness approve understanding`'s stdin-report
 path also now genuinely REFUSES the approval marker when the submitted
