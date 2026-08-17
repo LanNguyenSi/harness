@@ -208,6 +208,20 @@ the outcome (the package already defaults to `fast_confirm` on its own)
 while restoring the marker's liveness on a `fast_confirm`-effective host;
 a `grill_me`/`strict`-resolved mode still gets the unconditional prefix.
 
+**Doctor advisory for a diverging env override (task `24abdecb`).**
+Because the env var only feeds the LIVE runtime path, an operator who
+carries `UNDERSTANDING_GATE_MODE` in their shell profile (rather than
+setting it inline for a one-off command) silently downgrades live
+enforcement relative to what `harness.yaml` declares, with nothing to
+flag the drift. `harness doctor` now warns (advisory, never an error —
+the env override is a legitimate, documented mechanism, not a
+misconfiguration) whenever `UNDERSTANDING_GATE_MODE` is set and diverges
+from `policy_packs[understanding-before-execution].config.mode`, naming
+both values so the operator can see at a glance which mode is actually
+being enforced. This check is agent-unreachable by design (it only
+reads the operator's own process environment) and renders in doctor's
+`Environment` section.
+
 **Rejection enforcement.** `harness approve understanding`'s stdin-report
 path also now genuinely REFUSES the approval marker when the submitted
 report is rejected under the resolved mode (e.g. a `fast_confirm`-shaped

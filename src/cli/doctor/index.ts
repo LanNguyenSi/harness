@@ -39,6 +39,7 @@ import {
 import { checkNpmBinPath, type NpmExec } from "./npm-bin-path.js";
 import { scanForRogueLedgers, type RogueLedgerScanOptions } from "./rogue-ledger.js";
 import { buildClaudeMcpRegistration } from "./claude-mcp.js";
+import { checkUnderstandingModeEnvDivergence } from "./understanding-mode-env.js";
 import type { ClaudeMcpExec } from "../../io/claude-mcp.js";
 import {
   isDoctorTarget,
@@ -106,10 +107,12 @@ export interface DoctorOptions extends LoaderOptions {
    */
   claudeMcpExec?: ClaudeMcpExec;
   /**
-   * Test-injection knob for env-dependent path resolution — today only the
-   * dead settings.json `mcpServers` block check, which honors
-   * `CLAUDE_CONFIG_DIR`. Defaults to `process.env`; tests inject `{}` (or
-   * a fake config dir) to stay hermetic against the operator's real env.
+   * Test-injection knob for env-dependent checks: the dead settings.json
+   * `mcpServers` block lookup (honors `CLAUDE_CONFIG_DIR`), and the
+   * understanding-gate mode env/config divergence advisory (task
+   * 24abdecb, reads `UNDERSTANDING_GATE_MODE`). Defaults to
+   * `process.env`; tests inject `{}` (or specific values) to stay
+   * hermetic against the operator's real env.
    */
   envOverride?: NodeJS.ProcessEnv;
 }
@@ -880,6 +883,9 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
     warningCount += report.claudeMcp.warnings.length;
   }
   if (report.npmGlobalBin?.status === "warn") warningCount++;
+  // Understanding-gate mode env/config divergence (task 24abdecb):
+  // always advisory, never an error — see understanding-mode-env.ts.
+  if (report.understandingModeEnv) warningCount++;
   if (report.memory.routerExecutable && !report.memory.routerExecutable.exists) errorCount++;
   if (!report.memory.routerExecutable) warningCount++;
   if (report.memory.routerVersion?.status === "warn") warningCount++;
@@ -1003,6 +1009,10 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
           ...(opts.envOverride !== undefined ? { env: opts.envOverride } : {}),
         })
       : undefined;
+  const understandingModeEnv = checkUnderstandingModeEnvDivergence(
+    manifest,
+    opts.envOverride ?? process.env,
+  );
   const manifestSec = manifestSection(manifest);
 
   const rogueLedgerDbs = scanForRogueLedgers({
@@ -1032,6 +1042,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     ...(claudeMcp !== undefined ? { claudeMcp } : {}),
     rogueLedgerDbs,
     ...(npmGlobalBin !== undefined ? { npmGlobalBin } : {}),
+    ...(understandingModeEnv !== undefined ? { understandingModeEnv } : {}),
   };
   if (opts.target === "codex") {
     const manifestDir = path.dirname(resolved.base);

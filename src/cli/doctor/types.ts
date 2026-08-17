@@ -6,6 +6,7 @@ import type { ClaudeMcpRegistrationSection } from "./claude-mcp.js";
 import type { CodexTargetReport } from "./codex.js";
 import type { NpmBinReport } from "./npm-bin-path.js";
 import type { RogueLedgerDb } from "./rogue-ledger.js";
+import type { UnderstandingModeEnvDivergence } from "./understanding-mode-env.js";
 
 /**
  * Phase 6 #6 follow-up — doctor target identifier. Distinct from
@@ -293,6 +294,15 @@ export interface DoctorReport {
    * doctor / harness probes. See task 4ddd78ed.
    */
   npmGlobalBin?: NpmBinReport;
+  /**
+   * Understanding-gate mode env/config divergence (task 24abdecb).
+   * Present only when `UNDERSTANDING_GATE_MODE` is set in the operator
+   * environment AND diverges from
+   * `policy_packs[understanding-before-execution].config.mode`. Always
+   * advisory (rolls into `warningCount`, never `errorCount`) — see
+   * `understanding-mode-env.ts` for the full rationale.
+   */
+  understandingModeEnv?: UnderstandingModeEnvDivergence;
   memory: MemoryReport;
   hooks: HookEntryReport[];
   policies: PolicyEntryReport[];
@@ -357,6 +367,7 @@ export interface DoctorReport {
 
 export type { NpmBinReport } from "./npm-bin-path.js";
 export type { ClaudeMcpRegistrationSection, ClaudeMcpEntryReport } from "./claude-mcp.js";
+export type { UnderstandingModeEnvDivergence } from "./understanding-mode-env.js";
 
 export type {
   Manifest,
