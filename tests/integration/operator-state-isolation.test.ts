@@ -50,7 +50,9 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Readable, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { runSessionStartPreflight } from "../../src/cli/session-start/index.js";
 import { sentinelPath, writeSentinel } from "../../src/runtime/pause-sentinel.js";
 import { resolveVitestEntry } from "../_helpers/nested-vitest.js";
 
@@ -218,3 +220,136 @@ describe.skipIf(!process.env["HARNESS_INTEGRATION_TESTS"])(
     }, 6 * 60 * 1000); // vitest's per-test timeout, slightly above the spawn timeout
   },
 );
+
+// ── Fail-log seam repo-wide hardening (task 80f49922) ──────────────────
+//
+// PR/task a48b9729 protected the session-start preflight not-ready
+// fail-log seam ONLY inside tests/cli/session-start/preflight.test.ts, via
+// a suite-local `vi.mock("node:os")` pin. That pin does nothing for any
+// OTHER test, or a child process, that calls `runSessionStartPreflight`
+// without injecting `logDir`. Task 80f49922 routes the seam's default
+// through `resolvePaths()` instead, so it now inherits the SAME
+// throw-on-real-home-dir guard (loader.ts:45-64) already pinned above —
+// repo-wide, not suite-local. These two tests run on the default `npm
+// test` hot path (no HARNESS_INTEGRATION_TESTS opt-in, no subprocess
+// spawn): they exercise the public `runSessionStartPreflight` surface
+// directly, deliberately WITHOUT mocking `os`, so a regression that
+// reverts to `os.homedir()` would be caught by writing into this
+// process's REAL `os.homedir()`-based `~/.harness/logs/` — the exact
+// leak this task closes.
+describe("session-start fail-log dir resolution (task 80f49922)", () => {
+  /** Minimal `.git/HEAD`-only fixture — same shape resolveGitContext reads
+   * in tests/cli/session-start/preflight.test.ts's makeRepoFixture. */
+  function makeRepoFixture(root: string, name: string): string {
+    const repo = path.join(root, name);
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    return repo;
+  }
+
+  function captureStderr(): { stream: NodeJS.WritableStream; output: () => string } {
+    const chunks: string[] = [];
+    const stream = new Writable({
+      write(chunk, _enc, cb) {
+        chunks.push(chunk.toString("utf8"));
+        cb();
+      },
+    });
+    return { stream, output: () => chunks.join("") };
+  }
+
+  const notReady = async (): Promise<{ ok: true; json: { ready: boolean; confidence: number; checks: Array<{ name: string; status: string }> } }> => ({
+    ok: true,
+    json: { ready: false, confidence: 0.2, checks: [{ name: "x", status: "fail" }] },
+  });
+
+  it("blocks the not-ready fail-log write instead of falling back to the real home dir when homeDir/configPath are not injected", async () => {
+    // Real ~/.harness/logs/ (NOT mocked in this file) — a passing test
+    // must never create or add to this directory. Snapshotted before and
+    // asserted unchanged after, plus an afterEach sweep below as a
+    // defensive cleanup in case a regression DOES write here.
+    const realFailLogDir = path.join(os.homedir(), ".harness", "logs");
+    const before = fs.existsSync(realFailLogDir) ? fs.readdirSync(realFailLogDir) : null;
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-osi-guard-"));
+    try {
+      const repo = makeRepoFixture(root, "guard-probe-repo");
+      const { stream: stderr, output: errOut } = captureStderr();
+
+      const result = await runSessionStartPreflight({
+        stdin: Readable.from([JSON.stringify({ session_id: "s", cwd: repo })]),
+        stderr,
+        runPreflight: notReady,
+        writeLedger: async () => ({ ok: true }),
+        // Deliberately no homeDir / configPath / logDir — the exact
+        // caller mistake the guard exists to catch.
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.wrote).toBe(false);
+      expect(errOut()).toContain("preflight fail-log write failed");
+      expect(errOut()).toContain("resolvePaths refused to fall back");
+      const after = fs.existsSync(realFailLogDir) ? fs.readdirSync(realFailLogDir) : null;
+      expect(after).toEqual(before);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      // Best-effort sweep: only removes entries this probe itself could
+      // plausibly have written (sanitizeForFilename keeps the repo name
+      // as a literal prefix), never touches pre-existing operator files.
+      if (fs.existsSync(realFailLogDir)) {
+        for (const name of fs.readdirSync(realFailLogDir)) {
+          if (name.startsWith("preflight-guard-probe-repo-")) {
+            try {
+              fs.unlinkSync(path.join(realFailLogDir, name));
+            } catch {
+              /* best-effort */
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it("resolves the not-ready fail-log dir via $HARNESS_HOME instead of hardcoding ~/.harness", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-osi-guard-envhome-"));
+    const customHome = path.join(root, "custom-harness-home");
+    fs.mkdirSync(customHome, { recursive: true });
+    const repo = makeRepoFixture(root, "envhome-repo");
+
+    const priorHarnessHome = process.env["HARNESS_HOME"];
+    const priorAllowReal = process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"];
+    process.env["HARNESS_HOME"] = customHome;
+    // Mirrors what the real CLI binary (src/cli/main.ts) always sets
+    // before any resolvePaths() call. Needed here because this test
+    // deliberately does NOT inject opts.homeDir/opts.configPath, so it
+    // can exercise resolveHomeDir()'s $HARNESS_HOME env-var precedence
+    // tier the same way an operator who exports $HARNESS_HOME would in
+    // production.
+    process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"] = "1";
+    try {
+      const { stream: stderr } = captureStderr();
+      const result = await runSessionStartPreflight({
+        stdin: Readable.from([JSON.stringify({ session_id: "s", cwd: repo })]),
+        stderr,
+        runPreflight: notReady,
+        writeLedger: async () => ({ ok: true }),
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.wrote).toBe(false);
+      const expectedLogDir = path.join(customHome, "logs");
+      expect(fs.existsSync(expectedLogDir)).toBe(true);
+      const files = fs
+        .readdirSync(expectedLogDir)
+        .filter((name) => name.startsWith("preflight-envhome-repo-"));
+      expect(files).toHaveLength(1);
+      expect(result.reason).toContain(`; log: ${path.join(expectedLogDir, files[0]!)}`);
+    } finally {
+      if (priorHarnessHome === undefined) delete process.env["HARNESS_HOME"];
+      else process.env["HARNESS_HOME"] = priorHarnessHome;
+      if (priorAllowReal === undefined) delete process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"];
+      else process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"] = priorAllowReal;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

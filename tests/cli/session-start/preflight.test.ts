@@ -923,9 +923,17 @@ describe("homedir safety net (suite-wide pin)", () => {
     expect(PINNED_HOME).not.toBe("");
   });
 
-  it("NEGATIVE CONTROL: a not-ready run that FORGETS to inject logDir writes under the pinned tmp home, never the real one", async () => {
+  it("NEGATIVE CONTROL: a not-ready run that FORGETS to inject logDir AND homeDir is blocked by the resolvePaths guard, never writes under any home", async () => {
+    // Task 80f49922: defaultFailLogDir() now routes through
+    // resolvePaths(), so this mistake (no `logDir`, no `homeDir`, no
+    // `configPath`) is now caught by the repo-wide throw-on-real-home-dir
+    // guard (loader.ts:45-64) BEFORE this suite's os.homedir() pin (task
+    // a48b9729, above) would even matter — the guard fires purely on
+    // missing homeDir/configPath, independent of what os.homedir()
+    // resolves to. persistFailLog is never reached, so nothing lands
+    // under PINNED_HOME either; this asserts both.
     const repo = makeRepoFixture("forgotten-injection");
-    const { stream: err } = captureStream();
+    const { stream: err, output: errOut } = captureStream();
     const pinnedLogDir = path.join(PINNED_HOME, ".harness", "logs");
     // No `logDir` option — exactly the mistake the net exists for.
     const result = await runSessionStartPreflight({
@@ -934,10 +942,12 @@ describe("homedir safety net (suite-wide pin)", () => {
       runPreflight: notReady,
       writeLedger: async () => ({ ok: true }),
     });
+    expect(result.exitCode).toBe(0);
     expect(result.wrote).toBe(false);
-    const files = fs.readdirSync(pinnedLogDir).filter((n) => n.startsWith("preflight-forgotten-injection-"));
-    expect(files).toHaveLength(1);
-    expect(result.reason).toContain(`; log: ${path.join(pinnedLogDir, files[0]!)}`);
+    expect(errOut()).toContain("preflight fail-log write failed");
+    expect(errOut()).toContain("resolvePaths refused to fall back");
+    expect(result.reason).not.toContain("; log:");
+    expect(fs.existsSync(pinnedLogDir)).toBe(false);
   });
 });
 

@@ -20,7 +20,6 @@
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import {
   resolveGitContext,
@@ -97,9 +96,11 @@ export interface SessionStartPreflightOptions extends LoaderOptions {
   runPreflight?: (cwd: string, timeoutMs: number) => Promise<RunPreflightResult>;
   /**
    * Directory the not-ready diagnostic JSON is persisted to (task
-   * T-001). Test seam — production defaults to `~/.harness/logs`
-   * (`os.homedir()`-based). Always pass a tmp dir in tests so nothing
-   * ever touches the operator's real `~/.harness/logs/`.
+   * T-001). Test seam — production defaults to `<home>/logs`, resolved
+   * via `resolvePaths()` (task 80f49922), which throws unless `homeDir`
+   * or `configPath` is also injected (loader.ts:45-64). Always pass a
+   * tmp dir in tests so nothing ever touches the operator's real
+   * `~/.harness/logs/` (or the legacy `~/.claude/logs/`).
    */
   logDir?: string;
   /** Inject the ledger writer (tests). */
@@ -297,9 +298,25 @@ function describeNotReady(json: PreflightJson, logPath?: string): string {
   return `preflight not ready (confidence ${confidence})${failSuffix}${logSuffix}`;
 }
 
-/** Default not-ready log directory: `~/.harness/logs` (task T-001). */
-function defaultFailLogDir(): string {
-  return path.join(os.homedir(), ".harness", "logs");
+/**
+ * Default not-ready log directory: `<home>/logs` (task T-001). Routed
+ * through `resolvePaths()` — the same idiom `defaultReportsDir`'s caller
+ * uses in approve/understanding.ts — instead of hardcoding
+ * `path.join(os.homedir(), ".harness", "logs")` directly (task 80f49922,
+ * reviewer finding on a48b9729). Two effects: (1) this now respects the
+ * real home-dir precedence chain ($HARNESS_HOME, then `~/.harness/`,
+ * then the legacy `~/.claude/` fallback) instead of silently diverging
+ * from the rest of the harness state (regression from 31fbf856); (2) it
+ * inherits the throw-on-real-home-dir guard in `resolvePaths()`
+ * (loader.ts:45-64), which previously protected this seam only via a
+ * suite-local `vi.mock("node:os")` pin in preflight.test.ts — a caller
+ * that forgot to inject `logDir` from any OTHER test or child process
+ * would still silently write into the operator's real home dir.
+ * Evaluated lazily from the `opts.logDir ?? defaultFailLogDir(opts)`
+ * call site, so injecting `logDir` alone still bypasses the guard.
+ */
+function defaultFailLogDir(opts: LoaderOptions): string {
+  return path.join(path.dirname(resolvePaths(opts).base), "logs");
 }
 
 /** Repo names land in a filename; strip anything not filename-safe. */
@@ -497,8 +514,19 @@ export async function runSessionStartPreflight(
     return done(false, repo, branch, sessionId, sessionSource, preflight.reason);
   }
   if (preflight.json.ready !== true) {
-    const logDir = opts.logDir ?? defaultFailLogDir();
-    const persisted = persistFailLog(preflight.json, repo, logDir);
+    // defaultFailLogDir() now routes through resolvePaths(), which throws
+    // when neither homeDir nor configPath is injected and the real binary
+    // has not set HARNESS_ALLOW_REAL_GENERATED_DIR=1 (loader.ts:45-64,
+    // task 80f49922). Fold that into the same { ok: false, reason } shape
+    // persistFailLog already returns for a write failure — this producer
+    // must degrade, never throw (see file header).
+    let persisted: { ok: true; path: string } | { ok: false; reason: string };
+    try {
+      const logDir = opts.logDir ?? defaultFailLogDir(opts);
+      persisted = persistFailLog(preflight.json, repo, logDir);
+    } catch (err) {
+      persisted = { ok: false, reason: (err as Error).message };
+    }
     if (!persisted.ok) {
       note(`preflight fail-log write failed: ${persisted.reason}`);
     }
