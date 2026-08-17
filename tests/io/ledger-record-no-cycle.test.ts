@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 // Regression for task `1272feb6`: a TDZ cycle used to live between
-// `src/runtime/ledger-record.ts` (which value-imported `parseLedgerTimestamp`
+// ledger-record.ts (then at `src/runtime/ledger-record.ts`, since slice 4 at
+// `src/io/ledger-record.ts`) (which value-imported `parseLedgerTimestamp`
 // from the `policies/index.ts` barrel) and `src/policies/ledger-client.ts`
 // (which value-imports `POLICY_DECISION_TYPE` from `runtime/ledger-record.ts`).
 // The barrel re-exported ledger-client, closing the loop. On any import

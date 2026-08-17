@@ -8,7 +8,13 @@
 // (src/policies/duration.ts, src/policies/extract.ts,
 // src/runtime/ledger-record.ts, src/runtime/expand-home.ts) were relocated
 // into src/io/ (structural-concentration slice 4, agent-tasks 61a37b25,
-// follow-up to task f86b2425) — no more grandfathered exemptions needed.
+// follow-up to task f86b2425). The per-file grandfather exemptions are gone,
+// but note what that means: src/io is deliberately unconstrained, so these
+// edges are now structurally OUT OF SCOPE of the layer rules rather than
+// individually exempted. ledger-record.ts in particular is not a leaf (it
+// imports policies/timestamp plus type-only policies/runtime imports).
+// Assign io/probes/overrides a layer (and rules, e.g. io-no-upward-imports)
+// if/when the shared utilities get sorted for real.
 //
 // DELIBERATELY UNCONSTRAINED: src/io, src/probes, and src/overrides are
 // utility/leaf directories with no assigned position in the layer chain;

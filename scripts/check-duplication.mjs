@@ -105,7 +105,10 @@ import * as path from "node:path";
 // cluster. Extracting a shared base would mean touching three existing
 // sibling files, out of this task's scope (same rationale as every raise
 // above).
-const MAX_CLONES = 111;
+// 111 -> 110 after the slice-4 io/ relocation: the -1 is a jscpd scan-order
+// re-pairing in the ledger-add/ledger-client/ledger-record cluster (io/ sorts
+// before policies/), not removed duplication.
+const MAX_CLONES = 110;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).

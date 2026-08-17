@@ -6,6 +6,9 @@ import {
   substituteTemplate,
   validateExtractGrammar,
   type ExtractBuiltins,
+  // Deliberately imported via the policies barrel, not src/io/extract.js:
+  // the barrel re-export IS the public surface of the extract DSL, so this
+  // suite doubles as a guard that the re-export keeps working.
 } from "../../src/policies/index.js";
 
 const BUILTINS: ExtractBuiltins = {
