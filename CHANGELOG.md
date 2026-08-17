@@ -836,6 +836,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `@lannguyensi/understanding-gate` lockfile refreshed to 0.4.10 (the
   `malformedSections` `ParseError` field this surfacing depends on);
   the declared range stays `^0.4.9`.
+- **`harness doctor` now warns (advisory, never an error) when
+  `UNDERSTANDING_GATE_MODE` is set in the operator's shell environment and
+  diverges from `policy_packs[understanding-before-execution].config.mode`**
+  (task `24abdecb`, reviewer finding on the `5d73d78d` Batch 11
+  verification round). After that task's fix, only the LIVE runtime path
+  (`resolveMode` in `approve/understanding.ts`'s stdin-report gap-fill, and
+  the Codex `UserPromptSubmit` injector) reads the env var at all — the
+  GENERATION path (`resolve()`/`buildHooks`, what `harness apply` bakes
+  into settings.json) never has and still doesn't. An operator who carries
+  `UNDERSTANDING_GATE_MODE` in their shell profile therefore silently
+  downgrades live enforcement relative to what `harness.yaml` declares,
+  with no signal anywhere that the two have diverged — live-verified:
+  `harness approve understanding` accepted a `fast_confirm`-shaped report
+  against a `grill_me`-configured manifest with no warning. New
+  `checkUnderstandingModeEnvDivergence` (`src/cli/doctor/understanding-mode-env.ts`)
+  is a pure manifest+env check, gated on the pack being declared and
+  enabled, normalising the env value the same way `resolveMode` does
+  (trim + lowercase) so an env value the live resolver would itself reject
+  is correctly treated as non-divergent; the advisory names both the env
+  value and the resolved `config.mode` and renders in doctor's
+  `Environment` section (mirroring the existing npm-global-bin-off-PATH
+  advisory there). `harness doctor`'s existing `envOverride` test-injection
+  knob is reused rather than adding a second one. New coverage in
+  `tests/cli/doctor-understanding-mode-env.test.ts`: the pure function's
+  unset/empty/agreeing/invalid/undeclared/disabled no-advisory cases, the
+  diverging-value case (naming both values), and a `doctor()`-level
+  integration pass through `format()` asserting the rendered `Environment`
+  section and `warningCount`.
 
 ## [0.44.0] - 2026-08-03
 

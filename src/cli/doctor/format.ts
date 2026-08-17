@@ -66,14 +66,21 @@ function formatManifestSection(report: DoctorReport): string[] {
 // checks already failed loudly.
 function formatEnvironmentSection(report: DoctorReport): string[] {
   const bin = report.npmGlobalBin;
-  if (!bin || bin.status !== "warn") return [];
-  return [
-    "",
-    "Environment",
-    `  ⚠ npm global bin (${bin.binDir}) is not on PATH`,
-    `      harness install commands wrote binaries here but your shell will not find them.`,
-    `      Add to your shell rc (e.g. ~/.bashrc, ~/.zshrc):  ${bin.pathPatchSuggestion}`,
-  ];
+  const modeEnv = report.understandingModeEnv;
+  if ((!bin || bin.status !== "warn") && !modeEnv) return [];
+  const out: string[] = ["", "Environment"];
+  if (bin && bin.status === "warn") {
+    out.push(
+      `  ⚠ npm global bin (${bin.binDir}) is not on PATH`,
+      `      harness install commands wrote binaries here but your shell will not find them.`,
+      `      Add to your shell rc (e.g. ~/.bashrc, ~/.zshrc):  ${bin.pathPatchSuggestion}`,
+    );
+  }
+  if (modeEnv) {
+    out.push(`  ⚠ ${modeEnv.message}`);
+    for (const line of modeEnv.detail) out.push(`      ${line}`);
+  }
+  return out;
 }
 
 function formatToolsSection(report: DoctorReport): string[] {
