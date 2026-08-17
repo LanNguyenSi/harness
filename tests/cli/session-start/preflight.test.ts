@@ -927,11 +927,14 @@ describe("homedir safety net (suite-wide pin)", () => {
     // Task 80f49922: defaultFailLogDir() now routes through
     // resolvePaths(), so this mistake (no `logDir`, no `homeDir`, no
     // `configPath`) is now caught by the repo-wide throw-on-real-home-dir
-    // guard (loader.ts:45-64) BEFORE this suite's os.homedir() pin (task
-    // a48b9729, above) would even matter — the guard fires purely on
-    // missing homeDir/configPath, independent of what os.homedir()
-    // resolves to. persistFailLog is never reached, so nothing lands
-    // under PINNED_HOME either; this asserts both.
+    // guard (loader.ts:45-64), which fires purely on missing
+    // homeDir/configPath, independent of what os.homedir() resolves to.
+    // This suite's os.homedir() pin (task a48b9729, above) no longer
+    // protects THIS seam — the guard throws before defaultFailLogDir()
+    // ever calls os.homedir() — but it still protects every OTHER
+    // os.homedir() consumer in this suite that doesn't route through
+    // resolvePaths(). persistFailLog is never reached here, so nothing
+    // lands under PINNED_HOME either; this asserts both.
     const repo = makeRepoFixture("forgotten-injection");
     const { stream: err, output: errOut } = captureStream();
     const pinnedLogDir = path.join(PINNED_HOME, ".harness", "logs");

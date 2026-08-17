@@ -96,11 +96,18 @@ export interface SessionStartPreflightOptions extends LoaderOptions {
   runPreflight?: (cwd: string, timeoutMs: number) => Promise<RunPreflightResult>;
   /**
    * Directory the not-ready diagnostic JSON is persisted to (task
-   * T-001). Test seam — production defaults to `<home>/logs`, resolved
-   * via `resolvePaths()` (task 80f49922), which throws unless `homeDir`
-   * or `configPath` is also injected (loader.ts:45-64). Always pass a
-   * tmp dir in tests so nothing ever touches the operator's real
-   * `~/.harness/logs/` (or the legacy `~/.claude/logs/`).
+   * T-001). Test seam — production defaults to the dirname of the
+   * manifest path `resolvePaths()` resolves, plus `/logs`
+   * (`path.dirname(resolvePaths(opts).base)`, task 80f49922). That is
+   * normally `<home>/logs`, where `<home>` follows the usual precedence
+   * ($HARNESS_HOME, then `~/.harness/`, then the legacy `~/.claude/`
+   * fallback) — EXCEPT when `configPath` is injected without `homeDir`:
+   * `configPath` overrides the manifest path directly, so the log dir
+   * becomes `dirname(configPath)/logs` and does NOT route through
+   * home-dir resolution at all in that case. `resolvePaths()` throws
+   * unless `homeDir` or `configPath` is also injected (loader.ts:45-64).
+   * Always pass a tmp dir in tests so nothing ever touches the
+   * operator's real `~/.harness/logs/` (or the legacy `~/.claude/logs/`).
    */
   logDir?: string;
   /** Inject the ledger writer (tests). */
@@ -319,6 +326,25 @@ function defaultFailLogDir(opts: LoaderOptions): string {
   return path.join(path.dirname(resolvePaths(opts).base), "logs");
 }
 
+/**
+ * Resolve the not-ready fail-log directory, catching only the
+ * `resolvePaths()` guard's throw (task 80f49922 reviewer finding).
+ * `persistFailLog()` below has its own never-throws contract (see its
+ * doc comment), so it is called OUTSIDE this try/catch at the call
+ * site — wrapping it here too would blur which of the two failure
+ * modes (guard throw vs. write failure) actually produced a given
+ * `{ ok: false, reason }`.
+ */
+function resolveFailLogDir(
+  opts: SessionStartPreflightOptions,
+): { ok: true; logDir: string } | { ok: false; reason: string } {
+  try {
+    return { ok: true, logDir: opts.logDir ?? defaultFailLogDir(opts) };
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 /** Repo names land in a filename; strip anything not filename-safe. */
 function sanitizeForFilename(value: string): string {
   const cleaned = value.replace(/[^a-zA-Z0-9._-]/g, "-");
@@ -520,13 +546,10 @@ export async function runSessionStartPreflight(
     // task 80f49922). Fold that into the same { ok: false, reason } shape
     // persistFailLog already returns for a write failure — this producer
     // must degrade, never throw (see file header).
-    let persisted: { ok: true; path: string } | { ok: false; reason: string };
-    try {
-      const logDir = opts.logDir ?? defaultFailLogDir(opts);
-      persisted = persistFailLog(preflight.json, repo, logDir);
-    } catch (err) {
-      persisted = { ok: false, reason: (err as Error).message };
-    }
+    const logDirResult = resolveFailLogDir(opts);
+    const persisted: { ok: true; path: string } | { ok: false; reason: string } = logDirResult.ok
+      ? persistFailLog(preflight.json, repo, logDirResult.logDir)
+      : { ok: false, reason: logDirResult.reason };
     if (!persisted.ok) {
       note(`preflight fail-log write failed: ${persisted.reason}`);
     }
