@@ -3,7 +3,7 @@ type: runbook
 title: Understanding-gate lockout recovery
 description: Operator procedure to unblock a session locked by the understanding-before-execution PreToolUse gate via `harness approve understanding`, including the 6-tier session-id resolution and the expiry semantics that re-arm the gate.
 tags: [runbook, understanding-gate, lockout, recovery, operator]
-timestamp: 2026-08-05T15:28:20Z
+timestamp: 2026-08-17T19:29:55Z
 sources:
   - src/cli/approve/understanding.ts
   - src/cli/index.ts
@@ -11,7 +11,8 @@ sources:
   - src/runtime/pending-approval.ts
   - src/runtime/home-dir.ts
   - src/io/generated-dir.ts
-  - src/policy-packs/builtin/understanding-before-execution-runtime.ts
+  - src/policy-packs/builtin/understanding-before-execution/task-markers.ts
+  - src/policy-packs/builtin/understanding-before-execution/persisted-reports.ts
   - src/policy-packs/builtin/understanding-before-execution.ts
   - src/cli/pack/hook-post-tool-use.ts
   - src/cli/pack/hook-pre-tool-use.ts
@@ -29,7 +30,7 @@ Every `Edit` / `Write` / `Bash` call is refused by the `understanding-before-exe
 
 ## Why the gate is closed
 
-The blocker consults two operator-authored sources, either of which approves (`src/policy-packs/builtin/understanding-before-execution-runtime.ts`):
+The blocker consults two operator-authored sources, either of which approves (`checkOperatorApprovalMarkers` in `src/policy-packs/builtin/understanding-before-execution/task-markers.ts`; the persisted-report fallback in `src/policy-packs/builtin/understanding-before-execution/persisted-reports.ts`):
 
 1. **Approval marker files** under `<generatedDir>/.approvals/` — the canonical signal. `checkOperatorApprovalMarkers` checks the **task-scoped** marker first (`task-<taskId>`, where the task id comes from `<generatedDir>/active-claim`, written by the `track-active-claim` PostToolUse hook on `mcp__agent-tasks__task_start`), then the **session-scoped** marker (`<generatedDir>/.approvals/<sessionId>`). Both are subject to the same optional `max_age` TTL. Since harness/f9485cc7, existence alone is NOT enough: the marker also carries an HMAC-SHA256 signature verified against an operator-side key at `<generatedDir>/.approval-signing.key`; a marker with an unreadable body, malformed/non-object JSON, or a missing/invalid signature is rejected exactly like a missing marker (`matched:false`, tagged `forged:true` for the signature cases). Symlinks at the marker path are still refused.
 2. **Persisted JSON report** under the reports dir with `approvalStatus: "approved"` matching the session — fallback for solo `@lannguyensi/understanding-gate` users.

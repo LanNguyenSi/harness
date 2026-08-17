@@ -15,6 +15,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   deleted (slice 4 of the structural-concentration work, task 61a37b25).
   `src/io` stays deliberately unconstrained; a follow-up considers an
   io-no-upward-imports rule.
+- `src/policy-packs/builtin/understanding-before-execution-runtime.ts`
+  (formerly a single monolith) is now a 9-line re-export shim over 7
+  concern-scoped siblings under `understanding-before-execution/`
+  (`ledger.ts`, `markers.ts`, `persisted-reports.ts`, `lifecycle.ts`,
+  `task-markers.ts`, `post-tool-use-boundary.ts`, `active-claim.ts`),
+  composed by `index.ts` (slice 2 of the structural-concentration work,
+  task `348a4d42`). Pure move: every existing import of the old path
+  (hook-pre-tool-use.ts, hook-codex-pre-tool-use.ts,
+  cli/approve/understanding.ts, tests, etc.) keeps working unchanged.
+  `safeJsonParse` (module-private in the monolith) is now exported from
+  `persisted-reports.ts` so `markers.ts` can import it cross-file, but is
+  deliberately NOT re-exported from the shim's public surface (pinned by
+  `tests/policy-packs/ube-export-surface.test.ts`); a follow-up considers
+  moving it into `src/io/`.
 
 ### Security
 
