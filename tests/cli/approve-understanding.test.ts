@@ -147,6 +147,36 @@ describe("approveUnderstanding", () => {
     expect(after.approvedBy).toBe("test-suite");
   });
 
+  it("clears expiredAt when approving a previously-expired report (agent-grounding 5120938c review round 2)", async () => {
+    // Fixture shape matches what `expirePersistedReport` itself writes
+    // (understanding-before-execution-runtime.ts): approvalStatus:
+    // "expired" plus an ISO expiredAt stamp. Before this fix, approving
+    // such a report rewrote approvalStatus in place without clearing
+    // expiredAt, leaving a self-contradictory persisted record
+    // ({approvalStatus: "approved", expiredAt: <stale ISO>}).
+    const filePath = writeReport("rpt-expired.json", {
+      sessionId: "sess-expired",
+      approvalStatus: "expired",
+      expiredAt: "2026-05-01T00:00:00.000Z",
+    });
+    const result = await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-expired",
+      reportsDir: tmp,
+      generatedDir: path.join(tmp, "harness.generated"),
+      now: new Date("2026-05-07T08:00:00Z"),
+      approvedBy: "test-suite",
+      ledgerAdd: async () => ({ ok: true }),
+    });
+
+    expect(result.persistedReport.ok).toBe(true);
+    if (!result.persistedReport.ok) return;
+    expect(result.persistedReport.previousStatus).toBe("expired");
+    const after = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+    expect(after.approvalStatus).toBe("approved");
+    expect("expiredAt" in after).toBe(false);
+  });
+
   it("refuses to adopt a stale sessionId-less pending report and says why (C1)", async () => {
     // Live-repro shape (harness-discovery C1, friction-log #67): the
     // only report on disk is a 17-day-old sessionId-less pending
