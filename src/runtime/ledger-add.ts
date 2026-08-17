@@ -9,7 +9,7 @@
 // degrade gracefully rather than throw mid-CLI.
 
 import { spawn } from "node:child_process";
-import { expandHome, expandHomeInEnv } from "./expand-home.js";
+import { expandHome, expandHomeInEnv } from "../io/expand-home.js";
 import { VERSION } from "../version.js";
 
 const DEFAULT_TIMEOUT_MS = 5_000;

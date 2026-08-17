@@ -31,7 +31,7 @@ import { addLedgerFact } from "../../runtime/ledger-add.js";
 import type { Manifest, McpServer } from "../../schema/index.js";
 import { EX_FAIL, EX_USAGE, HarnessExitError } from "../exit-codes.js";
 import { loadManifest, resolvePaths, type LoaderOptions } from "../loader.js";
-import { expandHome } from "../../runtime/expand-home.js";
+import { expandHome } from "../../io/expand-home.js";
 
 const DEFAULT_PAUSE_SECONDS = 15 * 60;
 

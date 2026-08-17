@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 // Regression for task `1272feb6`: a TDZ cycle used to live between
-// `src/runtime/ledger-record.ts` (which value-imported `parseLedgerTimestamp`
+// ledger-record.ts (then at `src/runtime/ledger-record.ts`, since slice 4 at
+// `src/io/ledger-record.ts`) (which value-imported `parseLedgerTimestamp`
 // from the `policies/index.ts` barrel) and `src/policies/ledger-client.ts`
 // (which value-imports `POLICY_DECISION_TYPE` from `runtime/ledger-record.ts`).
 // The barrel re-exported ledger-client, closing the loop. On any import
@@ -19,9 +20,9 @@ import { describe, expect, it } from "vitest";
 // `src/cli/index.ts` is loaded instead of `src/cli/main.ts` because main
 // auto-runs and calls `process.exit`, which would muddy the test signal.
 
-describe("runtime/ledger-record ↔ policies/index — no TDZ cycle on load", () => {
+describe("io/ledger-record ↔ policies/index — no TDZ cycle on load", () => {
   it("value-importing POLICY_DECISION_TYPE before loading the CLI program does not throw", async () => {
-    const { POLICY_DECISION_TYPE } = await import("../../src/runtime/ledger-record.js");
+    const { POLICY_DECISION_TYPE } = await import("../../src/io/ledger-record.js");
     expect(POLICY_DECISION_TYPE).toBe("policy_decision");
     await expect(import("../../src/cli/index.js")).resolves.toBeDefined();
   });

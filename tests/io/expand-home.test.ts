@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { expandHome, expandHomeInEnv } from "../../src/runtime/expand-home.js";
+import { expandHome, expandHomeInEnv } from "../../src/io/expand-home.js";
 
 const FAKE_HOME = "/home/test-user";
 

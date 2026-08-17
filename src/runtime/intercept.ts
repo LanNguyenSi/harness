@@ -39,7 +39,7 @@ import {
   type EnvironmentResolution,
 } from "./environment-resolver.js";
 import { resolveGitContext, type GitRepoContext } from "./git-context.js";
-import { POLICY_DECISION_TYPE } from "./ledger-record.js";
+import { POLICY_DECISION_TYPE } from "../io/ledger-record.js";
 import { classifyRisk, type RiskProfile } from "./risk-classifier.js";
 import { resolveSessionId } from "./session-id.js";
 import {

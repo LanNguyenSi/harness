@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { InvalidDurationError, parseDurationSeconds } from "../../src/policies/duration.js";
+import { InvalidDurationError, parseDurationSeconds } from "../../src/io/duration.js";
 
 describe("parseDurationSeconds — shorthand", () => {
   it.each([

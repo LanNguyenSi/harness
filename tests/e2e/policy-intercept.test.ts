@@ -35,7 +35,7 @@ import {
   runInterceptCli,
 } from "../../src/cli/policy/intercept.js";
 import { openLedgerSession } from "../../src/policies/index.js";
-import { recordPolicyDecisionOnSession } from "../../src/runtime/ledger-record.js";
+import { recordPolicyDecisionOnSession } from "../../src/io/ledger-record.js";
 import { makeDecision } from "../_helpers/decision.js";
 import type { McpServer } from "../../src/schema/index.js";
 

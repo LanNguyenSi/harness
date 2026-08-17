@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Internal
+
+- The 4 grandfathered reverse-import exemptions (duration, extract,
+  expand-home, ledger-record) recorded as known debt in 0.44.0 are closed:
+  the utils moved to `src/io/` and the dependency-cruiser exemptions are
+  deleted (slice 4 of the structural-concentration work, task 61a37b25).
+  `src/io` stays deliberately unconstrained; a follow-up considers an
+  io-no-upward-imports rule.
+
 ### Security
 
 - **SECURITY (LOW): `isEscapeCommand`'s top-level `command.trim()`

@@ -2,7 +2,7 @@ import { z } from "zod";
 import {
   InvalidDurationError,
   parseDurationSeconds,
-} from "../policies/duration.js";
+} from "../io/duration.js";
 
 export const DurationSchema = z.string().min(1).superRefine((v, ctx) => {
   try {
@@ -74,7 +74,7 @@ export type Requires = z.infer<typeof RequiresSchema>;
 //     coverage in `tests/runtime/intercept.test.ts` (the `dogfood:${SESSION_ID}`
 //     fixture).
 //   - REPO / BRANCH / CWD — populated by the runtime from git + process state
-//     before `evaluateExtract` runs (`src/policies/extract.ts:ExtractBuiltins`).
+//     before `evaluateExtract` runs (`src/io/extract.ts:ExtractBuiltins`).
 //   - TOOL_NAME — taken from the hook event payload.
 //
 // Adding a new variable here is a spec change: update ARCHITECTURE §6, wire

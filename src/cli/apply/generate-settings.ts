@@ -48,7 +48,7 @@
 //     and is sorted by command for the same reason.
 
 import type { Hook, Manifest, McpServer } from "../../schema/index.js";
-import { expandHome } from "../../runtime/expand-home.js";
+import { expandHome } from "../../io/expand-home.js";
 
 export const DEFAULT_BUDGET_MS = 30_000;
 

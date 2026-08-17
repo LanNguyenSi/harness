@@ -10,13 +10,13 @@ import { spawn } from "node:child_process";
 // Type-only on purpose: `policies/ledger-client.ts` value-imports
 // POLICY_DECISION_TYPE from this module, so a VALUE import back would
 // re-create the TDZ cycle pinned absent by
-// tests/runtime/ledger-record-no-cycle.test.ts. `import type` is erased
+// tests/io/ledger-record-no-cycle.test.ts. `import type` is erased
 // at compile time and adds no runtime edge.
 import type { LedgerSession } from "../policies/ledger-client.js";
 import type { LedgerEntry } from "../policies/requires.js";
 import { parseLedgerTimestamp } from "../policies/timestamp.js";
 import { expandHome, expandHomeInEnv } from "./expand-home.js";
-import type { PolicyDecision } from "./intercept.js";
+import type { PolicyDecision } from "../runtime/intercept.js";
 import { VERSION } from "../version.js";
 
 export interface LedgerRecordOptions {

@@ -7,7 +7,7 @@ export {
   type RequiresEvaluation,
   type RequiresTrace,
 } from "./requires.js";
-export { parseDurationSeconds, InvalidDurationError } from "./duration.js";
+export { parseDurationSeconds, InvalidDurationError } from "../io/duration.js";
 export { parseLedgerTimestamp } from "./timestamp.js";
 export {
   openLedgerSession,
@@ -33,4 +33,4 @@ export {
   type ExtractTraceEntry,
   type ExtractTraceSource,
   type SubstituteTemplateResult,
-} from "./extract.js";
+} from "../io/extract.js";

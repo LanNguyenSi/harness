@@ -9,8 +9,8 @@ import {
   decisionSortKey,
   decodeLedgerContent,
   type PolicyDecisionPayload,
-} from "../runtime/ledger-record.js";
-import { POLICY_DECISION_TYPE } from "../runtime/ledger-record.js";
+} from "../io/ledger-record.js";
+import { POLICY_DECISION_TYPE } from "../io/ledger-record.js";
 import {
   resolveReadSessionId,
   type ResolveReadSessionOptions,

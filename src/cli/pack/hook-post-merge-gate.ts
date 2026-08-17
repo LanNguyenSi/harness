@@ -57,7 +57,7 @@ import {
 import { queryLedgerByTag, type LedgerEntry } from "../../policies/index.js";
 import { resolveGitContext } from "../../runtime/git-context.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
-import { POLICY_DECISION_TYPE } from "../../runtime/ledger-record.js";
+import { POLICY_DECISION_TYPE } from "../../io/ledger-record.js";
 import { type Manifest, type McpServer, type PolicyUx } from "../../schema/index.js";
 import { type LoaderOptions } from "../loader.js";
 import { checkHookPause, loadManifestOrInjected, parseConfigUx, readStdin } from "./hook-bootstrap.js";

@@ -4,23 +4,21 @@
 // to its right). The goal is catching the next reverse import, not a style
 // crusade (docs/CONTRIBUTING.md).
 //
-// KNOWN DEBT (grandfathered below, discovered when this gate first ran —
-// the review's "zero reverse imports" claim was grep-schematic, not
-// file-accurate): four de-facto SHARED UTILITIES live inside layer dirs
-// and are imported from below their directory's position:
-//   - src/policies/duration.ts   <- src/schema/requires.ts
-//   - src/policies/extract.ts    <- src/schema/extract.ts
-//   - src/runtime/ledger-record.ts <- src/policies/{requires,ledger-client}.ts
-//   - src/runtime/expand-home.ts   <- src/policies/ledger-client.ts
-// The honest fix is moving them into a shared util layer; that relocation
-// belongs to the structural-concentration follow-up (task f86b2425), not
-// this gate. The exemptions are per-target-file, so ANY OTHER upward
-// import still fails.
+// The four de-facto SHARED UTILITIES that used to live inside layer dirs
+// (src/policies/duration.ts, src/policies/extract.ts,
+// src/runtime/ledger-record.ts, src/runtime/expand-home.ts) were relocated
+// into src/io/ (structural-concentration slice 4, agent-tasks 61a37b25,
+// follow-up to task f86b2425). The per-file grandfather exemptions are gone,
+// but note what that means: src/io is deliberately unconstrained, so these
+// edges are now structurally OUT OF SCOPE of the layer rules rather than
+// individually exempted. ledger-record.ts in particular is not a leaf (it
+// imports policies/timestamp plus type-only policies/runtime imports).
+// Assign io/probes/overrides a layer (and rules, e.g. io-no-upward-imports)
+// if/when the shared utilities get sorted for real.
 //
 // DELIBERATELY UNCONSTRAINED: src/io, src/probes, and src/overrides are
 // utility/leaf directories with no assigned position in the layer chain;
-// only the floors above forbid importing probes/. Assign them a layer
-// (and rules) if/when f86b2425 sorts the shared utilities.
+// only the floors above forbid importing probes/.
 /** @type {import('dependency-cruiser').IConfiguration} */
 module.exports = {
   forbidden: [
@@ -30,23 +28,14 @@ module.exports = {
         "schema/ is the base vocabulary layer: it must not depend on policies/runtime/policy-packs/cli/probes",
       severity: "error",
       from: { path: "^src/schema" },
-      to: {
-        path: "^src/(policies|runtime|policy-packs|cli|probes)",
-        pathNot: ["^src/policies/duration\\.ts$", "^src/policies/extract\\.ts$"],
-      },
+      to: { path: "^src/(policies|runtime|policy-packs|cli|probes)" },
     },
     {
       name: "policies-no-upward-imports",
-      comment: "policies/ may use schema/ (and the grandfathered utils) only",
+      comment: "policies/ may use schema/ only",
       severity: "error",
       from: { path: "^src/policies" },
-      to: {
-        path: "^src/(runtime|policy-packs|cli|probes)",
-        pathNot: [
-          "^src/runtime/ledger-record\\.ts$",
-          "^src/runtime/expand-home\\.ts$",
-        ],
-      },
+      to: { path: "^src/(runtime|policy-packs|cli|probes)" },
     },
     {
       name: "runtime-no-upward-imports",

@@ -29,7 +29,7 @@ export {
   decisionSortKey,
   type LedgerRecordOptions,
   type PolicyDecisionPayload,
-} from "./ledger-record.js";
+} from "../io/ledger-record.js";
 export { resolveSessionId } from "./session-id.js";
 export {
   buildAgentFacingBlock,

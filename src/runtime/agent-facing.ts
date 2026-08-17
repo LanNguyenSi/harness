@@ -28,7 +28,7 @@
 // Unresolved vars are left literal so the agent can still read what
 // was expected (mirrors renderProducers' best-effort substitution).
 
-import { substituteTemplate } from "../policies/extract.js";
+import { substituteTemplate } from "../io/extract.js";
 import type { PolicyUx } from "../schema/index.js";
 
 export interface AgentFacingBlock {
