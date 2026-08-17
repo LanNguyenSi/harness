@@ -2,6 +2,26 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-08-17T19:29:55Z, review fix-round doc-repointing (agent-tasks
+  348a4d42, structural concentration slice 2): 13 citations across 4 docs
+  (evidence-ledger-trust-boundary, codex-adapter-parity-gaps,
+  understanding-gate-lockout-recovery, gate-fail-posture-matrix) plus 3
+  citations in docs/policy-packs/understanding-before-execution.md still
+  named `understanding-before-execution-runtime.ts` as the implementation
+  site after that file became a 9-line re-export shim over 7 concern
+  siblings under `understanding-before-execution/`. Repointed each
+  citation to the sibling that actually defines the cited symbol
+  (`checkApprovalMarker`/`writeApprovalMarker` -> `markers.ts`;
+  `matchLedgerEntries`/`isPolicyDecisionRow` -> `ledger.ts`;
+  `checkOperatorApprovalMarkers` -> `task-markers.ts`, dropping its
+  stale `~line 1005` anchor; `matchPostToolUseBoundary` /
+  `applyPostToolUseExpiry` / `describePostToolUseExpiry` ->
+  `post-tool-use-boundary.ts`); the 3 OKF `sources:` entries pointing at
+  the shim were replaced with the sibling paths the doc body actually
+  cites. CHANGELOG.md's own historical references to the pre-split
+  monolith were deliberately left as-is. Content re-verified only for
+  the touched paragraphs (not a full claim-by-claim sweep of these 4
+  docs); re-stamped.
 - 2026-08-06T17:59:39Z, targeted correction (task af7e61d9): the 2026-08-05
   sweep below re-stamped pause-vs-gate-kill-switch's 7 citations but missed
   a semantic drift `okf-kit check` cannot see (source-mtime staleness only,

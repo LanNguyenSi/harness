@@ -3,10 +3,11 @@ type: invariant
 title: Evidence-ledger trust boundary
 description: The agent-writable evidence ledger is audit-only for the builtin enforcement gates; only operator- or trusted-process-authored filesystem markers (read via the shared symlink-rejecting reader in src/io/read-regular-file.ts) open them, while custom requires.ledger_tag policies are process gates by design.
 tags: [evidence-ledger, trust-boundary, approvals, security]
-timestamp: 2026-08-05T15:17:57Z
+timestamp: 2026-08-17T19:29:55Z
 sources:
   - src/io/read-regular-file.ts
-  - src/policy-packs/builtin/understanding-before-execution-runtime.ts
+  - src/policy-packs/builtin/understanding-before-execution/markers.ts
+  - src/policy-packs/builtin/understanding-before-execution/ledger.ts
   - src/policy-packs/builtin/branch-protection-runtime.ts
   - src/policy-packs/builtin/solution-acceptance-runtime.ts
   - src/policies/requires.ts
@@ -25,7 +26,7 @@ No evidence sink the gated agent can write — above all the evidence ledger, re
 
 ## Where it's enforced
 
-**Shared marker reader.** `readRegularFileRejectingSymlink` in `src/io/read-regular-file.ts` is "THE shared implementation for every gate-marker read" (its own doc comment). It `lstatSync`s (not `stat`) and returns a 5-kind result (`ok` / `missing` / `symlink` / `not-regular` / `unreadable`), so a symlink planted at a marker path can never redirect approval to agent-controlled content (agent-tasks/d39f160e). Extracted as one copy in 0.39.0, task f86b2425 slice 1 (`CHANGELOG.md`). Consumers: `checkApprovalMarker` in `src/policy-packs/builtin/understanding-before-execution-runtime.ts` and `readVerdict` in `src/policy-packs/builtin/solution-acceptance-runtime.ts`.
+**Shared marker reader.** `readRegularFileRejectingSymlink` in `src/io/read-regular-file.ts` is "THE shared implementation for every gate-marker read" (its own doc comment). It `lstatSync`s (not `stat`) and returns a 5-kind result (`ok` / `missing` / `symlink` / `not-regular` / `unreadable`), so a symlink planted at a marker path can never redirect approval to agent-controlled content (agent-tasks/d39f160e). Extracted as one copy in 0.39.0, task f86b2425 slice 1 (`CHANGELOG.md`). Consumers: `checkApprovalMarker` in `src/policy-packs/builtin/understanding-before-execution/markers.ts` and `readVerdict` in `src/policy-packs/builtin/solution-acceptance-runtime.ts`.
 
 **Understanding gate.** `checkApprovalMarker(generatedDir, sessionId)` reads `harness.generated/.approvals/<sessionId>` (`APPROVAL_MARKER_DIRNAME = ".approvals"`, `approvalMarkerPathFor`). The marker is written only by `writeApprovalMarker`, called from `harness approve understanding` in the operator's un-hooked shell; Edit/Write/Bash are all gated by the same PreToolUse hook and no configured MCP exposes filesystem writes, so the marker is operator-only (closes agent-tasks/88ca4bb3). The second accepted source is the persisted JSON report under `.understanding-gate/reports/`, flipped to `approvalStatus: "approved"` by the same approve verb — the agent's Stop hook only writes `pending` reports (docs/policy-packs/understanding-before-execution.md, "Approval state"). The `understanding-approved:${SESSION_ID}` ledger row that `harness approve understanding` still writes is forensics only: `matchLedgerEntries` in the runtime file is "Kept for the audit / forensics path only" and labels a hit `(no longer satisfies the gate)`. Marker existence is no longer the whole contract: since harness/f9485cc7, the marker also carries an HMAC-SHA256 signature over `(markerId, approvedAt, approvedBy, reportContentHash)`, verified against an operator-side key at `<generatedDir>/.approval-signing.key`. A marker with missing/invalid JSON, a missing or wrong-`alg` signature, or a signature that fails to verify is now REJECTED (`matched:false`, `forged:true`) with the same outcome as no marker at all, distinguishable via a `forged/unsigned marker rejected` detail string. A malformed sessionId still fails CLOSED, and `maxAgeMs` (agent-tasks/d8ee60ca) still expires markers, evaluated only after signature verification succeeds.
 

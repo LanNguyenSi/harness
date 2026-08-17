@@ -1,0 +1,78 @@
+import { describe, expect, it } from "vitest";
+import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
+
+// Pins the public export surface of the understanding-before-execution
+// re-export shim (structural concentration slice 2, agent-tasks 348a4d42;
+// review finding). The shim is a single `export * from
+// "./understanding-before-execution/index.js"` line, so a new re-export
+// added to index.ts OR to any of its 7 concern-scoped siblings silently
+// widens the shim's public surface with no other signal — the reviewer
+// proved this by temporarily adding `export { safeJsonParse } from
+// "./persisted-reports.js";` to index.ts, which no existing test caught.
+//
+// This test imports the actual compiled runtime namespace object (not the
+// .ts source text), so it only sees VALUE exports: type-only exports
+// (interfaces, `type` aliases) are erased at transform time and never
+// appear in `Object.keys()`, regardless of how many `export { ... }`
+// names are written in the source. The 40 names below were captured by
+// running this exact import+Object.keys().sort() against the shim and are
+// the actual, verified runtime surface — not a source-text export count.
+//
+// Mutation-verified: temporarily re-adding `export { safeJsonParse } from
+// "./persisted-reports.js";` to
+// src/policy-packs/builtin/understanding-before-execution/index.ts turns
+// both assertions below red (extra 41st key in the first, `true` in the
+// second); reverting turns them green again.
+const EXPECTED_EXPORTS = [
+  "ACTIVE_CLAIM_FILENAME",
+  "APPROVAL_MARKER_DIRNAME",
+  "APPROVAL_MARKER_TASK_PREFIX",
+  "APPROVED_LEDGER_TAG_PREFIX",
+  "DEFAULT_BASH_TOOL_NAMES",
+  "REPORTS_DIR_ENV",
+  "TOLERANT_FALLBACK_FUTURE_SKEW_MS",
+  "TOLERANT_FALLBACK_MAX_AGE_MS",
+  "activeClaimPathFor",
+  "applyPostToolUseExpiry",
+  "approvalMarkerPathFor",
+  "approvedLedgerTagFor",
+  "bashCommandMatchesAny",
+  "checkActiveClaimApprovalMarker",
+  "checkApprovalMarker",
+  "checkOperatorApprovalMarkers",
+  "checkPersistedReport",
+  "clearActiveClaim",
+  "clearApprovalMarker",
+  "clearTaskApprovalMarker",
+  "defaultReportsDir",
+  "describePostToolUseExpiry",
+  "expirePersistedReport",
+  "extractBashCommandFromToolInput",
+  "extractTaskIdFromToolInput",
+  "extractTasksTransitionStatusFromToolInput",
+  "findLatestReportForSession",
+  "isPolicyDecisionRow",
+  "listPersistedReports",
+  "matchLedgerEntries",
+  "matchPostToolUseBoundary",
+  "parseApprovalLifecycle",
+  "readActiveClaim",
+  "reportsDirForManifest",
+  "selectReportForSession",
+  "taskApprovalMarkerPathFor",
+  "toolNameMatchesAny",
+  "writeActiveClaim",
+  "writeApprovalMarker",
+  "writeTaskApprovalMarker",
+] as const;
+
+describe("understanding-before-execution-runtime shim export surface", () => {
+  it("exports exactly the pinned 40-name surface, sorted", () => {
+    const actual = Object.keys(ubeShim).sort();
+    expect(actual).toEqual([...EXPECTED_EXPORTS].sort());
+  });
+
+  it("does not export safeJsonParse (module-private to persisted-reports.ts)", () => {
+    expect(Object.prototype.hasOwnProperty.call(ubeShim, "safeJsonParse")).toBe(false);
+  });
+});
