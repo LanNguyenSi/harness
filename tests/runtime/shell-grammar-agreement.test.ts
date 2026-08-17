@@ -40,7 +40,7 @@ import { normalizeCommand } from "../../src/runtime/command-normalize.js";
 // would join silently, which is the very failure mode the parent task was
 // opened for. Nothing here scans for that. Checked 2026-07-28: the only other
 // `[A-Za-z_][A-Za-z0-9_]*` under src/ is `IDENTIFIER_RE` in
-// src/policies/extract.ts, a JSONPath-DSL identifier — a different concept, so
+// src/io/extract.ts, a JSONPath-DSL identifier — a different concept, so
 // "three modules" is accurate today and this is a watch item, not a gap.
 // src/runtime/bash-match-registry.ts's unregistered-set scan is the idiom to
 // copy if a guard is ever wanted.

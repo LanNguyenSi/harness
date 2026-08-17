@@ -19,7 +19,7 @@
 // filesystem marker the mcp ledger_add path cannot write.
 
 import type { Producer } from "../schema/index.js";
-import { substituteTemplate } from "./extract.js";
+import { substituteTemplate } from "../io/extract.js";
 
 function substituteAll(
   template: string,

@@ -8,7 +8,7 @@ import {
   KNOWN_RUNTIMES,
   resolveBuiltin,
 } from "../../policy-packs/index.js";
-import { expandHome } from "../../runtime/expand-home.js";
+import { expandHome } from "../../io/expand-home.js";
 import { shippedOperatorOnlyPolicyNames } from "../init/templates.js";
 import { isPolicyInterceptCommand, requiredHookBudgetMs } from "../policy/intercept.js";
 import type { Hook, Manifest } from "../../schema/index.js";

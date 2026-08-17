@@ -11,7 +11,7 @@ import type { PolicyDecision } from "../../src/runtime/intercept.js";
 import {
   encodeLedgerContent,
   payloadFromDecision,
-} from "../../src/runtime/ledger-record.js";
+} from "../../src/io/ledger-record.js";
 
 const DEFAULTS: Omit<PolicyDecision, "policyName"> = {
   enforcement: "block",

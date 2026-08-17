@@ -36,7 +36,7 @@ import { atomicWriteFile } from "../../io/atomic-write.js";
 import { readRegularFileRejectingSymlink } from "../../io/read-regular-file.js";
 import { InvalidDurationError, parseDurationSeconds, type LedgerEntry } from "../../policies/index.js";
 import { signMarker, verifyMarkerSignature } from "../../runtime/approval-signing.js";
-import { POLICY_DECISION_TYPE } from "../../runtime/ledger-record.js";
+import { POLICY_DECISION_TYPE } from "../../io/ledger-record.js";
 import { rejectMalformedSessionId } from "../../runtime/reject-malformed-session-id.js";
 import { expandToolNameAliases } from "../../runtime/tool-name-aliases.js";
 

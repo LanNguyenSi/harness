@@ -1,6 +1,6 @@
 import type { Requires } from "../schema/requires.js";
-import { POLICY_DECISION_TYPE } from "../runtime/ledger-record.js";
-import { InvalidDurationError, parseDurationSeconds } from "./duration.js";
+import { POLICY_DECISION_TYPE } from "../io/ledger-record.js";
+import { InvalidDurationError, parseDurationSeconds } from "../io/duration.js";
 import { parseLedgerTimestamp } from "./timestamp.js";
 
 export interface LedgerEntry {

@@ -15,8 +15,8 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { LedgerEntry } from "./requires.js";
-import { expandHome, expandHomeInEnv } from "../runtime/expand-home.js";
-import { POLICY_DECISION_TYPE } from "../runtime/ledger-record.js";
+import { expandHome, expandHomeInEnv } from "../io/expand-home.js";
+import { POLICY_DECISION_TYPE } from "../io/ledger-record.js";
 import { VERSION } from "../version.js";
 
 const DEFAULT_TIMEOUT_MS = 5_000;

@@ -2,7 +2,7 @@ import { z } from "zod";
 import {
   ExtractGrammarError,
   validateExtractGrammar,
-} from "../policies/extract.js";
+} from "../io/extract.js";
 
 export const ExtractExpressionSchema = z.string().min(1).superRefine((v, ctx) => {
   try {

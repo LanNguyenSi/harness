@@ -8,7 +8,7 @@ import {
   payloadFromDecision,
   recordPolicyDecision,
   recordPolicyDecisionOnSession,
-} from "../../src/runtime/ledger-record.js";
+} from "../../src/io/ledger-record.js";
 import { openLedgerSession } from "../../src/policies/ledger-client.js";
 import type { PolicyDecision } from "../../src/runtime/intercept.js";
 

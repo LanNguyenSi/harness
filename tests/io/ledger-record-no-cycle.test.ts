@@ -19,9 +19,9 @@ import { describe, expect, it } from "vitest";
 // `src/cli/index.ts` is loaded instead of `src/cli/main.ts` because main
 // auto-runs and calls `process.exit`, which would muddy the test signal.
 
-describe("runtime/ledger-record ↔ policies/index — no TDZ cycle on load", () => {
+describe("io/ledger-record ↔ policies/index — no TDZ cycle on load", () => {
   it("value-importing POLICY_DECISION_TYPE before loading the CLI program does not throw", async () => {
-    const { POLICY_DECISION_TYPE } = await import("../../src/runtime/ledger-record.js");
+    const { POLICY_DECISION_TYPE } = await import("../../src/io/ledger-record.js");
     expect(POLICY_DECISION_TYPE).toBe("policy_decision");
     await expect(import("../../src/cli/index.js")).resolves.toBeDefined();
   });

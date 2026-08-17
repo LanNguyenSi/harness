@@ -2,7 +2,7 @@ import { defineConfig } from "vitest/config";
 
 // A small family of files (tests/policies/ledger-client.test.ts,
 // tests/probes/mcp.test.ts, tests/runtime/ledger-add.test.ts,
-// tests/runtime/ledger-record.test.ts, tests/cli/doctor-codex.test.ts)
+// tests/io/ledger-record.test.ts, tests/cli/doctor-codex.test.ts)
 // spawns real child processes (execa) and races their own
 // spawn/init/exit/IPC latency against a fixed local test-timeout budget
 // (250-2000ms). With no pool/concurrency limits, vitest's default pool
@@ -20,7 +20,7 @@ import { defineConfig } from "vitest/config";
 // This is a PROBABILISTIC mitigation, not a structural guarantee: this
 // file caps concurrency (attacks the "many competing workers" side of the
 // race); tests/policies/ledger-client.test.ts, tests/probes/mcp.test.ts,
-// tests/runtime/ledger-add.test.ts and tests/runtime/ledger-record.test.ts
+// tests/runtime/ledger-add.test.ts and tests/io/ledger-record.test.ts
 // separately raise the family's own success-path timeout budgets (attacks
 // the "budget too tight for cold-spawn latency" side — see the per-test
 // comments in those files, task T-002). A first pass shipping maxWorkers=6

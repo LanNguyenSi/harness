@@ -49,7 +49,7 @@ import {
 } from "../../policy-packs/builtin/branch-protection-runtime.js";
 import { resolveGeneratedDir } from "../../io/generated-dir.js";
 import { resolveGitContext } from "../../runtime/git-context.js";
-import { POLICY_DECISION_TYPE } from "../../runtime/ledger-record.js";
+import { POLICY_DECISION_TYPE } from "../../io/ledger-record.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { type Manifest, type McpServer, type PolicyUx } from "../../schema/index.js";
 import { type LoaderOptions } from "../loader.js";

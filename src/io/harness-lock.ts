@@ -28,7 +28,7 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { expandHome } from "../runtime/expand-home.js";
+import { expandHome } from "./expand-home.js";
 import type { Manifest } from "../schema/index.js";
 import { atomicWriteFile } from "./atomic-write.js";
 
