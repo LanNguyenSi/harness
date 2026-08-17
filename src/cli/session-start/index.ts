@@ -321,6 +321,16 @@ function describeNotReady(json: PreflightJson, logPath?: string): string {
  * would still silently write into the operator's real home dir.
  * Evaluated lazily from the `opts.logDir ?? defaultFailLogDir(opts)`
  * call site, so injecting `logDir` alone still bypasses the guard.
+ *
+ * Precedence when BOTH `homeDir` and `configPath` are injected at once:
+ * `configPath` wins here, inherited from `resolvePaths()`'s own `base =
+ * opts.configPath ?? path.join(home, DEFAULT_BASENAME)` (loader.ts) —
+ * `configPath`, when present, is used verbatim regardless of `homeDir`.
+ * This is the opposite of `resolveGeneratedDir()` (io/generated-dir.ts),
+ * which checks `homeDir` FIRST and only falls back to the manifest
+ * path's directory when `homeDir` is undefined, so `homeDir` wins there.
+ * Intentional, pre-existing divergence between the two resolvers, not a
+ * bug to reconcile here — documented, not changed.
  */
 function defaultFailLogDir(opts: LoaderOptions): string {
   return path.join(path.dirname(resolvePaths(opts).base), "logs");

@@ -291,19 +291,45 @@ describe("session-start fail-log dir resolution (task 80f49922)", () => {
 
   /** Best-effort sweep: only removes entries a given probe could plausibly
    * have written (sanitizeForFilename keeps the repo name as a literal
-   * filename prefix), never touches pre-existing operator files. */
-  function sweepRealFailLogDir(dir: string, filenamePrefix: string): void {
-    if (!fs.existsSync(dir)) return;
-    for (const name of fs.readdirSync(dir)) {
-      if (name.startsWith(filenamePrefix)) {
+   * filename prefix) AND that were absent from the pre-test snapshot, so
+   * this literally never touches pre-existing operator files (a
+   * prefix-only match could otherwise delete a real operator file that
+   * happens to share the prefix, e.g. from a previous manual run under
+   * the same repo name). Takes the snapshot itself, not just its `dir`,
+   * so the before-list is available for the diff. */
+  function sweepRealFailLogDir(snap: { dir: string; before: string[] | null }, filenamePrefix: string): void {
+    if (!fs.existsSync(snap.dir)) return;
+    const before = new Set(snap.before ?? []);
+    for (const name of fs.readdirSync(snap.dir)) {
+      if (name.startsWith(filenamePrefix) && !before.has(name)) {
         try {
-          fs.unlinkSync(path.join(dir, name));
+          fs.unlinkSync(path.join(snap.dir, name));
         } catch {
           /* best-effort */
         }
       }
     }
   }
+
+  it("sweepRealFailLogDir only removes prefix-matching entries absent from the snapshot", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-osi-sweep-unit-"));
+    try {
+      const preexisting = "preflight-sweep-unit-repo-preexisting.json";
+      const unrelated = "preflight-other-repo-unrelated.json";
+      fs.writeFileSync(path.join(dir, preexisting), "{}");
+      fs.writeFileSync(path.join(dir, unrelated), "{}");
+      const snap = { dir, before: fs.readdirSync(dir) };
+
+      const fresh = "preflight-sweep-unit-repo-fresh.json";
+      fs.writeFileSync(path.join(dir, fresh), "{}");
+
+      sweepRealFailLogDir(snap, "preflight-sweep-unit-repo-");
+
+      expect(fs.readdirSync(dir).sort()).toEqual([preexisting, unrelated].sort());
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   it("blocks the not-ready fail-log write instead of falling back to the real home dir when homeDir/configPath are not injected", async () => {
     const realSnap = snapshotRealFailLogDir();
@@ -328,7 +354,7 @@ describe("session-start fail-log dir resolution (task 80f49922)", () => {
       assertRealFailLogDirUnchanged(realSnap);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
-      sweepRealFailLogDir(realSnap.dir, "preflight-guard-probe-repo-");
+      sweepRealFailLogDir(realSnap, "preflight-guard-probe-repo-");
     }
   });
 
@@ -336,16 +362,20 @@ describe("session-start fail-log dir resolution (task 80f49922)", () => {
     // Unlike the tests below, this one injects opts.homeDir directly, so
     // resolveHomeDir() short-circuits at its "explicit" precedence tier
     // and never calls os.homedir() at all (see runtime/home-dir.ts). That
-    // means (1) it needs no HARNESS_ALLOW_REAL_GENERATED_DIR=1 escape
-    // hatch — the resolvePaths() guard only fires when BOTH homeDir and
-    // configPath are omitted — and (2) it cannot leak into the real home
-    // by construction, so no snapshot/sweep is needed either. It still
-    // kills the same os.homedir()-hardcoding mutant as the real-home
-    // tests: if defaultFailLogDir() reverted to
+    // means it needs no HARNESS_ALLOW_REAL_GENERATED_DIR=1 escape hatch —
+    // the resolvePaths() guard only fires when BOTH homeDir and configPath
+    // are omitted. It still kills the same os.homedir()-hardcoding mutant
+    // as the real-home tests: if defaultFailLogDir() reverted to
     // `path.join(os.homedir(), ".harness", "logs")` instead of routing
     // through `resolvePaths(opts)`, the log file would land under this
-    // process's actual home dir instead of the injected tmp `homeDir`,
-    // and the assertion below would fail.
+    // process's actual home dir instead of the injected tmp `homeDir`, and
+    // the assertion below would fail. The real-fail-log-dir snapshot/sweep
+    // below is not redundant with that: it is the regression-case
+    // backstop for exactly that mutant, not insurance the current code
+    // needs (the current code cannot leak into the real home by
+    // construction) — it is what makes the assertion above meaningful,
+    // by proving nothing landed in the real dir either.
+    const realSnap = snapshotRealFailLogDir();
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-osi-guard-homedir-"));
     const injectedHome = path.join(root, "injected-home");
     fs.mkdirSync(injectedHome, { recursive: true });
@@ -369,8 +399,10 @@ describe("session-start fail-log dir resolution (task 80f49922)", () => {
         .filter((name) => name.startsWith("preflight-homedir-repo-"));
       expect(files).toHaveLength(1);
       expect(result.reason).toContain(`; log: ${path.join(expectedLogDir, files[0]!)}`);
+      assertRealFailLogDirUnchanged(realSnap);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
+      sweepRealFailLogDir(realSnap, "preflight-homedir-repo-");
     }
   });
 
@@ -385,8 +417,13 @@ describe("session-start fail-log dir resolution (task 80f49922)", () => {
     // whenever configPath does not live inside the harness home dir —
     // e.g. `harness --config ./local.harness.yaml`. Hermetic like the
     // homeDir test above: configPath bypasses the resolvePaths() guard
-    // (it only requires ONE of homeDir/configPath), so no ALLOW_REAL
-    // flag or real-home snapshot is needed.
+    // (it only requires ONE of homeDir/configPath), so no ALLOW_REAL flag
+    // is needed. The real-fail-log-dir snapshot/sweep below is not
+    // redundant with that: it is the regression-case backstop for a
+    // reverted defaultFailLogDir() (see the homeDir test's comment above
+    // for the mutant this guards against), not insurance the current
+    // hermetic path needs.
+    const realSnap = snapshotRealFailLogDir();
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-osi-guard-configpath-"));
     const configPath = path.join(root, "custom-config-dir", "harness.yaml");
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
@@ -411,8 +448,10 @@ describe("session-start fail-log dir resolution (task 80f49922)", () => {
         .filter((name) => name.startsWith("preflight-configpath-repo-"));
       expect(files).toHaveLength(1);
       expect(result.reason).toContain(`; log: ${path.join(expectedLogDir, files[0]!)}`);
+      assertRealFailLogDirUnchanged(realSnap);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
+      sweepRealFailLogDir(realSnap, "preflight-configpath-repo-");
     }
   });
 
@@ -470,7 +509,7 @@ describe("session-start fail-log dir resolution (task 80f49922)", () => {
       if (priorAllowReal === undefined) delete process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"];
       else process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"] = priorAllowReal;
       fs.rmSync(root, { recursive: true, force: true });
-      sweepRealFailLogDir(realSnap.dir, "preflight-envhome-repo-");
+      sweepRealFailLogDir(realSnap, "preflight-envhome-repo-");
     }
   });
 
@@ -485,10 +524,10 @@ describe("session-start fail-log dir resolution (task 80f49922)", () => {
     // configurable, so spyOn throws "Cannot redefine property: homedir"
     // (verified against this repo's actual vitest/Node versions). The
     // only working substitute is mocking the "node:os" module itself.
-    // Doing that with the suite-wide `vi.mock` this file's sibling
-    // sentinel tests rely on (top of file) would break THEM, since they
-    // depend on the REAL operator os.homedir() to find/restore the real
-    // pause sentinel. So this test scopes the mock to itself: `vi.doMock`
+    // Registering this with the hoisted `vi.mock` form would apply
+    // suite-wide and break this file's sentinel tests, which depend on
+    // the REAL operator os.homedir() to find/restore the real pause
+    // sentinel. So this test scopes the mock to itself: `vi.doMock`
     // (not the hoisted `vi.mock`) + `vi.resetModules()` + a dynamic
     // `import()` of session-start/index.js AFTER registering the mock,
     // so only this test's freshly-loaded copy of the module graph (and
@@ -512,20 +551,24 @@ describe("session-start fail-log dir resolution (task 80f49922)", () => {
 
     const priorHarnessHome = process.env["HARNESS_HOME"];
     const priorAllowReal = process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"];
-    // Must be unset: a real $HARNESS_HOME would win the "env" tier before
-    // resolveHomeDir() ever reaches the legacy disk check this test
-    // targets.
-    delete process.env["HARNESS_HOME"];
-    process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"] = "1";
-
-    vi.resetModules();
-    vi.doMock("node:os", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("node:os")>();
-      const homedir = (): string => fakeUserHome;
-      return { ...actual, homedir, default: { ...actual, homedir } };
-    });
 
     try {
+      // Must be unset: a real $HARNESS_HOME would win the "env" tier
+      // before resolveHomeDir() ever reaches the legacy disk check this
+      // test targets. These writes (and the mock registration below) are
+      // first statements INSIDE this try block, not before it, so the
+      // `finally` below unconditionally undoes them even if one of these
+      // setup calls itself were to throw.
+      delete process.env["HARNESS_HOME"];
+      process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"] = "1";
+
+      vi.resetModules();
+      vi.doMock("node:os", async (importOriginal) => {
+        const actual = await importOriginal<typeof import("node:os")>();
+        const homedir = (): string => fakeUserHome;
+        return { ...actual, homedir, default: { ...actual, homedir } };
+      });
+
       const dynamicModule = await import("../../src/cli/session-start/index.js");
       const { stream: stderr } = captureStderr();
       const result = await dynamicModule.runSessionStartPreflight({
@@ -555,7 +598,7 @@ describe("session-start fail-log dir resolution (task 80f49922)", () => {
       if (priorAllowReal === undefined) delete process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"];
       else process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"] = priorAllowReal;
       fs.rmSync(root, { recursive: true, force: true });
-      sweepRealFailLogDir(realSnap.dir, "preflight-legacy-repo-");
+      sweepRealFailLogDir(realSnap, "preflight-legacy-repo-");
     }
   });
 });
