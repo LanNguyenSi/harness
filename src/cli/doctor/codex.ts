@@ -397,14 +397,28 @@ export function runCodexTargetChecks(
   return { target: "codex", checks };
 }
 
-export function countCodexDiagnostics(
-  report: CodexTargetReport,
+/**
+ * Tally `error`/`warn` entries across any target's check list. Exported
+ * (batch18/task f34eb233) so `doctor/opencode.ts`'s
+ * `countOpencodeDiagnostics` reuses this instead of a second,
+ * near-identical loop -- the same "reuse over re-copy" call the
+ * `findOnPath` export above already made for the per-target adapter
+ * modules (see its own doc comment).
+ */
+export function countStatusDiagnostics(
+  checks: readonly { status: CodexCheckStatus }[],
 ): { errorCount: number; warningCount: number } {
   let errorCount = 0;
   let warningCount = 0;
-  for (const c of report.checks) {
+  for (const c of checks) {
     if (c.status === "error") errorCount += 1;
     else if (c.status === "warn") warningCount += 1;
   }
   return { errorCount, warningCount };
+}
+
+export function countCodexDiagnostics(
+  report: CodexTargetReport,
+): { errorCount: number; warningCount: number } {
+  return countStatusDiagnostics(report.checks);
 }

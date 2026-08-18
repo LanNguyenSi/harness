@@ -36,6 +36,11 @@ import {
   runCodexTargetChecks,
   type RunCodexCheckOptions,
 } from "./codex.js";
+import {
+  countOpencodeDiagnostics,
+  runOpencodeTargetChecks,
+  type RunOpencodeCheckOptions,
+} from "./opencode.js";
 import { checkNpmBinPath, type NpmExec } from "./npm-bin-path.js";
 import { scanForRogueLedgers, type RogueLedgerScanOptions } from "./rogue-ledger.js";
 import { buildClaudeMcpRegistration } from "./claude-mcp.js";
@@ -76,6 +81,8 @@ export interface DoctorOptions extends LoaderOptions {
   target?: DoctorTarget;
   /** Test-injection knobs forwarded to the codex target evaluator. */
   codexCheckOptions?: Partial<RunCodexCheckOptions>;
+  /** Test-injection knobs forwarded to the opencode target evaluator. */
+  opencodeCheckOptions?: Partial<RunOpencodeCheckOptions>;
   /**
    * Test-injection knobs for the rogue-ledger scan. `homeDir` and `cwd`
    * default to the runtime values resolved inside `doctor`; tests
@@ -898,6 +905,11 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
     errorCount += codexCounts.errorCount;
     warningCount += codexCounts.warningCount;
   }
+  if (report.opencodeTarget) {
+    const opencodeCounts = countOpencodeDiagnostics(report.opencodeTarget);
+    errorCount += opencodeCounts.errorCount;
+    warningCount += opencodeCounts.warningCount;
+  }
   warningCount += report.rogueLedgerDbs.length;
   return { errorCount, warningCount };
 }
@@ -1054,6 +1066,17 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
       codexOpts.pathEnv = opts.pathEnv;
     }
     partial.codexTarget = runCodexTargetChecks(manifest, codexOpts);
+  }
+  if (opts.target === "opencode") {
+    const manifestDir = path.dirname(resolved.base);
+    const opencodeOpts: RunOpencodeCheckOptions = {
+      manifestDir,
+      ...(opts.opencodeCheckOptions ?? {}),
+    };
+    if (opencodeOpts.pathEnv === undefined && opts.pathEnv !== undefined) {
+      opencodeOpts.pathEnv = opts.pathEnv;
+    }
+    partial.opencodeTarget = runOpencodeTargetChecks(manifest, opencodeOpts);
   }
   const counts = countDiagnostics(partial);
   return { ...partial, ...counts };

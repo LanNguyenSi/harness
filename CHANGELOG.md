@@ -888,6 +888,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   diverging-value case (naming both values), and a `doctor()`-level
   integration pass through `format()` asserting the rendered `Environment`
   section and `warningCount`.
+- **`harness apply --runtime opencode`: a third policy-pack adapter
+  runtime alongside `claude-code` and `codex`** (task `f34eb233`).
+  New `src/cli/apply/generate-opencode-config.ts` emits
+  `harness.generated/opencode/opencode.json` in place of settings.json,
+  carrying an ADR-style header documenting the adapter-mapping decisions
+  verified against opencode's published config JSON Schema and docs:
+  `tools.mcp[]` IS projected (opencode's native `mcp` block, reusing
+  `generate-settings.ts`'s `buildMcpServers` / `projectGroundingEnv` so
+  the grounding-mcp `EVIDENCE_LEDGER_DB` wiring and the literal-tilde
+  warning stay identical across every runtime); manifest `hooks[]` and
+  `memory.router` are NOT projected (opencode has no declarative
+  hook/event field at all, only a JS/TS plugin API — out of this task's
+  scope), and opencode's native `permission` block is deferred to a
+  follow-up (v1 keeps parity with the codex adapter's own deferred
+  sandbox-profile mapping), both cases surfacing a warning instead of a
+  silent drop. Output is byte-stable across repeat applies and harness
+  never merges into, or writes, any operator-owned opencode config file
+  (`~/.config/opencode/`, a project `opencode.json`, or `$OPENCODE_CONFIG`)
+  — the generated artefact's own banner explains how an operator wires it
+  in. `--target <path>` is rejected with `--runtime opencode`, symmetric
+  to the existing `--runtime codex` rejection (both wire Claude Code's
+  settings.json). `harness doctor --target opencode`
+  (`src/cli/doctor/opencode.ts`) checks the generated artefact's
+  presence + banner and that every projected MCP server's command
+  resolves on PATH; `countStatusDiagnostics` is factored out of
+  `doctor/codex.ts`'s `countCodexDiagnostics` so both target modules
+  share one tally loop instead of two copies. New coverage:
+  `tests/cli/apply/generate-opencode-config.test.ts`,
+  `tests/cli/apply/apply-opencode-runtime.test.ts`,
+  `tests/cli/doctor-opencode.test.ts`.
 
 ## [0.44.0] - 2026-08-03
 

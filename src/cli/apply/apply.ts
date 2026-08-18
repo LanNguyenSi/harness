@@ -69,6 +69,7 @@ import {
   CODEX_GENERATED_HEADER_LINE,
   generateCodexConfig,
 } from "./generate-codex-config.js";
+import { generateOpencodeConfig } from "./generate-opencode-config.js";
 import { generateMemoryIndex } from "./generate-memory-index.js";
 import {
   GROUNDING_MCP_SERVER_NAME,
@@ -86,6 +87,7 @@ export const SETTINGS_BASENAME = "settings.json";
 export const MEMORY_BASENAME = "MEMORY.md";
 export const MANIFEST_BASENAME = "harness.yaml";
 export const CODEX_CONFIG_BASENAME = "codex/config.toml";
+export const OPENCODE_CONFIG_BASENAME = "opencode/opencode.json";
 
 export interface ApplyOptions {
   configPath?: string;
@@ -406,6 +408,41 @@ function buildExpectedFiles(
     };
   }
 
+  if (runtime === "opencode") {
+    // opencode apply: emit the opencode config artefact instead of
+    // settings.json, same reasoning as the codex branch above --
+    // settings.json is Claude Code's contract and meaningless to
+    // opencode. MEMORY.md and pack instructions.md are runtime-agnostic
+    // and ship unchanged.
+    const opencodeConfig = generateOpencodeConfig(augmentedManifest);
+    const opencodeWarnings = [...opencodeConfig.warnings];
+    if (packExpansion.permissions) {
+      // See generate-opencode-config.ts's header ("permission -> NOT
+      // PROJECTED"): mirrors the codex branch's silent-drop guard above
+      // so a policy-pack permission contribution never vanishes without
+      // a trace.
+      const totalPerms =
+        packExpansion.permissions.allow.length +
+        packExpansion.permissions.ask.length +
+        packExpansion.permissions.deny.length;
+      if (totalPerms > 0) {
+        opencodeWarnings.push(
+          `policy_packs contributed ${totalPerms} permission entr${
+            totalPerms === 1 ? "y" : "ies"
+          }; --runtime opencode does not yet wire permissions into opencode's permission block (documented follow-up)`,
+        );
+      }
+    }
+    return {
+      files: [
+        { basename: OPENCODE_CONFIG_BASENAME, content: opencodeConfig.content },
+        { basename: MEMORY_BASENAME, content: indexResult.content },
+        ...packFiles,
+      ],
+      warnings: [...opencodeWarnings, ...indexResult.warnings, ...packExpansion.warnings],
+    };
+  }
+
   const settingsResult = generateSettingsWithWarnings(augmentedManifest, {
     ...(packExpansion.permissions && { packPermissions: packExpansion.permissions }),
   });
@@ -612,6 +649,16 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   if (targetPath && opts.runtime === "codex") {
     throw new HarnessExitError(
       "--target is incompatible with --runtime codex (target wires Claude Code's settings.json)",
+      EX_NOINPUT,
+    );
+  }
+  // Batch 18 / task f34eb233: same incoherence for --runtime opencode --
+  // see generate-opencode-config.ts's header for why it does not produce
+  // settings.json (or write into any operator-owned opencode config at
+  // all). Reject symmetrically to the codex branch above.
+  if (targetPath && opts.runtime === "opencode") {
+    throw new HarnessExitError(
+      "--target is incompatible with --runtime opencode (target wires Claude Code's settings.json)",
       EX_NOINPUT,
     );
   }
