@@ -146,6 +146,21 @@ function buildInstructions(
   runtime: Runtime,
 ): string {
   const description = pack.description?.trim() ?? "";
+  const isOpencode = runtime === "opencode";
+  // HIGH-F1 (batch18 fix-round, task f34eb233): unlike the sibling
+  // packs, this file previously had NO runtime-conditional text at all
+  // — "## Effect" unconditionally claimed the hooks below "are wired
+  // into the harness-managed settings", which is false under
+  // `--runtime opencode`: opencode has no declarative hook/event field
+  // and `harness apply --runtime opencode` never projects `hooks[]`
+  // into the generated opencode artefact (see runtime.ts's header).
+  // Mirrors post-merge-gate.ts's "## Runtime" UNSUPPORTED marker.
+  const runtimeUnsupportedNote = isOpencode
+    ? " (UNSUPPORTED — opencode has no declarative hook/event wiring; this pack's hooks are not projected into any opencode artefact)"
+    : "";
+  const wiringSentence = isOpencode
+    ? "This pack's hooks are **not wired** under `--runtime opencode`: opencode has no declarative hook/event field (only a JS/TS plugin API), and `harness apply --runtime opencode` never projects `hooks[]` into the generated opencode artefact. The mechanics below describe the Claude Code / Codex behavior this pack implements; none of it fires today under opencode."
+    : "Two `PreToolUse` hooks (both blocking: hard) are wired into the\nharness-managed settings:";
   return `# Policy Pack: ${PACK_NAME}
 
 > Operator audit copy. This pack makes task completion EARNED from a real
@@ -155,7 +170,7 @@ function buildInstructions(
 
 ## Runtime
 
-${runtime}
+${runtime}${runtimeUnsupportedNote}
 
 ## Producer (required)
 
@@ -171,8 +186,7 @@ deadlock; \`harness validate\` / \`harness doctor\` warn about this.
 
 ## Effect
 
-Two \`PreToolUse\` hooks (both blocking: hard) are wired into the
-harness-managed settings:
+${wiringSentence}
 
 1. \`completion-gate\` (\`${COMPLETION_BLOCKER_COMMAND}\`): denies the
    completion verbs unless a READY verdict exists at the CURRENT git HEAD.

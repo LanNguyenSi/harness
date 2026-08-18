@@ -1,6 +1,7 @@
 export {
   apply,
   CODEX_CONFIG_BASENAME,
+  OPENCODE_CONFIG_BASENAME,
   DRIFT_HINT_MESSAGE,
   GENERATED_DIRNAME,
   MANIFEST_BASENAME,
@@ -14,6 +15,14 @@ export {
 } from "./apply.js";
 export { formatNextSteps, type NextStepsContext } from "./next-steps.js";
 export { generateCodexConfig, type CodexConfigResult } from "./generate-codex-config.js";
+export {
+  generateOpencodeConfig,
+  OPENCODE_GENERATED_HEADER_LINE,
+  type OpencodeConfigResult,
+  type OpencodeLocalMcpServer,
+  type OpencodeDisabledMcpServer,
+  type OpencodeMcpEntry,
+} from "./generate-opencode-config.js";
 export {
   CODEX_MANAGED_BEGIN,
   CODEX_MANAGED_END,

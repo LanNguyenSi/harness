@@ -19,8 +19,13 @@ import { defaultReportsDir } from "../../policy-packs/builtin/understanding-befo
 import { expandPolicyPacks } from "../../policy-packs/index.js";
 import type { Hook, Manifest } from "../../schema/index.js";
 import { VERSION as HARNESS_VERSION } from "../../version.js";
+import { countStatusDiagnostics, type DoctorCheckStatus } from "./target-checks.js";
 
-export type CodexCheckStatus = "ok" | "warn" | "error";
+// LOW-F5 (batch18 fix-round, task f34eb233 review): re-exported for
+// import-path compatibility -- see target-checks.ts's header for why
+// these moved out of this file.
+export { countStatusDiagnostics };
+export type CodexCheckStatus = DoctorCheckStatus;
 
 export interface CodexCheckEntry {
   name: string;
@@ -400,11 +405,5 @@ export function runCodexTargetChecks(
 export function countCodexDiagnostics(
   report: CodexTargetReport,
 ): { errorCount: number; warningCount: number } {
-  let errorCount = 0;
-  let warningCount = 0;
-  for (const c of report.checks) {
-    if (c.status === "error") errorCount += 1;
-    else if (c.status === "warn") warningCount += 1;
-  }
-  return { errorCount, warningCount };
+  return countStatusDiagnostics(report.checks);
 }

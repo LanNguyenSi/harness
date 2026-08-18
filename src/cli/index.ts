@@ -819,7 +819,8 @@ export function buildProgram(opts: RunOptions = {}): Command {
       "--runtime <runtime>",
       `policy-pack adapter runtime (${KNOWN_RUNTIMES.join(" | ")}; default: claude-code). ` +
         "Selects which adapter shape policy-pack hooks expand into and which artefacts apply writes. " +
-        "`codex` emits harness.generated/codex/config.toml in place of settings.json.",
+        "`codex` emits harness.generated/codex/config.toml in place of settings.json. " +
+        "`opencode` emits harness.generated/opencode/opencode.json (MCP servers only; not auto-installed).",
     )
     .option(
       "--install",

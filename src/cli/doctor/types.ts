@@ -4,6 +4,7 @@ import type { Manifest } from "../../schema/index.js";
 import type { Diagnostic } from "../validate/types.js";
 import type { ClaudeMcpRegistrationSection } from "./claude-mcp.js";
 import type { CodexTargetReport } from "./codex.js";
+import type { OpencodeTargetReport } from "./opencode.js";
 import type { NpmBinReport } from "./npm-bin-path.js";
 import type { RogueLedgerDb } from "./rogue-ledger.js";
 import type { UnderstandingModeEnvDivergence } from "./understanding-mode-env.js";
@@ -16,7 +17,7 @@ import type { UnderstandingModeEnvDivergence } from "./understanding-mode-env.js
  * `--target claude-code` and do nothing, since there is no
  * claude-code-specific doctor module today.
  */
-export const KNOWN_DOCTOR_TARGETS = ["codex"] as const;
+export const KNOWN_DOCTOR_TARGETS = ["codex", "opencode"] as const;
 export type DoctorTarget = (typeof KNOWN_DOCTOR_TARGETS)[number];
 
 export function isDoctorTarget(value: unknown): value is DoctorTarget {
@@ -353,6 +354,14 @@ export interface DoctorReport {
    * errorCount / warningCount.
    */
   codexTarget?: CodexTargetReport;
+  /**
+   * Batch 18 / task f34eb233: present when `--target opencode` is
+   * passed. Aggregates harness-side opencode adapter health checks
+   * (generated config presence + banner, projected MCP server command
+   * resolution). Counts roll into the top-level errorCount /
+   * warningCount, same as `codexTarget`.
+   */
+  opencodeTarget?: OpencodeTargetReport;
   /**
    * Leftover `<parent>/~/.evidence-ledger/ledger.db` files from the
    * literal-tilde `EVIDENCE_LEDGER_DB` env leak (agent-tasks/42d224a6,

@@ -63,11 +63,14 @@
 // higher-risk gate; see templates.ts for the rationale), unlike
 // branch-protection's default-enabled precedent.
 //
-// Claude Code only in v1 (no Codex adapter): both hooks match on the
-// `Bash` tool name and classify by command text, a mechanism that has
-// no established Codex-adapter parity yet (mirrors `solution-acceptance`,
-// which ships with no Codex variant either). `resolve()` warns if wired
-// under `runtime: "codex"`.
+// Claude Code only in v1 (no Codex or opencode adapter): both hooks
+// match on the `Bash` tool name and classify by command text, a
+// mechanism that has no established Codex-adapter parity yet (mirrors
+// `solution-acceptance`, which ships with no Codex variant either) and
+// no meaning at all under opencode (no declarative hook/event field to
+// match against). `resolve()` warns whenever `runtime !== "claude-code"`
+// (batch18 fix-round, task f34eb233 — widened from a codex-only check
+// so opencode gets the same warning).
 
 import { z } from "zod";
 import { PolicyUxSchema } from "../../schema/policies.js";
@@ -177,7 +180,13 @@ function buildInstructions(pack: PolicyPack, runtime: Runtime): string {
 
 ## Runtime
 
-${runtime}${runtime === "codex" ? " (UNSUPPORTED — see \"Known gaps\" below; both hooks assume the Claude Code Bash tool surface)" : ""}
+${runtime}${
+    runtime === "codex"
+      ? " (UNSUPPORTED — see \"Known gaps\" below; both hooks assume the Claude Code Bash tool surface)"
+      : runtime === "opencode"
+        ? " (UNSUPPORTED — see \"Known gaps\" below; opencode has no declarative hook/event wiring, so neither hook is projected into any opencode artefact)"
+        : ""
+  }
 
 ## Trigger + signals
 
@@ -304,6 +313,11 @@ ${runtime}${runtime === "codex" ? " (UNSUPPORTED — see \"Known gaps\" below; b
   throwaway PR and check for a fresh \`${MERGED_TAG_PREFIX}\` fact in the
   evidence ledger.
 - **No Codex adapter**: see "Runtime" above.
+- **No opencode adapter**: see "Runtime" above; opencode has no
+  declarative hook/event field (only a JS/TS plugin API), so neither
+  the producer nor the blocker hook above is ever projected into the
+  generated opencode artefact (\`harness.generated/opencode/opencode.json\`)
+  — this pack has no effect at all under \`--runtime opencode\`.
 
 ## Fail posture
 
@@ -336,9 +350,23 @@ export function resolve(
     },
   ];
   const warnings: string[] = [];
-  if (runtime === "codex") {
+  // HIGH-F1 (batch18 fix-round, task f34eb233): widened from
+  // `runtime === "codex"` to `runtime !== "claude-code"` so opencode
+  // gets the same pack-level warning codex already got — before this,
+  // opencode silently fell through this check (it is neither
+  // "claude-code" nor, before the widening, matched by
+  // `runtime === "codex"`), losing both the UNSUPPORTED marker above
+  // AND this warning even though opencode has no hook wiring at all
+  // (strictly worse than codex, whose hooks are at least PROJECTED,
+  // just against the wrong tool-name surface).
+  if (runtime !== "claude-code") {
+    const detail =
+      runtime === "codex"
+        ? "hooks are wired assuming the Claude Code Bash tool surface and will not fire correctly under a Codex runtime"
+        : "opencode has no declarative hook/event wiring, so neither hook is projected into any opencode artefact and this pack has no effect";
+    const adapterName = runtime === "codex" ? "Codex" : "opencode";
     warnings.push(
-      `policy_packs[${pack.name}]: post-merge-gate has no Codex adapter in v1; hooks are wired assuming the Claude Code Bash tool surface and will not fire correctly under a Codex runtime.`,
+      `policy_packs[${pack.name}]: post-merge-gate has no ${adapterName} adapter in v1; ${detail}.`,
     );
   }
   return { contribution: { hooks, files }, warnings };

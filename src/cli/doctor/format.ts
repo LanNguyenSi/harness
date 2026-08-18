@@ -328,6 +328,16 @@ function formatCodexTargetSection(report: DoctorReport): string[] {
   return out;
 }
 
+function formatOpencodeTargetSection(report: DoctorReport): string[] {
+  if (!report.opencodeTarget) return [];
+  const out: string[] = ["", "Target: opencode"];
+  for (const c of report.opencodeTarget.checks) {
+    const marker = c.status === "ok" ? "✓" : c.status === "warn" ? "⚠" : "✗";
+    out.push(`  ${marker} ${c.name}  ${c.message}`);
+  }
+  return out;
+}
+
 /**
  * Wrap a filesystem path for safe inclusion inside a single-quoted shell
  * argument. Repo directory names under $HOME/git/* can contain quotes or
@@ -433,6 +443,7 @@ export function format(report: DoctorReport): string {
   lines.push(...formatGroundingSection(report));
   lines.push(...formatClaudeMcpSection(report));
   lines.push(...formatCodexTargetSection(report));
+  lines.push(...formatOpencodeTargetSection(report));
   lines.push(...formatRogueLedgerSection(report));
   lines.push(...formatSummary(report));
   lines.push("");
