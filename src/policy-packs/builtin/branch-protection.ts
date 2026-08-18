@@ -130,10 +130,25 @@ function buildHooks(runtime: Runtime): Hook[] {
 function buildInstructions(pack: PolicyPack, branches: readonly string[], runtime: Runtime): string {
   const description = pack.description?.trim() ?? "";
   const isCodex = runtime === "codex";
+  const isOpencode = runtime === "opencode";
   const blockerMatch = isCodex ? PRE_TOOL_USE_MATCH_CODEX : PRE_TOOL_USE_MATCH_CLAUDE;
   const settingsArtefact = isCodex
     ? "`harness.generated/codex/config.toml`"
     : "harness-managed `settings.json`";
+  // HIGH-F1 (batch18 fix-round, task f34eb233): before this, opencode
+  // fell through to the claude-code `else` branch above and the
+  // "## Effect" text below claimed hooks were wired into
+  // `settings.json` even though opencode has no declarative hook/event
+  // field and `harness apply --runtime opencode` never projects
+  // `hooks[]` into the generated opencode artefact (see runtime.ts's
+  // header). Mirrors post-merge-gate.ts's "## Runtime" UNSUPPORTED
+  // marker.
+  const runtimeUnsupportedNote = isOpencode
+    ? " (UNSUPPORTED — opencode has no declarative hook/event wiring; this pack's hooks are not projected into any opencode artefact)"
+    : "";
+  const wiringSentence = isOpencode
+    ? "This pack's hooks are **not wired** under `--runtime opencode`: opencode has no declarative hook/event field (only a JS/TS plugin API), and `harness apply --runtime opencode` never projects `hooks[]` into the generated opencode artefact. The mechanics below describe the Claude Code / Codex behavior this pack implements; none of it fires today under opencode."
+    : `While this pack is enabled, hooks are wired into the ${settingsArtefact}:`;
   const minutes = Math.round(PRODUCER_FRESHNESS_MS / 60000);
   return `# Policy Pack: ${PACK_NAME}
 
@@ -143,7 +158,7 @@ function buildInstructions(pack: PolicyPack, branches: readonly string[], runtim
 
 ## Runtime
 
-${runtime}
+${runtime}${runtimeUnsupportedNote}
 
 ## Protected branches
 
@@ -153,7 +168,7 @@ Set \`config.protected_branches\` in your manifest to override.
 
 ## Effect
 
-While this pack is enabled, hooks are wired into the ${settingsArtefact}:
+${wiringSentence}
 
 1. \`SessionStart\` producer (\`${PRODUCER_COMMAND}\`, blocking: false):
    reads the cwd's \`.git/HEAD\`. If the branch is NOT in the protected

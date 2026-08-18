@@ -121,7 +121,17 @@ describe("apply --runtime opencode", () => {
       ),
     ).toBe(true);
 
-    // instructions.md still ships (runtime-agnostic pack file).
+    // instructions.md still ships, but its CONTENT is runtime-specific
+    // (HIGH-F1, batch18 fix-round, task f34eb233): before this fix,
+    // understanding-before-execution's buildInstructions() fell through
+    // to the claude-code `else` branch under `--runtime opencode` and
+    // falsely claimed its hooks were "wired into the harness-managed
+    // settings.json", even though nothing is wired for opencode (no
+    // settings.json exists, and packExpansion.hooks is never projected
+    // into the opencode artefact -- asserted above via the "hook(s)...
+    // no declarative hook wiring" warning). The inert
+    // `instructions.length > 0` assertion this replaced would pass
+    // whether or not that false claim was present.
     const instructions = fs.readFileSync(
       path.join(
         tmpHome,
@@ -132,6 +142,47 @@ describe("apply --runtime opencode", () => {
       ),
       "utf8",
     );
-    expect(instructions.length).toBeGreaterThan(0);
+    expect(instructions).not.toContain(
+      "hooks are wired into the harness-managed `settings.json`",
+    );
+    expect(instructions).toContain("not wired");
+    expect(instructions).toContain("UNSUPPORTED");
+  });
+
+  it("marks post-merge-gate as UNSUPPORTED under --runtime opencode, in BOTH the instructions.md Runtime marker and the pack-level apply warning", async () => {
+    writeManifest({
+      policy_packs: [{ name: "post-merge-gate" }],
+    });
+    const result = await apply({ homeDir: tmpHome, runtime: "opencode" });
+    expect(result.outcome).toBe("applied");
+
+    // Pack-level warning (post-merge-gate.ts's resolve()): before this
+    // fix, the runtime !== "claude-code" check was `runtime === "codex"`
+    // only, so opencode silently got no warning at all even though this
+    // pack (unlike understanding-before-execution) has no opencode OR
+    // codex adapter and is fully inert under both.
+    expect(
+      result.warnings.some(
+        (w) =>
+          w.includes("policy_packs[post-merge-gate]") &&
+          w.includes("no opencode adapter") &&
+          w.includes("no declarative hook/event wiring"),
+      ),
+    ).toBe(true);
+
+    // instructions.md's "## Runtime" section carries the same
+    // UNSUPPORTED marker post-merge-gate already emits for codex,
+    // mirrored for opencode.
+    const instructions = fs.readFileSync(
+      path.join(
+        tmpHome,
+        GENERATED_DIRNAME,
+        "policy-packs",
+        "post-merge-gate",
+        "instructions.md",
+      ),
+      "utf8",
+    );
+    expect(instructions).toContain("opencode (UNSUPPORTED");
   });
 });

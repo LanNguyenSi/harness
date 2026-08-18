@@ -20,6 +20,8 @@ export {
   OPENCODE_GENERATED_HEADER_LINE,
   type OpencodeConfigResult,
   type OpencodeLocalMcpServer,
+  type OpencodeDisabledMcpServer,
+  type OpencodeMcpEntry,
 } from "./generate-opencode-config.js";
 export {
   CODEX_MANAGED_BEGIN,

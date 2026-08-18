@@ -2,9 +2,23 @@ import { describe, expect, it } from "vitest";
 import {
   OPENCODE_GENERATED_HEADER_LINE,
   generateOpencodeConfig,
+  type OpencodeLocalMcpServer,
+  type OpencodeMcpEntry,
 } from "../../../src/cli/apply/generate-opencode-config.js";
 import { EVIDENCE_LEDGER_DB_ENV } from "../../../src/cli/apply/generate-settings.js";
 import { parseManifest, type Manifest } from "../../../src/schema/index.js";
+
+// LOW-F4 (batch18 fix-round, task f34eb233 review): `mcp` entries are
+// now `OpencodeLocalMcpServer | OpencodeDisabledMcpServer`. Tests that
+// dot-access local-only fields (`.type`/`.command`/`.environment`) on an
+// entry they know is enabled narrow through this guard instead of an
+// unchecked cast.
+function asLocal(entry: OpencodeMcpEntry | undefined): OpencodeLocalMcpServer {
+  if (!entry || !("command" in entry)) {
+    throw new Error("expected a local (enabled) opencode MCP entry");
+  }
+  return entry;
+}
 
 // Canonical manifest used by the "runs against a real manifest" +
 // byte-stability tests, analogous to generate-codex-config.test.ts's
@@ -65,9 +79,10 @@ describe("generateOpencodeConfig", () => {
       command: ["agent-tasks-mcp-bridge", "--stdio"],
       environment: { AGENT_TASKS_TOKEN: "secret" },
     });
-    expect(mcp["grounding-mcp"]?.type).toBe("local");
-    expect(mcp["grounding-mcp"]?.command).toEqual(["grounding-mcp-server"]);
-    expect(mcp["grounding-mcp"]?.environment?.[EVIDENCE_LEDGER_DB_ENV]).toBe(
+    const groundingEntry = asLocal(mcp["grounding-mcp"]);
+    expect(groundingEntry.type).toBe("local");
+    expect(groundingEntry.command).toEqual(["grounding-mcp-server"]);
+    expect(groundingEntry.environment?.[EVIDENCE_LEDGER_DB_ENV]).toBe(
       "/home/op/.evidence-ledger/ledger.db",
     );
 
@@ -151,17 +166,63 @@ describe("generateOpencodeConfig", () => {
     expect(parsed).toEqual({ "$schema": "https://opencode.ai/config.json" });
   });
 
-  it("warns when every tools.mcp[] entry is disabled", () => {
+  it("projects a disabled tools.mcp[] entry as a bare `{ enabled: false }` marker, not omitted (LOW-F4)", () => {
+    const { warnings, mcp, content } = generateOpencodeConfig(
+      parseManifest({
+        version: 1,
+        tools: {
+          mcp: [{ name: "off", command: "x", enabled: false, env: { SECRET: "s3cr3t" } }],
+        },
+      }),
+    );
+    // No "every entry disabled" warning anymore -- the marker itself
+    // documents the disablement, and no per-entry warning fires either.
+    expect(warnings).toEqual([]);
+    expect(mcp).toEqual({ off: { enabled: false } });
+    // The disabled entry's env must NOT leak through the marker -- it
+    // never goes through toOpencodeMcpServer at all.
+    const jsonBody = content
+      .split("\n")
+      .filter((l) => !l.startsWith("//"))
+      .join("\n");
+    const parsed = JSON.parse(jsonBody) as { mcp: Record<string, unknown> };
+    expect(parsed.mcp["off"]).toEqual({ enabled: false });
+    expect(content).not.toContain("s3cr3t");
+  });
+
+  it("sorts enabled + disabled tools.mcp[] entries together, ascending by name (stable-output rule)", () => {
+    const { mcp, content } = generateOpencodeConfig(
+      parseManifest({
+        version: 1,
+        tools: {
+          mcp: [
+            { name: "z-disabled", command: "x", enabled: false },
+            { name: "a-enabled", command: "y" },
+          ],
+        },
+      }),
+    );
+    expect(Object.keys(mcp)).toEqual(["a-enabled", "z-disabled"]);
+    const aIdx = content.indexOf('"a-enabled"');
+    const zIdx = content.indexOf('"z-disabled"');
+    expect(aIdx).toBeGreaterThan(-1);
+    expect(zIdx).toBeGreaterThan(-1);
+    expect(aIdx).toBeLessThan(zIdx);
+  });
+
+  it("still warns when every entry is enabled but none produced a projectable server", () => {
     const { warnings, mcp } = generateOpencodeConfig(
       parseManifest({
         version: 1,
         tools: {
-          mcp: [{ name: "off", command: "x", enabled: false }],
+          mcp: [{ name: "blank", command: "   " }],
         },
       }),
     );
     expect(mcp).toEqual({});
-    expect(warnings.some((w) => w.includes("disabled"))).toBe(true);
+    expect(
+      warnings.some((w) => w.includes("none produced a projectable opencode `mcp` entry")),
+    ).toBe(true);
   });
 
   it("does not warn about hooks when the manifest has none", () => {
@@ -169,6 +230,75 @@ describe("generateOpencodeConfig", () => {
       parseManifest({ version: 1, hooks: [] }),
     );
     expect(warnings.some((w) => w.includes("hook"))).toBe(false);
+  });
+
+  it("golden: exact full content for a manifest with mcp + hooks + a policy-pack-shaped hook + memory.router, homeDir injected (MED-F2)", () => {
+    // MED-F2 (batch18 fix-round, task f34eb233 review): the substring
+    // assertions elsewhere in this file each check one fragment of
+    // `content` in isolation, so a mutant that deletes or garbles a
+    // DIFFERENT line of the generator's static HEADER banner (e.g. the
+    // "mcp -> projected below" adapter-mapping line, or the whole
+    // $OPENCODE_CONFIG merge-contract paragraph) passes every one of
+    // them undetected. This test pins the ENTIRE rendered file via one
+    // `toBe()` against an inline literal (no snapshot infra in this
+    // repo) so any such deletion fails here. `canonicalManifest()`
+    // already covers mcp (two servers, one of them grounding-mcp to
+    // exercise the homeDir-dependent EVIDENCE_LEDGER_DB projection),
+    // hooks (one entry shaped exactly like a policy-pack contribution:
+    // `policy-pack:understanding-before-execution:pre-tool-use`), and
+    // memory.router; `homeDir: "/home/op"` is injected so the ledger
+    // path is deterministic across machines.
+    const { content } = generateOpencodeConfig(canonicalManifest(), {
+      homeDir: "/home/op",
+    });
+    expect(content).toBe(
+      "// Generated by harness apply --runtime opencode.\n" +
+        "// DO NOT EDIT: re-run `harness apply --runtime opencode` to regenerate.\n" +
+        "//\n" +
+        "// harness does NOT install this file automatically -- it never writes\n" +
+        "// into ~/.config/opencode/ or a project opencode.json. Wire it in\n" +
+        "// yourself, either:\n" +
+        "//   - point $OPENCODE_CONFIG at this file's path, or\n" +
+        "//   - copy the \"mcp\" block below into your own opencode.json /\n" +
+        "//     opencode.jsonc (opencode merges config sources by precedence;\n" +
+        "//     see https://opencode.ai/docs/config/).\n" +
+        "//\n" +
+        "// Adapter mapping (full ADR in this generator's module header,\n" +
+        "// src/cli/apply/generate-opencode-config.ts):\n" +
+        "//   mcp        -> projected below (opencode's native `mcp` block).\n" +
+        "//                 A manifest entry with `enabled: false` is emitted\n" +
+        "//                 as a bare `{\"enabled\": false}` marker rather than\n" +
+        "//                 omitted, so it overrides an active declaration for\n" +
+        "//                 the same server name in another merged config\n" +
+        "//                 source instead of silently not disabling it.\n" +
+        "//   hooks      -> NOT projected; opencode has no declarative hook\n" +
+        "//                 field, only a JS/TS plugin API (out of scope here)\n" +
+        "//   permission -> NOT projected in v1 (documented follow-up)\n" +
+        "{\n" +
+        '  "$schema": "https://opencode.ai/config.json",\n' +
+        '  "mcp": {\n' +
+        '    "agent-tasks": {\n' +
+        '      "type": "local",\n' +
+        '      "command": [\n' +
+        '        "agent-tasks-mcp-bridge",\n' +
+        '        "--stdio"\n' +
+        "      ],\n" +
+        '      "environment": {\n' +
+        '        "AGENT_TASKS_TOKEN": "secret"\n' +
+        "      }\n" +
+        "    },\n" +
+        '    "grounding-mcp": {\n' +
+        '      "type": "local",\n' +
+        '      "command": [\n' +
+        '        "grounding-mcp-server"\n' +
+        "      ],\n" +
+        '      "environment": {\n' +
+        '        "EVIDENCE_LEDGER_DB": "/home/op/.evidence-ledger/ledger.db"\n' +
+        "      }\n" +
+        "    }\n" +
+        "  }\n" +
+        "}\n",
+    );
   });
 
   it("is byte-stable for a given manifest (regenerable on no-op apply)", () => {

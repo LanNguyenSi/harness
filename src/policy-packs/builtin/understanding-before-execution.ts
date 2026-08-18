@@ -969,6 +969,7 @@ function buildInstructions(
 ): string {
   const description = pack.description?.trim() ?? "";
   const isCodex = runtime === "codex";
+  const isOpencode = runtime === "opencode";
   const injectorCmd = isCodex
     ? COMMAND_USER_PROMPT_SUBMIT_CODEX
     : BIN_USER_PROMPT_SUBMIT_CLAUDE;
@@ -982,6 +983,20 @@ function buildInstructions(
   const settingsArtefact = isCodex
     ? "`harness.generated/codex/config.toml`"
     : "harness-managed `settings.json`";
+  // HIGH-F1 (batch18 fix-round, task f34eb233): before this, opencode
+  // fell through to the claude-code `else` branch above (buildHooks
+  // does the same) and the "## Effect" text below claimed hooks were
+  // wired into `settings.json` even though opencode has no declarative
+  // hook/event field and `harness apply --runtime opencode` never
+  // projects `hooks[]` into the generated opencode artefact (see
+  // runtime.ts's header). Mirrors post-merge-gate.ts's "## Runtime"
+  // UNSUPPORTED marker.
+  const runtimeUnsupportedNote = isOpencode
+    ? " (UNSUPPORTED — opencode has no declarative hook/event wiring; this pack's hooks are not projected into any opencode artefact)"
+    : "";
+  const wiringSentence = isOpencode
+    ? "This pack's hooks are **not wired** under `--runtime opencode`: opencode has no declarative hook/event field (only a JS/TS plugin API), and `harness apply --runtime opencode` never projects `hooks[]` into the generated opencode artefact. The mechanics below describe the Claude Code / Codex behavior this pack implements; none of it fires today under opencode."
+    : `While this pack is enabled, hooks are wired into the ${settingsArtefact}:`;
   const stopBullet = `2. \`Stop\` capture (\`${stopCmd}\`): persists the emitted Understanding
    Report under \`.understanding-gate/reports/\` for audit and downstream
    approval consumption.
@@ -997,7 +1012,7 @@ function buildInstructions(
 
 ## Runtime
 
-${runtime}
+${runtime}${runtimeUnsupportedNote}
 
 ## Mode
 
@@ -1007,7 +1022,7 @@ ${modeFriction(mode)}
 
 ## Effect
 
-While this pack is enabled, hooks are wired into the ${settingsArtefact}:
+${wiringSentence}
 
 1. \`UserPromptSubmit\` injector (\`${injectorCmd}\`): inserts the
    Understanding-Gate instruction template into the agent's first response.

@@ -19,8 +19,13 @@ import { defaultReportsDir } from "../../policy-packs/builtin/understanding-befo
 import { expandPolicyPacks } from "../../policy-packs/index.js";
 import type { Hook, Manifest } from "../../schema/index.js";
 import { VERSION as HARNESS_VERSION } from "../../version.js";
+import { countStatusDiagnostics, type DoctorCheckStatus } from "./target-checks.js";
 
-export type CodexCheckStatus = "ok" | "warn" | "error";
+// LOW-F5 (batch18 fix-round, task f34eb233 review): re-exported for
+// import-path compatibility -- see target-checks.ts's header for why
+// these moved out of this file.
+export { countStatusDiagnostics };
+export type CodexCheckStatus = DoctorCheckStatus;
 
 export interface CodexCheckEntry {
   name: string;
@@ -395,26 +400,6 @@ export function runCodexTargetChecks(
   checks.push(checkReportsDir(opts.manifestDir));
 
   return { target: "codex", checks };
-}
-
-/**
- * Tally `error`/`warn` entries across any target's check list. Exported
- * (batch18/task f34eb233) so `doctor/opencode.ts`'s
- * `countOpencodeDiagnostics` reuses this instead of a second,
- * near-identical loop -- the same "reuse over re-copy" call the
- * `findOnPath` export above already made for the per-target adapter
- * modules (see its own doc comment).
- */
-export function countStatusDiagnostics(
-  checks: readonly { status: CodexCheckStatus }[],
-): { errorCount: number; warningCount: number } {
-  let errorCount = 0;
-  let warningCount = 0;
-  for (const c of checks) {
-    if (c.status === "error") errorCount += 1;
-    else if (c.status === "warn") warningCount += 1;
-  }
-  return { errorCount, warningCount };
 }
 
 export function countCodexDiagnostics(

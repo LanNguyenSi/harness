@@ -28,11 +28,27 @@
 // command: string[], cwd?, environment?: Record<string,string>,
 // enabled?, timeout? }`). We reuse generate-settings.ts's
 // `buildMcpServers` + `projectGroundingEnv` (Claude Code's `{command,
-// args, env}` shape, already covering disabled-entry filtering, the
-// grounding-mcp EVIDENCE_LEDGER_DB projection, and the literal-tilde
-// env-value warning) and reshape the result into opencode's `{type:
-// "local", command: [...], environment}` instead of hand-rolling a third
-// copy of that logic that could drift from the other two runtimes.
+// args, env}` shape, already covering the grounding-mcp
+// EVIDENCE_LEDGER_DB projection and the literal-tilde env-value
+// warning) and reshape the result into opencode's `{type: "local",
+// command: [...], environment}` instead of hand-rolling a third copy of
+// that logic that could drift from the other two runtimes.
+//
+// enabled:false -> projected as a bare `{"enabled": false}` marker, NOT
+// omitted (LOW-F4, batch18 fix-round, task f34eb233 review; the
+// reviewer verified live against opencode 1.18.18 that a bare
+// `{"enabled": false}` entry -- no `type`/`command` -- is accepted).
+// `buildMcpServers` drops disabled entries entirely, which is fine for
+// Claude Code's settings.json (the only mcpServers source Claude Code
+// reads, so a dropped entry is equivalent to a disabled one) but wrong
+// for opencode: per the "Config location" list above, opencode MERGES
+// multiple config sources, so a server name this generator's output
+// simply omits does NOT override an `enabled: true` (or default-
+// enabled) declaration for the SAME name in another merged source
+// (e.g. the operator's own ~/.config/opencode/opencode.json) -- the
+// operator's intent to disable that server would silently not take
+// effect. Emitting the explicit marker instead makes the disablement
+// actually win once merged.
 //
 // hooks -> NOT PROJECTED (documented no-op, not a bug). opencode.json's
 // schema has NO declarative hook/event field of any kind (confirmed:
@@ -99,6 +115,18 @@ export interface OpencodeLocalMcpServer {
   environment?: Record<string, string>;
 }
 
+/**
+ * LOW-F4 (batch18 fix-round, task f34eb233 review): the marker projected
+ * for a manifest `tools.mcp[]` entry declared `enabled: false`. See this
+ * module's "enabled:false" header note for why a bare object -- no
+ * `type`/`command` -- is emitted instead of omitting the key.
+ */
+export interface OpencodeDisabledMcpServer {
+  enabled: false;
+}
+
+export type OpencodeMcpEntry = OpencodeLocalMcpServer | OpencodeDisabledMcpServer;
+
 export interface OpencodeConfigResult {
   content: string;
   warnings: string[];
@@ -109,9 +137,11 @@ export interface OpencodeConfigResult {
    * without re-deriving it -- `harness doctor --target opencode`'s MCP
    * command-resolution check -- read this instead. Mirrors
    * `GenerateSettingsResult.mcpServers`'s reason for existing
-   * (generate-settings.ts).
+   * (generate-settings.ts). Entries for `enabled: false` manifest
+   * servers appear here too, as `OpencodeDisabledMcpServer` (LOW-F4);
+   * consumers that need to skip them can check `"command" in entry`.
    */
-  mcp: Record<string, OpencodeLocalMcpServer>;
+  mcp: Record<string, OpencodeMcpEntry>;
 }
 
 /**
@@ -137,7 +167,12 @@ const HEADER = [
   "//",
   "// Adapter mapping (full ADR in this generator's module header,",
   "// src/cli/apply/generate-opencode-config.ts):",
-  "//   mcp        -> projected below (opencode's native `mcp` block)",
+  "//   mcp        -> projected below (opencode's native `mcp` block).",
+  "//                 A manifest entry with `enabled: false` is emitted",
+  "//                 as a bare `{\"enabled\": false}` marker rather than",
+  "//                 omitted, so it overrides an active declaration for",
+  "//                 the same server name in another merged config",
+  "//                 source instead of silently not disabling it.",
   "//   hooks      -> NOT projected; opencode has no declarative hook",
   "//                 field, only a JS/TS plugin API (out of scope here)",
   "//   permission -> NOT projected in v1 (documented follow-up)",
@@ -172,20 +207,44 @@ export function generateOpencodeConfig(
   const warnings: string[] = [];
 
   // Claude Code's {command, args, env} shape already carries the
-  // disabled-entry filter, the grounding-mcp EVIDENCE_LEDGER_DB
-  // projection, and the literal-tilde warning; `buildMcpServers` returns
-  // keys pre-sorted ascending by name (see its own header), which is
-  // what this projection's stable-output rule relies on.
+  // grounding-mcp EVIDENCE_LEDGER_DB projection and the literal-tilde
+  // warning; `buildMcpServers` returns keys pre-sorted ascending by
+  // name (see its own header) AND drops `enabled: false` entries
+  // entirely. That drop is correct for the Claude-Code-shaped
+  // intermediate this reuses, but NOT for the final opencode `mcp`
+  // block: those disabled entries are re-added below as explicit
+  // `{"enabled": false}` markers instead of staying dropped (LOW-F4,
+  // batch18 fix-round, task f34eb233 review — see this module's
+  // "enabled:false" header note for why).
   const claudeShapeMcp = buildMcpServers(manifest.tools.mcp, warnings);
   projectGroundingEnv(manifest, claudeShapeMcp, extras.homeDir);
 
-  const mcp: Record<string, OpencodeLocalMcpServer> = {};
-  for (const [name, server] of Object.entries(claudeShapeMcp)) {
-    mcp[name] = toOpencodeMcpServer(server);
+  // Built by iterating manifest.tools.mcp SORTED ascending by name (not
+  // by re-using claudeShapeMcp's own key order, which only covers the
+  // enabled subset) so the combined enabled+disabled output keeps the
+  // same stable-output guarantee the enabled-only projection had before.
+  const mcp: Record<string, OpencodeMcpEntry> = {};
+  const sortedEntries = [...manifest.tools.mcp].sort((a, b) =>
+    a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+  );
+  for (const e of sortedEntries) {
+    if (e.enabled === false) {
+      mcp[e.name] = { enabled: false };
+      continue;
+    }
+    // Absent when buildMcpServers skipped this entry (empty command
+    // after token-splitting; already warned above by buildMcpServers
+    // itself).
+    const server = claudeShapeMcp[e.name];
+    if (server) mcp[e.name] = toOpencodeMcpServer(server);
   }
   if (manifest.tools.mcp.length > 0 && Object.keys(mcp).length === 0) {
+    // Reachable only when every entry is enabled but produced no
+    // projectable server (empty command) -- a real `enabled: false`
+    // entry always lands in `mcp` as a marker now, so it can no longer
+    // be the cause of an empty result here (LOW-F4).
     warnings.push(
-      "every tools.mcp[] entry is disabled; the emitted opencode config has no `mcp` entries",
+      "tools.mcp[] has entries but none produced a projectable opencode `mcp` entry (see the per-entry warnings above)",
     );
   }
 

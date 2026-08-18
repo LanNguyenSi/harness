@@ -412,8 +412,14 @@ function buildExpectedFiles(
     // opencode apply: emit the opencode config artefact instead of
     // settings.json, same reasoning as the codex branch above --
     // settings.json is Claude Code's contract and meaningless to
-    // opencode. MEMORY.md and pack instructions.md are runtime-agnostic
-    // and ship unchanged.
+    // opencode. MEMORY.md ships unchanged. Pack instructions.md files
+    // are NOT runtime-agnostic (HIGH-F1, batch18 fix-round, task
+    // f34eb233): each builtin pack's buildInstructions() branches on
+    // `runtime` and, under opencode, documents that its hooks are
+    // UNSUPPORTED/not-wired (opencode has no declarative hook/event
+    // field, so `packExpansion.hooks` computed below is never
+    // projected into the opencode artefact either) -- the file still
+    // ships either way, its CONTENT differs per runtime.
     const opencodeConfig = generateOpencodeConfig(augmentedManifest);
     const opencodeWarnings = [...opencodeConfig.warnings];
     if (packExpansion.permissions) {

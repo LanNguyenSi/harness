@@ -236,6 +236,7 @@ operator-driven flows.
 | `pack add / remove / list` | mutating (add/remove), read-only (list) | manages `policy_packs:` entries in the manifest. Today's canonical pack: `understanding-before-execution`. |
 | `approve understanding --session <id>` | mutating | operator action that approves a captured Understanding Report (round-trips evidence-ledger tag + persisted JSON). Required before write-capable tools fire under the understanding-before-execution pack. |
 | `doctor --target codex` | read-only | verifies Codex adapter wiring after `apply --runtime codex`. `--json` for machine-readable output. |
+| `doctor --target opencode` | read-only | verifies opencode adapter wiring after `apply --runtime opencode` (config artefact presence/banner + every projected MCP server's command resolves on PATH). `--json` for machine-readable output. |
 | `policy intercept` | runtime hook | called by Claude Code via `settings.json`, not directly by agents. |
 
 ## The audit triumvirate

@@ -102,7 +102,16 @@ function checkMcpCommands(
     ];
   }
   return names.map((name): OpencodeCheckEntry => {
-    const firstToken = mcp[name]!.command[0];
+    const entry = mcp[name]!;
+    // LOW-F4 (batch18 fix-round, task f34eb233 review): `mcp` now also
+    // carries `{"enabled": false}` markers for disabled manifest
+    // entries (generate-opencode-config.ts). There is no command to
+    // resolve for those -- skip the PATH check instead of crashing on
+    // the missing `.command` field.
+    if (!("command" in entry)) {
+      return { name: `mcp ${name}`, status: "ok", message: "disabled (enabled: false); command not checked" };
+    }
+    const firstToken = entry.command[0];
     if (!firstToken) {
       return { name: `mcp ${name}`, status: "error", message: "empty command after projection" };
     }

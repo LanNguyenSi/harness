@@ -93,10 +93,13 @@ export interface InteractivePrompts {
 
 /**
  * Wire targets the wizard knows about. `claude-code` and `codex` map to
- * the runtimes that `harness apply` already supports. `opencode` is
- * surfaced as disabled until the runtime adapter (agent-tasks/f34eb233)
- * lands; including it here keeps the checkbox slot stable so docs and
- * screenshots do not churn when the adapter ships.
+ * the runtimes `harness apply` already supports via this wizard.
+ * `opencode`'s runtime adapter has SHIPPED (task f34eb233 --
+ * `harness apply --runtime opencode` works standalone), but wiring
+ * THIS wizard up to call it is tracked separately as installer v1.1
+ * task c5287b80, not built here (MED-F3, batch18 fix-round). The
+ * checkbox slot stays disabled and stable in the meantime so docs and
+ * screenshots do not churn when that wizard wiring lands.
  */
 export type WireableRuntime = RuntimeName;
 export interface RuntimeApplyOutcome {
@@ -306,14 +309,18 @@ function readPriorLastApply(o: WireRuntimeOpts): LastApplyRecord | null {
 }
 
 async function wireRuntime(o: WireRuntimeOpts): Promise<RuntimeApplyOutcome> {
-  // Defensive: only claude-code and codex have apply paths in v1. The
-  // checkbox UI disables "opencode" until task f34eb233 lands, so this
-  // branch is unreachable through normal use; the guard fires if the
-  // disabled flag is ever removed without wiring an adapter, instead of
-  // silently returning a half-built RuntimeApplyOutcome.
+  // Defensive: only claude-code and codex have WIZARD apply paths in
+  // v1. opencode's runtime adapter has already SHIPPED (task f34eb233,
+  // `harness apply --runtime opencode` works standalone) -- wiring THIS
+  // wizard up to call it is tracked separately as installer v1.1 task
+  // c5287b80, not built here (MED-F3, batch18 fix-round). The checkbox
+  // UI keeps "opencode" disabled, so this branch is unreachable through
+  // normal use; the guard fires if the disabled flag is ever removed
+  // without wiring the wizard path, instead of silently returning a
+  // half-built RuntimeApplyOutcome.
   if (o.runtime !== "claude-code" && o.runtime !== "codex") {
     throw new HarnessExitError(
-      `wireRuntime: ${o.runtime} is not a wirable runtime in this harness build`,
+      `wireRuntime: ${o.runtime} is not a wizard-wirable runtime yet (adapter shipped in f34eb233; wizard wiring tracked in c5287b80)`,
       EX_FAIL,
     );
   }
@@ -1435,14 +1442,17 @@ async function runPostInitTail(t: PostInitTailOpts): Promise<InteractiveResult> 
     message: "Wire harness into which runtimes now? (space to toggle, return to confirm; uncheck all to skip)",
     choices: [
       ...wireChoices,
-      // opencode is parked until the runtime adapter (task f34eb233)
-      // lands. Listing it disabled keeps the slot stable so the wizard
-      // copy and screenshots do not churn when v1.1 enables it.
+      // opencode's runtime adapter has SHIPPED (task f34eb233 --
+      // `harness apply --runtime opencode` works standalone); wiring
+      // THIS checkbox up to call it is tracked separately as installer
+      // v1.1 task c5287b80, not built here (MED-F3, batch18 fix-round).
+      // Listing it disabled keeps the slot stable so the wizard copy
+      // and screenshots do not churn when that wizard wiring lands.
       {
-        name: "opencode     (shipping in harness v1.1 — adapter task f34eb233)",
+        name: "opencode     (adapter shipped, f34eb233 -- wizard wiring tracked in c5287b80)",
         value: "opencode" as WireableRuntime,
         checked: false,
-        disabled: "(disabled until f34eb233 lands)",
+        disabled: "(adapter shipped; wizard wiring tracked in c5287b80)",
       },
     ],
   })) as WireableRuntime[];

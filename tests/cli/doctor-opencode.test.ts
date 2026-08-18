@@ -173,6 +173,41 @@ describe("doctor --target opencode", () => {
     expect(artefactCheck?.message).toMatch(/hand-edited/);
   });
 
+  it("does not PATH-check a disabled tools.mcp[] entry's marker (LOW-F4)", async () => {
+    const home = tempHome();
+    writeManifest(home, {
+      tools: {
+        mcp: [{ name: "off", command: "totally-not-a-real-binary", enabled: false }],
+        cli: [],
+        skills: { enabled: [], source_dirs: [] },
+        builtin: { known: [] },
+      },
+    });
+    await apply({ homeDir: home, runtime: "opencode" });
+
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe(),
+      versionProbe: () => null,
+      pathEnv: "/nonexistent/dir",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+      claudeMcpExec: execCliMissing(),
+      target: "opencode",
+      opencodeCheckOptions: { manifestDir: home, pathEnv: "/nonexistent/dir" },
+    });
+
+    // Before this fix, `mcp["off"]` in the generated config carried a
+    // `{"enabled": false}` marker with no `.command` field, and
+    // checkMcpCommands crashed reading `.command[0]` off it. Now it
+    // reports `ok` (nothing to resolve) instead.
+    const mcpCheck = report.opencodeTarget!.checks.find((c) => c.name === "mcp off");
+    expect(mcpCheck?.status).toBe("ok");
+    expect(mcpCheck?.message).toMatch(/disabled/);
+    const errorChecks = report.opencodeTarget!.checks.filter((c) => c.status === "error");
+    expect(errorChecks).toEqual([]);
+  });
+
   it("warns (not errors) when no MCP servers are projected", async () => {
     const home = tempHome();
     writeManifest(home, {
