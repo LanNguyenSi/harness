@@ -16,6 +16,7 @@ import {
 import {
   SOLUTION_VERDICT_SIGNING_KEY_ENV,
   generateSettingsWithWarnings,
+  signingKeyEnvValue,
 } from "../../src/cli/apply/generate-settings.js";
 import { signingKeyPathFor } from "../../src/runtime/approval-signing.js";
 import { init } from "../../src/cli/init/index.js";
@@ -958,11 +959,72 @@ policies: []
       },
     });
     const before = fs.readFileSync(manifestPath, "utf8");
-    const r = await runAdopt(settingsPath, { configPath: manifestPath });
+    // prompt/stdinIsTTY seam (review round H1-R2, L2): under a regression
+    // the drift branch now surfaces as a FAILING ASSERTION on `outcome`
+    // (with the actual outcome in the diff) instead of a HarnessExitError
+    // from the non-TTY guard, and the declined prompt still never writes.
+    const r = await runAdopt(settingsPath, {
+      configPath: manifestPath,
+      stdinIsTTY: true,
+      prompt: async () => "n",
+    });
     expect(r.outcome).toBe("no-drift");
     expect(r.mcpDriftCount).toBe(0);
     // "no-drift" never writes the manifest -- assert it byte-for-byte, not
     // just via the outcome enum.
+    expect(fs.readFileSync(manifestPath, "utf8")).toBe(before);
+  });
+
+  // Review round H1-R2, M1: apply and adopt must agree on the projected
+  // value for NON-ABSOLUTE generatedDir inputs too (shared
+  // `signingKeyEnvValue`); with a hand-rolled `signingKeyPathFor(raw)` on
+  // either side these report phantom "modified" drift.
+  it.each([
+    ["literal-tilde", "~/h1r2-home/harness.generated"],
+    ["relative", "rel-h1r2/harness.generated"],
+  ])("adopt() sees zero drift for a %s generatedDir (shared signingKeyEnvValue)", async (_label, rawGeneratedDir) => {
+    fs.writeFileSync(
+      manifestPath,
+      `version: 1
+grounding:
+  evidence_ledger:
+    path: "${LEDGER_PATH}"
+tools:
+  mcp:
+    - name: grounding-mcp
+      command: [node, /opt/g/server.js]
+      enabled: true
+  cli: []
+  skills: { enabled: [], source_dirs: [] }
+  builtin: { known: [] }
+memory: { directories: [] }
+hooks: []
+policies: []
+`,
+    );
+    writeSettings({});
+    // The registry carries what the (normalizing) apply-side projection
+    // would have registered for this raw generatedDir.
+    writeRegistry({
+      "grounding-mcp": {
+        command: "node",
+        args: ["/opt/g/server.js"],
+        env: {
+          EVIDENCE_LEDGER_DB: LEDGER_PATH,
+          SOLUTION_VERDICT_SIGNING_KEY: signingKeyEnvValue(rawGeneratedDir),
+        },
+      },
+    });
+    const before = fs.readFileSync(manifestPath, "utf8");
+    const drift = computeMcpDrift(
+      manifestMcpProjection(
+        parseManifest(parseYaml(fs.readFileSync(manifestPath, "utf8"))),
+        undefined,
+        rawGeneratedDir,
+      ),
+      parseSettingsMcpServers(JSON.parse(fs.readFileSync(registryPath, "utf8"))),
+    );
+    expect(drift).toEqual([]);
     expect(fs.readFileSync(manifestPath, "utf8")).toBe(before);
   });
 });

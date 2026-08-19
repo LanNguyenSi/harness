@@ -297,7 +297,7 @@ export function buildMcpServers(
  *   and projecting an env no server reads would be decorative again. See
  *   the status comments in src/schema/grounding.ts.
  */
-export function projectGroundingEnv(
+function projectGroundingEnv(
   manifest: Manifest,
   mcp: Record<string, SettingsMcpServer>,
   homeDir?: string,
@@ -355,12 +355,15 @@ export function groundingLedgerEnvValue(
  *   never-a-tilde, always-absolute contract `groundingLedgerEnvValue`
  *   already gives `EVIDENCE_LEDGER_DB`. This harness never THROWS on a
  *   relative/tilde `generatedDir` the way grounding-mcp's own consumer
- *   throws on a non-absolute env value; it normalizes instead. That
- *   combination (`expandHome` + `path.resolve`) always succeeds — resolve
- *   makes any string absolute against `process.cwd()` — so there is no
- *   remaining case for a `validate/checks.ts`-style warning to cover.
+ *   throws on a non-absolute env value; it normalizes instead. The
+ *   normalization lives in `signingKeyEnvValue` so every producer of this
+ *   env value shares it (review round H1-R2: the adopt mirror in
+ *   adopt/derive.ts computes the SAME value through the SAME function;
+ *   a producer that hand-rolls `signingKeyPathFor` on a raw `generatedDir`
+ *   reintroduces phantom adopt drift). The key FILE's on-disk location for
+ *   a non-absolute `generatedDir` is a separate, tracked follow-up.
  */
-export function projectSigningKeyEnv(
+function projectSigningKeyEnv(
   mcp: Record<string, SettingsMcpServer>,
   generatedDir?: string,
   homeDir?: string,
@@ -370,10 +373,22 @@ export function projectSigningKeyEnv(
   if (!generatedDir) return;
   const env = server.env ?? {};
   if (!env[SOLUTION_VERDICT_SIGNING_KEY_ENV]) {
-    const normalizedGeneratedDir = path.resolve(expandHome(generatedDir, homeDir));
-    env[SOLUTION_VERDICT_SIGNING_KEY_ENV] = signingKeyPathFor(normalizedGeneratedDir);
+    env[SOLUTION_VERDICT_SIGNING_KEY_ENV] = signingKeyEnvValue(generatedDir, homeDir);
     server.env = env;
   }
+}
+
+/**
+ * The single source of the projected `SOLUTION_VERDICT_SIGNING_KEY` VALUE
+ * (mirrors how `EVIDENCE_LEDGER_DB` shares its value): `expandHome` +
+ * `path.resolve` on `generatedDir`, then `signingKeyPathFor`. Both the
+ * apply-side projection above and the adopt-side mirror
+ * (adopt/derive.ts) MUST call this, never `signingKeyPathFor` on a raw
+ * `generatedDir` — otherwise apply and adopt disagree for relative or
+ * literal-tilde `generatedDir` values and adopt reports phantom drift.
+ */
+export function signingKeyEnvValue(generatedDir: string, homeDir?: string): string {
+  return signingKeyPathFor(path.resolve(expandHome(generatedDir, homeDir)));
 }
 
 export interface BuildDesiredMcpServersOptions {

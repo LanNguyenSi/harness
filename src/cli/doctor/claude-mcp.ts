@@ -169,6 +169,16 @@ export async function buildClaudeMcpRegistration(
   // init wizard when they matter; re-reporting them here would just
   // duplicate that diagnostic under a different section, so they are
   // discarded.
+  // homeDir: opts.home is DELIBERATE here (review round H1-R2, L4,
+  // resolved by documentation): doctor expands the manifest's
+  // tilde-carrying values (e.g. the EVIDENCE_LEDGER_DB ledger path)
+  // against the operator home it was invoked for, which is the
+  // pre-existing EVIDENCE_LEDGER_DB semantics this check has always had.
+  // apply/init pass no homeDir and fall back to os.homedir(); the two only
+  // diverge when doctor is pointed at a DIFFERENT home than the one the
+  // process runs as, in which case doctor's hint is the correct one for
+  // that home. For the signing key the shared signingKeyEnvValue resolves
+  // non-absolute generatedDir inputs the same way at every call site.
   const { mcp: desired } = buildDesiredMcpServers(manifest, {
     homeDir: opts.home,
     generatedDir: opts.generatedDir,

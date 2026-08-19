@@ -4,8 +4,8 @@ import {
   GROUNDING_MCP_SERVER_NAME,
   SOLUTION_VERDICT_SIGNING_KEY_ENV,
   groundingLedgerEnvValue,
+  signingKeyEnvValue,
 } from "../apply/generate-settings.js";
-import { signingKeyPathFor } from "../../runtime/approval-signing.js";
 
 const KNOWN_EVENTS = new Set([
   "SessionStart",
@@ -266,7 +266,7 @@ export function manifestMcpProjection(
   ) {
     grounding.env = {
       ...(grounding.env ?? {}),
-      [SOLUTION_VERDICT_SIGNING_KEY_ENV]: signingKeyPathFor(generatedDir),
+      [SOLUTION_VERDICT_SIGNING_KEY_ENV]: signingKeyEnvValue(generatedDir),
     };
   }
   return out;
