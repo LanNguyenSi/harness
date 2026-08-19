@@ -79,8 +79,79 @@ prefix is caught (`~/.local/state/...`, `$HOME/...`,
 writer is the producer.
 
 Anti-forgery scope is v1-honest: it closes the enumerated-write-path
-residual, not arbitrary same-uid forgery. Cryptographic marker signing
-is a tracked follow-up.
+residual, not arbitrary same-uid forgery.
+
+### Marker signing (harness/c7c3f606)
+
+The verdict now carries an HMAC-SHA256 signature, reusing the SAME
+`signMarker` / `verifyMarkerSignature` primitive
+(`src/runtime/approval-signing.ts`) shipped for the understanding-gate
+approval marker and its branch-protection twin (harness/f9485cc7): same
+crypto, same operator-side key at `<generatedDir>/.approval-signing.key`,
+same fail-closed contract. The signed tuple mirrors the approval
+marker's payload shape onto the verdict's own fields — `timestamp` plays
+the role of `approvedAt`, `source` plays the role of `approvedBy`, and a
+content hash of `head`/`ready`/`confidence`/`blockers` plays the role of
+`reportContentHash`, so tampering ANY of those fields after signing
+invalidates the signature, not just editing `signature` itself.
+
+`harness pack hook solution-acceptance` REJECTS a verdict with a missing
+or invalid signature — `allowed: false`, same as no verdict at all, but
+with a distinct `forged/unsigned solution-acceptance verdict rejected`
+reason, so an operator/auditor can tell an active forgery attempt (or a
+not-yet-signing producer) apart from the routine "no verdict yet" or
+"not ready yet" cases. Signature verification runs BEFORE `ready`/`head`
+are ever trusted, so a forged-but-plausible `ready:true` verdict is
+rejected before it would otherwise pass.
+
+**Back-compat is strict, no migration window** — the same strict
+no-grace-period POLICY f9485cc7 made (the RECOVERY differs — there is no
+operator-side command that resolves this one until the grounding-mcp
+producer ships): a verdict with no `signature` field is rejected exactly
+like a forgery.
+
+The HMAC markerId is derived from the CALLER's id, not from `verdict.id`
+read back out of the marker body — a producer mirroring `signVerdict`
+MUST set `verdict.id` to the exact id string the consumer looks the
+marker up by (byte-identical, no trimming or case normalization), and
+the consumer additionally rejects outright when `verdict.id !== id`
+even if the signature itself still verifies (belt-and-braces against a
+cross-id replay of a validly-signed verdict). The hook also emits a
+short, greppable STDERR-only audit tag,
+`[audit: forged/unsigned verdict marker rejected]`, whenever a denial
+is specifically a forged/unsigned/identity-mismatched verdict — an
+audit-sweep target distinct from the routine "no verdict" / "not ready"
+/ "stale" denials, which never carry it.
+
+**Honest residual — read this before assuming more than it delivers.**
+Unlike the understanding-gate marker, harness does not WRITE this one.
+The producer is `@lannguyensi/grounding-mcp`, a separate package/repo
+(see "How it works" above). This task shipped the CONSUMER side only
+(pattern + exemplar): `signVerdict` /
+`verifyVerdictSignature` in `solution-acceptance-runtime.ts` are the
+reusable pair a producer-side change mirrors, but **no currently-released
+grounding-mcp version signs its output**. Concretely, until a matching
+producer release ships (tracked as a cross-repo follow-up):
+
+- every verdict this consumer reads is "unsigned" and the completion-gate
+  denies it UNIVERSALLY, even a perfectly legitimate `ready:true` verdict
+  at the correct HEAD;
+- re-running `solution_evaluate` does NOT recover from this — the new
+  verdict is unsigned too, so it denies again;
+- `harness pause` remains the operator override in the interim (or
+  temporarily disabling the pack via `harness pack rm solution-acceptance`
+  / flipping `enabled: false`, same as any other misconfigured hard-block
+  pack).
+
+grounding-mcp's own `solution_gate` does NOT (yet) enforce this signature
+either — only this harness consumer does. That asymmetry closes once the
+producer-side change ships.
+
+Glob-every-segment / interpreter-runtime-path-construction spellings of
+the write-guard's own residual (the enumerated-write-path scope above)
+are UNCHANGED by signing: signing verifies the AUTHENTICITY of whatever
+bytes land at the marker path, it does not additionally restrict which
+write primitives can reach that path.
 
 ## Orchestrator-workflow process arm
 
