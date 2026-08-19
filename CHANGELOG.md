@@ -46,8 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   new optional `toolchain_parity.stale_after_days` manifest knob
   (`src/schema/toolchain-parity.ts`, default off) — a peer snapshot older
   than the threshold gets an extra advisory note without being counted
-  as drift. Advisory character is unchanged throughout: every path still
-  exits 0, and `ok`/drift comparator semantics are untouched. Also
+  as drift. Advisory character is unchanged throughout: every PRODUCTION
+  path exits 0 (an injected collector that throws propagates by the
+  hermetic-spawn-guard contract, corrected wording — see Round 2b below),
+  and `ok`/drift comparator semantics are untouched. Also
   corrects the `toolchain-parity` hook's `budget_ms: 10000` comment in
   `src/cli/init/templates.ts`, which previously described only the
   parallel node/npm collection and missed that the ledger write runs
@@ -82,10 +84,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   plus a string split underneath) — so the catch was dead, untested code
   (round-1 review finding) and is removed rather than built out into a
   fake seam; the two genuine I/O sites stay caught.
+  **Round 2b (second review fix-round, same task, `c1b5ade5`):** R2's
+  review, re-run against the R2 fix, proved the log-injection class was
+  still open across roughly ten call sites in three vector families — R2
+  had sanitized only the collision-warning and stale-peer notes, leaving
+  every other note() call reachable by untrusted content: the "ok
+  against"/"drift:N against" notes (raw `comparison.peerProfile`, never
+  wrapped by R2 at all), every individual drift message from
+  `compareToPeer` (untrusted `peer.node`/`owKitVersion`/npm/mcp names,
+  reproduced against a real forged `parity:unparseable-peer:INJECTED` tag),
+  and two of the three peer-file-read notes (the corrupt-file and
+  unreadable-file lines used a raw `fileName`, while only the third,
+  `peerLabel`, was sanitized). Fix: moved the CR/LF strip to the shared
+  `note()` closure itself — `msg.replace(/[\r\n]/g, " ")`, once, before
+  every stderr write — closing the whole class at its one choke point
+  instead of requiring every present and future call site to remember its
+  own sanitization. With injection protection centralized in `note()`, the
+  three R2-added `sanitizeProfileName(...)` display wraps (collision note,
+  unparseable-peer `peerLabel`, stale-peer note) are reverted back to the
+  raw field: `sanitizeProfileName` is a FILENAME escaper (documented at
+  its definition) that also lossily mangles a legitimate non-ASCII profile
+  name, so reusing it for display was both redundant once `note()`
+  protects the line and a correctness regression — the stale-peer note's
+  sanitized spelling could differ from the same peer's raw spelling on the
+  "ok against" line two lines above it, within the SAME run. `note()`
+  itself is now the only site responsible for log-injection safety; the
+  filename path (`ownFileName`/`writeOwnSnapshot`) is unaffected and still
+  goes through `sanitizeProfileName`. Also, three unrelated LOW findings
+  from the same review pass: (a) the collision-warning note now appends a
+  one-line remediation hint ("...set a distinct `toolchain_parity.profile`
+  on one of the machines"); (b) the collision pre-read's previously-bare
+  `catch {}` is narrowed to re-note any error whose `code` is not `ENOENT`
+  (a genuinely missing file is still silent — EACCES/EISDIR/etc. is now a
+  one-line note that the collision check silently did not run, rather than
+  vanishing into the same branch as "no existing file"); (c) the ledger
+  write's `result.reason ?? "unknown error"` fallback is kept, with a
+  comment explaining why (`AddLedgerFactResult`'s `!ok` arm types `reason`
+  as non-optional, so the fallback is unreachable through any type-checked
+  caller — but unlike the pure `resolveManifestLedgerWriter` call the R2
+  catch-removal above targeted, `writeLedger` is an injectable *public*
+  seam a JS-level or otherwise untyped caller can reach with a malformed
+  return value at runtime, so this one stays). New/updated tests: a
+  note()-level pin (an arbitrary thrown message with an embedded newline
+  produces no second stderr line), dedicated regressions for the three
+  reviewer-reproduced vectors (hostile `peer.profile`, hostile `peer.node`
+  in a drift message, hostile peer filename with an embedded newline —
+  each asserted against the exact greppable prefix it tried to forge), a
+  negative control pinning that the collision check does NOT fire when a
+  machine's own profile matches its own existing snapshot (guards a
+  "warn-always" mutation), an EISDIR case for the narrowed catch, and a
+  label-coherence test showing one peer's name renders identically on the
+  "ok against" and stale-peer lines in the same run.
 
 ### Security
 
-- **SECURITY (LOW): `isEscapeCommand`'s top-level `command.trim()`
+- **SECURITY: `harness session-start toolchain-parity`'s stderr log-injection
+  class is closed, across every call site, not just the two R2 patched**
+  (task `c1b5ade5` R2b). The machine-state directory is populated
+  cross-machine by `agent-memory-sync`, so a peer's snapshot content
+  (`profile`, `node`, `owKitVersion`, npm/mcp package names) and even a
+  peer's raw filename are all attacker-influenced input; a crafted value
+  containing an embedded newline plus note-prefix-shaped text could forge
+  a standalone, fully fake `harness session-start toolchain-parity: ...`
+  line in stderr — including the exact greppable
+  `parity:unparseable-peer:<label>` / `toolchain-parity:ok` /
+  `toolchain-parity:drift:<n>` tags an operator or `harness audit` would
+  grep for. R2 (same task, prior round) sanitized only 2 of the roughly 10
+  reachable sites (the collision-warning and stale-peer notes); this round
+  closes the rest — the "ok against"/"drift:N against" notes, every
+  individual `compareToPeer` drift message, and the two previously-raw
+  peer-file-read notes — by stripping CR/LF once, in the shared `note()`
+  closure all of these funnel through, rather than continuing to require a
+  wrap at each call site. The pre-existing 876/878-area peer-unreadable and
+  peer-corrupt notes (raw `fileName`) are covered by this same fix; there
+  is no remaining open site in this class and no follow-up is needed.
   (`src/cli/pack/approve-escape.ts`) stripped a TRAILING report-heredoc line
   made only of a non-bash-blank whitespace codepoint (e.g. NBSP, U+2028)
   before the 623640a5 `after.every(/^[ \t]*$/)` post-terminator check ever

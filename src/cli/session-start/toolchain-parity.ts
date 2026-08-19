@@ -650,7 +650,21 @@ export async function runSessionStartToolchainParity(
   const nodeTimeoutMs = opts.nodeTimeoutMs ?? DEFAULT_NODE_TIMEOUT_MS;
   const npmTimeoutMs = opts.npmTimeoutMs ?? DEFAULT_NPM_GLOBALS_TIMEOUT_MS;
   const note = (msg: string): void => {
-    stderr.write(`harness session-start toolchain-parity: ${msg}\n`);
+    // CR/LF strip, ONCE, at this choke point (task c1b5ade5 R2b, closing
+    // what R2's per-site sanitizeProfileName wraps left open): every
+    // note() call writes exactly one stderr line prefixed with
+    // "harness session-start toolchain-parity: ". Untrusted, cross-machine-
+    // synced content reaches a note() argument through roughly ten call
+    // sites below — a peer's `profile` field, a peer filename, and an
+    // npm/mcp/node/owKitVersion value embedded in a compareToPeer drift
+    // message — and R2 sanitized only 2 of them (the collision and stale
+    // notes), leaving the rest (the "ok against"/"drift:N against" lines,
+    // every individual drift message, and two of the three peer-file-read
+    // notes) able to have a crafted `\n` forge a standalone fake parity
+    // line. Stripping CR/LF here closes the whole class by construction,
+    // regardless of which site the untrusted string flows through or
+    // whether a future site remembers to sanitize its own argument.
+    stderr.write(`harness session-start toolchain-parity: ${msg.replace(/[\r\n]/g, " ")}\n`);
   };
   const done = (
     wrote: boolean,
@@ -809,18 +823,29 @@ export async function runSessionStartToolchainParity(
     const existingParsed = parseSnapshotJson(existingRaw);
     if (existingParsed.ok && existingParsed.snapshot.profile !== profile) {
       // The existing snapshot's `profile` field is untrusted, cross-machine
-      // synced content (task c1b5ade5 R2, finding 1) — sanitize before
-      // interpolating it into the stderr stream, exactly like ownFileName's
-      // filename label above, so a crafted profile string cannot forge a
-      // standalone parity line.
+      // synced content, shown RAW here (task c1b5ade5 R2b, reverting R2's
+      // sanitizeProfileName wrap at this site): note() now strips CR/LF at
+      // the choke point above, so a per-site sanitize is redundant AND
+      // would mangle a legitimate non-ASCII profile name into a label that
+      // no longer matches what actually collided. sanitizeProfileName
+      // stays reserved for the FILENAME path (ownFileName, writeOwnSnapshot
+      // below) — never for this stderr-display path.
       note(
-        `WARNING: sanitized filename "${ownFileName}" collides with an existing snapshot for a DIFFERENT profile ("${sanitizeProfileName(existingParsed.snapshot.profile)}"); this run's write is about to overwrite it`,
+        `WARNING: sanitized filename "${ownFileName}" collides with an existing snapshot for a DIFFERENT profile ("${existingParsed.snapshot.profile}"); this run's write is about to overwrite it — set a distinct \`toolchain_parity.profile\` on one of the machines`,
       );
     }
-  } catch {
+  } catch (err) {
     // No existing file for this sanitized name yet (first run for this
-    // profile/filename), or it is unreadable — nothing to warn about here;
-    // writeOwnSnapshot below reports its own write failures separately.
+    // profile/filename) is the expected common case — ENOENT stays a
+    // silent skip; writeOwnSnapshot below reports its own write failures
+    // separately. Anything else (EACCES, EISDIR, ...) means the collision
+    // check silently did NOT run, which is a different, noteworthy outcome
+    // from "no collision found" (task c1b5ade5 R2b, narrowing the
+    // previously-bare catch): re-noted as one line rather than swallowed.
+    const e = err as NodeJS.ErrnoException;
+    if (e.code !== "ENOENT") {
+      note(`could not check for a profile-name collision on ${ownFileName}: ${e.message}`);
+    }
   }
 
   const runNodeVersion = opts.runNodeVersion ?? realNodeVersionSpawn;
@@ -881,16 +906,17 @@ export async function runSessionStartToolchainParity(
     const parsed = parseSnapshotJson(raw);
     if (!parsed.ok) {
       // The profile field itself failed to parse, so the filename (minus
-      // its `.json` suffix) is the best available peer identifier — it is
-      // exactly `sanitizeProfileName(profile)` for any file this producer
-      // itself wrote. Files this producer did NOT write are untrusted
-      // input (the machine-state dir is populated cross-machine by sync),
-      // so the label is re-sanitized before it is interpolated into the
-      // greppable stderr tag: a crafted filename must not be able to
-      // forge a standalone parity line. The `|| fileName` keeps a
+      // its `.json` suffix) is the best available peer identifier. Files
+      // this producer did NOT write are untrusted input (the machine-state
+      // dir is populated cross-machine by sync), but note() strips CR/LF
+      // at the choke point above (task c1b5ade5 R2b, reverting R2's
+      // sanitizeProfileName wrap at this site), so the label is shown RAW
+      // here — a crafted filename still cannot forge a standalone parity
+      // line, and sanitizeProfileName stays reserved for the FILENAME
+      // path, not this stderr-display one. The `|| fileName` keeps a
       // degenerate name like a literal `.json` from producing an empty
       // label.
-      const peerLabel = sanitizeProfileName(fileName.replace(/\.json$/, "") || fileName);
+      const peerLabel = fileName.replace(/\.json$/, "") || fileName;
       note(`peer snapshot ${fileName} is corrupt: ${parsed.reason}`);
       note(`parity:unparseable-peer:${peerLabel}`);
       unparseablePeers.push(peerLabel);
@@ -910,12 +936,16 @@ export async function runSessionStartToolchainParity(
     // comparison above, not a drift finding — it never touches driftTotal.
     // Only fires when `stale_after_days` is explicitly configured.
     if (staleAfterMs !== undefined && comparison.ageMs > staleAfterMs) {
-      // comparison.peerProfile is untrusted, cross-machine synced content
-      // (task c1b5ade5 R2, finding 1) — sanitized before interpolation, same
-      // as the collision-warning note above, so a crafted peer `profile`
-      // cannot forge a standalone parity line here either.
+      // comparison.peerProfile is untrusted, cross-machine synced content,
+      // shown RAW here for the same reason as the collision-warning note
+      // above (task c1b5ade5 R2b, reverting R2's sanitizeProfileName wrap
+      // at this site): note() strips CR/LF at the choke point, and this
+      // also keeps the label identical to the "ok against"/"drift:N
+      // against" line for the SAME peer just above, instead of showing two
+      // different sanitized-vs-raw spellings of one peer's name in the
+      // same run.
       note(
-        `peer ${sanitizeProfileName(comparison.peerProfile)} snapshot is stale (age ${age}, exceeds the configured ${config.stale_after_days}d threshold); its comparison may not reflect that machine's CURRENT toolchain`,
+        `peer ${comparison.peerProfile} snapshot is stale (age ${age}, exceeds the configured ${config.stale_after_days}d threshold); its comparison may not reflect that machine's CURRENT toolchain`,
       );
     }
   }
@@ -972,6 +1002,15 @@ export async function runSessionStartToolchainParity(
     return done(false, profile, peersCompared, driftTotal, sessionId, sessionSource, reason, unparseablePeers.length);
   }
   if (!result.ok) {
+    // `?? "unknown error"` is unreachable through any type-checked caller
+    // (`AddLedgerFactResult`'s `!ok` arm types `reason` as a non-optional
+    // string) — but unlike the try/catch removed around
+    // resolveManifestLedgerWriter above (a private, non-injectable pure
+    // function only ever called from this same typed module, so genuinely
+    // dead), `writeLedger` IS an injectable public seam
+    // (SessionStartToolchainParityOptions.writeLedger): a JS-level or
+    // otherwise untyped caller can hand back `{ ok: false }` with no
+    // `reason` at runtime, so this fallback stays (task c1b5ade5 R2b).
     const reason = `ledger write failed: ${result.reason ?? "unknown error"}`;
     note(reason);
     return done(false, profile, peersCompared, driftTotal, sessionId, sessionSource, reason, unparseablePeers.length);
