@@ -267,6 +267,27 @@ describe("doctor toolchain-parity — corrupt peer file", () => {
     expect(report.toolchainParity?.driftTotal).toBe(0);
     expect(report.warningCount).toBe(0);
   });
+
+  it("reports no-peers with the corrupt files surfaced when EVERY peer file is unparseable", async () => {
+    const stateDir = tmpDir("harness-tp-state-");
+    fs.writeFileSync(path.join(stateDir, "corrupt-a.json"), "{ not valid json", "utf8");
+    fs.writeFileSync(path.join(stateDir, "corrupt-b.json"), "also not json", "utf8");
+    const home = makeFixture({ "harness.yaml": manifestYaml(stateDir) });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+      toolchainParityOptions: baseCollectors(),
+    });
+    // No parseable peer to compare against -> no-peers, but the corrupt
+    // files are still surfaced (not silently dropped), and no diagnostic
+    // counter moves.
+    expect(report.toolchainParity?.status).toBe("no-peers");
+    expect(report.toolchainParity?.unparseablePeers?.sort()).toEqual(["corrupt-a", "corrupt-b"]);
+    expect(report.warningCount).toBe(0);
+    expect(report.errorCount).toBe(0);
+  });
 });
 
 describe("doctor toolchain-parity — --shallow", () => {

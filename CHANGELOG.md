@@ -33,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 
 - `harness doctor` gains an on-demand toolchain-parity section (task
-  `13919613`), the doctor companion to `harness session-start
+  `13919613`, commit `16d47941`), the doctor companion to `harness session-start
   toolchain-parity`: reuses that command's Collector/Comparator core
   (`collectLocalSnapshot`, `compareToPeer`, `parseSnapshotJson`,
   `formatSnapshotAge`, the real collectors) verbatim — no comparison
