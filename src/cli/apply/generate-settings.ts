@@ -49,6 +49,7 @@
 
 import type { Hook, Manifest, McpServer } from "../../schema/index.js";
 import { expandHome } from "../../io/expand-home.js";
+import { signingKeyPathFor } from "../../runtime/approval-signing.js";
 
 export const DEFAULT_BUDGET_MS = 30_000;
 
@@ -56,6 +57,8 @@ export const DEFAULT_BUDGET_MS = 30_000;
 export const GROUNDING_MCP_SERVER_NAME = "grounding-mcp";
 /** The env var grounding-mcp's ledger-bridge reads for the evidence-ledger DB path. */
 export const EVIDENCE_LEDGER_DB_ENV = "EVIDENCE_LEDGER_DB";
+/** The env var grounding-mcp (>= 0.8.0) reads for the harness's own approval-marker signing-key path. */
+export const SOLUTION_VERDICT_SIGNING_KEY_ENV = "SOLUTION_VERDICT_SIGNING_KEY";
 
 export interface SettingsHookCommand {
   type: "command";
@@ -121,6 +124,17 @@ export interface GenerateSettingsExtras {
    * injected by tests for determinism.
    */
   homeDir?: string;
+  /**
+   * Absolute `harness.generated/` directory for the manifest in use (task
+   * 03a917fd/H1). Used only to project `SOLUTION_VERDICT_SIGNING_KEY` (see
+   * `projectSigningKeyEnv`) onto the grounding-mcp entry — the path to the
+   * harness's own `.approval-signing.key` (`signingKeyPathFor`). Unlike
+   * `homeDir` above there is no safe universal default: the generated dir
+   * depends on manifest-path resolution (a `--config` override changes
+   * it), so a caller that omits this gets NO projection rather than a
+   * guessed-wrong path.
+   */
+  generatedDir?: string;
 }
 
 export function generateSettings(manifest: Manifest): SettingsRoot {
@@ -168,6 +182,7 @@ export function generateSettingsWithWarnings(
   // GenerateSettingsResult.mcpServers.
   const mcp = buildMcpServers(manifest.tools.mcp, warnings);
   projectGroundingEnv(manifest, mcp, extras.homeDir);
+  projectSigningKeyEnv(mcp, extras.generatedDir);
 
   const permissions = compactPermissions(extras.packPermissions);
   if (permissions) out.permissions = permissions;
@@ -298,6 +313,41 @@ export function groundingLedgerEnvValue(
   homeDir?: string,
 ): string {
   return expandHome(manifest.grounding.evidence_ledger.path, homeDir);
+}
+
+/**
+ * Wire the harness's own approval-signing key path into the grounding-mcp
+ * server entry (task 03a917fd/H1, agent-grounding 9b6c4beb comment 2,
+ * Option 2), exactly mirroring `projectGroundingEnv` above.
+ *
+ * `<generatedDir>/.approval-signing.key` (see `signingKeyPathFor`,
+ * src/runtime/approval-signing.ts) becomes the `SOLUTION_VERDICT_SIGNING_KEY`
+ * env on the `tools.mcp[grounding-mcp]` entry — the variable grounding-mcp
+ * (>= 0.8.0) reads primarily and THROWS on a non-absolute value, so this
+ * projects only the fully-resolved, already-absolute key PATH, never the
+ * key bytes themselves.
+ *
+ * Rules (mirrors `projectGroundingEnv`):
+ * - Projection only fires when a grounding-mcp entry exists; without one
+ *   there is no consumer.
+ * - An operator-declared `env.SOLUTION_VERDICT_SIGNING_KEY` on the entry
+ *   wins — an explicit override is never clobbered (same truthiness check:
+ *   an empty-string "override" is treated as absent).
+ * - No `generatedDir` passed in -> no projection, no crash. There is
+ *   nothing correct to derive without it (see `GenerateSettingsExtras`).
+ */
+export function projectSigningKeyEnv(
+  mcp: Record<string, SettingsMcpServer>,
+  generatedDir?: string,
+): void {
+  const server = mcp[GROUNDING_MCP_SERVER_NAME];
+  if (!server) return;
+  if (!generatedDir) return;
+  const env = server.env ?? {};
+  if (!env[SOLUTION_VERDICT_SIGNING_KEY_ENV]) {
+    env[SOLUTION_VERDICT_SIGNING_KEY_ENV] = signingKeyPathFor(generatedDir);
+    server.env = env;
+  }
 }
 
 // Translate manifest `memory.router` into a synthetic UserPromptSubmit

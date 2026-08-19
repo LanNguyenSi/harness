@@ -91,6 +91,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `generateSettingsWithWarnings` (`src/cli/apply/generate-settings.ts`)
+  gains `projectSigningKeyEnv`, projecting the harness's own approval-
+  signing key path (`<generatedDir>/.approval-signing.key`,
+  `signingKeyPathFor`) as the `SOLUTION_VERDICT_SIGNING_KEY` env on the
+  `tools.mcp[grounding-mcp]` entry, exactly mirroring the existing
+  `EVIDENCE_LEDGER_DB` / `projectGroundingEnv` projection (task
+  `03a917fd`/H1, agent-grounding `9b6c4beb` comment 2, Option 2): only
+  the fully-resolved, absolute key PATH is projected, never the key
+  bytes; an operator-declared `env.SOLUTION_VERDICT_SIGNING_KEY` on the
+  entry wins; no projection fires without a grounding-mcp entry or
+  without the new `GenerateSettingsExtras.generatedDir` passed in
+  (there is no safe default to guess). Wiring the real, resolved
+  `generatedDir` through `harness apply`'s and `harness init`'s call
+  sites is a follow-up slice; this slice ships the projection primitive
+  with unit coverage only, matching `EVIDENCE_LEDGER_DB`'s own test
+  layer.
 - `harness doctor` gains an on-demand toolchain-parity section (task
   `13919613`, commit `16d47941`), the doctor companion to `harness session-start
   toolchain-parity`: reuses that command's Collector/Comparator core
