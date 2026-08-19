@@ -6,6 +6,23 @@ import { composeCustom } from "../../src/cli/init/composer.js";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import { parseManifest } from "../../src/schema/index.js";
 
+// Module-scope helper (hoisted out of two describe blocks that each used
+// to define their own copy — task fb80b5bb round 2): extracts the
+// `approval_lifecycle.expire_on_bash_match` patterns from a rendered
+// profile template as compiled RegExp objects, so tests exercise the
+// ACTUAL shipped regexes rather than hand-copied literals.
+function bashMatchers(templateSource: string): RegExp[] {
+  const parsed = parseManifest(parseYaml(templateSource));
+  const pack = parsed.policy_packs.find((p) => p.name === "understanding-before-execution");
+  if (!pack) throw new Error("understanding-before-execution pack missing from template");
+  const lifecycle = (pack.config as Record<string, unknown>)["approval_lifecycle"];
+  const patterns = (lifecycle as Record<string, unknown>)["expire_on_bash_match"];
+  if (!Array.isArray(patterns)) {
+    throw new Error("expire_on_bash_match must be a string array in the template");
+  }
+  return patterns.map((p) => new RegExp(p as string));
+}
+
 // Drift guard for the npm-bin pins in FULL_TEMPLATE: any hook whose
 // `command:` shells out to a tool shipped by a separate npm package
 // MUST carry a `min_version` + `version_command` floor pointing at
@@ -264,18 +281,121 @@ describe("profile templates: single `&` is a command boundary in every policy tr
     }
   });
 
+  // Task fb80b5bb round 1 widened these patterns from `^`-anchored to
+  // `\b`-scoped to close the fail-open forms measured against the old
+  // shape. Round 2 measured that widening end-to-end against the real
+  // PostToolUse hook and reverted it: it made
+  // `harness approve understanding <<'RPT' ... RPT` self-revoking (a
+  // report body that legitimately quotes a boundary command as part of
+  // the plan expires its OWN freshly-written marker), plus 8 measured
+  // everyday false positives and still 20 remaining fail-open forms. See
+  // "expire_on_bash_match: start-anchored, with a documented fail-open
+  // limitation" in docs/policy-packs/understanding-before-execution.md
+  // for the full rationale. The `&`-boundary-alternation guard below is
+  // UNRELATED to this anchoring decision and stays: it still protects
+  // against the `&`-boundary family fixed in d834a065 (a different
+  // concern, PreToolUse `bash_match` policy triggers) leaking into this
+  // PostToolUse-boundary family's own patterns.
   it.each(TEMPLATES)("%s: expire_on_bash_match is a separate anchored family, untouched", (_, src) => {
     const parsed = parseManifest(parseYaml(src));
     const pack = parsed.policy_packs.find((p) => p.name === "understanding-before-execution");
     const lifecycle = (pack?.config as Record<string, unknown>)?.["approval_lifecycle"];
     const patterns = (lifecycle as Record<string, unknown>)?.["expire_on_bash_match"] as string[];
     expect(Array.isArray(patterns)).toBe(true);
+    // Whole-value pin (round 2b): the per-pattern shape checks below
+    // (anchored, `\b`-terminated, no `&`) stay green under a widening
+    // (e.g. `(master|main)` -> `(master|main|develop)`), a narrowing, or
+    // a reorder of the array — none of those change the shape. This
+    // asserts the exact literals, so any of the three go red here. The
+    // two literals are the ones documented in "expire_on_bash_match:
+    // start-anchored, with a documented fail-open limitation" in
+    // docs/policy-packs/understanding-before-execution.md; that section
+    // and this assertion must not drift apart.
+    expect(patterns).toEqual(["^gh pr (merge|close)\\b", "^git push origin (master|main)\\b"]);
     for (const p of patterns) {
       // Anchored, no boundary alternation: widening the trigger family
       // must never leak into ledger-expiry semantics.
       expect(p.startsWith("^"), `${p} must stay anchored`).toBe(true);
+      // Trailing `\b` word boundary: without this check a start-anchored
+      // pattern could still be silently narrowed (e.g. dropping the
+      // close-word boundary) with nothing catching it. This assertion
+      // was missing from the pre-fb80b5bb version of this test; the
+      // round-2 mutation probe proved its absence would go undetected.
+      expect(p.endsWith("\\b"), `${p} must end with a \\b word boundary`).toBe(true);
       expect(p.includes("&"), `${p} must not carry a boundary alternation`).toBe(false);
     }
+  });
+
+  // Task fb80b5bb round 2: pins the KNOWN, DOCUMENTED fail-open gap of
+  // the `^`-anchored patterns against the actual shipped regexes (not
+  // hand-copied literals), so the gap this task measured and chose not
+  // to close stays visible instead of drifting silently further. See
+  // "expire_on_bash_match: start-anchored, with a documented fail-open
+  // limitation" in docs/policy-packs/understanding-before-execution.md
+  // for the full list and the reasoning against widening — this
+  // describe block and that doc section must not drift apart.
+  describe("expire_on_bash_match: anchored-pattern behavior (task fb80b5bb, round 2)", () => {
+    const matchesAny = (matchers: RegExp[], cmd: string): boolean => matchers.some((re) => re.test(cmd));
+
+    it.each(TEMPLATES)("%s: the plain boundary commands still match", (_, src) => {
+      const matchers = bashMatchers(src);
+      for (const cmd of ["gh pr merge 42 --squash", "gh pr close 7", "git push origin main", "git push origin master"]) {
+        expect(matchesAny(matchers, cmd), `expected a boundary regex to match ${JSON.stringify(cmd)} in ${_}`).toBe(
+          true,
+        );
+      }
+    });
+
+    // Known miss: the anchor sits at command START, so a boundary
+    // command behind a shell prefix or with a flag inserted between its
+    // own words does not expire the marker.
+    // `approval_lifecycle.max_age` is the named safety net for all of
+    // these — documented as a limitation, not fixed, by this task.
+    it.each(TEMPLATES)(
+      "%s: known fail-open forms do NOT expire the marker (documented limitation, not fixed)",
+      (_, src) => {
+        const matchers = bashMatchers(src);
+        for (const cmd of [
+          "cd repo && gh pr merge 42", // leading `cd <dir> &&`
+          "GH_TOKEN=x gh pr merge 42", // env-var assignment prefix
+          "(gh pr merge 42)", // subshell parens
+          "git -C repo push origin main", // flag inserted between `git` and `push`
+          "git -c user.name=x push origin main", // flag inserted between `git` and `push`
+          "git push --force origin main", // flag inserted between `push` and `origin`
+          "git push -u origin main", // flag inserted between `push` and `origin`
+          "git push origin HEAD:main", // refspec instead of a bare branch name
+          "gh --repo owner/repo pr merge 42", // flag inserted between `gh` and `pr`
+          "git  push  origin  main", // doubled whitespace between tokens
+        ]) {
+          expect(
+            matchesAny(matchers, cmd),
+            `expected NO boundary regex to match ${JSON.stringify(cmd)} in ${_} (documented fail-open form)`,
+          ).toBe(false);
+        }
+      },
+    );
+
+    // Negative-FP pins: trivially true under `^`-anchoring today, but
+    // pinned against a future de-anchoring attempt (the one round 2
+    // reverted) so the self-revocation and everyday-FP regressions this
+    // task measured cannot silently return unnoticed.
+    it.each(TEMPLATES)(
+      "%s: quoted/prose mentions of a boundary command do not falsely expire the marker",
+      (_, src) => {
+        const matchers = bashMatchers(src);
+        const approveHeredoc = [
+          "harness approve understanding <<'RPT'",
+          "Plan: after review approves the PR, run `gh pr merge 42` and `git push origin main`.",
+          "RPT",
+        ].join("\n");
+        for (const cmd of ['grep "gh pr merge" docs/', 'echo "gh pr merge 42"', 'echo "git push origin main"', approveHeredoc]) {
+          expect(
+            matchesAny(matchers, cmd),
+            `expected NO boundary regex to match ${JSON.stringify(cmd)} in ${_} (would self-revoke or false-positive)`,
+          ).toBe(false);
+        }
+      },
+    );
   });
 });
 
@@ -288,20 +408,9 @@ describe("profile templates: single `&` is a command boundary in every policy tr
 // (word boundary). Trace: TS source → runtime string → YAML disk →
 // yaml.parse → new RegExp → .test against a realistic Bash command.
 describe("profile templates: expire_on_bash_match round-trips to functioning regex", () => {
-  function bashMatchers(templateSource: string): RegExp[] {
-    const parsed = parseManifest(parseYaml(templateSource));
-    const pack = parsed.policy_packs.find(
-      (p) => p.name === "understanding-before-execution",
-    );
-    if (!pack) throw new Error("understanding-before-execution pack missing from template");
-    const lifecycle = (pack.config as Record<string, unknown>)["approval_lifecycle"];
-    const patterns = (lifecycle as Record<string, unknown>)["expire_on_bash_match"];
-    if (!Array.isArray(patterns)) {
-      throw new Error("expire_on_bash_match must be a string array in the template");
-    }
-    return patterns.map((p) => new RegExp(p as string));
-  }
-
+  // Uses the module-scope `bashMatchers` helper defined near the top of
+  // this file (hoisted from a duplicate local copy — task fb80b5bb
+  // round 2).
   it.each([
     ["SOLO_TEMPLATE", SOLO_TEMPLATE],
     ["TEAM_TEMPLATE", TEAM_TEMPLATE],
