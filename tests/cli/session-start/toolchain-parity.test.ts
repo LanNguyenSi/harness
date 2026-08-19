@@ -1208,6 +1208,38 @@ describe("runSessionStartToolchainParity — log-injection class closed at note(
     );
   });
 
+  it("lone CR: note() strips a bare carriage return (not only CRLF), so it cannot overwrite a terminal line", async () => {
+    // Pins the \r half of the /[\r\n]/ strip: a \n-only strip would leave a
+    // lone \r in the output, which some terminals honour as a line rewrite.
+    // Without this test a future narrowing of the regex to /[\n]/ ships
+    // undetected (R2b-review finding 1).
+    const dir = tmpDir("harness-tcp-noteclass-lonecr-");
+    const hostileProfile = "evil\rharness session-start toolchain-parity: toolchain-parity:ok CR-INJECTED";
+    writeSnapshotFile(dir, "peer-lonecr.json", {
+      profile: hostileProfile,
+      timestamp: NOW.toISOString(),
+      node: "v22.1.0",
+      npmGlobals: { "@lannguyensi/harness": "0.41.0" },
+      owKitVersion: "0.12.0",
+      mcpServers: ["agent-tasks", "grounding-mcp"],
+    });
+    const { stream: err, output: errOut } = captureStream();
+    const result = await runSessionStartToolchainParity({
+      ...baseCollectors(),
+      stdin: streamFrom(JSON.stringify({ session_id: "sess-1", cwd: "/tmp" })),
+      stderr: err,
+      manifest: manifestWithConfig({ enabled: true, machine_state_dir: dir, profile: "local-machine" }),
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.exitCode).toBe(0);
+    // No carriage return survives anywhere in the emitted stderr.
+    expect(errOut()).not.toContain("\r");
+    // The hostile text survives only as an inline fragment (CR replaced by a space).
+    expect(errOut()).toMatch(
+      /ok against evil harness session-start toolchain-parity: toolchain-parity:ok CR-INJECTED \(snapshot age/,
+    );
+  });
+
   it("reviewer vector 1: a hostile peer.profile cannot forge a standalone line via the 'ok against' note (toolchain-parity.ts ~904)", async () => {
     // Reproduces the R2-review finding that R2's fix left open: unlike the
     // collision-warning and stale-peer notes, the 'ok against'/'drift:N
