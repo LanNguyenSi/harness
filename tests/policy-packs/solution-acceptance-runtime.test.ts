@@ -316,28 +316,93 @@ describe("evaluateGate — signature verification (harness/c7c3f606, fail-closed
     expect(r.reason).toMatch(/could not be verified/);
   });
 
-  // Review LOW (fix-round-2): a verdict missing its `timestamp` / `source`
-  // fields (mapped onto `verifyMarkerSignature`'s `approvedAt` /
-  // `approvedBy`) is a LEGITIMATELY MALFORMED marker — e.g. a producer bug
-  // that left the field blank — not evidence of an active forgery attempt.
-  // Both stay fail-closed (`allowed: false`), but must NOT be classified
-  // `forged: true`, mirroring the existing key-unavailable carve-out.
-  it("a verdict with an empty timestamp is fail-closed but NOT classified as forged (missing approvedAt carve-out)", () => {
+  // Review LOW (fix-round-2), rescoped by review R2 MED (fix-round-2b): a
+  // verdict with NO signature/alg fields at all, whose `timestamp` /
+  // `source` (mapped onto `verifyMarkerSignature`'s `approvedAt` /
+  // `approvedBy`) also reads blank, is a LEGITIMATELY MALFORMED, never-
+  // signed marker — e.g. a producer bug that left the field blank — not
+  // evidence of an active forgery attempt. Both stay fail-closed
+  // (`allowed: false`), but must NOT be classified `forged: true`, mirroring
+  // the existing key-unavailable carve-out. Uses `writeUnsignedMarker`
+  // (NOT `writeMarker`) so this genuinely exercises the "no signature at
+  // all" case the carve-out is now scoped to — see the SIGNED-and-blanked
+  // regressions just below for the case that must NOT get this carve-out.
+  it("an UNSIGNED verdict with an empty timestamp is fail-closed but NOT classified as forged (missing approvedAt carve-out)", () => {
     const dir = tmpDir();
-    writeMarker(dir, "t", { head: HEAD, ready: true, timestamp: "" });
+    writeUnsignedMarker(dir, "t", { head: HEAD, ready: true, timestamp: "" });
     const r = evaluateGate(readVerdict(dir, "t"), HEAD, "t", generatedDir);
     expect(r.allowed).toBe(false);
     expect(r.forged).toBe(false);
     expect(r.reason).toMatch(/missing approvedAt/);
   });
 
-  it("a verdict with an empty source is fail-closed but NOT classified as forged (missing approvedBy carve-out)", () => {
+  it("an UNSIGNED verdict with an empty source is fail-closed but NOT classified as forged (missing approvedBy carve-out)", () => {
     const dir = tmpDir();
-    writeMarker(dir, "t", { head: HEAD, ready: true, source: "" });
+    writeUnsignedMarker(dir, "t", { head: HEAD, ready: true, source: "" });
     const r = evaluateGate(readVerdict(dir, "t"), HEAD, "t", generatedDir);
     expect(r.allowed).toBe(false);
     expect(r.forged).toBe(false);
     expect(r.reason).toMatch(/missing approvedBy/);
+  });
+
+  // Regression (harness/c7c3f606 review R2 MED, fix-round-2b / audit
+  // finding A8): the carve-out above must NOT extend to a verdict that
+  // DOES carry a signature. Before this fix, `writeMarker` (which always
+  // signs) with a blanked `timestamp` hit the SAME "missing approvedAt"
+  // verification reason as the genuinely-unsigned case above — because
+  // `verifyMarkerSignature` checks `approvedAt` for blankness BEFORE ever
+  // comparing the signature — so a forger who took a REAL signed verdict
+  // and blanked its `timestamp` post-signing suppressed `forged: true` even
+  // though the marker plainly carries `alg`/`signature` fields. `allowed`
+  // stayed `false` throughout (never a bypass), but the audit tag lied.
+  // This is now classified `forged: true`.
+  it("a SIGNED verdict with a blanked timestamp IS classified as forged, unlike its unsigned counterpart (A8)", () => {
+    const dir = tmpDir();
+    writeMarker(dir, "t", { head: HEAD, ready: true, timestamp: "" });
+    const v = readVerdict(dir, "t");
+    expect(v?.signature).toBeDefined(); // sanity: this really is a signed marker
+    expect(v?.alg).toBeDefined();
+    const r = evaluateGate(v, HEAD, "t", generatedDir);
+    expect(r.allowed).toBe(false);
+    expect(r.forged).toBe(true);
+    expect(r.reason).toMatch(/forged\/unsigned solution-acceptance verdict rejected/);
+  });
+
+  it("a SIGNED verdict with a blanked source IS classified as forged, unlike its unsigned counterpart (A8)", () => {
+    const dir = tmpDir();
+    writeMarker(dir, "t", { head: HEAD, ready: true, source: "" });
+    const v = readVerdict(dir, "t");
+    expect(v?.signature).toBeDefined();
+    expect(v?.alg).toBeDefined();
+    const r = evaluateGate(v, HEAD, "t", generatedDir);
+    expect(r.allowed).toBe(false);
+    expect(r.forged).toBe(true);
+    expect(r.reason).toMatch(/forged\/unsigned solution-acceptance verdict rejected/);
+  });
+
+  // Negative control (audit finding A7, review R2): the MINIMAL
+  // hand-written marker the finding named — `{id, head, ready:true}`, no
+  // `timestamp`/`source`/`confidence`/`blockers`/signature keys at all —
+  // still reads as the defensible "unsigned legacy marker" case after this
+  // fix, i.e. the tightened carve-out does not spuriously flip A7 to
+  // forged:true. `allowed` is false either way (fail-closed, never a
+  // bypass); only the audit classification is at stake here, and this one
+  // stays `forged: false` on purpose, unlike its SIGNED counterpart (A8)
+  // above.
+  it("the minimal hand-written marker with no signature and no timestamp/source (A7) stays forged:false", () => {
+    const dir = tmpDir();
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      verdictPathFor(dir, "t"),
+      JSON.stringify({ id: "t", head: HEAD, ready: true }),
+    );
+    const v = readVerdict(dir, "t");
+    expect(v?.signature).toBeUndefined();
+    expect(v?.alg).toBeUndefined();
+    const r = evaluateGate(v, HEAD, "t", generatedDir);
+    expect(r.allowed).toBe(false);
+    expect(r.forged).toBe(false);
+    expect(r.reason).toMatch(/missing approvedAt/);
   });
 
   // A verdict signed for one id must not verify under a different id — the

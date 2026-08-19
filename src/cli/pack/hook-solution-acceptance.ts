@@ -305,13 +305,15 @@ export async function runPackHookSolutionAcceptanceCli(
   // Distinct operator-facing audit tag when the gate blocked SPECIFICALLY
   // because the verdict was forged/unsigned or identity-mismatched
   // (GateResult.forged, harness/c7c3f606), not the routine "no verdict" /
-  // "not ready" / "stale" cases — mirrors the `markerForgedNote` /
-  // `markerForged` audit-note pattern in hook-pre-tool-use.ts and
-  // hook-branch-protection.ts. `gate.reason` already narrates the forgery
-  // in prose; this appends a short, greppable literal tag to the STDERR
-  // diagnostic (operator/audit surface only, not the agent-facing block
-  // reason `blockJson` sends) so an operator scanning hook logs for active
-  // forgery attempts does not have to pattern-match the prose.
+  // "not ready" / "stale" cases — mirrors the `ackEcho` audit-echo pattern
+  // in hook-branch-protection.ts (a short, greppable tag appended only to
+  // the STDERR diagnostic), NOT that same hook's `markerForgedNote`: that
+  // one folds its forged-marker wording into the AGENT-facing block reason
+  // too (`why` there feeds both `note()` and `blockJson`). This tag stays
+  // out of the agent-facing reason on purpose — `gate.reason` already
+  // narrates the forgery in prose for the agent, so there is nothing this
+  // tag would add there; it exists so an operator scanning hook logs for
+  // active forgery attempts does not have to pattern-match the prose.
   const forgedTag = gate.forged ? " [audit: forged/unsigned verdict marker rejected]" : "";
   const diagnostic = `BLOCK — ${gate.reason}${forgedTag}`;
   note(diagnostic);

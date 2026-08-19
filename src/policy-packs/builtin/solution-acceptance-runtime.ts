@@ -219,6 +219,15 @@ function verdictContentHash(v: Pick<Verdict, "head" | "ready" | "confidence" | "
  * CONSUMER of this marker, see module doc) — exported as the pattern +
  * exemplar a grounding-mcp-side producer change reuses, and used directly
  * by this module's own tests to construct validly-signed fixtures.
+ *
+ * Load-bearing on the producer side: `signMarker` is called with
+ * `verdictMarkerId(verdict.id)`, while the consumer (`verifyVerdictSignature`
+ * below) verifies with `verdictMarkerId(id)` where `id` is the CALLER's id,
+ * not `verdict.id`. Those two only agree when a mirroring producer sets
+ * `verdict.id` to the EXACT id string the consumer looks the marker up by —
+ * byte-identical, no trimming or case normalization on either side — and the
+ * consumer additionally rejects outright when `verdict.id !== id` even if
+ * the signature itself still verifies (belt-and-braces, see `evaluateGate`).
  */
 export function signVerdict(generatedDir: string, verdict: Verdict): Verdict {
   const signed = signMarker(generatedDir, verdictMarkerId(verdict.id), {
@@ -412,24 +421,40 @@ export interface GateResult {
    * signing-key I/O failure (fail-closed but NOT classified as forged,
    * mirroring `SignatureVerification`'s `kind: "key-unavailable"` — a
    * broken key file must not read as an active forgery attempt in audit
-   * output), and from a verdict missing its `timestamp` / `source` fields
-   * (fail-closed but NOT classified as forged either — a legitimately
-   * malformed marker, not evidence of an attack; see the `MISSING_*_REASON`
-   * carve-out below). `allowed` is always false when `forged` is true.
+   * output), and from a verdict with NO `alg`/`signature` fields at all
+   * whose `timestamp` / `source` also reads blank (fail-closed but NOT
+   * classified as forged either — a legitimately malformed, never-signed
+   * marker, not evidence of an attack; see the `MISSING_*_REASON` carve-out
+   * below). That last carve-out is scoped tightly: a verdict that DOES carry
+   * `alg`/`signature` but still hits the same blank-field reason IS
+   * classified `forged: true` — a signed field reading blank only happens
+   * via post-signing tampering, so it does not get the "legitimately
+   * malformed" benefit of the doubt (review R2, closes an audit-fidelity
+   * gap where a forger could blank a real signed verdict's `timestamp` to
+   * suppress this tag while the block itself still held). `allowed` is
+   * always false when `forged` is true.
    */
   forged: boolean;
 }
 
 // `verifyMarkerSignature` (`src/runtime/approval-signing.ts`, NOT modified by
 // this module) returns these exact literal reason strings when `verdict`'s
-// `timestamp` / `source` map onto an empty `approvedAt` / `approvedBy`. Both
-// can arise from a legitimately malformed marker (a producer bug that left
-// the field blank) rather than an active forgery attempt, so `evaluateGate`
-// carves them out of the generic `forged: true` bucket below — the same
-// carve-out shape as `SignatureVerification`'s `kind: "key-unavailable"`.
-// Matched by exact string since `verifyMarkerSignature` has no `kind` tag
-// for this case; if its wording ever changes, these two constants must move
-// with it.
+// `timestamp` / `source` map onto an empty `approvedAt` / `approvedBy`. That
+// check runs FIRST, before `verifyMarkerSignature` ever looks at `signature`
+// itself — so it fires identically whether the verdict carries NO signature
+// at all (a genuinely legacy/unsigned marker) OR carries a well-formed
+// `alg`/`signature` pair that no longer matches because the blank field was
+// introduced AFTER signing (a forger tampering a real signed verdict to
+// suppress the forged tag: blank `timestamp`, and the "missing approvedAt"
+// short-circuit means the tampered signature is never even compared).
+// `evaluateGate` below carves out ONLY the first case (no signature/alg
+// present at all — the same carve-out shape as `SignatureVerification`'s
+// `kind: "key-unavailable"`); a verdict that carries a signature/alg but
+// still hits this reason falls through to the generic `forged: true`
+// bucket, because "signed, yet a signed field reads blank" is post-signing
+// tampering by construction (harness/c7c3f606 review R2). Matched by exact
+// string since `verifyMarkerSignature` has no `kind` tag for this case; if
+// its wording ever changes, these two constants must move with it.
 const MISSING_APPROVED_AT_REASON = "missing approvedAt";
 const MISSING_APPROVED_BY_REASON = "missing approvedBy";
 
@@ -501,9 +526,17 @@ export function evaluateGate(
       };
     }
     if (
-      verification.reason === MISSING_APPROVED_AT_REASON ||
-      verification.reason === MISSING_APPROVED_BY_REASON
+      (verification.reason === MISSING_APPROVED_AT_REASON ||
+        verification.reason === MISSING_APPROVED_BY_REASON) &&
+      verdict.signature === undefined &&
+      verdict.alg === undefined
     ) {
+      // Scoped (harness/c7c3f606 review R2 MED): the carve-out applies ONLY
+      // to a verdict that carries NO signature/alg fields at all. A verdict
+      // that DOES carry them but still hits this reason is not "legitimately
+      // malformed" — it is a signature computed over content that now reads
+      // blank, which only happens via post-signing tampering (the blank
+      // field falls through to the generic forged:true branch below instead).
       return {
         allowed: false,
         reason:

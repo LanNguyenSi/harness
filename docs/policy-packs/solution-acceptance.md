@@ -104,9 +104,24 @@ not-yet-signing producer) apart from the routine "no verdict yet" or
 are ever trusted, so a forged-but-plausible `ready:true` verdict is
 rejected before it would otherwise pass.
 
-**Back-compat is strict, no migration window** — the SAME trade-off
-f9485cc7 made: a verdict with no `signature` field is rejected exactly
+**Back-compat is strict, no migration window** — the same strict
+no-grace-period POLICY f9485cc7 made (the RECOVERY differs — there is no
+operator-side command that resolves this one until the grounding-mcp
+producer ships): a verdict with no `signature` field is rejected exactly
 like a forgery.
+
+The HMAC markerId is derived from the CALLER's id, not from `verdict.id`
+read back out of the marker body — a producer mirroring `signVerdict`
+MUST set `verdict.id` to the exact id string the consumer looks the
+marker up by (byte-identical, no trimming or case normalization), and
+the consumer additionally rejects outright when `verdict.id !== id`
+even if the signature itself still verifies (belt-and-braces against a
+cross-id replay of a validly-signed verdict). The hook also emits a
+short, greppable STDERR-only audit tag,
+`[audit: forged/unsigned verdict marker rejected]`, whenever a denial
+is specifically a forged/unsigned/identity-mismatched verdict — an
+audit-sweep target distinct from the routine "no verdict" / "not ready"
+/ "stale" denials, which never carry it.
 
 **Honest residual — read this before assuming more than it delivers.**
 Unlike the understanding-gate marker, harness does not WRITE this one.

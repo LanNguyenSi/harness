@@ -309,6 +309,68 @@ describe("completion-gate — signature verification end-to-end (harness/c7c3f60
     expect(res.blocked).toBe(true);
     expect(res.diagnostic).not.toMatch(/\[audit: forged/);
   });
+
+  // Negative control (review R2, finding 2c): the forged-audit tag must
+  // also stay ABSENT on the other two routine denial paths — "not ready"
+  // and "stale head" — not just "no verdict" (already pinned above). Both
+  // read a perfectly well-formed, VALIDLY-SIGNED verdict; the reason they
+  // deny has nothing to do with forgery.
+  it("does NOT carry the forged-audit tag on a routine not-ready BLOCK", async () => {
+    const { res } = await run({
+      cwd: repoAtHead(HEAD),
+      verdictDir: verdictDirWith(TASK, { head: HEAD, ready: false, blockers: ["1 test failing"] }),
+    });
+    expect(res.blocked).toBe(true);
+    expect(res.diagnostic).not.toMatch(/\[audit: forged/);
+  });
+
+  it("does NOT carry the forged-audit tag on a routine stale-head BLOCK", async () => {
+    const { res } = await run({
+      cwd: repoAtHead(HEAD),
+      verdictDir: verdictDirWith(TASK, { head: OTHER, ready: true }),
+    });
+    expect(res.blocked).toBe(true);
+    expect(res.diagnostic).not.toMatch(/\[audit: forged/);
+  });
+
+  // Regression (review R2 MED, harness/c7c3f606 fix-round-2b, audit finding
+  // A8), exercised through the real hook entrypoint: a verdict that DOES
+  // carry a valid `alg`/`signature` pair but whose `timestamp` reads blank
+  // must be classified forged:true (STDERR audit tag present), not silently
+  // read as "legitimately malformed, not forged" the way a genuinely
+  // unsigned marker is. `allowed` was already false before this fix — this
+  // pins the AUDIT classification, not the block itself.
+  it("BLOCKS a SIGNED verdict with a blanked timestamp, WITH the forged-audit tag present", async () => {
+    const { res, out } = await run({
+      cwd: repoAtHead(HEAD),
+      verdictDir: verdictDirWith(TASK, { head: HEAD, ready: true, timestamp: "" }),
+    });
+    expect(res.blocked).toBe(true);
+    expect(JSON.parse(out).reason).toMatch(/forged\/unsigned solution-acceptance verdict rejected/);
+    expect(res.diagnostic).toMatch(/\[audit: forged\/unsigned verdict marker rejected\]/);
+  });
+
+  // Regression (review R2, finding 2b), exercised through the real hook
+  // entrypoint: a verdict whose signature genuinely verifies for the
+  // active-claim task id (the marker sits at that task's own path, signed
+  // against that same id), but whose BODY `id` field was mutated to a
+  // DIFFERENT string post-signing (the signed payload does not cover `id`
+  // itself, so this leaves the signature valid) must still be rejected —
+  // the belt-and-braces `verdict.id !== id` check in `evaluateGate` — with
+  // the forged-audit tag present end to end.
+  it("BLOCKS on verdict.id !== active-claim id even though the signature still verifies, WITH the forged-audit tag", async () => {
+    const dir = verdictDirWith(TASK, { head: HEAD, ready: true });
+    const markerPath = path.join(dir, `${TASK}.json`);
+    const raw = JSON.parse(fs.readFileSync(markerPath, "utf8")) as Verdict;
+    raw.id = "someone-else"; // mutate ONLY id post-signing; signature untouched
+    fs.writeFileSync(markerPath, JSON.stringify(raw));
+    const { res, out } = await run({ cwd: repoAtHead(HEAD), verdictDir: dir, activeClaim: TASK });
+    expect(res.blocked).toBe(true);
+    const reason = JSON.parse(out).reason as string;
+    expect(reason).toMatch(/forged\/unsigned solution-acceptance verdict rejected/);
+    expect(reason).toMatch(/cross-id replay/);
+    expect(res.diagnostic).toMatch(/\[audit: forged\/unsigned verdict marker rejected\]/);
+  });
 });
 
 describe("completion-gate — production resolution path (no injected manifest/claim)", () => {
