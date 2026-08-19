@@ -2,8 +2,10 @@ import type { Manifest, McpServer } from "../../schema/index.js";
 import {
   EVIDENCE_LEDGER_DB_ENV,
   GROUNDING_MCP_SERVER_NAME,
+  SOLUTION_VERDICT_SIGNING_KEY_ENV,
   groundingLedgerEnvValue,
 } from "../apply/generate-settings.js";
+import { signingKeyPathFor } from "../../runtime/approval-signing.js";
 
 const KNOWN_EVENTS = new Set([
   "SessionStart",
@@ -224,6 +226,7 @@ export function projectRegistryMcpServers(servers: Record<string, unknown>): Der
 export function manifestMcpProjection(
   manifest: Manifest,
   homeDir?: string,
+  generatedDir?: string,
 ): DerivedMcp[] {
   const out = manifest.tools.mcp.map(toDerivedMcp);
   // Mirror apply's grounding projection (generate-settings.ts,
@@ -245,6 +248,25 @@ export function manifestMcpProjection(
     grounding.env = {
       ...(grounding.env ?? {}),
       [EVIDENCE_LEDGER_DB_ENV]: groundingLedgerEnvValue(manifest, homeDir),
+    };
+  }
+  // Exact same mirror for apply's SOLUTION_VERDICT_SIGNING_KEY projection
+  // (generate-settings.ts, projectSigningKeyEnv; task 03a917fd/H1b) so an
+  // adopt after an apply does not report phantom drift on grounding-mcp
+  // for this key either. Same operator-override semantics as the
+  // EVIDENCE_LEDGER_DB mirror above (only fill in when absent), plus
+  // `projectSigningKeyEnv`'s own extra rule: no `generatedDir` passed in
+  // -> no projection, since there is nothing correct to derive without
+  // it (see GenerateSettingsExtras.generatedDir's doc comment).
+  if (
+    grounding !== undefined &&
+    groundingManifestEntry?.enabled !== false &&
+    generatedDir !== undefined &&
+    !grounding.env?.[SOLUTION_VERDICT_SIGNING_KEY_ENV]
+  ) {
+    grounding.env = {
+      ...(grounding.env ?? {}),
+      [SOLUTION_VERDICT_SIGNING_KEY_ENV]: signingKeyPathFor(generatedDir),
     };
   }
   return out;

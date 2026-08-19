@@ -13,7 +13,11 @@ import {
   parseSettingsMcpServers,
   synthesizeName,
 } from "../../src/cli/adopt/derive.js";
-import { generateSettingsWithWarnings } from "../../src/cli/apply/generate-settings.js";
+import {
+  SOLUTION_VERDICT_SIGNING_KEY_ENV,
+  generateSettingsWithWarnings,
+} from "../../src/cli/apply/generate-settings.js";
+import { signingKeyPathFor } from "../../src/runtime/approval-signing.js";
 import { init } from "../../src/cli/init/index.js";
 import { parseManifest } from "../../src/schema/index.js";
 import { STUB_NPM_BIN_EXEC_WARN } from "../_helpers/npm-bin-exec.js";
@@ -841,6 +845,60 @@ describe("apply -> adopt round-trip for the grounding projection", () => {
     settings.mcpServers["grounding-mcp"]!.env!.EVIDENCE_LEDGER_DB = "/elsewhere/l.db";
     const settingsMcp = parseSettingsMcpServers(settings);
     const projection = manifestMcpProjection(GROUNDING_MANIFEST, "/home/op");
+    const drift = computeMcpDrift(settingsMcp, projection);
+    expect(drift).toHaveLength(1);
+    expect(drift[0]?.reason).toBe("modified");
+  });
+});
+
+// task 03a917fd/H1b: exact same round-trip requirement as above, for
+// apply's SOLUTION_VERDICT_SIGNING_KEY projection (generate-settings.ts,
+// projectSigningKeyEnv): the manifest-side mirror in derive.ts's
+// manifestMcpProjection must carry the same key or every apply->adopt
+// cycle reports phantom "modified" drift on grounding-mcp for it.
+describe("apply -> adopt round-trip for the signing-key projection (task 03a917fd/H1b)", () => {
+  const GROUNDING_MANIFEST = parseManifest({
+    version: 1,
+    tools: {
+      mcp: [
+        { name: "grounding-mcp", command: ["node", "/opt/g/server.js"], enabled: true },
+      ],
+      cli: [],
+      skills: { enabled: [], source_dirs: [] },
+      builtin: { known: [] },
+    },
+    memory: { directories: [] },
+    hooks: [],
+    policies: [],
+  });
+  const GENERATED_DIR = "/home/op/harness.generated";
+
+  it("reports zero MCP drift for a registry entry matching the signing-key projection", () => {
+    const { mcpServers } = generateSettingsWithWarnings(GROUNDING_MANIFEST, {
+      homeDir: "/home/op",
+      generatedDir: GENERATED_DIR,
+    });
+    const settings = { hooks: {}, mcpServers };
+    const settingsMcp = parseSettingsMcpServers(settings);
+    const projection = manifestMcpProjection(GROUNDING_MANIFEST, "/home/op", GENERATED_DIR);
+    expect(computeMcpDrift(settingsMcp, projection)).toEqual([]);
+    // Sanity: the key really is present and absolute, not just absent on
+    // both sides (which would also compute zero drift vacuously).
+    expect(mcpServers["grounding-mcp"]?.env?.[SOLUTION_VERDICT_SIGNING_KEY_ENV]).toBe(
+      signingKeyPathFor(GENERATED_DIR),
+    );
+  });
+
+  it("still reports drift when the operator value diverges from the signing-key projection", () => {
+    const { mcpServers } = generateSettingsWithWarnings(GROUNDING_MANIFEST, {
+      homeDir: "/home/op",
+      generatedDir: GENERATED_DIR,
+    });
+    const settings = { hooks: {}, mcpServers };
+    // Simulate an out-of-band edit to a live registry entry.
+    settings.mcpServers["grounding-mcp"]!.env!.SOLUTION_VERDICT_SIGNING_KEY = "/elsewhere/other.key";
+    const settingsMcp = parseSettingsMcpServers(settings);
+    const projection = manifestMcpProjection(GROUNDING_MANIFEST, "/home/op", GENERATED_DIR);
     const drift = computeMcpDrift(settingsMcp, projection);
     expect(drift).toHaveLength(1);
     expect(drift[0]?.reason).toBe("modified");

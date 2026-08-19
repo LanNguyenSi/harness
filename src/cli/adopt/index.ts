@@ -14,6 +14,7 @@ import { parseManifest, type McpServer } from "../../schema/index.js";
 import { applyAdd, type McpEntry as McpAddEntry } from "../add/mutate.js";
 import { EX_FAIL, EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
 import { readTopLevelMcpServers, resolveClaudeUserRegistryPath } from "../../io/claude-mcp.js";
+import { resolveGeneratedDir } from "../../io/generated-dir.js";
 import {
   computeDrift,
   computeMcpDrift,
@@ -167,7 +168,17 @@ export async function adopt(
   const { servers: registryServers, error: registryReadError } =
     readTopLevelMcpServers(registryPath);
   const registryMcp = projectRegistryMcpServers(registryServers);
-  const mcpProjection = manifestMcpProjection(manifest);
+  // task 03a917fd/H1b: generatedDir resolved the same way apply.ts and
+  // interactive.ts resolve it, so manifestMcpProjection's
+  // SOLUTION_VERDICT_SIGNING_KEY mirror (derive.ts) compares against the
+  // real key path. homeDir is left as-is (not previously threaded through
+  // here for the EVIDENCE_LEDGER_DB mirror either -- out of this task's
+  // scope to change).
+  const generatedDir = resolveGeneratedDir({
+    ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
+    manifestPath,
+  });
+  const mcpProjection = manifestMcpProjection(manifest, undefined, generatedDir);
   const mcpDrift = computeMcpDrift(registryMcp, mcpProjection);
 
   if (drift.length === 0 && mcpDrift.length === 0) {

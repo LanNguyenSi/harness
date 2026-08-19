@@ -104,9 +104,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   without the new `GenerateSettingsExtras.generatedDir` passed in
   (there is no safe default to guess). Wiring the real, resolved
   `generatedDir` through `harness apply`'s and `harness init`'s call
-  sites is a follow-up slice; this slice ships the projection primitive
-  with unit coverage only, matching `EVIDENCE_LEDGER_DB`'s own test
-  layer.
+  sites (task `03a917fd`/H1b) is now live: `generate-opencode-config.ts`'s
+  `generateOpencodeConfig` gained the matching `generatedDir` extra and
+  `apply.ts`'s `buildExpectedFiles` threads its own resolved
+  `generatedDir` into both that call and its `generateSettingsWithWarnings`
+  call; `init/interactive.ts`'s `loadDesiredMcpServers` — the function
+  that feeds the REAL `claude mcp` CLI registration (`ensureMcpServers`)
+  — now also projects `SOLUTION_VERDICT_SIGNING_KEY`, mirroring
+  `EVIDENCE_LEDGER_DB` there; `adopt/derive.ts`'s `manifestMcpProjection`
+  gained the matching manifest-side mirror so an apply→adopt cycle does
+  not report phantom drift on grounding-mcp for this key either. One
+  caveat carried over from `EVIDENCE_LEDGER_DB`/T-002: settings.json's
+  `mcpServers` block (and therefore `apply.ts`'s
+  `generateSettingsWithWarnings` call specifically) is dead at runtime —
+  Claude Code's real MCP registration goes exclusively through the
+  `claude mcp` CLI path in `interactive.ts`, so the settings.json branch's
+  `generatedDir` threading is wired for symmetry/future-proofing but has
+  no independently observable effect today.
 - `harness doctor` gains an on-demand toolchain-parity section (task
   `13919613`, commit `16d47941`), the doctor companion to `harness session-start
   toolchain-parity`: reuses that command's Collector/Comparator core

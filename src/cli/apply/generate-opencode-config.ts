@@ -27,12 +27,13 @@
 // ($defs.McpLocalConfig in the published schema: `{ type: "local",
 // command: string[], cwd?, environment?: Record<string,string>,
 // enabled?, timeout? }`). We reuse generate-settings.ts's
-// `buildMcpServers` + `projectGroundingEnv` (Claude Code's `{command,
-// args, env}` shape, already covering the grounding-mcp
-// EVIDENCE_LEDGER_DB projection and the literal-tilde env-value
-// warning) and reshape the result into opencode's `{type: "local",
-// command: [...], environment}` instead of hand-rolling a third copy of
-// that logic that could drift from the other two runtimes.
+// `buildMcpServers` + `projectGroundingEnv` + `projectSigningKeyEnv`
+// (Claude Code's `{command, args, env}` shape, already covering the
+// grounding-mcp EVIDENCE_LEDGER_DB and SOLUTION_VERDICT_SIGNING_KEY
+// projections and the literal-tilde env-value warning) and reshape the
+// result into opencode's `{type: "local", command: [...], environment}`
+// instead of hand-rolling a third copy of that logic that could drift
+// from the other two runtimes.
 //
 // enabled:false -> projected as a bare `{"enabled": false}` marker, NOT
 // omitted (LOW-F4, batch18 fix-round, task f34eb233 review; the
@@ -106,7 +107,12 @@
 //     above).
 
 import type { Manifest } from "../../schema/index.js";
-import { buildMcpServers, projectGroundingEnv, type SettingsMcpServer } from "./generate-settings.js";
+import {
+  buildMcpServers,
+  projectGroundingEnv,
+  projectSigningKeyEnv,
+  type SettingsMcpServer,
+} from "./generate-settings.js";
 
 /** opencode's native local-MCP-server shape (`$defs.McpLocalConfig`). */
 export interface OpencodeLocalMcpServer {
@@ -187,6 +193,14 @@ export interface GenerateOpencodeConfigExtras {
    * convention as `GenerateSettingsExtras.homeDir` in generate-settings.ts.
    */
   homeDir?: string;
+  /**
+   * Absolute `harness.generated/` directory for the manifest in use (task
+   * 03a917fd/H1b), threaded through to `projectSigningKeyEnv` exactly like
+   * `GenerateSettingsExtras.generatedDir` in generate-settings.ts. Same
+   * no-safe-default rule: omitting this yields NO
+   * `SOLUTION_VERDICT_SIGNING_KEY` projection rather than a guessed path.
+   */
+  generatedDir?: string;
 }
 
 function toOpencodeMcpServer(server: SettingsMcpServer): OpencodeLocalMcpServer {
@@ -218,6 +232,11 @@ export function generateOpencodeConfig(
   // "enabled:false" header note for why).
   const claudeShapeMcp = buildMcpServers(manifest.tools.mcp, warnings);
   projectGroundingEnv(manifest, claudeShapeMcp, extras.homeDir);
+  // task 03a917fd/H1b: same reuse for the SOLUTION_VERDICT_SIGNING_KEY
+  // projection (generate-settings.ts, projectSigningKeyEnv) -- mirrors
+  // projectGroundingEnv immediately above instead of hand-rolling a third
+  // copy of that logic that could drift from the other two runtimes.
+  projectSigningKeyEnv(claudeShapeMcp, extras.generatedDir);
 
   // Built by iterating manifest.tools.mcp SORTED ascending by name (not
   // by re-using claudeShapeMcp's own key order, which only covers the

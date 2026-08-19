@@ -41,6 +41,7 @@ import { apply, CODEX_CONFIG_BASENAME, SETTINGS_BASENAME, type ApplyResult } fro
 import {
   buildMcpServers,
   projectGroundingEnv,
+  projectSigningKeyEnv,
   type SettingsMcpServer,
 } from "../apply/generate-settings.js";
 import { loadManifest } from "../loader.js";
@@ -466,6 +467,18 @@ interface DesiredMcpServers {
  * `apply.ts`'s own `buildExpectedFiles` call, which never overrides it
  * either.
  *
+ * Also projects `SOLUTION_VERDICT_SIGNING_KEY` (task 03a917fd/H1b,
+ * `projectSigningKeyEnv`) the same way `projectGroundingEnv` projects
+ * `EVIDENCE_LEDGER_DB` above. Unlike `homeDir`, `generatedDir` has no safe
+ * default, so it is resolved here the same way `readPriorLastApply` above
+ * resolves it: `resolveGeneratedDir({homeDir: harnessHomeDir, manifestPath:
+ * configPath})`. THIS is the real, live MCP-registration path (the `claude
+ * mcp` CLI via `ensureMcpServers`, called by `wireClaudeMcp` below) --
+ * unlike `apply.ts`'s `buildExpectedFiles`, whose equivalent
+ * `GenerateSettingsResult.mcpServers` is never serialized into
+ * settings.json (see that field's own doc comment) and therefore never
+ * reaches Claude Code's real MCP registry through THAT path.
+ *
  * Returns `null` when the manifest can't be reloaded (should not happen
  * right after a successful `init()`, but a hand-edited/deleted manifest
  * between write and this read is possible); callers degrade gracefully.
@@ -486,6 +499,11 @@ function loadDesiredMcpServers(
   const warnings: string[] = [];
   const desired = buildMcpServers(manifest.tools.mcp, warnings);
   projectGroundingEnv(manifest, desired);
+  const generatedDir = resolveGeneratedDir({
+    ...(harnessHomeDir !== undefined ? { homeDir: harnessHomeDir } : {}),
+    manifestPath: configPath,
+  });
+  projectSigningKeyEnv(desired, generatedDir);
   return { manifest, desired, warnings };
 }
 

@@ -332,6 +332,7 @@ function buildExpectedFiles(
   manifest: Manifest,
   opts: ApplyOptions,
   manifestPath: string,
+  generatedDir: string,
 ): { files: ExpectedFile[]; warnings: string[] } {
   // Phase 6 #2: expand policy_packs[] into hook contributions + extra
   // generated files BEFORE settings projection. Pack hooks flow through
@@ -420,7 +421,11 @@ function buildExpectedFiles(
     // field, so `packExpansion.hooks` computed below is never
     // projected into the opencode artefact either) -- the file still
     // ships either way, its CONTENT differs per runtime.
-    const opencodeConfig = generateOpencodeConfig(augmentedManifest);
+    // generatedDir threaded in (task 03a917fd/H1b) so the opencode config's
+    // grounding-mcp entry gets a real, resolved SOLUTION_VERDICT_SIGNING_KEY
+    // instead of no projection at all (generateOpencodeConfig's extras have
+    // no safe default for this -- see GenerateOpencodeConfigExtras).
+    const opencodeConfig = generateOpencodeConfig(augmentedManifest, { generatedDir });
     const opencodeWarnings = [...opencodeConfig.warnings];
     if (packExpansion.permissions) {
       // See generate-opencode-config.ts's header ("permission -> NOT
@@ -449,8 +454,19 @@ function buildExpectedFiles(
     };
   }
 
+  // generatedDir threaded in (task 03a917fd/H1b) for symmetry with the
+  // opencode branch above and to keep this call's SOLUTION_VERDICT_SIGNING_KEY
+  // computation correct should a future caller start consuming
+  // GenerateSettingsResult.mcpServers from this call site. As of T-002
+  // that field is NOT projected into settings.json (see its own doc
+  // comment) and Claude Code's real MCP registration goes exclusively
+  // through the `claude mcp` CLI path in src/cli/init/interactive.ts's
+  // `loadDesiredMcpServers` (a separate, independent call into
+  // buildMcpServers/projectGroundingEnv/projectSigningKeyEnv) -- so this
+  // particular projection is not observable in settings.json today.
   const settingsResult = generateSettingsWithWarnings(augmentedManifest, {
     ...(packExpansion.permissions && { packPermissions: packExpansion.permissions }),
+    generatedDir,
   });
   const settings = `${JSON.stringify(settingsResult.root, null, 2)}\n`;
   return {
@@ -592,7 +608,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     );
   }
 
-  const { files: expected, warnings } = buildExpectedFiles(manifest, opts, manifestPath);
+  const { files: expected, warnings } = buildExpectedFiles(manifest, opts, manifestPath, generatedDir);
   const lastApply = readLastApply(generatedDir);
 
   if (opts.installCodex && runtime !== "codex") {
