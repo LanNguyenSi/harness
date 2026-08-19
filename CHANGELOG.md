@@ -29,52 +29,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   deliberately NOT re-exported from the shim's public surface (pinned by
   `tests/policy-packs/ube-export-surface.test.ts`); a follow-up considers
   moving it into `src/io/`.
+- `approval_lifecycle.expire_on_bash_match`'s shipped `SOLO_TEMPLATE` /
+  `TEAM_TEMPLATE` / `FULL_TEMPLATE` regexes stay `^`-anchored
+  (`^gh pr (merge|close)\b`, `^git push origin (master|main)\b`) — no
+  functional change from the last release (task `fb80b5bb`). A same-task
+  first attempt widened both patterns to `\b`-scoped/un-anchored to close
+  a measured fail-open gap (a boundary command behind `cd <dir> &&`, an
+  env-var prefix, a subshell, or an inserted flag never expired the
+  marker); a follow-up review measured that widening end-to-end against
+  the real PostToolUse hook and found it made things worse: the
+  `harness approve understanding <<'RPT' ... RPT` flow became
+  self-revoking (a report body that legitimately quotes a boundary
+  command as part of the plan expired its own freshly-written marker,
+  an operator-only recovery), plus 8 measured everyday false positives
+  (`grep`/`echo`/commit-message text) and still 20 residual fail-open
+  forms uncaught. A scoped `isEscapeCommand` exemption for the
+  approve-heredoc was considered and rejected: it would import a
+  documented divergence class (4 prior halts) into a new consumer.
+  Reverted `src/cli/init/profiles.ts`, `src/cli/init/templates.ts`,
+  `docs/examples/full-manifest.yaml`, and regenerated
+  `docs/examples/full-manifest.expected.yaml` (verified byte-for-byte
+  against the real `describe()` output) back to the shipped patterns.
+  New docs: "expire_on_bash_match: start-anchored, with a documented
+  fail-open limitation" in
+  `docs/policy-packs/understanding-before-execution.md`, naming the full
+  set of known fail-open forms (including `git push --force/-u origin
+  main`, `git push origin HEAD:main`, `git -c x=y push`, `gh --repo o/r
+  pr merge`, whitespace variants), the safety-net role of `max_age`
+  (`1h` SOLO / `4h` TEAM+FULL), and a separate known gap: the interactive
+  custom profile (`harness init --interactive`, `composeCustom()` in
+  `src/cli/init/composer.ts`) sets `expire_on_tool_match` and `max_age`
+  but never sets `expire_on_bash_match` at all — tracked as a follow-up,
+  not fixed here. Updated `tests/cli/init-full-template-pins.test.ts`:
+  restored the "expire_on_bash_match is a separate anchored family,
+  untouched" guard's original `^`-anchored assertions and added a
+  trailing-`\b` structural check that the pre-fb80b5bb version of this
+  test never had (a round-2 mutation probe proved its absence would go
+  undetected); added an "anchored-pattern behavior" describe block
+  pinning positive matches, the documented known-miss forms, and
+  negative false-positive-avoidance forms (including the approve-heredoc
+  shape) against the actual shipped regexes; hoisted the `bashMatchers`
+  helper (previously duplicated across two describe blocks) to module
+  scope. Mutation-verified: removing the `^` anchor from a pattern turns
+  both the structural guard and the false-positive-avoidance pins red;
+  removing only the trailing `\b` turns solely the new end-anchor check
+  red — both restored to green afterward.
 
 ### Security
 
-- **SECURITY (MEDIUM): the shipped `approval_lifecycle.expire_on_bash_match`
-  profile regexes (`SOLO_TEMPLATE` / `TEAM_TEMPLATE` / `FULL_TEMPLATE`) were
-  `^`-anchored, so a boundary command sitting behind a common shell
-  prefix never expired the approval marker, leaving it valid past the
-  real PR merge / branch push until `approval_lifecycle.max_age`
-  finally caught up — a fail-open miss** (task `fb80b5bb`, surfaced by
-  task `bea04a03` making `expire_on_bash_match` actually route real Bash
-  calls to the PostToolUse hook). Measured misses against the old
-  `^gh pr (merge|close)\b` / `^git push origin (master|main)\b`
-  patterns: `cd repo && gh pr merge 42`, `GH_TOKEN=x gh pr merge 42`,
-  `(gh pr merge 42)`, and `git -C repo push origin main` (the `-C <dir>`
-  flag inserted between `git` and `push`). Fix: both patterns are now
-  `\b`-scoped instead of `^`-anchored
-  (`\bgh pr (merge|close)\b`), and the push pattern gained an optional
-  `(?: -C \S+)?` infix for `git -C <dir> push origin ...`. Deliberate
-  trade-off: the unanchored patterns also match inside quoted/echoed
-  text (`echo "gh pr merge 42"`), which is an accepted over-trigger
-  (one unnecessary re-approval) rather than the fail-open miss this
-  closes; `max_age` remains the named safety net for the residual
-  shell-obfuscation gap (heredocs, `sh -c`, `eval`, base64-decoded
-  payloads) this regex family still cannot see, same class PR #341
-  documents for the unrelated PreToolUse `bash_match` policy-trigger
-  family. Deliberately out of scope: parsing shell syntax
-  (quotes/escapes/heredocs) to close that residual gap, or touching the
-  PreToolUse `bash_match` matcher-routing fixed separately in
-  `bea04a03`. Updated `src/cli/init/profiles.ts` (`SOLO_TEMPLATE`,
-  `TEAM_TEMPLATE`), `src/cli/init/templates.ts` (`FULL_TEMPLATE`),
-  `docs/examples/full-manifest.yaml`, and regenerated
-  `docs/examples/full-manifest.expected.yaml` (the `harness describe`
-  golden fixture) to match. New docs: "expire_on_bash_match prefix
-  tolerance" in `docs/policy-packs/understanding-before-execution.md`.
-  New/updated tests in `tests/cli/init-full-template-pins.test.ts`: the
-  former "expire_on_bash_match is a separate anchored family, untouched"
-  guard is revised to pin the new un-anchored, `\b`-scoped shape instead
-  (still asserting no `&`-boundary-alternation leak from the unrelated
-  `d834a065` family); a new "compound/prefixed boundary commands" describe
-  block pins the actual shipped regexes (not hand-copied literals) against
-  the measured misses above, a set of unrelated/non-boundary negative
-  controls (`git status`, `gh pr view 42`, `git pull origin main`, `git
-  push origin feature/foo`, `git -C repo status`, ...), and the accepted
-  quoted-text false positive as a documented, pinned trade-off. Mutation-
-  verified: reverting either pattern to its old `^`-anchored form turns
-  the new compound-command test red.
 - **SECURITY (LOW): `isEscapeCommand`'s top-level `command.trim()`
   (`src/cli/pack/approve-escape.ts`) stripped a TRAILING report-heredoc line
   made only of a non-bash-blank whitespace codepoint (e.g. NBSP, U+2028)

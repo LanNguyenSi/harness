@@ -644,20 +644,9 @@ policy_packs:
           # (open / in_progress / review keep the work claim per v2
           # semantics, see PR #200).
           - mcp__agent-tasks__tasks_transition
-        # Hardened (task fb80b5bb): the two Bash patterns below are
-        # unanchored (\b word boundary, not `^`) so a boundary command
-        # behind a leading `cd <dir> &&`, an env-var prefix
-        # (`GH_TOKEN=x gh pr merge`), a subshell `(...)`, or (push
-        # pattern only) a `git -C <dir>` flag still expires the marker —
-        # a miss here is fail-open, unlike the false-positive trade-off
-        # this widening deliberately accepts (also matches inside
-        # quoted text, e.g. `echo "gh pr merge"`). See
-        # "expire_on_bash_match prefix tolerance" in
-        # docs/policy-packs/understanding-before-execution.md for the
-        # full rationale and the pinning test.
         expire_on_bash_match:
-          - '\bgh pr (merge|close)\b'
-          - '\bgit(?: -C \S+)? push origin (master|main)\b'
+          - '^gh pr (merge|close)\b'
+          - '^git push origin (master|main)\b'
         max_age: 4h
 
   # branch-protection (agent-tasks/2fdc5bbe, default-enabled since v0.17.2):

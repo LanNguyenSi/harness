@@ -285,61 +285,99 @@ Since task `d78fb3c7`, the pack's `config:` block is validated by `harness valid
 | `permission_profile` | enum `safe-start` / `implementation-after-approval` / `high-risk-grill-me` | optional; see the table above |
 | `approval_lifecycle.mode` | literal `session` | optional; opts out of the PostToolUse marker-expiry hook |
 | `approval_lifecycle.expire_on_tool_match` | array of tool-name strings | optional override for the default agent-tasks tool list |
-| `approval_lifecycle.expire_on_bash_match` | array of regex strings | optional; clear the marker when a Bash call matches any of these (gh-cli workflows); see "expire_on_bash_match prefix tolerance" below for the shipped defaults' anchoring |
+| `approval_lifecycle.expire_on_bash_match` | array of regex strings | optional; clear the marker when a Bash call matches any of these (gh-cli workflows); see "expire_on_bash_match: start-anchored, with a documented fail-open limitation" below for the shipped defaults' known gap |
 | `approval_lifecycle.max_age` | duration string (`1h`, `30m`, ...) | optional safety net for sessions that never hit a listed tool / Bash boundary |
 | `ux` | `PolicyUxSchema` (`cannot` + `required[]` + `run[]`) | optional; renders agent-facing remediation when the PreToolUse blocker fires |
 | `producers` | array of `ProducerSchema` (`kind` + recipe) | optional; companion to `ux:` for the same blocker render path |
 
 Any other top-level key is rejected as a typo. New keys land in this schema (`src/policy-packs/builtin/understanding-before-execution.ts`) first, then in the pack's runtime resolver.
 
-### `expire_on_bash_match` prefix tolerance (task `fb80b5bb`)
+### `expire_on_bash_match`: start-anchored, with a documented fail-open limitation (task `fb80b5bb`, measured 2026-08-19)
 
-The shipped `SOLO_TEMPLATE` / `TEAM_TEMPLATE` / `FULL_TEMPLATE` defaults for `approval_lifecycle.expire_on_bash_match` are:
+The shipped `SOLO_TEMPLATE` / `TEAM_TEMPLATE` / `FULL_TEMPLATE` defaults for `approval_lifecycle.expire_on_bash_match` are, and remain:
 
 ```
-\bgh pr (merge|close)\b
-\bgit(?: -C \S+)? push origin (master|main)\b
+^gh pr (merge|close)\b
+^git push origin (master|main)\b
 ```
 
-Before task `fb80b5bb` these two patterns were `^`-anchored
-(`^gh pr (merge|close)\b`, `^git push origin (master|main)\b`). Once task
-`bea04a03` made `expire_on_bash_match` actually route real Bash calls to
-the PostToolUse hook, the anchoring became a genuine fail-open gap: any
-boundary command sitting behind a common shell prefix never matched, so
-the approval marker survived the real merge/push and stayed valid until
-`approval_lifecycle.max_age` finally expired it. Measured misses against
-the old patterns:
+These two patterns are **deliberately `^`-anchored**: they match only at
+the start of the Bash command string, not anywhere inside it.
+
+**Known fail-open forms.** Because the anchor sits at command start, a
+boundary command behind a common shell prefix, or with a flag inserted
+between its own words, does not expire the marker — the approval stays
+valid past the real merge/push until `approval_lifecycle.max_age`
+finally catches up. Measured misses, several of them everyday shapes
+rather than deliberate evasion:
 
 - `cd repo && gh pr merge 42` (leading `cd <dir> &&`)
 - `GH_TOKEN=x gh pr merge 42` (env-var assignment prefix)
 - `(gh pr merge 42)` (subshell parens)
-- `git -C repo push origin main` (the `-C <dir>` flag inserted between `git` and `push`, which no amount of un-anchoring alone fixes — the push pattern's `(?: -C \S+)?` infix exists specifically for this shape)
+- `git -C repo push origin main`, `git -c user.name=x push origin main` (a flag inserted between `git` and `push`)
+- `git push --force origin main`, `git push -u origin main` (a flag inserted between `push` and `origin`)
+- `git push origin HEAD:main` (a refspec instead of a bare branch name)
+- `gh --repo owner/repo pr merge 42` (a flag inserted between `gh` and `pr`)
+- doubled/irregular whitespace between tokens (the pattern's literal single space does not tolerate it)
 
-The fix widens both patterns from `^`-anchored to `\b`-scoped (word
-boundary, not start-of-string), and adds the optional `-C <dir>` infix
-to the push pattern. It deliberately does **not** attempt to parse shell
-syntax (quotes, escapes, heredocs, `sh -c`, `eval`, base64-decoded
-payloads): that is the same class of gap PR #341 documents for the
-unrelated PreToolUse `bash_match` policy-trigger family, and pulling it
-in here would mean writing a shell-semantics parser, which this task
-explicitly stayed out of (see `docs/okf/quote-model-divergence.md` for
-why that direction has a documented halt history).
+`approval_lifecycle.max_age` (`1h` on `SOLO_TEMPLATE`, `4h` on
+`TEAM_TEMPLATE`/`FULL_TEMPLATE`) is the named safety net for all of the
+above: a miss here is bounded, not unbounded.
 
-**Trade-off, taken deliberately (fail-safe over fail-open):** a `\b`-scoped,
-un-anchored pattern also matches inside quoted or echoed text —
-`echo "gh pr merge 42"` now expires the marker even though nothing was
-actually merged. This is an intentional over-trigger: the cost is one
-unnecessary re-approval (annoying), not a stale approval surviving a
-real merge/push (a bypass). A miss stays fail-open only up to
-`approval_lifecycle.max_age`, which remains the named safety net for
-whatever this regex family still cannot see — heredocs, `sh -c`,
-`eval`, base64-decoded payloads, and any other shell-obfuscation shape,
-same residual class as PR #341. Pinned against the actual shipped
-regexes (not hand-copied literals) by the
-`"expire_on_bash_match: compound/prefixed boundary commands"` describe
-block in `tests/cli/init-full-template-pins.test.ts`, so a future regex
-edit that silently re-narrows or over-widens the boundary reddens
-there.
+**Why this stays anchored instead of being widened.** Task `fb80b5bb`
+first shipped a `\b`-scoped, un-anchored version of both patterns to
+close the fail-open forms above. A follow-up review measured that
+change end-to-end against the real PostToolUse hook and found it made
+things worse, not better:
+
+- The `harness approve understanding <<'RPT' ... RPT` approval flow
+  became self-revoking under the widened patterns: the report body
+  legitimately quotes a boundary command as part of the stated plan
+  (e.g. "then run `gh pr merge 42`"), so the SAME Bash call that writes
+  the freshly-approved marker also matches the widened pattern and
+  expires it — flipping the persisted report to `expired` in the same
+  breath it was approved. Recovery from that state is operator-only,
+  which is worse than the fail-open gap the widening was meant to
+  close.
+- 8 measured everyday false positives fired the same way — `grep`/`echo`
+  invocations that quote a boundary command, and commit messages that
+  mention one in prose, all expired the marker with nothing actually
+  merged or pushed.
+- Even widened, 20 fail-open forms remained un-caught (further
+  prefix/flag placements, quoting, and shell-obfuscation shapes) — the
+  widening did not close the class of gap, it only moved it, while
+  adding the self-revocation regression on top.
+- A scoped exemption via `isEscapeCommand` (to let the approve-heredoc
+  bypass its own trigger) was considered and rejected: it imports a
+  documented divergence class (4 prior halts) into a new consumer, and
+  any further widening variant without real shell-awareness keeps
+  re-hitting the same heredoc/quoted-text shape.
+
+Closing this class of miss for real needs shell-aware command matching
+(distinguishing an executed command from quoted/heredoc text,
+understanding shell word-splitting well enough to see past inserted
+flags and prefixes). That is the same open design question already
+tracked for command-matching in general in
+`docs/okf/quote-model-divergence.md` — this task does not attempt to
+solve it here; `approval_lifecycle.max_age` remains the intended
+mitigation until it is.
+
+Pinned against the actual shipped regexes (not hand-copied literals) by
+the `"expire_on_bash_match: anchored-pattern behavior (task fb80b5bb,
+round 2)"` describe block in `tests/cli/init-full-template-pins.test.ts`
+— positive matches, the documented known-miss forms, and the documented
+false-positive-avoidance forms are all pinned there, so a future edit
+that re-widens the anchor without updating this section reddens.
+
+**Known gap: the interactive custom profile.** `harness init
+--interactive`'s composer (`src/cli/init/composer.ts`, the
+`understanding-before-execution` branch, around lines 596-604) sets
+`approval_lifecycle.expire_on_tool_match` and `max_age` but never sets
+`expire_on_bash_match` at all — a session built through the interactive
+composer has NO Bash-boundary expiry whatsoever, relying solely on
+`max_age` and the tool-match list. This is a distinct, wider gap than
+the anchoring limitation above (zero Bash coverage, not a narrow
+anchor), and is tracked as a follow-up task rather than fixed here.
 
 ### Pack-level `min_version` (task `bd154095`)
 

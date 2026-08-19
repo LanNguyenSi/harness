@@ -845,18 +845,6 @@ policy_packs:
       # the safety net. Operators who prefer the legacy per-session
       # behaviour opt out with \`approval_lifecycle: { mode: session }\`.
       # Operators on other task systems override the matchers.
-      #
-      # Hardened (task fb80b5bb): the two Bash patterns below are
-      # unanchored (\\b word boundary, not \`^\`) so a boundary command
-      # behind a leading \`cd <dir> &&\`, an env-var prefix
-      # (\`GH_TOKEN=x gh pr merge\`), a subshell \`(...)\`, or (push
-      # pattern only) a \`git -C <dir>\` flag still expires the marker —
-      # a miss here is fail-open, unlike the false-positive trade-off
-      # this widening deliberately accepts (also matches inside quoted
-      # text, e.g. \`echo "gh pr merge"\`). See "expire_on_bash_match
-      # prefix tolerance" in
-      # docs/policy-packs/understanding-before-execution.md for the full
-      # rationale and the pinning test.
       approval_lifecycle:
         expire_on_tool_match:
           - mcp__agent-tasks__task_finish
@@ -864,8 +852,8 @@ policy_packs:
           - mcp__agent-tasks__pull_requests_merge
           - mcp__agent-tasks__tasks_transition
         expire_on_bash_match:
-          - '\\bgh pr (merge|close)\\b'
-          - '\\bgit(?: -C \\S+)? push origin (master|main)\\b'
+          - '^gh pr (merge|close)\\b'
+          - '^git push origin (master|main)\\b'
         max_age: 4h
 
   # branch-protection (agent-tasks/2fdc5bbe, default-enabled since v0.17.2):
