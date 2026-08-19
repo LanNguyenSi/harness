@@ -186,11 +186,18 @@ hooks:
     event: SessionStart
     command: harness session-start toolchain-parity
     blocking: false
-    # node --version + npm ls -g run in parallel (bounded ~2s/~4s each);
-    # plus two near-instant file reads and a ledger write. 10s leaves
-    # comfortable headroom over the normal-case sub-5s wall time without
-    # approaching git-preflight's 70s (which wraps a full external test
-    # suite, a fundamentally heavier operation this hook never performs).
+    # node --version + npm ls -g run in PARALLEL (bounded ~2s/~4s each, so
+    # max(2s,4s)=4s worst case for that pair), plus two near-instant file
+    # reads; the ledger write runs SEQUENTIALLY after those and carries its
+    # own timeout floor (resolveManifestLedgerWriter's default 5s absent an
+    # explicit grounding-mcp health.timeout_ms or a bound
+    # SessionStartToolchainParityOptions.ledgerTimeoutMs). Worst case is
+    # therefore additive, ~4s + 5s = 9s, not the sub-5s the collectors alone
+    # would suggest — 10s still clears it, but with only ~1s of margin, not
+    # the "comfortable" headroom an earlier version of this comment claimed
+    # (task c1b5ade5). Nowhere near git-preflight's 70s (which wraps a full
+    # external test suite, a fundamentally heavier operation this hook
+    # never performs).
     budget_ms: 10000
 
   # Budget note (task 7bf47554, follow-up to the ms/seconds unit fix
