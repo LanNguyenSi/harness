@@ -472,6 +472,30 @@ describe("verdictMarkerId / signVerdict / verifyVerdictSignature", () => {
     expect(verifyVerdictSignature(generatedDir, "t", signed)).toEqual({ ok: true });
   });
 
+  // Direct, dedicated pin of the markerId-derivation fix (harness/c7c3f606
+  // fix-round-2), at the `verifyVerdictSignature` unit level — deliberately
+  // NOT going through `evaluateGate`, so this is independent of that
+  // function's separate `verdict.id !== id` belt-and-braces check (which
+  // would otherwise also reject a verbatim-copy scenario and mask whether
+  // THIS function alone derives the markerId correctly). A verdict signed
+  // for "task-a" must verify under "task-a" and must NOT verify under
+  // "task-b", even though the verdict's own body still says `id: "task-a"`
+  // in both calls — the caller's id, not the body, drives the check.
+  it("verifyVerdictSignature derives the markerId from the CALLER's id, not verdict.id", () => {
+    const verdict: Verdict = {
+      id: "task-a",
+      head: HEAD,
+      ready: true,
+      confidence: 1,
+      blockers: [],
+      timestamp: "2026-05-30T00:00:00.000Z",
+      source: "preflight",
+    };
+    const signed = signVerdict(generatedDir, verdict);
+    expect(verifyVerdictSignature(generatedDir, "task-a", signed)).toEqual({ ok: true });
+    expect(verifyVerdictSignature(generatedDir, "task-b", signed).ok).toBe(false);
+  });
+
   it("verifyVerdictSignature rejects a verdict with no signature at all", () => {
     const verdict: Verdict = {
       id: "t",
