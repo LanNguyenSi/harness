@@ -264,18 +264,117 @@ describe("profile templates: single `&` is a command boundary in every policy tr
     }
   });
 
-  it.each(TEMPLATES)("%s: expire_on_bash_match is a separate anchored family, untouched", (_, src) => {
+  // Task fb80b5bb (Batch 19) intentionally revised the anchoring
+  // decision this test used to pin: `expire_on_bash_match` patterns
+  // moved from `^`-anchored to `\b`-scoped so a boundary command behind
+  // `cd <dir> &&`, an env-var prefix, a subshell `(...)`, or (push
+  // pattern only) `git -C <dir>` still expires the marker (see
+  // docs/policy-packs/understanding-before-execution.md,
+  // "expire_on_bash_match prefix tolerance"). The `&`-boundary-
+  // alternation guard below is UNRELATED to that change and stays: it
+  // still protects against the `&`-boundary-family fixed in d834a065
+  // (a completely different concern, PreToolUse `bash_match` policy
+  // triggers) accidentally leaking into this PostToolUse-boundary
+  // family's own patterns.
+  it.each(TEMPLATES)("%s: expire_on_bash_match patterns are unanchored (task fb80b5bb) and still carry no `&`-boundary alternation", (_, src) => {
     const parsed = parseManifest(parseYaml(src));
     const pack = parsed.policy_packs.find((p) => p.name === "understanding-before-execution");
     const lifecycle = (pack?.config as Record<string, unknown>)?.["approval_lifecycle"];
     const patterns = (lifecycle as Record<string, unknown>)?.["expire_on_bash_match"] as string[];
     expect(Array.isArray(patterns)).toBe(true);
     for (const p of patterns) {
-      // Anchored, no boundary alternation: widening the trigger family
-      // must never leak into ledger-expiry semantics.
-      expect(p.startsWith("^"), `${p} must stay anchored`).toBe(true);
+      // No `^` anchor: the whole point of fb80b5bb is that these match
+      // anywhere a boundary verb sits, not only at command start.
+      expect(p.startsWith("^"), `${p} must NOT be start-anchored (task fb80b5bb widened it)`).toBe(false);
+      // Still `\b`-scoped, not a bare substring match, so an unrelated
+      // word merely containing "gh" or "git" cannot match.
+      expect(p.startsWith("\\b"), `${p} must open with a \\b word boundary`).toBe(true);
+      // Unrelated concern (d834a065's `&`-boundary-alternation family)
+      // must not leak into this family's own patterns.
       expect(p.includes("&"), `${p} must not carry a boundary alternation`).toBe(false);
     }
+  });
+
+  // AC pin (task fb80b5bb): the ACTUAL shipped regexes — not hand-copied
+  // literals — against realistic prefixed/compound boundary commands.
+  // Reproduces the exact fail-open miss the task fixed
+  // (`cd repo && gh pr merge 42`, `git -C repo push origin main`,
+  // `GH_TOKEN=x gh pr merge 42`, `(gh pr merge 42)`), each of which used
+  // to slip past the old `^`-anchored patterns and leave a stale
+  // approval marker alive past the real merge/push. A future regex edit
+  // that silently narrows or widens the boundary reddens here.
+  describe("expire_on_bash_match: compound/prefixed boundary commands (task fb80b5bb)", () => {
+    function bashMatchers(templateSource: string): RegExp[] {
+      const parsed = parseManifest(parseYaml(templateSource));
+      const pack = parsed.policy_packs.find((p) => p.name === "understanding-before-execution");
+      if (!pack) throw new Error("understanding-before-execution pack missing from template");
+      const lifecycle = (pack.config as Record<string, unknown>)["approval_lifecycle"];
+      const patterns = (lifecycle as Record<string, unknown>)["expire_on_bash_match"];
+      if (!Array.isArray(patterns)) {
+        throw new Error("expire_on_bash_match must be a string array in the template");
+      }
+      return patterns.map((p) => new RegExp(p as string));
+    }
+    const matchesAny = (matchers: RegExp[], cmd: string): boolean => matchers.some((re) => re.test(cmd));
+
+    it.each(TEMPLATES)("%s: prefixed/compound forms of a real boundary command still expire the marker", (_, src) => {
+      const matchers = bashMatchers(src);
+      for (const cmd of [
+        "gh pr merge 42 --squash",
+        "cd repo && gh pr merge 42",
+        "GH_TOKEN=x gh pr merge 42",
+        "(gh pr merge 42)",
+        "cd repo && gh pr close 7",
+        "git push origin main",
+        "git push origin master",
+        "cd repo && git push origin main",
+        "git -C repo push origin main",
+        "GIT_AUTHOR_NAME=x git -C repo push origin main",
+        "(git -C repo push origin main)",
+      ]) {
+        expect(matchesAny(matchers, cmd), `expected a boundary regex to match ${JSON.stringify(cmd)} in ${_}`).toBe(
+          true,
+        );
+      }
+    });
+
+    it.each(TEMPLATES)("%s: unrelated or non-boundary commands do not falsely expire the marker", (_, src) => {
+      const matchers = bashMatchers(src);
+      for (const cmd of [
+        "git status",
+        "gh pr view 42",
+        "gh pr list",
+        "gh issue close 42",
+        "git pull origin main",
+        "git push origin feature/foo",
+        "git -C repo status",
+        "npm publish",
+      ]) {
+        expect(matchesAny(matchers, cmd), `expected no boundary regex to match ${JSON.stringify(cmd)} in ${_}`).toBe(
+          false,
+        );
+      }
+    });
+
+    // Documents the accepted trade-off named in the task's own
+    // acceptance criteria: an unanchored `\b`-scoped pattern also fires
+    // inside quoted text. This is the deliberately chosen failure
+    // direction (an extra, unnecessary re-approval) rather than the
+    // fail-open miss the task closes (a marker that survives a real
+    // merge/push). Pinned so a future "fix" that tries to exclude
+    // quoted occurrences (which would require real shell-quote parsing,
+    // out of scope here — see the task's stop-signal note) doesn't
+    // silently change this behaviour unnoticed.
+    it.each(TEMPLATES)(
+      "%s: accepted false positive by design — the pattern also fires inside quoted/echoed text",
+      (_, src) => {
+        const matchers = bashMatchers(src);
+        expect(
+          matchesAny(matchers, 'echo "gh pr merge 42"'),
+          "expected the gh boundary regex to ALSO match inside quoted text (documented trade-off)",
+        ).toBe(true);
+      },
+    );
   });
 });
 

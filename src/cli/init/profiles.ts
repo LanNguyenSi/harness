@@ -108,10 +108,22 @@ policy_packs:
       # with their own regexes. \`max_age\` is the safety net for
       # sessions that never hit a listed command. Opt out entirely
       # with \`approval_lifecycle: { mode: session }\`.
+      #
+      # Hardened (task fb80b5bb): the two patterns below are unanchored
+      # (\\b word boundary, not \`^\`) so a boundary command behind a
+      # leading \`cd <dir> &&\`, an env-var prefix
+      # (\`GH_TOKEN=x gh pr merge\`), a subshell \`(...)\`, or (push
+      # pattern only) a \`git -C <dir>\` flag still expires the marker —
+      # a miss here is fail-open (approval survives the real merge/push
+      # until \`max_age\`), unlike the false-positive trade-off this
+      # widening deliberately accepts (also matches inside quoted text,
+      # e.g. \`echo "gh pr merge"\`). See "expire_on_bash_match prefix
+      # tolerance" in docs/policy-packs/understanding-before-execution.md
+      # for the full rationale and the pinning test.
       approval_lifecycle:
         expire_on_bash_match:
-          - '^gh pr (merge|close)\\b'
-          - '^git push origin (master|main)\\b'
+          - '\\bgh pr (merge|close)\\b'
+          - '\\bgit(?: -C \\S+)? push origin (master|main)\\b'
         max_age: 1h
 `;
 
@@ -271,6 +283,18 @@ policy_packs:
       # gh-cli in parallel (hybrid workflow). \`max_age\` is the safety
       # net. Opt out entirely with
       # \`approval_lifecycle: { mode: session }\`.
+      #
+      # Hardened (task fb80b5bb): the two Bash patterns below are
+      # unanchored (\\b word boundary, not \`^\`) so a boundary command
+      # behind a leading \`cd <dir> &&\`, an env-var prefix
+      # (\`GH_TOKEN=x gh pr merge\`), a subshell \`(...)\`, or (push
+      # pattern only) a \`git -C <dir>\` flag still expires the marker —
+      # a miss here is fail-open, unlike the false-positive trade-off
+      # this widening deliberately accepts (also matches inside quoted
+      # text, e.g. \`echo "gh pr merge"\`). See "expire_on_bash_match
+      # prefix tolerance" in
+      # docs/policy-packs/understanding-before-execution.md for the full
+      # rationale and the pinning test.
       approval_lifecycle:
         expire_on_tool_match:
           - mcp__agent-tasks__task_finish
@@ -278,7 +302,7 @@ policy_packs:
           - mcp__agent-tasks__pull_requests_merge
           - mcp__agent-tasks__tasks_transition
         expire_on_bash_match:
-          - '^gh pr (merge|close)\\b'
-          - '^git push origin (master|main)\\b'
+          - '\\bgh pr (merge|close)\\b'
+          - '\\bgit(?: -C \\S+)? push origin (master|main)\\b'
         max_age: 4h
 `;

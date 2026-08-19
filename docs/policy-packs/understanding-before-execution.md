@@ -285,12 +285,61 @@ Since task `d78fb3c7`, the pack's `config:` block is validated by `harness valid
 | `permission_profile` | enum `safe-start` / `implementation-after-approval` / `high-risk-grill-me` | optional; see the table above |
 | `approval_lifecycle.mode` | literal `session` | optional; opts out of the PostToolUse marker-expiry hook |
 | `approval_lifecycle.expire_on_tool_match` | array of tool-name strings | optional override for the default agent-tasks tool list |
-| `approval_lifecycle.expire_on_bash_match` | array of regex strings | optional; clear the marker when a Bash call matches any of these (gh-cli workflows) |
+| `approval_lifecycle.expire_on_bash_match` | array of regex strings | optional; clear the marker when a Bash call matches any of these (gh-cli workflows); see "expire_on_bash_match prefix tolerance" below for the shipped defaults' anchoring |
 | `approval_lifecycle.max_age` | duration string (`1h`, `30m`, ...) | optional safety net for sessions that never hit a listed tool / Bash boundary |
 | `ux` | `PolicyUxSchema` (`cannot` + `required[]` + `run[]`) | optional; renders agent-facing remediation when the PreToolUse blocker fires |
 | `producers` | array of `ProducerSchema` (`kind` + recipe) | optional; companion to `ux:` for the same blocker render path |
 
 Any other top-level key is rejected as a typo. New keys land in this schema (`src/policy-packs/builtin/understanding-before-execution.ts`) first, then in the pack's runtime resolver.
+
+### `expire_on_bash_match` prefix tolerance (task `fb80b5bb`)
+
+The shipped `SOLO_TEMPLATE` / `TEAM_TEMPLATE` / `FULL_TEMPLATE` defaults for `approval_lifecycle.expire_on_bash_match` are:
+
+```
+\bgh pr (merge|close)\b
+\bgit(?: -C \S+)? push origin (master|main)\b
+```
+
+Before task `fb80b5bb` these two patterns were `^`-anchored
+(`^gh pr (merge|close)\b`, `^git push origin (master|main)\b`). Once task
+`bea04a03` made `expire_on_bash_match` actually route real Bash calls to
+the PostToolUse hook, the anchoring became a genuine fail-open gap: any
+boundary command sitting behind a common shell prefix never matched, so
+the approval marker survived the real merge/push and stayed valid until
+`approval_lifecycle.max_age` finally expired it. Measured misses against
+the old patterns:
+
+- `cd repo && gh pr merge 42` (leading `cd <dir> &&`)
+- `GH_TOKEN=x gh pr merge 42` (env-var assignment prefix)
+- `(gh pr merge 42)` (subshell parens)
+- `git -C repo push origin main` (the `-C <dir>` flag inserted between `git` and `push`, which no amount of un-anchoring alone fixes — the push pattern's `(?: -C \S+)?` infix exists specifically for this shape)
+
+The fix widens both patterns from `^`-anchored to `\b`-scoped (word
+boundary, not start-of-string), and adds the optional `-C <dir>` infix
+to the push pattern. It deliberately does **not** attempt to parse shell
+syntax (quotes, escapes, heredocs, `sh -c`, `eval`, base64-decoded
+payloads): that is the same class of gap PR #341 documents for the
+unrelated PreToolUse `bash_match` policy-trigger family, and pulling it
+in here would mean writing a shell-semantics parser, which this task
+explicitly stayed out of (see `docs/okf/quote-model-divergence.md` for
+why that direction has a documented halt history).
+
+**Trade-off, taken deliberately (fail-safe over fail-open):** a `\b`-scoped,
+un-anchored pattern also matches inside quoted or echoed text —
+`echo "gh pr merge 42"` now expires the marker even though nothing was
+actually merged. This is an intentional over-trigger: the cost is one
+unnecessary re-approval (annoying), not a stale approval surviving a
+real merge/push (a bypass). A miss stays fail-open only up to
+`approval_lifecycle.max_age`, which remains the named safety net for
+whatever this regex family still cannot see — heredocs, `sh -c`,
+`eval`, base64-decoded payloads, and any other shell-obfuscation shape,
+same residual class as PR #341. Pinned against the actual shipped
+regexes (not hand-copied literals) by the
+`"expire_on_bash_match: compound/prefixed boundary commands"` describe
+block in `tests/cli/init-full-template-pins.test.ts`, so a future regex
+edit that silently re-narrows or over-widens the boundary reddens
+there.
 
 ### Pack-level `min_version` (task `bd154095`)
 

@@ -32,6 +32,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- **SECURITY (MEDIUM): the shipped `approval_lifecycle.expire_on_bash_match`
+  profile regexes (`SOLO_TEMPLATE` / `TEAM_TEMPLATE` / `FULL_TEMPLATE`) were
+  `^`-anchored, so a boundary command sitting behind a common shell
+  prefix never expired the approval marker, leaving it valid past the
+  real PR merge / branch push until `approval_lifecycle.max_age`
+  finally caught up — a fail-open miss** (task `fb80b5bb`, surfaced by
+  task `bea04a03` making `expire_on_bash_match` actually route real Bash
+  calls to the PostToolUse hook). Measured misses against the old
+  `^gh pr (merge|close)\b` / `^git push origin (master|main)\b`
+  patterns: `cd repo && gh pr merge 42`, `GH_TOKEN=x gh pr merge 42`,
+  `(gh pr merge 42)`, and `git -C repo push origin main` (the `-C <dir>`
+  flag inserted between `git` and `push`). Fix: both patterns are now
+  `\b`-scoped instead of `^`-anchored
+  (`\bgh pr (merge|close)\b`), and the push pattern gained an optional
+  `(?: -C \S+)?` infix for `git -C <dir> push origin ...`. Deliberate
+  trade-off: the unanchored patterns also match inside quoted/echoed
+  text (`echo "gh pr merge 42"`), which is an accepted over-trigger
+  (one unnecessary re-approval) rather than the fail-open miss this
+  closes; `max_age` remains the named safety net for the residual
+  shell-obfuscation gap (heredocs, `sh -c`, `eval`, base64-decoded
+  payloads) this regex family still cannot see, same class PR #341
+  documents for the unrelated PreToolUse `bash_match` policy-trigger
+  family. Deliberately out of scope: parsing shell syntax
+  (quotes/escapes/heredocs) to close that residual gap, or touching the
+  PreToolUse `bash_match` matcher-routing fixed separately in
+  `bea04a03`. Updated `src/cli/init/profiles.ts` (`SOLO_TEMPLATE`,
+  `TEAM_TEMPLATE`), `src/cli/init/templates.ts` (`FULL_TEMPLATE`),
+  `docs/examples/full-manifest.yaml`, and regenerated
+  `docs/examples/full-manifest.expected.yaml` (the `harness describe`
+  golden fixture) to match. New docs: "expire_on_bash_match prefix
+  tolerance" in `docs/policy-packs/understanding-before-execution.md`.
+  New/updated tests in `tests/cli/init-full-template-pins.test.ts`: the
+  former "expire_on_bash_match is a separate anchored family, untouched"
+  guard is revised to pin the new un-anchored, `\b`-scoped shape instead
+  (still asserting no `&`-boundary-alternation leak from the unrelated
+  `d834a065` family); a new "compound/prefixed boundary commands" describe
+  block pins the actual shipped regexes (not hand-copied literals) against
+  the measured misses above, a set of unrelated/non-boundary negative
+  controls (`git status`, `gh pr view 42`, `git pull origin main`, `git
+  push origin feature/foo`, `git -C repo status`, ...), and the accepted
+  quoted-text false positive as a documented, pinned trade-off. Mutation-
+  verified: reverting either pattern to its old `^`-anchored form turns
+  the new compound-command test red.
 - **SECURITY (LOW): `isEscapeCommand`'s top-level `command.trim()`
   (`src/cli/pack/approve-escape.ts`) stripped a TRAILING report-heredoc line
   made only of a non-bash-blank whitespace codepoint (e.g. NBSP, U+2028)

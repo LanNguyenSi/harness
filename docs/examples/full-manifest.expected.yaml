@@ -472,8 +472,8 @@ policy_packs:
           - mcp__agent-tasks__pull_requests_merge
           - mcp__agent-tasks__tasks_transition
         expire_on_bash_match:
-          - ^gh pr (merge|close)\b
-          - ^git push origin (master|main)\b
+          - \bgh pr (merge|close)\b
+          - "\\bgit(?: -C \\S+)? push origin (master|main)\\b"
         max_age: 4h
   - name: branch-protection
     source: builtin
