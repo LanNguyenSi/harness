@@ -45,6 +45,10 @@ import { checkNpmBinPath, type NpmExec } from "./npm-bin-path.js";
 import { scanForRogueLedgers, type RogueLedgerScanOptions } from "./rogue-ledger.js";
 import { buildClaudeMcpRegistration } from "./claude-mcp.js";
 import { checkUnderstandingModeEnvDivergence } from "./understanding-mode-env.js";
+import {
+  runDoctorToolchainParity,
+  type RunDoctorToolchainParityOptions,
+} from "./toolchain-parity.js";
 import type { ClaudeMcpExec } from "../../io/claude-mcp.js";
 import {
   isDoctorTarget,
@@ -122,6 +126,16 @@ export interface DoctorOptions extends LoaderOptions {
    * hermetic against the operator's real env.
    */
   envOverride?: NodeJS.ProcessEnv;
+  /**
+   * Test-injection knobs for the toolchain-parity comparison (task
+   * 13919613). Mirrors `codexCheckOptions`/`opencodeCheckOptions`: tests
+   * inject `runNodeVersion`/`runNpmGlobals`/`readOwKitVersion`/
+   * `readMcpServerNames` to fake the reused session-start Collector
+   * without a real spawn (see the hermetic-spawn-guard doc on those
+   * collectors); production omits this and the real collectors run,
+   * gated the same way `--shallow` gates every other live-spawn check.
+   */
+  toolchainParityOptions?: Partial<RunDoctorToolchainParityOptions>;
 }
 
 export { isDoctorTarget, KNOWN_DOCTOR_TARGETS };
@@ -890,6 +904,17 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
     warningCount += report.claudeMcp.warnings.length;
   }
   if (report.npmGlobalBin?.status === "warn") warningCount++;
+  // Toolchain-parity drift (task 13919613): advisory-only, ALWAYS a
+  // warning, never an error — a machine running a different Node/OW-Kit/
+  // npm-global/MCP-set than a peer is a real drift signal worth flagging,
+  // but never a hard failure the way a broken MCP server or a missing
+  // required CLI is. `"skipped"` (--shallow) and `"no-peers"` (nothing to
+  // compare yet) are informational states and contribute nothing here.
+  if (report.toolchainParity) {
+    for (const p of report.toolchainParity.peers) {
+      if (p.status === "drift") warningCount++;
+    }
+  }
   // Understanding-gate mode env/config divergence (task 24abdecb):
   // always advisory, never an error — see understanding-mode-env.ts.
   if (report.understandingModeEnv) warningCount++;
@@ -1025,6 +1050,17 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     manifest,
     opts.envOverride ?? process.env,
   );
+  // Toolchain-parity on-demand comparison (task 13919613). Gated purely on
+  // `toolchain_parity.enabled` — mirrors `grounding`'s "only when the
+  // feature is actually in use" gating, so a manifest that never opted
+  // into the SessionStart companion sees no section at all here either.
+  const toolchainParity = manifest.toolchain_parity.enabled
+    ? await runDoctorToolchainParity(manifest, {
+        shallow: !!opts.shallow,
+        ...(opts.now !== undefined ? { now: opts.now } : {}),
+        ...opts.toolchainParityOptions,
+      })
+    : undefined;
   const manifestSec = manifestSection(manifest);
 
   const rogueLedgerDbs = scanForRogueLedgers({
@@ -1052,6 +1088,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     hookBudgetLedgerMargin,
     ...(grounding !== undefined ? { grounding } : {}),
     ...(claudeMcp !== undefined ? { claudeMcp } : {}),
+    ...(toolchainParity !== undefined ? { toolchainParity } : {}),
     rogueLedgerDbs,
     ...(npmGlobalBin !== undefined ? { npmGlobalBin } : {}),
     ...(understandingModeEnv !== undefined ? { understandingModeEnv } : {}),
