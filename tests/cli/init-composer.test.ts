@@ -48,6 +48,31 @@ describe("composeCustom — single pack", () => {
     expect(cfg?.mode).toBe("grill_me");
     expect(cfg?.producers?.some((p) => p.kind === "ask")).toBe(true);
   });
+
+  it("approval_lifecycle: emits expire_on_tool_match + max_age but NO expire_on_bash_match key (known gap, task 90eae119)", () => {
+    // Unlike SOLO_TEMPLATE/TEAM_TEMPLATE/FULL_TEMPLATE (which all ship
+    // expire_on_bash_match), the interactive composer's
+    // understanding-before-execution branch never sets it at all — a
+    // session built through `harness init --interactive` has NO
+    // Bash-boundary expiry whatsoever, relying solely on max_age and the
+    // tool-match list. See "Known gap: the interactive custom profile"
+    // in docs/policy-packs/understanding-before-execution.md (task
+    // `90eae119-cb77-4941-975c-7d2930e685d8`, tracked as a follow-up, not
+    // fixed here) — this pin and that doc section must not drift apart;
+    // a future fix closing the gap should turn this assertion red.
+    const { manifest } = compose({ packs: ["understanding-before-execution"] });
+    const pack = manifest.policy_packs.find((p) => p.name === "understanding-before-execution");
+    const cfg = pack?.config as { approval_lifecycle?: Record<string, unknown> } | undefined;
+    const lifecycle = cfg?.approval_lifecycle;
+    expect(lifecycle?.["expire_on_tool_match"]).toEqual([
+      "mcp__agent-tasks__task_finish",
+      "mcp__agent-tasks__task_abandon",
+      "mcp__agent-tasks__pull_requests_merge",
+      "mcp__agent-tasks__tasks_transition",
+    ]);
+    expect(lifecycle?.["max_age"]).toBe("4h");
+    expect(lifecycle ? "expire_on_bash_match" in lifecycle : undefined).toBe(false);
+  });
 });
 
 describe("composeCustom — MCPs", () => {

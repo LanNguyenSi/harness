@@ -41,9 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `harness approve understanding <<'RPT' ... RPT` flow became
   self-revoking (a report body that legitimately quotes a boundary
   command as part of the plan expired its own freshly-written marker,
-  an operator-only recovery), plus 8 measured everyday false positives
-  (`grep`/`echo`/commit-message text) and still 20 residual fail-open
-  forms uncaught. A scoped `isEscapeCommand` exemption for the
+  an operator-only recovery), plus at least 8 everyday false positives
+  observed during the round-2 review probe (corpus not retained;
+  `grep`/`echo`/commit-message text) and at least 20 residual fail-open
+  forms still observed uncaught in that same probe. A scoped
+  `isEscapeCommand` exemption for the
   approve-heredoc was considered and rejected: it would import a
   documented divergence class (4 prior halts) into a new consumer.
   Reverted `src/cli/init/profiles.ts`, `src/cli/init/templates.ts`,
@@ -59,8 +61,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (`1h` SOLO / `4h` TEAM+FULL), and a separate known gap: the interactive
   custom profile (`harness init --interactive`, `composeCustom()` in
   `src/cli/init/composer.ts`) sets `expire_on_tool_match` and `max_age`
-  but never sets `expire_on_bash_match` at all — tracked as a follow-up,
-  not fixed here. Updated `tests/cli/init-full-template-pins.test.ts`:
+  but never sets `expire_on_bash_match` at all — tracked as a follow-up
+  (task `90eae119-cb77-4941-975c-7d2930e685d8`), not fixed here. Updated
+  `tests/cli/init-full-template-pins.test.ts`:
   restored the "expire_on_bash_match is a separate anchored family,
   untouched" guard's original `^`-anchored assertions and added a
   trailing-`\b` structural check that the pre-fb80b5bb version of this
@@ -69,14 +72,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   pinning positive matches, the documented known-miss forms, and
   negative false-positive-avoidance forms (including the approve-heredoc
   shape) against the actual shipped regexes; hoisted the `bashMatchers`
-  helper (previously duplicated across two describe blocks) to module
+  helper (duplicated across two describe blocks during this task's first
+  attempt on this branch — master carried only one definition) to module
   scope. Mutation-verified: removing the `^` anchor from a pattern turns
   both the structural guard and the false-positive-avoidance pins red;
   removing only the trailing `\b` turns solely the new end-anchor check
-  red — both restored to green afterward.
+  red — both restored to green afterward. Round 2b: the "separate
+  anchored family, untouched" guard gained a whole-value
+  `toEqual([...])` pin over the two literals (the pre-existing
+  per-pattern shape checks stayed green under a widening such as
+  `(master|main)` -> `(master|main|develop)`); the known-miss `it.each`
+  array gained the 4 forms the docs already named but the array did not
+  yet pin (`git -c user.name=x push origin main`, `git push origin
+  HEAD:main`, `gh --repo owner/repo pr merge 42`, doubled whitespace);
+  and `tests/cli/init-composer.test.ts` gained a pin for the
+  interactive-composer gap named above (task
+  `90eae119-cb77-4941-975c-7d2930e685d8`).
 
 ### Security
 
+- No functional change: the known fail-open limitation of
+  `approval_lifecycle.expire_on_bash_match` is now documented — see the
+  Internal entry above (task `fb80b5bb`) and
+  `docs/policy-packs/understanding-before-execution.md`.
 - **SECURITY (LOW): `isEscapeCommand`'s top-level `command.trim()`
   (`src/cli/pack/approve-escape.ts`) stripped a TRAILING report-heredoc line
   made only of a non-bash-blank whitespace codepoint (e.g. NBSP, U+2028)

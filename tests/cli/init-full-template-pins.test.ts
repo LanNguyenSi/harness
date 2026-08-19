@@ -302,6 +302,16 @@ describe("profile templates: single `&` is a command boundary in every policy tr
     const lifecycle = (pack?.config as Record<string, unknown>)?.["approval_lifecycle"];
     const patterns = (lifecycle as Record<string, unknown>)?.["expire_on_bash_match"] as string[];
     expect(Array.isArray(patterns)).toBe(true);
+    // Whole-value pin (round 2b): the per-pattern shape checks below
+    // (anchored, `\b`-terminated, no `&`) stay green under a widening
+    // (e.g. `(master|main)` -> `(master|main|develop)`), a narrowing, or
+    // a reorder of the array — none of those change the shape. This
+    // asserts the exact literals, so any of the three go red here. The
+    // two literals are the ones documented in "expire_on_bash_match:
+    // start-anchored, with a documented fail-open limitation" in
+    // docs/policy-packs/understanding-before-execution.md; that section
+    // and this assertion must not drift apart.
+    expect(patterns).toEqual(["^gh pr (merge|close)\\b", "^git push origin (master|main)\\b"]);
     for (const p of patterns) {
       // Anchored, no boundary alternation: widening the trigger family
       // must never leak into ledger-expiry semantics.
@@ -350,8 +360,12 @@ describe("profile templates: single `&` is a command boundary in every policy tr
           "GH_TOKEN=x gh pr merge 42", // env-var assignment prefix
           "(gh pr merge 42)", // subshell parens
           "git -C repo push origin main", // flag inserted between `git` and `push`
+          "git -c user.name=x push origin main", // flag inserted between `git` and `push`
           "git push --force origin main", // flag inserted between `push` and `origin`
           "git push -u origin main", // flag inserted between `push` and `origin`
+          "git push origin HEAD:main", // refspec instead of a bare branch name
+          "gh --repo owner/repo pr merge 42", // flag inserted between `gh` and `pr`
+          "git  push  origin  main", // doubled whitespace between tokens
         ]) {
           expect(
             matchesAny(matchers, cmd),

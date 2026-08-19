@@ -324,11 +324,11 @@ rather than deliberate evasion:
 `TEAM_TEMPLATE`/`FULL_TEMPLATE`) is the named safety net for all of the
 above: a miss here is bounded, not unbounded.
 
-**Why this stays anchored instead of being widened.** Task `fb80b5bb`
-first shipped a `\b`-scoped, un-anchored version of both patterns to
-close the fail-open forms above. A follow-up review measured that
-change end-to-end against the real PostToolUse hook and found it made
-things worse, not better:
+**Why this stays anchored instead of being widened.** A first attempt on
+this branch (task `fb80b5bb`) widened both patterns to a `\b`-scoped,
+un-anchored version (never released) to close the fail-open forms
+above. A follow-up review measured that change end-to-end against the
+real PostToolUse hook and found it made things worse, not better:
 
 - The `harness approve understanding <<'RPT' ... RPT` approval flow
   became self-revoking under the widened patterns: the report body
@@ -339,12 +339,13 @@ things worse, not better:
   breath it was approved. Recovery from that state is operator-only,
   which is worse than the fail-open gap the widening was meant to
   close.
-- 8 measured everyday false positives fired the same way — `grep`/`echo`
-  invocations that quote a boundary command, and commit messages that
-  mention one in prose, all expired the marker with nothing actually
-  merged or pushed.
-- Even widened, 20 fail-open forms remained un-caught (further
-  prefix/flag placements, quoting, and shell-obfuscation shapes) — the
+- At least 8 everyday false positives were observed during the round-2
+  review probe (corpus not retained) — `grep`/`echo` invocations that
+  quote a boundary command, and commit messages that mention one in
+  prose, all expired the marker with nothing actually merged or pushed.
+- Even widened, at least 20 fail-open forms were still observed
+  uncaught in that same probe (corpus not retained) — further
+  prefix/flag placements, quoting, and shell-obfuscation shapes — so the
   widening did not close the class of gap, it only moved it, while
   adding the self-revocation regression on top.
 - A scoped exemption via `isEscapeCommand` (to let the approve-heredoc
@@ -371,13 +372,18 @@ that re-widens the anchor without updating this section reddens.
 
 **Known gap: the interactive custom profile.** `harness init
 --interactive`'s composer (`src/cli/init/composer.ts`, the
-`understanding-before-execution` branch, around lines 596-604) sets
+`understanding-before-execution` branch of `composeCustom()`) sets
 `approval_lifecycle.expire_on_tool_match` and `max_age` but never sets
 `expire_on_bash_match` at all — a session built through the interactive
 composer has NO Bash-boundary expiry whatsoever, relying solely on
 `max_age` and the tool-match list. This is a distinct, wider gap than
 the anchoring limitation above (zero Bash coverage, not a narrow
-anchor), and is tracked as a follow-up task rather than fixed here.
+anchor), and is tracked as a follow-up task (task
+`90eae119-cb77-4941-975c-7d2930e685d8`) rather than fixed here. Pinned
+in `tests/cli/init-composer.test.ts` (the composed manifest's
+`approval_lifecycle` carries `expire_on_tool_match` + `max_age` but no
+`expire_on_bash_match` key), so a future edit closing this gap turns
+that pin red rather than drifting silently.
 
 ### Pack-level `min_version` (task `bd154095`)
 
