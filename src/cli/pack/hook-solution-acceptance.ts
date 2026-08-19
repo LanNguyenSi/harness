@@ -290,7 +290,11 @@ export async function runPackHookSolutionAcceptanceCli(
   const dir = opts.verdictDir ?? resolveVerdictDir();
   const currentHead = resolveGitContext(cwd).sha || null;
   const verdict = readVerdict(dir, taskId);
-  const gate = evaluateGate(verdict, currentHead, taskId);
+  // generatedDir (harness's own .generated/ dir, NOT the verdict dir) holds
+  // the shared approval-signing key evaluateGate needs to verify the
+  // verdict's HMAC signature (harness/c7c3f606); undefined fails closed
+  // inside evaluateGate with its own distinct reason.
+  const gate = evaluateGate(verdict, currentHead, taskId, generatedDir);
 
   if (gate.allowed) {
     const diagnostic = `${gate.reason}; allowing ${actionLabel}`;

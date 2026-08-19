@@ -1,7 +1,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { signingKeyPathFor } from "../../src/runtime/approval-signing.js";
 import {
   bashReferencesVerdictDir,
   DEFAULT_PROTECTED_COMPLETION_TOOLS,
@@ -12,11 +13,14 @@ import {
   resolveExplicitVerdictId,
   resolveProtectedCompletionTools,
   sanitizeVerdictId,
+  signVerdict,
   VERDICT_DIR_ENV,
   VERDICT_DIR_TAIL,
   VERDICT_ID_ENV,
   verdictDir,
+  verdictMarkerId,
   verdictPathFor,
+  verifyVerdictSignature,
   type Verdict,
 } from "../../src/policy-packs/builtin/solution-acceptance-runtime.js";
 import type { PolicyPack } from "../../src/schema/index.js";
@@ -36,7 +40,34 @@ function tmpDir(): string {
 const HEAD = "f30767afdc14013a48cd0c024a82213f2f63855a";
 const OTHER_HEAD = "0123456789abcdef0123456789abcdef01234567";
 
+// Shared operator-side signing key location for the whole file (mirrors
+// approval-signing.test.ts / tests/policy-packs/runtime.test.ts): a fresh
+// tmp dir per test, so no signature ever leaks across tests.
+let generatedDir: string;
+beforeEach(() => {
+  generatedDir = fs.mkdtempSync(path.join(os.tmpdir(), "sa-signing-"));
+  cleanups.push(() => fs.rmSync(generatedDir, { recursive: true, force: true }));
+});
+
+/** Builds and SIGNS a verdict (harness/c7c3f606) under the shared `generatedDir`, then writes it. */
 function writeMarker(dir: string, id: string, v: Partial<Verdict>): void {
+  fs.mkdirSync(dir, { recursive: true });
+  const full: Verdict = {
+    id,
+    head: HEAD,
+    ready: true,
+    confidence: 0.9,
+    blockers: [],
+    timestamp: "2026-05-30T00:00:00.000Z",
+    source: "preflight",
+    ...v,
+  };
+  const signed = signVerdict(generatedDir, full);
+  fs.writeFileSync(verdictPathFor(dir, id), `${JSON.stringify(signed, null, 2)}\n`);
+}
+
+/** Writes an UNSIGNED verdict (no `alg`/`signature` — the pre-c7c3f606 / legacy producer shape). */
+function writeUnsignedMarker(dir: string, id: string, v: Partial<Verdict>): void {
   fs.mkdirSync(dir, { recursive: true });
   const full: Verdict = {
     id,
@@ -130,21 +161,23 @@ describe("readVerdict", () => {
 });
 
 describe("evaluateGate — mirror of grounding-mcp solution_gate", () => {
-  it("allows only a ready verdict at the current HEAD", () => {
+  it("allows only a ready, VALIDLY-SIGNED verdict at the current HEAD", () => {
     const dir = tmpDir();
     writeMarker(dir, "t", { head: HEAD, ready: true });
-    expect(evaluateGate(readVerdict(dir, "t"), HEAD, "t").allowed).toBe(true);
+    expect(evaluateGate(readVerdict(dir, "t"), HEAD, "t", generatedDir).allowed).toBe(true);
   });
   it("blocks: no verdict", () => {
-    const r = evaluateGate(null, HEAD, "t");
+    const r = evaluateGate(null, HEAD, "t", generatedDir);
     expect(r.allowed).toBe(false);
+    expect(r.forged).toBe(false);
     expect(r.reason).toMatch(/no solution-acceptance verdict/);
   });
   it("blocks: not ready, surfacing blockers", () => {
     const dir = tmpDir();
     writeMarker(dir, "t", { ready: false, blockers: ["lint failed", "1 test failing"] });
-    const r = evaluateGate(readVerdict(dir, "t"), HEAD, "t");
+    const r = evaluateGate(readVerdict(dir, "t"), HEAD, "t", generatedDir);
     expect(r.allowed).toBe(false);
+    expect(r.forged).toBe(false);
     expect(r.reason).toMatch(/not ready: lint failed; 1 test failing/);
   });
   it("blocks: an orchestrator-workflow process blocker reaches the agent via the existing blockers path", () => {
@@ -158,26 +191,181 @@ describe("evaluateGate — mirror of grounding-mcp solution_gate", () => {
     const dir = tmpDir();
     const owBlocker = "orchestrator-workflow: handoff final-status is 'blocked'";
     writeMarker(dir, "t", { head: HEAD, ready: false, blockers: [owBlocker] });
-    const r = evaluateGate(readVerdict(dir, "t"), HEAD, "t");
+    const r = evaluateGate(readVerdict(dir, "t"), HEAD, "t", generatedDir);
     expect(r.allowed).toBe(false);
     expect(r.reason).toContain(owBlocker);
   });
   it("blocks: HEAD drift (stale verdict)", () => {
     const dir = tmpDir();
     writeMarker(dir, "t", { head: OTHER_HEAD, ready: true });
-    const r = evaluateGate(readVerdict(dir, "t"), HEAD, "t");
+    const r = evaluateGate(readVerdict(dir, "t"), HEAD, "t", generatedDir);
     expect(r.allowed).toBe(false);
+    expect(r.forged).toBe(false);
     expect(r.reason).toMatch(/stale solution-acceptance verdict/);
   });
   it("blocks: unresolvable current HEAD", () => {
     const dir = tmpDir();
     writeMarker(dir, "t", { ready: true });
-    expect(evaluateGate(readVerdict(dir, "t"), null, "t").allowed).toBe(false);
+    expect(evaluateGate(readVerdict(dir, "t"), null, "t", generatedDir).allowed).toBe(false);
   });
   it("ignores confidence: ready:true confidence:0 at HEAD still ALLOWS (parity with producer)", () => {
     const dir = tmpDir();
     writeMarker(dir, "t", { ready: true, confidence: 0, head: HEAD });
-    expect(evaluateGate(readVerdict(dir, "t"), HEAD, "t").allowed).toBe(true);
+    expect(evaluateGate(readVerdict(dir, "t"), HEAD, "t", generatedDir).allowed).toBe(true);
+  });
+});
+
+describe("evaluateGate — signature verification (harness/c7c3f606, fail-closed)", () => {
+  it("rejects an UNSIGNED verdict with a distinct forged reason, separate from no-marker", () => {
+    const dir = tmpDir();
+    writeUnsignedMarker(dir, "t", { head: HEAD, ready: true });
+    const r = evaluateGate(readVerdict(dir, "t"), HEAD, "t", generatedDir);
+    expect(r.allowed).toBe(false);
+    expect(r.forged).toBe(true);
+    expect(r.reason).toMatch(/forged\/unsigned solution-acceptance verdict rejected/);
+    // Distinct from the "no verdict recorded" wording used when the file is absent.
+    expect(r.reason).not.toMatch(/no solution-acceptance verdict recorded/);
+  });
+
+  // Regression (AC #3): a marker hand-written WITHOUT the signing key —
+  // simulating a forge via a write primitive the write-guard does not
+  // enumerate — must NOT satisfy the gate, even with perfectly well-formed
+  // ready/head/blockers fields. Mirrors
+  // tests/policy-packs/runtime.test.ts's approval-marker forgery regression.
+  it("a hand-written marker without a signature does NOT satisfy the gate (forgery regression)", () => {
+    const dir = tmpDir();
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      verdictPathFor(dir, "attacker-task"),
+      `${JSON.stringify({
+        id: "attacker-task",
+        head: HEAD,
+        ready: true,
+        confidence: 1,
+        blockers: [],
+        timestamp: new Date().toISOString(),
+        source: "attacker",
+      })}\n`,
+    );
+    const r = evaluateGate(readVerdict(dir, "attacker-task"), HEAD, "attacker-task", generatedDir);
+    expect(r.allowed).toBe(false);
+    expect(r.forged).toBe(true);
+    expect(r.reason).toMatch(/forged\/unsigned solution-acceptance verdict rejected/);
+    expect(r.reason).toMatch(/missing signature/);
+  });
+
+  // Mutation-verification (mirrors approval-signing's tamper regression):
+  // flip ONE byte of an otherwise-valid signature and confirm the gate
+  // blocks with the forged reason, not silently accepting it.
+  it("a validly-signed verdict with one tampered signature byte is REJECTED", () => {
+    const dir = tmpDir();
+    writeMarker(dir, "t", { head: HEAD, ready: true });
+    // Confirm the untampered verdict verifies first, so the assertion below
+    // is attributable to the tamper, not to some other break.
+    expect(evaluateGate(readVerdict(dir, "t"), HEAD, "t", generatedDir).allowed).toBe(true);
+    const markerPath = verdictPathFor(dir, "t");
+    const raw = JSON.parse(fs.readFileSync(markerPath, "utf8")) as { signature: string };
+    const original = raw.signature;
+    const flippedChar = original[0] === "0" ? "1" : "0";
+    raw.signature = flippedChar + original.slice(1);
+    fs.writeFileSync(markerPath, `${JSON.stringify(raw, null, 2)}\n`);
+    const r = evaluateGate(readVerdict(dir, "t"), HEAD, "t", generatedDir);
+    expect(r.allowed).toBe(false);
+    expect(r.forged).toBe(true);
+    expect(r.reason).toMatch(/forged\/unsigned solution-acceptance verdict rejected/);
+    expect(r.reason).toMatch(/signature verification failed/);
+  });
+
+  // Tampering ANY signed field (not just `signature` itself) must also fail
+  // verification — the content hash binds head/ready/confidence/blockers,
+  // not just the literal bytes signMarker hashed.
+  it("tampering `ready` after signing (without touching signature) is REJECTED", () => {
+    const dir = tmpDir();
+    writeMarker(dir, "t", { head: HEAD, ready: false, blockers: ["lint failed"] });
+    const markerPath = verdictPathFor(dir, "t");
+    const raw = JSON.parse(fs.readFileSync(markerPath, "utf8")) as Verdict;
+    raw.ready = true; // flip a forger would want: turn a real "not ready" into "ready"
+    raw.blockers = [];
+    fs.writeFileSync(markerPath, `${JSON.stringify(raw, null, 2)}\n`);
+    const r = evaluateGate(readVerdict(dir, "t"), HEAD, "t", generatedDir);
+    expect(r.allowed).toBe(false);
+    expect(r.forged).toBe(true);
+  });
+
+  it("fails closed (NOT forged) when generatedDir cannot be resolved", () => {
+    const dir = tmpDir();
+    writeMarker(dir, "t", { head: HEAD, ready: true });
+    const r = evaluateGate(readVerdict(dir, "t"), HEAD, "t", undefined);
+    expect(r.allowed).toBe(false);
+    expect(r.forged).toBe(false);
+    expect(r.reason).toMatch(/cannot resolve harness\.generated\//);
+  });
+
+  // Review parity with approval-signing.ts: a broken signing-key file (I/O
+  // error) must NOT read as an active forgery attempt. Distinct from `forged`.
+  it("a signing-key I/O failure is fail-closed but NOT classified as forged", () => {
+    const dir = tmpDir();
+    writeMarker(dir, "t", { head: HEAD, ready: true });
+    expect(evaluateGate(readVerdict(dir, "t"), HEAD, "t", generatedDir).allowed).toBe(true);
+    const keyPath = signingKeyPathFor(generatedDir);
+    fs.rmSync(keyPath, { force: true });
+    fs.mkdirSync(keyPath); // directory at the key's path: readFileSync throws EISDIR
+    const r = evaluateGate(readVerdict(dir, "t"), HEAD, "t", generatedDir);
+    expect(r.allowed).toBe(false);
+    expect(r.forged).toBe(false);
+    expect(r.reason).toMatch(/could not be verified/);
+  });
+
+  // A verdict signed for one id must not verify under a different id — the
+  // markerId is bound into the signature (mirrors the approval marker's
+  // copy-to-a-different-session-id regression).
+  it("a validly-signed verdict's signature does not transfer to a different id", () => {
+    const dir = tmpDir();
+    writeMarker(dir, "task-a", { head: HEAD, ready: true });
+    const originalPath = verdictPathFor(dir, "task-a");
+    const raw = JSON.parse(fs.readFileSync(originalPath, "utf8")) as Verdict;
+    raw.id = "task-b"; // relabel, same signature
+    const copiedPath = verdictPathFor(dir, "task-b");
+    fs.writeFileSync(copiedPath, `${JSON.stringify(raw, null, 2)}\n`);
+    const r = evaluateGate(readVerdict(dir, "task-b"), HEAD, "task-b", generatedDir);
+    expect(r.allowed).toBe(false);
+    expect(r.forged).toBe(true);
+  });
+});
+
+describe("verdictMarkerId / signVerdict / verifyVerdictSignature", () => {
+  it("verdictMarkerId namespaces the id so it cannot collide with an approval/branch-protection marker id", () => {
+    expect(verdictMarkerId("task-42")).toBe("solution-verdict-task-42");
+  });
+
+  it("signVerdict + verifyVerdictSignature round-trip ok on an untampered verdict", () => {
+    const verdict: Verdict = {
+      id: "t",
+      head: HEAD,
+      ready: true,
+      confidence: 0.5,
+      blockers: [],
+      timestamp: "2026-05-30T00:00:00.000Z",
+      source: "preflight",
+    };
+    const signed = signVerdict(generatedDir, verdict);
+    expect(signed.alg).toBeDefined();
+    expect(signed.signature).toBeDefined();
+    expect(verifyVerdictSignature(generatedDir, signed)).toEqual({ ok: true });
+  });
+
+  it("verifyVerdictSignature rejects a verdict with no signature at all", () => {
+    const verdict: Verdict = {
+      id: "t",
+      head: HEAD,
+      ready: true,
+      confidence: 0.5,
+      blockers: [],
+      timestamp: "2026-05-30T00:00:00.000Z",
+      source: "preflight",
+    };
+    const v = verifyVerdictSignature(generatedDir, verdict);
+    expect(v.ok).toBe(false);
   });
 });
 
@@ -291,16 +479,41 @@ describe("golden fixture — drift guard against the real producer", () => {
     expect(Object.keys(raw).sort()).toEqual([...PRODUCER_KEYS].sort());
   });
 
-  it("the consumer parses the real marker and gates on it correctly", () => {
+  // harness/c7c3f606: the REAL 0.3.2 producer output carries no `signature`
+  // field (no currently-released grounding-mcp version signs). Under the
+  // new fail-closed contract this is correctly REJECTED as unsigned — the
+  // exact same strict, no-migration-window trade-off f9485cc7 made for the
+  // understanding-gate marker, just landing here because the producer is a
+  // separate package/repo (see solution-acceptance-runtime.ts module doc,
+  // "HONEST RESIDUAL"). This replaces the pre-c7c3f606 assertion that this
+  // exact unsigned marker ALLOWED at its own head.
+  it("the real UNSIGNED 0.3.2 marker is rejected as forged/unsigned, even at its own HEAD", () => {
     const dir = tmpDir();
     fs.mkdirSync(dir, { recursive: true });
     const raw = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as Verdict;
     fs.writeFileSync(verdictPathFor(dir, raw.id), JSON.stringify(raw));
     const v = readVerdict(dir, raw.id);
     expect(v).not.toBeNull();
+    const r = evaluateGate(v, raw.head, raw.id, generatedDir);
+    expect(r.allowed).toBe(false);
+    expect(r.forged).toBe(true);
+  });
+
+  // Once the SAME 7-key content is signed (as a future signing producer
+  // would do), the pre-existing ready/HEAD-match gate logic behaves exactly
+  // as before: allow at the marker's own head, deny at a drifted head. This
+  // preserves the original test's coverage of that decision.
+  it("the consumer gates a SIGNED copy of the real marker's content correctly", () => {
+    const dir = tmpDir();
+    fs.mkdirSync(dir, { recursive: true });
+    const raw = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as Verdict;
+    const signed = signVerdict(generatedDir, raw);
+    fs.writeFileSync(verdictPathFor(dir, raw.id), JSON.stringify(signed));
+    const v = readVerdict(dir, raw.id);
+    expect(v).not.toBeNull();
     // allow at the marker's own head, deny at a drifted head.
-    expect(evaluateGate(v, raw.head, raw.id).allowed).toBe(true);
-    expect(evaluateGate(v, OTHER_HEAD, raw.id).allowed).toBe(false);
+    expect(evaluateGate(v, raw.head, raw.id, generatedDir).allowed).toBe(true);
+    expect(evaluateGate(v, OTHER_HEAD, raw.id, generatedDir).allowed).toBe(false);
   });
 });
 
@@ -333,9 +546,24 @@ describe("golden fixture 0.5.0 — pins the orchestrator-workflow blocker contra
     expect(fixture.blockers.some((b) => /^orchestrator-workflow: /.test(b))).toBe(true);
   });
 
-  it("the consumer gate denies the not-ready OW verdict and surfaces the OW blocker", () => {
-    const r = evaluateGate(fixture, fixture.head, fixture.id);
+  // harness/c7c3f606: the raw fixture is unsigned (no released producer
+  // signs yet), so it is now rejected as forged/unsigned BEFORE the OW
+  // blocker logic ever runs — proving the signature check is evaluated
+  // first, fail-closed, regardless of what `ready`/`blockers` claim.
+  it("the raw UNSIGNED 0.5.0 marker is rejected as forged/unsigned before the not-ready logic runs", () => {
+    const r = evaluateGate(fixture, fixture.head, fixture.id, generatedDir);
     expect(r.allowed).toBe(false);
+    expect(r.forged).toBe(true);
+  });
+
+  // Signing the SAME captured content (as a future signing producer would)
+  // exercises the pre-existing not-ready + OW-blocker-surfacing behavior
+  // this test originally pinned, unchanged.
+  it("a SIGNED copy of the 0.5.0 marker still denies the not-ready OW verdict and surfaces the OW blocker", () => {
+    const signed = signVerdict(generatedDir, fixture);
+    const r = evaluateGate(signed, signed.head, signed.id, generatedDir);
+    expect(r.allowed).toBe(false);
+    expect(r.forged).toBe(false);
     const owBlocker = fixture.blockers.find((b) => /^orchestrator-workflow: /.test(b));
     expect(owBlocker).toBeDefined();
     expect(r.reason).toContain(owBlocker as string);
