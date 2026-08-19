@@ -77,6 +77,7 @@ describe("ToolchainParitySchema — manifest parsing", () => {
     expect(m.toolchain_parity.machine_state_dir).toBeUndefined();
     expect(m.toolchain_parity.profile).toBeUndefined();
     expect(m.toolchain_parity.workspace_root).toBeUndefined();
+    expect(m.toolchain_parity.stale_after_days).toBeUndefined();
   });
 
   it("parses an explicit enabled config with all fields", () => {
@@ -85,17 +86,24 @@ describe("ToolchainParitySchema — manifest parsing", () => {
       machine_state_dir: "/tmp/machine-state",
       profile: "mac-mini",
       workspace_root: "/repo",
+      stale_after_days: 14,
     });
     expect(m.toolchain_parity).toEqual({
       enabled: true,
       machine_state_dir: "/tmp/machine-state",
       profile: "mac-mini",
       workspace_root: "/repo",
+      stale_after_days: 14,
     });
   });
 
   it("rejects unknown keys (.strict())", () => {
     expect(() => manifestWithConfig({ enabled: true, bogus_key: 1 })).toThrow();
+  });
+
+  it("rejects a non-positive stale_after_days", () => {
+    expect(() => manifestWithConfig({ enabled: true, stale_after_days: 0 })).toThrow();
+    expect(() => manifestWithConfig({ enabled: true, stale_after_days: -1 })).toThrow();
   });
 });
 
@@ -656,5 +664,228 @@ describe("real node/npm spawn guard (hermetic-spawn-guard.ts)", () => {
         manifest: manifestWithConfig({ enabled: true, machine_state_dir: dir, profile: "local-machine" }),
       }),
     ).rejects.toThrow(/Refusing to spawn a REAL "npm ls -g --depth=0 --json"/);
+  });
+});
+
+describe("runSessionStartToolchainParity — lossy profile-name sanitization (AC1, task c1b5ade5)", () => {
+  it("warns when the configured profile is not filename-safe", async () => {
+    const dir = tmpDir("harness-tcp-lossy-");
+    const { stream: err, output: errOut } = captureStream();
+    const result = await runSessionStartToolchainParity({
+      ...baseCollectors(),
+      stdin: streamFrom(JSON.stringify({ session_id: "sess-1", cwd: "/tmp" })),
+      stderr: err,
+      manifest: manifestWithConfig({ enabled: true, machine_state_dir: dir, profile: "mac/mini" }),
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(errOut()).toMatch(/configured profile "mac\/mini" is not filename-safe; using sanitized "mac-mini"/);
+    // The snapshot itself is still written, under the sanitized filename.
+    expect(fs.existsSync(path.join(dir, "mac-mini.json"))).toBe(true);
+  });
+
+  it("negative control: does NOT warn when the configured profile is already filename-safe", async () => {
+    const dir = tmpDir("harness-tcp-nolossy-");
+    const { stream: err, output: errOut } = captureStream();
+    const result = await runSessionStartToolchainParity({
+      ...baseCollectors(),
+      stdin: streamFrom(JSON.stringify({ session_id: "sess-1", cwd: "/tmp" })),
+      stderr: err,
+      manifest: manifestWithConfig({ enabled: true, machine_state_dir: dir, profile: "mac-mini" }),
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(errOut()).not.toMatch(/is not filename-safe/);
+  });
+
+  it("flags a collision when the sanitized filename already holds a DIFFERENT profile's snapshot", async () => {
+    const dir = tmpDir("harness-tcp-lossy-collide-");
+    // Pre-seed the sanitized target filename with a snapshot belonging to a
+    // DIFFERENT profile: sanitizeProfileName("mac/mini") === "mac-mini",
+    // the same target this run's own write is about to use, so this run's
+    // write is about to silently overwrite what looks like a peer's file.
+    writeSnapshotFile(dir, "mac-mini.json", {
+      profile: "mac-mini",
+      timestamp: NOW.toISOString(),
+      node: "v20.0.0",
+      npmGlobals: {},
+      mcpServers: [],
+    });
+    const { stream: err, output: errOut } = captureStream();
+    const result = await runSessionStartToolchainParity({
+      ...baseCollectors(),
+      stdin: streamFrom(JSON.stringify({ session_id: "sess-1", cwd: "/tmp" })),
+      stderr: err,
+      manifest: manifestWithConfig({ enabled: true, machine_state_dir: dir, profile: "mac/mini" }),
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(errOut()).toMatch(
+      /WARNING: sanitized filename "mac-mini\.json" collides with an existing snapshot for a DIFFERENT profile \("mac-mini"\)/,
+    );
+  });
+});
+
+describe("runSessionStartToolchainParity — defensive catches (AC2, task c1b5ade5)", () => {
+  it("degrades to exit 0 with a note when the injected session resolver throws", async () => {
+    const dir = tmpDir("harness-tcp-resolvesession-throw-");
+    writeSnapshotFile(dir, "peer-a.json", {
+      profile: "peer-a",
+      timestamp: NOW.toISOString(),
+      node: "v22.1.0",
+      npmGlobals: {},
+      mcpServers: [],
+    });
+    const { stream: err, output: errOut } = captureStream();
+    const result = await runSessionStartToolchainParity({
+      ...baseCollectors(),
+      resolveSession: () => {
+        throw new Error("boom: transcript discovery exploded");
+      },
+      stdin: streamFrom(JSON.stringify({ cwd: "/tmp" })),
+      stderr: err,
+      manifest: manifestWithConfig({ enabled: true, machine_state_dir: dir, profile: "local-machine" }),
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.sessionId).toBe("default");
+    expect(errOut()).toMatch(/session id resolution failed: boom: transcript discovery exploded/);
+    // The rest of the run still completes normally: own snapshot written,
+    // peer compared, ledger recorded — a session-resolution throw must not
+    // abort collection or comparison.
+    expect(result.wrote).toBe(true);
+    expect(fs.existsSync(path.join(dir, "local-machine.json"))).toBe(true);
+  });
+
+  it("degrades to exit 0 with a note when the injected writeLedger REJECTS instead of resolving", async () => {
+    const dir = tmpDir("harness-tcp-writeledger-reject-");
+    writeSnapshotFile(dir, "peer-a.json", {
+      profile: "peer-a",
+      timestamp: NOW.toISOString(),
+      node: "v22.1.0",
+      npmGlobals: {},
+      mcpServers: [],
+    });
+    const { stream: err, output: errOut } = captureStream();
+    const result = await runSessionStartToolchainParity({
+      ...baseCollectors(),
+      stdin: streamFrom(JSON.stringify({ session_id: "sess-1", cwd: "/tmp" })),
+      stderr: err,
+      manifest: manifestWithConfig({ enabled: true, machine_state_dir: dir, profile: "local-machine" }),
+      writeLedger: async () => {
+        throw new Error("grounding-mcp connection reset");
+      },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.wrote).toBe(false);
+    expect(result.reason).toMatch(/ledger write threw: grounding-mcp connection reset/);
+    expect(errOut()).toMatch(/ledger write threw: grounding-mcp connection reset/);
+  });
+});
+
+describe("runSessionStartToolchainParity — configurable staleness threshold (AC3, task c1b5ade5)", () => {
+  it("adds a stale-peer warning, without inflating drift, when a peer's age exceeds stale_after_days", async () => {
+    const dir = tmpDir("harness-tcp-stale-");
+    writeSnapshotFile(dir, "peer-old.json", {
+      profile: "peer-old",
+      timestamp: new Date(NOW.getTime() - 10 * 24 * 60 * 60 * 1000).toISOString(), // 10 days old
+      node: "v22.1.0",
+      npmGlobals: { "@lannguyensi/harness": "0.41.0" },
+      owKitVersion: "0.12.0",
+      mcpServers: ["agent-tasks", "grounding-mcp"],
+    });
+    const writes: string[] = [];
+    const { stream: err, output: errOut } = captureStream();
+    const result = await runSessionStartToolchainParity({
+      ...baseCollectors(),
+      stdin: streamFrom(JSON.stringify({ session_id: "sess-1", cwd: "/tmp" })),
+      stderr: err,
+      manifest: manifestWithConfig({
+        enabled: true,
+        machine_state_dir: dir,
+        profile: "local-machine",
+        stale_after_days: 7,
+      }),
+      writeLedger: async (args) => {
+        writes.push(args.content);
+        return { ok: true };
+      },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.driftCount).toBe(0);
+    expect(writes).toEqual(["toolchain-parity:ok"]);
+    expect(errOut()).toMatch(/peer peer-old snapshot is stale \(age 10d, exceeds the configured 7d threshold\)/);
+  });
+
+  it("negative control: does NOT warn when stale_after_days is unset, even for a very old peer", async () => {
+    const dir = tmpDir("harness-tcp-stale-off-");
+    writeSnapshotFile(dir, "peer-old.json", {
+      profile: "peer-old",
+      timestamp: new Date(NOW.getTime() - 365 * 24 * 60 * 60 * 1000).toISOString(),
+      node: "v22.1.0",
+      npmGlobals: { "@lannguyensi/harness": "0.41.0" },
+      owKitVersion: "0.12.0",
+      mcpServers: ["agent-tasks", "grounding-mcp"],
+    });
+    const { stream: err, output: errOut } = captureStream();
+    const result = await runSessionStartToolchainParity({
+      ...baseCollectors(),
+      stdin: streamFrom(JSON.stringify({ session_id: "sess-1", cwd: "/tmp" })),
+      stderr: err,
+      manifest: manifestWithConfig({ enabled: true, machine_state_dir: dir, profile: "local-machine" }),
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(errOut()).not.toMatch(/is stale/);
+  });
+});
+
+describe("runSessionStartToolchainParity — sessionSource 'default' warning branch (AC5, task c1b5ade5)", () => {
+  it('logs a WARNING note when the session resolves to the literal "default"', async () => {
+    const dir = tmpDir("harness-tcp-sessiondefault-");
+    writeSnapshotFile(dir, "peer-a.json", {
+      profile: "peer-a",
+      timestamp: NOW.toISOString(),
+      node: "v22.1.0",
+      npmGlobals: { "@lannguyensi/harness": "0.41.0" },
+      owKitVersion: "0.12.0",
+      mcpServers: ["agent-tasks", "grounding-mcp"],
+    });
+    const { stream: err, output: errOut } = captureStream();
+    const result = await runSessionStartToolchainParity({
+      ...baseCollectors(),
+      resolveSession: () => "default",
+      stdin: streamFrom(JSON.stringify({ cwd: "/tmp" })), // no session_id
+      stderr: err,
+      manifest: manifestWithConfig({ enabled: true, machine_state_dir: dir, profile: "local-machine" }),
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.sessionId).toBe("default");
+    expect(result.sessionSource).toBe("default");
+    expect(result.wrote).toBe(true);
+    expect(errOut()).toMatch(/WARNING: session resolved to the literal "default"/);
+  });
+
+  it("negative control: does NOT log the WARNING note when the session resolves from an explicit id", async () => {
+    const dir = tmpDir("harness-tcp-sessionexplicit-");
+    writeSnapshotFile(dir, "peer-a.json", {
+      profile: "peer-a",
+      timestamp: NOW.toISOString(),
+      node: "v22.1.0",
+      npmGlobals: { "@lannguyensi/harness": "0.41.0" },
+      owKitVersion: "0.12.0",
+      mcpServers: ["agent-tasks", "grounding-mcp"],
+    });
+    const { stream: err, output: errOut } = captureStream();
+    const result = await runSessionStartToolchainParity({
+      ...baseCollectors(),
+      stdin: streamFrom(JSON.stringify({ session_id: "sess-1", cwd: "/tmp" })),
+      stderr: err,
+      manifest: manifestWithConfig({ enabled: true, machine_state_dir: dir, profile: "local-machine" }),
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.sessionSource).toBe("stdin");
+    expect(errOut()).not.toMatch(/WARNING: session resolved/);
   });
 });

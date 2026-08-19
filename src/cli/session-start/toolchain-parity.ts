@@ -699,7 +699,21 @@ export async function runSessionStartToolchainParity(
         ? event.session_id
         : undefined;
   const resolveSession = opts.resolveSession ?? resolveReadSessionId;
-  const sessionId = resolveSession(explicit, {});
+  // Defensive (task c1b5ade5): a session resolver that throws (real or
+  // injected) must degrade to the same FALLBACK_SESSION every OTHER "no
+  // session known" path already uses, not crash a producer whose whole
+  // contract is "never break the session loop". Unlike collectLocalSnapshot
+  // below, this call is NOT part of the hermetic-spawn-guard contract, so
+  // wrapping it here does not swallow a HermeticSpawnViolationError.
+  let sessionId: string;
+  try {
+    sessionId = resolveSession(explicit, {});
+  } catch (err) {
+    note(
+      `session id resolution failed: ${(err as Error).message}; falling back to session "${FALLBACK_SESSION}"`,
+    );
+    sessionId = FALLBACK_SESSION;
+  }
   const sessionSource: SessionStartToolchainParityResult["sessionSource"] =
     typeof opts.session === "string" && opts.session.length > 0
       ? "flag"
@@ -738,7 +752,12 @@ export async function runSessionStartToolchainParity(
   const machineStateDir = config.machine_state_dir ?? defaultMachineStateDir();
   const profile = config.profile ?? sanitizeProfileName(os.hostname());
   const workspaceRoot = config.workspace_root ?? cwd;
-  const ownFileName = `${sanitizeProfileName(profile)}.json`;
+  const sanitizedProfile = sanitizeProfileName(profile);
+  const ownFileName = `${sanitizedProfile}.json`;
+  // Advisory staleness threshold (AC3, task c1b5ade5): undefined disables
+  // the check entirely, matching the schema's default-off comment.
+  const staleAfterMs =
+    config.stale_after_days !== undefined ? config.stale_after_days * 24 * 60 * 60 * 1000 : undefined;
 
   try {
     fs.mkdirSync(machineStateDir, { recursive: true });
@@ -746,6 +765,34 @@ export async function runSessionStartToolchainParity(
     const reason = `cannot create/access machine-state dir ${machineStateDir}: ${(err as Error).message}`;
     note(reason);
     return done(false, profile, 0, 0, sessionId, sessionSource, reason);
+  }
+
+  // Lossy-sanitization advisory (task c1b5ade5): a `profile` configured
+  // with characters that are not filename-safe silently loses information
+  // when sanitizeProfileName strips/replaces them. That is invisible to an
+  // operator unless flagged — worse, two DIFFERENT configured profiles can
+  // sanitize to the SAME filename (e.g. "mac/mini" and "mac-mini" both land
+  // on "mac-mini.json"), in which case this run's write is about to
+  // silently overwrite what looked like a peer's snapshot. Both cases are
+  // advisory-only: this producer still writes its own snapshot and
+  // continues normally either way.
+  if (sanitizedProfile !== profile) {
+    note(
+      `configured profile "${profile}" is not filename-safe; using sanitized "${sanitizedProfile}" for the snapshot file (${ownFileName})`,
+    );
+    try {
+      const existingRaw = fs.readFileSync(path.join(machineStateDir, ownFileName), "utf8");
+      const existingParsed = parseSnapshotJson(existingRaw);
+      if (existingParsed.ok && existingParsed.snapshot.profile !== profile) {
+        note(
+          `WARNING: sanitized filename "${ownFileName}" collides with an existing snapshot for a DIFFERENT profile ("${existingParsed.snapshot.profile}"); this run's write is about to overwrite it`,
+        );
+      }
+    } catch {
+      // No existing file for this sanitized name yet (first run for this
+      // profile), or it is unreadable — nothing to warn about here;
+      // writeOwnSnapshot below reports its own write failures separately.
+    }
   }
 
   const runNodeVersion = opts.runNodeVersion ?? realNodeVersionSpawn;
@@ -831,6 +878,14 @@ export async function runSessionStartToolchainParity(
       note(`drift:${comparison.drift.length} against ${comparison.peerProfile} (snapshot age ${age})`);
       for (const item of comparison.drift) note(`drift — ${item.message}`);
     }
+    // AC3 (task c1b5ade5): a stale peer is a trustworthiness CAVEAT on the
+    // comparison above, not a drift finding — it never touches driftTotal.
+    // Only fires when `stale_after_days` is explicitly configured.
+    if (staleAfterMs !== undefined && comparison.ageMs > staleAfterMs) {
+      note(
+        `peer ${comparison.peerProfile} snapshot is stale (age ${age}, exceeds the configured ${config.stale_after_days}d threshold); its comparison may not reflect that machine's CURRENT toolchain`,
+      );
+    }
   }
 
   if (peersCompared === 0) {
@@ -852,9 +907,23 @@ export async function runSessionStartToolchainParity(
 
   let writeLedger = opts.writeLedger;
   if (!writeLedger) {
-    const resolved = resolveManifestLedgerWriter(manifest, {
-      ...(opts.ledgerTimeoutMs !== undefined ? { ledgerTimeoutMs: opts.ledgerTimeoutMs } : {}),
-    });
+    // Defensive (task c1b5ade5): resolveManifestLedgerWriter is currently a
+    // pure function that always returns a discriminated result rather than
+    // throwing, but that is an implementation detail of its own, not a
+    // contract this call site should lean on — a future change to it (or
+    // to findGroundingMcp/mcpCommandList underneath) throwing would
+    // otherwise crash a producer whose whole contract is "never break the
+    // session loop".
+    let resolved: ReturnType<typeof resolveManifestLedgerWriter>;
+    try {
+      resolved = resolveManifestLedgerWriter(manifest, {
+        ...(opts.ledgerTimeoutMs !== undefined ? { ledgerTimeoutMs: opts.ledgerTimeoutMs } : {}),
+      });
+    } catch (err) {
+      const reason = `resolveManifestLedgerWriter threw: ${(err as Error).message}; cannot record ${content}`;
+      note(reason);
+      return done(false, profile, peersCompared, driftTotal, sessionId, sessionSource, reason, unparseablePeers.length);
+    }
     if (!resolved.ok) {
       const reason = `${resolved.reason}; cannot record ${content}`;
       note(reason);
@@ -863,7 +932,18 @@ export async function runSessionStartToolchainParity(
     writeLedger = resolved.write;
   }
 
-  const result = await writeLedger({ sessionId, content, source: LEDGER_SOURCE });
+  // Defensive (task c1b5ade5): an injected or real writeLedger that REJECTS
+  // instead of resolving to `{ ok: false, reason }` must degrade the same
+  // way the `!result.ok` branch below already does, not propagate as an
+  // unhandled rejection out of a SessionStart hook.
+  let result: { ok: boolean; reason?: string };
+  try {
+    result = await writeLedger({ sessionId, content, source: LEDGER_SOURCE });
+  } catch (err) {
+    const reason = `ledger write threw: ${(err as Error).message}`;
+    note(reason);
+    return done(false, profile, peersCompared, driftTotal, sessionId, sessionSource, reason, unparseablePeers.length);
+  }
   if (!result.ok) {
     const reason = `ledger write failed: ${result.reason ?? "unknown error"}`;
     note(reason);

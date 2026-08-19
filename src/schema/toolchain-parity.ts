@@ -31,6 +31,15 @@ export const ToolchainParitySchema = z
     // workflow kit's own version marker) is read from, for the OW-Kit
     // version drift check. Defaults to the session cwd.
     workspace_root: z.string().min(1).optional(),
+    // Advisory staleness threshold, in days, for a peer snapshot's own
+    // `timestamp` (task c1b5ade5, hardening follow-up to the initial
+    // 690fba7c drop). Undefined (default) disables the check entirely —
+    // no snapshot is ever "too old" to compare. When set, a peer whose
+    // snapshot age exceeds this threshold gets an EXTRA stderr note
+    // flagging it as stale; the comparison itself (and `driftCount`) is
+    // unchanged — staleness is a caveat on trustworthiness, not a drift
+    // finding, so it never inflates the drift count.
+    stale_after_days: z.number().positive().optional(),
   })
   .strict();
 

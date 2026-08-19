@@ -30,6 +30,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `tests/policy-packs/ube-export-surface.test.ts`); a follow-up considers
   moving it into `src/io/`.
 
+### Added
+
+- `harness session-start toolchain-parity` hardening round (task
+  `c1b5ade5`, follow-up to the initial 690fba7c drop): (1) a lossy
+  `sanitizeProfileName` advisory — a configured `profile` that is not
+  filename-safe now logs a warning, plus a stronger WARNING when the
+  sanitized filename collides with an existing snapshot for a DIFFERENT
+  profile (this run's write is about to overwrite it); (2) defensive
+  try/catch around the `resolveSession`, `resolveManifestLedgerWriter`,
+  and `writeLedger` call sites — a throw/rejection from any of the three
+  now degrades to a note + exit 0 instead of an unhandled
+  throw/rejection, same as every other failure path in this producer
+  (deliberately NOT applied to `collectLocalSnapshot`, which the
+  hermetic-spawn-guard contract requires to propagate uncaught); (3) a
+  new optional `toolchain_parity.stale_after_days` manifest knob
+  (`src/schema/toolchain-parity.ts`, default off) — a peer snapshot older
+  than the threshold gets an extra advisory note without being counted
+  as drift. Advisory character is unchanged throughout: every path still
+  exits 0, and `ok`/drift comparator semantics are untouched. Also
+  corrects the `toolchain-parity` hook's `budget_ms: 10000` comment in
+  `src/cli/init/templates.ts`, which previously described only the
+  parallel node/npm collection and missed that the ledger write runs
+  SEQUENTIALLY after with its own ~5s default timeout floor (worst case
+  ~9s, not the "comfortable" sub-5s headroom the old comment claimed).
+
 ### Security
 
 - **SECURITY (LOW): `isEscapeCommand`'s top-level `command.trim()`
