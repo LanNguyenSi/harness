@@ -47,6 +47,7 @@
 //   - Within a group, the inner hooks[] preserves matcher-grouping order
 //     and is sorted by command for the same reason.
 
+import * as path from "node:path";
 import type { Hook, Manifest, McpServer } from "../../schema/index.js";
 import { expandHome } from "../../io/expand-home.js";
 import { signingKeyPathFor } from "../../runtime/approval-signing.js";
@@ -97,16 +98,22 @@ export interface GenerateSettingsResult {
   warnings: string[];
   /**
    * The manifest's `tools.mcp[]` entries translated into Claude Code's
-   * server-spec shape (command/args/env), INCLUDING the grounding-mcp
-   * `EVIDENCE_LEDGER_DB` projection (`projectGroundingEnv`). Deliberately
-   * NOT part of `root` and never serialized into settings.json (task
+   * server-spec shape (command/args/env) via `buildDesiredMcpServers` —
+   * INCLUDING both the grounding-mcp `EVIDENCE_LEDGER_DB`
+   * (`projectGroundingEnv`) and `SOLUTION_VERDICT_SIGNING_KEY`
+   * (`projectSigningKeyEnv`) projections. Deliberately NOT part of `root`
+   * and never serialized into settings.json (task
    * init-mcp-wiring-claude-code/T-002): Claude Code does not read the
    * settings.json `mcpServers` block at runtime — see
    * `src/io/claude-mcp.ts`'s module header. User-scope MCP registration
    * goes exclusively through the `claude mcp` CLI now
-   * (`ensureMcpServers`); this field is what feeds that path. The init
-   * wizard (`src/cli/init/interactive.ts`) reads it directly instead of
-   * reading it back out of a written settings.json.
+   * (`ensureMcpServers`). `buildDesiredMcpServers` is the single call
+   * every producer of this shape shares (review round H1, Finding 2): the
+   * init wizard (`src/cli/init/interactive.ts`), the doctor registration-
+   * health check (`src/cli/doctor/claude-mcp.ts`), and the opencode config
+   * generator (`generate-opencode-config.ts`) all call it directly rather
+   * than re-deriving this field from a written settings.json, so a NEW
+   * projected env only needs to be added in one place.
    */
   mcpServers: Record<string, SettingsMcpServer>;
 }
@@ -125,14 +132,16 @@ export interface GenerateSettingsExtras {
    */
   homeDir?: string;
   /**
-   * Absolute `harness.generated/` directory for the manifest in use (task
+   * The `harness.generated/` directory for the manifest in use (task
    * 03a917fd/H1). Used only to project `SOLUTION_VERDICT_SIGNING_KEY` (see
    * `projectSigningKeyEnv`) onto the grounding-mcp entry — the path to the
    * harness's own `.approval-signing.key` (`signingKeyPathFor`). Unlike
    * `homeDir` above there is no safe universal default: the generated dir
    * depends on manifest-path resolution (a `--config` override changes
    * it), so a caller that omits this gets NO projection rather than a
-   * guessed-wrong path.
+   * guessed-wrong path. A relative value, or one carrying a literal `~`,
+   * is normalized to an absolute path at the projection boundary (review
+   * round H1, Finding 1) rather than rejected — see `projectSigningKeyEnv`.
    */
   generatedDir?: string;
 }
@@ -174,15 +183,18 @@ export function generateSettingsWithWarnings(
     out.hooks[event] = buildGroups(hooks);
   }
 
-  // buildMcpServers/projectGroundingEnv still run here (not moved) so the
-  // env-tilde and empty-command warnings stay attached to the same
-  // `warnings` array regardless of which path (settings.json hooks vs.
-  // the claude-mcp Ensure path) consumes the resulting spec map. The
-  // result is intentionally NOT projected into `out` — see
+  // buildDesiredMcpServers still runs here (not moved) so the env-tilde
+  // and empty-command warnings stay attached to the same `warnings` array
+  // regardless of which path (settings.json hooks vs. the claude-mcp
+  // Ensure path) consumes the resulting spec map. The result is
+  // intentionally NOT projected into `out` — see
   // GenerateSettingsResult.mcpServers.
-  const mcp = buildMcpServers(manifest.tools.mcp, warnings);
-  projectGroundingEnv(manifest, mcp, extras.homeDir);
-  projectSigningKeyEnv(mcp, extras.generatedDir);
+  const desiredMcp = buildDesiredMcpServers(manifest, {
+    homeDir: extras.homeDir,
+    generatedDir: extras.generatedDir,
+  });
+  warnings.push(...desiredMcp.warnings);
+  const mcp = desiredMcp.mcp;
 
   const permissions = compactPermissions(extras.packPermissions);
   if (permissions) out.permissions = permissions;
@@ -335,19 +347,77 @@ export function groundingLedgerEnvValue(
  *   an empty-string "override" is treated as absent).
  * - No `generatedDir` passed in -> no projection, no crash. There is
  *   nothing correct to derive without it (see `GenerateSettingsExtras`).
+ * - `generatedDir` is normalized at this projection boundary before it
+ *   reaches `signingKeyPathFor` (review round H1, Finding 1): `expandHome`
+ *   (same idiom `projectGroundingEnv` above and `groundingLedgerEnvValue`
+ *   use) then `path.resolve`, so a relative `generatedDir` or one carrying
+ *   a literal `~` still projects an absolute path — the same
+ *   never-a-tilde, always-absolute contract `groundingLedgerEnvValue`
+ *   already gives `EVIDENCE_LEDGER_DB`. This harness never THROWS on a
+ *   relative/tilde `generatedDir` the way grounding-mcp's own consumer
+ *   throws on a non-absolute env value; it normalizes instead. That
+ *   combination (`expandHome` + `path.resolve`) always succeeds — resolve
+ *   makes any string absolute against `process.cwd()` — so there is no
+ *   remaining case for a `validate/checks.ts`-style warning to cover.
  */
 export function projectSigningKeyEnv(
   mcp: Record<string, SettingsMcpServer>,
   generatedDir?: string,
+  homeDir?: string,
 ): void {
   const server = mcp[GROUNDING_MCP_SERVER_NAME];
   if (!server) return;
   if (!generatedDir) return;
   const env = server.env ?? {};
   if (!env[SOLUTION_VERDICT_SIGNING_KEY_ENV]) {
-    env[SOLUTION_VERDICT_SIGNING_KEY_ENV] = signingKeyPathFor(generatedDir);
+    const normalizedGeneratedDir = path.resolve(expandHome(generatedDir, homeDir));
+    env[SOLUTION_VERDICT_SIGNING_KEY_ENV] = signingKeyPathFor(normalizedGeneratedDir);
     server.env = env;
   }
+}
+
+export interface BuildDesiredMcpServersOptions {
+  /** Threaded to `projectGroundingEnv` and `projectSigningKeyEnv`'s tilde-expansion; defaults to `os.homedir()` (see `expandHome`). */
+  homeDir?: string;
+  /** Threaded to `projectSigningKeyEnv`; no safe default (see that function's doc). */
+  generatedDir?: string;
+}
+
+export interface DesiredMcpServersResult {
+  mcp: Record<string, SettingsMcpServer>;
+  warnings: string[];
+}
+
+/**
+ * Single choke point for the manifest -> Claude-Code-shaped MCP
+ * server-spec projection (review round H1, Finding 2 — STRUCTURAL fix).
+ * Encapsulates the fixed sequence `buildMcpServers` -> `projectGroundingEnv`
+ * -> `projectSigningKeyEnv` so every producer of this shape — `harness
+ * apply`'s settings.json generation (this module), the init wizard's
+ * `claude mcp` CLI wiring (`src/cli/init/interactive.ts`), the doctor
+ * registration-health check (`src/cli/doctor/claude-mcp.ts`), and the
+ * opencode config generator (`generate-opencode-config.ts`) — calls this
+ * ONE function instead of hand-rolling the same three-call sequence.
+ *
+ * Before this helper existed, that sequence had to be wired into each
+ * call site by hand: three of the four remembered to call
+ * `projectSigningKeyEnv` when it was added (task 03a917fd/H1b), and
+ * doctor's registration check did not, so its "not registered, run this
+ * `claude mcp add-json ...`" hint silently omitted
+ * `SOLUTION_VERDICT_SIGNING_KEY` (review round H1, Finding 2). Routing
+ * every producer through this function means the NEXT projected env only
+ * needs to be added here once, and cannot again reach only some of the
+ * call sites.
+ */
+export function buildDesiredMcpServers(
+  manifest: Manifest,
+  opts: BuildDesiredMcpServersOptions = {},
+): DesiredMcpServersResult {
+  const warnings: string[] = [];
+  const mcp = buildMcpServers(manifest.tools.mcp, warnings);
+  projectGroundingEnv(manifest, mcp, opts.homeDir);
+  projectSigningKeyEnv(mcp, opts.generatedDir, opts.homeDir);
+  return { mcp, warnings };
 }
 
 // Translate manifest `memory.router` into a synthetic UserPromptSubmit

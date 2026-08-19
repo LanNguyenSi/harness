@@ -905,6 +905,68 @@ describe("apply -> adopt round-trip for the signing-key projection (task 03a917f
   });
 });
 
+// Review round H1, Finding 3: the two round-trip describe blocks above call
+// `manifestMcpProjection` / `computeMcpDrift` / `parseSettingsMcpServers`
+// directly, bypassing `adopt()` (and therefore adopt/index.ts's own
+// `resolveGeneratedDir({homeDir: opts.homeDir, manifestPath})` call)
+// entirely. A regression that drops the `generatedDir` argument at that
+// real call site would not be caught by them. This is the missing real
+// e2e: a bare grounding-mcp manifest entry (no env declared at all), an
+// effective registry carrying BOTH projected envs, run through the actual
+// `adopt()` function end to end.
+describe("adopt — real e2e for the grounding + signing-key round-trip (review round H1, Finding 3)", () => {
+  // Absolute, no leading `~`, so EVIDENCE_LEDGER_DB's expansion is
+  // independent of `os.homedir()` on whatever machine runs this test
+  // (adopt/index.ts threads `homeDir: undefined` into the EVIDENCE_LEDGER_DB
+  // mirror, out of this task's scope to change — see the comment at that
+  // call site).
+  const LEDGER_PATH = "/var/tmp/h1-finding3-ledger.db";
+
+  it("adopt() sees zero MCP drift and leaves the manifest untouched", async () => {
+    fs.writeFileSync(
+      manifestPath,
+      `version: 1
+grounding:
+  evidence_ledger:
+    path: "${LEDGER_PATH}"
+tools:
+  mcp:
+    - name: grounding-mcp
+      command: [node, /opt/g/server.js]
+      enabled: true
+  cli: []
+  skills: { enabled: [], source_dirs: [] }
+  builtin: { known: [] }
+memory: { directories: [] }
+hooks: []
+policies: []
+`,
+    );
+    writeSettings({});
+    // No explicit homeDir passed to runAdopt below, so adopt/index.ts
+    // resolves generatedDir the same way apply.ts / interactive.ts do
+    // without an explicit homeDir: `<dirname(manifestPath)>/harness.generated`.
+    const generatedDir = path.join(tmpHome, "harness.generated");
+    writeRegistry({
+      "grounding-mcp": {
+        command: "node",
+        args: ["/opt/g/server.js"],
+        env: {
+          EVIDENCE_LEDGER_DB: LEDGER_PATH,
+          SOLUTION_VERDICT_SIGNING_KEY: signingKeyPathFor(generatedDir),
+        },
+      },
+    });
+    const before = fs.readFileSync(manifestPath, "utf8");
+    const r = await runAdopt(settingsPath, { configPath: manifestPath });
+    expect(r.outcome).toBe("no-drift");
+    expect(r.mcpDriftCount).toBe(0);
+    // "no-drift" never writes the manifest -- assert it byte-for-byte, not
+    // just via the outcome enum.
+    expect(fs.readFileSync(manifestPath, "utf8")).toBe(before);
+  });
+});
+
 describe("adopt — round-trip fidelity (task 059b669c)", () => {
   it("captures a settings hook `timeout` (seconds) into budget_ms (ms) and apply round-trips it (task 7bf47554 unit fix)", async () => {
     // settings.json `timeout` is Claude Code's own unit: SECONDS. adopt

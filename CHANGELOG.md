@@ -121,6 +121,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `claude mcp` CLI path in `interactive.ts`, so the settings.json branch's
   `generatedDir` threading is wired for symmetry/future-proofing but has
   no independently observable effect today.
+- Review round H1 fix-round (task `03a917fd`): `generate-settings.ts`
+  gains `buildDesiredMcpServers(manifest, {homeDir, generatedDir})`, a
+  single choke-point wrapper around `buildMcpServers` ->
+  `projectGroundingEnv` -> `projectSigningKeyEnv`. Every producer of the
+  Claude-Code-shaped MCP server-spec map — `harness apply`'s
+  settings.json generation, `init --interactive`'s `claude mcp` CLI
+  wiring, `harness doctor`'s registration-health check, and the opencode
+  config generator — now calls this one function instead of hand-rolling
+  the same three-call sequence, closing the gap where doctor's "not
+  registered, run this `claude mcp add-json ...`" hint for grounding-mcp
+  silently omitted `SOLUTION_VERDICT_SIGNING_KEY` (3 of the 4 producers
+  called `projectSigningKeyEnv`, doctor did not). `projectSigningKeyEnv`
+  also normalizes a relative or literal-tilde `generatedDir`
+  (`expandHome` + `path.resolve`, mirroring `groundingLedgerEnvValue`'s
+  idiom for `EVIDENCE_LEDGER_DB`) into an absolute path instead of
+  silently under-projecting. `docs/ARCHITECTURE.md`'s `grounding:`
+  wiring-status note and `GenerateSettingsResult.mcpServers`'s doc
+  comment now name both projections.
 - `harness doctor` gains an on-demand toolchain-parity section (task
   `13919613`, commit `16d47941`), the doctor companion to `harness session-start
   toolchain-parity`: reuses that command's Collector/Comparator core

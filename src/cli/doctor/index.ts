@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { compareNumericVersions } from "../../io/version-compare.js";
+import { resolveGeneratedDir } from "../../io/generated-dir.js";
 import { inspectMemory } from "../../probes/memory.js";
 import {
   RealMcpProbe,
@@ -1037,10 +1038,19 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   // further runtime-scoped gate); the live `claude mcp list` spawn
   // inside buildClaudeMcpRegistration additionally self-gates on
   // `!shallow` and at least one ENABLED entry.
+  //
+  // generatedDir resolved the same way apply.ts / interactive.ts resolve
+  // it (review round H1, Finding 2) so buildClaudeMcpRegistration's
+  // desired projection carries SOLUTION_VERDICT_SIGNING_KEY too.
+  const generatedDir = resolveGeneratedDir({
+    ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
+    manifestPath: resolved.base,
+  });
   const claudeMcp =
     manifest.tools.mcp.length > 0
       ? await buildClaudeMcpRegistration(manifest, {
           home,
+          generatedDir,
           shallow: !!opts.shallow,
           ...(opts.claudeMcpExec !== undefined ? { claudeMcpExec: opts.claudeMcpExec } : {}),
           ...(opts.envOverride !== undefined ? { env: opts.envOverride } : {}),

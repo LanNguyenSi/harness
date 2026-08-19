@@ -454,16 +454,9 @@ function buildExpectedFiles(
     };
   }
 
-  // generatedDir threaded in (task 03a917fd/H1b) for symmetry with the
-  // opencode branch above and to keep this call's SOLUTION_VERDICT_SIGNING_KEY
-  // computation correct should a future caller start consuming
-  // GenerateSettingsResult.mcpServers from this call site. As of T-002
-  // that field is NOT projected into settings.json (see its own doc
-  // comment) and Claude Code's real MCP registration goes exclusively
-  // through the `claude mcp` CLI path in src/cli/init/interactive.ts's
-  // `loadDesiredMcpServers` (a separate, independent call into
-  // buildMcpServers/projectGroundingEnv/projectSigningKeyEnv) -- so this
-  // particular projection is not observable in settings.json today.
+  // generatedDir threaded in (task 03a917fd/H1b) for SOLUTION_VERDICT_SIGNING_KEY
+  // correctness; see GenerateSettingsResult.mcpServers's doc comment for
+  // why this projection is not itself observable in settings.json.
   const settingsResult = generateSettingsWithWarnings(augmentedManifest, {
     ...(packExpansion.permissions && { packPermissions: packExpansion.permissions }),
     generatedDir,

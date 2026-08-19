@@ -39,9 +39,7 @@ import type { NpmExec } from "../doctor/npm-bin-path.js";
 import { validate } from "../validate/index.js";
 import { apply, CODEX_CONFIG_BASENAME, SETTINGS_BASENAME, type ApplyResult } from "../apply/index.js";
 import {
-  buildMcpServers,
-  projectGroundingEnv,
-  projectSigningKeyEnv,
+  buildDesiredMcpServers,
   type SettingsMcpServer,
 } from "../apply/generate-settings.js";
 import { loadManifest } from "../loader.js";
@@ -457,24 +455,21 @@ interface DesiredMcpServers {
 /**
  * Reload the effective manifest and translate `tools.mcp[]` into the
  * server-spec shape the `claude mcp` CLI wants (task
- * init-mcp-wiring-claude-code/T-002). Reuses the exact same
- * `buildMcpServers` + `projectGroundingEnv` functions the settings.json
- * projection used to feed into the (now dead) `mcpServers` block —
- * see generate-settings.ts's `GenerateSettingsResult.mcpServers` doc.
- * `harnessHomeDir` is the harness STATE root (`harnessHomeArg(opts)`),
- * not the operator's `$HOME`; `projectGroundingEnv`'s tilde-expansion is
- * deliberately left on its default (`os.homedir()`) here, mirroring
- * `apply.ts`'s own `buildExpectedFiles` call, which never overrides it
- * either.
+ * init-mcp-wiring-claude-code/T-002). Reuses `buildDesiredMcpServers`
+ * (review round H1, Finding 2), the single choke point every producer of
+ * this shape now shares — see generate-settings.ts's
+ * `GenerateSettingsResult.mcpServers` doc. `harnessHomeDir` is the harness
+ * STATE root (`harnessHomeArg(opts)`), not the operator's `$HOME`; the
+ * grounding tilde-expansion is deliberately left on its default
+ * (`os.homedir()`) here, mirroring `apply.ts`'s own `buildExpectedFiles`
+ * call, which never overrides it either.
  *
- * Also projects `SOLUTION_VERDICT_SIGNING_KEY` (task 03a917fd/H1b,
- * `projectSigningKeyEnv`) the same way `projectGroundingEnv` projects
- * `EVIDENCE_LEDGER_DB` above. Unlike `homeDir`, `generatedDir` has no safe
- * default, so it is resolved here the same way `readPriorLastApply` above
- * resolves it: `resolveGeneratedDir({homeDir: harnessHomeDir, manifestPath:
- * configPath})`. THIS is the real, live MCP-registration path (the `claude
- * mcp` CLI via `ensureMcpServers`, called by `wireClaudeMcp` below) --
- * unlike `apply.ts`'s `buildExpectedFiles`, whose equivalent
+ * `generatedDir` (task 03a917fd/H1b) has no safe default, so it is
+ * resolved here the same way `readPriorLastApply` above resolves it:
+ * `resolveGeneratedDir({homeDir: harnessHomeDir, manifestPath: configPath})`.
+ * THIS is the real, live MCP-registration path (the `claude mcp` CLI via
+ * `ensureMcpServers`, called by `wireClaudeMcp` below) -- unlike
+ * `apply.ts`'s `buildExpectedFiles`, whose equivalent
  * `GenerateSettingsResult.mcpServers` is never serialized into
  * settings.json (see that field's own doc comment) and therefore never
  * reaches Claude Code's real MCP registry through THAT path.
@@ -496,14 +491,11 @@ function loadDesiredMcpServers(
   } catch {
     return null;
   }
-  const warnings: string[] = [];
-  const desired = buildMcpServers(manifest.tools.mcp, warnings);
-  projectGroundingEnv(manifest, desired);
   const generatedDir = resolveGeneratedDir({
     ...(harnessHomeDir !== undefined ? { homeDir: harnessHomeDir } : {}),
     manifestPath: configPath,
   });
-  projectSigningKeyEnv(desired, generatedDir);
+  const { mcp: desired, warnings } = buildDesiredMcpServers(manifest, { generatedDir });
   return { manifest, desired, warnings };
 }
 

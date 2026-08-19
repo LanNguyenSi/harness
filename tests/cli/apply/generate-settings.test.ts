@@ -1080,4 +1080,36 @@ describe("generateSettings — SOLUTION_VERDICT_SIGNING_KEY projection (task 03a
     );
     expect(mcpServers["agent-tasks"]?.env?.SOLUTION_VERDICT_SIGNING_KEY).toBeUndefined();
   });
+
+  // Review round H1, Finding 1: `generatedDir` is normalized at the
+  // projection boundary (expandHome + path.resolve, mirroring
+  // `groundingLedgerEnvValue`'s idiom for EVIDENCE_LEDGER_DB) instead of
+  // being rejected. A relative or literal-tilde `generatedDir` must still
+  // project an ABSOLUTE, tilde-free SOLUTION_VERDICT_SIGNING_KEY, since
+  // grounding-mcp throws on a non-absolute value.
+  it("normalizes a RELATIVE generatedDir to an absolute path (Finding 1)", () => {
+    const m = manifestOf([], [GROUNDING_MCP]);
+    const relative = "relative/harness.generated";
+    const { mcpServers } = generateSettingsWithWarnings(m, { generatedDir: relative });
+    const projected = mcpServers["grounding-mcp"]?.env?.SOLUTION_VERDICT_SIGNING_KEY;
+    expect(typeof projected).toBe("string");
+    expect(path.isAbsolute(projected as string)).toBe(true);
+    expect((projected as string).startsWith("~")).toBe(false);
+    expect(projected).toBe(signingKeyPathFor(path.resolve(relative)));
+  });
+
+  it("normalizes a LITERAL-TILDE generatedDir to an absolute path (Finding 1)", () => {
+    const m = manifestOf([], [GROUNDING_MCP]);
+    const { mcpServers } = generateSettingsWithWarnings(m, {
+      homeDir: "/home/op",
+      generatedDir: "~/my-harness/harness.generated",
+    });
+    const projected = mcpServers["grounding-mcp"]?.env?.SOLUTION_VERDICT_SIGNING_KEY;
+    expect(typeof projected).toBe("string");
+    expect(path.isAbsolute(projected as string)).toBe(true);
+    expect((projected as string).startsWith("~")).toBe(false);
+    expect(projected).toBe(
+      signingKeyPathFor("/home/op/my-harness/harness.generated"),
+    );
+  });
 });

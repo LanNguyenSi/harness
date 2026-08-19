@@ -10,10 +10,14 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { parse as parseYaml } from "yaml";
 import { afterEach, describe, expect, it } from "vitest";
 import { doctor } from "../../src/cli/doctor/index.js";
 import { format } from "../../src/cli/doctor/format.js";
-import type { ClaudeMcpExec } from "../../src/io/claude-mcp.js";
+import { buildDesiredMcpServers } from "../../src/cli/apply/generate-settings.js";
+import { parseManifest } from "../../src/schema/index.js";
+import { posixSingleQuote, type ClaudeMcpExec } from "../../src/io/claude-mcp.js";
+import { signingKeyPathFor } from "../../src/runtime/approval-signing.js";
 import { HermeticSpawnViolationError } from "../../src/runtime/hermetic-spawn-guard.js";
 import { STUB_NPM_BIN_EXEC_UNKNOWN as STUB_NPM_BIN_EXEC } from "../_helpers/npm-bin-exec.js";
 
@@ -408,5 +412,58 @@ describe("doctor — hermetic spawn guard, claude-mcp path (task 0d80e969)", () 
         // Deliberately NOT injecting claudeMcpExec.
       }),
     ).rejects.toThrow(HermeticSpawnViolationError);
+  });
+});
+
+// Review round H1, Finding 2 (STRUCTURAL fix): before `buildDesiredMcpServers`
+// existed, `buildClaudeMcpRegistration` called `buildMcpServers` +
+// `projectGroundingEnv` directly and never called `projectSigningKeyEnv` at
+// all, so the "not registered, run this `claude mcp add-json ...`" hint for
+// grounding-mcp silently omitted SOLUTION_VERDICT_SIGNING_KEY — 3 of the 4
+// producers of this shape (apply, init --interactive, opencode) carried the
+// var, doctor did not. This pins the fix: the hint now matches
+// `buildDesiredMcpServers`'s output byte-for-byte, the same call every other
+// producer makes.
+describe("doctor — SOLUTION_VERDICT_SIGNING_KEY parity in the add-json hint (review round H1, Finding 2)", () => {
+  it("the not-registered add-json hint for grounding-mcp carries SOLUTION_VERDICT_SIGNING_KEY and matches buildDesiredMcpServers byte-for-byte", async () => {
+    const home = makeFixture({
+      "harness.yaml": manifestWithMcp(
+        `    - name: grounding-mcp\n      command: [node, /opt/g/server.js]\n      enabled: true`,
+      ),
+    });
+    const manifestPath = path.join(home, "harness.yaml");
+    // Empty `claude mcp list` output -- grounding-mcp is desired but not
+    // registered, so the "not registered" branch (and its add-json hint)
+    // fires.
+    const report = await doctor({
+      configPath: manifestPath,
+      homeOverride: home,
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC,
+      claudeMcpExec: execWithStdout(""),
+      envOverride: {},
+    });
+    const entry = report.claudeMcp?.entries.find((e) => e.name === "grounding-mcp");
+    expect(entry?.status).toBe("error");
+    expect(entry?.message).toContain("SOLUTION_VERDICT_SIGNING_KEY");
+
+    // Independently recompute the desired projection the exact way doctor
+    // does it (no explicit `homeDir` LoaderOptions override in this call,
+    // so `generatedDir` resolves to `<fixture root>/harness.generated`,
+    // same as apply.ts's / interactive.ts's own default-homeDir path) and
+    // assert the hint is byte-identical to it, not just "mentions the var
+    // name".
+    const manifest = parseManifest(parseYaml(fs.readFileSync(manifestPath, "utf8")));
+    const generatedDir = path.join(home, "harness.generated");
+    const { mcp: desired } = buildDesiredMcpServers(manifest, { homeDir: home, generatedDir });
+    expect(desired["grounding-mcp"]?.env?.SOLUTION_VERDICT_SIGNING_KEY).toBe(
+      signingKeyPathFor(generatedDir),
+    );
+    const expectedHint =
+      "not registered with the claude CLI — run `harness init --interactive` or " +
+      `\`claude mcp add-json --scope user grounding-mcp ${posixSingleQuote(
+        JSON.stringify(desired["grounding-mcp"]),
+      )}\``;
+    expect(entry?.message).toBe(expectedHint);
   });
 });
