@@ -661,6 +661,15 @@ function migrateDeadSettingsMcpBlock(
  * manifest". GC reporting is independent of the add/replace gate below —
  * it runs, and is reported, regardless of whether the add/replace pass
  * for `desired` succeeded.
+ *
+ * `homeDir: claudeHomeDir` below (batch19/T-005, Finding 2 — task
+ * fb3e4dce) is the ONLY drift-read/spawn-alignment input this call needs
+ * to pass: `ensureMcpServers` itself now derives `configDir` from the
+ * SAME `registryPath` it resolves from this `homeDir` and threads it to
+ * every real `claude` spawn, so a non-default harness home (`--home`)
+ * mutates/reads the same registry file this function's drift comparison
+ * used. See `io/claude-mcp.ts`'s module doc for the empirical CLI probe
+ * behind this.
  */
 async function wireClaudeMcp(
   o: WireRuntimeOpts,
@@ -729,10 +738,21 @@ async function wireClaudeMcp(
   const cliMissing = actionable.some(
     (r) => r.add?.status === "cli-missing" || r.remove?.status === "cli-missing",
   );
+  // batch19/T-005, Finding 3: an `add-json` "already exists" outcome
+  // counts as OK too, but ONLY when `ensureMcpServers`'s own
+  // `claude mcp get` + registry-file-re-read verification (see
+  // `addAndVerifyAlreadyExists` in `io/claude-mcp.ts`) confirmed the
+  // already-registered spec actually matches `desired` — the manifest's
+  // target state holds even though this run's own add-json call didn't
+  // register it. An unverified or spec-mismatched already-exists (
+  // `verifiedAlreadyExists` absent or `matches: false`) keeps the prior
+  // conservative behavior: NOT ok, migration below stays gated.
   const allOk = ensureResult.results.every(
     (r) =>
       r.action === "noop" ||
-      ((r.action === "add" || r.action === "replace") && r.add?.status === "added"),
+      ((r.action === "add" || r.action === "replace") &&
+        (r.add?.status === "added" ||
+          (r.add?.status === "already-exists" && r.verifiedAlreadyExists?.matches === true))),
   );
 
   if (!allOk) {
@@ -771,9 +791,27 @@ async function wireClaudeMcp(
     return; // D-002: migration runs only after every desired server registers successfully.
   }
 
-  if (actionable.length > 0) {
+  // batch19/T-005-R2, Fix 6 (review round 2, task fb3e4dce): split the
+  // success wording by what actually happened this run — a freshly
+  // `add-json`-registered server is genuinely "registered" here, but a
+  // verified-already-exists one (Finding 3 above) was NOT registered by
+  // THIS run at all; the prior single "registered N ..." message for both
+  // buckets falsely implied a fresh registration happened for names this
+  // run only CONFIRMED were already correct.
+  const freshlyRegistered = actionable.filter((r) => r.add?.status === "added");
+  const confirmedAlreadyRegistered = actionable.filter(
+    (r) => r.verifiedAlreadyExists?.matches === true,
+  );
+  if (freshlyRegistered.length > 0) {
     o.stderr(
-      `\nregistered ${actionable.length} MCP server(s) with the claude CLI (user scope): ${actionable
+      `\nregistered ${freshlyRegistered.length} MCP server(s) with the claude CLI (user scope): ${freshlyRegistered
+        .map((r) => r.name)
+        .join(", ")}\n`,
+    );
+  }
+  if (confirmedAlreadyRegistered.length > 0) {
+    o.stderr(
+      `confirmed ${confirmedAlreadyRegistered.length} MCP server(s) already registered with the claude CLI (user scope): ${confirmedAlreadyRegistered
         .map((r) => r.name)
         .join(", ")}\n`,
     );

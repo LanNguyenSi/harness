@@ -49,6 +49,71 @@
 //     of "✔ Connected" | "✘ Failed to connect" | "! Needs authentication".
 //   Respects CLAUDE_CONFIG_DIR: the user-scope registry then lives at
 //   $CLAUDE_CONFIG_DIR/.claude.json instead of ~/.claude.json.
+//
+// Re-verified/extended (empirical probe, 2026-08-19, disposable
+// CLAUDE_CONFIG_DIR, batch19/T-005 — task fb3e4dce): `claude mcp get
+// <name>`'s stdout is human-readable prose (`<name>:\n  Scope: ...\n
+// Status: ...\n  Issue: ...`) — it does NOT print the registered
+// `command`/`args`/`env`, on Claude Code 2.1.235. This is why the
+// already-exists verification below (`addAndVerifyAlreadyExists`)
+// confirms EXISTENCE via `get`'s exit code, then compares the actual
+// registered spec via a fresh re-read of the same registry file
+// `ensureMcpServers` already trusts for drift comparison — `get`'s prose
+// output has nothing machine-parseable to compare against.
+
+// Two review findings fixed here (batch19/T-005, task fb3e4dce, follow-up
+// to run 2026-07-18-init-mcp-wiring-claude-code):
+//   Finding 2 (CLAUDE_CONFIG_DIR drift): `realClaudeMcpExec` used to spawn
+//   `claude` with no explicit `env`, so it inherited `process.env`
+//   verbatim — identical to `ensureMcpServers`'s drift-read directory only
+//   when `homeDir`/`registryPath` happens to match the OS default. A
+//   non-default home (`--home`, or any `homeDir`/`registryPath` override)
+//   made the live CLI spawn mutate/read a DIFFERENT `.claude.json` than
+//   the one `ensureMcpServers` just compared against. Fixed by threading
+//   `ClaudeMcpCallOptions.configDir` (== `path.dirname(registryPath)`,
+//   always, both branches of `resolveClaudeUserRegistryPath`'s precedence)
+//   through every verb wrapper to `exec`'s new third argument;
+//   `realClaudeMcpExec` sets `CLAUDE_CONFIG_DIR` in the child's env from
+//   it. `configDir` undefined (every caller other than `ensureMcpServers`
+//   today) preserves the pre-existing behavior exactly: no explicit `env`
+//   passed to `spawn`, i.e. plain `process.env` inheritance.
+//   Finding 3 (already-exists treated as failure): `ensureMcpServers`
+//   used to report an `add-json` "already exists" outcome exactly like any
+//   other add failure, even though the actual condition — the desired
+//   server IS registered — is the target state the caller wanted.
+//   `addAndVerifyAlreadyExists` now verifies via `claude mcp get` (see the
+//   2026-08-19 probe note above) + a fresh registry-file re-read whenever
+//   `addJsonMcpServer` reports "already-exists": a confirmed, spec-matching
+//   registration is surfaced via `EnsureServerResult.verifiedAlreadyExists
+//   .matches = true` so a caller (`wireClaudeMcp` in
+//   `cli/init/interactive.ts`) can treat it as an effective success (e.g.
+//   letting the dead-settings.json migration proceed); an unconfirmed or
+//   spec-mismatched registration preserves the PRIOR conservative
+//   behavior (`matches = false`, caller keeps treating the overall result
+//   as not-yet-successful).
+//
+// CORRECTION (batch19/T-005-R2, review round 2, task fb3e4dce): the
+// "Finding 2" description above is WRONG about the DEFAULT path — it reads
+// as though the default (no `homeDir`/`registryPath`/`CLAUDE_CONFIG_DIR`
+// override) case was already unaffected pre-fix and stays unaffected,
+// which is not what the code actually did. `configDir === path.dirname
+// (registryPath)`, ALWAYS, is only correct on an override path; on the
+// default path `registryPath` is `~/.claude.json` (directly under HOME),
+// so `path.dirname(registryPath)` is `~` itself — NOT `~/.claude`, which
+// is the `claude` CLI's own actual default `CLAUDE_CONFIG_DIR` for
+// everything OTHER than the registry file. Setting `CLAUDE_CONFIG_DIR=~`
+// on every real spawn (the unconditional R1 shape) silently moved the
+// CLI's own config-dir default away from `~/.claude` to `~`, corrupting
+// every OTHER config-dir-relative path it resolves for the lifetime of
+// that spawn — empirically observed: registry backups landing in
+// `<HOME>/backups` instead of `<HOME>/.claude/backups`. Fixed:
+// `resolveMcpConfigDirOverride` (below) now emits `configDir` ONLY when
+// the resolution actually used an override (`CLAUDE_CONFIG_DIR` present in
+// the resolution `env`, or an explicit `registryPath`, or a `homeDir` whose
+// resolved value differs from the OS default `~/.claude`); the pure
+// default case gets `configDir: undefined`, i.e. the real spawn's
+// `process.env` is left completely unmodified — a genuine no-op against
+// pre-fix default-path behavior, unlike the R1 shape.
 
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
@@ -73,7 +138,14 @@ export interface ClaudeMcpExecResult {
 }
 
 export interface ClaudeMcpExec {
-  (args: string[], timeoutMs: number): Promise<ClaudeMcpExecResult>;
+  /**
+   * `configDir`, when given (batch19/T-005, Finding 2), is the value the
+   * real spawn must expose as `CLAUDE_CONFIG_DIR` so it operates on
+   * exactly the registry file the caller resolved `registryPath` from. A
+   * fake `exec` injected by a test is free to ignore this third argument
+   * entirely — it never spawns for real, so there is no env to align.
+   */
+  (args: string[], timeoutMs: number, configDir?: string): Promise<ClaudeMcpExecResult>;
 }
 
 /**
@@ -112,8 +184,22 @@ export interface ClaudeMcpExec {
  *   - uninstall's `removeRegisteredMcpServers` (src/cli/uninstall/
  *     index.ts) and `uninstall()` likewise have no try/catch around the
  *     `removeMcpServer` call.
+ *
+ * `configDir` (batch19/T-005, Finding 2): when given, exposed to the
+ * spawned `claude` process as `CLAUDE_CONFIG_DIR` (on top of an otherwise
+ * unmodified `process.env`), so the real CLI resolves the exact same
+ * `$CLAUDE_CONFIG_DIR/.claude.json` that `ensureMcpServers` already read
+ * for its drift comparison — see the module doc's "Finding 2" note.
+ * `undefined` (every caller other than `ensureMcpServers` today) keeps the
+ * pre-existing behavior byte-for-byte: no explicit `env` key is passed to
+ * `spawn` at all, i.e. plain `process.env` inheritance, exactly as before
+ * this parameter existed.
  */
-function realClaudeMcpExec(args: string[], timeoutMs: number): Promise<ClaudeMcpExecResult> {
+function realClaudeMcpExec(
+  args: string[],
+  timeoutMs: number,
+  configDir?: string,
+): Promise<ClaudeMcpExecResult> {
   // Every caller in this module passes >=2 elements (["mcp", <verb>, ...]),
   // so the fallback below is unreached today — kept anyway so a future
   // call site that passes fewer never degrades to a blank/truncated
@@ -126,7 +212,10 @@ function realClaudeMcpExec(args: string[], timeoutMs: number): Promise<ClaudeMcp
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn("claude", args, { stdio: ["ignore", "pipe", "pipe"] });
+      child = spawn("claude", args, {
+        stdio: ["ignore", "pipe", "pipe"],
+        ...(configDir !== undefined ? { env: { ...process.env, CLAUDE_CONFIG_DIR: configDir } } : {}),
+      });
     } catch (err) {
       const e = err as NodeJS.ErrnoException;
       resolve({
@@ -174,6 +263,23 @@ export interface ClaudeMcpCallOptions {
   exec?: ClaudeMcpExec;
   /** Per-call timeout in ms. Default {@link DEFAULT_TIMEOUT_MS}. */
   timeoutMs?: number;
+  /**
+   * Value to expose as `CLAUDE_CONFIG_DIR` to a REAL `claude` spawn
+   * (batch19/T-005, Finding 2) — forwarded verbatim as `exec`'s third
+   * argument. `ensureMcpServers` derives this via
+   * {@link resolveMcpConfigDirOverride} — NOT unconditionally
+   * `path.dirname(registryPath)` (that was the R1 shape; see the module
+   * doc's "CORRECTION" note for why it was wrong on the default path) —
+   * so a real spawn and the drift-read it was compared against always
+   * target the same file, including under a non-default `homeDir`/
+   * `--home`, while the pure default path gets `undefined` (no override).
+   * `uninstall`'s `removeMcpServer` call threads the same helper's result
+   * (Fix 3, R2). Leave undefined for a bare verb call that has no
+   * registry-path resolution to align against at all (doctor's
+   * `listMcpServers`). Ignored by an injected test `exec` (no real spawn
+   * happens under test, so there is no env to align).
+   */
+  configDir?: string;
 }
 
 /** Claude Code's `mcpServers` entry shape: command + optional args/env (matches SettingsMcpServer in generate-settings.ts). */
@@ -227,7 +333,7 @@ export async function addJsonMcpServer(
   const exec = opts.exec ?? realClaudeMcpExec;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const json = JSON.stringify(compactSpec(spec));
-  const r = await exec(["mcp", "add-json", "--scope", "user", name, json], timeoutMs);
+  const r = await exec(["mcp", "add-json", "--scope", "user", name, json], timeoutMs, opts.configDir);
   if (r.timedOut) {
     return { status: "timeout", message: `claude mcp add-json timed out after ${timeoutMs}ms`, code: r.code };
   }
@@ -261,7 +367,7 @@ export async function removeMcpServer(
 ): Promise<RemoveResult> {
   const exec = opts.exec ?? realClaudeMcpExec;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const r = await exec(["mcp", "remove", "--scope", "user", name], timeoutMs);
+  const r = await exec(["mcp", "remove", "--scope", "user", name], timeoutMs, opts.configDir);
   if (r.timedOut) {
     return { status: "timeout", message: `claude mcp remove timed out after ${timeoutMs}ms`, code: r.code };
   }
@@ -305,7 +411,7 @@ export interface GetResult {
 export async function getMcpServer(name: string, opts: ClaudeMcpCallOptions = {}): Promise<GetResult> {
   const exec = opts.exec ?? realClaudeMcpExec;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const r = await exec(["mcp", "get", name], timeoutMs);
+  const r = await exec(["mcp", "get", name], timeoutMs, opts.configDir);
   if (r.timedOut) {
     return { status: "timeout", raw: "", code: r.code };
   }
@@ -399,7 +505,7 @@ export interface ListResult {
 export async function listMcpServers(opts: ClaudeMcpCallOptions = {}): Promise<ListResult> {
   const exec = opts.exec ?? realClaudeMcpExec;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const r = await exec(["mcp", "list"], timeoutMs);
+  const r = await exec(["mcp", "list"], timeoutMs, opts.configDir);
   if (r.timedOut) {
     return { status: "timeout", servers: [], message: `claude mcp list timed out after ${timeoutMs}ms` };
   }
@@ -428,6 +534,18 @@ export interface ResolveRegistryPathOptions {
 }
 
 /**
+ * The OS-default Claude Code home (`~/.claude`) when neither `homeDir` nor
+ * an effective `CLAUDE_CONFIG_DIR` override is in play. A tiny shared
+ * helper (batch19/T-005-R2, review round 2, Fix 2) so
+ * `resolveClaudeUserRegistryPath` and `resolveMcpConfigDirOverride` can't
+ * independently drift on how "the default" is computed — that drift is
+ * exactly what would silently reopen the bug Fix 2 closes.
+ */
+function defaultClaudeHomeDir(): string {
+  return path.join(os.homedir(), ".claude");
+}
+
+/**
  * Resolve the path to the user-scope registry file the `claude` CLI
  * itself reads/writes — the same precedence the CLI applies: an explicit
  * `CLAUDE_CONFIG_DIR` wins (`$CLAUDE_CONFIG_DIR/.claude.json`); otherwise
@@ -441,8 +559,62 @@ export function resolveClaudeUserRegistryPath(opts: ResolveRegistryPathOptions =
   if (typeof configDir === "string" && configDir.length > 0) {
     return path.join(configDir, ".claude.json");
   }
-  const homeDir = opts.homeDir ?? path.join(os.homedir(), ".claude");
+  const homeDir = opts.homeDir ?? defaultClaudeHomeDir();
   return path.join(path.dirname(homeDir), ".claude.json");
+}
+
+/**
+ * Decide the `CLAUDE_CONFIG_DIR` value (if any) a REAL `claude` spawn must
+ * be given so it resolves to the SAME registry file the caller already
+ * derived via `resolveClaudeUserRegistryPath`'s own precedence (batch19/
+ * T-005-R2, review round 2, Fix 2 — task fb3e4dce). This CORRECTS the R1
+ * shape (`configDir = path.dirname(registryPath)`, unconditionally): on
+ * the pure default resolution, `registryPath` is `~/.claude.json`
+ * (directly under HOME), so `path.dirname(registryPath)` is `~` itself —
+ * NOT `~/.claude`, the `claude` CLI's own actual default `CLAUDE_CONFIG_DIR`
+ * for everything OTHER than the registry file (settings.json, backups,
+ * ...). Forcing `CLAUDE_CONFIG_DIR=~` on every real spawn silently moved
+ * the CLI's own config-dir default away from `~/.claude` to `~` — see the
+ * module doc's "CORRECTION" note for the empirical symptom this produced.
+ *
+ * Only emits an override when the resolution actually used one:
+ *   - an explicit `registryPath` override always needs one — there is no
+ *     way the CLI's own default resolution lands there on its own;
+ *   - an effective `CLAUDE_CONFIG_DIR` in `env` (the same branch
+ *     `resolveClaudeUserRegistryPath` takes) is passed straight through —
+ *     covers a caller whose `env` differs from the actual `process.env` a
+ *     real spawn would otherwise inherit;
+ *   - a `homeDir` whose resolved value differs from
+ *     {@link defaultClaudeHomeDir} needs one too, for the same reason as
+ *     the explicit-`registryPath` case.
+ * The PURE default (none of the above) returns `undefined`: the real
+ * spawn then gets no explicit `env` override at all (see
+ * `realClaudeMcpExec`), i.e. plain `process.env` inheritance — exactly
+ * what the CLI's own default resolution already does on its own, and a
+ * genuine no-op against pre-fix default-path behavior (unlike the R1
+ * shape, which was NOT a no-op there).
+ */
+export function resolveMcpConfigDirOverride(opts: {
+  /** Explicit registry-path override, if the caller gave one directly (mirrors `EnsureMcpServersOptions.registryPath`). */
+  registryPath?: string;
+  /** homeDir input exactly as the caller gave it — may be undefined (the OS default). */
+  homeDir?: string;
+  /** Override for process.env (CLAUDE_CONFIG_DIR lookup). Defaults to `process.env`. */
+  env?: NodeJS.ProcessEnv;
+}): string | undefined {
+  if (opts.registryPath !== undefined) {
+    return path.dirname(opts.registryPath);
+  }
+  const env = opts.env ?? process.env;
+  const configDirEnv = env["CLAUDE_CONFIG_DIR"];
+  if (typeof configDirEnv === "string" && configDirEnv.length > 0) {
+    return configDirEnv;
+  }
+  const effectiveHomeDir = opts.homeDir ?? defaultClaudeHomeDir();
+  if (effectiveHomeDir !== defaultClaudeHomeDir()) {
+    return path.dirname(effectiveHomeDir);
+  }
+  return undefined;
 }
 
 export interface RegistryReadResult {
@@ -517,6 +689,46 @@ function specsEqual(existing: unknown, desired: ClaudeMcpServerSpec): boolean {
 
 export type EnsureAction = "noop" | "add" | "replace" | "skipped";
 
+/**
+ * Result of verifying an `add-json` "already exists" outcome (batch19/
+ * T-005, Finding 3) via `claude mcp get` + a fresh registry-file re-read.
+ * See the module doc's "Finding 3" note for why a re-read of the file (not
+ * `get`'s own stdout) is what supplies the spec comparison.
+ *
+ * R2 correction (Fix 4, task fb3e4dce, review round 2): `getStatus` has
+ * THREE meaningfully different shapes, not two — `"found"` (positive),
+ * `"not-found"` (a genuine negative: `get` exited its documented "absent"
+ * code), and `"timeout"`/`"cli-missing"` (INCONCLUSIVE: `get` never
+ * actually answered the question either way). The R1 code treated
+ * anything other than `"found"` as a reason to leave `matches: false`,
+ * which meant a `get` that merely couldn't run (a transient CLI timeout,
+ * or the CLI going missing between the `add-json` and `get` calls) could
+ * silently override a File-verified match and block the caller's
+ * migration gate on nothing more than bad luck. Fixed: only a genuine
+ * `"not-found"` (or a spec mismatch) keeps `matches: false` without
+ * consulting the file; `"found"` OR an inconclusive `getStatus` both fall
+ * through to the same file-based spec comparison — the file, not `get`'s
+ * own exit code, is what actually answers "is `desired[name]` genuinely
+ * already registered".
+ */
+export interface VerifiedAlreadyExistsResult {
+  /** Outcome of the `claude mcp get <name>` call used to confirm existence. */
+  getStatus: GetStatus;
+  /**
+   * `true` iff `getStatus !== "not-found"` (i.e. `get` either positively
+   * confirmed the name, or was merely inconclusive — see the R2 note
+   * above) AND a fresh re-read of the SAME registry file `ensureMcpServers`
+   * derived `registryPath` from shows a spec identical to `desired[name]`
+   * (same equality `specsEqual` already uses for drift detection). A
+   * verified match means the caller's target state already holds — treat
+   * this the same as a fresh "added" for gating purposes. `false`
+   * (`get` positively found nothing there, the re-read errored, or the
+   * spec genuinely differs) preserves the prior conservative behavior:
+   * the caller must keep treating the overall result as not-yet-successful.
+   */
+  matches: boolean;
+}
+
 export interface EnsureServerResult {
   name: string;
   action: EnsureAction;
@@ -526,6 +738,8 @@ export interface EnsureServerResult {
   add?: AddJsonResult;
   /** Present when action === "skipped": the registry file could not be read safely, so drift cannot be determined. */
   reason?: string;
+  /** Present iff `add?.status === "already-exists"` — see {@link VerifiedAlreadyExistsResult}. */
+  verifiedAlreadyExists?: VerifiedAlreadyExistsResult;
 }
 
 export interface EnsureMcpServersGcOptions {
@@ -612,6 +826,44 @@ export interface EnsureMcpServersResult {
 }
 
 /**
+ * Wrap `addJsonMcpServer`: when the CLI reports `already-exists`
+ * (batch19/T-005, Finding 3), verify via `claude mcp get` that the server
+ * is genuinely registered, then re-read the SAME registry file
+ * `ensureMcpServers` derived `registryPath` from (the add-json call may
+ * have raced ahead of, or exposed a staleness in, the initial file read
+ * `ensureMcpServers` took its `current`/drift snapshot from) to compare
+ * the live spec against `desired`. Every other `add.status` passes
+ * through unchanged — no extra call, no `verifiedAlreadyExists`.
+ *
+ * R2 (Fix 4): the file-based spec comparison runs whenever `get` DIDN'T
+ * positively rule the name out — i.e. `getStatus === "found"` OR
+ * inconclusive (`"timeout"`/`"cli-missing"`) — not only on `"found"`. Only
+ * a genuine `"not-found"` skips the file check and keeps `matches: false`
+ * outright. See {@link VerifiedAlreadyExistsResult}'s R2 doc for why an
+ * inconclusive `get` must not silently override a File-verified match.
+ */
+async function addAndVerifyAlreadyExists(
+  name: string,
+  spec: ClaudeMcpServerSpec,
+  callOpts: ClaudeMcpCallOptions,
+  registryPath: string,
+): Promise<{ add: AddJsonResult; verifiedAlreadyExists?: VerifiedAlreadyExistsResult }> {
+  const add = await addJsonMcpServer(name, spec, callOpts);
+  if (add.status !== "already-exists") {
+    return { add };
+  }
+  const verify = await getMcpServer(name, callOpts);
+  let matches = false;
+  if (verify.status !== "not-found") {
+    const fresh = readTopLevelMcpServers(registryPath);
+    if (fresh.error === null) {
+      matches = specsEqual(fresh.servers[name], spec);
+    }
+  }
+  return { add, verifiedAlreadyExists: { getStatus: verify.status, matches } };
+}
+
+/**
  * Reconcile `desired` against the live user-scope registry:
  *   - name absent from the registry           → `add-json`
  *   - name present, spec identical             → no-op, NO exec call at all
@@ -637,12 +889,37 @@ export interface EnsureMcpServersResult {
  * registry couldn't be read safely, GC is skipped too, mirroring the main
  * loop (`gc.registryReadError` set, `gc.results` empty) — same "never
  * guess" rule.
+ *
+ * `configDir` (batch19/T-005, Finding 2; corrected R2 — see
+ * {@link resolveMcpConfigDirOverride}) is threaded to every CLI call this
+ * function makes, so a REAL `claude` spawn (`realClaudeMcpExec`, when the
+ * caller didn't inject `opts.exec`) mutates/reads exactly the registry
+ * file this function's own drift comparison just read — no divergence
+ * under a non-default `homeDir`/`--home`/`registryPath` override. On the
+ * PURE default resolution (no override anywhere), `configDir` is
+ * `undefined` instead — a real spawn there gets no explicit `env` at all,
+ * matching the CLI's own default resolution exactly (see that function's
+ * doc for why the R1 shape, an unconditional `path.dirname(registryPath)`,
+ * was wrong on this exact path).
+ *
+ * An `add-json` "already exists" outcome (Finding 3) is verified via
+ * `addAndVerifyAlreadyExists` before being reported: see
+ * {@link VerifiedAlreadyExistsResult} for what a caller does with the
+ * result.
  */
 export async function ensureMcpServers(opts: EnsureMcpServersOptions): Promise<EnsureMcpServersResult> {
   const registryPath =
     opts.registryPath ?? resolveClaudeUserRegistryPath({ homeDir: opts.homeDir, env: opts.env });
   const { servers: existing, error: readError } = readTopLevelMcpServers(registryPath);
-  const callOpts: ClaudeMcpCallOptions = { exec: opts.exec, timeoutMs: opts.timeoutMs };
+  const callOpts: ClaudeMcpCallOptions = {
+    exec: opts.exec,
+    timeoutMs: opts.timeoutMs,
+    configDir: resolveMcpConfigDirOverride({
+      registryPath: opts.registryPath,
+      homeDir: opts.homeDir,
+      env: opts.env,
+    }),
+  };
   const results: EnsureServerResult[] = [];
 
   for (const name of Object.keys(opts.desired).sort()) {
@@ -655,8 +932,18 @@ export async function ensureMcpServers(opts: EnsureMcpServersOptions): Promise<E
 
     const current = existing[name];
     if (current === undefined) {
-      const add = await addJsonMcpServer(name, spec, callOpts);
-      results.push({ name, action: "add", add });
+      const { add, verifiedAlreadyExists } = await addAndVerifyAlreadyExists(
+        name,
+        spec,
+        callOpts,
+        registryPath,
+      );
+      results.push({
+        name,
+        action: "add",
+        add,
+        ...(verifiedAlreadyExists !== undefined ? { verifiedAlreadyExists } : {}),
+      });
       continue;
     }
 
@@ -673,8 +960,19 @@ export async function ensureMcpServers(opts: EnsureMcpServersOptions): Promise<E
       results.push({ name, action: "replace", remove });
       continue;
     }
-    const add = await addJsonMcpServer(name, spec, callOpts);
-    results.push({ name, action: "replace", remove, add });
+    const { add, verifiedAlreadyExists } = await addAndVerifyAlreadyExists(
+      name,
+      spec,
+      callOpts,
+      registryPath,
+    );
+    results.push({
+      name,
+      action: "replace",
+      remove,
+      add,
+      ...(verifiedAlreadyExists !== undefined ? { verifiedAlreadyExists } : {}),
+    });
   }
 
   let gc: GcResult | undefined;

@@ -12,6 +12,7 @@ import {
   posixSingleQuote,
   removeMcpServer,
   resolveClaudeUserRegistryPath,
+  resolveMcpConfigDirOverride,
   stripOwnedMcpServers,
   type ClaudeMcpExec,
   type ClaudeMcpExecResult,
@@ -280,6 +281,105 @@ describe("realClaudeMcpExec hermetic spawn guard (task 0d80e969)", () => {
   });
 });
 
+describe("realClaudeMcpExec — real spawn CLAUDE_CONFIG_DIR alignment (batch19/T-005-R2, review round 2, Fix 1 — task fb3e4dce)", () => {
+  // The hermetic-spawn tests above prove `realClaudeMcpExec` REFUSES a real
+  // spawn under vitest by default — necessary, but not sufficient: every
+  // OTHER test in this file injects a fake `exec`, so the actual
+  // `configDir` -> `CLAUDE_CONFIG_DIR` env-passing line inside
+  // `realClaudeMcpExec` (src/io/claude-mcp.ts) could be deleted or
+  // corrupted and the full suite would stay green (the HIGH finding this
+  // fixes). Pinned here via ONE real spawn, using the suite's documented
+  // per-site escape hatch `HARNESS_ALLOW_REAL_SPAWN=1`
+  // (src/runtime/hermetic-spawn-guard.ts; precedent:
+  // tests/cli/session-start/stale-base-check.test.ts's
+  // `withRealSpawnAllowed`), against a throwaway `claude` SHIM this test
+  // itself writes under `os.tmpdir()` — never the real Claude Code CLI,
+  // never the operator's real `~/.claude.json`. The shim also lives under
+  // `os.tmpdir()`, so the suite-wide hermetic-spawn-allowlist backstop
+  // (tests/_helpers/hermetic-spawn-allowlist.ts, D3 "a fixture the calling
+  // test itself created under os.tmpdir()") would independently let it
+  // through even without the escape hatch.
+  let dir: string;
+  let claudeBin: string;
+  let seenFile: string;
+  let savedPath: string | undefined;
+  let savedConfigDir: string | undefined;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-mcp-real-spawn-"));
+    claudeBin = path.join(dir, "claude");
+    seenFile = path.join(dir, "seen-config-dir.txt");
+    // Writes whatever CLAUDE_CONFIG_DIR it actually received (or a
+    // sentinel when unset) to `seenFile`, then reports an ordinary
+    // add-json success so `addJsonMcpServer` doesn't need to special-case
+    // the shim's output shape.
+    fs.writeFileSync(
+      claudeBin,
+      [
+        "#!/usr/bin/env node",
+        "const fs = require('fs');",
+        `fs.writeFileSync(${JSON.stringify(seenFile)}, process.env.CLAUDE_CONFIG_DIR ?? "\\0UNSET\\0");`,
+        "process.stdout.write('Added stdio MCP server real-spawn-test to user config');",
+        "process.exit(0);",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.chmodSync(claudeBin, 0o755);
+    savedPath = process.env.PATH;
+    process.env.PATH = `${dir}${path.delimiter}${savedPath ?? ""}`;
+    savedConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  });
+
+  afterEach(() => {
+    if (savedPath === undefined) delete process.env.PATH;
+    else process.env.PATH = savedPath;
+    if (savedConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = savedConfigDir;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  /**
+   * `HARNESS_ALLOW_REAL_SPAWN=1` is `realClaudeMcpExec`'s (and the
+   * suite-wide hermetic-spawn-allowlist's) documented escape hatch for a
+   * test that deliberately exercises the real spawn path end-to-end.
+   * Mirrors `withRealSpawnAllowed` in
+   * tests/cli/session-start/stale-base-check.test.ts. Scoped with
+   * try/finally so a thrown assertion still restores the prior value.
+   */
+  async function withRealSpawnAllowed<T>(fn: () => Promise<T>): Promise<T> {
+    const prev = process.env.HARNESS_ALLOW_REAL_SPAWN;
+    process.env.HARNESS_ALLOW_REAL_SPAWN = "1";
+    try {
+      return await fn();
+    } finally {
+      if (prev === undefined) delete process.env.HARNESS_ALLOW_REAL_SPAWN;
+      else process.env.HARNESS_ALLOW_REAL_SPAWN = prev;
+    }
+  }
+
+  it("an explicit configDir wins over the parent process's own CLAUDE_CONFIG_DIR (real spawn, no injected exec)", async () => {
+    process.env.CLAUDE_CONFIG_DIR = "/parent-process-own-value-must-not-leak";
+    const override = path.join(dir, "override-config-dir");
+    const r = await withRealSpawnAllowed(() =>
+      addJsonMcpServer("real-spawn-test", { command: "bar" }, { configDir: override }),
+    );
+    expect(r.status).toBe("added");
+    expect(fs.readFileSync(seenFile, "utf8")).toBe(override);
+  });
+
+  it("negative control: with NO configDir given, the real spawn inherits the parent's own CLAUDE_CONFIG_DIR verbatim (no override injected)", async () => {
+    process.env.CLAUDE_CONFIG_DIR = "/parent-process-own-value-should-be-inherited";
+    const r = await withRealSpawnAllowed(() =>
+      addJsonMcpServer("real-spawn-test", { command: "bar" }),
+    );
+    expect(r.status).toBe("added");
+    expect(fs.readFileSync(seenFile, "utf8")).toBe(
+      "/parent-process-own-value-should-be-inherited",
+    );
+  });
+});
+
 describe("resolveClaudeUserRegistryPath", () => {
   it("uses CLAUDE_CONFIG_DIR when set", () => {
     const p = resolveClaudeUserRegistryPath({ env: { CLAUDE_CONFIG_DIR: "/tmp/cfgdir" } });
@@ -437,6 +537,276 @@ describe("ensureMcpServers", () => {
     // `foo` is absent from the TOP-LEVEL mcpServers (the projects.*.foo
     // entry must not satisfy it), so it's added, not treated as a match.
     expect(r.results).toEqual([{ name: "foo", action: "add", add: { status: "added", message: "added", code: 0 } }]);
+  });
+});
+
+describe("ensureMcpServers CLAUDE_CONFIG_DIR alignment (batch19/T-005, Finding 2 — task fb3e4dce)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-mcp-configdir-"));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("threads configDir === dirname(registryPath) to exec for a NON-DEFAULT home, matching the drift-read directory", async () => {
+    // A non-default Claude Code home, the way `wireClaudeMcp` passes
+    // `homeDir: claudeHomeDir` (`path.dirname(o.claudeSettingsPath)`,
+    // derived from harness's own `--home` override) — NOT
+    // `os.homedir()/.claude`. Before this fix, `realClaudeMcpExec` spawned
+    // with no explicit env at all, so a real `claude` CLI invoked this way
+    // would mutate/read `~/.claude.json` (the OS default) instead of the
+    // file `ensureMcpServers` actually compared `desired` against here —
+    // exactly the divergence this test pins.
+    const nonDefaultHome = path.join(tmpDir, "custom-harness-home", ".claude");
+    fs.mkdirSync(nonDefaultHome, { recursive: true });
+    const seenConfigDirs: (string | undefined)[] = [];
+    const exec: ClaudeMcpExec = async (_args, _timeoutMs, configDir) => {
+      seenConfigDirs.push(configDir);
+      return ok("added");
+    };
+    const r = await ensureMcpServers({
+      desired: { foo: { command: "bar" } },
+      exec,
+      homeDir: nonDefaultHome,
+    });
+    const expectedRegistryPath = resolveClaudeUserRegistryPath({ homeDir: nonDefaultHome, env: {} });
+    expect(r.registryPath).toBe(expectedRegistryPath);
+    // The exact directory `ensureMcpServers` read `mcpServers` from for
+    // the drift comparison, NOT `os.homedir()` (which the pre-fix code
+    // would have implicitly fallen back to via plain `process.env`
+    // inheritance).
+    expect(path.dirname(expectedRegistryPath)).not.toBe(os.homedir());
+    expect(seenConfigDirs).toEqual([path.dirname(expectedRegistryPath)]);
+  });
+
+  it("threads the SAME configDir to add-json, remove, AND get across a replace + already-exists-verify sequence", async () => {
+    // Exercises all three verbs `ensureMcpServers` can call in one pass
+    // (remove -> add-json -> get, the already-exists-verify branch) and
+    // asserts every one of them saw the identical configDir — the
+    // real-CLI-spawn/drift-read alignment must hold for every verb, not
+    // just a fresh add.
+    const nonDefaultHome = path.join(tmpDir, "another-home", ".claude");
+    fs.mkdirSync(nonDefaultHome, { recursive: true });
+    const registryFile = path.join(path.dirname(nonDefaultHome), ".claude.json");
+    fs.writeFileSync(registryFile, JSON.stringify({ mcpServers: { foo: { command: "old-binary" } } }), "utf8");
+    const seenConfigDirs: (string | undefined)[] = [];
+    const exec: ClaudeMcpExec = async (args, _timeoutMs, configDir) => {
+      seenConfigDirs.push(configDir);
+      if (args[1] === "remove") return ok("");
+      if (args[1] === "add-json") return fail(1, "MCP server foo already exists in user config");
+      if (args[1] === "get") return ok("foo:\n  Scope: User config\n  Status: ✘ Failed to connect");
+      return ok("");
+    };
+    await ensureMcpServers({
+      desired: { foo: { command: "new-binary" } },
+      exec,
+      homeDir: nonDefaultHome,
+    });
+    const expectedConfigDir = path.dirname(
+      resolveClaudeUserRegistryPath({ homeDir: nonDefaultHome, env: {} }),
+    );
+    expect(seenConfigDirs).toEqual([expectedConfigDir, expectedConfigDir, expectedConfigDir]);
+  });
+});
+
+describe("resolveMcpConfigDirOverride (batch19/T-005-R2, review round 2, Fix 2 — task fb3e4dce)", () => {
+  // Pure-function coverage of the decision logic `ensureMcpServers` and
+  // uninstall's `removeRegisteredMcpServers` both call. Deliberately NOT
+  // exercised through `ensureMcpServers` for the pure-default case: doing
+  // so would require leaving `homeDir`/`registryPath`/`env` all at their
+  // real defaults, which would read the OPERATOR'S REAL `~/.claude.json`
+  // — exactly what this task's assignment forbids testing against. This
+  // function has no file I/O at all, so it's safe to call directly with a
+  // real (but harmless) `os.homedir()`.
+
+  it("returns undefined for the pure default resolution (no CLAUDE_CONFIG_DIR, no homeDir/registryPath override) — the R2 correction", () => {
+    // R1 returned `path.dirname(registryPath)` here unconditionally, which
+    // on this exact path is `os.homedir()` itself (registryPath is
+    // `~/.claude.json`, directly under HOME) — NOT `~/.claude`, the CLI's
+    // own actual default CLAUDE_CONFIG_DIR. `undefined` is the corrected,
+    // genuinely-a-no-op answer.
+    expect(resolveMcpConfigDirOverride({ env: {} })).toBeUndefined();
+  });
+
+  it("passes an effective CLAUDE_CONFIG_DIR straight through", () => {
+    expect(resolveMcpConfigDirOverride({ env: { CLAUDE_CONFIG_DIR: "/tmp/cfgdir" } })).toBe(
+      "/tmp/cfgdir",
+    );
+  });
+
+  it("an empty-string CLAUDE_CONFIG_DIR does not count as set (falls through to the homeDir/default check, matching resolveClaudeUserRegistryPath)", () => {
+    expect(resolveMcpConfigDirOverride({ env: { CLAUDE_CONFIG_DIR: "" } })).toBeUndefined();
+  });
+
+  it("returns dirname(homeDir) when homeDir differs from the OS default", () => {
+    expect(resolveMcpConfigDirOverride({ homeDir: "/tmp/custom-home/.claude", env: {} })).toBe(
+      "/tmp/custom-home",
+    );
+  });
+
+  it("returns undefined when an explicit homeDir happens to equal the OS default (still no override in play)", () => {
+    const osDefault = path.join(os.homedir(), ".claude");
+    expect(resolveMcpConfigDirOverride({ homeDir: osDefault, env: {} })).toBeUndefined();
+  });
+
+  it("an explicit registryPath override always wins, even alongside a homeDir override", () => {
+    expect(
+      resolveMcpConfigDirOverride({
+        registryPath: "/tmp/explicit-registry/.claude.json",
+        homeDir: "/tmp/custom-home/.claude",
+        env: {},
+      }),
+    ).toBe("/tmp/explicit-registry");
+  });
+
+  it("CLAUDE_CONFIG_DIR in env takes precedence over a homeDir override (matches resolveClaudeUserRegistryPath's own precedence)", () => {
+    expect(
+      resolveMcpConfigDirOverride({
+        homeDir: "/tmp/custom-home/.claude",
+        env: { CLAUDE_CONFIG_DIR: "/tmp/cfgdir" },
+      }),
+    ).toBe("/tmp/cfgdir");
+  });
+});
+
+describe("ensureMcpServers already-exists verification (batch19/T-005, Finding 3 — task fb3e4dce)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-mcp-already-exists-"));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function registryPath(): string {
+    return path.join(tmpDir, ".claude.json");
+  }
+
+  function writeRegistry(obj: unknown): void {
+    fs.writeFileSync(registryPath(), JSON.stringify(obj), "utf8");
+  }
+
+  it("a MATCHING already-exists (confirmed via claude mcp get + a fresh registry re-read) is surfaced as verifiedAlreadyExists.matches=true", async () => {
+    // The registry file `ensureMcpServers` reads BEFORE calling add-json
+    // has no `foo` yet (current === undefined, so it takes the add-json
+    // branch) — but the live CLI reports "already exists", and by the
+    // time it does, the file actually DOES contain `foo` with a spec
+    // identical to `desired.foo` (simulating a registration this run's
+    // own earlier file-read snapshot raced ahead of / didn't see).
+    writeRegistry({ mcpServers: {} });
+    const calls: string[][] = [];
+    const exec: ClaudeMcpExec = async (args) => {
+      calls.push(args);
+      if (args[1] === "add-json") {
+        writeRegistry({ mcpServers: { foo: { command: "bar", args: ["--x"] } } });
+        return fail(1, "MCP server foo already exists in user config");
+      }
+      if (args[1] === "get") {
+        return ok("foo:\n  Scope: User config (available in all your projects)\n  Status: ✔ Connected");
+      }
+      return ok("");
+    };
+    const r = await ensureMcpServers({
+      desired: { foo: { command: "bar", args: ["--x"] } },
+      exec,
+      registryPath: registryPath(),
+    });
+    expect(r.results).toEqual([
+      {
+        name: "foo",
+        action: "add",
+        add: { status: "already-exists", message: "MCP server foo already exists in user config", code: 1 },
+        verifiedAlreadyExists: { getStatus: "found", matches: true },
+      },
+    ]);
+    expect(calls.map((a) => a.slice(0, 2).join(" "))).toEqual(["mcp add-json", "mcp get"]);
+  });
+
+  it("a MISMATCHED already-exists (get finds it, but the live spec differs) keeps verifiedAlreadyExists.matches=false — prior conservative outcome preserved", async () => {
+    writeRegistry({ mcpServers: {} });
+    const exec: ClaudeMcpExec = async (args) => {
+      if (args[1] === "add-json") {
+        // Live registry actually holds a DIFFERENT command than `desired`.
+        writeRegistry({ mcpServers: { foo: { command: "someone-elses-binary" } } });
+        return fail(1, "MCP server foo already exists in user config");
+      }
+      if (args[1] === "get") {
+        return ok("foo:\n  Scope: User config\n  Status: ✔ Connected");
+      }
+      return ok("");
+    };
+    const r = await ensureMcpServers({
+      desired: { foo: { command: "bar" } },
+      exec,
+      registryPath: registryPath(),
+    });
+    expect(r.results).toEqual([
+      {
+        name: "foo",
+        action: "add",
+        add: { status: "already-exists", message: "MCP server foo already exists in user config", code: 1 },
+        verifiedAlreadyExists: { getStatus: "found", matches: false },
+      },
+    ]);
+  });
+
+  it("already-exists whose verification `claude mcp get` itself can't find the server keeps matches=false (getStatus not-found)", async () => {
+    writeRegistry({ mcpServers: {} });
+    const exec: ClaudeMcpExec = async (args) => {
+      if (args[1] === "add-json") return fail(1, "MCP server foo already exists in user config");
+      if (args[1] === "get") return fail(1, "No such server");
+      return ok("");
+    };
+    const r = await ensureMcpServers({
+      desired: { foo: { command: "bar" } },
+      exec,
+      registryPath: registryPath(),
+    });
+    expect(r.results[0]?.verifiedAlreadyExists).toEqual({ getStatus: "not-found", matches: false });
+  });
+
+  it("a TIMED-OUT verification `claude mcp get` still falls back to the file check, and a match counts as verified (batch19/T-005-R2, Fix 4 — task fb3e4dce)", async () => {
+    // R1 treated any getStatus other than "found" as a reason to leave
+    // matches=false, WITHOUT even consulting the file — so a `get` call
+    // that merely timed out (inconclusive, not a positive "absent") could
+    // silently override a genuinely File-verified match. Fixed: only a
+    // real "not-found" skips the file check; "found" and inconclusive
+    // (timeout/cli-missing) both fall through to it.
+    writeRegistry({ mcpServers: {} });
+    const exec: ClaudeMcpExec = async (args) => {
+      if (args[1] === "add-json") {
+        // Simulates a registration this run's own earlier file-read
+        // snapshot raced ahead of, same setup as the MATCHING test above.
+        writeRegistry({ mcpServers: { foo: { command: "bar", args: ["--x"] } } });
+        return fail(1, "MCP server foo already exists in user config");
+      }
+      if (args[1] === "get") return timeout();
+      return ok("");
+    };
+    const r = await ensureMcpServers({
+      desired: { foo: { command: "bar", args: ["--x"] } },
+      exec,
+      registryPath: registryPath(),
+    });
+    expect(r.results[0]?.verifiedAlreadyExists).toEqual({ getStatus: "timeout", matches: true });
+  });
+
+  it("a plain \"added\" outcome never triggers a get call and never carries verifiedAlreadyExists", async () => {
+    let getCalled = false;
+    const exec: ClaudeMcpExec = async (args) => {
+      if (args[1] === "get") getCalled = true;
+      return ok("added");
+    };
+    const r = await ensureMcpServers({
+      desired: { foo: { command: "bar" } },
+      exec,
+      registryPath: registryPath(),
+    });
+    expect(getCalled).toBe(false);
+    expect(r.results[0]).not.toHaveProperty("verifiedAlreadyExists");
   });
 });
 
