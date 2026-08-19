@@ -661,6 +661,15 @@ function migrateDeadSettingsMcpBlock(
  * manifest". GC reporting is independent of the add/replace gate below —
  * it runs, and is reported, regardless of whether the add/replace pass
  * for `desired` succeeded.
+ *
+ * `homeDir: claudeHomeDir` below (batch19/T-005, Finding 2 — task
+ * fb3e4dce) is the ONLY drift-read/spawn-alignment input this call needs
+ * to pass: `ensureMcpServers` itself now derives `configDir` from the
+ * SAME `registryPath` it resolves from this `homeDir` and threads it to
+ * every real `claude` spawn, so a non-default harness home (`--home`)
+ * mutates/reads the same registry file this function's drift comparison
+ * used. See `io/claude-mcp.ts`'s module doc for the empirical CLI probe
+ * behind this.
  */
 async function wireClaudeMcp(
   o: WireRuntimeOpts,
@@ -729,10 +738,21 @@ async function wireClaudeMcp(
   const cliMissing = actionable.some(
     (r) => r.add?.status === "cli-missing" || r.remove?.status === "cli-missing",
   );
+  // batch19/T-005, Finding 3: an `add-json` "already exists" outcome
+  // counts as OK too, but ONLY when `ensureMcpServers`'s own
+  // `claude mcp get` + registry-file-re-read verification (see
+  // `addAndVerifyAlreadyExists` in `io/claude-mcp.ts`) confirmed the
+  // already-registered spec actually matches `desired` — the manifest's
+  // target state holds even though this run's own add-json call didn't
+  // register it. An unverified or spec-mismatched already-exists (
+  // `verifiedAlreadyExists` absent or `matches: false`) keeps the prior
+  // conservative behavior: NOT ok, migration below stays gated.
   const allOk = ensureResult.results.every(
     (r) =>
       r.action === "noop" ||
-      ((r.action === "add" || r.action === "replace") && r.add?.status === "added"),
+      ((r.action === "add" || r.action === "replace") &&
+        (r.add?.status === "added" ||
+          (r.add?.status === "already-exists" && r.verifiedAlreadyExists?.matches === true))),
   );
 
   if (!allOk) {

@@ -440,6 +440,190 @@ describe("ensureMcpServers", () => {
   });
 });
 
+describe("ensureMcpServers CLAUDE_CONFIG_DIR alignment (batch19/T-005, Finding 2 — task fb3e4dce)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-mcp-configdir-"));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("threads configDir === dirname(registryPath) to exec for a NON-DEFAULT home, matching the drift-read directory", async () => {
+    // A non-default Claude Code home, the way `wireClaudeMcp` passes
+    // `homeDir: claudeHomeDir` (`path.dirname(o.claudeSettingsPath)`,
+    // derived from harness's own `--home` override) — NOT
+    // `os.homedir()/.claude`. Before this fix, `realClaudeMcpExec` spawned
+    // with no explicit env at all, so a real `claude` CLI invoked this way
+    // would mutate/read `~/.claude.json` (the OS default) instead of the
+    // file `ensureMcpServers` actually compared `desired` against here —
+    // exactly the divergence this test pins.
+    const nonDefaultHome = path.join(tmpDir, "custom-harness-home", ".claude");
+    fs.mkdirSync(nonDefaultHome, { recursive: true });
+    const seenConfigDirs: (string | undefined)[] = [];
+    const exec: ClaudeMcpExec = async (_args, _timeoutMs, configDir) => {
+      seenConfigDirs.push(configDir);
+      return ok("added");
+    };
+    const r = await ensureMcpServers({
+      desired: { foo: { command: "bar" } },
+      exec,
+      homeDir: nonDefaultHome,
+    });
+    const expectedRegistryPath = resolveClaudeUserRegistryPath({ homeDir: nonDefaultHome, env: {} });
+    expect(r.registryPath).toBe(expectedRegistryPath);
+    // The exact directory `ensureMcpServers` read `mcpServers` from for
+    // the drift comparison, NOT `os.homedir()` (which the pre-fix code
+    // would have implicitly fallen back to via plain `process.env`
+    // inheritance).
+    expect(path.dirname(expectedRegistryPath)).not.toBe(os.homedir());
+    expect(seenConfigDirs).toEqual([path.dirname(expectedRegistryPath)]);
+  });
+
+  it("threads the SAME configDir to add-json, remove, AND get across a replace + already-exists-verify sequence", async () => {
+    // Exercises all three verbs `ensureMcpServers` can call in one pass
+    // (remove -> add-json -> get, the already-exists-verify branch) and
+    // asserts every one of them saw the identical configDir — the
+    // real-CLI-spawn/drift-read alignment must hold for every verb, not
+    // just a fresh add.
+    const nonDefaultHome = path.join(tmpDir, "another-home", ".claude");
+    fs.mkdirSync(nonDefaultHome, { recursive: true });
+    const registryFile = path.join(path.dirname(nonDefaultHome), ".claude.json");
+    fs.writeFileSync(registryFile, JSON.stringify({ mcpServers: { foo: { command: "old-binary" } } }), "utf8");
+    const seenConfigDirs: (string | undefined)[] = [];
+    const exec: ClaudeMcpExec = async (args, _timeoutMs, configDir) => {
+      seenConfigDirs.push(configDir);
+      if (args[1] === "remove") return ok("");
+      if (args[1] === "add-json") return fail(1, "MCP server foo already exists in user config");
+      if (args[1] === "get") return ok("foo:\n  Scope: User config\n  Status: ✘ Failed to connect");
+      return ok("");
+    };
+    await ensureMcpServers({
+      desired: { foo: { command: "new-binary" } },
+      exec,
+      homeDir: nonDefaultHome,
+    });
+    const expectedConfigDir = path.dirname(
+      resolveClaudeUserRegistryPath({ homeDir: nonDefaultHome, env: {} }),
+    );
+    expect(seenConfigDirs).toEqual([expectedConfigDir, expectedConfigDir, expectedConfigDir]);
+  });
+});
+
+describe("ensureMcpServers already-exists verification (batch19/T-005, Finding 3 — task fb3e4dce)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-mcp-already-exists-"));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function registryPath(): string {
+    return path.join(tmpDir, ".claude.json");
+  }
+
+  function writeRegistry(obj: unknown): void {
+    fs.writeFileSync(registryPath(), JSON.stringify(obj), "utf8");
+  }
+
+  it("a MATCHING already-exists (confirmed via claude mcp get + a fresh registry re-read) is surfaced as verifiedAlreadyExists.matches=true", async () => {
+    // The registry file `ensureMcpServers` reads BEFORE calling add-json
+    // has no `foo` yet (current === undefined, so it takes the add-json
+    // branch) — but the live CLI reports "already exists", and by the
+    // time it does, the file actually DOES contain `foo` with a spec
+    // identical to `desired.foo` (simulating a registration this run's
+    // own earlier file-read snapshot raced ahead of / didn't see).
+    writeRegistry({ mcpServers: {} });
+    const calls: string[][] = [];
+    const exec: ClaudeMcpExec = async (args) => {
+      calls.push(args);
+      if (args[1] === "add-json") {
+        writeRegistry({ mcpServers: { foo: { command: "bar", args: ["--x"] } } });
+        return fail(1, "MCP server foo already exists in user config");
+      }
+      if (args[1] === "get") {
+        return ok("foo:\n  Scope: User config (available in all your projects)\n  Status: ✔ Connected");
+      }
+      return ok("");
+    };
+    const r = await ensureMcpServers({
+      desired: { foo: { command: "bar", args: ["--x"] } },
+      exec,
+      registryPath: registryPath(),
+    });
+    expect(r.results).toEqual([
+      {
+        name: "foo",
+        action: "add",
+        add: { status: "already-exists", message: "MCP server foo already exists in user config", code: 1 },
+        verifiedAlreadyExists: { getStatus: "found", matches: true },
+      },
+    ]);
+    expect(calls.map((a) => a.slice(0, 2).join(" "))).toEqual(["mcp add-json", "mcp get"]);
+  });
+
+  it("a MISMATCHED already-exists (get finds it, but the live spec differs) keeps verifiedAlreadyExists.matches=false — prior conservative outcome preserved", async () => {
+    writeRegistry({ mcpServers: {} });
+    const exec: ClaudeMcpExec = async (args) => {
+      if (args[1] === "add-json") {
+        // Live registry actually holds a DIFFERENT command than `desired`.
+        writeRegistry({ mcpServers: { foo: { command: "someone-elses-binary" } } });
+        return fail(1, "MCP server foo already exists in user config");
+      }
+      if (args[1] === "get") {
+        return ok("foo:\n  Scope: User config\n  Status: ✔ Connected");
+      }
+      return ok("");
+    };
+    const r = await ensureMcpServers({
+      desired: { foo: { command: "bar" } },
+      exec,
+      registryPath: registryPath(),
+    });
+    expect(r.results).toEqual([
+      {
+        name: "foo",
+        action: "add",
+        add: { status: "already-exists", message: "MCP server foo already exists in user config", code: 1 },
+        verifiedAlreadyExists: { getStatus: "found", matches: false },
+      },
+    ]);
+  });
+
+  it("already-exists whose verification `claude mcp get` itself can't find the server keeps matches=false (getStatus not-found)", async () => {
+    writeRegistry({ mcpServers: {} });
+    const exec: ClaudeMcpExec = async (args) => {
+      if (args[1] === "add-json") return fail(1, "MCP server foo already exists in user config");
+      if (args[1] === "get") return fail(1, "No such server");
+      return ok("");
+    };
+    const r = await ensureMcpServers({
+      desired: { foo: { command: "bar" } },
+      exec,
+      registryPath: registryPath(),
+    });
+    expect(r.results[0]?.verifiedAlreadyExists).toEqual({ getStatus: "not-found", matches: false });
+  });
+
+  it("a plain \"added\" outcome never triggers a get call and never carries verifiedAlreadyExists", async () => {
+    let getCalled = false;
+    const exec: ClaudeMcpExec = async (args) => {
+      if (args[1] === "get") getCalled = true;
+      return ok("added");
+    };
+    const r = await ensureMcpServers({
+      desired: { foo: { command: "bar" } },
+      exec,
+      registryPath: registryPath(),
+    });
+    expect(getCalled).toBe(false);
+    expect(r.results[0]).not.toHaveProperty("verifiedAlreadyExists");
+  });
+});
+
 describe("ensureMcpServers gc option (task 363a6de0, MCP-removal GC)", () => {
   let tmpDir: string;
 

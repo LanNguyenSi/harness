@@ -627,6 +627,178 @@ describe("interactive wizard — MCP registration + settings.json migration (tas
   });
 });
 
+describe("interactive wizard — already-exists gate (batch19/T-005, Finding 3 — task fb3e4dce)", () => {
+  // Bespoke fake CLI (not the shared `fakeClaudeCli` helper): for
+  // `alreadyExistsName`, `add-json` reports the documented "already
+  // exists" outcome instead of "added" — simulating a registration
+  // `ensureMcpServers`'s own earlier registry-file read didn't see (the
+  // exact condition Finding 3 fixes) — while every OTHER desired name
+  // (here: the sibling manifest MCP server) goes through the ordinary
+  // add-json path. `matchingSpec: true` persists a spec-IDENTICAL entry to
+  // the registry file as a side effect of the "already exists" branch
+  // (simulating that the live CLI genuinely already has it correctly
+  // registered); `matchingSpec: false` persists a DIFFERENT command,
+  // simulating a genuine drift the verification must not paper over.
+  function fakeClaudeCliWithAlreadyExists(
+    registryPath: string,
+    alreadyExistsName: string,
+    matchingSpec: boolean,
+  ): { exec: import("../../src/io/claude-mcp.js").ClaudeMcpExec; calls: string[][] } {
+    const calls: string[][] = [];
+    function readRegistry(): Record<string, unknown> {
+      try {
+        return JSON.parse(fs.readFileSync(registryPath, "utf8")) as Record<string, unknown>;
+      } catch {
+        return {};
+      }
+    }
+    function writeRegistry(registry: Record<string, unknown>): void {
+      fs.writeFileSync(registryPath, JSON.stringify(registry, null, 2));
+    }
+    const exec: import("../../src/io/claude-mcp.js").ClaudeMcpExec = async (args) => {
+      calls.push(args);
+      if (args[0] === "mcp" && args[1] === "add-json") {
+        const name = args[4]!;
+        const spec = JSON.parse(args[5]!) as Record<string, unknown>;
+        if (name === alreadyExistsName) {
+          const registry = readRegistry();
+          const mcpServers = (registry["mcpServers"] as Record<string, unknown>) ?? {};
+          mcpServers[name] = matchingSpec ? spec : { command: "someone-elses-binary" };
+          registry["mcpServers"] = mcpServers;
+          writeRegistry(registry);
+          return {
+            code: 1,
+            stdout: "",
+            stderr: `MCP server ${name} already exists in user config`,
+            enoent: false,
+            timedOut: false,
+          };
+        }
+        const registry = readRegistry();
+        const mcpServers = (registry["mcpServers"] as Record<string, unknown>) ?? {};
+        mcpServers[name] = spec;
+        registry["mcpServers"] = mcpServers;
+        writeRegistry(registry);
+        return {
+          code: 0,
+          stdout: `Added stdio MCP server ${name} to user config\n`,
+          stderr: "",
+          enoent: false,
+          timedOut: false,
+        };
+      }
+      if (args[0] === "mcp" && args[1] === "get") {
+        const name = args[2]!;
+        const registry = readRegistry();
+        const mcpServers = (registry["mcpServers"] as Record<string, unknown>) ?? {};
+        if (mcpServers[name] !== undefined) {
+          return {
+            code: 0,
+            stdout: `${name}:\n  Scope: User config (available in all your projects)\n  Status: ✔ Connected\n`,
+            stderr: "",
+            enoent: false,
+            timedOut: false,
+          };
+        }
+        return { code: 1, stdout: "", stderr: `No MCP server named "${name}"`, enoent: false, timedOut: false };
+      }
+      if (args[0] === "mcp" && args[1] === "remove") {
+        const name = args[4]!;
+        const registry = readRegistry();
+        const mcpServers = (registry["mcpServers"] as Record<string, unknown>) ?? {};
+        delete mcpServers[name];
+        registry["mcpServers"] = mcpServers;
+        writeRegistry(registry);
+        return { code: 0, stdout: "", stderr: "", enoent: false, timedOut: false };
+      }
+      return { code: 0, stdout: "", stderr: "", enoent: false, timedOut: false };
+    };
+    return { exec, calls };
+  }
+
+  it("a VERIFIED-MATCHING already-exists counts as success: allOk holds, the dead settings.json mcpServers block is still migrated, and no failure warning prints", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    fs.writeFileSync(
+      path.join(tmpHome, ".claude", "settings.json"),
+      JSON.stringify({ mcpServers: { "agent-tasks": { command: "old-agent-tasks" } } }, null, 2),
+    );
+    const registryPath = path.join(tmpHome, ".claude.json");
+    const { exec } = fakeClaudeCliWithAlreadyExists(registryPath, "agent-tasks", true);
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      mcpExec: exec,
+      authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
+      prompts: mockPrompts({
+        select: ["team"],
+        confirm: [true, true],
+        checkbox: [["claude-code"]],
+        input: ["~/.claude/projects/{project}/memory"],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+
+    expect(result.aborted).toBe(false);
+    const outcome = result.applies?.[0];
+    const agentTasksResult = outcome?.mcpEnsure?.results.find((r) => r.name === "agent-tasks");
+    expect(agentTasksResult?.add?.status).toBe("already-exists");
+    expect(agentTasksResult?.verifiedAlreadyExists).toEqual({ getStatus: "found", matches: true });
+
+    // Migration still ran (D-002 gate held despite the "already exists"
+    // add-json outcome) — the dead settings.json entry is stripped.
+    expect(outcome?.mcpMigrationRemovedNames).toEqual(["agent-tasks"]);
+    const settings = JSON.parse(
+      fs.readFileSync(path.join(tmpHome, ".claude", "settings.json"), "utf8"),
+    ) as { mcpServers?: Record<string, unknown> };
+    expect(settings.mcpServers).toBeUndefined();
+    expect(cap.stderr()).not.toContain("Registering one or more MCP servers");
+    expect(cap.stderr()).not.toContain("claude` CLI is not on PATH");
+  });
+
+  it("a VERIFIED-MISMATCHED already-exists keeps the prior conservative behavior: allOk fails, migration is skipped, and the failure warning prints", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    fs.writeFileSync(
+      path.join(tmpHome, ".claude", "settings.json"),
+      JSON.stringify({ mcpServers: { "agent-tasks": { command: "old-agent-tasks" } } }, null, 2),
+    );
+    const registryPath = path.join(tmpHome, ".claude.json");
+    const { exec } = fakeClaudeCliWithAlreadyExists(registryPath, "agent-tasks", false);
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      mcpExec: exec,
+      authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
+      prompts: mockPrompts({
+        select: ["team"],
+        confirm: [true, true],
+        checkbox: [["claude-code"]],
+        input: ["~/.claude/projects/{project}/memory"],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+
+    expect(result.aborted).toBe(false);
+    const outcome = result.applies?.[0];
+    const agentTasksResult = outcome?.mcpEnsure?.results.find((r) => r.name === "agent-tasks");
+    expect(agentTasksResult?.add?.status).toBe("already-exists");
+    expect(agentTasksResult?.verifiedAlreadyExists).toEqual({ getStatus: "found", matches: false });
+
+    // Migration did NOT run (D-002: prior conservative behavior held) —
+    // the dead settings.json entry survives untouched.
+    expect(outcome?.mcpMigrationRemovedNames).toBeUndefined();
+    const settings = JSON.parse(
+      fs.readFileSync(path.join(tmpHome, ".claude", "settings.json"), "utf8"),
+    ) as { mcpServers?: Record<string, unknown> };
+    expect(settings.mcpServers).toEqual({ "agent-tasks": { command: "old-agent-tasks" } });
+    expect(cap.stderr()).toContain("Registering one or more MCP servers with the `claude` CLI failed:");
+    expect(cap.stderr()).toContain("agent-tasks: MCP server agent-tasks already exists in user config");
+  });
+});
+
 describe("interactive wizard — MCP-removal GC (task 363a6de0)", () => {
   // Both tests below force apply()'s `--merge` step to throw (invalid
   // existing settings.json — same trick the "recovers gracefully when the
