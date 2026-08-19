@@ -8,6 +8,7 @@ import {
   type RunInteractiveOptions,
 } from "../../src/cli/init/interactive.js";
 import { HermeticSpawnViolationError } from "../../src/runtime/hermetic-spawn-guard.js";
+import { signingKeyPathFor } from "../../src/runtime/approval-signing.js";
 import { STUB_NPM_BIN_EXEC_WARN } from "../_helpers/npm-bin-exec.js";
 
 // Stub for `npm prefix -g` (task npm-prefix-g-hermeticity-guard/T-004).
@@ -486,6 +487,15 @@ describe("interactive wizard — MCP registration + settings.json migration (tas
     expect(registry.mcpServers["grounding-mcp"]?.command).toBe("grounding-mcp");
     expect(registry.mcpServers["grounding-mcp"]?.env?.["EVIDENCE_LEDGER_DB"]).toContain(
       ".evidence-ledger/ledger.db",
+    );
+    // task 03a917fd/H1b: same real-registration path also carries
+    // SOLUTION_VERDICT_SIGNING_KEY now (loadDesiredMcpServers ->
+    // projectSigningKeyEnv), an absolute path to the harness's own
+    // approval-signing key under the SAME generatedDir apply() itself
+    // used for this run (outcome.apply.generatedDir).
+    expect(outcome?.apply?.generatedDir).toBeDefined();
+    expect(registry.mcpServers["grounding-mcp"]?.env?.["SOLUTION_VERDICT_SIGNING_KEY"]).toBe(
+      signingKeyPathFor(outcome!.apply!.generatedDir),
     );
 
     // Migration: harness-owned names stripped from the dead settings.json

@@ -332,6 +332,7 @@ function buildExpectedFiles(
   manifest: Manifest,
   opts: ApplyOptions,
   manifestPath: string,
+  generatedDir: string,
 ): { files: ExpectedFile[]; warnings: string[] } {
   // Phase 6 #2: expand policy_packs[] into hook contributions + extra
   // generated files BEFORE settings projection. Pack hooks flow through
@@ -420,7 +421,11 @@ function buildExpectedFiles(
     // field, so `packExpansion.hooks` computed below is never
     // projected into the opencode artefact either) -- the file still
     // ships either way, its CONTENT differs per runtime.
-    const opencodeConfig = generateOpencodeConfig(augmentedManifest);
+    // generatedDir threaded in (task 03a917fd/H1b) so the opencode config's
+    // grounding-mcp entry gets a real, resolved SOLUTION_VERDICT_SIGNING_KEY
+    // instead of no projection at all (generateOpencodeConfig's extras have
+    // no safe default for this -- see GenerateOpencodeConfigExtras).
+    const opencodeConfig = generateOpencodeConfig(augmentedManifest, { generatedDir });
     const opencodeWarnings = [...opencodeConfig.warnings];
     if (packExpansion.permissions) {
       // See generate-opencode-config.ts's header ("permission -> NOT
@@ -449,8 +454,12 @@ function buildExpectedFiles(
     };
   }
 
+  // generatedDir threaded in (task 03a917fd/H1b) for SOLUTION_VERDICT_SIGNING_KEY
+  // correctness; see GenerateSettingsResult.mcpServers's doc comment for
+  // why this projection is not itself observable in settings.json.
   const settingsResult = generateSettingsWithWarnings(augmentedManifest, {
     ...(packExpansion.permissions && { packPermissions: packExpansion.permissions }),
+    generatedDir,
   });
   const settings = `${JSON.stringify(settingsResult.root, null, 2)}\n`;
   return {
@@ -592,7 +601,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     );
   }
 
-  const { files: expected, warnings } = buildExpectedFiles(manifest, opts, manifestPath);
+  const { files: expected, warnings } = buildExpectedFiles(manifest, opts, manifestPath, generatedDir);
   const lastApply = readLastApply(generatedDir);
 
   if (opts.installCodex && runtime !== "codex") {

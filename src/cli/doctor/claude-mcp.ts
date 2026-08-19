@@ -23,10 +23,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Manifest } from "../../schema/index.js";
-import {
-  buildMcpServers,
-  projectGroundingEnv,
-} from "../apply/generate-settings.js";
+import { buildDesiredMcpServers } from "../apply/generate-settings.js";
 import {
   listMcpServers,
   posixSingleQuote,
@@ -89,6 +86,18 @@ export interface BuildClaudeMcpRegistrationOptions {
   shallow?: boolean;
   /** Test-injection knob; production omits this and the real `claude` CLI is spawned. */
   claudeMcpExec?: ClaudeMcpExec;
+  /**
+   * The `harness.generated/` directory for the manifest in use (review
+   * round H1, Finding 2), threaded to `buildDesiredMcpServers` so the
+   * desired projection — and therefore the "not registered" `claude mcp
+   * add-json ...` hint — carries `SOLUTION_VERDICT_SIGNING_KEY` exactly
+   * like `apply`/`init --interactive`/opencode's config generator project
+   * it. The caller (doctor/index.ts) resolves this the same way apply.ts
+   * and interactive.ts do: `resolveGeneratedDir({homeDir, manifestPath})`.
+   * Omitted -> no signing-key projection, mirroring
+   * `BuildDesiredMcpServersOptions.generatedDir`'s own no-safe-default rule.
+   */
+  generatedDir?: string;
 }
 
 /**
@@ -155,13 +164,25 @@ export async function buildClaudeMcpRegistration(
   manifest: Manifest,
   opts: BuildClaudeMcpRegistrationOptions,
 ): Promise<ClaudeMcpRegistrationSection> {
-  // buildMcpServers' own warnings (empty command, literal-tilde env
+  // buildDesiredMcpServers' own warnings (empty command, literal-tilde env
   // values) are already surfaced by the settings-generation path / the
   // init wizard when they matter; re-reporting them here would just
-  // duplicate that diagnostic under a different section, so the array is
+  // duplicate that diagnostic under a different section, so they are
   // discarded.
-  const desired = buildMcpServers(manifest.tools.mcp, []);
-  projectGroundingEnv(manifest, desired, opts.home);
+  // homeDir: opts.home is DELIBERATE here (review round H1-R2, L4,
+  // resolved by documentation): doctor expands the manifest's
+  // tilde-carrying values (e.g. the EVIDENCE_LEDGER_DB ledger path)
+  // against the operator home it was invoked for, which is the
+  // pre-existing EVIDENCE_LEDGER_DB semantics this check has always had.
+  // apply/init pass no homeDir and fall back to os.homedir(); the two only
+  // diverge when doctor is pointed at a DIFFERENT home than the one the
+  // process runs as, in which case doctor's hint is the correct one for
+  // that home. For the signing key the shared signingKeyEnvValue resolves
+  // non-absolute generatedDir inputs the same way at every call site.
+  const { mcp: desired } = buildDesiredMcpServers(manifest, {
+    homeDir: opts.home,
+    generatedDir: opts.generatedDir,
+  });
   const desiredNames = Object.keys(desired).sort();
 
   const warnings: string[] = [];

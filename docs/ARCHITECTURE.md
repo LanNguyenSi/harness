@@ -104,7 +104,24 @@ Notes:
   status comment in `src/schema/grounding.ts`). Runtime grounding
   ENFORCEMENT keys off the `tools.mcp[]` entry named `grounding-mcp`
   (validate + session-start); `grounding:` is the section that CONFIGURES
-  that entry, not a separate enforcement switch.
+  that entry, not a separate enforcement switch. Alongside
+  `EVIDENCE_LEDGER_DB` above, the same `tools.mcp[grounding-mcp]` entry
+  also gets `SOLUTION_VERDICT_SIGNING_KEY` projected onto it (task
+  03a917fd/H1): the harness's own `<harness.generated>/.approval-signing.key`
+  path, which grounding-mcp (>= 0.8.0) reads to verify solution-verdict
+  signatures. Same override semantics (an operator-declared
+  `env.SOLUTION_VERDICT_SIGNING_KEY` wins) but no safe fallback — without a
+  resolvable `generatedDir` for the manifest in use, nothing is projected
+  at all. Every producer of this shape (`harness apply`, `init
+  --interactive`'s `claude mcp` wiring, `harness doctor`'s registration
+  check, and the opencode config generator) shares one call,
+  `buildDesiredMcpServers` in `generate-settings.ts`; the adopt-side drift
+  mirror (`adopt/derive.ts`) additionally shares the projected VALUES
+  themselves (`groundingLedgerEnvValue` / `signingKeyEnvValue`), so the
+  projections cannot drift apart between producers as long as every new
+  producer goes through those shared functions (a hand-rolled
+  `signingKeyPathFor` on a raw `generatedDir` is exactly the phantom-drift
+  bug the shared value function exists to prevent).
 - **`auto_start: true`** is the default because per VISION §3 Grounding the current "sessions must be started manually" mode is a sharp edge. Setting it to `false` disables auto-start for users who want to script it themselves. (RESERVED — not consumed yet.)
 - **`policies_source`** points to a file, not inline policies. Claim-gate policies are opinionated data structures (claim types × required evidence), arguably their own DSL. Keeping them out of the top-level manifest prevents the manifest from bloating and lets policy libraries be shared or versioned independently. (RESERVED — not consumed yet.)
 - **`retention_days`** is a hint, not an enforcement. It is passed to `ledger prune` by a scheduled or hook-triggered invocation; `harness` itself does not run prune. (RESERVED — evidence-ledger implements no prune yet.)

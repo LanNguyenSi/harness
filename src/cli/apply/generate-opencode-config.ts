@@ -27,12 +27,13 @@
 // ($defs.McpLocalConfig in the published schema: `{ type: "local",
 // command: string[], cwd?, environment?: Record<string,string>,
 // enabled?, timeout? }`). We reuse generate-settings.ts's
-// `buildMcpServers` + `projectGroundingEnv` (Claude Code's `{command,
-// args, env}` shape, already covering the grounding-mcp
-// EVIDENCE_LEDGER_DB projection and the literal-tilde env-value
-// warning) and reshape the result into opencode's `{type: "local",
-// command: [...], environment}` instead of hand-rolling a third copy of
-// that logic that could drift from the other two runtimes.
+// `buildDesiredMcpServers` (Claude Code's `{command, args, env}` shape,
+// already covering the grounding-mcp EVIDENCE_LEDGER_DB and
+// SOLUTION_VERDICT_SIGNING_KEY projections and the literal-tilde
+// env-value warning) and reshape the
+// result into opencode's `{type: "local", command: [...], environment}`
+// instead of hand-rolling a third copy of that logic that could drift
+// from the other two runtimes.
 //
 // enabled:false -> projected as a bare `{"enabled": false}` marker, NOT
 // omitted (LOW-F4, batch18 fix-round, task f34eb233 review; the
@@ -106,7 +107,10 @@
 //     above).
 
 import type { Manifest } from "../../schema/index.js";
-import { buildMcpServers, projectGroundingEnv, type SettingsMcpServer } from "./generate-settings.js";
+import {
+  buildDesiredMcpServers,
+  type SettingsMcpServer,
+} from "./generate-settings.js";
 
 /** opencode's native local-MCP-server shape (`$defs.McpLocalConfig`). */
 export interface OpencodeLocalMcpServer {
@@ -187,6 +191,14 @@ export interface GenerateOpencodeConfigExtras {
    * convention as `GenerateSettingsExtras.homeDir` in generate-settings.ts.
    */
   homeDir?: string;
+  /**
+   * Absolute `harness.generated/` directory for the manifest in use (task
+   * 03a917fd/H1b), threaded through to `projectSigningKeyEnv` exactly like
+   * `GenerateSettingsExtras.generatedDir` in generate-settings.ts. Same
+   * no-safe-default rule: omitting this yields NO
+   * `SOLUTION_VERDICT_SIGNING_KEY` projection rather than a guessed path.
+   */
+  generatedDir?: string;
 }
 
 function toOpencodeMcpServer(server: SettingsMcpServer): OpencodeLocalMcpServer {
@@ -204,20 +216,23 @@ export function generateOpencodeConfig(
   manifest: Manifest,
   extras: GenerateOpencodeConfigExtras = {},
 ): OpencodeConfigResult {
-  const warnings: string[] = [];
-
   // Claude Code's {command, args, env} shape already carries the
-  // grounding-mcp EVIDENCE_LEDGER_DB projection and the literal-tilde
-  // warning; `buildMcpServers` returns keys pre-sorted ascending by
-  // name (see its own header) AND drops `enabled: false` entries
-  // entirely. That drop is correct for the Claude-Code-shaped
-  // intermediate this reuses, but NOT for the final opencode `mcp`
-  // block: those disabled entries are re-added below as explicit
-  // `{"enabled": false}` markers instead of staying dropped (LOW-F4,
-  // batch18 fix-round, task f34eb233 review — see this module's
-  // "enabled:false" header note for why).
-  const claudeShapeMcp = buildMcpServers(manifest.tools.mcp, warnings);
-  projectGroundingEnv(manifest, claudeShapeMcp, extras.homeDir);
+  // grounding-mcp EVIDENCE_LEDGER_DB and SOLUTION_VERDICT_SIGNING_KEY
+  // projections plus the literal-tilde warning, via `buildDesiredMcpServers`
+  // (review round H1, Finding 2 -- the single choke point every producer of
+  // this shape now shares, instead of hand-rolling a third copy of the
+  // buildMcpServers/projectGroundingEnv/projectSigningKeyEnv sequence).
+  // `buildMcpServers` (inside the helper) returns keys pre-sorted ascending
+  // by name (see its own header) AND drops `enabled: false` entries
+  // entirely. That drop is correct for the Claude-Code-shaped intermediate
+  // this reuses, but NOT for the final opencode `mcp` block: those disabled
+  // entries are re-added below as explicit `{"enabled": false}` markers
+  // instead of staying dropped (LOW-F4, batch18 fix-round, task f34eb233
+  // review — see this module's "enabled:false" header note for why).
+  const { mcp: claudeShapeMcp, warnings } = buildDesiredMcpServers(manifest, {
+    homeDir: extras.homeDir,
+    generatedDir: extras.generatedDir,
+  });
 
   // Built by iterating manifest.tools.mcp SORTED ascending by name (not
   // by re-using claudeShapeMcp's own key order, which only covers the

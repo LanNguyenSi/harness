@@ -91,6 +91,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `generateSettingsWithWarnings` (`src/cli/apply/generate-settings.ts`)
+  gains `projectSigningKeyEnv`, projecting the harness's own approval-
+  signing key path (`<generatedDir>/.approval-signing.key`,
+  `signingKeyPathFor`) as the `SOLUTION_VERDICT_SIGNING_KEY` env on the
+  `tools.mcp[grounding-mcp]` entry, exactly mirroring the existing
+  `EVIDENCE_LEDGER_DB` / `projectGroundingEnv` projection (task
+  `03a917fd`/H1, agent-grounding `9b6c4beb` comment 2, Option 2): only
+  the fully-resolved, absolute key PATH is projected, never the key
+  bytes; an operator-declared `env.SOLUTION_VERDICT_SIGNING_KEY` on the
+  entry wins; no projection fires without a grounding-mcp entry or
+  without the new `GenerateSettingsExtras.generatedDir` passed in
+  (there is no safe default to guess). Wiring the real, resolved
+  `generatedDir` through `harness apply`'s and `harness init`'s call
+  sites (task `03a917fd`/H1b) is now live: `generate-opencode-config.ts`'s
+  `generateOpencodeConfig` gained the matching `generatedDir` extra and
+  `apply.ts`'s `buildExpectedFiles` threads its own resolved
+  `generatedDir` into both that call and its `generateSettingsWithWarnings`
+  call; `init/interactive.ts`'s `loadDesiredMcpServers` — the function
+  that feeds the REAL `claude mcp` CLI registration (`ensureMcpServers`)
+  — now also projects `SOLUTION_VERDICT_SIGNING_KEY`, mirroring
+  `EVIDENCE_LEDGER_DB` there; `adopt/derive.ts`'s `manifestMcpProjection`
+  gained the matching manifest-side mirror so an apply→adopt cycle does
+  not report phantom drift on grounding-mcp for this key either. One
+  caveat carried over from `EVIDENCE_LEDGER_DB`/T-002: settings.json's
+  `mcpServers` block (and therefore `apply.ts`'s
+  `generateSettingsWithWarnings` call specifically) is dead at runtime —
+  Claude Code's real MCP registration goes exclusively through the
+  `claude mcp` CLI path in `interactive.ts`, so the settings.json branch's
+  `generatedDir` threading is wired for symmetry/future-proofing but has
+  no independently observable effect today.
+- Review round H1 fix-round (task `03a917fd`): `generate-settings.ts`
+  gains `buildDesiredMcpServers(manifest, {homeDir, generatedDir})`, a
+  single choke-point wrapper around `buildMcpServers` ->
+  `projectGroundingEnv` -> `projectSigningKeyEnv`. Every producer of the
+  Claude-Code-shaped MCP server-spec map — `harness apply`'s
+  settings.json generation, `init --interactive`'s `claude mcp` CLI
+  wiring, `harness doctor`'s registration-health check, and the opencode
+  config generator — now calls this one function instead of hand-rolling
+  the same three-call sequence, closing the gap where doctor's "not
+  registered, run this `claude mcp add-json ...`" hint for grounding-mcp
+  silently omitted `SOLUTION_VERDICT_SIGNING_KEY` (3 of the 4 producers
+  called `projectSigningKeyEnv`, doctor did not). `projectSigningKeyEnv`
+  also normalizes a relative or literal-tilde `generatedDir`
+  (`expandHome` + `path.resolve`, mirroring `groundingLedgerEnvValue`'s
+  idiom for `EVIDENCE_LEDGER_DB`) into an absolute path instead of
+  silently under-projecting. `docs/ARCHITECTURE.md`'s `grounding:`
+  wiring-status note and `GenerateSettingsResult.mcpServers`'s doc
+  comment now name both projections.
 - `harness doctor` gains an on-demand toolchain-parity section (task
   `13919613`, commit `16d47941`), the doctor companion to `harness session-start
   toolchain-parity`: reuses that command's Collector/Comparator core

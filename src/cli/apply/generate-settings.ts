@@ -47,8 +47,10 @@
 //   - Within a group, the inner hooks[] preserves matcher-grouping order
 //     and is sorted by command for the same reason.
 
+import * as path from "node:path";
 import type { Hook, Manifest, McpServer } from "../../schema/index.js";
 import { expandHome } from "../../io/expand-home.js";
+import { signingKeyPathFor } from "../../runtime/approval-signing.js";
 
 export const DEFAULT_BUDGET_MS = 30_000;
 
@@ -56,6 +58,8 @@ export const DEFAULT_BUDGET_MS = 30_000;
 export const GROUNDING_MCP_SERVER_NAME = "grounding-mcp";
 /** The env var grounding-mcp's ledger-bridge reads for the evidence-ledger DB path. */
 export const EVIDENCE_LEDGER_DB_ENV = "EVIDENCE_LEDGER_DB";
+/** The env var grounding-mcp (>= 0.8.0) reads for the harness's own approval-marker signing-key path. */
+export const SOLUTION_VERDICT_SIGNING_KEY_ENV = "SOLUTION_VERDICT_SIGNING_KEY";
 
 export interface SettingsHookCommand {
   type: "command";
@@ -94,16 +98,22 @@ export interface GenerateSettingsResult {
   warnings: string[];
   /**
    * The manifest's `tools.mcp[]` entries translated into Claude Code's
-   * server-spec shape (command/args/env), INCLUDING the grounding-mcp
-   * `EVIDENCE_LEDGER_DB` projection (`projectGroundingEnv`). Deliberately
-   * NOT part of `root` and never serialized into settings.json (task
+   * server-spec shape (command/args/env) via `buildDesiredMcpServers` —
+   * INCLUDING both the grounding-mcp `EVIDENCE_LEDGER_DB`
+   * (`projectGroundingEnv`) and `SOLUTION_VERDICT_SIGNING_KEY`
+   * (`projectSigningKeyEnv`) projections. Deliberately NOT part of `root`
+   * and never serialized into settings.json (task
    * init-mcp-wiring-claude-code/T-002): Claude Code does not read the
    * settings.json `mcpServers` block at runtime — see
    * `src/io/claude-mcp.ts`'s module header. User-scope MCP registration
    * goes exclusively through the `claude mcp` CLI now
-   * (`ensureMcpServers`); this field is what feeds that path. The init
-   * wizard (`src/cli/init/interactive.ts`) reads it directly instead of
-   * reading it back out of a written settings.json.
+   * (`ensureMcpServers`). `buildDesiredMcpServers` is the single call
+   * every producer of this shape shares (review round H1, Finding 2): the
+   * init wizard (`src/cli/init/interactive.ts`), the doctor registration-
+   * health check (`src/cli/doctor/claude-mcp.ts`), and the opencode config
+   * generator (`generate-opencode-config.ts`) all call it directly rather
+   * than re-deriving this field from a written settings.json, so a NEW
+   * projected env only needs to be added in one place.
    */
   mcpServers: Record<string, SettingsMcpServer>;
 }
@@ -121,6 +131,19 @@ export interface GenerateSettingsExtras {
    * injected by tests for determinism.
    */
   homeDir?: string;
+  /**
+   * The `harness.generated/` directory for the manifest in use (task
+   * 03a917fd/H1). Used only to project `SOLUTION_VERDICT_SIGNING_KEY` (see
+   * `projectSigningKeyEnv`) onto the grounding-mcp entry — the path to the
+   * harness's own `.approval-signing.key` (`signingKeyPathFor`). Unlike
+   * `homeDir` above there is no safe universal default: the generated dir
+   * depends on manifest-path resolution (a `--config` override changes
+   * it), so a caller that omits this gets NO projection rather than a
+   * guessed-wrong path. A relative value, or one carrying a literal `~`,
+   * is normalized to an absolute path at the projection boundary (review
+   * round H1, Finding 1) rather than rejected — see `projectSigningKeyEnv`.
+   */
+  generatedDir?: string;
 }
 
 export function generateSettings(manifest: Manifest): SettingsRoot {
@@ -160,14 +183,18 @@ export function generateSettingsWithWarnings(
     out.hooks[event] = buildGroups(hooks);
   }
 
-  // buildMcpServers/projectGroundingEnv still run here (not moved) so the
-  // env-tilde and empty-command warnings stay attached to the same
-  // `warnings` array regardless of which path (settings.json hooks vs.
-  // the claude-mcp Ensure path) consumes the resulting spec map. The
-  // result is intentionally NOT projected into `out` — see
+  // buildDesiredMcpServers still runs here (not moved) so the env-tilde
+  // and empty-command warnings stay attached to the same `warnings` array
+  // regardless of which path (settings.json hooks vs. the claude-mcp
+  // Ensure path) consumes the resulting spec map. The result is
+  // intentionally NOT projected into `out` — see
   // GenerateSettingsResult.mcpServers.
-  const mcp = buildMcpServers(manifest.tools.mcp, warnings);
-  projectGroundingEnv(manifest, mcp, extras.homeDir);
+  const desiredMcp = buildDesiredMcpServers(manifest, {
+    homeDir: extras.homeDir,
+    generatedDir: extras.generatedDir,
+  });
+  warnings.push(...desiredMcp.warnings);
+  const mcp = desiredMcp.mcp;
 
   const permissions = compactPermissions(extras.packPermissions);
   if (permissions) out.permissions = permissions;
@@ -270,7 +297,7 @@ export function buildMcpServers(
  *   and projecting an env no server reads would be decorative again. See
  *   the status comments in src/schema/grounding.ts.
  */
-export function projectGroundingEnv(
+function projectGroundingEnv(
   manifest: Manifest,
   mcp: Record<string, SettingsMcpServer>,
   homeDir?: string,
@@ -298,6 +325,114 @@ export function groundingLedgerEnvValue(
   homeDir?: string,
 ): string {
   return expandHome(manifest.grounding.evidence_ledger.path, homeDir);
+}
+
+/**
+ * Wire the harness's own approval-signing key path into the grounding-mcp
+ * server entry (task 03a917fd/H1, agent-grounding 9b6c4beb comment 2,
+ * Option 2), exactly mirroring `projectGroundingEnv` above.
+ *
+ * `<generatedDir>/.approval-signing.key` (see `signingKeyPathFor`,
+ * src/runtime/approval-signing.ts) becomes the `SOLUTION_VERDICT_SIGNING_KEY`
+ * env on the `tools.mcp[grounding-mcp]` entry — the variable grounding-mcp
+ * (>= 0.8.0) reads primarily and THROWS on a non-absolute value, so this
+ * projects only the fully-resolved, already-absolute key PATH, never the
+ * key bytes themselves.
+ *
+ * Rules (mirrors `projectGroundingEnv`):
+ * - Projection only fires when a grounding-mcp entry exists; without one
+ *   there is no consumer.
+ * - An operator-declared `env.SOLUTION_VERDICT_SIGNING_KEY` on the entry
+ *   wins — an explicit override is never clobbered (same truthiness check:
+ *   an empty-string "override" is treated as absent).
+ * - No `generatedDir` passed in -> no projection, no crash. There is
+ *   nothing correct to derive without it (see `GenerateSettingsExtras`).
+ * - `generatedDir` is normalized at this projection boundary before it
+ *   reaches `signingKeyPathFor` (review round H1, Finding 1): `expandHome`
+ *   (same idiom `projectGroundingEnv` above and `groundingLedgerEnvValue`
+ *   use) then `path.resolve`, so a relative `generatedDir` or one carrying
+ *   a literal `~` still projects an absolute path — the same
+ *   never-a-tilde, always-absolute contract `groundingLedgerEnvValue`
+ *   already gives `EVIDENCE_LEDGER_DB`. This harness never THROWS on a
+ *   relative/tilde `generatedDir` the way grounding-mcp's own consumer
+ *   throws on a non-absolute env value; it normalizes instead. The
+ *   normalization lives in `signingKeyEnvValue` so every producer of this
+ *   env value shares it (review round H1-R2: the adopt mirror in
+ *   adopt/derive.ts computes the SAME value through the SAME function;
+ *   a producer that hand-rolls `signingKeyPathFor` on a raw `generatedDir`
+ *   reintroduces phantom adopt drift). The key FILE's on-disk location for
+ *   a non-absolute `generatedDir` is a separate, tracked follow-up.
+ */
+function projectSigningKeyEnv(
+  mcp: Record<string, SettingsMcpServer>,
+  generatedDir?: string,
+  homeDir?: string,
+): void {
+  const server = mcp[GROUNDING_MCP_SERVER_NAME];
+  if (!server) return;
+  if (!generatedDir) return;
+  const env = server.env ?? {};
+  if (!env[SOLUTION_VERDICT_SIGNING_KEY_ENV]) {
+    env[SOLUTION_VERDICT_SIGNING_KEY_ENV] = signingKeyEnvValue(generatedDir, homeDir);
+    server.env = env;
+  }
+}
+
+/**
+ * The single source of the projected `SOLUTION_VERDICT_SIGNING_KEY` VALUE
+ * (mirrors how `EVIDENCE_LEDGER_DB` shares its value): `expandHome` +
+ * `path.resolve` on `generatedDir`, then `signingKeyPathFor`. Both the
+ * apply-side projection above and the adopt-side mirror
+ * (adopt/derive.ts) MUST call this, never `signingKeyPathFor` on a raw
+ * `generatedDir` — otherwise apply and adopt disagree for relative or
+ * literal-tilde `generatedDir` values and adopt reports phantom drift.
+ */
+export function signingKeyEnvValue(generatedDir: string, homeDir?: string): string {
+  return signingKeyPathFor(path.resolve(expandHome(generatedDir, homeDir)));
+}
+
+export interface BuildDesiredMcpServersOptions {
+  /** Threaded to `projectGroundingEnv` and `projectSigningKeyEnv`'s tilde-expansion; defaults to `os.homedir()` (see `expandHome`). */
+  homeDir?: string;
+  /** Threaded to `projectSigningKeyEnv`; no safe default (see that function's doc). */
+  generatedDir?: string;
+}
+
+export interface DesiredMcpServersResult {
+  mcp: Record<string, SettingsMcpServer>;
+  warnings: string[];
+}
+
+/**
+ * Single choke point for the manifest -> Claude-Code-shaped MCP
+ * server-spec projection (review round H1, Finding 2 — STRUCTURAL fix).
+ * Encapsulates the fixed sequence `buildMcpServers` -> `projectGroundingEnv`
+ * -> `projectSigningKeyEnv` so every producer of this shape — `harness
+ * apply`'s settings.json generation (this module), the init wizard's
+ * `claude mcp` CLI wiring (`src/cli/init/interactive.ts`), the doctor
+ * registration-health check (`src/cli/doctor/claude-mcp.ts`), and the
+ * opencode config generator (`generate-opencode-config.ts`) — calls this
+ * ONE function instead of hand-rolling the same three-call sequence.
+ *
+ * Before this helper existed, that sequence had to be wired into each
+ * call site by hand: three of the four remembered to call
+ * `projectSigningKeyEnv` when it was added (task 03a917fd/H1b), and
+ * doctor's registration check did not, so its "not registered, run this
+ * `claude mcp add-json ...`" hint silently omitted
+ * `SOLUTION_VERDICT_SIGNING_KEY` (review round H1, Finding 2). Routing
+ * every producer through this function means the NEXT projected env only
+ * needs to be added here once, and cannot again reach only some of the
+ * call sites.
+ */
+export function buildDesiredMcpServers(
+  manifest: Manifest,
+  opts: BuildDesiredMcpServersOptions = {},
+): DesiredMcpServersResult {
+  const warnings: string[] = [];
+  const mcp = buildMcpServers(manifest.tools.mcp, warnings);
+  projectGroundingEnv(manifest, mcp, opts.homeDir);
+  projectSigningKeyEnv(mcp, opts.generatedDir, opts.homeDir);
+  return { mcp, warnings };
 }
 
 // Translate manifest `memory.router` into a synthetic UserPromptSubmit
