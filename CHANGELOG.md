@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-08-19
+
 ### Internal
 
 - The 4 grandfathered reverse-import exemptions (duration, extract,
