@@ -8,6 +8,7 @@ import type { OpencodeTargetReport } from "./opencode.js";
 import type { NpmBinReport } from "./npm-bin-path.js";
 import type { RogueLedgerDb } from "./rogue-ledger.js";
 import type { UnderstandingModeEnvDivergence } from "./understanding-mode-env.js";
+import type { ToolchainParitySection } from "./toolchain-parity.js";
 
 /**
  * Phase 6 #6 follow-up — doctor target identifier. Distinct from
@@ -347,6 +348,17 @@ export interface DoctorReport {
    */
   claudeMcp?: ClaudeMcpRegistrationSection;
   /**
+   * On-demand toolchain-parity comparison (task 13919613), reusing the
+   * Collector/Comparator core from `harness session-start
+   * toolchain-parity` (src/cli/doctor/toolchain-parity.ts). Present only
+   * when `toolchain_parity.enabled` is true in the manifest — absent
+   * otherwise, mirroring `grounding`'s "only when the feature is in use"
+   * gating. Always read-only: never writes a snapshot file or a ledger
+   * fact. Only `"drift"`-status peers roll into `warningCount`; the
+   * section is never an `errorCount` source (advisory, not a gate).
+   */
+  toolchainParity?: ToolchainParitySection;
+  /**
    * Phase 6 #6 follow-up: present when `--target codex` is passed.
    * Aggregates harness-side codex adapter health checks (binary
    * resolution, generated config presence, hook command resolution,
@@ -377,6 +389,7 @@ export interface DoctorReport {
 export type { NpmBinReport } from "./npm-bin-path.js";
 export type { ClaudeMcpRegistrationSection, ClaudeMcpEntryReport } from "./claude-mcp.js";
 export type { UnderstandingModeEnvDivergence } from "./understanding-mode-env.js";
+export type { ToolchainParitySection, ToolchainParityPeerReport } from "./toolchain-parity.js";
 
 export type {
   Manifest,

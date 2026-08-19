@@ -391,6 +391,49 @@ function formatGroundingSection(report: DoctorReport): string[] {
   return out;
 }
 
+/**
+ * Single choke point for peer-controlled strings reaching doctor's
+ * plain-text output (task 13919613, mirroring the CR/LF strip
+ * `note()` in src/cli/session-start/toolchain-parity.ts applies at ITS
+ * own choke point). A peer snapshot's `profile` field, and every value
+ * (npm package name/version, node version, OW-Kit version, MCP server
+ * name) baked into a `compareToPeer` drift `message`, is untrusted,
+ * cross-machine-synced content — agent-memory-sync populates the
+ * machine-state directory from other machines this repo does not
+ * control. A crafted `\n`/`\r` inside any of those could otherwise forge
+ * a fake standalone doctor line (e.g. a spoofed "0 errors" Summary).
+ * Applied at render time, not at collection time, so it protects every
+ * site below regardless of which reused field the value flows through.
+ */
+function stripCrLf(s: string): string {
+  return s.replace(/[\r\n]/g, " ");
+}
+
+function formatToolchainParitySection(report: DoctorReport): string[] {
+  const tp = report.toolchainParity;
+  if (tp === undefined) return [];
+  const out: string[] = ["", "Toolchain Parity"];
+  if (tp.status === "skipped" || tp.status === "no-peers") {
+    out.push(`  ~ ${stripCrLf(tp.message)}`);
+    return out;
+  }
+  for (const p of tp.peers) {
+    const marker = p.status === "ok" ? "✓" : "⚠";
+    const label = p.status === "ok" ? "ok" : `drift:${p.driftCount}`;
+    out.push(
+      `  ${marker} ${stripCrLf(p.peerProfile)}  ${label} (snapshot age ${p.ageLabel})`,
+    );
+    for (const d of p.drift) out.push(`      drift — ${stripCrLf(d.message)}`);
+  }
+  if (tp.unparseablePeers.length > 0) {
+    out.push(
+      `  ⚠ ${tp.unparseablePeers.length} peer snapshot(s) could not be parsed: ` +
+        tp.unparseablePeers.map(stripCrLf).join(", "),
+    );
+  }
+  return out;
+}
+
 function formatClaudeMcpSection(report: DoctorReport): string[] {
   const c = report.claudeMcp;
   if (c === undefined) return [];
@@ -442,6 +485,7 @@ export function format(report: DoctorReport): string {
   lines.push(...formatHookBudgetLedgerMarginSection(report));
   lines.push(...formatGroundingSection(report));
   lines.push(...formatClaudeMcpSection(report));
+  lines.push(...formatToolchainParitySection(report));
   lines.push(...formatCodexTargetSection(report));
   lines.push(...formatOpencodeTargetSection(report));
   lines.push(...formatRogueLedgerSection(report));

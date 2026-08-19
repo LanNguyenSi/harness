@@ -32,6 +32,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `harness doctor` gains an on-demand toolchain-parity section (task
+  `13919613`), the doctor companion to `harness session-start
+  toolchain-parity`: reuses that command's Collector/Comparator core
+  (`collectLocalSnapshot`, `compareToPeer`, `parseSnapshotJson`,
+  `formatSnapshotAge`, the real collectors) verbatim — no comparison
+  logic is duplicated — to compare the current live toolchain against
+  whatever peer snapshots already exist in `machine_state_dir`, without
+  ever writing a snapshot file or a ledger fact. Present only when
+  `toolchain_parity.enabled: true` (omitted otherwise), following the
+  same optional-section convention as `npmGlobalBin`/the claude-code MCP
+  registration check. `--shallow` skips the live collection (no
+  `node`/`npm` spawn), mirroring those same checks. Drift always rolls
+  into `warningCount`, never `errorCount` — advisory only, not a gate,
+  same contract as the SessionStart producer. Documented in
+  `docs/CLI.md`.
 - `harness session-start toolchain-parity` hardening round (task
   `c1b5ade5`, follow-up to the initial 690fba7c drop): (1) a lossy
   `sanitizeProfileName` advisory — a configured `profile` that is not

@@ -87,8 +87,14 @@ async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
   });
 }
 
-/** Profile names land in a filename; strip anything not filename-safe. */
-function sanitizeProfileName(value: string): string {
+/**
+ * Profile names land in a filename; strip anything not filename-safe.
+ * Exported (task 13919613) so `harness doctor`'s toolchain-parity section
+ * can resolve the SAME own-profile filename this producer would, without
+ * re-implementing the sanitization rule. Pure export, no behaviour change
+ * to any call site in this module.
+ */
+export function sanitizeProfileName(value: string): string {
   const cleaned = value.replace(/[^a-zA-Z0-9._-]/g, "-");
   return cleaned.length > 0 ? cleaned : "profile";
 }
@@ -211,8 +217,14 @@ export type CollectNpmGlobalsResult =
  * runs in (the PATH-shim incident this task follows up on was exactly a
  * PATH pointing at the wrong node), which `process.version` (the node
  * running THIS harness process) would silently paper over.
+ *
+ * Exported (task 13919613) so `harness doctor`'s toolchain-parity section
+ * can default its own `runNodeVersion` injection knob to the SAME real
+ * collector this producer uses — the whole point of the reuse is that
+ * doctor never re-implements this spawn/parse logic. No behaviour change:
+ * this is the exact function every existing call site already used.
  */
-function realNodeVersionSpawn(timeoutMs: number): Promise<CollectNodeVersionResult> {
+export function realNodeVersionSpawn(timeoutMs: number): Promise<CollectNodeVersionResult> {
   assertNoRealSpawnInTests(
     "node --version",
     "Inject a fake `runNodeVersion` (SessionStartToolchainParityOptions.runNodeVersion) instead of exercising the real spawn path.",
@@ -254,8 +266,12 @@ function realNodeVersionSpawn(timeoutMs: number): Promise<CollectNodeVersionResu
  * exit code: `npm ls -g` can exit non-zero on an unrelated extraneous/
  * invalid global entry while still emitting a perfectly parseable
  * `dependencies` JSON block, so a parseable stdout wins over the exit code.
+ *
+ * Exported (task 13919613) for the same reuse reason as
+ * {@link realNodeVersionSpawn} — `harness doctor`'s toolchain-parity
+ * section defaults to this real collector rather than duplicating it.
  */
-function realNpmGlobalsSpawn(timeoutMs: number): Promise<CollectNpmGlobalsResult> {
+export function realNpmGlobalsSpawn(timeoutMs: number): Promise<CollectNpmGlobalsResult> {
   assertNoRealSpawnInTests(
     "npm ls -g --depth=0 --json",
     "Inject a fake `runNpmGlobals` (SessionStartToolchainParityOptions.runNpmGlobals) instead of exercising the real spawn path.",
@@ -309,8 +325,11 @@ function realNpmGlobalsSpawn(timeoutMs: number): Promise<CollectNpmGlobalsResult
  * NOT an error — it degrades silently to `{}`. Malformed JSON or a
  * non-string `version` field on a manifest that DOES exist is noteworthy
  * (something is there but broken), so that degrades to `{ error }`.
+ *
+ * Exported (task 13919613) for the same reuse reason as
+ * {@link realNodeVersionSpawn}.
  */
-function realReadOwKitVersion(workspaceRoot: string): { version?: string; error?: string } {
+export function realReadOwKitVersion(workspaceRoot: string): { version?: string; error?: string } {
   const manifestPath = path.join(workspaceRoot, ".ai", "workflow", "manifest.json");
   let raw: string;
   try {
@@ -345,15 +364,23 @@ function realReadOwKitVersion(workspaceRoot: string): { version?: string; error?
  * same "read the effective registration from outside io/claude-mcp.ts"
  * purpose). Deliberately NOT `claude mcp list` (a spawn): the brief calls
  * for a file-read source for the NAMES here, and this is it.
+ *
+ * Exported (task 13919613) for the same reuse reason as
+ * {@link realNodeVersionSpawn}.
  */
-function realReadMcpServerNames(): { names: string[]; error?: string } {
+export function realReadMcpServerNames(): { names: string[]; error?: string } {
   const registryPath = resolveClaudeUserRegistryPath();
   const { servers, error } = readTopLevelMcpServers(registryPath);
   if (error !== null) return { names: [], error };
   return { names: Object.keys(servers).sort() };
 }
 
-interface CollectLocalSnapshotOptions {
+/**
+ * Exported (task 13919613) so `harness doctor`'s toolchain-parity section
+ * can call {@link collectLocalSnapshot} directly instead of duplicating
+ * its orchestration of the four collectors.
+ */
+export interface CollectLocalSnapshotOptions {
   profile: string;
   now: Date;
   workspaceRoot: string;
@@ -373,8 +400,13 @@ interface CollectLocalSnapshotOptions {
  * line for the caller to log, but never stops the other collectors from
  * running. node/npm run in PARALLEL (see the timeout constants' comment
  * above for why).
+ *
+ * Exported (task 13919613): `harness doctor`'s toolchain-parity section
+ * imports this directly as its Collector core — see that module's header
+ * for the reuse rationale. No behaviour change to this function or any
+ * existing call site.
  */
-async function collectLocalSnapshot(
+export async function collectLocalSnapshot(
   opts: CollectLocalSnapshotOptions,
 ): Promise<{ snapshot: ToolchainSnapshot; notes: string[] }> {
   const notes: string[] = [];
@@ -637,7 +669,13 @@ export interface SessionStartToolchainParityResult {
   reason?: string;
 }
 
-function defaultMachineStateDir(): string {
+/**
+ * Exported (task 13919613) so `harness doctor`'s toolchain-parity section
+ * resolves the SAME default machine-state directory this producer writes
+ * to when `toolchain_parity.machine_state_dir` is omitted from the
+ * manifest — reusing the constant instead of re-deriving it.
+ */
+export function defaultMachineStateDir(): string {
   return path.join(os.homedir(), ".harness", "machine-state");
 }
 
