@@ -38,8 +38,12 @@ export const ToolchainParitySchema = z
     // snapshot age exceeds this threshold gets an EXTRA stderr note
     // flagging it as stale; the comparison itself (and `driftCount`) is
     // unchanged — staleness is a caveat on trustworthiness, not a drift
-    // finding, so it never inflates the drift count.
-    stale_after_days: z.number().positive().optional(),
+    // finding, so it never inflates the drift count. `.finite()` (task
+    // c1b5ade5 R2, finding 5): without it, `Infinity` (reachable via YAML
+    // `.inf`) passed `.positive()` and silently turned the check into a
+    // permanent no-op (`comparison.ageMs > Infinity` is always false) —
+    // fractional values stay allowed, only non-finite ones are rejected.
+    stale_after_days: z.number().positive().finite().optional(),
   })
   .strict();
 

@@ -42,7 +42,7 @@ import {
   resolveClaudeUserRegistryPath,
 } from "../../io/claude-mcp.js";
 import { assertNoRealSpawnInTests } from "../../runtime/hermetic-spawn-guard.js";
-import { resolveManifestLedgerWriter } from "../../runtime/ledger-writer.js";
+import { resolveManifestLedgerWriter, type LedgerWriteFn } from "../../runtime/ledger-writer.js";
 import {
   resolveReadSessionId,
   type ResolveReadSessionOptions,
@@ -59,10 +59,13 @@ const SNAPSHOT_SCHEMA_VERSION = 1;
 // collectLocalSnapshot below), so the wall-time contribution of the two
 // spawns together is max(nodeTimeoutMs, npmTimeoutMs), not their sum.
 // Combined with two near-instant fs reads (OW-Kit version, MCP registry)
-// and a ledger write, normal-case wall time targets well under 5s, matching
-// the fast-path budget the `branch-check` sibling runs at (git-preflight's
-// 70s budget is the outlier — it wraps a full external test-suite run,
-// which this producer never does).
+// and a SEQUENTIAL ledger write afterwards, the worst-case wall-time this
+// hook needs against its configured `budget_ms` (and how much headroom
+// that leaves) is analyzed once, at the hook's own `budget_ms`
+// declaration in src/cli/init/templates.ts — search "toolchain-parity"
+// there. That comment is the single place the number lives; this one
+// deliberately does not restate it (task c1b5ade5 R2, closing a drift
+// between the two comments a prior round introduced).
 const DEFAULT_NODE_TIMEOUT_MS = 2_000;
 const DEFAULT_NPM_GLOBALS_TIMEOUT_MS = 4_000;
 
@@ -588,11 +591,7 @@ export interface SessionStartToolchainParityOptions extends LoaderOptions {
   /** Inject a manifest (tests). Bypasses loadManifest. */
   manifest?: Manifest;
   /** Inject the ledger writer (tests). */
-  writeLedger?: (args: {
-    sessionId: string;
-    content: string;
-    source: string;
-  }) => Promise<{ ok: boolean; reason?: string }>;
+  writeLedger?: LedgerWriteFn;
   /** Inject the read-path session resolver (env + transcript discovery). Test seam. */
   resolveSession?: (explicit: string | undefined, opts: ResolveReadSessionOptions) => string;
   /** Inject the `node --version` collector (tests) — see realNodeVersionSpawn's doc. */
@@ -706,6 +705,17 @@ export async function runSessionStartToolchainParity(
   // below, this call is NOT part of the hermetic-spawn-guard contract, so
   // wrapping it here does not swallow a HermeticSpawnViolationError.
   let sessionId: string;
+  // Task c1b5ade5 R2 (finding 3): a throw here always degrades sessionId to
+  // FALLBACK_SESSION below, but sessionSource's ternary was computed purely
+  // from `opts.session`/`event.session_id`/`sessionId` — so a stdin event
+  // that DID carry a `session_id` still reported sessionSource "stdin" even
+  // though the id actually recorded was "default" (the resolver never ran
+  // to completion). That both misrepresents the ledger fact's provenance
+  // and suppresses the AC5 "resolved to default" warning below, which only
+  // fires when sessionSource === "default". `resolverThrew` short-circuits
+  // sessionSource to "default" whenever the catch below fired, regardless
+  // of what `explicit`/`event.session_id` looked like.
+  let resolverThrew = false;
   try {
     sessionId = resolveSession(explicit, {});
   } catch (err) {
@@ -713,9 +723,11 @@ export async function runSessionStartToolchainParity(
       `session id resolution failed: ${(err as Error).message}; falling back to session "${FALLBACK_SESSION}"`,
     );
     sessionId = FALLBACK_SESSION;
+    resolverThrew = true;
   }
-  const sessionSource: SessionStartToolchainParityResult["sessionSource"] =
-    typeof opts.session === "string" && opts.session.length > 0
+  const sessionSource: SessionStartToolchainParityResult["sessionSource"] = resolverThrew
+    ? "default"
+    : typeof opts.session === "string" && opts.session.length > 0
       ? "flag"
       : typeof event.session_id === "string" && event.session_id.length > 0
         ? "stdin"
@@ -780,19 +792,35 @@ export async function runSessionStartToolchainParity(
     note(
       `configured profile "${profile}" is not filename-safe; using sanitized "${sanitizedProfile}" for the snapshot file (${ownFileName})`,
     );
-    try {
-      const existingRaw = fs.readFileSync(path.join(machineStateDir, ownFileName), "utf8");
-      const existingParsed = parseSnapshotJson(existingRaw);
-      if (existingParsed.ok && existingParsed.snapshot.profile !== profile) {
-        note(
-          `WARNING: sanitized filename "${ownFileName}" collides with an existing snapshot for a DIFFERENT profile ("${existingParsed.snapshot.profile}"); this run's write is about to overwrite it`,
-        );
-      }
-    } catch {
-      // No existing file for this sanitized name yet (first run for this
-      // profile), or it is unreadable — nothing to warn about here;
-      // writeOwnSnapshot below reports its own write failures separately.
+  }
+  // Collision check (task c1b5ade5 R2, finding 2): this must run on EVERY
+  // invocation, not only when THIS machine's own profile happens to be
+  // lossy — the collision is equally caused by a DIFFERENT (peer)
+  // machine's lossy profile landing on the SAME sanitized filename as
+  // this machine's own, already filename-safe, profile. Gating this read
+  // on `sanitizedProfile !== profile` meant only the lossy side of such a
+  // pair ever warned; the filename-safe side silently overwrote the lossy
+  // peer's snapshot with no signal at all (and that peer would then never
+  // show up in `peersCompared`). Only the "not filename-safe" note above
+  // stays scoped to the lossy case — it is about THIS profile, not about
+  // a collision.
+  try {
+    const existingRaw = fs.readFileSync(path.join(machineStateDir, ownFileName), "utf8");
+    const existingParsed = parseSnapshotJson(existingRaw);
+    if (existingParsed.ok && existingParsed.snapshot.profile !== profile) {
+      // The existing snapshot's `profile` field is untrusted, cross-machine
+      // synced content (task c1b5ade5 R2, finding 1) — sanitize before
+      // interpolating it into the stderr stream, exactly like ownFileName's
+      // filename label above, so a crafted profile string cannot forge a
+      // standalone parity line.
+      note(
+        `WARNING: sanitized filename "${ownFileName}" collides with an existing snapshot for a DIFFERENT profile ("${sanitizeProfileName(existingParsed.snapshot.profile)}"); this run's write is about to overwrite it`,
+      );
     }
+  } catch {
+    // No existing file for this sanitized name yet (first run for this
+    // profile/filename), or it is unreadable — nothing to warn about here;
+    // writeOwnSnapshot below reports its own write failures separately.
   }
 
   const runNodeVersion = opts.runNodeVersion ?? realNodeVersionSpawn;
@@ -882,8 +910,12 @@ export async function runSessionStartToolchainParity(
     // comparison above, not a drift finding — it never touches driftTotal.
     // Only fires when `stale_after_days` is explicitly configured.
     if (staleAfterMs !== undefined && comparison.ageMs > staleAfterMs) {
+      // comparison.peerProfile is untrusted, cross-machine synced content
+      // (task c1b5ade5 R2, finding 1) — sanitized before interpolation, same
+      // as the collision-warning note above, so a crafted peer `profile`
+      // cannot forge a standalone parity line here either.
       note(
-        `peer ${comparison.peerProfile} snapshot is stale (age ${age}, exceeds the configured ${config.stale_after_days}d threshold); its comparison may not reflect that machine's CURRENT toolchain`,
+        `peer ${sanitizeProfileName(comparison.peerProfile)} snapshot is stale (age ${age}, exceeds the configured ${config.stale_after_days}d threshold); its comparison may not reflect that machine's CURRENT toolchain`,
       );
     }
   }
@@ -907,23 +939,18 @@ export async function runSessionStartToolchainParity(
 
   let writeLedger = opts.writeLedger;
   if (!writeLedger) {
-    // Defensive (task c1b5ade5): resolveManifestLedgerWriter is currently a
-    // pure function that always returns a discriminated result rather than
-    // throwing, but that is an implementation detail of its own, not a
-    // contract this call site should lean on — a future change to it (or
-    // to findGroundingMcp/mcpCommandList underneath) throwing would
-    // otherwise crash a producer whose whole contract is "never break the
-    // session loop".
-    let resolved: ReturnType<typeof resolveManifestLedgerWriter>;
-    try {
-      resolved = resolveManifestLedgerWriter(manifest, {
-        ...(opts.ledgerTimeoutMs !== undefined ? { ledgerTimeoutMs: opts.ledgerTimeoutMs } : {}),
-      });
-    } catch (err) {
-      const reason = `resolveManifestLedgerWriter threw: ${(err as Error).message}; cannot record ${content}`;
-      note(reason);
-      return done(false, profile, peersCompared, driftTotal, sessionId, sessionSource, reason, unparseablePeers.length);
-    }
+    // No try/catch here (task c1b5ade5 R2, finding 4 — orchestrator
+    // decision): resolveManifestLedgerWriter is a pure function over an
+    // already-validated `manifest` with no throw path (findGroundingMcp is
+    // a plain array `.find`, mcpCommandList a plain string split) and no
+    // I/O seam to fail — unlike `resolveSession` above and `writeLedger`
+    // below, which DO wrap real I/O/spawn boundaries and stay caught. A
+    // try/catch here had no exercisable throw path and was dead,
+    // untested code (round-1 review finding); removed rather than built
+    // out into a fake seam.
+    const resolved = resolveManifestLedgerWriter(manifest, {
+      ...(opts.ledgerTimeoutMs !== undefined ? { ledgerTimeoutMs: opts.ledgerTimeoutMs } : {}),
+    });
     if (!resolved.ok) {
       const reason = `${resolved.reason}; cannot record ${content}`;
       note(reason);
@@ -936,7 +963,7 @@ export async function runSessionStartToolchainParity(
   // instead of resolving to `{ ok: false, reason }` must degrade the same
   // way the `!result.ok` branch below already does, not propagate as an
   // unhandled rejection out of a SessionStart hook.
-  let result: { ok: boolean; reason?: string };
+  let result: Awaited<ReturnType<LedgerWriteFn>>;
   try {
     result = await writeLedger({ sessionId, content, source: LEDGER_SOURCE });
   } catch (err) {

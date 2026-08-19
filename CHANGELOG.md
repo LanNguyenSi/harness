@@ -38,11 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   filename-safe now logs a warning, plus a stronger WARNING when the
   sanitized filename collides with an existing snapshot for a DIFFERENT
   profile (this run's write is about to overwrite it); (2) defensive
-  try/catch around the `resolveSession`, `resolveManifestLedgerWriter`,
-  and `writeLedger` call sites — a throw/rejection from any of the three
-  now degrades to a note + exit 0 instead of an unhandled
-  throw/rejection, same as every other failure path in this producer
-  (deliberately NOT applied to `collectLocalSnapshot`, which the
+  try/catch around the `resolveSession` and `writeLedger` call sites — a
+  throw/rejection from either now degrades to a note + exit 0 instead of
+  an unhandled throw/rejection, same as every other failure path in this
+  producer (deliberately NOT applied to `collectLocalSnapshot`, which the
   hermetic-spawn-guard contract requires to propagate uncaught); (3) a
   new optional `toolchain_parity.stale_after_days` manifest knob
   (`src/schema/toolchain-parity.ts`, default off) — a peer snapshot older
@@ -54,6 +53,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   parallel node/npm collection and missed that the ledger write runs
   SEQUENTIALLY after with its own ~5s default timeout floor (worst case
   ~9s, not the "comfortable" sub-5s headroom the old comment claimed).
+  **Round 2 (review fix-round, same task):** (a) the collision-warning
+  note and the stale-peer note both interpolated an untrusted,
+  cross-machine-synced `profile` field into the stderr stream
+  unsanitized — a crafted profile string (embedded newline plus
+  note-prefix-shaped text) could forge a standalone parity line;
+  both sites now wrap the value in `sanitizeProfileName(...)`, same as
+  the pre-existing filename-label site (the two "ok against"/"drift:N
+  against" sibling notes stay unsanitized — a known, separate gap,
+  scoped out of this round); (b) the collision check was one-sided — it
+  only ran on the lossy machine's own run, so a filename-safe machine
+  silently overwrote a lossy peer's snapshot with no signal and that
+  peer silently dropping out of `peersCompared`; the existing-file read
+  now runs on every invocation, and only the "not filename-safe" note
+  stays scoped to the lossy case; (c) a session resolver that throws
+  while the stdin event DID carry a `session_id` used to still report
+  `sessionSource: "stdin"` even though `sessionId` had actually fallen
+  back to `"default"` — misrepresenting the ledger fact's provenance and
+  suppressing the AC5 "resolved to default" warning; a `resolverThrew`
+  flag now short-circuits `sessionSource` to `"default"` whenever the
+  catch fires; (d) `stale_after_days` gained `.finite()` — `.positive()`
+  alone accepted `Infinity` (reachable via YAML `.inf`), silently turning
+  the staleness check into a permanent no-op. The try/catch this round
+  removes was around `resolveManifestLedgerWriter`: unlike the two
+  real I/O/spawn-adjacent seams it sat next to (`resolveSession`,
+  `writeLedger`), that call has no throw path at all — it is a pure
+  function over an already-validated `manifest` (a plain array `.find`
+  plus a string split underneath) — so the catch was dead, untested code
+  (round-1 review finding) and is removed rather than built out into a
+  fake seam; the two genuine I/O sites stay caught.
 
 ### Security
 
