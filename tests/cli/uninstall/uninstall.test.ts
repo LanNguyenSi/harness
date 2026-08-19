@@ -784,3 +784,61 @@ describe("uninstall — MCP registry axis seatbelt (task d6086441 review finding
     }
   });
 });
+
+describe("uninstall — MCP-remove configDir alignment (batch19/T-005-R2, review round 2, Fix 3 — task fb3e4dce)", () => {
+  // Before this fix, `removeRegisteredMcpServers` (src/cli/uninstall/
+  // index.ts) never threaded `configDir` at all — a REAL `claude mcp
+  // remove` spawned there under a non-default `--home` mutated the
+  // OS-default `~/.claude.json` instead of `inventory.mcpRegistryPath`
+  // (the file the read-only listing pass actually found the server in),
+  // the init/uninstall asymmetry Fix 2 closed only on the `init` side.
+  afterEach(() => {
+    homedirOverride.value = undefined;
+  });
+
+  it("threads configDir === dirname(mcpRegistryPath) to `claude mcp remove` under an explicit --home override", async () => {
+    writeRegistry({ mcpServers: { "grounding-mcp": { command: "node", args: ["server.js"] } } });
+    const seen: Array<{ args: string[]; configDir?: string }> = [];
+    const exec: ClaudeMcpExec = async (args, _timeoutMs, configDir) => {
+      seen.push({ args, configDir });
+      return { code: 0, stdout: "", stderr: "", enoent: false, timedOut: false };
+    };
+    const r = await uninstall({ homeDir, settingsPath, apply: true, mcpExec: exec });
+    if (r.mode !== "apply") throw new Error("expected apply");
+    expect(r.inventory.mcpRegistryPath).toBe(registryPath);
+    expect(seen).toEqual([
+      {
+        args: ["mcp", "remove", "--scope", "user", "grounding-mcp"],
+        configDir: path.dirname(registryPath),
+      },
+    ]);
+  });
+
+  it("does NOT override configDir on the pure default resolution (no --home) — same corrected semantics as ensureMcpServers' Fix 2", async () => {
+    // `homedirOverride.value = tmp` redirects `os.homedir()` (used by
+    // BOTH `resolveHomeDir` in uninstall's own code AND
+    // `resolveMcpConfigDirOverride`'s internal default computation) into
+    // this test's own tmp dir, so `opts.homeDir` stays genuinely
+    // undefined (the real "no --home" shape) without ever touching the
+    // developer's actual home directory — same technique the "MCP
+    // registry axis seatbelt" tests above use.
+    homedirOverride.value = tmp;
+    const stateDir = path.join(tmp, ".harness-state");
+    fs.mkdirSync(stateDir, { recursive: true });
+    const isolatedSettingsPath = path.join(tmp, "isolated-settings.json");
+    writeRegistry({ mcpServers: { "grounding-mcp": { command: "g" } } });
+    const seen: Array<{ configDir?: string }> = [];
+    const exec: ClaudeMcpExec = async (_args, _timeoutMs, configDir) => {
+      seen.push({ configDir });
+      return { code: 0, stdout: "", stderr: "", enoent: false, timedOut: false };
+    };
+    const r = await uninstall({
+      stateDir,
+      settingsPath: isolatedSettingsPath,
+      apply: true,
+      mcpExec: exec, // unlocks mcpRegistryAxisAllowed WITHOUT an explicit homeDir
+    });
+    if (r.mode !== "apply") throw new Error("expected apply");
+    expect(seen).toEqual([{ configDir: undefined }]);
+  });
+});

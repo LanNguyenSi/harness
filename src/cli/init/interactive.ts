@@ -791,9 +791,27 @@ async function wireClaudeMcp(
     return; // D-002: migration runs only after every desired server registers successfully.
   }
 
-  if (actionable.length > 0) {
+  // batch19/T-005-R2, Fix 6 (review round 2, task fb3e4dce): split the
+  // success wording by what actually happened this run — a freshly
+  // `add-json`-registered server is genuinely "registered" here, but a
+  // verified-already-exists one (Finding 3 above) was NOT registered by
+  // THIS run at all; the prior single "registered N ..." message for both
+  // buckets falsely implied a fresh registration happened for names this
+  // run only CONFIRMED were already correct.
+  const freshlyRegistered = actionable.filter((r) => r.add?.status === "added");
+  const confirmedAlreadyRegistered = actionable.filter(
+    (r) => r.verifiedAlreadyExists?.matches === true,
+  );
+  if (freshlyRegistered.length > 0) {
     o.stderr(
-      `\nregistered ${actionable.length} MCP server(s) with the claude CLI (user scope): ${actionable
+      `\nregistered ${freshlyRegistered.length} MCP server(s) with the claude CLI (user scope): ${freshlyRegistered
+        .map((r) => r.name)
+        .join(", ")}\n`,
+    );
+  }
+  if (confirmedAlreadyRegistered.length > 0) {
+    o.stderr(
+      `confirmed ${confirmedAlreadyRegistered.length} MCP server(s) already registered with the claude CLI (user scope): ${confirmedAlreadyRegistered
         .map((r) => r.name)
         .join(", ")}\n`,
     );

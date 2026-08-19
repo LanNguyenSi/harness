@@ -52,6 +52,7 @@ import {
   readTopLevelMcpServers,
   removeMcpServer,
   resolveClaudeUserRegistryPath,
+  resolveMcpConfigDirOverride,
   type RemoveStatus,
 } from "../../io/claude-mcp.js";
 import { GENERATED_DIRNAME } from "../../io/generated-dir.js";
@@ -907,6 +908,19 @@ function writeRestoreSnapshot(
  * spawning anything when there are no candidates or the registry couldn't
  * be read safely (`inventory.mcpRegistryReadError` set) — same "never
  * guess" rule `ensureMcpServers`'s GC pass applies.
+ *
+ * `configDir` (batch19/T-005-R2, Fix 3, review round 2 — task fb3e4dce):
+ * `inventory.mcpRegistryPath` is derived from `opts.homeDir` (via
+ * `resolveClaudeUserRegistryPath` in `buildInventory`), the same input
+ * `ensureMcpServers` threads through `resolveMcpConfigDirOverride` on the
+ * `init` side. Before this fix, a REAL `claude mcp remove` spawned here
+ * under a non-default `--home` mutated the OS-default `~/.claude.json`
+ * (plain `process.env` inheritance, no override) instead of the file
+ * `inventory.mcpRegistryServers` was actually read from — the same
+ * init/uninstall asymmetry Fix 2 closed on the `init` side, left open
+ * here. `resolveMcpConfigDirOverride({ homeDir: opts.homeDir })` mirrors
+ * `ensureMcpServers`'s own call exactly (same corrected semantics: no
+ * override at all on the pure default resolution).
  */
 async function removeRegisteredMcpServers(
   inventory: UninstallInventory,
@@ -914,7 +928,10 @@ async function removeRegisteredMcpServers(
 ): Promise<McpRegistryRemoval[]> {
   if (inventory.mcpRegistryReadError !== null) return [];
   if (inventory.mcpRegistryServers.length === 0) return [];
-  const callOpts = opts.mcpExec ? { exec: opts.mcpExec } : {};
+  const callOpts = {
+    ...(opts.mcpExec ? { exec: opts.mcpExec } : {}),
+    configDir: resolveMcpConfigDirOverride({ homeDir: opts.homeDir }),
+  };
   const results: McpRegistryRemoval[] = [];
   for (const name of inventory.mcpRegistryServers) {
     const r = await removeMcpServer(name, callOpts);

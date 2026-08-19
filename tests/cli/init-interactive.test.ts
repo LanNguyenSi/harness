@@ -716,6 +716,20 @@ describe("interactive wizard â€” already-exists gate (batch19/T-005, Finding 3 â
     return { exec, calls };
   }
 
+  /**
+   * The verb sequence (in call order) `calls` recorded for a single
+   * server `name` â€” `add-json` matches on `args[4]`, `get` on `args[2]`
+   * (their respective name-argument positions). Used to pin Finding 5
+   * (batch19/T-005-R2, review round 2, task fb3e4dce): `mcp get` must
+   * follow `mcp add-json` ONLY for the already-exists name, never for an
+   * ordinary sibling that just gets added.
+   */
+  function verbSequenceForName(calls: string[][], name: string): string[] {
+    return calls
+      .filter((c) => (c[1] === "add-json" && c[4] === name) || (c[1] === "get" && c[2] === name))
+      .map((c) => c[1]!);
+  }
+
   it("a VERIFIED-MATCHING already-exists counts as success: allOk holds, the dead settings.json mcpServers block is still migrated, and no failure warning prints", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
     fs.writeFileSync(
@@ -723,7 +737,7 @@ describe("interactive wizard â€” already-exists gate (batch19/T-005, Finding 3 â
       JSON.stringify({ mcpServers: { "agent-tasks": { command: "old-agent-tasks" } } }, null, 2),
     );
     const registryPath = path.join(tmpHome, ".claude.json");
-    const { exec } = fakeClaudeCliWithAlreadyExists(registryPath, "agent-tasks", true);
+    const { exec, calls } = fakeClaudeCliWithAlreadyExists(registryPath, "agent-tasks", true);
     const cap = captureStreams();
     const result = await runInteractive({
       homeDir: tmpHome,
@@ -755,6 +769,41 @@ describe("interactive wizard â€” already-exists gate (batch19/T-005, Finding 3 â
     expect(settings.mcpServers).toBeUndefined();
     expect(cap.stderr()).not.toContain("Registering one or more MCP servers");
     expect(cap.stderr()).not.toContain("claude` CLI is not on PATH");
+
+    // Finding 5 (R2): `mcp get` follows `mcp add-json` ONLY for the
+    // already-exists name (agent-tasks); every sibling desired name (the
+    // "team" profile's other manifest MCP server(s)) only ever sees a
+    // plain `add-json` â€” nothing in `fakeClaudeCliWithAlreadyExists`'s
+    // `calls` was previously asserted on at all.
+    expect(verbSequenceForName(calls, "agent-tasks")).toEqual(["add-json", "get"]);
+    const siblingNames = new Set(
+      calls.filter((c) => c[1] === "add-json" && c[4] !== "agent-tasks").map((c) => c[4]!),
+    );
+    expect(siblingNames.size).toBeGreaterThan(0);
+    for (const name of siblingNames) {
+      expect(verbSequenceForName(calls, name)).toEqual(["add-json"]);
+    }
+
+    // Finding 6 (R2): the success message is split by what actually
+    // happened this run â€” "registered" for freshly add-json'd names,
+    // "confirmed ... already registered" for the verified-already-exists
+    // one. Before this fix both buckets were reported as "registered",
+    // falsely implying agent-tasks was freshly registered by this run.
+    const allResults = outcome?.mcpEnsure?.results ?? [];
+    const freshlyRegisteredNames = allResults
+      .filter((r) => r.add?.status === "added")
+      .map((r) => r.name);
+    const confirmedNames = allResults
+      .filter((r) => r.verifiedAlreadyExists?.matches === true)
+      .map((r) => r.name);
+    expect(confirmedNames).toEqual(["agent-tasks"]);
+    expect(freshlyRegisteredNames.length).toBeGreaterThan(0);
+    expect(cap.stderr()).toContain(
+      `registered ${freshlyRegisteredNames.length} MCP server(s) with the claude CLI (user scope): ${freshlyRegisteredNames.join(", ")}`,
+    );
+    expect(cap.stderr()).toContain(
+      `confirmed ${confirmedNames.length} MCP server(s) already registered with the claude CLI (user scope): ${confirmedNames.join(", ")}`,
+    );
   });
 
   it("a VERIFIED-MISMATCHED already-exists keeps the prior conservative behavior: allOk fails, migration is skipped, and the failure warning prints", async () => {
@@ -764,7 +813,7 @@ describe("interactive wizard â€” already-exists gate (batch19/T-005, Finding 3 â
       JSON.stringify({ mcpServers: { "agent-tasks": { command: "old-agent-tasks" } } }, null, 2),
     );
     const registryPath = path.join(tmpHome, ".claude.json");
-    const { exec } = fakeClaudeCliWithAlreadyExists(registryPath, "agent-tasks", false);
+    const { exec, calls } = fakeClaudeCliWithAlreadyExists(registryPath, "agent-tasks", false);
     const cap = captureStreams();
     const result = await runInteractive({
       homeDir: tmpHome,
@@ -796,6 +845,18 @@ describe("interactive wizard â€” already-exists gate (batch19/T-005, Finding 3 â
     expect(settings.mcpServers).toEqual({ "agent-tasks": { command: "old-agent-tasks" } });
     expect(cap.stderr()).toContain("Registering one or more MCP servers with the `claude` CLI failed:");
     expect(cap.stderr()).toContain("agent-tasks: MCP server agent-tasks already exists in user config");
+
+    // Finding 5 (R2): same verb-order pin as the matching-spec test above
+    // â€” `get` follows `add-json` ONLY for the already-exists name, even
+    // on the mismatched-spec/failure path.
+    expect(verbSequenceForName(calls, "agent-tasks")).toEqual(["add-json", "get"]);
+    const siblingNames = new Set(
+      calls.filter((c) => c[1] === "add-json" && c[4] !== "agent-tasks").map((c) => c[4]!),
+    );
+    expect(siblingNames.size).toBeGreaterThan(0);
+    for (const name of siblingNames) {
+      expect(verbSequenceForName(calls, name)).toEqual(["add-json"]);
+    }
   });
 });
 
