@@ -55,11 +55,17 @@
 // module doc above). No currently-released producer signs its output, so
 // until a matching grounding-mcp release ships (a tracked cross-repo
 // follow-up), EVERY verdict this consumer reads is "unsigned" and the
-// completion-gate denies it — the same strict, no-grace-period trade-off
-// f9485cc7 made, just with the producer update landing in a different repo
-// and on its own release cadence. Operators running this pack today should
-// expect the completion-gate to deny universally until that producer update
-// ships; `harness pause` remains the operator override in the interim.
+// completion-gate denies it — the SAME strict, no-grace-period POLICY
+// f9485cc7 made (no unsigned marker satisfies the gate). The RECOVERY shape
+// differs, though: f9485cc7's producer and consumer live in this one repo,
+// so an operator hitting that denial has a local fix (`harness approve
+// understanding` / `harness approve branch-protection`, one command, this
+// release). Here the producer is a separate package on its own release
+// cadence, so there is NO operator-side command that resolves the denial —
+// re-running `solution_evaluate` today still yields an unsigned verdict.
+// Operators running this pack should expect the completion-gate to deny
+// universally until the grounding-mcp producer release ships; `harness
+// pause` remains the operator override in the interim.
 // Glob-every-segment / interpreter-runtime-path-construction spellings of
 // the write-guard's residual (see below) are UNCHANGED by this: signing
 // verifies content authenticity of whatever bytes land at the marker path,
@@ -230,9 +236,26 @@ export function signVerdict(generatedDir: string, verdict: Verdict): Verdict {
  * post-signing edit to `head` / `ready` / `confidence` / `blockers` /
  * `timestamp` / `source` fails verification, not just an edit to
  * `signature` itself.
+ *
+ * `id` is the CALLER's id — the one `evaluateGate` is actually checking
+ * (`readVerdict`'s lookup key) — NOT `verdict.id` (a field read back out of
+ * the marker BODY, which is exactly the bytes an attacker controls when
+ * copying a validly-signed marker verbatim onto a different id's path).
+ * This mirrors the load-bearing invariant `approval-signing.ts`'s
+ * `signMarker` doc states explicitly: "verification always recomputes the
+ * HMAC using the id the caller is checking, NOT one read back out of the
+ * marker body." Trusting `verdict.id` here would let a byte-for-byte copy
+ * of one id's signed verdict pass verification under a DIFFERENT id's
+ * request, because the copy's `signature` and its own (also-copied)
+ * `verdict.id` field would always agree with each other regardless of which
+ * id actually asked.
  */
-export function verifyVerdictSignature(generatedDir: string, verdict: Verdict): SignatureVerification {
-  return verifyMarkerSignature(generatedDir, verdictMarkerId(verdict.id), {
+export function verifyVerdictSignature(
+  generatedDir: string,
+  id: string,
+  verdict: Verdict,
+): SignatureVerification {
+  return verifyMarkerSignature(generatedDir, verdictMarkerId(id), {
     approvedAt: verdict.timestamp,
     approvedBy: verdict.source,
     reportContentHash: verdictContentHash(verdict),
@@ -380,17 +403,35 @@ export interface GateResult {
   /**
    * True when `allowed` is false SPECIFICALLY because a verdict file
    * existed and parsed (the 7 producer keys), but carried a missing or
-   * invalid HMAC signature (harness/c7c3f606) — a legacy/not-yet-signing
-   * producer, a marker planted through some write primitive the write-guard
-   * doesn't enumerate, or content tampered post-signing. Distinct from
-   * `verdict === null` (no marker at all, `forged: false`) and from a
+   * invalid HMAC signature (harness/c7c3f606), or a body that identifies a
+   * different id than the one being checked (cross-id replay, see the
+   * `verdict.id !== id` check below) — a legacy/not-yet-signing producer, a
+   * marker planted through some write primitive the write-guard doesn't
+   * enumerate, or content tampered/copied post-signing. Distinct from
+   * `verdict === null` (no marker at all, `forged: false`), from a
    * signing-key I/O failure (fail-closed but NOT classified as forged,
    * mirroring `SignatureVerification`'s `kind: "key-unavailable"` — a
    * broken key file must not read as an active forgery attempt in audit
-   * output). `allowed` is always false when `forged` is true.
+   * output), and from a verdict missing its `timestamp` / `source` fields
+   * (fail-closed but NOT classified as forged either — a legitimately
+   * malformed marker, not evidence of an attack; see the `MISSING_*_REASON`
+   * carve-out below). `allowed` is always false when `forged` is true.
    */
   forged: boolean;
 }
+
+// `verifyMarkerSignature` (`src/runtime/approval-signing.ts`, NOT modified by
+// this module) returns these exact literal reason strings when `verdict`'s
+// `timestamp` / `source` map onto an empty `approvedAt` / `approvedBy`. Both
+// can arise from a legitimately malformed marker (a producer bug that left
+// the field blank) rather than an active forgery attempt, so `evaluateGate`
+// carves them out of the generic `forged: true` bucket below — the same
+// carve-out shape as `SignatureVerification`'s `kind: "key-unavailable"`.
+// Matched by exact string since `verifyMarkerSignature` has no `kind` tag
+// for this case; if its wording ever changes, these two constants must move
+// with it.
+const MISSING_APPROVED_AT_REASON = "missing approvedAt";
+const MISSING_APPROVED_BY_REASON = "missing approvedBy";
 
 /**
  * Evaluate the gate for `id` at `currentHead`. First verifies the verdict's
@@ -403,15 +444,29 @@ export interface GateResult {
  * dir) — `undefined` when it could not be resolved, which fails closed with
  * its own distinct (non-forged) reason.
  *
- * Once signed, mirrors grounding-mcp `evaluateGate`: allow iff
- * `verdict.ready === true` AND `verdict.head === currentHead`. `confidence`
- * is INFORMATIONAL ONLY and never gates — a `ready:true confidence:0`
- * verdict at HEAD passes — so the harness consumer stays byte-parity with
- * the producer's `solution_gate` for THAT decision. Signature verification
- * itself is NOT (yet) mirrored on the producer side — see module doc,
- * "HONEST RESIDUAL": grounding-mcp's own `solution_gate` does not enforce
- * this signature, only this harness consumer does, until a matching
- * producer release ships.
+ * `verifyVerdictSignature` is called with `id` — the CALLER's id, i.e. the
+ * one this function is asked to check — not `verdict.id`. A SECOND,
+ * belt-and-braces check below independently rejects `verdict.id !== id`:
+ * even though the signature check alone already closes the cross-id-replay
+ * hole (a byte-for-byte copy of a validly-signed verdict onto a different
+ * id's path fails signature verification, because the markerId the
+ * signature is bound to no longer matches `id`), the verdict body's `id`
+ * field itself is NOT part of the signed payload (only `timestamp` /
+ * `source` / the head-ready-confidence-blockers content hash are), so it
+ * can drift from the id that was actually verified without invalidating an
+ * otherwise-valid signature. This check makes that drift fail loudly too,
+ * rather than silently ignoring an inconsistency in the body of a verdict
+ * that otherwise passed.
+ *
+ * Once signed and identity-checked, mirrors grounding-mcp `evaluateGate`:
+ * allow iff `verdict.ready === true` AND `verdict.head === currentHead`.
+ * `confidence` is INFORMATIONAL ONLY and never gates — a `ready:true
+ * confidence:0` verdict at HEAD passes — so the harness consumer stays
+ * byte-parity with the producer's `solution_gate` for THAT decision.
+ * Signature verification itself is NOT (yet) mirrored on the producer side
+ * — see module doc, "HONEST RESIDUAL": grounding-mcp's own `solution_gate`
+ * does not enforce this signature, only this harness consumer does, until a
+ * matching producer release ships.
  */
 export function evaluateGate(
   verdict: Verdict | null,
@@ -435,7 +490,7 @@ export function evaluateGate(
       forged: false,
     };
   }
-  const verification = verifyVerdictSignature(generatedDir, verdict);
+  const verification = verifyVerdictSignature(generatedDir, id, verdict);
   if (!verification.ok) {
     if (verification.kind === "key-unavailable") {
       return {
@@ -445,11 +500,34 @@ export function evaluateGate(
         forged: false,
       };
     }
+    if (
+      verification.reason === MISSING_APPROVED_AT_REASON ||
+      verification.reason === MISSING_APPROVED_BY_REASON
+    ) {
+      return {
+        allowed: false,
+        reason:
+          `solution-acceptance verdict for "${id}" is missing a required field (${verification.reason}); ` +
+          `treating as unsigned, not forged (a legitimately malformed marker, re-run solution_evaluate)`,
+        verdict,
+        forged: false,
+      };
+    }
     return {
       allowed: false,
       reason:
         `forged/unsigned solution-acceptance verdict rejected for "${id}": ${verification.reason} ` +
         `(a producer that does not yet sign verdicts, or a marker written through an unguarded path)`,
+      verdict,
+      forged: true,
+    };
+  }
+  if (verdict.id !== id) {
+    return {
+      allowed: false,
+      reason:
+        `forged/unsigned solution-acceptance verdict rejected for "${id}": verdict body identifies itself ` +
+        `as "${verdict.id}" (cross-id replay of a validly-signed verdict, or a corrupted marker)`,
       verdict,
       forged: true,
     };

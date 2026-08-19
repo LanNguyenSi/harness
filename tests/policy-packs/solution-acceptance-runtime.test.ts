@@ -316,10 +316,37 @@ describe("evaluateGate — signature verification (harness/c7c3f606, fail-closed
     expect(r.reason).toMatch(/could not be verified/);
   });
 
+  // Review LOW (fix-round-2): a verdict missing its `timestamp` / `source`
+  // fields (mapped onto `verifyMarkerSignature`'s `approvedAt` /
+  // `approvedBy`) is a LEGITIMATELY MALFORMED marker — e.g. a producer bug
+  // that left the field blank — not evidence of an active forgery attempt.
+  // Both stay fail-closed (`allowed: false`), but must NOT be classified
+  // `forged: true`, mirroring the existing key-unavailable carve-out.
+  it("a verdict with an empty timestamp is fail-closed but NOT classified as forged (missing approvedAt carve-out)", () => {
+    const dir = tmpDir();
+    writeMarker(dir, "t", { head: HEAD, ready: true, timestamp: "" });
+    const r = evaluateGate(readVerdict(dir, "t"), HEAD, "t", generatedDir);
+    expect(r.allowed).toBe(false);
+    expect(r.forged).toBe(false);
+    expect(r.reason).toMatch(/missing approvedAt/);
+  });
+
+  it("a verdict with an empty source is fail-closed but NOT classified as forged (missing approvedBy carve-out)", () => {
+    const dir = tmpDir();
+    writeMarker(dir, "t", { head: HEAD, ready: true, source: "" });
+    const r = evaluateGate(readVerdict(dir, "t"), HEAD, "t", generatedDir);
+    expect(r.allowed).toBe(false);
+    expect(r.forged).toBe(false);
+    expect(r.reason).toMatch(/missing approvedBy/);
+  });
+
   // A verdict signed for one id must not verify under a different id — the
   // markerId is bound into the signature (mirrors the approval marker's
-  // copy-to-a-different-session-id regression).
-  it("a validly-signed verdict's signature does not transfer to a different id", () => {
+  // copy-to-a-different-session-id regression). This relabels the body's
+  // `id` to match the NEW path, so it exercises "a stale signature computed
+  // for a different id fails" — see the VERBATIM-copy test below for the
+  // sharper cross-id-replay regression, where the body is left untouched.
+  it("a validly-signed verdict's signature does not transfer to a different id (relabeled body)", () => {
     const dir = tmpDir();
     writeMarker(dir, "task-a", { head: HEAD, ready: true });
     const originalPath = verdictPathFor(dir, "task-a");
@@ -328,6 +355,97 @@ describe("evaluateGate — signature verification (harness/c7c3f606, fail-closed
     const copiedPath = verdictPathFor(dir, "task-b");
     fs.writeFileSync(copiedPath, `${JSON.stringify(raw, null, 2)}\n`);
     const r = evaluateGate(readVerdict(dir, "task-b"), HEAD, "task-b", generatedDir);
+    expect(r.allowed).toBe(false);
+    expect(r.forged).toBe(true);
+  });
+
+  // Regression (review R1 HIGH, harness/c7c3f606 fix-round-2): a
+  // VERBATIM byte-for-byte copy of a validly-signed verdict onto a SECOND
+  // id's marker path — the body's `id` field is left untouched at "task-a"
+  // — must NOT satisfy that second id's gate. Before this fix,
+  // `verifyVerdictSignature` derived the HMAC markerId from `verdict.id`
+  // (the marker BODY, attacker-writable via a plain file copy) instead of
+  // from the id the caller is actually checking, so this exact copy
+  // verified successfully and the gate ALLOWED "task-b" to complete on
+  // "task-a"'s verdict. This is the scenario the relabeled-body test above
+  // does NOT cover (that test mutates `id` to match the new path, which
+  // breaks the signature for an unrelated reason and passes even under the
+  // pre-fix code).
+  it("a VERBATIM file copy of a signed verdict onto a second id's path is rejected (cross-id replay)", () => {
+    const dir = tmpDir();
+    writeMarker(dir, "task-a", { head: HEAD, ready: true });
+    const bytes = fs.readFileSync(verdictPathFor(dir, "task-a"));
+    // Byte-for-byte copy: the body still says id:"task-a".
+    fs.writeFileSync(verdictPathFor(dir, "task-b"), bytes);
+    const copied = readVerdict(dir, "task-b");
+    expect(copied?.id).toBe("task-a"); // confirms this is a TRUE verbatim copy, not a relabel
+    const r = evaluateGate(copied, HEAD, "task-b", generatedDir);
+    expect(r.allowed).toBe(false);
+    expect(r.forged).toBe(true);
+  });
+
+  // Isolated pin for the belt-and-braces `verdict.id !== id` check
+  // (evaluateGate), independent of the markerId-derivation fix above. The
+  // HMAC payload signMarker/verifyMarkerSignature compute does NOT include
+  // `id` itself (only timestamp/source/content-hash), so a verdict's `id`
+  // field can be edited post-signing WITHOUT invalidating the signature —
+  // the markerId-derivation fix alone does not catch this, because
+  // `verifyVerdictSignature` never reads `verdict.id` at all once it is
+  // given the caller's id directly. This constructs exactly that: a
+  // verdict validly signed for CALLER id "solo-x", with `id` mutated to
+  // "someone-else" afterward (signature untouched, so verification still
+  // passes), placed at "solo-x"'s own path so the caller's id and the file
+  // path agree. Without the dedicated `verdict.id !== id` check, this would
+  // ALLOW (ready:true, head matches); with it, it is rejected.
+  it("verdict.id disagreeing with the requested id is rejected even when the signature still verifies", () => {
+    const dir = tmpDir();
+    const id = "solo-x";
+    fs.mkdirSync(dir, { recursive: true });
+    const full: Verdict = {
+      id,
+      head: HEAD,
+      ready: true,
+      confidence: 0.9,
+      blockers: [],
+      timestamp: "2026-05-30T00:00:00.000Z",
+      source: "preflight",
+    };
+    const signed = signVerdict(generatedDir, full);
+    // Mutate ONLY `id` after signing — `id` is not part of the signed
+    // payload, so this leaves `signed.signature` valid for CALLER id "solo-x".
+    const tampered: Verdict = { ...signed, id: "someone-else" };
+    fs.writeFileSync(verdictPathFor(dir, id), `${JSON.stringify(tampered, null, 2)}\n`);
+    const read = readVerdict(dir, id);
+    expect(read?.id).toBe("someone-else");
+    // Sanity: the signature genuinely still verifies for the caller's id —
+    // proves the rejection below comes from the `verdict.id !== id` check,
+    // not from a signature failure.
+    expect(verifyVerdictSignature(generatedDir, id, read as Verdict)).toEqual({ ok: true });
+    const r = evaluateGate(read, HEAD, id, generatedDir);
+    expect(r.allowed).toBe(false);
+    expect(r.forged).toBe(true);
+  });
+
+  // Regression: two DIFFERENT raw task ids that collapse to the SAME
+  // sanitized file path (sanitizeVerdictId turns ":" into "_", so "a:b" and
+  // "a_b" both resolve to "a_b.json") must not let one task's verdict
+  // satisfy the other's gate. Before this fix, the HMAC markerId was
+  // derived from `verdict.id` (the file's own content), so the collision
+  // alone was enough: the second, unrelated task's gate check would find
+  // the first task's byte-identical file, compute the SAME body-derived
+  // markerId, and allow. Deriving the markerId from the CALLER's raw id
+  // instead (this fix) makes the two ids sign/verify under DIFFERENT
+  // markerIds despite the path collision, so the mismatch is caught.
+  it("colliding sanitized ids (\"a:b\" vs \"a_b\") do not let one task's verdict satisfy the other's gate", () => {
+    const dir = tmpDir();
+    expect(verdictPathFor(dir, "a:b")).toBe(verdictPathFor(dir, "a_b")); // same path, confirmed
+    // Producer writes for raw id "a:b" (its own gate would use this raw id).
+    writeMarker(dir, "a:b", { head: HEAD, ready: true });
+    // A DIFFERENT task, raw id "a_b", resolves to the SAME file via the
+    // sanitize collision and asks its own gate to check it.
+    const collided = readVerdict(dir, "a_b");
+    expect(collided?.id).toBe("a:b"); // it really did read the other task's file
+    const r = evaluateGate(collided, HEAD, "a_b", generatedDir);
     expect(r.allowed).toBe(false);
     expect(r.forged).toBe(true);
   });
@@ -351,7 +469,7 @@ describe("verdictMarkerId / signVerdict / verifyVerdictSignature", () => {
     const signed = signVerdict(generatedDir, verdict);
     expect(signed.alg).toBeDefined();
     expect(signed.signature).toBeDefined();
-    expect(verifyVerdictSignature(generatedDir, signed)).toEqual({ ok: true });
+    expect(verifyVerdictSignature(generatedDir, "t", signed)).toEqual({ ok: true });
   });
 
   it("verifyVerdictSignature rejects a verdict with no signature at all", () => {
@@ -364,7 +482,7 @@ describe("verdictMarkerId / signVerdict / verifyVerdictSignature", () => {
       timestamp: "2026-05-30T00:00:00.000Z",
       source: "preflight",
     };
-    const v = verifyVerdictSignature(generatedDir, verdict);
+    const v = verifyVerdictSignature(generatedDir, "t", verdict);
     expect(v.ok).toBe(false);
   });
 });

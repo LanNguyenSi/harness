@@ -274,6 +274,41 @@ describe("completion-gate — signature verification end-to-end (harness/c7c3f60
     expect(res.blocked).toBe(true);
     expect(JSON.parse(out).reason).toMatch(/forged\/unsigned solution-acceptance verdict rejected/);
   });
+
+  // Regression (review R1 HIGH, harness/c7c3f606 fix-round-2), exercised
+  // through the real hook entrypoint: a VERBATIM byte-for-byte copy of a
+  // validly-signed verdict onto a SECOND task's marker path must not
+  // satisfy that second task's completion gate. Before this fix, the
+  // markerId used to verify the signature was derived from the marker
+  // BODY's `id` field (unchanged by a plain file copy) rather than the
+  // active-claim task id the hook is actually checking, so this exact copy
+  // passed verification and ALLOWED "task-other" to finish on "task-42"'s
+  // verdict.
+  it("BLOCKS a VERBATIM file copy of a signed verdict onto a different task's marker path (cross-id replay)", async () => {
+    const dir = verdictDirWith(TASK, { head: HEAD, ready: true });
+    const bytes = fs.readFileSync(path.join(dir, `${TASK}.json`));
+    const OTHER_TASK = "task-other";
+    fs.writeFileSync(path.join(dir, `${OTHER_TASK}.json`), bytes);
+    const { res, out } = await run({
+      cwd: repoAtHead(HEAD),
+      verdictDir: dir,
+      activeClaim: OTHER_TASK,
+    });
+    expect(res.blocked).toBe(true);
+    const reason = JSON.parse(out).reason as string;
+    expect(reason).toMatch(/forged\/unsigned solution-acceptance verdict rejected/);
+    // Also confirmed at the STDERR diagnostic / operator-facing audit tag.
+    expect(res.diagnostic).toMatch(/\[audit: forged\/unsigned verdict marker rejected\]/);
+  });
+
+  // The forged-audit tag is specific to `forged: true` denials — a routine
+  // "no verdict" block must not carry it, so the tag stays a reliable
+  // signal an operator can grep for.
+  it("does NOT carry the forged-audit tag on a routine no-verdict BLOCK", async () => {
+    const { res } = await run({ cwd: repoAtHead(HEAD), verdictDir: verdictDirWith(null) });
+    expect(res.blocked).toBe(true);
+    expect(res.diagnostic).not.toMatch(/\[audit: forged/);
+  });
 });
 
 describe("completion-gate — production resolution path (no injected manifest/claim)", () => {
