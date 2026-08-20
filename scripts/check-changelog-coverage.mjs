@@ -39,7 +39,16 @@
 //      citation style is "(task `<id8>`)"; matched in the coverage text
 //      with the same non-hex-flanked boundary used to extract it, so
 //      `deadbee1` is not satisfied by a longer hex run in the text (e.g.
-//      `deadbee1234567`);
+//      `deadbee1234567`). A task id with no hex letter at all (e.g.
+//      `13919613`) is real but rare — agent-tasks issues purely-numeric
+//      ids too, and dropping them silently uncovered a real commit in
+//      Batch 19 (PR #437). Such a numeric-only 8-digit window only counts
+//      as a link token when a `task` or `commit` keyword sits within a
+//      short punctuation/whitespace gap on either side (e.g. "task
+//      `13919613`", "commit 13919613") — never as a bare number. That
+//      adjacency requirement is what keeps an incidental 8-digit run (a
+//      version number, an issue count, a timestamp fragment) from being
+//      mistaken for a task id and creating false coverage;
 //   2. the commit's PR number from the squash-merge subject suffix
 //      `(#NNN)`, matched in the coverage text as `#NNN` not immediately
 //      followed by another digit, so `#42` is not satisfied by `#423`
@@ -189,17 +198,43 @@ export function commitType(subject) {
   return m ? m[1].toLowerCase() : null;
 }
 
+// A numeric-only 8-digit window counts as a task id only when a `task` or
+// `commit` keyword sits within this many characters of punctuation/
+// whitespace on either side — see linkTokens class 1 in the module header.
+// Wide enough for "(task `" / "commit " style gaps, narrow enough that a
+// keyword mentioned elsewhere in the message cannot reach across it.
+const NUMERIC_ID_KEYWORD_GAP = 12;
+const NUMERIC_ID_KEYWORD_BEFORE = /\b(?:task|commit)\b[^0-9a-z]*$/i;
+const NUMERIC_ID_KEYWORD_AFTER = /^[^0-9a-z]*\b(?:task|commit)\b/i;
+
+/** True when an 8-digit window at `message[index, index + length)` has a
+ * `task`/`commit` keyword immediately adjacent (only punctuation/
+ * whitespace between them, within NUMERIC_ID_KEYWORD_GAP chars) on either
+ * side. Only consulted for windows with no hex letter — see linkTokens. */
+function hasAdjacentIdKeyword(message, index, length) {
+  const before = message.slice(Math.max(0, index - NUMERIC_ID_KEYWORD_GAP), index);
+  const after = message.slice(index + length, index + length + NUMERIC_ID_KEYWORD_GAP);
+  return NUMERIC_ID_KEYWORD_BEFORE.test(before) || NUMERIC_ID_KEYWORD_AFTER.test(after);
+}
+
 /** All link tokens of a commit — see the module header for the four
  * classes. 8-hex extraction requires non-hex boundaries so a 40-hex SHA
  * embedded in a message does not shed spurious 8-hex windows. */
 export function linkTokens(commit) {
-  const taskIds = new Set(
-    (commit.message.match(/(?<![0-9a-f])[0-9a-f]{8}(?![0-9a-f])/g) ?? []).filter(
-      // A task id of only digits does not exist in practice, but a pure
-      // number (e.g. a timestamp fragment) would: require a hex letter.
-      (t) => /[a-f]/.test(t),
-    ),
-  );
+  const taskIds = new Set();
+  const hex8Pattern = /(?<![0-9a-f])[0-9a-f]{8}(?![0-9a-f])/g;
+  let m;
+  while ((m = hex8Pattern.exec(commit.message)) !== null) {
+    const id = m[0];
+    // A hex-lettered id counts unconditionally (existing behavior). A
+    // purely numeric one is real but ambiguous — a bare 8-digit run could
+    // just as easily be a version number or an issue count — so it counts
+    // only next to a `task`/`commit` keyword (see NUMERIC_ID_KEYWORD_GAP
+    // above and the module header's link-token class 1).
+    if (/[a-f]/.test(id) || hasAdjacentIdKeyword(commit.message, m.index, id.length)) {
+      taskIds.add(id);
+    }
+  }
   const prNumbers = new Set(commit.subject.match(/#\d+/g) ?? []);
   const ghsaIds = new Set(commit.message.match(/GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}/g) ?? []);
   return { taskIds: [...taskIds], prNumbers: [...prNumbers], ghsaIds: [...ghsaIds], shortSha: commit.sha.slice(0, 7) };
@@ -298,7 +333,10 @@ export function main(repoDir = process.cwd()) {
     console.error(
       "check-changelog-coverage: add an [Unreleased] entry citing the commit's task id (`<id8>`) or PR number (#NNN), " +
         "or — only if the commit is genuinely not release-notable — give it one of the skipped conventional types: " +
-        [...SKIPPED_TYPES].join(", ") + ".",
+        [...SKIPPED_TYPES].join(", ") + ". " +
+        "If the task id has no hex letter (a purely numeric id, e.g. `13919613`), it only counts right next to the " +
+        'word "task" or "commit" (e.g. "task `13919613`") — a bare number elsewhere in the entry will not cover this ' +
+        "commit; cite the commit's own SHA or the PR number (#NNN) instead.",
     );
     process.exitCode = 1;
     return;

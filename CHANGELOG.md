@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `check-changelog-coverage`'s `linkTokens` no longer drops a purely
+  numeric 8-digit task id (no hex letter, e.g. `13919613`) — agent-tasks
+  issues those too, and the prior hex-letter-only gate silently failed
+  the gate for such a commit with no obvious cause (real gap seen in
+  Batch 19, PR #437; task `41f7eca5`). A numeric-only id now counts as a
+  link token when a `task`/`commit` keyword sits directly next to it
+  (e.g. "task `13919613`"); a bare 8-digit number with no such adjacency
+  still does not count, so a version number or an issue count cannot
+  create false coverage.
+
 ## [0.45.0] - 2026-08-19
 
 ### Internal

@@ -122,6 +122,30 @@ describe("linkTokens", () => {
     expect(t.taskIds).toHaveLength(0);
   });
 
+  // Regression pin for the real Batch 19 / PR #437 gap: agent-tasks issues
+  // purely-numeric ids too, and the pre-fix code dropped every 8-digit
+  // window with no hex letter, so a commit citing one went uncovered with
+  // no obvious cause even though its changelog entry named the id.
+  it("accepts a purely numeric 8-digit id when a task/commit keyword sits right next to it", () => {
+    const before = linkTokens(commit({ message: "fix: x (#1)\n\ntask 13919613" }));
+    expect(before.taskIds).toContain("13919613");
+
+    const backticked = linkTokens(commit({ message: "fix: x (#1)\n\ncloses task `13919613`" }));
+    expect(backticked.taskIds).toContain("13919613");
+
+    const commitKeyword = linkTokens(commit({ message: "fix: x (#1)\n\nsee commit 20261234 for context" }));
+    expect(commitKeyword.taskIds).toContain("20261234");
+  });
+
+  it("does NOT accept a bare numeric 8-digit run with no adjacent task/commit keyword (no false coverage)", () => {
+    // A version number, an issue count, or any other incidental 8-digit
+    // run must stay uncovered-eligible — it must not silently satisfy the
+    // gate just because it happens to be 8 digits long.
+    const t = linkTokens(commit({ message: "fix: x (#1)\n\nsee 13919613 for context, version 20261234 shipped" }));
+    expect(t.taskIds).not.toContain("13919613");
+    expect(t.taskIds).not.toContain("20261234");
+  });
+
   it("extracts PR numbers from the subject only, and GHSA ids from anywhere", () => {
     const t = linkTokens(
       commit({ subject: "fix(deps): close advisory (#374)", message: "fix(deps): close advisory (#374)\n\nGHSA-r28c-9q8g-f849, relates to #999" }),
@@ -187,6 +211,19 @@ describe("classifyCommits", () => {
 
   it("treats a null section (missing heading) as empty text", () => {
     const { uncovered } = classifyCommits([commit()], null);
+    expect(uncovered).toHaveLength(1);
+  });
+
+  it("covers a commit via a purely numeric task id cited next to 'task' in the changelog", () => {
+    const c = commit({ subject: "fix: x (#1)", message: "fix: x (#1)\n\ntask 13919613" });
+    const { covered, uncovered } = classifyCommits([c], "- entry (task `13919613`)\n");
+    expect(covered).toHaveLength(1);
+    expect(uncovered).toHaveLength(0);
+  });
+
+  it("does NOT cover a commit whose only token is a bare numeric id with no keyword adjacency, even if the same digits appear in the coverage text (no false coverage)", () => {
+    const c = commit({ subject: "fix: x (#1)", message: "fix: x (#1)\n\nsee 13919613 for context" });
+    const { uncovered } = classifyCommits([c], "- unrelated entry mentions 13919613 as a version number\n");
     expect(uncovered).toHaveLength(1);
   });
 });
