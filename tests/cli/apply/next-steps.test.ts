@@ -50,4 +50,57 @@ describe("formatNextSteps", () => {
     expect(s).toContain("/abs/x/settings.json");
     expect(s).not.toMatch(/^\.\//m);
   });
+
+  it("runtime claude-code (explicit) matches the default (no runtime field) output byte-for-byte", () => {
+    // Golden pin (task f9d49e97, acceptance criterion 1): runtime-aware
+    // branching must not change a single byte of the claude-code hint.
+    const base = { generatedSettingsPath: "/abs/harness.generated/settings.json" };
+    const withoutRuntime = formatNextSteps(base);
+    const withClaudeCode = formatNextSteps({ ...base, runtime: "claude-code" });
+    expect(withClaudeCode).toBe(withoutRuntime);
+    expect(withoutRuntime).toBe(
+      [
+        "",
+        "Generated files written. Nothing is wired into Claude Code yet.",
+        "",
+        "Recommended next step (wires into your user-global Claude settings):",
+        "  harness apply --target ~/.claude/settings.json --merge",
+        "",
+        "Alternatives:",
+        "  • Project-scoped:  harness apply --target .claude/settings.local.json --merge",
+        '  • One-shot only:   claude -p "..." --settings /abs/harness.generated/settings.json',
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("runtime codex: no settings.json / --target recommendation, points at config.toml and --install instead", () => {
+    const s = formatNextSteps({
+      generatedSettingsPath: "/abs/harness.generated/settings.json",
+      codexConfigPath: "/abs/harness.generated/codex/config.toml",
+      runtime: "codex",
+    });
+    expect(s).toContain("/abs/harness.generated/codex/config.toml");
+    expect(s).toContain("harness apply --runtime codex --install");
+    expect(s).toContain("~/.codex/config.toml");
+    expect(s).not.toContain("--target");
+    expect(s).not.toContain("settings.json");
+    expect(s).not.toContain("claude -p");
+    expect(s).not.toContain("--merge");
+  });
+
+  it("runtime opencode: no settings.json / --target recommendation, points at $OPENCODE_CONFIG / mcp-block-copy instead", () => {
+    const s = formatNextSteps({
+      generatedSettingsPath: "/abs/harness.generated/settings.json",
+      opencodeConfigPath: "/abs/harness.generated/opencode/opencode.json",
+      runtime: "opencode",
+    });
+    expect(s).toContain("/abs/harness.generated/opencode/opencode.json");
+    expect(s).toContain("$OPENCODE_CONFIG");
+    expect(s).toContain("mcp");
+    expect(s).not.toContain("--target");
+    expect(s).not.toContain("settings.json");
+    expect(s).not.toContain("claude -p");
+    expect(s).not.toContain("--merge");
+  });
 });

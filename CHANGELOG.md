@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`harness apply`'s post-apply "Next steps" hint (`formatNextSteps`,
+  `src/cli/apply/next-steps.ts`) ignored `--runtime` entirely and always
+  printed the Claude Code settings.json-merge / `claude -p` block, even
+  under `--runtime codex` and `--runtime opencode`** (task `f9d49e97`;
+  reviewer finding, batch18-R1, on task `f34eb233`, verified PRE-EXISTING).
+  Both suggested commands were impossible under those two runtimes:
+  `--target` is already rejected outright for `codex`/`opencode`
+  (`apply.ts`), and neither runtime emits a `settings.json`. `runtime` is
+  now threaded from the CLI's parsed `--runtime` option through to
+  `formatNextSteps`; under `codex` the hint now points at the generated
+  `codex/config.toml` and `harness apply --runtime codex --install`; under
+  `opencode` it points at `$OPENCODE_CONFIG` / copying the generated
+  `mcp` block, mirroring the wiring text each generator already prints in
+  its own banner (`generate-codex-config.ts`, `generate-opencode-config.ts`)
+  instead of inventing new wording. The default (`runtime` omitted, or
+  explicit `claude-code`) is byte-for-byte unchanged, pinned by a golden
+  test in `tests/cli/apply/next-steps.test.ts`.
+
 ## [0.45.0] - 2026-08-19
 
 ### Internal

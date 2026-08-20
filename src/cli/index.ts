@@ -27,8 +27,10 @@ import type { AddEntry } from "./add/mutate.js";
 import { adopt } from "./adopt/index.js";
 import {
   apply,
+  CODEX_CONFIG_BASENAME,
   DRIFT_HINT_MESSAGE,
   formatNextSteps,
+  OPENCODE_CONFIG_BASENAME,
   SETTINGS_BASENAME,
   type FileApplyOutcome,
 } from "./apply/index.js";
@@ -986,11 +988,16 @@ export function buildProgram(opts: RunOptions = {}): Command {
             // "nothing is wired" against operators who wired a target
             // on a previous run).
             const generatedSettingsPath = path.join(result.generatedDir, SETTINGS_BASENAME);
+            const codexConfigPath = path.join(result.generatedDir, CODEX_CONFIG_BASENAME);
+            const opencodeConfigPath = path.join(result.generatedDir, OPENCODE_CONFIG_BASENAME);
             const anyChanged = result.files.some((f) => f.changed);
             stdout(
               formatNextSteps({
                 generatedSettingsPath,
+                codexConfigPath,
+                opencodeConfigPath,
                 anyChanged,
+                ...(runtime !== undefined ? { runtime } : {}),
                 ...((result.targetWritten || result.targetInSync) && result.targetPath
                   ? { targetPath: result.targetPath }
                   : {}),
