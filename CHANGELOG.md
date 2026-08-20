@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-08-20
+
 ### Fixed
 
 - **`harness apply`'s post-apply "Next steps" hint (`formatNextSteps`,
