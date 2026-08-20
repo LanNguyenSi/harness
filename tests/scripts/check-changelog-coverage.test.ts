@@ -146,6 +146,38 @@ describe("linkTokens", () => {
     expect(t.taskIds).not.toContain("20261234");
   });
 
+  it("does NOT treat a keyword that only appears AFTER the digits as adjacency (the after side was dropped: zero corpus support, widest false-positive surface)", () => {
+    const t = linkTokens(commit({ message: "fix: x (#1)\n\nreleased on 20260820, task 41f7eca5" }));
+    expect(t.taskIds).not.toContain("20260820");
+    // The hex-lettered id right next to "task" still counts unconditionally.
+    expect(t.taskIds).toContain("41f7eca5");
+  });
+
+  it("does NOT treat a keyword separated by a lettered word as adjacency ('task id' / 'task number' near-misses)", () => {
+    expect(linkTokens(commit({ message: "fix: x (#1)\n\ntask id 13919613" })).taskIds).not.toContain("13919613");
+    expect(linkTokens(commit({ message: "fix: x (#1)\n\ntask number 13919613" })).taskIds).not.toContain("13919613");
+  });
+
+  it("requires a real word boundary before the keyword, not a substring match ('subtask' / 'committed')", () => {
+    expect(linkTokens(commit({ message: "fix: x (#1)\n\nsubtask 13919613" })).taskIds).not.toContain("13919613");
+    expect(linkTokens(commit({ message: "fix: x (#1)\n\ncommitted 13919613" })).taskIds).not.toContain("13919613");
+  });
+
+  it("does NOT reach across a separation wider than NUMERIC_ID_KEYWORD_GAP", () => {
+    // "task" (4 chars) + 9 spaces = 13 chars, one past the 12-char gap.
+    const wide = `task${" ".repeat(9)}13919613`;
+    expect(linkTokens(commit({ message: `fix: x (#1)\n\n${wide}` })).taskIds).not.toContain("13919613");
+  });
+
+  it("does NOT treat a keyword embedded earlier in a longer word as adjacency, even when the fixed-width lookup window happens to start mid-word ('retask')", () => {
+    // Regression pin for the slicing artifact: the 12-char window can be
+    // truncated to start exactly at "task" inside "retask", making a
+    // `\b`-anchored regex on just that slice see an artificial
+    // start-of-string boundary as if it were a real word boundary.
+    const sliced = `retask${" ".repeat(8)}13919613`;
+    expect(linkTokens(commit({ message: sliced })).taskIds).not.toContain("13919613");
+  });
+
   it("extracts PR numbers from the subject only, and GHSA ids from anywhere", () => {
     const t = linkTokens(
       commit({ subject: "fix(deps): close advisory (#374)", message: "fix(deps): close advisory (#374)\n\nGHSA-r28c-9q8g-f849, relates to #999" }),
@@ -311,6 +343,20 @@ describe("main", () => {
     expect(errorOutput).toContain("feat: uncovered thing (#42)");
     expect(errorOutput).toContain("cafe0012");
     expect(errorOutput).toContain("#42");
+  });
+
+  it("FAIL guidance ties the numeric-id adjacency rule to the commit message, not the changelog entry (message-shape pin)", () => {
+    initRepoWithTag("## [Unreleased]\n\n### Fixed\n- unrelated (task `deadbee1`)\n\n## [0.1.0]\n- base\n");
+    addCommit("feat: uncovered thing (#42)", "see 13919613 for context");
+
+    main(dir);
+
+    expect(process.exitCode).toBe(1);
+    const errorOutput = errorSpy.mock.calls.map((callArgs: unknown[]) => callArgs.join(" ")).join("\n");
+    expect(errorOutput).toContain("is only recognized as a link token when the");
+    expect(errorOutput).toContain("in the commit message itself");
+    expect(errorOutput).toContain("not of the changelog entry's wording");
+    expect(errorOutput).toContain("cite the commit's own SHA or the PR number (#NNN) in the changelog entry instead");
   });
 
   it("FAIL when commits exist but CHANGELOG.md has no [Unreleased] section", () => {

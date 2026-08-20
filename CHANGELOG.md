@@ -14,10 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   issues those too), and the prior hex-letter-only gate silently failed
   the gate for such a commit with no obvious cause (real gap seen in
   Batch 19, PR #437; task `41f7eca5`). A numeric-only id now counts as a
-  link token when a `task`/`commit` keyword sits directly next to it
-  (e.g. "task `13919613`"); a bare 8-digit number with no such adjacency
-  still does not count, so a version number or an issue count cannot
-  create false coverage.
+  link token when a `task`/`commit` keyword sits directly before it in
+  the commit's own message (e.g. "task `13919613`"); a bare 8-digit
+  number with no such adjacency, or one whose only nearby keyword comes
+  after it, still does not count, so a version number, an issue count,
+  or a timestamp fragment cannot create false coverage.
 
 ## [0.45.0] - 2026-08-19
 
