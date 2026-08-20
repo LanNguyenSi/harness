@@ -139,7 +139,7 @@ describe("linkTokens", () => {
 
   it("does NOT accept a bare numeric 8-digit run with no adjacent task/commit keyword (no false coverage)", () => {
     // A version number, an issue count, or any other incidental 8-digit
-    // run must stay uncovered-eligible — it must not silently satisfy the
+    // run must stay uncovered-eligible: it must not silently satisfy the
     // gate just because it happens to be 8 digits long.
     const t = linkTokens(commit({ message: "fix: x (#1)\n\nsee 13919613 for context, version 20261234 shipped" }));
     expect(t.taskIds).not.toContain("13919613");

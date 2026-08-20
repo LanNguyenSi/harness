@@ -40,12 +40,12 @@
 //      with the same non-hex-flanked boundary used to extract it, so
 //      `deadbee1` is not satisfied by a longer hex run in the text (e.g.
 //      `deadbee1234567`). A task id with no hex letter at all (e.g.
-//      `13919613`) is real but rare — agent-tasks issues purely-numeric
-//      ids too, and dropping them silently uncovered a real commit in
+//      `13919613`) is real but rare (agent-tasks issues purely-numeric
+//      ids too), and dropping them silently uncovered a real commit in
 //      Batch 19 (PR #437). Such a numeric-only 8-digit window only counts
 //      as a link token when a `task` or `commit` keyword sits within a
 //      short punctuation/whitespace gap on either side (e.g. "task
-//      `13919613`", "commit 13919613") — never as a bare number. That
+//      `13919613`", "commit 13919613"), never as a bare number. That
 //      adjacency requirement is what keeps an incidental 8-digit run (a
 //      version number, an issue count, a timestamp fragment) from being
 //      mistaken for a task id and creating false coverage;
@@ -200,7 +200,7 @@ export function commitType(subject) {
 
 // A numeric-only 8-digit window counts as a task id only when a `task` or
 // `commit` keyword sits within this many characters of punctuation/
-// whitespace on either side — see linkTokens class 1 in the module header.
+// whitespace on either side (see linkTokens class 1 in the module header).
 // Wide enough for "(task `" / "commit " style gaps, narrow enough that a
 // keyword mentioned elsewhere in the message cannot reach across it.
 const NUMERIC_ID_KEYWORD_GAP = 12;
@@ -210,7 +210,7 @@ const NUMERIC_ID_KEYWORD_AFTER = /^[^0-9a-z]*\b(?:task|commit)\b/i;
 /** True when an 8-digit window at `message[index, index + length)` has a
  * `task`/`commit` keyword immediately adjacent (only punctuation/
  * whitespace between them, within NUMERIC_ID_KEYWORD_GAP chars) on either
- * side. Only consulted for windows with no hex letter — see linkTokens. */
+ * side. Only consulted for windows with no hex letter (see linkTokens). */
 function hasAdjacentIdKeyword(message, index, length) {
   const before = message.slice(Math.max(0, index - NUMERIC_ID_KEYWORD_GAP), index);
   const after = message.slice(index + length, index + length + NUMERIC_ID_KEYWORD_GAP);
@@ -227,8 +227,8 @@ export function linkTokens(commit) {
   while ((m = hex8Pattern.exec(commit.message)) !== null) {
     const id = m[0];
     // A hex-lettered id counts unconditionally (existing behavior). A
-    // purely numeric one is real but ambiguous — a bare 8-digit run could
-    // just as easily be a version number or an issue count — so it counts
+    // purely numeric one is real but ambiguous (a bare 8-digit run could
+    // just as easily be a version number or an issue count), so it counts
     // only next to a `task`/`commit` keyword (see NUMERIC_ID_KEYWORD_GAP
     // above and the module header's link-token class 1).
     if (/[a-f]/.test(id) || hasAdjacentIdKeyword(commit.message, m.index, id.length)) {
@@ -335,8 +335,8 @@ export function main(repoDir = process.cwd()) {
         "or — only if the commit is genuinely not release-notable — give it one of the skipped conventional types: " +
         [...SKIPPED_TYPES].join(", ") + ". " +
         "If the task id has no hex letter (a purely numeric id, e.g. `13919613`), it only counts right next to the " +
-        'word "task" or "commit" (e.g. "task `13919613`") — a bare number elsewhere in the entry will not cover this ' +
-        "commit; cite the commit's own SHA or the PR number (#NNN) instead.",
+        'word "task" or "commit" (e.g. "task `13919613`"); a bare number elsewhere in the entry will not cover this ' +
+        "commit, so cite the commit's own SHA or the PR number (#NNN) instead.",
     );
     process.exitCode = 1;
     return;
