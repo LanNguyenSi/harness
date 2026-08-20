@@ -163,6 +163,14 @@ describe("linkTokens", () => {
     expect(linkTokens(commit({ message: "fix: x (#1)\n\ncommitted 13919613" })).taskIds).not.toContain("13919613");
   });
 
+  it("requires a real word boundary AFTER the keyword too, not just before it ('task_13919613' as one run)", () => {
+    // No space between "task" and the digits: an underscore is a non-
+    // alnum character (passes the trailing gap's character class) but is
+    // still a word character, so a real word boundary does not exist
+    // between "task" and "_13919613" here.
+    expect(linkTokens(commit({ message: "fix: x (#1)\n\ntask_13919613" })).taskIds).not.toContain("13919613");
+  });
+
   it("does NOT reach across a separation wider than NUMERIC_ID_KEYWORD_GAP", () => {
     // "task" (4 chars) + 9 spaces = 13 chars, one past the 12-char gap.
     const wide = `task${" ".repeat(9)}13919613`;
