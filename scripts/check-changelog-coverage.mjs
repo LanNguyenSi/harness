@@ -39,7 +39,23 @@
 //      citation style is "(task `<id8>`)"; matched in the coverage text
 //      with the same non-hex-flanked boundary used to extract it, so
 //      `deadbee1` is not satisfied by a longer hex run in the text (e.g.
-//      `deadbee1234567`);
+//      `deadbee1234567`). A task id with no hex letter at all (e.g.
+//      `13919613`) is real but rare (agent-tasks issues purely-numeric
+//      ids too), and dropping them silently uncovered a real commit in
+//      Batch 19 (PR #437). Such a numeric-only 8-digit window, found in
+//      the commit message, only counts as a link token when a `task` or
+//      `commit` keyword sits directly before it, within a short
+//      punctuation/whitespace gap (e.g. "task `13919613`", "commit
+//      13919613"), never as a bare number, and never via a keyword that
+//      only follows the digits (that side has zero support across the
+//      real corpus and the widest false-positive surface, so it was
+//      dropped; see NUMERIC_ID_KEYWORD_GAP). That adjacency requirement
+//      is what keeps an incidental 8-digit run in a commit message (a
+//      version number, an issue count, a timestamp fragment) from being
+//      read as a task id and creating false coverage; the coverage-text
+//      side of the lookup (`coverageHasHexId`) carries no such
+//      requirement of its own, since it only ever checks ids the
+//      extraction side above already decided count;
 //   2. the commit's PR number from the squash-merge subject suffix
 //      `(#NNN)`, matched in the coverage text as `#NNN` not immediately
 //      followed by another digit, so `#42` is not satisfied by `#423`
@@ -189,17 +205,64 @@ export function commitType(subject) {
   return m ? m[1].toLowerCase() : null;
 }
 
+// A numeric-only 8-digit window counts as a task id only when a `task` or
+// `commit` keyword BEGINS within this many characters before it, with
+// only punctuation/whitespace filling the rest of the gap (see linkTokens
+// class 1 in the module header). The keyword itself eats into that
+// budget: e.g. "task " is 5 chars, leaving only 7 of the 12 free for
+// whitespace/punctuation, so the effective whitespace-only allowance is
+// NUMERIC_ID_KEYWORD_GAP minus the keyword's own length, never the full
+// 12. Before-side only: a keyword that only follows the digits (e.g.
+// "20260820, task 41f7eca5") is not recognized, having zero support
+// across the real corpus (every observed hit is keyword-before) and the
+// widest false-positive surface of the two directions (a keyword
+// anywhere later in the message could retroactively "cover" an unrelated
+// date/version/count).
+const NUMERIC_ID_KEYWORD_GAP = 12;
+const NUMERIC_ID_KEYWORD_BEFORE = /\b(?:task|commit)\b[^0-9a-z]*$/i;
+
+/** True when the 8-digit window starting at `message[index]` has a
+ * `task`/`commit` keyword beginning within NUMERIC_ID_KEYWORD_GAP chars
+ * before it, with only punctuation/whitespace in between (see
+ * NUMERIC_ID_KEYWORD_GAP above). Only consulted for windows with no hex
+ * letter (see linkTokens).
+ *
+ * The lookup runs over a fixed-width slice of `message`, which can start
+ * mid-word (e.g. slicing "retask" down to just "task"); a `\b`-anchored
+ * regex tested against only that slice would read the artificial start
+ * of the slice as a real word boundary and false-match. To guard against
+ * that, the keyword's boundary is re-checked against the character
+ * immediately before it in the FULL message, not just the slice: a
+ * mid-slice "start" is only trusted when it is also the true start of
+ * the message. */
+function hasAdjacentIdKeyword(message, index) {
+  const windowStart = Math.max(0, index - NUMERIC_ID_KEYWORD_GAP);
+  const before = message.slice(windowStart, index);
+  const match = NUMERIC_ID_KEYWORD_BEFORE.exec(before);
+  if (match === null) return false;
+  const keywordStart = windowStart + match.index;
+  return keywordStart === 0 || !/\w/.test(message[keywordStart - 1]);
+}
+
 /** All link tokens of a commit — see the module header for the four
  * classes. 8-hex extraction requires non-hex boundaries so a 40-hex SHA
  * embedded in a message does not shed spurious 8-hex windows. */
 export function linkTokens(commit) {
-  const taskIds = new Set(
-    (commit.message.match(/(?<![0-9a-f])[0-9a-f]{8}(?![0-9a-f])/g) ?? []).filter(
-      // A task id of only digits does not exist in practice, but a pure
-      // number (e.g. a timestamp fragment) would: require a hex letter.
-      (t) => /[a-f]/.test(t),
-    ),
-  );
+  const taskIds = new Set();
+  const hex8Pattern = /(?<![0-9a-f])[0-9a-f]{8}(?![0-9a-f])/g;
+  let m;
+  while ((m = hex8Pattern.exec(commit.message)) !== null) {
+    const id = m[0];
+    // A hex-lettered id counts unconditionally (existing behavior). A
+    // purely numeric one is real but ambiguous (a bare 8-digit run could
+    // just as easily be a version number or an issue count), so it counts
+    // only when a `task`/`commit` keyword sits directly before it (see
+    // NUMERIC_ID_KEYWORD_GAP above and the module header's link-token
+    // class 1).
+    if (/[a-f]/.test(id) || hasAdjacentIdKeyword(commit.message, m.index)) {
+      taskIds.add(id);
+    }
+  }
   const prNumbers = new Set(commit.subject.match(/#\d+/g) ?? []);
   const ghsaIds = new Set(commit.message.match(/GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}/g) ?? []);
   return { taskIds: [...taskIds], prNumbers: [...prNumbers], ghsaIds: [...ghsaIds], shortSha: commit.sha.slice(0, 7) };
@@ -298,7 +361,13 @@ export function main(repoDir = process.cwd()) {
     console.error(
       "check-changelog-coverage: add an [Unreleased] entry citing the commit's task id (`<id8>`) or PR number (#NNN), " +
         "or — only if the commit is genuinely not release-notable — give it one of the skipped conventional types: " +
-        [...SKIPPED_TYPES].join(", ") + ".",
+        [...SKIPPED_TYPES].join(", ") + ". " +
+        "A purely numeric task id (no hex letter, e.g. `13919613`) is only recognized as a link token when the " +
+        'word "task" or "commit" sits directly before it in the commit message itself (e.g. "task `13919613`" ' +
+        "in that commit). " +
+        "That adjacency is a property of the commit message, not of the changelog entry's wording, so rewording " +
+        "the entry cannot create coverage for it. For a commit already pushed whose message lacks that adjacency, " +
+        "cite the commit's own SHA or the PR number (#NNN) in the changelog entry instead.",
     );
     process.exitCode = 1;
     return;

@@ -33,9 +33,14 @@ Thanks for your interest. harness is a declarative control plane for agent harne
    branch, in the not-yet-tagged rolled-up version section above it):
    reference the commit's 8-hex task id (`` `<id8>` ``), its PR number
    (`#NNN`), a GHSA advisory id, or — for a commit already pushed without
-   a citable token — the commit's own SHA. A commit whose
-   conventional-commit type is `chore`, `ci`, `docs`, `refactor`, `style`,
-   or `test` needs no entry. This applies to EVERY commit pushed to a
+   a citable token — the commit's own SHA. A purely numeric task id (no
+   hex letter, e.g. `13919613`; agent-tasks issues those too) only counts
+   as a citable id when the word `task` or `commit` sits directly before
+   it in the commit's own message (e.g. `task 13919613`); if the commit's
+   message does not already say that, cite its SHA or its PR number
+   (`#NNN`) instead. A commit whose conventional-commit type is `chore`,
+   `ci`, `docs`, `refactor`, `style`, or `test` needs no entry. This
+   applies to EVERY commit pushed to a
    branch under review, not just the eventual squash-merge subject — a
    `pull_request` CI run grades the whole branch, including review-round
    commits, so give each one a task id (or a skipped type) as you make it.
