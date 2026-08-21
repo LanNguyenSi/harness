@@ -163,7 +163,7 @@ into `harness.yaml`:
 hooks:
   - name: require-review-evidence
     event: PreToolUse
-    blocking: true
+    blocking: hard   # vocabulary: false | soft | hard
     command: ~/.claude/hooks/require-review-evidence.sh
 
 policies:

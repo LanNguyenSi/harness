@@ -139,7 +139,7 @@ producer release ships (tracked as a cross-repo follow-up):
 - re-running `solution_evaluate` does NOT recover from this — the new
   verdict is unsigned too, so it denies again;
 - `harness pause` remains the operator override in the interim (or
-  temporarily disabling the pack via `harness pack rm solution-acceptance`
+  temporarily disabling the pack via `harness pack remove solution-acceptance`
   / flipping `enabled: false`, same as any other misconfigured hard-block
   pack).
 

@@ -1,6 +1,6 @@
 # Policy Pack: `understanding-before-execution`
 
-> **Status (Phase 6 anchor):** vocabulary only. The `policy_packs:` manifest key parses and validates; nothing in `harness apply`, `harness doctor`, or runtime enforcement honours it yet. Sub-tasks #2 through #6 in [`ROADMAP.md`](../ROADMAP.md#phase-6--understanding-gate-policy-pack) wire those surfaces in. Until they ship, this doc describes the **target shape**, with the implementation status of each piece called out inline.
+> **Status:** shipped and live. The pack is default-enabled in every init template except `minimal` (`full`, `solo`, and `team`), runtime enforcement runs through the pack's PreToolUse blocker (`harness pack hook pre-tool-use`), and `harness apply`, `harness doctor`, and `harness approve understanding` all honour it (Phase 6 released; see [`ROADMAP.md`](../ROADMAP.md#phase-6--understanding-gate-policy-pack)).
 
 ## What this pack does
 
@@ -10,7 +10,7 @@ The motivating failure mode: an agent reads a task, picks an interpretation, and
 
 Long-form design and rationale: [`lava-ice-logs/2026-04-30/harness-pre-execution-understanding-integration.md`](https://github.com/LanNguyenSi/lava-ice-logs/blob/master/2026-04-30/harness-pre-execution-understanding-integration.md).
 
-## How it works (target architecture)
+## How it works
 
 ```
 User prompt
@@ -26,12 +26,12 @@ Stop hook persists report     (from @lannguyensi/understanding-gate)
     │  → .understanding-gate/reports/<iso>-<slug>-<hash>.json
     ▼
 Human reviews and approves
-    │  via `harness approve understanding`  ← Phase 6 #4
+    │  via `harness approve understanding`  (Phase 6 #4, shipped)
     │  writes approval marker: harness.generated/.approvals/${SESSION_ID}
     │  flips approvalStatus=approved on the persisted report
     │  also writes ledger tag understanding-approved:${SESSION_ID} (audit only)
     ▼
-PreToolUse hook               ← Phase 6 #4 (harness-side blocker)
+PreToolUse hook               (Phase 6 #4, shipped; harness-side blocker)
     │  consults the approval marker file OR the persisted report
     │  passes for Edit / Write / Bash / commit / push / PR creation
     ▼
