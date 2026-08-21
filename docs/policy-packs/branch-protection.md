@@ -13,7 +13,7 @@ branching upfront.
 
 ## Status
 
-Opt-in. Not wired by any init template. Enable with:
+Default-enabled in `harness init --template full` since v0.17.2. Opt-in for the solo, team, and minimal templates; enable there with:
 
 ```bash
 harness pack add branch-protection

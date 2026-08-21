@@ -1,6 +1,6 @@
 # Policy Pack: `understanding-before-execution`
 
-> **Status (Phase 6 anchor):** vocabulary only. The `policy_packs:` manifest key parses and validates; nothing in `harness apply`, `harness doctor`, or runtime enforcement honours it yet. Sub-tasks #2 through #6 in [`ROADMAP.md`](../ROADMAP.md#phase-6--understanding-gate-policy-pack) wire those surfaces in. Until they ship, this doc describes the **target shape**, with the implementation status of each piece called out inline.
+> **Status:** shipped and live. The pack is default-enabled in the `full` and `solo` init templates, runtime enforcement runs through the pack's PreToolUse blocker (`harness pack hook pre-tool-use`), and `harness apply`, `harness doctor`, and `harness approve understanding` all honour it (Phase 6 released; see [`ROADMAP.md`](../ROADMAP.md#phase-6--understanding-gate-policy-pack)).
 
 ## What this pack does
 
