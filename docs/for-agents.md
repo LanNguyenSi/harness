@@ -14,7 +14,7 @@ handling), see [`for-humans.md`](for-humans.md).
 1. The manifest declares hooks, policies, and workflows. `harness
    apply` materialises them into `settings.json`. Claude Code loads
    that and fires hooks at the events the manifest listed.
-2. When a policy hook fires, `harness intercept` evaluates the policy
+2. When a policy hook fires, `harness policy intercept` evaluates the policy
    against the evidence ledger. If the required `ledger_tag` has no
    matching entry, the call is denied and the deny is recorded as a
    `policy_decision` row.
@@ -233,7 +233,7 @@ operator-driven flows.
 | `init --probe` | read-only | prints a JSON snapshot of detected runtimes + MCPs + manifest; no writes. |
 | `adopt` | mutating | reverse engineers a manifest from an existing settings.json. |
 | `export` | mutating-ish | emits a manifest snapshot to a chosen path. |
-| `pack add / remove / list` | mutating (add/remove), read-only (list) | manages `policy_packs:` entries in the manifest. Today's canonical pack: `understanding-before-execution`. |
+| `pack add / remove / list / reseed` | mutating (add/remove/reseed), read-only (list) | manages `policy_packs:` entries in the manifest. Four builtin packs: `understanding-before-execution`, `branch-protection`, `solution-acceptance`, `post-merge-gate`. `reseed <name>` pulls the shipped template's config back onto a drifted entry. |
 | `approve understanding --session <id>` | mutating | operator action that approves a captured Understanding Report (round-trips evidence-ledger tag + persisted JSON). Required before write-capable tools fire under the understanding-before-execution pack. |
 | `doctor --target codex` | read-only | verifies Codex adapter wiring after `apply --runtime codex`. `--json` for machine-readable output. |
 | `doctor --target opencode` | read-only | verifies opencode adapter wiring after `apply --runtime opencode` (config artefact presence/banner + every projected MCP server's command resolves on PATH). `--json` for machine-readable output. |
@@ -274,7 +274,7 @@ reach for `audit`.
 - Do not bypass hook scripts with `--no-verify` or by editing the
   generated `settings.json` directly. If a hook is failing, the fix
   is to fix the hook (or the policy), not to silence it.
-- Do not swallow stderr from `harness intercept`. The `--verbose`
+- Do not swallow stderr from `harness policy intercept`. The `--verbose`
   diagnostic block is the canonical "why did this fire" output.
 - Do not force-push to `master`, even when you "are sure". The
   workflow always cuts a fresh branch off the latest master.

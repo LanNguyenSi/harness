@@ -1,6 +1,6 @@
 # Policy Pack: `understanding-before-execution`
 
-> **Status:** shipped and live. The pack is default-enabled in every init template except `minimal` (`full`, `solo`, and `team`), runtime enforcement runs through the pack's PreToolUse blocker (`harness pack hook pre-tool-use`), and `harness apply`, `harness doctor`, and `harness approve understanding` all honour it (Phase 6 released; see [`ROADMAP.md`](../ROADMAP.md#phase-6--understanding-gate-policy-pack)).
+> **Status:** shipped and live. The pack is default-enabled in every init template except `minimal` (`full`, `solo`, and `team`), runtime enforcement runs through the pack's PreToolUse blocker (`harness pack hook pre-tool-use`), and `harness apply`, `harness doctor`, and `harness approve understanding` all honour it (Phase 6 released; see [`ROADMAP.md`](../ROADMAP.md#phase-6-understanding-gate-policy-pack)).
 
 ## What this pack does
 
@@ -702,6 +702,6 @@ To act on a hit: cross-reference the logged `taskId` against agent-tasks to see 
 
 ## See also
 
-- [`docs/ROADMAP.md` Phase 6](../ROADMAP.md#phase-6--understanding-gate-policy-pack) for the sub-task decomposition.
+- [`docs/ROADMAP.md` Phase 6](../ROADMAP.md#phase-6-understanding-gate-policy-pack) for the sub-task decomposition.
 - [`docs/ARCHITECTURE.md` §6](../ARCHITECTURE.md) for the policies/requires/grounding-mcp wiring this pack composes on top of.
 - `@lannguyensi/understanding-gate` source: <https://www.npmjs.com/package/@lannguyensi/understanding-gate>.

@@ -10,9 +10,11 @@ Each phase below ships in this shape:
 - **Non-goals**: what is explicitly *not* in this phase, especially items a reader might expect.
 - **Exit gate**: the one-line statement of when this phase is releasable.
 
+**All seven phases below have shipped** (README.md's Status section tracks the current release). The acceptance-criteria checkboxes are the historical specs each phase was accepted against at the time it shipped, not a live done/not-done tracker: they are left unchecked here rather than retroactively ticked, and `CHANGELOG.md` is the source of truth for what actually shipped in which version.
+
 ## Phase ordering rationale
 
-The order is deliberate: read-only inventory → managed edits → declarative truth → policy layer. The full justification lives in [`VISION.md` §8](VISION.md#8-why-introspection-comes-before-enforcement) ("Why introspection comes before enforcement"). In short: you cannot enforce policies on a configuration surface you cannot read, and Phase 1's `harness doctor` already delivers user-visible value (worked demo in [`ARCHITECTURE.md` Appendix D](ARCHITECTURE.md#appendix-d--phase-1-value-demonstration)). Inverting the order would make every false-positive policy fire its own debugging incident.
+The order is deliberate: read-only inventory → managed edits → declarative truth → policy layer. The full justification lives in [`VISION.md` §8](VISION.md#8-why-introspection-comes-before-enforcement) ("Why introspection comes before enforcement"). In short: you cannot enforce policies on a configuration surface you cannot read, and Phase 1's `harness doctor` already delivers user-visible value (worked demo in [`ARCHITECTURE.md` Appendix D](ARCHITECTURE.md#appendix-d-phase-1-value-demonstration)). Inverting the order would make every false-positive policy fire its own debugging incident.
 
 ## Phase 1: Read-only inventory
 
