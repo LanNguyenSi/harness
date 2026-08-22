@@ -61,10 +61,12 @@ These four things bite people who skip ahead to the YAML:
    gate must *enforce* against the agent, the
    evidence has to come from an actor the agent does not control: an
    `ask`-kind producer (the operator's "go" on the prompt is the
-   approval), CI, or a distinct trusted process. The two builtin packs
-   were hardened to filesystem markers for exactly this reason after a
-   self-approval incident (see [`CLI.md`](CLI.md) on branch-protection:
-   "the ledger is agent-writable and no longer opens the gate").
+   approval), CI, or a distinct trusted process. Two of the four
+   builtin packs (`understanding-before-execution`,
+   `branch-protection`) were hardened to filesystem markers for
+   exactly this reason after a self-approval incident (see
+   [`CLI.md`](CLI.md) on branch-protection: "the ledger is
+   agent-writable and no longer opens the gate").
    `harness validate` warns when a `block` policy declares no
    `producers:` at all, because then the evidence source is
    undocumented and this trade-off was never made visibly.

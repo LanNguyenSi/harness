@@ -275,6 +275,6 @@ block; see Failure mode #2):
 
 ## See also
 
-- [`understanding-before-execution.md`](understanding-before-execution.md), [`branch-protection.md`](branch-protection.md): the other two builtin packs.
+- [`understanding-before-execution.md`](understanding-before-execution.md), [`branch-protection.md`](branch-protection.md), [`post-merge-gate.md`](post-merge-gate.md): the other three builtin packs.
 - [`../runtime-reality-hook.md`](../runtime-reality-hook.md): the opt-in drift gate that shares the "operator-configured producer, harness-side consumer" split.
 - CHANGELOG `v0.32.0` / `v0.33.0` for the shipping rationale and the operator decisions behind the defaults.
