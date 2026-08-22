@@ -1,6 +1,6 @@
 # harness CLI reference
 
-Tracks the verbs available on the `harness` binary as of `v0.36.0`; changes that ship on master after that tag are listed under Notes. For policy semantics see [`docs/policy-packs/`](policy-packs/); for the risk gate specifically see [`docs/risk-gate.md`](risk-gate.md).
+Tracks the verbs available on the `harness` binary as of `v0.46.0`; changes that ship on master after that tag are listed under Notes. For policy semantics see [`docs/policy-packs/`](policy-packs/); for the risk gate specifically see [`docs/risk-gate.md`](risk-gate.md).
 
 The CLI is grouped by purpose below. Run any verb with `--help` for flags and examples.
 
@@ -9,7 +9,7 @@ The CLI is grouped by purpose below. Run any verb with `--help` for flags and ex
 | Verb | One-liner |
 |------|-----------|
 | `harness init [--template solo\|team\|full] [--interactive] [--probe]` | Bootstrap a starter `harness.yaml`. `--interactive` walks the wire-up Q&A and writes `harness.lock` + `harness.generated/`. `--probe` emits a JSON snapshot of detected runtimes and exits. |
-| `harness apply` | Render the manifest into the config files the agent runtime actually reads (`~/.claude/settings.json`, `harness.generated/*`). |
+| `harness apply [--runtime claude-code\|codex\|opencode] [--target <path>] [--merge\|--force]` | Render the manifest into the config files the agent runtime actually reads. Default `claude-code` writes `~/.claude/settings.json` / `harness.generated/*`; `--runtime codex` emits `harness.generated/codex/config.toml` (`--install` merges it into `~/.codex/config.toml`); `--runtime opencode` emits `harness.generated/opencode/opencode.json` (MCP servers only, not auto-installed). `--target <path>` additionally writes settings.json to `<path>`, `--merge` 3-way-merges it, `--force` overwrites it. |
 | `harness describe` | Print the effective merged manifest (inherited packs + local overrides). |
 | `harness validate` | Lint the manifest and referenced assets without writing anything. |
 | `harness diff` | Show what `apply` would change against the currently rendered config. |
@@ -26,7 +26,7 @@ The CLI is grouped by purpose below. Run any verb with `--help` for flags and ex
 
 | Verb | One-liner |
 |------|-----------|
-| `harness doctor [--rm-rogue-ledgers] [--yes]` | Health summary across hooks, packs, MCP registrations, runtime detection, binary version, and (when `toolchain_parity.enabled: true`) an on-demand toolchain-parity comparison against peer snapshots. A bare run is read-only; `--rm-rogue-ledgers` opts into deleting each rogue evidence-ledger directory it finds (prompts per hit; add `--yes` to skip the prompts). Exits `1` when the report's `errorCount` is above zero (in both prose and `--json` mode) so CI/scripts can gate on doctor health; warnings alone (`warningCount`) still exit `0`. |
+| `harness doctor [--target codex\|opencode] [--rm-rogue-ledgers] [--yes]` | Health summary across hooks, packs, MCP registrations, runtime detection, binary version, and (when `toolchain_parity.enabled: true`) an on-demand toolchain-parity comparison against peer snapshots. A bare run is read-only; `--rm-rogue-ledgers` opts into deleting each rogue evidence-ledger directory it finds (prompts per hit; add `--yes` to skip the prompts). Exits `1` when the report's `errorCount` is above zero (in both prose and `--json` mode) so CI/scripts can gate on doctor health; warnings alone (`warningCount`) still exit `0`. `--target codex` / `--target opencode` verifies that runtime's adapter wiring after `apply --runtime <same>` (config artefact presence/banner +, for opencode, every projected MCP server's command resolving on PATH). |
 | `harness list <category>` | Print one category's entries as a flat table or JSON. Valid categories: `mcp`, `cli`, `skills`, `memories`, `hooks`, `policies`, `workflows`. |
 | `harness audit [--since 1h] [--policy <name>]` | Replay recorded policy decisions from the evidence-ledger. |
 | `harness session-export [sessionId]` | Export the full evidence-ledger for a Claude Code session as JSON, suitable for archival or attaching to a PR. |
@@ -59,6 +59,8 @@ These are called by Claude Code via `settings.json`; you usually do not run them
 | `harness pack hook solution-acceptance` | `PreToolUse` completion-gate (v0.32.0, opt-in pack): denies task-finishing tools (agent-tasks completion verbs, `git push`, `gh pr merge`) unless a ready solution-acceptance verdict exists at the current git HEAD for the active-claim task (or, without a claim, the `SOLUTION_VERDICT_ID` env id). Fail-closed. See [`docs/policy-packs/solution-acceptance.md`](policy-packs/solution-acceptance.md). |
 | `harness pack hook solution-acceptance-writeguard` | `PreToolUse` anti-forgery companion (v0.32.0): denies agent writes into the solution-verdict dir; the producer (`grounding-mcp`) is the only legitimate writer. |
 | `harness pack hook runtime-reality` | `PreToolUse` drift gate (v0.31.0, opt-in): before destructive runtime commands, probes live process state and denies on critical drift against the expectations file. Fail-open on probe errors. See [`docs/runtime-reality-hook.md`](runtime-reality-hook.md). |
+| `harness pack hook post-merge-gate` | `PreToolUse` blocker (v0.42.0, opt-in pack): denies a curated history-mutating git/gh command once the current branch tip matches a recorded merged-tip fact. The recovery vocabulary (`git switch`/`checkout`/`pull`/`fetch`, `branch -d`/`-D`, `stash list`/`show`, any `harness ...` command) always passes as its own command. Fails open when the ledger is unreachable. See [`docs/policy-packs/post-merge-gate.md`](policy-packs/post-merge-gate.md). |
+| `harness pack hook post-merge-gate-record` | `PostToolUse` producer for the `post-merge-gate` pack: on a confirmed `gh pr merge` success, records a `post-merge-gate:merged:<repo>:<branch>:<sha>` fact. `blocking:false`. |
 | `harness pack hook codex-pre-tool-use` | Codex variant of `pre-tool-use`. The generator that emits its `settings.json` entry pins a 2s timeout floor as of v0.29.0. |
 | `harness pack hook codex-user-prompt-submit` | Codex `UserPromptSubmit` entry. |
 | `harness pack hook codex-stop` | Codex `Stop` entry. |

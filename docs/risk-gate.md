@@ -10,7 +10,7 @@
 > tag exists (written by `harness approve risk`). The built-in
 > `dangerous-shell` classifier + `gate-prod-destructive` policies ship
 > in `harness init --template full`, and `harness doctor` reports Risk
-> Gate wiring health. See [`ROADMAP.md`](ROADMAP.md#phase-7--risk-gate).
+> Gate wiring health. See [`ROADMAP.md`](ROADMAP.md#phase-7-risk-gate).
 
 ## What the Risk Gate is
 

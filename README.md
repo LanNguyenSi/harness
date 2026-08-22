@@ -217,7 +217,13 @@ confirmations in `v0.34.0`, `apply` failing loud when policies are
 declared without `grounding-mcp` wired in `v0.35.0`, and the
 `harness doctor --rm-rogue-ledgers` cleanup mode plus the read-only
 Bash classifier re-admitting `sort` / `tree` / `file` in `v0.36.0`.
-The current release is `v0.36.0`.
+Further milestones since then: HMAC-signed understanding-gate approval
+markers in `v0.41.0`, the opt-in `post-merge-gate` policy pack in
+`v0.42.0`, the `&`-as-command-boundary trigger fix in `v0.43.0`,
+per-policy cross-repository attribution for `${REPO}`/`${BRANCH}`
+preflight facts in `v0.44.0`, and `apply --runtime codex|opencode`
+next-steps hints in `v0.46.0`.
+The current release is `v0.46.0`.
 
 The phase-by-phase plan with acceptance criteria lives in
 [`docs/ROADMAP.md`](docs/ROADMAP.md); what shipped in each version is
@@ -237,15 +243,18 @@ policy_packs:
       permission_profile: safe-start  # safe-start | implementation-after-approval | high-risk-grill-me
 ```
 
-Manage packs with `harness pack add / remove / list`. Three packs ship
+Manage packs with `harness pack add / remove / list`. Four packs ship
 today: [`understanding-before-execution`](docs/policy-packs/understanding-before-execution.md)
 (forces an Understanding Report before any write-capable tool fires),
 [`branch-protection`](docs/policy-packs/branch-protection.md)
 (blocks source mutations on protected branches without an explicit
-override), and the opt-in
+override), the opt-in
 [`solution-acceptance`](docs/policy-packs/solution-acceptance.md)
 completion gate (added in `v0.32.0`; holds a task done until an
-accepted solution verdict is logged). Custom packs from `path:`, `npm:`, or `git:` sources are
+accepted solution verdict is logged), and the opt-in
+[`post-merge-gate`](docs/policy-packs/post-merge-gate.md) pack (added
+in `v0.42.0`; denies mutating git/gh work on a branch whose tip has
+already been merged). Custom packs from `path:`, `npm:`, or `git:` sources are
 out of scope for v1 (see the pack docs for the future-vocabulary
 contract).
 
