@@ -598,7 +598,7 @@ a reason.
 
 ## See also
 
-- [`docs/ROADMAP.md` Phase 7](ROADMAP.md#phase-7--risk-gate) for the
+- [`docs/ROADMAP.md` Phase 7](ROADMAP.md#phase-7-risk-gate) for the
   six-sub-task decomposition.
 - [`docs/ARCHITECTURE.md` §6](ARCHITECTURE.md) for the
   `policies:` / `requires:` / `grounding-mcp` wiring the Risk Gate

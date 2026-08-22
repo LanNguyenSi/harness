@@ -217,12 +217,13 @@ confirmations in `v0.34.0`, `apply` failing loud when policies are
 declared without `grounding-mcp` wired in `v0.35.0`, and the
 `harness doctor --rm-rogue-ledgers` cleanup mode plus the read-only
 Bash classifier re-admitting `sort` / `tree` / `file` in `v0.36.0`.
-Further milestones since then: HMAC-signed understanding-gate approval
-markers in `v0.41.0`, the opt-in `post-merge-gate` policy pack in
-`v0.42.0`, the `&`-as-command-boundary trigger fix in `v0.43.0`,
-per-policy cross-repository attribution for `${REPO}`/`${BRANCH}`
-preflight facts in `v0.44.0`, and `apply --runtime codex|opencode`
-next-steps hints in `v0.46.0`.
+Selected milestones since then (not exhaustive; see `CHANGELOG.md`
+for the full list): HMAC-signed understanding-gate approval markers
+in `v0.41.0`, the opt-in `post-merge-gate` policy pack in `v0.42.0`,
+the `&`-as-command-boundary trigger fix in `v0.43.0`, per-policy
+cross-repository attribution for `${REPO}`/`${BRANCH}` preflight
+facts in `v0.44.0`, and `apply --runtime codex|opencode` next-steps
+hints in `v0.46.0`.
 The current release is `v0.46.0`.
 
 The phase-by-phase plan with acceptance criteria lives in
