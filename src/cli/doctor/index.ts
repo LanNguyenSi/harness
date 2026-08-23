@@ -1045,6 +1045,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const generatedDir = resolveGeneratedDir({
     ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
     manifestPath: resolved.base,
+    userHome: home,
   });
   const claudeMcp =
     manifest.tools.mcp.length > 0

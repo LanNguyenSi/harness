@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `resolveGeneratedDir` (`src/io/generated-dir.ts`) now normalizes its
+  result exactly once (`expandHome` + `path.resolve`), so the
+  approval-signing key file and the projected `SOLUTION_VERDICT_SIGNING_KEY`
+  env value agree for a literal-tilde or relative home (task `8254e357`).
+  Previously, only the projected env value was normalized; a literal-`~`
+  `HARNESS_HOME` (e.g. from a docker/systemd env where the shell never
+  expands it) pointed the env at a normalized path while the key FILE was
+  written under the raw, un-expanded one — a silent dangling pointer
+  instead of a loud failure. Behaviour change: a relative `homeDir` now
+  resolves against `process.cwd()` at call time (previously it could flow
+  unresolved into `fs.mkdirSync` and the key writer). `resolveGeneratedDir`
+  also gained an optional `userHome` to override the tilde-expansion home
+  per call (threaded into `doctor`'s registration-health check so it keeps
+  expanding against the operator home it was invoked for, per the
+  H1-R2/L4 decision).
+
 ## [0.46.0] - 2026-08-20
 
 ### Fixed
