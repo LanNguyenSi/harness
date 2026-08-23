@@ -3,6 +3,10 @@ import {
   isReadOnlyBashCommand,
   isReadOnlyBashPipeline,
 } from "../../src/runtime/read-only-bash.js";
+// Task 62fa0542, monotonicity fixture: a byte-for-byte snapshot of
+// origin/master's classifier (see the describe block near the bottom of
+// this file for the full rationale), imported under an aliased name.
+import { isReadOnlyBashCommand as isReadOnlyBashCommandMaster } from "./__fixtures__/read-only-bash.master-baseline.js";
 
 describe("read-only Bash classifier", () => {
   describe("simple read-only binaries", () => {
@@ -1117,5 +1121,310 @@ describe("write-flag guards see through long-option ABBREVIATION (task dd055c1d)
     "file -i foo.txt",
   ])("monotonicity: still read-only after the fix: %s", (cmd) => {
     expect(isReadOnlyBashCommand(cmd)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 62fa0542: `isGitDangerousToken`'s pre-fix guard compared exact
+// spellings only (`--upload-pack`, `--exec`, `--receive-pack`, `--output`),
+// so any GNU/BSD `getopt_long` UNAMBIGUOUS ABBREVIATION of the first three
+// slipped through and classified read-only while genuinely running an
+// operator-named binary — a real ACE bypass:
+// `git ls-remote --upl=/prog .` (down to `--u`) resolves to
+// `--upload-pack=/prog` and runs `/prog`, yet the pre-fix classifier said
+// read-only. `--output` was measured too and needed no change (see below).
+//
+// Ground truth throughout is the ARTEFACT (a canary shell script that
+// appends a marker line when actually executed), not the exit code, run
+// against the real git on this machine: git version 2.50.1 (Apple Git-155,
+// macOS). Commands: `git ls-remote --<prefix>=<canary> <local-repo>`,
+// `git fetch --<prefix>=<canary> <local-repo>`, `git push
+// --<prefix>=<canary> --dry-run <local-repo> HEAD:refs/heads/probe`, and
+// `git send-pack --<prefix>=<canary> --dry-run <local-repo>
+// HEAD:refs/heads/probe`, from a throwaway repo + sink repo pair in the
+// scratchpad. `git <sub> -h` was used first as a coarse survey, then
+// every candidate flag/subcommand pair was confirmed (or refuted) against
+// the real binary directly, because `-h`'s static usage synopsis omits at
+// least one real, reachable option (`ls-remote`'s hidden `--exec` alias).
+//
+// MEASUREMENT TABLE (subcommand x flag -> shortest unambiguous prefix
+// past `--`, git 2.50.1; "n/a" = flag not accepted at any prefix length):
+//
+//   --upload-pack:
+//     ls-remote  -> 1  (--u; only `u`-prefixed option on ls-remote)
+//     fetch      -> 4  (--upl; --u/--up ambiguous with --unshallow /
+//                        --update-head-ok / --update-shallow, ERRORS)
+//     => global minimum used (fail-closed, "ambiguous on one sub,
+//        unambiguous on another -> block"): 1
+//   --exec:
+//     ls-remote  -> 3  (--exe; --e/--ex ambiguous with --exit-code,
+//                        ERRORS; hidden legacy alias for --upload-pack,
+//                        undocumented in `-h`, same execution vector)
+//     fetch, status, branch, tag, remote, ls-files, ls-tree, rev-parse,
+//     rev-list, describe, blame, shortlog, reflog, cat-file,
+//     check-ref-format, for-each-ref, name-rev, merge-base, show-ref
+//                -> n/a (every one of these "unknown option" at the full
+//                        spelling; rev-parse's exit-0 echo of an unknown
+//                        `--` flag back to stdout is its documented
+//                        parse-helper fallback, not option recognition,
+//                        confirmed: canary never ran)
+//     => 3 (only reachable subcommand)
+//   --receive-pack:
+//     every subcommand in GIT_READ_ONLY_SUBS -> n/a (not accepted at any
+//     prefix length by any of them on this git version; it is a
+//     `push`/`send-pack` option). Calibrated defensively against the two
+//     commands that DO accept it: push -> 5 (--rece; --rec ambiguous
+//     with --recurse-submodules, ERRORS), send-pack -> 3 (--rec; --r/--re
+//     ambiguous with --remote, ERRORS). Per the fail-closed rule (take
+//     the minimum across measured subcommands): 3.
+//   --output:
+//     diff, log, show, rev-list, shortlog, blame -> n/a. Every prefix
+//     shorter than the full 8-character spelling (`--o` .. `--outpu`)
+//     was REJECTED (`invalid option` / `unrecognized argument` /
+//     `unknown option`), canary file never created; only the exact
+//     `--output` spelling writes. This option's parser does not do GNU
+//     abbreviation matching at all on this git version (confirmed
+//     distinct from an "ambiguous, multiple candidates" error — it is
+//     "not recognized" instead). No code change: the pre-existing
+//     exact-match guard is already measured-correct.
+//
+// OVER-BLOCK COST (disclosed, accepted — real git behavior that this fix
+// now classifies NOT read-only even though it mutates nothing):
+//   --upload-pack minimum (1): `git status --u` (-> --untracked-files),
+//     `git ls-files --u` (-> --unmerged), `git name-rev --u` (->
+//     --undefined).
+//   --receive-pack minimum (3): `git ls-files --rec` and
+//     `git branch --rec` (both -> the unrelated --recurse-submodules).
+//   --exec minimum (3): none found (no other `exe`-prefixed flag exists
+//     on any subcommand in GIT_READ_ONLY_SUBS per the `-h` survey).
+// ---------------------------------------------------------------------------
+
+describe("git guard sees through long-option ABBREVIATION (task 62fa0542)", () => {
+  // --upload-pack: every unambiguous prefix from the measured minimum
+  // (--u, on ls-remote) through the full spelling, glued and separated,
+  // on both subcommands that accept the flag.
+  it.each([
+    "git ls-remote --u=/tmp/evil.sh /tmp/repo",
+    "git ls-remote --up=/tmp/evil.sh /tmp/repo",
+    "git ls-remote --upl=/tmp/evil.sh /tmp/repo",
+    "git ls-remote --uplo=/tmp/evil.sh /tmp/repo",
+    "git ls-remote --uploa=/tmp/evil.sh /tmp/repo",
+    "git ls-remote --upload=/tmp/evil.sh /tmp/repo",
+    "git ls-remote --upload-=/tmp/evil.sh /tmp/repo",
+    "git ls-remote --upload-p=/tmp/evil.sh /tmp/repo",
+    "git ls-remote --upload-pa=/tmp/evil.sh /tmp/repo",
+    "git ls-remote --upload-pac=/tmp/evil.sh /tmp/repo",
+    "git ls-remote --u /tmp/evil.sh /tmp/repo", // separated form
+    "git ls-remote --upl /tmp/evil.sh /tmp/repo",
+    // fetch: measured minimum there is 4 (--upl); shorter prefixes are
+    // ALSO blocked (fail-closed, global forfeit) even though on fetch
+    // itself git would already refuse --u/--up/--uplo as ambiguous.
+    "git fetch --upl=/tmp/evil.sh origin",
+    "git fetch --upload=/tmp/evil.sh origin",
+    "git fetch --upload-pack=/tmp/evil.sh origin",
+  ])("blocks the abbreviated --upload-pack form: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // --exec: measured minimum on ls-remote (the only reachable subcommand)
+  // is 3 (--exe).
+  it.each([
+    "git ls-remote --exe=/tmp/evil.sh /tmp/repo",
+    "git ls-remote --exec=/tmp/evil.sh /tmp/repo",
+    "git ls-remote --exe /tmp/evil.sh /tmp/repo",
+  ])("blocks the abbreviated --exec form: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // --receive-pack: not reachable on any read-only subcommand today, but
+  // guarded defensively (matching the pre-fix exact-match posture); the
+  // global forfeit applies the token check to every subcommand in
+  // GIT_READ_ONLY_SUBS regardless of whether THAT subcommand's real
+  // option table has the flag.
+  it.each([
+    "git ls-remote --rec=/tmp/evil.sh /tmp/repo",
+    "git ls-remote --rece=/tmp/evil.sh /tmp/repo",
+    "git ls-remote --receive-pack=/tmp/evil.sh /tmp/repo",
+    "git fetch --rec=/tmp/evil.sh origin",
+    "git status --rec=/tmp/evil.sh",
+  ])("blocks the abbreviated --receive-pack form: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // --output stays exact-match only (measured: no abbreviation accepted
+  // by git on this version) — pin the existing exact-match behavior here
+  // too so a mutation that deletes the --output arm is caught by THIS
+  // describe block as well as the pre-existing 9d1fff1b tests.
+  it.each([
+    "git diff --output=/tmp/x.patch HEAD~1 HEAD",
+    "git log --output=/tmp/x.txt",
+  ])("still blocks the exact --output form: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // Negative control: harmless git read-only forms, including
+  // unambiguous abbreviations of OTHER (non-dangerous) long options,
+  // must stay read-only. `--one` for `--oneline` is measured (git
+  // 2.50.1, `git log --one` behaves identically to `git log --oneline`,
+  // exit 0, no ambiguity error) and explicitly named in the task brief.
+  it.each([
+    "git log --one",
+    "git log --oneline -20",
+    "git log --stat",
+    "git log --no-color",
+    "git diff --stat HEAD~1",
+    "git show --no-patch HEAD",
+    "git ls-remote --tags",
+    "git ls-remote -q origin",
+    "git fetch --all",
+    "git fetch --prune origin",
+    "git status -uno",
+  ])("negative control: stays read-only: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(true);
+  });
+
+  // ACCEPTED over-blocking, pinned as a disclosed decision (see the
+  // measurement table's OVER-BLOCK COST section above): each of these is
+  // real, harmless git behavior that this fix now classifies NOT
+  // read-only, because the global forfeit cannot see which subcommand a
+  // token is being resolved against. Over-blocking a read is the
+  // accepted direction (module design contract, top of file).
+  it.each([
+    "git status --u", // -> --untracked-files
+    "git ls-files --u", // -> --unmerged
+    "git name-rev --u HEAD", // -> --undefined
+    "git ls-files --rec", // -> --recurse-submodules
+    "git branch --rec", // -> --recurse-submodules
+  ])("ACCEPTED over-block: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 62fa0542, monotonicity: nothing origin/master (commit 031f154, the
+// branch base — no divergent commits existed yet when the snapshot below
+// was taken) blocks may become read-only after this fix. The fixture is a
+// byte-for-byte copy of that commit's src/runtime/read-only-bash.ts (only
+// its `decodeShellWord` import path was adjusted for the fixture's new
+// location), imported under an aliased name so both the master and the
+// fixed classifier run in the same test file. A large corpus of git,
+// non-git, and adversarial commands is run through both; the fixed
+// classifier must never return `true` where master returned `false`
+// (superset, not just equal).
+// ---------------------------------------------------------------------------
+
+describe("git guard monotonicity vs origin/master (task 62fa0542)", () => {
+  const corpus = [
+    // Bare read-only git forms.
+    "git status",
+    "git status -uno",
+    "git log",
+    "git log --oneline -20",
+    "git log --one",
+    "git log --stat",
+    "git diff",
+    "git diff HEAD~1",
+    "git diff --stat HEAD~1",
+    "git show HEAD",
+    "git show --no-patch HEAD",
+    "git branch",
+    "git branch --show-current",
+    "git branch --rec",
+    "git tag",
+    "git fetch origin",
+    "git fetch --all",
+    "git fetch --prune origin",
+    "git remote -v",
+    "git remote show origin",
+    "git ls-files",
+    "git ls-files --u",
+    "git ls-files --rec",
+    "git ls-remote origin",
+    "git ls-remote --tags",
+    "git ls-remote -q origin",
+    "git ls-tree HEAD",
+    "git rev-parse HEAD",
+    "git rev-list HEAD",
+    "git describe",
+    "git blame README.md",
+    "git shortlog",
+    "git reflog",
+    "git cat-file -p HEAD",
+    "git check-ref-format refs/heads/main",
+    "git for-each-ref",
+    "git name-rev HEAD",
+    "git name-rev --u HEAD",
+    "git merge-base HEAD main",
+    "git show-ref",
+    // Known write forms (must stay blocked).
+    "git push",
+    "git push origin master",
+    "git commit -m wip",
+    "git add .",
+    "git reset --hard",
+    "git checkout master",
+    "git rebase main",
+    "git merge feature",
+    "git stash",
+    "git clean -fd",
+    "git branch -D main",
+    "git branch --delete main",
+    "git branch --set-upstream-to=origin/main",
+    "git tag v1",
+    "git remote add origin https://example.com/a.git",
+    "git fetch origin main:main",
+    "git diff --output=/tmp/x.patch HEAD~1 HEAD",
+    "git log --output=/tmp/x.txt",
+    "git rev-list --output=/tmp/x.txt HEAD",
+    "git shortlog --output=/tmp/x.txt HEAD",
+    "git blame --output=/tmp/x.txt README.md",
+    "git fetch --upload-pack=/tmp/evil.sh /tmp/repo",
+    "git fetch --upload-pack /tmp/evil.sh /tmp/repo",
+    "git ls-remote --upload-pack=/tmp/evil.sh /tmp/repo",
+    "git ls-remote ext::sh -c touch",
+    "git fetch ext::sh",
+    "git branch --edit-description",
+    "git branch -f",
+    "git reflog expire --expire=now --all",
+    "git reflog delete main@{0}",
+    // The new bypass class itself: master says read-only (true, wrong);
+    // the fixed classifier must say NOT read-only (false).
+    "git ls-remote --u=/tmp/evil.sh /tmp/repo",
+    "git ls-remote --upl=/tmp/evil.sh /tmp/repo",
+    "git ls-remote --exe=/tmp/evil.sh /tmp/repo",
+    "git fetch --upl=/tmp/evil.sh origin",
+    "git ls-remote --rec=/tmp/evil.sh /tmp/repo",
+    // Non-git read-only and write commands, to confirm the fixture
+    // reflects the WHOLE classifier, not just the git guard.
+    "ls -la /tmp",
+    "cat /etc/hosts",
+    "sort FILE",
+    "sort --co=/tmp/evil data.txt",
+    "rm -rf /",
+    "find . -name '-delete'",
+  ];
+
+  it.each(corpus)("monotonic: master-block implies fixed-block: %s", (cmd) => {
+    const master = isReadOnlyBashCommandMaster(cmd);
+    const fixed = isReadOnlyBashCommand(cmd);
+    // master === false (blocked) must imply fixed === false (still
+    // blocked) — the fixed classifier may ONLY narrow (more true ->
+    // false), never widen (false -> true).
+    if (master === false) {
+      expect(fixed).toBe(false);
+    }
+  });
+
+  it("the new bypass class is a strict narrowing, not a no-op: master allowed it, the fix blocks it", () => {
+    const bypassForms = [
+      "git ls-remote --u=/tmp/evil.sh /tmp/repo",
+      "git ls-remote --upl=/tmp/evil.sh /tmp/repo",
+      "git ls-remote --exe=/tmp/evil.sh /tmp/repo",
+      "git fetch --upl=/tmp/evil.sh origin",
+    ];
+    for (const cmd of bypassForms) {
+      expect(isReadOnlyBashCommandMaster(cmd)).toBe(true); // pre-fix: ALLOW (the bug)
+      expect(isReadOnlyBashCommand(cmd)).toBe(false); // post-fix: BLOCK
+    }
   });
 });

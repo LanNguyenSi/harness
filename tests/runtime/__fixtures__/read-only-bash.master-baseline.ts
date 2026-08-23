@@ -56,7 +56,11 @@
 // parallel classifier in the future, it should mirror this allowlist
 // verbatim, not diverge.
 
-import { decodeShellWord } from "./shell-word.js";
+// Path adjusted for this fixture's location (tests/runtime/__fixtures__/)
+// relative to the real module (src/runtime/); the fixture is otherwise a
+// byte-for-byte snapshot of origin/master's src/runtime/read-only-bash.ts
+// at commit 031f154 (task 62fa0542, git-abbreviation monotonicity check).
+import { decodeShellWord } from "../../../src/runtime/shell-word.js";
 
 /**
  * Single-token read-only binaries. Each accepts arguments without
@@ -217,32 +221,11 @@ const GIT_READ_ONLY_SUBS: ReadonlySet<string> = new Set([
  *     forfeit to a subcommand list would need re-auditing on every git
  *     version for which parsers reach that handler; a global forfeit
  *     does not, and no read-only git subcommand uses `--output` as a
- *     read flag. Detected on the exact long form ONLY (no abbreviation
- *     handling) — task 62fa0542 measured `--output` on git 2.50.1 and
- *     found the diff/log/show/rev-list/shortlog/blame option parser does
- *     NOT do GNU abbreviation matching for this flag at all: every prefix
- *     shorter than the full 8 characters (`--o`..`--outpu`) errored
- *     `invalid option` / `unrecognized argument` / `unknown option`
- *     WITHOUT writing the canary file, on every one of those subcommands.
- *     Adding an abbreviation arm here would only over-block (e.g.
- *     `--o` is not close to any other real flag, so no live over-block
- *     was found either) with no matching security benefit on this git
- *     version, so the exact-match stays as the measured-correct guard;
- *     re-measure if the guarded git version ever changes.
- *   - `--upload-pack` / `--exec` / `--receive-pack`, in ANY unambiguous
- *     GNU/BSD `getopt_long` abbreviation (task 62fa0542, real ACE bypass:
- *     `git ls-remote --upl=/prog .` resolves to `--upload-pack` and runs
- *     `/prog` — the exact-spelling-only guard that shipped in 9d1fff1b
- *     missed every abbreviated form). Each one runs an operator-named
- *     binary: measured `git fetch --upload-pack=<script> <local-repo>`
- *     and `git ls-remote --upload-pack=<script> <local-repo>` executing
- *     the script; `--receive-pack` is blocked defensively by analogy
- *     (transport-option sibling of `--upload-pack`/`--exec`, config- and
- *     version-dependent, not reachable on any subcommand in
- *     `GIT_READ_ONLY_SUBS` on the measured git 2.50.1 — same fail-closed
- *     posture as the `::` transport arm below). See `isLongOptionAbbreviation`
- *     call sites just below for the measured minimum prefix length and
- *     the per-flag measurement table in this module's git-guard tests.
+ *     read flag. Detected on the exact long form so `--output-indicator-new=`
+ *     and `--oneline` are unaffected.
+ *   - `--upload-pack=<path>` / `--exec=<path>` / `--receive-pack=<path>`
+ *     run an operator-named binary: measured `git fetch
+ *     --upload-pack=<script> <local-repo>` executing the script.
  *   - a NON-flag positional containing `::` is the `ext::`/`fd::`
  *     transport-helper form, which runs a local program (protocol.ext
  *     defaults to `user`, i.e. allowed for a direct CLI call). Blocked
@@ -254,41 +237,9 @@ const GIT_READ_ONLY_SUBS: ReadonlySet<string> = new Set([
 function isGitDangerousToken(raw: string): boolean {
   const hit = (t: string): boolean => {
     if (t === "--output" || t.startsWith("--output=")) return true;
-    // `--upload-pack`: measured minimum unambiguous prefix is 1 character
-    // past `--` (`--u`), on `git ls-remote` (git 2.50.1) — `ls-remote`'s
-    // option table has no other `u`-prefixed flag, so `--u` resolves
-    // unambiguously to `--upload-pack` there even though the SAME prefix
-    // is ambiguous on `git fetch` (`--unshallow` / `--update-shallow`,
-    // needs `--upl`, 4 chars, to disambiguate). Per the fail-closed rule
-    // (a prefix unambiguous on ANY relevant subcommand is blocked
-    // everywhere), the minimum of the two — 1 — is used globally. Known,
-    // disclosed over-block cost at this minimum (measured, git 2.50.1):
-    // `git status --u` (-> `--untracked-files`), `git ls-files --u`
-    // (-> `--unmerged`), `git name-rev --u` (-> `--undefined`) are all
-    // genuinely read-only real git behavior that this guard now blocks.
-    if (isLongOptionAbbreviation(t, "--upload-pack", 1)) return true;
-    // `--exec`: on `git ls-remote` (a hidden legacy alias for
-    // `--upload-pack`, same execution vector, undocumented in `-h`), the
-    // measured minimum unambiguous prefix is 3 characters past `--`
-    // (`--exe`) — `--e` / `--ex` are ambiguous with `--exit-code` and
-    // ERROR (do not execute). No read-only subcommand other than
-    // `ls-remote` accepts `--exec` at all (measured against every name
-    // in `GIT_READ_ONLY_SUBS`), and no other flag on any of those
-    // subcommands starts with `exe`, so no over-block was found at this
-    // minimum.
-    if (isLongOptionAbbreviation(t, "--exec", 3)) return true;
-    // `--receive-pack`: not accepted, at any prefix length, by any
-    // subcommand in `GIT_READ_ONLY_SUBS` on the measured git 2.50.1 (it
-    // is a `push`/`send-pack` option) — the exact spelling was already
-    // blocked defensively pre-fix, so this is the same defense extended
-    // to abbreviations, not a newly-reachable vector. Calibrated against
-    // `git send-pack` (measured minimum unambiguous prefix: 3 characters
-    // past `--`, `--rec` — `--r` / `--re` are ambiguous with `--remote`
-    // and ERROR). Known, disclosed over-block cost at this minimum:
-    // `git ls-files --rec` and `git branch --rec` (both -> the
-    // unrelated, harmless `--recurse-submodules`) are genuinely
-    // read-only real git behavior that this guard now blocks.
-    if (isLongOptionAbbreviation(t, "--receive-pack", 3)) return true;
+    if (t === "--upload-pack" || t.startsWith("--upload-pack=")) return true;
+    if (t === "--exec" || t.startsWith("--exec=")) return true;
+    if (t === "--receive-pack" || t.startsWith("--receive-pack=")) return true;
     if (!t.startsWith("-") && t.includes("::")) return true;
     return false;
   };
