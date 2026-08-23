@@ -3,10 +3,6 @@ import {
   isReadOnlyBashCommand,
   isReadOnlyBashPipeline,
 } from "../../src/runtime/read-only-bash.js";
-// Task 62fa0542, monotonicity fixture: a byte-for-byte snapshot of
-// origin/master's classifier (see the describe block near the bottom of
-// this file for the full rationale), imported under an aliased name.
-import { isReadOnlyBashCommand as isReadOnlyBashCommandMaster } from "./__fixtures__/read-only-bash.master-baseline.js";
 
 describe("read-only Bash classifier", () => {
   describe("simple read-only binaries", () => {
@@ -1240,15 +1236,32 @@ describe("git guard sees through long-option ABBREVIATION (task 62fa0542)", () =
   // guarded defensively (matching the pre-fix exact-match posture); the
   // global forfeit applies the token check to every subcommand in
   // GIT_READ_ONLY_SUBS regardless of whether THAT subcommand's real
-  // option table has the flag.
+  // option table has the flag. Minimum CORRECTED to 4 (`--rece`) in this
+  // round (task 62fa0542, review round 1, item 5): the original 3
+  // (`--rec`) was calibrated against `git send-pack`, but `--rec` is
+  // still ambiguous with `--recurse-submodules` on `git push` (the
+  // reviewer's measured reference command) — `git push --rec=/x
+  // --dry-run <repo> HEAD:x` errors ambiguous, `--rece=/x ...` already
+  // attempts to read from the named script. `--rec` itself is
+  // deliberately NOT in this list any more (see the "no longer an
+  // over-block" test below).
   it.each([
-    "git ls-remote --rec=/tmp/evil.sh /tmp/repo",
     "git ls-remote --rece=/tmp/evil.sh /tmp/repo",
     "git ls-remote --receive-pack=/tmp/evil.sh /tmp/repo",
-    "git fetch --rec=/tmp/evil.sh origin",
-    "git status --rec=/tmp/evil.sh",
+    "git fetch --rece=/tmp/evil.sh origin",
+    "git status --rece=/tmp/evil.sh",
   ])("blocks the abbreviated --receive-pack form: %s", (cmd) => {
     expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // Below the corrected minimum, `--rec` no longer forfeits the floor:
+  // it is genuinely ambiguous on git's own receive-pack-accepting
+  // commands and does not reach `--receive-pack` on this git version.
+  it.each([
+    "git ls-remote --rec=/tmp/evil.sh /tmp/repo",
+    "git fetch --rec=/tmp/evil.sh origin",
+  ])("does NOT block --rec (below the corrected --receive-pack minimum): %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(true);
   });
 
   // --output stays exact-match only (measured: no abbreviation accepted
@@ -1283,6 +1296,25 @@ describe("git guard sees through long-option ABBREVIATION (task 62fa0542)", () =
     expect(isReadOnlyBashCommand(cmd)).toBe(true);
   });
 
+  // Item 6 (review round 1): --exec deliberately stays at minimum 3
+  // (`--exe`); `--ex` is ambiguous with `--exit-code` on `git ls-remote`
+  // (git 2.50.1) and genuinely does NOT execute — pin this as a
+  // deliberate, test-visible line so a future tightening to 2 is a
+  // conscious change, not a silent one.
+  it("deliberate: --ex stays read-only, ambiguous with --exit-code on this git version", () => {
+    expect(isReadOnlyBashCommand("git ls-remote --ex=/prog .")).toBe(true);
+  });
+
+  // Item 6: quoted/decoded-form rows for the new --upload-pack arm — the
+  // ONLY forms that exercise the raw-or-decoded decode branch of
+  // isGitDangerousToken for an abbreviated (not exact) spelling.
+  it.each([
+    'git ls-remote --"upl"=/tmp/evil.sh /tmp/repo',
+    "git ls-remote --u'p'l=/tmp/evil.sh /tmp/repo",
+  ])("blocks quoted abbreviated --upload-pack form: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
   // ACCEPTED over-blocking, pinned as a disclosed decision (see the
   // measurement table's OVER-BLOCK COST section above): each of these is
   // real, harmless git behavior that this fix now classifies NOT
@@ -1293,137 +1325,361 @@ describe("git guard sees through long-option ABBREVIATION (task 62fa0542)", () =
     "git status --u", // -> --untracked-files
     "git ls-files --u", // -> --unmerged
     "git name-rev --u HEAD", // -> --undefined
-    "git ls-files --rec", // -> --recurse-submodules
-    "git branch --rec", // -> --recurse-submodules
   ])("ACCEPTED over-block: %s", (cmd) => {
     expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // `git ls-files --rec` / `git branch --rec` are NOT over-blocks (see
+  // the "does NOT block --rec" test above and the corrected minimum):
+  // real git resolves `--rec` to the unrelated, harmless
+  // `--recurse-submodules` on both subcommands, and the corrected
+  // --receive-pack minimum (4, `--rece`) no longer reaches it.
+  it.each([
+    "git ls-files --rec",
+    "git branch --rec",
+  ])("NOT an over-block (corrected --receive-pack minimum): %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(true);
   });
 });
 
 // ---------------------------------------------------------------------------
-// Task 62fa0542, monotonicity: nothing origin/master (commit 031f154, the
-// branch base — no divergent commits existed yet when the snapshot below
-// was taken) blocks may become read-only after this fix. The fixture is a
-// byte-for-byte copy of that commit's src/runtime/read-only-bash.ts (only
-// its `decodeShellWord` import path was adjusted for the fixture's new
-// location), imported under an aliased name so both the master and the
-// fixed classifier run in the same test file. A large corpus of git,
-// non-git, and adversarial commands is run through both; the fixed
-// classifier must never return `true` where master returned `false`
-// (superset, not just equal).
+// Task 62fa0542, review round 1 (HIGH finding on 2118d30): `isBranchWriteFlag`
+// compared exact spellings only, so any unambiguous GNU abbreviation of a
+// `git branch` write flag fell through and classified read-only while
+// genuinely mutating — `git branch --unse` really unsets the upstream,
+// `GIT_EDITOR=... git branch --edi` really writes
+// `branch.<name>.description` and spawns the editor, and `git branch
+// --set-upstream-t=other` really sets tracking. See the measurement table
+// in `isBranchWriteFlag`'s doc comment (src/runtime/read-only-bash.ts) for
+// the per-flag minimum prefix and over-block audit.
+// ---------------------------------------------------------------------------
+
+describe("branch write-flag guard sees through long-option ABBREVIATION (task 62fa0542, review round 1)", () => {
+  // The three flags the reviewer named explicitly, at their measured
+  // minimum unambiguous prefix.
+  it.each([
+    "git branch --unse",
+    "git branch --edi",
+    "git branch --set-upstream-t=x",
+  ])("blocks the reviewer-named abbreviation: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // --delete: measured minimum 1 char past `--` (`--d`), every prefix
+  // from there through the full spelling. Deliberately NO positional
+  // operand (`git branch --d main` would already be blocked by the
+  // structural "no non-flag operand" rule regardless of this flag arm,
+  // which would make the row pass even with the arm removed — the
+  // bare form is what actually exercises `isBranchWriteFlag`, same
+  // reasoning as the pre-existing `git branch -f` / `--force` tests).
+  it.each([
+    "git branch --d",
+    "git branch --de",
+    "git branch --del",
+    "git branch --dele",
+    "git branch --delet",
+    "git branch --delete",
+  ])("blocks the abbreviated --delete form: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // --move: measured minimum 2 chars past `--` (`--mo`); `--m` alone is
+  // ambiguous with `--merged` on real git and does not reach it. Bare
+  // form (no positional) for the same reason as --delete above.
+  it.each([
+    "git branch --mo",
+    "git branch --mov",
+    "git branch --move",
+  ])("blocks the abbreviated --move form: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // --copy: measured minimum 3 chars past `--` (`--cop`); `--c`/`--co`
+  // are ambiguous with `--create-reflog`/`--column` and do not reach it.
+  // Bare form (no positional) for the same reason as --delete above.
+  it.each([
+    "git branch --cop",
+    "git branch --copy",
+  ])("blocks the abbreviated --copy form: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // --force: measured minimum 4 chars past `--` (`--forc`); `--f`/`--fo`/
+  // `--for` are ambiguous with `--format` and do not reach it.
+  it.each([
+    "git branch --forc",
+    "git branch --force",
+  ])("blocks the abbreviated --force form: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // --unset-upstream: measured minimum 1 char past `--` (`--u`), unique
+  // on `git branch`'s option table.
+  it.each([
+    "git branch --u",
+    "git branch --un",
+    "git branch --uns",
+    "git branch --unse",
+    "git branch --unset",
+    "git branch --unset-",
+    "git branch --unset-u",
+    "git branch --unset-upstream",
+  ])("blocks the abbreviated --unset-upstream form: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // --edit-description: measured minimum 1 char past `--` (`--e`), unique
+  // on `git branch`'s option table.
+  it.each([
+    "git branch --e",
+    "git branch --ed",
+    "git branch --edi",
+    "git branch --edit",
+    "git branch --edit-d",
+    "git branch --edit-description",
+  ])("blocks the abbreviated --edit-description form: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  // --set-upstream-to: measured minimum 13 chars past `--`
+  // (`--set-upstream-`, WITH the trailing hyphen — the 12-char
+  // `--set-upstream` alone is the deprecated exact alias, already an
+  // exact-match entry, not an abbreviation of `-to`).
+  it.each([
+    "git branch --set-upstream-=x",
+    "git branch --set-upstream-t=x",
+    "git branch --set-upstream-to=x",
+  ])("blocks the abbreviated --set-upstream-to form: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  describe("negative controls: harmless branch read forms stay read-only (AC3)", () => {
+    it.each([
+      "git branch",
+      "git branch --list",
+      "git branch --l",
+      "git branch --show-current",
+      "git branch --sh",
+      "git branch --contains",
+      "git branch --con",
+      "git branch -a",
+      "git branch -r",
+      "git branch -v",
+      "git branch --merged",
+      "git branch --me",
+      "git branch --no-merged",
+      "git branch --no-me",
+    ])("allows %s", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(true);
+    });
+  });
+
+  describe("write-flag guard sees through shell quoting (repo convention, task fdee7d0f)", () => {
+    it.each([
+      'git branch --"unse"',
+      "git branch --uns'e'",
+      'git branch --edi"t"',
+      'git branch --"set-upstream-t"=x',
+    ])("blocks quoted abbreviated write form: %s", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 62fa0542, monotonicity: a corpus of git, non-git, and adversarial
+// commands, each pinned with its verdict under BOTH the pre-abbreviation-fix
+// classifier (`master`, a byte-for-byte snapshot of origin/master commit
+// 031f154 — the branch base, no divergent commits existed yet when it was
+// taken) and the current, fixed classifier (`current`). Every row carries an
+// explicit assertion (review round 1, item 2): a `master: false` row asserts
+// `current` is also `false` (the fix may only NARROW, never widen, what
+// counts as read-only); a `master: true` row asserts the table's own
+// `current` value verbatim — `true` when the fix leaves it read-only, `false`
+// for the newly-blocked abbreviation-bypass rows this task closes.
+//
+// The 031f154 snapshot itself is NOT kept in this repo (review round 1, item
+// 2: this table replaces the 954-line module-snapshot fixture
+// `tests/runtime/__fixtures__/read-only-bash.master-baseline.ts`, deleted by
+// this same change). Every `masterVerdict` below was generated once,
+// offline, by evaluating that commit's `src/runtime/read-only-bash.ts`
+// (byte-for-byte, only its relative `decodeShellWord` import path adjusted)
+// against every row here, then pinned as a literal. To extend this table,
+// check out commit 031f154, run the corpus through THAT commit's
+// `isReadOnlyBashCommand`, and pin the printed verdicts the same way.
 // ---------------------------------------------------------------------------
 
 describe("git guard monotonicity vs origin/master (task 62fa0542)", () => {
-  const corpus = [
+  // [command, masterVerdict (031f154), currentVerdict (this fix)]
+  const corpus: [string, boolean, boolean][] = [
     // Bare read-only git forms.
-    "git status",
-    "git status -uno",
-    "git log",
-    "git log --oneline -20",
-    "git log --one",
-    "git log --stat",
-    "git diff",
-    "git diff HEAD~1",
-    "git diff --stat HEAD~1",
-    "git show HEAD",
-    "git show --no-patch HEAD",
-    "git branch",
-    "git branch --show-current",
-    "git branch --rec",
-    "git tag",
-    "git fetch origin",
-    "git fetch --all",
-    "git fetch --prune origin",
-    "git remote -v",
-    "git remote show origin",
-    "git ls-files",
-    "git ls-files --u",
-    "git ls-files --rec",
-    "git ls-remote origin",
-    "git ls-remote --tags",
-    "git ls-remote -q origin",
-    "git ls-tree HEAD",
-    "git rev-parse HEAD",
-    "git rev-list HEAD",
-    "git describe",
-    "git blame README.md",
-    "git shortlog",
-    "git reflog",
-    "git cat-file -p HEAD",
-    "git check-ref-format refs/heads/main",
-    "git for-each-ref",
-    "git name-rev HEAD",
-    "git name-rev --u HEAD",
-    "git merge-base HEAD main",
-    "git show-ref",
-    // Known write forms (must stay blocked).
-    "git push",
-    "git push origin master",
-    "git commit -m wip",
-    "git add .",
-    "git reset --hard",
-    "git checkout master",
-    "git rebase main",
-    "git merge feature",
-    "git stash",
-    "git clean -fd",
-    "git branch -D main",
-    "git branch --delete main",
-    "git branch --set-upstream-to=origin/main",
-    "git tag v1",
-    "git remote add origin https://example.com/a.git",
-    "git fetch origin main:main",
-    "git diff --output=/tmp/x.patch HEAD~1 HEAD",
-    "git log --output=/tmp/x.txt",
-    "git rev-list --output=/tmp/x.txt HEAD",
-    "git shortlog --output=/tmp/x.txt HEAD",
-    "git blame --output=/tmp/x.txt README.md",
-    "git fetch --upload-pack=/tmp/evil.sh /tmp/repo",
-    "git fetch --upload-pack /tmp/evil.sh /tmp/repo",
-    "git ls-remote --upload-pack=/tmp/evil.sh /tmp/repo",
-    "git ls-remote ext::sh -c touch",
-    "git fetch ext::sh",
-    "git branch --edit-description",
-    "git branch -f",
-    "git reflog expire --expire=now --all",
-    "git reflog delete main@{0}",
-    // The new bypass class itself: master says read-only (true, wrong);
-    // the fixed classifier must say NOT read-only (false).
-    "git ls-remote --u=/tmp/evil.sh /tmp/repo",
-    "git ls-remote --upl=/tmp/evil.sh /tmp/repo",
-    "git ls-remote --exe=/tmp/evil.sh /tmp/repo",
-    "git fetch --upl=/tmp/evil.sh origin",
-    "git ls-remote --rec=/tmp/evil.sh /tmp/repo",
-    // Non-git read-only and write commands, to confirm the fixture
-    // reflects the WHOLE classifier, not just the git guard.
-    "ls -la /tmp",
-    "cat /etc/hosts",
-    "sort FILE",
-    "sort --co=/tmp/evil data.txt",
-    "rm -rf /",
-    "find . -name '-delete'",
+    ["git status", true, true],
+    ["git status -uno", true, true],
+    ["git log", true, true],
+    ["git log --oneline -20", true, true],
+    ["git log --one", true, true],
+    ["git log --stat", true, true],
+    ["git diff", true, true],
+    ["git diff HEAD~1", true, true],
+    ["git diff --stat HEAD~1", true, true],
+    ["git show HEAD", true, true],
+    ["git show --no-patch HEAD", true, true],
+    ["git branch", true, true],
+    ["git branch --show-current", true, true],
+    ["git branch --rec", true, true],
+    ["git tag", true, true],
+    ["git fetch origin", true, true],
+    ["git fetch --all", true, true],
+    ["git fetch --prune origin", true, true],
+    ["git remote -v", true, true],
+    ["git remote show origin", true, true],
+    ["git ls-files", true, true],
+    // ACCEPTED over-block (git-guard abbreviation fix, 2118d30): --u
+    // resolves to --upload-pack's global forfeit, unrelated to the
+    // harmless --unmerged this real form means on ls-files.
+    ["git ls-files --u", true, false],
+    ["git ls-files --rec", true, true],
+    ["git ls-remote origin", true, true],
+    ["git ls-remote --tags", true, true],
+    ["git ls-remote -q origin", true, true],
+    ["git ls-tree HEAD", true, true],
+    ["git rev-parse HEAD", true, true],
+    ["git rev-list HEAD", true, true],
+    ["git describe", true, true],
+    ["git blame README.md", true, true],
+    ["git shortlog", true, true],
+    ["git reflog", true, true],
+    ["git cat-file -p HEAD", true, true],
+    ["git check-ref-format refs/heads/main", true, true],
+    ["git for-each-ref", true, true],
+    ["git name-rev HEAD", true, true],
+    // ACCEPTED over-block, same reason as ls-files --u above.
+    ["git name-rev --u HEAD", true, false],
+    ["git merge-base HEAD main", true, true],
+    ["git show-ref", true, true],
+    // Known write forms (must stay blocked on both).
+    ["git push", false, false],
+    ["git push origin master", false, false],
+    ["git commit -m wip", false, false],
+    ["git add .", false, false],
+    ["git reset --hard", false, false],
+    ["git checkout master", false, false],
+    ["git rebase main", false, false],
+    ["git merge feature", false, false],
+    ["git stash", false, false],
+    ["git clean -fd", false, false],
+    ["git branch -D main", false, false],
+    ["git branch --delete main", false, false],
+    ["git branch --set-upstream-to=origin/main", false, false],
+    ["git tag v1", false, false],
+    ["git remote add origin https://example.com/a.git", false, false],
+    ["git fetch origin main:main", false, false],
+    ["git diff --output=/tmp/x.patch HEAD~1 HEAD", false, false],
+    ["git log --output=/tmp/x.txt", false, false],
+    ["git rev-list --output=/tmp/x.txt HEAD", false, false],
+    ["git shortlog --output=/tmp/x.txt HEAD", false, false],
+    ["git blame --output=/tmp/x.txt README.md", false, false],
+    ["git fetch --upload-pack=/tmp/evil.sh /tmp/repo", false, false],
+    ["git fetch --upload-pack /tmp/evil.sh /tmp/repo", false, false],
+    ["git ls-remote --upload-pack=/tmp/evil.sh /tmp/repo", false, false],
+    ["git ls-remote ext::sh -c touch", false, false],
+    ["git fetch ext::sh", false, false],
+    ["git branch --edit-description", false, false],
+    ["git branch -f", false, false],
+    ["git reflog expire --expire=now --all", false, false],
+    ["git reflog delete main@{0}", false, false],
+    // Bypass class from the git-guard abbreviation fix (2118d30): master
+    // says read-only (true, wrong — master pre-dates that fix); the
+    // current classifier blocks it.
+    ["git ls-remote --u=/tmp/evil.sh /tmp/repo", true, false],
+    ["git ls-remote --upl=/tmp/evil.sh /tmp/repo", true, false],
+    ["git ls-remote --exe=/tmp/evil.sh /tmp/repo", true, false],
+    ["git fetch --upl=/tmp/evil.sh origin", true, false],
+    ["git ls-remote --rece=/tmp/evil.sh /tmp/repo", true, false],
+    // Below the CORRECTED --receive-pack minimum (4, review round 1, item
+    // 5): --rec is genuinely ambiguous on git's own receive-pack-accepting
+    // commands and does not reach it — master and current agree (true),
+    // this is not part of the bypass class.
+    ["git ls-remote --rec=/tmp/evil.sh /tmp/repo", true, true],
+    ["git status --rec=/tmp/evil.sh", true, true],
+    // Bypass class from THIS review round's branch-flag abbreviation fix:
+    // master says read-only (true, wrong — master pre-dates ALL
+    // abbreviation fixes, including 2118d30's); the current classifier
+    // blocks it. Deliberately bare (no positional operand) for --delete/
+    // --move/--copy: the positional forms are already blocked by the
+    // pre-existing structural rule on BOTH master and current, so they
+    // would not distinguish this fix from a no-op.
+    ["git branch --unse", true, false],
+    ["git branch --edi", true, false],
+    ["git branch --set-upstream-t=x", true, false],
+    ["git branch --d", true, false],
+    ["git branch --mo", true, false],
+    ["git branch --cop", true, false],
+    ["git branch --forc", true, false],
+    ["git branch --set-upstream-=x", true, false],
+    // Negative controls for the branch fix: harmless abbreviations of
+    // OTHER (non-write) branch flags, unaffected on both.
+    ["git branch --l", true, true],
+    ["git branch --sh", true, true],
+    ["git branch --con", true, true],
+    ["git branch --me", true, true],
+    ["git branch --no-me", true, true],
+    // Non-git read-only and write commands, to confirm the table reflects
+    // the WHOLE classifier, not just the git guard.
+    ["ls -la /tmp", true, true],
+    ["cat /etc/hosts", true, true],
+    ["sort FILE", true, true],
+    ["sort --co=/tmp/evil data.txt", false, false],
+    ["rm -rf /", false, false],
+    ["find . -name '-delete'", false, false],
   ];
 
-  it.each(corpus)("monotonic: master-block implies fixed-block: %s", (cmd) => {
-    const master = isReadOnlyBashCommandMaster(cmd);
-    const fixed = isReadOnlyBashCommand(cmd);
-    // master === false (blocked) must imply fixed === false (still
-    // blocked) — the fixed classifier may ONLY narrow (more true ->
-    // false), never widen (false -> true).
-    if (master === false) {
-      expect(fixed).toBe(false);
+  it.each(corpus)("monotonic and pinned: %s (master=%s, current=%s)", (cmd, masterVerdict, currentVerdict) => {
+    // Every row is checked against the table's own pinned `currentVerdict`
+    // — not just "narrower than master" — so a row that should stay `true`
+    // and a row that should newly become `false` are both caught if the
+    // classifier drifts either way.
+    expect(isReadOnlyBashCommand(cmd)).toBe(currentVerdict);
+    // The monotonicity invariant itself, kept as a live assertion (not
+    // just an artifact of how the table was generated): current may only
+    // narrow (true -> false relative to master), never widen.
+    if (masterVerdict === false) {
+      expect(currentVerdict).toBe(false);
     }
   });
 
-  it("the new bypass class is a strict narrowing, not a no-op: master allowed it, the fix blocks it", () => {
+  it("the bypass classes closed by this task are a strict narrowing, not a no-op: master allowed them, the fix blocks them", () => {
+    // The full, explicit set of rows above where master said read-only
+    // (true, the bug) and current now blocks (false) — both the
+    // pre-existing git-guard abbreviation fix (2118d30) and this round's
+    // branch-flag abbreviation fix.
     const bypassForms = [
+      "git ls-files --u",
+      "git name-rev --u HEAD",
       "git ls-remote --u=/tmp/evil.sh /tmp/repo",
       "git ls-remote --upl=/tmp/evil.sh /tmp/repo",
       "git ls-remote --exe=/tmp/evil.sh /tmp/repo",
       "git fetch --upl=/tmp/evil.sh origin",
+      "git ls-remote --rece=/tmp/evil.sh /tmp/repo",
+      "git branch --unse",
+      "git branch --edi",
+      "git branch --set-upstream-t=x",
+      "git branch --d",
+      "git branch --mo",
+      "git branch --cop",
+      "git branch --forc",
+      "git branch --set-upstream-=x",
     ];
+    const tabled = new Set(corpus.filter(([, m, c]) => m === true && c === false).map(([cmd]) => cmd));
+    // The explicit list above must be exactly the master=true/current=false
+    // rows in the table — keeps this test from silently drifting out of
+    // sync with the table it is meant to summarize.
+    expect(new Set(bypassForms)).toEqual(tabled);
+    // masterVerdict for every one of these is pinned `true` in the table
+    // above (the 031f154 snapshot is not imported at runtime any more —
+    // see the file-header comment); only the CURRENT classifier's verdict
+    // is exercised live here.
     for (const cmd of bypassForms) {
-      expect(isReadOnlyBashCommandMaster(cmd)).toBe(true); // pre-fix: ALLOW (the bug)
       expect(isReadOnlyBashCommand(cmd)).toBe(false); // post-fix: BLOCK
     }
   });

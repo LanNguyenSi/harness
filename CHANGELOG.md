@@ -24,6 +24,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   per call (threaded into `doctor`'s registration-health check so it keeps
   expanding against the operator home it was invoked for, per the
   H1-R2/L4 decision).
+- The read-only Bash floor (`isReadOnlyBashCommand`) now blocks
+  unambiguous GNU/BSD `getopt_long` abbreviations of git's
+  `--upload-pack` / `--exec` / `--receive-pack` transport flags AND of
+  `git branch`'s write flags (`--delete`, `--move`, `--copy`, `--force`,
+  `--unset-upstream`, `--edit-description`, `--set-upstream-to`), not
+  just their exact spellings (task `62fa0542`). Both are the same class
+  of gap: `git ls-remote --u=/prog .` resolves to `--upload-pack=/prog`
+  and previously classified read-only while executing `/prog`;
+  `git branch --unse` really unsets the upstream and `git branch --edi`
+  really writes `branch.<name>.description` and spawns `$GIT_EDITOR`,
+  both of which the pre-fix exact-spelling-only `BRANCH_WRITE_FLAGS`
+  check also missed. Also corrects two off-by-one measurement errors
+  found while closing the branch gap: `--upload-pack`'s minimum on
+  `git fetch` is 3 (`--upl`), not 4, and `--receive-pack`'s minimum
+  (calibrated against `git push`) is 4 (`--rece`), not 3 — the latter
+  correction means `git ls-files --rec` / `git branch --rec` are
+  correctly read-only again (real git resolves `--rec` to the
+  unrelated, harmless `--recurse-submodules`), not an over-block.
 
 ## [0.46.0] - 2026-08-20
 

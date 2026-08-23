@@ -187,13 +187,43 @@ Some bins are classified read-only only when their write flags are absent
   forfeited for EVERY git subcommand: `--output=<path>` (creates a file
   at parse time, on rev-list/shortlog/blame as well as diff/log/show) and
   `--upload-pack=`/`--exec=`/`--receive-pack=`/`ext::` (run a local
-  binary). Conservative cost (over-blocked reads, use flag-only or glued
-  `--flag=value` forms to stay floored): tag/branch listing with a
-  pathspec or `--contains <ref>`, `git reflog <ref>`, `git fetch <remote>
-  <ref>` and separated fetch flag values (`--depth 5`). Out of scope
-  (separate tasks): path-qualified `git -C <dir>` (5b5d1022), GNU
-  long-option abbreviations (dd055c1d), and config/env-borne vectors
-  (`GIT_EXTERNAL_DIFF`, `protocol.ext.allow`).
+  binary). The forfeit is abbreviation-aware (task `62fa0542`, measured
+  against git 2.50.1): it also matches any unambiguous GNU/BSD
+  `getopt_long` prefix of `--upload-pack` (minimum 1 char past `--`,
+  `--u`, unambiguous on `ls-remote`), `--exec` (minimum 3, `--exe`,
+  `ls-remote`'s hidden legacy alias for `--upload-pack`), or
+  `--receive-pack` (minimum 4, `--rece`, calibrated against `git push`;
+  `--rec` alone is still ambiguous with `--recurse-submodules` on `push`
+  and does not reach it) — the pre-fix exact-spelling-only guard let
+  `git ls-remote --upl=/prog .` run `/prog` while classifying read-only.
+  `--output` deliberately stays exact-match: measured directly, git
+  accepts no abbreviation of it at all on any of these subcommands
+  (`--o`..`--outpu` all error, none write). `branch`'s write flags
+  (`--delete`/`--move`/`--copy`/`--force`/`--unset-upstream`/
+  `--edit-description`/`--set-upstream-to`) are likewise
+  abbreviation-aware now (same task): `git branch --unse` really unsets
+  the upstream and `git branch --edi` really writes
+  `branch.<name>.description` and spawns `$GIT_EDITOR`, both of which the
+  pre-fix exact-spelling-only `BRANCH_WRITE_FLAGS` check missed. Conservative
+  cost (over-blocked reads, use flag-only or glued `--flag=value` forms to
+  stay floored): tag/branch listing with a pathspec or `--contains <ref>`,
+  `git reflog <ref>`, `git fetch <remote> <ref>` and separated fetch flag
+  values (`--depth 5`); `git status`/`git ls-files`/`git name-rev --u`
+  (each resolves to an unrelated, harmless flag — `--untracked-files`,
+  `--unmerged`, `--undefined` — but the global `--upload-pack` forfeit
+  cannot see which subcommand it is resolving against). No new branch-flag
+  over-block was found: none of the seven measured minimum prefixes above
+  collides with any other `git branch` long option (see the measurement
+  table in `isBranchWriteFlag`'s doc comment, `src/runtime/read-only-bash.ts`).
+  Note `git ls-files --rec` / `git branch --rec` are NOT an over-block:
+  an earlier draft of the `--receive-pack` abbreviation fix miscalibrated
+  the minimum at 3 (`--rec`, ambiguous on `send-pack` only) instead of the
+  measured 4 (`--rece`, the real minimum on `push`), which would have
+  over-blocked `--rec` as a false `--receive-pack` match; the corrected
+  minimum leaves `--rec` correctly read-only (real git resolves it to
+  `--recurse-submodules`, unrelated and harmless). Out of scope (separate
+  tasks): path-qualified `git -C <dir>` (5b5d1022) and config/env-borne
+  vectors (`GIT_EXTERNAL_DIFF`, `protocol.ext.allow`).
 
 Two more entries floor a whole class of commands that were previously
 unclassified and, on a production-resolved session (checked-out `main`
