@@ -292,14 +292,11 @@ function isGitDangerousToken(raw: string): boolean {
     // 3-chars (`--rec`) claim: `git push --rec=<script> --dry-run <repo>
     // HEAD:x` errors `ambiguous option: rec (could be --recurse-submodules
     // or --receive-pack)`, while `--rece=<script> ...` already attempts to
-    // read from the named script as the remote helper. Known, disclosed
-    // over-block cost at this corrected minimum: `git ls-files --rec` and
-    // `git branch --rec` (both -> the unrelated, harmless
-    // `--recurse-submodules`) are genuinely read-only real git behavior
-    // that this guard now blocks — note `--rec` itself does NOT reach
-    // `--receive-pack` at the corrected minimum, it is blocked only
-    // because it is the (harmless) `--recurse-submodules` abbreviation,
-    // unrelated to this flag.
+    // read from the named script as the remote helper. At the corrected
+    // minimum 4, there is no known over-block for this receive-pack arm:
+    // `--rec` stays read-only not because we block it, but because on real
+    // git it resolves to the unrelated, harmless `--recurse-submodules`
+    // (below the minimum), so it errors naturally as an ambiguous option.
     if (isLongOptionAbbreviation(t, "--receive-pack", 4)) return true;
     if (!t.startsWith("-") && t.includes("::")) return true;
     return false;

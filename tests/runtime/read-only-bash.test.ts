@@ -1624,6 +1624,25 @@ describe("git guard monotonicity vs origin/master (task 62fa0542)", () => {
     ["git branch --con", true, true],
     ["git branch --me", true, true],
     ["git branch --no-me", true, true],
+    // Ambiguity floor pins: each token just below its flag's minimum.
+    // These are read-only on real git because they are ambiguous or
+    // unrecognized; pinning them prevents lowering the minimum from
+    // introducing a new over-block undetected by the test suite.
+    // Below --move minimum 2: --m (ambiguous with --merged).
+    ["git branch --m", true, true],
+    // Below --copy minimum 3: --c (ambiguous with --create-reflog or
+    // --column), --co (ambiguous with --column).
+    ["git branch --c", true, true],
+    ["git branch --co", true, true],
+    // Below --force minimum 4: --f (ambiguous with --format), --fo
+    // (ambiguous with --format), --for (ambiguous with --format).
+    ["git branch --f", true, true],
+    ["git branch --fo", true, true],
+    ["git branch --for", true, true],
+    // Below --set-upstream-to minimum 13: --se (ambiguous with
+    // --set-upstream), --set-upstrea (ambiguous with --set-upstream).
+    ["git branch --se", true, true],
+    ["git branch --set-upstrea", true, true],
     // Non-git read-only and write commands, to confirm the table reflects
     // the WHOLE classifier, not just the git guard.
     ["ls -la /tmp", true, true],
