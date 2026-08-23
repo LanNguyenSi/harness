@@ -217,11 +217,32 @@ const GIT_READ_ONLY_SUBS: ReadonlySet<string> = new Set([
  *     forfeit to a subcommand list would need re-auditing on every git
  *     version for which parsers reach that handler; a global forfeit
  *     does not, and no read-only git subcommand uses `--output` as a
- *     read flag. Detected on the exact long form so `--output-indicator-new=`
- *     and `--oneline` are unaffected.
- *   - `--upload-pack=<path>` / `--exec=<path>` / `--receive-pack=<path>`
- *     run an operator-named binary: measured `git fetch
- *     --upload-pack=<script> <local-repo>` executing the script.
+ *     read flag. Detected on the exact long form ONLY (no abbreviation
+ *     handling) — task 62fa0542 measured `--output` on git 2.50.1 and
+ *     found the diff/log/show/rev-list/shortlog/blame option parser does
+ *     NOT do GNU abbreviation matching for this flag at all: every prefix
+ *     shorter than the full 8 characters (`--o`..`--outpu`) errored
+ *     `invalid option` / `unrecognized argument` / `unknown option`
+ *     WITHOUT writing the canary file, on every one of those subcommands.
+ *     Adding an abbreviation arm here would only over-block (e.g.
+ *     `--o` is not close to any other real flag, so no live over-block
+ *     was found either) with no matching security benefit on this git
+ *     version, so the exact-match stays as the measured-correct guard;
+ *     re-measure if the guarded git version ever changes.
+ *   - `--upload-pack` / `--exec` / `--receive-pack`, in ANY unambiguous
+ *     GNU/BSD `getopt_long` abbreviation (task 62fa0542, real ACE bypass:
+ *     `git ls-remote --upl=/prog .` resolves to `--upload-pack` and runs
+ *     `/prog` — the exact-spelling-only guard that shipped in 9d1fff1b
+ *     missed every abbreviated form). Each one runs an operator-named
+ *     binary: measured `git fetch --upload-pack=<script> <local-repo>`
+ *     and `git ls-remote --upload-pack=<script> <local-repo>` executing
+ *     the script; `--receive-pack` is blocked defensively by analogy
+ *     (transport-option sibling of `--upload-pack`/`--exec`, config- and
+ *     version-dependent, not reachable on any subcommand in
+ *     `GIT_READ_ONLY_SUBS` on the measured git 2.50.1 — same fail-closed
+ *     posture as the `::` transport arm below). See `isLongOptionAbbreviation`
+ *     call sites just below for the measured minimum prefix length and
+ *     the per-flag measurement table in this module's git-guard tests.
  *   - a NON-flag positional containing `::` is the `ext::`/`fd::`
  *     transport-helper form, which runs a local program (protocol.ext
  *     defaults to `user`, i.e. allowed for a direct CLI call). Blocked
@@ -233,9 +254,50 @@ const GIT_READ_ONLY_SUBS: ReadonlySet<string> = new Set([
 function isGitDangerousToken(raw: string): boolean {
   const hit = (t: string): boolean => {
     if (t === "--output" || t.startsWith("--output=")) return true;
-    if (t === "--upload-pack" || t.startsWith("--upload-pack=")) return true;
-    if (t === "--exec" || t.startsWith("--exec=")) return true;
-    if (t === "--receive-pack" || t.startsWith("--receive-pack=")) return true;
+    // `--upload-pack`: measured minimum unambiguous prefix is 1 character
+    // past `--` (`--u`), on `git ls-remote` (git 2.50.1) — `ls-remote`'s
+    // option table has no other `u`-prefixed flag, so `--u` resolves
+    // unambiguously to `--upload-pack` there even though the SAME prefix
+    // is ambiguous on `git fetch` (`--unshallow` / `--update-shallow`,
+    // needs `--upl`, 3 chars past `--`, to disambiguate — re-measured
+    // task 62fa0542 review round 1, correcting an off-by-one in the
+    // original 4-chars claim: `git fetch --upl=<script> <repo>` already
+    // attempts to exec the script; `--up` alone still errors ambiguous
+    // against `--update-head-ok`/`--update-shallow`). Per the fail-closed rule
+    // (a prefix unambiguous on ANY relevant subcommand is blocked
+    // everywhere), the minimum of the two — 1 — is used globally. Known,
+    // disclosed over-block cost at this minimum (measured, git 2.50.1):
+    // `git status --u` (-> `--untracked-files`), `git ls-files --u`
+    // (-> `--unmerged`), `git name-rev --u` (-> `--undefined`) are all
+    // genuinely read-only real git behavior that this guard now blocks.
+    if (isLongOptionAbbreviation(t, "--upload-pack", 1)) return true;
+    // `--exec`: on `git ls-remote` (a hidden legacy alias for
+    // `--upload-pack`, same execution vector, undocumented in `-h`), the
+    // measured minimum unambiguous prefix is 3 characters past `--`
+    // (`--exe`) — `--e` / `--ex` are ambiguous with `--exit-code` and
+    // ERROR (do not execute). No read-only subcommand other than
+    // `ls-remote` accepts `--exec` at all (measured against every name
+    // in `GIT_READ_ONLY_SUBS`), and no other flag on any of those
+    // subcommands starts with `exe`, so no over-block was found at this
+    // minimum.
+    if (isLongOptionAbbreviation(t, "--exec", 3)) return true;
+    // `--receive-pack`: not accepted, at any prefix length, by any
+    // subcommand in `GIT_READ_ONLY_SUBS` on the measured git 2.50.1 (it
+    // is a `push`/`send-pack` option) — the exact spelling was already
+    // blocked defensively pre-fix, so this is the same defense extended
+    // to abbreviations, not a newly-reachable vector. Calibrated against
+    // `git push` (a `send-pack` front end): measured minimum unambiguous
+    // prefix is 4 characters past `--`, `--rece` — re-measured task
+    // 62fa0542 review round 1, correcting an off-by-one in the original
+    // 3-chars (`--rec`) claim: `git push --rec=<script> --dry-run <repo>
+    // HEAD:x` errors `ambiguous option: rec (could be --recurse-submodules
+    // or --receive-pack)`, while `--rece=<script> ...` already attempts to
+    // read from the named script as the remote helper. At the corrected
+    // minimum 4, there is no known over-block for this receive-pack arm:
+    // `--rec` stays read-only not because we block it, but because on real
+    // git it resolves to the unrelated, harmless `--recurse-submodules`
+    // (below the minimum), so it errors naturally as an ambiguous option.
+    if (isLongOptionAbbreviation(t, "--receive-pack", 4)) return true;
     if (!t.startsWith("-") && t.includes("::")) return true;
     return false;
   };
@@ -252,6 +314,59 @@ function isGitDangerousToken(raw: string): boolean {
  * config or descriptions of the CURRENT branch without a positional,
  * so the structural rule alone would miss them. Closed set from git's
  * branch(1) manual.
+ *
+ * EXACT spellings and short flags only. Every long-form entry also has
+ * an unambiguous GNU `getopt_long` ABBREVIATION vector (task 62fa0542,
+ * review round 1 fix on 2118d30: `git branch --unse` really unsets the
+ * upstream, `GIT_EDITOR=... git branch --edi` really writes
+ * `branch.<name>.description` and spawns the editor, `git branch
+ * --set-upstream-t=other` really sets tracking — the exact-spelling-only
+ * set below missed every one of these), closed by `isBranchWriteFlag`
+ * below via `isLongOptionAbbreviation`, NOT by widening this set (which
+ * only ever holds exact tokens).
+ *
+ * MEASUREMENT TABLE (git 2.50.1, `git branch <flag>` on a real repo,
+ * ground truth = a created/measured artefact — a config write, an
+ * editor invocation via `GIT_EDITOR`, a deleted/renamed/copied branch —
+ * never the exit code alone; scratchpad/gitmeasure/repo, this run):
+ *
+ *   flag                 shortest unambiguous prefix    over-block
+ *   --delete             --d               (1 char)     none found
+ *   --move               --mo              (2 chars)    none found
+ *   --copy               --cop             (3 chars)    none found
+ *   --force              --forc            (4 chars)    none found
+ *   --unset-upstream     --u               (1 char)      none found
+ *   --edit-description   --e               (1 char)      none found
+ *   --set-upstream-to    --set-upstream-   (13 chars,
+ *                          NOTE the trailing hyphen is part of the
+ *                          minimum: `--set-upstream` alone (12 chars,
+ *                          no trailing `-`) is the deprecated exact
+ *                          `--set-upstream` alias instead, already an
+ *                          exact-match entry above; adding the `-`
+ *                          disambiguates towards `-to`)   none found
+ *
+ * "none found" means: no OTHER long option on `git branch`'s option
+ * table (`--verbose`, `--quiet`, `--track`, `--color`, `--contains`,
+ * `--no-contains`, `--abbrev`, `--all`, `--omit-empty`, `--list`,
+ * `--show-current`, `--create-reflog`, `--merged`, `--no-merged`,
+ * `--column`, `--sort`, `--points-at`, `--ignore-case`,
+ * `--recurse-submodules`, `--format`) shares a prefix with any of the
+ * flags above at or past the measured minimum length, so none of these
+ * abbreviation arms blocks a genuinely harmless `git branch` read form
+ * (confirmed by direct measurement of each one, not by inspection
+ * alone). Ambiguous shorter prefixes (`--m`, `--c`/`--co`, `--f`/`--fo`/
+ * `--for`, `--s`/`--se`/`--set`/.../`--set-upstre`, `--n`/`--no`/`--no-`)
+ * genuinely ERROR on real git (do not write) and are correctly left
+ * unmatched below — `isLongOptionAbbreviation`'s gated minimum is what
+ * keeps them unmatched.
+ *
+ * `--track` (`-t`) was also checked (task brief flagged it as a "?"):
+ * bare `git branch --track` / `--track=direct` (no positional) is a
+ * harmless no-op read (measured: lists branches, no config change);
+ * the only way `--track` mutates is alongside a branch-name positional
+ * (`git branch --track newname`), which the structural "no non-flag
+ * operand" rule in `isReadOnlyGitInvocation` already blocks. No new
+ * guard needed for `--track`.
  */
 const BRANCH_WRITE_FLAGS: ReadonlySet<string> = new Set([
   "-d", "-D", "--delete", "-m", "-M", "--move", "-c", "-C", "--copy",
@@ -260,10 +375,23 @@ const BRANCH_WRITE_FLAGS: ReadonlySet<string> = new Set([
 ]);
 
 function isBranchWriteFlag(raw: string): boolean {
-  const hit = (t: string): boolean =>
-    BRANCH_WRITE_FLAGS.has(t) ||
-    t.startsWith("--set-upstream-to=") ||
-    t.startsWith("--set-upstream=");
+  const hit = (t: string): boolean => {
+    if (BRANCH_WRITE_FLAGS.has(t)) return true;
+    if (t.startsWith("--set-upstream-to=") || t.startsWith("--set-upstream=")) return true;
+    // Unambiguous GNU abbreviations of each long-form write flag. See
+    // the measurement table above for the minimum prefix length and
+    // over-block audit for each. `isLongOptionAbbreviation` itself
+    // strips any glued `=VALUE` before comparing, so this also covers
+    // `--set-upstream-t=other`, `--del=`, etc.
+    if (isLongOptionAbbreviation(t, "--delete", 1)) return true;
+    if (isLongOptionAbbreviation(t, "--move", 2)) return true;
+    if (isLongOptionAbbreviation(t, "--copy", 3)) return true;
+    if (isLongOptionAbbreviation(t, "--force", 4)) return true;
+    if (isLongOptionAbbreviation(t, "--unset-upstream", 1)) return true;
+    if (isLongOptionAbbreviation(t, "--edit-description", 1)) return true;
+    if (isLongOptionAbbreviation(t, "--set-upstream-to", 13)) return true;
+    return false;
+  };
   return hit(raw) || hit(decodeShellWord(raw));
 }
 

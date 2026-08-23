@@ -108,7 +108,8 @@ import * as path from "node:path";
 // 111 -> 110 after the slice-4 io/ relocation: the -1 is a jscpd scan-order
 // re-pairing in the ledger-add/ledger-client/ledger-record cluster (io/ sorts
 // before policies/), not removed duplication.
-const MAX_CLONES = 110;
+// 110 -> 109 after the master-baseline fixture deletion, task 62fa0542.
+const MAX_CLONES = 109;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).
