@@ -98,7 +98,7 @@ jobs:
               exit 0
             fi
             if [ "${attempt}" -ge "${max}" ]; then
-              echo "::error::npm publish failed after ${max} attempts. If the failure is a Sigstore TLog 409, re-run this workflow (Actions -> Publish to npm -> Run workflow) once the Rekor service recovers." >&2
+              echo "::error::npm publish failed after ${max} attempts. If the failure is a Sigstore TLog 409, re-run this workflow (Actions -> Publish to npm -> Run workflow) once the Rekor service recovers. A persistent 403/404 instead likely means the npmjs.com Trusted Publisher entry for this repo/workflow is missing or misconfigured; retrying will not fix that." >&2
               exit 1
             fi
             backoff=$((2 ** attempt * 5))
