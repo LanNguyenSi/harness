@@ -593,12 +593,28 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
             // agent-tasks/d8ee60ca: expire the approval marker on
             // task-completion boundaries so multi-task sessions
             // re-prompt for an Understanding Report between tasks.
+            // agent-tasks/90eae119: Custom mirrors TEAM_TEMPLATE /
+            // FULL_TEMPLATE here (same tool-match list, same 4h
+            // max_age), so it also mirrors their expire_on_bash_match
+            // Bash boundary for operators who use gh-cli in parallel
+            // (hybrid workflow) instead of relying on max_age alone.
+            // This was an oversight in the sweep that introduced
+            // expire_on_bash_match (task f54e0ecb, PR #181), which
+            // covered the SOLO/TEAM/FULL templates but missed this
+            // composer. Same shipped start-anchored patterns and the
+            // same documented fail-open limitations apply (see
+            // docs/policy-packs/understanding-before-execution.md); no
+            // shell-aware matching is added here.
             approval_lifecycle: {
               expire_on_tool_match: [
                 "mcp__agent-tasks__task_finish",
                 "mcp__agent-tasks__task_abandon",
                 "mcp__agent-tasks__pull_requests_merge",
                 "mcp__agent-tasks__tasks_transition",
+              ],
+              expire_on_bash_match: [
+                "^gh pr (merge|close)\\b",
+                "^git push origin (master|main)\\b",
               ],
               max_age: "4h",
             },

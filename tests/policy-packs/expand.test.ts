@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { parse as parseYaml } from "yaml";
 import { expandPolicyPacks } from "../../src/policy-packs/expand.js";
 import { parseManifest } from "../../src/schema/index.js";
 import { expandCodexHookMatchPattern } from "../../src/runtime/tool-name-aliases.js";
+import { composeCustom } from "../../src/cli/init/composer.js";
 
 function buildManifest(
   packs: unknown[],
@@ -188,6 +190,28 @@ describe("expandPolicyPacks", () => {
       (h) => h.name === "policy-pack:understanding-before-execution:post-tool-use",
     );
     expect(post?.match).toBe("^(?:Bash)$");
+  });
+
+  it("end-to-end: composeCustom()'s expire_on_bash_match actually widens the PostToolUse matcher to include Bash (agent-tasks/90eae119)", () => {
+    // Fixture-free pin (no hand-built manifest): feeds a real
+    // `harness init --interactive` Custom-profile manifest through the
+    // actual expandPolicyPacks resolver, so the composer's
+    // expire_on_bash_match wiring is proven live end-to-end, not just via
+    // the composer's own unit pins (init-composer.test.ts) or a synthetic
+    // config object (the tests above).
+    const composed = composeCustom({
+      packs: ["understanding-before-execution"],
+      mcps: [],
+      policies: [],
+    });
+    const m = parseManifest(parseYaml(composed.yaml));
+    const r = expandPolicyPacks(m);
+    const post = r.hooks.find(
+      (h) => h.name === "policy-pack:understanding-before-execution:post-tool-use",
+    );
+    expect(post).toBeDefined();
+    const re = new RegExp(post!.match!);
+    expect(re.test("Bash")).toBe(true);
   });
 
   it("PreToolUse hook is hard-blocking with the documented match", () => {

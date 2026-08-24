@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `harness init --interactive`'s Custom profile composer
+  (`composeCustom()` in `src/cli/init/composer.ts`) now emits
+  `approval_lifecycle.expire_on_bash_match` for the
+  understanding-before-execution pack, matching the same anchored
+  patterns (`^gh pr (merge|close)\b`, `^git push origin (master|main)\b`)
+  and `max_age: 4h` that SOLO_TEMPLATE/TEAM_TEMPLATE/FULL_TEMPLATE
+  already ship (task `90eae119`). Previously a session built through the
+  interactive composer had NO Bash-boundary expiry at all, relying
+  solely on `max_age` and the tool-match list; this was a pre-existing
+  oversight from the sweep that introduced `expire_on_bash_match` on the
+  three templates (task `f54e0ecb`, PR #181), not a deliberate design
+  choice, and does not add shell-aware matching (see
+  `docs/policy-packs/understanding-before-execution.md` for the shared,
+  documented fail-open limitations of the anchored patterns).
 - `resolveGeneratedDir` (`src/io/generated-dir.ts`) now normalizes its
   result exactly once (`expandHome` + `path.resolve`), so the
   approval-signing key file and the projected `SOLUTION_VERDICT_SIGNING_KEY`
