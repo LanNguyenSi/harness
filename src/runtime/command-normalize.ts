@@ -745,6 +745,44 @@ const VAR_ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
 export const GIT_TOKEN_RE = /^(?:\S*\/)?git$/;
 
 /**
+ * git global options that this module's `peelGitGlobalOptions` skips over
+ * to find the subcommand. Exported so `read-only-bash.ts` can share the same
+ * source of truth; each module keeps its own decision about what a matched
+ * option means.
+ *
+ * Flags that consume a value (separate token or glued via `=`): `-C`,
+ * `--git-dir`, `--work-tree`, `-c`, `--namespace`.
+ *
+ * Flags without a value: `--no-pager`, `-p`, `--paginate`, `--exec-path`,
+ * `--literal-pathspecs`, `--no-replace-objects`.
+ */
+
+/**
+ * git global options that take a value, excluding `-c` for security.
+ * `-c KEY=VALUE` can inject arbitrary git config that executes code
+ * (core.fsmonitor, core.pager, core.editor, protocol.*.allow run
+ * arbitrary programs); fail-closed by not skipping it. read-only-bash.ts
+ * uses this set to skip only the safe value-taking options.
+ *
+ * Flags: `-C`, `--git-dir`, `--work-tree`, `--namespace` (recognized both
+ * standalone and glued with `=`).
+ */
+export const GIT_GLOBAL_VALUE_TAKING_FLAGS: ReadonlySet<string> = new Set([
+  "-C", "--git-dir", "--work-tree", "--namespace",
+]);
+
+/**
+ * git global options that take no value.
+ * Flags: `--no-pager`, `-p`, `--paginate`, `--exec-path`,
+ * `--literal-pathspecs`, `--no-replace-objects`.
+ */
+export const GIT_GLOBAL_NO_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "--no-pager", "-p", "--paginate",
+  "--exec-path",
+  "--literal-pathspecs", "--no-replace-objects",
+]);
+
+/**
  * The three OTHER head tokens this module covers (D-001, run
  * 2026-07-28-nongit-trigger-wrappers) — `gh` (`gh pr merge` / `gh pr
  * create`), `npm` (`npm publish`), `harness` (the kill-switch verbs). A
