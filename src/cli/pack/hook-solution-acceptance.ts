@@ -275,9 +275,13 @@ export async function runPackHookSolutionAcceptanceCli(
         ? " (could not resolve harness.generated/; pass --config)"
         : "";
     const reason =
-      `no verdict id: no active-claim task id recorded${detail} and ${VERDICT_ID_ENV} is unset or invalid. ` +
-      `Call mcp__agent-tasks__task_start first (agent-tasks workflow; the verdict id is the active task), ` +
-      `or set ${VERDICT_ID_ENV} to the verdict id for a solo / non-agent-tasks session.`;
+      `no verdict id: no active-claim task id recorded${detail} and ${VERDICT_ID_ENV} is unset or invalid.\n` +
+      `\n` +
+      `Converge one of two ways:\n` +
+      `\n` +
+      `1. Agent-tasks workflow: Call mcp__agent-tasks__task_start first to claim the task (the verdict id is the active task). For post-done work (Release, deploy, etc.), create a separate task and call task_start for it.\n` +
+      `\n` +
+      `2. Solo / non-agent-tasks session: ${VERDICT_ID_ENV} must be set in the environment at Session-Start time (Operator option; it is read at Hook startup, not agent-sideeffect-settable from within the session).`;
     const diagnostic = `BLOCK — ${reason}`;
     note(diagnostic);
     stdout.write(`${blockJson(actionLabel, toolName, "<no-verdict-id>", reason, configUx, sessionId)}\n`);

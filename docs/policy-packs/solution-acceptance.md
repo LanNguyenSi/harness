@@ -263,6 +263,17 @@ Condition #1 is a hard error; condition #2 is a warning. Both are
 surfaced by `harness validate` and `harness doctor` when the pack is
 enabled.
 
+## Post-completion work: the Release-Task pattern
+
+After `task_finish` succeeds, post-done work like Release, deploy, or publishing is OUT OF SCOPE for the current task's verdict. Any post-done action that modifies repository state (a new commit, a tag, a published package) must run WITHIN its own separate task.
+
+**Pattern:**
+
+1. Main work task: claim with `task_start`, do work, finish with `task_finish` (gated by a verdict for the main work).
+2. Post-done task (Release, deploy, etc.): create a separate task, claim with `task_start` (the verdict id for post-done work is this new task's id), run the post-done action, then `task_finish` (gated by a verdict for the post-done work).
+
+This ensures each distinct completion boundary (main work vs. post-done) has its own separate preflight run and verdict. Trying to finish post-done work under the original task's verdict id would fail: the original task's verdict was earned for the state BEFORE post-done changes, not after.
+
 ## Env knobs
 
 Read by the hook process (NOT from the manifest's `tools.mcp` env
@@ -271,7 +282,7 @@ block; see Failure mode #2):
 | Variable | Effect | Default |
 |----------|--------|---------|
 | `SOLUTION_VERDICT_DIR` | Overrides the verdict directory the consumer reads. Must match where the producer writes. | `$XDG_STATE_HOME/agent-grounding/solution-verdicts`, falling back to `~/.local/state/agent-grounding/solution-verdicts` |
-| `SOLUTION_VERDICT_ID` | Verdict id for solo / non-agent-tasks sessions. Consulted only when no `active-claim` exists. Validated as a safe single path segment; malformed fails closed. Set it to the same id passed to `mcp__grounding-mcp__solution_evaluate({ id })`. | unset (fail-closed without a claim) |
+| `SOLUTION_VERDICT_ID` | Verdict id for solo / non-agent-tasks sessions. Consulted only when no `active-claim` exists. Validated as a safe single path segment; malformed fails closed. Set it to the same id passed to `mcp__grounding-mcp__solution_evaluate({ id })`. Must be set in the environment at Session-Start time (an Operator decision, not agent-sideeffect-settable from within the session). | unset (fail-closed without a claim) |
 
 ## See also
 

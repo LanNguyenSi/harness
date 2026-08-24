@@ -560,6 +560,23 @@ describe("completion-gate — solo / non-agent-tasks verdict id (SOLUTION_VERDIC
     expect(reason).toMatch(/SOLUTION_VERDICT_ID/);
     expect(reason).toMatch(/task_start/);
   });
+
+  it("distinguishes agent-tasks vs solo-session paths in the no-verdict-id deny message", async () => {
+    const { res, out } = await run({
+      cwd: repoAtHead(HEAD),
+      verdictDir: verdictDirWith(null),
+      activeClaim: null,
+      env: {},
+    });
+    expect(res.blocked).toBe(true);
+    const reason = JSON.parse(out).reason as string;
+    // Mentions the agent-tasks path
+    expect(reason).toMatch(/Agent-tasks workflow.*task_start.*post-done work.*separate task/);
+    // Mentions the solo-session path with explicit Session-Start emphasis
+    expect(reason).toMatch(/Solo \/ non-agent-tasks session.*Session-Start time.*not agent-sideeffect-settable/);
+    // Does not suggest setting SOLUTION_VERDICT_ID as an agent-side action
+    expect(reason).not.toMatch(/set SOLUTION_VERDICT_ID.*within/i);
+  });
 });
 
 describe("completion-gate — malformed config.ux (task 19e293c6)", () => {
