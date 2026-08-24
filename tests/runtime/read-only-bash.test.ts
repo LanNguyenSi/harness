@@ -3,6 +3,7 @@ import {
   isReadOnlyBashCommand,
   isReadOnlyBashPipeline,
 } from "../../src/runtime/read-only-bash.js";
+import { GIT_GLOBAL_NO_VALUE_FLAGS, GIT_GLOBAL_VALUE_TAKING_FLAGS } from "../../src/runtime/command-normalize.js";
 
 describe("read-only Bash classifier", () => {
   describe("simple read-only binaries", () => {
@@ -187,8 +188,67 @@ describe("read-only Bash classifier", () => {
       "git fetch https://example.com/a.git",
       "git ls-remote https://example.com/a.git",
       "git ls-remote origin",
+      // Task: path-qualified git binary (basename match).
+      "/usr/bin/git status",
+      "./git log",
+      "/path/to/git diff",
     ])("allows %s", (cmd) => {
       expect(isReadOnlyBashCommand(cmd)).toBe(true);
+    });
+
+    // Negative controls: git-like binaries that are NOT git.
+    it.each([
+      "mygit status",
+      "gitk log",
+      "git-foo status",
+    ])("does NOT treat %s as git", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    });
+
+    // Task: git global options (AC3). Excludes `-c` which is handled separately below.
+    it.each([
+      "git -C /tmp status",
+      "git --no-pager log",
+      "git --git-dir=/tmp/.git status",
+      "git --work-tree=/tmp diff",
+      "git -p log",
+      "git --paginate log",
+      "git --exec-path=/tmp rev-parse HEAD",
+      "git --namespace=ns log",
+      "git --literal-pathspecs status",
+      "git --no-replace-objects log",
+      // Multiple options
+      "git -C /tmp --no-pager status",
+      "git --no-pager -C /tmp log",
+      "git -C /tmp --git-dir=/tmp/.git status",
+    ])("allows git global options without -c: %s", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(true);
+    });
+
+    // CRITICAL (security): `-c` KEY=VALUE can inject arbitrary git config that
+    // executes code (core.fsmonitor, core.pager, core.editor, protocol.*.allow
+    // run arbitrary programs). Fail-closed by not skipping `-c` entirely.
+    // Regressions: before fix, every form below was classified read-only
+    // (measure against real git 2.50.1 confirmed execution). AC4: git -c x=y push
+    // must remain Write (existing positive control). Missing-test case
+    // (AC5): -C (directory changer) without value at end of command.
+    it.each([
+      // Benign config that was previously skipped (negative control).
+      "git -c user.name=x log",
+      // Injection forms: core.fsmonitor, core.pager, core.editor execute
+      // the value as a program. Measured on real git 2.50.1 to execute.
+      "git -c core.fsmonitor=id status",
+      "git -c core.pager=id log",
+      "git -c core.editor=id status",
+      // protocol.*.allow are execution vectors on git versions that support them.
+      "git -c protocol.ext.allow=id status",
+      "git -c protocol.file.allow=id status",
+      // Benign config followed by write subcommand (original AC4 form).
+      "git -c x=y push",
+      // Value-taking option without value at end (Missing-test case, AC5).
+      "git -C",
+    ])("blocks git -c or incomplete value-taking options: %s", (cmd) => {
+      expect(isReadOnlyBashCommand(cmd)).toBe(false);
     });
 
     // Shell-quoting must not launder a write past the positive shape
@@ -1701,5 +1761,72 @@ describe("git guard monotonicity vs origin/master (task 62fa0542)", () => {
     for (const cmd of bypassForms) {
       expect(isReadOnlyBashCommand(cmd)).toBe(false); // post-fix: BLOCK
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Invariant test: git global option names (HIGH finding / AC3)
+// Ensure that the flags handled by skipGitGlobalOptions in read-only-bash.ts
+// are exactly those exported by command-normalize.ts. This prevents drift
+// between the two implementations.
+// ---------------------------------------------------------------------------
+describe("git global options invariant (AC3)", () => {
+  it("skipGitGlobalOptions handles all no-value flags from the export", () => {
+    // These forms must be recognized as no-value options (not skip the value token).
+    const noValueForms = [
+      "git --no-pager status",
+      "git -p log",
+      "git --paginate log",
+      "git --exec-path status",
+      "git --literal-pathspecs status",
+      "git --no-replace-objects log",
+    ];
+    for (const cmd of noValueForms) {
+      expect(isReadOnlyBashCommand(cmd)).toBe(true);
+    }
+    // Verify all flags in the exported set are included: test forms that would
+    // fail if a flag is missing (the next token would be consumed as value).
+  });
+
+  it.each(Array.from(GIT_GLOBAL_NO_VALUE_FLAGS))("no-value flag %s recognized by skipGitGlobalOptions", (flag) => {
+    const cmd = `git ${flag} status`;
+    expect(isReadOnlyBashCommand(cmd)).toBe(true);
+  });
+
+  it("skipGitGlobalOptions handles all value-taking flags from the export (excluding -c)", () => {
+    // These forms must be recognized as value-taking options (skip both flag and value).
+    const valueTakingForms = [
+      "git -C /tmp status",
+      "git --git-dir=/tmp/.git status",
+      "git --work-tree=/tmp status",
+      "git --namespace=ns status",
+    ];
+    for (const cmd of valueTakingForms) {
+      expect(isReadOnlyBashCommand(cmd)).toBe(true);
+    }
+    // Verify all flags in the exported set are included: test with separate values.
+  });
+
+  it.each(Array.from(GIT_GLOBAL_VALUE_TAKING_FLAGS))("value-taking flag %s recognized by skipGitGlobalOptions", (flag) => {
+    const cmd = `git ${flag} /tmp status`;
+    expect(isReadOnlyBashCommand(cmd)).toBe(true);
+  });
+
+  it("-c is NOT in the value-taking flags (fail-closed for config injection)", () => {
+    expect(GIT_GLOBAL_VALUE_TAKING_FLAGS.has("-c")).toBe(false);
+    // Verify that -c is treated as unknown, causing skipGitGlobalOptions to stop
+    // and thus the -c and its value are NOT skipped, making the command classify
+    // as unrecognized write.
+    expect(isReadOnlyBashCommand("git -c user.name=x status")).toBe(false);
+    expect(isReadOnlyBashCommand("git -c core.fsmonitor=id status")).toBe(false);
+  });
+
+  it("value-taking flags whose values resemble subcommands are handled correctly", () => {
+    // Regression test: -C and --git-dir consume their values (a directory path),
+    // so the next token ("status") is not treated as the git subcommand. The value
+    // is consumed, no subcommand follows, and the command falls through to bare-git
+    // logic (read-only by default).
+    expect(isReadOnlyBashCommand("git -C status")).toBe(true); // -C consumes "status" as path
+    expect(isReadOnlyBashCommand("git --git-dir status")).toBe(true); // --git-dir consumes "status" as path
   });
 });

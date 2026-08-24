@@ -57,6 +57,11 @@
 // verbatim, not diverge.
 
 import { decodeShellWord } from "./shell-word.js";
+import {
+  GIT_GLOBAL_NO_VALUE_FLAGS,
+  GIT_GLOBAL_VALUE_TAKING_FLAGS,
+  GIT_TOKEN_RE,
+} from "./command-normalize.js";
 
 /**
  * Single-token read-only binaries. Each accepts arguments without
@@ -910,6 +915,65 @@ function checkFileWrite(t: string): boolean {
 }
 
 /**
+ * Returns true when `bin` (with any path prefix) basename-matches "git".
+ * Examples: "git", "/usr/bin/git", "./git", "/path/to/git" all return true.
+ * "mygit", "gitk", "git-foo" all return false (not exact basename match).
+ * Uses GIT_TOKEN_RE from command-normalize.ts for the canonical basename matching.
+ */
+function isGitBinary(bin: string): boolean {
+  return GIT_TOKEN_RE.test(bin);
+}
+
+/**
+ * Strips leading git global options from tokens, returning the index after
+ * the last global option (or 1 if no options). This allows the subcommand
+ * check to look at the first remaining token after global options.
+ *
+ * Git global options recognized: -C, --git-dir, --work-tree, --namespace
+ * (value-taking), and --no-pager, -p, --paginate, --exec-path, --literal-pathspecs,
+ * --no-replace-objects (no-value).
+ *
+ * NOTE: `-c` is deliberately NOT included because git config injection can
+ * execute arbitrary code (core.fsmonitor, core.pager, core.editor, etc.);
+ * if `-c` appears, the command fails closed (treated as write).
+ */
+function skipGitGlobalOptions(tokens: readonly string[]): number {
+  let idx = 1; // Start after "git"
+  while (idx < tokens.length) {
+    const t = tokens[idx];
+    if (t === undefined || !t.startsWith("-")) break;
+
+    // No-value options: use the exported set (exact match or glued with =).
+    if (GIT_GLOBAL_NO_VALUE_FLAGS.has(t) || Array.from(GIT_GLOBAL_NO_VALUE_FLAGS).some(f => t.startsWith(f + "="))) {
+      idx += 1;
+      continue;
+    }
+
+    // Value-taking options: -C, --git-dir, --work-tree, --namespace
+    // (both standalone and with glued =VALUE).
+    const flagName = t.indexOf("=") === -1 ? t : t.slice(0, t.indexOf("="));
+    if (GIT_GLOBAL_VALUE_TAKING_FLAGS.has(flagName)) {
+      if (t.includes("=")) {
+        // Glued form (--flag=value), it's one token
+        idx += 1;
+      } else {
+        // Standalone form: if there's no next token, the value is missing.
+        // Fail closed: treat as write (return early).
+        if (idx + 1 >= tokens.length) {
+          return idx; // Stop here, leaving the flag unprocessed
+        }
+        idx += 2; // Skip flag and value
+      }
+      continue;
+    }
+
+    // Unknown flag (including `-c`, which we fail-closed on), stop.
+    break;
+  }
+  return idx;
+}
+
+/**
  * Classify an already-tokenized, metachar-cleared argv. Factored out
  * of `isReadOnlyBashCommand` so the command-runner special cases
  * (`command` / `env`) can recurse on the residual underlying command
@@ -1023,9 +1087,13 @@ function classifyTokens(tokens: readonly string[]): boolean {
   // tight: `<bin> --version <thing>` could exfiltrate or mis-route.
   if (tokens.length === 2 && VERSION_OR_HELP_FLAGS.has(sub)) return true;
 
-  if (bin === "git") {
-    if (!GIT_READ_ONLY_SUBS.has(sub)) return false;
-    return isReadOnlyGitInvocation(sub, tokens.slice(2));
+  if (isGitBinary(bin)) {
+    // Strip git global options to find the subcommand.
+    const argsIdx = skipGitGlobalOptions(tokens);
+    const subAtIdx = tokens[argsIdx];
+    if (subAtIdx === undefined) return true; // bare `git` or only options
+    if (!GIT_READ_ONLY_SUBS.has(subAtIdx)) return false;
+    return isReadOnlyGitInvocation(subAtIdx, tokens.slice(argsIdx + 1));
   }
 
   if (bin === "gh") {
