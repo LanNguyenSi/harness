@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`harness pack hook solution-acceptance`'s no-verdict-id Deny message
+  now honestly distinguishes between agent-tasks and solo-session paths**
+  (task `664981b3`). The previous message suggested "set
+  `SOLUTION_VERDICT_ID` to the verdict id for a solo / non-agent-tasks
+  session", which was misleading: the env knob is read at Hook startup (at
+  Session-Start time), not agent-sideeffect-settable from within the
+  session. The new message clarifies two distinct paths: (1) Agent-tasks
+  workflow — call `task_start` to claim the task; post-done work (Release,
+  deploy, etc.) is a separate task with its own `task_start` and verdict;
+  (2) Solo session — `SOLUTION_VERDICT_ID` must be set at Session-Start
+  time (Operator decision, not agent-settable). Documentation on the
+  Release-Task pattern is added to
+  `docs/policy-packs/solution-acceptance.md`. The optional HEAD-source
+  mini-fix is deferred: no concrete HEAD-resolution defect was identified
+  within this scope. Non-decisions: Producer-side
+  binding of Verdict-ID to a specific session is deferred (would couple
+  producer and consumer, and adds complexity for a rare case of
+  long-running solo sessions); Command-Prefix-Parsing of
+  `SOLUTION_VERDICT_ID=<id> <command>` is deferred (would add a new
+  Shell-Shape exception, expanding the attack surface, when the existing
+  Session-Start-time knob is clearer and simpler).
 - `harness init --interactive`'s Custom profile composer
   (`composeCustom()` in `src/cli/init/composer.ts`) now emits
   `approval_lifecycle.expire_on_bash_match` for the
