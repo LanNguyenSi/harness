@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`read-only-bash` recognises a path-qualified git binary and skips git
+  global options before the subcommand, while `-c` stays fail-closed**
+  (task `5b5d1022`, #452). Two measured false positives (a path-qualified
+  git binary and global options such as `--no-pager` before the
+  subcommand) were classified as writes; the classifier now matches git by
+  basename and skips the global options using the flag sets exported from
+  `command-normalize`. `-c KEY=VALUE` is never skipped, because peeling it
+  would let config-injection vectors such as `core.fsmonitor` reach a
+  read-only subcommand; value-taking options without a value also fail
+  closed. Pinned by regression tests.
 - **`harness pack hook solution-acceptance`'s no-verdict-id Deny message
   now honestly distinguishes between agent-tasks and solo-session paths**
   (task `664981b3`). The previous message suggested "set
