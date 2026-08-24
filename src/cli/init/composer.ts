@@ -598,11 +598,11 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
             // max_age), so it also mirrors their expire_on_bash_match
             // Bash boundary for operators who use gh-cli in parallel
             // (hybrid workflow) instead of relying on max_age alone.
-            // This was an oversight in the earlier expire_on_bash_match
-            // sweep (task d834a065), which covered the SOLO/TEAM/FULL
-            // templates but missed this composer. Same shipped
-            // start-anchored patterns and the same documented
-            // fail-open limitations apply (see
+            // This was an oversight in the sweep that introduced
+            // expire_on_bash_match (task f54e0ecb, PR #181), which
+            // covered the SOLO/TEAM/FULL templates but missed this
+            // composer. Same shipped start-anchored patterns and the
+            // same documented fail-open limitations apply (see
             // docs/policy-packs/understanding-before-execution.md); no
             // shell-aware matching is added here.
             approval_lifecycle: {

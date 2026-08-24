@@ -53,12 +53,12 @@ describe("composeCustom — single pack", () => {
     // Historically the interactive composer's understanding-before-execution
     // branch set expire_on_tool_match + max_age but never expire_on_bash_match
     // at all, unlike SOLO_TEMPLATE/TEAM_TEMPLATE/FULL_TEMPLATE (which all ship
-    // it) — a session built through `harness init --interactive` had NO
+    // it): a session built through `harness init --interactive` had NO
     // Bash-boundary expiry whatsoever, relying solely on max_age and the
     // tool-match list. Closed by task `90eae119-cb77-4941-975c-7d2930e685d8`:
     // the composer now mirrors TEAM_TEMPLATE/FULL_TEMPLATE's own
     // expire_on_bash_match patterns (same anchored regexes, same 4h
-    // max_age — Custom already matched their expire_on_tool_match list and
+    // max_age; Custom already matched their expire_on_tool_match list and
     // max_age, so it inherits their Bash boundary too). See
     // docs/policy-packs/understanding-before-execution.md; this pin and
     // that doc section must not drift apart.

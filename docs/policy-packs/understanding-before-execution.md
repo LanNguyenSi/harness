@@ -294,7 +294,7 @@ Any other top-level key is rejected as a typo. New keys land in this schema (`sr
 
 ### `expire_on_bash_match`: start-anchored, with a documented fail-open limitation (task `fb80b5bb`, measured 2026-08-19)
 
-The shipped `SOLO_TEMPLATE` / `TEAM_TEMPLATE` / `FULL_TEMPLATE` defaults for `approval_lifecycle.expire_on_bash_match` are, and remain:
+The shipped `SOLO_TEMPLATE` / `TEAM_TEMPLATE` / `FULL_TEMPLATE` defaults (and the interactive Custom composer's, see "Closed gap" below) for `approval_lifecycle.expire_on_bash_match` are, and remain:
 
 ```
 ^gh pr (merge|close)\b
@@ -377,14 +377,14 @@ that re-widens the anchor without updating this section reddens.
 `expire_on_bash_match` at all — a session built through the interactive
 composer had NO Bash-boundary expiry whatsoever, relying solely on
 `max_age` and the tool-match list. This was a pre-existing oversight from
-the same sweep that hardened `expire_on_bash_match` on
-SOLO_TEMPLATE/TEAM_TEMPLATE/FULL_TEMPLATE (task `d834a065`), not a
+the same sweep that introduced `expire_on_bash_match` on
+SOLO_TEMPLATE/TEAM_TEMPLATE/FULL_TEMPLATE (task `f54e0ecb`, PR #181), not a
 deliberate design choice. Closed by task
 `90eae119-cb77-4941-975c-7d2930e685d8`: the composer now emits the same
 `expire_on_bash_match` patterns TEAM_TEMPLATE/FULL_TEMPLATE ship (Custom
 already matched their `expire_on_tool_match` list and `max_age: 4h`, so it
 inherits their Bash boundary too), with the same anchored-pattern and
-fail-open limitations documented above — this change adds no shell-aware
+fail-open limitations documented above; this change adds no shell-aware
 matching. Pinned in `tests/cli/init-composer.test.ts` (the composed
 manifest's `approval_lifecycle` carries `expire_on_tool_match`,
 `expire_on_bash_match`, and `max_age` matching TEAM/FULL), so a future edit

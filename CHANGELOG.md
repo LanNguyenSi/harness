@@ -18,9 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   already ship (task `90eae119`). Previously a session built through the
   interactive composer had NO Bash-boundary expiry at all, relying
   solely on `max_age` and the tool-match list; this was a pre-existing
-  oversight from the sweep that hardened `expire_on_bash_match` on the
-  three templates (task `d834a065`), not a deliberate design choice, and
-  does not add shell-aware matching (see
+  oversight from the sweep that introduced `expire_on_bash_match` on the
+  three templates (task `f54e0ecb`, PR #181), not a deliberate design
+  choice, and does not add shell-aware matching (see
   `docs/policy-packs/understanding-before-execution.md` for the shared,
   documented fail-open limitations of the anchored patterns).
 - `resolveGeneratedDir` (`src/io/generated-dir.ts`) now normalizes its

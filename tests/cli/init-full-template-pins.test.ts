@@ -397,6 +397,28 @@ describe("profile templates: single `&` is a command boundary in every policy tr
       },
     );
   });
+
+  // Drift guard (agent-tasks/90eae119 fix round 2): the composer's
+  // expire_on_bash_match list was hand-copied into composer.ts and into
+  // tests/cli/init-composer.test.ts as literal strings, so nothing
+  // asserted composeCustom() actually STAYS equal to what
+  // TEAM_TEMPLATE/FULL_TEMPLATE ship; a future edit to either side could
+  // silently drift the other back out of sync, the same class of gap this
+  // task closed for the `&`-boundary alphabet above. Extracts both sides
+  // through the real render (templates via bashMatchers, composer via
+  // composeCustom()) rather than re-hand-copying either list.
+  it("composeCustom()'s expire_on_bash_match matches TEAM_TEMPLATE/FULL_TEMPLATE exactly", () => {
+    const templatePatterns = bashMatchers(TEAM_TEMPLATE).map((re) => re.source);
+    expect(bashMatchers(FULL_TEMPLATE).map((re) => re.source)).toEqual(templatePatterns);
+
+    const composed = composeCustom({
+      packs: ["understanding-before-execution"],
+      mcps: [],
+      policies: [],
+    });
+    const composedPatterns = bashMatchers(composed.yaml).map((re) => re.source);
+    expect(composedPatterns).toEqual(templatePatterns);
+  });
 });
 
 // Regression guard for the YAML-render round-trip of the new
