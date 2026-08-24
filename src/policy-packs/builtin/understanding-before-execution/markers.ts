@@ -11,7 +11,7 @@ import { atomicWriteFile } from "../../../io/atomic-write.js";
 import { readRegularFileRejectingSymlink } from "../../../io/read-regular-file.js";
 import { signMarker, verifyMarkerSignature } from "../../../runtime/approval-signing.js";
 import { rejectMalformedSessionId } from "../../../runtime/reject-malformed-session-id.js";
-import { safeJsonParse } from "./persisted-reports.js";
+import { safeJsonParse } from "../../../io/safe-json-parse.js";
 
 export const APPROVAL_MARKER_DIRNAME = ".approvals";
 
