@@ -4,13 +4,17 @@
 // src/policy-packs/builtin/understanding-before-execution/index.ts for
 // the re-exported public surface.
 //
-// `safeJsonParse` is exported (it was module-private in the monolith) so
-// markers.ts can reuse it for marker-body parsing -- import/export
-// mechanics only, no behavior change.
+// `safeJsonParse` used to be defined and exported here (module-private in
+// the monolith, then exported so markers.ts could reuse it for
+// marker-body parsing). It has since moved to src/io/safe-json-parse.ts
+// (task 9bc0d546) so both call sites import a shared helper instead of one
+// importing it from the other -- import/export mechanics only, no
+// behavior change.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { atomicWriteFile } from "../../../io/atomic-write.js";
+import { safeJsonParse } from "../../../io/safe-json-parse.js";
 
 export interface PersistedReport {
   filePath: string;
@@ -69,14 +73,6 @@ export function defaultReportsDir(cwd: string = process.cwd()): string {
  */
 export function reportsDirForManifest(manifestPath: string): string {
   return path.join(path.dirname(manifestPath), DEFAULT_REPORTS_DIRNAME, REPORTS_SUBDIR);
-}
-
-export function safeJsonParse(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
 }
 
 /**

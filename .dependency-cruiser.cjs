@@ -8,17 +8,30 @@
 // (src/policies/duration.ts, src/policies/extract.ts,
 // src/runtime/ledger-record.ts, src/runtime/expand-home.ts) were relocated
 // into src/io/ (structural-concentration slice 4, agent-tasks 61a37b25,
-// follow-up to task f86b2425). The per-file grandfather exemptions are gone,
-// but note what that means: src/io is deliberately unconstrained, so these
-// edges are now structurally OUT OF SCOPE of the layer rules rather than
-// individually exempted. ledger-record.ts in particular is not a leaf (it
-// imports policies/timestamp plus type-only policies/runtime imports).
-// Assign io/probes/overrides a layer (and rules, e.g. io-no-upward-imports)
-// if/when the shared utilities get sorted for real.
+// follow-up to task f86b2425).
 //
-// DELIBERATELY UNCONSTRAINED: src/io, src/probes, and src/overrides are
-// utility/leaf directories with no assigned position in the layer chain;
-// only the floors above forbid importing probes/.
+// src/io still has no assigned layer position of its own (that is a bigger
+// design decision, out of scope here -- see io-no-upward-imports below for
+// what IS gated in the meantime). src/probes and src/overrides remain
+// DELIBERATELY UNCONSTRAINED utility/leaf directories with no assigned
+// position in the layer chain; only the floors above forbid importing
+// probes/.
+//
+// io-no-upward-imports (task 9bc0d546) closes the gap the four relocated
+// utilities opened: src/io is no longer a structurally invisible zone
+// where any upward import silently escapes the layer rules. New files
+// under src/io must not import from policies/runtime/policy-packs/cli.
+// Exactly two pre-existing files still do, and are exempted by an
+// explicit `from.pathNot` naming those two files (NOT a `to.pathNot`
+// grandfather -- see the ratchet test in
+// tests/dependency-cruiser-config.test.ts, which fails if any rule in
+// this file ever gains a `to.pathNot`):
+//   - src/io/claude-mcp.ts imports src/runtime/hermetic-spawn-guard.ts
+//   - src/io/ledger-record.ts imports src/policies/ledger-client.ts,
+//     src/policies/requires.ts, src/policies/timestamp.ts (values) and
+//     src/runtime/intercept.ts (type-only); it is not a leaf.
+// Assign io/probes/overrides a real layer position if/when the shared
+// utilities get sorted for real (out of scope for this task).
 /** @type {import('dependency-cruiser').IConfiguration} */
 module.exports = {
   forbidden: [
@@ -50,6 +63,21 @@ module.exports = {
       severity: "error",
       from: { path: "^src/policy-packs" },
       to: { path: "^src/cli" },
+    },
+    {
+      name: "io-no-upward-imports",
+      comment:
+        "io/ must not import from policies/runtime/policy-packs/cli. Two " +
+        "pre-existing files are exempted by exact file path (from.pathNot, " +
+        "not a to.pathNot grandfather -- see the header comment above and " +
+        "tests/dependency-cruiser-config.test.ts): src/io/claude-mcp.ts and " +
+        "src/io/ledger-record.ts.",
+      severity: "error",
+      from: {
+        path: "^src/io",
+        pathNot: "^src/io/(claude-mcp|ledger-record)\\.ts$",
+      },
+      to: { path: "^src/(policies|runtime|policy-packs|cli)" },
     },
   ],
   options: {

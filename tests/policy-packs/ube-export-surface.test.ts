@@ -72,7 +72,7 @@ describe("understanding-before-execution-runtime shim export surface", () => {
     expect(actual).toEqual([...EXPECTED_EXPORTS].sort());
   });
 
-  it("does not export safeJsonParse (module-private to persisted-reports.ts)", () => {
+  it("does not export safeJsonParse (lives in src/io/safe-json-parse.ts, not part of the UBE surface)", () => {
     expect(Object.prototype.hasOwnProperty.call(ubeShim, "safeJsonParse")).toBe(false);
   });
 });
