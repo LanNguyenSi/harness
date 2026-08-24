@@ -49,17 +49,19 @@ describe("composeCustom — single pack", () => {
     expect(cfg?.producers?.some((p) => p.kind === "ask")).toBe(true);
   });
 
-  it("approval_lifecycle: emits expire_on_tool_match + max_age but NO expire_on_bash_match key (known gap, task 90eae119)", () => {
-    // Unlike SOLO_TEMPLATE/TEAM_TEMPLATE/FULL_TEMPLATE (which all ship
-    // expire_on_bash_match), the interactive composer's
-    // understanding-before-execution branch never sets it at all — a
-    // session built through `harness init --interactive` has NO
+  it("approval_lifecycle: emits expire_on_tool_match + expire_on_bash_match + max_age matching TEAM/FULL templates (task 90eae119)", () => {
+    // Historically the interactive composer's understanding-before-execution
+    // branch set expire_on_tool_match + max_age but never expire_on_bash_match
+    // at all, unlike SOLO_TEMPLATE/TEAM_TEMPLATE/FULL_TEMPLATE (which all ship
+    // it) — a session built through `harness init --interactive` had NO
     // Bash-boundary expiry whatsoever, relying solely on max_age and the
-    // tool-match list. See "Known gap: the interactive custom profile"
-    // in docs/policy-packs/understanding-before-execution.md (task
-    // `90eae119-cb77-4941-975c-7d2930e685d8`, tracked as a follow-up, not
-    // fixed here) — this pin and that doc section must not drift apart;
-    // a future fix closing the gap should turn this assertion red.
+    // tool-match list. Closed by task `90eae119-cb77-4941-975c-7d2930e685d8`:
+    // the composer now mirrors TEAM_TEMPLATE/FULL_TEMPLATE's own
+    // expire_on_bash_match patterns (same anchored regexes, same 4h
+    // max_age — Custom already matched their expire_on_tool_match list and
+    // max_age, so it inherits their Bash boundary too). See
+    // docs/policy-packs/understanding-before-execution.md; this pin and
+    // that doc section must not drift apart.
     const { manifest } = compose({ packs: ["understanding-before-execution"] });
     const pack = manifest.policy_packs.find((p) => p.name === "understanding-before-execution");
     const cfg = pack?.config as { approval_lifecycle?: Record<string, unknown> } | undefined;
@@ -70,8 +72,11 @@ describe("composeCustom — single pack", () => {
       "mcp__agent-tasks__pull_requests_merge",
       "mcp__agent-tasks__tasks_transition",
     ]);
+    expect(lifecycle?.["expire_on_bash_match"]).toEqual([
+      "^gh pr (merge|close)\\b",
+      "^git push origin (master|main)\\b",
+    ]);
     expect(lifecycle?.["max_age"]).toBe("4h");
-    expect(lifecycle ? "expire_on_bash_match" in lifecycle : undefined).toBe(false);
   });
 });
 
