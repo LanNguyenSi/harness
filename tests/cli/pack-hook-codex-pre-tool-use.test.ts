@@ -13,6 +13,7 @@ import {
   writeTaskApprovalMarker,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 import { readPendingApproval } from "../../src/runtime/pending-approval.js";
+import { writeSentinel, type PauseSentinel } from "../../src/runtime/pause-sentinel.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
 let tmp: string;
@@ -1122,5 +1123,78 @@ describe("pack hook codex-pre-tool-use blocker: malformed-sections surfacing (ta
     });
     expect(result.blocked).toBe(true);
     expect(stderr.read()).not.toMatch(/malformed sections/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pause sentinel (task 1432e053), mirroring the behavioural pause coverage
+// on the sibling hook (tests/cli/pack-hook-codex-post-tool-use.test.ts,
+// "honours the pause sentinel and skips marker expiry").
+// ---------------------------------------------------------------------------
+describe("pack hook codex-pre-tool-use blocker -- pause sentinel (task 1432e053)", () => {
+  let sentinelTmp: string;
+  let generatedDir: string;
+
+  const ACTIVE_SENTINEL: PauseSentinel = {
+    pausedAt: new Date().toISOString(),
+    expiresAt: null, // indefinite, never auto-expires during test
+    reason: "operator recovery",
+    pausedBy: "test",
+  };
+
+  beforeEach(() => {
+    sentinelTmp = fs.mkdtempSync(path.join(os.tmpdir(), "ug-codex-pre-pause-"));
+    generatedDir = path.join(sentinelTmp, "harness.generated");
+    fs.mkdirSync(generatedDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(sentinelTmp, { recursive: true, force: true });
+  });
+
+  it("honours the pause sentinel: allows without evaluating and emits a PAUSED notice", async () => {
+    writeSentinel(generatedDir, ACTIVE_SENTINEL);
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event()),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.approvalCheck.source).toBe("none");
+    const stderrText = stderr.read();
+    expect(stderrText).toContain("PAUSED");
+    expect(stderrText).toContain("operator recovery");
+  });
+
+  it("resumes normal evaluation after the pause sentinel expires (negative control)", async () => {
+    // `runPackHookCodexPreToolUseCli` (unlike its stop / user-prompt-submit
+    // / post-tool-use siblings) has no `now` test-injection knob, so this
+    // uses a sentinel whose `expiresAt` is genuinely in the past against
+    // the real wall clock rather than an injected one.
+    writeSentinel(generatedDir, {
+      pausedAt: "2020-01-01T00:00:00.000Z",
+      expiresAt: "2020-01-01T01:00:00.000Z",
+      reason: "operator recovery",
+      pausedBy: "test",
+    });
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(event()),
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    // No marker, no persisted report, no ledger match, and the sentinel is
+    // expired: normal evaluation runs and blocks, proving the expired
+    // sentinel no longer short-circuits the check.
+    expect(result.blocked).toBe(true);
+    expect(stderr.read()).not.toContain("PAUSED");
   });
 });

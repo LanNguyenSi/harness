@@ -34,7 +34,7 @@ import { atomicWriteFile } from "../../io/atomic-write.js";
 import { defaultReportsDir } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import type { Manifest } from "../../schema/index.js";
 import { type LoaderOptions } from "../loader.js";
-import { loadManifestOrInjected, pickString, readStdin } from "./hook-bootstrap.js";
+import { checkHookPause, loadManifestOrInjected, pickString, readStdin } from "./hook-bootstrap.js";
 
 const PACK_NAME = "understanding-before-execution";
 const RUNTIME_TAG = "codex";
@@ -48,6 +48,10 @@ export interface PackHookCodexStopOptions extends LoaderOptions {
   manifest?: Manifest;
   /** Test-injectable clock; defaults to new Date(). */
   now?: Date;
+  /** Test-injected generatedDir for the pause-sentinel check; bypasses
+   *  path resolution when supplied (mirrors `hook-codex-pre-tool-use.ts`
+   *  / `hook-codex-post-tool-use.ts`). */
+  generatedDir?: string;
 }
 
 export interface ParsedReport {
@@ -318,6 +322,24 @@ export async function runPackHookCodexStopCli(
       stderr,
     );
   }
+  // Pause sentinel (task 1432e053, parity with pre-tool-use / post-tool-use /
+  // user-prompt-submit), honoured BEFORE stdin JSON parsing (and before
+  // manifest load), so an active `harness pause` is honoured and announced
+  // even when the stdin payload cannot be parsed at all. This deliberately
+  // diverges from `hook-codex-pre-tool-use.ts`, which parses stdin first
+  // and checks the pause afterward: pre-tool-use's malformed-JSON path
+  // still needs to run (it emits a diagnostic and falls through to allow),
+  // while here checking the pause first means an unparsable payload during
+  // an active pause never reaches the parse step at all, so the
+  // malformed-JSON diagnostic below is intentionally not emitted in that
+  // case.
+  if (checkHookPause("codex-stop", stderr, opts, opts.generatedDir, opts.now).paused) {
+    return allowResult(
+      "harness pack hook codex-stop: harness paused, skipping capture.",
+      stderr,
+    );
+  }
+
   let envelope: StopEnvelope = {};
   try {
     envelope = JSON.parse(raw.trim() || "{}") as StopEnvelope;
