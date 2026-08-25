@@ -869,7 +869,12 @@ function buildHooks(
   // #80 + #81); 0.4.0 supersedes it. The PreToolUse blocker below is
   // the harness CLI itself, not an npm-backed bin, so it does not carry
   // a floor here.
-  const UG_MIN_VERSION = "0.4.0";
+  // 0.5.0 raises the floor again: the UserPromptSubmit hook now carries an
+  // UNDERSTANDING_GATE_PAUSE_FILE prefix, and only 0.5.0 and later read that
+  // variable. On an older gate the prefix is set but ignored, so the pause
+  // wiring is silently inert; the floor makes `harness doctor` say so instead
+  // of leaving the operator to discover it.
+  const UG_MIN_VERSION = "0.5.0";
   const UG_VERSION_COMMAND: [string, string] = [
     "understanding-gate",
     "--version",
