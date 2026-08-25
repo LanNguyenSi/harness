@@ -174,3 +174,46 @@ describe("loadManifestOrInjected", () => {
     ).toThrow();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Pin: every Codex hook honours the pause sentinel (task 1432e053)
+// ---------------------------------------------------------------------------
+//
+// Source-grep rather than behavioral, deliberately: the per-hook behavioral
+// pause tests already live alongside each hook's own test file (e.g.
+// pack-hook-codex-stop.test.ts, pack-hook-codex-user-prompt-submit.test.ts,
+// pack-hook-codex-pre-tool-use.test.ts). This test's job is narrower and
+// purely textual: it pins that each file imports `checkHookPause` from
+// hook-bootstrap.js and contains a `checkHookPause(` call site somewhere in
+// its source. It does not pin that the call is reachable, correctly wired
+// into the hook's control flow, or actually honoured at runtime, that
+// coverage is what the behavioral tests in the per-hook files are for; a
+// call site could in principle sit in dead code and still satisfy this
+// pin.
+describe("codex hooks import checkHookPause (parity pin, task 1432e053)", () => {
+  const CODEX_HOOK_FILES = [
+    "hook-codex-pre-tool-use.ts",
+    "hook-codex-post-tool-use.ts",
+    "hook-codex-stop.ts",
+    "hook-codex-user-prompt-submit.ts",
+  ];
+
+  it.each(CODEX_HOOK_FILES)("%s imports checkHookPause from hook-bootstrap.js", (filename) => {
+    const src = fs.readFileSync(
+      new URL(`../../src/cli/pack/${filename}`, import.meta.url),
+      "utf8",
+    );
+    // Matches every `import { ..., checkHookPause, ... } from
+    // "./hook-bootstrap.js"` statement in the file, not just the first,
+    // a second, separate import statement from the same specifier would
+    // otherwise hide behind the first match and still pass. Union the
+    // named imports across all matches.
+    const importBlocks = [...src.matchAll(/import\s*\{([^}]*)\}\s*from\s*["']\.\/hook-bootstrap\.js["']/g)];
+    expect(importBlocks.length, `${filename}: no import from ./hook-bootstrap.js found`).toBeGreaterThan(0);
+    const names = importBlocks.flatMap((m) => (m[1] ?? "").split(",").map((s) => s.trim()));
+    expect(names).toContain("checkHookPause");
+    // The import alone is not enough: pin that the hook actually calls
+    // checkHookPause somewhere in its body, not merely imports it.
+    expect(src, `${filename}: imports checkHookPause but never calls it`).toMatch(/checkHookPause\(/);
+  });
+});

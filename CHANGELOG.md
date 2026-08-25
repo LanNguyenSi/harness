@@ -9,6 +9,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Codex adapter pause parity: `harness pack hook codex-user-prompt-submit`
+  and `harness pack hook codex-stop` now honour an active pause sentinel,
+  and the UserPromptSubmit notification-turn heuristic is fail-open**
+  (tasks `63fefe3a` and `1432e053`). Unlike every other pack hook, these
+  two never called `checkHookPause`: an active, unexpired `harness pause`
+  silenced every PreToolUse/PostToolUse gate but kept the full
+  Understanding Gate instruction block injecting and kept persisting
+  Understanding Report captures under `.understanding-gate/reports/`
+  during a paused window. Both hooks now check the sentinel first, before
+  manifest load, the same ordering as the other Codex hooks; all four
+  `hook-codex-*.ts` files import `checkHookPause`, the module header of
+  `src/cli/pack/hook-bootstrap.ts` lists no "no pause check" exception any
+  more, and a source-grep test pins that the exception list cannot grow
+  back. Second change in the UserPromptSubmit hook: a first cut suppressed
+  injection whenever the stdin envelope carried no `prompt` field, on the
+  assumption that a missing `prompt` means a notification turn. An advisor
+  review found this unverified against a real Codex payload (the generated
+  `config.toml` header documents the wire shape as
+  `{ session_id?, tool_name?, raw_input?, event? }`, with no `prompt`
+  field, and every suppression test supplied `prompt` itself), so a real
+  envelope without that field would have gone permanently, silently dark.
+  `hasRealUserPrompt` therefore fails OPEN to inject: it only suppresses
+  when a recognised prompt-carrying field (`prompt`, `text`, `input`,
+  `message`, `user_prompt`, `user_input`) is positively present and empty;
+  a missing field, unparsable stdin, or an unrecognised envelope shape all
+  inject, as before. Scope note: the incident task `63fefe3a` started from
+  (observed repeatedly in internal dogfooding) was reported against the
+  Claude Code adapter, whose hooks live in the separate
+  `@lannguyensi/understanding-gate` npm package and were fixed there in
+  its 0.5.0. This entry is Codex-adapter parity only and does not claim to
+  fix the Claude-side behaviour. **Open risk, unchanged:** the alias field
+  names beyond `prompt` are a reasoned guess, not verified against real
+  Codex traffic; that suppression path may in practice never fire.
+- **Fix round on the above (task `1432e053`): `hasRealUserPrompt` now
+  decides across the entire alias set, not just the first alias in list
+  order.** The previous cut returned as soon as it hit the first
+  alias present with a string value, so an envelope carrying an empty
+  `prompt` alongside a non-empty `text` (`{"prompt":"","text":"real
+  operator text"}`) suppressed injection even though real operator text
+  was present under a later alias. It now inspects every recognised
+  alias, injects if any is non-empty after trimming, and only suppresses
+  when at least one alias is present and every present string-valued
+  alias is empty.
 - **`harness doctor` now probes the `min_version` floor on
   policy-pack-EXPANDED hooks, not just `manifest.hooks[]`** (task
   `ab634898`). This gap predates 0.47.0: `checkHooks` walked

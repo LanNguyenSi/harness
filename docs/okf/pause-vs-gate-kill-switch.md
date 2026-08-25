@@ -3,7 +3,7 @@ type: runbook
 title: Kill switches — pause vs gate disable
 description: harness has two distinct operator kill switches — `harness pause` (sentinel file, silences ALL hooks temporarily, operator-only enforced in code) vs `harness gate disable` (surgically removes matching hook groups from settings.json with a reversible snapshot); when to use which, exact flags, restore paths, and trust caveats.
 tags: [runbook, pause, gate-disable, kill-switch, operator]
-timestamp: 2026-08-08T08:45:00Z
+timestamp: 2026-08-25T22:00:00Z
 sources:
   - src/runtime/pause-sentinel.ts
   - src/runtime/command-normalize.ts
@@ -18,6 +18,9 @@ sources:
   - src/schema/policies.ts
   - src/runtime/intercept.ts
   - src/cli/validate/checks.ts
+  - src/cli/pack/hook-bootstrap.ts
+  - src/cli/pack/hook-codex-user-prompt-submit.ts
+  - src/cli/pack/hook-codex-stop.ts
   - docs/for-humans.md
   - CHANGELOG.md
 ---
@@ -37,7 +40,9 @@ harness has TWO separate kill-switch mechanisms. Do not conflate them: `pause` i
 
 ## Mechanism 1: `harness pause` / `harness resume` (sentinel)
 
-**What it is.** One JSON file at `<generatedDir>/.harness-paused` (`SENTINEL_BASENAME` in `src/runtime/pause-sentinel.ts:37`). `generatedDir` is `harness.generated/` next to the manifest in use, or `<homeDir>/harness.generated` with an override (`src/io/generated-dir.ts`). While the sentinel exists and is unexpired, EVERY PreToolUse/PostToolUse hook calls `maybeAnnouncePause()` (`src/runtime/pause-sentinel.ts:164`), emits one stderr line (`harness <hook>: PAUSED since Xm ago (reason: ...); auto-resumes in Ym. Run \`harness resume\` to re-enable.`) and short-circuits to allow without evaluating gate logic. On the first hook fire AFTER expiry the sentinel is silently deleted (auto-resume) and gating resumes.
+**What it is.** One JSON file at `<generatedDir>/.harness-paused` (`SENTINEL_BASENAME` in `src/runtime/pause-sentinel.ts:37`). `generatedDir` is `harness.generated/` next to the manifest in use, or `<homeDir>/harness.generated` with an override (`src/io/generated-dir.ts`). While the sentinel exists and is unexpired, EVERY PreToolUse/PostToolUse hook, plus the Codex `UserPromptSubmit` injector and the Codex `Stop` capture hook, calls `maybeAnnouncePause()` / `checkHookPause()` (`src/runtime/pause-sentinel.ts:164`), emits one stderr line (`harness <hook>: PAUSED since Xm ago (reason: ...); auto-resumes in Ym. Run \`harness resume\` to re-enable.`) and short-circuits to allow without evaluating gate logic. On the first hook fire AFTER expiry the sentinel is silently deleted (auto-resume) and gating resumes.
+
+**History note: closed 2026-08-25 (tasks `63fefe3a`, `1432e053`).** The Codex `UserPromptSubmit` injector and the Codex `Stop` capture now both honour the sentinel; earlier they did not, so an active pause silenced every gate except these two. Both now call `checkHookPause` first, same ordering as `hook-pre-tool-use.ts`. All four `hook-codex-*.ts` files import `checkHookPause`, pinned by a source-grep test. Measurement and dogfood detail: CHANGELOG.md, `63fefe3a` and `1432e053` entries.
 
 **Commands** (registered in `src/cli/index.ts:2988-3087`):
 - `harness pause --for <duration>` — e.g. `5m`, `1h`, `PT30S`; default 15 minutes (`DEFAULT_PAUSE_SECONDS = 15 * 60`, `src/cli/pause/index.ts:36`).
