@@ -8,10 +8,16 @@
 // instruction block on stdout that Codex will prepend to its system
 // prompt before the agent runs.
 //
-// Wire format on stdin (envelope harness publishes; Codex CLI
-// integration wraps its native event into this shape):
-//
-//   { session_id?: string, prompt?: string }
+// Wire format on stdin: UNVERIFIED against a real Codex payload. This
+// module does not trust a single field name; it alias-tolerates any of
+// `REAL_PROMPT_FIELD_ALIASES` below (`prompt`, `text`, `input`,
+// `message`, `user_prompt`, `user_input`) as the carrier of the
+// operator's actual prompt text, the same way the sibling Codex hooks
+// alias-tolerate `tool`/`tool_name` and `raw_input`/`tool_input`. The
+// generated `config.toml` header for other Codex hooks documents the
+// wire shape as `{ session_id?, tool_name?, raw_input?, event? }`, with
+// no prompt field at all, so an envelope carrying none of the known
+// aliases is expected, not an error.
 //
 // stdout: a plain-text instruction block (no JSON wrapper) that Codex
 // concatenates into `additional_instructions`. The block is identical
@@ -131,20 +137,27 @@ const REAL_PROMPT_FIELD_ALIASES = [
 /**
  * True when the UserPromptSubmit envelope should trigger injection.
  *
- * FAIL-OPEN TO INJECT: this only returns `false` (suppress) when a
- * recognized prompt-carrying field (see `REAL_PROMPT_FIELD_ALIASES`) is
- * POSITIVELY present on the parsed envelope and is empty or
- * whitespace-only — a real signal that the sender explicitly marked
- * this turn as carrying no operator text. Everything else defaults to
- * `true` (inject, i.e. the pre-task-63fefe3a behavior):
+ * FAIL-OPEN TO INJECT: this only returns `false` (suppress) when at
+ * least one recognized prompt-carrying field (see
+ * `REAL_PROMPT_FIELD_ALIASES`) is POSITIVELY present on the parsed
+ * envelope with a string value, and every string-valued alias present
+ * is empty or whitespace-only, a real signal that the sender
+ * explicitly marked this turn as carrying no operator text. The
+ * decision considers every alias present, not just the first match in
+ * list order: a single non-empty string alias anywhere in the envelope
+ * (for example `{"prompt":"","text":"real operator text"}`) is real
+ * user input and must inject, even when an earlier-listed alias on the
+ * same envelope is empty. Everything else defaults to `true` (inject,
+ * i.e. the pre-task-63fefe3a behavior):
  *
  *   - unparsable / non-JSON stdin,
  *   - a parsed value that is not an object,
- *   - an object that carries none of the known aliases at all (this is
- *     the documented `{ session_id?, tool_name?, raw_input?, event? }`
- *     shape from the generated config.toml header — no prompt field by
- *     design, not evidence of a notification turn),
- *   - an alias present but holding a non-string value.
+ *   - an object that carries none of the known aliases as a string
+ *     value at all (this is the documented `{ session_id?, tool_name?,
+ *     raw_input?, event? }` shape from the generated config.toml
+ *     header, no prompt field by design, not evidence of a
+ *     notification turn, and a non-string alias value is ignored the
+ *     same way),
  *
  * An envelope harness cannot parse, or cannot recognize, is not
  * evidence that there was no real user input; it is evidence this
@@ -161,13 +174,14 @@ export function hasRealUserPrompt(raw: string): boolean {
   }
   if (typeof parsed !== "object" || parsed === null) return true;
   const obj = parsed as Record<string, unknown>;
+  let sawStringAlias = false;
   for (const key of REAL_PROMPT_FIELD_ALIASES) {
     const value = obj[key];
-    if (typeof value === "string") {
-      return value.trim().length > 0;
-    }
+    if (typeof value !== "string") continue;
+    sawStringAlias = true;
+    if (value.trim().length > 0) return true;
   }
-  return true;
+  return !sawStringAlias;
 }
 
 export async function runPackHookCodexUserPromptSubmitCli(

@@ -223,6 +223,51 @@ describe("pack hook codex-user-prompt-submit injector", () => {
         expect(stdout.read()).toBe("");
       },
     );
+
+    // Fix round (task 1432e053 review): the decision must consider every
+    // alias present on the envelope, not just the first alias in list
+    // order. `prompt` sorts before `text` in REAL_PROMPT_FIELD_ALIASES; a
+    // first-match short-circuit would return on the empty `prompt` and
+    // never look at the real text carried under `text`.
+    it("injects when an earlier-listed alias is empty but a later-listed alias carries real text", async () => {
+      const stdout = bufferStream();
+      const result = await runPackHookCodexUserPromptSubmitCli({
+        manifest: manifestWithPack(),
+        stdin: readableFromString(
+          JSON.stringify({ session_id: "sess-1", prompt: "", text: "real operator text" }),
+        ),
+        stdout: stdout.stream,
+        stderr: bufferStream().stream,
+      });
+      expect(result.emitted).toBe(true);
+      expect(stdout.read()).toContain("Understanding Gate");
+    });
+
+    it("suppresses when every string-valued alias present on the envelope is empty", async () => {
+      const stdout = bufferStream();
+      const result = await runPackHookCodexUserPromptSubmitCli({
+        manifest: manifestWithPack(),
+        stdin: readableFromString(JSON.stringify({ session_id: "sess-1", prompt: "", text: "" })),
+        stdout: stdout.stream,
+        stderr: bufferStream().stream,
+      });
+      expect(result.emitted).toBe(false);
+      expect(stdout.read()).toBe("");
+    });
+
+    it("ignores a non-string alias value and still injects on a real string alias", async () => {
+      const stdout = bufferStream();
+      const result = await runPackHookCodexUserPromptSubmitCli({
+        manifest: manifestWithPack(),
+        stdin: readableFromString(
+          JSON.stringify({ session_id: "sess-1", prompt: 123, text: "real" }),
+        ),
+        stdout: stdout.stream,
+        stderr: bufferStream().stream,
+      });
+      expect(result.emitted).toBe(true);
+      expect(stdout.read()).toContain("Understanding Gate");
+    });
   });
 
   describe("pause sentinel", () => {

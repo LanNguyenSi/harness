@@ -322,6 +322,20 @@ export async function runPackHookCodexStopCli(
       stderr,
     );
   }
+  // Pause sentinel (task 1432e053, parity with pre-tool-use / post-tool-use /
+  // user-prompt-submit), honoured BEFORE stdin JSON parsing (and before
+  // manifest load), so an active `harness pause` is honoured and announced
+  // even when the stdin payload cannot be parsed at all. `hook-codex-
+  // pre-tool-use.ts` follows the same ordering: emit the diagnostic and
+  // fall through to the pause check rather than returning early on
+  // malformed input.
+  if (checkHookPause("codex-stop", stderr, opts, opts.generatedDir, opts.now).paused) {
+    return allowResult(
+      "harness pack hook codex-stop: harness paused, skipping capture.",
+      stderr,
+    );
+  }
+
   let envelope: StopEnvelope = {};
   try {
     envelope = JSON.parse(raw.trim() || "{}") as StopEnvelope;
@@ -330,13 +344,6 @@ export async function runPackHookCodexStopCli(
       "harness pack hook codex-stop: malformed JSON on stdin, skipping capture.",
       stderr,
     );
-  }
-
-  // Pause sentinel (task 1432e053, parity with pre-tool-use / post-tool-use /
-  // user-prompt-submit) — honoured BEFORE manifest load so a broken install
-  // still respects an active `harness pause`.
-  if (checkHookPause("codex-stop", stderr, opts, opts.generatedDir, opts.now).paused) {
-    return { exitCode: 0, reportPath: null, parsed: false, diagnostic: "harness paused" };
   }
 
   let manifest: Manifest;

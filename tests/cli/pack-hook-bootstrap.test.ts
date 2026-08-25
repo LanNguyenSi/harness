@@ -198,11 +198,17 @@ describe("codex hooks import checkHookPause (parity pin, task 1432e053)", () => 
       new URL(`../../src/cli/pack/${filename}`, import.meta.url),
       "utf8",
     );
-    // Matches `import { ..., checkHookPause, ... } from "./hook-bootstrap.js"`
-    // regardless of which other named imports share the specifier list.
-    const importBlock = src.match(/import\s*\{([^}]*)\}\s*from\s*["']\.\/hook-bootstrap\.js["']/);
-    expect(importBlock, `${filename}: no import from ./hook-bootstrap.js found`).not.toBeNull();
-    const names = (importBlock![1] ?? "").split(",").map((s) => s.trim());
+    // Matches every `import { ..., checkHookPause, ... } from
+    // "./hook-bootstrap.js"` statement in the file, not just the first,
+    // a second, separate import statement from the same specifier would
+    // otherwise hide behind the first match and still pass. Union the
+    // named imports across all matches.
+    const importBlocks = [...src.matchAll(/import\s*\{([^}]*)\}\s*from\s*["']\.\/hook-bootstrap\.js["']/g)];
+    expect(importBlocks.length, `${filename}: no import from ./hook-bootstrap.js found`).toBeGreaterThan(0);
+    const names = importBlocks.flatMap((m) => (m[1] ?? "").split(",").map((s) => s.trim()));
     expect(names).toContain("checkHookPause");
+    // The import alone is not enough: pin that the hook actually calls
+    // checkHookPause somewhere in its body, not merely imports it.
+    expect(src, `${filename}: imports checkHookPause but never calls it`).toMatch(/checkHookPause\(/);
   });
 });

@@ -425,6 +425,33 @@ describe("runPackHookCodexStopCli", () => {
       expect(fs.existsSync(reportsDir)).toBe(false);
     });
 
+    // Fix round (task 1432e053 review): checkHookPause must run BEFORE the
+    // stdin JSON.parse, mirroring hook-codex-pre-tool-use.ts's ordering, so
+    // an active pause is honoured and announced even when the stdin
+    // payload is unparsable garbage.
+    it("suppresses capture and emits a PAUSED notice even when stdin is malformed JSON", async () => {
+      writeSentinel(generatedDir, ACTIVE_SENTINEL);
+      const reportsDir = path.join(tmp, "reports");
+      const stderr = bufferStream();
+
+      const result = await runPackHookCodexStopCli({
+        manifest: manifestWithPack(),
+        stdin: readableFromString("{not-json"),
+        stderr: stderr.stream,
+        reportsDir,
+        generatedDir,
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.parsed).toBe(false);
+      expect(result.reportPath).toBeNull();
+      expect(stderr.read()).toContain("PAUSED");
+      expect(stderr.read()).toContain(
+        "harness pack hook codex-stop: harness paused, skipping capture.",
+      );
+      expect(fs.existsSync(reportsDir)).toBe(false);
+    });
+
     it("still captures when no sentinel is present (unchanged behavior)", async () => {
       const reportsDir = path.join(tmp, "reports");
       const stderr = bufferStream();

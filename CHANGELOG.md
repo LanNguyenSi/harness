@@ -35,14 +35,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `message`, `user_prompt`, `user_input`) is positively present and empty;
   a missing field, unparsable stdin, or an unrecognised envelope shape all
   inject, as before. Scope note: the incident task `63fefe3a` started from
-  (a six-hour pause window that still produced three Understanding Reports,
-  the same failure class seen across batches 20, 25 and 26) was reported
-  against the Claude Code adapter, whose hooks live in the separate
+  (observed repeatedly in internal dogfooding) was reported against the
+  Claude Code adapter, whose hooks live in the separate
   `@lannguyensi/understanding-gate` npm package and were fixed there in
   its 0.5.0. This entry is Codex-adapter parity only and does not claim to
   fix the Claude-side behaviour. **Open risk, unchanged:** the alias field
   names beyond `prompt` are a reasoned guess, not verified against real
   Codex traffic; that suppression path may in practice never fire.
+- **Fix round on the above (task `1432e053`): `hasRealUserPrompt` now
+  decides across the entire alias set, not just the first alias in list
+  order.** The previous cut returned as soon as it hit the first
+  alias present with a string value, so an envelope carrying an empty
+  `prompt` alongside a non-empty `text` (`{"prompt":"","text":"real
+  operator text"}`) suppressed injection even though real operator text
+  was present under a later alias. It now inspects every recognised
+  alias, injects if any is non-empty after trimming, and only suppresses
+  when at least one alias is present and every present string-valued
+  alias is empty.
 
 ## [0.47.0] - 2026-08-25
 
