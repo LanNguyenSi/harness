@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`harness doctor` now probes the `min_version` floor on
+  policy-pack-EXPANDED hooks, not just `manifest.hooks[]`** (task
+  `ab634898`). 0.47.0's claim that raising `understanding-before-execution`'s
+  `min_version` to 0.5.0 "turns [a stale gate] into a `harness doctor`
+  finding" only holds from this version onward: `checkHooks` walked
+  `manifest.hooks[]` only, so a hook a builtin pack contributes at apply
+  time (understanding-before-execution's Claude `UserPromptSubmit` and
+  `Stop` hooks, both floored at understanding-gate 0.5.0) never got its
+  declared `min_version` + `version_command` probed, and a below-floor
+  install produced a clean doctor report. A new "Policy-pack hooks"
+  section runs the same version probe already used for manifest-declared
+  hooks against `expandPolicyPacks`'s output, deduped per distinct
+  `version_command` so a probe used by more than one hook spawns once.
+  Warn-not-error, matching the manifest-hook and pack-level floors; exit
+  code is unaffected.
+
 ## [0.47.0] - 2026-08-25
 
 ### Added

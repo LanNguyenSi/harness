@@ -1061,6 +1061,96 @@ policy_packs:
   });
 });
 
+// Hook-level min_version floor on policy-pack-EXPANDED hooks (task
+// ab634898). Distinct from the pack-LEVEL `policy_packs[].min_version`
+// floor tested just above: `expandPolicyPacks` produces the hooks
+// Claude Code actually runs, but `manifest.hooks[]` never includes
+// them, so without `policyPackHookVersions` a below-floor
+// understanding-gate install went unreported. understanding-gate 0.5.0
+// is the floor understanding-before-execution declares on its
+// UserPromptSubmit + Stop hooks (both point at the same
+// `understanding-gate --version` probe).
+describe("doctor: hook-level min_version floor on policy-pack-expanded hooks (task ab634898)", () => {
+  it("flags a below-floor understanding-gate install as a warn finding with hook name, installed version, and floor", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+${SILENCE_DRIFT}policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+      versionProbe: () => "understanding-gate 0.4.11",
+    });
+    expect(report.policyPackHookVersions.length).toBeGreaterThanOrEqual(1);
+    const upsGap = report.policyPackHookVersions.find((g) =>
+      g.name.includes("user-prompt-submit"),
+    );
+    expect(upsGap).toMatchObject({
+      event: "UserPromptSubmit",
+      declaredMinVersion: "0.5.0",
+    });
+    expect(upsGap?.message).toMatch(/outdated: installed v0\.4\.11 < required 0\.5\.0/);
+    expect(report.warningCount).toBeGreaterThanOrEqual(1);
+    expect(report.errorCount).toBe(0);
+    const text = format(report);
+    expect(text).toContain("Policy-pack hooks");
+    expect(text).toContain("0.4.11");
+    expect(text).toContain("0.5.0");
+    expect(text).toContain("degraded mode");
+  });
+
+  it("stays silent (negative control) when understanding-gate is on the declared floor", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+${SILENCE_DRIFT}policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+      versionProbe: () => "understanding-gate 0.5.0",
+    });
+    expect(report.policyPackHookVersions).toHaveLength(0);
+    expect(format(report)).not.toContain("Policy-pack hooks");
+  });
+
+  it("dedupes the version probe across hooks that share one version_command", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+${SILENCE_DRIFT}policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+`,
+    });
+    let calls = 0;
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+      versionProbe: (cmd) => {
+        calls++;
+        expect(cmd).toEqual(["understanding-gate", "--version"]);
+        return "understanding-gate 0.4.11";
+      },
+    });
+    // Both the UserPromptSubmit and Stop hooks declare the identical
+    // `["understanding-gate", "--version"]` version_command; the probe
+    // must spawn it once, not once per hook.
+    expect(report.policyPackHookVersions.length).toBeGreaterThanOrEqual(2);
+    expect(calls).toBe(1);
+  });
+});
+
 describe("doctor — policy pack ux/producers drift check (task 68b9ad9c)", () => {
   // Motivation: the understanding-gate deny message is entirely driven by
   // config.ux when the operator has declared one. The init templates

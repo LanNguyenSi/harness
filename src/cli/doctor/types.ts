@@ -179,6 +179,31 @@ export interface PolicyPackUxDriftReport {
   message: string;
 }
 
+/**
+ * Doctor surface for the HOOK-level `min_version` floor on a
+ * policy-pack-EXPANDED hook (task ab634898). Distinct from
+ * `PolicyPackVersionGapReport` (the pack-level `policy_packs[].min_version`
+ * floor, a different mechanism checked by `checkPolicyPackVersions`):
+ * this covers an individual hook a builtin pack contributes, e.g.
+ * understanding-before-execution's UserPromptSubmit/Stop hooks, each
+ * declaring its own `min_version` + `version_command`
+ * (`src/policy-packs/builtin/understanding-before-execution.ts`).
+ * `expandPolicyPacks` produces the hooks Claude Code actually runs, but
+ * `manifest.hooks[]` (what `HookEntryReport`/`checkHooks` walk) never
+ * includes them, so without this section an operator below a pack
+ * hook's floor saw a clean doctor report. Always warn, never error;
+ * mirrors the manifest-hook floor (`HookVersionReport`) and the
+ * pack-level floor. Empty array when every pack-expanded hook that
+ * declares a floor meets it (or none declare one).
+ */
+export interface PolicyPackHookVersionGapReport {
+  /** The pack-expanded hook's name, e.g. `policy-pack:understanding-before-execution:user-prompt-submit`. */
+  name: string;
+  event: string;
+  declaredMinVersion: string;
+  message: string;
+}
+
 export interface PolicyPacksSection {
   unresolved: PolicyPackUnresolved[];
   configIssues: PolicyPackConfigIssue[];
@@ -315,6 +340,15 @@ export interface DoctorReport {
    * surfaced loudly here. Errors count toward `errorCount`.
    */
   policyPacks: PolicyPacksSection;
+  /**
+   * Hook-level `min_version` floors on policy-pack-expanded hooks (task
+   * ab634898). See `PolicyPackHookVersionGapReport` for why this is
+   * separate from both `hooks[].version` (manifest-declared hooks only)
+   * and `policyPacks.versionGaps` (the pack-level floor). Always
+   * present; empty when every pack-expanded hook that declares a floor
+   * meets it.
+   */
+  policyPackHookVersions: PolicyPackHookVersionGapReport[];
   workflows: WorkflowsSectionReport;
   /** Phase 7 #6 — Risk Gate wiring health (classifiers / resolvers / `when:`). */
   riskGate: RiskGateSection;

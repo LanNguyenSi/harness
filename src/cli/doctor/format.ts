@@ -173,6 +173,26 @@ function formatHooksSection(report: DoctorReport): string[] {
   return out;
 }
 
+// Policy-pack hooks section (task ab634898): the hook-level `min_version`
+// floor on hooks a builtin policy pack contributes (understanding-gate's
+// UserPromptSubmit/Stop hooks, floored at 0.5.0, are the motivating
+// case). Distinct from the "Hooks" section above (which only walks
+// `manifest.hooks[]`, never the pack-expanded ones) and from "Policy
+// Packs" below (the pack-LEVEL `policy_packs[].min_version` floor).
+// Stays silent when there is nothing to report, same convention as
+// "Policy Packs".
+function formatPolicyPackHookVersionsSection(report: DoctorReport): string[] {
+  if (report.policyPackHookVersions.length === 0) return [];
+  const out: string[] = ["", "Policy-pack hooks"];
+  for (const gap of report.policyPackHookVersions) {
+    out.push(`  ⚠ ${gap.name}.min_version  ${gap.message}`);
+    out.push(
+      `      this pack-contributed hook runs in degraded mode below its declared min_version ${gap.declaredMinVersion}. Upgrade the package-side bin.`,
+    );
+  }
+  return out;
+}
+
 function formatPoliciesSection(report: DoctorReport): string[] {
   const out: string[] = ["", "Policies"];
   for (const p of report.policies) {
@@ -477,6 +497,7 @@ export function format(report: DoctorReport): string {
   lines.push(...formatToolsSection(report));
   lines.push(...formatMemorySection(report));
   lines.push(...formatHooksSection(report));
+  lines.push(...formatPolicyPackHookVersionsSection(report));
   lines.push(...formatPoliciesSection(report));
   lines.push(...formatPolicyPacksSection(report));
   lines.push(...formatWorkflowsSection(report));
