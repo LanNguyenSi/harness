@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-08-25
+
 ### Fixed
 
 - **Codex adapter pause parity: `harness pack hook codex-user-prompt-submit`
