@@ -31,24 +31,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- **`harness pack hook codex-user-prompt-submit` now honours an active
-  pause sentinel and no longer injects on turns without real user input**
-  (task `63fefe3a`). Two separate bugs, closed together: (1) unlike every
-  other pack hook, this UserPromptSubmit injector never called
-  `checkHookPause` — an active, unexpired `harness pause` silenced every
-  PreToolUse/PostToolUse gate but not this one, so the full Understanding
-  Gate instruction block kept injecting during a paused window; it now
-  checks the sentinel first, mirroring `hook-pre-tool-use.ts`. (2) the
-  hook ignored the stdin envelope entirely and injected on every turn,
-  including notification turns (subagent completion, a Monitor event, a
-  background-bash command finishing) that carry no `prompt` field in the
-  documented wire format `{ session_id?, prompt? }`; it now only injects
-  when `prompt` is a non-empty, non-whitespace string. Both checks run
-  before manifest load, same ordering discipline as the other gates.
-  Root-caused from a dogfood: a six-hour pause window still produced three
-  full Understanding Reports on notification turns before the operator
-  intervened (Batch 26, session `ebbcbc78`), the same failure class
-  reported across three separate batches (20, 25, 26).
+- **`harness pack hook codex-user-prompt-submit` (Codex adapter parity,
+  not the fix for the originally-reported issue — see below) now honours
+  an active pause sentinel, and its notification-turn heuristic is now
+  fail-open instead of fail-closed** (task `63fefe3a`). Two changes: (1)
+  unlike every other pack hook, this UserPromptSubmit injector never
+  called `checkHookPause` — an active, unexpired `harness pause` silenced
+  every PreToolUse/PostToolUse gate but not this one, so the full
+  Understanding Gate instruction block kept injecting during a paused
+  window; it now checks the sentinel first, mirroring
+  `hook-pre-tool-use.ts`. (2) a same-task first cut had the hook suppress
+  injection whenever the stdin envelope carried no `prompt` field, on the
+  assumption that a missing `prompt` means a notification turn (subagent
+  completion, a Monitor event, a background-bash command finishing). An
+  advisor review caught that this was unverified against a real Codex
+  payload — the generated `config.toml` header documents the Codex wire
+  shape as `{ session_id?, tool_name?, raw_input?, event? }`, with no
+  `prompt` field at all, and every test exercising the suppression used a
+  synthetic fixture that supplied `prompt` itself, so a real envelope
+  without that field would have gone permanently, silently dark. Fixed by
+  making `hasRealUserPrompt` fail OPEN to inject: it only suppresses when
+  a recognized prompt-carrying field (several aliases now, not just
+  `prompt`) is positively present and empty; a missing field, unparsable
+  stdin, or an unrecognized envelope shape all inject, same as before this
+  task. Both checks run before manifest load, same ordering discipline as
+  the other gates. Note on scope: the incident this task started from (a
+  six-hour pause window that still produced three full Understanding
+  Reports, Batch 26, session `ebbcbc78`, the same failure class reported
+  across three separate batches — 20, 25, 26) was reported against the
+  Claude Code adapter, whose UserPromptSubmit hook lives in the separate
+  `@lannguyensi/understanding-gate` npm package repo, not here. Item (1)
+  above (the pause-sentinel gap) is a real, independently-confirmed bug in
+  this repo's Codex hook and is fixed. Item (2) is Codex-adapter parity
+  work only — it does not touch, and does not claim to fix, the
+  originally-reported Claude-side behavior; any fix for that belongs in
+  the npm package repo.
 - **`read-only-bash` recognises a path-qualified git binary and skips git
   global options before the subcommand, while `-c` stays fail-closed**
   (task `5b5d1022`, #452). Two measured false positives (a path-qualified

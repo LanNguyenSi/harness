@@ -30,14 +30,27 @@
 //      `harness pause` must silence this injector exactly like it silences
 //      the PreToolUse/PostToolUse gates. Checked BEFORE manifest load so a
 //      broken install still respects an active pause.
-//   2. No real user input (task 63fefe3a): the envelope's `prompt` field is
-//      the only carrier of actual operator text in this wire format. A
-//      turn with no `prompt` (or an empty/whitespace-only one) is a
-//      notification turn — subagent completion, a Monitor event, a
-//      background-bash finishing — not a new instruction, so injecting the
-//      full instruction block on it is pure noise (and, per the pack's own
+//   2. No real user input (task 63fefe3a, corrected same task after an
+//      advisor review caught the first cut fail-closed): a notification
+//      turn — subagent completion, a Monitor event, a background-bash
+//      finishing — carries no operator text, and injecting the full
+//      instruction block on it is pure noise (and, per the pack's own
 //      contract, prompts the agent to write a fresh Understanding Report
-//      against nothing).
+//      against nothing). BUT the module's own documented envelope
+//      (`{ session_id?, prompt? }` above) is unverified against a real
+//      Codex payload: the generated `config.toml` header for every other
+//      Codex hook documents the wire shape as `{ session_id?, tool_name?,
+//      raw_input?, event? }` — no `prompt` field at all — and the sibling
+//      hooks (`hook-codex-pre-tool-use.ts` etc.) never trust a single
+//      field name, they alias-tolerate (`tool`/`tool_name`,
+//      `raw_input`/`tool_input`) via `pickString`. So this check is
+//      FAIL-OPEN-TO-INJECT: it only suppresses when a recognized
+//      prompt-carrying field is POSITIVELY present and empty. A missing
+//      field, an unrecognized envelope shape, or unparsable stdin is not
+//      evidence of "no user input" — it is evidence the real Codex wire
+//      format is not what this module assumed, and the safe default in
+//      that case is the pre-task-63fefe3a behavior: inject. See
+//      `hasRealUserPrompt` below.
 
 import { type Mode, resolveMode } from "../../policy-packs/builtin/understanding-before-execution.js";
 import type { Manifest } from "../../schema/index.js";
@@ -96,26 +109,65 @@ export function buildInstructionBlock(mode: Mode): string {
 }
 
 /**
- * True when the UserPromptSubmit envelope carries actual operator text.
- * The wire format is `{ session_id?: string, prompt?: string }` (see
- * module header); `prompt` is the only field that can hold real user
- * input, so a turn with a missing, non-string, or whitespace-only
- * `prompt` is a notification turn (subagent completion, Monitor event,
- * background-bash completion), not a new instruction, and must not
- * trigger injection. Malformed JSON degrades to "no real input" for the
- * same reason the rest of this hook degrades to allow/no-op on error: an
- * envelope harness cannot parse is not evidence of a real prompt.
+ * Field names that could plausibly carry the operator's actual prompt
+ * text on a Codex UserPromptSubmit envelope. `prompt` is this module's
+ * own documented guess; the others are tolerated the same way the
+ * sibling Codex hooks tolerate `tool`/`tool_name` and
+ * `raw_input`/`tool_input` — a real integration may use a different
+ * name than the one this package assumed. None of this is confirmed
+ * against a real Codex payload (see module header); the alias list only
+ * WIDENS which fields can prove a real prompt, it never narrows what
+ * counts as "unknown, so inject".
+ */
+const REAL_PROMPT_FIELD_ALIASES = [
+  "prompt",
+  "text",
+  "input",
+  "message",
+  "user_prompt",
+  "user_input",
+] as const;
+
+/**
+ * True when the UserPromptSubmit envelope should trigger injection.
+ *
+ * FAIL-OPEN TO INJECT: this only returns `false` (suppress) when a
+ * recognized prompt-carrying field (see `REAL_PROMPT_FIELD_ALIASES`) is
+ * POSITIVELY present on the parsed envelope and is empty or
+ * whitespace-only — a real signal that the sender explicitly marked
+ * this turn as carrying no operator text. Everything else defaults to
+ * `true` (inject, i.e. the pre-task-63fefe3a behavior):
+ *
+ *   - unparsable / non-JSON stdin,
+ *   - a parsed value that is not an object,
+ *   - an object that carries none of the known aliases at all (this is
+ *     the documented `{ session_id?, tool_name?, raw_input?, event? }`
+ *     shape from the generated config.toml header — no prompt field by
+ *     design, not evidence of a notification turn),
+ *   - an alias present but holding a non-string value.
+ *
+ * An envelope harness cannot parse, or cannot recognize, is not
+ * evidence that there was no real user input; it is evidence this
+ * module's assumption about the wire format was wrong, and the correct
+ * failure direction for a governance-adjacent injector is to keep
+ * injecting, not to go silently dark.
  */
 export function hasRealUserPrompt(raw: string): boolean {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return false;
+    return true;
   }
-  if (typeof parsed !== "object" || parsed === null) return false;
-  const prompt = (parsed as Record<string, unknown>).prompt;
-  return typeof prompt === "string" && prompt.trim().length > 0;
+  if (typeof parsed !== "object" || parsed === null) return true;
+  const obj = parsed as Record<string, unknown>;
+  for (const key of REAL_PROMPT_FIELD_ALIASES) {
+    const value = obj[key];
+    if (typeof value === "string") {
+      return value.trim().length > 0;
+    }
+  }
+  return true;
 }
 
 export async function runPackHookCodexUserPromptSubmitCli(

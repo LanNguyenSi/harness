@@ -102,24 +102,66 @@ describe("pack hook codex-user-prompt-submit injector", () => {
     expect(a).toContain("mode: grill_me");
   });
 
-  describe("no real user input (notification turns)", () => {
-    it("suppresses injection when the envelope carries no prompt field (task-completion / monitor notification)", async () => {
+  describe("no real user input (fail-open to inject, task 63fefe3a fix)", () => {
+    it("REGRESSION: an envelope with only the documented config.toml fields (no prompt field at all) still injects", async () => {
+      // This is the exact regression an advisor review caught: the
+      // generated config.toml header documents the wire shape as
+      // { session_id?, tool_name?, raw_input?, event? } — no `prompt`
+      // field. A hook that suppressed on "no prompt field" would go
+      // permanently silent against the real envelope while every test
+      // using a synthetic `{"prompt": ...}` fixture stayed green.
       const stdout = bufferStream();
-      const stderr = bufferStream();
       const result = await runPackHookCodexUserPromptSubmitCli({
         manifest: manifestWithPack(),
-        // No `prompt` field at all: this is the shape a notification turn
-        // (subagent completion, Monitor event, background-bash completion)
-        // carries, per the documented envelope `{ session_id?, prompt? }`.
-        stdin: readableFromString(JSON.stringify({ session_id: "sess-1" })),
+        stdin: readableFromString(
+          JSON.stringify({
+            session_id: "sess-1",
+            tool_name: "Bash",
+            raw_input: { command: "echo hi" },
+            event: "PreToolUse",
+          }),
+        ),
         stdout: stdout.stream,
-        stderr: stderr.stream,
+        stderr: bufferStream().stream,
       });
-      expect(result.emitted).toBe(false);
-      expect(stdout.read()).toBe("");
+      expect(result.emitted).toBe(true);
+      expect(stdout.read()).toContain("Understanding Gate");
     });
 
-    it("suppresses injection when prompt is an empty/whitespace-only string", async () => {
+    it("injects on malformed (non-JSON) stdin", async () => {
+      const stdout = bufferStream();
+      const result = await runPackHookCodexUserPromptSubmitCli({
+        manifest: manifestWithPack(),
+        stdin: readableFromString("not json at all"),
+        stdout: stdout.stream,
+        stderr: bufferStream().stream,
+      });
+      expect(result.emitted).toBe(true);
+    });
+
+    it("injects on empty stdin", async () => {
+      const stdout = bufferStream();
+      const result = await runPackHookCodexUserPromptSubmitCli({
+        manifest: manifestWithPack(),
+        stdin: readableFromString(""),
+        stdout: stdout.stream,
+        stderr: bufferStream().stream,
+      });
+      expect(result.emitted).toBe(true);
+    });
+
+    it("injects on an envelope with no recognizable fields at all", async () => {
+      const stdout = bufferStream();
+      const result = await runPackHookCodexUserPromptSubmitCli({
+        manifest: manifestWithPack(),
+        stdin: readableFromString(JSON.stringify({ foo: "bar" })),
+        stdout: stdout.stream,
+        stderr: bufferStream().stream,
+      });
+      expect(result.emitted).toBe(true);
+    });
+
+    it("suppresses injection when prompt is POSITIVELY present and empty/whitespace-only (a real signal of a notification turn)", async () => {
       const stdout = bufferStream();
       const result = await runPackHookCodexUserPromptSubmitCli({
         manifest: manifestWithPack(),
@@ -142,6 +184,45 @@ describe("pack hook codex-user-prompt-submit injector", () => {
       expect(result.emitted).toBe(true);
       expect(stdout.read()).toContain("Understanding Gate");
     });
+
+    it.each(["text", "input", "message", "user_prompt", "user_input"])(
+      "still injects on a real operator prompt carried under the alias field `%s`",
+      async (alias) => {
+        const stdout = bufferStream();
+        const result = await runPackHookCodexUserPromptSubmitCli({
+          manifest: manifestWithPack(),
+          stdin: readableFromString(
+            JSON.stringify({ session_id: "sess-1", [alias]: "please fix the flaky test" }),
+          ),
+          stdout: stdout.stream,
+          stderr: bufferStream().stream,
+        });
+        expect(result.emitted).toBe(true);
+        expect(stdout.read()).toContain("Understanding Gate");
+      },
+    );
+
+    // Discriminating probe for alias support: a fail-open default means
+    // "still injects on alias `%s`" (above) passes even if that alias were
+    // dropped from the recognized list entirely, because an unrecognized
+    // field falls through to "inject anyway". Only the SUPPRESS path
+    // (an alias present and positively empty) actually proves the alias is
+    // recognized, since dropping the alias would flip that case from
+    // "suppress" to "inject" (fail-open) — an observable difference.
+    it.each(["prompt", "text", "input", "message", "user_prompt", "user_input"])(
+      "suppresses injection when the alias field `%s` is positively present and empty (proves the alias is recognized)",
+      async (alias) => {
+        const stdout = bufferStream();
+        const result = await runPackHookCodexUserPromptSubmitCli({
+          manifest: manifestWithPack(),
+          stdin: readableFromString(JSON.stringify({ session_id: "sess-1", [alias]: "" })),
+          stdout: stdout.stream,
+          stderr: bufferStream().stream,
+        });
+        expect(result.emitted).toBe(false);
+        expect(stdout.read()).toBe("");
+      },
+    );
   });
 
   describe("pause sentinel", () => {
