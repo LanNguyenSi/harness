@@ -182,7 +182,7 @@ describe("loadManifestOrInjected", () => {
 // Source-grep rather than behavioral, deliberately: the per-hook behavioral
 // pause tests already live alongside each hook's own test file (e.g.
 // pack-hook-codex-stop.test.ts, pack-hook-codex-user-prompt-submit.test.ts).
-// This test's job is narrower — pin that the module header's "no pause
+// This test's job is narrower, pin that the module header's "no pause
 // check" exception list can never silently grow back to include one of the
 // four hook-codex-*.ts files without a test failing here first.
 describe("codex hooks import checkHookPause (parity pin, task 1432e053)", () => {

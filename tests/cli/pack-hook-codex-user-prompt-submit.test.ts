@@ -106,7 +106,7 @@ describe("pack hook codex-user-prompt-submit injector", () => {
     it("REGRESSION: an envelope with only the documented config.toml fields (no prompt field at all) still injects", async () => {
       // This is the exact regression an advisor review caught: the
       // generated config.toml header documents the wire shape as
-      // { session_id?, tool_name?, raw_input?, event? } — no `prompt`
+      // { session_id?, tool_name?, raw_input?, event? }, no `prompt`
       // field. A hook that suppressed on "no prompt field" would go
       // permanently silent against the real envelope while every test
       // using a synthetic `{"prompt": ...}` fixture stayed green.
@@ -208,7 +208,7 @@ describe("pack hook codex-user-prompt-submit injector", () => {
     // field falls through to "inject anyway". Only the SUPPRESS path
     // (an alias present and positively empty) actually proves the alias is
     // recognized, since dropping the alias would flip that case from
-    // "suppress" to "inject" (fail-open) — an observable difference.
+    // "suppress" to "inject" (fail-open), an observable difference.
     it.each(["prompt", "text", "input", "message", "user_prompt", "user_input"])(
       "suppresses injection when the alias field `%s` is positively present and empty (proves the alias is recognized)",
       async (alias) => {
@@ -276,7 +276,7 @@ describe("pack hook codex-user-prompt-submit injector", () => {
 
     const ACTIVE_SENTINEL: PauseSentinel = {
       pausedAt: new Date().toISOString(),
-      expiresAt: null, // indefinite — never auto-expires during test
+      expiresAt: null, // indefinite, never auto-expires during test
       reason: "operator recovery",
       pausedBy: "test",
     };

@@ -28,7 +28,7 @@
 //   - hook-stay-in-scope.ts: loads no manifest.
 //
 // hook-codex-stop.ts and hook-codex-user-prompt-submit.ts now use all of
-// the above, including the pause check (tasks 63fefe3a, 1432e053) — they
+// the above, including the pause check (tasks 63fefe3a, 1432e053), they
 // used to be listed here as "no pause check" exceptions.
 //
 // Per-hook decision logic, error envelopes, and early-return shapes stay local

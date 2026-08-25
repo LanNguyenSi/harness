@@ -32,28 +32,28 @@
 //
 //   1. Pause sentinel (task 63fefe3a): honoured the same way every other
 //      pack hook honours it (`checkHookPause`, mirrored from
-//      `hook-pre-tool-use.ts`) — an active, unexpired
+//      `hook-pre-tool-use.ts`), an active, unexpired
 //      `harness pause` must silence this injector exactly like it silences
 //      the PreToolUse/PostToolUse gates. Checked BEFORE manifest load so a
 //      broken install still respects an active pause.
 //   2. No real user input (task 63fefe3a, corrected same task after an
 //      advisor review caught the first cut fail-closed): a notification
-//      turn — subagent completion, a Monitor event, a background-bash
-//      finishing — carries no operator text, and injecting the full
+//      turn, subagent completion, a Monitor event, a background-bash
+//      finishing, carries no operator text, and injecting the full
 //      instruction block on it is pure noise (and, per the pack's own
 //      contract, prompts the agent to write a fresh Understanding Report
 //      against nothing). BUT the module's own documented envelope
 //      (`{ session_id?, prompt? }` above) is unverified against a real
 //      Codex payload: the generated `config.toml` header for every other
 //      Codex hook documents the wire shape as `{ session_id?, tool_name?,
-//      raw_input?, event? }` — no `prompt` field at all — and the sibling
+//      raw_input?, event? }`, no `prompt` field at all, and the sibling
 //      hooks (`hook-codex-pre-tool-use.ts` etc.) never trust a single
 //      field name, they alias-tolerate (`tool`/`tool_name`,
 //      `raw_input`/`tool_input`) via `pickString`. So this check is
 //      FAIL-OPEN-TO-INJECT: it only suppresses when a recognized
 //      prompt-carrying field is POSITIVELY present and empty. A missing
 //      field, an unrecognized envelope shape, or unparsable stdin is not
-//      evidence of "no user input" — it is evidence the real Codex wire
+//      evidence of "no user input", it is evidence the real Codex wire
 //      format is not what this module assumed, and the safe default in
 //      that case is the pre-task-63fefe3a behavior: inject. See
 //      `hasRealUserPrompt` below.
@@ -119,7 +119,7 @@ export function buildInstructionBlock(mode: Mode): string {
  * text on a Codex UserPromptSubmit envelope. `prompt` is this module's
  * own documented guess; the others are tolerated the same way the
  * sibling Codex hooks tolerate `tool`/`tool_name` and
- * `raw_input`/`tool_input` — a real integration may use a different
+ * `raw_input`/`tool_input`, a real integration may use a different
  * name than the one this package assumed. None of this is confirmed
  * against a real Codex payload (see module header); the alias list only
  * WIDENS which fields can prove a real prompt, it never narrows what
@@ -194,7 +194,7 @@ export async function runPackHookCodexUserPromptSubmitCli(
 
   const raw = await readStdin(stdin).catch(() => "");
 
-  // Pause sentinel — operator-only kill switch. Honoured BEFORE manifest
+  // Pause sentinel, operator-only kill switch. Honoured BEFORE manifest
   // load, same ordering as every other pack hook (see module header).
   if (checkHookPause("codex-user-prompt-submit", stderr, opts, opts.generatedDir, opts.now).paused) {
     return { exitCode: 0, emitted: false, text: "" };

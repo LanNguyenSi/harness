@@ -385,7 +385,7 @@ describe("runPackHookCodexStopCli", () => {
 
     const ACTIVE_SENTINEL: PauseSentinel = {
       pausedAt: new Date().toISOString(),
-      expiresAt: null, // indefinite — never auto-expires during test
+      expiresAt: null, // indefinite, never auto-expires during test
       reason: "operator recovery",
       pausedBy: "test",
     };
