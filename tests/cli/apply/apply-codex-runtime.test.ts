@@ -80,6 +80,30 @@ describe("apply --runtime codex", () => {
     expect(config).not.toContain("blocking = ");
   });
 
+  it("does NOT prefix the codex UserPromptSubmit hook with UNDERSTANDING_GATE_PAUSE_FILE", async () => {
+    // Apply computes `pauseFile` (sentinelPath(generatedDir)) unconditionally
+    // for every runtime and passes it to expandPolicyPacks, but the
+    // PAUSE_FILE prefix (wrapPause) is wired ONLY into the Claude Code
+    // UserPromptSubmit command (`understanding-before-execution.ts`'s
+    // codex branch uses the fixed COMMAND_USER_PROMPT_SUBMIT_CODEX with no
+    // wrap at all) — the prefix exists only for the npm-backed
+    // understanding-gate-claude-hook bin, which is Claude-Code-only; the
+    // reason the Codex hook doesn't need it isn't that the Codex path is
+    // already pause-aware. It is NOT: per src/cli/pack/hook-bootstrap.ts's
+    // own inventory comment, hook-codex-user-prompt-submit.ts does no pause
+    // check at all today. Codex pause-parity is an open, unrelated gap this
+    // task does not close (agent-tasks 63fefe3a fix-round).
+    writeManifestWithPack();
+    const result = await apply({ homeDir: tmpHome, runtime: "codex" });
+    expect(result.outcome).toBe("applied");
+    const config = fs.readFileSync(
+      path.join(tmpHome, GENERATED_DIRNAME, CODEX_CONFIG_BASENAME),
+      "utf8",
+    );
+    expect(config).toContain("harness pack hook codex-user-prompt-submit");
+    expect(config).not.toContain("UNDERSTANDING_GATE_PAUSE_FILE");
+  });
+
   it("emits the operator audit instructions.md with runtime: codex", async () => {
     writeManifestWithPack();
     await apply({ homeDir: tmpHome, runtime: "codex" });

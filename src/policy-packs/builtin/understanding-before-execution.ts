@@ -29,6 +29,16 @@ import {
 import { REPORTS_DIR_ENV } from "./understanding-before-execution-runtime.js";
 import { SHELL_ALIASES } from "../../runtime/tool-name-aliases.js";
 
+// Env var the npm-backed `understanding-gate-claude-hook` bin reads to find
+// the harness pause sentinel (`src/runtime/pause-sentinel.ts`,
+// SENTINEL_BASENAME = ".harness-paused"). The bin runs OUTSIDE harness's
+// own runtime (it's a package-owned process, not a `harness pack hook ...`
+// subcommand), so it cannot resolve `generatedDir` itself the way
+// `src/cli/pause-check.ts` does for harness's own hooks — the apply path
+// bakes the resolved sentinel path in as an env-var prefix instead, same
+// mechanism as UNDERSTANDING_GATE_REPORT_DIR below (agent-tasks 63fefe3a).
+export const PAUSE_FILE_ENV = "UNDERSTANDING_GATE_PAUSE_FILE";
+
 export const PACK_NAME = "understanding-before-execution";
 
 // Canonical version probe for the pack's package-side bin. Consumed by
@@ -298,6 +308,18 @@ export interface ResolvePackOptions {
    * `verdictDir()` falls back to the env-var-or-XDG precedence.
    */
   solutionVerdictDir?: string;
+  /**
+   * Absolute path to the harness pause sentinel file (`sentinelPath(generatedDir)`
+   * from `src/runtime/pause-sentinel.ts`). When provided, the pack prefixes
+   * ONLY the Claude UserPromptSubmit hook command with
+   * `UNDERSTANDING_GATE_PAUSE_FILE=<path>` so the npm-backed
+   * `understanding-gate-claude-hook` bin — which runs outside harness's own
+   * runtime and cannot resolve `generatedDir` itself — can read the same
+   * sentinel harness's own hooks already consult. Apply sets this to
+   * `sentinelPath(generatedDir)`; in test/legacy paths it may be omitted,
+   * in which case the command is emitted unchanged (agent-tasks 63fefe3a).
+   */
+  pauseFile?: string;
 }
 
 /**
@@ -316,6 +338,14 @@ function prefixCommandWithReportsDir(
 ): string {
   if (!reportsDir) return command;
   return `${REPORTS_DIR_ENV}=${shellQuoteSingle(reportsDir)} ${command}`;
+}
+
+function prefixCommandWithPauseFile(
+  command: string,
+  pauseFile: string | undefined,
+): string {
+  if (!pauseFile) return command;
+  return `${PAUSE_FILE_ENV}=${shellQuoteSingle(pauseFile)} ${command}`;
 }
 
 /**
@@ -693,6 +723,14 @@ function buildHooks(
   // env var — write/read the same directory.
   const wrap = (cmd: string): string =>
     prefixCommandWithReportsDir(cmd, opts.reportsDir);
+  // When `opts.pauseFile` is set (the apply path), the Claude
+  // UserPromptSubmit command ALSO gets prefixed with
+  // `UNDERSTANDING_GATE_PAUSE_FILE=<absolute>` (see {@link PAUSE_FILE_ENV}'s
+  // doc comment for why only this one hook needs it: the npm-backed bin
+  // runs outside harness's own runtime and cannot resolve `generatedDir`
+  // the way harness's own hooks do).
+  const wrapPause = (cmd: string): string =>
+    prefixCommandWithPauseFile(cmd, opts.pauseFile);
   // Task 5d73d78d review MEDIUM-7: omit the prefix entirely when the
   // resolved mode already coerces to the package's OWN default
   // (`fast_confirm`). Baking `UNDERSTANDING_GATE_MODE=fast_confirm`
@@ -840,7 +878,7 @@ function buildHooks(
     {
       name: `${HOOK_NAME_PREFIX}:user-prompt-submit`,
       event: "UserPromptSubmit",
-      command: wrapMode(BIN_USER_PROMPT_SUBMIT_CLAUDE),
+      command: wrapMode(wrapPause(BIN_USER_PROMPT_SUBMIT_CLAUDE)),
       blocking: false,
       budget_ms: 5000,
       min_version: UG_MIN_VERSION,

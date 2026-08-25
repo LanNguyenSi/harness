@@ -65,6 +65,7 @@ import { EX_FAIL, EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
 import { loadManifest } from "../loader.js";
 import { GENERATED_DIRNAME, resolveGeneratedDir } from "../../io/generated-dir.js";
 import { resolveHomeDir } from "../../runtime/home-dir.js";
+import { sentinelPath } from "../../runtime/pause-sentinel.js";
 import {
   CODEX_GENERATED_HEADER_LINE,
   generateCodexConfig,
@@ -360,7 +361,17 @@ function buildExpectedFiles(
     typeof verdictDirOverride === "string" && verdictDirOverride.trim().length > 0
       ? verdictDirOverride
       : undefined;
-  const packExpansion = expandPolicyPacks(manifest, runtime, { reportsDir, solutionVerdictDir });
+  // Pause-sentinel path (agent-tasks 63fefe3a): threaded through so the
+  // Claude UserPromptSubmit hook's npm-backed bin can find the same
+  // sentinel harness's own hooks resolve via generatedDir at runtime. See
+  // `ResolvePackOptions.pauseFile`'s doc comment for why only that one hook
+  // needs it.
+  const pauseFile = sentinelPath(generatedDir);
+  const packExpansion = expandPolicyPacks(manifest, runtime, {
+    reportsDir,
+    solutionVerdictDir,
+    pauseFile,
+  });
   const augmentedManifest: Manifest =
     packExpansion.hooks.length === 0
       ? manifest

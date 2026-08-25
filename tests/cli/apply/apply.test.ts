@@ -1466,11 +1466,21 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
     // is not the package's own fast_confirm default, so the prefix is
     // present (a fast_confirm-resolved mode omits it instead — task
     // 5d73d78d review MEDIUM-7, covered in tests/policy-packs/expand.test.ts).
+    // The UserPromptSubmit command also carries an
+    // `UNDERSTANDING_GATE_PAUSE_FILE=<generatedDir>/.harness-paused` prefix
+    // (agent-tasks 63fefe3a): the npm-backed bin runs outside harness's own
+    // runtime and cannot resolve `generatedDir` itself, so apply bakes in
+    // the resolved sentinel path the way it already does for REPORT_DIR on
+    // the Stop/PreToolUse hooks below. Mode stays outermost.
     const userPromptSubmitCommand = allCommands.find((c) =>
       c.endsWith("understanding-gate-claude-hook"),
     );
     expect(userPromptSubmitCommand).toBe(
-      "UNDERSTANDING_GATE_MODE='grill_me' understanding-gate-claude-hook",
+      `UNDERSTANDING_GATE_MODE='grill_me' UNDERSTANDING_GATE_PAUSE_FILE='${path.join(
+        tmpHome,
+        GENERATED_DIRNAME,
+        ".harness-paused",
+      )}' understanding-gate-claude-hook`,
     );
     // Phase 6 #4: harness owns the PreToolUse blocker (consults BOTH
     // ledger + persisted report). The package's own bin still works for
@@ -1521,6 +1531,54 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
     expect(preToolUseGroup?.matcher).toBe("Edit|Write|Bash");
   });
 
+  it("UNDERSTANDING_GATE_PAUSE_FILE follows the resolved generatedDir, not a fixed path (AC2) — a --config install anchors it next to the manifest, not ~/.claude", async () => {
+    // Regression guard against hardcoding the sentinel path: a
+    // --config-only install (no homeDir override) resolves generatedDir
+    // next to the manifest (see the "when --config is passed without
+    // homeDir" test above), so the PAUSE_FILE prefix must point there
+    // too, not at some fixed ~/.claude location.
+    const altRoot = fs.mkdtempSync(path.join(os.tmpdir(), "harness-altcfg-pause-"));
+    try {
+      const altManifest = path.join(altRoot, "harness.yaml");
+      fs.writeFileSync(
+        altManifest,
+        yamlStringify({
+          version: 1,
+          tools: { mcp: [], cli: [], skills: { enabled: [], source_dirs: [] }, builtin: { known: [] } },
+          memory: { directories: [] },
+          hooks: [],
+          policies: [],
+          policy_packs: [{ name: "understanding-before-execution" }],
+        }),
+      );
+      const r = await apply({ configPath: altManifest });
+      expect(r.generatedDir).toBe(path.join(altRoot, GENERATED_DIRNAME));
+      const settings = JSON.parse(
+        fs.readFileSync(path.join(altRoot, GENERATED_DIRNAME, SETTINGS_BASENAME), "utf8"),
+      ) as {
+        hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>;
+      };
+      const allCommands: string[] = [];
+      for (const groups of Object.values(settings.hooks)) {
+        for (const g of groups) for (const h of g.hooks) allCommands.push(h.command);
+      }
+      const userPromptSubmitCommand = allCommands.find((c) =>
+        c.endsWith("understanding-gate-claude-hook"),
+      );
+      expect(userPromptSubmitCommand).toBe(
+        `UNDERSTANDING_GATE_MODE='grill_me' UNDERSTANDING_GATE_PAUSE_FILE='${path.join(
+          altRoot,
+          GENERATED_DIRNAME,
+          ".harness-paused",
+        )}' understanding-gate-claude-hook`,
+      );
+      // Never the tmpHome-anchored path from the sibling test above.
+      expect(userPromptSubmitCommand).not.toContain(tmpHome);
+    } finally {
+      fs.rmSync(altRoot, { recursive: true, force: true });
+    }
+  });
+
   it("apply bakes UNDERSTANDING_GATE_MODE from config.mode alone — an exported env var with a DIFFERENT value has no effect (task 5d73d78d review HIGH-3)", async () => {
     // Repro for the HIGH-3 review finding: before this fix, `harness
     // apply` resolved the pack's mode the SAME env-aware way the live
@@ -1551,8 +1609,21 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
       const userPromptSubmitCommand = allCommands.find((c) =>
         c.endsWith("understanding-gate-claude-hook"),
       );
+      // Full command, not just an anchored prefix: the generated line now
+      // carries two env assignments (MODE, then PAUSE_FILE), and a shell
+      // applies last-assignment-wins per var name. A prefix-anchored
+      // /^UNDERSTANDING_GATE_MODE='grill_me' / match only pins the FIRST
+      // token — it would still pass if something appended a second,
+      // ambient-derived UNDERSTANDING_GATE_MODE assignment after
+      // PAUSE_FILE, even though that second assignment is the one the
+      // hook process actually sees. Asserting the full string is what
+      // catches that.
       expect(userPromptSubmitCommand).toBe(
-        "UNDERSTANDING_GATE_MODE='grill_me' understanding-gate-claude-hook",
+        `UNDERSTANDING_GATE_MODE='grill_me' UNDERSTANDING_GATE_PAUSE_FILE='${path.join(
+          tmpHome,
+          GENERATED_DIRNAME,
+          ".harness-paused",
+        )}' understanding-gate-claude-hook`,
       );
     } finally {
       if (saved === undefined) delete process.env["UNDERSTANDING_GATE_MODE"];

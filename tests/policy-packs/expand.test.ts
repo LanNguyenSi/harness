@@ -310,6 +310,23 @@ describe("expandPolicyPacks", () => {
     );
   });
 
+  it("config.mode: fast_confirm plus a pauseFile emits UNDERSTANDING_GATE_PAUSE_FILE with NO mode prefix", () => {
+    // MEDIUM-7 above omits the MODE prefix on a fast_confirm-effective
+    // config; this pins that the PAUSE_FILE prefix from wrapPause still
+    // applies on its own in that case, with the MODE-outermost wrap
+    // (wrapMode) omitting cleanly rather than leaving a stray empty
+    // prefix or dropping PAUSE_FILE too.
+    const m = buildManifest([
+      { name: "understanding-before-execution", config: { mode: "fast_confirm" } },
+    ]);
+    const r = expandPolicyPacks(m, undefined, {
+      pauseFile: "/home/u/.claude/harness.generated/.harness-paused",
+    });
+    expect(r.hooks.find((h) => h.event === "UserPromptSubmit")?.command).toBe(
+      "UNDERSTANDING_GATE_PAUSE_FILE='/home/u/.claude/harness.generated/.harness-paused' understanding-gate-claude-hook",
+    );
+  });
+
   it("coerces config.mode: strict to UNDERSTANDING_GATE_MODE=grill_me (the package has no strict variant)", () => {
     const m = buildManifest([
       { name: "understanding-before-execution", config: { mode: "strict" } },
@@ -380,6 +397,72 @@ describe("expandPolicyPacks", () => {
     });
     expect(r.hooks.find((h) => h.event === "Stop")?.command).toContain(
       "UNDERSTANDING_GATE_REPORT_DIR='/has/q'\\''uote/reports'",
+    );
+  });
+
+  it("prefixes the Claude UserPromptSubmit command with UNDERSTANDING_GATE_PAUSE_FILE when pauseFile is supplied", () => {
+    // AC1: the pack's UserPromptSubmit hook carries
+    // UNDERSTANDING_GATE_PAUSE_FILE=<generatedDir>/.harness-paused and
+    // still invokes understanding-gate-claude-hook with the existing MODE
+    // prefix outermost.
+    const m = buildManifest([{ name: "understanding-before-execution" }]);
+    const r = expandPolicyPacks(m, undefined, {
+      pauseFile: "/home/u/.claude/harness.generated/.harness-paused",
+    });
+    expect(r.hooks.find((h) => h.event === "UserPromptSubmit")?.command).toBe(
+      "UNDERSTANDING_GATE_MODE='grill_me' UNDERSTANDING_GATE_PAUSE_FILE='/home/u/.claude/harness.generated/.harness-paused' understanding-gate-claude-hook",
+    );
+  });
+
+  it("derives the pause-file prefix from whatever pauseFile path is passed in, not a fixed path (AC2)", () => {
+    // Guards against hardcoding: a DIFFERENT pauseFile path (as would come
+    // from a different generatedDir, e.g. a --config install) must produce
+    // a DIFFERENT command, not a fixed literal.
+    const m = buildManifest([{ name: "understanding-before-execution" }]);
+    const r1 = expandPolicyPacks(m, undefined, {
+      pauseFile: "/home/u/.claude/harness.generated/.harness-paused",
+    });
+    const r2 = expandPolicyPacks(m, undefined, {
+      pauseFile: "/other/config/dir/harness.generated/.harness-paused",
+    });
+    const cmd1 = r1.hooks.find((h) => h.event === "UserPromptSubmit")?.command;
+    const cmd2 = r2.hooks.find((h) => h.event === "UserPromptSubmit")?.command;
+    expect(cmd1).toContain(
+      "UNDERSTANDING_GATE_PAUSE_FILE='/home/u/.claude/harness.generated/.harness-paused'",
+    );
+    expect(cmd2).toContain(
+      "UNDERSTANDING_GATE_PAUSE_FILE='/other/config/dir/harness.generated/.harness-paused'",
+    );
+    expect(cmd1).not.toBe(cmd2);
+  });
+
+  it("quotes a pauseFile path containing a space (AC3)", () => {
+    const m = buildManifest([{ name: "understanding-before-execution" }]);
+    const r = expandPolicyPacks(m, undefined, {
+      pauseFile: "/Users/lan/Library/Application Support/harness.generated/.harness-paused",
+    });
+    expect(r.hooks.find((h) => h.event === "UserPromptSubmit")?.command).toContain(
+      "UNDERSTANDING_GATE_PAUSE_FILE='/Users/lan/Library/Application Support/harness.generated/.harness-paused'",
+    );
+  });
+
+  it("does NOT add UNDERSTANDING_GATE_PAUSE_FILE to any other hook (AC4)", () => {
+    const m = buildManifest([{ name: "understanding-before-execution" }]);
+    const r = expandPolicyPacks(m, undefined, {
+      reportsDir: "/tmp/reports",
+      pauseFile: "/tmp/generated/.harness-paused",
+    });
+    for (const hook of r.hooks) {
+      if (hook.event === "UserPromptSubmit") continue;
+      expect(hook.command).not.toContain("UNDERSTANDING_GATE_PAUSE_FILE");
+    }
+  });
+
+  it("omits the pause-file prefix when pauseFile is not supplied", () => {
+    const m = buildManifest([{ name: "understanding-before-execution" }]);
+    const r = expandPolicyPacks(m);
+    expect(r.hooks.find((h) => h.event === "UserPromptSubmit")?.command).toBe(
+      "UNDERSTANDING_GATE_MODE='grill_me' understanding-gate-claude-hook",
     );
   });
 
