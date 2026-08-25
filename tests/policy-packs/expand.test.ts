@@ -382,9 +382,9 @@ describe("expandPolicyPacks", () => {
     const ups = r.hooks.find((h) => h.event === "UserPromptSubmit");
     const stop = r.hooks.find((h) => h.event === "Stop");
     const pre = r.hooks.find((h) => h.event === "PreToolUse");
-    expect(ups?.min_version).toBe("0.4.0");
+    expect(ups?.min_version).toBe("0.5.0");
     expect(ups?.version_command).toEqual(["understanding-gate", "--version"]);
-    expect(stop?.min_version).toBe("0.4.0");
+    expect(stop?.min_version).toBe("0.5.0");
     expect(stop?.version_command).toEqual(["understanding-gate", "--version"]);
     expect(pre?.min_version).toBeUndefined();
     expect(pre?.version_command).toBeUndefined();

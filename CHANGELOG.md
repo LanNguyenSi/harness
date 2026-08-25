@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-08-25
+
 ### Added
+
+- **`understanding-before-execution` now requires `@lannguyensi/understanding-gate`
+  0.5.0 or later for its Claude `UserPromptSubmit` and `Stop` hooks** (task
+  `63fefe3a`). The pause-file prefix added in the same release is only read from
+  0.5.0 onwards; on an older gate it is set and ignored, which makes the pause
+  wiring silently inert. Raising `min_version` turns that into a `harness doctor`
+  finding instead of a silent no-op.
 
 - **`understanding-before-execution`'s Claude `UserPromptSubmit` hook now
   carries an `UNDERSTANDING_GATE_PAUSE_FILE=<generatedDir>/.harness-paused`
