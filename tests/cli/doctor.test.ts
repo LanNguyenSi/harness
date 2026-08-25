@@ -1198,7 +1198,7 @@ ${SILENCE_DRIFT}policy_packs:
     expect(text).toContain("Policy-pack hooks");
   });
 
-  // F3 fix round: probe_failed / parse_failed have no known installed
+  // probe_failed / parse_failed have no known installed
   // version, so the renderer must not print the below-floor "runs in
   // degraded mode below its declared min_version" line for them (that
   // line asserts an installed version the doctor never determined).
@@ -1286,7 +1286,7 @@ ${SILENCE_DRIFT}policy_packs:
     expect(recordedArgv).toEqual([["understanding-gate", "--version"]]);
   });
 
-  // F4 fix round: the integration test above cannot, by itself,
+  // The integration test above cannot, by itself,
   // discriminate a cache keyed on the full argv from one keyed on only
   // `cmd[0]`, because both hooks this pack contributes already share
   // one byte-identical version_command. `memoizeVersionProbe` is
@@ -1294,7 +1294,7 @@ ${SILENCE_DRIFT}policy_packs:
   // `cmd[0]` but differ past it, so an argv[0]-only key (which would
   // wrongly collapse them into one cache slot and one probe call)
   // fails this test.
-  describe("memoizeVersionProbe (task ab634898 fix round 1)", () => {
+  describe("memoizeVersionProbe (task ab634898)", () => {
     it("caches on the full argv, not just cmd[0]", () => {
       const recordedArgv: Array<readonly string[]> = [];
       const probe = memoizeVersionProbe((cmd) => {

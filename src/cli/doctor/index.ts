@@ -463,7 +463,7 @@ function checkHookVersion(
  * `["understanding-gate", "--version"]` vs. `["understanding-gate",
  * "--check"]`) are never conflated into the same cache slot; only a
  * byte-identical argv array is deduped. Exported standalone (task
- * ab634898 fix round 1) so this caching contract has its own focused
+ * ab634898) so this caching contract has its own focused
  * unit test independent of any particular pack's hook shape.
  */
 export function memoizeVersionProbe(
@@ -505,7 +505,7 @@ export function memoizeVersionProbe(
  * evaluate the harness-side adapter health for that runtime, they do
  * not change which runtime is actually installed and running the
  * hooks. Matches the sibling pack-level check's `resolveBuiltin(pack,
- * DEFAULT_RUNTIME)` further below (fix round 3, review finding C1:
+ * DEFAULT_RUNTIME)` further below (task ab634898:
  * keying this on `--target` produced a below-floor install that showed
  * no warning under `--target codex` and a spurious one under
  * `--target opencode`, where the pack never wires in the first place).
