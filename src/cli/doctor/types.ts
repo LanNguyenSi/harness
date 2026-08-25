@@ -75,6 +75,15 @@ export interface ToolsSection {
  */
 export interface HookVersionReport {
   status: "ok" | "warn";
+  /**
+   * Which outcome the probe hit, mirroring `PolicyPackVersionGapKind`
+   * (`src/policy-packs/version-check.ts`) so both hook-level and
+   * pack-level gaps share one warning vocabulary. Only set on `warn`;
+   * a `status: "ok"` report has nothing to classify.
+   */
+  kind?: "below_floor" | "probe_failed" | "parse_failed";
+  /** Parsed installed version, when the probe succeeded. Null when the probe failed or its stdout didn't parse. */
+  actualVersion?: string | null;
   message: string;
 }
 
@@ -201,6 +210,17 @@ export interface PolicyPackHookVersionGapReport {
   name: string;
   event: string;
   declaredMinVersion: string;
+  /**
+   * Which outcome the probe hit; mirrors `PolicyPackVersionGapKind`
+   * (`src/policy-packs/version-check.ts`) so the hook-level and
+   * pack-level sections classify gaps the same way instead of the
+   * renderer having to regex `message` back apart.
+   */
+  kind: "below_floor" | "probe_failed" | "parse_failed";
+  /** Parsed installed version when the probe succeeded; null for `probe_failed` / `parse_failed`, where it is unknown. */
+  actualVersion: string | null;
+  /** The `version_command` that was probed, e.g. `["understanding-gate", "--version"]`. */
+  versionCommand: readonly string[];
   message: string;
 }
 

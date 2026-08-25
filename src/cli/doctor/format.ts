@@ -186,9 +186,16 @@ function formatPolicyPackHookVersionsSection(report: DoctorReport): string[] {
   const out: string[] = ["", "Policy-pack hooks"];
   for (const gap of report.policyPackHookVersions) {
     out.push(`  ⚠ ${gap.name}.min_version  ${gap.message}`);
-    out.push(
-      `      this pack-contributed hook runs in degraded mode below its declared min_version ${gap.declaredMinVersion}. Upgrade the package-side bin.`,
-    );
+    if (gap.kind === "below_floor") {
+      out.push(
+        `      this pack-contributed hook runs in degraded mode below its declared min_version ${gap.declaredMinVersion}. Upgrade the package-side bin.`,
+      );
+    } else {
+      const bin = gap.versionCommand[0] ?? "the probe binary";
+      out.push(
+        `      could not determine the installed version of ${bin}; make sure it is on PATH (declared floor ${gap.declaredMinVersion}).`,
+      );
+    }
   }
   return out;
 }

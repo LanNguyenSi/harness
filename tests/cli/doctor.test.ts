@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   doctor,
+  memoizeVersionProbe,
   NULL_GIT_IGNORE_PROBE,
   resolveGitIgnoreProbe,
 } from "../../src/cli/doctor/index.js";
@@ -1123,6 +1124,66 @@ ${SILENCE_DRIFT}policy_packs:
     expect(format(report)).not.toContain("Policy-pack hooks");
   });
 
+  // F3 fix round: probe_failed / parse_failed have no known installed
+  // version, so the renderer must not print the below-floor "runs in
+  // degraded mode below its declared min_version" line for them (that
+  // line asserts an installed version the doctor never determined).
+  it("renders a probe-failed prose line, not the degraded-mode line, when the version probe returns null", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+${SILENCE_DRIFT}policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+      versionProbe: () => null,
+    });
+    expect(report.policyPackHookVersions.length).toBeGreaterThanOrEqual(1);
+    for (const gap of report.policyPackHookVersions) {
+      expect(gap.kind).toBe("probe_failed");
+      expect(gap.actualVersion).toBeNull();
+    }
+    const text = format(report);
+    expect(text).toContain("Policy-pack hooks");
+    expect(text).not.toContain("degraded mode");
+    expect(text).toContain(
+      "could not determine the installed version of understanding-gate; make sure it is on PATH (declared floor 0.5.0).",
+    );
+  });
+
+  it("renders a parse-failed prose line, not the degraded-mode line, when the probe returns unparseable stdout", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+${SILENCE_DRIFT}policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+      versionProbe: () => "not a version",
+    });
+    expect(report.policyPackHookVersions.length).toBeGreaterThanOrEqual(1);
+    for (const gap of report.policyPackHookVersions) {
+      expect(gap.kind).toBe("parse_failed");
+      expect(gap.actualVersion).toBeNull();
+    }
+    const text = format(report);
+    expect(text).toContain("Policy-pack hooks");
+    expect(text).not.toContain("degraded mode");
+    expect(text).toContain(
+      "could not determine the installed version of understanding-gate; make sure it is on PATH (declared floor 0.5.0).",
+    );
+  });
+
   it("dedupes the version probe across hooks that share one version_command", async () => {
     const home = makeFixture({
       "harness.yaml": `version: 1
@@ -1133,21 +1194,51 @@ ${SILENCE_DRIFT}policy_packs:
     source: builtin
 `,
     });
-    let calls = 0;
+    const recordedArgv: Array<readonly string[]> = [];
     const report = await doctor({
       configPath: path.join(home, "harness.yaml"),
       shallow: true,
       versionProbe: (cmd) => {
-        calls++;
-        expect(cmd).toEqual(["understanding-gate", "--version"]);
+        recordedArgv.push(cmd);
         return "understanding-gate 0.4.11";
       },
     });
     // Both the UserPromptSubmit and Stop hooks declare the identical
     // `["understanding-gate", "--version"]` version_command; the probe
-    // must spawn it once, not once per hook.
+    // must spawn it once, not once per hook. Asserting the full
+    // recorded argv array (not just a call count) pins that the probe
+    // actually ran with the real command, not some truncated stand-in.
     expect(report.policyPackHookVersions.length).toBeGreaterThanOrEqual(2);
-    expect(calls).toBe(1);
+    expect(recordedArgv).toEqual([["understanding-gate", "--version"]]);
+  });
+
+  // F4 fix round: the integration test above cannot, by itself,
+  // discriminate a cache keyed on the full argv from one keyed on only
+  // `cmd[0]`, because both hooks this pack contributes already share
+  // one byte-identical version_command. `memoizeVersionProbe` is
+  // exported and unit-tested directly with two commands that share
+  // `cmd[0]` but differ past it, so an argv[0]-only key (which would
+  // wrongly collapse them into one cache slot and one probe call)
+  // fails this test.
+  describe("memoizeVersionProbe (task ab634898 fix round 1)", () => {
+    it("caches on the full argv, not just cmd[0]", () => {
+      const recordedArgv: Array<readonly string[]> = [];
+      const probe = memoizeVersionProbe((cmd) => {
+        recordedArgv.push(cmd);
+        return `${cmd.join(" ")} ok`;
+      });
+      const a = ["understanding-gate", "--version"] as const;
+      const b = ["understanding-gate", "--check"] as const;
+      expect(probe(a)).toBe("understanding-gate --version ok");
+      expect(probe(a)).toBe("understanding-gate --version ok");
+      expect(probe(b)).toBe("understanding-gate --check ok");
+      expect(probe(b)).toBe("understanding-gate --check ok");
+      // `a` and `b` share `cmd[0]` ("understanding-gate") but differ
+      // past it, so both must have reached the underlying probe once
+      // each (2 calls total), and repeated calls with the same argv
+      // must not re-invoke it.
+      expect(recordedArgv).toEqual([a, b]);
+    });
   });
 });
 
@@ -1897,6 +1988,8 @@ tools:
     expect(received).toEqual(["my-hook-bin", "--version"]);
     expect(report.hooks[0]?.version).toEqual({
       status: "warn",
+      kind: "below_floor",
+      actualVersion: "0.2.0",
       message: "outdated: installed v0.2.0 < required 0.5.0",
     });
     expect(report.warningCount).toBeGreaterThanOrEqual(1);

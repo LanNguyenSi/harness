@@ -431,6 +431,8 @@ function checkHookVersion(
   if (stdout === null) {
     return {
       status: "warn",
+      kind: "probe_failed",
+      actualVersion: null,
       message: `version probe failed for ${hook.version_command.join(" ")}`,
     };
   }
@@ -438,13 +440,20 @@ function checkHookVersion(
   if (!m || !m[1]) {
     return {
       status: "warn",
+      kind: "parse_failed",
+      actualVersion: null,
       message: `could not parse a version from "${stdout.trim()}"`,
     };
   }
   const actual = m[1];
   const cmp = compareVersions(actual, hook.min_version);
   return cmp < 0
-    ? { status: "warn", message: `outdated: installed v${actual} < required ${hook.min_version}` }
+    ? {
+        status: "warn",
+        kind: "below_floor",
+        actualVersion: actual,
+        message: `outdated: installed v${actual} < required ${hook.min_version}`,
+      }
     : { status: "ok", message: `v${actual} ≥ ${hook.min_version}` };
 }
 
@@ -470,26 +479,54 @@ function checkHookVersion(
  * the pack-level floor's "green ones produce nothing" contract
  * (`checkPolicyPackVersions`). Always warn, never error: the pack still
  * runs in degraded mode rather than failing outright.
+ *
+ * The runtime passed to `expandPolicyPacks` is derived from
+ * `opts.target` the same way `--target codex` / `--target opencode`
+ * already select their own doctor modules, falling back to
+ * `DEFAULT_RUNTIME` ("claude-code") when no target is given. `DoctorTarget`
+ * has no "claude-code" member (see its doc comment in `types.ts`), so
+ * every value it can hold ("codex" | "opencode") is already a valid
+ * `Runtime`.
  */
+/**
+ * Wraps a version probe with a per-full-argv cache, keyed on
+ * `JSON.stringify(cmd)` so two commands sharing only `cmd[0]` (e.g.
+ * `["understanding-gate", "--version"]` vs. `["understanding-gate",
+ * "--check"]`) are never conflated into the same cache slot; only a
+ * byte-identical argv array is deduped. Exported standalone (task
+ * ab634898 fix round 1) so this caching contract has its own focused
+ * unit test independent of any particular pack's hook shape.
+ */
+export function memoizeVersionProbe(
+  probe: (cmd: readonly string[]) => string | null,
+): (cmd: readonly string[]) => string | null {
+  const cache = new Map<string, string | null>();
+  return (cmd: readonly string[]): string | null => {
+    const key = JSON.stringify(cmd);
+    if (!cache.has(key)) cache.set(key, probe(cmd));
+    return cache.get(key) ?? null;
+  };
+}
+
 function checkPolicyPackHookVersions(
   manifest: Manifest,
   versionProbe: (cmd: readonly string[]) => string | null,
+  target: DoctorTarget | undefined,
 ): PolicyPackHookVersionGapReport[] {
-  const expansion = expandPolicyPacks(manifest, DEFAULT_RUNTIME);
-  const probeCache = new Map<string, string | null>();
-  const dedupedProbe = (cmd: readonly string[]): string | null => {
-    const key = cmd.join(" ");
-    if (!probeCache.has(key)) probeCache.set(key, versionProbe(cmd));
-    return probeCache.get(key) ?? null;
-  };
+  const runtime = target ?? DEFAULT_RUNTIME;
+  const expansion = expandPolicyPacks(manifest, runtime);
+  const dedupedProbe = memoizeVersionProbe(versionProbe);
   const gaps: PolicyPackHookVersionGapReport[] = [];
   for (const hook of expansion.hooks) {
     const version = checkHookVersion(hook, dedupedProbe);
-    if (version && version.status === "warn" && hook.min_version) {
+    if (version && version.status === "warn" && hook.min_version && version.kind) {
       gaps.push({
         name: hook.name,
         event: hook.event,
         declaredMinVersion: hook.min_version,
+        kind: version.kind,
+        actualVersion: version.actualVersion ?? null,
+        versionCommand: hook.version_command ?? [],
         message: version.message,
       });
     }
@@ -1078,6 +1115,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const policyPackHookVersions = checkPolicyPackHookVersions(
     manifest,
     policyPacksVersionProbe,
+    opts.target,
   );
   const workflows = buildWorkflows(manifest);
   const riskGate = buildRiskGate(manifest);
