@@ -310,7 +310,7 @@ describe("expandPolicyPacks", () => {
     );
   });
 
-  it("config.mode: fast_confirm plus a pauseFile emits UNDERSTANDING_GATE_PAUSE_FILE with NO mode prefix (agent-tasks 63fefe3a fix-round)", () => {
+  it("config.mode: fast_confirm plus a pauseFile emits UNDERSTANDING_GATE_PAUSE_FILE with NO mode prefix", () => {
     // MEDIUM-7 above omits the MODE prefix on a fast_confirm-effective
     // config; this pins that the PAUSE_FILE prefix from wrapPause still
     // applies on its own in that case, with the MODE-outermost wrap
@@ -400,7 +400,7 @@ describe("expandPolicyPacks", () => {
     );
   });
 
-  it("prefixes the Claude UserPromptSubmit command with UNDERSTANDING_GATE_PAUSE_FILE when pauseFile is supplied (agent-tasks 63fefe3a)", () => {
+  it("prefixes the Claude UserPromptSubmit command with UNDERSTANDING_GATE_PAUSE_FILE when pauseFile is supplied", () => {
     // AC1: the pack's UserPromptSubmit hook carries
     // UNDERSTANDING_GATE_PAUSE_FILE=<generatedDir>/.harness-paused and
     // still invokes understanding-gate-claude-hook with the existing MODE

@@ -1531,7 +1531,7 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
     expect(preToolUseGroup?.matcher).toBe("Edit|Write|Bash");
   });
 
-  it("UNDERSTANDING_GATE_PAUSE_FILE follows the resolved generatedDir, not a fixed path (AC2, agent-tasks 63fefe3a) — a --config install anchors it next to the manifest, not ~/.claude", async () => {
+  it("UNDERSTANDING_GATE_PAUSE_FILE follows the resolved generatedDir, not a fixed path (AC2) — a --config install anchors it next to the manifest, not ~/.claude", async () => {
     // Regression guard against hardcoding the sentinel path: a
     // --config-only install (no homeDir override) resolves generatedDir
     // next to the manifest (see the "when --config is passed without
