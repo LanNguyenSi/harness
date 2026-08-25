@@ -174,3 +174,35 @@ describe("loadManifestOrInjected", () => {
     ).toThrow();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Pin: every Codex hook honours the pause sentinel (task 1432e053)
+// ---------------------------------------------------------------------------
+//
+// Source-grep rather than behavioral, deliberately: the per-hook behavioral
+// pause tests already live alongside each hook's own test file (e.g.
+// pack-hook-codex-stop.test.ts, pack-hook-codex-user-prompt-submit.test.ts).
+// This test's job is narrower — pin that the module header's "no pause
+// check" exception list can never silently grow back to include one of the
+// four hook-codex-*.ts files without a test failing here first.
+describe("codex hooks import checkHookPause (parity pin, task 1432e053)", () => {
+  const CODEX_HOOK_FILES = [
+    "hook-codex-pre-tool-use.ts",
+    "hook-codex-post-tool-use.ts",
+    "hook-codex-stop.ts",
+    "hook-codex-user-prompt-submit.ts",
+  ];
+
+  it.each(CODEX_HOOK_FILES)("%s imports checkHookPause from hook-bootstrap.js", (filename) => {
+    const src = fs.readFileSync(
+      new URL(`../../src/cli/pack/${filename}`, import.meta.url),
+      "utf8",
+    );
+    // Matches `import { ..., checkHookPause, ... } from "./hook-bootstrap.js"`
+    // regardless of which other named imports share the specifier list.
+    const importBlock = src.match(/import\s*\{([^}]*)\}\s*from\s*["']\.\/hook-bootstrap\.js["']/);
+    expect(importBlock, `${filename}: no import from ./hook-bootstrap.js found`).not.toBeNull();
+    const names = (importBlock![1] ?? "").split(",").map((s) => s.trim());
+    expect(names).toContain("checkHookPause");
+  });
+});

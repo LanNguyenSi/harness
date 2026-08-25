@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`harness pack hook codex-stop` now honours an active pause sentinel**
+  (task `1432e053`, follow-up to `63fefe3a`). Like `codex-user-prompt-submit`
+  before task `63fefe3a` fixed it, `hook-codex-stop.ts` never called
+  `checkHookPause` — an active, unexpired `harness pause` silenced every
+  other pack hook (PreToolUse/PostToolUse gates and, since `63fefe3a`, the
+  Codex UserPromptSubmit injector) but not this one, so a paused window
+  could still persist Understanding Report captures under
+  `.understanding-gate/reports/`. It now checks the sentinel first,
+  honoured BEFORE manifest load, same ordering as the other three Codex
+  hooks. All four `hook-codex-*.ts` files now import `checkHookPause`
+  (`src/cli/pack/hook-bootstrap.ts`'s module header no longer lists any of
+  them as a "no pause check" exception), pinned by a source-grep test so
+  the exception list cannot silently grow back. This closes the residual
+  gap that commit 15aa127d / a689ba4 (task `63fefe3a`, PR-local commits on
+  this branch, not yet a separate task at the time) flagged as
+  out-of-scope in `docs/okf/pause-vs-gate-kill-switch.md`; it does NOT
+  claim to fix task `63fefe3a` itself, which was already closed by those
+  commits for the `codex-user-prompt-submit` hook, nor does it touch the
+  Claude Code adapter (`@lannguyensi/understanding-gate`, a separate npm
+  package repo). **Open risk, unchanged by this task:** the alias field
+  names `codex-user-prompt-submit` recognizes beyond `prompt` (`text`,
+  `input`, `message`, `user_prompt`, `user_input`) remain a reasoned guess,
+  not verified against real Codex traffic — that suppression path may in
+  practice never fire.
+
 ## [0.47.0] - 2026-08-25
 
 ### Added

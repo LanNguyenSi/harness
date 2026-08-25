@@ -34,7 +34,7 @@ import { atomicWriteFile } from "../../io/atomic-write.js";
 import { defaultReportsDir } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import type { Manifest } from "../../schema/index.js";
 import { type LoaderOptions } from "../loader.js";
-import { loadManifestOrInjected, pickString, readStdin } from "./hook-bootstrap.js";
+import { checkHookPause, loadManifestOrInjected, pickString, readStdin } from "./hook-bootstrap.js";
 
 const PACK_NAME = "understanding-before-execution";
 const RUNTIME_TAG = "codex";
@@ -48,6 +48,10 @@ export interface PackHookCodexStopOptions extends LoaderOptions {
   manifest?: Manifest;
   /** Test-injectable clock; defaults to new Date(). */
   now?: Date;
+  /** Test-injected generatedDir for the pause-sentinel check; bypasses
+   *  path resolution when supplied (mirrors `hook-codex-pre-tool-use.ts`
+   *  / `hook-codex-post-tool-use.ts`). */
+  generatedDir?: string;
 }
 
 export interface ParsedReport {
@@ -326,6 +330,13 @@ export async function runPackHookCodexStopCli(
       "harness pack hook codex-stop: malformed JSON on stdin, skipping capture.",
       stderr,
     );
+  }
+
+  // Pause sentinel (task 1432e053, parity with pre-tool-use / post-tool-use /
+  // user-prompt-submit) — honoured BEFORE manifest load so a broken install
+  // still respects an active `harness pause`.
+  if (checkHookPause("codex-stop", stderr, opts, opts.generatedDir, opts.now).paused) {
+    return { exitCode: 0, reportPath: null, parsed: false, diagnostic: "harness paused" };
   }
 
   let manifest: Manifest;

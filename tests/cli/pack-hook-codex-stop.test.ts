@@ -10,6 +10,7 @@ import {
 } from "../../src/cli/pack/hook-codex-stop.js";
 import { approveUnderstanding } from "../../src/cli/approve/understanding.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
+import { writeSentinel, type PauseSentinel } from "../../src/runtime/pause-sentinel.js";
 
 let tmp: string;
 let savedClaude: string | undefined;
@@ -376,5 +377,100 @@ describe("runPackHookCodexStopCli", () => {
     ) as Record<string, unknown>;
     expect(after["approvalStatus"]).toBe("approved");
     expect(after["approvedAt"]).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  describe("pause sentinel (task 1432e053, parity with user-prompt-submit)", () => {
+    let sentinelTmp: string;
+    let generatedDir: string;
+
+    const ACTIVE_SENTINEL: PauseSentinel = {
+      pausedAt: new Date().toISOString(),
+      expiresAt: null, // indefinite — never auto-expires during test
+      reason: "operator recovery",
+      pausedBy: "test",
+    };
+
+    beforeEach(() => {
+      sentinelTmp = fs.mkdtempSync(path.join(os.tmpdir(), "ug-codex-stop-pause-"));
+      generatedDir = path.join(sentinelTmp, "harness.generated");
+      fs.mkdirSync(generatedDir, { recursive: true });
+    });
+
+    afterEach(() => {
+      fs.rmSync(sentinelTmp, { recursive: true, force: true });
+    });
+
+    it("suppresses capture and emits a PAUSED notice when the sentinel is active", async () => {
+      writeSentinel(generatedDir, ACTIVE_SENTINEL);
+      const reportsDir = path.join(tmp, "reports");
+      const stderr = bufferStream();
+      const env = JSON.stringify({
+        session_id: "sess-stop-paused",
+        last_assistant_message: FULL_REPORT,
+      });
+
+      const result = await runPackHookCodexStopCli({
+        manifest: manifestWithPack(),
+        stdin: readableFromString(env),
+        stderr: stderr.stream,
+        reportsDir,
+        generatedDir,
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.parsed).toBe(false);
+      expect(result.reportPath).toBeNull();
+      expect(stderr.read()).toContain("PAUSED");
+      expect(stderr.read()).toContain("operator recovery");
+      expect(fs.existsSync(reportsDir)).toBe(false);
+    });
+
+    it("still captures when no sentinel is present (unchanged behavior)", async () => {
+      const reportsDir = path.join(tmp, "reports");
+      const stderr = bufferStream();
+      const env = JSON.stringify({
+        session_id: "sess-stop-nopause",
+        last_assistant_message: FULL_REPORT,
+      });
+
+      const result = await runPackHookCodexStopCli({
+        manifest: manifestWithPack(),
+        stdin: readableFromString(env),
+        stderr: stderr.stream,
+        reportsDir,
+        generatedDir,
+      });
+
+      expect(result.parsed).toBe(true);
+      expect(result.reportPath).not.toBeNull();
+    });
+
+    it("resumes capturing after the pause sentinel expires (negative control)", async () => {
+      const now = new Date("2026-01-01T01:00:00.000Z");
+      writeSentinel(generatedDir, {
+        pausedAt: "2025-12-31T23:00:00.000Z",
+        expiresAt: "2026-01-01T00:00:00.000Z", // one hour before `now`
+        reason: "operator recovery",
+        pausedBy: "test",
+      });
+      const reportsDir = path.join(tmp, "reports");
+      const stderr = bufferStream();
+      const env = JSON.stringify({
+        session_id: "sess-stop-expired",
+        last_assistant_message: FULL_REPORT,
+      });
+
+      const result = await runPackHookCodexStopCli({
+        manifest: manifestWithPack(),
+        stdin: readableFromString(env),
+        stderr: stderr.stream,
+        reportsDir,
+        generatedDir,
+        now,
+      });
+
+      expect(result.parsed).toBe(true);
+      expect(result.reportPath).not.toBeNull();
+    });
   });
 });
