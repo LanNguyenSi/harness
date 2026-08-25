@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-08-25
+
 ### Added
 
 - **`understanding-before-execution` now requires `@lannguyensi/understanding-gate`
