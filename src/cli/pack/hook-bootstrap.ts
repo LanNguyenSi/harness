@@ -26,7 +26,8 @@
 //     isTTY guard, which is a legitimately different contract.
 //   - hook-solution-acceptance-writeguard.ts: loads no manifest.
 //   - hook-stay-in-scope.ts: loads no manifest.
-//   - hook-codex-stop.ts / hook-codex-user-prompt-submit.ts: no pause check.
+//   - hook-codex-stop.ts: no pause check.
+//   - hook-codex-user-prompt-submit.ts: pause check added (task 63fefe3a).
 //
 // Per-hook decision logic, error envelopes, and early-return shapes stay local
 // to each hook. This module covers structural boilerplate only, not semantics.

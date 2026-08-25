@@ -31,6 +31,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`harness pack hook codex-user-prompt-submit` now honours an active
+  pause sentinel and no longer injects on turns without real user input**
+  (task `63fefe3a`). Two separate bugs, closed together: (1) unlike every
+  other pack hook, this UserPromptSubmit injector never called
+  `checkHookPause` — an active, unexpired `harness pause` silenced every
+  PreToolUse/PostToolUse gate but not this one, so the full Understanding
+  Gate instruction block kept injecting during a paused window; it now
+  checks the sentinel first, mirroring `hook-pre-tool-use.ts`. (2) the
+  hook ignored the stdin envelope entirely and injected on every turn,
+  including notification turns (subagent completion, a Monitor event, a
+  background-bash command finishing) that carry no `prompt` field in the
+  documented wire format `{ session_id?, prompt? }`; it now only injects
+  when `prompt` is a non-empty, non-whitespace string. Both checks run
+  before manifest load, same ordering discipline as the other gates.
+  Root-caused from a dogfood: a six-hour pause window still produced three
+  full Understanding Reports on notification turns before the operator
+  intervened (Batch 26, session `ebbcbc78`), the same failure class
+  reported across three separate batches (20, 25, 26).
 - **`read-only-bash` recognises a path-qualified git binary and skips git
   global options before the subcommand, while `-c` stays fail-closed**
   (task `5b5d1022`, #452). Two measured false positives (a path-qualified

@@ -20,11 +20,29 @@
 //
 // Failure mode: any error → exit 0, no stdout, diagnostic on stderr.
 // A missing injector text must never fail the agent's prompt path.
+//
+// Two short-circuits happen before any manifest/mode logic runs, both
+// producing the same "no stdout, no injection" outcome:
+//
+//   1. Pause sentinel (task 63fefe3a): honoured the same way every other
+//      pack hook honours it (`checkHookPause`, mirrored from
+//      `hook-pre-tool-use.ts`) — an active, unexpired
+//      `harness pause` must silence this injector exactly like it silences
+//      the PreToolUse/PostToolUse gates. Checked BEFORE manifest load so a
+//      broken install still respects an active pause.
+//   2. No real user input (task 63fefe3a): the envelope's `prompt` field is
+//      the only carrier of actual operator text in this wire format. A
+//      turn with no `prompt` (or an empty/whitespace-only one) is a
+//      notification turn — subagent completion, a Monitor event, a
+//      background-bash finishing — not a new instruction, so injecting the
+//      full instruction block on it is pure noise (and, per the pack's own
+//      contract, prompts the agent to write a fresh Understanding Report
+//      against nothing).
 
 import { type Mode, resolveMode } from "../../policy-packs/builtin/understanding-before-execution.js";
 import type { Manifest } from "../../schema/index.js";
 import { type LoaderOptions } from "../loader.js";
-import { loadManifestOrInjected, readStdin } from "./hook-bootstrap.js";
+import { checkHookPause, loadManifestOrInjected, readStdin } from "./hook-bootstrap.js";
 
 const PACK_NAME = "understanding-before-execution";
 
@@ -34,6 +52,12 @@ export interface PackHookCodexUserPromptSubmitOptions extends LoaderOptions {
   stdout?: NodeJS.WritableStream;
   stderr?: NodeJS.WritableStream;
   manifest?: Manifest;
+  /** Test-injected generatedDir for the pause-sentinel check; bypasses
+   *  path resolution when supplied (mirrors `hook-pre-tool-use.ts`). */
+  generatedDir?: string;
+  /** Override "now" for deterministic pause-expiry tests. Forwarded to
+   *  `checkHookPause` / `checkPauseFromLoader`. */
+  now?: Date;
 }
 
 export interface PackHookCodexUserPromptSubmitResult {
@@ -71,6 +95,29 @@ export function buildInstructionBlock(mode: Mode): string {
   return base + "\n";
 }
 
+/**
+ * True when the UserPromptSubmit envelope carries actual operator text.
+ * The wire format is `{ session_id?: string, prompt?: string }` (see
+ * module header); `prompt` is the only field that can hold real user
+ * input, so a turn with a missing, non-string, or whitespace-only
+ * `prompt` is a notification turn (subagent completion, Monitor event,
+ * background-bash completion), not a new instruction, and must not
+ * trigger injection. Malformed JSON degrades to "no real input" for the
+ * same reason the rest of this hook degrades to allow/no-op on error: an
+ * envelope harness cannot parse is not evidence of a real prompt.
+ */
+export function hasRealUserPrompt(raw: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  if (typeof parsed !== "object" || parsed === null) return false;
+  const prompt = (parsed as Record<string, unknown>).prompt;
+  return typeof prompt === "string" && prompt.trim().length > 0;
+}
+
 export async function runPackHookCodexUserPromptSubmitCli(
   opts: PackHookCodexUserPromptSubmitOptions = {},
 ): Promise<PackHookCodexUserPromptSubmitResult> {
@@ -79,9 +126,22 @@ export async function runPackHookCodexUserPromptSubmitCli(
   const stderr = opts.stderr ?? process.stderr;
   const packName = opts.pack ?? PACK_NAME;
 
-  // Drain stdin so the parent isn't blocked. We don't actually need any
-  // field from it for v1 — the instruction block is prompt-independent.
-  await readStdin(stdin).catch(() => "");
+  const raw = await readStdin(stdin).catch(() => "");
+
+  // Pause sentinel — operator-only kill switch. Honoured BEFORE manifest
+  // load, same ordering as every other pack hook (see module header).
+  if (checkHookPause("codex-user-prompt-submit", stderr, opts, opts.generatedDir, opts.now).paused) {
+    return { exitCode: 0, emitted: false, text: "" };
+  }
+
+  // No real user input on this turn: nothing to react to, so nothing to
+  // inject. See `hasRealUserPrompt` above.
+  if (!hasRealUserPrompt(raw)) {
+    stderr.write(
+      "harness pack hook codex-user-prompt-submit: no real user prompt on this turn, suppressing injection.\n",
+    );
+    return { exitCode: 0, emitted: false, text: "" };
+  }
 
   let manifest: Manifest;
   try {

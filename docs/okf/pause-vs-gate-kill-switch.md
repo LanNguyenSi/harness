@@ -18,6 +18,9 @@ sources:
   - src/schema/policies.ts
   - src/runtime/intercept.ts
   - src/cli/validate/checks.ts
+  - src/cli/pack/hook-bootstrap.ts
+  - src/cli/pack/hook-codex-user-prompt-submit.ts
+  - src/cli/pack/hook-codex-stop.ts
   - docs/for-humans.md
   - CHANGELOG.md
 ---
@@ -38,6 +41,8 @@ harness has TWO separate kill-switch mechanisms. Do not conflate them: `pause` i
 ## Mechanism 1: `harness pause` / `harness resume` (sentinel)
 
 **What it is.** One JSON file at `<generatedDir>/.harness-paused` (`SENTINEL_BASENAME` in `src/runtime/pause-sentinel.ts:37`). `generatedDir` is `harness.generated/` next to the manifest in use, or `<homeDir>/harness.generated` with an override (`src/io/generated-dir.ts`). While the sentinel exists and is unexpired, EVERY PreToolUse/PostToolUse hook calls `maybeAnnouncePause()` (`src/runtime/pause-sentinel.ts:164`), emits one stderr line (`harness <hook>: PAUSED since Xm ago (reason: ...); auto-resumes in Ym. Run \`harness resume\` to re-enable.`) and short-circuits to allow without evaluating gate logic. On the first hook fire AFTER expiry the sentinel is silently deleted (auto-resume) and gating resumes.
+
+**Correction, closed 2026-08-25 (task `63fefe3a`): the Codex `UserPromptSubmit` injector now also honours the sentinel; the Codex `Stop` capture still does not.** The claim above ("EVERY PreToolUse/PostToolUse hook") was, read literally, an understatement of the intended contract (this doc's own frontmatter `description` calls pause a mute of "ALL hooks") and an overstatement of the actual one: `harness pack hook codex-user-prompt-submit` (`src/cli/pack/hook-codex-user-prompt-submit.ts`) never called `checkPauseFromLoader` at all, so an active pause silenced every gate EXCEPT this one — measured live in a dogfood where a six-hour pause window still produced three full Understanding-Gate instruction injections and reports on notification turns (session `ebbcbc78`, the same failure class recorded across three separate dogfood batches). It now calls `checkHookPause` first, same ordering as `hook-pre-tool-use.ts` and `hook-runtime-reality.ts` (`src/cli/pack/hook-bootstrap.ts`'s "Not used by" list is updated accordingly). **Residual gap, out of scope for task 63fefe3a: `harness pack hook codex-stop` (`src/cli/pack/hook-codex-stop.ts`) still calls no pause check**, so an active pause does not (yet) suppress the Stop-hook report capture. Until that is closed, "silences ALL hooks" in the frontmatter description is still one hook short of literally true; treat it as "all PreToolUse/PostToolUse gates, plus the Codex UserPromptSubmit injector."
 
 **Commands** (registered in `src/cli/index.ts:2988-3087`):
 - `harness pause --for <duration>` — e.g. `5m`, `1h`, `PT30S`; default 15 minutes (`DEFAULT_PAUSE_SECONDS = 15 * 60`, `src/cli/pause/index.ts:36`).
