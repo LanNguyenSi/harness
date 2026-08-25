@@ -412,7 +412,7 @@ Missing `min_version` is silent (legacy manifest). Warn-not-error: doctor's `war
 - In `fast_confirm` mode: Prior Art is NOT required. The five-bullet shape (currentUnderstanding, intendedOutcome, outOfScope, verificationPlan, assumptions) does not carry it. The failure class this section guards against (multi-turn build of an unnecessary tool) is intrinsically a grill_me / full situation.
 - Origin: `pattern-scout` 2026-05-22, a ~5000-line agent-dx package that shipped before anyone noticed `opensrc-mcp` already solved the problem better. The existing nine sections all framed the task as given; none forced the question "should this be built at all?".
 
-The pack's hook-level `min_version` floor on the npm-backed bins (`UG_MIN_VERSION` in the pack source) is bumped to `0.4.0` so `harness doctor` flags installs below it. Operators on 0.3.x produce reports that pre-0.4.0 parsers accept silently; on 0.4.0+ the section is enforced.
+The pack's hook-level `min_version` floor on the npm-backed bins (`UG_MIN_VERSION` in the pack source) is bumped to `0.4.0`. `harness doctor` flags installs below it via its "Policy-pack hooks" section (task `ab634898`); earlier releases declared this floor but doctor never actually probed a pack-expanded hook against it, so a below-floor install produced a clean report until that task shipped. Operators on 0.3.x produce reports that pre-0.4.0 parsers accept silently; on 0.4.0+ the section is enforced.
 
 ## Suggested permission profiles (Phase 6 #5)
 

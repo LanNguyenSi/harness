@@ -73,10 +73,25 @@ export interface ToolsSection {
  * absent otherwise (the path-existence check on the hook command still
  * runs unconditionally and surfaces via the main `status` field).
  */
-export interface HookVersionReport {
-  status: "ok" | "warn";
-  message: string;
-}
+export type HookVersionReport =
+  | {
+      status: "ok";
+      message: string;
+    }
+  | {
+      status: "warn";
+      /**
+       * Which outcome the probe hit, mirroring `PolicyPackVersionGapKind`
+       * (`src/policy-packs/version-check.ts`) so both hook-level and
+       * pack-level gaps share one warning vocabulary. Required on
+       * `warn`: every warn-producing branch of `checkHookVersion`
+       * classifies its outcome, so there is no warn case without one.
+       */
+      kind: "below_floor" | "probe_failed" | "parse_failed";
+      /** Parsed installed version, when the probe succeeded. Null when the probe failed or its stdout didn't parse. */
+      actualVersion: string | null;
+      message: string;
+    };
 
 export interface HookEntryReport {
   name: string;
@@ -176,6 +191,42 @@ export interface PolicyPackUxDriftReport {
   name: string;
   /** Which sub-field(s) diverge: `ux`, `producers`, or both. */
   fields: string[];
+  message: string;
+}
+
+/**
+ * Doctor surface for the HOOK-level `min_version` floor on a
+ * policy-pack-EXPANDED hook (task ab634898). Distinct from
+ * `PolicyPackVersionGapReport` (the pack-level `policy_packs[].min_version`
+ * floor, a different mechanism checked by `checkPolicyPackVersions`):
+ * this covers an individual hook a builtin pack contributes, e.g.
+ * understanding-before-execution's UserPromptSubmit/Stop hooks, each
+ * declaring its own `min_version` + `version_command`
+ * (`src/policy-packs/builtin/understanding-before-execution.ts`).
+ * `expandPolicyPacks` produces the hooks Claude Code actually runs, but
+ * `manifest.hooks[]` (what `HookEntryReport`/`checkHooks` walk) never
+ * includes them, so without this section an operator below a pack
+ * hook's floor saw a clean doctor report. Always warn, never error;
+ * mirrors the manifest-hook floor (`HookVersionReport`) and the
+ * pack-level floor. Empty array when every pack-expanded hook that
+ * declares a floor meets it (or none declare one).
+ */
+export interface PolicyPackHookVersionGapReport {
+  /** The pack-expanded hook's name, e.g. `policy-pack:understanding-before-execution:user-prompt-submit`. */
+  name: string;
+  event: string;
+  declaredMinVersion: string;
+  /**
+   * Which outcome the probe hit; mirrors `PolicyPackVersionGapKind`
+   * (`src/policy-packs/version-check.ts`) so the hook-level and
+   * pack-level sections classify gaps the same way instead of the
+   * renderer having to regex `message` back apart.
+   */
+  kind: "below_floor" | "probe_failed" | "parse_failed";
+  /** Parsed installed version when the probe succeeded; null for `probe_failed` / `parse_failed`, where it is unknown. */
+  actualVersion: string | null;
+  /** The `version_command` that was probed, e.g. `["understanding-gate", "--version"]`. */
+  versionCommand: readonly string[];
   message: string;
 }
 
@@ -315,6 +366,15 @@ export interface DoctorReport {
    * surfaced loudly here. Errors count toward `errorCount`.
    */
   policyPacks: PolicyPacksSection;
+  /**
+   * Hook-level `min_version` floors on policy-pack-expanded hooks (task
+   * ab634898). See `PolicyPackHookVersionGapReport` for why this is
+   * separate from both `hooks[].version` (manifest-declared hooks only)
+   * and `policyPacks.versionGaps` (the pack-level floor). Always
+   * present; empty when every pack-expanded hook that declares a floor
+   * meets it.
+   */
+  policyPackHookVersions: PolicyPackHookVersionGapReport[];
   workflows: WorkflowsSectionReport;
   /** Phase 7 #6 — Risk Gate wiring health (classifiers / resolvers / `when:`). */
   riskGate: RiskGateSection;

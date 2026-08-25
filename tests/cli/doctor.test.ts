@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   doctor,
+  memoizeVersionProbe,
   NULL_GIT_IGNORE_PROBE,
   resolveGitIgnoreProbe,
 } from "../../src/cli/doctor/index.js";
@@ -1061,6 +1062,260 @@ policy_packs:
   });
 });
 
+// Hook-level min_version floor on policy-pack-EXPANDED hooks (task
+// ab634898). Distinct from the pack-LEVEL `policy_packs[].min_version`
+// floor tested just above: `expandPolicyPacks` produces the hooks
+// Claude Code actually runs, but `manifest.hooks[]` never includes
+// them, so without `policyPackHookVersions` a below-floor
+// understanding-gate install went unreported. understanding-gate 0.5.0
+// is the floor understanding-before-execution declares on its
+// UserPromptSubmit + Stop hooks (both point at the same
+// `understanding-gate --version` probe).
+describe("doctor: hook-level min_version floor on policy-pack-expanded hooks (task ab634898)", () => {
+  it("flags a below-floor understanding-gate install as a warn finding with hook name, installed version, and floor", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+${SILENCE_DRIFT}policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+      versionProbe: () => "understanding-gate 0.4.11",
+    });
+    expect(report.policyPackHookVersions.length).toBeGreaterThanOrEqual(1);
+    const upsGap = report.policyPackHookVersions.find((g) =>
+      g.name.includes("user-prompt-submit"),
+    );
+    expect(upsGap).toMatchObject({
+      event: "UserPromptSubmit",
+      declaredMinVersion: "0.5.0",
+    });
+    expect(upsGap?.message).toMatch(/outdated: installed v0\.4\.11 < required 0\.5\.0/);
+    expect(report.warningCount).toBeGreaterThanOrEqual(1);
+    expect(report.errorCount).toBe(0);
+    const text = format(report);
+    expect(text).toContain("Policy-pack hooks");
+    expect(text).toContain("0.4.11");
+    expect(text).toContain("0.5.0");
+    expect(text).toContain("degraded mode");
+  });
+
+  it("stays silent (negative control) when understanding-gate is on the declared floor", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+${SILENCE_DRIFT}policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+      versionProbe: () => "understanding-gate 0.5.0",
+    });
+    expect(report.policyPackHookVersions).toHaveLength(0);
+    expect(format(report)).not.toContain("Policy-pack hooks");
+  });
+
+  // Review round 3, finding C2: pin that policyPackHookVersions actually
+  // contributes to warningCount, not just that it's populated.
+  // countDiagnostics has `warningCount +=
+  // report.policyPackHookVersions.length`; deleting that line leaves
+  // every other doctor test green (the pack-hook gaps still show up in
+  // the section itself), so this test compares warningCount for the
+  // identical fixture at-floor vs. below-floor and asserts the delta
+  // is exactly `policyPackHookVersions.length`, which only holds when
+  // that line is present.
+  it("warningCount increases by exactly policyPackHookVersions.length when the install drops below floor", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+${SILENCE_DRIFT}policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+`,
+    });
+    const atFloor = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+      versionProbe: () => "understanding-gate 0.5.0",
+    });
+    const belowFloor = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+      versionProbe: () => "understanding-gate 0.4.11",
+    });
+    expect(atFloor.policyPackHookVersions).toHaveLength(0);
+    expect(belowFloor.policyPackHookVersions.length).toBeGreaterThanOrEqual(1);
+    expect(belowFloor.warningCount - atFloor.warningCount).toBe(
+      belowFloor.policyPackHookVersions.length,
+    );
+  });
+
+  // Review round 3, finding C1: the pack-hook expansion must key on
+  // the DEFAULT_RUNTIME ("claude-code") install, not on `--target`.
+  // `--target codex` additionally evaluates the harness-side Codex
+  // adapter health; it is not a statement about which runtime is
+  // actually installed. Keying the expansion on `target` (round-1
+  // regression) made this exact below-floor install produce ZERO
+  // "Policy-pack hooks" warnings under `--target codex`, the silent
+  // report this task exists to close.
+  it("still reports the pack-hook floor gap under --target codex (target is not the runtime)", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+${SILENCE_DRIFT}policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+      target: "codex",
+      pathEnv: "",
+      versionProbe: () => "understanding-gate 0.4.11",
+    });
+    expect(report.policyPackHookVersions.length).toBeGreaterThanOrEqual(1);
+    const upsGap = report.policyPackHookVersions.find((g) =>
+      g.name.includes("user-prompt-submit"),
+    );
+    expect(upsGap).toMatchObject({
+      event: "UserPromptSubmit",
+      declaredMinVersion: "0.5.0",
+      kind: "below_floor",
+    });
+    const text = format(report);
+    expect(text).toContain("Policy-pack hooks");
+  });
+
+  // probe_failed / parse_failed have no known installed
+  // version, so the renderer must not print the below-floor "runs in
+  // degraded mode below its declared min_version" line for them (that
+  // line asserts an installed version the doctor never determined).
+  it("renders a probe-failed prose line, not the degraded-mode line, when the version probe returns null", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+${SILENCE_DRIFT}policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+      versionProbe: () => null,
+    });
+    expect(report.policyPackHookVersions.length).toBeGreaterThanOrEqual(1);
+    for (const gap of report.policyPackHookVersions) {
+      expect(gap.kind).toBe("probe_failed");
+      expect(gap.actualVersion).toBeNull();
+    }
+    const text = format(report);
+    expect(text).toContain("Policy-pack hooks");
+    expect(text).not.toContain("degraded mode");
+    expect(text).toContain(
+      "understanding-gate is not on PATH, failed, or does not support --version (declared floor 0.5.0).",
+    );
+  });
+
+  it("renders a parse-failed prose line, not the degraded-mode line, when the probe returns unparseable stdout", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+${SILENCE_DRIFT}policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+      versionProbe: () => "not a version",
+    });
+    expect(report.policyPackHookVersions.length).toBeGreaterThanOrEqual(1);
+    for (const gap of report.policyPackHookVersions) {
+      expect(gap.kind).toBe("parse_failed");
+      expect(gap.actualVersion).toBeNull();
+    }
+    const text = format(report);
+    expect(text).toContain("Policy-pack hooks");
+    expect(text).not.toContain("degraded mode");
+    expect(text).toContain(
+      "the probe ran but its output did not contain a version for understanding-gate (declared floor 0.5.0).",
+    );
+  });
+
+  it("dedupes the version probe across hooks that share one version_command", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+${SILENCE_DRIFT}policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+`,
+    });
+    const recordedArgv: Array<readonly string[]> = [];
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+      versionProbe: (cmd) => {
+        recordedArgv.push(cmd);
+        return "understanding-gate 0.4.11";
+      },
+    });
+    // Both the UserPromptSubmit and Stop hooks declare the identical
+    // `["understanding-gate", "--version"]` version_command; the probe
+    // must spawn it once, not once per hook. Asserting the full
+    // recorded argv array (not just a call count) pins that the probe
+    // actually ran with the real command, not some truncated stand-in.
+    expect(report.policyPackHookVersions.length).toBeGreaterThanOrEqual(2);
+    expect(recordedArgv).toEqual([["understanding-gate", "--version"]]);
+  });
+
+  // The integration test above cannot, by itself,
+  // discriminate a cache keyed on the full argv from one keyed on only
+  // `cmd[0]`, because both hooks this pack contributes already share
+  // one byte-identical version_command. `memoizeVersionProbe` is
+  // exported and unit-tested directly with two commands that share
+  // `cmd[0]` but differ past it, so an argv[0]-only key (which would
+  // wrongly collapse them into one cache slot and one probe call)
+  // fails this test.
+  describe("memoizeVersionProbe (task ab634898)", () => {
+    it("caches on the full argv, not just cmd[0]", () => {
+      const recordedArgv: Array<readonly string[]> = [];
+      const probe = memoizeVersionProbe((cmd) => {
+        recordedArgv.push(cmd);
+        return `${cmd.join(" ")} ok`;
+      });
+      const a = ["understanding-gate", "--version"] as const;
+      const b = ["understanding-gate", "--check"] as const;
+      expect(probe(a)).toBe("understanding-gate --version ok");
+      expect(probe(a)).toBe("understanding-gate --version ok");
+      expect(probe(b)).toBe("understanding-gate --check ok");
+      expect(probe(b)).toBe("understanding-gate --check ok");
+      // `a` and `b` share `cmd[0]` ("understanding-gate") but differ
+      // past it, so both must have reached the underlying probe once
+      // each (2 calls total), and repeated calls with the same argv
+      // must not re-invoke it.
+      expect(recordedArgv).toEqual([a, b]);
+    });
+  });
+});
+
 describe("doctor — policy pack ux/producers drift check (task 68b9ad9c)", () => {
   // Motivation: the understanding-gate deny message is entirely driven by
   // config.ux when the operator has declared one. The init templates
@@ -1807,6 +2062,8 @@ tools:
     expect(received).toEqual(["my-hook-bin", "--version"]);
     expect(report.hooks[0]?.version).toEqual({
       status: "warn",
+      kind: "below_floor",
+      actualVersion: "0.2.0",
       message: "outdated: installed v0.2.0 < required 0.5.0",
     });
     expect(report.warningCount).toBeGreaterThanOrEqual(1);
