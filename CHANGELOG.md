@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`understanding-before-execution`'s Claude `UserPromptSubmit` hook now
+  carries an `UNDERSTANDING_GATE_PAUSE_FILE=<generatedDir>/.harness-paused`
+  env prefix** (task `63fefe3a`), same mechanism as the existing
+  `UNDERSTANDING_GATE_REPORT_DIR` prefix. The npm-backed
+  `understanding-gate-claude-hook` bin runs outside harness's own runtime
+  and cannot resolve `generatedDir` (and therefore the pause sentinel) the
+  way harness's own hooks already do; apply now bakes in the resolved
+  sentinel path (`sentinelPath(generatedDir)`) so the bin can read it. Only
+  this one hook gets the new prefix; the path is derived from the
+  install's actual `generatedDir`, never hardcoded.
+
 ### Fixed
 
 - **`read-only-bash` recognises a path-qualified git binary and skips git
