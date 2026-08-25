@@ -307,8 +307,12 @@ describe("pack hook codex-user-prompt-submit injector", () => {
       expect(result.emitted).toBe(false);
       expect(result.exitCode).toBe(0);
       expect(stdout.read()).toBe("");
-      expect(stderr.read()).toContain("PAUSED");
-      expect(stderr.read()).toContain("operator recovery");
+      const stderrText = stderr.read();
+      expect(stderrText).toContain("PAUSED");
+      expect(stderrText).toContain("operator recovery");
+      expect(stderrText).toContain(
+        "harness pack hook codex-user-prompt-submit: harness paused, skipping injection.",
+      );
     });
 
     it("still injects on a real prompt when no sentinel is present (unchanged behavior)", async () => {

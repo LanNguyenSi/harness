@@ -27,9 +27,11 @@
 //   - hook-solution-acceptance-writeguard.ts: loads no manifest.
 //   - hook-stay-in-scope.ts: loads no manifest.
 //
-// hook-codex-stop.ts and hook-codex-user-prompt-submit.ts now use all of
-// the above, including the pause check (tasks 63fefe3a, 1432e053), they
-// used to be listed here as "no pause check" exceptions.
+// hook-codex-stop.ts and hook-codex-user-prompt-submit.ts now also call
+// the pause check (2, `checkHookPause`), on top of the stdin reader (1) and
+// manifest loader (3) they already used (tasks 63fefe3a, 1432e053); they
+// used to be listed here as "no pause check" exceptions. Neither one pulls
+// in 4-6, so "use all of the above" would overstate it.
 //
 // Per-hook decision logic, error envelopes, and early-return shapes stay local
 // to each hook. This module covers structural boilerplate only, not semantics.

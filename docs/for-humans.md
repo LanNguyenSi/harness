@@ -329,8 +329,12 @@ harness resume                 # cuts the pause short
 While paused, every PreToolUse / PostToolUse hook emits a one-line
 stderr notice (`harness <hook>: PAUSED since 3m ago (reason: ...);
 auto-resumes in 7m. Run \`harness resume\` to re-enable.`) and allows
-the tool call without evaluating. After the window expires, the next
-hook fire silently deletes the sentinel and resumes normal gating.
+the tool call without evaluating. The same sentinel also short-circuits
+the Codex UserPromptSubmit injector and the Codex Stop capture, which
+emit their own one-line stderr notice and skip injection/capture
+without evaluating, even though neither one is a tool call. After the
+window expires, the next hook fire silently deletes the sentinel and
+resumes normal gating.
 
 **Operator-only by design, but the CLI check is a speed bump, not a
 boundary.** `harness pause` refuses to run when any of

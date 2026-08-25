@@ -197,6 +197,9 @@ export async function runPackHookCodexUserPromptSubmitCli(
   // Pause sentinel, operator-only kill switch. Honoured BEFORE manifest
   // load, same ordering as every other pack hook (see module header).
   if (checkHookPause("codex-user-prompt-submit", stderr, opts, opts.generatedDir, opts.now).paused) {
+    stderr.write(
+      "harness pack hook codex-user-prompt-submit: harness paused, skipping injection.\n",
+    );
     return { exitCode: 0, emitted: false, text: "" };
   }
 

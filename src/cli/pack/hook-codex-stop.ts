@@ -325,10 +325,14 @@ export async function runPackHookCodexStopCli(
   // Pause sentinel (task 1432e053, parity with pre-tool-use / post-tool-use /
   // user-prompt-submit), honoured BEFORE stdin JSON parsing (and before
   // manifest load), so an active `harness pause` is honoured and announced
-  // even when the stdin payload cannot be parsed at all. `hook-codex-
-  // pre-tool-use.ts` follows the same ordering: emit the diagnostic and
-  // fall through to the pause check rather than returning early on
-  // malformed input.
+  // even when the stdin payload cannot be parsed at all. This deliberately
+  // diverges from `hook-codex-pre-tool-use.ts`, which parses stdin first
+  // and checks the pause afterward: pre-tool-use's malformed-JSON path
+  // still needs to run (it emits a diagnostic and falls through to allow),
+  // while here checking the pause first means an unparsable payload during
+  // an active pause never reaches the parse step at all, so the
+  // malformed-JSON diagnostic below is intentionally not emitted in that
+  // case.
   if (checkHookPause("codex-stop", stderr, opts, opts.generatedDir, opts.now).paused) {
     return allowResult(
       "harness pack hook codex-stop: harness paused, skipping capture.",
