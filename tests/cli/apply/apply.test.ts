@@ -1609,12 +1609,21 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
       const userPromptSubmitCommand = allCommands.find((c) =>
         c.endsWith("understanding-gate-claude-hook"),
       );
-      // Not asserting the full command here (that's the dedicated
-      // PAUSE_FILE tests above) — only that MODE resolves from
-      // config.mode, staying outermost regardless of the PAUSE_FILE
-      // prefix now also present (agent-tasks 63fefe3a).
-      expect(userPromptSubmitCommand).toMatch(
-        /^UNDERSTANDING_GATE_MODE='grill_me' /,
+      // Full command, not just an anchored prefix: the generated line now
+      // carries two env assignments (MODE, then PAUSE_FILE), and a shell
+      // applies last-assignment-wins per var name. A prefix-anchored
+      // /^UNDERSTANDING_GATE_MODE='grill_me' / match only pins the FIRST
+      // token — it would still pass if something appended a second,
+      // ambient-derived UNDERSTANDING_GATE_MODE assignment after
+      // PAUSE_FILE, even though that second assignment is the one the
+      // hook process actually sees. Asserting the full string is what
+      // catches that.
+      expect(userPromptSubmitCommand).toBe(
+        `UNDERSTANDING_GATE_MODE='grill_me' UNDERSTANDING_GATE_PAUSE_FILE='${path.join(
+          tmpHome,
+          GENERATED_DIRNAME,
+          ".harness-paused",
+        )}' understanding-gate-claude-hook`,
       );
     } finally {
       if (saved === undefined) delete process.env["UNDERSTANDING_GATE_MODE"];

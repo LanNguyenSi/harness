@@ -310,6 +310,23 @@ describe("expandPolicyPacks", () => {
     );
   });
 
+  it("config.mode: fast_confirm plus a pauseFile emits UNDERSTANDING_GATE_PAUSE_FILE with NO mode prefix (agent-tasks 63fefe3a fix-round)", () => {
+    // MEDIUM-7 above omits the MODE prefix on a fast_confirm-effective
+    // config; this pins that the PAUSE_FILE prefix from wrapPause still
+    // applies on its own in that case, with the MODE-outermost wrap
+    // (wrapMode) omitting cleanly rather than leaving a stray empty
+    // prefix or dropping PAUSE_FILE too.
+    const m = buildManifest([
+      { name: "understanding-before-execution", config: { mode: "fast_confirm" } },
+    ]);
+    const r = expandPolicyPacks(m, undefined, {
+      pauseFile: "/home/u/.claude/harness.generated/.harness-paused",
+    });
+    expect(r.hooks.find((h) => h.event === "UserPromptSubmit")?.command).toBe(
+      "UNDERSTANDING_GATE_PAUSE_FILE='/home/u/.claude/harness.generated/.harness-paused' understanding-gate-claude-hook",
+    );
+  });
+
   it("coerces config.mode: strict to UNDERSTANDING_GATE_MODE=grill_me (the package has no strict variant)", () => {
     const m = buildManifest([
       { name: "understanding-before-execution", config: { mode: "strict" } },

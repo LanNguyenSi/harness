@@ -61,6 +61,15 @@ export {
   clearApprovalMarker,
 } from "./markers.js";
 
+// PAUSE_FILE_ENV's canonical definition lives in the parent
+// understanding-before-execution.ts (it's an apply-time-only construction
+// concern, not a persisted-reports one), re-exported here so it is
+// reachable through the same path as its REPORTS_DIR_ENV sibling below —
+// one shared symbol between producer (apply's wrapPause) and any reader,
+// instead of a bare string literal that could drift silently (agent-tasks
+// 63fefe3a fix-round).
+export { PAUSE_FILE_ENV } from "../understanding-before-execution.js";
+
 export {
   type PersistedReport,
   REPORTS_DIR_ENV,

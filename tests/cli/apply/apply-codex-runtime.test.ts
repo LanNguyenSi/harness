@@ -80,6 +80,26 @@ describe("apply --runtime codex", () => {
     expect(config).not.toContain("blocking = ");
   });
 
+  it("does NOT prefix the codex UserPromptSubmit hook with UNDERSTANDING_GATE_PAUSE_FILE (agent-tasks 63fefe3a fix-round)", async () => {
+    // Apply computes `pauseFile` (sentinelPath(generatedDir)) unconditionally
+    // for every runtime and passes it to expandPolicyPacks, but the
+    // PAUSE_FILE prefix (wrapPause) is wired ONLY into the Claude Code
+    // UserPromptSubmit command (`understanding-before-execution.ts`'s
+    // codex branch uses the fixed COMMAND_USER_PROMPT_SUBMIT_CODEX with no
+    // wrap at all) — the npm-backed bin the prefix exists for is a
+    // Claude-Code-only hook; the Codex adapter shells out to harness's own
+    // CLI, which resolves generatedDir itself.
+    writeManifestWithPack();
+    const result = await apply({ homeDir: tmpHome, runtime: "codex" });
+    expect(result.outcome).toBe("applied");
+    const config = fs.readFileSync(
+      path.join(tmpHome, GENERATED_DIRNAME, CODEX_CONFIG_BASENAME),
+      "utf8",
+    );
+    expect(config).toContain("harness pack hook codex-user-prompt-submit");
+    expect(config).not.toContain("UNDERSTANDING_GATE_PAUSE_FILE");
+  });
+
   it("emits the operator audit instructions.md with runtime: codex", async () => {
     writeManifestWithPack();
     await apply({ homeDir: tmpHome, runtime: "codex" });

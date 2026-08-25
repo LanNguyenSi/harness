@@ -37,7 +37,7 @@ import { SHELL_ALIASES } from "../../runtime/tool-name-aliases.js";
 // `src/cli/pause-check.ts` does for harness's own hooks — the apply path
 // bakes the resolved sentinel path in as an env-var prefix instead, same
 // mechanism as UNDERSTANDING_GATE_REPORT_DIR below (agent-tasks 63fefe3a).
-const PAUSE_FILE_ENV = "UNDERSTANDING_GATE_PAUSE_FILE";
+export const PAUSE_FILE_ENV = "UNDERSTANDING_GATE_PAUSE_FILE";
 
 export const PACK_NAME = "understanding-before-execution";
 
