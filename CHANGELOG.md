@@ -9,30 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- **`harness pack hook codex-stop` now honours an active pause sentinel**
-  (task `1432e053`, follow-up to `63fefe3a`). Like `codex-user-prompt-submit`
-  before task `63fefe3a` fixed it, `hook-codex-stop.ts` never called
-  `checkHookPause` — an active, unexpired `harness pause` silenced every
-  other pack hook (PreToolUse/PostToolUse gates and, since `63fefe3a`, the
-  Codex UserPromptSubmit injector) but not this one, so a paused window
-  could still persist Understanding Report captures under
-  `.understanding-gate/reports/`. It now checks the sentinel first,
-  honoured BEFORE manifest load, same ordering as the other three Codex
-  hooks. All four `hook-codex-*.ts` files now import `checkHookPause`
-  (`src/cli/pack/hook-bootstrap.ts`'s module header no longer lists any of
-  them as a "no pause check" exception), pinned by a source-grep test so
-  the exception list cannot silently grow back. This closes the residual
-  gap that commit 15aa127d / a689ba4 (task `63fefe3a`, PR-local commits on
-  this branch, not yet a separate task at the time) flagged as
-  out-of-scope in `docs/okf/pause-vs-gate-kill-switch.md`; it does NOT
-  claim to fix task `63fefe3a` itself, which was already closed by those
-  commits for the `codex-user-prompt-submit` hook, nor does it touch the
-  Claude Code adapter (`@lannguyensi/understanding-gate`, a separate npm
-  package repo). **Open risk, unchanged by this task:** the alias field
-  names `codex-user-prompt-submit` recognizes beyond `prompt` (`text`,
-  `input`, `message`, `user_prompt`, `user_input`) remain a reasoned guess,
-  not verified against real Codex traffic — that suppression path may in
-  practice never fire.
+- **Codex adapter pause parity: `harness pack hook codex-user-prompt-submit`
+  and `harness pack hook codex-stop` now honour an active pause sentinel,
+  and the UserPromptSubmit notification-turn heuristic is fail-open**
+  (tasks `63fefe3a` and `1432e053`). Unlike every other pack hook, these
+  two never called `checkHookPause`: an active, unexpired `harness pause`
+  silenced every PreToolUse/PostToolUse gate but kept the full
+  Understanding Gate instruction block injecting and kept persisting
+  Understanding Report captures under `.understanding-gate/reports/`
+  during a paused window. Both hooks now check the sentinel first, before
+  manifest load, the same ordering as the other Codex hooks; all four
+  `hook-codex-*.ts` files import `checkHookPause`, the module header of
+  `src/cli/pack/hook-bootstrap.ts` lists no "no pause check" exception any
+  more, and a source-grep test pins that the exception list cannot grow
+  back. Second change in the UserPromptSubmit hook: a first cut suppressed
+  injection whenever the stdin envelope carried no `prompt` field, on the
+  assumption that a missing `prompt` means a notification turn. An advisor
+  review found this unverified against a real Codex payload (the generated
+  `config.toml` header documents the wire shape as
+  `{ session_id?, tool_name?, raw_input?, event? }`, with no `prompt`
+  field, and every suppression test supplied `prompt` itself), so a real
+  envelope without that field would have gone permanently, silently dark.
+  `hasRealUserPrompt` therefore fails OPEN to inject: it only suppresses
+  when a recognised prompt-carrying field (`prompt`, `text`, `input`,
+  `message`, `user_prompt`, `user_input`) is positively present and empty;
+  a missing field, unparsable stdin, or an unrecognised envelope shape all
+  inject, as before. Scope note: the incident task `63fefe3a` started from
+  (a six-hour pause window that still produced three Understanding Reports,
+  the same failure class seen across batches 20, 25 and 26) was reported
+  against the Claude Code adapter, whose hooks live in the separate
+  `@lannguyensi/understanding-gate` npm package and were fixed there in
+  its 0.5.0. This entry is Codex-adapter parity only and does not claim to
+  fix the Claude-side behaviour. **Open risk, unchanged:** the alias field
+  names beyond `prompt` are a reasoned guess, not verified against real
+  Codex traffic; that suppression path may in practice never fire.
 
 ## [0.47.0] - 2026-08-25
 
@@ -58,41 +68,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- **`harness pack hook codex-user-prompt-submit` (Codex adapter parity,
-  not the fix for the originally-reported issue — see below) now honours
-  an active pause sentinel, and its notification-turn heuristic is now
-  fail-open instead of fail-closed** (task `63fefe3a`). Two changes: (1)
-  unlike every other pack hook, this UserPromptSubmit injector never
-  called `checkHookPause` — an active, unexpired `harness pause` silenced
-  every PreToolUse/PostToolUse gate but not this one, so the full
-  Understanding Gate instruction block kept injecting during a paused
-  window; it now checks the sentinel first, mirroring
-  `hook-pre-tool-use.ts`. (2) a same-task first cut had the hook suppress
-  injection whenever the stdin envelope carried no `prompt` field, on the
-  assumption that a missing `prompt` means a notification turn (subagent
-  completion, a Monitor event, a background-bash command finishing). An
-  advisor review caught that this was unverified against a real Codex
-  payload — the generated `config.toml` header documents the Codex wire
-  shape as `{ session_id?, tool_name?, raw_input?, event? }`, with no
-  `prompt` field at all, and every test exercising the suppression used a
-  synthetic fixture that supplied `prompt` itself, so a real envelope
-  without that field would have gone permanently, silently dark. Fixed by
-  making `hasRealUserPrompt` fail OPEN to inject: it only suppresses when
-  a recognized prompt-carrying field (several aliases now, not just
-  `prompt`) is positively present and empty; a missing field, unparsable
-  stdin, or an unrecognized envelope shape all inject, same as before this
-  task. Both checks run before manifest load, same ordering discipline as
-  the other gates. Note on scope: the incident this task started from (a
-  six-hour pause window that still produced three full Understanding
-  Reports, Batch 26, session `ebbcbc78`, the same failure class reported
-  across three separate batches — 20, 25, 26) was reported against the
-  Claude Code adapter, whose UserPromptSubmit hook lives in the separate
-  `@lannguyensi/understanding-gate` npm package repo, not here. Item (1)
-  above (the pause-sentinel gap) is a real, independently-confirmed bug in
-  this repo's Codex hook and is fixed. Item (2) is Codex-adapter parity
-  work only — it does not touch, and does not claim to fix, the
-  originally-reported Claude-side behavior; any fix for that belongs in
-  the npm package repo.
 - **`read-only-bash` recognises a path-qualified git binary and skips git
   global options before the subcommand, while `-c` stays fail-closed**
   (task `5b5d1022`, #452). Two measured false positives (a path-qualified
