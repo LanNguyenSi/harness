@@ -190,10 +190,15 @@ function formatPolicyPackHookVersionsSection(report: DoctorReport): string[] {
       out.push(
         `      this pack-contributed hook runs in degraded mode below its declared min_version ${gap.declaredMinVersion}. Upgrade the package-side bin.`,
       );
+    } else if (gap.kind === "probe_failed") {
+      const bin = gap.versionCommand[0] ?? "the probe binary";
+      out.push(
+        `      ${bin} is not on PATH, failed, or does not support --version (declared floor ${gap.declaredMinVersion}).`,
+      );
     } else {
       const bin = gap.versionCommand[0] ?? "the probe binary";
       out.push(
-        `      could not determine the installed version of ${bin}; make sure it is on PATH (declared floor ${gap.declaredMinVersion}).`,
+        `      the probe ran but its output did not contain a version for ${bin} (declared floor ${gap.declaredMinVersion}).`,
       );
     }
   }

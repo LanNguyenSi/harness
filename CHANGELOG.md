@@ -21,23 +21,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   same pack's 0.4.0 floor (docs/policy-packs/understanding-before-execution.md);
   both only hold from this version onward. A new "Policy-pack hooks"
   section runs the same version probe already used for manifest-declared
-  hooks against `expandPolicyPacks`'s output, deduped per distinct
+  hooks against `expandPolicyPacks`'s output (always against the
+  `claude-code` default runtime, independent of `--target`, which
+  additionally evaluates a harness-side adapter and is not a statement
+  about which runtime is installed), deduped per distinct
   `version_command` so a probe used by more than one hook spawns once.
+  Each gap reports `kind` (`below_floor` / `probe_failed` /
+  `parse_failed`), `actualVersion`, and `versionCommand`, mirroring the
+  sibling pack-level `PolicyPackVersionGap` shape; the renderer prints
+  the "runs in degraded mode below its declared min_version" line only
+  for `kind: "below_floor"`, and its own prose per kind otherwise, since
+  `probe_failed` / `parse_failed` have no known installed version.
   Warn-not-error, matching the manifest-hook and pack-level floors; exit
   code is unaffected.
-  - Fix round 1: the dedup cache key was `cmd.join("<NUL>")`, a literal
-    NUL byte in the source that made `file`/some greps treat the file as
-    binary; switched to `JSON.stringify(cmd)` (extracted into an exported
-    `memoizeVersionProbe` helper, its own unit test pins the full-argv
-    key against an argv[0]-only regression). The "Policy-pack hooks"
-    gap report gained `kind` / `actualVersion` / `versionCommand` fields
-    mirroring the sibling pack-level `PolicyPackVersionGap` shape, and
-    the renderer only prints the "runs in degraded mode below its
-    declared min_version" line for `kind: "below_floor"`; `probe_failed`
-    / `parse_failed` (unknown installed version) get their own prose.
-    The runtime passed to `expandPolicyPacks` is now derived from
-    `--target` (falling back to the `claude-code` default) instead of
-    being hardcoded.
 
 ## [0.47.0] - 2026-08-25
 

@@ -458,6 +458,26 @@ function checkHookVersion(
 }
 
 /**
+ * Wraps a version probe with a per-full-argv cache, keyed on
+ * `JSON.stringify(cmd)` so two commands sharing only `cmd[0]` (e.g.
+ * `["understanding-gate", "--version"]` vs. `["understanding-gate",
+ * "--check"]`) are never conflated into the same cache slot; only a
+ * byte-identical argv array is deduped. Exported standalone (task
+ * ab634898 fix round 1) so this caching contract has its own focused
+ * unit test independent of any particular pack's hook shape.
+ */
+export function memoizeVersionProbe(
+  probe: (cmd: readonly string[]) => string | null,
+): (cmd: readonly string[]) => string | null {
+  const cache = new Map<string, string | null>();
+  return (cmd: readonly string[]): string | null => {
+    const key = JSON.stringify(cmd);
+    if (!cache.has(key)) cache.set(key, probe(cmd));
+    return cache.get(key) ?? null;
+  };
+}
+
+/**
  * Hook-level `min_version` floor on policy-pack-expanded hooks (task
  * ab634898). `checkHooks` above only walks `manifest.hooks[]`, but the
  * hooks Claude Code actually runs also include whatever
@@ -480,46 +500,32 @@ function checkHookVersion(
  * (`checkPolicyPackVersions`). Always warn, never error: the pack still
  * runs in degraded mode rather than failing outright.
  *
- * The runtime passed to `expandPolicyPacks` is derived from
- * `opts.target` the same way `--target codex` / `--target opencode`
- * already select their own doctor modules, falling back to
- * `DEFAULT_RUNTIME` ("claude-code") when no target is given. `DoctorTarget`
- * has no "claude-code" member (see its doc comment in `types.ts`), so
- * every value it can hold ("codex" | "opencode") is already a valid
- * `Runtime`.
+ * Always expands against `DEFAULT_RUNTIME` ("claude-code"), never
+ * `opts.target`: `--target codex` / `--target opencode` additionally
+ * evaluate the harness-side adapter health for that runtime, they do
+ * not change which runtime is actually installed and running the
+ * hooks. Matches the sibling pack-level check's `resolveBuiltin(pack,
+ * DEFAULT_RUNTIME)` further below (fix round 3, review finding C1:
+ * keying this on `--target` produced a below-floor install that showed
+ * no warning under `--target codex` and a spurious one under
+ * `--target opencode`, where the pack never wires in the first place).
  */
-/**
- * Wraps a version probe with a per-full-argv cache, keyed on
- * `JSON.stringify(cmd)` so two commands sharing only `cmd[0]` (e.g.
- * `["understanding-gate", "--version"]` vs. `["understanding-gate",
- * "--check"]`) are never conflated into the same cache slot; only a
- * byte-identical argv array is deduped. Exported standalone (task
- * ab634898 fix round 1) so this caching contract has its own focused
- * unit test independent of any particular pack's hook shape.
- */
-export function memoizeVersionProbe(
-  probe: (cmd: readonly string[]) => string | null,
-): (cmd: readonly string[]) => string | null {
-  const cache = new Map<string, string | null>();
-  return (cmd: readonly string[]): string | null => {
-    const key = JSON.stringify(cmd);
-    if (!cache.has(key)) cache.set(key, probe(cmd));
-    return cache.get(key) ?? null;
-  };
-}
-
 function checkPolicyPackHookVersions(
   manifest: Manifest,
   versionProbe: (cmd: readonly string[]) => string | null,
-  target: DoctorTarget | undefined,
 ): PolicyPackHookVersionGapReport[] {
-  const runtime = target ?? DEFAULT_RUNTIME;
-  const expansion = expandPolicyPacks(manifest, runtime);
+  // Always expands against DEFAULT_RUNTIME ("claude-code"), not
+  // `opts.target`: `--target` additionally evaluates the harness-side
+  // adapter health for that runtime (see checkPolicyPackHookVersions'
+  // header comment), it does not change which runtime is actually
+  // installed. Matches the sibling pack-level check's
+  // `resolveBuiltin(pack, DEFAULT_RUNTIME)` a few hundred lines below.
+  const expansion = expandPolicyPacks(manifest, DEFAULT_RUNTIME);
   const dedupedProbe = memoizeVersionProbe(versionProbe);
   const gaps: PolicyPackHookVersionGapReport[] = [];
   for (const hook of expansion.hooks) {
     const version = checkHookVersion(hook, dedupedProbe);
-    if (version && version.status === "warn" && hook.min_version && version.kind) {
+    if (version && version.status === "warn" && hook.min_version) {
       gaps.push({
         name: hook.name,
         event: hook.event,
@@ -1115,7 +1121,6 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const policyPackHookVersions = checkPolicyPackHookVersions(
     manifest,
     policyPacksVersionProbe,
-    opts.target,
   );
   const workflows = buildWorkflows(manifest);
   const riskGate = buildRiskGate(manifest);

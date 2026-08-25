@@ -1124,6 +1124,80 @@ ${SILENCE_DRIFT}policy_packs:
     expect(format(report)).not.toContain("Policy-pack hooks");
   });
 
+  // Review round 3, finding C2: pin that policyPackHookVersions actually
+  // contributes to warningCount, not just that it's populated.
+  // countDiagnostics has `warningCount +=
+  // report.policyPackHookVersions.length`; deleting that line leaves
+  // every other doctor test green (the pack-hook gaps still show up in
+  // the section itself), so this test compares warningCount for the
+  // identical fixture at-floor vs. below-floor and asserts the delta
+  // is exactly `policyPackHookVersions.length`, which only holds when
+  // that line is present.
+  it("warningCount increases by exactly policyPackHookVersions.length when the install drops below floor", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+${SILENCE_DRIFT}policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+`,
+    });
+    const atFloor = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+      versionProbe: () => "understanding-gate 0.5.0",
+    });
+    const belowFloor = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+      versionProbe: () => "understanding-gate 0.4.11",
+    });
+    expect(atFloor.policyPackHookVersions).toHaveLength(0);
+    expect(belowFloor.policyPackHookVersions.length).toBeGreaterThanOrEqual(1);
+    expect(belowFloor.warningCount - atFloor.warningCount).toBe(
+      belowFloor.policyPackHookVersions.length,
+    );
+  });
+
+  // Review round 3, finding C1: the pack-hook expansion must key on
+  // the DEFAULT_RUNTIME ("claude-code") install, not on `--target`.
+  // `--target codex` additionally evaluates the harness-side Codex
+  // adapter health; it is not a statement about which runtime is
+  // actually installed. Keying the expansion on `target` (round-1
+  // regression) made this exact below-floor install produce ZERO
+  // "Policy-pack hooks" warnings under `--target codex`, the silent
+  // report this task exists to close.
+  it("still reports the pack-hook floor gap under --target codex (target is not the runtime)", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+${SILENCE_DRIFT}policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+      target: "codex",
+      pathEnv: "",
+      versionProbe: () => "understanding-gate 0.4.11",
+    });
+    expect(report.policyPackHookVersions.length).toBeGreaterThanOrEqual(1);
+    const upsGap = report.policyPackHookVersions.find((g) =>
+      g.name.includes("user-prompt-submit"),
+    );
+    expect(upsGap).toMatchObject({
+      event: "UserPromptSubmit",
+      declaredMinVersion: "0.5.0",
+      kind: "below_floor",
+    });
+    const text = format(report);
+    expect(text).toContain("Policy-pack hooks");
+  });
+
   // F3 fix round: probe_failed / parse_failed have no known installed
   // version, so the renderer must not print the below-floor "runs in
   // degraded mode below its declared min_version" line for them (that
@@ -1152,7 +1226,7 @@ ${SILENCE_DRIFT}policy_packs:
     expect(text).toContain("Policy-pack hooks");
     expect(text).not.toContain("degraded mode");
     expect(text).toContain(
-      "could not determine the installed version of understanding-gate; make sure it is on PATH (declared floor 0.5.0).",
+      "understanding-gate is not on PATH, failed, or does not support --version (declared floor 0.5.0).",
     );
   });
 
@@ -1180,7 +1254,7 @@ ${SILENCE_DRIFT}policy_packs:
     expect(text).toContain("Policy-pack hooks");
     expect(text).not.toContain("degraded mode");
     expect(text).toContain(
-      "could not determine the installed version of understanding-gate; make sure it is on PATH (declared floor 0.5.0).",
+      "the probe ran but its output did not contain a version for understanding-gate (declared floor 0.5.0).",
     );
   });
 

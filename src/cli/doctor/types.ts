@@ -73,19 +73,25 @@ export interface ToolsSection {
  * absent otherwise (the path-existence check on the hook command still
  * runs unconditionally and surfaces via the main `status` field).
  */
-export interface HookVersionReport {
-  status: "ok" | "warn";
-  /**
-   * Which outcome the probe hit, mirroring `PolicyPackVersionGapKind`
-   * (`src/policy-packs/version-check.ts`) so both hook-level and
-   * pack-level gaps share one warning vocabulary. Only set on `warn`;
-   * a `status: "ok"` report has nothing to classify.
-   */
-  kind?: "below_floor" | "probe_failed" | "parse_failed";
-  /** Parsed installed version, when the probe succeeded. Null when the probe failed or its stdout didn't parse. */
-  actualVersion?: string | null;
-  message: string;
-}
+export type HookVersionReport =
+  | {
+      status: "ok";
+      message: string;
+    }
+  | {
+      status: "warn";
+      /**
+       * Which outcome the probe hit, mirroring `PolicyPackVersionGapKind`
+       * (`src/policy-packs/version-check.ts`) so both hook-level and
+       * pack-level gaps share one warning vocabulary. Required on
+       * `warn`: every warn-producing branch of `checkHookVersion`
+       * classifies its outcome, so there is no warn case without one.
+       */
+      kind: "below_floor" | "probe_failed" | "parse_failed";
+      /** Parsed installed version, when the probe succeeded. Null when the probe failed or its stdout didn't parse. */
+      actualVersion: string | null;
+      message: string;
+    };
 
 export interface HookEntryReport {
   name: string;
