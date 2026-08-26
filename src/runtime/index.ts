@@ -51,6 +51,10 @@ export {
   type RiskProfile,
 } from "./risk-classifier.js";
 export {
+  resolveDeletionTarget,
+  type DeletionTargetVerdict,
+} from "./deletion-target-resolve.js";
+export {
   resolveKubeContext,
   type KubeContext,
   type ResolveKubeContextOptions,

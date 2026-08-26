@@ -552,6 +552,108 @@ Policies that declare a `ux:` block are not altered: the operator chose
 the exact wording of the agent-facing surface; the flag still rides the
 audit record and is still visible in `harness audit` and `explain --trace`.
 
+### Dev-context deletion gate (`action.deletion_target_unresolvable`)
+
+*Status: live as of task `d03af8f6`. Additive alongside
+`gate-prod-destructive`/`gate-prod-destructive-approval`; nothing about
+those two policies changed.*
+
+`gate-prod-destructive`/`-approval` gate on `risk.severity_at_least` +
+`environment.name: production`, so on an ordinary task branch —
+`environment: unknown` — neither fires: an `rm -rf`, `find ... -delete`,
+or `git clean -f*` runs unconfirmed even when its target is a typo'd
+path, a stray shell variable, or a relative path that resolves somewhere
+other than where the agent thinks it does. The motivating incident class
+is not "an agent attacks production" but "an agent cleans up its own
+scratch files and the path points elsewhere."
+
+This gate closes that gap WITHOUT scoping to production, using a
+DIFFERENT mechanism than the four `risk.*`/`environment.*` clauses above:
+
+- **`src/runtime/deletion-target-resolve.ts`** recognizes a deletion verb
+  — `rm` with a recursive (`-r`/`-R`/`--recursive`) or force
+  (`-f`/`--force`) flag, `find ... -delete`, or `git clean` with a force
+  flag (`-f`/`--force`/a short cluster containing `f`) — as the
+  command's FIRST shell segment, after stripping a leading `cd <path>
+  &&` / `VAR=value` / `git switch|checkout <branch> &&` prefix via the
+  same `parseBashPrefix` the a7eb1a71 kubectl-target-parse environment
+  signal already uses (composing with that path, not duplicating it). A
+  deletion verb that is not the first chained segment
+  (`echo hi && rm -rf /x`) is not recognized — the existing
+  `dangerous-shell` classifier's unanchored regex already covers a
+  dangerous tail for the production-scoped policies; this gate is the
+  narrower dev-context safety net. No regex is used anywhere in this
+  module: it is a whitespace/quote-aware tokenizer over the flag and
+  target tokens, not a pattern matched against the raw string, so there
+  is no ReDoS surface to measure here.
+- Each target token is resolved STATICALLY — no filesystem I/O, no
+  process-env read, no shell-variable expansion, no cwd substitution:
+  - a token containing `$` (an unexpanded variable reference), starting
+    with `~` (unexpanded home directory), or not starting with `/`
+    (relative — this resolver deliberately does not consult the event's
+    cwd) is **unresolvable**;
+  - an absolute path is normalized (`..`-traversal collapsed lexically)
+    and compared against every `risk.safe_deletion_roots` entry as a
+    directory-prefix match; inside one of them is **resolved**, outside
+    every one of them is **unresolvable**.
+- **`risk.safe_deletion_roots`** (new manifest key, under `risk:`
+  alongside `classifiers:`) is the allowlist those absolute targets are
+  checked against:
+
+  ```yaml
+  risk:
+    safe_deletion_roots:
+      - /tmp
+      - /private/tmp
+  ```
+
+  Schema default is exactly this list — the two spellings this
+  harness's own scratchpad convention can use: on macOS `/tmp` is a
+  symlink to `/private/tmp`, and different tools report the target
+  under either spelling. An operator-declared list REPLACES the
+  default, it does not merge with it. An entry may end in a trailing
+  `/**` or `/*` as documentation sugar (stripped before matching); this
+  is a plain directory-prefix check, not a real glob engine.
+- **`when.action.deletion_target_unresolvable: true`** (new `when:`
+  clause) reads the verdict above. Unlike `risk.severity_at_least` /
+  `risk.category_in` / `action.reversible`, this clause is **never**
+  subject to the "unknown is not safe" fail-close described below: an
+  action the deletion resolver does not recognize as a deletion verb at
+  all (`deletionTarget === null`) simply does not satisfy `true` here —
+  it never falls back to matched=true the way the risk-derived clauses
+  do for an unclassified action. This is deliberate and load-bearing:
+  those clauses fail-close because "we could not classify this generic
+  action" is itself risk-bearing, but doing the same for THIS clause
+  would turn an unscoped policy into a blanket gate on every unrelated
+  unclassified Bash call, in every environment — approval-spam, not a
+  deletion-specific gate. Because the clause is exempt, the shipped
+  `gate-dev-unsafe-deletion` policy below needs no `environment.name`
+  scope, and `harness validate`'s footgun lint
+  (`checkPolicyRiskWithoutEnvScope`, "Unclassified actions and the
+  fail-close rule" below) does not fire on it — that lint only inspects
+  `risk.severity_at_least` / `risk.category_in` / `action.reversible`.
+- **`gate-dev-unsafe-deletion`** (new policy, shipped in
+  `harness init --template full` and `docs/examples/full-manifest.yaml`,
+  additive next to `gate-prod-destructive`/`-approval`): `require_approval`
+  on `action.deletion_target_unresolvable: true`, no `environment.name`
+  clause, reusing the same `risk-approved:${SESSION_ID}` ledger tag and
+  `harness approve risk` unblock path the production-scoped approval
+  policy already uses — one operator approval clears the tag for the
+  rest of the session, so a misdirected command costs one approval, not
+  repeated approval prompts.
+- **Deny-first order is unaffected.** `gate-dev-unsafe-deletion` is
+  listed AFTER `gate-prod-destructive`/`-approval` in both shipped
+  manifests. When environment resolves to `production` AND the target is
+  both `critical`-severity (dangerous-shell) AND outside every safe root,
+  `gate-prod-destructive`'s hard `deny` is still the first blocking
+  decision `intercept()` finds — this gate never downgrades an existing
+  production deny to a mere approval prompt.
+
+Inspect the resolver's verdict directly with
+`harness explain-policy gate-dev-unsafe-deletion --event <event.json>`:
+the projection's `deletion_target` field shows the recognized verb,
+every target, which targets were unresolved, and why.
+
 ## Decision model
 
 *Status: all four outcomes are evaluated and enforced as of Phase 7 #6.

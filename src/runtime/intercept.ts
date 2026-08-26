@@ -38,6 +38,11 @@ import {
   resolveEnvironment,
   type EnvironmentResolution,
 } from "./environment-resolver.js";
+import {
+  resolveDeletionTarget,
+  type DeletionTargetVerdict,
+} from "./deletion-target-resolve.js";
+import { DEFAULT_SAFE_DELETION_ROOTS } from "../schema/risk.js";
 import { resolveGitContext, type GitRepoContext } from "./git-context.js";
 import { POLICY_DECISION_TYPE } from "../io/ledger-record.js";
 import { classifyRisk, type RiskProfile } from "./risk-classifier.js";
@@ -405,6 +410,11 @@ export interface RiskGateContext {
 interface EnrichedEnvelope {
   risk: RiskProfile;
   environment: EnvironmentResolution;
+  /** Static deletion-target verdict (task d03af8f6); null when the
+   *  command is not a recognized deletion verb. See
+   *  `deletion-target-resolve.ts` and `when-eval.ts`'s
+   *  `action.deletion_target_unresolvable` clause. */
+  deletionTarget: DeletionTargetVerdict | null;
 }
 
 /**
@@ -437,7 +447,24 @@ function enrichEnvelope(
       kubeNamespace: rc?.kubeNamespace ?? "",
     },
   );
-  return { risk, environment };
+  // Static deletion-target resolution (task d03af8f6) needs only the raw
+  // command — unlike the environment resolver above, it deliberately
+  // does not consult `riskContext` (cwd, env, kube): a relative target is
+  // UNRESOLVABLE by design, not resolved against ambient cwd. See
+  // `deletion-target-resolve.ts`'s module doc for the full rationale.
+  const deletionShellCommand = extractShellCommand({ raw_input: envelope.raw_input });
+  const deletionTarget =
+    deletionShellCommand === null
+      ? null
+      : resolveDeletionTarget(
+          deletionShellCommand,
+          // Defensive fallback (not just the schema `.default()`): a
+          // hand-built `Manifest` test fixture that constructs `risk:`
+          // directly, bypassing `RiskSchema.parse`, may omit this field
+          // entirely — never trust it present.
+          manifest.risk.safe_deletion_roots ?? DEFAULT_SAFE_DELETION_ROOTS,
+        );
+  return { risk, environment, deletionTarget };
 }
 
 /**

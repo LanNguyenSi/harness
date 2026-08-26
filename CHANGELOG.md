@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Risk Gate: a new, environment-INDEPENDENT deletion-target gate closes the
+  dev-context gap where `gate-prod-destructive*` only fires once the resolved
+  environment is `production`** (task `d03af8f6`). Measured 2026-08-06 (re-
+  verified against 0.49.0): on a task branch (`environment: unknown`) an `rm
+  -rf` against ANY absolute path — a typo'd path, a stale variable, a
+  traversal that walks outside the intended scratch dir — ran unconfirmed,
+  because `risk.severity_at_least`/`risk.category_in` fail-close to
+  matched=true for an unclassified action, so an unscoped policy would
+  instead have gated every unrelated unclassified Bash call in every
+  environment (approval-spam, not a deletion-specific gate). New pieces,
+  additive alongside the existing production-scoped policies (nothing
+  existing changed semantics):
+  - `src/runtime/deletion-target-resolve.ts`: a pure, regex-free tokenizer
+    (no shell spawned) that recognizes `rm -r*`/`-f*`, `find ... -delete`,
+    and `git clean -f*` as the command's first shell segment (composing with,
+    not duplicating, the a7eb1a71 `parseBashPrefix`/kubectl-target-parse
+    environment-signal path) and statically resolves each target: an
+    unexpanded `$VAR`/`~`, a relative path, or a `..`-traversal that
+    normalizes outside every declared root is UNRESOLVABLE; an absolute path
+    inside a declared `risk.safe_deletion_roots` entry is not.
+  - `risk.safe_deletion_roots` (new manifest key, schema default `["/tmp",
+    "/private/tmp"]` — the two spellings this harness's own scratchpad
+    convention can use, since macOS symlinks `/tmp` to `/private/tmp`).
+  - `when.action.deletion_target_unresolvable` (new `policy.when:` clause,
+    `src/runtime/when-eval.ts`): deliberately NOT subject to the "unknown is
+    not safe" fail-close the four existing risk/environment clauses share —
+    it reads the deletion resolver's own verdict, not the Risk Classifier's
+    `classified` state, so it never falls back to matched=true for an
+    unrelated unclassified command. This is what lets the new policy below
+    be environment-independent without becoming a blanket gate.
+  - `gate-dev-unsafe-deletion` (new policy, `harness init --template full` +
+    `docs/examples/full-manifest.yaml`, additive alongside
+    `gate-prod-destructive`/`-approval`): `require_approval` on
+    `action.deletion_target_unresolvable: true`, reusing the same
+    `risk-approved:${SESSION_ID}` ledger tag / `harness approve risk`
+    unblock path the production-scoped approval policy already uses.
+  - The dead alternation in the shipped `dangerous-shell` classifier's
+    `rm\s+-rf\s+(/|/var|/data|/mnt|~)` pattern (the bare `/` branch already
+    matches every absolute path, so `/var`/`/data`/`/mnt` never
+    independently contribute a match) is documented, not changed — see the
+    comment in `docs/examples/full-manifest.yaml`; it only feeds the
+    existing production-scoped policies, out of this task's scope.
+
 ## [0.49.0] - 2026-08-26
 
 ### Fixed

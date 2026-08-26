@@ -202,3 +202,17 @@ describe("FULL_TEMPLATE risk.classifiers[] drift guard (task a7eb1a71)", () => {
     }
   });
 });
+
+// Task d03af8f6: gate-dev-unsafe-deletion's `action.deletion_target_unresolvable`
+// clause reads `risk.safe_deletion_roots`, which the policy drift guard above
+// does not cover (it only pins policy fields and risk.classifiers[].patterns).
+// Extend the same drift-guard shape to this new config surface: a
+// safe_deletion_roots edit in one manifest without the matching edit in the
+// other must fail here rather than silently drift.
+describe("FULL_TEMPLATE risk.safe_deletion_roots drift guard (task d03af8f6)", () => {
+  it("matches the reference manifest's safe_deletion_roots exactly", () => {
+    const ref = loadReferenceManifest();
+    const full = loadFullTemplateManifest();
+    expect(full.risk.safe_deletion_roots).toEqual(ref.risk.safe_deletion_roots);
+  });
+});

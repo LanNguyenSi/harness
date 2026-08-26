@@ -399,6 +399,32 @@ policies:
     when:
       risk.severity_at_least: high
       environment.name: production
+  - name: gate-dev-unsafe-deletion
+    description: Require approval for a deletion-verb command whose target cannot be statically proven safe, in every environment.
+    trigger:
+      event: PreToolUse
+      match: Bash
+    requires:
+      ledger_tag: risk-approved:${SESSION_ID}
+    hook: risk-gate
+    enforcement: require_approval
+    producers:
+      - kind: ask
+        command: harness approve risk
+        description: Operator approves this Risk Gate decision from their own shell.
+      - kind: mcp
+        verb: mcp__grounding-mcp__ledger_add
+        example: '{sessionId:"${SESSION_ID}", type:"fact", content:"risk-approved:${SESSION_ID} — operator-authorized", source:"operator"}'
+        description: Recovery path if the approve verb is unavailable; only meaningful when the OPERATOR authorizes the content.
+    ux:
+      cannot: You cannot run this deletion command yet — its target cannot be statically proven safe.
+      required:
+        - operator approval of this Risk Gate decision, OR an absolute target inside a declared risk.safe_deletion_roots entry
+      run:
+        - harness approve risk
+        - "Or point the command at a path under risk.safe_deletion_roots (default: /tmp, /private/tmp) instead of an unresolved variable, relative path, or traversal."
+    when:
+      action.deletion_target_unresolvable: true
   - name: deny-kill-switch-bypass
     description: Deny harness pause, harness resume, harness gate disable, and harness gate enable from the agent's Bash tool. These are operator-only kill switches.
     trigger:
@@ -531,6 +557,9 @@ risk:
             - infrastructure_change
           severity: critical
   degraded_fail_posture: preserve_enforcement
+  safe_deletion_roots:
+    - /tmp
+    - /private/tmp
 environments:
   resolvers:
     - name: production-signals

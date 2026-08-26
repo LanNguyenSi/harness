@@ -109,7 +109,21 @@ import * as path from "node:path";
 // re-pairing in the ledger-add/ledger-client/ledger-record cluster (io/ sorts
 // before policies/), not removed duplication.
 // 110 -> 109 after the master-baseline fixture deletion, task 62fa0542.
-const MAX_CLONES = 109;
+// Raised to 110 for the deletion-target resolver (task d03af8f6,
+// `src/runtime/deletion-target-resolve.ts`). Verified (not assumed) by
+// diffing the full jscpd `duplicates[]` set against master: net +1, and
+// that one new pair is `deletion-target-resolve.ts` <-> `kubectl-target-
+// parse.ts` (the `firstSegment`/`tokenize` quoted-whitespace tokenizer).
+// kubectl-target-parse.ts's own doc comment already declined to export
+// that ~15-line pair for its single prior caller ("not worth the
+// coupling"); this task's module doc makes the same call for the same
+// reason, now with a second caller. Extracting a shared tokenizer module
+// would mean editing kubectl-target-parse.ts itself — a security-
+// sensitive, carefully-measured parser (task a7eb1a71) — purely for
+// dedup, out of this task's scope (same rationale as every prior raise
+// above: touching an existing sibling file to dedup a narrow, already-
+// tolerated helper shape is deferred, not silently absorbed).
+const MAX_CLONES = 110;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).

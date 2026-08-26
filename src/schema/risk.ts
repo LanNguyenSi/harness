@@ -98,12 +98,39 @@ export const DegradedFailPostureSchema = z.enum([
   "fail_open",
 ]);
 
+// Safe-deletion-root allowlist (task d03af8f6). `src/runtime/
+// deletion-target-resolve.ts` statically resolves the target(s) of a
+// deletion-verb command (`rm -r*`/`-f*`, `find ... -delete`, `git clean
+// -f*`) and treats a target as safe only when it is an ABSOLUTE path
+// that lies inside one of these roots (a plain directory-prefix match:
+// the target equals the root, or starts with `root + "/"`; an optional
+// trailing `/**` or `/*` on an entry is stripped as documentation sugar
+// before matching — it is not a real glob engine). A target the
+// resolver cannot statically prove absolute and prefix-matched — an
+// unexpanded `$VAR`/`${VAR}` reference, a `~`-relative path, a relative
+// path, or a `..`-traversal that normalizes outside every root — is
+// treated as UNRESOLVABLE, never guessed safe. The defaults cover the
+// two spellings this harness's own scratchpad convention can use: a
+// symlinked `/tmp` and its `/private/tmp` realpath (macOS); an operator
+// who overrides this list REPLACES it, it does not merge with the
+// default. See docs/risk-gate.md.
+// Exported (not just used as the schema `.default()`) so runtime call
+// sites can fall back to the same list for a hand-built `Manifest` that
+// bypassed schema parsing entirely (every test fixture that constructs
+// `{ risk: { classifiers: [...] } }` directly, without going through
+// `RiskSchema.parse`) — see `src/runtime/intercept.ts` and
+// `src/cli/explain-policy.ts`.
+export const DEFAULT_SAFE_DELETION_ROOTS: string[] = ["/tmp", "/private/tmp"];
+
 export const RiskSchema = z
   .object({
     classifiers: z.array(RiskClassifierSchema).default([]),
     degraded_fail_posture: DegradedFailPostureSchema.default(
       "preserve_enforcement",
     ),
+    safe_deletion_roots: z
+      .array(z.string().min(1))
+      .default(DEFAULT_SAFE_DELETION_ROOTS),
   })
   .strict()
   .superRefine((risk, ctx) => {

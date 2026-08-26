@@ -5,6 +5,7 @@
 // rule: an unclassified risk profile satisfies every risk-derived clause.
 
 import { describe, expect, it } from "vitest";
+import type { DeletionTargetVerdict } from "../../src/runtime/deletion-target-resolve.js";
 import type { EnvironmentResolution } from "../../src/runtime/environment-resolver.js";
 import type { RiskProfile } from "../../src/runtime/risk-classifier.js";
 import { evaluateWhen } from "../../src/runtime/when-eval.js";
@@ -297,5 +298,82 @@ describe("evaluateWhen — Friction-log #38/#40/#43/#50 regression (read-only fl
       environment: env("production"),
     });
     expect(result.matched).toBe(true);
+  });
+});
+
+describe("evaluateWhen — action.deletion_target_unresolvable (task d03af8f6)", () => {
+  const UNRESOLVABLE: DeletionTargetVerdict = {
+    verb: "rm",
+    targets: ["/home/x"],
+    unresolvedTargets: ["/home/x"],
+    unresolvable: true,
+    reason: "rm: target(s) not statically resolvable inside a declared risk.safe_deletion_roots entry: /home/x",
+  };
+  const RESOLVED: DeletionTargetVerdict = {
+    verb: "rm",
+    targets: ["/tmp/x"],
+    unresolvedTargets: [],
+    unresolvable: false,
+    reason: "rm: every target resolves inside a declared risk.safe_deletion_roots entry",
+  };
+
+  it("matches true against an unresolvable deletion target, in an UNKNOWN environment, with no environment.name clause", () => {
+    const result = evaluateWhen(
+      { "action.deletion_target_unresolvable": true },
+      { risk: UNCLASSIFIED, environment: env("unknown"), deletionTarget: UNRESOLVABLE },
+    );
+    expect(result.matched).toBe(true);
+    // Load-bearing: this clause must NOT be counted as a fail-closed
+    // unclassified match — it reads a wholly separate signal.
+    expect(result.unclassifiedFallback).toBe(false);
+  });
+
+  it("does not match when the target resolves inside the safe-deletion allowlist (allow)", () => {
+    const result = evaluateWhen(
+      { "action.deletion_target_unresolvable": true },
+      { risk: UNCLASSIFIED, environment: env("unknown"), deletionTarget: RESOLVED },
+    );
+    expect(result.matched).toBe(false);
+  });
+
+  it("does NOT fall back to matched=true for an unrelated unclassified command (deletionTarget null)", () => {
+    // The load-bearing guarantee this clause exists for: an unscoped
+    // policy on this clause must not become a blanket gate on every
+    // unclassified Bash call the way the risk.* clauses would.
+    const result = evaluateWhen(
+      { "action.deletion_target_unresolvable": true },
+      { risk: UNCLASSIFIED, environment: env("unknown"), deletionTarget: null },
+    );
+    expect(result.matched).toBe(false);
+    expect(result.unclassifiedFallback).toBe(false);
+  });
+
+  it("treats an omitted deletionTarget the same as null (backward-compatible context)", () => {
+    const result = evaluateWhen(
+      { "action.deletion_target_unresolvable": true },
+      { risk: UNCLASSIFIED, environment: env("unknown") },
+    );
+    expect(result.matched).toBe(false);
+  });
+
+  it("supports gating on `false` (target resolved) as an explicit allow-only clause", () => {
+    const result = evaluateWhen(
+      { "action.deletion_target_unresolvable": false },
+      { risk: UNCLASSIFIED, environment: env("unknown"), deletionTarget: RESOLVED },
+    );
+    expect(result.matched).toBe(true);
+  });
+
+  it("ANDs with other clauses normally (composes with environment.name if an operator chooses to add one)", () => {
+    const result = evaluateWhen(
+      {
+        "action.deletion_target_unresolvable": true,
+        "environment.name": "production",
+      },
+      { risk: UNCLASSIFIED, environment: env("dev"), deletionTarget: UNRESOLVABLE },
+    );
+    expect(result.matched).toBe(false);
+    const envClause = result.clauses.find((c) => c.clause === "environment.name");
+    expect(envClause).toMatchObject({ matched: false });
   });
 });
