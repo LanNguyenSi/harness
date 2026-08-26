@@ -32,7 +32,7 @@ import type {
 import { RiskSeveritySchema } from "../schema/index.js";
 import type { ActionEnvelope } from "./action-envelope.js";
 import { expandToolNameAliases, extractShellCommand } from "./tool-name-aliases.js";
-import { isReadOnlyBashCommand } from "./read-only-bash.js";
+import { isReadOnlyBashCommand, isReadOnlyKubectlCommand } from "./read-only-bash.js";
 
 // Ordered severity scale: a value's index here is the comparison key
 // for "highest matched severity wins". Sourced from the schema enum so
@@ -263,6 +263,20 @@ export function classifyRisk(
         severityIdx = lowIdx;
         reasons.push(
           "built-in: provably read-only command recognized (severity low)",
+        );
+      } else if (isReadOnlyKubectlCommand(shellCommand)) {
+        // Kubectl read-verb floor (task da823721), narrower than the
+        // general read-only floor above and NOT folded into
+        // `isReadOnlyBashCommand` itself: it changes only the Risk
+        // Classifier's behavior. The understanding-gate PreToolUse
+        // blocker and the solution-acceptance write-guard both consume
+        // `isReadOnlyBashCommand` directly and keep treating every
+        // kubectl invocation as non-read-only, unchanged by this floor.
+        // See docs/risk-gate.md's kubectl read-only floor decision for
+        // the secrets exclusion and the full blast-radius reasoning.
+        severityIdx = lowIdx;
+        reasons.push(
+          "built-in: provably read-only kubectl verb recognized (severity low)",
         );
       }
     }

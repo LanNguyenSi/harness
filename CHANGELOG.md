@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Risk Gate: a narrow, secrets-excluding kubectl read-only verb floor
+  fixes the AC5 false positive waived at task `a7eb1a71`** (task
+  `da823721`). Once an explicit `--context`/`--namespace` resolves
+  `environment: production` (`a7eb1a71`), the pre-existing "unknown is
+  not safe" rule made a harmless `kubectl get pods --context prod-eu-1`
+  require approval exactly like `kubectl delete namespace payments
+  --context prod-eu-1` does. `isReadOnlyKubectlCommand`
+  (`src/runtime/read-only-bash.ts`) floors a curated set of read verbs
+  (`get`, `describe`, `logs`, `top`, `api-resources`, `api-versions`,
+  `version`, `cluster-info`, `explain`, `auth can-i`) to `low` severity
+  in `classifyRisk`'s built-in floor (`src/runtime/risk-classifier.ts`),
+  UNLESS the command reads `--raw` or the resource argument mentions
+  "secret" in any form (`get secret`, `get secrets`, `get
+  secret/<name>`, `describe secret`, `-o yaml`/`-o json` on a secret) —
+  a prod Secret read stays approval-gated. Any other kubectl subcommand
+  stays fail-closed, unchanged. The floor is wired ONLY into the Risk
+  Classifier: it is a separate function, not folded into the shared
+  `isReadOnlyBashCommand` / `isReadOnlyBashPipeline` the
+  understanding-gate PreToolUse blocker and the solution-acceptance
+  write-guard also consume, so every kubectl command still requires an
+  approved Understanding Report there, unchanged — proven by a real
+  end-to-end test (`tests/cli/pack-hook-pre-tool-use.test.ts`), not just
+  the classifier unit. See docs/risk-gate.md's "Kubectl read-only verb
+  floor (decision record, task `da823721`)" for the full decision, the
+  `get all` / `explain secret` sub-decisions, and the blast-radius
+  reasoning.
+  Round 2 (review): three bypasses of the secrets exclusion were
+  measured end-to-end ALLOW and fixed. `-f`/`--filename`/`-k`/`--kustomize`
+  on `get`/`describe` now disables the floor (a manifest file or
+  kustomization directory can select a Secret/ConfigMap this module
+  cannot read). Any token after `kubectl` containing `$` now disables
+  the floor (`$VAR`/`${VAR}`/`"$VAR"` leave the resource-type argument
+  unresolved in the raw command text). `configmap`/`configmaps`/the
+  bare `cm` abbreviation now get the same exclusion as `secret` (a
+  common credential store in practice). Also: the `--raw` reject now
+  applies to every floored verb, not just `get`; the timing test now
+  measures a floored 30-flag run instead of the fail-closed short-circuit
+  path; and docs/risk-gate.md's `get all` claim is narrowed to kubectl's
+  built-in resources (a CRD can opt into the `all` category via its own
+  `spec.names.categories`), citing the runnable `kubectl
+  api-resources --categories=all` check rather than an upstream file
+  path this task did not run against a live cluster.
+  Round 3 (review): brace expansion (`kubectl get s{e..e}cret ...`),
+  glob patterns (`get s*`, `get sec[r]et`), and endpoint/identity
+  redirection (`--server`/`-s`/`--kubeconfig`/`--token`/`--as`, pre- or
+  post-verb) were measured end-to-end ALLOW, the same class of bug as
+  round 2's findings recurring a third time on top of a metacharacter-
+  by-metacharacter exclusion list. `isReadOnlyKubectlCommand` is
+  redesigned around two ALLOWLISTS instead: every token after `kubectl`
+  must match a plain-word shape (closing brace expansion, globs,
+  quoting, and escaping, and superseding the round-2 `$`-token and
+  `decodeShellWord`-decoding checks, both now redundant), and every flag
+  token must be drawn from an explicit per-verb read-flag allowlist (or
+  a small global-flag allowlist) — `--raw`, `--filename`/
+  `-k`/`--kustomize`, and every endpoint/identity flag
+  (`--server`/`-s`/`--kubeconfig`/`--token`/`--as`/`--as-group`/
+  `--user`/`--cluster`/`--tls-server-name`/`--insecure-skip-tls-verify`)
+  are simply absent from every verb's allowlist, closing all three as
+  one mechanism instead of three separate checks. `--as`/`--as-group`
+  impersonation, floored in rounds 1-2, is now refused (behavior
+  change, folded into the endpoint/identity set). See docs/risk-gate.md's
+  "Round 3: from metacharacter exclusions to allowlists" for the halt
+  rationale and the new residual-risk bullet on the secret/configmap
+  exclusion being a two-kind resource-TYPE denylist (not a
+  credential-content scan: Pod env literals and Flux
+  `HelmRelease`/Argo CD `Application` `values:` blocks stay floored;
+  mitigation is an operator-defined classifier pattern).
+
 ## [0.49.0] - 2026-08-26
 
 ### Fixed
