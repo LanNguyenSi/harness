@@ -134,10 +134,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     (glued or bare, optional leading fd number) is no longer collected as
     a target — `rm -rf /tmp/x >/dev/null 2>&1` no longer reports
     `/dev/null` as an unresolved target.
-  - **`find` search-root equality (MEDIUM):** `find`'s own search-root
-    operand EQUALLING a declared root now resolves (`find` only ever
-    deletes strictly inside the directory it is pointed at); `rm` keeps
-    the strict-deeper-only rule.
+  - **`find` search-root equality (MEDIUM, premise corrected round 4 —
+    see below):** `find`'s own search-root operand EQUALLING a declared
+    root now resolves; `rm` keeps the strict-deeper-only rule.
   - **Brace groups and subshells:** `{ rm -rf /home/x; }` (leading `{` /
     trailing `}`/`;` token stripped before the head test) and `(rm -rf
     /home/x)` (trailing `)` stripped from the segment's last token) are
@@ -158,6 +157,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     FILE the agent writes and executes, `shred`/`rmdir`/`unlink` (real
     deletion verbs outside this task's closed head-token set), and
     `npm run clean` (a script NAME, not a literal deletion verb).
+
+  **Review round 4** (same task): four more measured gaps against the
+  round-3 recognition surface, plus reviewer-flagged output-quality
+  issues. Fixed:
+  - **`xargs` separated-value flags (HIGH):** round 3's `xargs` flag
+    peeling (`peelGenericFlags`, boolean-only) stranded a SEPARATED flag
+    value where the verb was expected, so `xargs -I {} rm -rf {}`,
+    `xargs -n 1 rm -rf`, `xargs -P 4 rm -rf`, `xargs -a list rm -rf`, and
+    `xargs -d '\n' rm -rf` all ran UNGATED (only the glued spellings —
+    `-I{}`, `-0`, `-n1` — happened to gate). Replaced with a forward
+    scan (bounded by the token count) for the first token that is itself
+    a recognized deletion-verb head, skipping `xargs`'s entire flag
+    vocabulary uniformly instead of enumerating it.
+  - **`find <root> -delete` root-itself premise was FALSE (MEDIUM):**
+    round 3 claimed `find <root> -delete` "only ever deletes entries
+    strictly inside `<root>`" — measured wrong: a BARE `find /tmp
+    -delete` (no test predicate) removes `/tmp` itself too, on both GNU
+    findutils and BSD find. Root-equality now resolves ONLY when the
+    expression carries at least one non-action test predicate (`-name`,
+    `-iname`, `-path`, `-ipath`, `-regex`, `-type`, `-mtime`, `-mmin`,
+    `-newer`, `-size`, `-empty`, `-user`, `-perm`, or `-maxdepth`/
+    `-mindepth` with a value `>= 1`), so `find /tmp -name '*.log'
+    -delete` still resolves but a bare `find /tmp -delete` now gates.
+    Corrected the same premise in `src/schema/risk.ts`, `docs/risk-
+    gate.md`, and this file.
+  - **`&>`/`>&` redirection forms (MEDIUM):** round 3's redirection
+    regexes matched only tokens starting with an optional fd number
+    followed by `<`/`>`, missing bash's combined stdout+stderr forms
+    `&>`/`&>>` (glued) and `>&`/`<&` (bare) — `rm -rf /tmp/x
+    &>/dev/null` and `rm -rf /tmp/x >& out` were GATED with the
+    redirect target misread as a second, unresolvable target. Both
+    regexes now cover the full set.
+  - **`stripRedirections` was unpinned in `resolveFind`/
+    `resolveGitClean` (MEDIUM, test gap):** added `find /tmp >out -name
+    '*.log' -delete` and `git clean -fd /tmp/x >/dev/null` fixtures;
+    removing the strip from either resolver now turns both red.
+  - **Duplicate/spurious targets (LOW):** `combineVerdicts` now
+    de-duplicates verdicts by exact `(verb, targets)` before combining,
+    replacing round 3's "accepted cosmetic quirk" — `nohup rm -rf
+    /home/x &` and `rm -rf /home/x 2>&1 | tee log` now name their
+    target once, not twice. This also fixed a real correctness bug the
+    round-3 note did not anticipate: for `rm -rf /home/x & rm -rf
+    /home/y`, the primary segmentation arm (which does not split on a
+    bare `&`) used to keep parsing past a dropped `&` into the SECOND
+    invocation's own tokens, collecting its verb `rm` as a spurious
+    literal target; `stripRedirections` now stops (rather than merely
+    skipping) at the first bare `&`, so that command no longer lists
+    `rm` as a target.
+  - **Backtick command substitution added to NOT COVERED (LOW):** `` `rm
+    -rf /home/x` `` is pinned alongside the other unparsed-substring
+    shapes (`bash -c '...'`, `eval "..."`).
+  - **`exec`/`nohup` wrapper enumerations updated (LOW):** `docs/okf/
+    policy-engine-producer-wiring.md` and `src/cli/init/templates.ts`'s
+    `deny-kill-switch-bypass` comment now list `exec`/`nohup` alongside
+    the other peeled wrappers (both were already peeled by
+    `peelWrapperPrefixes` since round 3; only the doc/comment
+    enumerations were stale). `docs/okf/pause-vs-gate-kill-switch.md`
+    gained a corresponding update note and timestamp re-stamp.
+  - **`docs/okf/policy-engine-producer-wiring.md` frontmatter
+    `description:` quoted (LOW):** the unquoted value's embedded
+    `risk.degraded_fail_posture: fail_open` colon-space made the
+    frontmatter block unparseable YAML (`npx okf-kit check docs/okf`
+    reported `frontmatter-required`); quoting fixes it.
+  - **`MAX_NORMALIZE_LENGTH` fallback added to NOT COVERED (LOW):** a
+    command past 100,000 characters falls back to the pre-round-2
+    single-first-segment contract — a recognized deletion verb in a
+    LATER segment of such an oversized command goes unrecognized. Named
+    explicitly rather than left implicit.
+  - `docs/risk-gate.md`'s "Dev-context deletion gate" section trimmed:
+    the round-by-round narrative and the measured BLOCKED->ALLOWED
+    incident now live only here (this file) and in the run's own
+    review-round notes; the reusable doc states the rule plus a pointer
+    to this entry.
+
 ### Fixed
 
 - **Risk Gate: a narrow, secrets-excluding kubectl read-only verb floor

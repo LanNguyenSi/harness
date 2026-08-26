@@ -106,9 +106,12 @@ export const DegradedFailPostureSchema = z.enum([
 // of these roots (a plain directory-prefix match against `root + "/"`;
 // the root itself does not count) — with one verb-specific exception:
 // for `find`, a search-root operand that EQUALS a declared root also
-// resolves, since `find` only ever deletes entries strictly inside the
-// directory it is pointed at (`rm`/`git clean` keep the strict rule, no
-// exception). An optional trailing `/**` or `/*` on an entry is stripped
+// resolves, but ONLY when the expression carries at least one
+// non-action test predicate (`-name`, `-type`, ...) narrowing which
+// entries match — REVIEW ROUND 4 (task d03af8f6): a BARE `find <root>
+// -delete` (no such predicate) removes `<root>` itself too, on both GNU
+// findutils and BSD find, so that shape still gates (`rm`/`git clean`
+// keep the strict rule regardless, no exception). An optional trailing `/**` or `/*` on an entry is stripped
 // as documentation sugar before matching — it is not a real glob
 // engine. A target the
 // resolver cannot statically prove absolute and prefix-matched — an

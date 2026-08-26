@@ -221,6 +221,24 @@ describe("intercept — AC3: unresolvable-target fixtures gate identically to AC
   });
 });
 
+describe("intercept — review round 4, HIGH: xargs -I {} rm -rf {} gates end-to-end", () => {
+  it("emits require_approval for the xargs -I {} separated-value spelling (round 3 left this ungated)", async () => {
+    const ledger = makeLedger();
+    const result = await intercept({
+      manifest: makeManifest({ policies: [DELETION_GATE_POLICY] }),
+      event: bashEvent("xargs -I {} rm -rf {}"),
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+      riskContext: riskCtx("task/x"),
+    });
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.policyName).toBe("gate-dev-unsafe-deletion");
+    expect(result.decisions[0]?.outcome).toBe("require_approval");
+    expect(result.blockJson?.decision).toBe("block");
+  });
+});
+
 describe("intercept — AC4: production-context regression, deny-first order unaffected", () => {
   const DESTROY_CLASSIFIER: RiskClassifier = {
     name: "dangerous-shell",

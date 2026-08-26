@@ -775,7 +775,8 @@ policies:
   # UPDATE (task 432db3d3, 2026-07-28, follow-up to ea8becf5): PARTIALLY
   # closed — for THIS policy only. \`src/runtime/command-normalize.ts\` now
   # peels wrapper prefixes (\`env\`, \`nice\`, \`command\`, \`sudo\`, \`doas\`,
-  # \`time\`, \`timeout\`, \`stdbuf\`, \`setsid\`, leading VAR=value) and
+  # \`time\`, \`timeout\`, \`stdbuf\`, \`setsid\`, \`exec\`, \`nohup\`, leading
+  # VAR=value) and
   # collapses whitespace runs for the closed head-token set
   # \`git\`/\`gh\`/\`npm\`/\`harness\`, so \`env harness pause\`, \`nice harness
   # gate disable\` and the like now reach this deny via the raw-OR-normalised

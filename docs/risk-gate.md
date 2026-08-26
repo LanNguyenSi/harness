@@ -833,14 +833,11 @@ audit record and is still visible in `harness audit` and `explain --trace`.
 
 ### Dev-context deletion gate (`action.deletion_target_unresolvable`)
 
-*Status: live as of task `d03af8f6`, revised in that task's own review
-round 2 (five measured gaps against a real transcript corpus) and again
-in review round 3 (recognition rebuilt on `src/runtime/command-
-normalize.ts`'s shared, flag-aware peelers and both of its segmentation
-arms, after two consecutive review rounds each found a NEW class of
-common shapes failing open — see below and CHANGELOG.md). Additive
-alongside `gate-prod-destructive`/`gate-prod-destructive-approval`;
-nothing about those two policies changed.*
+*Status: live as of task `d03af8f6`. Additive alongside
+`gate-prod-destructive`/`gate-prod-destructive-approval`; nothing about
+those two policies changed. For the round-by-round measured gaps and
+fixes (four review rounds so far), see `CHANGELOG.md`'s `d03af8f6`
+entries — this section states the current rule only.*
 
 `gate-prod-destructive`/`-approval` gate on `risk.severity_at_least` +
 `environment.name: production`, so on an ordinary task branch —
@@ -908,10 +905,14 @@ DIFFERENT mechanism than the four `risk.*`/`environment.*` clauses above:
     path ITSELF does not count: `rm -rf /tmp` is unresolvable, not
     resolved) is **resolved** — with one verb-specific exception: for
     `find`, a search-root operand that EQUALS a declared root also
-    resolves (`find /tmp -name '*.log' -delete` is allowed), since `find`
-    only ever deletes entries strictly inside the directory it is
-    pointed at; `rm`/`git clean` keep the strict rule. A target whose
-    final path segment is a bare glob-sugar `*`/`**` (`rm -rf /tmp/*`) is
+    resolves, but ONLY when the expression carries at least one
+    non-action test predicate (`-name`, `-iname`, `-path`, `-ipath`,
+    `-regex`, `-type`, `-mtime`, `-mmin`, `-newer`, `-size`, `-empty`,
+    `-user`, `-perm`, or `-maxdepth`/`-mindepth` with a value `>= 1`) —
+    `find /tmp -name '*.log' -delete` is allowed, but a bare `find /tmp
+    -delete` is not: it removes `/tmp` itself too, on both GNU findutils
+    and BSD find. `rm`/`git clean` keep the strict rule regardless. A
+    target whose final path segment is a bare glob-sugar `*`/`**` (`rm -rf /tmp/*`) is
     always **unresolvable**, regardless of which root it would otherwise
     sit under — it names "whatever the directory currently contains,"
     not a specific, provably-safe path.
@@ -986,9 +987,8 @@ DIFFERENT mechanism than the four `risk.*`/`environment.*` clauses above:
   This is deliberate: an earlier revision of this gate shared the
   production tag, so approving one routine dev-context `rm -rf dist`
   silently cleared `gate-prod-destructive-approval` for the rest of the
-  session — measured live (a subsequent `kubectl delete namespace
-  payments` went from BLOCKED to ALLOWED after one unrelated
-  `risk-approved:${SESSION_ID}` ledger entry). Like the production tag,
+  session (measured incident in `CHANGELOG.md`'s `d03af8f6` entry). Like
+  the production tag,
   the deletion tag's approval lifetime is session-wide (a deliberate DX
   trade-off, not a bug): one operator approval clears it for every
   subsequent unresolvable deletion in that session, not just the one

@@ -480,7 +480,91 @@ describe("resolveDeletionTarget — review round 3: NOT COVERED residuals (pinne
     ["rmdir /home/x"],
     ["unlink /home/x"],
     ["npm run clean"],
+    ["`rm -rf /home/x`"],
   ])("%s is NOT recognized (documented ceiling)", (cmd) => {
     expect(resolveDeletionTarget(cmd, ROOTS)).toBeNull();
+  });
+});
+
+// Task d03af8f6, review round 4: fixes to the round-3 findings above.
+describe("resolveDeletionTarget — review round 4: xargs separated-value flags (HIGH)", () => {
+  it.each([
+    ["xargs -I {} rm -rf {}", "/home/x"],
+    ["xargs -n 1 rm -rf /home/x", "/home/x"],
+    ["xargs -P 4 rm -rf /home/x", "/home/x"],
+    ["xargs -a list rm -rf /home/x", "/home/x"],
+    ["xargs -d '\\n' rm -rf /home/x", "/home/x"],
+  ])("gates %s (round-3 peeler stranded the flag's separated value where the verb was expected)", (cmd) => {
+    const v = resolveDeletionTarget(cmd, ROOTS);
+    expect(v?.verb).toBe("rm");
+    expect(v?.unresolvable).toBe(true);
+  });
+
+  it("gates find . -name '*.log' | xargs -I {} rm -rf {} on both segments", () => {
+    const v = resolveDeletionTarget("find . -name '*.log' | xargs -I {} rm -rf {}", ROOTS);
+    expect(v?.unresolvable).toBe(true);
+    // The find segment itself is not recognized (no -delete/-exec), only
+    // the xargs-wrapped rm segment is — but that segment alone must gate.
+    expect(v?.verb).toBe("rm");
+  });
+});
+
+describe("resolveDeletionTarget — review round 4: find root-itself requires a test predicate (MEDIUM)", () => {
+  it("gates a bare find /tmp -delete (no test predicate — the root-itself premise was false)", () => {
+    const v = resolveDeletionTarget("find /tmp -delete", ROOTS);
+    expect(v?.unresolvable).toBe(true);
+  });
+
+  it("still allows find /tmp -name '*.log' -delete (a test predicate narrows away from the root entry)", () => {
+    const v = resolveDeletionTarget("find /tmp -name '*.log' -delete", ROOTS);
+    expect(v?.unresolvable).toBe(false);
+  });
+});
+
+describe("resolveDeletionTarget — review round 4: stripRedirections is not inert (MEDIUM)", () => {
+  it("allows find /tmp >out -name '*.log' -delete (redirection token stripped, not collected as a target)", () => {
+    const v = resolveDeletionTarget("find /tmp >out -name '*.log' -delete", ROOTS);
+    expect(v?.unresolvable).toBe(false);
+    expect(v?.targets).not.toContain("out");
+    expect(v?.targets).not.toContain(">out");
+  });
+
+  it("allows git clean -fd /tmp/x >/dev/null (redirection token stripped, not collected as a target)", () => {
+    const v = resolveDeletionTarget("git clean -fd /tmp/x >/dev/null", ROOTS);
+    expect(v?.unresolvable).toBe(false);
+    expect(v?.targets).not.toContain("/dev/null");
+  });
+});
+
+describe("resolveDeletionTarget — review round 4: &>/>& redirection forms (MEDIUM)", () => {
+  it("allows rm -rf /tmp/x &>/dev/null (glued combined-redirect form)", () => {
+    const v = resolveDeletionTarget("rm -rf /tmp/x &>/dev/null", ROOTS);
+    expect(v?.unresolvable).toBe(false);
+    expect(v?.targets).not.toContain("&>/dev/null");
+  });
+
+  it("allows rm -rf /tmp/x >& out (bare combined-redirect form, whitespace-separated filename dropped too)", () => {
+    const v = resolveDeletionTarget("rm -rf /tmp/x >& out", ROOTS);
+    expect(v?.unresolvable).toBe(false);
+    expect(v?.targets).not.toContain("out");
+  });
+});
+
+describe("resolveDeletionTarget — review round 4: verdict de-duplication (LOW (b))", () => {
+  it("names /home/x once for nohup rm -rf /home/x &", () => {
+    const v = resolveDeletionTarget("nohup rm -rf /home/x &", ROOTS);
+    expect(v?.targets).toEqual(["/home/x"]);
+  });
+
+  it("names /tmp/x once for rm -rf /tmp/x 2>&1 | tee log", () => {
+    const v = resolveDeletionTarget("rm -rf /tmp/x 2>&1 | tee log", ROOTS);
+    expect(v?.targets).toEqual(["/tmp/x"]);
+  });
+
+  it("does not list rm as a target for rm -rf /home/x & rm -rf /home/y, and names each real target once", () => {
+    const v = resolveDeletionTarget("rm -rf /home/x & rm -rf /home/y", ROOTS);
+    expect(v?.targets).not.toContain("rm");
+    expect(v?.targets).toEqual(["/home/x", "/home/y"]);
+    expect(v?.unresolvable).toBe(true);
   });
 });
