@@ -21,13 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   environment (approval-spam, not a deletion-specific gate). New pieces,
   additive alongside the existing production-scoped policies (nothing
   existing changed semantics):
-  - `src/runtime/deletion-target-resolve.ts`: a pure, regex-free tokenizer
-    (no shell spawned) that recognizes `rm -r*`/`-f*`, `find ... -delete`,
-    and `git clean -f*` across EVERY shell segment of a command and
-    statically resolves each target: an unexpanded `$VAR`/`~`, a relative
-    path, or a `..`-traversal that normalizes outside every declared root
-    is UNRESOLVABLE; an absolute path strictly inside a declared
-    `risk.safe_deletion_roots` entry is not.
+  - `src/runtime/deletion-target-resolve.ts`: a pure, no-nested-quantifier-
+    regexes (no ReDoS surface) tokenizer (no shell spawned) that recognizes
+    `rm -r*`/`-f*`, `find ... -delete`, and `git clean -f*` across EVERY
+    shell segment of a command and statically resolves each target: an
+    unexpanded `$VAR`/`~`, a relative path, or a `..`-traversal that
+    normalizes outside every declared root is UNRESOLVABLE; an absolute
+    path strictly inside a declared `risk.safe_deletion_roots` entry is
+    not.
   - `risk.safe_deletion_roots` (new manifest key, schema default `["/tmp",
     "/private/tmp"]` — the two spellings this harness's own scratchpad
     convention can use, since macOS symlinks `/tmp` to `/private/tmp`).
@@ -96,6 +97,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     of tolerating the round-1 clone pair: `firstSegment` is now exported
     there (pure visibility change) and imported; `check:duplication`'s
     pinned baseline is back at 109 (was raised to 110 in round 1).
+
+  **Review round 3** (same task): round 2's own hand-rolled recognition —
+  a second, independently-drifting copy of the wrapper-peeling and
+  segmentation `src/runtime/command-normalize.ts` already ships,
+  flag-aware and pinned for the `bash_match` gate — still failed OPEN on
+  a new class every round (round 1: first-segment-only; round 2:
+  flag-blind wrapper peeling plus bare-`&`/brace/`exec`/`nohup`). Rebuilt
+  on top of `command-normalize.ts`'s own machinery instead of a third
+  hand-rolled enumeration:
+  - **Shared wrapper peeling (structural fix):** the resolver now reuses
+    `command-normalize.ts`'s exported `peelWrapperPrefixes` (the same
+    loop `canonicalizeSegment` uses for `git`/`gh`/`npm`/`harness`
+    trigger recognition) instead of its own narrower copy — closing every
+    flag the round-2 peeler missed: `sudo -u <user>`, `sudo -E`, `sudo
+    --preserve-env`, `nice -n <n>`, `nice -<n>`, `env -i`, `env -u <VAR>`,
+    `timeout -k <n> <duration>`, `timeout --signal=<sig> <duration>`.
+    `exec` and `nohup` are now peeled too — added to
+    `peelWrapperPrefixes` itself so both this gate and the `bash_match`
+    trigger gate benefit. `xargs` (never peeled by `command-normalize
+    .ts` — its own argv is not simply "the command to run") stays a
+    local concern, but its own flags (`-0`, `-n1`, ...) are now peeled
+    too, via the newly-exported `peelGenericFlags`.
+  - **Dual-arm segmentation (structural fix):** segments now come from
+    BOTH of `command-normalize.ts`'s arms — `segmentViewOf` (primary) AND
+    the new `segmentViewOfAmpAware` (the bare-`&` alphabet
+    `normalizeCommandAmpAware` already uses for trigger matching) —
+    combined additively and de-duplicated by text, closing `echo hi & rm
+    -rf /home/x` (a background job the primary alphabet does not split
+    on).
+  - **`find -exec`/`-execdir` recognition (MEDIUM):** `find /home -exec
+    rm -rf {} +` / `find /home -execdir rm {} \;` are now recognized,
+    targeting `find`'s own search-path operand (never the `{}`
+    placeholder).
+  - **Redirection operands (MEDIUM):** a `>`/`>>`/`<`/`<<`/`<<<` token
+    (glued or bare, optional leading fd number) is no longer collected as
+    a target — `rm -rf /tmp/x >/dev/null 2>&1` no longer reports
+    `/dev/null` as an unresolved target.
+  - **`find` search-root equality (MEDIUM):** `find`'s own search-root
+    operand EQUALLING a declared root now resolves (`find` only ever
+    deletes strictly inside the directory it is pointed at); `rm` keeps
+    the strict-deeper-only rule.
+  - **Brace groups and subshells:** `{ rm -rf /home/x; }` (leading `{` /
+    trailing `}`/`;` token stripped before the head test) and `(rm -rf
+    /home/x)` (trailing `)` stripped from the segment's last token) are
+    now recognized.
+  - **`safe_deletion_roots` hygiene, widened (LOW):** an entry that
+    lexically NORMALIZES to the filesystem root (`/.`, `/./`,
+    `/tmp/..` — not only the bare-`/` spelling round 2 caught) is now
+    also a schema parse error; `checkSafeDeletionRootsSyntax`
+    (`src/cli/validate/checks.ts`) now falls back to
+    `DEFAULT_SAFE_DELETION_ROOTS` for a hand-built `Manifest` missing
+    `risk`/`risk.safe_deletion_roots` instead of throwing.
+  - `gate-dev-unsafe-deletion`'s position in `FULL_TEMPLATE` (after both
+    `gate-prod-destructive` and `gate-prod-destructive-approval`) is now
+    pinned by a test — `src/runtime/intercept.ts` evaluates policies in
+    array order.
+  - NOT COVERED, named rather than left implicit (pinned as
+    `toBeNull()`): `bash -c '...'`/`sh -c '...'`, `eval "..."`, a script
+    FILE the agent writes and executes, `shred`/`rmdir`/`unlink` (real
+    deletion verbs outside this task's closed head-token set), and
+    `npm run clean` (a script NAME, not a literal deletion verb).
 
 ## [0.49.0] - 2026-08-26
 

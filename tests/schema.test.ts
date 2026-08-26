@@ -148,6 +148,28 @@ describe("parseManifest — happy path", () => {
     ).toThrow(/filesystem root itself|defeating the allowlist/i);
   });
 
+  it.each(["/.", "/./", "/tmp/.."])(
+    "rejects %s — it lexically normalizes to the filesystem root too (task d03af8f6, review round 3, LOW (d))",
+    (root) => {
+      expect(() =>
+        parseManifest({
+          version: 1,
+          risk: { safe_deletion_roots: [root] },
+        }),
+      ).toThrow(/normalizes to the filesystem root|defeating the allowlist/i);
+    },
+  );
+
+  it("still accepts a genuine subdirectory whose OWN name is not just '..'/'.'", () => {
+    const m = parseManifest({
+      version: 1,
+      risk: { safe_deletion_roots: ["/tmp/../scratch"] },
+    });
+    // /tmp/../scratch normalizes to /scratch — a real, non-root
+    // subdirectory, not the filesystem root.
+    expect(m.risk.safe_deletion_roots).toEqual(["/tmp/../scratch"]);
+  });
+
   it("accepts a string command for tools.mcp[].command", () => {
     const m = parseManifest({
       version: 1,

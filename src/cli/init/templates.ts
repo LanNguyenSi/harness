@@ -699,15 +699,14 @@ policies:
   # \`git clean -f*\`) whose target(s) cannot be statically proven inside
   # \`risk.safe_deletion_roots\` (below). See docs/risk-gate.md.
   #
-  # UPDATE (task d03af8f6, review round 2, HIGH 2 fix): this policy now
-  # consults its OWN ledger tag (\`risk-approved:deletion:\${SESSION_ID}\`)
-  # instead of the tag \`gate-prod-destructive-approval\` above also
-  # consults. Sharing one tag meant approving a routine dev-context
-  # deletion (\`rm -rf dist\`) silently cleared the production approval
-  # gate for the rest of the session too — measured live. \`harness
-  # approve risk --scope deletion\` writes this tag; the bare \`harness
-  # approve risk\` (no \`--scope\`) keeps writing only the production tag,
-  # unchanged.
+  # This policy consults its OWN ledger tag
+  # (\`risk-approved:deletion:\${SESSION_ID}\`), never the tag
+  # \`gate-prod-destructive-approval\` above consults — a routine dev-
+  # context deletion approval must not also clear the production
+  # approval gate. \`harness approve risk --scope deletion\` writes this
+  # tag; the bare \`harness approve risk\` (no \`--scope\`) keeps writing
+  # only the production tag. See CHANGELOG.md task d03af8f6 for the
+  # measured incident this fixed.
   - name: gate-dev-unsafe-deletion
     description: Require approval for a deletion-verb command whose target cannot be statically proven safe, in every environment.
     trigger:

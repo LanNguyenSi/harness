@@ -16,6 +16,7 @@ import {
 } from "../init/templates.js";
 import { isPolicyInterceptCommand, requiredHookBudgetMs } from "../policy/intercept.js";
 import type { Hook, Manifest } from "../../schema/index.js";
+import { DEFAULT_SAFE_DELETION_ROOTS } from "../../schema/risk.js";
 import type { Diagnostic } from "./types.js";
 
 export interface CheckOptions {
@@ -485,7 +486,17 @@ export function checkPolicyRiskWithoutEnvScope(manifest: Manifest): Diagnostic[]
 // usability lint, not a security gap needing a parse-time refusal.
 export function checkSafeDeletionRootsSyntax(manifest: Manifest): Diagnostic[] {
   const diags: Diagnostic[] = [];
-  manifest.risk.safe_deletion_roots.forEach((root, i) => {
+  // Guarded (task d03af8f6, review round 3, LOW (e)) the same way
+  // `src/runtime/intercept.ts` and `src/cli/explain-policy.ts` already
+  // guard this same field: a hand-built `Manifest` that bypasses
+  // `RiskSchema.parse` (every test fixture that constructs
+  // `{ risk: { classifiers: [...] } }` directly, per that schema's own
+  // comment) can carry a `risk` with no `safe_deletion_roots` at all, or
+  // no `risk` object whatsoever — `manifest.risk.safe_deletion_roots`
+  // would throw for either shape instead of degrading to the same
+  // default the runtime resolver itself falls back to.
+  const safeDeletionRoots = manifest.risk?.safe_deletion_roots ?? DEFAULT_SAFE_DELETION_ROOTS;
+  safeDeletionRoots.forEach((root, i) => {
     const trimmed = root.trim();
     if (!trimmed.startsWith("/")) {
       diags.push({

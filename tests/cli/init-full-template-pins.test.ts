@@ -513,3 +513,29 @@ describe("post-merge-gate comment: escape-first precedence is not taught anywher
     expect(block).toMatch(/does NOT exempt the mutation/);
   });
 });
+
+// Task d03af8f6, review round 3, MEDIUM C4: gate-dev-unsafe-deletion must
+// be declared AFTER both gate-prod-destructive and
+// gate-prod-destructive-approval, so the deny-first ordering documented
+// at gate-prod-destructive's own comment ("Ordered deny-first so a
+// critical action ... gets the hard-deny envelope") is not silently
+// defeated by a future edit that moves the deletion gate earlier in the
+// array — src/runtime/intercept.ts evaluates policies in array order and
+// stops at the first that fires.
+describe("FULL_TEMPLATE: gate-dev-unsafe-deletion is ordered after both production destructive gates", () => {
+  it("gate-prod-destructive and gate-prod-destructive-approval both precede gate-dev-unsafe-deletion", () => {
+    const parsed = parseManifest(parseYaml(FULL_TEMPLATE));
+    const names = parsed.policies.map((p) => p.name);
+    const prodDestructive = names.indexOf("gate-prod-destructive");
+    const prodDestructiveApproval = names.indexOf("gate-prod-destructive-approval");
+    const devUnsafeDeletion = names.indexOf("gate-dev-unsafe-deletion");
+    expect(prodDestructive, "gate-prod-destructive missing from FULL_TEMPLATE").toBeGreaterThanOrEqual(0);
+    expect(
+      prodDestructiveApproval,
+      "gate-prod-destructive-approval missing from FULL_TEMPLATE",
+    ).toBeGreaterThanOrEqual(0);
+    expect(devUnsafeDeletion, "gate-dev-unsafe-deletion missing from FULL_TEMPLATE").toBeGreaterThanOrEqual(0);
+    expect(devUnsafeDeletion).toBeGreaterThan(prodDestructive);
+    expect(devUnsafeDeletion).toBeGreaterThan(prodDestructiveApproval);
+  });
+});

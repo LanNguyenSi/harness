@@ -326,3 +326,161 @@ describe("resolveDeletionTarget — decodeShellWord, obfuscated flags (review ro
     expect(v?.unresolvable).toBe(true); // implicit "." target
   });
 });
+
+// Task d03af8f6, review round 3: the recognition surface was rebuilt on
+// top of command-normalize.ts's shared, flag-aware peelers and both of
+// its segmentation arms (BOUNDARY_RE + AMP_BOUNDARY_RE). Every shape
+// named in the orchestrator's pin list below was measured as a live
+// false negative under the round-2 module before this rewrite.
+describe("resolveDeletionTarget — review round 3: flag-aware wrapper peeling (reused from command-normalize.ts)", () => {
+  it.each([
+    ["sudo -u root rm -rf /home/x", "/home/x"],
+    ["sudo -E rm -rf /x", "/x"],
+    ["sudo --preserve-env rm -rf /home/x", "/home/x"],
+    ["nice -n 10 rm -rf /x", "/x"],
+    ["nice -10 rm -rf /home/x", "/home/x"],
+    ["env -i rm -rf /x", "/x"],
+    ["env -u FOO rm -rf /home/x", "/home/x"],
+    ["timeout -k 5 10 rm -rf /home/x", "/home/x"],
+    ["timeout --signal=KILL 5 rm -rf /x", "/x"],
+    ["exec rm -rf /home/x", "/home/x"],
+  ])("recognizes %s (round-2 peeler stopped at the wrapper's flag)", (cmd, target) => {
+    const v = resolveDeletionTarget(cmd, ROOTS);
+    expect(v?.verb).toBe("rm");
+    expect(v?.unresolvable).toBe(true);
+    expect(v?.targets).toContain(target);
+  });
+
+  it("recognizes nohup rm -rf ... & (trailing background marker never becomes a spurious target)", () => {
+    const v = resolveDeletionTarget("nohup rm -rf /home/x &", ROOTS);
+    expect(v?.verb).toBe("rm");
+    expect(v?.unresolvable).toBe(true);
+    expect(v?.targets.every((t) => t === "/home/x")).toBe(true);
+    expect(v?.targets.length).toBeGreaterThan(0);
+  });
+});
+
+describe("resolveDeletionTarget — review round 3: bare-& background jobs via the amp-aware segmentation arm", () => {
+  it("recognizes a deletion verb after a bare & (background job, not a chain BOUNDARY_RE splits on)", () => {
+    const v = resolveDeletionTarget("echo hi & rm -rf /home/x", ROOTS);
+    expect(v?.verb).toBe("rm");
+    expect(v?.unresolvable).toBe(true);
+    expect(v?.targets).toEqual(["/home/x"]);
+  });
+});
+
+describe("resolveDeletionTarget — review round 3: brace group", () => {
+  it("recognizes a deletion verb inside a { ...; } brace group", () => {
+    const v = resolveDeletionTarget("{ rm -rf /home/x; }", ROOTS);
+    expect(v?.verb).toBe("rm");
+    expect(v?.unresolvable).toBe(true);
+    expect(v?.targets).toEqual(["/home/x"]);
+  });
+});
+
+describe("resolveDeletionTarget — review round 3: subshell trailing )", () => {
+  it("recognizes a deletion verb inside a (...) subshell, stripping the trailing paren from the target", () => {
+    const v = resolveDeletionTarget("(rm -rf /home/x)", ROOTS);
+    expect(v?.verb).toBe("rm");
+    expect(v?.unresolvable).toBe(true);
+    expect(v?.targets).toEqual(["/home/x"]);
+  });
+});
+
+describe("resolveDeletionTarget — review round 3: xargs flag peeling (round 2 peeled only the bare xargs token)", () => {
+  it("peels xargs's own short flag and recognizes the wrapped rm with a redirected stdin operand stripped", () => {
+    const v = resolveDeletionTarget("xargs -0 rm -rf < list", ROOTS);
+    expect(v?.verb).toBe("rm");
+    expect(v?.unresolvable).toBe(true);
+  });
+
+  it("peels xargs -n1 and recognizes the wrapped rm with no explicit operand", () => {
+    const v = resolveDeletionTarget("xargs -n1 rm -rf", ROOTS);
+    expect(v?.verb).toBe("rm");
+    expect(v?.unresolvable).toBe(true);
+  });
+
+  it("recognizes a piped find | xargs -0 rm -rf, the find segment itself unrecognized (no -delete)", () => {
+    const v = resolveDeletionTarget("find /home -print0 | xargs -0 rm -rf", ROOTS);
+    expect(v?.verb).toBe("rm");
+    expect(v?.unresolvable).toBe(true);
+  });
+});
+
+describe("resolveDeletionTarget — review round 3: find -exec/-execdir rm recognition (MEDIUM C1)", () => {
+  it("recognizes find <path> -exec rm -rf {} + as a deletion, targeting find's own search path (not {})", () => {
+    const v = resolveDeletionTarget("find /home -exec rm -rf {} +", ROOTS);
+    expect(v?.verb).toBe("find");
+    expect(v?.targets).toEqual(["/home"]);
+    expect(v?.unresolvable).toBe(true);
+  });
+
+  it("recognizes find <path> -execdir rm {} \\; the same way", () => {
+    const v = resolveDeletionTarget("find /home -execdir rm {} \\;", ROOTS);
+    expect(v?.verb).toBe("find");
+    expect(v?.targets).toEqual(["/home"]);
+    expect(v?.unresolvable).toBe(true);
+  });
+
+  it("still returns null for find -exec of a non-deletion command", () => {
+    expect(resolveDeletionTarget("find /home -exec echo {} +", ROOTS)).toBeNull();
+  });
+
+  it("resolves find -exec rm when the search path is inside the allowlist", () => {
+    const v = resolveDeletionTarget("find /tmp/scratch -exec rm -rf {} +", ROOTS);
+    expect(v?.unresolvable).toBe(false);
+  });
+});
+
+describe("resolveDeletionTarget — review round 3: redirection operands are never targets (MEDIUM C2)", () => {
+  it("does not treat /dev/null (and the merged fd) as targets — rm -rf /tmp/x >/dev/null 2>&1 is ALLOWED", () => {
+    const v = resolveDeletionTarget("rm -rf /tmp/x >/dev/null 2>&1", ROOTS);
+    expect(v?.unresolvable).toBe(false);
+    expect(v?.targets).not.toContain("/dev/null");
+  });
+
+  it("gates rm -rf /home/x >/dev/null with targets == [\"/home/x\"] only", () => {
+    const v = resolveDeletionTarget("rm -rf /home/x >/dev/null", ROOTS);
+    expect(v?.unresolvable).toBe(true);
+    expect(v?.targets).toEqual(["/home/x"]);
+  });
+
+  it("drops a whitespace-separated redirection target too (bare operator form)", () => {
+    const v = resolveDeletionTarget("rm -rf /tmp/x > /dev/null", ROOTS);
+    expect(v?.unresolvable).toBe(false);
+    expect(v?.targets).not.toContain("/dev/null");
+  });
+});
+
+describe("resolveDeletionTarget — review round 3: find search-root equality resolves, rm keeps strictly-deeper (MEDIUM C3)", () => {
+  it("resolves find /tmp -name '*.log' -delete (root operand EQUALS the declared root) as ALLOWED", () => {
+    const v = resolveDeletionTarget("find /tmp -name '*.log' -delete", ROOTS);
+    expect(v?.unresolvable).toBe(false);
+  });
+
+  it("gates find / -delete (root operand is the filesystem root, not a declared safe root)", () => {
+    const v = resolveDeletionTarget("find / -delete", ROOTS);
+    expect(v?.unresolvable).toBe(true);
+    expect(v?.targets).toEqual(["/"]);
+  });
+
+  it("still gates rm -rf /tmp (rm keeps the strictly-deeper rule — equality does not resolve for rm)", () => {
+    expect(resolveDeletionTarget("rm -rf /tmp", ROOTS)?.unresolvable).toBe(true);
+  });
+});
+
+describe("resolveDeletionTarget — review round 3: NOT COVERED residuals (pinned ceiling, not a regression if still null)", () => {
+  it.each([
+    ["bash -c 'rm -rf /home/x'"],
+    ["sh -c 'rm -rf /home/x'"],
+    ['eval "rm -rf /home/x"'],
+    ["sh script.sh"],
+    ["bash script.sh"],
+    ["shred /home/x"],
+    ["rmdir /home/x"],
+    ["unlink /home/x"],
+    ["npm run clean"],
+  ])("%s is NOT recognized (documented ceiling)", (cmd) => {
+    expect(resolveDeletionTarget(cmd, ROOTS)).toBeNull();
+  });
+});

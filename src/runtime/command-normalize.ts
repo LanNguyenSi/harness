@@ -374,16 +374,29 @@
 //   - `$(...)` command substitution is NOT in this list — see the
 //     "accidentally covered" note right below. Do not read its absence
 //     here as "also open"; it genuinely blocks today, pinned by a test.
-//   - Ten more measured-bypass spellings, none of them peeled wrapper
-//     prefixes or a recognised `git` spelling: `exec git status`, `nohup
-//     git status`, `ionice -c3 git status`, `flock /tmp/l git status`,
-//     `script -q /dev/null git status`, `chrt -b 0 git status`, `taskset
-//     -c 0 git status`, `\git status` (the backslash defeats
-//     `GIT_TOKEN_RE`, which requires the bare basename), `"git" status`
-//     (a QUOTED binary name — the mirror image of the quoted-subcommand
-//     gap above), and `env -S "git status"` (the split-string flag hands
-//     the rest of the argv to a fresh, opaque re-parse this module
-//     deliberately does not follow, per `peelEnv`'s own comment).
+//   - CLOSED (task d03af8f6, review round 3): `exec git status` and
+//     `nohup git status` used to sit in this list. Both are now peeled
+//     the same boolean-flag-only way as `setsid` (`peelExec`/`peelNohup`,
+//     part of the shared `peelWrapperPrefixes` loop) — added while
+//     rebuilding `src/runtime/deletion-target-resolve.ts`'s own
+//     recognition on top of this module's peelers so the deletion gate
+//     could see past `exec rm -rf ...` / `nohup rm -rf ... &`, and added
+//     HERE (not only there) so this module's own `git`/`gh`/`npm`/
+//     `harness` trigger recognition benefits too, per the orchestrator
+//     decision for that task. `exec`'s own rare value-taking flag (`-a
+//     name`) is NOT modelled — treated as boolean like every other
+//     unrecognised flag this loop's generic branch consumes, the same
+//     approximation `setsid`'s three flags already use.
+//   - Eight more measured-bypass spellings, none of them peeled wrapper
+//     prefixes or a recognised `git` spelling: `ionice -c3 git status`,
+//     `flock /tmp/l git status`, `script -q /dev/null git status`, `chrt
+//     -b 0 git status`, `taskset -c 0 git status`, `\git status` (the
+//     backslash defeats `GIT_TOKEN_RE`, which requires the bare
+//     basename), `"git" status` (a QUOTED binary name — the mirror image
+//     of the quoted-subcommand gap above), and `env -S "git status"` (the
+//     split-string flag hands the rest of the argv to a fresh, opaque
+//     re-parse this module deliberately does not follow, per `peelEnv`'s
+//     own comment).
 //   - `gh`'s / `npm`'s own tool-specific flags inserted BETWEEN the head
 //     token and its subcommand: `gh -R owner/repo pr merge`, `gh --repo
 //     owner/repo pr create`, `npm --loglevel=silent publish`, `npm
@@ -727,6 +740,23 @@ interface Token {
   text: string;
   start: number;
   end: number;
+}
+
+/**
+ * The minimal shape `peelWrapperPrefixes` and every individual `peelX`
+ * wrapper-peeler actually need — `.text` only, never `.start`/`.end`
+ * (task d03af8f6, review round 3). Exported so
+ * `src/runtime/deletion-target-resolve.ts` can hand these SAME peelers a
+ * decoded token array of its own (built from ITS quote-aware tokenizer,
+ * not this module's `tokenizeWithOffsets`) without fabricating fake
+ * offsets: `Token` (with real offsets) is structurally assignable to
+ * `WrapperPeelToken[]` already, so `canonicalizeSegment`'s own call sites
+ * below need no change at all — this is a widening of the peelers'
+ * PARAMETER types only, not a behaviour change (none of them ever read
+ * `.start`/`.end`).
+ */
+export interface WrapperPeelToken {
+  text: string;
 }
 
 const VAR_ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
@@ -1195,6 +1225,38 @@ export function segmentViewOf(command: string): CommandSegment[] | null {
   if (command.length > MAX_NORMALIZE_LENGTH) return null;
   try {
     return segmentAndCanonicalize(command, BOUNDARY_RE, true).segments ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Ampersand-aware sibling of `segmentViewOf` (task d03af8f6, review
+ * round 3): the same per-segment view, but segmented under
+ * `AMP_BOUNDARY_RE` (`BOUNDARY_RE` plus a bare `&`) instead of
+ * `BOUNDARY_RE` — closing the same bare-`&` gap `normalizeCommandAmpAware`
+ * closes for trigger matching (`echo hi & rm -rf /home/x`), but as a
+ * segment VIEW rather than a rejoined string, for
+ * `src/runtime/deletion-target-resolve.ts`'s multi-segment scan. Uses the
+ * SAME shared walk (`segmentAndCanonicalize`, parameterised on
+ * `boundaryRe` since task aabbad63) as every other pass in this module —
+ * no new segmentation logic. `CommandSegment.effectiveTarget`'s own
+ * composition rules are UNCHANGED by which alphabet drove the split; a
+ * caller that only needs `.text` per segment (as the deletion resolver
+ * does) is unaffected by the same directory-extraction reliability
+ * caveat `normalizeCommandAmpAware`'s own comment names for `targetDir`/
+ * `targetBase` — this function returns the FULL `CommandSegment` shape,
+ * `effectiveTarget` included, so a future caller relying on THAT field
+ * under this alphabet should read `normalizeCommandAmpAware`'s comment
+ * first. `null` under the same `MAX_NORMALIZE_LENGTH` condition
+ * `segmentViewOf` uses; `[]` for an empty/non-string command or the
+ * never-throws fallback.
+ */
+export function segmentViewOfAmpAware(command: string): CommandSegment[] | null {
+  if (typeof command !== "string" || command.length === 0) return [];
+  if (command.length > MAX_NORMALIZE_LENGTH) return null;
+  try {
+    return segmentAndCanonicalize(command, AMP_BOUNDARY_RE, true).segments ?? [];
   } catch {
     return [];
   }
@@ -1974,7 +2036,7 @@ const BOUNDARY_QUOTE_SCANNER = new QuoteScanner();
  * it now matches — a measured fail-closed gain over master, also
  * pinned.
  */
-function consumeAssignment(tokens: Token[], idx: number): number {
+function consumeAssignment(tokens: readonly WrapperPeelToken[], idx: number): number {
   const quote = new QuoteScanner();
   for (let i = idx; i < tokens.length; i++) {
     const text = tokens[i]!.text;
@@ -2003,6 +2065,120 @@ function tokenizeWithOffsets(s: string): Token[] {
     out.push({ text: m[0], start: m.index, end: m.index + m[0].length });
   }
   return out;
+}
+
+/** Return type of `peelWrapperPrefixes` — see that function's own comment. */
+export interface WrapperPeelResult {
+  /** Index of the first token after every recognised wrapper prefix this
+   *  loop peeled — the wrapped invocation's own head token, or (if
+   *  `tokens.length`) no head token survived at all. */
+  idx: number;
+  /**
+   * The `env -C <dir>` / `--chdir <dir>` target directory, when this
+   * chain peeled an `env` wrapper naming one (excluding a `~`-prefixed
+   * value — F5, treated as if absent). `null` when no `env -C`/`--chdir`
+   * was peeled. Consumed only by `canonicalizeSegment`'s own
+   * `targetDir`/`targetBase` bookkeeping —
+   * `src/runtime/deletion-target-resolve.ts` (the other caller, task
+   * d03af8f6, review round 3) has no analogous need and ignores it.
+   */
+  envTargetDir: string | null;
+}
+
+/**
+ * Peel a leading wrapper-command chain: `VAR=value` tokens (any number,
+ * in sequence), `env` (+ its own flags/assignments, capturing `-C`/
+ * `--chdir`), `command` (+ its own flags), `nice` (+ its own flags),
+ * `sudo` / `doas` / `time` / `timeout` / `stdbuf` / `setsid` / `exec` /
+ * `nohup` (+ each one's own flags — F4 fix; `exec`/`nohup` added task
+ * d03af8f6, review round 3). Bounded by `tokens.length` so a
+ * pathological input cannot spin. Returns the cursor position of
+ * whatever token (if any) survives the peel — the caller decides what to
+ * do with it; this function never itself inspects the survivor.
+ *
+ * SHARED (task d03af8f6, review round 3) between `canonicalizeSegment`
+ * below — this module's own `git`/`gh`/`npm`/`harness` trigger
+ * recognition — and `src/runtime/deletion-target-resolve.ts`'s deletion-
+ * verb recognition (`rm`/`find`/`git clean`), which used to hand-roll an
+ * independent, narrower copy of this exact peeling vocabulary
+ * (`peelWrapperHeads`, missing `-u`/`-i`/`-C` on `env`, the duration-
+ * consuming shape of `timeout`, `nice`'s glued/`--adjustment=` forms,
+ * and `exec`/`nohup` entirely). Reusing this ONE loop instead of
+ * maintaining two means a future wrapper added here (or a flag fix to an
+ * existing one) benefits both gates automatically, and
+ * `npm run check:duplication`'s clone-count fitness function has one
+ * fewer near-duplicate block to flag. `deletion-target-resolve.ts` hands
+ * this a decoded token array built from ITS OWN quote-aware tokenizer
+ * (`WrapperPeelToken[]`, `.text` only — see that interface's own
+ * comment for why the offset-carrying `Token[]` this module's own
+ * `tokenizeWithOffsets` produces is not required here), then layers its
+ * own `xargs` handling on top (this loop deliberately does NOT recognise
+ * `xargs` — see the module header's NOT-SUPPORTED list for why `xargs`
+ * is architecturally different from every wrapper peeled here: its own
+ * argv is not simply "the command to run").
+ */
+export function peelWrapperPrefixes(
+  tokens: readonly WrapperPeelToken[],
+  startIdx = 0,
+): WrapperPeelResult {
+  let idx = startIdx;
+  let envTargetDir: string | null = null;
+  for (let guard = 0; guard < tokens.length; guard++) {
+    const head = tokens[idx]?.text;
+    if (head === undefined) break;
+    if (VAR_ASSIGN_RE.test(head)) {
+      idx = consumeAssignment(tokens, idx);
+      continue;
+    }
+    if (head === "env") {
+      const r = peelEnv(tokens, idx + 1);
+      idx = r.idx;
+      if (envTargetDir === null) envTargetDir = r.targetDir;
+      continue;
+    }
+    if (head === "command") {
+      idx = peelCommand(tokens, idx + 1);
+      continue;
+    }
+    if (head === "nice") {
+      idx = peelNice(tokens, idx + 1);
+      continue;
+    }
+    if (head === "sudo") {
+      idx = peelSudo(tokens, idx + 1);
+      continue;
+    }
+    if (head === "doas") {
+      idx = peelDoas(tokens, idx + 1);
+      continue;
+    }
+    if (head === "time") {
+      idx = peelTime(tokens, idx + 1);
+      continue;
+    }
+    if (head === "timeout") {
+      idx = peelTimeout(tokens, idx + 1);
+      continue;
+    }
+    if (head === "stdbuf") {
+      idx = peelStdbuf(tokens, idx + 1);
+      continue;
+    }
+    if (head === "setsid") {
+      idx = peelSetsid(tokens, idx + 1);
+      continue;
+    }
+    if (head === "exec") {
+      idx = peelExec(tokens, idx + 1);
+      continue;
+    }
+    if (head === "nohup") {
+      idx = peelNohup(tokens, idx + 1);
+      continue;
+    }
+    break;
+  }
+  return { idx, envTargetDir };
 }
 
 /**
@@ -2054,61 +2230,9 @@ function canonicalizeSegment(segmentText: string): {
     };
   }
 
-  let idx = 0;
-  let envTargetDir: string | null = null;
-
-  // Peel wrapper prefixes: VAR=value tokens, `env` (+ its own flags/
-  // assignments), `command` (+ its own flags), `nice` (+ its own
-  // flags), `sudo` / `doas` / `time` / `timeout` / `stdbuf` / `setsid`
-  // (+ each one's own flags — F4 fix). Bounded by tokens.length so a
-  // pathological input cannot spin.
-  for (let guard = 0; guard < tokens.length; guard++) {
-    const head = tokens[idx]?.text;
-    if (head === undefined) break;
-    if (VAR_ASSIGN_RE.test(head)) {
-      idx = consumeAssignment(tokens, idx);
-      continue;
-    }
-    if (head === "env") {
-      const r = peelEnv(tokens, idx + 1);
-      idx = r.idx;
-      if (envTargetDir === null) envTargetDir = r.targetDir;
-      continue;
-    }
-    if (head === "command") {
-      idx = peelCommand(tokens, idx + 1);
-      continue;
-    }
-    if (head === "nice") {
-      idx = peelNice(tokens, idx + 1);
-      continue;
-    }
-    if (head === "sudo") {
-      idx = peelSudo(tokens, idx + 1);
-      continue;
-    }
-    if (head === "doas") {
-      idx = peelDoas(tokens, idx + 1);
-      continue;
-    }
-    if (head === "time") {
-      idx = peelTime(tokens, idx + 1);
-      continue;
-    }
-    if (head === "timeout") {
-      idx = peelTimeout(tokens, idx + 1);
-      continue;
-    }
-    if (head === "stdbuf") {
-      idx = peelStdbuf(tokens, idx + 1);
-      continue;
-    }
-    if (head === "setsid") {
-      idx = peelSetsid(tokens, idx + 1);
-      continue;
-    }
-    break;
-  }
+  const peeled = peelWrapperPrefixes(tokens);
+  let idx = peeled.idx;
+  const envTargetDir = peeled.envTargetDir;
 
   const headTok = tokens[idx]?.text;
   if (headTok === undefined) {
@@ -2272,7 +2396,7 @@ function canonicalizeSegment(segmentText: string): {
  * absent).
  */
 function peelEnv(
-  tokens: Token[],
+  tokens: readonly WrapperPeelToken[],
   startIdx: number,
 ): { idx: number; targetDir: string | null } {
   let idx = startIdx;
@@ -2342,7 +2466,7 @@ function peelEnv(
 }
 
 /** Peel `command`'s own flags (e.g. `-p`, `-v`, `-V`, `--`). */
-function peelCommand(tokens: Token[], startIdx: number): number {
+function peelCommand(tokens: readonly WrapperPeelToken[], startIdx: number): number {
   let idx = startIdx;
   while (idx < tokens.length) {
     const t = tokens[idx]!.text;
@@ -2368,7 +2492,7 @@ function peelCommand(tokens: Token[], startIdx: number): number {
  * status` bypassed even though `nice` was already in the SUPPORTED list,
  * because only the `-n`-prefixed spellings were recognised.
  */
-function peelNice(tokens: Token[], startIdx: number): number {
+function peelNice(tokens: readonly WrapperPeelToken[], startIdx: number): number {
   let idx = startIdx;
   while (idx < tokens.length) {
     const t = tokens[idx]!.text;
@@ -2397,20 +2521,27 @@ function peelNice(tokens: Token[], startIdx: number): number {
 /**
  * Generic "peel this wrapper's own flags" loop shared by the small,
  * bounded-vocabulary runners added for F4 (`sudo`, `doas`, `time`,
- * `stdbuf`, `setsid`): consume `--`, any flag in `valueFlags` (+ its
- * following token), any glued short/long form matching `gluedRe`, then
- * any OTHER `-`-prefixed token treated as boolean (mirrors `peelCommand`
- * above — safe because an unrecognised flag is either genuinely boolean,
- * in which case this is correct, or value-taking, in which case its
- * VALUE token is left for the next iteration and — not being `git`, a
- * known wrapper, or another flag — simply causes a clean, safe bail-out
- * a token late rather than a false match). Does NOT capture flag
- * VALUES: none of these five wrappers have a "run in a different
- * directory" semantic this module tracks as a target directory — only
- * `env -C`/`--chdir` does, and that stays hand-written in `peelEnv`.
+ * `stdbuf`, `setsid`, `exec`, `nohup`): consume `--`, any flag in
+ * `valueFlags` (+ its following token), any glued short/long form
+ * matching `gluedRe`, then any OTHER `-`-prefixed token treated as
+ * boolean (mirrors `peelCommand` above — safe because an unrecognised
+ * flag is either genuinely boolean, in which case this is correct, or
+ * value-taking, in which case its VALUE token is left for the next
+ * iteration and — not being `git`, a known wrapper, or another flag —
+ * simply causes a clean, safe bail-out a token late rather than a false
+ * match). Does NOT capture flag VALUES: none of these wrappers have a
+ * "run in a different directory" semantic this module tracks as a
+ * target directory — only `env -C`/`--chdir` does, and that stays
+ * hand-written in `peelEnv`. Exported (task d03af8f6, review round 3) so
+ * `src/runtime/deletion-target-resolve.ts` can reuse this SAME loop for
+ * `xargs`'s own flags (`-0`, `-n1`, ...) instead of a third
+ * independently-drifting copy — that module is the reason this needs no
+ * value-flag vocabulary of its own either: `xargs`'s own value-taking
+ * flags are not modelled there, matching this function's existing
+ * effort level for the boolean-only wrappers above.
  */
-function peelGenericFlags(
-  tokens: Token[],
+export function peelGenericFlags(
+  tokens: readonly WrapperPeelToken[],
   startIdx: number,
   valueFlags: ReadonlySet<string>,
   gluedRe: RegExp | null,
@@ -2458,7 +2589,7 @@ const SUDO_VALUE_FLAGS: ReadonlySet<string> = new Set([
 /** `sudo`'s glued short-value forms: `-uroot`, `-Cbastion`, etc. */
 const SUDO_GLUED_RE = /^-[ghpRrtTuC]./;
 
-function peelSudo(tokens: Token[], startIdx: number): number {
+function peelSudo(tokens: readonly WrapperPeelToken[], startIdx: number): number {
   return peelGenericFlags(tokens, startIdx, SUDO_VALUE_FLAGS, SUDO_GLUED_RE);
 }
 
@@ -2466,7 +2597,7 @@ function peelSudo(tokens: Token[], startIdx: number): number {
 const DOAS_VALUE_FLAGS: ReadonlySet<string> = new Set(["-u", "-C"]);
 const DOAS_GLUED_RE = /^-[uC]./;
 
-function peelDoas(tokens: Token[], startIdx: number): number {
+function peelDoas(tokens: readonly WrapperPeelToken[], startIdx: number): number {
   return peelGenericFlags(tokens, startIdx, DOAS_VALUE_FLAGS, DOAS_GLUED_RE);
 }
 
@@ -2474,7 +2605,7 @@ function peelDoas(tokens: Token[], startIdx: number): number {
 const TIME_VALUE_FLAGS: ReadonlySet<string> = new Set(["-o", "-f", "--output", "--format"]);
 const TIME_GLUED_RE = /^-[of]./;
 
-function peelTime(tokens: Token[], startIdx: number): number {
+function peelTime(tokens: readonly WrapperPeelToken[], startIdx: number): number {
   return peelGenericFlags(tokens, startIdx, TIME_VALUE_FLAGS, TIME_GLUED_RE);
 }
 
@@ -2493,7 +2624,7 @@ const TIMEOUT_GLUED_RE = /^-[ks]./;
  * it; the caller's "is this token `git`?" check bails safely on
  * whatever token is actually there.
  */
-function peelTimeout(tokens: Token[], startIdx: number): number {
+function peelTimeout(tokens: readonly WrapperPeelToken[], startIdx: number): number {
   let idx = peelGenericFlags(tokens, startIdx, TIMEOUT_VALUE_FLAGS, TIMEOUT_GLUED_RE);
   if (tokens[idx] !== undefined) idx += 1;
   return idx;
@@ -2505,12 +2636,33 @@ const STDBUF_VALUE_FLAGS: ReadonlySet<string> = new Set([
 ]);
 const STDBUF_GLUED_RE = /^-[ioe]./;
 
-function peelStdbuf(tokens: Token[], startIdx: number): number {
+function peelStdbuf(tokens: readonly WrapperPeelToken[], startIdx: number): number {
   return peelGenericFlags(tokens, startIdx, STDBUF_VALUE_FLAGS, STDBUF_GLUED_RE);
 }
 
 /** `setsid`'s flags (`-w`/`--wait`, `-c`/`--ctty`, `-f`/`--fork`) are all boolean. */
-function peelSetsid(tokens: Token[], startIdx: number): number {
+function peelSetsid(tokens: readonly WrapperPeelToken[], startIdx: number): number {
+  return peelGenericFlags(tokens, startIdx, new Set(), null);
+}
+
+/**
+ * `exec`'s own flags (bash builtin: `-a name`, `-c`, `-l`) are rare
+ * enough that this module treats it as a boolean-only wrapper like
+ * `setsid` above — an unrecognised flag (including `-a`, whose VALUE
+ * this does not capture) simply consumes one token via
+ * `peelGenericFlags`'s generic `-flag` branch (task d03af8f6, review
+ * round 3 — closes the `exec git status` / `exec rm -rf ...` bypass
+ * named in the module header's NOT-SUPPORTED list).
+ */
+function peelExec(tokens: readonly WrapperPeelToken[], startIdx: number): number {
+  return peelGenericFlags(tokens, startIdx, new Set(), null);
+}
+
+/** `nohup` takes no flags of its own (GNU coreutils: only `--help`/`--version`,
+ *  neither of which precedes a real wrapped command). Boolean-only, same
+ *  shape as `peelSetsid`/`peelExec` (task d03af8f6, review round 3 — closes
+ *  the `nohup git status` / `nohup rm -rf ... &` bypass). */
+function peelNohup(tokens: readonly WrapperPeelToken[], startIdx: number): number {
   return peelGenericFlags(tokens, startIdx, new Set(), null);
 }
 
