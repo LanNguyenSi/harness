@@ -330,29 +330,62 @@ mutate anything. `a7eb1a71`'s AC5 measured and waived this rather than
 fixing it; this task makes the fix decision.
 
 **Decision: GO**, with a floor narrower than the general read-only floor
-above. A curated set of kubectl read verbs — `get`, `describe`, `logs`,
-`top`, `api-resources`, `api-versions`, `version`, `cluster-info`,
-`explain`, and `auth can-i` (a permission CHECK, never the resource's
-own data) — floors to `low`, UNLESS the command reads `--raw` (an
-arbitrary, unclassifiable API path, checked on EVERY floored verb, not
-just `get`), selects its resources from a FILE or a kustomization
-DIRECTORY (`-f`/`--filename`, `-k`/`--kustomize` on `get`/`describe` —
-this module cannot read what such a file names), contains an unresolved
-`$`-expansion (`$VAR`, `${VAR}`, `"$VAR"` — the resource-type argument
-is then not literally readable, so it cannot be proven safe), or the
-resource argument mentions "secret" or "configmap" in any form (`get
-secret`, `get secrets`, `get secret/<name>`, `describe secret`, `-o
-yaml`/`-o json` on a secret, a comma-list like `get pods,secrets`; the
-same shapes for `configmap`/`configmaps`/the bare `cm` abbreviation).
-Any other kubectl subcommand — `apply`, `delete`, `patch`, `create`,
-`replace`, `scale`, `rollout`, `drain`, `cordon`, `taint`, `label`,
-`annotate`, `set`, `exec`, `cp`, `port-forward`, `proxy`, `edit`,
-`attach`, `debug`, `auth reconcile`, `config`, or anything this floor
-has not enumerated — is NOT on the allowlist and stays fail-closed
-(unknown is not safe), unchanged. Implementation:
-`isReadOnlyKubectlCommand` in `src/runtime/read-only-bash.ts`, wired into
-`classifyRisk`'s built-in floor block in `src/runtime/risk-classifier.ts`
-alongside (not merged with) the general read-only floor.
+above, built from two ALLOWLISTS rather than a metacharacter denylist
+(round 3 redesign — see "Round 3: from metacharacter exclusions to
+allowlists" below for why). A curated set of kubectl read verbs — `get`,
+`describe`, `logs`, `top`, `api-resources`, `api-versions`, `version`,
+`cluster-info`, `explain`, and `auth can-i` (a permission CHECK, never
+the resource's own data) — floors to `low` only when BOTH allowlists
+hold: (1) every token after `kubectl` matches a plain-word shape
+(letters, digits, and `` _ . : / = , @ % + - ``; no quotes, backslashes,
+`$`, backticks, braces, globs, or any other shell-special character),
+and (2) every flag token is drawn from that verb's explicit read-flag
+allowlist (or the small global-flag allowlist, legal before or after the
+verb) — UNLESS, additionally, the resource argument mentions "secret" or
+"configmap" in any form (`get secret`, `get secrets`, `get
+secret/<name>`, `describe secret`, `-o yaml`/`-o json` on a secret, a
+comma-list like `get pods,secrets`; the same shapes for
+`configmap`/`configmaps`/the bare `cm` abbreviation), for `get`/
+`describe` only. `--raw` (an arbitrary, unclassifiable API path),
+`-f`/`--filename`/`-k`/`--kustomize` (FILE- or kustomization-DIRECTORY-
+driven resource selection this module cannot read into), and
+`--server`/`-s`/`--kubeconfig`/`--token`/`--as`/`--as-group`/`--user`/
+`--cluster`/`--tls-server-name`/`--insecure-skip-tls-verify` (endpoint or
+identity redirection) are never members of any verb's flag allowlist, so
+each is refused by the SAME mechanism — an absent allowlist entry — not
+by a dedicated check per flag. An unresolved `$`-expansion (`$VAR`,
+`${VAR}`, `"$VAR"`) fails the token-shape allowlist directly, for the
+same reason: the resource-type argument is then not literally readable,
+so it cannot be proven safe. Any other kubectl subcommand — `apply`,
+`delete`, `patch`, `create`, `replace`, `scale`, `rollout`, `drain`,
+`cordon`, `taint`, `label`, `annotate`, `set`, `exec`, `cp`,
+`port-forward`, `proxy`, `edit`, `attach`, `debug`, `auth reconcile`,
+`config`, or anything this floor has not enumerated — is NOT on the verb
+allowlist and stays fail-closed (unknown is not safe), unchanged.
+Implementation: `isReadOnlyKubectlCommand` in
+`src/runtime/read-only-bash.ts`, wired into `classifyRisk`'s built-in
+floor block in `src/runtime/risk-classifier.ts` alongside (not merged
+with) the general read-only floor.
+
+**Round 3: from metacharacter exclusions to allowlists.** Round 1 shipped
+a narrow verb floor with a secrets/configmap substring exclusion; round 2
+added `--raw`, file/kustomize selection, and `$`-expansion exclusions on
+top of it. Round-2 review then found the same class of bug a third time —
+brace expansion (`kubectl get s{e..e}cret ... ` expands to `secret`
+before kubectl ever sees the argv), glob patterns (`get s*`, `get
+sec[r]et`), and endpoint redirection (`--server`/`-s`/`--kubeconfig`, pre-
+or post-verb) all floored end-to-end — because each round had patched one
+more shell-metacharacter bypass onto the same substring/decode-based
+exclusion instead of closing the class. The halt decision was to stop
+enumerating metacharacters and redesign to the two allowlists described
+above: a token-shape allowlist closes brace expansion, globs, quoting,
+and escaping in a single check (a quoted or escaped token simply never
+matches the plain-word pattern, which is also why the per-token
+`decodeShellWord` decoding round 1 added to the secret/configmap checks
+is no longer needed — those checks now only ever see raw tokens that
+already passed the shape check), and a flag allowlist closes endpoint
+redirection, `--raw`, and file/kustomize selection in one mechanism
+(omission from the allowlist) instead of three separate checks.
 
 **ConfigMap sub-decision.** ConfigMap data is a common credential store
 in practice (`.env`-shaped config, connection strings, and — while an
@@ -402,15 +435,16 @@ mechanical:
 
 The secrets check itself is deliberately over-broad in the fail-safe
 direction: it matches "secret" as a case-insensitive substring anywhere
-in the command's tokens (raw or `decodeShellWord`-decoded), so
-`kubectl get secretstores --context prod` (an unrelated CRD whose name
-happens to contain "secret") is also excluded from the floor and falls
-back to requiring approval. That is an accepted false negative
-(convenience cost, occasionally requiring approval for a genuinely safe
-read), not a false positive — the constraint this decision must not
-violate is "a prod Secret read stays approval-gated," and the substring
-match can only ever REQUIRE more approval than a precise resource-type
-parse would, never less.
+in the command's (already token-shape-validated, so always raw and never
+quoted or escaped) tokens, so `kubectl get secretstores --context prod`
+(an unrelated CRD whose name happens to contain "secret") is also
+excluded from the floor and falls back to requiring approval. This is an
+accepted false positive — the detector over-matches "secret-shaped"
+resource names, in the safe direction: the constraint this decision must
+not violate is "a prod Secret read stays approval-gated," and the
+substring match can only ever REQUIRE more approval than a precise
+resource-type parse would (a convenience cost, occasionally requiring
+approval for a genuinely safe read), never less.
 
 **Blast radius, and why the floor is NOT in `isReadOnlyBashCommand` /
 `isReadOnlyBashPipeline`.** Those two functions are shared by three
@@ -459,26 +493,28 @@ Keeping the floor as its own function, consulted only from
 decision is about.
 
 **Fail-safe posture, restated:** every ambiguous shape (an unrecognized
-subcommand, an unrecognized global flag before the verb, any mention of
-"secret" or "configmap", `--raw`, file-driven resource selection, an
-unresolved `$`-expansion, or any shell chaining/redirection/substitution)
-falls through to `false` — not floored, so "unknown is not safe" still
-applies and the action requires approval on a production-resolved
-session. The floor can only ever ALLOW something the "unknown is not
-safe" rule would otherwise have blocked; it cannot itself cause a block.
+subcommand, an unrecognized flag anywhere — before or after the verb,
+including `--raw`, file/kustomize-driven resource selection, and
+endpoint/identity redirection, all of which are simply absent from the
+flag allowlists — any non-plain-word token, including an unresolved
+`$`-expansion, and mention of "secret" or "configmap") falls through to
+`false` — not floored, so "unknown is not safe" still applies and the
+action requires approval on a production-resolved session. The floor can
+only ever ALLOW something the "unknown is not safe" rule would otherwise
+have blocked; it cannot itself cause a block.
 
 **Residual risks, accepted:**
 
-- **`--as`/`--as-group` impersonation is floored.** A floored `kubectl
-  get pods --as some-other-user --context prod-eu-1` is still a READ
-  (it cannot mutate cluster state), but it reads through a DIFFERENT
-  RBAC identity than the caller's own — the set of objects that identity
-  can see is not necessarily the same set the calling identity could see
-  directly, so the floor is a decision about mutation risk, not about
-  which data a specific read is able to reach. Accepted: the floor's
-  entire premise is "read-only kubectl commands are safe to floor
-  regardless of exactly which objects they touch," and an impersonated
-  read is still read-only by that definition.
+- **`--as`/`--as-group` impersonation is refused, not floored, as of
+  round 3** — a behavior CHANGE from rounds 1-2, where a floored
+  `kubectl get pods --as some-other-user --context prod-eu-1` was still
+  a READ (it cannot mutate cluster state) but through a DIFFERENT RBAC
+  identity than the caller's own. Round 3 folded `--as`/`--as-group`
+  into the same never-allowlisted set as `--server`/`--kubeconfig` (see
+  "Round 3" above) because it is, structurally, the same identity-
+  redirection shape; the earlier rounds' acceptance of it as read-only
+  regardless of which RBAC identity performs the read is superseded, not
+  reaffirmed.
 - **`logs`/`describe` output may itself carry credentials** — a
   container's stdout/stderr can log a token or connection string, and a
   `describe`d object's annotations or event history can echo one back.
@@ -488,31 +524,58 @@ safe" rule would otherwise have blocked; it cannot itself cause a block.
   credentials), not every possible credential that could appear inside
   the free-text output of an otherwise-ordinary resource read, which no
   string classifier can enumerate.
+- **The secret/configmap exclusion is a two-KIND resource-TYPE denylist,
+  not a credential-content scan.** It excludes `Secret` and `ConfigMap`
+  objects by name; it says nothing about credentials that live inside a
+  DIFFERENT resource type's ordinary fields. A floored `kubectl get pods
+  -o yaml --context prod-eu-1` can return a Pod spec's plaintext `env:`
+  literals (as opposed to a `secretKeyRef`, which names a Secret but not
+  its value), and a floored `kubectl get application my-app -o yaml
+  --context prod-eu-1` (or `helmrelease`) can return a Flux
+  `HelmRelease`/Argo CD `Application` object whose `values:`/`spec:`
+  block embeds plaintext credentials by convention in some clusters, in
+  full. Both are accepted, for the same reason the two-KIND scope was
+  chosen over a full credential-content scan in round 1: a resource-TYPE
+  check is mechanical and provably complete over the two kinds it
+  targets, where a content scan over arbitrary YAML would be a
+  best-effort heuristic with its own false-negative surface. Mitigation
+  is out of this floor's scope: an operator who runs clusters with
+  credential-bearing CRDs (HelmRelease, Application, or a custom
+  resource with the same shape) should add an operator-defined
+  classifier pattern (`policy.when` / a custom risk rule, see the
+  Classifier reference above) naming those resource types explicitly,
+  the same way this decision's own two-KIND denylist was chosen instead
+  of trying to close every credential-bearing shape at once.
 
 **Verification.** `tests/runtime/read-only-bash.test.ts`'s "kubectl
 read-only floor" describe block unit-tests `isReadOnlyKubectlCommand`
 directly (floored / not-floored / edge cases / chaining / a 30-flag
-timing check), and separately pins that `isReadOnlyBashCommand` /
-`isReadOnlyBashPipeline` still classify every kubectl form `false`.
-`tests/runtime/risk-classifier.test.ts`'s "built-in kubectl read-only
-floor" describe block covers `classifyRisk` directly, including the
-secrets exclusion and the operator-classifier-still-wins case.
+timing check; round 3 added dedicated blocks for brace expansion, glob
+patterns, endpoint/identity redirection, and unknown/unlisted flags, plus
+a per-verb flag-allowlist positive block), and separately pins that
+`isReadOnlyBashCommand` / `isReadOnlyBashPipeline` still classify every
+kubectl form `false`. `tests/runtime/risk-classifier.test.ts`'s
+"built-in kubectl read-only floor" describe block covers `classifyRisk`
+directly, including the secrets exclusion and the
+operator-classifier-still-wins case.
 `tests/runtime/intercept-cli-kube-context-flag.test.ts`'s "kubectl
 read-only floor end-to-end" describe block runs the real
 `runInterceptCli` policy-intercept path (not just the classifier) for
 both the allow case (`kubectl get pods --context prod-eu-1`) and the
 still-approval-gated cases (`kubectl get secret -o yaml --context
-prod-eu-1`, and, added in round 2, the file-driven-selection,
-`$`-expansion, and configmap cases), and its earlier AC2/AC5
-classifier-half tests were updated from "unclassified" to "floored to
-low" to match this decision.
-Negative control: removing the kubectl floor (or dropping the
-secrets/configmap exclusion, the file-selection guard, or the
-`$`-expansion guard from it) was applied and observed to fail exactly
-the tests named above, then restored — see the `[Unreleased]` CHANGELOG
-entry for task `da823721` and the named test blocks above (this file's
-own record of what was measured, rather than a pointer to a subagent
-report that does not live in this repository).
+prod-eu-1`; the file-driven-selection, `$`-expansion, and configmap
+cases from round 2; and, added in round 3, the brace-expansion and
+`--server` pre-/post-verb endpoint-redirection cases), and its earlier
+AC2/AC5 classifier-half tests were updated from "unclassified" to
+"floored to low" to match this decision.
+Negative control: removing the kubectl floor (or, individually, the
+secrets/configmap exclusion, the file-selection guard, the
+`$`-expansion guard, the token-shape allowlist, an entry from the flag
+allowlist, or the flag-allowlist enforcement itself) was applied and
+observed to fail exactly the tests named above, then restored — see the
+`[Unreleased]` CHANGELOG entry for task `da823721` and the named test
+blocks above (this file's own record of what was measured, rather than
+a pointer to a subagent report that does not live in this repository).
 
 ### Environment resolvers (`environments:`)
 

