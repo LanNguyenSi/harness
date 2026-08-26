@@ -1,6 +1,7 @@
 // Task d03af8f6 — static deletion-target resolver unit tests.
 
 import { describe, expect, it } from "vitest";
+import { MAX_NORMALIZE_LENGTH } from "../../src/runtime/command-normalize.js";
 import { resolveDeletionTarget } from "../../src/runtime/deletion-target-resolve.js";
 
 const ROOTS = ["/tmp", "/private/tmp"];
@@ -452,10 +453,10 @@ describe("resolveDeletionTarget — review round 3: redirection operands are nev
   });
 });
 
-describe("resolveDeletionTarget — review round 3: find search-root equality resolves, rm keeps strictly-deeper (MEDIUM C3)", () => {
-  it("resolves find /tmp -name '*.log' -delete (root operand EQUALS the declared root) as ALLOWED", () => {
+describe("resolveDeletionTarget — review round 5: find root-equality exception removed, every verb requires strictly-deeper (HIGH)", () => {
+  it("gates find /tmp -name '*.log' -delete (root operand EQUALS the declared root — find has no exception any more)", () => {
     const v = resolveDeletionTarget("find /tmp -name '*.log' -delete", ROOTS);
-    expect(v?.unresolvable).toBe(false);
+    expect(v?.unresolvable).toBe(true);
   });
 
   it("gates find / -delete (root operand is the filesystem root, not a declared safe root)", () => {
@@ -509,21 +510,33 @@ describe("resolveDeletionTarget — review round 4: xargs separated-value flags 
   });
 });
 
-describe("resolveDeletionTarget — review round 4: find root-itself requires a test predicate (MEDIUM)", () => {
-  it("gates a bare find /tmp -delete (no test predicate — the root-itself premise was false)", () => {
-    const v = resolveDeletionTarget("find /tmp -delete", ROOTS);
+describe("resolveDeletionTarget — review round 5: find root-equality exception removed (HIGH)", () => {
+  it.each([
+    "find /tmp -delete",
+    "find /tmp -name '*.log' -delete",
+    "find /tmp -maxdepth 1 -delete",
+    "find /tmp -empty -delete",
+    "find /tmp -type d -delete",
+    "find /tmp -name x -o -delete",
+    "find /tmp -maxdepth 1 -exec rm -rf {} +",
+    "find /tmp -mindepth 1 -delete",
+  ])("gates %s (target equals the declared root itself — no exception for find, same as rm)", (cmd) => {
+    const v = resolveDeletionTarget(cmd, ROOTS);
     expect(v?.unresolvable).toBe(true);
   });
 
-  it("still allows find /tmp -name '*.log' -delete (a test predicate narrows away from the root entry)", () => {
-    const v = resolveDeletionTarget("find /tmp -name '*.log' -delete", ROOTS);
-    expect(v?.unresolvable).toBe(false);
-  });
+  it.each(["find /tmp/scratch -name '*.log' -delete", "find /private/tmp/claude-501/s/x -delete"])(
+    "allows %s (target strictly deeper than the declared root)",
+    (cmd) => {
+      const v = resolveDeletionTarget(cmd, ROOTS);
+      expect(v?.unresolvable).toBe(false);
+    },
+  );
 });
 
 describe("resolveDeletionTarget — review round 4: stripRedirections is not inert (MEDIUM)", () => {
-  it("allows find /tmp >out -name '*.log' -delete (redirection token stripped, not collected as a target)", () => {
-    const v = resolveDeletionTarget("find /tmp >out -name '*.log' -delete", ROOTS);
+  it("allows find /tmp/scratch >out -name '*.log' -delete (redirection token stripped, not collected as a target)", () => {
+    const v = resolveDeletionTarget("find /tmp/scratch >out -name '*.log' -delete", ROOTS);
     expect(v?.unresolvable).toBe(false);
     expect(v?.targets).not.toContain("out");
     expect(v?.targets).not.toContain(">out");
@@ -566,5 +579,61 @@ describe("resolveDeletionTarget — review round 4: verdict de-duplication (LOW 
     expect(v?.targets).not.toContain("rm");
     expect(v?.targets).toEqual(["/home/x", "/home/y"]);
     expect(v?.unresolvable).toBe(true);
+  });
+});
+
+describe("resolveDeletionTarget — review round 5: xargs replace-string aliasing (MEDIUM, security)", () => {
+  it.each(["xargs -I{} rm -rf /tmp/{}", "xargs -I% rm -rf /tmp/%", "find / -name x | xargs -I{} rm -rf /tmp/{}"])(
+    "gates %s (the replace-string's runtime value is never statically known, even though the literal token starts with a safe root)",
+    (cmd) => {
+      const v = resolveDeletionTarget(cmd, ROOTS);
+      expect(v?.unresolvable).toBe(true);
+    },
+  );
+
+  it("cat list | xargs -I% rm -rf /tmp/% also gates", () => {
+    const v = resolveDeletionTarget("cat list | xargs -I% rm -rf /tmp/%", ROOTS);
+    expect(v?.unresolvable).toBe(true);
+  });
+});
+
+describe("resolveDeletionTarget — review round 5: findPathOperands stops at !/(/) (LOW)", () => {
+  it("gates find /tmp ! -name x -delete with targets == [\"/tmp\"] (! is never collected as a target)", () => {
+    const v = resolveDeletionTarget("find /tmp ! -name x -delete", ROOTS);
+    expect(v?.targets).toEqual(["/tmp"]);
+    expect(v?.unresolvable).toBe(true);
+  });
+
+  it("allows find /tmp/scratch ! -name x -delete (target strictly deeper than the declared root)", () => {
+    const v = resolveDeletionTarget("find /tmp/scratch ! -name x -delete", ROOTS);
+    expect(v?.unresolvable).toBe(false);
+  });
+});
+
+describe("resolveDeletionTarget — review round 5: glued trailing & is stripped once (LOW)", () => {
+  it("gates rm -rf /home/x& with targets == [\"/home/x\"] (not duplicated by the two segmentation arms)", () => {
+    const v = resolveDeletionTarget("rm -rf /home/x&", ROOTS);
+    expect(v?.targets).toEqual(["/home/x"]);
+    expect(v?.unresolvable).toBe(true);
+  });
+
+  it("allows rm -rf /tmp/x& (target strictly deeper than the declared root, once trailing & is stripped)", () => {
+    const v = resolveDeletionTarget("rm -rf /tmp/x&", ROOTS);
+    expect(v?.unresolvable).toBe(false);
+  });
+});
+
+describe("resolveDeletionTarget — review round 5: oversized-command single-first-segment fallback (LOW)", () => {
+  it("falls back to inspecting only the FIRST shell segment past MAX_NORMALIZE_LENGTH, missing a deletion verb in a later segment", () => {
+    const padding = "a".repeat(MAX_NORMALIZE_LENGTH + 10);
+    const cmd = `echo ${padding} && rm -rf /home/x`;
+    expect(cmd.length).toBeGreaterThan(MAX_NORMALIZE_LENGTH);
+    // Both segmentation arms decline on a command this long, so
+    // resolveDeletionTarget falls back to the pre-multi-segment,
+    // single-first-segment contract: only "echo <padding>" (the first
+    // segment) is inspected. It is not a recognized deletion verb, so
+    // the later `rm -rf /home/x` segment goes entirely unrecognized and
+    // the verdict is null (not gated).
+    expect(resolveDeletionTarget(cmd, ROOTS)).toBeNull();
   });
 });

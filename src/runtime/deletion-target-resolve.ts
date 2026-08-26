@@ -20,173 +20,91 @@
 // Bash call in every environment — approval spam, not a deletion-
 // specific gate).
 //
-// REVIEW ROUND 3 (task d03af8f6, this revision): the ROUND-2 HALT RULE
-// fired — two consecutive review rounds each found the recognition
-// surface failing OPEN on a NEW, structurally similar class of common
-// shapes (round 1: first-segment-only; round 2: flag-blind wrapper
-// peeling plus bare-`&`/brace/exec/nohup). The structural cause: this
-// module hand-rolled its own segmentation and wrapper peeling instead of
-// reusing `src/runtime/command-normalize.ts`, which already ships
-// flag-aware, measured, pinned peelers and TWO segmentation arms trusted
-// by the `bash_match` gate. This revision replaces the hand-rolled
-// recognition with that shared machinery:
-//
-//   1. Segments now come from BOTH of `command-normalize.ts`'s
-//      segmentation arms — `segmentViewOf` (the primary `BOUNDARY_RE`
-//      alphabet) AND `segmentViewOfAmpAware` (the `AMP_BOUNDARY_RE`
-//      alphabet, which additionally splits on a bare `&` — task
-//      aabbad63's own gap-closer for trigger matching, reused here for
-//      the same reason: `echo hi & rm -rf /home/x` is a background job,
-//      not a chain the primary alphabet splits on). The two arms'
-//      segment TEXTS are combined ADDITIVELY and de-duplicated by exact
-//      text (see `collectSegmentTexts`): when a command has no bare `&`
-//      the two arms produce byte-identical segmentation, so
-//      de-duplication is what keeps `targets`/`unresolvedTargets` from
-//      double-counting the common case, while a command that DOES split
-//      differently under the two alphabets (the `&`-background case)
-//      gets the union of both views' recognized deletion segments. A
-//      verdict from EITHER arm counts toward the combined result:
-//      unresolvable if any recognized segment (from either arm) is,
-//      resolved only if every recognized segment (from both arms) is —
-//      see `combineVerdicts`, unchanged from round 2's rule, now fed a
-//      richer segment set. When both arms decline (an oversized command
-//      past `MAX_NORMALIZE_LENGTH` — the same bound for both) this
-//      module falls back to the pre-round-2, single-first-segment
-//      contract.
-//   2. A wrapper prefix on the deletion verb ITSELF is peeled with
-//      `command-normalize.ts`'s own exported `peelWrapperPrefixes` —
-//      the SAME loop `canonicalizeSegment` uses for `git`/`gh`/`npm`/
-//      `harness` trigger recognition, not a second, independently
-//      drifting copy. This closes every flag this module's OWN
-//      round-2 `peelWrapperHeads` missed: `sudo -u root ...`, `sudo -E
-//      ...`, `sudo --preserve-env ...`, `nice -n 10 ...`, `nice -10
-//      ...`, `env -i ...`, `env -u FOO ...`, `timeout -k 5 10 ...`,
-//      `timeout --signal=KILL 5 ...` — none of these advanced past the
-//      wrapper's own bare name before, because the round-2 peeler
-//      recognized ONLY the bare wrapper token, never its flags. `exec`
-//      and `nohup` are ALSO now peeled — added to
-//      `peelWrapperPrefixes` itself (`command-normalize.ts`) rather
-//      than only here, so this module's own gate AND the `bash_match`
-//      trigger gate both benefit; see that function's own comment.
-//      `xargs` stays a LOCAL concern (`peelWrapperHeadsAndXargs` below):
-//      `command-normalize.ts` deliberately never recognizes it (its own
-//      argv is not simply "the command to run" — see that module's
-//      NOT-SUPPORTED list), but this resolver's own semantics for it —
-//      UNRESOLVABLE when no explicit operand survives, since the real
-//      target comes from stdin — are unchanged from round 2. REVIEW
-//      ROUND 4 (HIGH): `xargs`'s own flags are no longer peeled by
-//      walking a flag table at all (round 3's `peelGenericFlags` reuse
-//      was boolean-only and stranded a SEPARATED flag value — `-I {}`,
-//      `-n 1`, `-P 4`, `-a list`, `-d '\n'` — where the verb was
-//      expected, leaving those five spellings ungated); instead, after
-//      the `xargs` token, this scans FORWARD for the first token that is
-//      itself a recognized deletion-verb head, skipping every flag and
-//      value uniformly regardless of spelling — see
-//      `findXargsVerbHead`'s own comment.
+// Recognition rule (current):
+//   1. Segments come from BOTH of `command-normalize.ts`'s segmentation
+//      arms — `segmentViewOf` (the primary alphabet) AND
+//      `segmentViewOfAmpAware` (the same alphabet plus a bare `&`,
+//      closing the `echo hi & rm -rf /home/x` background-job gap) —
+//      combined additively and de-duplicated by exact segment text
+//      (`collectSegmentTexts`). A verdict from EITHER arm counts toward
+//      the combined result: unresolvable if any recognized segment is,
+//      resolved only if every recognized segment is (`combineVerdicts`).
+//      When both arms decline (a command past `MAX_NORMALIZE_LENGTH`)
+//      this module falls back to a single-first-segment contract.
+//   2. A wrapper prefix on the deletion verb is peeled with
+//      `command-normalize.ts`'s own exported `peelWrapperPrefixes` (the
+//      SAME loop `canonicalizeSegment` uses for `git`/`gh`/`npm`/
+//      `harness` trigger recognition) — `sudo`, `doas`, `command`,
+//      `env`, `time`, `timeout`, `nice`, `exec`, `nohup`. `xargs` is a
+//      LOCAL concern (`peelWrapperHeadsAndXargs` below): its own argv
+//      is not simply "the command to run", so `command-normalize.ts`
+//      never peels it; after the `xargs` token, this scans FORWARD for
+//      the first token that is itself a recognized deletion-verb head,
+//      skipping every flag and value uniformly regardless of spelling —
+//      see `findXargsVerbHead`'s own comment — and captures the
+//      replace-string along the way (the value of `-I`/`-i`, glued or
+//      separated, default `{}` when neither is given) so a target token
+//      containing it is treated as unresolvable, the same as an
+//      unexpanded `$` token: its real value is substituted from stdin
+//      at runtime, never statically knowable.
 //   3. A recognised `rm` head additionally accepts a path-qualified
-//      spelling (`/bin/rm`, `/usr/bin/rm`) via `RM_HEAD_RE` — unchanged
-//      from round 2.
+//      spelling (`/bin/rm`, `/usr/bin/rm`) via `RM_HEAD_RE`.
 //   4. Every token is decoded with `decodeShellWord` (`shell-word.ts`)
-//      before any verb/flag/`-delete` comparison — unchanged from round
-//      2 (see that round's scoping note, preserved verbatim below).
-//   5. `find` recognition now ALSO covers `-exec`/`-execdir` whose next
-//      token matches `RM_HEAD_RE` (`find /home -exec rm -rf {} +`,
-//      `find /home -execdir rm {} \;`) — round 2 recognized only
-//      `-delete`. The verdict's targets are `find`'s own PATH operands
-//      (the same leading-non-flag-token extraction `-delete` recognition
-//      already used), never the literal `{}` placeholder token itself:
-//      `{}` is not a real path (does not start with `/`) and would
-//      always come out unresolvable on its own merits if it were ever
-//      handed to the resolver, so naming the search root instead is both
-//      the more useful verdict and the safer one (a target this module
-//      cannot statically prove safe still gates the action either way).
-//   6. `find`'s own search-ROOT operand is resolved when it EQUALS a
-//      declared root, not only when strictly deeper, BUT ONLY when the
-//      expression carries at least one non-action test predicate
-//      (`-name`, `-type`, ... — see `FIND_TEST_PREDICATES`). REVIEW
-//      ROUND 4 (MEDIUM, correcting round 3's premise here): `find
-//      <root> -delete` does NOT only ever delete entries strictly
-//      inside `<root>` — a BARE `find /tmp -delete` (no test predicate
-//      narrowing which entries match) removes `/tmp` itself too, on
-//      both GNU findutils and BSD find, so that shape still GATES. Only
-//      `find /tmp -name '*.log' -delete` (a test predicate narrows
-//      matches away from the root's own directory entry) is exactly as
-//      safe as `find /tmp/scratch -delete`. `rm`
-//      keeps the round-2 strictly-deeper rule (`rm -rf /tmp` still
-//      GATES): `rm`'s own operand names the directory to be removed,
-//      not merely searched, so equality to the root itself really would
-//      remove the root's own directory entry.
-//   7. Redirection operands are no longer collected as deletion targets:
-//      a token matching `REDIRECT_TOKEN_RE` (a `>`/`>>`/`<`/`<<`/`<<<`
-//      operator, glued or bare, with an optional leading fd number, PLUS
-//      `&>`/`&>>` — added REVIEW ROUND 4 MEDIUM, round 3's regex missed
-//      bash's combined stdout+stderr redirect) is dropped before target
-//      collection in EVERY resolver, and when the token IS the bare
-//      operator (no filename glued to it, now also covering `>&`/`<&`/
-//      `&>`/`&>>`) the FOLLOWING token is dropped too — `rm -rf /tmp/x
-//      >/dev/null 2>&1` no longer collects `/dev/null` as a second,
-//      unresolvable "target", and neither does `rm -rf /tmp/x
-//      &>/dev/null` or `rm -rf /tmp/x >& out`. A trailing `)` on a
-//      subshell segment's last token (`(rm -rf /home/x)` — `(` is a
-//      `BOUNDARY_RE`/`AMP_BOUNDARY_RE` boundary character consumed by
-//      segmentation itself, but `)` is not one, per that module's own
-//      comment) is stripped before flag/target parsing for the same
-//      reason.
-//   8. A leading `{` / trailing `}`/`;` token — the shell-syntax markers
-//      of a `{ ...; }` brace group — is stripped before the head test.
-//      `{` is NOT one of `BOUNDARY_RE`/`AMP_BOUNDARY_RE`'s boundary
-//      characters (by design — see that module's own alphabet comments),
-//      so it survives as an ordinary leading TOKEN of whatever segment
-//      follows it, and the `;` immediately before the closing `}` IS a
-//      boundary character, so a `{ rm -rf /home/x; }` command segments
-//      to `"{ rm -rf /home/x"` / `"}"` — the `{` would otherwise sit
-//      where the verb token is expected and defeat the head test.
+//      before any verb/flag/`-delete` comparison.
+//   5. `find` recognition also covers `-exec`/`-execdir` whose next
+//      token matches `RM_HEAD_RE`. The verdict's targets are `find`'s
+//      own leading, non-flag PATH operands (`findPathOperands`) — never
+//      the literal `{}` placeholder token — and collection stops at the
+//      first `!`, `(`, `)`, or `-`-prefixed token, so a test/operator
+//      token is never mistaken for a search-root operand.
+//   6. A target is resolved only when it is an ABSOLUTE path lying
+//      STRICTLY INSIDE a declared `risk.safe_deletion_roots` entry, for
+//      EVERY recognized verb (`rm`, `find`, `git-clean`) alike — the
+//      root path itself never counts, `find` included: `find`'s own
+//      start point is removed by `-delete`/`-exec`, the same way `rm`'s
+//      operand is, so there is no root-equality exception for `find`
+//      (see `isInsideAllowlist`'s own comment). A target whose final
+//      path segment is a bare glob-sugar `*`/`**` never counts either,
+//      regardless of which root it would otherwise sit under.
+//   7. Redirection operands are not collected as deletion targets (a
+//      `REDIRECT_TOKEN_RE` match is dropped before target collection in
+//      every resolver, and its bare-operator form also drops the
+//      following whitespace-separated filename token). A trailing `)`
+//      on a subshell segment's last token, and a trailing bare `&` on a
+//      backgrounded segment's last token, are each stripped once before
+//      flag/target parsing.
+//   8. A leading `{` / trailing `}`/`;` token (a `{ ...; }` brace group)
+//      is stripped before the head test.
 //
 // Never throws. Returns `null` when no shell segment of `command`, by
 // the narrow head test above, names a recognized deletion verb at all.
 //
-// NOT COVERED (deliberate residuals, named rather than left implicit —
-// mirrors `command-normalize.ts`'s own convention). Each of these is
-// pinned as a `toBeNull()`/no-op test in `tests/runtime/
-// deletion-target-resolve.test.ts` so a future change that accidentally
-// starts "recognizing" one of these shapes (a false negative turning
-// into an unreviewed false ceiling-widening, not a fix) is caught:
+// NOT COVERED (deliberate residuals, pinned as a `toBeNull()`/no-op test
+// in `tests/runtime/deletion-target-resolve.test.ts` so a future change
+// that accidentally starts "recognizing" one of these shapes is caught):
 //   - `bash -c 'rm -rf /home/x'` / `sh -c '...'`: the wrapped command
 //     lives inside a single string argument this module does not parse
-//     into — same boundary `command-normalize.ts`'s own NOT-SUPPORTED
-//     list draws for the identical shape.
-//   - `eval "rm -rf /home/x"`: `eval` is not a recognized wrapper —
-//     unlike `sudo`/`env`/..., its argument is a STRING to be
-//     re-parsed, not "the command to run" positionally, the same
-//     architectural reason `xargs` needs bespoke handling rather than
-//     generic peeling.
+//     into.
+//   - `eval "rm -rf /home/x"`: `eval`'s argument is a STRING to be
+//     re-parsed, not "the command to run" positionally.
 //   - `sh script.sh` / `bash script.sh` / any script FILE the agent
 //     writes and then executes: this module never reads a file's
 //     contents.
-//   - `shred`, `rmdir`, `unlink`: real deletion-shaped verbs this
-//     module's closed head-token set (`rm`, `find`, `git clean`) does
-//     not include. `shred` overwrites-then-optionally-deletes;
-//     `rmdir`/`unlink` are narrower single-purpose deletion verbs. None
-//     are in scope for this task; a future task can extend the closed
-//     set the same way `-exec`/`-execdir` extended `find`'s.
+//   - `shred`, `rmdir`, `unlink`: real deletion-shaped verbs outside
+//     this module's closed head-token set (`rm`, `find`, `git clean`).
 //   - `npm run clean` (or any `package.json` script / Makefile target /
 //     CI job whose NAME suggests deletion): this module inspects the
 //     literal command line only, never a script's own body.
-//   - `` `rm -rf /home/x` `` (backtick command substitution): like
-//     `bash -c '...'`, the deletion command lives inside a substitution
-//     this module does not parse into — a leading/trailing backtick
-//     token is not stripped the way a brace-group `{`/`}` or a subshell
-//     `)` is (module header points 7-8), so the outer segment's head
-//     test never matches. Added REVIEW ROUND 4, LOW (c).
+//   - `` `rm -rf /home/x` `` (backtick command substitution): the
+//     deletion command lives inside a substitution this module does not
+//     parse into.
 //   - Any command past `MAX_NORMALIZE_LENGTH` (100,000 characters,
-//     `command-normalize.ts`) falls back to the pre-round-2,
-//     single-first-segment contract (`collectSegmentTexts` returns
-//     `null`, see `resolveDeletionTarget`): only the FIRST shell segment
-//     of such an oversized command is inspected, so a recognized
-//     deletion verb in a LATER segment goes unrecognized. Named REVIEW
-//     ROUND 4, LOW (f) — an accepted size-bounded residual of the
-//     multi-segment recognition module header point 1 adds, not a new
-//     gap this revision introduces.
+//     `command-normalize.ts`) falls back to a single-first-segment
+//     contract: only the FIRST shell segment of such an oversized
+//     command is inspected, so a recognized deletion verb in a LATER
+//     segment goes unrecognized.
+//
+// History and measurements: CHANGELOG.md, task d03af8f6.
 
 import { parseBashPrefix } from "./bash-prefix-parse.js";
 import {
@@ -328,27 +246,14 @@ function normalizePosixPath(p: string): string {
   return absolute ? `/${joined}` : joined || ".";
 }
 
-/** True when `target` (already known absolute) lies inside one of
- * `safeRoots`. `allowRootItself` (module header point 6, corrected
- * REVIEW ROUND 4 MEDIUM): for `find`, the search-ROOT operand equalling
- * a declared root counts ONLY when the caller has determined the
- * invocation carries at least one non-action test predicate (see
- * `findHasTestPredicate`) — round 3's premise that "`find <root>
- * -delete` only ever deletes entries strictly inside `<root>`" is FALSE:
- * a bare `find /tmp -delete` (no `-name`/`-type`/... narrowing which
- * entries match) removes `/tmp` itself too, on both GNU findutils and
- * BSD find. `find /tmp -name '*.log' -delete` (a test predicate narrows
- * matches away from the root's own directory entry) is exactly as safe
- * as `find /tmp/scratch -delete`, so root-equality is allowed there. For
- * `rm` (and `git-clean`, unchanged), only STRICTLY deeper counts (module
- * header point 6) — the root path itself never does, and a target whose
- * final segment is a bare glob-sugar `*`/`**` never counts, regardless
- * of which root it would otherwise sit under. */
-function isInsideAllowlist(
-  target: string,
-  safeRoots: readonly string[],
-  allowRootItself: boolean,
-): boolean {
+/** True when `target` (already known absolute) lies STRICTLY inside one
+ * of `safeRoots` — the root path itself never counts, for ANY
+ * recognized verb (`rm`, `find`, `git-clean` alike; `find`'s own start
+ * point is removed by `-delete`/`-exec`, the same way `rm`'s operand
+ * is, so it gets no exception). A target whose final path segment is a
+ * bare glob-sugar `*`/`**` never counts either, regardless of which
+ * root it would otherwise sit under. */
+function isInsideAllowlist(target: string, safeRoots: readonly string[]): boolean {
   const normalizedTarget = normalizePosixPath(target);
   const lastSlash = normalizedTarget.lastIndexOf("/");
   const lastSegment = normalizedTarget.slice(lastSlash + 1);
@@ -356,32 +261,32 @@ function isInsideAllowlist(
   for (const rawRoot of safeRoots) {
     const root = normalizePosixPath(normalizeRoot(rawRoot));
     if (normalizedTarget.startsWith(`${root}/`)) return true;
-    if (allowRootItself && normalizedTarget === root) return true;
   }
   return false;
 }
 
-/** Resolve one raw target token. `false` = unresolvable (gate it). */
-function targetIsResolvedSafe(
-  token: string,
-  safeRoots: readonly string[],
-  allowRootItself: boolean,
-): boolean {
+/** Resolve one raw target token. `false` = unresolvable (gate it).
+ * `replaceString`, when given (an `xargs` invocation's own `-I`/`-i`
+ * value, default `{}`), makes a token containing it unresolvable too —
+ * the same treatment as an unexpanded `$` token: the real value is
+ * substituted from stdin at runtime, never statically knowable. */
+function targetIsResolvedSafe(token: string, safeRoots: readonly string[], replaceString?: string): boolean {
   if (token.includes("$")) return false; // unexpanded shell variable
+  if (replaceString !== undefined && token.includes(replaceString)) return false;
   // Relative (does not start with `/`) — this also covers every
   // `~`-prefixed token, since `~foo` is never `/`-prefixed; a separate
   // `~`-prefix check here would be fully redundant with this one.
   if (!token.startsWith("/")) return false;
-  return isInsideAllowlist(token, safeRoots, allowRootItself);
+  return isInsideAllowlist(token, safeRoots);
 }
 
 function buildVerdict(
   verb: DeletionTargetVerdict["verb"],
   targets: string[],
   safeRoots: readonly string[],
-  allowRootItself = false,
+  replaceString?: string,
 ): DeletionTargetVerdict {
-  const unresolvedTargets = targets.filter((t) => !targetIsResolvedSafe(t, safeRoots, allowRootItself));
+  const unresolvedTargets = targets.filter((t) => !targetIsResolvedSafe(t, safeRoots, replaceString));
   const unresolvable = unresolvedTargets.length > 0;
   const reason = unresolvable
     ? `${verb}: target(s) not statically resolvable inside a declared risk.safe_deletion_roots entry: ${unresolvedTargets.join(", ")}`
@@ -393,39 +298,33 @@ function buildVerdict(
  * Drop a redirection operand token — `REDIRECT_TOKEN_RE` (module header
  * point 7): an optional leading fd number followed by `<`/`>`, OR a
  * bare `&>`/`&>>` (bash's own combined stdout+stderr redirect, which
- * does NOT start with a digit or `<`/`>` and so needed a separate
- * alternative — REVIEW ROUND 4 MEDIUM; round 3's regex missed it, so
- * `rm -rf /tmp/x &>/dev/null` GATED with `&>/dev/null` misread as a
- * second, unresolvable target). Covers `>`, `>>`, `<`, `<<`, `<<<`,
- * `>&`, `<&`, `&>`, `&>>`, and a glued form like `>/dev/null` or
- * `2>&1`. When the matched token IS the bare operator (nothing glued to
- * it — `BARE_REDIRECT_OPERATOR_RE`), the FOLLOWING token (the filename,
- * when whitespace-separated from the operator) is dropped too — this
- * now also recognizes `>&`/`<&`/`&>`/`&>>` as bare operators (round 3
- * only recognized `>`/`>>`/`<`/`<<`/`<<<`), so `rm -rf /tmp/x >& out`
- * drops `out` the same way `rm -rf /tmp/x > out` already did. Applied
- * to the "rest" tokens of every resolver, before flag/target parsing —
- * a redirection operand is never a deletion target.
+ * does NOT start with a digit or `<`/`>` and so needs a separate
+ * alternative). Covers `>`, `>>`, `<`, `<<`, `<<<`, `>&`, `<&`, `&>`,
+ * `&>>`, and a glued form like `>/dev/null` or `2>&1`. When the matched
+ * token IS the bare operator (nothing glued to it —
+ * `BARE_REDIRECT_OPERATOR_RE`), the FOLLOWING token (the filename, when
+ * whitespace-separated from the operator) is dropped too — `rm -rf
+ * /tmp/x >& out` drops `out` the same way `rm -rf /tmp/x > out` does.
+ * Applied to the "rest" tokens of every resolver, before flag/target
+ * parsing — a redirection operand is never a deletion target.
  *
  * ALSO stops accumulating at a bare `&` token (background-job marker)
- * rather than merely dropping it (REVIEW ROUND 4, LOW (b), corrected
- * from round 3): `nohup rm -rf /home/x &` segmented under the PRIMARY
- * (`BOUNDARY_RE`) arm keeps its trailing ` &` attached to the same
- * segment text (bare `&` is not one of that arm's boundary characters —
- * see `AMP_BOUNDARY_RE`'s own comment). Round 3 only dropped the `&`
- * token itself and kept parsing past it — which is harmless for a
- * single trailing `&` but WRONG for `rm -rf /home/x & rm -rf /home/y`:
- * the primary arm never splits on the bare `&` at all, so its ONE
- * segment's rest-tokens continued past the dropped `&` into the SECOND
- * invocation's own tokens, and the second invocation's verb (`rm`) —
- * not `-`-prefixed, so it fell through every flag check — was collected
- * as a spurious literal `"rm"` TARGET. Stopping at the first bare `&`
- * instead treats it as the end of THIS invocation, matching what a
- * background job actually is; the amp-aware arm already produces the
- * correct, separate segment for what comes after the `&`, and
- * `combineVerdicts`'s de-duplication (see its own comment) collapses
- * the resulting duplicate target this now yields, rather than the
- * previous version's bogus extra one.
+ * rather than merely dropping it: `nohup rm -rf /home/x &` segmented
+ * under the PRIMARY (`BOUNDARY_RE`) arm keeps its trailing ` &` attached
+ * to the same segment text (bare `&` is not one of that arm's boundary
+ * characters — see `AMP_BOUNDARY_RE`'s own comment). Stopping (not
+ * merely dropping the `&` token and continuing) matters for `rm -rf
+ * /home/x & rm -rf /home/y`: the primary arm never splits on the bare
+ * `&` at all, so without stopping its ONE segment's rest-tokens would
+ * continue past the `&` into the SECOND invocation's own tokens, and
+ * the second invocation's verb (`rm`) — not `-`-prefixed, so it falls
+ * through every flag check — would be collected as a spurious literal
+ * `"rm"` TARGET. Stopping at the first bare `&` instead treats it as the
+ * end of THIS invocation, matching what a background job actually is;
+ * the amp-aware arm already produces the correct, separate segment for
+ * what comes after the `&`, and `combineVerdicts`'s de-duplication (see
+ * its own comment) collapses the resulting duplicate target this
+ * yields.
  */
 const REDIRECT_TOKEN_RE = /^(?:\d*[<>]|&>>?)/;
 const BARE_REDIRECT_OPERATOR_RE = /^(?:\d*(?:>>|<<<|<<|>|<)|>&|<&|&>>|&>)$/;
@@ -453,6 +352,7 @@ function resolveRm(
   tokens: string[],
   safeRoots: readonly string[],
   xargsWrapped: boolean,
+  replaceString?: string,
 ): DeletionTargetVerdict | null {
   let recursive = false;
   let force = false;
@@ -483,62 +383,30 @@ function resolveRm(
     // recognized deletion" (module header point 2).
     return buildVerdict("rm", ["(xargs-supplied target, not statically known)"], safeRoots);
   }
-  return buildVerdict("rm", targets, safeRoots);
+  return buildVerdict("rm", targets, safeRoots, replaceString);
 }
 
 /** Leading, non-flag path operands of a `find` invocation's own rest
  *  tokens — the search root(s). Shared by both the `-delete` and the
- *  `-exec`/`-execdir` recognition branches. */
+ *  `-exec`/`-execdir` recognition branches. Collection stops at the
+ *  first `-`-prefixed token (a flag or an action/test primitive, `-not`
+ *  included), or at `!`, `(`, `)` — `find`'s own expression-grouping and
+ *  negation operators are never path operands, so none of them is ever
+ *  emitted as a target. */
 function findPathOperands(rest: string[]): string[] {
   const paths: string[] = [];
   for (const t of rest) {
-    if (t.startsWith("-")) break;
+    if (t.startsWith("-") || t === "!" || t === "(" || t === ")") break;
     paths.push(t);
   }
   return paths;
 }
 
-/**
- * `find`'s non-action TEST predicates (as opposed to its ACTION
- * primaries like `-delete`/`-exec`/`-print`): a `find <root> -delete`
- * whose expression carries at least one of these narrows which entries
- * match away from the root directory ENTRY itself, which is what makes
- * root-equality safe to resolve (see `isInsideAllowlist`'s own comment,
- * REVIEW ROUND 4 MEDIUM). A bare `find <root> -delete` with NONE of
- * these removes `<root>` itself too, so it must NOT get the
- * root-equality allowance. `-maxdepth`/`-mindepth` only count with a
- * value `>= 1` — `-maxdepth 0` still matches (and can delete) the root
- * entry alone.
- */
-const FIND_TEST_PREDICATES: ReadonlySet<string> = new Set([
-  "-name",
-  "-iname",
-  "-path",
-  "-ipath",
-  "-regex",
-  "-type",
-  "-mtime",
-  "-mmin",
-  "-newer",
-  "-size",
-  "-empty",
-  "-user",
-  "-perm",
-]);
-
-function findHasTestPredicate(rest: string[]): boolean {
-  for (let i = 0; i < rest.length; i++) {
-    const t = rest[i]!;
-    if (FIND_TEST_PREDICATES.has(t)) return true;
-    if (t === "-maxdepth" || t === "-mindepth") {
-      const value = rest[i + 1];
-      if (value !== undefined && Number.isFinite(Number(value)) && Number(value) >= 1) return true;
-    }
-  }
-  return false;
-}
-
-function resolveFind(tokens: string[], safeRoots: readonly string[]): DeletionTargetVerdict | null {
+function resolveFind(
+  tokens: string[],
+  safeRoots: readonly string[],
+  replaceString?: string,
+): DeletionTargetVerdict | null {
   const rest = stripRedirections(tokens.slice(1));
   const hasDelete = rest.includes("-delete");
   // Module header point 5: `-exec`/`-execdir` whose IMMEDIATELY
@@ -551,10 +419,14 @@ function resolveFind(tokens: string[], safeRoots: readonly string[]): DeletionTa
   if (!hasDelete && !hasExecRm) return null;
   const paths = findPathOperands(rest);
   const targets = paths.length > 0 ? paths : ["."];
-  return buildVerdict("find", targets, safeRoots, findHasTestPredicate(rest));
+  return buildVerdict("find", targets, safeRoots, replaceString);
 }
 
-function resolveGitClean(tokens: string[], safeRoots: readonly string[]): DeletionTargetVerdict | null {
+function resolveGitClean(
+  tokens: string[],
+  safeRoots: readonly string[],
+  replaceString?: string,
+): DeletionTargetVerdict | null {
   const rest = stripRedirections(tokens.slice(2));
   const hasForce = rest.some(
     (t) => t === "-f" || t === "--force" || (t.startsWith("-") && !t.startsWith("--") && t.includes("f")),
@@ -562,8 +434,11 @@ function resolveGitClean(tokens: string[], safeRoots: readonly string[]): Deleti
   if (!hasForce) return null;
   const pathspecs = rest.filter((t) => !t.startsWith("-"));
   const targets = pathspecs.length > 0 ? pathspecs : ["."];
-  return buildVerdict("git-clean", targets, safeRoots);
+  return buildVerdict("git-clean", targets, safeRoots, replaceString);
 }
+
+const XARGS_DEFAULT_REPLACE_STRING = "{}";
+const XARGS_REPLACE_FLAG_GLUED_RE = /^-[Ii](.+)$/;
 
 /**
  * Peel `xargs` — the ONE wrapper `command-normalize.ts`'s shared
@@ -575,58 +450,63 @@ function resolveGitClean(tokens: string[], safeRoots: readonly string[]): Deleti
  * whether what's left is `xargs`, and stops once neither step advances
  * the cursor.
  *
- * REVIEW ROUND 4 (task d03af8f6, HIGH): after the `xargs` token itself,
- * this NO LONGER walks `xargs`'s own flag table with `peelGenericFlags`
- * (a boolean-only loop). `xargs` has SEPARATED-value flags
- * (`-I {}`, `-n 1`, `-P 4`, `-a list`, `-d '\n'`) whose value token
- * `peelGenericFlags` cannot distinguish from a verb: it consumed only
- * the flag token itself, leaving the value token (`{}`, `1`, `4`, ...)
- * sitting where the verb was expected, so `xargs -I {} rm -rf {}`,
- * `xargs -n 1 rm -rf`, `xargs -P 4 rm -rf`, `xargs -a list rm -rf`, and
- * `xargs -d '\n' rm -rf` all failed the head test and ran UNGATED (only
- * the glued forms — `-I{}`, `-0`, `-n1` — happened to gate, since those
- * have no separate value token to strand). Modeling `xargs`'s full
- * separated-vs-glued value-flag vocabulary would be a fourth
- * independently-drifting copy of exactly the kind of table this module
- * has twice now replaced with shared machinery (module header points 1
- * and 2) — so instead of enumerating `xargs`'s option table at all, this
- * scans FORWARD from the token after `xargs` (bounded by
- * `tokens.length`, `findXargsVerbHead` below) for the first token that
- * is itself a recognized deletion-verb head (`RM_HEAD_RE`, `find`, or
- * `git` immediately followed by `clean`) and resumes recognition there,
- * skipping over every `xargs` flag AND its value uniformly, regardless
- * of which spelling was used. `xargs`'s own semantics for "no verb head
- * found at all" match `peelWrapperHeadsAndXargs`'s existing behavior:
- * `idx` lands past the end of the segment, `tokens.length === 0` after
- * slicing, and `resolveSegmentText` returns `null` — e.g. `xargs echo
- * hi` stays unrecognized, same as before this fix.
+ * After the `xargs` token itself, this does not walk `xargs`'s full
+ * option table (a fourth independently-drifting copy of exactly the
+ * kind of table this module already replaced with shared machinery,
+ * module header points 1 and 2). Instead it scans FORWARD from the
+ * token after `xargs` (bounded by `tokens.length`) for the first token
+ * that is itself a recognized deletion-verb head (`RM_HEAD_RE`, `find`,
+ * or `git` immediately followed by `clean`), skipping every `xargs`
+ * flag AND its value uniformly regardless of spelling — see
+ * `findXargsVerbHead`. Along the way it also captures the invocation's
+ * own replace-string: the value of a `-I`/`-i` flag, glued
+ * (`-I{}`) or whitespace-separated (`-I {}`), or `{}` (`xargs`'s own
+ * default) when neither is given. `xargs`'s own semantics for "no verb
+ * head found at all" match `peelWrapperHeadsAndXargs`'s existing
+ * behavior: `idx` lands past the end of the segment, `tokens.length ===
+ * 0` after slicing, and `resolveSegmentText` returns `null` — e.g.
+ * `xargs echo hi` stays unrecognized.
  */
-function findXargsVerbHead(tokens: readonly WrapperPeelToken[], startIdx: number): number {
+function findXargsVerbHead(
+  tokens: readonly WrapperPeelToken[],
+  startIdx: number,
+): { verbIdx: number; replaceString: string } {
+  let replaceString = XARGS_DEFAULT_REPLACE_STRING;
   for (let i = startIdx; i < tokens.length; i++) {
     const t = tokens[i]!.text;
     if (RM_HEAD_RE.test(t) || t === "find" || (t === "git" && tokens[i + 1]?.text === "clean")) {
-      return i;
+      return { verbIdx: i, replaceString };
     }
+    if (t === "-I" || t === "-i") {
+      const value = tokens[i + 1]?.text;
+      if (value !== undefined) replaceString = value;
+      continue;
+    }
+    const glued = XARGS_REPLACE_FLAG_GLUED_RE.exec(t);
+    if (glued) replaceString = glued[1]!;
   }
-  return tokens.length;
+  return { verbIdx: tokens.length, replaceString };
 }
 
 function peelWrapperHeadsAndXargs(
   tokens: readonly WrapperPeelToken[],
-): { idx: number; xargsWrapped: boolean } {
+): { idx: number; xargsWrapped: boolean; replaceString: string } {
   let idx = 0;
   let xargsWrapped = false;
+  let replaceString = XARGS_DEFAULT_REPLACE_STRING;
   for (let guard = 0; guard <= tokens.length; guard++) {
     const before = idx;
     idx = peelWrapperPrefixes(tokens, idx).idx;
     if (tokens[idx]?.text === "xargs") {
       xargsWrapped = true;
-      idx = findXargsVerbHead(tokens, idx + 1);
+      const found = findXargsVerbHead(tokens, idx + 1);
+      idx = found.verbIdx;
+      replaceString = found.replaceString;
       continue;
     }
     if (idx === before) break;
   }
-  return { idx, xargsWrapped };
+  return { idx, xargsWrapped, replaceString };
 }
 
 /** Strip a leading `{` token and a trailing `}`/`;` token — the
@@ -662,12 +542,33 @@ function stripTrailingParen(rawTokens: string[]): string[] {
   return rawTokens;
 }
 
+/** Strip a single trailing bare `&` from a segment's last RAW token —
+ *  the same treatment `stripTrailingParen` gives a subshell's trailing
+ *  `)`. The PRIMARY segmentation arm does not split on a bare `&` (see
+ *  `AMP_BOUNDARY_RE`'s own comment), so it survives glued to whatever
+ *  token was last (`rm -rf /home/x&` -> last raw token `/home/x&`); the
+ *  AMP-AWARE arm's segment for the same command has no trailing `&` at
+ *  all. Left unstripped, the primary arm's target (`/home/x&`) and the
+ *  amp-aware arm's target (`/home/x`) are textually different, so
+ *  `combineVerdicts` would concatenate both instead of the dedup it
+ *  performs on identical targets, reporting the same target twice.
+ *  Applied only to the LAST token, and only when that token is not the
+ *  bare `&` alone (which would zero it out into an empty string). */
+function stripTrailingAmp(rawTokens: string[]): string[] {
+  if (rawTokens.length === 0) return rawTokens;
+  const last = rawTokens[rawTokens.length - 1]!;
+  if (last.length > 1 && last.endsWith("&")) {
+    return [...rawTokens.slice(0, -1), last.slice(0, -1)];
+  }
+  return rawTokens;
+}
+
 /**
  * Resolve one already-isolated shell segment's text: strip a leading
  * `cd <path> &&` / `VAR=value` / `git switch|checkout <branch> &&`
  * prefix via `parseBashPrefix` (composing with, not duplicating, the
- * a7eb1a71 environment-signal path), strip brace-group/subshell edge
- * markers, peel a wrapper-command chain
+ * a7eb1a71 environment-signal path), strip brace-group/subshell/
+ * background-job edge markers, peel a wrapper-command chain
  * (`peelWrapperHeadsAndXargs`), decode every remaining token, and run
  * the head test. `null` when this segment does not name a recognized
  * deletion verb at all.
@@ -678,17 +579,18 @@ function resolveSegmentText(
 ): DeletionTargetVerdict | null {
   const prefix = parseBashPrefix(segmentText);
   const remainder = segmentText.slice(prefix.remainderStart);
-  const rawTokens = stripTrailingParen(stripBraceGroupMarkers(tokenizeRaw(remainder)));
+  const rawTokens = stripTrailingAmp(stripTrailingParen(stripBraceGroupMarkers(tokenizeRaw(remainder))));
   const decodedTokens = rawTokens.map((t) => decodeShellWord(t));
   const peelTokens: WrapperPeelToken[] = decodedTokens.map((text) => ({ text }));
-  const { idx, xargsWrapped } = peelWrapperHeadsAndXargs(peelTokens);
+  const { idx, xargsWrapped, replaceString } = peelWrapperHeadsAndXargs(peelTokens);
   const tokens = decodedTokens.slice(idx);
   if (tokens.length === 0) return null;
+  const xargsReplaceString = xargsWrapped ? replaceString : undefined;
 
   const head = tokens[0]!;
-  if (RM_HEAD_RE.test(head)) return resolveRm(tokens, safeRoots, xargsWrapped);
-  if (head === "find") return resolveFind(tokens, safeRoots);
-  if (head === "git" && tokens[1] === "clean") return resolveGitClean(tokens, safeRoots);
+  if (RM_HEAD_RE.test(head)) return resolveRm(tokens, safeRoots, xargsWrapped, xargsReplaceString);
+  if (head === "find") return resolveFind(tokens, safeRoots, xargsReplaceString);
+  if (head === "git" && tokens[1] === "clean") return resolveGitClean(tokens, safeRoots, xargsReplaceString);
   return null;
 }
 
@@ -700,9 +602,8 @@ function resolveSegmentText(
  * recognized segment's verb, and `reason` joins every segment's own
  * reason with `; `.
  *
- * REVIEW ROUND 4 (LOW (b), replacing round 3's "accepted cosmetic
- * quirk"): de-duplication in `collectSegmentTexts` is by exact segment
- * TEXT, per arm, which is not enough — a command whose recognized
+ * De-duplication in `collectSegmentTexts` is by exact segment TEXT, per
+ * arm, which is not enough on its own — a command whose recognized
  * segment differs between the two arms only in a trailing marker the
  * PRIMARY arm's alphabet does not split on but the AMP-AWARE arm's does
  * (`nohup rm -rf /home/x &`: the trailing ` &` survives inside the
@@ -712,16 +613,11 @@ function resolveSegmentText(
  * `verb`+`targets` are nonetheless IDENTICAL once each is resolved.
  * `dedupeVerdicts` below removes that duplication (and its matching
  * `reason` line) by exact `(verb, JSON(targets))` equality before
- * combining, rather than accepting it as cosmetic. This also fixes a
- * correctness bug the round-3 comment did not anticipate: for `rm -rf
- * /home/x & rm -rf /home/y`, the primary arm's SINGLE segment (bare `&`
- * is not one of its boundary characters) used to keep parsing past the
- * dropped `&` into the SECOND invocation's own tokens, collecting its
- * verb `rm` as a spurious literal target; `stripRedirections` now stops
- * at the first bare `&` instead (see its own comment), so the primary
- * arm's verdict for that command is now IDENTICAL to the amp-aware
- * arm's first-segment verdict, and dedup collapses the pair, leaving
- * only the real, distinct `/home/x`/`/home/y` targets.
+ * combining. For `rm -rf /home/x & rm -rf /home/y`, `stripRedirections`
+ * stops at the first bare `&` (see its own comment) so the primary
+ * arm's verdict for that command is IDENTICAL to the amp-aware arm's
+ * first-segment verdict, and dedup collapses the pair, leaving only the
+ * real, distinct `/home/x`/`/home/y` targets.
  */
 function verdictKey(v: DeletionTargetVerdict): string {
   return `${v.verb} ${JSON.stringify(v.targets)}`;

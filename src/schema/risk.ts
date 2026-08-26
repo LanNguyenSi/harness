@@ -104,14 +104,10 @@ export const DegradedFailPostureSchema = z.enum([
 // `-execdir` with an `rm` payload, `git clean -f*`) and treats a target
 // as safe only when it is an ABSOLUTE path that lies STRICTLY INSIDE one
 // of these roots (a plain directory-prefix match against `root + "/"`;
-// the root itself does not count) — with one verb-specific exception:
-// for `find`, a search-root operand that EQUALS a declared root also
-// resolves, but ONLY when the expression carries at least one
-// non-action test predicate (`-name`, `-type`, ...) narrowing which
-// entries match — REVIEW ROUND 4 (task d03af8f6): a BARE `find <root>
-// -delete` (no such predicate) removes `<root>` itself too, on both GNU
-// findutils and BSD find, so that shape still gates (`rm`/`git clean`
-// keep the strict rule regardless, no exception). An optional trailing `/**` or `/*` on an entry is stripped
+// the root itself does not count, for EVERY verb alike — `find`'s own
+// start point is removed by `-delete`/`-exec` the same way `rm`'s
+// operand is, so it gets no root-equality exception either). An
+// optional trailing `/**` or `/*` on an entry is stripped
 // as documentation sugar before matching — it is not a real glob
 // engine. A target the
 // resolver cannot statically prove absolute and prefix-matched — an

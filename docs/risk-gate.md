@@ -903,19 +903,20 @@ DIFFERENT mechanism than the four `risk.*`/`environment.*` clauses above:
     and compared against every `risk.safe_deletion_roots` entry as a
     directory-prefix match; **strictly inside** one of them (the root
     path ITSELF does not count: `rm -rf /tmp` is unresolvable, not
-    resolved) is **resolved** — with one verb-specific exception: for
-    `find`, a search-root operand that EQUALS a declared root also
-    resolves, but ONLY when the expression carries at least one
-    non-action test predicate (`-name`, `-iname`, `-path`, `-ipath`,
-    `-regex`, `-type`, `-mtime`, `-mmin`, `-newer`, `-size`, `-empty`,
-    `-user`, `-perm`, or `-maxdepth`/`-mindepth` with a value `>= 1`) —
-    `find /tmp -name '*.log' -delete` is allowed, but a bare `find /tmp
-    -delete` is not: it removes `/tmp` itself too, on both GNU findutils
-    and BSD find. `rm`/`git clean` keep the strict rule regardless. A
-    target whose final path segment is a bare glob-sugar `*`/`**` (`rm -rf /tmp/*`) is
-    always **unresolvable**, regardless of which root it would otherwise
-    sit under — it names "whatever the directory currently contains,"
-    not a specific, provably-safe path.
+    resolved) is **resolved** — for EVERY recognized verb alike, `find`
+    included: `find /tmp -delete` and `find /tmp -name '*.log' -delete`
+    both gate when the operand equals the declared root exactly, the
+    same as `rm -rf /tmp`; only `find /tmp/scratch ...` (strictly
+    deeper) resolves. A target whose final path segment is a bare
+    glob-sugar `*`/`**` (`rm -rf /tmp/*`) is always **unresolvable**,
+    regardless of which root it would otherwise sit under — it names
+    "whatever the directory currently contains," not a specific,
+    provably-safe path. An `xargs` invocation's own replace-string (the
+    value of `-I`/`-i`, default `{}`) makes any target token containing
+    it **unresolvable** too, the same as an unexpanded `$` token: `xargs
+    -I{} rm -rf /tmp/{}` gates even though `/tmp/{}` textually starts
+    with a safe root, because the literal value substituted at runtime
+    is never statically known.
 - **Known ceilings (not covered, deliberately, pinned as tests rather
   than left implicit):** `bash -c '...'`/`sh -c '...'` (the wrapped
   command lives inside a string argument this resolver does not parse
@@ -926,7 +927,13 @@ DIFFERENT mechanism than the four `risk.*`/`environment.*` clauses above:
   this resolver's closed head-token set (`rm`/`find`/`git clean`);
   `npm run clean` or any other script/Makefile/CI job whose NAME suggests
   deletion — this resolver inspects the literal command line only, never
-  a script's own body.
+  a script's own body; `` `rm -rf /home/x` `` (backtick command
+  substitution — the deletion command lives inside a substitution this
+  resolver does not parse into); any command past `MAX_NORMALIZE_LENGTH`
+  (100,000 characters, `command-normalize.ts`) — the resolver falls back
+  to inspecting only the FIRST shell segment, so a recognized deletion
+  verb in a LATER segment of such an oversized command goes
+  unrecognized.
 - **`risk.safe_deletion_roots`** (new manifest key, under `risk:`
   alongside `classifiers:`) is the allowlist those absolute targets are
   checked against:

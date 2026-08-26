@@ -231,6 +231,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     review-round notes; the reusable doc states the rule plus a pointer
     to this entry.
 
+  **Review round 5** (same task): the round-4 root-equality exception for
+  `find` (a search-root operand EQUALLING a declared root resolved when
+  the expression carried a test predicate) is REMOVED. It had already
+  been corrected once, in round 4 — the halt rule fired on a second
+  consecutive round finding the same premise wrong, so the exception
+  itself was cut rather than patched a third time: every recognized verb
+  (`rm`, `find`, `git-clean`) now requires a target STRICTLY deeper than
+  a declared root, no exceptions. `find /tmp -name '*.log' -delete` and
+  `find /tmp -mindepth 1 -delete` now gate, same as `rm -rf /tmp`; a
+  scratch cleanup strictly inside a session directory (e.g. `find
+  /private/tmp/claude-<uid>/<session>/x -delete`) is unaffected. Three
+  more measured gaps, fixed alongside:
+  - **`xargs` replace-string aliasing (MEDIUM, security):** `xargs -I{}
+    rm -rf /tmp/{}` and `cat list | xargs -I% rm -rf /tmp/%` used to
+    resolve ALLOWED — the placeholder token textually starts with a safe
+    root, but its real value is substituted from stdin at runtime, never
+    statically known. `findXargsVerbHead`'s forward scan now also
+    captures the invocation's own replace-string (the value of `-I`/
+    `-i`, glued or separated, default `{}`), and every resolver treats a
+    target token containing it as unresolvable, the same as an
+    unexpanded `$` token.
+  - **`find`'s path-operand collection did not stop at `!`/`(`/`)`
+    (LOW):** `findPathOperands` now also stops at `!`, `(`, and `)` (a
+    `-`-prefixed token, `-not` included, already stopped it) so a
+    negation or grouping operator is never mistaken for — or emitted as
+    — a search-root operand.
+  - **Glued trailing `&` double-counted a target (LOW):** `rm -rf
+    /home/x&` used to yield `targets == ["/home/x&", "/home/x"]` — the
+    primary segmentation arm's segment keeps the bare `&` glued to its
+    last raw token (it is not one of that arm's boundary characters),
+    while the amp-aware arm's matching segment has none, so the two
+    arms' verdicts textually differed and `combineVerdicts`'s dedup
+    (keyed on exact target text) did not collapse them. A new
+    `stripTrailingAmp` (the same treatment `stripTrailingParen` gives a
+    subshell's trailing `)`) strips a single trailing bare `&` from a
+    segment's last raw token before target collection, so the command
+    now yields `["/home/x"]` once.
+
 ### Fixed
 
 - **Risk Gate: a narrow, secrets-excluding kubectl read-only verb floor
