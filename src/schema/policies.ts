@@ -116,6 +116,34 @@ export const PolicyUxSchema = z
 //                            (`unknown` is matchable: unknown is not
 //                            safe).
 //   action.reversible      — envelope action reversibility flag.
+//   action.deletion_target_unresolvable — a deletion-verb command (`rm
+//                            -r*`/`-f*`, `find ... -delete`, `git clean
+//                            -f*`) whose target(s) could not be
+//                            statically proven inside a declared
+//                            `risk.safe_deletion_roots` entry. UNLIKE the
+//                            four clauses above, this one is NEVER
+//                            subject to the "unknown is not safe"
+//                            fail-close: an action the deletion resolver
+//                            does not recognize as a deletion verb at
+//                            all does not satisfy this clause, so a
+//                            policy gated purely on it does not need an
+//                            `environment.name` scope to avoid firing on
+//                            every unrelated unclassified command — see
+//                            src/runtime/when-eval.ts and
+//                            src/runtime/deletion-target-resolve.ts.
+//                            ONLY `true` is a meaningful value (task
+//                            d03af8f6, review round 2): a resolver
+//                            verdict is either `unresolvable: true` (gate
+//                            it) or the action never reaches this clause
+//                            at all (a resolved-safe target or a
+//                            non-deletion command both simply fail to
+//                            match `true`) — `false` would match every
+//                            non-deletion-verb command in the manifest
+//                            (verdict `null` -> "actual" false -> equals
+//                            declared `false`), which is never the
+//                            intent of a `when:` clause naming this key.
+//                            The schema accepts only the literal `true`;
+//                            `false` is a validate-time error.
 // An empty `when: {}` is rejected: it would be a silent no-op.
 export const PolicyWhenSchema = z
   .object({
@@ -123,6 +151,7 @@ export const PolicyWhenSchema = z
     "risk.category_in": z.array(RiskCategorySchema).min(1).optional(),
     "environment.name": MatchableEnvironmentSchema.optional(),
     "action.reversible": z.boolean().optional(),
+    "action.deletion_target_unresolvable": z.literal(true).optional(),
   })
   .strict()
   .superRefine((when, ctx) => {

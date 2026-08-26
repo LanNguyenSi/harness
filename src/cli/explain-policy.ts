@@ -18,13 +18,17 @@ import {
   classifyRisk,
   evaluateWhen,
   policyMatchesEvent,
+  resolveDeletionTarget,
   resolveEnvironment,
   resolveKubeContext,
+  type DeletionTargetVerdict,
   type EnvironmentResolution,
   type RiskProfile,
   type WhenClauseResult,
 } from "../runtime/index.js";
+import { extractShellCommand } from "../runtime/tool-name-aliases.js";
 import type { Manifest } from "../schema/index.js";
+import { DEFAULT_SAFE_DELETION_ROOTS } from "../schema/risk.js";
 import { loadEventEnvelope, type EventInputSeams } from "./event-input.js";
 import { EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { loadManifest, type LoaderOptions } from "./loader.js";
@@ -56,6 +60,9 @@ interface ExplainPolicyProjection {
   };
   classifier: RiskProfile;
   environment: EnvironmentResolution;
+  /** Static deletion-target verdict (task d03af8f6); null when the
+   *  event's command is not a recognized deletion verb. */
+  deletion_target: DeletionTargetVerdict | null;
   when:
     | { declared: false }
     | {
@@ -118,10 +125,22 @@ export function explainPolicy(
     },
   );
 
+  // Static deletion-target resolution (task d03af8f6) — same "raw
+  // command only, no ambient cwd/env" contract as the runtime's own
+  // `enrichEnvelope`. See `deletion-target-resolve.ts`.
+  const explainShellCommand = extractShellCommand({ raw_input: envelope.raw_input });
+  const deletionTarget =
+    explainShellCommand === null
+      ? null
+      : resolveDeletionTarget(
+          explainShellCommand,
+          manifest.risk.safe_deletion_roots ?? DEFAULT_SAFE_DELETION_ROOTS,
+        );
+
   const triggerMatched = policyMatchesEvent(policy, event);
   const whenEval =
     policy.when !== undefined
-      ? evaluateWhen(policy.when, { risk: classifier, environment })
+      ? evaluateWhen(policy.when, { risk: classifier, environment, deletionTarget })
       : undefined;
 
   const projection: ExplainPolicyProjection = {
@@ -140,6 +159,7 @@ export function explainPolicy(
     },
     classifier,
     environment,
+    deletion_target: deletionTarget,
     when: whenEval
       ? {
           declared: true,

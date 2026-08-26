@@ -107,8 +107,6 @@ describe("normalizeCommand", () => {
   describe("G2: still-unsupported spellings stay unmatched (documented ceiling, review round 2)", () => {
     const re = policyBashMatch("preflight-before-investigation");
     const cases: Array<{ label: string; command: string }> = [
-      { label: "exec", command: "exec git status" },
-      { label: "nohup", command: "nohup git status" },
       { label: "ionice", command: "ionice -c3 git status" },
       { label: "flock", command: "flock /tmp/l git status" },
       { label: "script", command: "script -q /dev/null git status" },
@@ -123,6 +121,28 @@ describe("normalizeCommand", () => {
         const { normalized } = normalizeCommand(c.command);
         expect(re.test(normalized)).toBe(false);
         expect(re.test(c.command)).toBe(false);
+      });
+    }
+  });
+
+  // CLOSED (task d03af8f6, review round 3): `exec` and `nohup` used to sit
+  // in the G2 block above. Both are now peeled by `peelWrapperPrefixes`
+  // (`peelExec`/`peelNohup`) — added while rebuilding
+  // `deletion-target-resolve.ts`'s own recognition on top of this
+  // module's peelers, per the orchestrator decision for that task, and
+  // added HERE too so this module's own trigger recognition benefits.
+  describe("task d03af8f6, review round 3: exec/nohup now peel and DO normalise to a trigger match", () => {
+    const re = policyBashMatch("preflight-before-investigation");
+    const cases: Array<{ label: string; command: string }> = [
+      { label: "exec", command: "exec git status" },
+      { label: "nohup", command: "nohup git status" },
+      { label: "exec with an unrecognised boolean flag", command: "exec -c git status" },
+    ];
+    for (const c of cases) {
+      it(`"${c.command}" DOES normalise to a trigger match, raw form still does not`, () => {
+        expect(re.test(c.command)).toBe(false);
+        const { normalized } = normalizeCommand(c.command);
+        expect(re.test(normalized)).toBe(true);
       });
     }
   });
@@ -922,27 +942,31 @@ describe("normalizeCommandAmpAware (task aabbad63: closes the bare-& gating gap 
     });
   });
 
-  // Fix round 1, finding F1: corrects an inaccurate closure claim measured
-  // against a realistic corpus (7 wrappers {env, nice, sudo, command,
-  // setsid, stdbuf, nohup} x 4 gated verbs x 2 shapes — `A=x&<wrapper>
-  // <verb>` and `echo hi & <wrapper> <verb>` — 56 spellings): 28/56 were
-  // ALREADY gated before this task (raw or the primary BOUNDARY_RE arm),
-  // 52/56 gate after, a delta of 24 attributable to this arm alone, and 4
-  // remain ungated — all of the shape pinned here. The pre-change 28/56 is
-  // high because the shipped trigger regexes' own `(\w+=\S+\s+)*` leading-
-  // assignment group lets `\S+` swallow a glued `&<wrapper>` (`A=x&nice git
-  // push` already matched the RAW regex before this task ever ran), so the
-  // GLUED family was never actually what this task closed — the
-  // background-job family (`echo hi & <wrapper> <verb>`) is, and `nohup`
-  // specifically stays out of reach of BOTH normalisation passes: it is not
-  // one of `canonicalizeSegment`'s recognised wrapper names (`env`,
-  // `command`, `nice`, `sudo`, `doas`, `time`, `timeout`, `stdbuf`,
-  // `setsid`), a pre-existing, already-documented gap in the module
-  // header's NOT-SUPPORTED list (`nohup git status` was measured as a
-  // bypass back in task `ea8becf5`) — not something a boundary alphabet
-  // (BOUNDARY_RE or AMP_BOUNDARY_RE) can reach, since the gap is in the
-  // wrapper-name vocabulary, not the segmentation.
-  describe("fix round 1, finding F1: 'echo hi & nohup <gated verb>' stays ungated (documented ceiling, not closed by either pass)", () => {
+  // Fix round 1, finding F1 (ORIGINAL scope, task aabbad63): corrected an
+  // inaccurate closure claim measured against a realistic corpus (7
+  // wrappers {env, nice, sudo, command, setsid, stdbuf, nohup} x 4 gated
+  // verbs x 2 shapes — `A=x&<wrapper> <verb>` and `echo hi & <wrapper>
+  // <verb>` — 56 spellings): 28/56 were already gated before that task
+  // (raw or the primary BOUNDARY_RE arm), 52/56 gated after, and 4
+  // remained ungated — the `nohup` shape pinned in this block, because
+  // `nohup` was not yet one of `canonicalizeSegment`'s recognised wrapper
+  // names.
+  //
+  // CLOSED (task d03af8f6, review round 3): `nohup` is now peeled by the
+  // SAME `peelWrapperPrefixes` loop both normalisation passes share (see
+  // `peelNohup`'s own comment) — added while rebuilding
+  // `deletion-target-resolve.ts`'s recognition on top of this module's
+  // peelers, and added HERE too per the orchestrator decision so this
+  // module's own trigger recognition benefits as well. `echo hi & nohup
+  // <verb>` still needs the AMP-AWARE pass specifically (the bare `&`
+  // before `nohup` is not a `BOUNDARY_RE` boundary — see that regex's own
+  // comment), so the primary `normalizeCommand` pass still misses these
+  // four, exactly as before; only `normalizeCommandAmpAware` newly
+  // catches them. This block flips from "stays ungated" to "closes via
+  // the amp-aware pass" rather than being deleted, so a future regression
+  // in `peelNohup` (or its wiring into `peelWrapperPrefixes`) shows up as
+  // a newly-failing test here, not a silently-reopened gap.
+  describe("task d03af8f6, review round 3: 'echo hi & nohup <gated verb>' now closes via the amp-aware pass", () => {
     const cases: Array<{ label: string; policyName: string; command: string }> = [
       {
         label: "preflight-before-investigation (read gate)",
@@ -959,11 +983,6 @@ describe("normalizeCommandAmpAware (task aabbad63: closes the bare-& gating gap 
         policyName: "deny-kill-switch-bypass",
         command: "echo hi & nohup harness pause",
       },
-      // Fix round 2: these two complete the pin. The measured residual is
-      // FOUR spellings, one per gated verb; round 1 pinned only two of
-      // them (plus the read gate, which is not one of the four), so a
-      // change to the merge or publish spelling could have passed
-      // silently while the CHANGELOG claimed the residual was pinned.
       {
         label: "review-before-merge-bash",
         policyName: "review-before-merge-bash",
@@ -976,11 +995,11 @@ describe("normalizeCommandAmpAware (task aabbad63: closes the bare-& gating gap 
       },
     ];
     for (const c of cases) {
-      it(`${c.label}: "${c.command}" does NOT normalise to a trigger match via either pass`, () => {
+      it(`${c.label}: "${c.command}" does NOT normalise to a trigger match via raw or the primary pass, but DOES via the amp-aware pass`, () => {
         const re = policyBashMatch(c.policyName);
         expect(re.test(c.command)).toBe(false);
         expect(re.test(normalizeCommand(c.command).normalized)).toBe(false);
-        expect(re.test(normalizeCommandAmpAware(c.command).normalized)).toBe(false);
+        expect(re.test(normalizeCommandAmpAware(c.command).normalized)).toBe(true);
       });
     }
   });

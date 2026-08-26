@@ -33,6 +33,14 @@ export interface MakeManifestOptions {
    * default); pass `"fail_open"` to pin the availability-first opt-out.
    */
   degradedFailPosture?: "preserve_enforcement" | "fail_open";
+  /**
+   * `risk.safe_deletion_roots` (task d03af8f6). Omitted by default so
+   * tests exercise the same hand-built-manifest fallback the runtime
+   * defends (absent field falls back to `DEFAULT_SAFE_DELETION_ROOTS` —
+   * see `src/runtime/intercept.ts` / `src/cli/explain-policy.ts`, not
+   * `undefined`); pass an explicit list to pin a non-default allowlist.
+   */
+  safeDeletionRoots?: string[];
 }
 
 const DEFAULT_HOOK = {
@@ -58,6 +66,9 @@ export function makeManifest(opts: MakeManifestOptions = {}): Manifest {
       classifiers: opts.classifiers ?? [],
       ...(opts.degradedFailPosture && {
         degraded_fail_posture: opts.degradedFailPosture,
+      }),
+      ...(opts.safeDeletionRoots && {
+        safe_deletion_roots: opts.safeDeletionRoots,
       }),
     },
     environments: { resolvers: opts.resolvers ?? [] },

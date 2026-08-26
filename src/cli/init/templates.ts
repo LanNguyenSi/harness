@@ -684,6 +684,56 @@ policies:
       run:
         - "harness approve risk"
 
+  # gate-dev-unsafe-deletion (task d03af8f6): the two policies above fire
+  # ONLY when the environment resolves to production — on an ordinary
+  # task branch (environment: unknown) a deletion command runs
+  # unconfirmed even when its target is a stray variable or a relative
+  # path pointing somewhere unintended. This policy is deliberately
+  # environment-INDEPENDENT (no environment.name clause) and gates on the
+  # new \`action.deletion_target_unresolvable\` clause instead of
+  # \`risk.severity_at_least\`/\`risk.category_in\` specifically because
+  # those fail-close to matched=true for ANY unclassified action —
+  # unscoped, that would gate every unrelated unclassified Bash call in
+  # every environment. \`action.deletion_target_unresolvable\` only fires
+  # for a recognized deletion verb (\`rm -r*\`/\`-f*\`, \`find ... -delete\`,
+  # \`git clean -f*\`) whose target(s) cannot be statically proven inside
+  # \`risk.safe_deletion_roots\` (below). See docs/risk-gate.md.
+  #
+  # This policy consults its OWN ledger tag
+  # (\`risk-approved:deletion:\${SESSION_ID}\`), never the tag
+  # \`gate-prod-destructive-approval\` above consults — a routine dev-
+  # context deletion approval must not also clear the production
+  # approval gate. \`harness approve risk --scope deletion\` writes this
+  # tag; the bare \`harness approve risk\` (no \`--scope\`) keeps writing
+  # only the production tag. See CHANGELOG.md task d03af8f6 for the
+  # measured incident this fixed.
+  - name: gate-dev-unsafe-deletion
+    description: Require approval for a deletion-verb command whose target cannot be statically proven safe, in every environment.
+    trigger:
+      event: PreToolUse
+      match: "Bash"
+    when:
+      action.deletion_target_unresolvable: true
+    requires:
+      ledger_tag: "risk-approved:deletion:\${SESSION_ID}"
+    hook: risk-gate
+    enforcement: require_approval
+    producers:
+      - kind: ask
+        command: harness approve risk --scope deletion
+        description: Operator approves this Risk Gate decision from their own shell.
+      - kind: mcp
+        verb: mcp__grounding-mcp__ledger_add
+        example: '{sessionId:"\${SESSION_ID}", type:"fact", content:"risk-approved:deletion:\${SESSION_ID} — operator-authorized", source:"operator"}'
+        description: Recovery path if the approve verb is unavailable; only meaningful when the OPERATOR authorizes the content.
+    ux:
+      cannot: "You cannot run this deletion command yet — its target cannot be statically proven safe."
+      required:
+        - "operator approval of this Risk Gate decision, OR an absolute target inside a declared risk.safe_deletion_roots entry"
+      run:
+        - "harness approve risk --scope deletion"
+        - "Or point the command at a path under risk.safe_deletion_roots (default: /tmp, /private/tmp) instead of an unresolved variable, relative path, or traversal."
+
   # deny-kill-switch-bypass / deny-session-env-strip / deny-pause-sentinel-forgery
   # (task cf1fde6d): \`harness pause\`/\`harness resume\` refuse to run inside an
   # agent shell in CODE, but that CLI check (refuseIfAgentShell / refuseIfNonTTY
@@ -725,7 +775,8 @@ policies:
   # UPDATE (task 432db3d3, 2026-07-28, follow-up to ea8becf5): PARTIALLY
   # closed — for THIS policy only. \`src/runtime/command-normalize.ts\` now
   # peels wrapper prefixes (\`env\`, \`nice\`, \`command\`, \`sudo\`, \`doas\`,
-  # \`time\`, \`timeout\`, \`stdbuf\`, \`setsid\`, leading VAR=value) and
+  # \`time\`, \`timeout\`, \`stdbuf\`, \`setsid\`, \`exec\`, \`nohup\`, leading
+  # VAR=value) and
   # collapses whitespace runs for the closed head-token set
   # \`git\`/\`gh\`/\`npm\`/\`harness\`, so \`env harness pause\`, \`nice harness
   # gate disable\` and the like now reach this deny via the raw-OR-normalised
@@ -978,6 +1029,19 @@ risk:
   # emitted default would turn a downgrade into a silent full fail-open
   # (review 2026-08-08). See docs/okf/gate-fail-posture-matrix.md.
   # degraded_fail_posture: preserve_enforcement
+  # Safe-deletion-root allowlist for gate-dev-unsafe-deletion's
+  # \`action.deletion_target_unresolvable\` clause (task d03af8f6): an
+  # absolute deletion target inside one of these roots is allowed; a
+  # relative path, an unexpanded \$VAR/~, or a traversal that normalizes
+  # outside every root is gated. Shown explicitly even though it matches
+  # the schema default (\`/tmp\`, \`/private/tmp\` — the two spellings this
+  # harness's own scratchpad convention can use, macOS symlinks /tmp to
+  # /private/tmp) so an operator sees the live config surface here rather
+  # than having to know the schema default exists. An override REPLACES
+  # this list, it does not merge with it. See docs/risk-gate.md.
+  safe_deletion_roots:
+    - /tmp
+    - /private/tmp
   classifiers:
     - name: dangerous-shell
       tool: Bash

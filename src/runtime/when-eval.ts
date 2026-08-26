@@ -27,6 +27,7 @@
 
 import type { PolicyWhen } from "../schema/index.js";
 import { RiskSeveritySchema } from "../schema/index.js";
+import type { DeletionTargetVerdict } from "./deletion-target-resolve.js";
 import type { EnvironmentResolution } from "./environment-resolver.js";
 import type { RiskProfile } from "./risk-classifier.js";
 
@@ -39,14 +40,23 @@ const SEVERITY_ORDER: readonly string[] = RiskSeveritySchema.options;
 export interface WhenContext {
   risk: RiskProfile;
   environment: EnvironmentResolution;
+  /**
+   * Static deletion-target verdict for this action (task d03af8f6), or
+   * `null`/omitted when the command was not recognized as a deletion
+   * verb at all — see `deletion-target-resolve.ts`. Optional so every
+   * caller/fixture that predates this arm keeps compiling and behaving
+   * exactly as before (treated the same as `null`).
+   */
+  deletionTarget?: DeletionTargetVerdict | null;
 }
 
-/** The four `when:` clause keys, exactly as they appear in the manifest. */
+/** The five `when:` clause keys, exactly as they appear in the manifest. */
 export type WhenClauseKey =
   | "risk.severity_at_least"
   | "risk.category_in"
   | "environment.name"
-  | "action.reversible";
+  | "action.reversible"
+  | "action.deletion_target_unresolvable";
 
 /** One declared clause's verdict, carried for explainability. */
 export interface WhenClauseResult {
@@ -170,6 +180,33 @@ export function evaluateWhen(
       expected: String(reversible),
       actual,
       matched,
+    });
+  }
+
+  // `action.deletion_target_unresolvable` (task d03af8f6) is deliberately
+  // NOT wired through the `unclassified` fail-close path above: it reads
+  // an entirely separate signal (`ctx.deletionTarget`, from
+  // `deletion-target-resolve.ts`), not the Risk Classifier's
+  // `classified`/`severity`/`categories` triad. An action the deletion
+  // resolver does not recognize as a deletion verb (`deletionTarget ===
+  // null`) simply does not satisfy `true` here — it never falls back to
+  // matched=true the way the four clauses above do for an unclassified
+  // risk profile. This is what lets a policy gate purely on this clause,
+  // environment-independently, without becoming a blanket gate on every
+  // unrelated unclassified Bash call (see this module's header and
+  // docs/risk-gate.md).
+  const deletionUnresolvable = when["action.deletion_target_unresolvable"];
+  if (deletionUnresolvable !== undefined) {
+    const verdict = ctx.deletionTarget ?? null;
+    const actualUnresolvable = verdict?.unresolvable ?? false;
+    clauses.push({
+      clause: "action.deletion_target_unresolvable",
+      expected: String(deletionUnresolvable),
+      actual:
+        verdict === null
+          ? "false (not a recognized deletion-verb command)"
+          : String(actualUnresolvable),
+      matched: actualUnresolvable === deletionUnresolvable,
     });
   }
 

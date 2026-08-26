@@ -7,6 +7,370 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Risk Gate: a new, environment-INDEPENDENT deletion-target gate closes the
+  dev-context gap where `gate-prod-destructive*` only fires once the resolved
+  environment is `production`** (task `d03af8f6`). Measured 2026-08-06 (re-
+  verified against 0.49.0): on a task branch (`environment: unknown`) an `rm
+  -rf` against ANY absolute path — a typo'd path, a stale variable, a
+  traversal that walks outside the intended scratch dir — ran unconfirmed,
+  because `risk.severity_at_least`/`risk.category_in` fail-close to
+  matched=true for an unclassified action, so an unscoped policy would
+  instead have gated every unrelated unclassified Bash call in every
+  environment (approval-spam, not a deletion-specific gate). New pieces,
+  additive alongside the existing production-scoped policies (nothing
+  existing changed semantics):
+  - `src/runtime/deletion-target-resolve.ts`: a pure, no-nested-quantifier-
+    regexes (no ReDoS surface) tokenizer (no shell spawned) that recognizes
+    `rm -r*`/`-f*`, `find ... -delete`, and `git clean -f*` across EVERY
+    shell segment of a command and statically resolves each target: an
+    unexpanded `$VAR`/`~`, a relative path, or a `..`-traversal that
+    normalizes outside every declared root is UNRESOLVABLE; an absolute
+    path strictly inside a declared `risk.safe_deletion_roots` entry is
+    not.
+  - `risk.safe_deletion_roots` (new manifest key, schema default `["/tmp",
+    "/private/tmp"]` — the two spellings this harness's own scratchpad
+    convention can use, since macOS symlinks `/tmp` to `/private/tmp`).
+  - `when.action.deletion_target_unresolvable` (new `policy.when:` clause,
+    `src/runtime/when-eval.ts`, only the literal `true` is a meaningful
+    value): deliberately NOT subject to the "unknown is not safe"
+    fail-close the four existing risk/environment clauses share — it reads
+    the deletion resolver's own verdict, not the Risk Classifier's
+    `classified` state, so it never falls back to matched=true for an
+    unrelated unclassified command. This is what lets the new policy below
+    be environment-independent without becoming a blanket gate.
+  - `gate-dev-unsafe-deletion` (new policy, `harness init --template full` +
+    `docs/examples/full-manifest.yaml`, additive alongside
+    `gate-prod-destructive`/`-approval`): `require_approval` on
+    `action.deletion_target_unresolvable: true`, unblocked via `harness
+    approve risk --scope deletion` (its own ledger tag — see the review
+    round 2 fixes below).
+  - The dead alternation in the shipped `dangerous-shell` classifier's
+    `rm\s+-rf\s+(/|/var|/data|/mnt|~)` pattern (the bare `/` branch already
+    matches every absolute path, so `/var`/`/data`/`/mnt` never
+    independently contribute a match) is documented, not changed — see the
+    comment in `docs/examples/full-manifest.yaml`; it only feeds the
+    existing production-scoped policies, out of this task's scope.
+
+  **Review round 2** (same task, before this line shipped) found the
+  first cut had five measured gaps against a real transcript corpus.
+  Fixed, all additive on top of the pieces above:
+  - **Multi-segment recognition (was HIGH):** round 1 inspected only the
+    command's FIRST shell segment — 656 of 1215 real deletion commands in
+    the operator's own transcript corpus (54%) chained the deletion behind
+    `&&`, a newline, or a prior `VAR=value &&` assignment and ran
+    completely ungated. The resolver now walks EVERY segment
+    (`segmentViewOf`, `src/runtime/command-normalize.ts`) and gates if ANY
+    recognized segment is unresolvable.
+  - **Cross-tier ledger tag (was HIGH, security):** `gate-dev-unsafe-
+    deletion` used to reuse `gate-prod-destructive-approval`'s
+    `risk-approved:${SESSION_ID}` tag, so approving one routine dev-context
+    `rm -rf dist` silently cleared the production approval gate for the
+    rest of the session — measured live (`kubectl delete namespace
+    payments` went BLOCKED -> ALLOWED after one unrelated dev approval).
+    The dev arm now writes/consults its own
+    `risk-approved:deletion:${SESSION_ID}` tag, via a new `harness approve
+    risk --scope deletion` option (`src/cli/approve/risk.ts`); the bare
+    `harness approve risk` keeps writing only the production tag,
+    unchanged.
+  - **Wrapper-head coverage (MEDIUM):** `sudo`/`doas`/`command`/`env`/
+    `time`/`timeout`/`nice`/`xargs` in front of the deletion verb, and
+    `git -C <path> clean -f*`, all now recognize the wrapped verb — a
+    bare `xargs rm -rf` (no explicit operand — the target comes from
+    stdin) is UNRESOLVABLE, not "not a deletion" the way an ordinary
+    operand-less `rm -rf` is.
+  - **Root-itself / bare-glob targets (MEDIUM):** `rm -rf /tmp`, `rm -rf
+    /tmp/`, and `rm -rf /tmp/*` used to resolve as safe — a target must
+    now be STRICTLY deeper than a declared root, and a bare `*`/`**` final
+    path segment is never resolvable regardless of the root it sits under.
+  - **Obfuscated flags (LOW):** every token is decoded with
+    `decodeShellWord` (`src/runtime/shell-word.ts`) before any verb/flag/
+    `-delete` comparison, so `find /x $'\x2ddelete'` / `git clean
+    $'\x2df'` are recognized.
+  - **`safe_deletion_roots` hygiene (LOW):** a bare `/` (or `//`, ...)
+    entry is now a schema parse error (it would match every absolute
+    path, silently defeating the allowlist); a non-absolute entry or one
+    containing `$`/`~` is a new `harness validate` warning
+    (`checkSafeDeletionRootsSyntax`, `src/cli/validate/checks.ts`).
+  - Deduplicated the tokenizer against `kubectl-target-parse.ts` instead
+    of tolerating the round-1 clone pair: `firstSegment` is now exported
+    there (pure visibility change) and imported; `check:duplication`'s
+    pinned baseline is back at 109 (was raised to 110 in round 1).
+
+  **Review round 3** (same task): round 2's own hand-rolled recognition —
+  a second, independently-drifting copy of the wrapper-peeling and
+  segmentation `src/runtime/command-normalize.ts` already ships,
+  flag-aware and pinned for the `bash_match` gate — still failed OPEN on
+  a new class every round (round 1: first-segment-only; round 2:
+  flag-blind wrapper peeling plus bare-`&`/brace/`exec`/`nohup`). Rebuilt
+  on top of `command-normalize.ts`'s own machinery instead of a third
+  hand-rolled enumeration:
+  - **Shared wrapper peeling (structural fix):** the resolver now reuses
+    `command-normalize.ts`'s exported `peelWrapperPrefixes` (the same
+    loop `canonicalizeSegment` uses for `git`/`gh`/`npm`/`harness`
+    trigger recognition) instead of its own narrower copy — closing every
+    flag the round-2 peeler missed: `sudo -u <user>`, `sudo -E`, `sudo
+    --preserve-env`, `nice -n <n>`, `nice -<n>`, `env -i`, `env -u <VAR>`,
+    `timeout -k <n> <duration>`, `timeout --signal=<sig> <duration>`.
+    `exec` and `nohup` are now peeled too — added to
+    `peelWrapperPrefixes` itself so both this gate and the `bash_match`
+    trigger gate benefit. `xargs` (never peeled by `command-normalize
+    .ts` — its own argv is not simply "the command to run") stays a
+    local concern, but its own flags (`-0`, `-n1`, ...) are now peeled
+    too, via the newly-exported `peelGenericFlags`.
+  - **Dual-arm segmentation (structural fix):** segments now come from
+    BOTH of `command-normalize.ts`'s arms — `segmentViewOf` (primary) AND
+    the new `segmentViewOfAmpAware` (the bare-`&` alphabet
+    `normalizeCommandAmpAware` already uses for trigger matching) —
+    combined additively and de-duplicated by text, closing `echo hi & rm
+    -rf /home/x` (a background job the primary alphabet does not split
+    on).
+  - **`find -exec`/`-execdir` recognition (MEDIUM):** `find /home -exec
+    rm -rf {} +` / `find /home -execdir rm {} \;` are now recognized,
+    targeting `find`'s own search-path operand (never the `{}`
+    placeholder).
+  - **Redirection operands (MEDIUM):** a `>`/`>>`/`<`/`<<`/`<<<` token
+    (glued or bare, optional leading fd number) is no longer collected as
+    a target — `rm -rf /tmp/x >/dev/null 2>&1` no longer reports
+    `/dev/null` as an unresolved target.
+  - **`find` search-root equality (MEDIUM, premise corrected round 4 —
+    see below):** `find`'s own search-root operand EQUALLING a declared
+    root now resolves; `rm` keeps the strict-deeper-only rule.
+  - **Brace groups and subshells:** `{ rm -rf /home/x; }` (leading `{` /
+    trailing `}`/`;` token stripped before the head test) and `(rm -rf
+    /home/x)` (trailing `)` stripped from the segment's last token) are
+    now recognized.
+  - **`safe_deletion_roots` hygiene, widened (LOW):** an entry that
+    lexically NORMALIZES to the filesystem root (`/.`, `/./`,
+    `/tmp/..` — not only the bare-`/` spelling round 2 caught) is now
+    also a schema parse error; `checkSafeDeletionRootsSyntax`
+    (`src/cli/validate/checks.ts`) now falls back to
+    `DEFAULT_SAFE_DELETION_ROOTS` for a hand-built `Manifest` missing
+    `risk`/`risk.safe_deletion_roots` instead of throwing.
+  - `gate-dev-unsafe-deletion`'s position in `FULL_TEMPLATE` (after both
+    `gate-prod-destructive` and `gate-prod-destructive-approval`) is now
+    pinned by a test — `src/runtime/intercept.ts` evaluates policies in
+    array order.
+  - NOT COVERED, named rather than left implicit (pinned as
+    `toBeNull()`): `bash -c '...'`/`sh -c '...'`, `eval "..."`, a script
+    FILE the agent writes and executes, `shred`/`rmdir`/`unlink` (real
+    deletion verbs outside this task's closed head-token set), and
+    `npm run clean` (a script NAME, not a literal deletion verb).
+
+  **Review round 4** (same task): four more measured gaps against the
+  round-3 recognition surface, plus reviewer-flagged output-quality
+  issues. Fixed:
+  - **`xargs` separated-value flags (HIGH):** round 3's `xargs` flag
+    peeling (`peelGenericFlags`, boolean-only) stranded a SEPARATED flag
+    value where the verb was expected, so `xargs -I {} rm -rf {}`,
+    `xargs -n 1 rm -rf`, `xargs -P 4 rm -rf`, `xargs -a list rm -rf`, and
+    `xargs -d '\n' rm -rf` all ran UNGATED (only the glued spellings —
+    `-I{}`, `-0`, `-n1` — happened to gate). Replaced with a forward
+    scan (bounded by the token count) for the first token that is itself
+    a recognized deletion-verb head, skipping `xargs`'s entire flag
+    vocabulary uniformly instead of enumerating it.
+  - **`find <root> -delete` root-itself premise was FALSE (MEDIUM):**
+    round 3 claimed `find <root> -delete` "only ever deletes entries
+    strictly inside `<root>`" — measured wrong: a BARE `find /tmp
+    -delete` (no test predicate) removes `/tmp` itself too, on both GNU
+    findutils and BSD find. Root-equality now resolves ONLY when the
+    expression carries at least one non-action test predicate (`-name`,
+    `-iname`, `-path`, `-ipath`, `-regex`, `-type`, `-mtime`, `-mmin`,
+    `-newer`, `-size`, `-empty`, `-user`, `-perm`, or `-maxdepth`/
+    `-mindepth` with a value `>= 1`), so `find /tmp -name '*.log'
+    -delete` still resolves but a bare `find /tmp -delete` now gates.
+    Corrected the same premise in `src/schema/risk.ts`, `docs/risk-
+    gate.md`, and this file.
+  - **`&>`/`>&` redirection forms (MEDIUM):** round 3's redirection
+    regexes matched only tokens starting with an optional fd number
+    followed by `<`/`>`, missing bash's combined stdout+stderr forms
+    `&>`/`&>>` (glued) and `>&`/`<&` (bare) — `rm -rf /tmp/x
+    &>/dev/null` and `rm -rf /tmp/x >& out` were GATED with the
+    redirect target misread as a second, unresolvable target. Both
+    regexes now cover the full set.
+  - **`stripRedirections` was unpinned in `resolveFind`/
+    `resolveGitClean` (MEDIUM, test gap):** added `find /tmp >out -name
+    '*.log' -delete` and `git clean -fd /tmp/x >/dev/null` fixtures;
+    removing the strip from either resolver now turns both red.
+  - **Duplicate/spurious targets (LOW):** `combineVerdicts` now
+    de-duplicates verdicts by exact `(verb, targets)` before combining,
+    replacing round 3's "accepted cosmetic quirk" — `nohup rm -rf
+    /home/x &` and `rm -rf /home/x 2>&1 | tee log` now name their
+    target once, not twice. This also fixed a real correctness bug the
+    round-3 note did not anticipate: for `rm -rf /home/x & rm -rf
+    /home/y`, the primary segmentation arm (which does not split on a
+    bare `&`) used to keep parsing past a dropped `&` into the SECOND
+    invocation's own tokens, collecting its verb `rm` as a spurious
+    literal target; `stripRedirections` now stops (rather than merely
+    skipping) at the first bare `&`, so that command no longer lists
+    `rm` as a target.
+  - **Backtick command substitution added to NOT COVERED (LOW):** `` `rm
+    -rf /home/x` `` is pinned alongside the other unparsed-substring
+    shapes (`bash -c '...'`, `eval "..."`).
+  - **`exec`/`nohup` wrapper enumerations updated (LOW):** `docs/okf/
+    policy-engine-producer-wiring.md` and `src/cli/init/templates.ts`'s
+    `deny-kill-switch-bypass` comment now list `exec`/`nohup` alongside
+    the other peeled wrappers (both were already peeled by
+    `peelWrapperPrefixes` since round 3; only the doc/comment
+    enumerations were stale). `docs/okf/pause-vs-gate-kill-switch.md`
+    gained a corresponding update note and timestamp re-stamp.
+  - **`docs/okf/policy-engine-producer-wiring.md` frontmatter
+    `description:` quoted (LOW):** the unquoted value's embedded
+    `risk.degraded_fail_posture: fail_open` colon-space made the
+    frontmatter block unparseable YAML (`npx okf-kit check docs/okf`
+    reported `frontmatter-required`); quoting fixes it.
+  - **`MAX_NORMALIZE_LENGTH` fallback added to NOT COVERED (LOW):** a
+    command past 100,000 characters falls back to the pre-round-2
+    single-first-segment contract — a recognized deletion verb in a
+    LATER segment of such an oversized command goes unrecognized. Named
+    explicitly rather than left implicit.
+  - `docs/risk-gate.md`'s "Dev-context deletion gate" section trimmed:
+    the round-by-round narrative and the measured BLOCKED->ALLOWED
+    incident now live only here (this file) and in the run's own
+    review-round notes; the reusable doc states the rule plus a pointer
+    to this entry.
+
+  **Review round 5** (same task): the round-4 root-equality exception for
+  `find` (a search-root operand EQUALLING a declared root resolved when
+  the expression carried a test predicate) is REMOVED. It had already
+  been corrected once, in round 4 — the halt rule fired on a second
+  consecutive round finding the same premise wrong, so the exception
+  itself was cut rather than patched a third time: every recognized verb
+  (`rm`, `find`, `git-clean`) now requires a target STRICTLY deeper than
+  a declared root, no exceptions. `find /tmp -name '*.log' -delete` and
+  `find /tmp -mindepth 1 -delete` now gate, same as `rm -rf /tmp`; a
+  scratch cleanup strictly inside a session directory (e.g. `find
+  /private/tmp/claude-<uid>/<session>/x -delete`) is unaffected. Three
+  more measured gaps, fixed alongside:
+  - **`xargs` replace-string aliasing (MEDIUM, security):** `xargs -I{}
+    rm -rf /tmp/{}` and `cat list | xargs -I% rm -rf /tmp/%` used to
+    resolve ALLOWED — the placeholder token textually starts with a safe
+    root, but its real value is substituted from stdin at runtime, never
+    statically known. `findXargsVerbHead`'s forward scan now also
+    captures the invocation's own replace-string (the value of `-I`/
+    `-i`, glued or separated, default `{}`), and every resolver treats a
+    target token containing it as unresolvable, the same as an
+    unexpanded `$` token.
+  - **`find`'s path-operand collection did not stop at `!`/`(`/`)`
+    (LOW):** `findPathOperands` now also stops at `!`, `(`, and `)` (a
+    `-`-prefixed token, `-not` included, already stopped it) so a
+    negation or grouping operator is never mistaken for — or emitted as
+    — a search-root operand.
+  - **Glued trailing `&` double-counted a target (LOW):** `rm -rf
+    /home/x&` used to yield `targets == ["/home/x&", "/home/x"]` — the
+    primary segmentation arm's segment keeps the bare `&` glued to its
+    last raw token (it is not one of that arm's boundary characters),
+    while the amp-aware arm's matching segment has none, so the two
+    arms' verdicts textually differed and `combineVerdicts`'s dedup
+    (keyed on exact target text) did not collapse them. A new
+    `stripTrailingAmp` (the same treatment `stripTrailingParen` gives a
+    subshell's trailing `)`) strips a single trailing bare `&` from a
+    segment's last raw token before target collection, so the command
+    now yields `["/home/x"]` once.
+
+  **Review round 6** (same task; escalated after five rounds each found
+  a new fail-open on the permissive side of the recognition layer).
+  Decision D-023: ANY `xargs`-wrapped deletion is unresolvable, without
+  parsing `xargs` at all — `xargs` appends or substitutes stdin-supplied
+  operands at runtime, so `echo /home/x | xargs rm -rf /tmp/known`
+  deletes `/home/x` while the round-5 module resolved it ALLOWED. The
+  round-5 replace-string plumbing (`-I`/`-i` capture, default `{}`) is
+  deleted; the bounded forward scan to the first deletion-verb head
+  stays, and every resolver returns unresolvable when `xargsWrapped`,
+  listing a synthetic `(xargs-supplied target, not statically known)`
+  entry plus any explicit operand, none resolved. The round-2 pin
+  "`xargs rm -rf /tmp/known` resolves" is flipped to GATED; `xargs ls`/
+  `xargs echo`/`xargs -I{} mv {} /trash` stay unrecognized; `xargs echo
+  rm -rf /home/x` (which only prints) is gated — an accepted, documented
+  over-gate of the forward scan. A path-qualified `/usr/bin/xargs` is
+  now recognized too (round 5 matched the bare word only). An
+  adversarial audit of 232 shapes against the built module (permissive
+  side: quoting, escapes, globs, traversal, substitution, symlink
+  spellings, keywords, wrappers; fail-safe side: every legitimate
+  inside-root shape) found and closed these CLASSES, each pinned:
+  - **Symlink-following spellings (HIGH):** a trailing `/` or `/.` on a
+    target follows a symlinked directory into its target (measured on
+    macOS: `rm -rf <link>/` removed the link's TARGET directory), and a
+    `..` component is resolved PHYSICALLY through a symlinked component
+    (`/tmp/<link>/../y` lands under the link's target), so both are now
+    unresolvable — the round-1 pin "`rm -rf /tmp/a/../b` resolves" is
+    flipped. `find -H`/`-L`/`-follow` make the whole `find` verdict
+    unresolvable. Still not visible lexically, named as a ceiling: a
+    symlink named without a trailing slash (`rm -rf /tmp/link/y`).
+  - **Globs that expand to `..` (HIGH):** `rm -rf /tmp/.*`, `/tmp/..*`,
+    `/tmp/.?/x`, `/tmp/.*/foo`, `/tmp/.[.]` resolved ALLOWED; `find
+    /tmp/.* -delete` traverses `/tmp/..` = `/`. A path component starting
+    with an explicit `.` whose remainder can glob-match `.` is now
+    unresolvable (`globComponentCanMatchDotDot`, a minimal fnmatch over
+    `*`/`?`/`[...]`); measured on bash 3.2 with and without `dotglob`
+    that `*`, `[.][.]`, `.[!.]*`, and `.??*` cannot match `..`, so those
+    (and `rm -rf /tmp/x/*.log`) stay resolvable.
+  - **Brace expansion, backtick and extglob (MEDIUM):** `rm -rf
+    /tmp/{..,x}` expands to `/tmp/..`; `` rm -rf /tmp/`cat<f` `` is a
+    single token with a command substitution; `rm -rf /tmp/@(..)/x` is
+    cut at the `(` boundary leaving `/tmp/@` as the target. A token
+    containing `{` or a backtick is unresolvable (this also subsumes
+    the `xargs`/`find` `{}` placeholder), and when the command contains
+    an extglob opener a target ending in `?`/`*`/`+`/`@`/`!` is
+    unresolvable.
+  - **`find -exec` payload operands (HIGH):** `find /tmp/x -exec rm -rf
+    /home/y \;` resolved ALLOWED — only the search root was a target.
+    The payload's explicit operands (every non-flag token other than the
+    exact `{}`, up to `+` or the end of the segment) are now targets;
+    `-ok`/`-okdir` are recognized alongside `-exec`/`-execdir`.
+  - **`find` continuation after `\;` (HIGH):** `;` is a segment
+    boundary, so `find /home/x -exec echo {} \; -exec rm -rf {} \;`
+    put the deleting `-exec` in a segment headed by `-exec`, which was
+    unrecognized. A `find`-headed segment's search roots are now carried
+    (per segmentation arm, in command order) into a directly following
+    segment headed by a `find` primitive. This also covers the escaped
+    grouped expression `find /home \( -name a -o -name b \) -delete`
+    that round 5 reported as unrecognized; the QUOTED `'('` spelling
+    stays a pinned residual (the cut lands inside the quoted run). The
+    orphaned `\`/`'`/`"` token the cut leaves behind is dropped from
+    both the roots and the payload operands.
+  - **`git clean` (HIGH):** `git -c clean.requireForce=false clean -d`
+    deletes without `-f`, but `command-normalize.ts` canonicalizes it
+    to `git clean -d` before the resolver sees it — a `clean
+    .requireForce` mention anywhere in the raw command text now counts
+    as a force flag (case-insensitive; also covers
+    `GIT_CONFIG_PARAMETERS` and a same-command `git config`). `git
+    --no-optional-locks clean -fdx /home/y` was unrecognized (an
+    un-canonicalized global option sat where `clean` was expected) —
+    `git`'s global options are now skipped locally, `-c`/`--config-env`
+    with their value. `git clean -f -e /tmp/x` resolved ALLOWED with
+    `/tmp/x` mistaken for a pathspec while git cleaned cwd —
+    `-e`/`--exclude` now consume their value.
+  - **Shell keywords and locally-peeled wrappers (MEDIUM):** `if true;
+    then rm -rf /home/x; fi`, `for f in a; do rm -rf /home/x; done`, `!
+    rm -rf /home/x`, `f() { rm -rf /home/x; }`, `exec -a name rm -rf
+    /home/x` (the shared peeler treats `-a` as boolean, leaving `name`
+    as the head), and `busybox`/`toybox rm -rf /home/x` were all
+    unrecognized. Leading `if`/`then`/`else`/`elif`/`while`/`until`/
+    `do`/`!`/`{`/`)`/`){` tokens are stripped; `exec -a <name>` and the
+    two multi-call binaries are peeled locally.
+  - **Inert tests and false positives from round 5 (LOW):** the
+    oversized-command pin gains a positive assertion (a deletion in the
+    FIRST segment past `MAX_NORMALIZE_LENGTH` still gates, the `/tmp`
+    variant allows); `( rm -rf /home/x )` reported the lone `)` as a
+    second target and `( rm -rf /tmp/x )` was GATED by it — a bare
+    `(`/`)` token is dropped during `rm`/`git clean` target collection
+    and `findPathOperands`'s unreachable `(`/`)` stop is removed (`!`
+    kept); `rm -rf /tmp/x # cleanup` was GATED on `#` and `cleanup` —
+    a `#` word now ends the segment, as it does for bash; `rm -rf
+    /tmp/x\ y` was GATED as two operands — the tokenizer now honours a
+    backslash escape; `find -P /tmp/x -delete` was GATED with `.` as the
+    root — `find`'s leading options are skipped. The quote-unaware amp
+    arm's duplicate reporting for a quoted literal `&` is noted next to
+    the dedup comment as a reporting-only, fail-closed ceiling.
+  - NOT COVERED additions, pinned: `env -S '...'`, `find ... -exec sh
+    -c '...'`, the quoted-paren grouped `find`, a `case` arm, runners
+    outside the wrapper set (`parallel`, `ionice`, `chrt`, `taskset`,
+    `caffeinate`, `flock`, `strace`, `ssh`, `docker exec`, `chroot`, `su
+    -c`, `watch`), a symlink named without a trailing slash, and a
+    `clean.requireForce` override set outside the command text.
+
 ### Fixed
 
 - **Risk Gate: a narrow, secrets-excluding kubectl read-only verb floor

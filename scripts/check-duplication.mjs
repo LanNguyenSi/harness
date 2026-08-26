@@ -109,6 +109,16 @@ import * as path from "node:path";
 // re-pairing in the ledger-add/ledger-client/ledger-record cluster (io/ sorts
 // before policies/), not removed duplication.
 // 110 -> 109 after the master-baseline fixture deletion, task 62fa0542.
+// 109 -> 110 -> 109 (task d03af8f6, review round 2): round 1 raised this
+// to 110 for a `deletion-target-resolve.ts` <-> `kubectl-target-parse.ts`
+// clone pair (a duplicated `firstSegment`/`tokenize` tokenizer). Round 2
+// closed that pair instead of tolerating it: `kubectl-target-parse.ts`'s
+// `firstSegment` is now exported (a pure visibility change, no logic
+// touched) and imported by `deletion-target-resolve.ts`, and that
+// module's own tokenizer was rewritten around `decodeShellWord` (a
+// genuinely different implementation, not a copy) for the LOW (b)
+// obfuscated-flag fix. Verified (not assumed) by re-running this script:
+// 109 clones, back at the pre-d03af8f6 baseline.
 const MAX_CLONES = 109;
 
 // Sets process.exitCode instead of calling process.exit so the caller's

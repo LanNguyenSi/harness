@@ -98,12 +98,43 @@ export const DegradedFailPostureSchema = z.enum([
   "fail_open",
 ]);
 
+// Safe-deletion-root allowlist (task d03af8f6). `src/runtime/
+// deletion-target-resolve.ts` statically resolves the target(s) of a
+// deletion-verb command (`rm -r*`/`-f*`, `find ... -delete`/`-exec*`/
+// `-execdir` with an `rm` payload, `git clean -f*`) and treats a target
+// as safe only when it is an ABSOLUTE path that lies STRICTLY INSIDE one
+// of these roots (a plain directory-prefix match against `root + "/"`;
+// the root itself does not count, for EVERY verb alike — `find`'s own
+// start point is removed by `-delete`/`-exec` the same way `rm`'s
+// operand is, so it gets no root-equality exception either). An
+// optional trailing `/**` or `/*` on an entry is stripped
+// as documentation sugar before matching — it is not a real glob
+// engine. A target the
+// resolver cannot statically prove absolute and prefix-matched — an
+// unexpanded `$VAR`/`${VAR}` reference, a `~`-relative path, a relative
+// path, or a `..`-traversal that normalizes outside every root — is
+// treated as UNRESOLVABLE, never guessed safe. The defaults cover the
+// two spellings this harness's own scratchpad convention can use: a
+// symlinked `/tmp` and its `/private/tmp` realpath (macOS); an operator
+// who overrides this list REPLACES it, it does not merge with the
+// default. See docs/risk-gate.md.
+// Exported (not just used as the schema `.default()`) so runtime call
+// sites can fall back to the same list for a hand-built `Manifest` that
+// bypassed schema parsing entirely (every test fixture that constructs
+// `{ risk: { classifiers: [...] } }` directly, without going through
+// `RiskSchema.parse`) — see `src/runtime/intercept.ts` and
+// `src/cli/explain-policy.ts`.
+export const DEFAULT_SAFE_DELETION_ROOTS: string[] = ["/tmp", "/private/tmp"];
+
 export const RiskSchema = z
   .object({
     classifiers: z.array(RiskClassifierSchema).default([]),
     degraded_fail_posture: DegradedFailPostureSchema.default(
       "preserve_enforcement",
     ),
+    safe_deletion_roots: z
+      .array(z.string().min(1))
+      .default(DEFAULT_SAFE_DELETION_ROOTS),
   })
   .strict()
   .superRefine((risk, ctx) => {
@@ -118,7 +149,57 @@ export const RiskSchema = z
       }
       seen.add(c.name);
     });
+    // A filesystem-root entry — bare `/`, or anything that lexically
+    // NORMALIZES to `/` (`/.`, `/./`, `/tmp/..` — task d03af8f6, review
+    // round 3, LOW (d), widening review round 2 LOW (a)'s bare-`/`-only
+    // check) — would match every absolute path as "inside" it via the
+    // resolver's own `target.startsWith(root + "/")` prefix check —
+    // silently defeating the entire point of an allowlist. Rejected at
+    // parse time with a message rather than special-cased to "matches
+    // everything" at runtime, since an operator who wrote one of these
+    // spellings almost certainly meant a specific subdirectory.
+    // Non-absolute entries and ones containing `$`/`~` are a `harness
+    // validate` LINT instead (a warning, not a parse-time error) — see
+    // `checkSafeDeletionRootsSyntax` in `src/cli/validate/checks.ts`.
+    risk.safe_deletion_roots.forEach((root, i) => {
+      if (normalizesToFilesystemRoot(root)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["safe_deletion_roots", i],
+          message:
+            `risk.safe_deletion_roots entry "${root}" normalizes to the filesystem root and can ` +
+            `never be a meaningful allowlist entry: every absolute deletion target would match ` +
+            `it as "inside," defeating the allowlist. Declare specific subdirectories instead ` +
+            `(e.g. "/tmp").`,
+        });
+      }
+    });
   });
+
+/**
+ * `true` when `root` (trimmed) lexically collapses to the filesystem
+ * root `/` — bare `/`, any run of bare `/` characters, `/.`, `/./`, or a
+ * `..`-traversal that pops back to `/` (`/tmp/..`). Lexical only (no
+ * filesystem I/O, mirrors `deletion-target-resolve.ts`'s own
+ * `normalizePosixPath` in spirit — not imported from there: this is a
+ * schema-time validation, `deletion-target-resolve.ts` is a runtime
+ * module, and neither layer should depend on the other for a check this
+ * small).
+ */
+function normalizesToFilesystemRoot(root: string): boolean {
+  const trimmed = root.trim();
+  if (!trimmed.startsWith("/")) return false;
+  const out: string[] = [];
+  for (const part of trimmed.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      out.pop();
+      continue;
+    }
+    out.push(part);
+  }
+  return out.length === 0;
+}
 
 export type DegradedFailPosture = z.infer<typeof DegradedFailPostureSchema>;
 export type RiskSeverity = z.infer<typeof RiskSeveritySchema>;

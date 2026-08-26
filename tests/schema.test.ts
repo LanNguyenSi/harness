@@ -32,7 +32,7 @@ describe("parseManifest — happy path", () => {
     expect(manifest.tools.mcp[0]?.name).toBe("codebase-oracle");
     expect(manifest.tools.mcp[2]?.name).toBe("grounding-mcp");
     expect(manifest.hooks).toHaveLength(12);
-    expect(manifest.policies).toHaveLength(13);
+    expect(manifest.policies).toHaveLength(14);
     const reviewPolicy = manifest.policies.find((p) => p.name === "review-before-merge");
     expect(reviewPolicy?.requires?.ledger_tag).toBe("review:${PR_NUMBER}");
     expect(reviewPolicy?.trigger.extract?.PR_NUMBER).toBe("toolArgs.prNumber");
@@ -130,6 +130,44 @@ describe("parseManifest — happy path", () => {
         risk: { degraded_fail_posture: "fail_closed_sometimes" },
       }),
     ).toThrow(/invalid enum|Invalid enum|invalid_value/i);
+  });
+
+  it("rejects a bare '/' risk.safe_deletion_roots entry — it would match every absolute path (task d03af8f6, review round 2, LOW (a))", () => {
+    expect(() =>
+      parseManifest({
+        version: 1,
+        risk: { safe_deletion_roots: ["/"] },
+      }),
+    ).toThrow(/filesystem root itself|defeating the allowlist/i);
+    // A trailing-slash spelling of the same mistake is caught too.
+    expect(() =>
+      parseManifest({
+        version: 1,
+        risk: { safe_deletion_roots: ["//"] },
+      }),
+    ).toThrow(/filesystem root itself|defeating the allowlist/i);
+  });
+
+  it.each(["/.", "/./", "/tmp/.."])(
+    "rejects %s — it lexically normalizes to the filesystem root too (task d03af8f6, review round 3, LOW (d))",
+    (root) => {
+      expect(() =>
+        parseManifest({
+          version: 1,
+          risk: { safe_deletion_roots: [root] },
+        }),
+      ).toThrow(/normalizes to the filesystem root|defeating the allowlist/i);
+    },
+  );
+
+  it("still accepts a genuine subdirectory whose OWN name is not just '..'/'.'", () => {
+    const m = parseManifest({
+      version: 1,
+      risk: { safe_deletion_roots: ["/tmp/../scratch"] },
+    });
+    // /tmp/../scratch normalizes to /scratch — a real, non-root
+    // subdirectory, not the filesystem root.
+    expect(m.risk.safe_deletion_roots).toEqual(["/tmp/../scratch"]);
   });
 
   it("accepts a string command for tools.mcp[].command", () => {
@@ -1200,6 +1238,26 @@ describe("parseManifest — Phase 7 risk-gate vocabulary", () => {
       ],
     });
     expect(m.policies[0]?.when?.["environment.name"]).toBe("unknown");
+  });
+
+  it("rejects action.deletion_target_unresolvable: false — only true is a meaningful polarity (task d03af8f6, review round 2)", () => {
+    expect(() =>
+      parseManifest({
+        version: 1,
+        hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
+        policies: [
+          {
+            name: "p",
+            description: "d",
+            trigger: { event: "PreToolUse" },
+            requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
+            hook: "h",
+            enforcement: "block",
+            when: { "action.deletion_target_unresolvable": false },
+          },
+        ],
+      }),
+    ).toThrow(/invalid_literal|invalid literal|expected true/i);
   });
 
   it("rejects an unknown clause key inside when: (.strict)", () => {

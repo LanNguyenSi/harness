@@ -67,6 +67,7 @@ describe("list — categories", () => {
       "preflight-before-push",
       "gate-prod-destructive",
       "gate-prod-destructive-approval",
+      "gate-dev-unsafe-deletion",
       "deny-kill-switch-bypass",
       "deny-session-env-strip",
       "deny-pause-sentinel-forgery",

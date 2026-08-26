@@ -316,7 +316,7 @@ function healthyAuditFor(wrappers: string[]): ArmAAudit {
     controls: built.controls,
     // known-good wrappers gate everything (assignment + control); known-
     // unsupported wrappers never gate their control (mirrors the real,
-    // measured nohup/timeout behaviour) but the audit still bash-runs them.
+    // measured timeout behaviour) but the audit still bash-runs them.
     gates: (cmd) => positiveControlWrappers.has(cmd.split(" ")[0]!),
     bashRan: () => true,
   });
@@ -370,9 +370,9 @@ describe("evaluateSelfTest", () => {
 
   it("fails when a known-unsupported wrapper's arm is missing entirely from the healthy corpus", () => {
     const { sabotaged } = selfTestPair();
-    const healthy = healthyAuditFor(KNOWN_GOOD_WRAPPERS); // nohup/timeout missing
+    const healthy = healthyAuditFor(KNOWN_GOOD_WRAPPERS); // timeout missing
     const { failures } = evaluateSelfTest({ healthy, sabotaged });
-    expect(failures.some((f) => f.includes('missing the "nohup" arm entirely'))).toBe(true);
+    expect(failures.some((f) => f.includes('missing the "timeout" arm entirely'))).toBe(true);
   });
 
   it("fails when the positive-control-never-fired rung does not fire on a known-unsupported wrapper", () => {
@@ -381,12 +381,12 @@ describe("evaluateSelfTest", () => {
     const healthy = auditArmA({
       shapes: built.shapes,
       controls: built.controls,
-      gates: () => true, // everything gates, including nohup/timeout controls
+      gates: () => true, // everything gates, including timeout's own control
       bashRan: () => true,
     });
     const { failures } = evaluateSelfTest({ healthy, sabotaged: sabotagedAuditFor(wrappers) });
     expect(
-      failures.some((f) => f.includes('wrapper "nohup" was NOT flagged POSITIVE CONTROL NEVER FIRED')),
+      failures.some((f) => f.includes('wrapper "timeout" was NOT flagged POSITIVE CONTROL NEVER FIRED')),
     ).toBe(true);
   });
 
@@ -460,11 +460,11 @@ describe("evaluateSelfTest", () => {
 });
 
 describe("the per-arm gate never folds an unmeasured arm into a zero (property, real corpus)", () => {
-  it("nohup and timeout are excluded from Arm A's real total, not silently counted as zero regressions", () => {
+  it("timeout is excluded from Arm A's real total, not silently counted as zero regressions", () => {
     // This mirrors what the real measurement run reports (see the CLI
-    // e2e below): with real gates, nohup/timeout's positive control never
-    // fires, so they must never contribute a false "0 regressed" to the
-    // total — they must be named as excluded instead.
+    // e2e below): with real gates, timeout's positive control never
+    // fires, so it must never contribute a false "0 regressed" to the
+    // total — it must be named as excluded instead.
     const wrappers = [...KNOWN_GOOD_WRAPPERS, ...KNOWN_UNSUPPORTED_WRAPPERS];
     const audit = healthyAuditFor(wrappers);
     expect(audit.totals.meaningfulZero).toBe(false);
@@ -527,10 +527,10 @@ describe.skipIf(!bashOnPath || !existsSync(builtCommandNormalize))("CLI self-tes
   }, 150_000);
 
   // Task aabbad63 landed the ampersand-aware second normalisation pass:
-  // arm A stays 96/96 kept (0 lost — the pass is additive-only, verified,
-  // not merely reasoned about), and arm B moved from the pre-fix 36/36
-  // fail-open down to 16/36 gated. It is NOT 0/36: the remaining 20
-  // ungated forms are all `A=x&<wrapper> -C /tmp <verb>` for
+  // arm A stays all-keep-gate (0 lost — the pass is additive-only,
+  // verified, not merely reasoned about), and arm B moved from the
+  // pre-fix 36/36 fail-open down to 16/36 gated. It is NOT 0/36: the
+  // remaining 20 ungated forms are all `A=x&<wrapper> -C /tmp <verb>` for
   // nice/command/nohup/setsid/stdbuf — a DIFFERENT, pre-existing
   // limitation than the bare-`&` boundary problem aabbad63 closes. Those
   // five wrappers' own flag-peeling never recognised a `-C <dir>` value
@@ -541,15 +541,21 @@ describe.skipIf(!bashOnPath || !existsSync(builtCommandNormalize))("CLI self-tes
   // with no `&` involved at all (`normalizeCommand("nice -C /tmp git
   // status").normalized` was already byte-identical to its own input
   // before this task), so it is independent of the boundary alphabet
-  // fix and out of aabbad63's scope.
-  it("a full run reports arm A all-keep-gate for the 6 measured wrappers and arm B mostly-closed (task aabbad63)", () => {
+  // fix and out of aabbad63's scope. `nohup` still appears in that
+  // ungated-`-C`-form list (its own flag-peeling never recognised `-C`
+  // either — a DIFFERENT gap than the one task d03af8f6 closed, which
+  // was `nohup` not being peeled AT ALL) even though it moved from
+  // `KNOWN_UNSUPPORTED_WRAPPERS` to `KNOWN_GOOD_WRAPPERS` (task
+  // d03af8f6, review round 3): arm A's total is now 112/112 kept (7
+  // measured arms, 16 each — `timeout` remains the sole excluded arm).
+  it("a full run reports arm A all-keep-gate for the 7 measured wrappers and arm B mostly-closed (task aabbad63)", () => {
     const out = execFileSync(process.execPath, [script], {
       encoding: "utf8",
       cwd: repoRoot,
       timeout: 120_000,
     });
-    expect(out).toContain("96 kept gate, 0 lost");
-    expect(out).toContain("NOT a global 8-wrapper result: 2 of 8 arms prove nothing");
+    expect(out).toContain("112 kept gate, 0 lost");
+    expect(out).toContain("NOT a global 8-wrapper result: 1 of 8 arms prove nothing");
     expect(out).toContain("16/36 gate");
     expect(out).toContain("20/36 forms ungated today");
   }, 150_000);

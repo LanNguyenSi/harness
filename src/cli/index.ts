@@ -1818,8 +1818,10 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .description(
       "Grant a Risk Gate require_approval decision (default), or deliberately override " +
         "a deny-tier block with --force <reason>. The default path writes the " +
-        "risk-approved:${SESSION_ID} ledger tag the require_approval policy's requires " +
-        "consults; --force writes risk-override:${SESSION_ID}:forced:<reason> for the " +
+        "risk-approved:${SESSION_ID} ledger tag the production-scoped require_approval " +
+        "policy's requires consults; --scope deletion writes " +
+        "risk-approved:deletion:${SESSION_ID} instead, for the dev-context deletion arm " +
+        "only; --force writes risk-override:${SESSION_ID}:forced:<reason> for the " +
         "deny-tier policy. Operator action.",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
@@ -1827,6 +1829,10 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .option(
       "--session <id>",
       "explicit session id (default: $CLAUDE_CODE_SESSION_ID, then $CLAUDE_SESSION_ID, then $CODEX_SESSION_ID, then staged .pending-approval)",
+    )
+    .option(
+      "--scope <scope>",
+      "restrict the ledger tag to one Risk Gate arm instead of the shared production tag; only 'deletion' is recognized (writes risk-approved:deletion:${SESSION_ID} for gate-dev-unsafe-deletion). Omit for the default production-scoped tag. Ignored with --force.",
     )
     .option(
       "--force <reason>",
@@ -1841,6 +1847,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         config?: string;
         project?: string;
         session?: string;
+        scope?: string;
         force?: string;
         iAmTheOperator?: boolean;
       }) => {
@@ -1848,6 +1855,15 @@ export function buildProgram(opts: RunOptions = {}): Command {
         if (options.config) cliOpts.configPath = options.config;
         if (options.project) cliOpts.project = options.project;
         if (options.session) cliOpts.session = options.session;
+        if (options.scope !== undefined) {
+          if (options.scope !== "deletion") {
+            throw new HarnessExitError(
+              `--scope "${options.scope}" is not recognized; the only supported value is "deletion".`,
+              EX_USAGE,
+            );
+          }
+          cliOpts.scope = "deletion";
+        }
         if (typeof options.force === "string") {
           const reason = options.force.trim();
           if (reason.length === 0) {

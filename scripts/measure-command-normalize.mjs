@@ -34,13 +34,8 @@
 //   never folded into a zero (the per-arm gate).
 //
 //   MEASURED, NOT ASSUMED (read before trusting "8 wrappers x 4 verbs =
-//   uniformly gated"): two of the eight wrappers fail their OWN positive
+//   uniformly gated"): one of the eight wrappers fails its OWN positive
 //   control today, independent of this task's `&` concern —
-//     - `nohup` is not one of `canonicalizeSegment`'s recognised wrapper
-//       names at all (see the command-normalize.ts module header's
-//       NOT-SUPPORTED list — "nohup git status" is already a pinned,
-//       documented bypass). `nohup <verb>` never gates, with or without an
-//       assignment.
 //     - `timeout` needs a mandatory leading DURATION positional
 //       (`peelTimeout` unconditionally treats the token right after
 //       `timeout`'s own flags as the duration and skips it, REGARDLESS of
@@ -53,12 +48,21 @@
 //       values ('x & y', 'a & b & c') because `peelTimeout` never returns
 //       control to `canonicalizeSegment`'s outer loop, so the multi-token
 //       quote continuation (`consumeAssignment`) never runs for it the way
-//       it does for every other wrapper. Both facts were measured against
-//       this repo's own build (`docs/examples/full-manifest.yaml` +
+//       it does for every other wrapper. This was measured against this
+//       repo's own build (`docs/examples/full-manifest.yaml` +
 //       `policyMatchesEvent`), not assumed from reading the source — see
-//       the per-arm gate output below, which reports both arms as PROVING
-//       NOTHING rather than silently omitting them or folding them into a
+//       the per-arm gate output below, which reports this arm as PROVING
+//       NOTHING rather than silently omitting it or folding it into a
 //       misleadingly-clean total.
+//
+//       CLOSED (task d03af8f6, review round 3): `nohup` used to be a
+//       SECOND wrapper in this paragraph — it was not one of
+//       `canonicalizeSegment`'s recognised wrapper names at all, so
+//       `nohup <verb>` never gated, with or without an assignment.
+//       `command-normalize.ts`'s shared `peelWrapperPrefixes` now peels
+//       it (`peelNohup`), so its positive control fires like the other
+//       six healthy wrappers — moved to `KNOWN_GOOD_WRAPPERS` below,
+//       re-measured, not assumed from the source change alone.
 //
 //   ARM B (currently OPEN, descriptive — NOT asserted closed, closing it
 //   is aabbad63's job): two bare-`&` shapes BOUNDARY_RE cannot see today
@@ -151,8 +155,12 @@ export const VERBS = [
 export const REQUIRED_POLICIES = VERBS.map((v) => v.policy);
 
 // Real, measured today (see module header) — NOT a design assumption.
-export const KNOWN_GOOD_WRAPPERS = ["env", "nice", "sudo", "command", "setsid", "stdbuf"];
-export const KNOWN_UNSUPPORTED_WRAPPERS = ["nohup", "timeout"];
+// `nohup` MOVED here from `KNOWN_UNSUPPORTED_WRAPPERS` (task d03af8f6,
+// review round 3): `command-normalize.ts`'s `peelWrapperPrefixes` now
+// recognizes it (`peelNohup`), closing the bare-verb positive-control
+// failure this module's own header used to document for it.
+export const KNOWN_GOOD_WRAPPERS = ["env", "nice", "sudo", "command", "setsid", "stdbuf", "nohup"];
+export const KNOWN_UNSUPPORTED_WRAPPERS = ["timeout"];
 
 const POSITIVE_CONTROL_NEVER_FIRED =
   "POSITIVE CONTROL NEVER FIRED (this wrapper's own bare-verb form never gates — proves nothing about its assignment forms)";

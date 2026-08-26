@@ -96,8 +96,16 @@ function isKubectlHead(command: string): boolean {
  * `&`, or newline. Quoted spans (single or double) are tracked so a
  * chain-looking character inside a flag value's quotes does not end
  * the segment early. See module doc, scope point 2.
+ *
+ * Exported (task d03af8f6, review round 2, pure visibility change — no
+ * logic touched) so `deletion-target-resolve.ts`'s single-segment
+ * fallback path can reuse this exact ~15-line function instead of
+ * carrying its own byte-identical copy (the prior duplication was the
+ * `check:duplication` clone pair the task's first round justified and
+ * raised `MAX_CLONES` for; this closes it without touching this
+ * module's own logic).
  */
-function firstSegment(command: string): string {
+export function firstSegment(command: string): string {
   let inSingle = false;
   let inDouble = false;
   for (let i = 0; i < command.length; i++) {
