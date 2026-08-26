@@ -389,58 +389,67 @@ the false-positive-class rationale).
 
 **The kube signal is not only the ambient `~/.kube/config` either**
 (task `a7eb1a71`). An explicit `--context`, `--namespace`, or `-n` flag
-named directly in a `kubectl ...` Bash command — the usual, explicit way
-of addressing a specific cluster — is parsed out of the command (both
-`--flag value` and `--flag=value` forms for the two long flags; `-n` is
-space-form only) and merged into the resolver's kube inputs.
-**CONFLICT PRIORITY, per field: the command's own explicit flag wins
-over whatever `~/.kube/config` resolved** — the same
-explicit-statement-wins-over-ambient-state rule the inline `VAR=value`
-merge above already applies to `env_var_patterns`. A command naming
-only `--context` still falls back to the ambient namespace, and vice
-versa. This parsing is deliberately narrow (the task's own risk note:
-too-broad parsing could collect a same-named flag from a foreign
-context): it recognizes ONLY a command whose own first token is the
-literal word `kubectl` — unlike the branch/`cd` merge above, it does
-NOT look through a leading `cd`/`VAR=value` prefix — and reads flags
-only from the kubectl invocation's own first shell segment (up to the
-first unquoted `&&`, `||`, `;`, `|`, `&`, or newline), so a `--context`
-flag belonging to an unrelated program, or to a second command chained
-after the kubectl call, is never read as a kube signal. See
-`src/runtime/kubectl-target-parse.ts` for the parser and
-`src/cli/policy/intercept.ts`'s merge point for the full rationale.
+named directly in a `kubectl ...` Bash command, the usual, explicit way
+of addressing a specific cluster, is parsed out of the command
+(`--flag value`, `--flag=value`, and, for `-n` only, the concatenated
+`-nVALUE` pflag short-flag form too) and merged into the resolver's
+kube inputs. **CONFLICT PRIORITY, per field: the merge is UPGRADE-ONLY,
+mirroring the existing branch-switch merge above.** An explicit flag can
+raise the resolved environment toward production (an ambient non-prod
+or unknown kube state, plus a production-looking `--context`, resolves
+production), but command text can never LOWER an already-resolved
+ambient production, the same asymmetric rule that protects a
+production branch from a same-command branch switch. A fix round 1
+shape merged the flag as a straight per-field replacement instead;
+measured, that let an empty `--context=`, a value smuggled past a
+`kubectl exec ... -- ...` separator, or a genuinely different
+non-production `--context` all downgrade an ambient-production
+resolution to allow, which the upgrade-only merge and two parser-level
+fixes (a blank flag value is treated as absent, and scanning stops at a
+bare `--`) now both close. This parsing is deliberately narrow (the
+task's own risk note: too-broad parsing could collect a same-named flag
+from a foreign context): the head test recognizes only a `kubectl`
+invocation, whether that is the command's own first token or the first
+token of the remainder after `src/runtime/bash-prefix-parse.ts` strips
+a leading `cd <path> &&` / `VAR=value` / `git switch <branch> &&`
+prefix (so `cd /tmp && kubectl ... --context x` is covered, but a
+`sudo`/`time`/`env` wrapper, a kubectl that is not the first chained
+segment, or a piped kubectl are not); flags are read only from that
+invocation's own first shell segment (up to the first unquoted `&&`,
+`||`, `;`, `|`, `&`, or newline, and stopping at a bare `--`), so a
+`--context` flag belonging to an unrelated program, a second chained
+command, or an exec'd program past `--`, is never read as a kube
+signal. See `src/runtime/kubectl-target-parse.ts` for the parser and
+`src/cli/policy/intercept.ts`'s `applyKubeTargetUpgrade` for the full
+rationale.
 
-One measured, OUT-OF-SCOPE interaction this surfaced, so a future
-change here does not rediscover it from scratch: once this merge
+One measured, out-of-scope interaction this surfaced: once this merge
 correctly resolves `environment: production` from an explicit
 `--context`, the PRE-EXISTING "unknown is not safe" rule (see
-`policy.when:` below) means an UNCLASSIFIED action — `kubectl get`
-included, since only the four `delete`-verb kinds below are classified
-— satisfies `risk.severity_at_least` regardless of its real severity.
-Against a resolved-production kube context, the shipped
-`gate-prod-destructive-approval` policy therefore requires approval for
-ANY unclassified Bash command, not only a classified-destructive one.
-Giving `kubectl get`/`describe` (or any other read-only kubectl verb) a
-classified low-severity floor, the way `git status`/`cat`/etc. already
-get one (see "Built-in benign harness commands" above), would resolve
-this — deliberately not done here: task `a7eb1a71`'s own scope excludes
-"classification of further kubectl subcommands beyond the four already
-covered."
+`policy.when:` below) makes an unclassified `kubectl get` against that
+context require approval too, not only a classified-destructive action.
+Giving read-only kubectl verbs a classified floor is a separate,
+orchestrator-waived follow-up decision, not made here.
 
-The kubectl classifier pattern itself is also now token-based and
+The kubectl classifier pattern itself is also token-based and
 flag-tolerant between the two verbs (same task): the shipped pattern
-used to require `kubectl` and `delete` adjacent
-(`kubectl\s+delete\s+(namespace|deployment|statefulset|pvc)`), so a flag
-in between — `kubectl --context=prod-eu-1 delete namespace payments` —
-fell back to unclassified entirely, even though the very same command's
-trailing-flag form (`kubectl delete namespace payments --context
-prod-eu-1`) already classified fine. The pattern now allows zero or more
-`-`/`--`-prefixed flag tokens (each optionally taking a value, `=`- or
-space-separated) between `kubectl` and `delete`, while still requiring
-the literal `delete` verb — `kubectl get`/`describe` never match,
-flagged or not. `terraform destroy` got the same treatment for
-terraform's own `-chdir=DIR` global flag, which occupies the identical
-position between the tool name and its subcommand.
+used to require `kubectl` and `delete` adjacent, so a flag in between
+(`kubectl --context=prod-eu-1 delete namespace payments`) fell back to
+unclassified entirely, even though the very same command's trailing-flag
+form already classified fine. Fix round 2 (review HIGH finding 1): an
+initial flag-tolerant pattern used nested, overlapping optional groups
+(an alternation inside a repeated group) that backtracks exponentially
+in the number of flag tokens, measured at multiple SECONDS on a
+real-looking 24 to 26 flag command via the live `harness policy
+intercept` path, a manifest default that ships in every `harness init`
+output on a hot PreToolUse path. The shipped pattern now consumes zero
+or more `-`/`--`-prefixed flag tokens with at most one, unambiguous,
+non-flag value token each, linear in command length (measured well
+under 1ms at 40 flags), while still requiring the literal `delete` verb
+so `kubectl get`/`describe` never match, flagged or not. `terraform
+destroy` got the identical treatment for terraform's own `-chdir=DIR`
+global flag, which occupies the same position between the tool name and
+its subcommand.
 
 `kube_context_patterns` are operator-authored regexes compiled at
 resolution time. As with `risk.classifiers[].patterns`, harness does

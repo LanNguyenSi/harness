@@ -31,7 +31,7 @@ import {
 import type { Manifest, MatchableEnvironment, McpServer } from "../../schema/index.js";
 import { resolveGeneratedDir, writePendingApproval } from "../../runtime/pending-approval.js";
 import { parseBashPrefix } from "../../runtime/bash-prefix-parse.js";
-import { parseKubectlTarget } from "../../runtime/kubectl-target-parse.js";
+import { parseKubectlTarget, type KubectlTarget } from "../../runtime/kubectl-target-parse.js";
 import {
   MAX_NORMALIZE_LENGTH,
   normalizeCommand,
@@ -309,6 +309,67 @@ function applyBranchSwitchUpgrade(
     inputs,
   );
   return ENV_RANK[candidateResolution.name] < ENV_RANK[baseResolution.name] ? candidateGit : baseGit;
+}
+
+/**
+ * Explicit kubectl target, upgrade-only merge (task a7eb1a71, review
+ * HIGH finding 2, fix round 2). An explicit --context/--namespace/-n on
+ * a kubectl command names the cluster and namespace the command
+ * actually runs against, the same idea as the branch-switch merge
+ * above. A fix round 1 shape merged it as a straight per-field
+ * replacement (explicit flag always wins); measured, that let command
+ * text LOWER an already-resolved production classification (an empty
+ * --context=, a flag read past a `kubectl exec ... -- ...` separator,
+ * or a genuinely different, non-production --context all downgraded an
+ * ambient-production resolution to allow). This merge is deliberately
+ * asymmetric instead, mirroring applyBranchSwitchUpgrade exactly: it
+ * only ever pushes the resolved environment to something MORE
+ * dangerous than the ambient kubeconfig alone already gave, never less.
+ *
+ * Both the ambient-only base and the merged-candidate kube inputs are
+ * run through the SAME resolveEnvironment call with IDENTICAL git/env
+ * inputs, so any difference in the result is attributable to the
+ * explicit kubectl flag alone. The more dangerous of the two (ENV_RANK
+ * order) wins; an explicit flag pointing somewhere non-production never
+ * downgrades an ambient-production resolution.
+ */
+function applyKubeTargetUpgrade(
+  event: ToolEvent,
+  manifest: Manifest,
+  cwd: string,
+  git: GitRepoContext,
+  ambientKube: { context: string; namespace: string },
+  kubectlTarget: KubectlTarget | null,
+  env: Record<string, string | undefined>,
+  user: string,
+  host: string,
+  now: Date | undefined,
+): { context: string; namespace: string } {
+  if (kubectlTarget === null) return ambientKube;
+  const candidateKube = {
+    context: kubectlTarget.context ?? ambientKube.context,
+    namespace: kubectlTarget.namespace ?? ambientKube.namespace,
+  };
+  if (
+    candidateKube.context === ambientKube.context &&
+    candidateKube.namespace === ambientKube.namespace
+  ) {
+    return ambientKube;
+  }
+  const effectiveNow = now ?? new Date();
+  const baseResolution = resolveEnvironment(
+    buildActionEnvelope(event, { cwd, git, user, host, now: effectiveNow }),
+    manifest.environments.resolvers,
+    { env, kubeContext: ambientKube.context, kubeNamespace: ambientKube.namespace },
+  );
+  const candidateResolution = resolveEnvironment(
+    buildActionEnvelope(event, { cwd, git, user, host, now: effectiveNow }),
+    manifest.environments.resolvers,
+    { env, kubeContext: candidateKube.context, kubeNamespace: candidateKube.namespace },
+  );
+  return ENV_RANK[candidateResolution.name] < ENV_RANK[baseResolution.name]
+    ? candidateKube
+    : ambientKube;
 }
 
 /**
@@ -977,11 +1038,17 @@ export async function runInterceptCli(
       event.tool_name === "Bash" ? readBashCommand(event.tool_input) : null;
     const bashPrefix = riskBashCommand === null ? null : parseBashPrefix(riskBashCommand);
     // Explicit `--context`/`--namespace`/`-n` on a `kubectl ...`
-    // invocation (task a7eb1a71) — see `parseKubectlTarget`'s own doc
-    // comment for the narrow, command-head-anchored scope this is
-    // deliberately kept to.
-    const kubectlTarget =
-      riskBashCommand === null ? null : parseKubectlTarget(riskBashCommand);
+    // invocation (task a7eb1a71). Fed the REMAINDER after `bashPrefix`
+    // consumed a leading `cd <path> &&` / `VAR=value` / `git switch
+    // <branch> &&` prefix, not the raw command, so a wrapped invocation
+    // like `cd /tmp && kubectl ... --context x` is still covered; see
+    // `parseKubectlTarget`'s own doc comment for the narrow,
+    // command-head-anchored scope this is otherwise kept to, and for
+    // the forms still NOT unwrapped (sudo/time/env wrappers, a kubectl
+    // that is not the first chained segment, a piped kubectl).
+    const kubectlSubject =
+      riskBashCommand === null ? null : riskBashCommand.slice(bashPrefix?.remainderStart ?? 0);
+    const kubectlTarget = kubectlSubject === null ? null : parseKubectlTarget(kubectlSubject);
     const resolverGit = (() => {
       if (bashPrefix === null || bashPrefix.cdTarget === null) return cwdGitContext;
       const effective = path.isAbsolute(bashPrefix.cdTarget)
@@ -999,23 +1066,13 @@ export async function runInterceptCli(
       // win over process.env (matches POSIX `VAR=value cmd` semantics).
       return { ...base, ...bashPrefix.inlineEnv };
     })();
-    // CONFLICT PRIORITY (task a7eb1a71): a kubectl invocation's own
-    // explicit `--context`/`--namespace`/`-n` flag is the operator's
-    // explicit statement of intent, exactly like the inline `VAR=value`
-    // merge above — it wins over whatever `kube` resolved from the
-    // AMBIENT `~/.kube/config` (or the `opts.kubeContext` /
-    // `opts.kubeNamespace` test override folded into `kube` above).
-    // EXPLICIT COMMAND FLAG > AMBIENT KUBECONFIG, per-field (a command
-    // naming only `--context` still falls back to the ambient
-    // namespace, and vice versa).
-    const resolverKube = {
-      context: kubectlTarget?.context ?? kube.context,
-      namespace: kubectlTarget?.namespace ?? kube.namespace,
-    };
     const riskUser = safeOs(() => os.userInfo().username);
     const riskHost = safeOs(() => os.hostname());
     // A leading `git switch`/`checkout <branch>` (task 341e024b) is
-    // merged on top of `resolverGit` above — upgrade-only, see
+    // merged on top of `resolverGit` above, upgrade-only, using the
+    // AMBIENT kube state (`kube` from `resolveKubeContext()` / the
+    // `opts.kubeContext`/`opts.kubeNamespace` test override), unaffected
+    // by the kubectl-target merge below. See
     // `applyBranchSwitchUpgrade`'s own doc comment for why this one is
     // NOT a straight replacement the way the `cd` merge is.
     const gitForRisk = applyBranchSwitchUpgrade(
@@ -1024,7 +1081,28 @@ export async function runInterceptCli(
       cwd,
       resolverGit,
       bashPrefix?.branchTarget ?? null,
-      { env: resolverEnv, kubeContext: resolverKube.context, kubeNamespace: resolverKube.namespace },
+      { env: resolverEnv, kubeContext: kube.context, kubeNamespace: kube.namespace },
+      riskUser,
+      riskHost,
+      opts.now,
+    );
+    // CONFLICT PRIORITY (task a7eb1a71): an explicit kubectl
+    // --context/--namespace/-n is merged on top of the AMBIENT kube
+    // state (`kube`), on top of `gitForRisk` above (the git context
+    // AFTER the branch-switch upgrade), upgrade-only, exactly the same
+    // asymmetric shape the branch-switch merge itself uses. Command
+    // text can only raise the resolved environment toward production,
+    // never lower an already-resolved production; see
+    // `applyKubeTargetUpgrade`'s own doc comment for the measured
+    // downgrade this fixes.
+    const kubeForRisk = applyKubeTargetUpgrade(
+      event,
+      manifest,
+      cwd,
+      gitForRisk,
+      { context: kube.context, namespace: kube.namespace },
+      kubectlTarget,
+      resolverEnv,
       riskUser,
       riskHost,
       opts.now,
@@ -1035,8 +1113,8 @@ export async function runInterceptCli(
       user: riskUser,
       host: riskHost,
       env: resolverEnv,
-      kubeContext: resolverKube.context,
-      kubeNamespace: resolverKube.namespace,
+      kubeContext: kubeForRisk.context,
+      kubeNamespace: kubeForRisk.namespace,
     };
   }
 
