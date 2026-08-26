@@ -74,6 +74,11 @@ ${extraHooks}policies:
 `;
 }
 
+// The literal boundary-alternation content FULL_TEMPLATE ships (no outer
+// parens), verified directly against shippedBashMatchBoundaries() in the
+// fixed-point test below. Used as a byte-identical baseline fixture.
+const TEMPLATE_BOUNDARY_CONTENT = "^|\\n|;|\\||&|\\(";
+
 // A hook + policy pair (same shipped names) whose FULL boundary-group
 // content is caller-supplied verbatim, for the set-comparison tests
 // (reordering, supersets, missing alternatives) that a single-token
@@ -402,6 +407,79 @@ policies:
         expect(m).not.toContain('"^"');
       }
     });
+
+    // Review round 3, item 2a mutation-probe target: a naive
+    // implementation that drops the LAST template alternative before
+    // comparing (e.g. an off-by-one `.slice(0, -1)` in
+    // missingBoundaryAlternatives) would never detect the trailing
+    // alternative (`\(`, the last one splitBoundaryAlternatives
+    // produces for the shipped boundary) as missing. Installed carries
+    // every alternative except `\(`.
+    it("reports drift naming the trailing alternative when only it is missing", async () => {
+      const missingCloseParen = "^|\\n|;|\\||&"; // template's set minus the trailing \\(
+      const home = makeFixture({
+        "harness.yaml": manifestWithFullBoundary(missingCloseParen, missingCloseParen),
+      });
+      const report = await doctor({
+        configPath: path.join(home, "harness.yaml"),
+        homeOverride: home,
+        shallow: true,
+      });
+      expect(report.triggerBoundaryDrift.errors).toHaveLength(2);
+      for (const m of report.triggerBoundaryDrift.errors) {
+        expect(m).toContain("missing");
+        expect(m).toContain('"\\("');
+      }
+    });
+
+    // Review round 3, item 2b mutation-probe target: stripping
+    // escape-awareness from splitBoundaryAlternatives (treating every
+    // `|` character as a separator, including the one inside `\|`)
+    // would still agree with itself on a byte-identical string (both
+    // sides mis-split the same way), so that alone cannot discriminate
+    // the mutant; the decisive case is a boundary that specifically
+    // lacks the `\|` alternative. Escape-aware splitting reports one
+    // clean "missing \|" finding; a naive splitter instead sees the
+    // shipped boundary's `\|` as two spurious tokens ("\" and an empty
+    // string) that the intentionally-`\|`-free installed boundary never
+    // produces either of, so it would report those two malformed tokens
+    // missing instead of the real `\|` alternative, and this assertion
+    // (which looks for `\|` named verbatim) would fail.
+    it("names the escaped-pipe alternative verbatim when only it is missing, not its naively-split pieces", async () => {
+      const home = makeFixture({
+        "harness.yaml": manifestWithFullBoundary(
+          TEMPLATE_BOUNDARY_CONTENT,
+          TEMPLATE_BOUNDARY_CONTENT,
+        ),
+      });
+      // Byte-identical to the shipped boundary: escape-aware or not, a
+      // string compared against itself always yields zero findings, so
+      // this is a baseline sanity check, not the discriminator by itself.
+      const identicalReport = await doctor({
+        configPath: path.join(home, "harness.yaml"),
+        homeOverride: home,
+        shallow: true,
+      });
+      expect(identicalReport.triggerBoundaryDrift.errors).toHaveLength(0);
+
+      const missingEscapedPipe = "^|\\n|;|&|\\("; // template's set minus \\|
+      const home2 = makeFixture({
+        "harness.yaml": manifestWithFullBoundary(missingEscapedPipe, missingEscapedPipe),
+      });
+      const report = await doctor({
+        configPath: path.join(home2, "harness.yaml"),
+        homeOverride: home2,
+        shallow: true,
+      });
+      expect(report.triggerBoundaryDrift.errors).toHaveLength(2);
+      for (const m of report.triggerBoundaryDrift.errors) {
+        expect(m).toContain("missing");
+        // The single escaped-pipe alternative, named whole.
+        expect(m).toContain('"\\|"');
+        // Not its naively-split halves (a lone backslash token).
+        expect(m).not.toContain('"\\"');
+      }
+    });
   });
 
   // Review round 2, item 3: an installed bash_match under a shipped name
@@ -419,6 +497,33 @@ policies:
     for (const m of report.triggerBoundaryDrift.errors) {
       expect(m).toContain("no recognizable");
       expect(m).toContain("boundary");
+    }
+  });
+
+  // Review round 3, item 1: a leading group that is syntactically a
+  // valid parenthesized alternation, but shares ZERO alternatives with
+  // the shipped boundary, is not a "missing an alternative" case (that
+  // wording implies the fix is to add one more branch); it is a
+  // different group entirely serving another purpose (here, a
+  // command-shape alternation that happens to sit first), and the fix is
+  // to replace it. It gets the same "no recognizable boundary" wording
+  // as the syntactically-absent case, not a "missing '^', '\n', ';',
+  // '\|', '&', '\('" listing of every template alternative.
+  it("routes a zero-overlap leading group to the no-recognizable-boundary wording, not a missing-every-alternative listing", async () => {
+    const home = makeFixture({
+      "harness.yaml": manifestWithFullBoundary("gh|git", "gh|git"),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+    });
+    expect(report.triggerBoundaryDrift.errors).toHaveLength(2);
+    for (const m of report.triggerBoundaryDrift.errors) {
+      expect(m).toContain("no recognizable");
+      expect(m).toContain("boundary");
+      expect(m).not.toContain("missing");
+      expect(m).not.toContain('"^"');
     }
   });
 });

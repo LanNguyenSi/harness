@@ -669,6 +669,30 @@ function triggerBoundaryRehydrationGuidance(entryName: string): string {
   );
 }
 
+// Shared "not a boundary at all" wording (review round 3, item 1). Used
+// both when the leading group is syntactically absent (no parenthesized
+// group at all) AND when one IS present but shares zero alternatives
+// with the template's, e.g. a shipped-named trigger whose leading group
+// serves an entirely different purpose such as `(gh|git)\s+pr merge\b`.
+// In both cases the fix is the same (replace the group with the
+// template's, not widen it with one more alternative), so the two cases
+// share a message instead of the zero-overlap case being misdescribed as
+// "missing" every single alternative.
+function noRecognizableBoundaryMessage(
+  entryLevel: "hook" | "policy",
+  entryName: string,
+  installedDescription: string,
+): string {
+  return (
+    `${entryLevel} "${entryName}"'s bash_match has no recognizable ` +
+    `leading boundary alternation (${installedDescription}). ` +
+    `The trigger matches no command separator at all, so it only fires ` +
+    `for a command that is literally the very first thing in the string, ` +
+    `every other position (after \`;\`, \`&\`, a newline, a pipe, an open ` +
+    `paren) is silently bypassable. ${triggerBoundaryRehydrationGuidance(entryName)}`
+  );
+}
+
 export function checkTriggerBoundaryDrift(manifest: Manifest): Diagnostic[] {
   const ignored = new Set(manifest.doctor.ignore_template_drift);
   const shipped = shippedBashMatchBoundaries();
@@ -691,18 +715,38 @@ export function checkTriggerBoundaryDrift(manifest: Manifest): Diagnostic[] {
       diags.push({
         severity: "error",
         path: diagPath,
-        message:
-          `${entry.level} "${entry.name}"'s bash_match has no recognizable ` +
-          `leading boundary alternation (installed value: "${installedBashMatch}"). ` +
-          `The trigger matches no command separator at all, so it only fires ` +
-          `for a command that is literally the very first thing in the string, ` +
-          `every other position (after \`;\`, \`&\`, a newline, a pipe, an open ` +
-          `paren) is silently bypassable. ${triggerBoundaryRehydrationGuidance(entry.name)}`,
+        message: noRecognizableBoundaryMessage(
+          entry.level,
+          entry.name,
+          `installed value: "${installedBashMatch}"`,
+        ),
       });
       continue;
     }
+    const templateAlternatives = splitBoundaryAlternatives(entry.boundary);
     const missing = missingBoundaryAlternatives(entry.boundary, actualBoundary);
     if (missing.length === 0) continue;
+    if (missing.length === templateAlternatives.length) {
+      // Zero overlap: the leading group is a syntactically valid
+      // parenthesized alternation, but it shares no alternative at all
+      // with the template's boundary, so it is not the boundary group
+      // (an unrelated command-shape alternation like `(gh|git)` that
+      // happens to sit first, or a fully custom, unrelated set). Report
+      // it as "no recognizable boundary", not as "missing" every single
+      // template alternative, since the fix is to replace this group,
+      // not extend it.
+      diags.push({
+        severity: "error",
+        path: diagPath,
+        message: noRecognizableBoundaryMessage(
+          entry.level,
+          entry.name,
+          `installed leading group: "(${actualBoundary})", which shares no ` +
+            `boundary token with the shipped template's "(${entry.boundary})"`,
+        ),
+      });
+      continue;
+    }
     const missingList = missing.map((m) => `"${m}"`).join(", ");
     diags.push({
       severity: "error",

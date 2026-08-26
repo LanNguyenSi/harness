@@ -343,10 +343,11 @@ function formatTemplateDriftSection(report: DoctorReport): string[] {
 // manifest stays silent, like the template-drift section immediately
 // above.
 function formatTriggerBoundaryDriftSection(report: DoctorReport): string[] {
-  const { errors } = report.triggerBoundaryDrift;
-  if (errors.length === 0) return [];
+  const { errors, warnings } = report.triggerBoundaryDrift;
+  if (errors.length === 0 && warnings.length === 0) return [];
   const out: string[] = ["", "Trigger boundary drift (shipped bash_match triggers)"];
   for (const m of errors) out.push(`  ✗ ${m}`);
+  for (const w of warnings) out.push(`  ⚠ ${w}`);
   return out;
 }
 

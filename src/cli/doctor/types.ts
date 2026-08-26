@@ -321,15 +321,22 @@ export interface TemplateDriftSection {
  * alternative the template has, or missing a boundary group entirely.
  * Rule and rationale live on `checkTriggerBoundaryDrift` in
  * `validate/checks.ts`; the measured incident that motivated this check
- * is in CHANGELOG.md's [Unreleased] entry for task 037cfb7c. Every
- * message rolls into `errorCount`, mirroring `templateDrift.errors`.
- * Always present; empty when every shipped-named trigger's boundary
- * covers the template's (or the manifest has none of those triggers, or
- * every drift is acknowledged via doctor.ignore_template_drift).
+ * is in CHANGELOG.md's [Unreleased] entry for task 037cfb7c. Shape
+ * mirrors `TemplateDriftSection` immediately above: every `error`
+ * diagnostic rolls into `errorCount`, every `warning` diagnostic (none
+ * emitted today; the field exists so a future non-error diagnostic from
+ * `checkTriggerBoundaryDrift` surfaces here instead of being silently
+ * dropped by `buildTriggerBoundaryDrift`) rolls into `warningCount`.
+ * Always present; both arrays empty when every shipped-named trigger's
+ * boundary covers the template's (or the manifest has none of those
+ * triggers, or every drift is acknowledged via
+ * doctor.ignore_template_drift).
  */
 export interface TriggerBoundaryDriftSection {
   /** Stale-boundary bash_match triggers, hook- or policy-level (each → errorCount). */
   errors: string[];
+  /** Reserved for a future non-error diagnostic shape (each → warningCount); empty today. */
+  warnings: string[];
 }
 
 /**

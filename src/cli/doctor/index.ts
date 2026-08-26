@@ -32,6 +32,7 @@ import {
   createDefaultGitIgnoreProbe,
   type GitIgnoreProbe,
 } from "../validate/checks.js";
+import type { Diagnostic } from "../validate/types.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import {
   countCodexDiagnostics,
@@ -821,12 +822,25 @@ function buildRiskGate(manifest: Manifest): RiskGateSection {
  * dogfood/CI run should fail until the manifest is caught up or the name
  * is explicitly acknowledged under doctor.ignore_template_drift.
  */
-function buildTemplateDrift(manifest: Manifest): TemplateDriftSection {
-  const diags = checkTemplatePolicyDrift(manifest);
+/**
+ * Splits a `Diagnostic[]` into the `{ errors, warnings }` message-array
+ * shape every drift-style doctor section uses (task 037cfb7c review round
+ * 3: `buildTemplateDrift` and `buildTriggerBoundaryDrift` had become
+ * byte-identical bodies around two different `checkX(manifest)` calls;
+ * this is the one place that split lives now).
+ */
+function partitionDiagnosticsBySeverity(diags: readonly Diagnostic[]): {
+  errors: string[];
+  warnings: string[];
+} {
   return {
     errors: diags.filter((d) => d.severity === "error").map((d) => d.message),
     warnings: diags.filter((d) => d.severity === "warning").map((d) => d.message),
   };
+}
+
+function buildTemplateDrift(manifest: Manifest): TemplateDriftSection {
+  return partitionDiagnosticsBySeverity(checkTemplatePolicyDrift(manifest));
 }
 
 /**
@@ -835,18 +849,14 @@ function buildTemplateDrift(manifest: Manifest): TemplateDriftSection {
  * template has, or missing a boundary group entirely. Doctor-only, like
  * `checkTemplatePolicyDrift` immediately above: `checkTriggerBoundaryDrift`
  * is deliberately not wired into validate's `runAssetChecks`, so
- * `harness validate` does not run it (only `harness doctor` does).
- * Partitions by severity like `buildTemplateDrift` above (rather than
- * mapping every diagnostic straight to `errors`) so this stays
- * load-bearing: `checkTriggerBoundaryDrift` only emits `error`-severity
- * diagnostics today, but a future non-`error` diagnostic would be
- * excluded from `errors` (and therefore from `errorCount`) instead of
- * silently inflating it, the same guarantee `buildTemplateDrift` gives
- * its own `errors` array.
+ * `harness validate` does not run it (only `harness doctor` does). Uses
+ * the same `partitionDiagnosticsBySeverity` split as `buildTemplateDrift`
+ * above: `checkTriggerBoundaryDrift` only emits `error`-severity
+ * diagnostics today, but a future non-`error` diagnostic now surfaces in
+ * `warnings` instead of being silently dropped.
  */
 function buildTriggerBoundaryDrift(manifest: Manifest): TriggerBoundaryDriftSection {
-  const diags = checkTriggerBoundaryDrift(manifest);
-  return { errors: diags.filter((d) => d.severity === "error").map((d) => d.message) };
+  return partitionDiagnosticsBySeverity(checkTriggerBoundaryDrift(manifest));
 }
 
 /**
@@ -1013,8 +1023,11 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // Trigger-boundary drift (task 037cfb7c): every entry is a measured,
   // exploitable gate bypass (see checkTriggerBoundaryDrift's header),
   // mapped to errorCount, mirroring templateDrift.errors immediately
-  // above.
+  // above; warnings mirrors templateDrift.warnings the same way (no
+  // warning-severity diagnostic exists today, but the pathway is wired
+  // so one would count instead of vanishing).
   errorCount += report.triggerBoundaryDrift.errors.length;
+  warningCount += report.triggerBoundaryDrift.warnings.length;
   // Hook-budget-vs-ledger-timeout margin (task d20a7e0c): every entry is
   // a real fail-open gap, mirroring templateDrift.errors immediately
   // above.

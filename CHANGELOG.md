@@ -74,6 +74,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   missing-alternative finding naming the missing alternative, and the
   no-boundary-group finding).
 
+### Fixed
+
+- **Trigger-boundary drift (task 037cfb7c), review round 3: a zero-overlap
+  leading group is no longer misreported as "missing" every template
+  alternative.** A shipped-named `bash_match` whose leading group is
+  syntactically a valid parenthesized alternation but shares NO
+  alternative with the shipped boundary (e.g. `(gh|git)\s+pr merge\b`,
+  where the group serves an unrelated command-shape purpose) now routes
+  to the same "no recognizable boundary" wording the syntactically-absent
+  case already used, instead of listing every one of the template's
+  alternatives as individually missing. New shared
+  `noRecognizableBoundaryMessage` helper in `src/cli/validate/checks.ts`
+  covers both cases. `TriggerBoundaryDriftSection` gained a `warnings`
+  field mirroring `TemplateDriftSection`, threaded through `format.ts`
+  and `countDiagnostics`'s `warningCount`, so a future non-error
+  diagnostic from `checkTriggerBoundaryDrift` would surface instead of
+  being silently dropped; `buildTemplateDrift` and
+  `buildTriggerBoundaryDrift` (`src/cli/doctor/index.ts`) now share a
+  `partitionDiagnosticsBySeverity` helper instead of duplicating the same
+  filter/map body, which also resolved a new duplication-pin hit
+  (`check:duplication` briefly went 109 to 110 on the byte-identical
+  bodies before the extraction). Two mutation-probe-driven test gaps
+  closed in `tests/cli/doctor-trigger-boundary-drift.test.ts`: a
+  `.slice(0, -1)`-shaped bug that would drop the shipped boundary's
+  trailing `\(` alternative from comparison, and a naive (escape-unaware)
+  `|`-split that would decompose the shipped boundary's `\|` alternative
+  into two spurious tokens; both are now named test cases, verified red
+  against the mutated implementation and green against the fix.
+
 ## [0.48.0] - 2026-08-25
 
 ### Fixed
