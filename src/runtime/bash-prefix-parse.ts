@@ -85,11 +85,22 @@ export interface BashPrefix {
   cdTarget: string | null;
   /**
    * Branch argument of a leading `git [-C <path>] (switch|checkout)
-   * <branch> &&|;`, or null when none — including when the branch
+   * <branch> &&|;`, or null when none, including when the branch
    * argument is a `-`-prefixed flag/file-restore form or an
    * unresolvable `$VAR` (see module doc, form 3). Task 341e024b.
    */
   branchTarget: string | null;
+  /**
+   * Index into the original `command` string right after the last
+   * consumed prefix clause: `command.slice(remainderStart)` is what is
+   * left once every recognized leading `VAR=value` / `cd <path> &&` /
+   * `git switch <branch> &&` clause has been stripped. `0` when nothing
+   * matched. Added (task a7eb1a71) so a caller needing to test the
+   * REMAINING command's own head, such as
+   * `kubectl-target-parse.ts`'s narrow kubectl-head anchor, can do so
+   * without re-implementing this module's prefix grammar.
+   */
+  remainderStart: number;
 }
 
 /**
@@ -99,7 +110,7 @@ export interface BashPrefix {
  */
 export function parseBashPrefix(command: string): BashPrefix {
   if (typeof command !== "string" || command.length === 0) {
-    return { inlineEnv: {}, cdTarget: null, branchTarget: null };
+    return { inlineEnv: {}, cdTarget: null, branchTarget: null, remainderStart: 0 };
   }
   const inlineEnv: Record<string, string> = {};
   let cdTarget: string | null = null;
@@ -130,7 +141,7 @@ export function parseBashPrefix(command: string): BashPrefix {
     }
     if (cursor === before) break;
   }
-  return { inlineEnv, cdTarget, branchTarget };
+  return { inlineEnv, cdTarget, branchTarget, remainderStart: cursor };
 }
 
 const WS = /\s/;

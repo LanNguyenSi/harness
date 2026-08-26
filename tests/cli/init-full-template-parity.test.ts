@@ -180,3 +180,25 @@ describe("FULL_TEMPLATE ↔ docs/examples/full-manifest.yaml — drift guard", (
     }
   });
 });
+
+// Task a7eb1a71 (review round 2, MEDIUM finding): the drift guard above
+// covers policies and policy_packs but not risk.classifiers[], so a
+// kubectl/terraform classifier pattern fix landed in
+// docs/examples/full-manifest.yaml without a matching change in
+// FULL_TEMPLATE and every test still passed. Extend the same guard to
+// risk.classifiers[].patterns.
+describe("FULL_TEMPLATE risk.classifiers[] drift guard (task a7eb1a71)", () => {
+  it("matches the reference on every classifier's patterns, categories, and severities", () => {
+    const ref = loadReferenceManifest();
+    const full = loadFullTemplateManifest();
+    const refByName = new Map(ref.risk.classifiers.map((c) => [c.name, c]));
+    const fullByName = new Map(full.risk.classifiers.map((c) => [c.name, c]));
+    expect([...fullByName.keys()].sort()).toEqual([...refByName.keys()].sort());
+    for (const [name, classifier] of fullByName) {
+      const counterpart = refByName.get(name);
+      expect(counterpart, `classifier ${name} in FULL_TEMPLATE has no counterpart`).toBeDefined();
+      if (!counterpart) continue;
+      expect(classifier.patterns).toEqual(counterpart.patterns);
+    }
+  });
+});

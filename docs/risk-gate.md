@@ -85,6 +85,11 @@ risk:
           severity: critical
 ```
 
+(Shown here in its simplest form for readability; the actual shipped
+`docs/examples/full-manifest.yaml` / `harness init --template full`
+pattern is the flag-tolerant, linear-time form covered later in this
+document under "Environment resolvers", not this literal string.)
+
 Each `patterns[]` entry maps a regular expression to a set of
 `categories` and a `severity`. The regex is validated at parse time;
 an unparseable pattern is a `harness validate` error.
@@ -386,6 +391,42 @@ in a command is captured — a chained `git switch dev && git switch main
 && ...` resolves the candidate as `dev`, never `main`; multi-switch
 parsing is deliberately not built (see the parser's own module doc for
 the false-positive-class rationale).
+
+**The kube signal is not only the ambient `~/.kube/config` either**
+(task `a7eb1a71`). An explicit `--context`, `--namespace`, or `-n` flag
+named directly in a `kubectl ...` Bash command is parsed out of the
+command (`--flag value`, `--flag=value`, and, for `-n` only, the
+concatenated `-nVALUE` pflag short-flag form too) and merged into the
+resolver's kube inputs. **CONFLICT PRIORITY: the merge is UPGRADE-ONLY,
+per field, mirroring the existing branch-switch merge above** (command
+text can raise the resolved environment toward production, never lower
+an already-resolved ambient production). The head test recognizes only
+a `kubectl` invocation, its own first token or the first token of the
+remainder after `src/runtime/bash-prefix-parse.ts` strips a leading
+`cd`/`VAR=value`/`git switch` prefix, and reads flags only from that
+invocation's own first shell segment, stopping at a bare `--`. See
+`src/runtime/kubectl-target-parse.ts`'s own module doc for the full
+scope and known-unhandled-shapes list, and CHANGELOG.md's
+`[Unreleased]` entry for the measured downgrade this fixes.
+
+One measured, out-of-scope interaction this surfaced: once this merge
+correctly resolves `environment: production` from an explicit
+`--context`, the PRE-EXISTING "unknown is not safe" rule (see
+`policy.when:` below) makes an unclassified `kubectl get` against that
+context require approval too, not only a classified-destructive action.
+Giving read-only kubectl verbs a classified floor is a separate,
+orchestrator-waived follow-up decision, not made here.
+
+The kubectl classifier pattern itself is also token-based and
+flag-tolerant between the two verbs (same task), consuming zero or more
+`-`/`--`-prefixed flag tokens with at most one, unambiguous, non-flag
+value token each, linear in command length, while still requiring the
+literal `delete` verb so `kubectl get`/`describe` never match, flagged
+or not. `terraform destroy` got the identical treatment for terraform's
+own `-chdir=DIR` global flag, which occupies the same position between
+the tool name and its subcommand. See CHANGELOG.md's `[Unreleased]`
+entry for the exponential-backtracking defect this replaced and its
+measured timings.
 
 `kube_context_patterns` are operator-authored regexes compiled at
 resolution time. As with `risk.classifiers[].patterns`, harness does

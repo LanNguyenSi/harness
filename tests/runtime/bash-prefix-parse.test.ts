@@ -241,15 +241,75 @@ describe("parseBashPrefix", () => {
 
   describe("degenerate input", () => {
     it("returns empty for empty / whitespace-only command", () => {
-      expect(parseBashPrefix("")).toEqual({ inlineEnv: {}, cdTarget: null, branchTarget: null });
-      expect(parseBashPrefix("   \t  ")).toEqual({ inlineEnv: {}, cdTarget: null, branchTarget: null });
+      expect(parseBashPrefix("")).toEqual({
+        inlineEnv: {},
+        cdTarget: null,
+        branchTarget: null,
+        remainderStart: 0,
+      });
+      expect(parseBashPrefix("   \t  ")).toEqual({
+        inlineEnv: {},
+        cdTarget: null,
+        branchTarget: null,
+        // Pure whitespace is fully consumed by the inline-env skip pass
+        // even though it finds no VAR=value token, so the remainder starts
+        // at the end of the string, not 0.
+        remainderStart: 6,
+      });
     });
 
     it("returns empty for non-string input", () => {
       // @ts-expect-error testing runtime guard
-      expect(parseBashPrefix(undefined)).toEqual({ inlineEnv: {}, cdTarget: null, branchTarget: null });
+      expect(parseBashPrefix(undefined)).toEqual({
+        inlineEnv: {},
+        cdTarget: null,
+        branchTarget: null,
+        remainderStart: 0,
+      });
       // @ts-expect-error testing runtime guard
-      expect(parseBashPrefix(null)).toEqual({ inlineEnv: {}, cdTarget: null, branchTarget: null });
+      expect(parseBashPrefix(null)).toEqual({
+        inlineEnv: {},
+        cdTarget: null,
+        branchTarget: null,
+        remainderStart: 0,
+      });
+    });
+  });
+
+  describe("remainderStart (task a7eb1a71)", () => {
+    it("is 0 when no prefix clause matches", () => {
+      expect(parseBashPrefix("terraform destroy").remainderStart).toBe(0);
+    });
+
+    it("points right after a consumed cd prefix", () => {
+      const cmd = "cd /tmp && kubectl delete namespace payments";
+      const r = parseBashPrefix(cmd);
+      expect(cmd.slice(r.remainderStart)).toBe("kubectl delete namespace payments");
+    });
+
+    it("points right after a consumed inline-env prefix", () => {
+      const cmd = "KUBECONFIG=/tmp/k kubectl delete namespace payments";
+      const r = parseBashPrefix(cmd);
+      expect(cmd.slice(r.remainderStart)).toBe("kubectl delete namespace payments");
+    });
+
+    it("points right after both a cd and an inline-env prefix, in either order", () => {
+      const a = "cd /tmp && KUBECONFIG=/tmp/k kubectl delete namespace payments";
+      const b = "KUBECONFIG=/tmp/k cd /tmp && kubectl delete namespace payments";
+      expect(a.slice(parseBashPrefix(a).remainderStart)).toBe("kubectl delete namespace payments");
+      expect(b.slice(parseBashPrefix(b).remainderStart)).toBe("kubectl delete namespace payments");
+    });
+
+    it("points right after a consumed cd prefix with a quoted path", () => {
+      const cmd = 'cd "/tmp/risk gate" && kubectl delete namespace payments';
+      const r = parseBashPrefix(cmd);
+      expect(cmd.slice(r.remainderStart)).toBe("kubectl delete namespace payments");
+    });
+
+    it("points right after a consumed git switch prefix", () => {
+      const cmd = "git switch main && kubectl delete namespace payments";
+      const r = parseBashPrefix(cmd);
+      expect(cmd.slice(r.remainderStart)).toBe("kubectl delete namespace payments");
     });
   });
 });

@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Risk Gate: an explicit `kubectl --context`/`--namespace`/`-n` target
+  is now a resolver signal, upgrade-only, and the shipped kubectl
+  classifier pattern no longer loses a match to a flag between
+  `kubectl` and `delete`, without exponential backtracking on a long
+  flag run** (task `a7eb1a71`). Before this fix the Kube half of the
+  environment resolver (`kube_context_patterns`/`kube_namespace_patterns`)
+  only ever read the AMBIENT `~/.kube/config` current-context, so the
+  whole Kube signal only fired when the ambient kubeconfig happened to
+  already point at production; a second, independent defect compounded
+  it, since the shipped kubectl classifier pattern required `kubectl`
+  and `delete` adjacent, so a flag in between fell back to unclassified
+  entirely. `src/runtime/kubectl-target-parse.ts` (new) parses
+  `--context`/`--namespace`/`-n` (space, `=`, and, for `-n`, the
+  concatenated `-nVALUE` short-flag form) out of a `kubectl ...`
+  command, anchored at the command's own head token (including the
+  remainder after a leading `cd`/`VAR=value`/`git switch` prefix is
+  stripped) and stopping at a bare `--` end-of-flags marker, so a
+  same-named flag belonging to an unrelated program, a chained command,
+  or an exec'd program is never read as a kube signal.
+  `src/cli/policy/intercept.ts`'s `applyKubeTargetUpgrade` merges the
+  result into the resolver's `SignalInputs` UPGRADE-ONLY, mirroring the
+  existing branch-switch merge: command text can raise the resolved
+  environment toward production, never lower an already-resolved
+  ambient production. Review fix round 2 replaced an initial per-field
+  always-wins merge that measurably let an empty `--context=`, a value
+  smuggled past a `kubectl exec ... -- ...` separator, or a genuinely
+  different non-production `--context` downgrade an ambient-production
+  resolution to allow. The shipped kubectl classifier pattern
+  (`docs/examples/full-manifest.yaml` / `src/cli/init/templates.ts`) is
+  token-based and flag-tolerant between the two verbs without matching
+  `kubectl get`/`describe`; review fix round 2 also replaced an initial
+  flag-tolerant pattern shape that backtracked exponentially (measured
+  at multiple seconds on a 24 to 26 flag command) with a linear-time
+  form (measured well under 1ms at 40 flags), since this pattern ships
+  in every `harness init` manifest on a hot PreToolUse path. The
+  analogous `terraform destroy` pattern got the same flag-tolerance and
+  linear-time treatment for terraform's own `-chdir=DIR` global flag,
+  which sits in the identical position. See docs/risk-gate.md for the
+  conflict-priority rule, the full parsing scope, and a measured,
+  out-of-scope interaction this surfaced with the pre-existing "unknown
+  is not safe" rule (waived for this task; a read-only kubectl
+  classification floor is a separate follow-up decision).
 ### Added
 
 - **`harness doctor` detects trigger-boundary drift on shipped `bash_match`
