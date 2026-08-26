@@ -213,7 +213,7 @@ describe("runInterceptCli — kubectl explicit --context/--namespace resolver si
 // this test's manifest with the AC1/AC2 one and running `kubectl get
 // pods --context prod-eu-1` end to end DOES block via that unrelated
 // mechanism — reported as an open question, not fixed here.
-describe("classifyRisk — AC5: kubectl get stays unclassified under the flag-tolerant pattern", () => {
+describe("classifyRisk — AC2/AC5: kubectl classifier flag-tolerance", () => {
   const CTX: EnvelopeContext = {
     cwd: "/work/repo",
     git: { repo: "repo", branch: "feature/work", sha: "" },
@@ -230,6 +230,23 @@ describe("classifyRisk — AC5: kubectl get stays unclassified under the flag-to
     };
     return buildActionEnvelope(event, CTX);
   }
+
+  it("AC2: `kubectl --context=prod-eu-1 delete namespace payments` (leading flag) classifies high", () => {
+    // The classifier half of AC2: the old rigid `kubectl\s+delete\s+...`
+    // pattern required the two verbs adjacent, so a leading flag between
+    // them fell back to unclassified entirely — this is the discriminating
+    // assertion for that specific defect (independent of the resolver
+    // half / environment resolution, which the intercept-level AC2 test
+    // above covers, and independent of the "unknown is not safe"
+    // interaction below, since a classified `high` action satisfies
+    // `risk.severity_at_least` on its own merits either way).
+    const p = classifyRisk(
+      bashEnvelope("kubectl --context=prod-eu-1 delete namespace payments"),
+      [KUBECTL_CLASSIFIER],
+    );
+    expect(p.classified).toBe(true);
+    expect(p.severity).toBe("high");
+  });
 
   it("`kubectl get pods --context prod-eu-1` is unclassified", () => {
     const p = classifyRisk(bashEnvelope("kubectl get pods --context prod-eu-1"), [
