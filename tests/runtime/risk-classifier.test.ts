@@ -397,3 +397,69 @@ describe("classifyRisk — built-in read-only floor", () => {
     expect(p.severity).not.toBe("low");
   });
 });
+
+describe("classifyRisk — built-in kubectl read-only floor (task da823721)", () => {
+  it.each([
+    "kubectl get pods --context prod-eu-1",
+    "kubectl get pods",
+    "kubectl describe namespace payments --context prod-eu-1",
+    "kubectl logs my-pod --context prod-eu-1",
+    "kubectl top pod --context prod-eu-1",
+    "kubectl api-resources --context prod-eu-1",
+    "kubectl version --context prod-eu-1",
+    "kubectl cluster-info --context prod-eu-1",
+    "kubectl explain pod --context prod-eu-1",
+    "kubectl auth can-i get pods --context prod-eu-1",
+    "kubectl get all --context prod-eu-1",
+  ])("classifies the provably read-only kubectl command %j as low", (command) => {
+    // Orchestrator decision (task da823721, docs/risk-gate.md): without
+    // this floor, an already-production-resolved `kubectl get` stays
+    // unclassified and the pre-existing "unknown is not safe" rule
+    // makes a `risk.severity_at_least` policy deny it — the same class
+    // of false positive the general read-only floor above fixes for
+    // `git status` / `ls` / etc.
+    const p = classifyRisk(bashEnvelope(command), [SHELL]);
+    expect(p.classified).toBe(true);
+    expect(p.severity).toBe("low");
+    expect(p.categories).toEqual([]);
+    expect(p.reversible).toBe(true);
+    expect(p.confidence).toBe("high");
+    expect(p.reasons[0]).toMatch(/built-in: provably read-only kubectl verb/);
+  });
+
+  it.each([
+    "kubectl get secret --context prod-eu-1",
+    "kubectl get secrets --context prod-eu-1",
+    "kubectl get secret/my-secret --context prod-eu-1",
+    "kubectl get secret -o yaml --context prod-eu-1",
+    "kubectl describe secret my-secret --context prod-eu-1",
+    "kubectl get --raw /api/v1/namespaces/prod/secrets --context prod-eu-1",
+  ])("does NOT floor a secret-sensitive kubectl read: %j stays unclassified", (command) => {
+    // Decision (docs/risk-gate.md): a read that can materialize live
+    // Secret data stays fail-closed (approval-required) even though the
+    // verb itself (`get`/`describe`) is otherwise floored.
+    const p = classifyRisk(bashEnvelope(command), [SHELL]);
+    expect(p.classified).toBe(false);
+    expect(p.severity).not.toBe("low");
+  });
+
+  it("regression: `kubectl delete namespace payments` still classifies via the operator pattern, not the floor", () => {
+    const p = classifyRisk(bashEnvelope("kubectl delete namespace payments"), [SHELL]);
+    expect(p.classified).toBe(true);
+    expect(p.severity).toBe("medium");
+    expect(p.reasons[0]).not.toMatch(/built-in/);
+  });
+
+  it("does not floor a mutating kubectl subcommand outside the curated verb list", () => {
+    const p = classifyRisk(bashEnvelope("kubectl apply -f x.yaml"), [SHELL]);
+    expect(p.classified).toBe(false);
+  });
+
+  it("lets a dangerous tail win: a chained kubectl read-only head is not floored", () => {
+    // The chaining guard forfeits BOTH the general read-only floor and
+    // the kubectl floor for the whole string, so this classifies via
+    // the operator's `rm\s+-rf\s+/` pattern, not either built-in floor.
+    const p = classifyRisk(bashEnvelope("kubectl get pods && rm -rf /var"), [SHELL]);
+    expect(p.severity).toBe("critical");
+  });
+});

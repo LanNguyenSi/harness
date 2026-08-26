@@ -1999,3 +1999,41 @@ describe("pack hook pre-tool-use blocker: malformed-sections surfacing (task 823
     expect(decision.reason).not.toMatch(/malformed sections/);
   });
 });
+
+describe("pack hook pre-tool-use blocker — kubectl unaffected by the Risk Classifier's kubectl read-only floor (task da823721)", () => {
+  // Task da823721 added a NARROW kubectl read-only floor, but wired it
+  // ONLY into the Risk Classifier's built-in floor
+  // (`src/runtime/risk-classifier.ts`), never into the shared
+  // `isReadOnlyBashCommand` / `isReadOnlyBashPipeline` this
+  // understanding-gate PreToolUse blocker consumes (via
+  // `isReadOnlyBashPipeline`). Every kubectl invocation must therefore
+  // still require an approved Understanding Report here, exactly as
+  // before that task — a read-only-looking `kubectl get pods
+  // --context prod-eu-1` still blocks pending approval, the same as an
+  // unrecognized command would.
+  it.each([
+    "kubectl get pods --context prod-eu-1",
+    "kubectl get pods",
+    "kubectl auth can-i get pods",
+    "kubectl describe namespace payments --context prod-eu-1",
+  ])("still blocks %j without an approved Understanding Report", async (command) => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: "Bash",
+          tool_input: { command },
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir: path.join(tmp, "harness.generated"),
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(true);
+  });
+});

@@ -313,6 +313,283 @@ The same guarantees hold:
   reason, so a write hidden past the 16 KiB subject cap cannot slip
   through either.
 
+#### Kubectl read-only verb floor (decision record, task `da823721`)
+
+**Status: GO, shipped.** Superseded, prior status: a Risk Gate false
+positive, waived at task `a7eb1a71` (see below).
+
+**Context.** Task `a7eb1a71` made an explicit `kubectl --context` /
+`--namespace` / `-n` flag a resolver signal (see below). That surfaced a
+measured interaction: once a command like `kubectl get pods --context
+prod-eu-1` resolves `environment: production`, the pre-existing "unknown
+is not safe" rule (`risk.severity_at_least` matches ANY threshold on an
+unclassified action, see `evaluateWhen` in `src/runtime/when-eval.ts`)
+makes that read require approval too — exactly like `kubectl delete
+namespace payments --context prod-eu-1` does, even though `get` cannot
+mutate anything. `a7eb1a71`'s AC5 measured and waived this rather than
+fixing it; this task makes the fix decision.
+
+**Decision: GO**, with a floor narrower than the general read-only floor
+above, built from two ALLOWLISTS rather than a metacharacter denylist
+(round 3 redesign — see "Round 3: from metacharacter exclusions to
+allowlists" below for why). A curated set of kubectl read verbs — `get`,
+`describe`, `logs`, `top`, `api-resources`, `api-versions`, `version`,
+`cluster-info`, `explain`, and `auth can-i` (a permission CHECK, never
+the resource's own data) — floors to `low` only when BOTH allowlists
+hold: (1) every token after `kubectl` matches a plain-word shape
+(letters, digits, and `` _ . : / = , @ % + - ``; no quotes, backslashes,
+`$`, backticks, braces, globs, or any other shell-special character),
+and (2) every flag token is drawn from that verb's explicit read-flag
+allowlist (or the global-flag allowlist, legal before or after the
+verb: `--context`, `--namespace`/`-n`, `--request-timeout`, `-v`/`--v`,
+and `--all-namespaces`/`-A`; the first five consume a value. Accepting
+`-A` globally is a deliberate simplification: kubectl rejects it on
+`logs`/`top`, so those commands merely error at `low`). `cluster-info`
+accepts no positional: `cluster-info dump` prints cluster-wide pod logs
+and is refused, together with any future sub-subcommand. Each `*_VALUE`
+flag is assumed to be a pflag flag with an empty NoOptDefVal, i.e. it
+always consumes the next argv element; a future flag-list edit must
+check that property, otherwise the consumed token becomes a live flag
+kubectl would honour) — UNLESS, additionally, the resource argument mentions "secret" or
+"configmap" in any form (`get secret`, `get secrets`, `get
+secret/<name>`, `describe secret`, `-o yaml`/`-o json` on a secret, a
+comma-list like `get pods,secrets`; the same shapes for
+`configmap`/`configmaps`/the bare `cm` abbreviation), for `get`/
+`describe` only. `--raw` (an arbitrary, unclassifiable API path),
+`--filename`/`-k`/`--kustomize` (FILE- or kustomization-DIRECTORY-
+driven resource selection this module cannot read into; `-f` is
+allowlisted for `logs` only, where it means --follow, and is absent from
+`get`/`describe`, where it is the file selector), and
+`--server`/`-s`/`--kubeconfig`/`--token`/`--as`/`--as-group`/`--user`/
+`--cluster`/`--tls-server-name`/`--insecure-skip-tls-verify` (endpoint or
+identity redirection) are never members of any verb's flag allowlist, so
+each is refused by the SAME mechanism — an absent allowlist entry — not
+by a dedicated check per flag. An unresolved `$`-expansion (`$VAR`,
+`${VAR}`, `"$VAR"`) fails the token-shape allowlist directly, for the
+same reason: the resource-type argument is then not literally readable,
+so it cannot be proven safe. Any other kubectl subcommand — `apply`,
+`delete`, `patch`, `create`, `replace`, `scale`, `rollout`, `drain`,
+`cordon`, `taint`, `label`, `annotate`, `set`, `exec`, `cp`,
+`port-forward`, `proxy`, `edit`, `attach`, `debug`, `auth reconcile`,
+`config`, or anything this floor has not enumerated — is NOT on the verb
+allowlist and stays fail-closed (unknown is not safe), unchanged.
+Implementation: `isReadOnlyKubectlCommand` in
+`src/runtime/read-only-bash.ts`, wired into `classifyRisk`'s built-in
+floor block in `src/runtime/risk-classifier.ts` alongside (not merged
+with) the general read-only floor.
+
+**Round 3: from metacharacter exclusions to allowlists.** Round 1 shipped
+a narrow verb floor with a secrets/configmap substring exclusion; round 2
+added `--raw`, file/kustomize selection, and `$`-expansion exclusions on
+top of it. Round-2 review then found the same class of bug a third time —
+brace expansion (`kubectl get s{e..e}cret ... ` expands to `secret`
+before kubectl ever sees the argv), glob patterns (`get s*`, `get
+sec[r]et`), and endpoint redirection (`--server`/`-s`/`--kubeconfig`, pre-
+or post-verb) all floored end-to-end — because each round had patched one
+more shell-metacharacter bypass onto the same substring/decode-based
+exclusion instead of closing the class. The halt decision was to stop
+enumerating metacharacters and redesign to the two allowlists described
+above: a token-shape allowlist closes brace expansion, globs, quoting,
+and escaping in a single check (a quoted or escaped token simply never
+matches the plain-word pattern, which is also why the per-token
+`decodeShellWord` decoding round 1 added to the secret/configmap checks
+is no longer needed — those checks now only ever see raw tokens that
+already passed the shape check), and a flag allowlist closes endpoint
+redirection, `--raw`, and file/kustomize selection in one mechanism
+(omission from the allowlist) instead of three separate checks.
+
+**ConfigMap sub-decision.** ConfigMap data is a common credential store
+in practice (`.env`-shaped config, connection strings, and — while an
+anti-pattern — plaintext secrets are all routinely stored there instead
+of in a `Secret` object), so `get`/`describe configmap` gets the same
+fail-safe exclusion as `secret`, not just the built-in Kubernetes
+Secret kind.
+
+**File-driven selection and `$`-expansion, round 2 (review HIGH findings
+1 and 2).** Both were measured, end-to-end, to resolve ALLOW before this
+fix: `kubectl get -f manifest.yaml -o yaml --context prod-eu-1` and
+`kubectl get -k overlays/prod -o yaml --context prod-eu-1` bypassed the
+secrets/configmap exclusion because the manifest file or kustomization
+directory's contents are invisible to a string classifier; `kubectl get
+$KIND -o yaml --context prod-eu-1` bypassed it because the raw command
+text never contains the literal resource name the shell would substitute
+at execution time. Both close the same way as the rest of this module:
+fail closed rather than attempt to resolve the file or the variable.
+
+Two sub-decisions, made explicit because they were judgment calls, not
+mechanical:
+
+- **`kubectl get all` is NOT excluded, for kubectl's BUILT-IN resources.**
+  kubectl's built-in `all` resource-category alias covers only the
+  common workload/networking kinds (pods, services, deployments,
+  replicasets, statefulsets, jobs, cronjobs, and a handful of others) and
+  never `Secret` or `ConfigMap` — runnable check: `kubectl
+  api-resources --categories=all` lists every resource type kubectl
+  currently considers part of `all` on a given cluster (this repo has no
+  `kubectl` installed and no live cluster to run it against; this is the
+  command an operator can run to confirm the claim on their own
+  cluster, not a claim this task ran it). The caveat is CRDs: a Custom
+  Resource Definition can opt itself into the `all` category via its own
+  `spec.names.categories: [all]`, and nothing stops a CRD author from
+  naming a Secret-shaped custom resource that way — `get all` on a
+  cluster with such a CRD installed could return that CRD's data without
+  the "secret"/"configmap" substring ever appearing in the command text.
+  This floor accepts that as a known, unmitigated gap specific to
+  cluster-defined CRDs, not a Secret/ConfigMap exposure through
+  kubectl's own built-in resource set.
+- **`kubectl explain secret` IS floored**, even though the resource word
+  "secret" appears. `explain` prints the API SCHEMA for a kind (field
+  names and types), never a live object's data — there is no Secret to
+  read. The secrets exclusion is scoped to `get`/`describe` only (the two
+  verbs that can return an actual object), not to every verb that merely
+  names a resource kind.
+
+The secrets check itself is deliberately over-broad in the fail-safe
+direction: it matches "secret" as a case-insensitive substring anywhere
+in the command's (already token-shape-validated, so always raw and never
+quoted or escaped) tokens, so `kubectl get secretstores --context prod`
+(an unrelated CRD whose name happens to contain "secret") is also
+excluded from the floor and falls back to requiring approval; likewise
+any `!` in a value, so the common `--field-selector=status.phase!=Running`
+is not floored either (the token-shape allowlist refuses `!`). This is an
+accepted false positive — the detector over-matches "secret-shaped"
+resource names, in the safe direction: the constraint this decision must
+not violate is "a prod Secret read stays approval-gated," and the
+substring match can only ever REQUIRE more approval than a precise
+resource-type parse would (a convenience cost, occasionally requiring
+approval for a genuinely safe read), never less.
+
+**Blast radius, and why the floor is NOT in `isReadOnlyBashCommand` /
+`isReadOnlyBashPipeline`.** Those two functions are shared by three
+consumers, only one of which this task's floor is meant to change:
+
+1. The Risk Classifier's built-in floor (`risk-classifier.ts`) — the
+   consumer this decision targets. `kubectl` was never in
+   `isReadOnlyBashCommand`'s `classifyTokens` dispatch, so before this
+   task every kubectl invocation was simply unclassified there; nothing
+   downstream of that function changes for kubectl. The new floor is a
+   SEPARATE check (`isReadOnlyKubectlCommand`), consulted only from
+   `classifyRisk`'s own built-in-floor block.
+2. The understanding-gate PreToolUse blocker (`hook-pre-tool-use.ts` /
+   `hook-codex-pre-tool-use.ts`), via `isReadOnlyBashPipeline` — must
+   keep requiring an approved Understanding Report for EVERY kubectl
+   command, including a plain `kubectl get pods`, unchanged by this
+   task. Proven by a real end-to-end test (not just the classifier unit):
+   `tests/cli/pack-hook-pre-tool-use.test.ts`'s "kubectl unaffected by
+   the Risk Classifier's kubectl read-only floor" describe block asserts
+   `result.blocked === true` for `kubectl get pods --context prod-eu-1`,
+   bare `kubectl get pods`, `kubectl auth can-i get pods`, and `kubectl
+   describe namespace payments --context prod-eu-1`, with no report and
+   no approval on the ledger.
+3. The solution-acceptance write-guard
+   (`hook-solution-acceptance-writeguard.ts`), via `isReadOnlyBashCommand`
+   directly — its read-only fast path exists to recognize commands that
+   cannot write to the local filesystem (specifically: cannot write into
+   the harness-protected solution-verdict directory). A kubectl
+   invocation writes nothing to the local filesystem regardless of
+   whether it reads a Secret from the API server, so this consumer's own
+   semantics are orthogonal to the secrets question the Risk Classifier
+   floor exists to answer; wiring the kubectl floor there was considered
+   and rejected as the wrong question for that gate, not merely
+   redundant. Leaving `isReadOnlyBashCommand` untouched for kubectl means
+   this consumer is provably unaffected by construction (no new code
+   path reaches it) rather than by a behavioral proof, which is the
+   simpler and stronger guarantee.
+
+Given (2) and (3), folding the new floor into the shared
+`isReadOnlyBashCommand` would have widened the understanding-gate
+PreToolUse blocker (letting an unreported `kubectl get` through without
+an approval) as a side effect of a Risk Classifier decision — an
+unrequested, untested change to a different gate's fail-closed posture.
+Keeping the floor as its own function, consulted only from
+`risk-classifier.ts`, scopes the blast radius to exactly the gate this
+decision is about.
+
+**Fail-safe posture, restated:** every ambiguous shape (an unrecognized
+subcommand, an unrecognized flag anywhere — before or after the verb,
+including `--raw`, file/kustomize-driven resource selection, and
+endpoint/identity redirection, all of which are simply absent from the
+flag allowlists — any non-plain-word token, including an unresolved
+`$`-expansion, and mention of "secret" or "configmap") falls through to
+`false` — not floored, so "unknown is not safe" still applies and the
+action requires approval on a production-resolved session. The floor can
+only ever ALLOW something the "unknown is not safe" rule would otherwise
+have blocked; it cannot itself cause a block.
+
+**Residual risks, accepted:**
+
+- **`--as`/`--as-group` impersonation is refused, not floored, as of
+  round 3** — a behavior CHANGE from rounds 1-2, where a floored
+  `kubectl get pods --as some-other-user --context prod-eu-1` was still
+  a READ (it cannot mutate cluster state) but through a DIFFERENT RBAC
+  identity than the caller's own. Round 3 folded `--as`/`--as-group`
+  into the same never-allowlisted set as `--server`/`--kubeconfig` (see
+  "Round 3" above) because it is, structurally, the same identity-
+  redirection shape; the earlier rounds' acceptance of it as read-only
+  regardless of which RBAC identity performs the read is superseded, not
+  reaffirmed.
+- **`logs`/`describe` output may itself carry credentials** — a
+  container's stdout/stderr can log a token or connection string, and a
+  `describe`d object's annotations or event history can echo one back.
+  This is a consciously accepted, non-mutating exposure: the floor's
+  secret/configmap exclusion targets the RESOURCE TYPE being read (can
+  this verb return an object whose entire purpose is to hold
+  credentials), not every possible credential that could appear inside
+  the free-text output of an otherwise-ordinary resource read, which no
+  string classifier can enumerate.
+- **The secret/configmap exclusion is a two-KIND resource-TYPE denylist,
+  not a credential-content scan.** It excludes `Secret` and `ConfigMap`
+  objects by name; it says nothing about credentials that live inside a
+  DIFFERENT resource type's ordinary fields. A floored `kubectl get pods
+  -o yaml --context prod-eu-1` can return a Pod spec's plaintext `env:`
+  literals (as opposed to a `secretKeyRef`, which names a Secret but not
+  its value), and a floored `kubectl get application my-app -o yaml
+  --context prod-eu-1` (or `helmrelease`) can return a Flux
+  `HelmRelease`/Argo CD `Application` object whose `values:`/`spec:`
+  block embeds plaintext credentials by convention in some clusters, in
+  full. Both are accepted, for the same reason the two-KIND scope was
+  chosen over a full credential-content scan in round 1: a resource-TYPE
+  check is mechanical and provably complete over the two kinds it
+  targets, where a content scan over arbitrary YAML would be a
+  best-effort heuristic with its own false-negative surface. Mitigation
+  is out of this floor's scope: an operator who runs clusters with
+  credential-bearing CRDs (HelmRelease, Application, or a custom
+  resource with the same shape) should add an operator-defined
+  classifier pattern (`policy.when` / a custom risk rule, see the
+  Classifier reference above) naming those resource types explicitly,
+  the same way this decision's own two-KIND denylist was chosen instead
+  of trying to close every credential-bearing shape at once.
+
+**Verification.** `tests/runtime/read-only-bash.test.ts`'s "kubectl
+read-only floor" describe block unit-tests `isReadOnlyKubectlCommand`
+directly (floored / not-floored / edge cases / chaining / a 30-flag
+timing check; round 3 added dedicated blocks for brace expansion, glob
+patterns, endpoint/identity redirection, and unknown/unlisted flags, plus
+a per-verb flag-allowlist positive block), and separately pins that
+`isReadOnlyBashCommand` / `isReadOnlyBashPipeline` still classify every
+kubectl form `false`. `tests/runtime/risk-classifier.test.ts`'s
+"built-in kubectl read-only floor" describe block covers `classifyRisk`
+directly, including the secrets exclusion and the
+operator-classifier-still-wins case.
+`tests/runtime/intercept-cli-kube-context-flag.test.ts`'s "kubectl
+read-only floor end-to-end" describe block runs the real
+`runInterceptCli` policy-intercept path (not just the classifier) for
+both the allow case (`kubectl get pods --context prod-eu-1`) and the
+still-approval-gated cases (`kubectl get secret -o yaml --context
+prod-eu-1`; the file-driven-selection, `$`-expansion, and configmap
+cases from round 2; and, added in round 3, the brace-expansion and
+`--server` pre-/post-verb endpoint-redirection cases), and its earlier
+AC2/AC5 classifier-half tests were updated from "unclassified" to
+"floored to low" to match this decision.
+Negative control: removing the kubectl floor (or, individually, the
+secrets/configmap exclusion, the file-selection guard, the
+`$`-expansion guard, the token-shape allowlist, an entry from the flag
+allowlist, or the flag-allowlist enforcement itself) was applied and
+observed to fail exactly the tests named above, then restored — see the
+`[Unreleased]` CHANGELOG entry for task `da823721` and the named test
+blocks above (this file's own record of what was measured, rather than
+a pointer to a subagent report that does not live in this repository).
+
 ### Environment resolvers (`environments:`)
 
 *Status: parsed and validated (Phase 7 #1). Consumed by the Context
@@ -414,8 +691,10 @@ correctly resolves `environment: production` from an explicit
 `--context`, the PRE-EXISTING "unknown is not safe" rule (see
 `policy.when:` below) makes an unclassified `kubectl get` against that
 context require approval too, not only a classified-destructive action.
-Giving read-only kubectl verbs a classified floor is a separate,
-orchestrator-waived follow-up decision, not made here.
+Giving read-only kubectl verbs a classified floor was waived as a
+separate follow-up decision at this task; task `da823721` made that
+decision (GO, a narrow secrets-excluding floor) — see "Kubectl read-only
+verb floor (decision record, task `da823721`)" above.
 
 The kubectl classifier pattern itself is also token-based and
 flag-tolerant between the two verbs (same task), consuming zero or more

@@ -637,6 +637,25 @@ const VERSION_OR_HELP_FLAGS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * True when `trimmed` contains a shell chaining (`;`, `&`, `|`),
+ * redirection (`<`, `>`), or command-substitution (backtick, `$(`)
+ * metacharacter that could hide a write behind an otherwise-provable
+ * read. Shared by `isReadOnlyBashCommand` and `isReadOnlyKubectlCommand`
+ * below (extracted, task da823721, to keep their identical preamble
+ * from being flagged as new copy-paste by the duplication gate). NOT
+ * reused by `isReadOnlyBashPipeline`, which deliberately admits a bare
+ * `|` (see its own doc comment) and so needs a narrower reject set.
+ */
+function hasUnsafeShellMetachar(trimmed: string): boolean {
+  return (
+    /[;&|<>]/.test(trimmed) ||
+    trimmed.includes("\n") ||
+    trimmed.includes("`") ||
+    trimmed.includes("$(")
+  );
+}
+
+/**
  * Classify a Bash command string. `true` means the command is
  * provably read-only and the understanding-gate can allow it without
  * an approved report. `false` means the command is either a write or
@@ -658,10 +677,7 @@ export function isReadOnlyBashCommand(command: string): boolean {
   // string, so it also covers any residual command a runner
   // (`env` / `command`) wraps: those are classified from the same
   // token slice, never from a re-read of the shell.
-  if (/[;&|<>]/.test(trimmed)) return false;
-  if (trimmed.includes("\n")) return false;
-  if (trimmed.includes("`")) return false;
-  if (trimmed.includes("$(")) return false;
+  if (hasUnsafeShellMetachar(trimmed)) return false;
 
   return classifyTokens(trimmed.split(/\s+/));
 }
@@ -707,6 +723,287 @@ export function isReadOnlyBashPipeline(command: string): boolean {
     if (s === "") return false;
     return isReadOnlyBashCommand(s);
   });
+}
+
+// Kubectl read-only VERB floor — used ONLY by the Risk Classifier's
+// built-in floor (`risk-classifier.ts`), never by `isReadOnlyBashCommand`
+// / `isReadOnlyBashPipeline` above. Task da823721 (blast-radius decision,
+// verb list, secrets/configmap exclusion, and the fail-safe rationale
+// for each: all recorded in docs/risk-gate.md's "Kubectl read-only verb
+// floor" section — this is the single source of truth for the scope,
+// keep it there rather than duplicating it here).
+//
+// Design: two ALLOWLISTS, not a metacharacter denylist. Round 1 and
+// round 2 of this task each patched one more shell-metacharacter
+// bypass onto a substring/decode-based exclusion (`$`-expansion,
+// quoting, escaping); round-2 review then found brace expansion
+// (`s{e..e}cret`), glob patterns (`s*`, `sec[r]et`), and endpoint
+// redirection (`--server`/`-s`/`--kubeconfig`) still slipping through,
+// because the fix kept adding exclusions for the metacharacter of the
+// week instead of closing the class. The halt decision from that round
+// was to stop enumerating metacharacters and redesign to allowlists:
+// (1) every token after `kubectl` must match a plain-word shape — no
+// quotes, backslashes, `$`, backticks, braces, globs, or any other
+// shell-special character survives that check, which is what actually
+// closes the brace/glob/quote/escape class at once instead of one
+// pattern at a time; (2) every flag token must be an explicitly named,
+// known-read flag for its verb (or a known global flag) — which is
+// what closes the endpoint-redirection class (`--server`, `-s`,
+// `--kubeconfig`, `--token`, `--as`, ... are simply never allowlisted,
+// pre- or post-verb) and the file/kustomize-driven resource-selection
+// class (`-f`/`--filename`/`-k`/`--kustomize` are not in any verb's
+// allowlist) and the `--raw` arbitrary-endpoint class (`--raw` is not
+// in any verb's allowlist either) in the same pass. Invariant:
+// `isReadOnlyKubectlCommand` returns `true` only for a curated read
+// verb, every token argv-shaped as a plain word, every flag drawn from
+// that verb's explicit allowlist, and no secret/configmap resource
+// mention; every other shape fails closed to `false`.
+const KUBECTL_READ_ONLY_VERBS: ReadonlySet<string> = new Set([
+  "get", "describe", "logs", "top",
+  "api-resources", "api-versions", "version", "cluster-info", "explain",
+]);
+
+// Verbs whose resource argument can materialize live Secret or
+// ConfigMap data.
+const KUBECTL_SENSITIVE_RESOURCE_VERBS: ReadonlySet<string> = new Set(["get", "describe"]);
+
+// Token shape allowlist. Every token after `kubectl` must match this:
+// letters, digits, and `_ . : / = , @ % + -`. That excludes quotes,
+// backslashes, `$`, backticks, `{`/`}` (brace expansion), `*`/`?`/`[`/`]`
+// (globs), `~`, `!`, `#`, `&`, `;`, `|`, `<`, `>`, `(`, `)`, and spaces
+// (embedded via quoting). A token that fails this never reaches the
+// verb or flag checks below: fail-closed on shape alone. This also
+// makes decoding quoted/escaped forms of "secret" or "configmap"
+// unnecessary — a quoted or escaped token simply never matches this
+// pattern in the first place, so the resource-mention checks below only
+// ever need to look at the raw token.
+const KUBECTL_PLAIN_WORD_PATTERN = /^[A-Za-z0-9_.:/=,@%+-]+$/;
+
+// Global flags, allowed before OR after the verb. Only the ones in
+// `KUBECTL_GLOBAL_VALUE_FLAGS` consume a following token as their value
+// (in the `--flag value` form; `--flag=value` never consumes a
+// following token). Deliberately excludes every flag that names an
+// alternate endpoint or identity — `--server`, `-s`, `--kubeconfig`,
+// `--token`, `--as`, `--as-group`, `--user`, `--cluster`,
+// `--tls-server-name`, `--insecure-skip-tls-verify` — so none of them
+// can ever float credentials or requests to a caller-chosen host
+// through this floor, no matter whether they appear before or after
+// the verb.
+const KUBECTL_GLOBAL_ALLOWED_FLAGS: ReadonlySet<string> = new Set([
+  "--context", "--namespace", "-n", "--request-timeout", "-v", "--v",
+  "--all-namespaces", "-A",
+]);
+const KUBECTL_GLOBAL_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "--context", "--namespace", "-n", "--request-timeout", "-v", "--v",
+]);
+
+// Per-verb read-flag allowlists. `*_VALUE` is the subset that consumes
+// a following token as its value in the `--flag value` form; every
+// other allowed flag is boolean (never consumes a following token).
+// `--raw` (arbitrary API server path) and the file/kustomize-driven
+// resource selectors `--filename`/`-k`/`--kustomize` (this module
+// cannot see what a manifest file or kustomization directory names, so
+// it cannot prove the selected resource is not a Secret or ConfigMap)
+// are deliberately absent from every verb's allowlist below — that
+// omission is the enforcement mechanism, not a separate check. `-f` is
+// allowlisted for `logs` ONLY, where it means --follow; on `get` and
+// `describe` it is the file selector and is deliberately absent.
+// Every `*_VALUE` member must be a pflag flag with an empty NoOptDefVal
+// (it always consumes the next argv element): if upstream ever turns
+// one of them into a boolean-with-default, the following token stops
+// being consumed by kubectl and must be re-validated here.
+const KUBECTL_GET_ALLOWED_FLAGS: ReadonlySet<string> = new Set([
+  "-o", "--output", "-l", "--selector", "--field-selector", "-w", "--watch",
+  "--watch-only", "--show-labels", "--no-headers", "--sort-by", "--show-kind",
+  "--label-columns", "-L", "--chunk-size", "--ignore-not-found",
+]);
+const KUBECTL_GET_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "-o", "--output", "-l", "--selector", "--field-selector", "--sort-by",
+  "--label-columns", "-L", "--chunk-size",
+]);
+
+const KUBECTL_DESCRIBE_ALLOWED_FLAGS: ReadonlySet<string> = new Set([
+  "-l", "--selector", "--show-events",
+]);
+const KUBECTL_DESCRIBE_VALUE_FLAGS: ReadonlySet<string> = new Set(["-l", "--selector"]);
+
+const KUBECTL_LOGS_ALLOWED_FLAGS: ReadonlySet<string> = new Set([
+  "-f", "--follow", "-c", "--container", "--all-containers", "--tail", "--since",
+  "--since-time", "--timestamps", "-p", "--previous", "--limit-bytes", "--prefix",
+  "-l", "--selector", "--max-log-requests",
+]);
+const KUBECTL_LOGS_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "-c", "--container", "--tail", "--since", "--since-time", "--limit-bytes",
+  "-l", "--selector", "--max-log-requests",
+]);
+
+const KUBECTL_TOP_ALLOWED_FLAGS: ReadonlySet<string> = new Set([
+  "--containers", "--sort-by", "-l", "--selector", "--no-headers",
+  "--use-protocol-buffers",
+]);
+const KUBECTL_TOP_VALUE_FLAGS: ReadonlySet<string> = new Set(["--sort-by", "-l", "--selector"]);
+
+// Shared by the informational verbs: api-resources, api-versions,
+// version, cluster-info, explain, and `auth can-i`.
+const KUBECTL_INFO_ALLOWED_FLAGS: ReadonlySet<string> = new Set([
+  "-o", "--output", "--namespaced", "--verbs", "--api-group", "--sort-by",
+  "--recursive", "--list", "-A", "--all-namespaces", "--client", "--short",
+]);
+const KUBECTL_INFO_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "-o", "--output", "--verbs", "--api-group", "--sort-by",
+]);
+
+/** True when any raw token mentions "secret" (case-insensitive substring). */
+function kubectlArgMentionsSecret(tokens: readonly string[]): boolean {
+  return tokens.some((t) => t.toLowerCase().includes("secret"));
+}
+
+/**
+ * True when any raw token mentions "configmap", or is (or contains, as
+ * one comma-separated resource-list segment) the bare abbreviation
+ * `cm` — `get cm`, `get cm/my-map`, `get pods,cm`, `get cm,pods` are
+ * all caught. ConfigMap data is a common credential store (see
+ * docs/risk-gate.md), so it gets the same fail-safe exclusion as
+ * Secrets. The `cm` check is segment-based rather than a bare substring
+ * match so it does not fire on an unrelated word that merely starts or
+ * ends with "cm" (`cmd`, `cmagent`).
+ */
+function kubectlArgMentionsConfigMap(tokens: readonly string[]): boolean {
+  return tokens.some((t) => {
+    const lower = t.toLowerCase();
+    if (lower.includes("configmap")) return true;
+    return lower.split(",").some((seg) => seg === "cm" || seg.startsWith("cm/"));
+  });
+}
+
+/**
+ * Kubectl read-only floor for the Risk Classifier ONLY — see the module
+ * doc above this constant block for scope and the blast-radius
+ * decision. `true` means every token after `kubectl` is argv-shaped as
+ * a plain word, a curated read verb was invoked, every flag is drawn
+ * from that verb's (or the global) allowlist, and — for `get`/
+ * `describe` — no token mentions a Secret or ConfigMap resource, with
+ * no shell chaining, redirection, or substitution anywhere in the
+ * command.
+ */
+export function isReadOnlyKubectlCommand(command: string): boolean {
+  const trimmed = command.trim();
+  if (trimmed === "") return false;
+  if (hasUnsafeShellMetachar(trimmed)) return false;
+
+  const tokens = trimmed.split(/\s+/);
+  if (tokens[0] !== "kubectl") return false;
+
+  const rest = tokens.slice(1);
+
+  // Token shape allowlist: every token after `kubectl` must be a plain
+  // word (see the constant doc above). Closes brace expansion, globs,
+  // quoting, and escaping in one check, before any verb or flag logic
+  // runs.
+  if (rest.some((t) => !KUBECTL_PLAIN_WORD_PATTERN.test(t))) return false;
+
+  // Walk any leading global flags to find the verb. An unrecognized
+  // flag here fails closed immediately — a token starting with `-`
+  // can never itself be the verb.
+  let idx = 0;
+  while (idx < rest.length) {
+    const t = rest[idx];
+    if (t === undefined || !t.startsWith("-")) break;
+    const eq = t.indexOf("=");
+    const flagName = eq === -1 ? t : t.slice(0, eq);
+    if (!KUBECTL_GLOBAL_ALLOWED_FLAGS.has(flagName)) return false;
+    idx += 1;
+    if (eq === -1 && KUBECTL_GLOBAL_VALUE_FLAGS.has(flagName)) {
+      if (idx >= rest.length) return false; // missing value: fail closed
+      idx += 1;
+    }
+  }
+
+  const sub = rest[idx];
+  if (sub === undefined) return false; // bare `kubectl` or only global flags
+  idx += 1;
+
+  let verbAllowedFlags: ReadonlySet<string>;
+  let verbValueFlags: ReadonlySet<string>;
+  // `auth can-i` is a permission CHECK, never the resource's own data,
+  // so it is deliberately excluded from `KUBECTL_SENSITIVE_RESOURCE_VERBS`
+  // (that Set only ever names `get`/`describe`) and this lookup returns
+  // `false` for it without a separate branch.
+  const sensitiveVerb = KUBECTL_SENSITIVE_RESOURCE_VERBS.has(sub);
+
+  if (sub === "auth") {
+    if (rest[idx] !== "can-i") return false;
+    idx += 1;
+    verbAllowedFlags = KUBECTL_INFO_ALLOWED_FLAGS;
+    verbValueFlags = KUBECTL_INFO_VALUE_FLAGS;
+  } else if (!KUBECTL_READ_ONLY_VERBS.has(sub)) {
+    return false;
+  } else {
+    switch (sub) {
+      case "get":
+        verbAllowedFlags = KUBECTL_GET_ALLOWED_FLAGS;
+        verbValueFlags = KUBECTL_GET_VALUE_FLAGS;
+        break;
+      case "describe":
+        verbAllowedFlags = KUBECTL_DESCRIBE_ALLOWED_FLAGS;
+        verbValueFlags = KUBECTL_DESCRIBE_VALUE_FLAGS;
+        break;
+      case "logs":
+        verbAllowedFlags = KUBECTL_LOGS_ALLOWED_FLAGS;
+        verbValueFlags = KUBECTL_LOGS_VALUE_FLAGS;
+        break;
+      case "top":
+        verbAllowedFlags = KUBECTL_TOP_ALLOWED_FLAGS;
+        verbValueFlags = KUBECTL_TOP_VALUE_FLAGS;
+        break;
+      default: // api-resources, api-versions, version, cluster-info, explain
+        verbAllowedFlags = KUBECTL_INFO_ALLOWED_FLAGS;
+        verbValueFlags = KUBECTL_INFO_VALUE_FLAGS;
+    }
+  }
+
+  const remainder = rest.slice(idx);
+
+  // Validate every remaining flag token against the combined global +
+  // per-verb allowlist (global flags are legal both before and after
+  // the verb). Positional tokens (resource names, selector values
+  // already consumed as a flag's value) are not re-validated here —
+  // they were already checked against the plain-word pattern above.
+  for (let i = 0; i < remainder.length; i++) {
+    const t = remainder[i];
+    if (t === undefined) continue;
+    if (!t.startsWith("-")) {
+      // `cluster-info` takes no positional: `cluster-info dump` prints
+      // cluster-wide pod logs and is refused (fail-safe), as is any
+      // future sub-subcommand. Every other verb's positionals were
+      // already shape-checked above.
+      if (sub === "cluster-info") return false;
+      continue;
+    }
+    const eq = t.indexOf("=");
+    const flagName = eq === -1 ? t : t.slice(0, eq);
+    const isGlobal = KUBECTL_GLOBAL_ALLOWED_FLAGS.has(flagName);
+    const isVerbFlag = verbAllowedFlags.has(flagName);
+    if (!isGlobal && !isVerbFlag) return false;
+    if (eq === -1) {
+      const takesValue =
+        (isGlobal && KUBECTL_GLOBAL_VALUE_FLAGS.has(flagName)) ||
+        (isVerbFlag && verbValueFlags.has(flagName));
+      if (takesValue) {
+        i += 1;
+        if (i >= remainder.length) return false; // missing value: fail closed
+      }
+    }
+  }
+
+  if (
+    sensitiveVerb &&
+    (kubectlArgMentionsSecret(remainder) || kubectlArgMentionsConfigMap(remainder))
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
 /**
