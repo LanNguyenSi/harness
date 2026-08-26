@@ -315,6 +315,31 @@ export interface TemplateDriftSection {
 }
 
 /**
+ * Trigger-boundary drift (task 037cfb7c, follow-up to adf037c1):
+ * shipped-by-name `bash_match` triggers (hook-level `hooks[].bash_match`
+ * or policy-level `policies[].trigger.bash_match`) missing a boundary
+ * alternative the template has, or missing a boundary group entirely.
+ * Rule and rationale live on `checkTriggerBoundaryDrift` in
+ * `validate/checks.ts`; the measured incident that motivated this check
+ * is in CHANGELOG.md's [Unreleased] entry for task 037cfb7c. Shape
+ * mirrors `TemplateDriftSection` immediately above: every `error`
+ * diagnostic rolls into `errorCount`, every `warning` diagnostic (none
+ * emitted today; the field exists so a future non-error diagnostic from
+ * `checkTriggerBoundaryDrift` surfaces here instead of being silently
+ * dropped by `buildTriggerBoundaryDrift`) rolls into `warningCount`.
+ * Always present; both arrays empty when every shipped-named trigger's
+ * boundary covers the template's (or the manifest has none of those
+ * triggers, or every drift is acknowledged via
+ * doctor.ignore_template_drift).
+ */
+export interface TriggerBoundaryDriftSection {
+  /** Stale-boundary bash_match triggers, hook- or policy-level (each → errorCount). */
+  errors: string[];
+  /** Reserved for a future non-error diagnostic shape (each → warningCount); empty today. */
+  warnings: string[];
+}
+
+/**
  * Hook-budget-vs-ledger-timeout margin (task d20a7e0c, follow-up to
  * f1aea826/7bf47554): blocking, ledger-consulting hooks (both directly
  * declared `harness policy intercept` hooks and enabled policy-pack
@@ -387,6 +412,13 @@ export interface DoctorReport {
    * via a valid doctor.ignore_template_drift entry).
    */
   templateDrift: TemplateDriftSection;
+  /**
+   * Trigger-boundary drift (task 037cfb7c). Always present; `errors`
+   * empty when every shipped-named `bash_match` trigger's boundary
+   * matches the template (or every drift is acknowledged via
+   * doctor.ignore_template_drift).
+   */
+  triggerBoundaryDrift: TriggerBoundaryDriftSection;
   /**
    * Hook-budget-vs-ledger-timeout margin (task d20a7e0c). Always
    * present; `errors` empty when every blocking, ledger-consulting hook
