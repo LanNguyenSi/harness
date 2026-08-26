@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.49.0] - 2026-08-26
+
 ### Fixed
 
 - **Risk Gate: an explicit `kubectl --context`/`--namespace`/`-n` target
