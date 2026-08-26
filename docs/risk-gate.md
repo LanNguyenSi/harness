@@ -85,6 +85,11 @@ risk:
           severity: critical
 ```
 
+(Shown here in its simplest form for readability; the actual shipped
+`docs/examples/full-manifest.yaml` / `harness init --template full`
+pattern is the flag-tolerant, linear-time form covered later in this
+document under "Environment resolvers", not this literal string.)
+
 Each `patterns[]` entry maps a regular expression to a set of
 `categories` and a `severity`. The regex is validated at parse time;
 an unparseable pattern is a `harness validate` error.
@@ -389,39 +394,20 @@ the false-positive-class rationale).
 
 **The kube signal is not only the ambient `~/.kube/config` either**
 (task `a7eb1a71`). An explicit `--context`, `--namespace`, or `-n` flag
-named directly in a `kubectl ...` Bash command, the usual, explicit way
-of addressing a specific cluster, is parsed out of the command
-(`--flag value`, `--flag=value`, and, for `-n` only, the concatenated
-`-nVALUE` pflag short-flag form too) and merged into the resolver's
-kube inputs. **CONFLICT PRIORITY, per field: the merge is UPGRADE-ONLY,
-mirroring the existing branch-switch merge above.** An explicit flag can
-raise the resolved environment toward production (an ambient non-prod
-or unknown kube state, plus a production-looking `--context`, resolves
-production), but command text can never LOWER an already-resolved
-ambient production, the same asymmetric rule that protects a
-production branch from a same-command branch switch. A fix round 1
-shape merged the flag as a straight per-field replacement instead;
-measured, that let an empty `--context=`, a value smuggled past a
-`kubectl exec ... -- ...` separator, or a genuinely different
-non-production `--context` all downgrade an ambient-production
-resolution to allow, which the upgrade-only merge and two parser-level
-fixes (a blank flag value is treated as absent, and scanning stops at a
-bare `--`) now both close. This parsing is deliberately narrow (the
-task's own risk note: too-broad parsing could collect a same-named flag
-from a foreign context): the head test recognizes only a `kubectl`
-invocation, whether that is the command's own first token or the first
-token of the remainder after `src/runtime/bash-prefix-parse.ts` strips
-a leading `cd <path> &&` / `VAR=value` / `git switch <branch> &&`
-prefix (so `cd /tmp && kubectl ... --context x` is covered, but a
-`sudo`/`time`/`env` wrapper, a kubectl that is not the first chained
-segment, or a piped kubectl are not); flags are read only from that
-invocation's own first shell segment (up to the first unquoted `&&`,
-`||`, `;`, `|`, `&`, or newline, and stopping at a bare `--`), so a
-`--context` flag belonging to an unrelated program, a second chained
-command, or an exec'd program past `--`, is never read as a kube
-signal. See `src/runtime/kubectl-target-parse.ts` for the parser and
-`src/cli/policy/intercept.ts`'s `applyKubeTargetUpgrade` for the full
-rationale.
+named directly in a `kubectl ...` Bash command is parsed out of the
+command (`--flag value`, `--flag=value`, and, for `-n` only, the
+concatenated `-nVALUE` pflag short-flag form too) and merged into the
+resolver's kube inputs. **CONFLICT PRIORITY: the merge is UPGRADE-ONLY,
+per field, mirroring the existing branch-switch merge above** (command
+text can raise the resolved environment toward production, never lower
+an already-resolved ambient production). The head test recognizes only
+a `kubectl` invocation, its own first token or the first token of the
+remainder after `src/runtime/bash-prefix-parse.ts` strips a leading
+`cd`/`VAR=value`/`git switch` prefix, and reads flags only from that
+invocation's own first shell segment, stopping at a bare `--`. See
+`src/runtime/kubectl-target-parse.ts`'s own module doc for the full
+scope and known-unhandled-shapes list, and CHANGELOG.md's
+`[Unreleased]` entry for the measured downgrade this fixes.
 
 One measured, out-of-scope interaction this surfaced: once this merge
 correctly resolves `environment: production` from an explicit
@@ -432,24 +418,15 @@ Giving read-only kubectl verbs a classified floor is a separate,
 orchestrator-waived follow-up decision, not made here.
 
 The kubectl classifier pattern itself is also token-based and
-flag-tolerant between the two verbs (same task): the shipped pattern
-used to require `kubectl` and `delete` adjacent, so a flag in between
-(`kubectl --context=prod-eu-1 delete namespace payments`) fell back to
-unclassified entirely, even though the very same command's trailing-flag
-form already classified fine. Fix round 2 (review HIGH finding 1): an
-initial flag-tolerant pattern used nested, overlapping optional groups
-(an alternation inside a repeated group) that backtracks exponentially
-in the number of flag tokens, measured at multiple SECONDS on a
-real-looking 24 to 26 flag command via the live `harness policy
-intercept` path, a manifest default that ships in every `harness init`
-output on a hot PreToolUse path. The shipped pattern now consumes zero
-or more `-`/`--`-prefixed flag tokens with at most one, unambiguous,
-non-flag value token each, linear in command length (measured well
-under 1ms at 40 flags), while still requiring the literal `delete` verb
-so `kubectl get`/`describe` never match, flagged or not. `terraform
-destroy` got the identical treatment for terraform's own `-chdir=DIR`
-global flag, which occupies the same position between the tool name and
-its subcommand.
+flag-tolerant between the two verbs (same task), consuming zero or more
+`-`/`--`-prefixed flag tokens with at most one, unambiguous, non-flag
+value token each, linear in command length, while still requiring the
+literal `delete` verb so `kubectl get`/`describe` never match, flagged
+or not. `terraform destroy` got the identical treatment for terraform's
+own `-chdir=DIR` global flag, which occupies the same position between
+the tool name and its subcommand. See CHANGELOG.md's `[Unreleased]`
+entry for the exponential-backtracking defect this replaced and its
+measured timings.
 
 `kube_context_patterns` are operator-authored regexes compiled at
 resolution time. As with `risk.classifiers[].patterns`, harness does

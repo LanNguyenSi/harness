@@ -299,5 +299,17 @@ describe("parseBashPrefix", () => {
       expect(a.slice(parseBashPrefix(a).remainderStart)).toBe("kubectl delete namespace payments");
       expect(b.slice(parseBashPrefix(b).remainderStart)).toBe("kubectl delete namespace payments");
     });
+
+    it("points right after a consumed cd prefix with a quoted path", () => {
+      const cmd = 'cd "/tmp/risk gate" && kubectl delete namespace payments';
+      const r = parseBashPrefix(cmd);
+      expect(cmd.slice(r.remainderStart)).toBe("kubectl delete namespace payments");
+    });
+
+    it("points right after a consumed git switch prefix", () => {
+      const cmd = "git switch main && kubectl delete namespace payments";
+      const r = parseBashPrefix(cmd);
+      expect(cmd.slice(r.remainderStart)).toBe("kubectl delete namespace payments");
+    });
   });
 });

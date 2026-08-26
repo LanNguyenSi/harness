@@ -319,6 +319,21 @@ describe("runInterceptCli - kubectl target behind a cd / inline-env prefix (revi
   });
 });
 
+// Review item 6 (round 3): the `--` end-of-flags stop is the ONLY thing
+// preventing a false upgrade here (there is no ambient signal to fall
+// back on, unlike the downgrade block above). Without it, the exec'd
+// program's own --context would be read as kubectl's, wrongly resolving
+// production and requiring approval for an ordinary exec.
+describe("runInterceptCli - the -- stop is the only protection against a false upgrade (review, fix round 3)", () => {
+  it("kubectl exec -it pod -- myapp --context prod-eu-1 stays non-production", async () => {
+    const { result, output } = await intercept(
+      "kubectl exec -it pod -- myapp --context prod-eu-1",
+    );
+    expect(result.blocked).toBe(false);
+    expect(output()).toBe("");
+  });
+});
+
 // AC5's classifier half, isolated from the policy engine: `kubectl get
 // pods --context prod-eu-1` must stay unclassified under the new
 // flag-tolerant pattern (no `delete` literal to anchor on).

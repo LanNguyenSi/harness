@@ -1,24 +1,12 @@
 // Kubectl explicit-target parser, Risk Gate resolver merge (task
 // a7eb1a71).
 //
-// Before this module, the Kube half of the Risk Gate's environment
-// resolver (`kube_context_patterns` / `kube_namespace_patterns`, see
-// `kube-context.ts`) only ever saw the AMBIENT `~/.kube/config`
-// `current-context`. An explicit `--context`/`--namespace`/`-n` flag
-// named directly in the Bash command, the usual, explicit way an
-// operator or agent addresses a specific cluster, was invisible: the
-// resolver could not tell `kubectl delete namespace payments
-// --context prod-eu-1` from a `kubectl` call with no `--context` at
-// all, so the whole Kube signal only fired when the ambient kubeconfig
-// happened to already point at production.
-//
-// This parser extracts that explicit target from a `kubectl ...`
-// command string so `src/cli/policy/intercept.ts` can merge it into the
-// resolver's `SignalInputs`. See that call site's own comment for the
-// merge rule: the merge is UPGRADE-ONLY (command text can raise the
-// resolved environment toward production, never lower an
-// already-resolved production), the same asymmetric shape the
-// branch-switch merge already uses.
+// Extracts an explicit `--context`/`--namespace`/`-n` target from a
+// `kubectl ...` command string so `src/cli/policy/intercept.ts` can
+// merge it into the resolver's `SignalInputs`, UPGRADE-ONLY (see that
+// call site's `applyKubeTargetUpgrade` for the merge rule). See
+// CHANGELOG.md's `[Unreleased]` entry for the measured defects this
+// fixes and the review round history.
 //
 // SCOPE, deliberately narrow (task risk note: too-broad parsing could
 // collect values from a foreign context):
@@ -32,43 +20,37 @@
 //      passes the remainder after `parseBashPrefix` consumed one) so a
 //      wrapped invocation like `cd /tmp && kubectl ... --context x` or
 //      `KUBECONFIG=/tmp/k kubectl ... --context x` is still covered.
-//      Unhandled on either side of that split, noted so a future change
-//      does not have to rediscover the gap: a `sudo`/`time`/`env`
-//      wrapper immediately before `kubectl` (parseBashPrefix does not
-//      recognize those prefixes either); a kubectl invocation that is
-//      not the FIRST segment of a chained command (`echo hi && kubectl
-//      ...`); and a piped kubectl (`foo | kubectl ...`, where kubectl is
-//      not the command head at all).
+//      Known unhandled shapes, listed so a future change does not have
+//      to rediscover them: a `sudo`/`time`/`env` wrapper immediately
+//      before `kubectl` (`parseBashPrefix` does not recognize those
+//      prefixes either); a kubectl invocation that is not the FIRST
+//      segment of a chained command (`echo hi && kubectl ...`); a piped
+//      kubectl (`foo | kubectl ...`, where kubectl is not the command
+//      head at all); an unquoted shell variable as a flag value
+//      (`--context $PROD` reads the literal text `$PROD`, never the
+//      variable's expanded value, so it practically never matches a
+//      real `kube_context_patterns` entry, the same "not evaluated"
+//      stance `bash-prefix-parse.ts` takes for `$VAR`/`${VAR}`); and
+//      backslash-escaped whitespace inside an unquoted value (`prod\
+//      eu` splits into two tokens at the escaped space, same as this
+//      runtime's other narrow parsers, none of which model shell
+//      escape sequences).
 //   2. Once the head is confirmed to be `kubectl`, flags are read only
 //      from the FIRST shell segment of the command, up to (not
 //      including) the first unquoted `&&`, `||`, `;`, `|`, `&`, or
 //      newline, AND stopping at a bare `--` token (the POSIX
-//      end-of-flags marker: `kubectl exec -it pod -- myapp --context
-//      staging-1` must not read the exec'd program's own `--context` as
-//      kubectl's). A `--context` flag that belongs to a SECOND, chained
-//      command after the kubectl invocation, or that appears after `--`,
-//      is never read as part of it.
+//      end-of-flags marker).
 //   3. Only `--context`, `--namespace`, and `-n` are recognized. The two
 //      long flags accept `--flag value` and `--flag=value`. `-n`
 //      additionally accepts the concatenated short-flag form `-nVALUE`
-//      (pflag, kubectl's own flag library, treats a value-taking short
-//      flag's remaining characters as its value, the same way `-oJSON`
-//      means `-o JSON`), on top of `-n value` and `-n=value`. Any other
-//      flag is ignored.
-//   4. When a flag repeats, the LAST occurrence wins, the same
-//      last-write-wins rule a real `getopt`-style parser (and kubectl
-//      itself) applies, and the same rule `consumeInlineEnv` already
-//      uses for repeated `VAR=value` prefixes.
+//      (see the narrowing note at its own call site) and `-n=value`.
+//      Any other flag is ignored.
+//   4. When a flag repeats, the LAST occurrence wins.
 //   5. A flag with an EMPTY or whitespace-only value (`--context=`,
 //      `--context ""`) is treated as though the flag were absent, never
-//      as the literal empty string: an empty `SignalInputs.kubeContext`
-//      means "no context" to the resolver (`environment-resolver.ts`
-//      only evaluates `kube_context_patterns` when the field is
-//      non-empty), so returning `""` here would let a bare `--context=`
-//      erase a real ambient production signal instead of leaving it
-//      alone. Fix round 2 (review HIGH finding 2): measured, this
-//      previously let `kubectl delete namespace payments --context=`
-//      downgrade an ambient-production resolution to allow.
+//      as the literal empty string (an empty `SignalInputs.kubeContext`
+//      means "no context" to the resolver, so returning `""` here would
+//      erase a real ambient signal instead of leaving it alone).
 //
 // Never throws; a command that is not a `kubectl` invocation (by the
 // narrow head test above) returns `{ context: null, namespace: null }`.
@@ -205,7 +187,17 @@ export function parseKubectlTarget(command: string): KubectlTarget {
 
     if (t === "--context" || t === "--namespace" || t === "-n") {
       const value = tokens[i + 1];
-      if (value === undefined || isBlank(value)) continue;
+      // No next token: a trailing valueless flag, nothing to consume or
+      // skip. Otherwise the NEXT token is this flag's value under real
+      // kubectl argument parsing (`--context -n prod` means --context
+      // takes the literal value "-n"; "prod" is a positional argument,
+      // not `-n`'s own value), so advance `i` past it here, regardless
+      // of whether the value turns out blank, so the loop's own
+      // increment does not re-examine that same token as if it were an
+      // independent flag (fix round 3, review LOW finding).
+      if (value === undefined) continue;
+      i++;
+      if (isBlank(value)) continue;
       if (t === "--context") context = value;
       else namespace = value;
       continue;
@@ -230,8 +222,21 @@ export function parseKubectlTarget(command: string): KubectlTarget {
       continue;
     }
     if (t.startsWith("-n") && t.length > 2) {
+      // Narrowed (fix round 3, review LOW finding): real pflag DOES
+      // glue any value onto a short flag's remaining characters, which
+      // makes an unrelated flag typed with a single dash instead of two
+      // (`-no-headers` for `--no-headers`) collide with this form and
+      // read as `-n` plus a nonsense namespace value `o-headers`. A
+      // genuine namespace value never contains a `-`-prefixed run once
+      // read this way, since a Kubernetes namespace is a plain DNS
+      // label; requiring no embedded `-` rejects that whole class of
+      // false positive. This does NOT catch every case (`-namespace`
+      // slices to `amespace`, which has no dash and is still accepted;
+      // this is genuine pflag behavior for a value-taking short flag
+      // and is left as a documented, narrow residual gap, not a
+      // fabricated denylist of flag-shaped words).
       const value = t.slice(2);
-      if (!isBlank(value)) namespace = value;
+      if (!isBlank(value) && !value.includes("-")) namespace = value;
       continue;
     }
   }

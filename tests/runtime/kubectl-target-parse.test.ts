@@ -44,6 +44,26 @@ describe("parseKubectlTarget", () => {
     ).toEqual({ context: "prod-eu-1", namespace: "payments" });
   });
 
+  it("does not glue -no-headers onto -n as a namespace value (review LOW finding, fix round 3)", () => {
+    // Real pflag would otherwise read this as -n with value "o-headers":
+    // a single-dash typo of the real --no-headers flag must not inject
+    // a nonsense namespace signal.
+    expect(parseKubectlTarget("kubectl get pods -no-headers --context prod")).toEqual({
+      context: "prod",
+      namespace: null,
+    });
+  });
+
+  it("does not re-examine a consumed value token as its own flag (review LOW finding, fix round 3)", () => {
+    // Real kubectl semantics: --context consumes the very next token as
+    // its value, even when that token is itself flag-shaped ("-n");
+    // "prod" is then a positional argument, not -n's own value.
+    expect(parseKubectlTarget("kubectl --context -n prod delete namespace x")).toEqual({
+      context: "-n",
+      namespace: null,
+    });
+  });
+
   it("returns null fields for a non-kubectl command head (negative control, AC4)", () => {
     // Same flag, same value shape, but the command is not a kubectl
     // invocation; the narrow head anchor (module doc scope point 1)

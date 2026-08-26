@@ -312,26 +312,15 @@ function applyBranchSwitchUpgrade(
 }
 
 /**
- * Explicit kubectl target, upgrade-only merge (task a7eb1a71, review
- * HIGH finding 2, fix round 2). An explicit --context/--namespace/-n on
- * a kubectl command names the cluster and namespace the command
- * actually runs against, the same idea as the branch-switch merge
- * above. A fix round 1 shape merged it as a straight per-field
- * replacement (explicit flag always wins); measured, that let command
- * text LOWER an already-resolved production classification (an empty
- * --context=, a flag read past a `kubectl exec ... -- ...` separator,
- * or a genuinely different, non-production --context all downgraded an
- * ambient-production resolution to allow). This merge is deliberately
- * asymmetric instead, mirroring applyBranchSwitchUpgrade exactly: it
- * only ever pushes the resolved environment to something MORE
- * dangerous than the ambient kubeconfig alone already gave, never less.
- *
- * Both the ambient-only base and the merged-candidate kube inputs are
- * run through the SAME resolveEnvironment call with IDENTICAL git/env
- * inputs, so any difference in the result is attributable to the
- * explicit kubectl flag alone. The more dangerous of the two (ENV_RANK
- * order) wins; an explicit flag pointing somewhere non-production never
- * downgrades an ambient-production resolution.
+ * Explicit kubectl target, upgrade-only merge (task a7eb1a71): an
+ * explicit --context/--namespace/-n on a kubectl command can only push
+ * the resolved environment to something MORE dangerous than the
+ * ambient kubeconfig alone already gave, never less, mirroring
+ * applyBranchSwitchUpgrade exactly (both the ambient-only base and the
+ * merged-candidate kube inputs run through the SAME resolveEnvironment
+ * call with identical git/env inputs, so ENV_RANK picks the more
+ * dangerous of the two). See CHANGELOG.md's `[Unreleased]` entry for
+ * the measured downgrade this fixes.
  */
 function applyKubeTargetUpgrade(
   event: ToolEvent,
