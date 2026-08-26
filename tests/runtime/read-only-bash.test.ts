@@ -1879,15 +1879,93 @@ describe("kubectl read-only floor (isReadOnlyKubectlCommand, task da823721)", ()
       // "secret" is also excluded (documented false positive, safe
       // direction — see the module doc in read-only-bash.ts).
       "kubectl get secretstores --context prod-eu-1",
+      // Case-insensitive branch (pins a mutant that swaps the
+      // case-folded check for a case-sensitive one).
+      "kubectl get SECRET --context prod-eu-1",
+      "kubectl get sEcReTs --context prod-eu-1",
+      // Quoted/escaped forms decode (via `decodeShellWord`) to a token
+      // that mentions "secret" (pins a mutant that removes the
+      // decoded-form half of the raw-or-decoded check).
+      'kubectl get "secret" --context prod-eu-1',
+      'kubectl get secre""t --context prod-eu-1',
+      "kubectl get sec\\ret --context prod-eu-1",
+      "kubectl get se'cr'et --context prod-eu-1",
+      // ANSI-C quoting (`$'\\x73ecret'` decodes to `secret`, \\x73 = 's').
+      // This is now ALSO caught earlier by the `$`-expansion refusal
+      // (any token containing `$` disables the floor before the
+      // secret/configmap check ever runs), so this row pins that first
+      // rule, not the decodeShellWord branch — kept because the intent
+      // (a secret read must never be floored) still holds either way.
+      "kubectl get $'\\x73ecret' --context prod-eu-1",
     ])("does not floor %j", (command) => {
       expect(isReadOnlyKubectlCommand(command)).toBe(false);
     });
   });
 
-  describe("NOT floored: --raw (arbitrary API path)", () => {
+  describe("NOT floored: configmap-sensitive resource mention (MEDIUM decision: ConfigMap data is a common credential store)", () => {
+    it.each([
+      "kubectl get configmap --context prod-eu-1",
+      "kubectl get configmaps --context prod-eu-1",
+      "kubectl get configmap/my-map --context prod-eu-1",
+      "kubectl get configmap -o yaml --context prod-eu-1",
+      "kubectl describe configmap my-map --context prod-eu-1",
+      "kubectl describe configmaps --context prod-eu-1",
+      // Bare `cm` abbreviation, alone or in a comma-separated resource
+      // list, in either position.
+      "kubectl get cm --context prod-eu-1",
+      "kubectl get cm x --context prod-eu-1",
+      "kubectl get cm/my-map --context prod-eu-1",
+      "kubectl get pods,cm --context prod-eu-1",
+      "kubectl get cm,pods --context prod-eu-1",
+    ])("does not floor %j", (command) => {
+      expect(isReadOnlyKubectlCommand(command)).toBe(false);
+    });
+  });
+
+  describe("NOT floored: --raw (arbitrary API path, applies to every floored verb, not just get)", () => {
     it.each([
       "kubectl get --raw /api/v1/namespaces/prod/pods --context prod-eu-1",
       "kubectl get --raw=/api/v1/namespaces/prod/pods --context prod-eu-1",
+      "kubectl describe --raw /api/v1/namespaces/prod/pods --context prod-eu-1",
+      "kubectl logs --raw /api/v1/namespaces/prod/pods --context prod-eu-1",
+    ])("does not floor %j", (command) => {
+      expect(isReadOnlyKubectlCommand(command)).toBe(false);
+    });
+  });
+
+  describe("NOT floored: file-driven resource selection (HIGH finding 1 — -f/-k bypass the secret exclusion)", () => {
+    it.each([
+      "kubectl get -f manifest.yaml -o yaml --context prod-eu-1",
+      "kubectl get --filename manifest.yaml --context prod-eu-1",
+      "kubectl get --filename=manifest.yaml --context prod-eu-1",
+      "kubectl get -k overlays/prod -o yaml --context prod-eu-1",
+      "kubectl get --kustomize overlays/prod --context prod-eu-1",
+      "kubectl get --kustomize=overlays/prod --context prod-eu-1",
+      "kubectl describe -f manifest.yaml --context prod-eu-1",
+    ])("does not floor %j", (command) => {
+      expect(isReadOnlyKubectlCommand(command)).toBe(false);
+    });
+  });
+
+  describe("NOT floored: unresolved $-expansion in a token (HIGH finding 2 — the resource name is not literally readable)", () => {
+    it.each([
+      "kubectl get $KIND -o yaml --context prod-eu-1",
+      'kubectl get ${KIND} -o yaml --context prod-eu-1',
+      'kubectl get "$KIND" -o yaml --context prod-eu-1',
+      // Also refused, at the cost of an otherwise-safe read requiring
+      // approval: the `$` check is not limited to the resource-type
+      // position, so a variable ANYWHERE after `kubectl` (here, in the
+      // namespace flag's value) disables the floor too.
+      "kubectl get pods -n $NS --context prod-eu-1",
+    ])("does not floor %j", (command) => {
+      expect(isReadOnlyKubectlCommand(command)).toBe(false);
+    });
+  });
+
+  describe("NOT floored: `config` is not a read verb (regression pin against widening the verb set)", () => {
+    it.each([
+      "kubectl config view --raw",
+      "kubectl config get-contexts",
     ])("does not floor %j", (command) => {
       expect(isReadOnlyKubectlCommand(command)).toBe(false);
     });
@@ -1990,17 +2068,19 @@ describe("kubectl read-only floor (isReadOnlyKubectlCommand, task da823721)", ()
     });
   });
 
-  it("linear-time on a long flag run (no regex backtracking; ~30 flags well under 100ms)", () => {
+  it("linear-time on a long RECOGNIZED flag run (no regex backtracking; 30 x --context well under 100ms, and still floors)", () => {
+    // Built from a recognized, value-taking global flag repeated 30
+    // times, so `skipKubectlGlobalOptions` actually walks the whole run
+    // instead of stopping at the first token (an unrecognized flag would
+    // measure the fail-closed short-circuit path instead of the loop
+    // this test means to time).
     let flags = "";
-    for (let i = 0; i < 30; i++) flags += ` --flag${i} val${i}`;
+    for (let i = 0; i < 30; i++) flags += " --context c";
     const command = `kubectl${flags} get pods --context prod-eu-1`;
     const t0 = Date.now();
     const result = isReadOnlyKubectlCommand(command);
     const elapsed = Date.now() - t0;
-    // The 30 unrecognized global flags stop `skipKubectlGlobalOptions`
-    // at the FIRST one (it is not a recognized global flag), so this
-    // measures the fail-closed path, not the floored path.
-    expect(result).toBe(false);
+    expect(result).toBe(true);
     expect(elapsed).toBeLessThan(100);
   });
 });

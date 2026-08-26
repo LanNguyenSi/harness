@@ -334,29 +334,65 @@ above. A curated set of kubectl read verbs — `get`, `describe`, `logs`,
 `top`, `api-resources`, `api-versions`, `version`, `cluster-info`,
 `explain`, and `auth can-i` (a permission CHECK, never the resource's
 own data) — floors to `low`, UNLESS the command reads `--raw` (an
-arbitrary, unclassifiable API path) or the resource argument mentions
-"secret" in any form (`get secret`, `get secrets`, `get secret/<name>`,
-`describe secret`, `-o yaml`/`-o json` on a secret, a comma-list like
-`get pods,secrets`). Any other kubectl subcommand — `apply`, `delete`,
-`patch`, `create`, `replace`, `scale`, `rollout`, `drain`, `cordon`,
-`taint`, `label`, `annotate`, `set`, `exec`, `cp`, `port-forward`,
-`proxy`, `edit`, `attach`, `debug`, `auth reconcile`, or anything this
-floor has not enumerated — is NOT on the allowlist and stays fail-closed
+arbitrary, unclassifiable API path, checked on EVERY floored verb, not
+just `get`), selects its resources from a FILE or a kustomization
+DIRECTORY (`-f`/`--filename`, `-k`/`--kustomize` on `get`/`describe` —
+this module cannot read what such a file names), contains an unresolved
+`$`-expansion (`$VAR`, `${VAR}`, `"$VAR"` — the resource-type argument
+is then not literally readable, so it cannot be proven safe), or the
+resource argument mentions "secret" or "configmap" in any form (`get
+secret`, `get secrets`, `get secret/<name>`, `describe secret`, `-o
+yaml`/`-o json` on a secret, a comma-list like `get pods,secrets`; the
+same shapes for `configmap`/`configmaps`/the bare `cm` abbreviation).
+Any other kubectl subcommand — `apply`, `delete`, `patch`, `create`,
+`replace`, `scale`, `rollout`, `drain`, `cordon`, `taint`, `label`,
+`annotate`, `set`, `exec`, `cp`, `port-forward`, `proxy`, `edit`,
+`attach`, `debug`, `auth reconcile`, `config`, or anything this floor
+has not enumerated — is NOT on the allowlist and stays fail-closed
 (unknown is not safe), unchanged. Implementation:
 `isReadOnlyKubectlCommand` in `src/runtime/read-only-bash.ts`, wired into
 `classifyRisk`'s built-in floor block in `src/runtime/risk-classifier.ts`
 alongside (not merged with) the general read-only floor.
 
+**ConfigMap sub-decision.** ConfigMap data is a common credential store
+in practice (`.env`-shaped config, connection strings, and — while an
+anti-pattern — plaintext secrets are all routinely stored there instead
+of in a `Secret` object), so `get`/`describe configmap` gets the same
+fail-safe exclusion as `secret`, not just the built-in Kubernetes
+Secret kind.
+
+**File-driven selection and `$`-expansion, round 2 (review HIGH findings
+1 and 2).** Both were measured, end-to-end, to resolve ALLOW before this
+fix: `kubectl get -f manifest.yaml -o yaml --context prod-eu-1` and
+`kubectl get -k overlays/prod -o yaml --context prod-eu-1` bypassed the
+secrets/configmap exclusion because the manifest file or kustomization
+directory's contents are invisible to a string classifier; `kubectl get
+$KIND -o yaml --context prod-eu-1` bypassed it because the raw command
+text never contains the literal resource name the shell would substitute
+at execution time. Both close the same way as the rest of this module:
+fail closed rather than attempt to resolve the file or the variable.
+
 Two sub-decisions, made explicit because they were judgment calls, not
 mechanical:
 
-- **`kubectl get all` is NOT excluded.** kubectl's built-in `all`
-  resource-category alias never includes `Secret` or `ConfigMap` objects
-  (it covers the common workload/networking kinds: pods, services,
-  deployments, replicasets, statefulsets, jobs, cronjobs, and a handful
-  of others) — verified against `kubectl` upstream's `pkg/kubectl/cmd/get`
-  resource-alias table. `get all` therefore cannot expose Secret data and
-  gets the floor like any other non-secret `get`.
+- **`kubectl get all` is NOT excluded, for kubectl's BUILT-IN resources.**
+  kubectl's built-in `all` resource-category alias covers only the
+  common workload/networking kinds (pods, services, deployments,
+  replicasets, statefulsets, jobs, cronjobs, and a handful of others) and
+  never `Secret` or `ConfigMap` — runnable check: `kubectl
+  api-resources --categories=all` lists every resource type kubectl
+  currently considers part of `all` on a given cluster (this repo has no
+  `kubectl` installed and no live cluster to run it against; this is the
+  command an operator can run to confirm the claim on their own
+  cluster, not a claim this task ran it). The caveat is CRDs: a Custom
+  Resource Definition can opt itself into the `all` category via its own
+  `spec.names.categories: [all]`, and nothing stops a CRD author from
+  naming a Secret-shaped custom resource that way — `get all` on a
+  cluster with such a CRD installed could return that CRD's data without
+  the "secret"/"configmap" substring ever appearing in the command text.
+  This floor accepts that as a known, unmitigated gap specific to
+  cluster-defined CRDs, not a Secret/ConfigMap exposure through
+  kubectl's own built-in resource set.
 - **`kubectl explain secret` IS floored**, even though the resource word
   "secret" appears. `explain` prints the API SCHEMA for a kind (field
   names and types), never a live object's data — there is no Secret to
@@ -424,11 +460,34 @@ decision is about.
 
 **Fail-safe posture, restated:** every ambiguous shape (an unrecognized
 subcommand, an unrecognized global flag before the verb, any mention of
-"secret", `--raw`, or any shell chaining/redirection/substitution) falls
-through to `false` — not floored, so "unknown is not safe" still applies
-and the action requires approval on a production-resolved session. The
-floor can only ever ALLOW something the "unknown is not safe" rule would
-otherwise have blocked; it cannot itself cause a block.
+"secret" or "configmap", `--raw`, file-driven resource selection, an
+unresolved `$`-expansion, or any shell chaining/redirection/substitution)
+falls through to `false` — not floored, so "unknown is not safe" still
+applies and the action requires approval on a production-resolved
+session. The floor can only ever ALLOW something the "unknown is not
+safe" rule would otherwise have blocked; it cannot itself cause a block.
+
+**Residual risks, accepted:**
+
+- **`--as`/`--as-group` impersonation is floored.** A floored `kubectl
+  get pods --as some-other-user --context prod-eu-1` is still a READ
+  (it cannot mutate cluster state), but it reads through a DIFFERENT
+  RBAC identity than the caller's own — the set of objects that identity
+  can see is not necessarily the same set the calling identity could see
+  directly, so the floor is a decision about mutation risk, not about
+  which data a specific read is able to reach. Accepted: the floor's
+  entire premise is "read-only kubectl commands are safe to floor
+  regardless of exactly which objects they touch," and an impersonated
+  read is still read-only by that definition.
+- **`logs`/`describe` output may itself carry credentials** — a
+  container's stdout/stderr can log a token or connection string, and a
+  `describe`d object's annotations or event history can echo one back.
+  This is a consciously accepted, non-mutating exposure: the floor's
+  secret/configmap exclusion targets the RESOURCE TYPE being read (can
+  this verb return an object whose entire purpose is to hold
+  credentials), not every possible credential that could appear inside
+  the free-text output of an otherwise-ordinary resource read, which no
+  string classifier can enumerate.
 
 **Verification.** `tests/runtime/read-only-bash.test.ts`'s "kubectl
 read-only floor" describe block unit-tests `isReadOnlyKubectlCommand`
@@ -442,13 +501,18 @@ secrets exclusion and the operator-classifier-still-wins case.
 read-only floor end-to-end" describe block runs the real
 `runInterceptCli` policy-intercept path (not just the classifier) for
 both the allow case (`kubectl get pods --context prod-eu-1`) and the
-still-approval-gated case (`kubectl get secret -o yaml --context
-prod-eu-1`), and its earlier AC2/AC5 classifier-half tests were updated
-from "unclassified" to "floored to low" to match this decision.
-Negative control: removing the kubectl floor (or dropping the secrets
-exclusion from it) was applied and observed to fail exactly the tests
-named above, then restored — see the implementer's `mutation_probes`
-report for task `da823721`.
+still-approval-gated cases (`kubectl get secret -o yaml --context
+prod-eu-1`, and, added in round 2, the file-driven-selection,
+`$`-expansion, and configmap cases), and its earlier AC2/AC5
+classifier-half tests were updated from "unclassified" to "floored to
+low" to match this decision.
+Negative control: removing the kubectl floor (or dropping the
+secrets/configmap exclusion, the file-selection guard, or the
+`$`-expansion guard from it) was applied and observed to fail exactly
+the tests named above, then restored — see the `[Unreleased]` CHANGELOG
+entry for task `da823721` and the named test blocks above (this file's
+own record of what was measured, rather than a pointer to a subagent
+report that does not live in this repository).
 
 ### Environment resolvers (`environments:`)
 

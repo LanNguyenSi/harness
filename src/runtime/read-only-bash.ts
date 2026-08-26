@@ -727,75 +727,47 @@ export function isReadOnlyBashPipeline(command: string): boolean {
 
 // Kubectl read-only VERB floor — used ONLY by the Risk Classifier's
 // built-in floor (`risk-classifier.ts`), never by `isReadOnlyBashCommand`
-// / `isReadOnlyBashPipeline` above. Task da823721 (blast-radius decision
-// recorded in docs/risk-gate.md): those two functions are shared by the
-// understanding-gate PreToolUse blocker and the solution-acceptance
-// write-guard, and both consumers must keep treating EVERY kubectl
-// invocation as non-read-only exactly as before this change — kubectl
-// was never in `classifyTokens`'s dispatch and still isn't, so a
-// `kubectl get` still needs an approved Understanding Report and is
-// never fast-pathed through the write-guard. The Risk Classifier's floor
-// is a separate, narrower question: whether an already-production-
-// resolved `kubectl get ...` should be floored to `low` instead of
-// fail-closing on the pre-existing "unknown is not safe" rule.
-//
-// Scope, deliberately narrow, same fail-safe posture as the rest of this
-// module:
-//   - Only a fixed, curated set of read verbs floors at all
-//     (`KUBECTL_READ_ONLY_VERBS`): `get`, `describe`, `logs`, `top`,
-//     `api-resources`, `api-versions`, `version`, `cluster-info`,
-//     `explain`, plus `auth can-i` (a permission CHECK that never
-//     returns the resource's own data). Any other subcommand —
-//     `apply`, `delete`, `patch`, `create`, `replace`, `scale`,
-//     `rollout`, `drain`, `cordon`, `taint`, `label`, `annotate`,
-//     `set`, `exec`, `cp`, `port-forward`, `proxy`, `edit`, `attach`,
-//     `debug`, `auth reconcile`, or an unrecognized subcommand — is not
-//     on the list, so it falls through to `false` (fail-safe: unknown
-//     is not safe).
-//   - `get` / `describe` are excluded whenever any token after the verb
-//     mentions "secret" (case-insensitive substring, checked on both
-//     the raw and `decodeShellWord`-decoded form of every token, same
-//     raw-or-decoded direction as the rest of this module): `get
-//     secret`, `get secrets`, `get secret/<name>`, `describe secret
-//     foo`, `get pods,secrets` are all caught. `-o yaml` / `-o json` on
-//     a secret is caught the same way — the exclusion keys on the
-//     RESOURCE mention, not the output flag. This is deliberately
-//     OVER-broad (`get secretstores` also gets excluded, a false
-//     positive) rather than under-broad: erring toward requiring
-//     approval on a mention of "secret" is the documented fail-safe
-//     direction (see docs/risk-gate.md's kubectl read-only floor
-//     decision). `kubectl get all` is NOT excluded: kubectl's built-in
-//     `all` category never includes Secrets or ConfigMaps — also a
-//     documented, deliberate decision, see docs/risk-gate.md.
-//   - `get --raw ...` is excluded unconditionally: `--raw` hits an
-//     arbitrary API server path chosen by the caller, which this
-//     module cannot prove is not a secrets endpoint the way it can a
-//     structured resource-type token.
-//   - A bounded set of GLOBAL flags (`--context`, `--namespace`/`-n`,
-//     `--kubeconfig`, `--cluster`, `--user`, `--server`/`-s`,
-//     `--token`, `--as`, `--as-group`, `--request-timeout`, `-v`/
-//     `--v`) may appear BEFORE the verb (`kubectl --context prod get
-//     pods`) as well as after (`kubectl get pods --context prod`); an
-//     unrecognized flag before the verb stops the scan and the verb
-//     lookup then fails (fail closed), mirroring `skipGitGlobalOptions`
-//     above.
-//   - Same metachar / chaining / substitution refusal as
-//     `isReadOnlyBashCommand`: any `;`, `&`, `|`, `<`, `>`, backtick,
-//     `$(`, or newline forfeits the classification for the whole
-//     string.
+// / `isReadOnlyBashPipeline` above. Task da823721 (blast-radius decision,
+// verb list, secrets/configmap exclusion, file-select and `$`-expansion
+// guards, and the fail-safe rationale for each: all recorded in
+// docs/risk-gate.md's "Kubectl read-only verb floor" section — this is
+// the single source of truth for the scope, keep it there rather than
+// duplicating it here). Invariant: `isReadOnlyKubectlCommand` returns
+// `true` only for a curated read verb with no shell chaining,
+// redirection, or substitution, no unresolved `$`-expansion, no
+// `--raw`/file-driven resource selection, and no secret/configmap
+// resource mention; every other shape fails closed to `false`.
 const KUBECTL_READ_ONLY_VERBS: ReadonlySet<string> = new Set([
   "get", "describe", "logs", "top",
   "api-resources", "api-versions", "version", "cluster-info", "explain",
 ]);
 
-// Verbs whose resource argument can materialize live Secret data.
-const KUBECTL_SECRET_SENSITIVE_VERBS: ReadonlySet<string> = new Set(["get", "describe"]);
+// Verbs whose resource argument can materialize live Secret or
+// ConfigMap data.
+const KUBECTL_SENSITIVE_RESOURCE_VERBS: ReadonlySet<string> = new Set(["get", "describe"]);
 
 const KUBECTL_GLOBAL_VALUE_FLAGS: ReadonlySet<string> = new Set([
   "--context", "--namespace", "-n", "--kubeconfig", "--cluster", "--user",
   "--server", "-s", "--token", "--as", "--as-group", "--request-timeout",
   "-v", "--v",
 ]);
+
+// Flags that select resources from a FILE rather than naming a resource
+// TYPE token — `-f`/`--filename` and `-k`/`--kustomize`. The secret /
+// configmap exclusion below can only read resource-type tokens present
+// on the command line; it cannot see what a manifest file or a
+// kustomization directory names, so `get`/`describe` disables the floor
+// entirely whenever either appears (fail-safe: an unreadable resource
+// selector is treated the same as a Secret mention). Simple prefix
+// match, deliberately: any token starting with one of these disables
+// the floor. `--filename` and `--kustomize` are checked as whole-prefix
+// strings, so an unrelated long flag like `--from-file` does not match
+// (its first two characters are `--`, not `-f`); an invented flag that
+// happens to start with `-f` or `-k` still trips the check — safe
+// direction, since this only ever REQUIRES more approval.
+const KUBECTL_FILE_SELECT_PREFIXES: readonly string[] = [
+  "-f", "-k", "--filename", "--kustomize",
+];
 
 /**
  * Skip a run of recognized, value-taking kubectl GLOBAL flags at the
@@ -830,11 +802,32 @@ function kubectlArgMentionsSecret(tokens: readonly string[]): boolean {
 }
 
 /**
+ * True when any token (raw or `decodeShellWord`-decoded) mentions
+ * "configmap", or is (or contains, as one comma-separated resource-list
+ * segment) the bare abbreviation `cm` — `get cm`, `get cm/my-map`,
+ * `get pods,cm`, `get cm,pods` are all caught. ConfigMap data is a
+ * common credential store (see docs/risk-gate.md), so it gets the same
+ * fail-safe exclusion as Secrets. The `cm` check is segment-based
+ * rather than a bare substring match so it does not fire on an
+ * unrelated word that merely starts or ends with "cm" (`cmd`,
+ * `cmagent`).
+ */
+function kubectlArgMentionsConfigMap(tokens: readonly string[]): boolean {
+  const mentionsConfigMap = (t: string): boolean => {
+    const lower = t.toLowerCase();
+    if (lower.includes("configmap")) return true;
+    return lower.split(",").some((seg) => seg === "cm" || seg.startsWith("cm/"));
+  };
+  return tokens.some((t) => mentionsConfigMap(t) || mentionsConfigMap(decodeShellWord(t)));
+}
+
+/**
  * Kubectl read-only floor for the Risk Classifier ONLY — see the module
  * doc above this constant block for scope and the blast-radius
- * decision. `true` means a curated read verb, with no secret-resource
- * mention and no `--raw`, was invoked with no shell chaining,
- * redirection, or substitution.
+ * decision. `true` means a curated read verb, with no secret/configmap
+ * resource mention, no `--raw`, no file-driven resource selection
+ * (`-f`/`-k`), and no unresolved `$`-expansion, was invoked with no
+ * shell chaining, redirection, or substitution.
  */
 export function isReadOnlyKubectlCommand(command: string): boolean {
   const trimmed = command.trim();
@@ -843,6 +836,16 @@ export function isReadOnlyKubectlCommand(command: string): boolean {
 
   const tokens = trimmed.split(/\s+/);
   if (tokens[0] !== "kubectl") return false;
+
+  // `$VAR`, `${VAR}`, and `"$VAR"` all leave a literal `$` in the raw
+  // token text (this module never expands shell variables — see
+  // `decodeShellWord`'s module doc), so a resource-type argument built
+  // from one is invisible to the secret/configmap substring checks
+  // below. Refusing the floor on ANY `$` after `kubectl` closes that
+  // gap. Scoped to THIS function only: the shared `hasUnsafeShellMetachar`
+  // used by `isReadOnlyBashCommand` / `isReadOnlyBashPipeline` is
+  // untouched, per the blast-radius decision in docs/risk-gate.md.
+  if (tokens.slice(1).some((t) => t.includes("$"))) return false;
 
   const verbIdx = skipKubectlGlobalOptions(tokens);
   const sub = tokens[verbIdx];
@@ -854,8 +857,12 @@ export function isReadOnlyKubectlCommand(command: string): boolean {
 
   const rest = tokens.slice(verbIdx + 1);
 
+  // `--raw` hits an arbitrary, unclassifiable API server path chosen by
+  // the caller for ANY floored verb, not just `get` (e.g. `describe
+  // --raw` / `logs --raw` are not real kubectl flags today, but a
+  // future or plugin verb could add one, and this check costs nothing
+  // to apply unconditionally).
   if (
-    sub === "get" &&
     rest.some((t) => {
       const flagName = t.indexOf("=") === -1 ? t : t.slice(0, t.indexOf("="));
       return flagName === "--raw";
@@ -864,7 +871,23 @@ export function isReadOnlyKubectlCommand(command: string): boolean {
     return false;
   }
 
-  if (KUBECTL_SECRET_SENSITIVE_VERBS.has(sub) && kubectlArgMentionsSecret(rest)) return false;
+  // `get`/`describe` select resources from a manifest FILE or a
+  // kustomization DIRECTORY via `-f`/`--filename`/`-k`/`--kustomize`;
+  // this module cannot read what such a file names, so it cannot prove
+  // the selected resource is not a Secret or ConfigMap.
+  if (
+    (sub === "get" || sub === "describe") &&
+    rest.some((t) => KUBECTL_FILE_SELECT_PREFIXES.some((p) => t.startsWith(p)))
+  ) {
+    return false;
+  }
+
+  if (
+    KUBECTL_SENSITIVE_RESOURCE_VERBS.has(sub) &&
+    (kubectlArgMentionsSecret(rest) || kubectlArgMentionsConfigMap(rest))
+  ) {
+    return false;
+  }
 
   return true;
 }

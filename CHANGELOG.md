@@ -35,6 +35,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   floor (decision record, task `da823721`)" for the full decision, the
   `get all` / `explain secret` sub-decisions, and the blast-radius
   reasoning.
+  Round 2 (review): three bypasses of the secrets exclusion were
+  measured end-to-end ALLOW and fixed. `-f`/`--filename`/`-k`/`--kustomize`
+  on `get`/`describe` now disables the floor (a manifest file or
+  kustomization directory can select a Secret/ConfigMap this module
+  cannot read). Any token after `kubectl` containing `$` now disables
+  the floor (`$VAR`/`${VAR}`/`"$VAR"` leave the resource-type argument
+  unresolved in the raw command text). `configmap`/`configmaps`/the
+  bare `cm` abbreviation now get the same exclusion as `secret` (a
+  common credential store in practice). Also: the `--raw` reject now
+  applies to every floored verb, not just `get`; the timing test now
+  measures a floored 30-flag run instead of the fail-closed short-circuit
+  path; and docs/risk-gate.md's `get all` claim is narrowed to kubectl's
+  built-in resources (a CRD can opt into the `all` category via its own
+  `spec.names.categories`), citing the runnable `kubectl
+  api-resources --categories=all` check rather than an upstream file
+  path this task did not run against a live cluster.
 
 ## [0.49.0] - 2026-08-26
 

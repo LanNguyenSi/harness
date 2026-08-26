@@ -281,6 +281,69 @@ describe("runInterceptCli - kubectl read-only floor end-to-end (task da823721)",
     expect(parsed.decision).toBe("block");
     expect(parsed.reason).toContain("gate-prod-destructive-approval");
   });
+
+  // Round 2 (review HIGH finding 1): file-driven resource selection
+  // bypasses the secrets exclusion, because this module cannot read what
+  // a manifest file or a kustomization directory names. Measured
+  // end-to-end ALLOW before the fix.
+  it("`kubectl get -f manifest.yaml -o yaml --context prod-eu-1` stays unclassified (file-driven selection) and still requires approval", async () => {
+    const { result, output } = await intercept(
+      "kubectl get -f manifest.yaml -o yaml --context prod-eu-1",
+    );
+    expect(result.blocked).toBe(true);
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.outcome).toBe("require_approval");
+    expect(result.decisions[0]?.policyName).toBe("gate-prod-destructive-approval");
+    const parsed = JSON.parse(output().trim());
+    expect(parsed.decision).toBe("block");
+    expect(parsed.reason).toContain("gate-prod-destructive-approval");
+  });
+
+  it("`kubectl get -k overlays/prod -o yaml --context prod-eu-1` stays unclassified (kustomize-driven selection) and still requires approval", async () => {
+    const { result, output } = await intercept(
+      "kubectl get -k overlays/prod -o yaml --context prod-eu-1",
+    );
+    expect(result.blocked).toBe(true);
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.outcome).toBe("require_approval");
+    expect(result.decisions[0]?.policyName).toBe("gate-prod-destructive-approval");
+    const parsed = JSON.parse(output().trim());
+    expect(parsed.decision).toBe("block");
+    expect(parsed.reason).toContain("gate-prod-destructive-approval");
+  });
+
+  // Round 2 (review HIGH finding 2): `$VAR` / `${VAR}` / `"$VAR"` leaves
+  // a literal `$` in the raw command text this module cannot resolve, so
+  // the resource-type argument is not literally readable. Measured
+  // end-to-end ALLOW before the fix.
+  it("`kubectl get $KIND -o yaml --context prod-eu-1` stays unclassified (unresolved $-expansion) and still requires approval", async () => {
+    const { result, output } = await intercept(
+      "kubectl get $KIND -o yaml --context prod-eu-1",
+    );
+    expect(result.blocked).toBe(true);
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.outcome).toBe("require_approval");
+    expect(result.decisions[0]?.policyName).toBe("gate-prod-destructive-approval");
+    const parsed = JSON.parse(output().trim());
+    expect(parsed.decision).toBe("block");
+    expect(parsed.reason).toContain("gate-prod-destructive-approval");
+  });
+
+  // Round 2 (review MEDIUM finding): ConfigMap data is a common
+  // credential store, so it now gets the same fail-safe exclusion as
+  // Secrets.
+  it("`kubectl get configmap -o yaml --context prod-eu-1` stays unclassified (configmap exclusion) and still requires approval", async () => {
+    const { result, output } = await intercept(
+      "kubectl get configmap -o yaml --context prod-eu-1",
+    );
+    expect(result.blocked).toBe(true);
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.outcome).toBe("require_approval");
+    expect(result.decisions[0]?.policyName).toBe("gate-prod-destructive-approval");
+    const parsed = JSON.parse(output().trim());
+    expect(parsed.decision).toBe("block");
+    expect(parsed.reason).toContain("gate-prod-destructive-approval");
+  });
 });
 
 // Review HIGH finding 2: the fix round 1 merge replaced the ambient
