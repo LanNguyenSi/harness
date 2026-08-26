@@ -269,6 +269,108 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     segment's last raw token before target collection, so the command
     now yields `["/home/x"]` once.
 
+  **Review round 6** (same task; escalated after five rounds each found
+  a new fail-open on the permissive side of the recognition layer).
+  Decision D-023: ANY `xargs`-wrapped deletion is unresolvable, without
+  parsing `xargs` at all — `xargs` appends or substitutes stdin-supplied
+  operands at runtime, so `echo /home/x | xargs rm -rf /tmp/known`
+  deletes `/home/x` while the round-5 module resolved it ALLOWED. The
+  round-5 replace-string plumbing (`-I`/`-i` capture, default `{}`) is
+  deleted; the bounded forward scan to the first deletion-verb head
+  stays, and every resolver returns unresolvable when `xargsWrapped`,
+  listing a synthetic `(xargs-supplied target, not statically known)`
+  entry plus any explicit operand, none resolved. The round-2 pin
+  "`xargs rm -rf /tmp/known` resolves" is flipped to GATED; `xargs ls`/
+  `xargs echo`/`xargs -I{} mv {} /trash` stay unrecognized; `xargs echo
+  rm -rf /home/x` (which only prints) is gated — an accepted, documented
+  over-gate of the forward scan. A path-qualified `/usr/bin/xargs` is
+  now recognized too (round 5 matched the bare word only). An
+  adversarial audit of 232 shapes against the built module (permissive
+  side: quoting, escapes, globs, traversal, substitution, symlink
+  spellings, keywords, wrappers; fail-safe side: every legitimate
+  inside-root shape) found and closed these CLASSES, each pinned:
+  - **Symlink-following spellings (HIGH):** a trailing `/` or `/.` on a
+    target follows a symlinked directory into its target (measured on
+    macOS: `rm -rf <link>/` removed the link's TARGET directory), and a
+    `..` component is resolved PHYSICALLY through a symlinked component
+    (`/tmp/<link>/../y` lands under the link's target), so both are now
+    unresolvable — the round-1 pin "`rm -rf /tmp/a/../b` resolves" is
+    flipped. `find -H`/`-L`/`-follow` make the whole `find` verdict
+    unresolvable. Still not visible lexically, named as a ceiling: a
+    symlink named without a trailing slash (`rm -rf /tmp/link/y`).
+  - **Globs that expand to `..` (HIGH):** `rm -rf /tmp/.*`, `/tmp/..*`,
+    `/tmp/.?/x`, `/tmp/.*/foo`, `/tmp/.[.]` resolved ALLOWED; `find
+    /tmp/.* -delete` traverses `/tmp/..` = `/`. A path component starting
+    with an explicit `.` whose remainder can glob-match `.` is now
+    unresolvable (`globComponentCanMatchDotDot`, a minimal fnmatch over
+    `*`/`?`/`[...]`); measured on bash 3.2 with and without `dotglob`
+    that `*`, `[.][.]`, `.[!.]*`, and `.??*` cannot match `..`, so those
+    (and `rm -rf /tmp/x/*.log`) stay resolvable.
+  - **Brace expansion, backtick and extglob (MEDIUM):** `rm -rf
+    /tmp/{..,x}` expands to `/tmp/..`; `` rm -rf /tmp/`cat<f` `` is a
+    single token with a command substitution; `rm -rf /tmp/@(..)/x` is
+    cut at the `(` boundary leaving `/tmp/@` as the target. A token
+    containing `{` or a backtick is unresolvable (this also subsumes
+    the `xargs`/`find` `{}` placeholder), and when the command contains
+    an extglob opener a target ending in `?`/`*`/`+`/`@`/`!` is
+    unresolvable.
+  - **`find -exec` payload operands (HIGH):** `find /tmp/x -exec rm -rf
+    /home/y \;` resolved ALLOWED — only the search root was a target.
+    The payload's explicit operands (every non-flag token other than the
+    exact `{}`, up to `+` or the end of the segment) are now targets;
+    `-ok`/`-okdir` are recognized alongside `-exec`/`-execdir`.
+  - **`find` continuation after `\;` (HIGH):** `;` is a segment
+    boundary, so `find /home/x -exec echo {} \; -exec rm -rf {} \;`
+    put the deleting `-exec` in a segment headed by `-exec`, which was
+    unrecognized. A `find`-headed segment's search roots are now carried
+    (per segmentation arm, in command order) into a directly following
+    segment headed by a `find` primitive. This also covers the escaped
+    grouped expression `find /home \( -name a -o -name b \) -delete`
+    that round 5 reported as unrecognized; the QUOTED `'('` spelling
+    stays a pinned residual (the cut lands inside the quoted run). The
+    orphaned `\`/`'`/`"` token the cut leaves behind is dropped from
+    both the roots and the payload operands.
+  - **`git clean` (HIGH):** `git -c clean.requireForce=false clean -d`
+    deletes without `-f`, but `command-normalize.ts` canonicalizes it
+    to `git clean -d` before the resolver sees it — a `clean
+    .requireForce` mention anywhere in the raw command text now counts
+    as a force flag (case-insensitive; also covers
+    `GIT_CONFIG_PARAMETERS` and a same-command `git config`). `git
+    --no-optional-locks clean -fdx /home/y` was unrecognized (an
+    un-canonicalized global option sat where `clean` was expected) —
+    `git`'s global options are now skipped locally, `-c`/`--config-env`
+    with their value. `git clean -f -e /tmp/x` resolved ALLOWED with
+    `/tmp/x` mistaken for a pathspec while git cleaned cwd —
+    `-e`/`--exclude` now consume their value.
+  - **Shell keywords and locally-peeled wrappers (MEDIUM):** `if true;
+    then rm -rf /home/x; fi`, `for f in a; do rm -rf /home/x; done`, `!
+    rm -rf /home/x`, `f() { rm -rf /home/x; }`, `exec -a name rm -rf
+    /home/x` (the shared peeler treats `-a` as boolean, leaving `name`
+    as the head), and `busybox`/`toybox rm -rf /home/x` were all
+    unrecognized. Leading `if`/`then`/`else`/`elif`/`while`/`until`/
+    `do`/`!`/`{`/`)`/`){` tokens are stripped; `exec -a <name>` and the
+    two multi-call binaries are peeled locally.
+  - **Inert tests and false positives from round 5 (LOW):** the
+    oversized-command pin gains a positive assertion (a deletion in the
+    FIRST segment past `MAX_NORMALIZE_LENGTH` still gates, the `/tmp`
+    variant allows); `( rm -rf /home/x )` reported the lone `)` as a
+    second target and `( rm -rf /tmp/x )` was GATED by it — a bare
+    `(`/`)` token is dropped during `rm`/`git clean` target collection
+    and `findPathOperands`'s unreachable `(`/`)` stop is removed (`!`
+    kept); `rm -rf /tmp/x # cleanup` was GATED on `#` and `cleanup` —
+    a `#` word now ends the segment, as it does for bash; `rm -rf
+    /tmp/x\ y` was GATED as two operands — the tokenizer now honours a
+    backslash escape; `find -P /tmp/x -delete` was GATED with `.` as the
+    root — `find`'s leading options are skipped. The quote-unaware amp
+    arm's duplicate reporting for a quoted literal `&` is noted next to
+    the dedup comment as a reporting-only, fail-closed ceiling.
+  - NOT COVERED additions, pinned: `env -S '...'`, `find ... -exec sh
+    -c '...'`, the quoted-paren grouped `find`, a `case` arm, runners
+    outside the wrapper set (`parallel`, `ionice`, `chrt`, `taskset`,
+    `caffeinate`, `flock`, `strace`, `ssh`, `docker exec`, `chroot`, `su
+    -c`, `watch`), a symlink named without a trailing slash, and a
+    `clean.requireForce` override set outside the command text.
+
 ### Fixed
 
 - **Risk Gate: a narrow, secrets-excluding kubectl read-only verb floor

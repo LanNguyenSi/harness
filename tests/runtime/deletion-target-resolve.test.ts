@@ -123,9 +123,15 @@ describe("resolveDeletionTarget — AC3: unresolvable-target fixtures", () => {
     expect(v?.unresolvedTargets).toEqual(["/tmp/scratch/../../home/lan/x"]);
   });
 
-  it("does not gate a traversal that normalizes back inside a root (no over-blocking)", () => {
+  it("gates a traversal even when it lexically normalizes back inside a root (review round 6: `..` is physical, not lexical, through a symlinked component)", () => {
+    // Round 1 resolved `/tmp/a/../b` as safe by lexical collapse. That
+    // assumes `/tmp/a` is a real directory: if it is a symlink to
+    // `/home/u/proj`, the kernel resolves `/tmp/a/..` as `/home/u`, and
+    // the deletion lands OUTSIDE the root. A `..` component can never be
+    // proven safe statically, so it is unresolvable for every verb.
     const v = resolveDeletionTarget("rm -rf /tmp/a/../b", ROOTS);
-    expect(v?.unresolvable).toBe(false);
+    expect(v?.unresolvable).toBe(true);
+    expect(v?.unresolvedTargets).toEqual(["/tmp/a/../b"]);
   });
 
   it("classifies a shell variable target NESTED INSIDE a safe root as unresolvable — the only discriminating case for the $ guard (review round 2, MEDIUM surviving-mutant fix)", () => {
@@ -305,9 +311,15 @@ describe("resolveDeletionTarget — xargs-wrapped deletion (review round 2, MEDI
     expect(v?.unresolvable).toBe(true);
   });
 
-  it("still resolves an EXPLICIT operand normally when one is given after xargs rm -rf", () => {
-    const safe = resolveDeletionTarget("xargs rm -rf /tmp/known", ROOTS);
-    expect(safe?.unresolvable).toBe(false);
+  it("gates an EXPLICIT operand after xargs rm -rf too (review round 6, D-023: xargs APPENDS stdin operands, so /tmp/known is not the only target)", () => {
+    // Round 2 pinned `xargs rm -rf /tmp/known` as resolved. Measured
+    // wrong in round 5: `echo /home/x | xargs rm -rf /tmp/known` runs
+    // `rm -rf /tmp/known /home/x`. Any xargs-wrapped deletion is now
+    // unresolvable without parsing xargs at all.
+    const safeLooking = resolveDeletionTarget("xargs rm -rf /tmp/known", ROOTS);
+    expect(safeLooking?.unresolvable).toBe(true);
+    expect(safeLooking?.targets).toEqual(["(xargs-supplied target, not statically known)", "/tmp/known"]);
+    expect(safeLooking?.unresolvedTargets).toEqual(safeLooking?.targets);
     const unsafe = resolveDeletionTarget("xargs rm -rf /home/x", ROOTS);
     expect(unsafe?.unresolvable).toBe(true);
   });
@@ -482,8 +494,30 @@ describe("resolveDeletionTarget — review round 3: NOT COVERED residuals (pinne
     ["unlink /home/x"],
     ["npm run clean"],
     ["`rm -rf /home/x`"],
+    // Review round 6 additions — each named in the module header's
+    // NOT-COVERED list and docs/risk-gate.md "Known ceilings":
+    ["env -S 'rm -rf /home/x'"],
+    ["find /tmp/x -exec sh -c 'rm -rf /home/y' \\;"],
+    ["find /home '(' -name a ')' -delete"],
+    ['find /home "(" -name a ")" -delete'],
+    ["case x in *) rm -rf /home/x;; esac"],
+    ["parallel rm -rf"],
+    ["ionice -c3 rm -rf /home/x"],
+    ["flock /tmp/l rm -rf /home/x"],
+    ["ssh h rm -rf /home/x"],
+    ["docker exec c rm -rf /x"],
+    ["chroot /x rm -rf /home"],
   ])("%s is NOT recognized (documented ceiling)", (cmd) => {
     expect(resolveDeletionTarget(cmd, ROOTS)).toBeNull();
+  });
+
+  it("names the out-of-band symlink and git-config ceilings as RESOLVED shapes it cannot see through (documented, not a regression)", () => {
+    // A symlink `/tmp/link -> /home/u` named WITHOUT a trailing slash:
+    // `/tmp/link/y` is lexically inside the root; only the filesystem
+    // knows better. Same for a `clean.requireForce=false` set in the
+    // repository config rather than on the command line.
+    expect(resolveDeletionTarget("rm -rf /tmp/link/y", ROOTS)?.unresolvable).toBe(false);
+    expect(resolveDeletionTarget("git clean -d", ROOTS)).toBeNull();
   });
 });
 
@@ -597,7 +631,7 @@ describe("resolveDeletionTarget — review round 5: xargs replace-string aliasin
   });
 });
 
-describe("resolveDeletionTarget — review round 5: findPathOperands stops at !/(/) (LOW)", () => {
+describe("resolveDeletionTarget — review round 5: findPathOperands stops at ! (LOW; `(` is a segment boundary and never reaches it)", () => {
   it("gates find /tmp ! -name x -delete with targets == [\"/tmp\"] (! is never collected as a target)", () => {
     const v = resolveDeletionTarget("find /tmp ! -name x -delete", ROOTS);
     expect(v?.targets).toEqual(["/tmp"]);
@@ -623,6 +657,30 @@ describe("resolveDeletionTarget — review round 5: glued trailing & is stripped
   });
 });
 
+describe("resolveDeletionTarget — review round 6: oversized-command fallback still gates a deletion in the FIRST segment (the R5 pin alone was inert)", () => {
+  it("gates rm -rf /home/x && echo <padding> past MAX_NORMALIZE_LENGTH, and allows the /tmp variant", () => {
+    const padding = "a".repeat(MAX_NORMALIZE_LENGTH + 10);
+    const unsafe = resolveDeletionTarget(`rm -rf /home/x && echo ${padding}`, ROOTS);
+    expect(unsafe?.verb).toBe("rm");
+    expect(unsafe?.unresolvable).toBe(true);
+    expect(unsafe?.targets).toEqual(["/home/x"]);
+    const safe = resolveDeletionTarget(`rm -rf /tmp/x && echo ${padding}`, ROOTS);
+    expect(safe?.unresolvable).toBe(false);
+  });
+
+  it("still recognizes a path-qualified git head in the fallback, where command-normalize.ts's canonicalization never ran", () => {
+    // In the normal path `/usr/bin/git clean` reaches this module already
+    // canonicalized to `git clean`; only the oversized fallback hands it
+    // the raw text, so only this fixture exercises GIT_HEAD_RE's
+    // path-qualified alternative.
+    const padding = "a".repeat(MAX_NORMALIZE_LENGTH + 10);
+    const v = resolveDeletionTarget(`/usr/bin/git clean -fdx /home/y && echo ${padding}`, ROOTS);
+    expect(v?.verb).toBe("git-clean");
+    expect(v?.targets).toEqual(["/home/y"]);
+    expect(v?.unresolvable).toBe(true);
+  });
+});
+
 describe("resolveDeletionTarget — review round 5: oversized-command single-first-segment fallback (LOW)", () => {
   it("falls back to inspecting only the FIRST shell segment past MAX_NORMALIZE_LENGTH, missing a deletion verb in a later segment", () => {
     const padding = "a".repeat(MAX_NORMALIZE_LENGTH + 10);
@@ -635,5 +693,276 @@ describe("resolveDeletionTarget — review round 5: oversized-command single-fir
     // the later `rm -rf /home/x` segment goes entirely unrecognized and
     // the verdict is null (not gated).
     expect(resolveDeletionTarget(cmd, ROOTS)).toBeNull();
+  });
+});
+
+// Task d03af8f6, review round 6: D-023 (any xargs-wrapped deletion is
+// unresolvable), the round-5 inert-test fixes, and the class rules the
+// round-6 adversarial audit added. Each block names the CLASS it pins.
+describe("resolveDeletionTarget — review round 6: ANY xargs-wrapped deletion is unresolvable (D-023)", () => {
+  it.each([
+    "xargs rm -rf /tmp/known",
+    "echo /home/x | xargs rm -rf /tmp/known",
+    "xargs -i rm -rf /tmp/{}",
+    "xargs -0I% rm -rf /tmp/%",
+    "xargs -tI% rm -rf /tmp/%",
+    "xargs --replace=% rm -rf /tmp/%",
+    "xargs --replace % rm -rf /tmp/%",
+    "xargs rm -rf /tmp/{}",
+    "xargs -I{} rm -rf {}",
+    "find /tmp/scratch -print0 | xargs -0 rm -rf",
+    "xargs -I{} find {} -delete",
+    "xargs -I{} git clean -fdx {}",
+    "xargs -n 1 rm -rf",
+    "xargs -P 4 rm -rf",
+    "xargs -a list rm -rf",
+    "xargs -d '\\n' rm -rf",
+    "find /home -print0 | /usr/bin/xargs -0 rm -rf",
+    "cat list | sudo xargs rm -rf",
+    "xargs sudo rm -rf /tmp/known",
+  ])("gates %s without parsing xargs's option vocabulary", (cmd) => {
+    const v = resolveDeletionTarget(cmd, ROOTS);
+    expect(v?.unresolvable).toBe(true);
+    expect(v?.targets[0]).toBe("(xargs-supplied target, not statically known)");
+    expect(v?.unresolvedTargets).toEqual(v?.targets);
+  });
+
+  it("names the verb of the wrapped invocation and reports an explicit operand without resolving it", () => {
+    expect(resolveDeletionTarget("xargs -I{} find {} -delete", ROOTS)?.verb).toBe("find");
+    expect(resolveDeletionTarget("xargs -I{} git clean -fdx {}", ROOTS)?.verb).toBe("git-clean");
+    const v = resolveDeletionTarget("xargs -I{} git clean -fdx {}", ROOTS);
+    expect(v?.targets).toEqual(["(xargs-supplied target, not statically known)", "{}"]);
+  });
+
+  it.each(["xargs ls", "xargs echo", "xargs -I{} mv {} /trash", "xargs rm /tmp/known"])(
+    "keeps %s unrecognized (no deletion-verb head after xargs, or rm without -r/-f)",
+    (cmd) => {
+      expect(resolveDeletionTarget(cmd, ROOTS)).toBeNull();
+    },
+  );
+
+  it("gates xargs echo rm -rf /home/x (forward scan crosses a non-verb word — documented, accepted over-gate)", () => {
+    const v = resolveDeletionTarget("xargs echo rm -rf /home/x", ROOTS);
+    expect(v?.verb).toBe("rm");
+    expect(v?.unresolvable).toBe(true);
+  });
+});
+
+describe("resolveDeletionTarget — review round 6: bare subshell parens are syntax, never operands", () => {
+  it("reports targets == [\"/home/x\"] for ( rm -rf /home/x ) (the lone `)` token is dropped)", () => {
+    const v = resolveDeletionTarget("( rm -rf /home/x )", ROOTS);
+    expect(v?.targets).toEqual(["/home/x"]);
+    expect(v?.unresolvable).toBe(true);
+  });
+
+  it("allows ( rm -rf /tmp/x ) and ( git clean -fdx /tmp/x ) — the lone `)` no longer gates a safe subshell", () => {
+    expect(resolveDeletionTarget("( rm -rf /tmp/x )", ROOTS)?.unresolvable).toBe(false);
+    expect(resolveDeletionTarget("( git clean -fdx /tmp/x )", ROOTS)?.unresolvable).toBe(false);
+  });
+});
+
+describe("resolveDeletionTarget — review round 6: tokenizer follows bash for backslash-space and comments", () => {
+  it("treats /tmp/x\\ y as ONE operand (allowed), like bash does", () => {
+    const v = resolveDeletionTarget("rm -rf /tmp/x\\ y", ROOTS);
+    expect(v?.targets).toEqual(["/tmp/x y"]);
+    expect(v?.unresolvable).toBe(false);
+  });
+
+  it("drops a trailing # comment so rm -rf /tmp/x # cleanup is allowed, but a quoted or escaped # is still an operand", () => {
+    const commented = resolveDeletionTarget("rm -rf /tmp/x # cleanup", ROOTS);
+    expect(commented?.targets).toEqual(["/tmp/x"]);
+    expect(commented?.unresolvable).toBe(false);
+    expect(resolveDeletionTarget("rm -rf /tmp/x '#' /home/y", ROOTS)?.unresolvable).toBe(true);
+    expect(resolveDeletionTarget("rm -rf /tmp/x \\#/home/y", ROOTS)?.unresolvable).toBe(true);
+    // A glued `#` is not a comment start.
+    expect(resolveDeletionTarget("rm -rf /tmp/x#/home/y", ROOTS)?.unresolvable).toBe(false);
+  });
+});
+
+describe("resolveDeletionTarget — review round 6: leading shell keywords and group markers are stripped", () => {
+  it.each([
+    "if true; then rm -rf /home/x; fi",
+    "for f in a; do rm -rf /home/x; done",
+    "! rm -rf /home/x",
+    "while rm -rf /home/x; do :; done",
+    "until rm -rf /home/x; do :; done",
+    "elif rm -rf /home/x; then :; fi",
+    "if [ -d /home/x ]; then rm -rf /home/x; fi",
+    "f() { rm -rf /home/x; }; f",
+    "f(){ rm -rf /home/x; }; f",
+  ])("gates %s", (cmd) => {
+    const v = resolveDeletionTarget(cmd, ROOTS);
+    expect(v?.verb).toBe("rm");
+    expect(v?.unresolvable).toBe(true);
+    expect(v?.targets).toEqual(["/home/x"]);
+  });
+});
+
+describe("resolveDeletionTarget — review round 6: locally-peeled wrappers", () => {
+  it("gates exec -a <name> rm -rf /home/x (the shared peeler would leave <name> as the head)", () => {
+    const v = resolveDeletionTarget("exec -a foo rm -rf /home/x", ROOTS);
+    expect(v?.verb).toBe("rm");
+    expect(v?.targets).toEqual(["/home/x"]);
+  });
+
+  it.each(["busybox rm -rf /home/x", "toybox rm -rf /home/x"])("gates the multi-call binary form %s", (cmd) => {
+    expect(resolveDeletionTarget(cmd, ROOTS)?.targets).toEqual(["/home/x"]);
+  });
+});
+
+describe("resolveDeletionTarget — review round 6: target class rules (each a closed CLASS, measured on bash 3.2)", () => {
+  it.each([
+    ["rm -rf /tmp/x/", "trailing slash follows a symlinked directory into its target"],
+    ["rm -rf /tmp/x/.", "trailing /. follows a symlinked directory into its target"],
+    ["find /tmp/x/ -delete", "trailing slash (find)"],
+    ["rm -rf /tmp/x/../y", ".. through a possibly-symlinked component"],
+    ["rm -rf /tmp/.*", ".* expands to /tmp/.."],
+    ["rm -rf /tmp/x/.*", ".* expands to /tmp/x/.."],
+    ["rm -rf /tmp/..*", "..* expands to /tmp/.."],
+    ["rm -rf /tmp/.?/x", ".? expands to .."],
+    ["rm -rf /tmp/.*/foo", "an intermediate .* expands to .."],
+    ["rm -rf /tmp/.[.]/x", ".[.] expands to .."],
+    ["rm -rf /tmp/.[!x]/y", ".[!x] expands to .."],
+    ["find /tmp/.* -delete", ".* (find)"],
+    ["rm -rf /tmp/{..,x}", "brace expansion yields /tmp/.."],
+    ["rm -rf /tmp/x{,.bak}", "brace expansion (any) is never statically expanded"],
+    ["rm -rf /tmp/`cat<f`", "backtick command substitution inside one token"],
+    ["rm -rf /tmp/@(..)/x", "extglob opener: the ( cut leaves the pattern head"],
+    ["rm -rf /tmp/!(x)", "extglob opener !("],
+    ["rm -rf /tmp/*/../../home", "glob then .."],
+    ["rm -rf /tmp/x/**", "bare ** final component"],
+  ])("gates %s (%s)", (cmd) => {
+    expect(resolveDeletionTarget(cmd, ROOTS)?.unresolvable).toBe(true);
+  });
+
+  it.each([
+    "rm -rf /tmp/x/*.log",
+    "rm -rf /tmp/x/build-*",
+    "rm -rf /tmp/x/.[!.]*",
+    "rm -rf /tmp/x/.??*",
+    "rm -rf /tmp/x/?",
+    "rm -rf /tmp/[.][.]/x",
+    "rm -rf //tmp/x",
+    "rm -rf /tmp/./x",
+    "rm -rf $'/tmp/x'",
+  ])("allows %s (a glob that cannot expand to .. stays resolvable; bash never matches .. without an explicit leading dot)", (cmd) => {
+    expect(resolveDeletionTarget(cmd, ROOTS)?.unresolvable).toBe(false);
+  });
+});
+
+describe("resolveDeletionTarget — review round 6: find", () => {
+  it.each([
+    ["find /tmp/x -exec rm -rf /home/y \\;", ["/tmp/x", "/home/y"]],
+    ["find /tmp/x -delete -exec rm -rf /home/y \\;", ["/tmp/x", "/home/y"]],
+    ["find /tmp/x -exec rm -rf {}/../../../home \\;", ["/tmp/x", "{}/../../../home"]],
+    ["find /tmp/x -execdir rm -rf ../../home \\;", ["/tmp/x", "../../home"]],
+    ["find /tmp/x -exec rm -rf {} \\; -exec rm -rf /home/y \\;", ["/tmp/x", "/tmp/x", "/home/y"]],
+  ])("gates %s — an -exec payload's explicit operands are targets too", (cmd, targets) => {
+    const v = resolveDeletionTarget(cmd, ROOTS);
+    expect(v?.verb).toBe("find");
+    expect(v?.targets).toEqual(targets);
+    expect(v?.unresolvable).toBe(true);
+  });
+
+  it.each([
+    "find /tmp/x -execdir rm -rf {} +",
+    "find /tmp/x -type f -exec rm -f {} +",
+    "find /tmp/x -exec /bin/rm -rf {} +",
+    "find /tmp/x -exec rm -rf -- {} +",
+    "find /tmp/x -exec rm -rf {} ';'",
+    'find /tmp/x -exec rm -rf {} ";"',
+    "find /tmp/x -ok rm -rf {} \\;",
+    "find /tmp/x -exec echo {} \\; -exec rm -rf {} \\;",
+    "find /tmp/x -exec echo {} \\; -delete",
+  ])("allows %s (only the {} placeholder, or the orphaned terminator escape, follows rm)", (cmd) => {
+    const v = resolveDeletionTarget(cmd, ROOTS);
+    expect(v?.verb).toBe("find");
+    expect(v?.unresolvable).toBe(false);
+  });
+
+  it("carries the search root into a continuation segment cut at \\; — find /home/x -exec echo {} \\; -exec rm -rf {} \\; gates on /home/x", () => {
+    const v = resolveDeletionTarget("find /home/x -exec echo {} \\; -exec rm -rf {} \\;", ROOTS);
+    expect(v?.verb).toBe("find");
+    expect(v?.targets).toEqual(["/home/x"]);
+    expect(v?.unresolvable).toBe(true);
+  });
+
+  it("resets the carry once another command intervenes (a -delete after `echo;` is not a find continuation)", () => {
+    expect(resolveDeletionTarget("find /home/x -exec echo {} \\; echo; -delete", ROOTS)).toBeNull();
+  });
+
+  it("covers the ESCAPED grouped expression via the same carry: find /home \\( -name a -o -name b \\) -delete gates, the /tmp/x variant allows", () => {
+    const unsafe = resolveDeletionTarget("find /home \\( -name a -o -name b \\) -delete", ROOTS);
+    expect(unsafe?.targets).toEqual(["/home"]);
+    expect(unsafe?.unresolvable).toBe(true);
+    expect(resolveDeletionTarget("find /tmp/x \\( -name a -o -name b \\) -delete", ROOTS)?.unresolvable).toBe(false);
+    expect(resolveDeletionTarget("find /home \\( -name a \\) -exec rm -rf {} \\;", ROOTS)?.unresolvable).toBe(true);
+  });
+
+  it.each(["find -L /tmp/x -delete", "find -H /tmp/x -delete", "find /tmp/x -follow -delete"])(
+    "gates %s (find follows symlinks, so a root-internal target may resolve outside)",
+    (cmd) => {
+      const v = resolveDeletionTarget(cmd, ROOTS);
+      expect(v?.unresolvable).toBe(true);
+      expect(v?.targets).toEqual(["/tmp/x"]);
+      expect(v?.reason).toContain("follows symlinks");
+    },
+  );
+
+  it.each(["find -P /tmp/x -delete", "find -O3 /tmp/x -delete", "find -f /tmp/x -delete", "find -D search /tmp/x -delete"])(
+    "allows %s (a leading option that does not change the search root is skipped)",
+    (cmd) => {
+      const v = resolveDeletionTarget(cmd, ROOTS);
+      expect(v?.targets).toEqual(["/tmp/x"]);
+      expect(v?.unresolvable).toBe(false);
+    },
+  );
+});
+
+describe("resolveDeletionTarget — review round 6: git clean", () => {
+  it.each([
+    "git -c clean.requireForce=false clean -d",
+    "git -c clean.requireforce=0 clean",
+    "GIT_CONFIG_PARAMETERS='clean.requireForce=false' git clean -d",
+    "git config clean.requireForce false && git clean -d",
+  ])("gates %s (a clean.requireForce override anywhere in the command counts as -f; canonicalization erases -c)", (cmd) => {
+    const v = resolveDeletionTarget(cmd, ROOTS);
+    expect(v?.verb).toBe("git-clean");
+    expect(v?.unresolvable).toBe(true);
+  });
+
+  it.each(["git --no-optional-locks clean -fdx /home/y", "git --literal-pathspecs -c a=b clean -f /home/y"])(
+    "gates %s (an un-canonicalized global option cannot hide the subcommand)",
+    (cmd) => {
+      const v = resolveDeletionTarget(cmd, ROOTS);
+      expect(v?.verb).toBe("git-clean");
+      expect(v?.targets).toEqual(["/home/y"]);
+    },
+  );
+
+  it("treats -e/--exclude as value-taking: git clean -f -e /tmp/x cleans cwd, not /tmp/x", () => {
+    for (const cmd of ["git clean -f -e /tmp/x", "git clean -f --exclude /tmp/x", "git clean -f $'\\x2de' /tmp/x"]) {
+      const v = resolveDeletionTarget(cmd, ROOTS);
+      expect(v?.targets).toEqual(["."]);
+      expect(v?.unresolvable).toBe(true);
+    }
+    expect(resolveDeletionTarget("git clean -f -e /tmp/x /tmp/y", ROOTS)?.unresolvable).toBe(false);
+    expect(resolveDeletionTarget("git clean -f --exclude=/home/y /tmp/x", ROOTS)?.unresolvable).toBe(false);
+  });
+
+  it("keeps a dry run and an unforced clean unrecognized, and a quoted pathspec intact", () => {
+    expect(resolveDeletionTarget("git clean -n", ROOTS)).toBeNull();
+    expect(resolveDeletionTarget("git clean --dry-run", ROOTS)).toBeNull();
+    expect(resolveDeletionTarget("git clean -i", ROOTS)).toBeNull();
+    expect(resolveDeletionTarget('git clean -fdx "/tmp/x y"', ROOTS)?.unresolvable).toBe(false);
+    expect(resolveDeletionTarget("git clean -fdx -- /home/y", ROOTS)?.targets).toEqual(["/home/y"]);
+  });
+});
+
+describe("resolveDeletionTarget — review round 6: quote-unaware amp arm on a quoted literal & (reporting-only ceiling, fail-closed)", () => {
+  it("gates rm -rf '/tmp/a&b' and lists the amp arm's cut-off spelling next to the real operand", () => {
+    const v = resolveDeletionTarget("rm -rf '/tmp/a&b'", ROOTS);
+    expect(v?.unresolvable).toBe(true);
+    expect(v?.targets).toContain("/tmp/a&b");
   });
 });

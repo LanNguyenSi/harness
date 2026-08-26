@@ -239,6 +239,51 @@ describe("intercept — review round 4, HIGH: xargs -I {} rm -rf {} gates end-to
   });
 });
 
+describe("intercept — review round 6: D-023 and the audit's class rules gate end-to-end", () => {
+  it.each([
+    ["xargs with an explicit safe-looking operand (D-023)", "xargs rm -rf /tmp/known"],
+    ["find -exec payload naming an outside operand", "find /tmp/x -exec rm -rf /home/y \\;"],
+    ["git clean forced via a -c config override that canonicalization erases", "git -c clean.requireForce=false clean -d"],
+    ["trailing slash on a root-internal target (symlink follow)", "rm -rf /tmp/x/"],
+    ["dot-glob that expands to ..", "rm -rf /tmp/x/.*"],
+    ["deletion behind a then keyword", "if true; then rm -rf /home/x; fi"],
+  ])("emits require_approval for %s: %j", async (_label, command) => {
+    const ledger = makeLedger();
+    const result = await intercept({
+      manifest: makeManifest({ policies: [DELETION_GATE_POLICY] }),
+      event: bashEvent(command),
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+      riskContext: riskCtx("task/x"),
+    });
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.policyName).toBe("gate-dev-unsafe-deletion");
+    expect(result.decisions[0]?.outcome).toBe("require_approval");
+    expect(result.blockJson?.decision).toBe("block");
+  });
+
+  it.each([
+    ["trailing comment", "rm -rf /tmp/scratch/x # cleanup"],
+    ["backslash-escaped space in one operand", "rm -rf /tmp/scratch/x\\ y"],
+    ["subshell with whitespace-separated parens", "( rm -rf /tmp/scratch/x )"],
+    ["escaped grouped find inside a root", "find /tmp/scratch \\( -name a -o -name b \\) -delete"],
+    ["git clean with a dry run only", "git clean -n"],
+  ])("does not gate %s: %j (no new false positives)", async (_label, command) => {
+    const ledger = makeLedger();
+    const result = await intercept({
+      manifest: makeManifest({ policies: [DELETION_GATE_POLICY] }),
+      event: bashEvent(command),
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+      riskContext: riskCtx("task/x"),
+    });
+    expect(result.decisions).toHaveLength(0);
+    expect(result.blockJson).toBeNull();
+  });
+});
+
 describe("intercept — AC4: production-context regression, deny-first order unaffected", () => {
   const DESTROY_CLASSIFIER: RiskClassifier = {
     name: "dangerous-shell",
