@@ -50,7 +50,10 @@ const DELETION_GATE_POLICY: Policy = {
   description: "require approval for a deletion-verb command whose target cannot be statically proven safe",
   trigger: { event: "PreToolUse", match: "Bash" },
   when: { "action.deletion_target_unresolvable": true },
-  requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
+  // Own ledger tag (task d03af8f6, review round 2, HIGH 2 fix) — see
+  // "cross-tier tag independence" below for why this must NOT be the
+  // same tag gate-prod-destructive-approval consults.
+  requires: { ledger_tag: "risk-approved:deletion:${SESSION_ID}" },
   hook: "h",
   enforcement: "require_approval",
 } as Policy;
@@ -70,7 +73,7 @@ describe("intercept — AC1: dev-context, target outside the allowlist -> requir
     const ledger = makeLedger();
     const result = await intercept({
       manifest: makeManifest({ policies: [DELETION_GATE_POLICY] }),
-      event: bashEvent("rm -rf /home/lan/git/pandora/some-dir"),
+      event: bashEvent("rm -rf /home/user/project/some-dir"),
       ledger,
       builtins: BUILTINS,
       now: NOW,
@@ -84,13 +87,13 @@ describe("intercept — AC1: dev-context, target outside the allowlist -> requir
     expect(result.blockJson?.decision).toBe("block");
   });
 
-  it("resolves to allow once the risk-approved ledger tag is on record (one approval, not per-command)", async () => {
+  it("resolves to allow once the risk-approved:deletion ledger tag is on record (one approval, not per-command)", async () => {
     const ledger = makeLedger([
-      { id: "a1", content: "risk-approved:sess-1", createdAt: NOW.toISOString() },
+      { id: "a1", content: "risk-approved:deletion:sess-1", createdAt: NOW.toISOString() },
     ]);
     const result = await intercept({
       manifest: makeManifest({ policies: [DELETION_GATE_POLICY] }),
-      event: bashEvent("rm -rf /home/lan/git/pandora/some-dir"),
+      event: bashEvent("rm -rf /home/user/project/some-dir"),
       ledger,
       builtins: BUILTINS,
       now: NOW,
@@ -98,6 +101,69 @@ describe("intercept — AC1: dev-context, target outside the allowlist -> requir
     });
     expect(result.decisions[0]?.outcome).toBe("allow");
     expect(result.blockJson).toBeNull();
+  });
+});
+
+describe("intercept — cross-tier tag independence (task d03af8f6, review round 2, HIGH 2)", () => {
+  const GATE_PROD_DESTRUCTIVE_APPROVAL: Policy = {
+    name: "gate-prod-destructive-approval",
+    description: "require operator approval for high-severity destructive shell actions against a production target",
+    trigger: { event: "PreToolUse", match: "Bash" },
+    when: { "risk.severity_at_least": "high", "environment.name": "production" },
+    requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
+    hook: "h",
+    enforcement: "require_approval",
+  } as Policy;
+  const DESTROY_CLASSIFIER: RiskClassifier = {
+    name: "dangerous-shell",
+    tool: "Bash",
+    patterns: [
+      { pattern: "rm\\s+-rf\\s+/", categories: ["destructive", "data_loss"], severity: "high" },
+    ],
+  };
+  const PROD_RESOLVER: EnvironmentResolver = {
+    name: "production-signals",
+    environment: "production",
+    signals: { branch_patterns: ["main"] },
+  };
+
+  it("a deletion-scope approval does NOT clear gate-prod-destructive-approval", async () => {
+    // Approve ONLY the deletion arm's own tag.
+    const ledger = makeLedger([
+      { id: "a1", content: "risk-approved:deletion:sess-1", createdAt: NOW.toISOString() },
+    ]);
+    const result = await intercept({
+      manifest: makeManifest({
+        policies: [GATE_PROD_DESTRUCTIVE_APPROVAL],
+        classifiers: [DESTROY_CLASSIFIER],
+        resolvers: [PROD_RESOLVER],
+      }),
+      event: bashEvent("rm -rf /var/lib/data"),
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+      riskContext: riskCtx("main"),
+    });
+    // Still gated — the shared-tag bug would have cleared this.
+    expect(result.decisions[0]?.outcome).toBe("require_approval");
+    expect(result.blockJson?.decision).toBe("block");
+  });
+
+  it("a production approval does NOT clear the dev-context deletion arm", async () => {
+    // Approve ONLY the production tag.
+    const ledger = makeLedger([
+      { id: "a1", content: "risk-approved:sess-1", createdAt: NOW.toISOString() },
+    ]);
+    const result = await intercept({
+      manifest: makeManifest({ policies: [DELETION_GATE_POLICY] }),
+      event: bashEvent("rm -rf /home/user/project/some-dir"),
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+      riskContext: riskCtx("task/x"),
+    });
+    expect(result.decisions[0]?.outcome).toBe("require_approval");
+    expect(result.blockJson?.decision).toBe("block");
   });
 });
 
@@ -201,7 +267,7 @@ describe("intercept — AC4: production-context regression, deny-first order una
         classifiers: [DESTROY_CLASSIFIER],
         resolvers: [PROD_RESOLVER],
       }),
-      event: bashEvent("rm -rf /home/lan/git/pandora/some-dir"),
+      event: bashEvent("rm -rf /home/user/project/some-dir"),
       ledger,
       builtins: BUILTINS,
       now: NOW,

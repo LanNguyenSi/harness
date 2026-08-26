@@ -23,34 +23,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   existing changed semantics):
   - `src/runtime/deletion-target-resolve.ts`: a pure, regex-free tokenizer
     (no shell spawned) that recognizes `rm -r*`/`-f*`, `find ... -delete`,
-    and `git clean -f*` as the command's first shell segment (composing with,
-    not duplicating, the a7eb1a71 `parseBashPrefix`/kubectl-target-parse
-    environment-signal path) and statically resolves each target: an
-    unexpanded `$VAR`/`~`, a relative path, or a `..`-traversal that
-    normalizes outside every declared root is UNRESOLVABLE; an absolute path
-    inside a declared `risk.safe_deletion_roots` entry is not.
+    and `git clean -f*` across EVERY shell segment of a command and
+    statically resolves each target: an unexpanded `$VAR`/`~`, a relative
+    path, or a `..`-traversal that normalizes outside every declared root
+    is UNRESOLVABLE; an absolute path strictly inside a declared
+    `risk.safe_deletion_roots` entry is not.
   - `risk.safe_deletion_roots` (new manifest key, schema default `["/tmp",
     "/private/tmp"]` — the two spellings this harness's own scratchpad
     convention can use, since macOS symlinks `/tmp` to `/private/tmp`).
   - `when.action.deletion_target_unresolvable` (new `policy.when:` clause,
-    `src/runtime/when-eval.ts`): deliberately NOT subject to the "unknown is
-    not safe" fail-close the four existing risk/environment clauses share —
-    it reads the deletion resolver's own verdict, not the Risk Classifier's
+    `src/runtime/when-eval.ts`, only the literal `true` is a meaningful
+    value): deliberately NOT subject to the "unknown is not safe"
+    fail-close the four existing risk/environment clauses share — it reads
+    the deletion resolver's own verdict, not the Risk Classifier's
     `classified` state, so it never falls back to matched=true for an
     unrelated unclassified command. This is what lets the new policy below
     be environment-independent without becoming a blanket gate.
   - `gate-dev-unsafe-deletion` (new policy, `harness init --template full` +
     `docs/examples/full-manifest.yaml`, additive alongside
     `gate-prod-destructive`/`-approval`): `require_approval` on
-    `action.deletion_target_unresolvable: true`, reusing the same
-    `risk-approved:${SESSION_ID}` ledger tag / `harness approve risk`
-    unblock path the production-scoped approval policy already uses.
+    `action.deletion_target_unresolvable: true`, unblocked via `harness
+    approve risk --scope deletion` (its own ledger tag — see the review
+    round 2 fixes below).
   - The dead alternation in the shipped `dangerous-shell` classifier's
     `rm\s+-rf\s+(/|/var|/data|/mnt|~)` pattern (the bare `/` branch already
     matches every absolute path, so `/var`/`/data`/`/mnt` never
     independently contribute a match) is documented, not changed — see the
     comment in `docs/examples/full-manifest.yaml`; it only feeds the
     existing production-scoped policies, out of this task's scope.
+
+  **Review round 2** (same task, before this line shipped) found the
+  first cut had five measured gaps against a real transcript corpus.
+  Fixed, all additive on top of the pieces above:
+  - **Multi-segment recognition (was HIGH):** round 1 inspected only the
+    command's FIRST shell segment — 656 of 1215 real deletion commands in
+    the operator's own transcript corpus (54%) chained the deletion behind
+    `&&`, a newline, or a prior `VAR=value &&` assignment and ran
+    completely ungated. The resolver now walks EVERY segment
+    (`segmentViewOf`, `src/runtime/command-normalize.ts`) and gates if ANY
+    recognized segment is unresolvable.
+  - **Cross-tier ledger tag (was HIGH, security):** `gate-dev-unsafe-
+    deletion` used to reuse `gate-prod-destructive-approval`'s
+    `risk-approved:${SESSION_ID}` tag, so approving one routine dev-context
+    `rm -rf dist` silently cleared the production approval gate for the
+    rest of the session — measured live (`kubectl delete namespace
+    payments` went BLOCKED -> ALLOWED after one unrelated dev approval).
+    The dev arm now writes/consults its own
+    `risk-approved:deletion:${SESSION_ID}` tag, via a new `harness approve
+    risk --scope deletion` option (`src/cli/approve/risk.ts`); the bare
+    `harness approve risk` keeps writing only the production tag,
+    unchanged.
+  - **Wrapper-head coverage (MEDIUM):** `sudo`/`doas`/`command`/`env`/
+    `time`/`timeout`/`nice`/`xargs` in front of the deletion verb, and
+    `git -C <path> clean -f*`, all now recognize the wrapped verb — a
+    bare `xargs rm -rf` (no explicit operand — the target comes from
+    stdin) is UNRESOLVABLE, not "not a deletion" the way an ordinary
+    operand-less `rm -rf` is.
+  - **Root-itself / bare-glob targets (MEDIUM):** `rm -rf /tmp`, `rm -rf
+    /tmp/`, and `rm -rf /tmp/*` used to resolve as safe — a target must
+    now be STRICTLY deeper than a declared root, and a bare `*`/`**` final
+    path segment is never resolvable regardless of the root it sits under.
+  - **Obfuscated flags (LOW):** every token is decoded with
+    `decodeShellWord` (`src/runtime/shell-word.ts`) before any verb/flag/
+    `-delete` comparison, so `find /x $'\x2ddelete'` / `git clean
+    $'\x2df'` are recognized.
+  - **`safe_deletion_roots` hygiene (LOW):** a bare `/` (or `//`, ...)
+    entry is now a schema parse error (it would match every absolute
+    path, silently defeating the allowlist); a non-absolute entry or one
+    containing `$`/`~` is a new `harness validate` warning
+    (`checkSafeDeletionRootsSyntax`, `src/cli/validate/checks.ts`).
+  - Deduplicated the tokenizer against `kubectl-target-parse.ts` instead
+    of tolerating the round-1 clone pair: `firstSegment` is now exported
+    there (pure visibility change) and imported; `check:duplication`'s
+    pinned baseline is back at 109 (was raised to 110 in round 1).
 
 ## [0.49.0] - 2026-08-26
 

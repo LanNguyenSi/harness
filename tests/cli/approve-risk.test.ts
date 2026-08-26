@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { approveRisk } from "../../src/cli/approve/risk.js";
+import { approveRisk, riskApprovedTagFor } from "../../src/cli/approve/risk.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
 import { makeManifest } from "../_helpers/manifest.js";
 import type { McpServer } from "../../src/schema/index.js";
@@ -159,6 +159,44 @@ describe("approveRisk — happy path", () => {
     });
     expect(result.sessionId).toBe("staged-sess");
     expect(result.sessionSource).toBe("pending-approval");
+  });
+});
+
+describe("approveRisk — --scope deletion (task d03af8f6, review round 2, HIGH 2)", () => {
+  it("writes risk-approved:deletion:<session> instead of the shared production tag", () => {
+    expect(riskApprovedTagFor("sess-xyz", "deletion")).toBe("risk-approved:deletion:sess-xyz");
+  });
+
+  it("the default (no scope) keeps writing only the production tag, unchanged", () => {
+    expect(riskApprovedTagFor("sess-xyz")).toBe("risk-approved:sess-xyz");
+  });
+
+  it("approveRisk({ scope: 'deletion' }) writes the deletion-scoped tag end to end", async () => {
+    const calls: Array<{ sessionId: string; content: string }> = [];
+    const result = await approveRisk({
+      session: "sess-xyz",
+      scope: "deletion",
+      generatedDir: tmpGeneratedDir(),
+      manifest: manifestWithGrounding(),
+      ledgerAdd: async (sessionId, content) => {
+        calls.push({ sessionId, content });
+        return { ok: true };
+      },
+    });
+    expect(result.ledger).toEqual({ ok: true, tag: "risk-approved:deletion:sess-xyz" });
+    expect(calls).toEqual([
+      { sessionId: "sess-xyz", content: "risk-approved:deletion:sess-xyz" },
+    ]);
+  });
+
+  it("a plain (unscoped) approveRisk() call is unaffected — no cross-tier bleed from the new option existing", async () => {
+    const result = await approveRisk({
+      session: "sess-xyz",
+      generatedDir: tmpGeneratedDir(),
+      manifest: manifestWithGrounding(),
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(result.ledger.tag).toBe("risk-approved:sess-xyz");
   });
 });
 

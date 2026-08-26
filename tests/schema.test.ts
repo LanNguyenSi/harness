@@ -132,6 +132,22 @@ describe("parseManifest — happy path", () => {
     ).toThrow(/invalid enum|Invalid enum|invalid_value/i);
   });
 
+  it("rejects a bare '/' risk.safe_deletion_roots entry — it would match every absolute path (task d03af8f6, review round 2, LOW (a))", () => {
+    expect(() =>
+      parseManifest({
+        version: 1,
+        risk: { safe_deletion_roots: ["/"] },
+      }),
+    ).toThrow(/filesystem root itself|defeating the allowlist/i);
+    // A trailing-slash spelling of the same mistake is caught too.
+    expect(() =>
+      parseManifest({
+        version: 1,
+        risk: { safe_deletion_roots: ["//"] },
+      }),
+    ).toThrow(/filesystem root itself|defeating the allowlist/i);
+  });
+
   it("accepts a string command for tools.mcp[].command", () => {
     const m = parseManifest({
       version: 1,
@@ -1200,6 +1216,26 @@ describe("parseManifest — Phase 7 risk-gate vocabulary", () => {
       ],
     });
     expect(m.policies[0]?.when?.["environment.name"]).toBe("unknown");
+  });
+
+  it("rejects action.deletion_target_unresolvable: false — only true is a meaningful polarity (task d03af8f6, review round 2)", () => {
+    expect(() =>
+      parseManifest({
+        version: 1,
+        hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
+        policies: [
+          {
+            name: "p",
+            description: "d",
+            trigger: { event: "PreToolUse" },
+            requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
+            hook: "h",
+            enforcement: "block",
+            when: { "action.deletion_target_unresolvable": false },
+          },
+        ],
+      }),
+    ).toThrow(/invalid_literal|invalid literal|expected true/i);
   });
 
   it("rejects an unknown clause key inside when: (.strict)", () => {

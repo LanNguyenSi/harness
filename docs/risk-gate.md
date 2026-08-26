@@ -554,9 +554,11 @@ audit record and is still visible in `harness audit` and `explain --trace`.
 
 ### Dev-context deletion gate (`action.deletion_target_unresolvable`)
 
-*Status: live as of task `d03af8f6`. Additive alongside
-`gate-prod-destructive`/`gate-prod-destructive-approval`; nothing about
-those two policies changed.*
+*Status: live as of task `d03af8f6`, revised in that task's own review
+round 2 (five measured gaps against a real transcript corpus — see
+below). Additive alongside `gate-prod-destructive`/
+`gate-prod-destructive-approval`; nothing about those two policies
+changed.*
 
 `gate-prod-destructive`/`-approval` gate on `risk.severity_at_least` +
 `environment.name: production`, so on an ordinary task branch —
@@ -571,31 +573,45 @@ This gate closes that gap WITHOUT scoping to production, using a
 DIFFERENT mechanism than the four `risk.*`/`environment.*` clauses above:
 
 - **`src/runtime/deletion-target-resolve.ts`** recognizes a deletion verb
-  — `rm` with a recursive (`-r`/`-R`/`--recursive`) or force
-  (`-f`/`--force`) flag, `find ... -delete`, or `git clean` with a force
-  flag (`-f`/`--force`/a short cluster containing `f`) — as the
-  command's FIRST shell segment, after stripping a leading `cd <path>
-  &&` / `VAR=value` / `git switch|checkout <branch> &&` prefix via the
-  same `parseBashPrefix` the a7eb1a71 kubectl-target-parse environment
-  signal already uses (composing with that path, not duplicating it). A
-  deletion verb that is not the first chained segment
-  (`echo hi && rm -rf /x`) is not recognized — the existing
-  `dangerous-shell` classifier's unanchored regex already covers a
-  dangerous tail for the production-scoped policies; this gate is the
-  narrower dev-context safety net. No regex is used anywhere in this
-  module: it is a whitespace/quote-aware tokenizer over the flag and
-  target tokens, not a pattern matched against the raw string, so there
-  is no ReDoS surface to measure here.
+  — `rm` (bare or path-qualified, e.g. `/bin/rm`) with a recursive
+  (`-r`/`-R`/`--recursive`) or force (`-f`/`--force`) flag, `find ...
+  -delete`, or `git clean` with a force flag (`-f`/`--force`/a short
+  cluster containing `f`) — across **every shell segment** of the
+  command, not just the first. Segmentation reuses `segmentViewOf`
+  (`src/runtime/command-normalize.ts`), the same per-segment view the
+  attributed-context resolver already consumes, which also canonicalizes
+  a git invocation's own global options (`git -C /repo clean -fdx` ->
+  `git clean -fdx`). A wrapper immediately in front of the verb —
+  `sudo`, `doas`, `command`, `env` (consuming its `VAR=value` args),
+  `time`, `timeout` (consuming its duration arg), `nice`, and `xargs` —
+  is peeled before the head test; `xargs rm -rf` with no explicit
+  operand is **unresolvable** (its real target comes from stdin, never
+  statically knowable) rather than "not a deletion" the way a bare,
+  operand-less `rm -rf` is. Every token is decoded with
+  `decodeShellWord` (`src/runtime/shell-word.ts`) before any verb/flag/
+  `-delete` comparison, so a flag hidden behind quote concatenation or an
+  ANSI-C escape (`find /x $'\x2ddelete'`) is still recognized. No regex
+  with a nested quantifier is used anywhere in this module — it is a
+  whitespace/quote-aware tokenizer over the flag and target tokens, plus
+  one bounded, non-nested `/^(?:\S*\/)?rm$/` head pattern, so there is no
+  ReDoS surface to measure here. A chained command's verdict is the OR of
+  every recognized segment's: **unresolvable if ANY recognized segment
+  is, resolved only if ALL of them are.**
 - Each target token is resolved STATICALLY — no filesystem I/O, no
   process-env read, no shell-variable expansion, no cwd substitution:
-  - a token containing `$` (an unexpanded variable reference), starting
-    with `~` (unexpanded home directory), or not starting with `/`
-    (relative — this resolver deliberately does not consult the event's
-    cwd) is **unresolvable**;
+  - a token containing `$` (an unexpanded variable reference) or not
+    starting with `/` (relative — this also covers every `~`-prefixed
+    token, since `~` is never `/`-prefixed; this resolver deliberately
+    does not consult the event's cwd) is **unresolvable**;
   - an absolute path is normalized (`..`-traversal collapsed lexically)
     and compared against every `risk.safe_deletion_roots` entry as a
-    directory-prefix match; inside one of them is **resolved**, outside
-    every one of them is **unresolvable**.
+    directory-prefix match; **strictly inside** one of them (the root
+    path ITSELF does not count: `rm -rf /tmp` is unresolvable, not
+    resolved) is **resolved**. A target whose final path segment is a
+    bare glob-sugar `*`/`**` (`rm -rf /tmp/*`) is always **unresolvable**,
+    regardless of which root it would otherwise sit under — it names
+    "whatever the directory currently contains," not a specific,
+    provably-safe path.
 - **`risk.safe_deletion_roots`** (new manifest key, under `risk:`
   alongside `classifiers:`) is the allowlist those absolute targets are
   checked against:
@@ -613,19 +629,29 @@ DIFFERENT mechanism than the four `risk.*`/`environment.*` clauses above:
   under either spelling. An operator-declared list REPLACES the
   default, it does not merge with it. An entry may end in a trailing
   `/**` or `/*` as documentation sugar (stripped before matching); this
-  is a plain directory-prefix check, not a real glob engine.
+  is a plain directory-prefix check, not a real glob engine. A bare `/`
+  entry (or any entry that is nothing but `/` characters) is a schema
+  parse error: it would match every absolute path, silently defeating
+  the allowlist. A non-absolute entry, or one containing a literal `$`
+  or `~` (this resolver never expands either), is a `harness validate`
+  warning instead — the resolver still fails CLOSED for the target that
+  entry was meant to cover, so it is a usability lint, not a security
+  gap needing a parse-time refusal.
 - **`when.action.deletion_target_unresolvable: true`** (new `when:`
-  clause) reads the verdict above. Unlike `risk.severity_at_least` /
-  `risk.category_in` / `action.reversible`, this clause is **never**
-  subject to the "unknown is not safe" fail-close described below: an
-  action the deletion resolver does not recognize as a deletion verb at
-  all (`deletionTarget === null`) simply does not satisfy `true` here —
-  it never falls back to matched=true the way the risk-derived clauses
-  do for an unclassified action. This is deliberate and load-bearing:
-  those clauses fail-close because "we could not classify this generic
-  action" is itself risk-bearing, but doing the same for THIS clause
-  would turn an unscoped policy into a blanket gate on every unrelated
-  unclassified Bash call, in every environment — approval-spam, not a
+  clause; only the literal `true` is a meaningful value — the schema
+  rejects `false`, since a chained non-deletion command would otherwise
+  match it via the resolver's `null` verdict) reads the verdict above.
+  Unlike `risk.severity_at_least` / `risk.category_in` /
+  `action.reversible`, this clause is **never** subject to the "unknown
+  is not safe" fail-close described below: an action the deletion
+  resolver does not recognize as a deletion verb at all
+  (`deletionTarget === null`) simply does not satisfy `true` here — it
+  never falls back to matched=true the way the risk-derived clauses do
+  for an unclassified action. This is deliberate and load-bearing: those
+  clauses fail-close because "we could not classify this generic action"
+  is itself risk-bearing, but doing the same for THIS clause would turn
+  an unscoped policy into a blanket gate on every unrelated unclassified
+  Bash call, in every environment — approval-spam, not a
   deletion-specific gate. Because the clause is exempt, the shipped
   `gate-dev-unsafe-deletion` policy below needs no `environment.name`
   scope, and `harness validate`'s footgun lint
@@ -636,11 +662,21 @@ DIFFERENT mechanism than the four `risk.*`/`environment.*` clauses above:
   `harness init --template full` and `docs/examples/full-manifest.yaml`,
   additive next to `gate-prod-destructive`/`-approval`): `require_approval`
   on `action.deletion_target_unresolvable: true`, no `environment.name`
-  clause, reusing the same `risk-approved:${SESSION_ID}` ledger tag and
-  `harness approve risk` unblock path the production-scoped approval
-  policy already uses — one operator approval clears the tag for the
-  rest of the session, so a misdirected command costs one approval, not
-  repeated approval prompts.
+  clause. It consults its **own** ledger tag,
+  `risk-approved:deletion:${SESSION_ID}` — a SEPARATE tag from
+  `gate-prod-destructive-approval`'s `risk-approved:${SESSION_ID}`.
+  `harness approve risk --scope deletion` writes it; the bare `harness
+  approve risk` (no `--scope`) keeps writing only the production tag.
+  This is deliberate: an earlier revision of this gate shared the
+  production tag, so approving one routine dev-context `rm -rf dist`
+  silently cleared `gate-prod-destructive-approval` for the rest of the
+  session — measured live (a subsequent `kubectl delete namespace
+  payments` went from BLOCKED to ALLOWED after one unrelated
+  `risk-approved:${SESSION_ID}` ledger entry). Like the production tag,
+  the deletion tag's approval lifetime is session-wide (a deliberate DX
+  trade-off, not a bug): one operator approval clears it for every
+  subsequent unresolvable deletion in that session, not just the one
+  that triggered it.
 - **Deny-first order is unaffected.** `gate-dev-unsafe-deletion` is
   listed AFTER `gate-prod-destructive`/`-approval` in both shipped
   manifests. When environment resolves to `production` AND the target is
@@ -649,10 +685,24 @@ DIFFERENT mechanism than the four `risk.*`/`environment.*` clauses above:
   decision `intercept()` finds — this gate never downgrades an existing
   production deny to a mere approval prompt.
 
+**Adopting this on an existing install.** `harness apply`/`init` never
+retroactively add a newly-shipped default policy to an
+already-materialized `harness.yaml` (see "Version history that matters"
+in `docs/okf/policy-engine-producer-wiring.md` and
+`checkTemplatePolicyDrift`'s own doc comment) — an install from before
+task `d03af8f6` does not gain this gate just by upgrading the `harness`
+package. To add it by hand: copy the `gate-dev-unsafe-deletion` policy
+block from `docs/examples/full-manifest.yaml` into your `policies:` list,
+and add a `risk.safe_deletion_roots` block (or rely on the schema
+default `["/tmp", "/private/tmp"]` if that already covers your scratch
+convention) — `harness validate` will flag a malformed roots entry (see
+above) once it is in place.
+
 Inspect the resolver's verdict directly with
 `harness explain-policy gate-dev-unsafe-deletion --event <event.json>`:
 the projection's `deletion_target` field shows the recognized verb,
-every target, which targets were unresolved, and why.
+every target (across every recognized segment, when a chained command
+names more than one), which targets were unresolved, and why.
 
 ## Decision model
 

@@ -131,6 +131,19 @@ export const PolicyUxSchema = z
 //                            every unrelated unclassified command — see
 //                            src/runtime/when-eval.ts and
 //                            src/runtime/deletion-target-resolve.ts.
+//                            ONLY `true` is a meaningful value (task
+//                            d03af8f6, review round 2): a resolver
+//                            verdict is either `unresolvable: true` (gate
+//                            it) or the action never reaches this clause
+//                            at all (a resolved-safe target or a
+//                            non-deletion command both simply fail to
+//                            match `true`) — `false` would match every
+//                            non-deletion-verb command in the manifest
+//                            (verdict `null` -> "actual" false -> equals
+//                            declared `false`), which is never the
+//                            intent of a `when:` clause naming this key.
+//                            The schema accepts only the literal `true`;
+//                            `false` is a validate-time error.
 // An empty `when: {}` is rejected: it would be a silent no-op.
 export const PolicyWhenSchema = z
   .object({
@@ -138,7 +151,7 @@ export const PolicyWhenSchema = z
     "risk.category_in": z.array(RiskCategorySchema).min(1).optional(),
     "environment.name": MatchableEnvironmentSchema.optional(),
     "action.reversible": z.boolean().optional(),
-    "action.deletion_target_unresolvable": z.boolean().optional(),
+    "action.deletion_target_unresolvable": z.literal(true).optional(),
   })
   .strict()
   .superRefine((when, ctx) => {

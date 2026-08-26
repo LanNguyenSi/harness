@@ -405,23 +405,23 @@ policies:
       event: PreToolUse
       match: Bash
     requires:
-      ledger_tag: risk-approved:${SESSION_ID}
+      ledger_tag: risk-approved:deletion:${SESSION_ID}
     hook: risk-gate
     enforcement: require_approval
     producers:
       - kind: ask
-        command: harness approve risk
+        command: harness approve risk --scope deletion
         description: Operator approves this Risk Gate decision from their own shell.
       - kind: mcp
         verb: mcp__grounding-mcp__ledger_add
-        example: '{sessionId:"${SESSION_ID}", type:"fact", content:"risk-approved:${SESSION_ID} — operator-authorized", source:"operator"}'
+        example: '{sessionId:"${SESSION_ID}", type:"fact", content:"risk-approved:deletion:${SESSION_ID} — operator-authorized", source:"operator"}'
         description: Recovery path if the approve verb is unavailable; only meaningful when the OPERATOR authorizes the content.
     ux:
       cannot: You cannot run this deletion command yet — its target cannot be statically proven safe.
       required:
         - operator approval of this Risk Gate decision, OR an absolute target inside a declared risk.safe_deletion_roots entry
       run:
-        - harness approve risk
+        - harness approve risk --scope deletion
         - "Or point the command at a path under risk.safe_deletion_roots (default: /tmp, /private/tmp) instead of an unresolved variable, relative path, or traversal."
     when:
       action.deletion_target_unresolvable: true

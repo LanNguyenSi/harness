@@ -25,6 +25,24 @@ export interface ApproveRiskOptions extends LoaderOptions {
   /** Explicit session id (overrides $CLAUDE_CODE_SESSION_ID / $CLAUDE_SESSION_ID / $CODEX_SESSION_ID). */
   session?: string;
   /**
+   * Restrict the ledger tag this verb writes to one Risk Gate ARM
+   * instead of the shared production tag (task d03af8f6, review round
+   * 2, HIGH 2 fix). `"deletion"` writes
+   * `risk-approved:deletion:${SESSION_ID}` — the tag
+   * `gate-dev-unsafe-deletion` alone consults — instead of the default
+   * `risk-approved:${SESSION_ID}` that BOTH `gate-prod-destructive-
+   * approval` and (before this fix) `gate-dev-unsafe-deletion` used to
+   * share. The measured bug this closes: approving a routine `rm -rf
+   * dist` on a task branch used to clear `gate-prod-destructive-
+   * approval` for the rest of the session too, since both policies
+   * consulted the exact same tag. Omitted (the default) writes ONLY the
+   * production tag, unchanged from before this option existed — an
+   * operator who never passes `--scope` sees no behavior change at all.
+   * Ignored when `force` is set (a forced override always writes the
+   * deny-tier `risk-override:` tag, which has no scope of its own).
+   */
+  scope?: "deletion";
+  /**
    * Operator-deliberate override of a Risk Gate `deny` decision. Writes
    * `risk-override:${SESSION_ID}:forced:<reason-slug>` instead of the
    * default `risk-approved:${SESSION_ID}` tag, so the built-in
@@ -79,9 +97,19 @@ export interface ApproveRiskResult {
 const RISK_APPROVED_PREFIX = "risk-approved";
 const RISK_OVERRIDE_PREFIX = "risk-override";
 
-/** The evidence-ledger tag a Risk Gate `require_approval` policy consults. */
-export function riskApprovedTagFor(sessionId: string): string {
-  return `${RISK_APPROVED_PREFIX}:${sessionId}`;
+/**
+ * The evidence-ledger tag a Risk Gate `require_approval` policy
+ * consults. With no `scope`, this is the SHARED production tag
+ * `gate-prod-destructive-approval` consults (unchanged since Phase 7
+ * #6). `scope: "deletion"` (task d03af8f6, review round 2) writes the
+ * dev-context deletion arm's OWN tag instead — `gate-dev-unsafe-
+ * deletion` consults `risk-approved:deletion:${SESSION_ID}` exclusively,
+ * so approving one does not clear the other. See `ApproveRiskOptions.scope`.
+ */
+export function riskApprovedTagFor(sessionId: string, scope?: "deletion"): string {
+  return scope === "deletion"
+    ? `${RISK_APPROVED_PREFIX}:deletion:${sessionId}`
+    : `${RISK_APPROVED_PREFIX}:${sessionId}`;
 }
 
 /**
@@ -250,7 +278,7 @@ export async function approveRisk(
   const forced = opts.force !== undefined;
   const tag = forced
     ? riskOverrideTagFor(sessionId, opts.force!.reason)
-    : riskApprovedTagFor(sessionId);
+    : riskApprovedTagFor(sessionId, opts.scope);
   const ledgerResult = manifest
     ? await writeLedgerTag(manifest, sessionId, tag, opts)
     : { ok: false as const, reason: "manifest unreadable; skipped ledger write" };

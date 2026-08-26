@@ -356,14 +356,6 @@ describe("evaluateWhen — action.deletion_target_unresolvable (task d03af8f6)",
     expect(result.matched).toBe(false);
   });
 
-  it("supports gating on `false` (target resolved) as an explicit allow-only clause", () => {
-    const result = evaluateWhen(
-      { "action.deletion_target_unresolvable": false },
-      { risk: UNCLASSIFIED, environment: env("unknown"), deletionTarget: RESOLVED },
-    );
-    expect(result.matched).toBe(true);
-  });
-
   it("ANDs with other clauses normally (composes with environment.name if an operator chooses to add one)", () => {
     const result = evaluateWhen(
       {

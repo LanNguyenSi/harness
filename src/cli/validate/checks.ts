@@ -466,6 +466,53 @@ export function checkPolicyRiskWithoutEnvScope(manifest: Manifest): Diagnostic[]
   return diags;
 }
 
+// Safe-deletion-root syntax lint (task d03af8f6, review round 2, LOW (a)).
+// `resolveDeletionTarget` (`src/runtime/deletion-target-resolve.ts`) only
+// ever treats an ABSOLUTE, plain-literal `risk.safe_deletion_roots` entry
+// as an allowlist member — a relative entry can never match any target
+// (every target the resolver considers absolute-checks against is itself
+// required to be absolute first, so a relative root is silently
+// dead weight), and an entry containing `$` or `~` reads as a LITERAL
+// dollar-sign/tilde character (this resolver never expands either), not
+// the shell construct an operator likely intended when writing it. Both
+// shapes are a config mistake the operator would otherwise discover only
+// by noticing a deletion that should have been allowed still got gated.
+// Warning-severity (not an error): unlike the bare-`/` case in
+// `RiskSchema`'s own `superRefine` (which defeats the allowlist in the
+// DANGEROUS direction — matching too much), a malformed entry here only
+// fails to widen the allowlist — the resolver still fails CLOSED
+// (unresolvable) for a target that entry was meant to cover, so it is a
+// usability lint, not a security gap needing a parse-time refusal.
+export function checkSafeDeletionRootsSyntax(manifest: Manifest): Diagnostic[] {
+  const diags: Diagnostic[] = [];
+  manifest.risk.safe_deletion_roots.forEach((root, i) => {
+    const trimmed = root.trim();
+    if (!trimmed.startsWith("/")) {
+      diags.push({
+        severity: "warning",
+        path: `risk.safe_deletion_roots[${i}]`,
+        message:
+          `risk.safe_deletion_roots entry "${root}" is not an absolute path — ` +
+          `resolveDeletionTarget only ever matches an absolute target against this list, ` +
+          `so a relative entry can never allow anything. See docs/risk-gate.md.`,
+      });
+      return;
+    }
+    if (trimmed.includes("$") || trimmed.includes("~")) {
+      diags.push({
+        severity: "warning",
+        path: `risk.safe_deletion_roots[${i}]`,
+        message:
+          `risk.safe_deletion_roots entry "${root}" contains "$" or "~" — this resolver never ` +
+          `expands a shell variable or home-directory reference, so the entry is matched as a ` +
+          `LITERAL "$"/"~" character, almost certainly not what was intended. Write the fully ` +
+          `expanded absolute path instead. See docs/risk-gate.md.`,
+      });
+    }
+  });
+  return diags;
+}
+
 // Template-policy drift (task adf037c1): an installed harness.yaml ages in
 // place — `harness apply` never retroactively adds newly-shipped default
 // policies to an already-materialized manifest, so security policies
@@ -1047,6 +1094,7 @@ export function runAssetChecks(
     ...checkPolicyPacks(manifest),
     ...checkPolicyPackConfigsAsDiagnostics(manifest),
     ...checkPolicyRiskWithoutEnvScope(manifest),
+    ...checkSafeDeletionRootsSyntax(manifest),
     ...checkPolicySelfAttestation(manifest),
     ...checkHookBudgetLedgerMargin(manifest),
   ];

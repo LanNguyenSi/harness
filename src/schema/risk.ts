@@ -145,6 +145,28 @@ export const RiskSchema = z
       }
       seen.add(c.name);
     });
+    // A bare filesystem-root entry (task d03af8f6, review round 2, LOW
+    // (a)) would match every absolute path as "inside" it via the
+    // resolver's own `target.startsWith(root + "/")` prefix check —
+    // silently defeating the entire point of an allowlist. Rejected at
+    // parse time with a message rather than special-cased to "matches
+    // everything" at runtime, since an operator who wrote "/" almost
+    // certainly meant a specific subdirectory. Non-absolute entries and
+    // ones containing `$`/`~` are a `harness validate` LINT instead (a
+    // warning, not a parse-time error) — see
+    // `checkSafeDeletionRootsSyntax` in `src/cli/validate/checks.ts`.
+    risk.safe_deletion_roots.forEach((root, i) => {
+      if (/^\/+$/.test(root.trim())) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["safe_deletion_roots", i],
+          message:
+            `risk.safe_deletion_roots entry "${root}" is the filesystem root itself: every ` +
+            `absolute deletion target would match it as "inside," defeating the allowlist. ` +
+            `Declare specific subdirectories instead (e.g. "/tmp").`,
+        });
+      }
+    });
   });
 
 export type DegradedFailPosture = z.infer<typeof DegradedFailPostureSchema>;

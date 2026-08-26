@@ -519,6 +519,16 @@ policies:
   # for a recognized deletion verb (`rm -r*`/`-f*`, `find ... -delete`,
   # `git clean -f*`) whose target(s) cannot be statically proven inside
   # `risk.safe_deletion_roots` (below). See docs/risk-gate.md.
+  #
+  # UPDATE (task d03af8f6, review round 2, HIGH 2 fix): this policy now
+  # consults its OWN ledger tag (`risk-approved:deletion:${SESSION_ID}`)
+  # instead of the tag `gate-prod-destructive-approval` above also
+  # consults. Sharing one tag meant approving a routine dev-context
+  # deletion (`rm -rf dist`) silently cleared the production approval
+  # gate for the rest of the session too — measured live. `harness
+  # approve risk --scope deletion` writes this tag; the bare `harness
+  # approve risk` (no `--scope`) keeps writing only the production tag,
+  # unchanged.
   - name: gate-dev-unsafe-deletion
     description: Require approval for a deletion-verb command whose target cannot be statically proven safe, in every environment.
     trigger:
@@ -527,23 +537,23 @@ policies:
     when:
       action.deletion_target_unresolvable: true
     requires:
-      ledger_tag: "risk-approved:${SESSION_ID}"
+      ledger_tag: "risk-approved:deletion:${SESSION_ID}"
     hook: risk-gate
     enforcement: require_approval
     producers:
       - kind: ask
-        command: harness approve risk
+        command: harness approve risk --scope deletion
         description: Operator approves this Risk Gate decision from their own shell.
       - kind: mcp
         verb: mcp__grounding-mcp__ledger_add
-        example: '{sessionId:"${SESSION_ID}", type:"fact", content:"risk-approved:${SESSION_ID} — operator-authorized", source:"operator"}'
+        example: '{sessionId:"${SESSION_ID}", type:"fact", content:"risk-approved:deletion:${SESSION_ID} — operator-authorized", source:"operator"}'
         description: Recovery path if the approve verb is unavailable; only meaningful when the OPERATOR authorizes the content.
     ux:
       cannot: "You cannot run this deletion command yet — its target cannot be statically proven safe."
       required:
         - "operator approval of this Risk Gate decision, OR an absolute target inside a declared risk.safe_deletion_roots entry"
       run:
-        - "harness approve risk"
+        - "harness approve risk --scope deletion"
         - "Or point the command at a path under risk.safe_deletion_roots (default: /tmp, /private/tmp) instead of an unresolved variable, relative path, or traversal."
 
   # deny-kill-switch-bypass / deny-session-env-strip / deny-pause-sentinel-forgery

@@ -1295,6 +1295,61 @@ policies:
   });
 });
 
+describe("validate — checkSafeDeletionRootsSyntax (task d03af8f6, review round 2, LOW (a))", () => {
+  function buildSafeRootsFixture(roots: string): string {
+    const yaml = `version: 1
+hooks:
+  - name: h
+    event: PreToolUse
+    command: /usr/bin/true
+    blocking: false
+risk:
+  safe_deletion_roots:
+${roots}
+`;
+    return writeFixture({ "harness.yaml": yaml });
+  }
+
+  it("warns on a non-absolute risk.safe_deletion_roots entry", () => {
+    const home = buildSafeRootsFixture("    - scratch");
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const hit = result.diagnostics.find(
+      (d) => d.severity === "warning" && /not an absolute path/i.test(d.message),
+    );
+    expect(hit).toBeDefined();
+    expect(hit?.path).toBe("risk.safe_deletion_roots[0]");
+  });
+
+  it("warns on a risk.safe_deletion_roots entry containing $ or ~", () => {
+    const home = buildSafeRootsFixture('    - "/tmp/$SCRATCH"');
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const hit = result.diagnostics.find(
+      (d) => d.severity === "warning" && /never expands|LITERAL/i.test(d.message),
+    );
+    expect(hit).toBeDefined();
+    expect(hit?.path).toBe("risk.safe_deletion_roots[0]");
+  });
+
+  it("does NOT warn on a well-formed absolute risk.safe_deletion_roots entry (negative control)", () => {
+    const home = buildSafeRootsFixture("    - /tmp");
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const hit = result.diagnostics.find((d) => d.path === "risk.safe_deletion_roots[0]");
+    expect(hit).toBeUndefined();
+  });
+});
+
 describe("validate — checkPolicySelfAttestation (task 43b107f2)", () => {
   // A block policy's requires.ledger_tag is satisfiable by any ledger
   // writer, including the gated agent. The check warns ONLY when no

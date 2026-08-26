@@ -50,7 +50,7 @@ const MANIFEST: Manifest = parseManifest({
       description: "require approval for a deletion-verb command whose target cannot be statically proven safe",
       trigger: { event: "PreToolUse", match: "Bash" },
       when: { "action.deletion_target_unresolvable": true },
-      requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
+      requires: { ledger_tag: "risk-approved:deletion:${SESSION_ID}" },
       hook: "risk-gate",
       enforcement: "require_approval",
     },
@@ -72,7 +72,7 @@ const seams = (branch: string) => ({
 
 describe("explainPolicy — AC1: dev-context, target outside the allowlist", () => {
   it("reports applies:true with environment unknown", () => {
-    const file = writeEvent("rm -rf /home/lan/git/pandora/some-dir");
+    const file = writeEvent("rm -rf /home/user/project/some-dir");
     const { projection } = explainPolicy("gate-dev-unsafe-deletion", {
       ...seams("task/x"),
       eventPath: file,
@@ -82,7 +82,7 @@ describe("explainPolicy — AC1: dev-context, target outside the allowlist", () 
     expect(projection.deletion_target).toMatchObject({
       verb: "rm",
       unresolvable: true,
-      unresolvedTargets: ["/home/lan/git/pandora/some-dir"],
+      unresolvedTargets: ["/home/user/project/some-dir"],
     });
     expect(projection.when).toMatchObject({ declared: true, matched: true });
     expect(projection.applies).toBe(true);
