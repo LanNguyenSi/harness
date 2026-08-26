@@ -1086,6 +1086,12 @@ const BOUNDARY_GROUP_RE = /^\(([^)]*)\)/;
  * regex source string (e.g. `"(^|\\n|;|\\||&|\\()..."` -> `"^|\\n|;|\\||&|\\("`).
  * Returns `undefined` when the string does not open with a parenthesized
  * group; defensive only, every shipped template entry does.
+ *
+ * Known limitation: the scan is not escape-aware, so an escaped closing
+ * paren (`\\)`) inside the group would truncate the match early at that
+ * `)` character instead of continuing past it. No shipped FULL_TEMPLATE
+ * boundary contains one today; a future boundary that needs a literal
+ * `)` inside the alternation would need this scan widened first.
  */
 export function extractBashMatchBoundary(bashMatch: string): string | undefined {
   return BOUNDARY_GROUP_RE.exec(bashMatch)?.[1];
@@ -1096,10 +1102,13 @@ export function extractBashMatchBoundary(bashMatch: string): string | undefined 
  * declares a `bash_match`, paired with its boundary-alternation group
  * (task 037cfb7c). Parsed from FULL_TEMPLATE itself, the same
  * single-source-of-truth pattern as `shippedOperatorOnlyPolicyNames`
- * immediately above, kept honest by the same
- * tests/cli/init-full-template-parity.test.ts, so this list can never
- * drift from what `harness init --template full` actually writes.
- * Memoized: the parse is pure and FULL_TEMPLATE is a build constant.
+ * immediately above, so this list can never drift from what
+ * `harness init --template full` actually writes; unlike
+ * `shippedOperatorOnlyPolicyNames`, this one is pinned by its own
+ * fixed-point test in tests/cli/doctor-trigger-boundary-drift.test.ts
+ * (entry count and the literal shipped boundary), not by
+ * tests/cli/init-full-template-parity.test.ts, which does not reference
+ * it. Memoized: the parse is pure and FULL_TEMPLATE is a build constant.
  */
 let shippedBashMatchBoundariesCache: readonly BashMatchBoundaryEntry[] | undefined;
 export function shippedBashMatchBoundaries(): readonly BashMatchBoundaryEntry[] {

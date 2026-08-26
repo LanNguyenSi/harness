@@ -23,29 +23,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   exact name, every `hooks[].bash_match` and
   `policies[].trigger.bash_match` entry `shippedBashMatchBoundaries()`
   (`src/cli/init/templates.ts`, parsed from `FULL_TEMPLATE`, same
-  single-source-of-truth pattern as `shippedOperatorOnlyPolicyNames()`)
-  knows by name, comparing ONLY the leading boundary group, never the
-  rest of the regex (an operator's own edits to the command-shape match
-  are legitimate and not flagged). Each mismatch is an ERROR (doctor's
-  `errorCount`, same as the missing-policy case: a stale boundary is a
-  real, measured gate bypass, not cosmetic drift; reproduced against a
-  real operator manifest 2026-08-25 via `harness policy intercept`, where
-  `sleep 0 & gh pr merge 1` passed with no deny on the unmigrated
-  manifest and was blocked once the boundary was widened to `&`), naming
-  the entry, its actual boundary, the template's boundary, and the
-  rehydration path. Same deliberate opt-out channel as `adf037c1`:
+  single-source-of-truth pattern as `shippedOperatorOnlyPolicyNames()`,
+  16 entries today: 8 hooks + 8 policies) knows by name, comparing ONLY
+  the leading boundary group, never the rest of the regex (an operator's
+  own edits to the command-shape match are legitimate and not flagged).
+  The comparison is set-based, not string-equal: the boundary's
+  `|`-separated alternatives are split escape-aware and only an
+  alternative the template has that the installed regex is MISSING is
+  reported by name; a reordered or superset boundary is not a finding
+  (review round 2, fixing a false-positive an exact-string comparison
+  would have produced on any cosmetic reordering or widening). An
+  installed `bash_match` under a shipped name with no recognizable
+  boundary group at all is its own finding (review round 2; the initial
+  cut silently produced zero findings for that case). Each finding is an
+  ERROR (doctor's `errorCount`, same as the missing-policy case: a
+  missing boundary alternative is a real, measured gate bypass, not
+  cosmetic drift; reproduced against a real operator manifest 2026-08-25
+  via `harness policy intercept`, where `sleep 0 & gh pr merge 1` passed
+  with no deny on the unmigrated manifest, 10 of the 16 shipped triggers
+  affected, and was blocked once the boundary was widened to include
+  `&`), naming the entry, its actual boundary, the template's boundary,
+  the specific missing alternative(s), and the rehydration path:
+  `harness init --template full --config /tmp/harness-full.yaml` (a
+  throwaway `--config` path, not `--template full --force` against the
+  live manifest: `init` resolves its target from `--config` or the home
+  directory, never `cwd`, so there is no "scratch dir" fallback, and
+  `--force` against the live manifest would overwrite it wholesale;
+  review round 2 caught the original wording's wrong remediation
+  command). Same deliberate opt-out channel as `adf037c1`:
   `doctor.ignore_template_drift: [<hook-or-policy-name>, ...]` silences
   only the report line, never enforcement; `checkTemplatePolicyDrift`'s
   stale-opt-out warning now also recognises a valid trigger-boundary name
   so a shared opt-out entry is not double-flagged as stale by the other
-  check. New section `triggerBoundaryDrift` in `DoctorReport` /
-  `format.ts` ("Trigger boundary drift (shipped bash_match triggers)").
-  Docs: `docs/okf/pause-vs-gate-kill-switch.md`'s "Fixed in v0.43.0" and
-  "Drift detection" sections now point at this check instead of only at
-  `harness init --template full --force`. Tests:
-  `tests/cli/doctor-trigger-boundary-drift.test.ts` (AC1-AC4: naming +
-  rehydration path, both negative controls, the ignore opt-out, and the
-  fix/revert mutation probe pinning the error-severity choice).
+  check. `buildTriggerBoundaryDrift` (`src/cli/doctor/index.ts`)
+  partitions diagnostics by severity like `buildTemplateDrift` does
+  (review round 2: a plain message-map left `severity: "error"` inert,
+  undetected by the initial test suite). New section
+  `triggerBoundaryDrift` in `DoctorReport` / `format.ts` ("Trigger
+  boundary drift (shipped bash_match triggers)"). Docs:
+  `docs/okf/pause-vs-gate-kill-switch.md`'s "Fixed in v0.43.0" and new
+  "Trigger-boundary drift detection" sections point at this check and
+  the corrected `--config` rehydration command. Tests:
+  `tests/cli/doctor-trigger-boundary-drift.test.ts` (naming + the
+  corrected rehydration path, both negative controls including a
+  fixed-point pin on `shippedBashMatchBoundaries()`'s 16 entries and
+  their literal boundary, the ignore opt-out verified against the
+  trigger matcher directly rather than by re-reading the YAML, the
+  fix/revert mutation probe, a direct severity assertion on every
+  diagnostic, reordered/superset boundaries producing zero findings, a
+  missing-alternative finding naming the missing alternative, and the
+  no-boundary-group finding).
 
 ## [0.48.0] - 2026-08-25
 

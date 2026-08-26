@@ -831,17 +831,22 @@ function buildTemplateDrift(manifest: Manifest): TemplateDriftSection {
 
 /**
  * Trigger-boundary drift (task 037cfb7c): shipped-by-name `bash_match`
- * triggers (hook- and policy-level) whose leading boundary-alternation
- * group has fallen behind FULL_TEMPLATE's. Delegates to the shared
- * validate check so `harness doctor` and `harness validate` stay in
- * parity, mirroring `buildTemplateDrift` immediately above.
- * `checkTriggerBoundaryDrift` only ever emits `error`-severity
- * diagnostics (see that function's header for why: a stale boundary is a
- * measured, exploitable gate bypass, never a stylistic warning), so
- * every message maps straight to `errors`.
+ * triggers (hook- and policy-level) missing a boundary alternative the
+ * template has, or missing a boundary group entirely. Doctor-only, like
+ * `checkTemplatePolicyDrift` immediately above: `checkTriggerBoundaryDrift`
+ * is deliberately not wired into validate's `runAssetChecks`, so
+ * `harness validate` does not run it (only `harness doctor` does).
+ * Partitions by severity like `buildTemplateDrift` above (rather than
+ * mapping every diagnostic straight to `errors`) so this stays
+ * load-bearing: `checkTriggerBoundaryDrift` only emits `error`-severity
+ * diagnostics today, but a future non-`error` diagnostic would be
+ * excluded from `errors` (and therefore from `errorCount`) instead of
+ * silently inflating it, the same guarantee `buildTemplateDrift` gives
+ * its own `errors` array.
  */
 function buildTriggerBoundaryDrift(manifest: Manifest): TriggerBoundaryDriftSection {
-  return { errors: checkTriggerBoundaryDrift(manifest).map((d) => d.message) };
+  const diags = checkTriggerBoundaryDrift(manifest);
+  return { errors: diags.filter((d) => d.severity === "error").map((d) => d.message) };
 }
 
 /**

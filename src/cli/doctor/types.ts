@@ -317,16 +317,15 @@ export interface TemplateDriftSection {
 /**
  * Trigger-boundary drift (task 037cfb7c, follow-up to adf037c1):
  * shipped-by-name `bash_match` triggers (hook-level `hooks[].bash_match`
- * or policy-level `policies[].trigger.bash_match`) whose leading
- * boundary-alternation group has fallen behind FULL_TEMPLATE's, e.g. a
- * manifest still on the pre-v0.43.0 `&&`-only boundary while the
- * template ships `&`. Each entry is a real, measured gate bypass (see
- * `checkTriggerBoundaryDrift` in `validate/checks.ts` for the incident),
- * so every message rolls into `errorCount`, mirroring
- * `templateDrift.errors`. Always present; empty when every shipped-named
- * trigger matches the template's boundary (or the manifest has none of
- * those triggers, or every drift is acknowledged via
- * doctor.ignore_template_drift).
+ * or policy-level `policies[].trigger.bash_match`) missing a boundary
+ * alternative the template has, or missing a boundary group entirely.
+ * Rule and rationale live on `checkTriggerBoundaryDrift` in
+ * `validate/checks.ts`; the measured incident that motivated this check
+ * is in CHANGELOG.md's [Unreleased] entry for task 037cfb7c. Every
+ * message rolls into `errorCount`, mirroring `templateDrift.errors`.
+ * Always present; empty when every shipped-named trigger's boundary
+ * covers the template's (or the manifest has none of those triggers, or
+ * every drift is acknowledged via doctor.ignore_template_drift).
  */
 export interface TriggerBoundaryDriftSection {
   /** Stale-boundary bash_match triggers, hook- or policy-level (each → errorCount). */
