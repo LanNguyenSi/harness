@@ -1053,3 +1053,80 @@ export function shippedOperatorOnlyPolicyNames(): readonly string[] {
   }
   return shippedOperatorOnlyCache;
 }
+
+/**
+ * One shipped `bash_match` trigger's leading boundary-alternation group
+ * (task 037cfb7c). Every FULL_TEMPLATE `bash_match` regex opens with a
+ * parenthesized alternation of the shell-token boundaries it treats as
+ * "start of a new command", e.g. `^|\n|;|\||&|\(` since v0.43.0 (task
+ * d834a065, which narrowed the old `&&`-only boundary to `&` so a
+ * backgrounded `sleep 0 & gh pr merge 1` is not missed). `level`
+ * distinguishes a hook-level `hooks[].bash_match` trigger from a
+ * policy-level `policies[].trigger.bash_match` trigger; the same name
+ * can exist on both levels for logically-paired entries with no
+ * collision (see the require- / review-...-bash hook/policy pairs in
+ * the template).
+ */
+export interface BashMatchBoundaryEntry {
+  level: "hook" | "policy";
+  name: string;
+  /** The alternation's inner content, e.g. `^|\n|;|\||&|\(` (no outer parens). */
+  boundary: string;
+}
+
+// Matches the leading `(...)` group of a bash_match regex source string.
+// Every shipped bash_match opens with the boundary-alternation group and
+// none of its branches contain a literal `)` (parens inside are always
+// escaped as `\(`), so a non-greedy scan to the first `)` is exact for
+// every entry in FULL_TEMPLATE.
+const BOUNDARY_GROUP_RE = /^\(([^)]*)\)/;
+
+/**
+ * Extracts the leading boundary-alternation group from a `bash_match`
+ * regex source string (e.g. `"(^|\\n|;|\\||&|\\()..."` -> `"^|\\n|;|\\||&|\\("`).
+ * Returns `undefined` when the string does not open with a parenthesized
+ * group; defensive only, every shipped template entry does.
+ *
+ * Known limitation: the scan is not escape-aware, so an escaped closing
+ * paren (`\\)`) inside the group would truncate the match early at that
+ * `)` character instead of continuing past it. No shipped FULL_TEMPLATE
+ * boundary contains one today; a future boundary that needs a literal
+ * `)` inside the alternation would need this scan widened first.
+ */
+export function extractBashMatchBoundary(bashMatch: string): string | undefined {
+  return BOUNDARY_GROUP_RE.exec(bashMatch)?.[1];
+}
+
+/**
+ * Every FULL_TEMPLATE `hooks[]` / `policies[].trigger` entry that
+ * declares a `bash_match`, paired with its boundary-alternation group
+ * (task 037cfb7c). Parsed from FULL_TEMPLATE itself, the same
+ * single-source-of-truth pattern as `shippedOperatorOnlyPolicyNames`
+ * immediately above, so this list can never drift from what
+ * `harness init --template full` actually writes; unlike
+ * `shippedOperatorOnlyPolicyNames`, this one is pinned by its own
+ * fixed-point test in tests/cli/doctor-trigger-boundary-drift.test.ts
+ * (entry count and the literal shipped boundary), not by
+ * tests/cli/init-full-template-parity.test.ts, which does not reference
+ * it. Memoized: the parse is pure and FULL_TEMPLATE is a build constant.
+ */
+let shippedBashMatchBoundariesCache: readonly BashMatchBoundaryEntry[] | undefined;
+export function shippedBashMatchBoundaries(): readonly BashMatchBoundaryEntry[] {
+  if (shippedBashMatchBoundariesCache === undefined) {
+    const manifest = parseManifest(parseYaml(FULL_TEMPLATE));
+    const entries: BashMatchBoundaryEntry[] = [];
+    for (const hook of manifest.hooks) {
+      if (!hook.bash_match) continue;
+      const boundary = extractBashMatchBoundary(hook.bash_match);
+      if (boundary !== undefined) entries.push({ level: "hook", name: hook.name, boundary });
+    }
+    for (const policy of manifest.policies) {
+      const bashMatch = policy.trigger.bash_match;
+      if (!bashMatch) continue;
+      const boundary = extractBashMatchBoundary(bashMatch);
+      if (boundary !== undefined) entries.push({ level: "policy", name: policy.name, boundary });
+    }
+    shippedBashMatchBoundariesCache = entries;
+  }
+  return shippedBashMatchBoundariesCache;
+}

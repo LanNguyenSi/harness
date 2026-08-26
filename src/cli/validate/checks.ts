@@ -9,7 +9,11 @@ import {
   resolveBuiltin,
 } from "../../policy-packs/index.js";
 import { expandHome } from "../../io/expand-home.js";
-import { shippedOperatorOnlyPolicyNames } from "../init/templates.js";
+import {
+  extractBashMatchBoundary,
+  shippedBashMatchBoundaries,
+  shippedOperatorOnlyPolicyNames,
+} from "../init/templates.js";
 import { isPolicyInterceptCommand, requiredHookBudgetMs } from "../policy/intercept.js";
 import type { Hook, Manifest } from "../../schema/index.js";
 import type { Diagnostic } from "./types.js";
@@ -539,23 +543,223 @@ export function checkTemplatePolicyDrift(manifest: Manifest): Diagnostic[] {
     }
   }
   // Stale/typo'd opt-out entries: named in ignore_template_drift but not a
-  // shipped operator_only policy, so they suppress nothing. Warn (not
-  // error) — fail-safe already (the operator keeps seeing any real drift),
-  // this only surfaces the dead config so a rename doesn't silently strand
-  // an acknowledgement.
+  // shipped operator_only policy AND not a shipped bash_match trigger name
+  // (task 037cfb7c's checkTriggerBoundaryDrift shares this same opt-out
+  // field, see that function's header), so they suppress nothing. Warn
+  // (not error), fail-safe already (the operator keeps seeing any real
+  // drift), this only surfaces the dead config so a rename doesn't
+  // silently strand an acknowledgement.
   const shippedSet = new Set(shipped);
+  const knownBashMatchNames = new Set(shippedBashMatchBoundaries().map((e) => e.name));
   for (const name of manifest.doctor.ignore_template_drift) {
-    if (!shippedSet.has(name)) {
+    if (!shippedSet.has(name) && !knownBashMatchNames.has(name)) {
       diags.push({
         severity: "warning",
         path: "doctor.ignore_template_drift",
         message:
           `doctor.ignore_template_drift lists "${name}", which is not a ` +
-          `shipped operator_only policy name — it suppresses nothing. Remove ` +
-          `the entry, or fix the name (a policy rename can strand an ` +
-          `acknowledgement here).`,
+          `shipped operator_only policy name or a shipped bash_match trigger ` +
+          `name, so it suppresses nothing. Remove the entry, or fix the name ` +
+          `(a policy/hook rename can strand an acknowledgement here).`,
       });
     }
+  }
+  return diags;
+}
+
+// Trigger-boundary drift (task 037cfb7c, follow-up to adf037c1): a
+// bash_match trigger's own drift check, parallel to
+// checkTemplatePolicyDrift's missing/downgraded-policy check above.
+// Compares, by exact name, every shipped-by-name bash_match trigger
+// (hook-level hooks[].bash_match and policy-level
+// policies[].trigger.bash_match) against shippedBashMatchBoundaries(),
+// but ONLY the leading boundary-alternation group, never the rest of
+// the regex; an operator's own edits to the command-shape match after
+// the boundary group are legitimate and must not be flagged.
+//
+// Comparison is set-based, not string-equal (splitBoundaryAlternatives
+// below splits the `|`-separated alternatives, escape-aware so `\|`
+// inside an alternative is not itself treated as a separator, and
+// trims each one). Only an alternative the template has that the
+// installed regex is MISSING is reported by name; reordering the same
+// alternatives, or an installed regex that is a superset of the
+// template's, is not a finding (a superset can only widen what the
+// trigger catches, never narrow it). An installed bash_match under a
+// shipped name that has no recognizable boundary group at all is its
+// own finding: it matches no command separator, so the trigger is
+// unreachable for anything but a bare command at the very start of the
+// string.
+//
+// Scope (mirrors checkTemplatePolicyDrift's operator decision
+// 2026-08-08): an entry the template doesn't know by that name is out
+// of scope for THIS check (a missing shipped hook/policy is
+// checkTemplatePolicyDrift's concern, not this one's).
+//
+// Exit-code choice: ERROR, not warn, same rationale as
+// checkTemplatePolicyDrift: a missing boundary alternative is a real,
+// measured gate bypass, not cosmetic drift. See CHANGELOG.md's
+// [Unreleased] entry for task 037cfb7c for the measured incident and
+// reproduction. Severity is pinned directly (not just via message
+// content) by tests/cli/doctor-trigger-boundary-drift.test.ts.
+//
+// Deliberate opt-out: a name listed under `doctor.ignore_template_drift`
+// is skipped entirely, same field and same "silences only this report,
+// never enforcement semantics" contract as checkTemplatePolicyDrift (see
+// that function's header), NOT a `policies[].enabled` flag, which the
+// runtime would still enforce while the operator believed it disabled.
+
+/**
+ * Splits a boundary-alternation group's inner content on top-level `|`
+ * alternation separators. A backslash-escaped character (e.g. `\|`,
+ * `\n`, `\(`) is treated as one atomic unit and is never itself a
+ * separator, so an escaped pipe inside an alternative does not split
+ * it. Each alternative is trimmed, so whitespace padding around a `|`
+ * does not change the comparison.
+ */
+function splitBoundaryAlternatives(boundary: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  for (let i = 0; i < boundary.length; i++) {
+    const ch = boundary[i];
+    if (ch === "\\" && i + 1 < boundary.length) {
+      current += ch + boundary[i + 1];
+      i++;
+      continue;
+    }
+    if (ch === "|") {
+      parts.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  parts.push(current.trim());
+  return parts;
+}
+
+/**
+ * The template's boundary alternatives that are absent from the
+ * installed boundary's alternative set. Order and duplicate extras in
+ * `installedBoundary` never matter: only a missing alternative narrows
+ * what the trigger can match relative to the template, so only a
+ * missing alternative is reported.
+ */
+function missingBoundaryAlternatives(
+  templateBoundary: string,
+  installedBoundary: string,
+): string[] {
+  const installedSet = new Set(splitBoundaryAlternatives(installedBoundary));
+  return splitBoundaryAlternatives(templateBoundary).filter((alt) => !installedSet.has(alt));
+}
+
+// Shared rehydration guidance appended to every finding message. `init`
+// resolves its target manifest via `--config` (or `~/.harness/harness.yaml`
+// by default, task adf037c1's original wording pointed at "a scratch dir",
+// which `init` does not honor: it always resolves against `--config` or the
+// home directory, never `cwd`); writing to a throwaway `--config` path is
+// the only way to get the shipped regex to compare against without risking
+// `--force` overwriting the live manifest.
+function triggerBoundaryRehydrationGuidance(entryName: string): string {
+  return (
+    `Rehydrate the boundary: \`harness init --template full --config ` +
+    `/tmp/harness-full.yaml\` and copy the boundary from there (or hand-edit ` +
+    `per docs/okf/pause-vs-gate-kill-switch.md), or, if this is a deliberate ` +
+    `custom boundary, list "${entryName}" under doctor.ignore_template_drift ` +
+    `to acknowledge the opt-out.`
+  );
+}
+
+// Shared "not a boundary at all" wording (review round 3, item 1). Used
+// both when the leading group is syntactically absent (no parenthesized
+// group at all) AND when one IS present but shares zero alternatives
+// with the template's, e.g. a shipped-named trigger whose leading group
+// serves an entirely different purpose such as `(gh|git)\s+pr merge\b`.
+// In both cases the fix is the same (replace the group with the
+// template's, not widen it with one more alternative), so the two cases
+// share a message instead of the zero-overlap case being misdescribed as
+// "missing" every single alternative.
+function noRecognizableBoundaryMessage(
+  entryLevel: "hook" | "policy",
+  entryName: string,
+  installedDescription: string,
+): string {
+  return (
+    `${entryLevel} "${entryName}"'s bash_match has no recognizable ` +
+    `leading boundary alternation (${installedDescription}). ` +
+    `The trigger matches no command separator at all, so it only fires ` +
+    `for a command that is literally the very first thing in the string, ` +
+    `every other position (after \`;\`, \`&\`, a newline, a pipe, an open ` +
+    `paren) is silently bypassable. ${triggerBoundaryRehydrationGuidance(entryName)}`
+  );
+}
+
+export function checkTriggerBoundaryDrift(manifest: Manifest): Diagnostic[] {
+  const ignored = new Set(manifest.doctor.ignore_template_drift);
+  const shipped = shippedBashMatchBoundaries();
+  const hooksByName = new Map(manifest.hooks.map((h) => [h.name, h]));
+  const policiesByName = new Map(manifest.policies.map((p) => [p.name, p]));
+  const diags: Diagnostic[] = [];
+  for (const entry of shipped) {
+    if (ignored.has(entry.name)) continue;
+    const installedBashMatch =
+      entry.level === "hook"
+        ? hooksByName.get(entry.name)?.bash_match
+        : policiesByName.get(entry.name)?.trigger.bash_match;
+    // Not present by that name at that level (missing entirely, or no
+    // longer carries a bash_match at all): out of this check's scope,
+    // see the "Scope" note above.
+    if (installedBashMatch === undefined) continue;
+    const diagPath = entry.level === "hook" ? "hooks" : "policies";
+    const actualBoundary = extractBashMatchBoundary(installedBashMatch);
+    if (actualBoundary === undefined) {
+      diags.push({
+        severity: "error",
+        path: diagPath,
+        message: noRecognizableBoundaryMessage(
+          entry.level,
+          entry.name,
+          `installed value: "${installedBashMatch}"`,
+        ),
+      });
+      continue;
+    }
+    const templateAlternatives = splitBoundaryAlternatives(entry.boundary);
+    const missing = missingBoundaryAlternatives(entry.boundary, actualBoundary);
+    if (missing.length === 0) continue;
+    if (missing.length === templateAlternatives.length) {
+      // Zero overlap: the leading group is a syntactically valid
+      // parenthesized alternation, but it shares no alternative at all
+      // with the template's boundary, so it is not the boundary group
+      // (an unrelated command-shape alternation like `(gh|git)` that
+      // happens to sit first, or a fully custom, unrelated set). Report
+      // it as "no recognizable boundary", not as "missing" every single
+      // template alternative, since the fix is to replace this group,
+      // not extend it.
+      diags.push({
+        severity: "error",
+        path: diagPath,
+        message: noRecognizableBoundaryMessage(
+          entry.level,
+          entry.name,
+          `installed leading group: "(${actualBoundary})", which shares no ` +
+            `boundary token with the shipped template's "(${entry.boundary})"`,
+        ),
+      });
+      continue;
+    }
+    const missingList = missing.map((m) => `"${m}"`).join(", ");
+    diags.push({
+      severity: "error",
+      path: diagPath,
+      message:
+        `${entry.level} "${entry.name}"'s bash_match boundary is missing ` +
+        `${missing.length === 1 ? "an alternative" : "alternatives"} the shipped ` +
+        `template has: ${missingList} (installed: "(${actualBoundary})", template: ` +
+        `"(${entry.boundary})"). A command that only opens with ` +
+        `${missing.length === 1 ? "that boundary token" : "one of those boundary tokens"} ` +
+        `(e.g. a backgrounded \`cmd & gh pr merge 1\`) is not matched, so the gate ` +
+        `this trigger guards is silently bypassable. ${triggerBoundaryRehydrationGuidance(entry.name)}`,
+    });
   }
   return diags;
 }
