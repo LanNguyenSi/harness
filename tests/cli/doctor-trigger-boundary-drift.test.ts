@@ -1,0 +1,252 @@
+// Trigger-boundary drift (task 037cfb7c, follow-up to adf037c1):
+// `checkTemplatePolicyDrift` only catches a shipped policy that is
+// entirely MISSING or downgraded; it never inspected a `bash_match`
+// trigger that IS present under a shipped name but whose leading
+// boundary-alternation group (`(^|\n|;|\||&|\()` since v0.43.0, task
+// d834a065) has fallen behind the template's pre-v0.43.0 `&&`-only
+// shape. See `checkTriggerBoundaryDrift` in
+// `src/cli/validate/checks.ts` for the measured incident this check
+// closes (a `sleep 0 & gh pr merge 1` bypass on an unmigrated manifest).
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { doctor } from "../../src/cli/doctor/index.js";
+import { format } from "../../src/cli/doctor/format.js";
+import { getTemplate } from "../../src/cli/init/templates.js";
+
+let cleanups: Array<() => void> = [];
+afterEach(() => {
+  for (const c of cleanups) c();
+  cleanups = [];
+});
+
+function makeFixture(files: Record<string, string>): string {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-boundary-"));
+  cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+  for (const [rel, contents] of Object.entries(files)) {
+    const full = path.join(home, rel);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, contents, "utf8");
+  }
+  return home;
+}
+
+// Silences the (unrelated) operator_only template-policy-drift check
+// (task adf037c1) so each test's errorCount/format assertions are about
+// trigger-boundary drift alone, not swamped by the three missing
+// kill-switch policies these minimal fixtures don't carry.
+const SILENCE_OPERATOR_ONLY_DRIFT = `doctor:
+  ignore_template_drift:
+    - deny-kill-switch-bypass
+    - deny-session-env-strip
+    - deny-pause-sentinel-forgery
+`;
+
+// A hook + policy pair named after a real FULL_TEMPLATE entry
+// (require-review-evidence-bash / review-before-merge-bash), but with the
+// pre-v0.43.0 `&&`-only boundary instead of the shipped `&` boundary.
+// `boundary` is the substitutable alternation token set so mutation-probe
+// tests can flip it in one place.
+function manifestWithBoundary(boundary: string, extraHooks = ""): string {
+  return `version: 1
+${SILENCE_OPERATOR_ONLY_DRIFT}hooks:
+  - name: require-review-evidence-bash
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '(^|\\n|;|\\||${boundary}|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
+    command: harness policy intercept
+    blocking: hard
+${extraHooks}policies:
+  - name: review-before-merge-bash
+    description: test
+    trigger:
+      event: PreToolUse
+      match: "Bash"
+      bash_match: '(^|\\n|;|\\||${boundary}|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
+    requires:
+      ledger_tag: "review:x"
+    hook: require-review-evidence-bash
+    enforcement: block
+`;
+}
+
+describe("doctor — trigger-boundary drift (task 037cfb7c)", () => {
+  // AC1: a manifest whose bash_match triggers carry the &&-only boundary
+  // reports one finding per affected hook AND one per affected policy,
+  // each naming the entry, its actual boundary, the template boundary,
+  // and a rehydration path; every finding is an error (see the exit-code
+  // rationale below), so errorCount picks them both up.
+  it("reports drift for both the hook-level and policy-level bash_match trigger, naming actual + template boundary and the rehydration path", async () => {
+    const home = makeFixture({ "harness.yaml": manifestWithBoundary("&&") });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+    });
+    expect(report.triggerBoundaryDrift.errors).toHaveLength(2);
+    const hookMsg = report.triggerBoundaryDrift.errors.find((m) =>
+      m.includes("require-review-evidence-bash"),
+    );
+    const policyMsg = report.triggerBoundaryDrift.errors.find((m) =>
+      m.includes("review-before-merge-bash"),
+    );
+    expect(hookMsg).toBeDefined();
+    expect(policyMsg).toBeDefined();
+    // Actual boundary (&&) and template boundary (&) both named.
+    for (const m of [hookMsg, policyMsg]) {
+      expect(m).toContain("(^|\\n|;|\\||&&|\\()");
+      expect(m).toContain("(^|\\n|;|\\||&|\\()");
+      // Rehydration path.
+      expect(m).toContain("harness init --template full");
+      expect(m).toContain("doctor.ignore_template_drift");
+    }
+    // Exit-code choice: error, not warn (pinned here). A stale boundary is
+    // a real, measured gate bypass (see checkTriggerBoundaryDrift's
+    // header) — CI/dogfood must not stay green with a live bypass.
+    expect(report.errorCount).toBeGreaterThanOrEqual(2);
+    const text = format(report);
+    expect(text).toContain("Trigger boundary drift (shipped bash_match triggers)");
+    expect(text).toContain("✗");
+    expect(text).not.toContain("⚠ require-review-evidence-bash");
+  });
+
+  // AC2 (negative control 1): a manifest generated by
+  // `harness init --template full` carries the shipped `&` boundary
+  // already, so it reports no drift.
+  it("reports no drift on a manifest from harness init --template full", async () => {
+    const home = makeFixture({ "harness.yaml": getTemplate("full") });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+    });
+    expect(report.triggerBoundaryDrift.errors).toHaveLength(0);
+    expect(format(report)).not.toContain("Trigger boundary drift");
+  });
+
+  // AC2 (negative control 2): an entry whose name does not exist in the
+  // template is out of scope for this check — even carrying an &&-only
+  // boundary produces no finding.
+  it("reports no drift for a bash_match entry not named in the template", async () => {
+    const home = makeFixture({
+      "harness.yaml": manifestWithBoundary(
+        "&",
+        `  - name: my-custom-bash-gate
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*custom-cmd\\b'
+    command: harness policy intercept
+    blocking: hard
+`,
+      ),
+    });
+    // Note: manifestWithBoundary("&", ...) already keeps the shipped
+    // entries drift-free; the appended block adds a namesake-free custom
+    // hook with an &&-only boundary, which must NOT surface a finding.
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+    });
+    expect(report.triggerBoundaryDrift.errors).toHaveLength(0);
+  });
+
+  // AC3: doctor.ignore_template_drift silences only the message, not
+  // enforcement — the runtime's own bash_match regex is untouched by this
+  // opt-out, only doctor's report is.
+  it("respects doctor.ignore_template_drift as a deliberate opt-out that silences only the message", async () => {
+    const manifest = manifestWithBoundary("&&").replace(
+      "    - deny-pause-sentinel-forgery\n",
+      "    - deny-pause-sentinel-forgery\n    - require-review-evidence-bash\n    - review-before-merge-bash\n",
+    );
+    const home = makeFixture({ "harness.yaml": manifest });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+    });
+    expect(report.triggerBoundaryDrift.errors).toHaveLength(0);
+    expect(report.errorCount).toBe(0);
+    // The manifest's own bash_match string is still the stale &&-only
+    // regex; the opt-out changed nothing about the installed trigger
+    // itself, only doctor's report of it.
+    const raw = fs.readFileSync(path.join(home, "harness.yaml"), "utf8");
+    expect(raw).toContain("&&|\\(");
+  });
+
+  // AC4 mutation probe: fixing one trigger's boundary to `&` in the test
+  // manifest makes its finding disappear; reverting to `&&` brings it
+  // back. Exercised against the hook-level entry (the policy-level
+  // entry is left on `&&` throughout, so it stays a live control that
+  // the fix/revert cycle does not touch).
+  it("mutation probe: correcting one trigger's boundary makes its finding disappear, and reverting brings it back", async () => {
+    const buildManifest = (hookBoundary: string): string => `version: 1
+${SILENCE_OPERATOR_ONLY_DRIFT}hooks:
+  - name: require-review-evidence-bash
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '(^|\\n|;|\\||${hookBoundary}|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
+    command: harness policy intercept
+    blocking: hard
+policies:
+  - name: review-before-merge-bash
+    description: test
+    trigger:
+      event: PreToolUse
+      match: "Bash"
+      bash_match: '(^|\\n|;|\\||&&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
+    requires:
+      ledger_tag: "review:x"
+    hook: require-review-evidence-bash
+    enforcement: block
+`;
+
+    // Baseline: both stale (&&).
+    const home = makeFixture({ "harness.yaml": buildManifest("&&") });
+    const configPath = path.join(home, "harness.yaml");
+    const baseline = await doctor({ configPath, homeOverride: home, shallow: true });
+    expect(baseline.triggerBoundaryDrift.errors).toHaveLength(2);
+    expect(baseline.triggerBoundaryDrift.errors.some((m) => m.includes("require-review-evidence-bash"))).toBe(
+      true,
+    );
+
+    // Mutant fix: hook boundary corrected to `&`, policy left at `&&`.
+    fs.writeFileSync(configPath, buildManifest("&"), "utf8");
+    const fixed = await doctor({ configPath, homeOverride: home, shallow: true });
+    expect(fixed.triggerBoundaryDrift.errors).toHaveLength(1);
+    expect(fixed.triggerBoundaryDrift.errors.some((m) => m.includes("require-review-evidence-bash"))).toBe(
+      false,
+    );
+    expect(fixed.triggerBoundaryDrift.errors.some((m) => m.includes("review-before-merge-bash"))).toBe(
+      true,
+    );
+
+    // Restored: back to `&&` — the finding reappears.
+    fs.writeFileSync(configPath, buildManifest("&&"), "utf8");
+    const restored = await doctor({ configPath, homeOverride: home, shallow: true });
+    expect(restored.triggerBoundaryDrift.errors).toHaveLength(2);
+    expect(
+      restored.triggerBoundaryDrift.errors.some((m) => m.includes("require-review-evidence-bash")),
+    ).toBe(true);
+  });
+
+  // A stale/typo'd ignore_template_drift entry that matches neither an
+  // operator_only policy name nor a shipped bash_match trigger name is
+  // still surfaced as a warning by checkTemplatePolicyDrift's shared
+  // stale-opt-out check (task 037cfb7c extended its "known names" set so
+  // a VALID trigger-boundary opt-out is not itself misreported as stale).
+  it("does not misreport a valid trigger-boundary opt-out as a stale ignore_template_drift entry", async () => {
+    const manifest = manifestWithBoundary("&&").replace(
+      "    - deny-pause-sentinel-forgery\n",
+      "    - deny-pause-sentinel-forgery\n    - require-review-evidence-bash\n    - review-before-merge-bash\n",
+    );
+    const home = makeFixture({ "harness.yaml": manifest });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+    });
+    expect(report.templateDrift.warnings).toHaveLength(0);
+  });
+});

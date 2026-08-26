@@ -28,6 +28,7 @@ import {
   checkSolutionAcceptanceKnobIgnored,
   checkSolutionAcceptanceProducer,
   checkTemplatePolicyDrift,
+  checkTriggerBoundaryDrift,
   createDefaultGitIgnoreProbe,
   type GitIgnoreProbe,
 } from "../validate/checks.js";
@@ -68,6 +69,7 @@ import {
   type PolicyPacksSection,
   type RiskGateSection,
   type TemplateDriftSection,
+  type TriggerBoundaryDriftSection,
   type ToolsSection,
 } from "./types.js";
 
@@ -828,6 +830,21 @@ function buildTemplateDrift(manifest: Manifest): TemplateDriftSection {
 }
 
 /**
+ * Trigger-boundary drift (task 037cfb7c): shipped-by-name `bash_match`
+ * triggers (hook- and policy-level) whose leading boundary-alternation
+ * group has fallen behind FULL_TEMPLATE's. Delegates to the shared
+ * validate check so `harness doctor` and `harness validate` stay in
+ * parity, mirroring `buildTemplateDrift` immediately above.
+ * `checkTriggerBoundaryDrift` only ever emits `error`-severity
+ * diagnostics (see that function's header for why: a stale boundary is a
+ * measured, exploitable gate bypass, never a stylistic warning), so
+ * every message maps straight to `errors`.
+ */
+function buildTriggerBoundaryDrift(manifest: Manifest): TriggerBoundaryDriftSection {
+  return { errors: checkTriggerBoundaryDrift(manifest).map((d) => d.message) };
+}
+
+/**
  * Hook-budget-vs-ledger-timeout margin (task d20a7e0c). Delegates to the
  * shared validate check so `harness doctor` and `harness validate` stay
  * in parity, mirroring `buildTemplateDrift` immediately above.
@@ -988,6 +1005,11 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // entries are warn-only (task adf037c1).
   errorCount += report.templateDrift.errors.length;
   warningCount += report.templateDrift.warnings.length;
+  // Trigger-boundary drift (task 037cfb7c): every entry is a measured,
+  // exploitable gate bypass (see checkTriggerBoundaryDrift's header),
+  // mapped to errorCount, mirroring templateDrift.errors immediately
+  // above.
+  errorCount += report.triggerBoundaryDrift.errors.length;
   // Hook-budget-vs-ledger-timeout margin (task d20a7e0c): every entry is
   // a real fail-open gap, mirroring templateDrift.errors immediately
   // above.
@@ -1125,6 +1147,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const workflows = buildWorkflows(manifest);
   const riskGate = buildRiskGate(manifest);
   const templateDrift = buildTemplateDrift(manifest);
+  const triggerBoundaryDrift = buildTriggerBoundaryDrift(manifest);
   const hookBudgetLedgerMargin = buildHookBudgetLedgerMargin(manifest);
   const groundingServer =
     manifest.tools.mcp.find(
@@ -1199,6 +1222,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     workflows,
     riskGate,
     templateDrift,
+    triggerBoundaryDrift,
     hookBudgetLedgerMargin,
     ...(grounding !== undefined ? { grounding } : {}),
     ...(claudeMcp !== undefined ? { claudeMcp } : {}),

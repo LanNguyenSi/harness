@@ -315,6 +315,25 @@ export interface TemplateDriftSection {
 }
 
 /**
+ * Trigger-boundary drift (task 037cfb7c, follow-up to adf037c1):
+ * shipped-by-name `bash_match` triggers (hook-level `hooks[].bash_match`
+ * or policy-level `policies[].trigger.bash_match`) whose leading
+ * boundary-alternation group has fallen behind FULL_TEMPLATE's, e.g. a
+ * manifest still on the pre-v0.43.0 `&&`-only boundary while the
+ * template ships `&`. Each entry is a real, measured gate bypass (see
+ * `checkTriggerBoundaryDrift` in `validate/checks.ts` for the incident),
+ * so every message rolls into `errorCount`, mirroring
+ * `templateDrift.errors`. Always present; empty when every shipped-named
+ * trigger matches the template's boundary (or the manifest has none of
+ * those triggers, or every drift is acknowledged via
+ * doctor.ignore_template_drift).
+ */
+export interface TriggerBoundaryDriftSection {
+  /** Stale-boundary bash_match triggers, hook- or policy-level (each → errorCount). */
+  errors: string[];
+}
+
+/**
  * Hook-budget-vs-ledger-timeout margin (task d20a7e0c, follow-up to
  * f1aea826/7bf47554): blocking, ledger-consulting hooks (both directly
  * declared `harness policy intercept` hooks and enabled policy-pack
@@ -387,6 +406,13 @@ export interface DoctorReport {
    * via a valid doctor.ignore_template_drift entry).
    */
   templateDrift: TemplateDriftSection;
+  /**
+   * Trigger-boundary drift (task 037cfb7c). Always present; `errors`
+   * empty when every shipped-named `bash_match` trigger's boundary
+   * matches the template (or every drift is acknowledged via
+   * doctor.ignore_template_drift).
+   */
+  triggerBoundaryDrift: TriggerBoundaryDriftSection;
   /**
    * Hook-budget-vs-ledger-timeout margin (task d20a7e0c). Always
    * present; `errors` empty when every blocking, ledger-consulting hook

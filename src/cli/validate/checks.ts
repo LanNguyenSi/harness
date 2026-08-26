@@ -9,7 +9,11 @@ import {
   resolveBuiltin,
 } from "../../policy-packs/index.js";
 import { expandHome } from "../../io/expand-home.js";
-import { shippedOperatorOnlyPolicyNames } from "../init/templates.js";
+import {
+  extractBashMatchBoundary,
+  shippedBashMatchBoundaries,
+  shippedOperatorOnlyPolicyNames,
+} from "../init/templates.js";
 import { isPolicyInterceptCommand, requiredHookBudgetMs } from "../policy/intercept.js";
 import type { Hook, Manifest } from "../../schema/index.js";
 import type { Diagnostic } from "./types.js";
@@ -539,23 +543,106 @@ export function checkTemplatePolicyDrift(manifest: Manifest): Diagnostic[] {
     }
   }
   // Stale/typo'd opt-out entries: named in ignore_template_drift but not a
-  // shipped operator_only policy, so they suppress nothing. Warn (not
-  // error) — fail-safe already (the operator keeps seeing any real drift),
-  // this only surfaces the dead config so a rename doesn't silently strand
-  // an acknowledgement.
+  // shipped operator_only policy AND not a shipped bash_match trigger name
+  // (task 037cfb7c's checkTriggerBoundaryDrift shares this same opt-out
+  // field, see that function's header), so they suppress nothing. Warn
+  // (not error), fail-safe already (the operator keeps seeing any real
+  // drift), this only surfaces the dead config so a rename doesn't
+  // silently strand an acknowledgement.
   const shippedSet = new Set(shipped);
+  const knownBashMatchNames = new Set(shippedBashMatchBoundaries().map((e) => e.name));
   for (const name of manifest.doctor.ignore_template_drift) {
-    if (!shippedSet.has(name)) {
+    if (!shippedSet.has(name) && !knownBashMatchNames.has(name)) {
       diags.push({
         severity: "warning",
         path: "doctor.ignore_template_drift",
         message:
           `doctor.ignore_template_drift lists "${name}", which is not a ` +
-          `shipped operator_only policy name — it suppresses nothing. Remove ` +
-          `the entry, or fix the name (a policy rename can strand an ` +
-          `acknowledgement here).`,
+          `shipped operator_only policy name or a shipped bash_match trigger ` +
+          `name, so it suppresses nothing. Remove the entry, or fix the name ` +
+          `(a policy/hook rename can strand an acknowledgement here).`,
       });
     }
+  }
+  return diags;
+}
+
+// Trigger-boundary drift (task 037cfb7c, follow-up to adf037c1): a
+// `bash_match` trigger's own drift check. `checkTemplatePolicyDrift`
+// above only catches a shipped policy that is entirely MISSING or
+// downgraded; it says nothing about a `bash_match` trigger that IS
+// present under a name the template still ships, but whose regex opens
+// with a stale boundary-alternation group. Measured incident (task
+// 037cfb7c, 2026-08-25): the operator's manifest carried all ten
+// require-/deny-/review-...-bash hooks and policies by name, each still
+// on the pre-v0.43.0 `&&`-only boundary (`(^|\n|;|\||&&|\()`) while
+// FULL_TEMPLATE has shipped the widened `&` boundary
+// (`(^|\n|;|\||&|\()`, task d834a065) for two minor releases.
+// `harness policy intercept` on the unmigrated manifest let
+// `sleep 0 & gh pr merge 1` through with no deny; the identical command
+// against a manifest using the `&` boundary was blocked. `harness apply`
+// never rewrites an already-materialized manifest's trigger regexes, so
+// this gap persists silently across every intervening release until an
+// operator notices, or is bypassed.
+//
+// Scope (mirrors checkTemplatePolicyDrift's operator decision 2026-08-08):
+// compare ONLY entries that exist, by exact name, in
+// `shippedBashMatchBoundaries()` (itself derived from FULL_TEMPLATE, both
+// hook- and policy-level `bash_match` triggers); an entry the template
+// doesn't know by that name is out of scope for THIS check (a missing
+// shipped hook/policy is `checkTemplatePolicyDrift`'s or a future check's
+// concern, not this one's). And compare ONLY the leading boundary
+// alternation, never the whole regex: an operator's own edits to the rest
+// of the pattern (the command-shape match after the boundary group) are
+// legitimate and must not be flagged.
+//
+// Exit-code choice: ERROR, not warn. This is not cosmetic drift: the
+// measured incident above shows the stale boundary is an actual,
+// exploitable gate bypass for every trigger it affects (the same
+// "silent defense gap" class checkTemplatePolicyDrift already treats as
+// error). A `warn` would let CI/dogfood runs stay green on an
+// installation with a live bypass, which is the exact failure mode this
+// check exists to close. Pinned by
+// tests/cli/doctor-trigger-boundary-drift.test.ts.
+//
+// Deliberate opt-out: a name listed under `doctor.ignore_template_drift`
+// is skipped entirely, same field and same "silences only this report,
+// never enforcement semantics" contract as checkTemplatePolicyDrift (see
+// that function's header), NOT a `policies[].enabled` flag, which the
+// runtime would still enforce while the operator believed it disabled.
+export function checkTriggerBoundaryDrift(manifest: Manifest): Diagnostic[] {
+  const ignored = new Set(manifest.doctor.ignore_template_drift);
+  const shipped = shippedBashMatchBoundaries();
+  const hooksByName = new Map(manifest.hooks.map((h) => [h.name, h]));
+  const policiesByName = new Map(manifest.policies.map((p) => [p.name, p]));
+  const diags: Diagnostic[] = [];
+  for (const entry of shipped) {
+    if (ignored.has(entry.name)) continue;
+    const installedBashMatch =
+      entry.level === "hook"
+        ? hooksByName.get(entry.name)?.bash_match
+        : policiesByName.get(entry.name)?.trigger.bash_match;
+    // Not present by that name at that level (missing entirely, or no
+    // longer carries a bash_match at all): out of this check's scope,
+    // see the "Scope" note above.
+    if (installedBashMatch === undefined) continue;
+    const actualBoundary = extractBashMatchBoundary(installedBashMatch);
+    if (actualBoundary === undefined || actualBoundary === entry.boundary) continue;
+    diags.push({
+      severity: "error",
+      path: entry.level === "hook" ? "hooks" : "policies",
+      message:
+        `${entry.level} "${entry.name}"'s bash_match boundary is stale: installed ` +
+        `uses "(${actualBoundary})" but the shipped template uses ` +
+        `"(${entry.boundary})". A command that only opens with a boundary ` +
+        `token in the newer set (e.g. a backgrounded \`cmd & gh pr merge 1\`) ` +
+        `is not matched, so the gate this trigger guards is silently bypassable. ` +
+        `Rehydrate the boundary from the full template (\`harness init ` +
+        `--template full\` in a scratch dir and copy the regex, or hand-edit per ` +
+        `docs/okf/pause-vs-gate-kill-switch.md), or, if this is a deliberate ` +
+        `custom boundary, list "${entry.name}" under doctor.ignore_template_drift ` +
+        `to acknowledge the opt-out.`,
+    });
   }
   return diags;
 }

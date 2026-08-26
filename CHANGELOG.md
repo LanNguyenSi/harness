@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`harness doctor` detects trigger-boundary drift on shipped `bash_match`
+  triggers, hook- AND policy-level** (task `037cfb7c`, follow-up to
+  `adf037c1`). `checkTemplatePolicyDrift` already caught a shipped
+  `operator_only` policy that is entirely missing or downgraded, but said
+  nothing about a `bash_match` trigger that IS present under a shipped
+  name whose leading boundary-alternation group has fallen behind
+  `FULL_TEMPLATE`'s (e.g. still the pre-v0.43.0 `&&`-only shape while the
+  template has shipped `&` since `d834a065`, two minor releases ago);
+  `harness apply` never rewrites an already-materialized manifest's
+  trigger regexes, so this gap persists silently. New
+  `checkTriggerBoundaryDrift` (`src/cli/validate/checks.ts`) compares, by
+  exact name, every `hooks[].bash_match` and
+  `policies[].trigger.bash_match` entry `shippedBashMatchBoundaries()`
+  (`src/cli/init/templates.ts`, parsed from `FULL_TEMPLATE`, same
+  single-source-of-truth pattern as `shippedOperatorOnlyPolicyNames()`)
+  knows by name, comparing ONLY the leading boundary group, never the
+  rest of the regex (an operator's own edits to the command-shape match
+  are legitimate and not flagged). Each mismatch is an ERROR (doctor's
+  `errorCount`, same as the missing-policy case: a stale boundary is a
+  real, measured gate bypass, not cosmetic drift; reproduced against a
+  real operator manifest 2026-08-25 via `harness policy intercept`, where
+  `sleep 0 & gh pr merge 1` passed with no deny on the unmigrated
+  manifest and was blocked once the boundary was widened to `&`), naming
+  the entry, its actual boundary, the template's boundary, and the
+  rehydration path. Same deliberate opt-out channel as `adf037c1`:
+  `doctor.ignore_template_drift: [<hook-or-policy-name>, ...]` silences
+  only the report line, never enforcement; `checkTemplatePolicyDrift`'s
+  stale-opt-out warning now also recognises a valid trigger-boundary name
+  so a shared opt-out entry is not double-flagged as stale by the other
+  check. New section `triggerBoundaryDrift` in `DoctorReport` /
+  `format.ts` ("Trigger boundary drift (shipped bash_match triggers)").
+  Docs: `docs/okf/pause-vs-gate-kill-switch.md`'s "Fixed in v0.43.0" and
+  "Drift detection" sections now point at this check instead of only at
+  `harness init --template full --force`. Tests:
+  `tests/cli/doctor-trigger-boundary-drift.test.ts` (AC1-AC4: naming +
+  rehydration path, both negative controls, the ignore opt-out, and the
+  fix/revert mutation probe pinning the error-severity choice).
+
 ## [0.48.0] - 2026-08-25
 
 ### Fixed

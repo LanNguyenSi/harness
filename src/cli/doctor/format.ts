@@ -337,6 +337,19 @@ function formatTemplateDriftSection(report: DoctorReport): string[] {
   return out;
 }
 
+// Trigger-boundary drift section (task 037cfb7c): shipped-by-name
+// bash_match triggers whose boundary alternation has fallen behind
+// FULL_TEMPLATE's. Render only when something is stale, a caught-up
+// manifest stays silent, like the template-drift section immediately
+// above.
+function formatTriggerBoundaryDriftSection(report: DoctorReport): string[] {
+  const { errors } = report.triggerBoundaryDrift;
+  if (errors.length === 0) return [];
+  const out: string[] = ["", "Trigger boundary drift (shipped bash_match triggers)"];
+  for (const m of errors) out.push(`  ✗ ${m}`);
+  return out;
+}
+
 // Hook-budget-vs-ledger-timeout margin section (task d20a7e0c): blocking,
 // ledger-consulting hooks whose budget_ms cannot clear the derived
 // worst-case ledger round-trip. Render only when something is under-
@@ -515,6 +528,7 @@ export function format(report: DoctorReport): string {
   lines.push(...formatWorkflowsSection(report));
   lines.push(...formatRiskGateSection(report));
   lines.push(...formatTemplateDriftSection(report));
+  lines.push(...formatTriggerBoundaryDriftSection(report));
   lines.push(...formatHookBudgetLedgerMarginSection(report));
   lines.push(...formatGroundingSection(report));
   lines.push(...formatClaudeMcpSection(report));
