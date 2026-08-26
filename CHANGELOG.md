@@ -62,7 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   quoting, and escaping, and superseding the round-2 `$`-token and
   `decodeShellWord`-decoding checks, both now redundant), and every flag
   token must be drawn from an explicit per-verb read-flag allowlist (or
-  a small global-flag allowlist) — `--raw`, `-f`/`--filename`/
+  a small global-flag allowlist) — `--raw`, `--filename`/
   `-k`/`--kustomize`, and every endpoint/identity flag
   (`--server`/`-s`/`--kubeconfig`/`--token`/`--as`/`--as-group`/
   `--user`/`--cluster`/`--tls-server-name`/`--insecure-skip-tls-verify`)

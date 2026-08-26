@@ -340,15 +340,26 @@ hold: (1) every token after `kubectl` matches a plain-word shape
 (letters, digits, and `` _ . : / = , @ % + - ``; no quotes, backslashes,
 `$`, backticks, braces, globs, or any other shell-special character),
 and (2) every flag token is drawn from that verb's explicit read-flag
-allowlist (or the small global-flag allowlist, legal before or after the
-verb) — UNLESS, additionally, the resource argument mentions "secret" or
+allowlist (or the global-flag allowlist, legal before or after the
+verb: `--context`, `--namespace`/`-n`, `--request-timeout`, `-v`/`--v`,
+and `--all-namespaces`/`-A`; the first five consume a value. Accepting
+`-A` globally is a deliberate simplification: kubectl rejects it on
+`logs`/`top`, so those commands merely error at `low`). `cluster-info`
+accepts no positional: `cluster-info dump` prints cluster-wide pod logs
+and is refused, together with any future sub-subcommand. Each `*_VALUE`
+flag is assumed to be a pflag flag with an empty NoOptDefVal, i.e. it
+always consumes the next argv element; a future flag-list edit must
+check that property, otherwise the consumed token becomes a live flag
+kubectl would honour) — UNLESS, additionally, the resource argument mentions "secret" or
 "configmap" in any form (`get secret`, `get secrets`, `get
 secret/<name>`, `describe secret`, `-o yaml`/`-o json` on a secret, a
 comma-list like `get pods,secrets`; the same shapes for
 `configmap`/`configmaps`/the bare `cm` abbreviation), for `get`/
 `describe` only. `--raw` (an arbitrary, unclassifiable API path),
-`-f`/`--filename`/`-k`/`--kustomize` (FILE- or kustomization-DIRECTORY-
-driven resource selection this module cannot read into), and
+`--filename`/`-k`/`--kustomize` (FILE- or kustomization-DIRECTORY-
+driven resource selection this module cannot read into; `-f` is
+allowlisted for `logs` only, where it means --follow, and is absent from
+`get`/`describe`, where it is the file selector), and
 `--server`/`-s`/`--kubeconfig`/`--token`/`--as`/`--as-group`/`--user`/
 `--cluster`/`--tls-server-name`/`--insecure-skip-tls-verify` (endpoint or
 identity redirection) are never members of any verb's flag allowlist, so
@@ -438,7 +449,9 @@ direction: it matches "secret" as a case-insensitive substring anywhere
 in the command's (already token-shape-validated, so always raw and never
 quoted or escaped) tokens, so `kubectl get secretstores --context prod`
 (an unrelated CRD whose name happens to contain "secret") is also
-excluded from the floor and falls back to requiring approval. This is an
+excluded from the floor and falls back to requiring approval; likewise
+any `!` in a value, so the common `--field-selector=status.phase!=Running`
+is not floored either (the token-shape allowlist refuses `!`). This is an
 accepted false positive — the detector over-matches "secret-shaped"
 resource names, in the safe direction: the constraint this decision must
 not violate is "a prod Secret read stays approval-gated," and the

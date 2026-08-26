@@ -2077,6 +2077,11 @@ describe("kubectl read-only floor (isReadOnlyKubectlCommand, task da823721)", ()
       "kubectl get pods --context prod-eu-1 | rm",
       "kubectl get pods > out.txt",
       "kubectl get pods --context prod-eu-1\nrm -rf /",
+      // Only the shell-metachar guard refuses these: every token after the
+      // newline is a plain word with no flag, so the allowlists alone would
+      // floor them (mutation-discriminating rows for that guard).
+      "kubectl get pods --context prod-eu-1\ncat /etc/passwd",
+      "kubectl get pods\ncat /etc/passwd",
       "kubectl get pods --context `evil`",
       "kubectl get pods --context $(evil)",
     ])("does not floor %j", (command) => {
@@ -2099,6 +2104,40 @@ describe("kubectl read-only floor (isReadOnlyKubectlCommand, task da823721)", ()
 
     it("kubectl-prefixed but not the literal binary (word-boundary) is not floored", () => {
       expect(isReadOnlyKubectlCommand("kubectl-plugin get pods")).toBe(false);
+    });
+
+    it.each([
+      "/usr/local/bin/kubectl get pods",
+      "./mykubectl get pods",
+      "sudo kubectl get pods",
+    ])("the head token must be exactly `kubectl` (%j is not floored)", (command) => {
+      expect(isReadOnlyKubectlCommand(command)).toBe(false);
+    });
+
+    it.each([
+      "kubectl get pods -n",
+      "kubectl get pods --chunk-size",
+      "kubectl logs pod --tail",
+    ])("a missing value on a post-verb value flag stops the scan, fail closed (%j)", (command) => {
+      expect(isReadOnlyKubectlCommand(command)).toBe(false);
+    });
+
+    it("cluster-info without a positional is floored", () => {
+      expect(isReadOnlyKubectlCommand("kubectl cluster-info --context prod-eu-1")).toBe(true);
+    });
+
+    it.each([
+      "kubectl cluster-info dump",
+      "kubectl cluster-info dump -A",
+      "kubectl cluster-info dump --all-namespaces --context prod-eu-1",
+      "kubectl cluster-info anythinggoes",
+    ])("cluster-info refuses every positional, so `dump` (cluster-wide pod logs) is not floored (%j)", (command) => {
+      expect(isReadOnlyKubectlCommand(command)).toBe(false);
+    });
+
+    it("`-f` is verb-scoped: --follow on logs floors, the file selector on get does not", () => {
+      expect(isReadOnlyKubectlCommand("kubectl logs pod -f --context prod-eu-1")).toBe(true);
+      expect(isReadOnlyKubectlCommand("kubectl get -f manifest.yaml --context prod-eu-1")).toBe(false);
     });
 
     it("an unrecognized global flag before the verb stops the scan (fail closed)", () => {

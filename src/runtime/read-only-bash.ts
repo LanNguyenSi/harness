@@ -801,11 +801,17 @@ const KUBECTL_GLOBAL_VALUE_FLAGS: ReadonlySet<string> = new Set([
 // a following token as its value in the `--flag value` form; every
 // other allowed flag is boolean (never consumes a following token).
 // `--raw` (arbitrary API server path) and the file/kustomize-driven
-// resource selectors `-f`/`--filename`/`-k`/`--kustomize` (this module
+// resource selectors `--filename`/`-k`/`--kustomize` (this module
 // cannot see what a manifest file or kustomization directory names, so
 // it cannot prove the selected resource is not a Secret or ConfigMap)
 // are deliberately absent from every verb's allowlist below — that
-// omission is the enforcement mechanism, not a separate check.
+// omission is the enforcement mechanism, not a separate check. `-f` is
+// allowlisted for `logs` ONLY, where it means --follow; on `get` and
+// `describe` it is the file selector and is deliberately absent.
+// Every `*_VALUE` member must be a pflag flag with an empty NoOptDefVal
+// (it always consumes the next argv element): if upstream ever turns
+// one of them into a boolean-with-default, the following token stops
+// being consumed by kubectl and must be re-validated here.
 const KUBECTL_GET_ALLOWED_FLAGS: ReadonlySet<string> = new Set([
   "-o", "--output", "-l", "--selector", "--field-selector", "-w", "--watch",
   "--watch-only", "--show-labels", "--no-headers", "--sort-by", "--show-kind",
@@ -965,7 +971,15 @@ export function isReadOnlyKubectlCommand(command: string): boolean {
   // they were already checked against the plain-word pattern above.
   for (let i = 0; i < remainder.length; i++) {
     const t = remainder[i];
-    if (t === undefined || !t.startsWith("-")) continue;
+    if (t === undefined) continue;
+    if (!t.startsWith("-")) {
+      // `cluster-info` takes no positional: `cluster-info dump` prints
+      // cluster-wide pod logs and is refused (fail-safe), as is any
+      // future sub-subcommand. Every other verb's positionals were
+      // already shape-checked above.
+      if (sub === "cluster-info") return false;
+      continue;
+    }
     const eq = t.indexOf("=");
     const flagName = eq === -1 ? t : t.slice(0, eq);
     const isGlobal = KUBECTL_GLOBAL_ALLOWED_FLAGS.has(flagName);
