@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Risk Gate: an explicit `kubectl --context`/`--namespace`/`-n` target
+  is now a resolver signal, and the shipped kubectl classifier pattern
+  no longer loses a match to a flag between `kubectl` and `delete`**
+  (task `a7eb1a71`). Before this fix the Kube half of the environment
+  resolver (`kube_context_patterns`/`kube_namespace_patterns`) only ever
+  read the AMBIENT `~/.kube/config` current-context; the usual, explicit
+  way of addressing a cluster — `kubectl delete namespace payments
+  --context prod-eu-1` — was invisible, so the whole Kube signal only
+  fired when the ambient kubeconfig happened to already point at
+  production (measured 2026-08-06: both the trailing- and leading-flag
+  forms resolved `environment: unknown` and allowed). A second,
+  independent defect compounded the leading-flag form: the shipped
+  `kubectl\s+delete\s+(namespace|deployment|statefulset|pvc)` classifier
+  pattern required the two verbs adjacent, so `kubectl --context=x
+  delete namespace payments` fell back to unclassified entirely.
+  `src/runtime/kubectl-target-parse.ts` (new) parses `--context`/
+  `--namespace`/`-n` (both `--flag value` and `--flag=value` forms) out
+  of a `kubectl ...` command, anchored at the command's own head token
+  so a same-named flag belonging to an unrelated program — or a second,
+  chained command — is never read as a kube signal; `src/cli/policy/
+  intercept.ts` merges the result into the resolver's `SignalInputs`,
+  explicit command flag winning over the ambient kubeconfig per field
+  (same shape as the existing inline-`VAR=value` merge). The shipped
+  `docs/examples/full-manifest.yaml` / `src/cli/init/templates.ts`
+  kubectl classifier pattern is now token-based and flag-tolerant
+  between the two verbs, without matching `kubectl get`/`describe`; the
+  analogous `terraform destroy` pattern got the same treatment for
+  terraform's own `-chdir=DIR` global flag, which sits in the identical
+  position. See docs/risk-gate.md for the conflict-priority rule and a
+  measured, out-of-scope interaction this surfaced: once the resolver
+  correctly resolves production from an explicit `--context`, the
+  pre-existing "unknown is not safe" rule makes ANY unclassified Bash
+  command against that context require approval, `kubectl get` included
+  — expanding kubectl subcommand classification to give read-only verbs
+  a floor is out of this task's scope.
+
 ## [0.48.0] - 2026-08-25
 
 ### Fixed

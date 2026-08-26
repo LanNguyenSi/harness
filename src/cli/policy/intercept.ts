@@ -31,6 +31,7 @@ import {
 import type { Manifest, MatchableEnvironment, McpServer } from "../../schema/index.js";
 import { resolveGeneratedDir, writePendingApproval } from "../../runtime/pending-approval.js";
 import { parseBashPrefix } from "../../runtime/bash-prefix-parse.js";
+import { parseKubectlTarget } from "../../runtime/kubectl-target-parse.js";
 import {
   MAX_NORMALIZE_LENGTH,
   normalizeCommand,
@@ -972,13 +973,15 @@ export async function runInterceptCli(
     // `resolverGit` itself — a switch away from a production branch can
     // never downgrade what `resolverGit` (cwd- or cd-based) already
     // resolved.
-    const bashPrefix =
-      event.tool_name === "Bash"
-        ? (() => {
-            const cmd = readBashCommand(event.tool_input);
-            return cmd === null ? null : parseBashPrefix(cmd);
-          })()
-        : null;
+    const riskBashCommand =
+      event.tool_name === "Bash" ? readBashCommand(event.tool_input) : null;
+    const bashPrefix = riskBashCommand === null ? null : parseBashPrefix(riskBashCommand);
+    // Explicit `--context`/`--namespace`/`-n` on a `kubectl ...`
+    // invocation (task a7eb1a71) — see `parseKubectlTarget`'s own doc
+    // comment for the narrow, command-head-anchored scope this is
+    // deliberately kept to.
+    const kubectlTarget =
+      riskBashCommand === null ? null : parseKubectlTarget(riskBashCommand);
     const resolverGit = (() => {
       if (bashPrefix === null || bashPrefix.cdTarget === null) return cwdGitContext;
       const effective = path.isAbsolute(bashPrefix.cdTarget)
@@ -996,6 +999,19 @@ export async function runInterceptCli(
       // win over process.env (matches POSIX `VAR=value cmd` semantics).
       return { ...base, ...bashPrefix.inlineEnv };
     })();
+    // CONFLICT PRIORITY (task a7eb1a71): a kubectl invocation's own
+    // explicit `--context`/`--namespace`/`-n` flag is the operator's
+    // explicit statement of intent, exactly like the inline `VAR=value`
+    // merge above — it wins over whatever `kube` resolved from the
+    // AMBIENT `~/.kube/config` (or the `opts.kubeContext` /
+    // `opts.kubeNamespace` test override folded into `kube` above).
+    // EXPLICIT COMMAND FLAG > AMBIENT KUBECONFIG, per-field (a command
+    // naming only `--context` still falls back to the ambient
+    // namespace, and vice versa).
+    const resolverKube = {
+      context: kubectlTarget?.context ?? kube.context,
+      namespace: kubectlTarget?.namespace ?? kube.namespace,
+    };
     const riskUser = safeOs(() => os.userInfo().username);
     const riskHost = safeOs(() => os.hostname());
     // A leading `git switch`/`checkout <branch>` (task 341e024b) is
@@ -1008,7 +1024,7 @@ export async function runInterceptCli(
       cwd,
       resolverGit,
       bashPrefix?.branchTarget ?? null,
-      { env: resolverEnv, kubeContext: kube.context, kubeNamespace: kube.namespace },
+      { env: resolverEnv, kubeContext: resolverKube.context, kubeNamespace: resolverKube.namespace },
       riskUser,
       riskHost,
       opts.now,
@@ -1019,8 +1035,8 @@ export async function runInterceptCli(
       user: riskUser,
       host: riskHost,
       env: resolverEnv,
-      kubeContext: kube.context,
-      kubeNamespace: kube.namespace,
+      kubeContext: resolverKube.context,
+      kubeNamespace: resolverKube.namespace,
     };
   }
 

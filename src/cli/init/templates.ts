@@ -988,10 +988,24 @@ risk:
         - pattern: 'DROP\\s+TABLE|TRUNCATE\\s+TABLE|DELETE\\s+FROM'
           categories: [destructive, data_loss]
           severity: high
-        - pattern: 'kubectl\\s+delete\\s+(namespace|deployment|statefulset|pvc)'
+        # Token-based, flag-tolerant (task a7eb1a71): a flag between
+        # \`kubectl\` and \`delete\` (e.g. \`kubectl --context=x delete
+        # namespace payments\`) used to defeat the old rigid
+        # \`kubectl\\s+delete\\s+...\` sequence entirely — the action fell
+        # back to unclassified. \`(?:\\s+-{1,2}[\\w-]+(?:=\\S+|\\s+(?!delete\\b)\\S+)?)*\`
+        # consumes zero or more \`--flag\`/\`-f\` tokens (each optionally
+        # taking a \`=value\` or a following space-separated value) between
+        # the two verbs, without matching \`kubectl get\`/\`describe\` (no
+        # \`delete\` literal to anchor on). See docs/risk-gate.md.
+        - pattern: 'kubectl(?:\\s+-{1,2}[\\w-]+(?:=\\S+|\\s+(?!delete\\b)\\S+)?)*\\s+delete\\s+(namespace|deployment|statefulset|pvc)'
           categories: [destructive, infrastructure_change]
           severity: high
-        - pattern: 'terraform\\s+destroy'
+        # Same flag-tolerance fix (task a7eb1a71 scope item 4, checked
+        # against the other verb patterns here): \`-chdir=DIR\` is
+        # terraform's own global flag and, like kubectl's flags above,
+        # sits BETWEEN the tool name and the subcommand
+        # (\`terraform -chdir=infra destroy\`).
+        - pattern: 'terraform(?:\\s+-{1,2}[\\w-]+(?:=\\S+|\\s+(?!destroy\\b)\\S+)?)*\\s+destroy'
           categories: [destructive, infrastructure_change]
           severity: critical
 

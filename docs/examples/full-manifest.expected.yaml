@@ -520,12 +520,12 @@ risk:
             - destructive
             - data_loss
           severity: high
-        - pattern: kubectl\s+delete\s+(namespace|deployment|statefulset|pvc)
+        - pattern: kubectl(?:\s+-{1,2}[\w-]+(?:=\S+|\s+(?!delete\b)\S+)?)*\s+delete\s+(namespace|deployment|statefulset|pvc)
           categories:
             - destructive
             - infrastructure_change
           severity: high
-        - pattern: terraform\s+destroy
+        - pattern: terraform(?:\s+-{1,2}[\w-]+(?:=\S+|\s+(?!destroy\b)\S+)?)*\s+destroy
           categories:
             - destructive
             - infrastructure_change
