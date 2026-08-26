@@ -133,7 +133,14 @@
 // that accidentally starts "recognizing" one of these shapes is caught):
 //   - `bash -c 'rm -rf /home/x'` / `sh -c '...'` / `env -S '...'` /
 //     `find ... -exec sh -c '...'`: the wrapped command lives inside a
-//     single string argument this module does not parse into.
+//     single string argument this module does not parse into. More
+//     generally, a `find -exec`/`-execdir`/`-ok`/`-okdir` payload whose
+//     head is not `rm` (`xargs rm -rf {} +`, `bash -c`, `perl -e`, ...)
+//     is not recognized as a deletion at all: only an `rm` payload is.
+//   - Backslash-newline line continuation (`rm -rf \<newline>/tmp/x`):
+//     the newline is a segment boundary before the tokenizer can join
+//     the lines, so the lone `\` becomes a relative target and the
+//     command over-gates (fail-closed, never a missed deletion).
 //   - `eval "rm -rf /home/x"`: `eval`'s argument is a STRING to be
 //     re-parsed, not "the command to run" positionally.
 //   - `sh script.sh` / `bash script.sh` / any script FILE the agent

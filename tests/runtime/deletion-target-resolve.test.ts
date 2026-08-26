@@ -498,6 +498,9 @@ describe("resolveDeletionTarget — review round 3: NOT COVERED residuals (pinne
     // NOT-COVERED list and docs/risk-gate.md "Known ceilings":
     ["env -S 'rm -rf /home/x'"],
     ["find /tmp/x -exec sh -c 'rm -rf /home/y' \\;"],
+    // a find -exec payload whose head is not rm is not a deletion here
+    ["find /home -exec xargs rm -rf {} +"],
+    ["find /home -exec bash -c 'rm -rf {}' \\;"],
     ["find /home '(' -name a ')' -delete"],
     ['find /home "(" -name a ")" -delete'],
     ["case x in *) rm -rf /home/x;; esac"],
@@ -964,5 +967,13 @@ describe("resolveDeletionTarget — review round 6: quote-unaware amp arm on a q
     const v = resolveDeletionTarget("rm -rf '/tmp/a&b'", ROOTS);
     expect(v?.unresolvable).toBe(true);
     expect(v?.targets).toContain("/tmp/a&b");
+  });
+});
+
+describe("backslash-newline line continuation over-gates (fail-closed ceiling)", () => {
+  it("splits at the newline before the escape can join the lines, so an in-root target still gates", () => {
+    const v = resolveDeletionTarget("rm -rf \\\n/tmp/x", ROOTS);
+    expect(v).not.toBeNull();
+    expect(v?.unresolvable).toBe(true);
   });
 });

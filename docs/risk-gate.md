@@ -969,7 +969,12 @@ DIFFERENT mechanism than the four `risk.*`/`environment.*` clauses above:
 - **Known ceilings (not covered, deliberately, pinned as tests rather
   than left implicit):** `bash -c '...'`/`sh -c '...'`/`env -S '...'`/
   `find ... -exec sh -c '...'` (the wrapped command lives inside a string
-  argument this resolver does not parse into); `eval "..."` (same reason
+  argument this resolver does not parse into), and more generally any
+  `find -exec`/`-execdir`/`-ok`/`-okdir` payload whose head is not `rm`
+  (`xargs rm -rf {} +`, `bash -c`, `perl -e`), which is not recognized as
+  a deletion at all; a backslash-newline line continuation
+  (`rm -rf \<newline>/tmp/x`) over-gates because the newline is a
+  segment boundary (fail-closed); `eval "..."` (same reason
   — a string to be re-parsed, not a positional "command to run"); a
   script FILE the agent writes and then executes (`sh script.sh`) — this
   resolver never reads a file's contents; `shred`/`rmdir`/`unlink` —
