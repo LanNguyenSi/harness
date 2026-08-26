@@ -27,6 +27,18 @@
 // and "cd/env prefix coverage" blocks pass a non-empty ambient
 // explicitly, on purpose, to exercise the upgrade-only merge and the
 // prefix-stripped head test.
+//
+// AC5 noted, but explicitly did NOT resolve, one measured interaction:
+// once this merge correctly resolves `environment: production` from an
+// explicit `--context`, the pre-existing "unknown is not safe" rule
+// makes an unclassified `kubectl get` against that context require
+// approval too, and giving read-only kubectl verbs a classified floor
+// was called out as a separate, orchestrator-waived follow-up decision.
+// Task da823721 made that decision (GO, see docs/risk-gate.md's kubectl
+// read-only floor section and `src/runtime/read-only-bash.ts`'s
+// `isReadOnlyKubectlCommand`); the "kubectl read-only floor" describe
+// blocks below exercise it end-to-end, and the AC5 classifier-half
+// tests below are updated to match the new, no-longer-waived outcome.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -229,13 +241,45 @@ describe("runInterceptCli - kubectl explicit --context/--namespace resolver sign
     // Regression check with the ambient kube state empty and no
     // explicit --context in the command at all: nothing resolves
     // production, so this is unaffected by the classifier fix either
-    // way. The interaction between an explicit-context `kubectl get`
-    // and the pre-existing "unknown is not safe" rule is a separate,
-    // orchestrator-waived decision; see the classifyRisk-level block
-    // below.
+    // way. The explicit-context `kubectl get` end-to-end interaction
+    // with the pre-existing "unknown is not safe" rule is exercised
+    // below (task da823721 resolved it: GO, a narrow kubectl read-only
+    // floor).
     const { result, output } = await intercept("kubectl get pods");
     expect(result.blocked).toBe(false);
     expect(output()).toBe("");
+  });
+});
+
+// End-to-end coverage for the kubectl read-only floor decision (task
+// da823721, docs/risk-gate.md). AC5 above measured that once an
+// explicit `--context` resolves `environment: production`, the
+// pre-existing "unknown is not safe" rule made an unclassified
+// `kubectl get` require approval too, and waived giving read-only
+// kubectl verbs a classified floor as a separate follow-up. These two
+// tests are that follow-up's discriminating end-to-end assertions,
+// through the SAME real `runInterceptCli` / policy-intercept path as
+// AC1-AC5 above, not just the classifier unit tested elsewhere.
+describe("runInterceptCli - kubectl read-only floor end-to-end (task da823721)", () => {
+  it("`kubectl get pods --context prod-eu-1` resolves production but is floored to low and allows", async () => {
+    const { result, output } = await intercept(
+      "kubectl get pods --context prod-eu-1",
+    );
+    expect(result.blocked).toBe(false);
+    expect(output()).toBe("");
+  });
+
+  it("`kubectl get secret -o yaml --context prod-eu-1` resolves production, stays unclassified (secret exclusion), and still requires approval", async () => {
+    const { result, output } = await intercept(
+      "kubectl get secret -o yaml --context prod-eu-1",
+    );
+    expect(result.blocked).toBe(true);
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.outcome).toBe("require_approval");
+    expect(result.decisions[0]?.policyName).toBe("gate-prod-destructive-approval");
+    const parsed = JSON.parse(output().trim());
+    expect(parsed.decision).toBe("block");
+    expect(parsed.reason).toContain("gate-prod-destructive-approval");
   });
 });
 
@@ -335,14 +379,16 @@ describe("runInterceptCli - the -- stop is the only protection against a false u
 });
 
 // AC5's classifier half, isolated from the policy engine: `kubectl get
-// pods --context prod-eu-1` must stay unclassified under the new
-// flag-tolerant pattern (no `delete` literal to anchor on).
-//
-// Orchestrator decision (review MEDIUM finding, AC5): the full
-// end-to-end block of a read-only `kubectl get --context prod` is the
-// pre-existing "unknown is not safe" rule, not something this fix
-// introduces, and is WAIVED for this task; giving `kubectl get` a
-// read-only classified floor is its own follow-up task.
+// pods --context prod-eu-1` does not classify via the operator
+// `KUBECTL_CLASSIFIER` pattern itself (no `delete` literal to anchor
+// on), but task da823721 gave read-only kubectl verbs their own
+// built-in floor (`isReadOnlyKubectlCommand`, folded into `classifyRisk`
+// alongside the general read-only floor), so `classified` is now `true`
+// / `low` here, not the unclassified outcome the review MEDIUM finding
+// (AC5) originally waived. `kubectl describe namespace ...` gets the
+// same floor (not a secret-sensitive resource); a secret read does not
+// — see `tests/runtime/risk-classifier.test.ts`'s "built-in kubectl
+// read-only floor" describe block for the secrets-exclusion coverage.
 describe("classifyRisk - AC2/AC5: kubectl classifier flag-tolerance", () => {
   const CTX: EnvelopeContext = {
     cwd: "/work/repo",
@@ -375,17 +421,26 @@ describe("classifyRisk - AC2/AC5: kubectl classifier flag-tolerance", () => {
     expect(p.severity).toBe("high");
   });
 
-  it("`kubectl get pods --context prod-eu-1` is unclassified", () => {
+  it("`kubectl get pods --context prod-eu-1` is floored to low by the kubectl read-only floor (task da823721)", () => {
     const p = classifyRisk(bashEnvelope("kubectl get pods --context prod-eu-1"), [
       KUBECTL_CLASSIFIER,
     ]);
-    expect(p.classified).toBe(false);
-    expect(p.severity).toBeNull();
+    expect(p.classified).toBe(true);
+    expect(p.severity).toBe("low");
   });
 
-  it("`kubectl describe namespace payments --context prod-eu-1` is unclassified", () => {
+  it("`kubectl describe namespace payments --context prod-eu-1` is floored to low (not a secret resource)", () => {
     const p = classifyRisk(
       bashEnvelope("kubectl describe namespace payments --context prod-eu-1"),
+      [KUBECTL_CLASSIFIER],
+    );
+    expect(p.classified).toBe(true);
+    expect(p.severity).toBe("low");
+  });
+
+  it("`kubectl get secret -o yaml --context prod-eu-1` stays unclassified (secret exclusion, task da823721)", () => {
+    const p = classifyRisk(
+      bashEnvelope("kubectl get secret -o yaml --context prod-eu-1"),
       [KUBECTL_CLASSIFIER],
     );
     expect(p.classified).toBe(false);

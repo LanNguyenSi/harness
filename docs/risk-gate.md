@@ -313,6 +313,143 @@ The same guarantees hold:
   reason, so a write hidden past the 16 KiB subject cap cannot slip
   through either.
 
+#### Kubectl read-only verb floor (decision record, task `da823721`)
+
+**Status: GO, shipped.** Superseded, prior status: a Risk Gate false
+positive, waived at task `a7eb1a71` (see below).
+
+**Context.** Task `a7eb1a71` made an explicit `kubectl --context` /
+`--namespace` / `-n` flag a resolver signal (see below). That surfaced a
+measured interaction: once a command like `kubectl get pods --context
+prod-eu-1` resolves `environment: production`, the pre-existing "unknown
+is not safe" rule (`risk.severity_at_least` matches ANY threshold on an
+unclassified action, see `evaluateWhen` in `src/runtime/when-eval.ts`)
+makes that read require approval too — exactly like `kubectl delete
+namespace payments --context prod-eu-1` does, even though `get` cannot
+mutate anything. `a7eb1a71`'s AC5 measured and waived this rather than
+fixing it; this task makes the fix decision.
+
+**Decision: GO**, with a floor narrower than the general read-only floor
+above. A curated set of kubectl read verbs — `get`, `describe`, `logs`,
+`top`, `api-resources`, `api-versions`, `version`, `cluster-info`,
+`explain`, and `auth can-i` (a permission CHECK, never the resource's
+own data) — floors to `low`, UNLESS the command reads `--raw` (an
+arbitrary, unclassifiable API path) or the resource argument mentions
+"secret" in any form (`get secret`, `get secrets`, `get secret/<name>`,
+`describe secret`, `-o yaml`/`-o json` on a secret, a comma-list like
+`get pods,secrets`). Any other kubectl subcommand — `apply`, `delete`,
+`patch`, `create`, `replace`, `scale`, `rollout`, `drain`, `cordon`,
+`taint`, `label`, `annotate`, `set`, `exec`, `cp`, `port-forward`,
+`proxy`, `edit`, `attach`, `debug`, `auth reconcile`, or anything this
+floor has not enumerated — is NOT on the allowlist and stays fail-closed
+(unknown is not safe), unchanged. Implementation:
+`isReadOnlyKubectlCommand` in `src/runtime/read-only-bash.ts`, wired into
+`classifyRisk`'s built-in floor block in `src/runtime/risk-classifier.ts`
+alongside (not merged with) the general read-only floor.
+
+Two sub-decisions, made explicit because they were judgment calls, not
+mechanical:
+
+- **`kubectl get all` is NOT excluded.** kubectl's built-in `all`
+  resource-category alias never includes `Secret` or `ConfigMap` objects
+  (it covers the common workload/networking kinds: pods, services,
+  deployments, replicasets, statefulsets, jobs, cronjobs, and a handful
+  of others) — verified against `kubectl` upstream's `pkg/kubectl/cmd/get`
+  resource-alias table. `get all` therefore cannot expose Secret data and
+  gets the floor like any other non-secret `get`.
+- **`kubectl explain secret` IS floored**, even though the resource word
+  "secret" appears. `explain` prints the API SCHEMA for a kind (field
+  names and types), never a live object's data — there is no Secret to
+  read. The secrets exclusion is scoped to `get`/`describe` only (the two
+  verbs that can return an actual object), not to every verb that merely
+  names a resource kind.
+
+The secrets check itself is deliberately over-broad in the fail-safe
+direction: it matches "secret" as a case-insensitive substring anywhere
+in the command's tokens (raw or `decodeShellWord`-decoded), so
+`kubectl get secretstores --context prod` (an unrelated CRD whose name
+happens to contain "secret") is also excluded from the floor and falls
+back to requiring approval. That is an accepted false negative
+(convenience cost, occasionally requiring approval for a genuinely safe
+read), not a false positive — the constraint this decision must not
+violate is "a prod Secret read stays approval-gated," and the substring
+match can only ever REQUIRE more approval than a precise resource-type
+parse would, never less.
+
+**Blast radius, and why the floor is NOT in `isReadOnlyBashCommand` /
+`isReadOnlyBashPipeline`.** Those two functions are shared by three
+consumers, only one of which this task's floor is meant to change:
+
+1. The Risk Classifier's built-in floor (`risk-classifier.ts`) — the
+   consumer this decision targets. `kubectl` was never in
+   `isReadOnlyBashCommand`'s `classifyTokens` dispatch, so before this
+   task every kubectl invocation was simply unclassified there; nothing
+   downstream of that function changes for kubectl. The new floor is a
+   SEPARATE check (`isReadOnlyKubectlCommand`), consulted only from
+   `classifyRisk`'s own built-in-floor block.
+2. The understanding-gate PreToolUse blocker (`hook-pre-tool-use.ts` /
+   `hook-codex-pre-tool-use.ts`), via `isReadOnlyBashPipeline` — must
+   keep requiring an approved Understanding Report for EVERY kubectl
+   command, including a plain `kubectl get pods`, unchanged by this
+   task. Proven by a real end-to-end test (not just the classifier unit):
+   `tests/cli/pack-hook-pre-tool-use.test.ts`'s "kubectl unaffected by
+   the Risk Classifier's kubectl read-only floor" describe block asserts
+   `result.blocked === true` for `kubectl get pods --context prod-eu-1`,
+   bare `kubectl get pods`, `kubectl auth can-i get pods`, and `kubectl
+   describe namespace payments --context prod-eu-1`, with no report and
+   no approval on the ledger.
+3. The solution-acceptance write-guard
+   (`hook-solution-acceptance-writeguard.ts`), via `isReadOnlyBashCommand`
+   directly — its read-only fast path exists to recognize commands that
+   cannot write to the local filesystem (specifically: cannot write into
+   the harness-protected solution-verdict directory). A kubectl
+   invocation writes nothing to the local filesystem regardless of
+   whether it reads a Secret from the API server, so this consumer's own
+   semantics are orthogonal to the secrets question the Risk Classifier
+   floor exists to answer; wiring the kubectl floor there was considered
+   and rejected as the wrong question for that gate, not merely
+   redundant. Leaving `isReadOnlyBashCommand` untouched for kubectl means
+   this consumer is provably unaffected by construction (no new code
+   path reaches it) rather than by a behavioral proof, which is the
+   simpler and stronger guarantee.
+
+Given (2) and (3), folding the new floor into the shared
+`isReadOnlyBashCommand` would have widened the understanding-gate
+PreToolUse blocker (letting an unreported `kubectl get` through without
+an approval) as a side effect of a Risk Classifier decision — an
+unrequested, untested change to a different gate's fail-closed posture.
+Keeping the floor as its own function, consulted only from
+`risk-classifier.ts`, scopes the blast radius to exactly the gate this
+decision is about.
+
+**Fail-safe posture, restated:** every ambiguous shape (an unrecognized
+subcommand, an unrecognized global flag before the verb, any mention of
+"secret", `--raw`, or any shell chaining/redirection/substitution) falls
+through to `false` — not floored, so "unknown is not safe" still applies
+and the action requires approval on a production-resolved session. The
+floor can only ever ALLOW something the "unknown is not safe" rule would
+otherwise have blocked; it cannot itself cause a block.
+
+**Verification.** `tests/runtime/read-only-bash.test.ts`'s "kubectl
+read-only floor" describe block unit-tests `isReadOnlyKubectlCommand`
+directly (floored / not-floored / edge cases / chaining / a 30-flag
+timing check), and separately pins that `isReadOnlyBashCommand` /
+`isReadOnlyBashPipeline` still classify every kubectl form `false`.
+`tests/runtime/risk-classifier.test.ts`'s "built-in kubectl read-only
+floor" describe block covers `classifyRisk` directly, including the
+secrets exclusion and the operator-classifier-still-wins case.
+`tests/runtime/intercept-cli-kube-context-flag.test.ts`'s "kubectl
+read-only floor end-to-end" describe block runs the real
+`runInterceptCli` policy-intercept path (not just the classifier) for
+both the allow case (`kubectl get pods --context prod-eu-1`) and the
+still-approval-gated case (`kubectl get secret -o yaml --context
+prod-eu-1`), and its earlier AC2/AC5 classifier-half tests were updated
+from "unclassified" to "floored to low" to match this decision.
+Negative control: removing the kubectl floor (or dropping the secrets
+exclusion from it) was applied and observed to fail exactly the tests
+named above, then restored — see the implementer's `mutation_probes`
+report for task `da823721`.
+
 ### Environment resolvers (`environments:`)
 
 *Status: parsed and validated (Phase 7 #1). Consumed by the Context
@@ -414,8 +551,10 @@ correctly resolves `environment: production` from an explicit
 `--context`, the PRE-EXISTING "unknown is not safe" rule (see
 `policy.when:` below) makes an unclassified `kubectl get` against that
 context require approval too, not only a classified-destructive action.
-Giving read-only kubectl verbs a classified floor is a separate,
-orchestrator-waived follow-up decision, not made here.
+Giving read-only kubectl verbs a classified floor was waived as a
+separate follow-up decision at this task; task `da823721` made that
+decision (GO, a narrow secrets-excluding floor) — see "Kubectl read-only
+verb floor (decision record, task `da823721`)" above.
 
 The kubectl classifier pattern itself is also token-based and
 flag-tolerant between the two verbs (same task), consuming zero or more

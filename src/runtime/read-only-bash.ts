@@ -637,6 +637,25 @@ const VERSION_OR_HELP_FLAGS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * True when `trimmed` contains a shell chaining (`;`, `&`, `|`),
+ * redirection (`<`, `>`), or command-substitution (backtick, `$(`)
+ * metacharacter that could hide a write behind an otherwise-provable
+ * read. Shared by `isReadOnlyBashCommand` and `isReadOnlyKubectlCommand`
+ * below (extracted, task da823721, to keep their identical preamble
+ * from being flagged as new copy-paste by the duplication gate). NOT
+ * reused by `isReadOnlyBashPipeline`, which deliberately admits a bare
+ * `|` (see its own doc comment) and so needs a narrower reject set.
+ */
+function hasUnsafeShellMetachar(trimmed: string): boolean {
+  return (
+    /[;&|<>]/.test(trimmed) ||
+    trimmed.includes("\n") ||
+    trimmed.includes("`") ||
+    trimmed.includes("$(")
+  );
+}
+
+/**
  * Classify a Bash command string. `true` means the command is
  * provably read-only and the understanding-gate can allow it without
  * an approved report. `false` means the command is either a write or
@@ -658,10 +677,7 @@ export function isReadOnlyBashCommand(command: string): boolean {
   // string, so it also covers any residual command a runner
   // (`env` / `command`) wraps: those are classified from the same
   // token slice, never from a re-read of the shell.
-  if (/[;&|<>]/.test(trimmed)) return false;
-  if (trimmed.includes("\n")) return false;
-  if (trimmed.includes("`")) return false;
-  if (trimmed.includes("$(")) return false;
+  if (hasUnsafeShellMetachar(trimmed)) return false;
 
   return classifyTokens(trimmed.split(/\s+/));
 }
@@ -707,6 +723,150 @@ export function isReadOnlyBashPipeline(command: string): boolean {
     if (s === "") return false;
     return isReadOnlyBashCommand(s);
   });
+}
+
+// Kubectl read-only VERB floor — used ONLY by the Risk Classifier's
+// built-in floor (`risk-classifier.ts`), never by `isReadOnlyBashCommand`
+// / `isReadOnlyBashPipeline` above. Task da823721 (blast-radius decision
+// recorded in docs/risk-gate.md): those two functions are shared by the
+// understanding-gate PreToolUse blocker and the solution-acceptance
+// write-guard, and both consumers must keep treating EVERY kubectl
+// invocation as non-read-only exactly as before this change — kubectl
+// was never in `classifyTokens`'s dispatch and still isn't, so a
+// `kubectl get` still needs an approved Understanding Report and is
+// never fast-pathed through the write-guard. The Risk Classifier's floor
+// is a separate, narrower question: whether an already-production-
+// resolved `kubectl get ...` should be floored to `low` instead of
+// fail-closing on the pre-existing "unknown is not safe" rule.
+//
+// Scope, deliberately narrow, same fail-safe posture as the rest of this
+// module:
+//   - Only a fixed, curated set of read verbs floors at all
+//     (`KUBECTL_READ_ONLY_VERBS`): `get`, `describe`, `logs`, `top`,
+//     `api-resources`, `api-versions`, `version`, `cluster-info`,
+//     `explain`, plus `auth can-i` (a permission CHECK that never
+//     returns the resource's own data). Any other subcommand —
+//     `apply`, `delete`, `patch`, `create`, `replace`, `scale`,
+//     `rollout`, `drain`, `cordon`, `taint`, `label`, `annotate`,
+//     `set`, `exec`, `cp`, `port-forward`, `proxy`, `edit`, `attach`,
+//     `debug`, `auth reconcile`, or an unrecognized subcommand — is not
+//     on the list, so it falls through to `false` (fail-safe: unknown
+//     is not safe).
+//   - `get` / `describe` are excluded whenever any token after the verb
+//     mentions "secret" (case-insensitive substring, checked on both
+//     the raw and `decodeShellWord`-decoded form of every token, same
+//     raw-or-decoded direction as the rest of this module): `get
+//     secret`, `get secrets`, `get secret/<name>`, `describe secret
+//     foo`, `get pods,secrets` are all caught. `-o yaml` / `-o json` on
+//     a secret is caught the same way — the exclusion keys on the
+//     RESOURCE mention, not the output flag. This is deliberately
+//     OVER-broad (`get secretstores` also gets excluded, a false
+//     positive) rather than under-broad: erring toward requiring
+//     approval on a mention of "secret" is the documented fail-safe
+//     direction (see docs/risk-gate.md's kubectl read-only floor
+//     decision). `kubectl get all` is NOT excluded: kubectl's built-in
+//     `all` category never includes Secrets or ConfigMaps — also a
+//     documented, deliberate decision, see docs/risk-gate.md.
+//   - `get --raw ...` is excluded unconditionally: `--raw` hits an
+//     arbitrary API server path chosen by the caller, which this
+//     module cannot prove is not a secrets endpoint the way it can a
+//     structured resource-type token.
+//   - A bounded set of GLOBAL flags (`--context`, `--namespace`/`-n`,
+//     `--kubeconfig`, `--cluster`, `--user`, `--server`/`-s`,
+//     `--token`, `--as`, `--as-group`, `--request-timeout`, `-v`/
+//     `--v`) may appear BEFORE the verb (`kubectl --context prod get
+//     pods`) as well as after (`kubectl get pods --context prod`); an
+//     unrecognized flag before the verb stops the scan and the verb
+//     lookup then fails (fail closed), mirroring `skipGitGlobalOptions`
+//     above.
+//   - Same metachar / chaining / substitution refusal as
+//     `isReadOnlyBashCommand`: any `;`, `&`, `|`, `<`, `>`, backtick,
+//     `$(`, or newline forfeits the classification for the whole
+//     string.
+const KUBECTL_READ_ONLY_VERBS: ReadonlySet<string> = new Set([
+  "get", "describe", "logs", "top",
+  "api-resources", "api-versions", "version", "cluster-info", "explain",
+]);
+
+// Verbs whose resource argument can materialize live Secret data.
+const KUBECTL_SECRET_SENSITIVE_VERBS: ReadonlySet<string> = new Set(["get", "describe"]);
+
+const KUBECTL_GLOBAL_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "--context", "--namespace", "-n", "--kubeconfig", "--cluster", "--user",
+  "--server", "-s", "--token", "--as", "--as-group", "--request-timeout",
+  "-v", "--v",
+]);
+
+/**
+ * Skip a run of recognized, value-taking kubectl GLOBAL flags at the
+ * front of the argv (after `kubectl` itself), returning the index of
+ * the first token that is not part of that run. An unrecognized flag,
+ * or a recognized flag missing its value, stops the scan in place (the
+ * caller then fails the verb lookup, which is fail-closed here).
+ */
+function skipKubectlGlobalOptions(tokens: readonly string[]): number {
+  let idx = 1; // after "kubectl"
+  while (idx < tokens.length) {
+    const t = tokens[idx];
+    if (t === undefined || !t.startsWith("-")) break;
+    const flagName = t.indexOf("=") === -1 ? t : t.slice(0, t.indexOf("="));
+    if (!KUBECTL_GLOBAL_VALUE_FLAGS.has(flagName)) break;
+    if (t.includes("=")) {
+      idx += 1;
+      continue;
+    }
+    if (idx + 1 >= tokens.length) return idx; // missing value: stop here, fail closed
+    idx += 2;
+  }
+  return idx;
+}
+
+/** True when any token (raw or `decodeShellWord`-decoded) mentions "secret". */
+function kubectlArgMentionsSecret(tokens: readonly string[]): boolean {
+  return tokens.some((t) => {
+    if (t.toLowerCase().includes("secret")) return true;
+    return decodeShellWord(t).toLowerCase().includes("secret");
+  });
+}
+
+/**
+ * Kubectl read-only floor for the Risk Classifier ONLY — see the module
+ * doc above this constant block for scope and the blast-radius
+ * decision. `true` means a curated read verb, with no secret-resource
+ * mention and no `--raw`, was invoked with no shell chaining,
+ * redirection, or substitution.
+ */
+export function isReadOnlyKubectlCommand(command: string): boolean {
+  const trimmed = command.trim();
+  if (trimmed === "") return false;
+  if (hasUnsafeShellMetachar(trimmed)) return false;
+
+  const tokens = trimmed.split(/\s+/);
+  if (tokens[0] !== "kubectl") return false;
+
+  const verbIdx = skipKubectlGlobalOptions(tokens);
+  const sub = tokens[verbIdx];
+  if (sub === undefined) return false; // bare `kubectl` or only global flags
+
+  if (sub === "auth") return tokens[verbIdx + 1] === "can-i";
+
+  if (!KUBECTL_READ_ONLY_VERBS.has(sub)) return false;
+
+  const rest = tokens.slice(verbIdx + 1);
+
+  if (
+    sub === "get" &&
+    rest.some((t) => {
+      const flagName = t.indexOf("=") === -1 ? t : t.slice(0, t.indexOf("="));
+      return flagName === "--raw";
+    })
+  ) {
+    return false;
+  }
+
+  if (KUBECTL_SECRET_SENSITIVE_VERBS.has(sub) && kubectlArgMentionsSecret(rest)) return false;
+
+  return true;
 }
 
 /**

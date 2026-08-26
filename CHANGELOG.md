@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Risk Gate: a narrow, secrets-excluding kubectl read-only verb floor
+  fixes the AC5 false positive waived at task `a7eb1a71`** (task
+  `da823721`). Once an explicit `--context`/`--namespace` resolves
+  `environment: production` (`a7eb1a71`), the pre-existing "unknown is
+  not safe" rule made a harmless `kubectl get pods --context prod-eu-1`
+  require approval exactly like `kubectl delete namespace payments
+  --context prod-eu-1` does. `isReadOnlyKubectlCommand`
+  (`src/runtime/read-only-bash.ts`) floors a curated set of read verbs
+  (`get`, `describe`, `logs`, `top`, `api-resources`, `api-versions`,
+  `version`, `cluster-info`, `explain`, `auth can-i`) to `low` severity
+  in `classifyRisk`'s built-in floor (`src/runtime/risk-classifier.ts`),
+  UNLESS the command reads `--raw` or the resource argument mentions
+  "secret" in any form (`get secret`, `get secrets`, `get
+  secret/<name>`, `describe secret`, `-o yaml`/`-o json` on a secret) —
+  a prod Secret read stays approval-gated. Any other kubectl subcommand
+  stays fail-closed, unchanged. The floor is wired ONLY into the Risk
+  Classifier: it is a separate function, not folded into the shared
+  `isReadOnlyBashCommand` / `isReadOnlyBashPipeline` the
+  understanding-gate PreToolUse blocker and the solution-acceptance
+  write-guard also consume, so every kubectl command still requires an
+  approved Understanding Report there, unchanged — proven by a real
+  end-to-end test (`tests/cli/pack-hook-pre-tool-use.test.ts`), not just
+  the classifier unit. See docs/risk-gate.md's "Kubectl read-only verb
+  floor (decision record, task `da823721`)" for the full decision, the
+  `get all` / `explain secret` sub-decisions, and the blast-radius
+  reasoning.
+
 ## [0.49.0] - 2026-08-26
 
 ### Fixed
