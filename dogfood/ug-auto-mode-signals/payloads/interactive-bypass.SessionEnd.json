@@ -1,0 +1,8 @@
+{
+  "session_id": "90ab7a1e-1eb1-4399-a14a-41115a07cb9f",
+  "transcript_path": "<scratch>/cc-config/projects/<scratch-slug>/90ab7a1e-1eb1-4399-a14a-41115a07cb9f.jsonl",
+  "cwd": "<scratch>/cc-work",
+  "prompt_id": "795352dc-ca55-4e6d-ac62-66523b25d675",
+  "hook_event_name": "SessionEnd",
+  "reason": "prompt_input_exit"
+}

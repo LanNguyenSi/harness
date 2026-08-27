@@ -5,8 +5,9 @@ in parallel with this dogfood; see that path for the decision). This
 directory holds only the measured signals and the scripts that produced
 them: what fields the Claude Code hook payload actually carries per
 permission mode and event, what the hook process's own environment looks
-like, and whether a report written mid-turn is visible to a `PreToolUse`
-hook versus to `Stop`.
+like, whether a report written mid-turn is visible to a `PreToolUse` hook
+versus to `Stop`, how a hook `ask` resolves headlessly and interactively,
+and what a subagent's tool call looks like to the same hook.
 
 ## Method
 
@@ -57,6 +58,62 @@ the same command once; if not, write it, then retry") otherwise. Three runs
 with the report requested before the first tool call, three without, all
 under `--permission-mode bypassPermissions`, `--max-turns 6`.
 
+Interactive capture (sections (h) and (i)): an interactive `claude` needs a
+TTY, so both interactive probes launch one inside a detached `tmux` session
+(`tmux new-session -d -s ugsig-<kind>-<pid>-<n> -x 200 -y 50 "cd <work> &&
+exec env -u CLAUDECODE CLAUDE_CONFIG_DIR=<dir> claude --permission-mode
+bypassPermissions"`) and drive it with `tmux send-keys`, reading the screen
+back with `tmux capture-pane -p`. Each run gets its own fresh config
+directory and its own scratch cwd. Two things about that shape are worth
+stating, because both could otherwise be mistaken for part of the
+measurement:
+
+- A fresh `CLAUDE_CONFIG_DIR` puts an interactive session into first-run
+  onboarding, which stops on the theme picker and then on a login-method
+  screen. A probe may not answer a login screen, so the isolated config
+  directory is seeded with a minimal `.claude.json` carrying only the
+  onboarding flags (`hasCompletedOnboarding`, `lastOnboardingVersion`,
+  `theme`, `numStartups`, `installMethod`, `autoUpdates`). No account data
+  is copied out of the operator's real config; authentication still comes
+  from the copied `.credentials.json`, exactly as in the `-p` runs. If the
+  login screen appears anyway the driver aborts the run.
+- The only keys the driver sends are the acknowledgements for three known
+  STARTUP dialogs (theme picker: Enter; workspace-trust "Is this a project
+  you created or one you trust": Enter on the preselected "Yes, I trust this
+  folder"; the bypassPermissions warning: Down then Enter to move off the
+  preselected "No, exit" onto "Yes, I accept"), the prompt text, `Escape`
+  and `/exit`. Any other screen aborts the run with the pane dumped. No
+  permission prompt is ever answered with an approval. The shared driver is
+  `interactive-lib.sh`, sourced by both interactive scripts.
+
+Interactive payload capture (`interactive-capture.sh`, section (h)):
+recorder hooks (`{ cat; echo; } >> <file>`) on `SessionStart`,
+`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SessionEnd`,
+`SubagentStart` and `SubagentStop`, plus a SECOND `PreToolUse` hook that
+dumps the hook process's own `env | grep -E '^(CLAUDE|AI_AGENT)'` next to
+the payload for the same tool call, so the hook env's
+`CLAUDE_CODE_SESSION_ID` can be compared against the payload's `session_id`
+within one run. Prompt: exactly one Bash call (`echo interactive-probe`),
+then the single word "done". Two runs, two fresh sessions.
+
+Interactive `ask` probe (`interactive-ask-probe.sh`, section (i)): the same
+tmux shape, with the ask-answering `PreToolUse` hook of `ask-probe.sh`
+byte-for-byte (record the payload, then answer `permissionDecision: "ask"`
+with reason `askprobe: hook asked for operator confirmation`) and plain
+recorders on `PostToolUse`, `PermissionRequest`, `PermissionDenied` and
+`Stop`. Prompt: exactly one Bash call (`echo askprobe-executed`), then
+"done". The probe watches the pane for a permission dialog; if one appears
+it is left untouched for a settle window (default 20 s, `UG_SIG_SETTLE`) to
+show it does not auto-resolve, the pane is captured before and after, and
+the run is ended with `Escape` and `/exit`. Two runs.
+
+Subagent capture (`subagent-capture.sh`, section (j)): `claude -p
+--permission-mode bypassPermissions --max-turns 6` with recorders on
+`UserPromptSubmit`, `SubagentStart`, `SubagentStop`, `PreToolUse`,
+`PostToolUse` and `Stop`. The prompt asks for the Agent tool
+(`subagent_type general-purpose`) to run exactly one bash command (`echo
+subagent-probe`) and forbids the parent from running bash itself. Two runs.
+
 Credentials (`~/.claude/.credentials.json`) were copied into the isolated
 config directory for the duration of each run and deleted afterward
 (the scripts below do this via a `trap ... EXIT`, macOS-specific and
@@ -71,12 +128,20 @@ UG_SIG_OUT=$(mktemp -d) ./hook-env-probe.sh   # hook process env + parent chain
 UG_SIG_OUT=$(mktemp -d) ./transcript-probe.sh # 5+2 report-visibility probe
 UG_SIG_OUT=$(mktemp -d) ./ask-probe.sh        # hook ask resolution, 4 modes
 UG_SIG_OUT=$(mktemp -d) ./retry-probe.sh      # block-and-retry, 3+3 runs
+UG_SIG_OUT=$(mktemp -d) ./interactive-capture.sh    # interactive payload capture, 2 runs
+UG_SIG_OUT=$(mktemp -d) ./interactive-ask-probe.sh  # interactive ask resolution, 2 runs
+UG_SIG_OUT=$(mktemp -d) ./subagent-capture.sh       # subagent session id, 2 runs
 ```
 
-All five scripts default `UG_SIG_OUT` / `UG_SIG_CONFIG_DIR` / `UG_SIG_WORK`
+All eight scripts default `UG_SIG_OUT` / `UG_SIG_CONFIG_DIR` / `UG_SIG_WORK`
 to fresh `mktemp -d` directories when unset, so they run standalone without
 any path editing. None of them touch the operator's default
-`CLAUDE_CONFIG_DIR`.
+`CLAUDE_CONFIG_DIR`. The three added ones take `UG_SIG_RUNS` (run count,
+default 2) and `UG_SIG_CLAUDE` (binary, default `claude` from `PATH`) as
+well; `interactive-ask-probe.sh` also takes `UG_SIG_SETTLE`.
+`interactive-lib.sh` is sourced by the two interactive scripts and is not
+run on its own. The two interactive scripts need `tmux` on `PATH` and kill
+every session they create through a `trap ... EXIT INT TERM`.
 
 ## Redaction
 
@@ -103,6 +168,17 @@ grep -rn -E '<login>|<tmp-prefix>|<run-id>|MESSAGING_TOKEN=[0-9a-f]|session_01' 
 ```
 
 Zero hits at capture time.
+
+Re-run unchanged after the interactive and subagent fixtures of sections
+(h) to (j) were added (their per-run config and cwd directories map onto the
+same `<scratch>/cc-config` and `<scratch>/cc-work` placeholders, and the
+captured panes go through the same replace): zero hits again. The pattern's
+only match anywhere under this directory is the line above, which spells the
+pattern out; excluding that line the grep returns nothing. No new
+secret-looking value appeared in the added fixtures, so the table above is
+unchanged. The added hook-env dump redacts
+`CLAUDE_CODE_MESSAGING_TOKEN` and `CLAUDE_CODE_BRIDGE_SESSION_ID` in the hook
+command itself, before the value ever reaches a file.
 
 ## Results
 
@@ -282,3 +358,154 @@ attempt and succeeded. Combined over both samples of the same one-retry
 deny text, 2/6 runs stopped after the single retry and 4/6 tried again;
 a single retry is reliable in neither direction, which is the reading the
 ADR carries.
+
+### (h) Interactive (non `-p`) `bypassPermissions` capture (n=2 fresh sessions)
+
+Method: see "Interactive payload capture" above. Script:
+`interactive-capture.sh`. Fixtures: `payloads/interactive-bypass.<Event>.json`
+(run 1's payloads), `payloads/interactive-bypass.hook-env.txt` (run 1's hook
+process env for the same tool call), and
+`payloads/interactive-bypass.session-agreement.json` (both runs' agreement
+rows).
+
+| Run | PreToolUse `permission_mode` | payload `session_id` | hook env `CLAUDE_CODE_SESSION_ID` | agree | `CLAUDE_CODE_ENTRYPOINT` | `AI_AGENT` |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | `bypassPermissions` | `90ab7a1e-1eb1-4399-a14a-41115a07cb9f` | same | yes | `cli` | `claude-code_2-1-247_harness` |
+| 2 | `bypassPermissions` | `ef297ea0-7037-491a-90b2-4cada1e057a2` | same | yes | `cli` | `claude-code_2-1-247_harness` |
+
+2/2. Three readings:
+
+- The interactive `PreToolUse` payload carries `permission_mode:
+  "bypassPermissions"`, the same value and spelling the `-p` runs of section
+  (a) carry. So does `UserPromptSubmit` and `Stop`; `SessionStart` and
+  `SessionEnd` carry no such field, again as under `-p`.
+- The hook process's `CLAUDE_CODE_SESSION_ID` equals the payload's
+  `session_id` in both runs. Section (c)'s agreement was captured only for a
+  `claude -p` run; it now holds for the interactive launch shape too. Still
+  not exercised: a `--session-id`-pinned launch.
+- `CLAUDE_CODE_ENTRYPOINT` is `cli` interactively, against `sdk-cli` under
+  `-p` (section (c)); `AI_AGENT` carries the same `_harness` suffix in both.
+  The interactive hook env has no `CLAUDE_CODE_BRIDGE_SESSION_ID` and no
+  `CLAUDE_CODE_EXECPATH` entry, where the `-p` probe of section (c) had
+  both; note that this probe's grep is `^(CLAUDE|AI_AGENT)` where section
+  (c)'s also took `SHLVL`, `PPID` and `_=`, so only the `CLAUDE*` and
+  `AI_AGENT` variables are comparable between the two.
+
+Two per-event differences from the `-p` field lists of section (b), same
+events, same mode:
+
+| Event | `-p` | interactive |
+| --- | --- | --- |
+| SessionStart | `session_id`, `transcript_path`, `cwd`, `hook_event_name`, `source` | the same plus `model` (value `claude-opus-5[1m]` in run 1) |
+| SessionEnd | `reason: "other"` | `reason: "prompt_input_exit"` (the session was ended with `/exit`) |
+
+`SubagentStart` and `SubagentStop` were registered in both runs and never
+fired: this prompt spawns no subagent. Section (j) exercises them.
+
+A third session was run afterwards with `UG_SIG_RUNS=1` and no other
+environment variables, to check that the script needs no path editing (its
+`UG_SIG_*` directories all came from `mktemp -d`). It reproduced all three
+readings above: `permission_mode` `bypassPermissions`, hook env
+`CLAUDE_CODE_SESSION_ID` equal to the payload `session_id`, and
+`CLAUDE_CODE_ENTRYPOINT` `cli`. Its payloads are not checked in, so the
+table above stays at the two recorded runs.
+
+### (i) Interactive resolution of a hook `permissionDecision: "ask"` under `bypassPermissions` (n=2)
+
+Method: see "Interactive `ask` probe" above; the hook answer is
+`ask-probe.sh`'s, byte-for-byte. Script: `interactive-ask-probe.sh`.
+Fixtures: `payloads/interactive-ask-bypass.PreToolUse.json`,
+`payloads/interactive-ask-bypass.PermissionRequest.json`, and
+`payloads/interactive-ask-bypass.pane.txt` (run 1's pane at the prompt,
+the same pane 20 s later untouched, the pane after `Escape`, and run 2's
+pane at the prompt).
+
+| Run | `permission_mode` in the PreToolUse payload | Permission dialog shown | Auto-resolved within 20 s | Command ran (PostToolUse fired) | PermissionRequest hook fired | PermissionDenied hook fired | Classification |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `bypassPermissions` | yes | no | no | yes | no | `prompted` |
+| 2 | `bypassPermissions` | yes | no | no | yes | no | `prompted` |
+
+2/2 `prompted`: interactively, and despite `bypassPermissions`, a hook `ask`
+is NOT auto-allowed. It surfaces a real permission dialog carrying the
+hook's own reason string, and that dialog waits for the operator. The
+verbatim pane at the prompt (run 1, from the fixture):
+
+```
+⏺ Bash(echo askprobe-executed)
+  ⎿  Waiting…
+
+ Bash command
+
+   echo askprobe-executed
+   Echo test string
+
+ │ Hook PreToolUse:Bash requires confirmation for this command:
+ │ askprobe: hook asked for operator confirmation [settings]
+ settings.json to update hooks
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No
+
+ Esc to cancel · Tab to amend · ctrl+e to explain
+```
+
+The evidence behind each column, so the classification can be checked rather
+than taken on trust: the dialog text above is the pane fixture; "no
+auto-resolve" is the second pane in that fixture, captured 20 s later with
+no key sent in between and byte-identical to the first; "command did not
+run" is the absent `iask<n>.PostToolUse.jsonl` recorder file (the same
+recorder wrote a file in every section (h) run, so its absence is
+informative and not a wiring accident); `Escape` was then sent, and the
+third pane shows `Interrupted · What should Claude do instead?`, which is a
+refusal, not an approval. No run of this probe ever answered a permission
+prompt.
+
+Two secondary observations: the `PermissionRequest` hook fires interactively
+(it never fired in the four `-p` runs of section (f)), and its payload
+carries the same `permission_mode: "bypassPermissions"`, `session_id`,
+`prompt_id` and `tool_input` as the `PreToolUse` payload of the same call,
+but no `tool_use_id`. `PermissionDenied` fired in neither section.
+
+So the two resolutions of a hook `ask` under `bypassPermissions` differ by
+launch shape: a denial under `-p` (section (f), 4/4 across modes),
+an operator prompt interactively (here, 2/2). Neither is an auto-allow.
+
+### (j) Subagent (Agent tool) capture under `-p bypassPermissions` (n=2)
+
+Method: see "Subagent capture" above. Script: `subagent-capture.sh`.
+Fixtures: `payloads/subagent-bypass.<Event>.json` (run 1;
+`subagent-bypass.PreToolUse.json` is an array holding both `PreToolUse`
+payloads of the run, the parent's `Agent` call and the subagent's own `Bash`
+call) and `payloads/subagent-bypass.transcript-shape.json` (both runs'
+transcript line counts by `type` and by `isSidechain`).
+
+| Run | SubagentStart fired | SubagentStop fired | Subagent's Bash `PreToolUse` `session_id` == parent's | Extra fields on that payload | `agent_type` |
+| --- | --- | --- | --- | --- | --- |
+| 1 | yes (1) | yes (1) | yes | `agent_id`, `agent_type` | `general-purpose` |
+| 2 | yes (1) | yes (1) | yes | `agent_id`, `agent_type` | `general-purpose` |
+
+2/2. What the payloads say:
+
+- The subagent's own tool call reaches the SAME `PreToolUse` hook with the
+  parent's `session_id`, the parent's `prompt_id`, the parent's
+  `transcript_path` and `permission_mode: "bypassPermissions"`, plus two
+  fields no non-subagent payload in this dogfood carries: `agent_id` (an
+  opaque id, e.g. `acbaf0d426cde00e9`) and `agent_type`
+  (`general-purpose`). So a subagent is not a separate session as far as the
+  hook payload is concerned, and `agent_id` is the field that tells a
+  subagent call apart from a main-line one.
+- `SubagentStart` carries `session_id`, `transcript_path`, `cwd`,
+  `prompt_id`, `agent_id`, `agent_type`, `hook_event_name`, and no
+  `permission_mode`. `SubagentStop` carries the `Stop` field set plus
+  `agent_id`, `agent_type` and `agent_transcript_path`, and it does carry
+  `permission_mode`.
+- Transcript shape, and this is the part that matters beyond the session id:
+  the subagent's turns are NOT in the transcript the payload names. In both
+  runs the payload's `transcript_path` holds 16 to 17 lines of which every
+  entry that carries the field has `isSidechain: false`, and zero have
+  `isSidechain: true`; the subagent's 6 entries live in a separate file,
+  `<transcript-dir>/<session-id>/subagents/agent-<agent_id>.jsonl`, named by
+  `SubagentStop`'s `agent_transcript_path`, and there every entry has
+  `isSidechain: true`. Counts per run in
+  `payloads/subagent-bypass.transcript-shape.json`.

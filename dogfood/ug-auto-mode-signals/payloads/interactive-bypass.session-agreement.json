@@ -1,0 +1,20 @@
+[
+  {
+    "run": 1,
+    "payload_session_id": "90ab7a1e-1eb1-4399-a14a-41115a07cb9f",
+    "hook_env_CLAUDE_CODE_SESSION_ID": "90ab7a1e-1eb1-4399-a14a-41115a07cb9f",
+    "agree": true,
+    "payload_permission_mode": "bypassPermissions",
+    "hook_env_CLAUDE_CODE_ENTRYPOINT": "cli",
+    "hook_env_AI_AGENT": "claude-code_2-1-247_harness"
+  },
+  {
+    "run": 2,
+    "payload_session_id": "ef297ea0-7037-491a-90b2-4cada1e057a2",
+    "hook_env_CLAUDE_CODE_SESSION_ID": "ef297ea0-7037-491a-90b2-4cada1e057a2",
+    "agree": true,
+    "payload_permission_mode": "bypassPermissions",
+    "hook_env_CLAUDE_CODE_ENTRYPOINT": "cli",
+    "hook_env_AI_AGENT": "claude-code_2-1-247_harness"
+  }
+]

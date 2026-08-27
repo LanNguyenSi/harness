@@ -1,0 +1,8 @@
+{
+  "session_id": "90ab7a1e-1eb1-4399-a14a-41115a07cb9f",
+  "transcript_path": "<scratch>/cc-config/projects/<scratch-slug>/90ab7a1e-1eb1-4399-a14a-41115a07cb9f.jsonl",
+  "cwd": "<scratch>/cc-work",
+  "hook_event_name": "SessionStart",
+  "source": "startup",
+  "model": "claude-opus-5[1m]"
+}

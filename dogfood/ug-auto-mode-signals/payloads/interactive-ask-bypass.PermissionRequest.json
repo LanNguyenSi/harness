@@ -1,0 +1,16 @@
+{
+  "session_id": "3fc8c7cf-0fbd-485b-9a25-82e92ddb7144",
+  "transcript_path": "<scratch>/cc-config/projects/<scratch-slug>/3fc8c7cf-0fbd-485b-9a25-82e92ddb7144.jsonl",
+  "cwd": "<scratch>/cc-work",
+  "prompt_id": "7a5e1f06-1781-41d6-a51f-dc751ce32a3b",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "hook_event_name": "PermissionRequest",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "echo askprobe-executed",
+    "description": "Echo test string"
+  }
+}

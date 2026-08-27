@@ -1,0 +1,40 @@
+[
+  {
+    "session_id": "42854038-447e-455b-95dc-6d99e9c09bd2",
+    "transcript_path": "<scratch>/cc-config/projects/<scratch-slug>/42854038-447e-455b-95dc-6d99e9c09bd2.jsonl",
+    "cwd": "<scratch>/cc-work",
+    "prompt_id": "30b66933-aa8d-4d5a-8cf4-c8bb864ecbc0",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+      "description": "Run echo probe",
+      "prompt": "Run exactly one bash command: echo subagent-probe\n\nThen return the command's stdout as your final output. Do not run any other commands.",
+      "subagent_type": "general-purpose",
+      "run_in_background": false
+    },
+    "tool_use_id": "toolu_0143puS8BRuRTxdfyRYPvEg2"
+  },
+  {
+    "session_id": "42854038-447e-455b-95dc-6d99e9c09bd2",
+    "transcript_path": "<scratch>/cc-config/projects/<scratch-slug>/42854038-447e-455b-95dc-6d99e9c09bd2.jsonl",
+    "cwd": "<scratch>/cc-work",
+    "prompt_id": "30b66933-aa8d-4d5a-8cf4-c8bb864ecbc0",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "acbaf0d426cde00e9",
+    "agent_type": "general-purpose",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "echo subagent-probe",
+      "description": "Echo probe string"
+    },
+    "tool_use_id": "toolu_01KjZ5Mcshg1nWq8981uG3va"
+  }
+]
