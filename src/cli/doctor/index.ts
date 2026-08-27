@@ -50,11 +50,17 @@ import {
 import { checkNpmBinPath, type NpmExec } from "./npm-bin-path.js";
 import { scanForRogueLedgers, type RogueLedgerScanOptions } from "./rogue-ledger.js";
 import { buildClaudeMcpRegistration } from "./claude-mcp.js";
-import { checkUnderstandingModeEnvDivergence } from "./understanding-mode-env.js";
+import {
+  checkUnderstandingModeEnvDivergence,
+  isUnderstandingPackEnabled,
+} from "./understanding-mode-env.js";
 import {
   runDoctorToolchainParity,
   type RunDoctorToolchainParityOptions,
 } from "./toolchain-parity.js";
+import { buildUgAutoApprovals, DEFAULT_RECENT_SESSIONS } from "./ug-auto-approvals.js";
+import { buildSettingsDrift } from "./settings-drift.js";
+import { LOCK_BASENAME } from "../../io/harness-lock.js";
 import type { ClaudeMcpExec } from "../../io/claude-mcp.js";
 import {
   isDoctorTarget,
@@ -144,6 +150,26 @@ export interface DoctorOptions extends LoaderOptions {
    * gated the same way `--shallow` gates every other live-spawn check.
    */
   toolchainParityOptions?: Partial<RunDoctorToolchainParityOptions>;
+  /**
+   * Window size for the understanding-gate auto-approval doctor listing
+   * (ADR docs/decisions/2026-08-27-ug-auto-mode-approval.md slice 1,
+   * agent-tasks 74b4b17d): how many of the newest `.approvals/` session
+   * markers to scan for the "auto approvals in the last N sessions"
+   * metric. Defaults to {@link DEFAULT_RECENT_SESSIONS}. Must be an
+   * integer >= 1; `doctor()` throws otherwise (mirrors the CLI's own
+   * `--recent-sessions` validation, but also covers direct/programmatic
+   * callers that bypass the CLI parser).
+   */
+  recentSessions?: number;
+  /**
+   * cwd the two project-scoped settings-drift candidates
+   * (`.claude/settings.json`, `.claude/settings.local.json`) resolve
+   * against, mirroring how `harness apply --target <relative path>`
+   * resolves its own target (`resolveTargetPath` in apply.ts, which
+   * calls bare `path.resolve`). Defaults to `process.cwd()`; tests
+   * inject a fixture dir to stay hermetic against the real cwd.
+   */
+  cwd?: string;
 }
 
 export { isDoctorTarget, KNOWN_DOCTOR_TARGETS };
@@ -1083,6 +1109,8 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // Understanding-gate mode env/config divergence (task 24abdecb):
   // always advisory, never an error — see understanding-mode-env.ts.
   if (report.understandingModeEnv) warningCount++;
+  // ugAutoApprovals is informational only (ℹ), never contributes here.
+  if (report.settingsDrift) warningCount += report.settingsDrift.warnings.length;
   if (report.memory.routerExecutable && !report.memory.routerExecutable.exists) errorCount++;
   if (!report.memory.routerExecutable) warningCount++;
   if (report.memory.routerVersion?.status === "warn") warningCount++;
@@ -1230,6 +1258,42 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     manifest,
     opts.envOverride ?? process.env,
   );
+
+  // ADR docs/decisions/2026-08-27-ug-auto-mode-approval.md slice 1
+  // (agent-tasks 74b4b17d), "Audit and doctor": the auto-approval
+  // listing + last-N metric, and the settings-drift compensating
+  // control for threat model (c)'s defaultMode/hook-roster plant. Both
+  // gated on the pack being declared and enabled (same gate as
+  // `understandingModeEnv` above) — a manifest that never uses the pack
+  // has no auto-approval markers or auto-approve config to drift.
+  const recentSessionsWindow = opts.recentSessions ?? DEFAULT_RECENT_SESSIONS;
+  if (!Number.isInteger(recentSessionsWindow) || recentSessionsWindow < 1) {
+    throw new Error(
+      `doctor: recentSessions must be an integer >= 1, got ${JSON.stringify(opts.recentSessions)}`,
+    );
+  }
+  const understandingPackEnabled = isUnderstandingPackEnabled(manifest);
+  const ugAutoApprovals = understandingPackEnabled
+    ? buildUgAutoApprovals(generatedDir, { recentSessions: recentSessionsWindow })
+    : undefined;
+  // Settings-drift additionally requires `harness.generated/` to exist:
+  // without at least one prior `harness apply`, there is no baseline to
+  // compare against and nothing this check owns an opinion about (a
+  // fresh manifest that declares the pack but has never been applied
+  // must stay exactly as quiet as today — see the doctor-understanding-
+  // mode-env fixture that already asserts a bare "Environment"-less
+  // report for that exact shape).
+  const settingsDrift =
+    understandingPackEnabled && fs.existsSync(generatedDir)
+      ? buildSettingsDrift({
+          generatedDir,
+          lockPath: path.join(path.dirname(resolved.base), LOCK_BASENAME),
+          cwd: opts.cwd ?? process.cwd(),
+          home,
+          env: opts.envOverride ?? process.env,
+        })
+      : undefined;
+
   // Toolchain-parity on-demand comparison (task 13919613). Gated purely on
   // `toolchain_parity.enabled` — mirrors `grounding`'s "only when the
   // feature is actually in use" gating, so a manifest that never opted
@@ -1274,6 +1338,8 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     rogueLedgerDbs,
     ...(npmGlobalBin !== undefined ? { npmGlobalBin } : {}),
     ...(understandingModeEnv !== undefined ? { understandingModeEnv } : {}),
+    ...(ugAutoApprovals !== undefined ? { ugAutoApprovals } : {}),
+    ...(settingsDrift !== undefined ? { settingsDrift } : {}),
   };
   if (opts.target === "codex") {
     const manifestDir = path.dirname(resolved.base);

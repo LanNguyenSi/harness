@@ -78,6 +78,21 @@ export interface UnderstandingModeEnvDivergence {
  *     warn about.
  *   - the normalised env mode differs from the resolved `config.mode`.
  */
+/**
+ * Shared gate for the understanding-gate doctor sub-checks that only
+ * make sense when the pack is actually live: this divergence advisory,
+ * and (ADR docs/decisions/2026-08-27-ug-auto-mode-approval.md slice 1,
+ * agent-tasks 74b4b17d) the auto-approval listing and settings-drift
+ * checks. Declared-but-disabled counts as not enabled, mirroring the
+ * `p.enabled !== false` gate `checkUnderstandingModeEnvDivergence` uses
+ * inline below.
+ */
+export function isUnderstandingPackEnabled(manifest: Manifest): boolean {
+  return manifest.policy_packs.some(
+    (p) => p.name === UNDERSTANDING_PACK_NAME && p.enabled !== false,
+  );
+}
+
 export function checkUnderstandingModeEnvDivergence(
   manifest: Manifest,
   env: NodeJS.ProcessEnv,

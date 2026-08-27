@@ -67,7 +67,14 @@ function formatManifestSection(report: DoctorReport): string[] {
 function formatEnvironmentSection(report: DoctorReport): string[] {
   const bin = report.npmGlobalBin;
   const modeEnv = report.understandingModeEnv;
-  if ((!bin || bin.status !== "warn") && !modeEnv) return [];
+  const ugAuto = report.ugAutoApprovals;
+  // "nothing when `.approvals/` is absent" (ug-auto-approvals.ts's AC 1):
+  // stay silent unless the directory actually exists, mirroring the rest
+  // of this section's "no line for a check that found nothing" style.
+  const showUgAuto = ugAuto !== undefined && ugAuto.approvalsDirPresent;
+  const drift = report.settingsDrift;
+  const hasDriftContent = drift !== undefined && (drift.notes.length > 0 || drift.warnings.length > 0);
+  if ((!bin || bin.status !== "warn") && !modeEnv && !showUgAuto && !hasDriftContent) return [];
   const out: string[] = ["", "Environment"];
   if (bin && bin.status === "warn") {
     out.push(
@@ -79,6 +86,36 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
   if (modeEnv) {
     out.push(`  ⚠ ${modeEnv.message}`);
     for (const line of modeEnv.detail) out.push(`      ${line}`);
+  }
+  if (showUgAuto && ugAuto) {
+    const modeParts = Object.keys(ugAuto.byMode)
+      .sort()
+      .map((m) => `${m}: ${ugAuto.byMode[m]}`)
+      .join(", ");
+    const modeSuffix = modeParts.length > 0 ? ` (${modeParts})` : "";
+    out.push(
+      `  ℹ auto approvals in the last ${ugAuto.windowSize} sessions: ${ugAuto.autoApprovedCount}${modeSuffix}`,
+    );
+    for (const e of ugAuto.entries) {
+      out.push(`      ${e.sessionId}  ${e.mode}  ${e.approvedAt}`);
+    }
+    const harnessKeys = Object.keys(ugAuto.byHarness);
+    if (harnessKeys.length > 1) {
+      const harnessParts = harnessKeys
+        .sort()
+        .map((h) => `${h}: ${ugAuto.byHarness[h]}`)
+        .join(", ");
+      out.push(`      by harness: ${harnessParts}`);
+    }
+    if (ugAuto.unreadableCount > 0) {
+      out.push(
+        `      ${ugAuto.unreadableCount} marker${ugAuto.unreadableCount === 1 ? "" : "s"} unreadable, excluded from the count`,
+      );
+    }
+  }
+  if (drift) {
+    for (const n of drift.notes) out.push(`  ℹ ${n}`);
+    for (const w of drift.warnings) out.push(`  ⚠ ${w}`);
   }
   return out;
 }

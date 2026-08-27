@@ -9,6 +9,8 @@ import type { NpmBinReport } from "./npm-bin-path.js";
 import type { RogueLedgerDb } from "./rogue-ledger.js";
 import type { UnderstandingModeEnvDivergence } from "./understanding-mode-env.js";
 import type { ToolchainParitySection } from "./toolchain-parity.js";
+import type { UgAutoApprovalsSection } from "./ug-auto-approvals.js";
+import type { SettingsDriftSection } from "./settings-drift.js";
 
 /**
  * Phase 6 #6 follow-up — doctor target identifier. Distinct from
@@ -407,6 +409,28 @@ export interface DoctorReport {
    * `understanding-mode-env.ts` for the full rationale.
    */
   understandingModeEnv?: UnderstandingModeEnvDivergence;
+  /**
+   * Auto-approval listing + last-N metric (ADR
+   * docs/decisions/2026-08-27-ug-auto-mode-approval.md slice 1,
+   * agent-tasks 74b4b17d, "Audit and doctor"). Present only when the
+   * `understanding-before-execution` pack is declared and enabled
+   * (mirrors `understandingModeEnv`'s gate) — a manifest that never
+   * uses the pack has no `.approvals/` markers this listing owns an
+   * opinion about. Purely informational (`ℹ`); never rolls into
+   * `warningCount`.
+   */
+  ugAutoApprovals?: UgAutoApprovalsSection;
+  /**
+   * Settings-drift compensating control (same ADR, threat model (c)): a
+   * `permissions.defaultMode` or hook entry present in a live Claude
+   * Code settings file but absent from harness's own last-apply
+   * snapshot. Present only when the understanding-gate pack is enabled
+   * AND `harness apply` has run at least once for this manifest
+   * (`harness.generated/` exists) — otherwise there is no baseline to
+   * compare against and nothing to say. `warnings` roll into
+   * `warningCount`; `notes` never do.
+   */
+  settingsDrift?: SettingsDriftSection;
   memory: MemoryReport;
   hooks: HookEntryReport[];
   policies: PolicyEntryReport[];
@@ -507,6 +531,8 @@ export interface DoctorReport {
 export type { NpmBinReport } from "./npm-bin-path.js";
 export type { ClaudeMcpRegistrationSection, ClaudeMcpEntryReport } from "./claude-mcp.js";
 export type { UnderstandingModeEnvDivergence } from "./understanding-mode-env.js";
+export type { UgAutoApprovalsSection, AutoApprovalListingEntry } from "./ug-auto-approvals.js";
+export type { SettingsDriftSection } from "./settings-drift.js";
 export type { ToolchainParitySection, ToolchainParityPeerReport } from "./toolchain-parity.js";
 
 export type {
