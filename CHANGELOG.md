@@ -36,6 +36,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `rewriteReportApproved` are exported from the approve CLI and reused,
   not copied. Pinned by the ADR's negative controls and mutation probes
   in `tests/cli/pack-hook-pre-tool-use-auto-approve.test.ts`.
+- **Understanding gate: the opt-in auto-approval path now runs on Codex
+  too, closing parity gap 13** (agent-tasks `57058364`, slice 2 of the
+  ADR `docs/decisions/2026-08-27-ug-auto-mode-approval.md`; commits
+  `cd6a37e`, `9e4ef7b`, `2635ce1`). `attemptAutoApproval`
+  (`src/cli/pack/auto-approve-path.ts`) becomes runtime-agnostic: the
+  caller names the harness for the minted marker's
+  `approvedBy: auto-mode:<harness>:<mode>` and supplies which
+  session-consistency evidence its runtime actually offers — an env
+  variable for Claude Code (unchanged) or, for Codex, the payload
+  `transcript_path` (Codex exports no session-id environment variable to
+  hook processes, measured live): the check passes only when the
+  transcript file's own name carries the session id and the file exists
+  on disk. `harness pack hook codex-pre-tool-use` now runs this same
+  attempt at the same point in its decision order as the Claude hook —
+  after the read-only Bash and recovery-commit exemptions, before
+  `.pending-approval` staging, allow only via the marker recheck — reads
+  `permission_mode` and `transcript_path` from the payload, and resolves
+  tool arguments through the shared `tool_input`/`raw_input` precedence
+  (`tool_input` preferred) so the real Codex payload reaches the
+  read-only and recovery-commit exemptions too. A registry of measured
+  `(harness, permission_mode, fixture)` triples
+  (`src/policy-packs/builtin/understanding-before-execution/measured-permission-modes.ts`)
+  ships inside the package; a new `harness validate` check
+  (`checkUnderstandingBeforeExecutionAutoApproveMeasured` in
+  `src/cli/validate/checks.ts`) errors on any `auto_approve.when` literal
+  that no harness was measured emitting, and a sync test binds the
+  registry to the checked-in dogfood fixtures in both directions. New
+  dogfood capture scripts (`codex-capture.sh`,
+  `codex-interactive-capture.sh`) and fixtures under
+  `dogfood/ug-auto-mode-signals/payloads/` back the registry; see
+  `docs/okf/understanding-gate-auto-mode-signals.md` for the measured
+  Codex `permission_mode` vocabulary. A separate opencode probe
+  (`dogfood/ug-auto-mode-signals/opencode/`) found no hook-level
+  observability of its `--auto` flag in the probed version, so opencode
+  stays out of scope for auto-approval; see the same okf doc. 33 new
+  Codex hook tests in
+  `tests/cli/pack-hook-codex-pre-tool-use-auto-approve.test.ts`.
 - **Dogfood: interactive `bypassPermissions` and subagent hook-payload
   captures** (agent-tasks `74b4b17d`): `dogfood/ug-auto-mode-signals/`
   gains `interactive-capture.sh`, `interactive-ask-probe.sh` and
@@ -68,8 +105,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   conjunction. Reach is post-approval only (invoking the hook is a gated
   Bash call before approval), so this is not an escalation over the
   existing post-approval write class; it is named rather than argued
-  away. The Codex hook does not run the auto path yet (slice 2,
-  `docs/okf/codex-adapter-parity-gaps.md` gap 13).
+  away. The Codex hook did not run the auto path in this slice; slice 2
+  (`57058364`, entry above) wires it and closes
+  `docs/okf/codex-adapter-parity-gaps.md` gap 13.
 
 ## [0.50.0] - 2026-08-27
 

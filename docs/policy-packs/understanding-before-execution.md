@@ -298,6 +298,10 @@ Any other top-level key is rejected as a typo. New keys land in this schema (`sr
 
 `auto_approve` lets an operator opt a specific permission mode into a hook-written, signed auto-marker instead of a human `harness approve understanding` call. It is a rule-only opt-in: the PreToolUse hook still requires a pending Understanding Report for the session and writes the marker through the same signing path a human approval uses. See `docs/decisions/2026-08-27-ug-auto-mode-approval.md` for the full design, the auto path's decision-order placement, and its threat model.
 
+Both PreToolUse hooks, Claude Code's `harness pack hook pre-tool-use` and Codex's `harness pack hook codex-pre-tool-use`, run the same `auto_approve` attempt at the same point in their decision order and against the same `when` block; only the minted marker's `approvedBy` prefix differs (`auto-mode:claude-code:<mode>` vs `auto-mode:codex:<mode>`), because the two runtimes hand the attempt different session-consistency evidence: Claude Code's hook environment carries `$CLAUDE_CODE_SESSION_ID`, while Codex exports no session-id environment variable to hook processes at all, so the Codex attempt is instead checked against the payload's `transcript_path` (the file's own name must carry the session id, and the file must exist on disk). On Codex, an allowlisted `bypassPermissions` covers every shape where the effective approval policy issues no prompts at all — `never`, `--dangerously-bypass-approvals-and-sandbox`, the Full Access profile, and any headless `codex exec` run without `--approve-for-me` — regardless of sandbox mode; a sandboxed, read-only headless run still reports `bypassPermissions` if it prompts for nothing. This differs from Claude Code, where `bypassPermissions` means the permission system itself is off. On-request shapes on Codex report `default`. See `docs/okf/understanding-gate-auto-mode-signals.md` for the measured evidence behind this.
+
+A literal listed in `auto_approve.when` must be one that a checked-in dogfood fixture shows some harness actually emitting; the measured set lives in the registry module `src/policy-packs/builtin/understanding-before-execution/measured-permission-modes.ts` and `harness validate` rejects any other literal at lint time (`checkUnderstandingBeforeExecutionAutoApproveMeasured`, `src/cli/validate/checks.ts`).
+
 Recommended shape:
 
 ```yaml
@@ -306,7 +310,7 @@ auto_approve:
   require_report: true
 ```
 
-Only list a mode in `when` that the operator actually intends to run unattended; `auto` and `dontAsk` are not supported values here and should not be listed. Because report validation strength is mode-dependent, pair `auto_approve` with `mode: grill_me` so the report the auto path consumes was actually checked, rather than merely present.
+Only list a mode in `when` that the operator actually intends to run unattended; `plan`, `auto` and `dontAsk` are not supported values here and should not be listed (nor are they in the measured registry above, so `harness validate` rejects them anyway). Because report validation strength is mode-dependent, pair `auto_approve` with `mode: grill_me` so the report the auto path consumes was actually checked, rather than merely present.
 
 ### `expire_on_bash_match`: start-anchored, with a documented fail-open limitation (task `fb80b5bb`, measured 2026-08-19)
 
@@ -591,6 +595,8 @@ Wire format for the Codex adapter scripts (stdin):
 Block contract (PreToolUse): exit 2 + reason on stderr. Allow contract: exit 0, optional diagnostic on stderr. Injector contract (UserPromptSubmit): instruction template on stdout for Codex to prepend to `additional_instructions`.
 
 `codex-post-tool-use` reads the same envelope but prefers `tool_input` over `raw_input` when both are present (`tool_input` is the field name the published Codex `PostToolUse` payload actually sends, matching Claude Code's own convention; `raw_input` remains accepted for any shim built against harness's earlier portable wire format). It also resolves `session_id` from `$CODEX_SESSION_ID` ahead of `$CLAUDE_CODE_SESSION_ID` / `$CLAUDE_SESSION_ID` when the event omits it.
+
+`codex-pre-tool-use` now (slice 2, agent-tasks 57058364) prefers `tool_input` over `raw_input` the same way, via the same shared `resolveToolInput` helper, so the real Codex payload reaches the read-only Bash and recovery-commit exemptions; it also reads `permission_mode` and `transcript_path` off the envelope for the `auto_approve` attempt (see "`auto_approve`: opt-in auto-approval for a listed permission mode" above).
 
 `--target` and `--runtime codex` are mutually exclusive: `--target` wires the Claude-Code-shaped settings.json into a destination path, which the codex runtime does not produce. The two runtimes are mutually exclusive for v1; running apply against a single manifest under both runtimes requires two invocations into separate generated trees.
 
