@@ -106,8 +106,14 @@ export interface BuildClaudeMcpRegistrationOptions {
  * applies for the registry file: a non-empty `CLAUDE_CONFIG_DIR` wins
  * (`$CLAUDE_CONFIG_DIR/settings.json`), otherwise it is
  * `~/.claude/settings.json` under the operator home.
+ *
+ * Exported (ADR docs/decisions/2026-08-27-ug-auto-mode-approval.md slice
+ * 1, agent-tasks 74b4b17d): `settings-drift.ts` reuses the same
+ * resolution for the user-scope file in its `permissions.defaultMode` /
+ * hook-roster drift check, so there is one authority for "where is the
+ * user settings.json" instead of a second, possibly-diverging copy.
  */
-function resolveSettingsPath(home: string, env: NodeJS.ProcessEnv): string {
+export function resolveSettingsPath(home: string, env: NodeJS.ProcessEnv): string {
   const configDir = env["CLAUDE_CONFIG_DIR"];
   if (typeof configDir === "string" && configDir.length > 0) {
     return path.join(configDir, "settings.json");
