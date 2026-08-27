@@ -43,15 +43,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (`src/cli/pack/auto-approve-path.ts`) becomes runtime-agnostic: the
   caller names the harness for the minted marker's
   `approvedBy: auto-mode:<harness>:<mode>` and supplies which
-  session-consistency evidence its runtime actually offers — an env
+  session-consistency evidence its runtime actually offers: an env
   variable for Claude Code (unchanged) or, for Codex, the payload
   `transcript_path` (Codex exports no session-id environment variable to
   hook processes, measured live): the check passes only when the
   transcript file's own name carries the session id and the file exists
   on disk. `harness pack hook codex-pre-tool-use` now runs this same
-  attempt at the same point in its decision order as the Claude hook —
+  attempt at the same point in its decision order as the Claude hook,
   after the read-only Bash and recovery-commit exemptions, before
-  `.pending-approval` staging, allow only via the marker recheck — reads
+  `.pending-approval` staging, allow only via the marker recheck, and reads
   `permission_mode` and `transcript_path` from the payload, and resolves
   tool arguments through the shared `tool_input`/`raw_input` precedence
   (`tool_input` preferred) so the real Codex payload reaches the
