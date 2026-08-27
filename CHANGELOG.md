@@ -39,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Understanding gate: the opt-in auto-approval path now runs on Codex
   too, closing parity gap 13** (agent-tasks `57058364`, slice 2 of the
   ADR `docs/decisions/2026-08-27-ug-auto-mode-approval.md`; commits
-  `cd6a37e`, `9e4ef7b`, `2635ce1`, `3c71b05`). `attemptAutoApproval`
+  `cd6a37e`, `9e4ef7b`, `2635ce1`, `3c71b05`, `ab58d84`). `attemptAutoApproval`
   (`src/cli/pack/auto-approve-path.ts`) becomes runtime-agnostic: the
   caller names the harness for the minted marker's
   `approvedBy: auto-mode:<harness>:<mode>` and supplies which
