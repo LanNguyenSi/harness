@@ -53,10 +53,32 @@ to fix and re-review. `merge.gate: solo` (in soloMode projects) or
 allowed to press the green button.
 
 If you skip the `review_subagent` step you are violating the
-workflow contract. The schema cannot enforce that today (runtime
-enforcement is a follow-up to PR #66), but the `review_templates:`
-block tells you exactly what checklist the reviewer is supposed to
-work through. Use it.
+workflow contract, and for the `merge` step specifically this can now
+be enforced at runtime (task `99f47307`, Slice 1): when a workflow
+declares a `review_subagent` step with `spawn: "required"` followed
+by a `merge` step, and the manifest's `hooks:` list declares BOTH
+`require-review-evidence` and `require-review-evidence-bash`
+(`src/cli/init/templates.ts`), `harness policy intercept` derives the
+same `review-before-merge` / `review-before-merge-bash` policy pair
+`harness init --template full` hand-authors and blocks
+`mcp__agent-tasks__pull_requests_merge` / `gh pr merge` until a
+`review:<pr-number>` or `review:<branch>` ledger entry exists for the
+session (`src/runtime/workflow-policies.ts`). `harness validate` errors
+if a workflow needs the gate but the two hooks are not wired
+(`checkWorkflowGateWiring`), so "declared required, gate silently
+inert" cannot pass unnoticed. This is scoped to the merge step only:
+the `branch` and `ci_gate` steps, PR-open gating from `workflows:`
+itself (today only reachable via the separate hand-authored
+`review-subagent-before-pr-create` / `-bash` policies), step-ordering
+validation, and `when.task_label`/project-based workflow selection are
+NOT enforced by this mechanism and remain schema-only for now. And as
+with every ledger-tag gate, this is a process gate, not a
+hostile-agent-safe one (see
+[`docs/okf/evidence-ledger-trust-boundary.md`](okf/evidence-ledger-trust-boundary.md)):
+a session that can call `mcp__grounding-mcp__ledger_add` can write the
+`review:*` tag itself. The `review_templates:` block still tells you
+exactly what checklist a real review is supposed to work through. Use
+it.
 
 ### If you use agent-tasks MCP
 

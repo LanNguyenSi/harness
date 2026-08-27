@@ -29,7 +29,7 @@ What the asset gate actually checks (`runAssetChecks`, `src/cli/validate/checks.
 - `checkCli` (`:109-160`): binary resolvable (absolute-and-executable, or found on `PATH`); `required: true` missing binary is an error; `min_version` below installed version is an error.
 - `checkSkills` (`:162-185`): every `tools.skills.required[]` name must have a `SKILL.md` under some `source_dirs` entry.
 - `checkHooks` (`:187-219`): rooted hook command paths must exist, be regular files, and be executable.
-- Policy-pack source/config resolution errors (`checkPolicyPacks` / `checkPolicyPackConfigsAsDiagnostics`, `:460-489`) and `checkSolutionAcceptanceProducer` (`:269-300`, grounding-mcp missing while the pack is enabled = error). Everything else in the suite (builtin drift, knob-ignored, self-attestation, risk-scope) is warning-severity and filtered out by add's `severity === "error"` filter.
+- Policy-pack source/config resolution errors (`checkPolicyPacks` / `checkPolicyPackConfigsAsDiagnostics`, `:460-489`) and `checkSolutionAcceptanceProducer` (`:274-305`, grounding-mcp missing while the pack is enabled = error). Everything else in the suite (builtin drift, knob-ignored, self-attestation, risk-scope) is warning-severity and filtered out by add's `severity === "error"` filter.
 
 Why the baseline diff is stable across the mutation: `applyAdd` **appends** to the sequence (`addToSequence` → `node.add`, `src/cli/add/mutate.ts:64-81`), and diagnostic paths for mcp/cli/skills/hooks are **name-keyed** (`tools.mcp[foo].command`), so existing entries' diagnostic keys are byte-identical between baseline and proposed and dedupe correctly.
 

@@ -9,6 +9,7 @@ import {
 } from "../overrides/machines.js";
 import { ManifestParseError, parseManifest, type Manifest } from "../schema/index.js";
 import { resolveHomeDir } from "../runtime/home-dir.js";
+import { deriveWorkflowGatePolicies } from "../runtime/workflow-policies.js";
 import { EX_NOINPUT, HarnessExitError } from "./exit-codes.js";
 
 export interface LoaderOptions {
@@ -150,6 +151,21 @@ export function loadManifest(opts: LoaderOptions = {}): LoadedManifest {
       throw new HarnessExitError(err.message, EX_NOINPUT);
     }
     throw err;
+  }
+
+  // 99f47307 Slice 1: turn `workflows:` into runtime enforcement by
+  // appending the derived review-before-merge policy pair (when the two
+  // evidence hooks are wired) to `manifest.policies` right after parse,
+  // so every `loadManifest` caller sees them with no `harness apply`
+  // round-trip: `harness policy intercept` (the actual PreToolUse
+  // enforcement entrypoint, src/cli/policy/intercept.ts), `harness list
+  // policies`, `harness explain[-policy]`, and `harness doctor` all load
+  // the manifest through this function. See
+  // src/runtime/workflow-policies.ts for the derivation and its fail
+  // direction (missing hooks -> no policy derived, not a silent allow).
+  const derivedPolicies = deriveWorkflowGatePolicies(manifest);
+  if (derivedPolicies.length > 0) {
+    manifest = { ...manifest, policies: [...manifest.policies, ...derivedPolicies] };
   }
 
   return { manifest, resolved };

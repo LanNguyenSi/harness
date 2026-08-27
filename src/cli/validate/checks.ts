@@ -17,6 +17,11 @@ import {
 import { isPolicyInterceptCommand, requiredHookBudgetMs } from "../policy/intercept.js";
 import type { Hook, Manifest } from "../../schema/index.js";
 import { DEFAULT_SAFE_DELETION_ROOTS } from "../../schema/risk.js";
+import {
+  REVIEW_EVIDENCE_HOOK_BASH,
+  REVIEW_EVIDENCE_HOOK_MCP,
+  workflowRequiresMergeGate,
+} from "../../runtime/workflow-policies.js";
 import type { Diagnostic } from "./types.js";
 
 export interface CheckOptions {
@@ -312,6 +317,42 @@ export function checkSolutionAcceptanceProducer(manifest: Manifest): Diagnostic[
     ];
   }
   return [];
+}
+
+// checkWorkflowGateWiring closes the exact gap deriveWorkflowGatePolicies
+// (src/runtime/workflow-policies.ts) leaves deliberately open: a
+// `workflows:` entry that declares a `review_subagent` step with
+// `spawn: "required"` followed by a `merge` step LOOKS like an
+// enforced gate, but `deriveWorkflowGatePolicies` only derives the
+// runtime policy pair when BOTH `require-review-evidence` and
+// `require-review-evidence-bash` are declared in `manifest.hooks[]`.
+// Without them the derivation quietly returns `[]` (no policy, so no
+// hook-reference error either, since there is nothing referencing a
+// hook to validate against) and the merge is never actually blocked, a
+// No-Op that LOOKS protective. This check makes that specific
+// misconfiguration a loud `error` instead of a silent non-enforcement.
+export function checkWorkflowGateWiring(manifest: Manifest): Diagnostic[] {
+  const offending = manifest.workflows.filter((wf) => workflowRequiresMergeGate(wf));
+  if (offending.length === 0) return [];
+
+  const hookNames = new Set(manifest.hooks.map((h) => h.name));
+  const missing = [REVIEW_EVIDENCE_HOOK_MCP, REVIEW_EVIDENCE_HOOK_BASH].filter(
+    (name) => !hookNames.has(name),
+  );
+  if (missing.length === 0) return [];
+
+  return offending.map((wf) => ({
+    severity: "error" as const,
+    path: "workflows",
+    message:
+      `workflow "${wf.name}" declares a review_subagent step with spawn: "required" ` +
+      `followed by a merge step, but the runtime merge gate is not wired: hooks[] is ` +
+      `missing ${missing.join(" and ")}. Without both, harness policy intercept never ` +
+      "derives this workflow's merge-gate policy and the merge is NOT blocked (silent " +
+      "non-enforcement). Declare both hooks (see docs/for-agents.md, or " +
+      "src/cli/init/templates.ts's require-review-evidence / require-review-evidence-bash " +
+      'entries) or drop spawn: "required".',
+  }));
 }
 
 /**
@@ -1108,6 +1149,7 @@ export function runAssetChecks(
     ...checkSafeDeletionRootsSyntax(manifest),
     ...checkPolicySelfAttestation(manifest),
     ...checkHookBudgetLedgerMargin(manifest),
+    ...checkWorkflowGateWiring(manifest),
   ];
 }
 

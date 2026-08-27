@@ -8,6 +8,7 @@ import { validate } from "../../src/cli/validate/index.js";
 import {
   __testables,
   checkPolicySelfAttestation,
+  checkWorkflowGateWiring,
   createDefaultGitIgnoreProbe,
 } from "../../src/cli/validate/checks.js";
 import { spawnSync } from "node:child_process";
@@ -16,6 +17,10 @@ import * as crypto from "node:crypto";
 import { parse as parseYaml } from "yaml";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import { parseManifest } from "../../src/schema/index.js";
+import {
+  REVIEW_EVIDENCE_HOOK_BASH as REVIEW_EVIDENCE_HOOK_BASH_NAME,
+  REVIEW_EVIDENCE_HOOK_MCP as REVIEW_EVIDENCE_HOOK_MCP_NAME,
+} from "../../src/runtime/workflow-policies.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..", "..");
@@ -981,6 +986,115 @@ describe("validate — checkSolutionAcceptanceProducer", () => {
     );
     expect(hit).toBeDefined();
     expect(hit?.path).toBe("tools.mcp");
+  });
+});
+
+describe("validate: checkWorkflowGateWiring (99f47307 Slice 1, AC4)", () => {
+  const WORKFLOW_REQUIRED = `review_templates:
+  t1: "Review this PR for correctness."
+workflows:
+  - name: ship
+    steps:
+      - kind: branch
+      - kind: review_subagent
+        spawn: required
+        template: t1
+      - kind: merge
+`;
+
+  const WIRED_HOOKS = `hooks:
+  - name: require-review-evidence
+    event: PreToolUse
+    match: "mcp__agent-tasks__pull_requests_merge"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+  - name: require-review-evidence-bash
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+`;
+
+  it("errors when spawn: required precedes a merge step but neither evidence hook is declared", () => {
+    const home = writeFixture({ "harness.yaml": `version: 1\n${WORKFLOW_REQUIRED}hooks: []\n` });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const hit = result.diagnostics.find(
+      (d) => d.severity === "error" && /workflow "ship".*not wired/.test(d.message),
+    );
+    expect(hit).toBeDefined();
+    expect(hit?.path).toBe("workflows");
+    expect(hit?.message).toContain(REVIEW_EVIDENCE_HOOK_MCP_NAME);
+    expect(hit?.message).toContain(REVIEW_EVIDENCE_HOOK_BASH_NAME);
+  });
+
+  it("errors when only ONE of the two evidence hooks is declared", () => {
+    const partialHook = `hooks:
+  - name: require-review-evidence
+    event: PreToolUse
+    match: "mcp__agent-tasks__pull_requests_merge"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+`;
+    const home = writeFixture({
+      "harness.yaml": `version: 1\n${WORKFLOW_REQUIRED}${partialHook}`,
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const hit = result.diagnostics.find(
+      (d) => d.severity === "error" && /workflow "ship".*not wired/.test(d.message),
+    );
+    expect(hit).toBeDefined();
+    expect(hit?.message).toContain(REVIEW_EVIDENCE_HOOK_BASH_NAME);
+  });
+
+  it("emits no diagnostic when both evidence hooks are declared", () => {
+    const home = writeFixture({
+      "harness.yaml": `version: 1\n${WORKFLOW_REQUIRED}${WIRED_HOOKS}`,
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const hit = result.diagnostics.find((d) => /workflow "ship"/.test(d.message));
+    expect(hit).toBeUndefined();
+  });
+
+  it("emits no diagnostic when the review step is spawn: optional (no gate needed)", () => {
+    const yaml = `version: 1\nreview_templates: {}\nworkflows:\n  - name: ship\n    steps:\n      - kind: branch\n      - kind: review_subagent\n        spawn: optional\n      - kind: merge\nhooks: []\n`;
+    const home = writeFixture({ "harness.yaml": yaml });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const hit = result.diagnostics.find((d) => /workflow "ship"/.test(d.message));
+    expect(hit).toBeUndefined();
+  });
+
+  // Mutation probe M4 (removing checkWorkflowGateWiring's registration from
+  // runAssetChecks): calling the pure check function directly still finds
+  // the error even if the aggregator stops wiring it in, so this test
+  // discriminates "the check itself is broken" from "the check is no
+  // longer registered", the latter would leave THIS assertion green while
+  // the fixture-based ones above go red.
+  it("the pure check function itself reports the same error independent of aggregator wiring", () => {
+    const manifest = parseManifest(parseYaml(`version: 1\n${WORKFLOW_REQUIRED}hooks: []\n`));
+    const diags = checkWorkflowGateWiring(manifest);
+    expect(diags).toHaveLength(1);
+    expect(diags[0]?.severity).toBe("error");
+    expect(diags[0]?.path).toBe("workflows");
   });
 });
 
