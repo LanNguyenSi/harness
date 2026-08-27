@@ -14,10 +14,14 @@ Demonstrate that:
 2. The `harness pack hook codex-pre-tool-use` blocker refuses
    `apply_patch` invocations with exit code 2 + a stderr reason until
    an approved Understanding Report exists for the session.
-3. After a persisted report flips `approvalStatus` to `approved` (the
-   synthetic equivalent of running `harness approve understanding`
-   when the ledger source is degraded), the same blocker exits 0 with
-   a diagnostic naming `persisted-report` as the approval source.
+3. After a persisted report flips `approvalStatus` to `approved` WITHOUT
+   a signed approval marker behind it (the synthetic equivalent of an
+   approval that bypassed `harness approve understanding`), the same
+   blocker still exits 2: since task 7402301d the persisted report is
+   audit evidence only, and the block reason names the distinct
+   `unsigned persisted-report approval rejected` diagnosis. Running
+   `harness approve understanding` for real writes the signed marker,
+   which is the only source that opens the gate.
 4. `harness pack hook codex-user-prompt-submit` emits the
    Understanding-Gate instruction template on stdout for Codex to
    prepend to its `additional_instructions`.
@@ -62,7 +66,8 @@ The driver writes to `dogfood/phase6-6/transcript/`:
 
 - `run.log`             : full smoke output.
 - `block-stderr.txt`    : captured BLOCK reason from step 2.
-- `allow-stderr.txt`    : captured ALLOW diagnostic from step 4.
+- `allow-stderr.txt`    : captured still-BLOCK diagnostic from step 4
+                          (unsigned persisted-report approval rejected).
 - `inject-stdout.txt`   : injector-emitted instruction template.
 - `cwd-<session>/`      : synthetic working directory holding the
                           persisted report under

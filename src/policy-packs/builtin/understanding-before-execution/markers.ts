@@ -1,5 +1,5 @@
-// Session-scoped approval marker file (filesystem source of the
-// two-source approval check), split out of the former monolithic
+// Session-scoped approval marker file (the signed filesystem source that
+// is the gate's only approval authority), split out of the former monolithic
 // understanding-before-execution-runtime.ts (structural concentration
 // slice 2, agent-tasks 348a4d42). Pure move: see
 // src/policy-packs/builtin/understanding-before-execution/index.ts for

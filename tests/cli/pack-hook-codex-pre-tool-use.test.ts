@@ -272,7 +272,12 @@ describe("pack hook codex-pre-tool-use blocker", () => {
     expect(stderr.read()).toMatch(/no approval marker for session sess-codex/);
   });
 
-  it("falls back to persisted report when ledger has no match", async () => {
+  // Task 7402301d, Codex parity with the Claude hook test of the same
+  // shape: until that task this pinned "falls back to persisted report
+  // when ledger has no match" (allow, source "persisted-report"). The
+  // report is evidence now; an approved-looking report alone blocks with
+  // exit 2 and the distinct audit reason on stderr.
+  it("BLOCKS on an approved persisted report alone (report is evidence, not authority; task 7402301d)", async () => {
     const reportsDir = path.join(tmp, "reports");
     writeReport(reportsDir, "2026-05-07-codex-approval.json", {
       sessionId: "sess-codex",
@@ -287,9 +292,14 @@ describe("pack hook codex-pre-tool-use blocker", () => {
       reportsDir,
       ledgerQuery: async (): Promise<LedgerEntry[]> => [],
     });
-    expect(result.blocked).toBe(false);
-    expect(result.exitCode).toBe(0);
-    expect(result.approvalCheck.source).toBe("persisted-report");
+    expect(result.blocked).toBe(true);
+    expect(result.exitCode).toBe(2);
+    expect(result.approvalCheck.approved).toBe(false);
+    expect(result.approvalCheck.source).toBe("none");
+    expect(result.approvalCheck.detail).toMatch(
+      /unsigned persisted-report approval rejected: report 2026-05-07-codex-approval\.json has approvalStatus=approved/,
+    );
+    expect(stderr.read()).toMatch(/BLOCK: .*unsigned persisted-report approval rejected/);
   });
 
   it("ignores policy_decision rows whose content shadow-includes the tag", async () => {

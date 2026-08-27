@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- **The understanding gate's persisted-report approval path no longer carries
+  gate authority: gate-time approval now flows only through the HMAC-signed
+  marker, in both the Claude and the Codex PreToolUse hook**
+  (task `7402301d`, the "persisted-report approval path is a separate,
+  still-unsigned residual" follow-up that the v0.41.0 marker-signing entry,
+  task `f9485cc7`, tracked). Why: both hooks consulted `checkPersistedReport`
+  as a SECOND approval source with equal authority ("either source
+  approves"), immediately after a forged marker had been rejected, and the
+  report was unsigned. Under the very threat model that motivated marker
+  signing (a future write primitive the `Edit|Write|Bash` blocker matcher
+  does not cover), one unsigned JSON write of `{"approvalStatus":"approved"}`
+  into `.understanding-gate/reports/` forged an approval with LESS effort
+  than the old marker forgery: the gate-read selection used the tolerant
+  sessionId-less fallback (`"any"`, no age limit), so the forged report
+  needed neither a session id nor a key read. Two closures were weighed:
+  (A) sign the report's approval state at approve time with the existing
+  `signMarker` primitive and verify it in the gate, or (B) make the signed
+  marker the only gate-time authority and demote the report to evidence.
+  (B) shipped. It leaves the smallest attack surface (no second signed
+  artefact, no second verification path, no new key consumer, nothing to
+  keep in sync when the approve flip and the post-tool-use expiry both
+  rewrite the report file), it is fail-closed by construction (the new
+  `PersistedReportEvidence` return shape has no `approved` field a hook
+  could read an allow decision out of, and `ApprovalSource` lost its
+  `"persisted-report"` member), and it leaves the approve flow, the
+  post-tool-use expiry, and the approve-time staleness handling (task
+  `adc20a8b`) untouched. (A) would have required choosing a canonical hash
+  form for a file that the approve flip and the expiry both rewrite, which
+  overlaps the C1 staleness cross-check follow-up (task `fa423e9b`); under
+  (B) that follow-up becomes an audit-fidelity gap rather than an authority
+  gap.
+  - Behaviour: `harness pack hook pre-tool-use` and `harness pack hook
+    codex-pre-tool-use` block when only the persisted report says approved,
+    with a distinct, greppable audit reason in the block reason and on
+    stderr, `unsigned persisted-report approval rejected: report <file> has
+    approvalStatus=approved ... but the persisted report is evidence, not
+    authority`, the counterpart of `forged/unsigned marker rejected`.
+    `checkPersistedReport` still runs, for that diagnostic and for the
+    parse-error lookup gate only. Shared in the runtime
+    (`persisted-reports.ts`), not duplicated per hook.
+  - Side effect worth knowing: `approval_lifecycle.max_age` now actually
+    expires an approval. Before, a still-approved persisted report kept the
+    gate open past `max_age` (pinned by the former "persisted-report source
+    wins BEFORE the recovery-commit check" test, now inverted); the
+    recovery-git-commit exemption (task `6e888423`) remains the way a bare
+    `git commit` passes after expiry.
+  - **Back-compat is strict, no migration window**, the same policy as
+    `f9485cc7`: an approval that only ever flipped the report (the
+    standalone `understanding-gate approve` CLI, or a `harness approve
+    understanding` run whose marker write failed) no longer opens the
+    harness gate; run `harness approve understanding` once after upgrading
+    on a machine with a live approval. The package's own standalone blocker
+    for solo users without harness is unaffected.
+  - Adversarial audit before closing, pinned as
+    `tests/cli/pack-hook-persisted-report-evidence.test.ts`: 22 probe
+    classes, each run against both runtimes (44 probes): hand-written
+    approved report; approved report next to an unsigned marker; marker
+    signed under a foreign key; sessionId-less report; report copied from
+    another session; producer-shaped filename with a future timestamp;
+    symlinked report; malformed sibling (parse-errors path); case and
+    whitespace variants of the status; expired marker; boundary-cleared
+    marker with and without a failed report expiry; report written after
+    the boundary (race); key rotation after a real approval; task-scoped
+    marker for another task; unresolvable generatedDir; the real approve
+    flow and a marker without any report (controls); read-only and mutating
+    shell commands. Residuals, named and pinned: a VALID marker plus a
+    report swapped after approval still allows (the operator did approve
+    the session; the marker's `reportContentHash` is not cross-checked at
+    gate time, task `fa423e9b`), and a key read plus an uncovered write
+    still forges a valid marker (the documented honest trust model of
+    `src/runtime/approval-signing.ts`).
+
 ### Added
 
 - **`workflows:` gets its first slice of runtime enforcement: a `review_subagent` step with `spawn: "required"` followed by a `merge` step now derives a real merge-time gate, closing the v0.7.0 note that runtime enforcement was a follow-up** (task `99f47307`, Slice 1). `src/runtime/workflow-policies.ts#deriveWorkflowGatePolicies` is a pure function `src/cli/loader.ts#loadManifest` calls right after parse: for every workflow whose steps match that shape, and only when `manifest.hooks[]` declares BOTH `require-review-evidence` and `require-review-evidence-bash` (the pair `harness init --template full` already hand-authors, `src/cli/init/templates.ts`), it appends the byte-identical `review-before-merge` / `review-before-merge-bash` policy pair to `manifest.policies`, renamed `workflow:<name>:...` for provenance. Every `loadManifest` caller inherits this with no `harness apply` round-trip: the real `harness policy intercept` entrypoint (`src/cli/policy/intercept.ts`), `harness list policies`, `harness explain[-policy]`, and `harness doctor`. Dedupe is keyed on trigger surface (event/match/bash_match) + `requires.ledger_tag`, so a hand-authored policy or a second qualifying workflow sharing the same surface does not double-intercept the same event. Fail direction: when the two evidence hooks are NOT wired the derivation returns nothing (never an unenforceable policy pointing at a hook that doesn't exist), closed by a new `error`-severity `harness validate` check, `checkWorkflowGateWiring`, so "declared `spawn: required`, gate never wired" cannot pass silently. The same CLI entrypoint runs on both adapters (`harness policy intercept`; `loadManifest` carries no runtime branching), so a Codex install that wires these hooks inherits the derived policies; not separately exercised — `docs/okf/codex-adapter-parity-gaps.md` gap 8 documents partial, de-facto Codex accommodation in the intercept engine (cwd resolution from the Codex sandbox argv), not a verified parity claim for this specific derivation. Scoped: only the `review_subagent (required) -> merge` pairing is enforced; PR-open gating driven by `workflows:` itself (today only reachable via the separate hand-authored `review-subagent-before-pr-create` / `-bash` policies), step-ordering validation, and `when.task_label`/project-based workflow selection remain schema-only and are left to a follow-up slice. `docs/for-agents.md` updated to describe the scoped, hook-dependent, process-gate-not-hostile-agent-safe behavior in place of the old "schema cannot enforce that today" line.
