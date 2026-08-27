@@ -1,7 +1,7 @@
 # Understanding Gate under auto/bypass permission modes: auditable, fail-closed auto-approval
 
 - **Date**: 2026-08-27
-- **Status**: Proposed, awaiting operator decision
+- **Status**: Accepted (operator adopted the recommended options on 2026-08-27; see "Operator decision" below)
 - **Decision tracker**: agent-tasks/f6be48cf (externalRef `concept/understanding-gate-auto-mode`)
 - **Implementation context**: concept only, no code in this change. Evidence lives in `docs/okf/understanding-gate-auto-mode-signals.md` (measured signal tables and the section "Signal sources by trust class") and `dogfood/ug-auto-mode-signals/` (redacted payload fixtures, capture and probe scripts). Every measurement this document relies on is cited by pointer to those two locations and not restated here.
 
@@ -430,6 +430,37 @@ Format rule for every mutation probe below: a probe names the mutant, the ONE te
 5. **Smoke runner as the first delegation consumer?** Recommendation: yes; it already spawns with `--session-id` and `bypassPermissions`, so it is the cheapest end-to-end dogfood.
 6. **Escape path under non-prompting modes (conditional).** Under `-p` a hook `ask` is already a denial in every mode. Only if the slice 1 interactive `bypassPermissions` measurement shows `ask` resolving to allow: should the escape path return `deny` for every non-prompting mode (recommended), or only for modes in `when`? If the interactive case also denies, no decision is needed here.
 7. **Is a settings-derived permission mode accepted as a valid signal?** A session's mode can be set by `permissions.defaultMode` in `.claude/settings.json` or `.claude/settings.local.json`, not only by a CLI flag, and those files are in the same post-approval agent-write class as the `auto_approve` opt-in (threat model (c)). Recommendation: accept it, because the payload cannot tell the two sources apart (it carries the mode, not its provenance), so "flag only" would be a rule harness cannot enforce and would only read as stronger than it is; take the doctor and `--since-apply` drift line on `permissions.defaultMode` as the compensating control instead. The alternative, if the operator wants a real separation, is to stop treating the mode as key one for repos where settings are agent-writable and require a slice 3 delegation there instead, which is decision 4 tightened to "always". There is also an ENFORCING lever outside harness that the operator should weigh before answering, because it changes the question rather than the answer: Claude Code lets an administrator block `bypassPermissions` outright by setting `permissions.disableBypassPermissionsMode` to `"disable"` in managed settings, and remove auto mode the same way with `permissions.disableAutoMode` (Claude Code docs, "Choose a permission mode", the `bypassPermissions` safety note and the section "Eliminate prompts with auto mode"). Managed settings sit at the top of the settings precedence chain, above the command line and above every project-scoped and user-scoped file (Claude Code docs, "Claude Code settings", settings precedence), which is exactly the layer the post-approval write class inside the repo does not reach. In a repo where the operator does not want the mode at all, that makes the settings-derived-mode plant impossible rather than merely visible, which no doctor line can. The cost is that it switches the slice 1 auto path off in that repo too: with the recommended `when: [bypassPermissions]` no payload there can ever carry a listed value, so a slice 3 delegation becomes the only remaining auto path. It is therefore an alternative to this design for repos that want bypass gone, not a hardening to combine with it, and the choice between the two is what decision 7 is really asking.
+
+## Operator decision
+
+Recorded 2026-08-27. The operator adopted the recommended option for every
+decision above without change ("wir halten uns erstmal nach deinen
+empfehlungen"). Resolved:
+
+1. Slice 1 scope: **A plus B's visibility half** (doctor listing and the
+   last-N metric); the `confirm` / `flag` verbs stay a named follow-up.
+2. Default `when`: **`[bypassPermissions]` only**; `auto` / `dontAsk`
+   require a captured fixture first, and `auto` would make auto-approval
+   the interactive default, so it is excluded even with a fixture until
+   scoped.
+3. Opt-in source: **live `harness.yaml` in v1**, with the applied-snapshot
+   and settings-drift checks as doctor warnings, not enforcement.
+4. Delegation for every auto-approved child: **yes, once slice 3 ships**;
+   slice 1 alone accepts the self-spawned-child residue explicitly (threat
+   model (c)).
+5. Smoke runner as the first delegation consumer: **yes**.
+6. Escape path under non-prompting modes: **conditional as written**; if
+   the slice 1 interactive `bypassPermissions` measurement shows a hook
+   `ask` resolving to allow, the escape path returns `deny` for every
+   non-prompting mode.
+7. Settings-derived permission mode as a valid signal: **accepted**, with
+   the doctor and `--since-apply` drift lines (including the hook roster)
+   as the compensating control, because the payload cannot distinguish the
+   provenance of the mode.
+
+The three slices are tracked as their own agent-tasks entries, created
+after this decision; slice 1 is the prerequisite for slices 2 and 3. This
+ADR is the canonical decision record.
 
 ## Reopen criteria
 
