@@ -72,14 +72,19 @@ export interface AutoApproveAttemptArgs {
   markerForged: boolean;
   stderr: { write(s: string): void };
   /**
-   * Audit-only ledger writer. `null` means the ledger is unreachable
-   * (no `grounding-mcp` in the manifest, or the caller chose not to
-   * resolve one); the auto path then logs one line and continues. The
-   * ledger is never a gate input.
+   * Audit-only ledger writer, resolved LAZILY: called only after the
+   * opt-in (`auto_approve` parses) and the `when` allowlist have both
+   * passed, i.e. only on a call that could actually reach the ledger
+   * write later in this function. Every earlier decline (opt-in absent,
+   * mode not allowlisted, forged marker, session mismatch, key absent,
+   * report not eligible) never invokes this thunk, so an unconfigured or
+   * expensive ledger resolution costs nothing on the overwhelming
+   * majority of gated calls that never opted in. `write: null` means
+   * the ledger is unreachable (no `grounding-mcp` in the manifest, or
+   * the caller chose not to resolve one); the auto path then logs one
+   * line and continues. The ledger is never a gate input.
    */
-  writeLedger: LedgerWriteFn | null;
-  /** Reason to log when `writeLedger` is null. */
-  ledgerUnavailableReason?: string;
+  resolveLedger: () => { write: LedgerWriteFn | null; reason?: string };
 }
 
 export type AutoApproveAttempt =
@@ -126,16 +131,23 @@ export async function attemptAutoApproval(
   // (2) `when` allowlist, exact string equality against the payload
   // literal (hardening item 2). Absent / empty / unlisted is the normal
   // case for an opted-in repo whose session simply runs in a prompting
-  // mode, so this is a single debug-style line, not a warning.
+  // mode, and it fires on EVERY such call once the opt-in is present, so
+  // this stays SILENT (no stderr line): a per-call note here would echo
+  // the configured `auto_approve.when` allowlist to stderr on every
+  // ordinary prompting-mode call (reviewer round-1 finding).
   const mode = args.permissionMode;
   if (!permissionModeAllowed(cfg, mode)) {
-    const shown = typeof mode === "string" ? JSON.stringify(mode) : "(absent)";
-    note(
-      `auto-approval not applicable: permission_mode ${shown} is not in auto_approve.when [${cfg.when.join(", ")}]`,
-    );
     return decline("permission_mode not in auto_approve.when");
   }
   const modeStr = mode as string;
+
+  // Resolve the audit-only ledger writer NOW, not earlier: this is the
+  // first point past both the opt-in check (1) and the `when` allowlist
+  // check (2), so `args.resolveLedger` runs only on a call that has an
+  // actual chance of reaching the ledger write below, never on the
+  // overwhelming majority of gated calls that are not opted in or run in
+  // an unlisted permission mode.
+  const ledger = args.resolveLedger();
 
   // (3) A forgery detected at step 3 is never laundered into an
   // approval (ADR condition 6). Declining also leaves the forged FILE and
@@ -263,15 +275,15 @@ export async function attemptAutoApproval(
   // Audit-only ledger fact. Never a gate input, so every failure here is
   // one stderr line and nothing more.
   const tag = autoApprovedLedgerTagFor(args.sessionId);
-  if (args.writeLedger === null) {
+  if (ledger.write === null) {
     note(
       `auto-approval ledger fact ${tag} not recorded (${
-        args.ledgerUnavailableReason ?? "ledger writer unavailable"
+        ledger.reason ?? "ledger writer unavailable"
       }); audit only, continuing`,
     );
   } else {
     try {
-      const result = await args.writeLedger({
+      const result = await ledger.write({
         sessionId: args.sessionId,
         content: tag,
         source: AUTO_APPROVE_LEDGER_SOURCE,

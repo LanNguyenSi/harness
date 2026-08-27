@@ -681,19 +681,24 @@ export async function runPackHookPreToolUseCli(
   // consults. Any failure falls through to the block with step 3's
   // `markerExpired` / `markerForged` intact.
   //
-  // The ledger writer is resolved lazily (only on a call that reaches
-  // here with the opt-in configured is it ever used) and stays
-  // audit-only: a missing `grounding-mcp` entry costs one stderr line
+  // The ledger writer is resolved lazily: `attemptAutoApproval` calls
+  // this thunk only after its own opt-in check and `when` allowlist
+  // check both pass, so a call that never opted in (or opted in but
+  // runs in an unlisted `permission_mode`, the ordinary case for every
+  // other gated call reaching step 9) never resolves a manifest-level
+  // ledger writer at all. A CLI-injected `opts.writeLedger` (test
+  // harness path) is used as-is when present, still only once the
+  // thunk actually runs; otherwise `resolveManifestLedgerWriter` looks
+  // up `grounding-mcp` in the manifest on demand. Stays audit-only
+  // either way: a missing `grounding-mcp` entry costs one stderr line
   // inside the auto path, never an approval.
-  let autoWriteLedger: LedgerWriteFn | null = opts.writeLedger ?? null;
-  let autoLedgerReason: string | undefined;
-  if (autoWriteLedger === null) {
+  const resolveAutoLedger = (): { write: LedgerWriteFn | null; reason?: string } => {
+    if (opts.writeLedger) return { write: opts.writeLedger };
     const resolved = resolveManifestLedgerWriter(manifest, {
       ...(opts.ledgerTimeoutMs !== undefined ? { ledgerTimeoutMs: opts.ledgerTimeoutMs } : {}),
     });
-    if (resolved.ok) autoWriteLedger = resolved.write;
-    else autoLedgerReason = resolved.reason;
-  }
+    return resolved.ok ? { write: resolved.write } : { write: null, reason: resolved.reason };
+  };
   const auto = await attemptAutoApproval({
     generatedDir,
     sessionId,
@@ -703,8 +708,7 @@ export async function runPackHookPreToolUseCli(
     reportsDir,
     markerForged,
     stderr,
-    writeLedger: autoWriteLedger,
-    ...(autoLedgerReason !== undefined ? { ledgerUnavailableReason: autoLedgerReason } : {}),
+    resolveLedger: resolveAutoLedger,
   });
   if (auto.approved) {
     const autoDiagnostic = `harness pack hook: ${auto.detail}, allowing.`;

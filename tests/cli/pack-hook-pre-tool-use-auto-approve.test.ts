@@ -837,4 +837,131 @@ describe("pack hook pre-tool-use — auto-approval path (ADR slice 1)", () => {
       expect(checkApprovalMarker(generatedDir, SESSION).matched).toBe(true);
     });
   });
+
+  describe("review round-1 fixes (agent-tasks 74b4b17d)", () => {
+    it("3a(i) - malformed auto_approve on the runtime path (require_report absent) is fail-closed: parseAutoApprove is the only runtime defence, since parseManifest accepts config as a free record", async () => {
+      process.env.CLAUDE_CODE_SESSION_ID = SESSION;
+      getOrCreateSigningKey(generatedDir);
+      const report = writePendingReport();
+      const manifest = parseManifest({
+        version: 1,
+        policy_packs: [
+          {
+            name: "understanding-before-execution",
+            enabled: true,
+            config: { auto_approve: { when: ["bypassPermissions"] } },
+          },
+        ],
+      });
+
+      const result = await call({ manifest });
+
+      expect(result.blocked).toBe(true);
+      expect(markerExists()).toBe(false);
+      expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
+      expect(result.stderr).toMatch(
+        /config\.auto_approve ignored \(require_report must be true, got undefined\)/,
+      );
+    });
+
+    it("3a(ii) - malformed auto_approve on the runtime path (when is a string, not an array) is fail-closed", async () => {
+      process.env.CLAUDE_CODE_SESSION_ID = SESSION;
+      getOrCreateSigningKey(generatedDir);
+      const report = writePendingReport();
+      const manifest = parseManifest({
+        version: 1,
+        policy_packs: [
+          {
+            name: "understanding-before-execution",
+            enabled: true,
+            config: { auto_approve: { when: "bypassPermissions", require_report: true } },
+          },
+        ],
+      });
+
+      const result = await call({ manifest });
+
+      expect(result.blocked).toBe(true);
+      expect(markerExists()).toBe(false);
+      expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
+      expect(result.stderr).toMatch(
+        /config\.auto_approve\.when ignored \(expected a non-empty string\[\], got string\)/,
+      );
+    });
+
+    it("3b - a marker write failure AFTER the report is consumed blocks and leaves the report consumed, and the same consumed report cannot mint on a later call", async () => {
+      // ADR consume-then-sign ordering: if the marker write fails after
+      // the report is consumed, the report must stay consumed (never
+      // reset to pending), so the same report can never mint on a later
+      // call. Reviewer round-1 finding: this ordering had no test.
+      process.env.CLAUDE_CODE_SESSION_ID = SESSION;
+      getOrCreateSigningKey(generatedDir);
+      const report = writePendingReport();
+
+      // Force `writeApprovalMarker`'s `atomicWriteFile` to fail
+      // deterministically: it does `fs.mkdirSync(path.dirname(filePath),
+      // { recursive: true })` where the marker's directory is
+      // `<generatedDir>/.approvals`. Pre-creating that path as a
+      // regular FILE makes `mkdirSync` throw, without mocking the
+      // module.
+      const approvalsPath = path.join(generatedDir, ".approvals");
+      fs.writeFileSync(approvalsPath, "blocking .approvals on purpose (test 3b)");
+
+      const result = await call();
+
+      expect(result.blocked).toBe(true);
+      expect(markerExists()).toBe(false);
+      expect(result.stderr).toMatch(/failed to write the approval marker/);
+
+      const afterFirst = readReport(report.filePath);
+      expect(afterFirst["approvalStatus"]).toBe("approved");
+      expect(afterFirst["approvedBy"]).toBe("auto-mode:claude-code:bypassPermissions");
+
+      // Unblock the marker write, then run a second gated call: the
+      // report is already consumed (no longer pending), so this call
+      // must still block and must not mint anything.
+      fs.rmSync(approvalsPath);
+      const second = await call();
+
+      expect(second.blocked).toBe(true);
+      expect(markerExists()).toBe(false);
+      // Shared phrase with the N3 forgery case (persisted-reports.ts's
+      // `UNSIGNED_REPORT_APPROVAL_REJECTED`): a report that claims
+      // `approvalStatus: approved` with no signed marker to back it
+      // reads identically here and in an agent-forged report. Documented
+      // in the lockout runbook (reviewer round-1 finding).
+      expect(second.stderr).toMatch(/unsigned persisted-report approval rejected/);
+    });
+
+    it("3c - generatedDir unresolvable declines (injected-manifest test path: no manifestPath, no injected generatedDir)", async () => {
+      process.env.CLAUDE_CODE_SESSION_ID = SESSION;
+      const stdout = bufferStream();
+      const stderr = bufferStream();
+      const payload = {
+        tool_name: "Edit",
+        session_id: SESSION,
+        permission_mode: "bypassPermissions",
+      };
+
+      // `generatedDir` deliberately omitted. `manifest` is injected, so
+      // `loadManifestOrInjected` returns `manifestPath: undefined` too
+      // (hook-bootstrap.ts), together these are the only way
+      // `generatedDir` resolves to `undefined` (hook-pre-tool-use.ts's
+      // `opts.generatedDir ?? (manifestPath !== undefined ? ... :
+      // undefined)`).
+      const result = await runPackHookPreToolUseCli({
+        manifest: manifestWithAutoApprove(),
+        stdin: readableFromString(JSON.stringify(payload)),
+        stdout: stdout.stream,
+        stderr: stderr.stream,
+        reportsDir,
+        ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+      });
+
+      expect(result.blocked).toBe(true);
+      expect(stderr.read()).toMatch(
+        /auto-approval declined: harness\.generated\/ could not be resolved/,
+      );
+    });
+  });
 });
