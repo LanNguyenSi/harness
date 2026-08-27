@@ -306,6 +306,29 @@ export function findLatestReportForSession(
  */
 const UNSIGNED_REPORT_APPROVAL_REJECTED = "unsigned persisted-report approval rejected";
 
+/** Cap applied to each interpolated value in `checkPersistedReport`'s `detail`. */
+const DETAIL_VALUE_MAX_LENGTH = 120;
+
+/**
+ * `detail` is not an inert log line: both PreToolUse hooks embed it
+ * verbatim into their block `reason`, and the Codex hook additionally
+ * writes it to stderr, the block-reason surface an operator reads
+ * directly. The report file's basename and its `approvedAt` field both
+ * come from a JSON file whose content the gated agent controls (it is
+ * only unsigned evidence, task 7402301d), so neither is trusted
+ * verbatim here: control characters (including newlines, which could
+ * forge extra `reason:`-looking lines) are replaced with a space and
+ * the result is capped so one field cannot blow out the surface.
+ */
+function sanitizeDetailValue(value: string): string {
+  // Deliberately strips C0/DEL control characters (including newline,
+  // which could otherwise forge an extra `reason:`-looking stderr line).
+  const flattened = value.replace(/[ -]/g, " ");
+  return flattened.length > DETAIL_VALUE_MAX_LENGTH
+    ? `${flattened.slice(0, DETAIL_VALUE_MAX_LENGTH)}...`
+    : flattened;
+}
+
 /**
  * What the gate learns from the persisted report: EVIDENCE, never
  * authority (task 7402301d). Until that task the report was the second
@@ -437,20 +460,22 @@ export function checkPersistedReport(
       report: null,
     };
   }
+  const safeFileName = sanitizeDetailValue(path.basename(latest.filePath));
   if (latest.approvalStatus !== "approved") {
     return {
       claimsApproved: false,
-      detail: `latest report ${path.basename(latest.filePath)} has approvalStatus=${
+      detail: `latest report ${safeFileName} has approvalStatus=${
         latest.approvalStatus ?? "<missing>"
       }`,
       report: latest,
     };
   }
+  const safeApprovedAt = latest.approvedAt ? sanitizeDetailValue(latest.approvedAt) : null;
   return {
     claimsApproved: true,
     detail:
-      `${UNSIGNED_REPORT_APPROVAL_REJECTED}: report ${path.basename(latest.filePath)} has ` +
-      `approvalStatus=approved${latest.approvedAt ? ` (approved at ${latest.approvedAt})` : ""} ` +
+      `${UNSIGNED_REPORT_APPROVAL_REJECTED}: report ${safeFileName} has ` +
+      `approvalStatus=approved${safeApprovedAt ? ` (approved at ${safeApprovedAt})` : ""} ` +
       `but the persisted report is evidence, not authority; the gate opens only on a ` +
       `validly-signed approval marker written by \`harness approve understanding\``,
     report: latest,

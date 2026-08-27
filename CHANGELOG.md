@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - **The understanding gate's persisted-report approval path no longer carries
   gate authority: gate-time approval now flows only through the HMAC-signed
-  marker, end to end, in both the Claude and the Codex PreToolUse hook**
+  marker, in both the Claude and the Codex PreToolUse hook**
   (task `7402301d`, the "persisted-report approval path is a separate,
   still-unsigned residual" follow-up that the v0.41.0 marker-signing entry,
   task `f9485cc7`, tracked). Why: both hooks consulted `checkPersistedReport`

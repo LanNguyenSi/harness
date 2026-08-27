@@ -1576,7 +1576,8 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .command("understanding")
     .description(
       "Mark the latest Understanding Report as approved AND write the evidence-ledger tag. " +
-        "Round-trips both sources so harnessed and solo (@lannguyensi/understanding-gate) stacks stay in sync.",
+        "Writes the signed approval marker and round-trips the audit records (persisted report, ledger row) " +
+        "so harnessed and solo (@lannguyensi/understanding-gate) stacks stay in sync.",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")

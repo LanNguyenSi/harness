@@ -3,7 +3,7 @@ type: runbook
 title: Kill switches — pause vs gate disable
 description: harness has two distinct operator kill switches — `harness pause` (sentinel file, silences ALL hooks temporarily, operator-only enforced in code) vs `harness gate disable` (surgically removes matching hook groups from settings.json with a reversible snapshot); when to use which, exact flags, restore paths, and trust caveats.
 tags: [runbook, pause, gate-disable, kill-switch, operator]
-timestamp: 2026-08-27T06:02:59Z
+timestamp: 2026-08-27T06:22:10Z
 sources:
   - src/runtime/pause-sentinel.ts
   - src/runtime/command-normalize.ts
@@ -34,8 +34,8 @@ harness has TWO separate kill-switch mechanisms. Do not conflate them: `pause` i
 | Situation | Use |
 |---|---|
 | Lockout recovery, debug A/B test, incident hotfix, short window | `harness pause --for <duration>` (all hooks dormant, auto-resumes) |
-| One specific hard-blocking hook must go, e.g. the understanding-before-execution PreToolUse gate blocks every Bash call INCLUDING its own recovery command `harness approve understanding` (the motivating case, task 8fcddb26, comment at `src/cli/index.ts:2629-2634`) | `harness gate disable --matcher <substring>` (removes only matching hook groups, reversible snapshot) |
-| Permanently turn a policy off | NEITHER. Edit `policies[].enabled` in the manifest (or `policy_packs[].enabled: false`): persistent, diff-able, source-controlled. Stated in the `harness pause` command help (`src/cli/index.ts:2995-2996`) and `docs/for-humans.md:391-393` |
+| One specific hard-blocking hook must go, e.g. the understanding-before-execution PreToolUse gate blocks every Bash call INCLUDING its own recovery command `harness approve understanding` (the motivating case, task 8fcddb26, comment at `src/cli/index.ts:2714-2719`) | `harness gate disable --matcher <substring>` (removes only matching hook groups, reversible snapshot) |
+| Permanently turn a policy off | NEITHER. Edit `policies[].enabled` in the manifest (or `policy_packs[].enabled: false`): persistent, diff-able, source-controlled. Stated in the `harness pause` command help (`src/cli/index.ts:3076-3082`) and `docs/for-humans.md:391-393` |
 | "Move fast on a prototype branch" | A branch-aware policy with a `when:` clause, not a session-wide pause (`docs/for-humans.md:394-395`) |
 
 ## Mechanism 1: `harness pause` / `harness resume` (sentinel)
@@ -44,7 +44,7 @@ harness has TWO separate kill-switch mechanisms. Do not conflate them: `pause` i
 
 **History note: closed 2026-08-25 (tasks `63fefe3a`, `1432e053`).** The Codex `UserPromptSubmit` injector and the Codex `Stop` capture now both honour the sentinel; earlier they did not, so an active pause silenced every gate except these two. Both now call `checkHookPause` first, same ordering as `hook-pre-tool-use.ts`. All four `hook-codex-*.ts` files import `checkHookPause`, pinned by a source-grep test. Measurement and dogfood detail: CHANGELOG.md, `63fefe3a` and `1432e053` entries.
 
-**Commands** (registered in `src/cli/index.ts:2989-3088`):
+**Commands** (registered in `src/cli/index.ts:3074-3173`):
 - `harness pause --for <duration>` — e.g. `5m`, `1h`, `PT30S`; default 15 minutes (`DEFAULT_PAUSE_SECONDS = 15 * 60`, `src/cli/pause/index.ts:36`).
 - `harness pause --indefinite` — refuses unless the separate verbose flag `--i-am-the-operator-and-accept-no-auto-resume` is also passed; the flag's verbosity is deliberate friction (`src/cli/pause/index.ts:269-281`).
 - `--reason <text>` — recorded in the sentinel and announced on each hook fire.

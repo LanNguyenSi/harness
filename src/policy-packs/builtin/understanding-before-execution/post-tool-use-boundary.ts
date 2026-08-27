@@ -230,9 +230,12 @@ export function applyPostToolUseExpiry(
     }
   }
 
-  // Persisted-report expiry (harness/1ee26e77 follow-up). Closes the
-  // silent bypass that existed since PR #172: marker-deletion alone did
-  // not invalidate the persisted-report fallback. Best-effort.
+  // Persisted-report expiry (harness/1ee26e77 follow-up). Originally
+  // closed a silent bypass that existed since PR #172: marker-deletion
+  // alone did not invalidate the persisted-report fallback. Since task
+  // 7402301d the report can no longer satisfy the gate on its own, so
+  // this now exists so the audit record agrees with the cleared marker.
+  // Best-effort.
   const reportExpiry = expirePersistedReport(reportsDir, sessionId, now);
 
   return {

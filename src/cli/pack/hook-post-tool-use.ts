@@ -71,10 +71,12 @@ export interface PackHookPostToolUseResult {
   taskMarkerCleared: boolean;
   /**
    * Was the persisted report (`.understanding-gate/reports/...json`)
-   * flipped from `approved` to `expired`? Closes the silent re-approval
-   * bypass that pre-this-fix existed since PR #172: the marker was
-   * deleted on task_finish but the persisted-report fallback still
-   * satisfied the gate.
+   * flipped from `approved` to `expired`? Originally closed a silent
+   * re-approval bypass that pre-this-fix existed since PR #172: the
+   * marker was deleted on task_finish but the persisted-report fallback
+   * still satisfied the gate. Since task 7402301d the report can no
+   * longer satisfy the gate on its own, so this now exists so the audit
+   * record agrees with the cleared marker.
    */
   persistedReportExpired: boolean;
   /** Diagnostic line emitted to stderr. */

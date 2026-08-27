@@ -9,10 +9,10 @@
 //
 // Why a new CLI verb (vs reusing `harness policy intercept`): the
 // existing intercept layer evaluates `policies[]` against `requires`,
-// which is purely ledger-based. The Understanding Gate has a second
-// source-of-truth (the persisted JSON report), and bolting a fallback
-// into the requires evaluator would leak pack-specific semantics into
-// the generic policy layer. This verb lives next to the pack instead.
+// which is purely ledger-based, while the gate has a pack-specific
+// signed-marker source the generic requires evaluator does not model
+// (task 7402301d); bolting it in would leak pack-specific semantics
+// into the generic policy layer. This verb lives next to the pack instead.
 //
 // Failure mode: any error in load / parse / ledger / report scan
 // resolves to ALLOW (exit 0, silent). The Understanding Gate is opt-in;
@@ -545,8 +545,10 @@ export async function runPackHookPreToolUseCli(
   // persisted-report approval rejected` phrase when the on-disk status
   // says approved) and to the parse-error lookup gate below
   // (`report.report === null`). `PersistedReportEvidence` has no
-  // `approved` field on purpose; the signed marker above is the only
-  // allow path.
+  // `approved` field on purpose; the signed marker is the only APPROVAL
+  // source that opens the gate. The carve-outs below (read-only Bash,
+  // recovery git-commit, escape-ask) are separate, independently-argued
+  // exemptions, not a second approval source.
   const reportsDir = opts.reportsDir ?? defaultReportsDir();
   const report = checkPersistedReport(reportsDir, sessionId);
 

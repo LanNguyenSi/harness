@@ -14,12 +14,16 @@
 #        - exit code 2 (Codex's blocking convention)
 #        - stderr contains "BLOCK"
 #   3. Drops a persisted `.understanding-gate/reports/<file>.json`
-#      with `approvalStatus: "approved"` for the same session id (the
-#      synthetic equivalent of running `harness approve understanding`
-#      against a session whose ledger source is degraded).
-#   4. Pipes the same Codex PreToolUse event in again. Asserts:
-#        - exit code 0
-#        - stderr names `persisted-report` as the approval source.
+#      with `approvalStatus: "approved"` for the same session id,
+#      WITHOUT the signed approval marker (the synthetic equivalent of
+#      an approval that bypassed `harness approve understanding`,
+#      e.g. a degraded producer writing straight to the reports dir).
+#   4. Pipes the same Codex PreToolUse event in again. Since task
+#      7402301d the persisted report is audit evidence only, not gate
+#      authority, so this still blocks. Asserts:
+#        - exit code 2 (still blocked; no signed marker exists)
+#        - stderr contains the distinct `unsigned persisted-report
+#          approval rejected` reason.
 #   5. Runs the codex-user-prompt-submit injector and asserts the
 #      Understanding-Gate instruction template lands on stdout.
 #   6. Runs the codex-stop hook against a synthetic stop event whose
@@ -27,10 +31,11 @@
 #      Asserts a parseable `.understanding-gate/reports/...json` lands
 #      with `approvalStatus: "pending"`.
 #   7. Runs `harness approve understanding --session <SESSION_B>` to
-#      flip that file's approvalStatus to `approved`, then pipes a
+#      write the signed approval marker (and round-trip the report's
+#      approvalStatus to `approved` as audit evidence), then pipes a
 #      PreToolUse event for SESSION_B into the blocker and asserts the
-#      allow path fires via the persisted-report source. This closes
-#      the capture-then-approve round-trip without a Codex binary.
+#      allow path fires via the signed marker. This closes the
+#      capture-then-approve round-trip without a Codex binary.
 #
 # No real Codex binary is required: the wire format on stdin is
 # defined by harness (see
@@ -132,9 +137,12 @@ echo "OK: wrote $APPROVED_REPORT"
 echo
 
 # ----------------------------------------------------------------------
-# Step 4: re-run PreToolUse, expect allow (exit 0)
+# Step 4: re-run PreToolUse. Since task 7402301d the persisted report
+#         is evidence, not gate authority, so an approved-looking
+#         report with no signed marker still blocks (exit 2), with the
+#         distinct `unsigned persisted-report approval rejected` reason.
 # ----------------------------------------------------------------------
-echo "--- step 4: PreToolUse after approval, expect allow ---"
+echo "--- step 4: PreToolUse with an unsigned approved report, expect still-block ---"
 set +e
 echo "$EVENT_JSON" | $HARNESS_BIN pack hook codex-pre-tool-use \
   --config "$ROOT/harness.yaml" \
@@ -143,17 +151,17 @@ echo "$EVENT_JSON" | $HARNESS_BIN pack hook codex-pre-tool-use \
   2>"$TRANSCRIPT_DIR/allow-stderr.txt"
 RC=$?
 set -e
-if [[ "$RC" -ne 0 ]]; then
-  echo "FAIL: expected exit 0 (allow), got $RC" >&2
+if [[ "$RC" -ne 2 ]]; then
+  echo "FAIL: expected exit 2 (still blocked; report is evidence, not authority), got $RC" >&2
   cat "$TRANSCRIPT_DIR/allow-stderr.txt" >&2
   exit 1
 fi
-if ! grep -q "persisted report" "$TRANSCRIPT_DIR/allow-stderr.txt"; then
-  echo "FAIL: stderr did not name persisted-report as the approval source" >&2
+if ! grep -q "unsigned persisted-report approval rejected" "$TRANSCRIPT_DIR/allow-stderr.txt"; then
+  echo "FAIL: stderr did not carry the distinct unsigned persisted-report approval rejected reason" >&2
   cat "$TRANSCRIPT_DIR/allow-stderr.txt" >&2
   exit 1
 fi
-echo "OK: allow path fired via persisted-report source"
+echo "OK: unsigned approved report still blocks with the distinct rejection reason"
 echo
 
 # ----------------------------------------------------------------------
@@ -264,12 +272,12 @@ if [[ "$RC" -ne 0 ]]; then
   cat "$TRANSCRIPT_DIR/allow-roundtrip-stderr.txt" >&2
   exit 1
 fi
-if ! grep -q "persisted report" "$TRANSCRIPT_DIR/allow-roundtrip-stderr.txt"; then
-  echo "FAIL: round-trip did not allow via persisted-report source" >&2
+if ! grep -q "approved via marker" "$TRANSCRIPT_DIR/allow-roundtrip-stderr.txt"; then
+  echo "FAIL: round-trip did not allow via the signed approval marker" >&2
   cat "$TRANSCRIPT_DIR/allow-roundtrip-stderr.txt" >&2
   exit 1
 fi
-echo "OK: capture + approve + allow round-trip complete"
+echo "OK: capture + approve + allow round-trip complete (allowed via signed marker)"
 echo
 
 echo "=========================================="

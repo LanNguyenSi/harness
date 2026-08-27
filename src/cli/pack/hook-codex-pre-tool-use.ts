@@ -297,7 +297,10 @@ export async function runPackHookCodexPreToolUseCli(
   // reason (with the distinct `unsigned persisted-report approval
   // rejected` phrase when the on-disk status says approved) and
   // `report.report === null` gates the parse-error lookup below. The
-  // signed marker above is the only allow path in this hook too.
+  // signed marker is the only APPROVAL source that opens the gate in
+  // this hook too. The read-only-Bash and recovery-git-commit carve-outs
+  // below are separate, independently-argued exemptions, not a second
+  // approval source.
   const reportsDir = opts.reportsDir ?? defaultReportsDir();
   const report = checkPersistedReport(reportsDir, sessionId);
 
