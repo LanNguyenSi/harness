@@ -1018,6 +1018,30 @@ describe("pack hook codex-pre-tool-use — auto-approval path (ADR slice 2)", ()
       expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
     });
 
+    it("N25b — tool_input classifies but raw_input is PRESENT and non-classifying: not exempted (a per-side fallback would wrongly allow this)", async () => {
+      // No signing key on purpose, same rationale as N25: with one, the
+      // auto path would open this call anyway and "blocked" would stop
+      // discriminating a regression that falls back to whichever side
+      // classifies instead of requiring both present fields to agree.
+      const report = writePendingReport();
+      expect(fs.existsSync(signingKeyPathFor(generatedDir))).toBe(false);
+
+      const result = await call({
+        toolName: "shell",
+        extraPayload: {
+          tool_input: { command: "ls" },
+          raw_input: {},
+        },
+      });
+
+      expect(result.blocked).toBe(true);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).not.toMatch(/read-only Bash command, allowing/);
+      expect(markerExists()).toBe(false);
+      expect(ledgerCalls).toEqual([]);
+      expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
+    });
+
     it("N26 — the same fixture with the two fields AGREEING is exempted (so N25 is the disagreement's doing)", async () => {
       writePendingReport();
 

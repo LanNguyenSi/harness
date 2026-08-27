@@ -68,7 +68,9 @@ describe("validate — understanding-before-execution auto_approve.when measured
     expect(diags[0]?.path).toBe(`${AUTO_APPROVE_PATH_PREFIX}[1]`);
     expect(diags[0]?.message).toMatch(/dontAsk/);
     expect(diags[0]?.message).toMatch(/no checked-in dogfood fixture/);
-    expect(diags[0]?.message).toMatch(/measured: acceptEdits, bypassPermissions, default/);
+    expect(diags[0]?.message).toMatch(
+      /measured for claude-code: acceptEdits, bypassPermissions, default/,
+    );
     expect(diags[0]?.message).toMatch(
       /docs\/decisions\/2026-08-27-ug-auto-mode-approval\.md, Slice 2/,
     );
@@ -176,6 +178,113 @@ describe("validate — understanding-before-execution auto_approve.when measured
     // not double-report it.
     const schemaError = result.diagnostics.find(
       (d) => d.path === "policy_packs[0].config.auto_approve.when" && d.severity === "error",
+    );
+    expect(schemaError).toBeDefined();
+  });
+});
+
+// Round-2 review finding (M1): `auto_approve.harnesses`
+// (docs/decisions/2026-08-27-ug-auto-mode-approval.md, Slice 2) scopes
+// which harnesses' evidence counts as "measured" for a `when` literal.
+// `acceptEdits` is measured ONLY for claude-code
+// (measured-permission-modes.ts), so a manifest that lists `harnesses:
+// [codex]` and allows `acceptEdits` must fail even though `acceptEdits`
+// is measured for SOME harness.
+describe("validate — auto_approve.when measured literals are scoped to auto_approve.harnesses", () => {
+  it("harnesses: [codex] + acceptEdits (measured for claude-code only) is an error naming codex", () => {
+    const home = fixtureWithPacks([
+      {
+        name: "understanding-before-execution",
+        config: {
+          auto_approve: {
+            when: ["acceptEdits"],
+            harnesses: ["codex"],
+            require_report: true,
+          },
+        },
+      },
+    ]);
+    const result = runValidate(home);
+    const diags = result.diagnostics.filter((d) => d.path.startsWith(AUTO_APPROVE_PATH_PREFIX));
+    expect(diags).toHaveLength(1);
+    expect(diags[0]?.severity).toBe("error");
+    expect(diags[0]?.message).toMatch(/acceptEdits/);
+    expect(diags[0]?.message).toMatch(/codex/);
+    expect(diags[0]?.message).toMatch(/measured for codex: bypassPermissions, default/);
+    expect(diags[0]?.message).not.toMatch(/claude-code/);
+  });
+
+  it("harnesses: [codex] + bypassPermissions (measured for codex) produces no diagnostic", () => {
+    const home = fixtureWithPacks([
+      {
+        name: "understanding-before-execution",
+        config: {
+          auto_approve: {
+            when: ["bypassPermissions"],
+            harnesses: ["codex"],
+            require_report: true,
+          },
+        },
+      },
+    ]);
+    const result = runValidate(home);
+    const diags = result.diagnostics.filter((d) => d.path.startsWith(AUTO_APPROVE_PATH_PREFIX));
+    expect(diags).toEqual([]);
+  });
+
+  it("harnesses: [claude-code, codex] + acceptEdits (measured for a LISTED harness) produces no diagnostic", () => {
+    const home = fixtureWithPacks([
+      {
+        name: "understanding-before-execution",
+        config: {
+          auto_approve: {
+            when: ["acceptEdits"],
+            harnesses: ["claude-code", "codex"],
+            require_report: true,
+          },
+        },
+      },
+    ]);
+    const result = runValidate(home);
+    const diags = result.diagnostics.filter((d) => d.path.startsWith(AUTO_APPROVE_PATH_PREFIX));
+    expect(diags).toEqual([]);
+  });
+
+  it("absent harnesses + acceptEdits defaults to claude-code and produces no diagnostic", () => {
+    const home = fixtureWithPacks([
+      {
+        name: "understanding-before-execution",
+        config: { auto_approve: { when: ["acceptEdits"], require_report: true } },
+      },
+    ]);
+    const result = runValidate(home);
+    const diags = result.diagnostics.filter((d) => d.path.startsWith(AUTO_APPROVE_PATH_PREFIX));
+    expect(diags).toEqual([]);
+  });
+
+  it.each([
+    ["a bare string instead of an array", "codex"],
+    ["an array with an unknown harness value", ["opencode"]],
+  ])("a malformed auto_approve.harnesses (%s) produces no diagnostic from this check", (_label, harnesses) => {
+    const home = fixtureWithPacks([
+      {
+        name: "understanding-before-execution",
+        config: {
+          auto_approve: { when: ["acceptEdits"], harnesses, require_report: true },
+        },
+      },
+    ]);
+    const result = runValidate(home);
+    // This check leaves a malformed `harnesses` block entirely to the zod
+    // schema check rather than reporting from here.
+    const diags = result.diagnostics.filter((d) =>
+      d.path.startsWith(`${AUTO_APPROVE_PATH_PREFIX}[`),
+    );
+    expect(diags).toEqual([]);
+    const schemaError = result.diagnostics.find(
+      (d) =>
+        d.path.startsWith("policy_packs[0].config.auto_approve.harnesses") &&
+        d.severity === "error",
     );
     expect(schemaError).toBeDefined();
   });

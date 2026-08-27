@@ -26,11 +26,10 @@ import {
   resolveProfile,
   KNOWN_PROFILE_NAMES,
 } from "./permission-profiles.js";
-import { REPORTS_DIR_ENV } from "./understanding-before-execution-runtime.js";
-// Direct import, not through the runtime shim: `AUTO_APPROVE_HARNESS_VALUES`
-// is deliberately not part of the shim's pinned public surface
-// (tests/policy-packs/ube-export-surface.test.ts).
-import { AUTO_APPROVE_HARNESS_VALUES } from "./understanding-before-execution/auto-approve.js";
+import {
+  AUTO_APPROVE_HARNESS_VALUES,
+  REPORTS_DIR_ENV,
+} from "./understanding-before-execution-runtime.js";
 import { SHELL_ALIASES } from "../../runtime/tool-name-aliases.js";
 
 // Env var the npm-backed `understanding-gate-claude-hook` bin reads to find

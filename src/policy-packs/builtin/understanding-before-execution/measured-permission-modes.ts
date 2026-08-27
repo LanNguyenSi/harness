@@ -77,17 +77,27 @@ export const MEASURED_PERMISSION_MODES: ReadonlyArray<MeasuredPermissionMode> = 
 ];
 
 /**
- * True when ANY harness has a measured fixture for this exact literal.
- * The `auto_approve.when` allowlist is shared across harnesses (the pack
- * config does not distinguish which harness produced the run), so a
- * literal counts as measured as soon as one harness has evidence for it.
- * Exact string equality: no case folding, no wildcards.
+ * True when the given HARNESS has a measured fixture for this exact
+ * literal. `auto_approve.harnesses` (docs/decisions/2026-08-27-ug-auto-mode-approval.md,
+ * Slice 2) scopes which harnesses' PreToolUse hooks may take the auto
+ * path at all, so "measured" is checked per listed harness, not across
+ * the whole registry: a literal measured only for Claude Code is not
+ * evidence that Codex ever emits it. Exact string equality: no case
+ * folding, no wildcards.
  */
-export function isMeasuredPermissionMode(literal: string): boolean {
-  return MEASURED_PERMISSION_MODES.some((entry) => entry.permissionMode === literal);
+export function isMeasuredPermissionModeFor(literal: string, harness: MeasuredHarness): boolean {
+  return MEASURED_PERMISSION_MODES.some(
+    (entry) => entry.harness === harness && entry.permissionMode === literal,
+  );
 }
 
-/** Sorted, de-duplicated list of every measured literal across harnesses. */
-export function measuredPermissionModeLiterals(): string[] {
-  return Array.from(new Set(MEASURED_PERMISSION_MODES.map((entry) => entry.permissionMode))).sort();
+/** Sorted, de-duplicated list of every literal measured for HARNESS. */
+export function measuredPermissionModeLiteralsFor(harness: MeasuredHarness): string[] {
+  return Array.from(
+    new Set(
+      MEASURED_PERMISSION_MODES.filter((entry) => entry.harness === harness).map(
+        (entry) => entry.permissionMode,
+      ),
+    ),
+  ).sort();
 }

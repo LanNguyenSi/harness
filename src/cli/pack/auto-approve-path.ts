@@ -56,16 +56,13 @@ import {
   autoApprovedByFor,
   autoApprovedLedgerTagFor,
   checkOperatorApprovalMarkers,
+  harnessAllowed,
   listPersistedReports,
   parseAutoApprove,
   permissionModeAllowed,
   selectNewestStrictSessionReport,
   writeApprovalMarker,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
-// Direct import, not through the runtime shim above: `harnessAllowed` is
-// deliberately not part of the shim's pinned public surface
-// (tests/policy-packs/ube-export-surface.test.ts), same as `CODEX_HARNESS`.
-import { harnessAllowed } from "../../policy-packs/builtin/understanding-before-execution/auto-approve.js";
 import { sha256Hex, signingKeyExists } from "../../runtime/approval-signing.js";
 import {
   clearPendingApproval,

@@ -262,12 +262,14 @@ export function permissionModeAllowed(cfg: AutoApproveConfig | null, mode: unkno
  * of `when` — the two allowlists are independent AND conditions, not
  * alternatives.
  *
- * Deliberately NOT re-exported through
- * `understanding-before-execution/index.ts`: like {@link CODEX_HARNESS},
- * its only runtime consumer is the shared PreToolUse auto path
- * (`src/cli/pack/auto-approve-path.ts`), and widening the runtime shim's
- * pinned public surface (tests/policy-packs/ube-export-surface.test.ts)
- * is a separate, conscious act.
+ * Re-exported through `understanding-before-execution/index.ts` (round-2
+ * review finding on slice 2): its call site (`src/cli/pack/auto-approve-path.ts`)
+ * imports every sibling symbol it needs (`parseAutoApprove`,
+ * `permissionModeAllowed`, ...) through the runtime shim already, so this
+ * one was pulled onto the pinned shim surface
+ * (tests/policy-packs/ube-export-surface.test.ts) to match, unlike
+ * {@link CODEX_HARNESS} which still has exactly one consumer and stays a
+ * direct import.
  */
 export function harnessAllowed(cfg: AutoApproveConfig | null, harness: unknown): boolean {
   if (cfg === null) return false;
