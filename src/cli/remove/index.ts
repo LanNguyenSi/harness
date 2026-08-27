@@ -36,11 +36,13 @@ export interface RemoveResult {
   /**
    * F8 (review round 2, 99f47307 Slice 1): workflow names whose runtime
    * merge gate is derived FROM this hook (see
-   * `derivedGateReferencingWorkflows` below) — empty unless `type` is
-   * `"hook"` and `name` is one of the two evidence hooks. Informational
-   * on dry-run (mirrors `forcedReferences`); on the write path, always
-   * `[]` for the same reason `forcedReferences` is: the pre-check below
-   * refuses the removal before it happens, unless `--force` was passed.
+   * `derivedGateReferencingWorkflows` below). Empty unless `type` is
+   * `"hook"`, `name` is one of the two evidence hooks, AND `--force` was
+   * passed (without it the pre-check refuses before either path). Unlike
+   * `forcedReferences`, this is populated on the dry-run AND the write
+   * path (F3, review round 3): there is no schema safety net for a
+   * derived-only reference, so a `--force` write really does drop the
+   * gate, and the CLI prints this list as the warning for it.
    */
   derivedGateReferences: string[];
 }
@@ -171,16 +173,20 @@ export async function remove(
     );
   }
 
+  // derivedGateWorkflows is non-empty here only under --force (the
+  // pre-check above threw otherwise), on BOTH paths: unlike a dangling
+  // policy.hook reference, nothing downstream refuses a --force'd
+  // derived-gate removal (see `derivedGateReferencingWorkflows`), so the
+  // write path must report it too, not only the dry-run (F3, review
+  // round 3; the round-2 code hard-coded `[]` on the write path and the
+  // CLI never printed either).
+  const derivedGateReferences = derivedGateWorkflows;
+
   if (opts.dryRun) {
     // forcedReferences is informational on dry-run: it shows the user which
     // policies would have been overridden if the schema gate did not refuse.
     // On the write path below it is always [] because --force on a referenced
     // hook never reaches that point — the schema rejects the dangling reference.
-    // derivedGateReferences (F8) mirrors that shape, EXCEPT there is no
-    // schema safety net on the write path (see the header comment on
-    // `derivedGateReferencingWorkflows`) — --force there really does drop
-    // the gate silently, so this dry-run report is the only warning an
-    // operator gets.
     return {
       path: target,
       type,
@@ -188,7 +194,7 @@ export async function remove(
       diff,
       applied: false,
       forcedReferences: opts.force ? plan.referencingPolicies : [],
-      derivedGateReferences: opts.force ? derivedGateWorkflows : [],
+      derivedGateReferences,
     };
   }
 
@@ -216,11 +222,7 @@ export async function remove(
     // hook, so the only way to reach here with --force is when there are no
     // referencing policies to begin with.
     forcedReferences: [],
-    // Always [] too: the pre-check above already refused unless --force
-    // was passed, and (unlike forcedReferences) nothing downstream would
-    // have caught a --force'd derived-gate removal anyway — this array
-    // only ever carries information on the dry-run path.
-    derivedGateReferences: [],
+    derivedGateReferences,
   };
 }
 

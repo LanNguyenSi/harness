@@ -68,9 +68,14 @@ hooks are not correctly wired — missing entirely, or declared under
 the right name but bound to the wrong trigger surface or a `command`
 that isn't `harness policy intercept` — (`checkWorkflowGateWiring`),
 so "declared required, gate silently inert" cannot pass unnoticed;
-a warning names a weaker hand-authored policy sharing the derived
-gate's trigger surface instead of letting it look like the only gate
-(`checkWorkflowGateWeakOverlap`). This is scoped to the merge step
+a warning names a weaker (or differently-extracting) hand-authored
+policy sharing the derived gate's trigger surface instead of letting
+it look like the only gate (`checkWorkflowGateWeakOverlap`); a
+hand-authored policy that is at least as strong and extracts the same
+variables replaces the derived pair outright. `harness list policies`
+and `harness doctor` show the derived pair marked "(derived from
+workflows[])"; `harness export` and the `.last-apply` snapshot carry
+only what you declared. This is scoped to the merge step
 only, and even there to two specific surfaces:
 `mcp__agent-tasks__pull_requests_merge` and `gh pr merge` are gated;
 `mcp__agent-tasks__task_merge` and `mcp__agent-tasks__task_finish`

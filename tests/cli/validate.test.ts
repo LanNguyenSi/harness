@@ -2242,3 +2242,81 @@ describe("validate — --json", () => {
     expect(err).toBe("");
   });
 });
+
+// Review round 3 (99f47307 Slice 1): F1 black-box reproduction (the full
+// template plus a qualifying workflow warned about a derived policy that a
+// strong hand-authored policy had suppressed) and the new derived-name
+// collision check.
+describe("validate: workflow checks on the derived view (review round 3)", () => {
+  const WORKFLOW_REQUIRED = `review_templates:
+  t1: "Review this PR for correctness."
+workflows:
+  - name: ship
+    steps:
+      - kind: branch
+      - kind: review_subagent
+        spawn: required
+        template: t1
+      - kind: merge
+`;
+
+  it("F1: FULL_TEMPLATE plus a qualifying workflow yields zero workflow diagnostics", () => {
+    const home = writeFixture({ "harness.yaml": `${FULL_TEMPLATE}\n${WORKFLOW_REQUIRED}` });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(result.diagnostics.filter((d) => d.path === "workflows")).toEqual([]);
+    // And the derived view carries no workflow:* policy: the template's
+    // own review-before-merge(-bash) pair stands in for both surfaces.
+    expect(result.manifest?.policies.filter((p) => p.name.startsWith("workflow:"))).toEqual([]);
+  });
+
+  it("errors when a hand-authored policy name collides with a derived policy name on a different surface", () => {
+    const wiredHooks = `hooks:
+  - name: require-review-evidence
+    event: PreToolUse
+    match: "mcp__agent-tasks__pull_requests_merge"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+  - name: require-review-evidence-bash
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+`;
+    const colliding = `policies:
+  - name: workflow:ship:review-before-merge
+    description: Same name as the derived gate, different surface.
+    trigger:
+      event: PreToolUse
+      match: "Bash"
+      bash_match: "git push"
+    requires:
+      ledger_tag: "review:done"
+    hook: require-review-evidence-bash
+    enforcement: block
+`;
+    const home = writeFixture({
+      "harness.yaml": `version: 1\n${WORKFLOW_REQUIRED}${colliding}${wiredHooks}`,
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const hit = result.diagnostics.find(
+      (d) => d.severity === "error" && /collides with the policy of the same name/.test(d.message),
+    );
+    expect(hit).toBeDefined();
+    expect(hit?.message).toContain("workflow:ship:review-before-merge");
+    // Fail-safe: the derived gate is still there (two entries share the name).
+    expect(
+      result.manifest?.policies.filter((p) => p.name === "workflow:ship:review-before-merge"),
+    ).toHaveLength(2);
+  });
+});

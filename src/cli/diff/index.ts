@@ -3,6 +3,7 @@ import { parse as parseYaml } from "yaml";
 import { OverrideMergeError, applyLayers } from "../../overrides/merge.js";
 import { ManifestParseError, parseManifest, type Manifest } from "../../schema/index.js";
 import { EX_NOINPUT, EX_USAGE, HarnessExitError } from "../exit-codes.js";
+import { withDerivedPolicies } from "../../runtime/workflow-policies.js";
 import { loadManifest, resolvePaths, type LoaderOptions } from "../loader.js";
 import { diffManifests, formatDiff, type Change } from "./engine.js";
 import {
@@ -41,9 +42,21 @@ function parseRefYaml(raw: string, label: string): unknown {
   }
 }
 
+/**
+ * Parse the ref-side manifest into the SAME view the working side gets
+ * from `loadManifest`: hand-authored policies plus the `workflows[]`-
+ * derived merge-gate pair (review round 3, 99f47307 Slice 1). Before
+ * this the ref side was `parseManifest` alone, so an unchanged manifest
+ * with a qualifying workflow diffed as `+ policies[workflow:<name>:
+ * review-before-merge(-bash)]` on every run. Derived on both sides (not
+ * stripped on both) because `harness diff` is an effective-config diff,
+ * the same reason override layers are merged on both sides: flipping a
+ * review step from `spawn: optional` to `required` since the ref changes
+ * what `policy intercept` enforces, and the diff should say so.
+ */
 function parseRefSchema(parsed: unknown): Manifest {
   try {
-    return parseManifest(parsed);
+    return withDerivedPolicies(parseManifest(parsed));
   } catch (err) {
     if (err instanceof ManifestParseError) {
       throw new HarnessExitError(

@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
+import { run } from "../../src/cli/index.js";
 import { init } from "../../src/cli/init/index.js";
 import { remove } from "../../src/cli/remove/index.js";
 import { applyRemove, planRemove } from "../../src/cli/remove/mutate.js";
@@ -35,6 +36,22 @@ afterEach(() => {
 
 function readManifest(): unknown {
   return parseYaml(fs.readFileSync(manifestPath, "utf8"));
+}
+
+/** In-process CLI run with captured streams (same shape as tests/cli/program.test.ts). */
+async function runCli(argv: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
+  let stdout = "";
+  let stderr = "";
+  const code = await run({
+    argv,
+    stdout: (s) => {
+      stdout += s;
+    },
+    stderr: (s) => {
+      stderr += s;
+    },
+  });
+  return { stdout, stderr, code };
 }
 
 describe("remove mcp / cli / skill", () => {
@@ -214,6 +231,66 @@ workflows:
       hooks?: { name: string }[];
     };
     expect(m.hooks?.map((h) => h.name)).not.toContain("require-review-evidence");
+  });
+
+  // F3 (review round 3): the round-2 write path hard-coded
+  // `derivedGateReferences: []` and the CLI never printed the field on
+  // either path, so `remove hook require-review-evidence --force` dropped
+  // the gate with no warning at all.
+  it("F3: the write path with --force reports the workflow whose gate it disables", async () => {
+    const r = await remove("hook", "require-review-evidence", {
+      configPath: derivedManifestPath,
+      homeDir: derivedHome,
+      force: true,
+    });
+    expect(r.applied).toBe(true);
+    expect(r.derivedGateReferences).toEqual(["ship"]);
+  });
+
+  it("F3: the CLI prints the derived-gate warning on stderr for a --force write (M3)", async () => {
+    const r = await runCli([
+      "remove",
+      "hook",
+      "require-review-evidence",
+      "--config",
+      derivedManifestPath,
+      "--force",
+    ]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toMatch(/forced removal disables the workflows\[\]-derived merge gate for: ship/);
+    expect(r.stdout).toMatch(/removed hook "require-review-evidence"/);
+    const m = parseYaml(fs.readFileSync(derivedManifestPath, "utf8")) as { hooks?: { name: string }[] };
+    expect(m.hooks?.map((h) => h.name)).not.toContain("require-review-evidence");
+  });
+
+  it("F3: the CLI prints the same warning on --dry-run --force and leaves the file untouched", async () => {
+    const before = fs.readFileSync(derivedManifestPath, "utf8");
+    const r = await runCli([
+      "remove",
+      "hook",
+      "require-review-evidence",
+      "--config",
+      derivedManifestPath,
+      "--dry-run",
+      "--force",
+    ]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toMatch(/derived merge gate for: ship/);
+    expect(r.stdout).toMatch(/^--- /m);
+    expect(fs.readFileSync(derivedManifestPath, "utf8")).toBe(before);
+  });
+
+  it("no derived-gate warning on stderr when removing an unrelated hook", async () => {
+    const withExtraHook = `${fs.readFileSync(derivedManifestPath, "utf8").replace(/policies: \[\]\n$/, "")}  - name: unrelated-hook
+    event: SessionStart
+    command: /usr/bin/true
+    blocking: false
+policies: []
+`;
+    fs.writeFileSync(derivedManifestPath, withExtraHook, "utf8");
+    const r = await runCli(["remove", "hook", "unrelated-hook", "--config", derivedManifestPath]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
   });
 
   it("does not block removing an UNRELATED hook the same manifest declares", async () => {

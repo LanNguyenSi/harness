@@ -384,3 +384,93 @@ tools:
     }
   });
 });
+
+// Review round 3 (99f47307 Slice 1): the ref side of `--since` was parsed
+// without the workflows[]-derived policies while the working side came
+// from loadManifest (derived view), so an UNCHANGED manifest with a
+// qualifying workflow diffed as `+ policies[workflow:ship:review-before-
+// merge(-bash)]` on every run. Both sides now take the derived view.
+describe("diff — workflows[]-derived policies (--since, review round 3)", () => {
+  const DISCRIMINATOR = { hostname: "h", platform: "linux", procVersionPath: "/nonexistent" } as const;
+
+  function workflowManifest(spawn: "required" | "optional"): string {
+    return `version: 1
+review_templates:
+  t1: "Review this PR for correctness."
+workflows:
+  - name: ship
+    steps:
+      - kind: branch
+      - kind: review_subagent
+        spawn: ${spawn}
+        template: t1
+      - kind: merge
+hooks:
+  - name: require-review-evidence
+    event: PreToolUse
+    match: "mcp__agent-tasks__pull_requests_merge"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+  - name: require-review-evidence-bash
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+policies:
+  - name: unrelated
+    description: Hand-authored, on an unrelated surface, present at both refs.
+    trigger:
+      event: PreToolUse
+      match: "Bash"
+      bash_match: "git status"
+    requires:
+      ledger_tag: "preflight:ready"
+    hook: require-review-evidence-bash
+    enforcement: warn
+`;
+  }
+
+  it("reports no changes for an identical workflow-gated manifest at the ref and in the worktree (M2)", () => {
+    const repo = newRepo();
+    fs.writeFileSync(path.join(repo, "harness.yaml"), workflowManifest("required"), "utf8");
+    gitCommit(repo, "initial");
+    const r = diff({
+      configPath: path.join(repo, "harness.yaml"),
+      since: "master",
+      homeDir: repo,
+      discriminator: DISCRIMINATOR,
+    });
+    expect(r.changes).toEqual([]);
+    // Sanity: BOTH sides carry the derived pair (same view), rather than
+    // neither.
+    const expectedNames = [
+      "unrelated",
+      "workflow:ship:review-before-merge",
+      "workflow:ship:review-before-merge-bash",
+    ];
+    expect(r.before.policies.map((p) => p.name)).toEqual(expectedNames);
+    expect(r.after.policies.map((p) => p.name)).toEqual(expectedNames);
+  });
+
+  it("reports the derived gate as added when the review step flips from optional to required since the ref", () => {
+    const repo = newRepo();
+    fs.writeFileSync(path.join(repo, "harness.yaml"), workflowManifest("optional"), "utf8");
+    gitCommit(repo, "optional review");
+    fs.writeFileSync(path.join(repo, "harness.yaml"), workflowManifest("required"), "utf8");
+    const r = diff({
+      configPath: path.join(repo, "harness.yaml"),
+      since: "master",
+      homeDir: repo,
+      discriminator: DISCRIMINATOR,
+    });
+    const added = r.changes.filter((c) => c.kind === "added").map((c) => c.path).sort();
+    expect(added).toEqual([
+      "policies[workflow:ship:review-before-merge-bash]",
+      "policies[workflow:ship:review-before-merge]",
+    ]);
+    expect(r.changes.some((c) => c.path.startsWith("workflows"))).toBe(true);
+  });
+});

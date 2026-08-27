@@ -10,6 +10,7 @@ import {
   validateBeforeWrite,
 } from "../../io/validate-before-write.js";
 import { parseManifest } from "../../schema/index.js";
+import { withDerivedPolicies } from "../../runtime/workflow-policies.js";
 import { runAssetChecks } from "../validate/checks.js";
 import { fmtDiagnostic } from "../validate/types.js";
 import { EX_FAIL, EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
@@ -75,8 +76,13 @@ export async function add(action: AddEntry, opts: AddOptions = {}): Promise<AddR
 
   // Asset gate — surfaces hook +x failures, missing required CLIs, etc.
   // We use parseManifest (not the result of validateBeforeWrite) so we have a
-  // typed Manifest for runAssetChecks. defaults flow through.
-  const manifest = parseManifest(parseYaml(proposed));
+  // typed Manifest for runAssetChecks. defaults flow through. Both this and
+  // the baseline below take the DERIVED view (workflows[]-derived policies
+  // folded in), the same view `harness validate` checks, so the gate here
+  // and validate cannot disagree about what "declared" means (review round
+  // 3, 99f47307 Slice 1); the derived entries cancel out in the baseline
+  // comparison unless the add itself changes what is derived.
+  const manifest = withDerivedPolicies(parseManifest(parseYaml(proposed)));
   // gitIgnoreProbe stays null: the knob-ignored check is warning-only and
   // this gate consumes errors, so the git spawn would be wasted work.
   const proposedErrors = runAssetChecks(manifest, {
@@ -90,7 +96,7 @@ export async function add(action: AddEntry, opts: AddOptions = {}): Promise<AddR
   // blocking on all proposed errors so the gate never weakens on a broken base.
   let baselineKeys = new Set<string>();
   try {
-    const baselineManifest = parseManifest(parseYaml(original));
+    const baselineManifest = withDerivedPolicies(parseManifest(parseYaml(original)));
     const baselineErrors = runAssetChecks(baselineManifest, {
       homeDir: opts.homeDir,
       gitIgnoreProbe: () => null,

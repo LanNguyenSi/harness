@@ -18,7 +18,9 @@ import { isPolicyInterceptCommand, requiredHookBudgetMs } from "../policy/interc
 import type { Hook, Manifest } from "../../schema/index.js";
 import { DEFAULT_SAFE_DELETION_ROOTS } from "../../schema/risk.js";
 import {
+  deriveWorkflowGatePolicies,
   findWeakGatePolicyOverlaps,
+  handAuthoredPolicies,
   MERGE_BASH_MATCH,
   MERGE_MCP_MATCH,
   REVIEW_EVIDENCE_HOOK_BASH,
@@ -450,6 +452,47 @@ export function checkWorkflowMergeBeforeReview(manifest: Manifest): Diagnostic[]
     }
   }
   return out;
+}
+
+/**
+ * Review round 3 (99f47307 Slice 1): a hand-authored policy whose name
+ * equals a derived policy's name (`workflow:<name>:review-before-merge[-
+ * bash]`) but sits on a DIFFERENT surface is not deduped (dedupe keys on
+ * surface, not name), so the derived view carries two policies with one
+ * name. The runtime evaluates both (fail-safe), but every by-name reader
+ * (`explain`, `explain-policy`, `audit`, `diff`'s name-keyed policy list)
+ * resolves the name to the hand-authored one and silently hides the
+ * derived gate. The schema's duplicate-name refinement cannot see this
+ * (it runs on the hand-authored view), so it is an error here.
+ */
+export function checkWorkflowDerivedNameCollision(manifest: Manifest): Diagnostic[] {
+  const handNames = new Set(handAuthoredPolicies(manifest).map((p) => p.name));
+  return deriveWorkflowGatePolicies(manifest)
+    .filter((derived) => handNames.has(derived.name))
+    .map((derived) => ({
+      severity: "error" as const,
+      path: "policies",
+      message:
+        `hand-authored policy "${derived.name}" collides with the policy of the same name ` +
+        "derived from workflows[] (it does not intercept the same surface, so it does not " +
+        "replace the derived gate); both are enforced, but explain/explain-policy/audit/diff " +
+        "resolve the name to the hand-authored one. Rename the hand-authored policy.",
+    }));
+}
+
+/**
+ * Every `workflows[]` check in one list, so `harness validate`
+ * (`runAssetChecks`) and `harness doctor`'s Workflows section run the
+ * SAME set (review round 3, 99f47307 Slice 1: doctor previously picked
+ * two of the three by hand and was missing `checkWorkflowMergeBeforeReview`).
+ */
+export function checkWorkflows(manifest: Manifest): Diagnostic[] {
+  return [
+    ...checkWorkflowGateWiring(manifest),
+    ...checkWorkflowGateWeakOverlap(manifest),
+    ...checkWorkflowMergeBeforeReview(manifest),
+    ...checkWorkflowDerivedNameCollision(manifest),
+  ];
 }
 
 /**
@@ -1246,9 +1289,7 @@ export function runAssetChecks(
     ...checkSafeDeletionRootsSyntax(manifest),
     ...checkPolicySelfAttestation(manifest),
     ...checkHookBudgetLedgerMargin(manifest),
-    ...checkWorkflowGateWiring(manifest),
-    ...checkWorkflowGateWeakOverlap(manifest),
-    ...checkWorkflowMergeBeforeReview(manifest),
+    ...checkWorkflows(manifest),
   ];
 }
 

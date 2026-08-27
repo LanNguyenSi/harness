@@ -24,9 +24,38 @@ import type { Manifest, Policy, Workflow } from "../schema/index.js";
  * Deliberately does NOT touch `src/runtime/intercept.ts`: the engine
  * already knows how to evaluate a `Policy`, so the only thing missing
  * was a `Policy` to hand it. `src/cli/loader.ts#loadManifest` calls
- * this after parsing and appends the result to `manifest.policies`
- * before any consumer (the CLI `policy intercept` entrypoint, `list`,
- * `explain`, `explain-policy`) reads it.
+ * `withDerivedPolicies` after parsing and appends the result to
+ * `manifest.policies` before any consumer (the CLI `policy intercept`
+ * entrypoint, `list`, `explain`, `explain-policy`) reads it.
+ *
+ * TWO VIEWS OF ONE MANIFEST (review round 3, 99f47307 Slice 1). Every
+ * reader of a parsed manifest sees exactly one of:
+ *
+ * - the HAND-AUTHORED view: `parseManifest(...)` as-is, only what the
+ *   operator wrote under `policies:`. Right for anything that writes a
+ *   manifest back to disk or serialises it for later comparison
+ *   (`harness export`, the `.last-apply` manifest snapshot, `add` /
+ *   `remove` / `adopt` / `pack reseed` file rewrites, the schema gate in
+ *   `io/validate-before-write.ts`), because a derived policy written out
+ *   as if hand-authored would be re-derived on top of itself next time.
+ *   `withoutDerivedPolicies` turns a derived view back into this one.
+ * - the DERIVED view: `withDerivedPolicies(parseManifest(...))`, hand-
+ *   authored policies plus the workflow gate pair. Right for enforcement
+ *   (`policy intercept`, hook entrypoints), validation (`validate`,
+ *   `doctor`, `add`'s asset gate), display (`list`, `explain[-policy]`,
+ *   `describe`, `dry-run`), and every COMPARISON where the other side is
+ *   also derived (`diff --since` ref side vs working side; the
+ *   `.last-apply` snapshot vs the current manifest in restart hints).
+ *   `loadManifest` hands out this view; the few readers that parse
+ *   without it (`validate`, `diff`'s ref side, `apply`'s snapshot
+ *   reader, `add`'s gate) call `withDerivedPolicies` themselves.
+ *
+ * Both helpers are idempotent and accept either view as input (they
+ * partition on `isDerivedPolicy`), so a reader can never "double derive"
+ * or strip a hand-authored policy by calling them on the wrong view.
+ * Review rounds 1 and 2 each found one reader on the wrong side of this
+ * line (`apply` vs `validate`; `diff --since`'s two sides); the table
+ * above plus tests/cli/manifest-view-parity.test.ts are the guard.
  *
  * Fail direction: when the two evidence hooks are NOT wired, this
  * returns `[]` for every workflow rather than deriving an
@@ -81,15 +110,14 @@ export function hasWiredMergeGateHooks(manifest: Manifest): boolean {
 }
 
 /**
- * Canonical key for "does this policy already intercept the same
- * surface for the same evidence?": event + match + bash_match +
- * requires.ledger_tag. Two policies sharing this key would double-fire
- * `harness policy intercept` on the identical event (double the ledger
- * query, double the audit write) for no additional enforcement value,
- * so `deriveWorkflowGatePolicies` skips deriving a duplicate — but ONLY
- * when the existing policy is at least as strong as the gate it would
- * be standing in for (see `isAtLeastAsStrongAsDerivedGate` immediately
- * below; F1, review round 2).
+ * Canonical key for "does this policy intercept the same surface for the
+ * same evidence?": event + match + bash_match + requires.ledger_tag. Two
+ * policies sharing this key fire on the identical event for the identical
+ * ledger tag, so the derivation treats a hand-authored policy with this
+ * key as a CANDIDATE for standing in for the derived gate. Whether it
+ * actually does is decided by `isEquivalentToDerivedGate` below: it must
+ * also extract its template variables the same way (F4, review round 3)
+ * and be at least as strong (F1, review round 2).
  */
 function triggerSurfaceKey(policy: Pick<Policy, "trigger" | "requires">): string {
   return JSON.stringify({
@@ -98,6 +126,33 @@ function triggerSurfaceKey(policy: Pick<Policy, "trigger" | "requires">): string
     bash_match: policy.trigger.bash_match ?? null,
     ledger_tag: policy.requires?.ledger_tag ?? null,
   });
+}
+
+/**
+ * Canonical form of `trigger.extract` for equality: key-sorted so two
+ * maps that declare the same variables from the same paths compare equal
+ * regardless of authoring order. `null` when the policy extracts nothing.
+ *
+ * F4 (review round 3): `extract` was NOT part of the dedupe key before,
+ * so a hand-authored block policy on the derived surface that extracted
+ * `PR_NUMBER` from a WRONG path (say `toolArgs.pr` instead of
+ * `toolArgs.prNumber`) counted as equivalent, suppressed the derived
+ * gate, and then evaluated its own `review:${PR_NUMBER}` against an
+ * unresolved variable. Under `risk.degraded_fail_posture: fail_open` that
+ * is an allow with "template variables unresolved": the merge went
+ * through with no review evidence at all. A differently-extracting policy
+ * no longer dedupes: the derived gate is produced as well, both apply,
+ * and `findWeakGatePolicyOverlaps` names the mismatch.
+ */
+function extractKey(policy: Pick<Policy, "trigger">): string | null {
+  const extract = policy.trigger.extract;
+  if (extract === undefined) return null;
+  const sorted: Record<string, string> = {};
+  for (const key of Object.keys(extract).sort()) {
+    const value = extract[key];
+    if (value !== undefined) sorted[key] = value;
+  }
+  return JSON.stringify(sorted);
 }
 
 /**
@@ -111,8 +166,8 @@ function triggerSurfaceKey(policy: Pick<Policy, "trigger" | "requires">): string
  * F1 (review round 2, 99f47307 Slice 1): before this, `triggerSurfaceKey`
  * alone decided dedupe, so a hand-authored `enforcement: "warn"` policy
  * (or a `block` policy scoped down via `when:` to only some environments)
- * on the identical surface silently suppressed the derived BLOCK gate —
- * a `spawn: "required"` workflow step that LOOKED enforced actually
+ * on the identical surface silently suppressed the derived BLOCK gate: a
+ * `spawn: "required"` workflow step that LOOKED enforced actually
  * degraded to warn-only, or to unenforced outside the `when:` scope,
  * with no diagnostic anywhere. A weaker match no longer dedupes: the
  * derived block gate is ALSO produced (both apply), and
@@ -138,6 +193,23 @@ function weaknessReason(policy: Policy): string | null {
   if (policy.when !== undefined) return "when: (risk/environment-scoped)";
   if (policy.operator_only === true) return "operator_only: true";
   return "weaker than a plain block gate";
+}
+
+/**
+ * Why a hand-authored policy on the derived gate's surface does NOT stand
+ * in for it, or `null` when it does (same surface, same extract, at least
+ * as strong). Strength is reported before an extract mismatch: a warn
+ * policy with a wrong extract path is first and foremost a warn policy.
+ */
+function nonEquivalenceReason(handPolicy: Policy, derivedGate: Policy): string | null {
+  const weakness = weaknessReason(handPolicy);
+  if (weakness !== null) return weakness;
+  const handExtract = extractKey(handPolicy);
+  const gateExtract = extractKey(derivedGate);
+  if (handExtract !== gateExtract) {
+    return `trigger.extract differs (${handExtract ?? "none"} vs derived ${gateExtract ?? "none"})`;
+  }
+  return null;
 }
 
 function buildMcpMergeGatePolicy(workflowName: string): Policy {
@@ -206,112 +278,9 @@ function buildBashMergeGatePolicy(workflowName: string): Policy {
   };
 }
 
-/**
- * Derive the merge-gate `Policy` pair for every workflow that needs one
- * and does not already have an equivalent policy (hand-authored or
- * derived from an earlier workflow in the same manifest) intercepting
- * the same surface for the same evidence tag.
- *
- * Returns `[]` when `manifest.hooks[]` is missing either evidence hook
- * (see module doc: that gap is a `validate` error, not silent
- * derivation of an unenforceable policy) or when no workflow declares
- * a `spawn: "required"` review step followed by a merge step.
- */
-export function deriveWorkflowGatePolicies(manifest: Manifest): Policy[] {
-  if (!hasWiredMergeGateHooks(manifest)) return [];
-
-  // F1 (review round 2): only an AT-LEAST-AS-STRONG hand-authored policy
-  // seeds `seen` — a weaker one (enforcement: warn/require_approval, or
-  // when:-scoped) shares the surface but must not suppress the derived
-  // block gate. See `isAtLeastAsStrongAsDerivedGate`.
-  const seen = new Set<string>(
-    manifest.policies.filter(isAtLeastAsStrongAsDerivedGate).map((p) => triggerSurfaceKey(p)),
-  );
-  const derived: Policy[] = [];
-
-  for (const workflow of manifest.workflows) {
-    if (!workflowRequiresMergeGate(workflow)) continue;
-
-    const mcpPolicy = buildMcpMergeGatePolicy(workflow.name);
-    const mcpKey = triggerSurfaceKey(mcpPolicy);
-    if (!seen.has(mcpKey)) {
-      derived.push(mcpPolicy);
-      seen.add(mcpKey);
-    }
-
-    const bashPolicy = buildBashMergeGatePolicy(workflow.name);
-    const bashKey = triggerSurfaceKey(bashPolicy);
-    if (!seen.has(bashKey)) {
-      derived.push(bashPolicy);
-      seen.add(bashKey);
-    }
-  }
-
-  return derived;
-}
-
-/** One weaker hand-authored policy sharing a derived gate's trigger surface. */
-export interface WeakGatePolicyOverlap {
-  /** The workflow whose `spawn: "required"` step derives the gate. */
-  workflowName: string;
-  /** Name the derived policy would carry (`workflow:<name>:review-before-merge[-bash]`). */
-  derivedPolicyName: string;
-  /** Human-readable surface label for the message (`mcp__agent-tasks__pull_requests_merge` or `` `gh pr merge` (Bash) ``). */
-  surface: string;
-  /** The weaker hand-authored policy's name. */
-  handPolicyName: string;
-  /** Why it does not qualify as at-least-as-strong (see `weaknessReason`). */
-  reason: string;
-}
-
-/**
- * Every hand-authored policy that shares a derived gate's trigger surface
- * + ledger_tag but is NOT strong enough to dedupe against (F1, review
- * round 2). `deriveWorkflowGatePolicies` still derives the block gate in
- * this case (both policies apply), but the overlap is worth flagging: an
- * operator reading `enforcement: warn` on `two-reviewers-required`-shaped
- * policy might reasonably believe THAT is the only gate on the surface.
- * `src/cli/validate/checks.ts` turns each entry into a warning
- * Diagnostic; `src/cli/doctor/index.ts` renders the same list in the
- * Workflows section. Returns `[]` when the evidence hooks are not wired
- * (mirrors `deriveWorkflowGatePolicies`'s own fail direction: nothing is
- * derived, so there is nothing to overlap with) or no workflow needs a
- * gate.
- */
-export function findWeakGatePolicyOverlaps(manifest: Manifest): WeakGatePolicyOverlap[] {
-  if (!hasWiredMergeGateHooks(manifest)) return [];
-
-  const overlaps: WeakGatePolicyOverlap[] = [];
-  for (const workflow of manifest.workflows) {
-    if (!workflowRequiresMergeGate(workflow)) continue;
-
-    const candidates: Array<{ policy: Policy; surface: string }> = [
-      { policy: buildMcpMergeGatePolicy(workflow.name), surface: MERGE_MCP_MATCH },
-      { policy: buildBashMergeGatePolicy(workflow.name), surface: "`gh pr merge` (Bash)" },
-    ];
-
-    for (const { policy: candidate, surface } of candidates) {
-      const key = triggerSurfaceKey(candidate);
-      for (const handPolicy of manifest.policies) {
-        if (triggerSurfaceKey(handPolicy) !== key) continue;
-        const reason = weaknessReason(handPolicy);
-        if (reason === null) continue;
-        overlaps.push({
-          workflowName: workflow.name,
-          derivedPolicyName: candidate.name,
-          surface,
-          handPolicyName: handPolicy.name,
-          reason,
-        });
-      }
-    }
-  }
-  return overlaps;
-}
-
 // F7 (review round 2): a registry of every `Policy` object this module has
 // ever handed back from `deriveWorkflowGatePolicies`. `WeakSet` keys on
-// object identity, not value equality — deliberately: two DIFFERENT
+// object identity, not value equality, deliberately: two DIFFERENT
 // workflows can derive value-identical-looking policies with different
 // names, and a hand-authored policy could theoretically share a derived
 // policy's exact shape too (nothing stops an operator hand-copying one
@@ -327,18 +296,157 @@ export function isDerivedPolicy(policy: Policy): boolean {
 }
 
 /**
+ * The hand-authored slice of `manifest.policies`: everything the operator
+ * wrote under `policies:`, none of the workflow-derived entries. Works on
+ * either view (see module doc); on a hand-authored view it is the
+ * identity.
+ */
+export function handAuthoredPolicies(manifest: Manifest): Policy[] {
+  return manifest.policies.filter((p) => !isDerivedPolicy(p));
+}
+
+/** One weaker hand-authored policy sharing a derived gate's trigger surface. */
+export interface WeakGatePolicyOverlap {
+  /** The workflow whose `spawn: "required"` step derives the gate. */
+  workflowName: string;
+  /** Name of the derived policy that is ALSO in force (`workflow:<name>:review-before-merge[-bash]`). */
+  derivedPolicyName: string;
+  /** Human-readable surface label for the message (`mcp__agent-tasks__pull_requests_merge` or `` `gh pr merge` (Bash) ``). */
+  surface: string;
+  /** The weaker hand-authored policy's name. */
+  handPolicyName: string;
+  /** Why it does not stand in for the derived gate (see `nonEquivalenceReason`). */
+  reason: string;
+}
+
+interface WorkflowGateDerivation {
+  policies: Policy[];
+  overlaps: WeakGatePolicyOverlap[];
+}
+
+/**
+ * The ONE walk that decides, per qualifying workflow and per surface,
+ * whether a gate is derived and which hand-authored policies overlap it.
+ * `deriveWorkflowGatePolicies` and `findWeakGatePolicyOverlaps` are both
+ * projections of this result, so they cannot disagree about what was
+ * derived (F1, review round 3: the overlap finder used to re-implement
+ * the walk without the `seen` set, and warned about a "derived" gate that
+ * a strong hand-authored policy had in fact suppressed).
+ *
+ * Only HAND-authored policies feed the walk (`handAuthoredPolicies`), so
+ * the result is the same whether the input is the hand-authored or the
+ * derived view.
+ */
+function deriveWorkflowGates(manifest: Manifest): WorkflowGateDerivation {
+  const empty: WorkflowGateDerivation = { policies: [], overlaps: [] };
+  if (!hasWiredMergeGateHooks(manifest)) return empty;
+
+  const hand = handAuthoredPolicies(manifest);
+  const bySurface = new Map<string, Policy[]>();
+  for (const policy of hand) {
+    const key = triggerSurfaceKey(policy);
+    const bucket = bySurface.get(key);
+    if (bucket) bucket.push(policy);
+    else bySurface.set(key, [policy]);
+  }
+
+  // Surfaces already covered: by an equivalent hand-authored policy (F1 +
+  // F4: at least as strong AND extracting the same way), or by a gate an
+  // earlier workflow in this same manifest already derived.
+  const seen = new Set<string>();
+  const derived: Policy[] = [];
+  const overlaps: WeakGatePolicyOverlap[] = [];
+
+  for (const workflow of manifest.workflows) {
+    if (!workflowRequiresMergeGate(workflow)) continue;
+
+    const candidates: Array<{ policy: Policy; surface: string }> = [
+      { policy: buildMcpMergeGatePolicy(workflow.name), surface: MERGE_MCP_MATCH },
+      { policy: buildBashMergeGatePolicy(workflow.name), surface: "`gh pr merge` (Bash)" },
+    ];
+
+    for (const { policy: candidate, surface } of candidates) {
+      const key = triggerSurfaceKey(candidate);
+      if (seen.has(key)) continue;
+      const sharing = bySurface.get(key) ?? [];
+      const reasons = sharing.map((hp) => ({
+        handPolicy: hp,
+        reason: nonEquivalenceReason(hp, candidate),
+      }));
+      if (reasons.some((r) => r.reason === null)) {
+        // An equivalent hand-authored policy already gates this surface;
+        // nothing is derived, so there is nothing to overlap with either.
+        seen.add(key);
+        continue;
+      }
+      derived.push(candidate);
+      seen.add(key);
+      for (const { handPolicy, reason } of reasons) {
+        if (reason === null) continue;
+        overlaps.push({
+          workflowName: workflow.name,
+          derivedPolicyName: candidate.name,
+          surface,
+          handPolicyName: handPolicy.name,
+          reason,
+        });
+      }
+    }
+  }
+
+  return { policies: derived, overlaps };
+}
+
+/**
+ * Derive the merge-gate `Policy` pair for every workflow that needs one
+ * and does not already have an equivalent policy (hand-authored, or
+ * derived from an earlier workflow in the same manifest) intercepting
+ * the same surface for the same evidence tag.
+ *
+ * Returns `[]` when `manifest.hooks[]` is missing either evidence hook
+ * (see module doc: that gap is a `validate` error, not silent
+ * derivation of an unenforceable policy) or when no workflow declares
+ * a `spawn: "required"` review step followed by a merge step.
+ */
+export function deriveWorkflowGatePolicies(manifest: Manifest): Policy[] {
+  return deriveWorkflowGates(manifest).policies;
+}
+
+/**
+ * Every hand-authored policy that shares an ACTUALLY DERIVED gate's
+ * trigger surface + ledger_tag but does not stand in for it: weaker
+ * (F1, review round 2) or extracting its variables differently (F4,
+ * review round 3). Both policies apply in that case, and the overlap is
+ * worth flagging: an operator reading `enforcement: warn` on a
+ * `two-reviewers-required`-shaped policy might reasonably believe THAT
+ * is the only gate on the surface. `src/cli/validate/checks.ts` turns
+ * each entry into a warning Diagnostic; `src/cli/doctor/index.ts`
+ * renders the same list in the Workflows section.
+ *
+ * Mirrors `deriveWorkflowGatePolicies` exactly (same walk, same `seen`
+ * set): a surface an equivalent hand-authored policy already covers
+ * derives nothing and therefore reports nothing, even when a second,
+ * weaker policy sits on it too. Returns `[]` when the evidence hooks are
+ * not wired or no workflow needs a gate.
+ */
+export function findWeakGatePolicyOverlaps(manifest: Manifest): WeakGatePolicyOverlap[] {
+  return deriveWorkflowGates(manifest).overlaps;
+}
+
+/**
  * The ONE place `workflows[]` gets folded into `manifest.policies` (F2,
  * review round 2). Before this, `src/cli/loader.ts#loadManifest` inlined
  * the append, so every OTHER manifest consumer that parses the manifest
  * a different way (`src/cli/validate/index.ts`'s `loadMergedRaw` +
  * `parseManifest`, notably) saw a manifest with no derived policies at
- * all — `apply` and `validate` diverged: a manifest with `workflows:` +
- * both evidence hooks but no hand-authored policies and no `grounding-mcp`
- * validated with "0 errors" while `apply --dry-run` refused with "policies
- * declared but grounding-mcp not wired". Both loader.ts and
- * src/cli/validate/index.ts (and therefore `doctor`, which loads via
- * loadManifest) now call this function so they share one view of
- * "effective policies".
+ * all, and `apply` and `validate` diverged. See the module doc for the
+ * full list of readers and which view each one takes.
+ *
+ * Idempotent and view-agnostic (review round 3): the derivation runs on
+ * `handAuthoredPolicies(manifest)` only and any derived entries already
+ * present are replaced, so calling this on an already-derived view yields
+ * the same policy names with no duplicates. Returns the input object
+ * unchanged when there is nothing to derive and nothing to replace.
  *
  * Registers each derived `Policy` object in the module-level
  * `derivedPolicyRegistry` (F7) so `isDerivedPolicy` can later distinguish
@@ -346,8 +454,22 @@ export function isDerivedPolicy(policy: Policy): boolean {
  * `list`/`doctor`'s "(derived from workflows[])" marker).
  */
 export function withDerivedPolicies(manifest: Manifest): Manifest {
+  const hand = handAuthoredPolicies(manifest);
   const derivedPolicies = deriveWorkflowGatePolicies(manifest);
-  if (derivedPolicies.length === 0) return manifest;
+  if (derivedPolicies.length === 0 && hand.length === manifest.policies.length) return manifest;
   for (const policy of derivedPolicies) derivedPolicyRegistry.add(policy);
-  return { ...manifest, policies: [...manifest.policies, ...derivedPolicies] };
+  return { ...manifest, policies: [...hand, ...derivedPolicies] };
+}
+
+/**
+ * The hand-authored view of a manifest that may carry derived policies:
+ * what `harness export` emits and what the `.last-apply` manifest
+ * snapshot stores, so nothing that gets written out or re-read later
+ * carries a derived policy as if the operator had declared it. Returns
+ * the input object unchanged when it carries no derived policy.
+ */
+export function withoutDerivedPolicies(manifest: Manifest): Manifest {
+  const hand = handAuthoredPolicies(manifest);
+  if (hand.length === manifest.policies.length) return manifest;
+  return { ...manifest, policies: hand };
 }

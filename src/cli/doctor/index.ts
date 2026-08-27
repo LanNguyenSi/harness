@@ -29,8 +29,7 @@ import {
   checkSolutionAcceptanceProducer,
   checkTemplatePolicyDrift,
   checkTriggerBoundaryDrift,
-  checkWorkflowGateWeakOverlap,
-  checkWorkflowGateWiring,
+  checkWorkflows,
   createDefaultGitIgnoreProbe,
   type GitIgnoreProbe,
 } from "../validate/checks.js";
@@ -778,16 +777,16 @@ function buildWorkflows(manifest: Manifest): import("./types.js").WorkflowsSecti
   // validate's workflow-gate check nowhere, so a spawn: "required"
   // workflow with the merge gate unwired (or wired to the wrong hook
   // trigger, F5) showed green here even though `harness validate` errors
-  // on it. Delegates to the shared checks, mirroring `buildTemplateDrift`
-  // / `buildTriggerBoundaryDrift`.
-  const wiring = partitionDiagnosticsBySeverity(checkWorkflowGateWiring(manifest));
-  const weakOverlap = partitionDiagnosticsBySeverity(checkWorkflowGateWeakOverlap(manifest));
+  // on it. Delegates to the shared `checkWorkflows` aggregate (review
+  // round 3: the one list validate runs too, so the two cannot drift
+  // again), mirroring `buildTemplateDrift` / `buildTriggerBoundaryDrift`.
+  const workflowChecks = partitionDiagnosticsBySeverity(checkWorkflows(manifest));
   return {
     declared: manifest.workflows.length,
     templates: Object.keys(manifest.review_templates).length,
     entries,
-    errors: [...wiring.errors, ...weakOverlap.errors],
-    warnings: [...wiring.warnings, ...weakOverlap.warnings],
+    errors: workflowChecks.errors,
+    warnings: workflowChecks.warnings,
   };
 }
 

@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { atomicWriteFile } from "../io/atomic-write.js";
 import type { Manifest } from "../schema/index.js";
-import { isDerivedPolicy } from "../runtime/workflow-policies.js";
+import { withoutDerivedPolicies } from "../runtime/workflow-policies.js";
 import { loadManifest, type LoaderOptions } from "./loader.js";
 
 export interface ExportOptions extends LoaderOptions {
@@ -36,12 +36,10 @@ export function exportManifest(opts: ExportOptions = {}): ExportResult {
   // computed view — a derived policy re-imported via `harness init
   // --config <exported file>`-style workflows would then be a
   // hand-authored duplicate of something the next `harness apply` would
-  // derive again anyway. Filter them back out via `isDerivedPolicy`
-  // (identity-based; see workflow-policies.ts) before projecting.
-  const manifest: Manifest = {
-    ...loaded,
-    policies: loaded.policies.filter((p) => !isDerivedPolicy(p)),
-  };
+  // derive again anyway. `withoutDerivedPolicies` (identity-based; see
+  // workflow-policies.ts) restores the hand-authored view before
+  // projecting; `harness list policies` / `doctor` show the derived pair.
+  const manifest: Manifest = withoutDerivedPolicies(loaded);
   const projection: Record<string, unknown> = manifest as unknown as Record<string, unknown>;
   const projected = opts.sanitize ? sanitize(projection, os.homedir()) : projection;
 
