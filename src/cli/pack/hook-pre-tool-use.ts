@@ -28,6 +28,7 @@ import {
 } from "../../policies/index.js";
 import { renderProducers } from "../../policies/producers.js";
 import {
+  CLAUDE_CODE_HARNESS,
   checkOperatorApprovalMarkers,
   checkPersistedReport,
   defaultReportsDir,
@@ -704,6 +705,15 @@ export async function runPackHookPreToolUseCli(
     sessionId,
     payloadSessionId: event.session_id,
     permissionMode: event.permission_mode,
+    // Slice 2 (agent-tasks/57058364) moved these two out of the shared
+    // body and onto the call sites: the Codex hook calls the SAME
+    // `attemptAutoApproval` with `CODEX_HARNESS` and its own
+    // session-consistency evidence. Claude Code's evidence is the hook
+    // process's `$CLAUDE_CODE_SESSION_ID`, exactly what the body used
+    // to read directly, so the wording of every diagnostic on this path
+    // is unchanged.
+    harness: CLAUDE_CODE_HARNESS,
+    sessionConsistency: { kind: "env", variable: "CLAUDE_CODE_SESSION_ID" },
     packConfig: declared.config,
     reportsDir,
     markerForged,

@@ -30,10 +30,13 @@ import {
   type ApprovalCheckResult,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { findLatestParseError, renderMalformedSectionsNotice } from "../approve/understanding.js";
+import { CODEX_HARNESS } from "../../policy-packs/builtin/understanding-before-execution/auto-approve.js";
+import { attemptAutoApproval } from "./auto-approve-path.js";
 import {
   resolveGeneratedDir,
   writePendingApproval,
 } from "../../runtime/pending-approval.js";
+import { resolveManifestLedgerWriter, type LedgerWriteFn } from "../../runtime/ledger-writer.js";
 import { extractShellCommand } from "../../runtime/tool-name-aliases.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { type Manifest, type McpServer } from "../../schema/index.js";
@@ -47,6 +50,7 @@ import {
   parseConfigUx,
   pickString,
   readStdin,
+  resolveToolInput,
 } from "./hook-bootstrap.js";
 
 const PACK_NAME = "understanding-before-execution";
@@ -69,6 +73,14 @@ export interface PackHookCodexPreToolUseOptions extends LoaderOptions {
   manifest?: Manifest;
   /** Inject a fake ledger query (test). */
   ledgerQuery?: (sessionId: string) => Promise<LedgerEntry[] | { degraded: string }>;
+  /**
+   * Inject the audit-only ledger WRITER that the auto-approval path
+   * records its fact through (test injection). Mirrors the Claude
+   * hook's option of the same name. Absent, the writer is resolved from
+   * the manifest, lazily, and only on a call that already passed the
+   * opt-in and `when` checks.
+   */
+  writeLedger?: LedgerWriteFn;
 }
 
 export interface PackHookCodexPreToolUseResult {
@@ -83,6 +95,21 @@ interface CodexEventEnvelope {
   session_id?: unknown;
   tool_name?: unknown;
   raw_input?: unknown;
+  // Real Codex sends tool arguments as `tool_input` (live capture,
+  // Codex 0.150.1: the PreToolUse payload is shape-identical to Claude
+  // Code's). `raw_input` above is harness's older published portable
+  // shape, still accepted for shims built against it. `resolveToolInput`
+  // (hook-bootstrap.ts) is the single resolver both fields go through —
+  // the same one the sibling Codex PostToolUse hooks already use, so the
+  // two wire shapes cannot drift apart between hooks.
+  tool_input?: unknown;
+  // Payload `permission_mode` (slice 1's `auto_approve.when` is an
+  // allowlist over these literals) and `transcript_path` (the auto
+  // path's session-consistency input on Codex, which carries no
+  // session-id environment variable at all). Both stay `unknown`: the
+  // auto path does every type check itself, fail-closed.
+  permission_mode?: unknown;
+  transcript_path?: unknown;
   // One Codex-native synonym tolerated: some integrations pass
   // `tool` instead of `tool_name`. We deliberately do NOT alias
   // `event.id` to session_id — `id` in most event-bus shapes is the
@@ -307,10 +334,15 @@ export async function runPackHookCodexPreToolUseCli(
   // Audit-only ledger probe.
   const ledger = await checkLedger(manifest, sessionId, opts);
 
-  // Exception: read-only shell commands. Codex's documented hook
-  // envelope carries tool args in `raw_input`; if that field is absent
-  // or unclassifiable, fall through to the block path (fail-closed).
-  const commandStr = extractCodexShellCommand(event.raw_input);
+  // Exception: read-only shell commands. Real Codex carries tool args in
+  // `tool_input`, harness's older published envelope in `raw_input`;
+  // `resolveToolInput` prefers the former and falls back to the latter,
+  // so both wire shapes reach the same classifier (before this, a real
+  // Codex payload's command was invisible here and every read-only `ls`
+  // hit the block). If neither field carries a classifiable command —
+  // including a conflicting `command`/`cmd` pair — this stays `null` and
+  // the call falls through to the block path (fail-closed).
+  const commandStr = extractCodexShellCommand(resolveToolInput(event));
   if (
     commandStr !== null &&
     CODEX_SHELL_TOOLS.has(toolName) &&
@@ -347,6 +379,59 @@ export async function runPackHookCodexPreToolUseCli(
       approvalCheck: { approved: true, source: "recovery-commit", detail: diagnostic },
       diagnostic,
     };
+  }
+
+  // Step 9: the operator-opt-in auto-approval attempt (slice 2 of
+  // docs/decisions/2026-08-27-ug-auto-mode-approval.md, agent-tasks/
+  // 57058364). The SAME `attemptAutoApproval` the Claude hook calls, at
+  // the same place in the decision order: last, on a call that the
+  // marker check (source 1) and both exemptions above have already
+  // declined — i.e. exactly a call that would otherwise reach the final
+  // block. So a read-only `ls` or a recovery `git commit` mints nothing,
+  // and `max_age` starts counting from the call that actually needed an
+  // approval. Two arguments carry everything that is Codex-specific:
+  // `harness: CODEX_HARNESS` (the minted `approvedBy` reads
+  // `auto-mode:codex:<mode>`, so an audit can tell the runtimes apart)
+  // and the transcript-path session-consistency check, since a Codex
+  // hook process carries no session-id environment variable for the
+  // Claude variant to compare against.
+  //
+  // It never returns an allow of its own: the allow below comes from the
+  // auto path's own re-run of `checkOperatorApprovalMarkers`, the same
+  // authority source 1 consults, and is reported through this hook's
+  // ordinary `allowResult` with `source: "marker"`. Any failure falls
+  // through to the block with `markerExpired` / `markerForged` intact.
+  //
+  // Placed BEFORE the `.pending-approval` staging write below on
+  // purpose: a successful auto-approval must not leave this session id
+  // staged for a later arg-less `harness approve understanding` to
+  // resolve to.
+  //
+  // The ledger writer resolves lazily, exactly like the Claude hook: the
+  // thunk runs only after the auto path's own opt-in and `when` checks
+  // both pass, so an ordinary gated Codex call never resolves one.
+  const resolveAutoLedger = (): { write: LedgerWriteFn | null; reason?: string } => {
+    if (opts.writeLedger) return { write: opts.writeLedger };
+    const resolved = resolveManifestLedgerWriter(manifest, {
+      ...(opts.ledgerTimeoutMs !== undefined ? { ledgerTimeoutMs: opts.ledgerTimeoutMs } : {}),
+    });
+    return resolved.ok ? { write: resolved.write } : { write: null, reason: resolved.reason };
+  };
+  const auto = await attemptAutoApproval({
+    generatedDir,
+    sessionId,
+    payloadSessionId: event.session_id,
+    permissionMode: event.permission_mode,
+    harness: CODEX_HARNESS,
+    sessionConsistency: { kind: "transcript-path", transcriptPath: event.transcript_path },
+    packConfig: declared.config,
+    reportsDir,
+    markerForged,
+    stderr,
+    resolveLedger: resolveAutoLedger,
+  });
+  if (auto.approved) {
+    return allowResult(auto.detail, "marker", stderr);
   }
 
   // Stage the session id so `harness approve understanding`, run from

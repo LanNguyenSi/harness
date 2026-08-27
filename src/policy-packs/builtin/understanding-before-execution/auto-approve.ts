@@ -23,15 +23,28 @@
  */
 export const AUTO_APPROVED_BY_PREFIX = "auto-mode:";
 
-/** The only harness identifier slice 1 mints markers for. */
+/** The harness identifier the Claude Code PreToolUse hook mints markers for. */
 export const CLAUDE_CODE_HARNESS = "claude-code";
+
+/**
+ * The harness identifier the Codex PreToolUse hook mints markers for
+ * (slice 2 of the ADR: same auto path, same fail-closed conditions, a
+ * distinct `approvedBy` segment so an audit can tell the two runtimes
+ * apart). Deliberately NOT re-exported through
+ * `understanding-before-execution/index.ts`: its only consumer is
+ * `src/cli/pack/hook-codex-pre-tool-use.ts`, and widening the runtime
+ * shim's pinned public surface (tests/policy-packs/ube-export-surface.test.ts)
+ * is a separate, conscious act.
+ */
+export const CODEX_HARNESS = "codex";
 
 /**
  * Build the `approvedBy` value the hook writes into a signed auto-marker:
  * `auto-mode:<harness>:<mode>`, for example `auto-mode:claude-code:bypassPermissions`
- * ("Audit and doctor" in the ADR). Neither `harness` nor `mode` is
- * validated here; callers pass already-known-good values (the fixed
- * `CLAUDE_CODE_HARNESS` constant and a `when`-matched mode string).
+ * or `auto-mode:codex:bypassPermissions` ("Audit and doctor" in the ADR).
+ * Neither `harness` nor `mode` is validated here; callers pass
+ * already-known-good values (one of the fixed harness constants above and
+ * a `when`-matched mode string).
  */
 export function autoApprovedByFor(harness: string, mode: string): string {
   return `${AUTO_APPROVED_BY_PREFIX}${harness}:${mode}`;

@@ -28,15 +28,26 @@
 //
 // FAIL CLOSED ON EVERY MISSING INPUT. Absent opt-in, unlisted
 // `permission_mode`, a forged marker already detected at step 3, a
-// payload/environment session-id disagreement, a missing signing key, a
-// missing / already-consumed / foreign / invalid report: each one
-// declines with one stderr line and no write.
+// failed session-consistency check, a missing signing key, a missing /
+// already-consumed / foreign / invalid report: each one declines with
+// one stderr line and no write.
+//
+// TWO CALL SITES, ONE BODY (slice 2, agent-tasks/57058364).
+// `hook-codex-pre-tool-use.ts` calls this same function at the same
+// place in its own decision order. Everything that differs between the
+// two runtimes is an ARGUMENT, never a fork: the `harness` segment of
+// the minted `approvedBy`, and which session-consistency evidence the
+// payload can be held against (`sessionConsistency`). Claude Code
+// carries `$CLAUDE_CODE_SESSION_ID` in the hook environment; Codex
+// carries no session-id environment variable at all (measured live,
+// Codex 0.150.1) but does name a per-session `transcript_path` that
+// exists on disk at PreToolUse time.
 
 import * as fs from "node:fs";
+import * as path from "node:path";
 import {
   autoApprovedByFor,
   autoApprovedLedgerTagFor,
-  CLAUDE_CODE_HARNESS,
   checkOperatorApprovalMarkers,
   listPersistedReports,
   parseAutoApprove,
@@ -55,6 +66,31 @@ import { rewriteReportApproved, validatePersistedReport } from "../approve/under
 /** Source string recorded on the audit-only ledger fact. */
 export const AUTO_APPROVE_LEDGER_SOURCE = "harness-pack-hook-pre-tool-use";
 
+/**
+ * Which second input the payload's own `session_id` is held against
+ * (ADR hardening item 1), chosen by the calling hook because the
+ * evidence a runtime actually provides differs:
+ *
+ * - `env`: the hook process carries the harness's session id in an
+ *   environment variable (`$CLAUDE_CODE_SESSION_ID` for Claude Code).
+ *   The payload field must equal it.
+ * - `transcript-path`: the payload names the session's transcript file
+ *   and the hook checks that the file's NAME carries this session id
+ *   and that the file exists on disk (Codex, which carries no
+ *   session-id environment variable at all).
+ *
+ * NEITHER IS A SECURITY BOUNDARY, and the comments inside the check say
+ * so. Both are CONSISTENCY checks of the same class: an agent that can
+ * compose the payload can compose both fields, and on Codex it can also
+ * create a file through Bash. What they buy is that a forgery has to
+ * fake two agreeing inputs (plus, on Codex, a file at the named path)
+ * instead of one, and that the mismatch is forensically distinct in the
+ * stderr trail.
+ */
+export type SessionConsistencyCheck =
+  | { kind: "env"; variable: string }
+  | { kind: "transcript-path"; transcriptPath: unknown };
+
 export interface AutoApproveAttemptArgs {
   /** `harness.generated/`; `undefined` when it could not be resolved (injected-manifest test path). */
   generatedDir: string | undefined;
@@ -64,6 +100,14 @@ export interface AutoApproveAttemptArgs {
   payloadSessionId: unknown;
   /** RAW `permission_mode` from the event payload. */
   permissionMode: unknown;
+  /**
+   * Harness identifier baked into the minted marker's `approvedBy`
+   * (`auto-mode:<harness>:<mode>`). `CLAUDE_CODE_HARNESS` from the
+   * Claude Code hook, `CODEX_HARNESS` from the Codex hook.
+   */
+  harness: string;
+  /** Which session-consistency evidence this runtime offers; see {@link SessionConsistencyCheck}. */
+  sessionConsistency: SessionConsistencyCheck;
   /** The pack's `config` block, unparsed. */
   packConfig: unknown;
   /** Persisted-report directory. */
@@ -92,7 +136,7 @@ export type AutoApproveAttempt =
       approved: true;
       /** `checkOperatorApprovalMarkers` detail for the freshly written marker. */
       detail: string;
-      /** `auto-mode:claude-code:<mode>` as written into the signed marker. */
+      /** `auto-mode:<harness>:<mode>` as written into the signed marker. */
       approvedBy: string;
       markerPath: string;
       reportPath: string;
@@ -159,10 +203,12 @@ export async function attemptAutoApproval(
   }
 
   // (4) Session consistency (hardening item 1): the PAYLOAD's own
-  // `session_id` must be present and must equal the hook process's
-  // `$CLAUDE_CODE_SESSION_ID`. Compared against the payload field
-  // specifically, never the hook's env-fallback-resolved id, or the
-  // check would compare the environment with itself.
+  // `session_id` must be present and must agree with a SECOND input the
+  // hook reads for itself — the runtime's session-id environment
+  // variable on Claude Code, the named per-session transcript file on
+  // Codex. Compared against the payload field specifically, never the
+  // hook's env-fallback-resolved id, or the env variant would compare
+  // the environment with itself.
   const payloadSid =
     typeof args.payloadSessionId === "string" && args.payloadSessionId.length > 0
       ? args.payloadSessionId
@@ -171,16 +217,58 @@ export async function attemptAutoApproval(
     note("auto-approval declined: event payload carries no session_id");
     return decline("no payload session_id");
   }
-  const envSid = process.env.CLAUDE_CODE_SESSION_ID;
-  if (typeof envSid !== "string" || envSid.length === 0) {
-    note("auto-approval declined: $CLAUDE_CODE_SESSION_ID is not set in the hook environment");
-    return decline("no CLAUDE_CODE_SESSION_ID");
-  }
-  if (envSid !== payloadSid) {
-    note(
-      "auto-approval declined: payload session_id does not match $CLAUDE_CODE_SESSION_ID in the hook environment",
-    );
-    return decline("session id mismatch");
+  const consistency = args.sessionConsistency;
+  if (consistency.kind === "env") {
+    const envSid = process.env[consistency.variable];
+    if (typeof envSid !== "string" || envSid.length === 0) {
+      note(
+        `auto-approval declined: $${consistency.variable} is not set in the hook environment`,
+      );
+      return decline(`no ${consistency.variable}`);
+    }
+    if (envSid !== payloadSid) {
+      note(
+        `auto-approval declined: payload session_id does not match $${consistency.variable} in the hook environment`,
+      );
+      return decline("session id mismatch");
+    }
+  } else {
+    // Codex carries no session-id environment variable in the hook
+    // process (measured live, Codex 0.150.1: only CODEX_HOME,
+    // CODEX_MANAGED_BY_NPM, CODEX_MANAGED_PACKAGE_ROOT), so the env
+    // variant has no counterpart there. The payload's own
+    // `transcript_path` is the second input instead: Codex names the
+    // session's rollout file
+    // `<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-<timestamp>-<session_id>.jsonl`
+    // and the file already exists when PreToolUse fires.
+    //
+    // Three separately-diagnosed conditions, each fail-closed: the
+    // field is a non-empty string; its BASENAME names this exact
+    // session (`-<sid>.jsonl`, or a bare `<sid>.jsonl` for a shim that
+    // drops the `rollout-<timestamp>` prefix); and the file EXISTS.
+    // The existence check is deliberately not a content check: reading
+    // and parsing the rollout would make the hook depend on Codex's
+    // internal transcript format for a check that is not a boundary
+    // anyway (see SessionConsistencyCheck).
+    const transcriptPath =
+      typeof consistency.transcriptPath === "string" && consistency.transcriptPath.length > 0
+        ? consistency.transcriptPath
+        : null;
+    if (transcriptPath === null) {
+      note("auto-approval declined: event payload carries no transcript_path");
+      return decline("no transcript_path");
+    }
+    const base = path.basename(transcriptPath);
+    if (base !== `${payloadSid}.jsonl` && !base.endsWith(`-${payloadSid}.jsonl`)) {
+      note(
+        `auto-approval declined: transcript_path does not name session ${payloadSid} (basename ${base})`,
+      );
+      return decline("transcript_path session mismatch");
+    }
+    if (!fs.existsSync(transcriptPath)) {
+      note(`auto-approval declined: transcript_path does not exist (${transcriptPath})`);
+      return decline("transcript_path missing");
+    }
   }
 
   // (5) Key precheck BEFORE any write (hardening item 5). The shared
@@ -244,7 +332,7 @@ export async function attemptAutoApproval(
   // BEFORE the approval rewrite, exactly as the approve CLI computes it.
   const reportContentHash = sha256Hex(raw);
   const approvedAt = new Date().toISOString();
-  const approvedBy = autoApprovedByFor(CLAUDE_CODE_HARNESS, modeStr);
+  const approvedBy = autoApprovedByFor(args.harness, modeStr);
 
   // CONSUME FIRST, then sign. If the marker write fails after this, the
   // report is spent and no marker exists: the call blocks and the same
