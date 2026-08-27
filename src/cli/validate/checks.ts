@@ -15,6 +15,11 @@ import {
   shippedOperatorOnlyPolicyNames,
 } from "../init/templates.js";
 import { isPolicyInterceptCommand, requiredHookBudgetMs } from "../policy/intercept.js";
+import { PACK_NAME as UNDERSTANDING_BEFORE_EXECUTION_PACK_NAME } from "../../policy-packs/builtin/understanding-before-execution.js";
+import {
+  isMeasuredPermissionMode,
+  measuredPermissionModeLiterals,
+} from "../../policy-packs/builtin/understanding-before-execution/measured-permission-modes.js";
 import type { Hook, Manifest } from "../../schema/index.js";
 import { DEFAULT_SAFE_DELETION_ROOTS } from "../../schema/risk.js";
 import {
@@ -1276,6 +1281,46 @@ function checkPolicyPackConfigsAsDiagnostics(manifest: Manifest): Diagnostic[] {
   });
 }
 
+// Slice 2 AC 3 (docs/decisions/2026-08-27-ug-auto-mode-approval.md): every
+// literal in `understanding-before-execution`'s `auto_approve.when` must be
+// backed by a checked-in dogfood fixture that shows SOME harness emitting
+// that exact `permission_mode` value; see
+// `src/policy-packs/builtin/understanding-before-execution/measured-permission-modes.ts`
+// for the registry and the sync test that keeps it honest against the
+// fixtures. Runs independently of `checkPolicyPackConfigsAsDiagnostics`
+// (the zod schema check above already reports shape errors for a
+// malformed `auto_approve` block) — this only inspects `when` when it is
+// already shaped as a non-empty array of strings, so it never double
+// reports and never throws on a malformed config.
+function checkUnderstandingBeforeExecutionAutoApproveMeasured(
+  manifest: Manifest,
+): Diagnostic[] {
+  const diags: Diagnostic[] = [];
+  manifest.policy_packs.forEach((pack, packIndex) => {
+    if (!pack.enabled) return;
+    if (pack.name !== UNDERSTANDING_BEFORE_EXECUTION_PACK_NAME) return;
+    const config = pack.config as Record<string, unknown> | undefined;
+    const autoApprove = config?.["auto_approve"];
+    if (typeof autoApprove !== "object" || autoApprove === null) return;
+    const when = (autoApprove as Record<string, unknown>)["when"];
+    if (!Array.isArray(when)) return;
+    if (!when.every((literal) => typeof literal === "string")) return;
+    const measured = measuredPermissionModeLiterals().join(", ");
+    when.forEach((literal: string, literalIndex: number) => {
+      if (isMeasuredPermissionMode(literal)) return;
+      diags.push({
+        severity: "error",
+        path: `policy_packs[${packIndex}].config.auto_approve.when[${literalIndex}]`,
+        message:
+          `auto_approve.when literal "${literal}" has no checked-in dogfood fixture showing a ` +
+          `harness emitting it (measured: ${measured}); see ` +
+          `docs/decisions/2026-08-27-ug-auto-mode-approval.md, Slice 2`,
+      });
+    });
+  });
+  return diags;
+}
+
 export function runAssetChecks(
   manifest: Manifest,
   opts: CheckOptions = {},
@@ -1295,6 +1340,7 @@ export function runAssetChecks(
     ),
     ...checkPolicyPacks(manifest),
     ...checkPolicyPackConfigsAsDiagnostics(manifest),
+    ...checkUnderstandingBeforeExecutionAutoApproveMeasured(manifest),
     ...checkPolicyRiskWithoutEnvScope(manifest),
     ...checkSafeDeletionRootsSyntax(manifest),
     ...checkPolicySelfAttestation(manifest),
