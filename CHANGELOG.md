@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.50.0] - 2026-08-27
+
 ### Security
 
 - **The understanding gate's persisted-report approval path no longer carries
