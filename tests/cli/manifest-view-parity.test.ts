@@ -196,11 +196,17 @@ describeSuite("manifest view parity: derived-view readers", () => {
     const manifestsSeen = runAssetChecksMock.mock.calls.map(
       (call: unknown[]) => call[0] as { policies: ReadonlyArray<{ name: string }> },
     );
-    expect(manifestsSeen.length).toBeGreaterThan(0);
-    const proposedCall = manifestsSeen.find((m) =>
-      DERIVED.every((name) => names(m.policies).includes(name)),
-    );
-    expect(proposedCall).toBeDefined();
+    // add calls the gate twice, proposed manifest first, then the baseline
+    // (src/cli/add/index.ts). A `.find()` over all calls would be satisfied
+    // by the baseline call alone, so each call is pinned individually: the
+    // first call is the proposed manifest, and every call must carry the
+    // derived pair (review round 4).
+    expect(manifestsSeen.length).toBe(2);
+    for (const [index, m] of manifestsSeen.entries()) {
+      for (const name of DERIVED) {
+        expect(names(m.policies), `runAssetChecks call ${index}`).toContain(name);
+      }
+    }
   });
 
   it("diff --since: both sides derived, so an unchanged manifest diffs clean", () => {

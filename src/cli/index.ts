@@ -1065,7 +1065,8 @@ export function buildProgram(opts: RunOptions = {}): Command {
           stderr(
             `(forced removal disables the workflows[]-derived merge gate for: ` +
               `${result.derivedGateReferences.join(", ")}; harness policy intercept ` +
-              `no longer blocks merges for ${result.derivedGateReferences.length === 1 ? "this workflow" : "these workflows"})\n`,
+              `no longer blocks merges for ${result.derivedGateReferences.length === 1 ? "this workflow" : "these workflows"} ` +
+              `and for any other workflow sharing the same merge surface)\n`,
           );
         }
         if (options.dryRun) {
