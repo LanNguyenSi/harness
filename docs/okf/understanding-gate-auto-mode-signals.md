@@ -3,8 +3,9 @@ type: overview
 title: Understanding gate, auto-mode signal sources (measured)
 description: What signals exist for detecting an agent's own permission/auto-approval mode across Claude Code, Codex, and opencode, measured where possible, doc-only where not, with a trust-class table. Covers both launch shapes for Claude Code, headless and interactive, plus how a hook ask resolves in each and what a subagent's tool call looks like to the same hook. The rule and the decision on which signals gate anything live in the ADR, not here.
 tags: [understanding-gate, permission-mode, auto-mode, hooks, measurement, trust-boundary]
-timestamp: 2026-08-27T17:32:41Z
+timestamp: 2026-08-27T17:54:07Z
 sources:
+  - src/cli/pack/auto-approve-path.ts
   - dogfood/ug-auto-mode-signals/README.md
   - src/cli/pack/hook-pre-tool-use.ts
   - src/cli/pack/hook-bootstrap.ts
@@ -116,13 +117,19 @@ either environment. Full env dump in the README's section (c).
 ### What harness reads today
 
 A repo-wide grep for `permission_mode|permissionMode|permission-mode`
-(the hyphenated form is the CLI flag) finds three sites, none of them the
-understanding-gate enforcement path:
+(the hyphenated form is the CLI flag) finds the sites below. Since slice 1
+of the ADR (agent-tasks `74b4b17d`) exactly one of them is gate logic, and
+it is confined to the last step of the hook's decision order:
 
-- `src/cli/pack/hook-pre-tool-use.ts` and `src/cli/pack/hook-bootstrap.ts`
-  (the understanding-before-execution gate's own hook and its shared
-  payload-parsing helpers): zero occurrences. The gate does not read this
-  field at all today.
+- `src/cli/pack/hook-pre-tool-use.ts` reads `permission_mode` from the
+  payload into its event type and hands it, together with the payload's
+  raw `session_id`, to `src/cli/pack/auto-approve-path.ts`, the
+  decision-order step 9 auto-approval attempt that runs only when the
+  marker check and every exemption branch have declined and only when
+  the pack config carries `auto_approve`. No other decision path
+  consults the field; `src/cli/pack/hook-bootstrap.ts` (the shared
+  payload-parsing helpers) still has zero occurrences. Before that slice
+  the gate did not read the field at all.
 - `src/cli/smoke/runner.ts:69-70`: `CLAUDE_FLAGS` hard-codes
   `--permission-mode bypassPermissions` as an argv flag the smoke driver
   passes to the `claude -p` subprocess it spawns; this sets the mode, it

@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Understanding gate: operator opt-in auto-approval for allowlisted
+  permission modes** (agent-tasks `74b4b17d`, slice 1 of the ADR
+  `docs/decisions/2026-08-27-ug-auto-mode-approval.md`). A new strict
+  pack-config block `auto_approve: { when: [...], require_report: true }`
+  (`require_report: false`, unknown keys and an empty `when` are
+  `harness validate` errors) lets the `understanding-before-execution`
+  PreToolUse hook write the signed SESSION approval marker itself, with
+  `approvedBy: auto-mode:claude-code:<mode>`, as the last step of its
+  decision order: only after the ordinary marker check, the read-only
+  Bash exemption, the recovery commit and the escape `ask` have each
+  declined, and only when the payload's `permission_mode` is in `when`,
+  the payload `session_id` equals the hook's `$CLAUDE_CODE_SESSION_ID`,
+  the signing key already exists (the hook never creates one), no forged
+  marker was seen, and the newest report bound to the session is exactly
+  `pending` and passes the approve CLI's own validation. The report is
+  consumed (flipped to `approved`, so one report mints at most once), the
+  audit-only ledger fact `understanding-auto-approved:<sid>` is recorded,
+  the `.pending-approval` staging entry is cleared, and the verdict comes
+  from re-running the same marker check. Every missing input fails
+  closed to today's block; the hook's fail-open infrastructure contract
+  is unchanged. New module `src/cli/pack/auto-approve-path.ts`,
+  `signingKeyExists` (non-creating) in `src/runtime/approval-signing.ts`,
+  `selectNewestStrictSessionReport` (no tolerant fallback, newest strict
+  match only) in `persisted-reports.ts`; `validatePersistedReport` and
+  `rewriteReportApproved` are exported from the approve CLI and reused,
+  not copied. Pinned by the ADR's negative controls and mutation probes
+  in `tests/cli/pack-hook-pre-tool-use-auto-approve.test.ts`.
+- **Dogfood: interactive `bypassPermissions` and subagent hook-payload
+  captures** (agent-tasks `74b4b17d`): `dogfood/ug-auto-mode-signals/`
+  gains `interactive-capture.sh`, `interactive-ask-probe.sh` and
+  `subagent-capture.sh` with redacted fixtures; results and the closed
+  "unverified" items are recorded in
+  `docs/okf/understanding-gate-auto-mode-signals.md`. A hook
+  `permissionDecision: "ask"` in an interactive `bypassPermissions`
+  session surfaces a real operator prompt (no auto-allow), so the ADR's
+  conditional escape-path `deny` branch is not needed for that mode.
+
+### Security
+
+- **The honest trust model in `src/runtime/approval-signing.ts` names the
+  hook as a second marker-minting route** (agent-tasks `74b4b17d`): with
+  `auto_approve` opted in, the forgery residual is a disjunction (read
+  the key, or make the hook sign for you) rather than the previous
+  conjunction. Reach is post-approval only (invoking the hook is a gated
+  Bash call before approval), so this is not an escalation over the
+  existing post-approval write class; it is named rather than argued
+  away. The Codex hook does not run the auto path yet (slice 2,
+  `docs/okf/codex-adapter-parity-gaps.md` gap 13).
+
 ## [0.50.0] - 2026-08-27
 
 ### Security

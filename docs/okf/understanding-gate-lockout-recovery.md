@@ -3,8 +3,9 @@ type: runbook
 title: Understanding-gate lockout recovery
 description: Operator procedure to unblock a session locked by the understanding-before-execution PreToolUse gate via `harness approve understanding`, including the 6-tier session-id resolution and the expiry semantics that re-arm the gate.
 tags: [runbook, understanding-gate, lockout, recovery, operator]
-timestamp: 2026-08-27T07:45:00Z
+timestamp: 2026-08-27T17:54:07Z
 sources:
+  - src/cli/pack/auto-approve-path.ts
   - src/cli/approve/understanding.ts
   - src/cli/index.ts
   - src/runtime/session-id.ts
@@ -36,6 +37,8 @@ The blocker has exactly one approval authority and consults one evidence record 
 2. **Persisted JSON report** under the reports dir: audit evidence only, never an approval source. Until task 7402301d an `approvalStatus: "approved"` report was a second, equal source ("either approves"), and it was unsigned, so one unsigned JSON write into the reports dir forged an approval; now a report whose on-disk status says approved but that no validly-signed marker backs is rejected with the distinct block reason `unsigned persisted-report approval rejected: ...` (the counterpart of `forged/unsigned marker rejected`). Consequence for recovery: the standalone `understanding-gate approve` CLI flips the report but writes no marker and therefore does not unblock a harnessed session; only `harness approve understanding` does.
 
 You are locked out because no fresh, validly-signed marker exists for this session/task: it was never approved, it was deleted at a task boundary, it aged past `max_age` (since task 7402301d a still-approved persisted report no longer keeps the gate open past `max_age`), the signing key was rotated, or the approval only ever flipped the report.
+
+Under the pack's opt-in `auto_approve` block (agent-tasks/74b4b17d, ADR `docs/decisions/2026-08-27-ug-auto-mode-approval.md`) a second writer can end the lockout without an operator step: when the session runs in a `permission_mode` listed in `auto_approve.when` and the newest report bound to this session is `pending` and passes the approve CLI's validation, the PreToolUse hook mints the session marker itself on the first gated call (`src/cli/pack/auto-approve-path.ts`, `approvedBy: auto-mode:claude-code:<mode>`) and consumes that report. A lockout that persists in auto mode therefore means one of: the mode is not in `when` (or the block is absent or malformed, which reads as "not opted in"), no `pending` report exists for this session (an older, already-consumed one does not re-arm; a fresh report does), the signing key is absent (the hook never creates it, `harness init` or `harness approve` does), the payload `session_id` and the hook's `$CLAUDE_CODE_SESSION_ID` disagree, or step 3 saw a forged marker. The hook's stderr names which one with an `auto-approval declined: ...` line; `harness doctor` lists auto approvals found in `.approvals/` and `harness audit` shows the `understanding-auto-approved:<sid>` fact.
 
 **Where these paths actually are.** `<generatedDir>` = `harness.generated/` next to the manifest (`src/io/generated-dir.ts`). The manifest defaults to `~/.harness/harness.yaml` (home-dir precedence in `src/runtime/home-dir.ts`: explicit `homeDir` → `$HARNESS_HOME` → `~/.harness/` if it exists → legacy `~/.claude/` if it carries `harness.yaml` or `harness.generated/` → `~/.harness/` create-on-first-use). So a default install has markers in `~/.harness/harness.generated/.approvals/`. The reports dir resolves `--reports-dir` flag → `$UNDERSTANDING_GATE_REPORT_DIR` env (`REPORTS_DIR_ENV` constant) → `<manifest-dir>/.understanding-gate/reports`, i.e. typically `~/.harness/.understanding-gate/reports` (`defaultReportsDir`, anchored on `path.dirname(resolvePaths(opts).base)` in `approveUnderstanding`).
 

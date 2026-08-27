@@ -2,6 +2,19 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-08-27T17:54:07Z, understanding-gate auto-approval, slice 1 code half
+  (agent-tasks `74b4b17d`): the PreToolUse hook gained the opt-in
+  `auto_approve` path at the end of its decision order
+  (`src/cli/pack/auto-approve-path.ts`). Five docs updated for it rather
+  than only re-stamped: `understanding-gate-auto-mode-signals.md` ("What
+  harness reads today" now names the one gate site that reads
+  `permission_mode`), `evidence-ledger-trust-boundary.md` (the marker has
+  a second, opt-in writer; what "operator-only" means now),
+  `gate-fail-posture-matrix.md` (the auto path is a fail-closed last
+  branch, the infrastructure fail-open contract is untouched),
+  `understanding-gate-lockout-recovery.md` (what a persisting lockout
+  means under auto mode), `codex-adapter-parity-gaps.md` (new gap 13: the
+  auto path is Claude-only until slice 2).
 - 2026-08-27T17:32:41Z, interactive and subagent captures for the auto-mode
   signal doc (agent-tasks `74b4b17d`, ADR slice 1 acceptance criteria 8
   and 9 plus the subagent assumption): three probes added to

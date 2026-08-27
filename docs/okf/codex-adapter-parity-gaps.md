@@ -3,8 +3,10 @@ type: module
 title: Codex runtime adapter — parity gaps vs Claude Code
 description: What harness's Codex runtime adapter is, the enumerated behavioral gaps vs the Claude Code first-class target (former headline gap — no Codex PostToolUse hook — closed by task a1348c89; the active-claim tracker / stay-in-scope reminder gap closed by task cf4cdc93; current top gap is the un-translated permission-profile / sandbox stanza, gap 4), and the Codex wire-format contract.
 tags: [codex, runtime-adapter, parity, hooks]
-timestamp: 2026-08-17T19:29:55Z
+timestamp: 2026-08-27T17:54:07Z
 sources:
+  - src/cli/pack/hook-pre-tool-use.ts
+  - src/cli/pack/auto-approve-path.ts
   - src/policy-packs/builtin/understanding-before-execution.ts
   - src/policy-packs/builtin/understanding-before-execution/post-tool-use-boundary.ts
   - src/policy-packs/builtin/understanding-before-execution/task-markers.ts
@@ -74,6 +76,8 @@ Cross-runtime approval state is shared by design: both runtimes persist reports 
 11. **`path_match` / `bash_match` are not projected into the Codex TOML** — the generator warns per hook ("script-side filter only", generate-codex-config.ts lines 192–203). Explicitly NOT a parity gap: the Claude Code projection in generate-settings.ts treats them identically as script-enforced documentation; the Codex warning just makes the silent drop visible.
 
 12. **CLOSED (task bea04a03) — `approval_lifecycle.expire_on_bash_match` is now routed to the PostToolUse hook on BOTH runtimes.** `postToolUseMatchPattern` (Claude) and `codexPostToolUseMatchPattern` (Codex), which build the `match`/`matcher` field for the Claude `post-tool-use` hook and the Codex `codex-post-tool-use` hook added by gap 1, each take a new `includeBash` parameter: when `resolveExpireOnBashMatchConfigured(pack)` finds at least one non-empty `expire_on_bash_match` pattern, the emitted list is widened with `Bash` (Claude) or the full Codex shell-alias set `Bash`/`shell`/`exec_command`/`functions.exec_command` (Codex), deduplicated against whatever `expire_on_tool_match` already lists (`understanding-before-execution.ts`). `resolveExpireOnToolMatch`'s own `emitHook` decision doesn't change, but the caller now ORs it with the bash-configured flag, so the hook is emitted (not silently suppressed) even when `expire_on_tool_match` is explicitly empty and only `expire_on_bash_match` is set — a case that used to drop the PostToolUse hook entirely. The widened tool names are never folded into `expire_on_tool_match`'s own tool-name semantics: `matchPostToolUseBoundary`'s hook-body logic (`post-tool-use-boundary.ts`) still classifies a matched Bash/shell call as a bash-regex match (`bashToolNames.has(toolName)`), never a tool-name match. Generator-layer + end-to-end tests (real `expandPolicyPacks` / `generateCodexConfig` output, the hook CLI invoked through the actual emitted matcher) live in `tests/policy-packs/expand.test.ts`, `tests/cli/apply/generate-codex-config.test.ts`, `tests/cli/pack-hook-post-tool-use.test.ts`, and `tests/cli/pack-hook-codex-post-tool-use.test.ts`.
+
+13. **OPEN (slice 2, agent-tasks 57058364): the opt-in auto-approval path is Claude-only.** Since agent-tasks/74b4b17d `harness pack hook pre-tool-use` runs the `auto_approve` attempt as the last step of its decision order (`src/cli/pack/auto-approve-path.ts`: allowlisted payload `permission_mode`, strict-session `pending` report, key precheck, signed session marker with `approvedBy: auto-mode:claude-code:<mode>`); `hook-codex-pre-tool-use.ts` does not call it, so a Codex session in an allowlisted mode still ends in the plain block until slice 2 measures Codex's live `permission_mode` values and wires the shared path with the `codex` prefix. The marker contract itself stays shared (gap 2): a session marker minted by the Claude hook is honored by the Codex hook for the same session id, and the `auto_approve` schema block is one config for both.
 
 ## Wire-format differences (Codex vs Claude Code)
 
