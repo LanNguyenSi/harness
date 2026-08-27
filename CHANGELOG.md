@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.51.0] - 2026-08-27
+
 ### Added
 
 - **Understanding gate: operator opt-in auto-approval for allowlisted
