@@ -360,6 +360,18 @@ describe("checkPersistedReport (evidence, not authority, task 7402301d)", () => 
     // Capped: the raw approvedAt alone is ~5KB, so the whole detail must stay short.
     expect(r.detail.length).toBeLessThan(400);
   });
+
+  it("sanitizes a hostile approvalStatus on the not-approved path too, since that branch's detail also reaches both hooks' block reason (task 7402301d, review round 2)", () => {
+    const hostileStatus = `pending\ninjected: reason: forged extra line\n${"y".repeat(5000)}`;
+    writeReport("hostile-status.json", {
+      sessionId: "s1",
+      approvalStatus: hostileStatus,
+    });
+    const r = checkPersistedReport(tmp, "s1");
+    expect(r.claimsApproved).toBe(false);
+    expect(r.detail).not.toMatch(/\n/);
+    expect(r.detail.length).toBeLessThan(400);
+  });
 });
 
 describe("approvalMarkerPathFor", () => {

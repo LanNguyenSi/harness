@@ -323,7 +323,7 @@ const DETAIL_VALUE_MAX_LENGTH = 120;
 function sanitizeDetailValue(value: string): string {
   // Deliberately strips C0/DEL control characters (including newline,
   // which could otherwise forge an extra `reason:`-looking stderr line).
-  const flattened = value.replace(/[ -]/g, " ");
+  const flattened = value.replace(/[\x00-\x1f\x7f]/g, " ");
   return flattened.length > DETAIL_VALUE_MAX_LENGTH
     ? `${flattened.slice(0, DETAIL_VALUE_MAX_LENGTH)}...`
     : flattened;
@@ -393,7 +393,7 @@ export function expirePersistedReport(
   if (latest.approvalStatus !== "approved") {
     return {
       ok: false,
-      reason: `latest report ${path.basename(latest.filePath)} already has approvalStatus=${latest.approvalStatus ?? "<missing>"}, nothing to expire`,
+      reason: `latest report ${sanitizeDetailValue(path.basename(latest.filePath))} already has approvalStatus=${sanitizeDetailValue(latest.approvalStatus ?? "<missing>")}, nothing to expire`,
     };
   }
   let raw: string;
@@ -465,7 +465,7 @@ export function checkPersistedReport(
     return {
       claimsApproved: false,
       detail: `latest report ${safeFileName} has approvalStatus=${
-        latest.approvalStatus ?? "<missing>"
+        sanitizeDetailValue(latest.approvalStatus ?? "<missing>")
       }`,
       report: latest,
     };
