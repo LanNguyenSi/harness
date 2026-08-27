@@ -2319,4 +2319,60 @@ workflows:
       result.manifest?.policies.filter((p) => p.name === "workflow:ship:review-before-merge"),
     ).toHaveLength(2);
   });
+
+  // F3 (review round 3 follow-up, 99f47307 Slice 1): the collision check
+  // fires on a NAME match regardless of surface. The test above only
+  // covers the different-surface case; this one is the same-surface case
+  // (also caught by checkWorkflowGateWeakOverlap, since a same-surface,
+  // weaker hand policy is an overlap too), and pins the corrected message
+  // wording: "it does not stand in for the derived gate", not the old
+  // "it does not intercept the same surface" (which was false here).
+  it("errors when a hand-authored policy name collides with a derived policy name on the SAME surface", () => {
+    const wiredHooks = `hooks:
+  - name: require-review-evidence
+    event: PreToolUse
+    match: "mcp__agent-tasks__pull_requests_merge"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+  - name: require-review-evidence-bash
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+`;
+    const sameSurfaceColliding = `policies:
+  - name: workflow:ship:review-before-merge
+    description: Same name as the derived gate, same surface, weaker enforcement.
+    trigger:
+      event: PreToolUse
+      match: "mcp__agent-tasks__pull_requests_merge"
+      extract:
+        PR_NUMBER: "toolArgs.prNumber"
+    requires:
+      ledger_tag: "review:\${PR_NUMBER}"
+    hook: require-review-evidence
+    enforcement: warn
+`;
+    const home = writeFixture({
+      "harness.yaml": `version: 1\n${WORKFLOW_REQUIRED}${sameSurfaceColliding}${wiredHooks}`,
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const hit = result.diagnostics.find(
+      (d) => d.severity === "error" && /collides with the policy of the same name/.test(d.message),
+    );
+    expect(hit).toBeDefined();
+    expect(hit?.message).toContain("does not stand in for the derived gate");
+    expect(hit?.message).not.toContain("does not intercept the same surface");
+    // Fail-safe: the derived gate is still there (two entries share the name).
+    expect(
+      result.manifest?.policies.filter((p) => p.name === "workflow:ship:review-before-merge"),
+    ).toHaveLength(2);
+  });
 });

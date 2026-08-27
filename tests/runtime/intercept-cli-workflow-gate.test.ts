@@ -273,4 +273,47 @@ describe("runInterceptCli: workflow-derived merge gate (99f47307 Slice 1, AC1/AC
     const parsed = JSON.parse(output().trim());
     expect(parsed.decision).toBe("block");
   });
+
+  // Review round 3 follow-up (F3, 99f47307 Slice 1): the case
+  // `checkWorkflowDerivedNameCollision` (src/cli/validate/checks.ts)
+  // errors on at the config level (a hand-authored `enforcement: warn`
+  // policy on the SAME surface AND the SAME NAME as the derived gate)
+  // exercised end to end through the real runtime: both policies are
+  // enforced (name collision is a validate-time authoring error, not a
+  // runtime dedupe), so the derived block gate still fires even though
+  // its name resolves to the hand-authored policy in every by-name
+  // reader. `result.blocked` is `runInterceptCli`'s surface for
+  // `blockJson !== null` (src/cli/policy/intercept.ts).
+  it("F3: a same-NAME, same-surface warn hand policy still leaves the derived block gate enforced (blockJson != null)", async () => {
+    const collidingWarnPolicy = `policies:
+  - name: workflow:ship:review-before-merge
+    description: Same name AND same surface as the derived gate, but weaker.
+    trigger:
+      event: PreToolUse
+      match: "mcp__agent-tasks__pull_requests_merge"
+      extract:
+        PR_NUMBER: "toolArgs.prNumber"
+    requires:
+      ledger_tag: "review:\${PR_NUMBER}"
+    hook: require-review-evidence
+    enforcement: warn
+`;
+    const { homeDir, configPath } = writeManifest(
+      `version: 1\n${workflowYaml("required")}${collidingWarnPolicy}${WIRED_HOOKS_YAML}`,
+    );
+    const { stream: out, output } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(MCP_MERGE_EVENT),
+      stdout: out,
+      homeDir,
+      configPath,
+      ledger: EMPTY_LEDGER,
+    });
+    expect(result.blocked).toBe(true);
+    const denying = result.decisions.find((d) => d.outcome === "deny");
+    expect(denying).toBeDefined();
+    expect(denying?.policyName).toBe("workflow:ship:review-before-merge");
+    const parsed = JSON.parse(output().trim());
+    expect(parsed.decision).toBe("block");
+  });
 });

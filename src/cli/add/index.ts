@@ -81,7 +81,13 @@ export async function add(action: AddEntry, opts: AddOptions = {}): Promise<AddR
   // folded in), the same view `harness validate` checks, so the gate here
   // and validate cannot disagree about what "declared" means (review round
   // 3, 99f47307 Slice 1); the derived entries cancel out in the baseline
-  // comparison unless the add itself changes what is derived.
+  // comparison unless the add itself changes what is derived. This is
+  // consistency-only, not a behavioral difference today: no error-severity
+  // check in runAssetChecks reads manifest.policies, so no fixture that
+  // parseManifest alone would pass and withDerivedPolicies would fail is
+  // known to exist right now (review round 3, F2). The derived view is
+  // kept as a parity pin against validate, and to stay correct the moment
+  // a future check does read manifest.policies at error severity.
   const manifest = withDerivedPolicies(parseManifest(parseYaml(proposed)));
   // gitIgnoreProbe stays null: the knob-ignored check is warning-only and
   // this gate consumes errors, so the git spawn would be wasted work.

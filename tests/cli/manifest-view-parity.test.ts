@@ -16,7 +16,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe as describeSuite, expect, it } from "vitest";
+import { afterEach, describe as describeSuite, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { apply, GENERATED_DIRNAME } from "../../src/cli/apply/index.js";
 import { describe } from "../../src/cli/describe.js";
@@ -30,6 +30,20 @@ import { loadManifest } from "../../src/cli/loader.js";
 import { validate } from "../../src/cli/validate/index.js";
 import { readLastApply } from "../../src/io/last-apply.js";
 import { isDerivedPolicy } from "../../src/runtime/workflow-policies.js";
+
+// F2 (review round 3, 99f47307 Slice 1): `runAssetChecks` (a named ESM
+// export) can't be `vi.spyOn`-ed directly ("Cannot redefine property"), so
+// this wraps it with `vi.fn` over the real implementation via `vi.mock` +
+// `importOriginal` (see reference_vitest_spyon_esm_named_export). Behavior
+// is unchanged (the wrapped fn still runs the real checks); this only lets
+// the `add` test below inspect which manifest each call received.
+vi.mock("../../src/cli/validate/checks.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/cli/validate/checks.js")>();
+  return { ...actual, runAssetChecks: vi.fn(actual.runAssetChecks) };
+});
+const { add } = await import("../../src/cli/add/index.js");
+const { runAssetChecks } = await import("../../src/cli/validate/checks.js");
+const runAssetChecksMock = runAssetChecks as unknown as ReturnType<typeof vi.fn>;
 
 const DERIVED = ["workflow:ship:review-before-merge", "workflow:ship:review-before-merge-bash"];
 const HAND = ["preflight-before-investigation-lite"];
@@ -161,6 +175,32 @@ describeSuite("manifest view parity: derived-view readers", () => {
     const { home, configPath } = fixture();
     const r = dryRun("merge it", { homeDir: home, configPath, tool: "Bash", toolArgs: '{"command":"gh pr merge 1"}' });
     expect(r.report.matchingPolicies.map((p) => p.name)).toContain("workflow:ship:review-before-merge-bash");
+  });
+
+  // F2 (review round 3, 99f47307 Slice 1): the previous "add's asset gate"
+  // header claim had no test that actually reads which manifest `add`
+  // hands to `runAssetChecks`. Spies on the real call so a regression to
+  // `parseManifest` (dropping `withDerivedPolicies`) turns this red: the
+  // derived pair would be absent from the manifest the gate evaluated.
+  it("add: the asset gate's proposed-manifest call carries the derived pair", async () => {
+    const { home, configPath } = fixture();
+    runAssetChecksMock.mockClear();
+    const r = await add(
+      {
+        type: "hook",
+        entry: { name: "unrelated", event: "SessionStart", command: "/usr/bin/true", blocking: false },
+      },
+      { configPath, homeDir: home },
+    );
+    expect(r.applied).toBe(true);
+    const manifestsSeen = runAssetChecksMock.mock.calls.map(
+      (call: unknown[]) => call[0] as { policies: ReadonlyArray<{ name: string }> },
+    );
+    expect(manifestsSeen.length).toBeGreaterThan(0);
+    const proposedCall = manifestsSeen.find((m) =>
+      DERIVED.every((name) => names(m.policies).includes(name)),
+    );
+    expect(proposedCall).toBeDefined();
   });
 
   it("diff --since: both sides derived, so an unchanged manifest diffs clean", () => {

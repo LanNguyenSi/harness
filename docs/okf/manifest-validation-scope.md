@@ -3,7 +3,7 @@ type: invariant
 title: Managed mutations validate the whole manifest
 description: harness add/remove schema-validate the ENTIRE proposed harness.yaml (no baseline diff), so a pre-existing schema error anywhere blocks an unrelated call; add's asset gate DOES baseline-diff, so pre-existing asset errors warn instead of block, while remove runs no asset checks at all.
 tags: [add, remove, validation, manifest, footgun]
-timestamp: 2026-08-27T07:45:00Z
+timestamp: 2026-08-27T08:12:00Z
 sources:
   - src/cli/add/index.ts
   - src/cli/remove/index.ts
@@ -22,7 +22,7 @@ sources:
 
 2. **Asset gate** (add ONLY, `src/cli/add/index.ts:77-125`): `runAssetChecks(withDerivedPolicies(parseManifest(parseYaml(proposed))))` also runs against the **full manifest** (in its derived view, `workflows[]`-derived merge-gate policies folded in on both the proposed and the baseline side, the same view `harness validate` checks; since 99f47307 Slice 1 review round 3), but its result is **diffed against a baseline**. Add re-runs the identical checks on the *original* manifest (`:97-110`) and keys each error-severity diagnostic as `severity|path|message` (`:104`). Only diagnostics **not present in the baseline set** block (`newErrors`, `:112-125`, error text `proposed manifest fails asset validation:`). Pre-existing asset errors are demoted to a warning on the result — `harness manifest has N pre-existing asset error(s) unrelated to this add; run `harness validate` to see them` (`:127-133`) — and the add proceeds. So for asset problems the true semantics is: **pre-existing does NOT block, newly-introduced does.**
 
-`harness remove` runs **no asset checks at all** — only the schema gate (`src/cli/remove/index.ts:168-174`) plus a schema-only recheck after lock acquisition (`:205-211`). Add has the same schema-only post-lock recheck (`src/cli/add/index.ts:140-153`); asset checks are not repeated under the lock.
+`harness remove` runs **no asset checks at all** — only the schema gate (`src/cli/remove/index.ts:186-192`) plus a schema-only recheck after lock acquisition (`:223-229`). Add has the same schema-only post-lock recheck (`src/cli/add/index.ts:147-159`); asset checks are not repeated under the lock.
 
 What the asset gate actually checks (`runAssetChecks`, `src/cli/validate/checks.ts:1269-1294`), all against the whole manifest:
 - `checkMcp` (`:109-126`): for every `tools.mcp[]` entry whose command's **first token is a rooted path** (absolute or `~/`), `statSync` the path (after `expandHome` against `opts.homeDir`); missing path → error `tools.mcp[<name>].command: path does not exist: <resolved>`. Note the bracket key is the **tool name, not an index**.
@@ -35,9 +35,9 @@ Why the baseline diff is stable across the mutation: `applyAdd` **appends** to t
 
 ## Where it's enforced
 
-- Schema gate, add: `src/cli/add/index.ts:68-75` (pre-lock) and `:147-153` (post-lock recheck).
-- Asset gate + baseline diff, add: `src/cli/add/index.ts:77-133` (`proposedErrors` `:88-91`, `baselineKeys` `:97-110`, `newErrors`/`preExistingErrors` split `:112-117`, block `:119-125`, warning `:127-133`).
-- Schema gate, remove: `src/cli/remove/index.ts:168-174` (pre-lock) and `:205-211` (post-lock recheck). `--force` on a hook referenced by policies only skips the human-readable pre-check (`:124-131`); the schema gate still rejects the resulting dangling `policy.hook` reference (`:163-167`). Since 99f47307 Slice 1 (F8, review round 2) a SECOND pre-check sits right after the policy one (`:133-152`): a hook a `workflows[]`-derived merge gate depends on (see `derivedGateReferencingWorkflows`, `:66-99`) is refused the same way, EXCEPT `--force` here has no schema-level safety net (a derived gate is not a static YAML reference the schema can see) — see that function's header comment; since review round 3 the CLI prints a `(forced removal disables the workflows[]-derived merge gate for: ...)` stderr line on both the `--dry-run --force` and the real `--force` path (`derivedGateReferences`).
+- Schema gate, add: `src/cli/add/index.ts:68-75` (pre-lock) and `:153-159` (post-lock recheck).
+- Asset gate + baseline diff, add: `src/cli/add/index.ts:77-139` (`proposedErrors` `:94-97`, `baselineKeys` `:103-116`, `newErrors`/`preExistingErrors` split `:118-123`, block `:125-131`, warning `:133-139`).
+- Schema gate, remove: `src/cli/remove/index.ts:186-192` (pre-lock) and `:223-229` (post-lock recheck). `--force` on a hook referenced by policies only skips the human-readable pre-check (`:142-149`); the schema gate still rejects the resulting dangling `policy.hook` reference (`:181-185`). Since 99f47307 Slice 1 (F8, review round 2) a SECOND pre-check sits right after the policy one (`:151-170`): a hook a `workflows[]`-derived merge gate depends on (see `derivedGateReferencingWorkflows`, `:66-117`) is refused the same way, EXCEPT `--force` here has no schema-level safety net (a derived gate is not a static YAML reference the schema can see) — see that function's header comment; since review round 3 the CLI prints a `(forced removal disables the workflows[]-derived merge gate for: ...)` stderr line on both the `--dry-run --force` and the real `--force` path (`derivedGateReferences`).
 - Whole-manifest parse both gates share: `validateBeforeWrite` → `parseManifest` (`src/io/validate-before-write.ts:12-28`, `src/schema/index.ts:113-126`).
 - Fail-closed backstop: if the *original* manifest cannot even be `parseManifest`'d when computing the baseline, `baselineKeys` stays empty and **every** proposed asset error counts as new, i.e. on a broken base the asset gate blocks on everything (`src/cli/add/index.ts:105-110`). In practice `applyAdd`/the schema gate throw first, so this branch is rare.
 

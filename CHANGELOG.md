@@ -221,13 +221,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     `doctor` the round-2 `checkWorkflowMergeBeforeReview` warning it was
     missing).
   - **New (correctness, LOW):** a hand-authored policy whose NAME equals
-    a derived policy's name but sits on a different surface is not
-    deduped (dedupe keys on surface, not name), so the derived view
-    carried two policies with one name and every by-name reader
-    (`explain`, `explain-policy`, `audit`, `diff`) silently resolved to
-    the hand-authored one. `validate`/`doctor` now error on the
-    collision (`checkWorkflowDerivedNameCollision`); the runtime still
-    enforces both.
+    a derived policy's name is not deduped by name (dedupe keys on
+    surface, not name), so the derived view carried two policies with one
+    name and every by-name reader (`explain`, `explain-policy`, `audit`,
+    `diff`) silently resolved to the hand-authored one. This fires both
+    when the hand-authored policy is on a different surface and when it
+    is on the same surface but weaker (the latter also reported as an
+    overlap by `checkWorkflowGateWeakOverlap`; the two checks are not
+    mutually exclusive). `validate`/`doctor` now error on the collision
+    (`checkWorkflowDerivedNameCollision`); the runtime still enforces
+    both. (Review round 3 follow-up, F3: the message's original "it does
+    not intercept the same surface" claim was wrong in the same-surface
+    case; corrected, with a same-surface test added.)
+  - **F6 follow-up (performance/docs, LOW):** `checkWorkflowGateWeakOverlap`'s
+    message now also notes that a deliberately-not-suppressed overlap means
+    the same event round-trips the ledger twice (once per policy), so the
+    hook's `budget_ms` should be checked against two policies, not one,
+    since `requiredHookBudgetMs` does not scale with the policy count.
   - Residuals, named rather than fixed: (a) the `.last-apply` manifest
     snapshot now stores the hand-authored view and the restart-hint
     reader re-derives with the current code, so a snapshot written by a
@@ -240,7 +250,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     residual stands: `mcp__agent-tasks__task_merge` and
     `mcp__agent-tasks__task_finish` (`autoMerge`) remain ungated until
     the follow-up task extends both the template pair and this
-    derivation.
+    derivation; (d) `diff --since` derives both sides with the CURRENT
+    (working-tree) harness version's derivation logic, since the ref side
+    is parsed in-process rather than checked out and re-derived with its
+    own code, so a change to the derivation logic itself between harness
+    releases does not show up as a diff.
 
 - **Risk Gate: a new, environment-INDEPENDENT deletion-target gate closes the
   dev-context gap where `gate-prod-destructive*` only fires once the resolved

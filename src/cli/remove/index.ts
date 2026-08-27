@@ -14,7 +14,6 @@ import {
   deriveWorkflowGatePolicies,
   REVIEW_EVIDENCE_HOOK_BASH,
   REVIEW_EVIDENCE_HOOK_MCP,
-  workflowRequiresMergeGate,
 } from "../../runtime/workflow-policies.js";
 import { EX_FAIL, EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
 import { applyRemove, planRemove, type RemoveType } from "./mutate.js";
@@ -94,8 +93,27 @@ function derivedGateReferencingWorkflows(yamlText: string, type: RemoveType, hoo
   // Non-empty only when BOTH evidence hooks are currently wired (see
   // `hasWiredMergeGateHooks`) — if only one is present already, no
   // workflow has an enforced gate to lose from removing the other.
-  if (deriveWorkflowGatePolicies(manifest).length === 0) return [];
-  return manifest.workflows.filter((wf) => workflowRequiresMergeGate(wf)).map((wf) => wf.name);
+  const derivedPolicies = deriveWorkflowGatePolicies(manifest);
+  if (derivedPolicies.length === 0) return [];
+  // F5 (review round 3 follow-up, 99f47307 Slice 1): this used to return
+  // every workflow matching `workflowRequiresMergeGate` (the SHAPE test),
+  // not the workflows the derivation actually produced a policy for (the
+  // dedupe an equivalent hand-authored policy already covers on the same
+  // surface derives NOTHING for; see `deriveWorkflowGates`'s `seen` set).
+  // A manifest with two qualifying workflows where only one is actually
+  // derived would name both here even though only one's gate is really
+  // lost. Project the workflow name back out of each derived policy's
+  // name instead (`workflow:<name>:review-before-merge[-bash]`), filtered
+  // to the hook being removed so a `require-review-evidence`-only removal
+  // does not also name workflows whose gate only depends on the bash hook.
+  const affected = new Set<string>();
+  for (const policy of derivedPolicies) {
+    if (policy.hook !== hookName) continue;
+    const match = /^workflow:(.+):review-before-merge(?:-bash)?$/.exec(policy.name);
+    const workflowName = match?.[1];
+    if (workflowName !== undefined) affected.add(workflowName);
+  }
+  return manifest.workflows.filter((wf) => affected.has(wf.name)).map((wf) => wf.name);
 }
 
 export async function remove(

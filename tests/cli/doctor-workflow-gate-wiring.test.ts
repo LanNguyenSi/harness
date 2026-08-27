@@ -137,6 +137,67 @@ describe("doctor — checkWorkflowGateWiring wired into the Workflows section (F
     expect(text).toContain("⚠");
   });
 
+  // F1 (review round 3, 99f47307 Slice 1): buildWorkflows delegates to
+  // the shared checkWorkflows aggregate (src/cli/validate/checks.ts), but
+  // the two tests above only exercise the pair doctor picked by hand
+  // before (checkWorkflowGateWiring + checkWorkflowGateWeakOverlap). If
+  // buildWorkflows were rolled back to that old pair, this file would
+  // stay all-green while `harness validate` errors/warns on the exact
+  // same manifests. These two assertions cover the other half of the
+  // aggregate: checkWorkflowMergeBeforeReview and
+  // checkWorkflowDerivedNameCollision.
+  it("reports the merge-before-review warning (checkWorkflowMergeBeforeReview) in the Workflows section", async () => {
+    const reversedWorkflow = `review_templates:
+  t1: "Review this PR for correctness."
+workflows:
+  - name: ship
+    steps:
+      - kind: branch
+      - kind: merge
+      - kind: review_subagent
+        spawn: required
+        template: t1
+`;
+    const home = makeFixture({
+      "harness.yaml": `version: 1\n${SILENCE_OPERATOR_ONLY_DRIFT}${reversedWorkflow}${WIRED_HOOKS}`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+    });
+    expect(report.workflows.warnings).toHaveLength(1);
+    expect(report.workflows.warnings[0]).toContain(
+      "declares a required review step after its merge step",
+    );
+  });
+
+  it("reports the derived-name-collision error (checkWorkflowDerivedNameCollision) in the Workflows section", async () => {
+    const colliding = `policies:
+  - name: workflow:ship:review-before-merge
+    description: Same name as the derived gate, different surface.
+    trigger:
+      event: PreToolUse
+      match: "Bash"
+      bash_match: "git push"
+    requires:
+      ledger_tag: "review:done"
+    hook: require-review-evidence-bash
+    enforcement: block
+`;
+    const home = makeFixture({
+      "harness.yaml": `version: 1\n${SILENCE_OPERATOR_ONLY_DRIFT}${WORKFLOW_REQUIRED}${colliding}${WIRED_HOOKS}`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+    });
+    expect(report.workflows.errors).toEqual(
+      expect.arrayContaining([expect.stringContaining("collides with the policy of the same name")]),
+    );
+  });
+
   it("marks a workflows[]-derived policy in the Policies section (F7)", async () => {
     const home = makeFixture({
       "harness.yaml": `version: 1\n${SILENCE_OPERATOR_ONLY_DRIFT}${WORKFLOW_REQUIRED}${WIRED_HOOKS}`,

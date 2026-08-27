@@ -53,6 +53,14 @@ function parseRefYaml(raw: string, label: string): unknown {
  * the same reason override layers are merged on both sides: flipping a
  * review step from `spawn: optional` to `required` since the ref changes
  * what `policy intercept` enforces, and the diff should say so.
+ *
+ * Residual (F4, review round 3, 99f47307 Slice 1): both sides derive with
+ * the CURRENT (working-tree) harness version's derivation logic, since
+ * this function runs in-process rather than at the ref's own checked-out
+ * code. A change to the derivation logic itself between harness releases
+ * therefore never shows up as a diff, even when the ref predates that
+ * change: `diff --since` compares manifest content across versions, not
+ * derivation behavior across versions.
  */
 function parseRefSchema(parsed: unknown): Manifest {
   try {

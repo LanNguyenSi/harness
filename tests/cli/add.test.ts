@@ -383,11 +383,17 @@ function forkAddWorker(workerPath: string, args: AddWorkerArgs): Promise<AddWork
   });
 }
 
-// Review round 3 (99f47307 Slice 1): `add`'s asset gate now validates the
+// Review round 3 (99f47307 Slice 1): `add`'s asset gate validates the
 // same derived view `harness validate` checks (workflows[]-derived policies
 // folded in on both the proposed and the baseline side). Pins that an
-// unrelated add on a workflow-gated manifest is unaffected.
-describe("add — asset gate on the derived view (review round 3)", () => {
+// unrelated add on a workflow-gated manifest is unaffected. This is a
+// consistency pin, not a behavioral difference today: no error-severity
+// check `runAssetChecks` runs currently reads `manifest.policies`, so this
+// suite alone cannot discriminate withDerivedPolicies from a bare
+// parseManifest — see tests/cli/manifest-view-parity.test.ts's spy-backed
+// test for the assertion that actually reads what manifest gets passed to
+// runAssetChecks (review round 3, F2).
+describe("add keeps the asset gate on the derived view (consistency pin, not a behavioral difference)", () => {
   it("adds an unrelated hook to a workflow-gated manifest", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-add-derived-"));
     try {

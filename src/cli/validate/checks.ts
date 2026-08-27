@@ -414,7 +414,10 @@ export function checkWorkflowGateWeakOverlap(manifest: Manifest): Diagnostic[] {
       `hand-authored policy "${overlap.handPolicyName}" on the same surface is weaker ` +
       `(${overlap.reason}). Both policies apply: the derived block gate ` +
       `("${overlap.derivedPolicyName}") still enforces review evidence independently, so this ` +
-      "is informational, not a gap — but double-check the weaker policy is intentional.",
+      "is informational, not a gap, but double-check the weaker policy is intentional. Note " +
+      "also that this overlap is not suppressed on purpose, so the same event now round-trips " +
+      "the ledger twice (once per policy); if that hook's budget_ms was sized for one policy, " +
+      "check it against two, since requiredHookBudgetMs does not scale with the policy count.",
   }));
 }
 
@@ -457,13 +460,19 @@ export function checkWorkflowMergeBeforeReview(manifest: Manifest): Diagnostic[]
 /**
  * Review round 3 (99f47307 Slice 1): a hand-authored policy whose name
  * equals a derived policy's name (`workflow:<name>:review-before-merge[-
- * bash]`) but sits on a DIFFERENT surface is not deduped (dedupe keys on
- * surface, not name), so the derived view carries two policies with one
- * name. The runtime evaluates both (fail-safe), but every by-name reader
- * (`explain`, `explain-policy`, `audit`, `diff`'s name-keyed policy list)
- * resolves the name to the hand-authored one and silently hides the
- * derived gate. The schema's duplicate-name refinement cannot see this
- * (it runs on the hand-authored view), so it is an error here.
+ * bash]`) is not deduped by name (dedupe keys on surface, not name), so
+ * the derived view carries two policies with one name. This fires both
+ * when the hand-authored policy sits on a DIFFERENT surface (dedupe never
+ * even compares them), and when it sits on the SAME surface but is not
+ * `isAtLeastAsStrongAsDerivedGate` (weaker enforcement or a `when:` scope
+ * — that case IS a surface match, so `findWeakGatePolicyOverlaps` also
+ * reports it as an overlap; the two checks are not mutually exclusive).
+ * Either way the runtime evaluates both policies (fail-safe), but every
+ * by-name reader (`explain`, `explain-policy`, `audit`, `diff`'s
+ * name-keyed policy list) resolves the name to the hand-authored one and
+ * silently hides the derived gate. The schema's duplicate-name refinement
+ * cannot see this (it runs on the hand-authored view), so it is an error
+ * here.
  */
 export function checkWorkflowDerivedNameCollision(manifest: Manifest): Diagnostic[] {
   const handNames = new Set(handAuthoredPolicies(manifest).map((p) => p.name));
@@ -474,9 +483,10 @@ export function checkWorkflowDerivedNameCollision(manifest: Manifest): Diagnosti
       path: "policies",
       message:
         `hand-authored policy "${derived.name}" collides with the policy of the same name ` +
-        "derived from workflows[] (it does not intercept the same surface, so it does not " +
-        "replace the derived gate); both are enforced, but explain/explain-policy/audit/diff " +
-        "resolve the name to the hand-authored one. Rename the hand-authored policy.",
+        "derived from workflows[] (it does not stand in for the derived gate: either a " +
+        "different trigger surface, or weaker / differently-extracting on the same one); " +
+        "both are enforced, but explain/explain-policy/audit/diff resolve the name to the " +
+        "hand-authored one. Rename the hand-authored policy.",
     }));
 }
 

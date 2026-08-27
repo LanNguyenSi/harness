@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { run } from "../../src/cli/index.js";
 import { init } from "../../src/cli/init/index.js";
+import { list } from "../../src/cli/list.js";
 import { remove } from "../../src/cli/remove/index.js";
 import { applyRemove, planRemove } from "../../src/cli/remove/mutate.js";
 import { STUB_NPM_BIN_EXEC_UNKNOWN as STUB_NPM_BIN_EXEC } from "../_helpers/npm-bin-exec.js";
@@ -321,6 +322,61 @@ policies: []
     });
     expect(r.applied).toBe(true);
     expect(r.derivedGateReferences).toEqual([]);
+  });
+
+  // F5 (review round 3 follow-up, 99f47307 Slice 1): `hotfix` requires a
+  // merge gate the same way `ship` does (shape test:
+  // `workflowRequiresMergeGate`), but both share the identical trigger
+  // surface + evidence tag, so the derivation's `seen` dedupe only ever
+  // produces `workflow:ship:*` (the first one walked); `hotfix` derives
+  // nothing new. `derivedGateReferencingWorkflows` used to name BOTH
+  // workflows here (it walked the shape test, not the derivation
+  // output), even though only `ship`'s gate is actually lost. `list
+  // policies` on this same manifest shows only `workflow:ship:*`, which
+  // is the ground truth this pre-check should match.
+  it("F5: names only the workflow whose gate the derivation actually produced, not every shape match", async () => {
+    const twoWorkflows = `version: 1
+review_templates:
+  t1: "Review this PR for correctness."
+workflows:
+  - name: ship
+    steps:
+      - kind: branch
+      - kind: review_subagent
+        spawn: required
+        template: t1
+      - kind: merge
+  - name: hotfix
+    steps:
+      - kind: branch
+      - kind: review_subagent
+        spawn: required
+        template: t1
+      - kind: merge
+${WIRED_HOOKS}policies: []
+`;
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-remove-derived-gate-two-wf-"));
+    try {
+      const configPath = path.join(home, "harness.yaml");
+      fs.writeFileSync(configPath, twoWorkflows, "utf8");
+      const r = await remove("hook", "require-review-evidence", {
+        configPath,
+        homeDir: home,
+        dryRun: true,
+        force: true,
+      });
+      expect(r.applied).toBe(false);
+      expect(r.derivedGateReferences).toEqual(["ship"]);
+      const listed = list("policies", { homeDir: home, configPath });
+      expect(
+        listed.rows.filter((row) => String(row.name).startsWith("workflow:")).map((row) => row.name),
+      ).toEqual([
+        "workflow:ship:review-before-merge",
+        "workflow:ship:review-before-merge-bash",
+      ]);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 
