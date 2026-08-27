@@ -1,0 +1,50 @@
+
+
+╭────────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.150.1)                         │
+│                                                    │
+│ model:     gpt-5.6-terra   /model to change        │
+│ directory: <scratch>/codex-work │
+╰────────────────────────────────────────────────────╯
+
+  Tip: Use /statusline to configure which items appear in the status line.
+
+⚠ `--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation.
+
+
+› Run exactly this one shell command and nothing else: echo tui-probe . Then reply with the single word: done
+
+
+• Ran echo tui-probe .
+  └ tui-probe .
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• done
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Ask Codex to do anything
+
+  gpt-5.6-terra default · <scratch>/codex-work
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

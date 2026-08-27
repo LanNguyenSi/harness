@@ -1,0 +1,11 @@
+{
+  "session_id": "01a0448c-ebf5-7692-b292-7e21b05dba8e",
+  "turn_id": "01a0448c-ec34-73f2-a762-5b8b2553a7b9",
+  "transcript_path": "<scratch>/codex-home/sessions/2026/08/27/rollout-2026-08-27T20-48-01-01a0448c-ebf5-7692-b292-7e21b05dba8e.jsonl",
+  "cwd": "<scratch>/codex-work",
+  "hook_event_name": "Stop",
+  "model": "gpt-5.6-terra",
+  "permission_mode": "bypassPermissions",
+  "stop_hook_active": false,
+  "last_assistant_message": "done"
+}

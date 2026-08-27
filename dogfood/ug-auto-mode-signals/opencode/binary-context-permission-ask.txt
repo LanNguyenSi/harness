@@ -1,0 +1,18 @@
+count '"permission.ask"': 0
+=== 'auto' near permission/mode in server-side code ===
+'stener("error", noop);\n        }\n      }\n    },\n    [kGetInspectOptions]: {\n      ...consolePropAttributes,\n      value: function(stream) {\n        let color = this[kColorMode];\n        if (color === "auto")\n          if (Bun.env.FORCE_COLOR !== @undefined)\n            color = Bun.enableANSIColors;\n          else\n            color = stream.isTTY && (typeof stream.getColorDepth === "function" ? stream.get'
+--
+'{use:bw,provider:_u}=Rj({name:"Permission",init:()=>{let j=cj(),[T,u]=Tj({mode:j.auto?"auto":"normal"});return{get mode(){return T.mode},set(H){u("mode",H)},toggle(){u("mode",(H)=>H==="auto"?"normal":"auto")}}}});import Cw from"path";var Nw={consoleManagedProviders:[],switchableOrgCount:0};function yj(j,T,u){let H=0,w=j.length-1;while(H<=w){let X=Math.floor((H+w)/2),y=u(j[X]);if(y===T)return{found:!0,ind'
+--
+'];if(!Y)break;let W=yj(Y,z.properties.requestID,(C)=>C.id);if(!W.found)break;w("permission",z.properties.sessionID,o((C)=>{C.splice(W.index,1)}));break}case"permission.asked":{let Y=z.properties;if(u.mode==="auto"){U.client.permission.reply({requestID:Y.id,reply:"once",directory:P,workspace:A});break}let W=H.permission[Y.sessionID];if(!W){w("permission",Y.sessionID,[Y]);break}let C=yj(W,Y.id,(c)=>c.id);if(C.fo'
+--
+'ication and sound settings"}),v9=E.Int.check(E.isGreaterThan(0)),l9=E.Struct({max_height:E.optional(v9).annotate({description:"Prompt textarea max height"}),max_width:E.optional(E.Union([v9,E.Literal("auto")])).annotate({description:"Home prompt max width: a positive integer for a fixed cap, or \'auto\' to scale with terminal width"})}).annotate({description:"Prompt size settings"}),XZ=E.Struct({$schema:E.'
+--
+'a dirtied callback");$.yogaSetDirtiedCallback(d0.ptr),v8=$}function TJ($){return typeof $==="object"&&$!==null&&"unit"in $&&"value"in $}function IJ($){if(TJ($))return $;if($===void 0)return t7;if($==="auto")return{unit:3,value:NaN};if(typeof $==="string"){if(!$.endsWith("%"))throw Error(`Invalid Yoga value: ${$}`);let Z=Number.parseFloat($);if(Number.isNaN(Z))throw Error(`Invalid Yoga percentage value: $'
+--
+'at(B0.AspectRatio)}setFlexBasis($){this.setValue(b.FlexBasis,0,$)}setFlexBasisPercent($){this.setValue(b.FlexBasis,0,$===void 0?void 0:{unit:2,value:$})}setFlexBasisAuto(){this.setValue(b.FlexBasis,0,"auto")}getFlexBasis(){return this.getValue(b.FlexBasis,0)}setWidth($){this.setValue(b.Width,0,$)}setWidthPercent($){this.setValue(b.Width,0,$===void 0?void 0:{unit:2,value:$})}setWidthAuto(){this.setValue(b'
+--
+'asis(){return this.getValue(b.FlexBasis,0)}setWidth($){this.setValue(b.Width,0,$)}setWidthPercent($){this.setValue(b.Width,0,$===void 0?void 0:{unit:2,value:$})}setWidthAuto(){this.setValue(b.Width,0,"auto")}getWidth(){return this.getValue(b.Width,0)}setHeight($){this.setValue(b.Height,0,$)}setHeightPercent($){this.setValue(b.Height,0,$===void 0?void 0:{unit:2,value:$})}setHeightAuto(){this.setValue(b.He'
+--
+'th(){return this.getValue(b.Width,0)}setHeight($){this.setValue(b.Height,0,$)}setHeightPercent($){this.setValue(b.Height,0,$===void 0?void 0:{unit:2,value:$})}setHeightAuto(){this.setValue(b.Height,0,"auto")}getHeight(){return this.getValue(b.Height,0)}setMinWidth($){this.setValue(b.MinWidth,0,$)}setMinWidthPercent($){this.setValue(b.MinWidth,0,$===void 0?void 0:{unit:2,value:$})}getMinWidth(){return thi'
+--

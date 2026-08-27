@@ -1,0 +1,10 @@
+{
+  "session_id": "01a04494-33d4-79a2-89d5-11e81ce7a37b",
+  "turn_id": "01a04494-475b-7cb1-9f7f-c690e7df8b44",
+  "transcript_path": "<scratch>/codex-home/sessions/2026/08/27/rollout-2026-08-27T20-55-58-01a04494-33d4-79a2-89d5-11e81ce7a37b.jsonl",
+  "cwd": "<scratch>/codex-work",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-5.6-terra",
+  "permission_mode": "bypassPermissions",
+  "prompt": "Run exactly this one shell command and nothing else: echo tui-probe . Then reply with the single word: done"
+}

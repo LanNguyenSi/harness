@@ -1,0 +1,1 @@
+-c approval_policy="never" -s danger-full-access

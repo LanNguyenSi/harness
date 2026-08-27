@@ -1,0 +1,14 @@
+{
+  "session_id": "01a0448b-4490-7ec2-b1ac-e5361230c324",
+  "turn_id": "01a0448b-44c9-76f0-a27d-63cca3dd0f11",
+  "transcript_path": "<scratch>/codex-home/sessions/2026/08/27/rollout-2026-08-27T20-46-12-01a0448b-4490-7ec2-b1ac-e5361230c324.jsonl",
+  "cwd": "<scratch>/codex-work",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-5.6-terra",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "env | grep -i -E 'codex|claude|permission' | sort"
+  },
+  "tool_use_id": "exec-8e75a254-8398-4cf3-ad57-08b063ba9529"
+}

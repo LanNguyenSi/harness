@@ -1,0 +1,1 @@
+CMD: (cwd project-ask) opencode serve --port 4097 --print-logs --log-level DEBUG  &  opencode run --attach http://127.0.0.1:4097 --auto "Run exactly this one bash command and nothing else: echo probe-ok . Then reply with the single word: done"
