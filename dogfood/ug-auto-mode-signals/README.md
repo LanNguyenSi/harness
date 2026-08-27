@@ -417,8 +417,8 @@ Method: see "Interactive `ask` probe" above; the hook answer is
 Fixtures: `payloads/interactive-ask-bypass.PreToolUse.json`,
 `payloads/interactive-ask-bypass.PermissionRequest.json`, and
 `payloads/interactive-ask-bypass.pane.txt` (run 1's pane at the prompt,
-the same pane 20 s later untouched, the pane after `Escape`, and run 2's
-pane at the prompt).
+the same pane 20 s later untouched, the pane after `Escape`, run 2's
+pane at the prompt, and run 2's pane 20 s later untouched).
 
 | Run | `permission_mode` in the PreToolUse payload | Permission dialog shown | Auto-resolved within 20 s | Command ran (PostToolUse fired) | PermissionRequest hook fired | PermissionDenied hook fired | Classification |
 | --- | --- | --- | --- | --- | --- | --- | --- |

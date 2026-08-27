@@ -38,10 +38,14 @@ cleanup() {
   for s in "${SESSIONS[@]:-}"; do
     [ -n "$s" ] && tmux kill-session -t "$s" 2>/dev/null
   done
+  # Each entry is a per-run config dir this script created itself (a
+  # subdirectory of $DIR), so removing the whole dir also drops the
+  # session transcript Claude Code wrote into it; an operator-supplied
+  # UG_SIG_CONFIG_DIR root is left in place.
   for d in "${CFGDIRS[@]:-}"; do
-    [ -n "$d" ] && rm -f "$d/.credentials.json"
+    [ -n "$d" ] && rm -rf "$d"
   done
-  echo "cleanup: tmux sessions killed, credential copies removed"
+  echo "cleanup: tmux sessions killed, per-run config dirs (credential copies included) removed"
 }
 trap cleanup EXIT INT TERM
 

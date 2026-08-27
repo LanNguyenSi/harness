@@ -39,10 +39,14 @@ cleanup() {
   for s in "${SESSIONS[@]:-}"; do
     [ -n "$s" ] && tmux kill-session -t "$s" 2>/dev/null
   done
+  # Each entry is a per-run config dir this script created itself (a
+  # subdirectory of $DIR), so removing the whole dir also drops the
+  # session transcript Claude Code wrote into it; an operator-supplied
+  # UG_SIG_CONFIG_DIR root is left in place.
   for d in "${CFGDIRS[@]:-}"; do
-    [ -n "$d" ] && rm -f "$d/.credentials.json"
+    [ -n "$d" ] && rm -rf "$d"
   done
-  echo "cleanup: tmux sessions killed, credential copies removed"
+  echo "cleanup: tmux sessions killed, per-run config dirs (credential copies included) removed"
 }
 trap cleanup EXIT INT TERM
 
@@ -84,7 +88,7 @@ run_one() {
     "UserPromptSubmit": [{"hooks":[{"type":"command","command":"{ cat; echo; } >> $CAP/$name.UserPromptSubmit.jsonl"}]}],
     "PreToolUse":       [{"matcher":"","hooks":[
                           {"type":"command","command":"{ cat; echo; } >> $CAP/$name.PreToolUse.jsonl"},
-                          {"type":"command","command":"{ env | grep -E '^(CLAUDE|AI_AGENT)' | sed -E 's/(TOKEN|BRIDGE_SESSION_ID)=.*/\\\\1=<redacted>/' | sort; echo; } >> $CAP/$name.hook-env.txt"}]}],
+                          {"type":"command","command":"{ env | grep -E '^(CLAUDE|AI_AGENT)' | sed -E 's/([A-Z_]*(TOKEN|SECRET|KEY|PASSWORD)[A-Z_]*|BRIDGE_SESSION_ID)=.*/\\\\1=<redacted>/' | sort; echo; } >> $CAP/$name.hook-env.txt"}]}],
     "PostToolUse":      [{"matcher":"","hooks":[{"type":"command","command":"{ cat; echo; } >> $CAP/$name.PostToolUse.jsonl"}]}],
     "Stop":             [{"hooks":[{"type":"command","command":"{ cat; echo; } >> $CAP/$name.Stop.jsonl"}]}],
     "SessionEnd":       [{"hooks":[{"type":"command","command":"{ cat; echo; } >> $CAP/$name.SessionEnd.jsonl"}]}],

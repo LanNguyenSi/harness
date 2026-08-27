@@ -54,9 +54,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `.claude/settings.json`, `.claude/settings.local.json` or the user
   settings file that was absent at the last `harness apply` (compared
   against the `.last-apply` snapshot; a file that was never an apply
-  target uses an empty baseline). Warnings only, no enforcement; both
-  checks run when the `understanding-before-execution` pack is declared
-  and enabled and `harness.generated/` exists.
+  target uses an empty baseline). Warnings only, no enforcement. The
+  listing runs when the `understanding-before-execution` pack is declared
+  and enabled; the drift check additionally requires that `harness apply`
+  has run at least once (`harness.generated/` exists).
 
 ### Security
 
