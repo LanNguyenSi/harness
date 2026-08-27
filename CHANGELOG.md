@@ -45,6 +45,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `permissionDecision: "ask"` in an interactive `bypassPermissions`
   session surfaces a real operator prompt (no auto-allow), so the ADR's
   conditional escape-path `deny` branch is not needed for that mode.
+- **`harness doctor`: auto-approval visibility and settings-drift warnings**
+  (agent-tasks `74b4b17d`, the ADR's Option B visibility half). The
+  understanding-gate section lists the auto approvals found in
+  `harness.generated/.approvals/` by `approvedBy` prefix with the metric
+  "auto approvals in the last N sessions" (N default 20, `--recent-sessions
+  <n>`), and warns about a `permissions.defaultMode` or a hook entry in
+  `.claude/settings.json`, `.claude/settings.local.json` or the user
+  settings file that was absent at the last `harness apply` (compared
+  against the `.last-apply` snapshot; a file that was never an apply
+  target uses an empty baseline). Warnings only, no enforcement; both
+  checks run when the `understanding-before-execution` pack is declared
+  and enabled and `harness.generated/` exists.
 
 ### Security
 
