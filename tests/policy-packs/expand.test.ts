@@ -64,6 +64,26 @@ describe("expandPolicyPacks", () => {
     expect(r.warnings).toEqual([]);
   });
 
+  it("pins the emitted PreToolUse hook descriptions naming the marker as sole gate authority (task 7402301d)", () => {
+    // Guards against a re-drift into "either source approves" prose: the
+    // persisted report and the ledger tag must stay named as audit
+    // evidence, never as an alternate approval source, in both the
+    // Claude and the Codex adapter's emitted hook description.
+    const mClaude = buildManifest([{ name: "understanding-before-execution" }]);
+    const claudePre = expandPolicyPacks(mClaude).hooks.find((h) => h.event === "PreToolUse");
+    expect(claudePre?.description).toBe(
+      "Block Edit/Write/Bash until the operator has approved the session's Understanding Report via harness approve understanding. Opens only on the signed approval marker; the persisted JSON report and the evidence-ledger tag (understanding-approved:${SESSION_ID}) are audit evidence.",
+    );
+
+    const mCodex = buildManifest([{ name: "understanding-before-execution" }]);
+    const codexPre = expandPolicyPacks(mCodex, "codex").hooks.find(
+      (h) => h.event === "PreToolUse",
+    );
+    expect(codexPre?.description).toBe(
+      "Codex adapter: block apply_patch and Codex shell tools until the operator has approved the session's Understanding Report via harness approve understanding. Opens only on the signed approval marker; the persisted JSON report and the evidence-ledger tag are audit evidence.",
+    );
+  });
+
   it("PostToolUse hook fires on the default agent-tasks task-boundary tools", () => {
     const m = buildManifest([{ name: "understanding-before-execution" }]);
     const r = expandPolicyPacks(m);

@@ -1183,8 +1183,9 @@ export function buildProgram(opts: RunOptions = {}): Command {
 
   // `harness pack hook` runtime sub-tree (Phase 6 #4): wired by the
   // pack's PreToolUse hook contribution; reads PreToolUse JSON from
-  // stdin, consults ledger + persisted-report, emits Claude Code deny
-  // JSON on block.
+  // stdin, consults the signed approval marker (the persisted report and
+  // the ledger are audit evidence only, task 7402301d), emits Claude Code
+  // deny JSON on block.
   const packHookCmd = packCmd
     .command("hook")
     .description("Pack runtime hook entrypoints (called by Claude Code via settings.json)");
@@ -1192,7 +1193,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
   packHookCmd
     .command("pre-tool-use")
     .description(
-      "PreToolUse blocker: read tool-event JSON from stdin, consult ledger + persisted report, emit deny JSON on block",
+      "PreToolUse blocker: read tool-event JSON from stdin, consult the signed approval marker (persisted report and ledger are audit evidence only), emit deny JSON on block",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
@@ -1278,7 +1279,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
   packHookCmd
     .command("codex-pre-tool-use")
     .description(
-      "Codex PreToolUse blocker: read tool-event JSON from stdin, consult ledger + persisted report, exit 2 with stderr reason on block",
+      "Codex PreToolUse blocker: read tool-event JSON from stdin, consult the signed approval marker (persisted report and ledger are audit evidence only), exit 2 with stderr reason on block",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
@@ -1575,7 +1576,8 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .command("understanding")
     .description(
       "Mark the latest Understanding Report as approved AND write the evidence-ledger tag. " +
-        "Round-trips both sources so harnessed and solo (@lannguyensi/understanding-gate) stacks stay in sync.",
+        "Writes the signed approval marker and round-trips the audit records (persisted report, ledger row) " +
+        "so harnessed and solo (@lannguyensi/understanding-gate) stacks stay in sync.",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")

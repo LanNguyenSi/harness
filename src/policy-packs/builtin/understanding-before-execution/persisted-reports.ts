@@ -290,19 +290,79 @@ export function findLatestReportForSession(
   return selectReportForSession(reports, sessionId, opts).report;
 }
 
-export interface PersistedReportApprovalCheck {
-  approved: boolean;
+/**
+ * Distinct, greppable audit phrase for the case where the persisted report
+ * on disk says `approvalStatus: "approved"` but no validly-signed approval
+ * marker backs it (task 7402301d). The counterpart of the marker path's
+ * `forged/unsigned marker rejected` phrase: both PreToolUse hooks embed
+ * `PersistedReportEvidence.detail` in their block reason, so this phrase
+ * is what an operator or auditor greps for to tell "someone dropped an
+ * approved-looking report into the reports directory" (or: a report was
+ * approved through a path that never wrote the signed marker, e.g. the
+ * standalone `understanding-gate approve` CLI) apart from the routine
+ * "never approved" case. Module-private on purpose: the tests that pin
+ * the phrase spell it out literally, so a change here turns them red
+ * instead of silently following the constant.
+ */
+const UNSIGNED_REPORT_APPROVAL_REJECTED = "unsigned persisted-report approval rejected";
+
+/** Cap applied to each interpolated value in `checkPersistedReport`'s `detail`. */
+const DETAIL_VALUE_MAX_LENGTH = 120;
+
+/**
+ * `detail` is not an inert log line: both PreToolUse hooks embed it
+ * verbatim into their block `reason`, and the Codex hook additionally
+ * writes it to stderr, the block-reason surface an operator reads
+ * directly. The report file's basename and its `approvedAt` field both
+ * come from a JSON file whose content the gated agent controls (it is
+ * only unsigned evidence, task 7402301d), so neither is trusted
+ * verbatim here: control characters (including newlines, which could
+ * forge extra `reason:`-looking lines) are replaced with a space and
+ * the result is capped so one field cannot blow out the surface.
+ */
+function sanitizeDetailValue(value: string): string {
+  // Deliberately strips C0/DEL control characters (including newline,
+  // which could otherwise forge an extra `reason:`-looking stderr line).
+  const flattened = value.replace(/[\x00-\x1f\x7f]/g, " ");
+  return flattened.length > DETAIL_VALUE_MAX_LENGTH
+    ? `${flattened.slice(0, DETAIL_VALUE_MAX_LENGTH)}...`
+    : flattened;
+}
+
+/**
+ * What the gate learns from the persisted report: EVIDENCE, never
+ * authority (task 7402301d). Until that task the report was the second
+ * of two equal approval sources ("either source approves"), consulted
+ * right after a forged marker had been rejected, and it was unsigned: an
+ * attacker with any write primitive the `Edit|Write|Bash` blocker
+ * matcher does not cover forged an approval with ONE unsigned JSON write
+ * (no session id, no key read needed, since the gate-read fallback adopts
+ * a sessionId-less report for any session). Gate-time approval authority
+ * now flows ONLY through the HMAC-signed marker (`checkOperatorApprovalMarkers`);
+ * this shape deliberately has no `approved` field so a hook cannot read
+ * an allow decision out of it by accident.
+ */
+export interface PersistedReportEvidence {
+  /**
+   * True when the selected report's on-disk `approvalStatus` is
+   * `"approved"`. Diagnostic only: an approved-looking report with no
+   * signed marker behind it is exactly the forgery shape this field must
+   * never be allowed to open the gate for. `detail` carries the
+   * `UNSIGNED_REPORT_APPROVAL_REJECTED` phrase in that case.
+   */
+  claimsApproved: boolean;
   detail: string;
   report: PersistedReport | null;
 }
 
 /**
  * Flip the latest matching persisted report's approvalStatus to
- * `expired` so it no longer satisfies the gate's persisted-report
- * fallback (harness/1ee26e77 follow-up: post-tool-use expiry was
- * marker-only; the persisted report at .understanding-gate/reports/
- * silently kept satisfying the gate even after task_finish deleted
- * the marker).
+ * `expired` so the audit record agrees with the cleared marker
+ * (harness/1ee26e77 follow-up: post-tool-use expiry was marker-only; the
+ * persisted report at .understanding-gate/reports/ silently kept
+ * satisfying the gate even after task_finish deleted the marker. Since
+ * task 7402301d the report carries no gate authority at all, so this flip
+ * is audit hygiene rather than a second gate closure).
  *
  * Atomic rewrite. Preserves the rest of the report body so the audit
  * trail (the operator's actual Understanding text + previous approval
@@ -333,7 +393,7 @@ export function expirePersistedReport(
   if (latest.approvalStatus !== "approved") {
     return {
       ok: false,
-      reason: `latest report ${path.basename(latest.filePath)} already has approvalStatus=${latest.approvalStatus ?? "<missing>"}, nothing to expire`,
+      reason: `latest report ${sanitizeDetailValue(path.basename(latest.filePath))} already has approvalStatus=${sanitizeDetailValue(latest.approvalStatus ?? "<missing>")}, nothing to expire`,
     };
   }
   let raw: string;
@@ -363,14 +423,31 @@ export function expirePersistedReport(
   return { ok: true, filePath: latest.filePath, previousStatus };
 }
 
+/**
+ * Gate-side EVIDENCE probe of the persisted report (task 7402301d). Both
+ * PreToolUse hooks call this after the signed-marker check has NOT
+ * matched, purely to (a) put a precise reason into the block diagnostic
+ * and (b) tell "no report at all" (`report: null`, which gates the
+ * parse-error lookup) apart from "a report exists but is pending".
+ *
+ * It never returns an approval. The selection still uses the tolerant
+ * sessionId-null fallback (`"any"`, no age limit) so the diagnostic keeps
+ * naming a legacy session's own sessionId-less report; that leniency is
+ * harmless now because nothing here can open the gate. A report whose
+ * on-disk status is `approved` yields `claimsApproved: true` with the
+ * `UNSIGNED_REPORT_APPROVAL_REJECTED` phrase in `detail`, the distinct
+ * audit signal for a report-side forgery attempt (or an approval that
+ * bypassed `harness approve understanding`, e.g. the standalone
+ * `understanding-gate approve` CLI, which writes no signed marker).
+ */
 export function checkPersistedReport(
   reportsDir: string,
   sessionId: string,
-): PersistedReportApprovalCheck {
+): PersistedReportEvidence {
   const reports = listPersistedReports(reportsDir);
   if (reports.length === 0) {
     return {
-      approved: false,
+      claimsApproved: false,
       detail: `no reports found at ${reportsDir}`,
       report: null,
     };
@@ -378,25 +455,29 @@ export function checkPersistedReport(
   const latest = findLatestReportForSession(reports, sessionId);
   if (!latest) {
     return {
-      approved: false,
+      claimsApproved: false,
       detail: `no report matched session_id=${sessionId} (${reports.length} report(s) for other sessions)`,
       report: null,
     };
   }
+  const safeFileName = sanitizeDetailValue(path.basename(latest.filePath));
   if (latest.approvalStatus !== "approved") {
     return {
-      approved: false,
-      detail: `latest report ${path.basename(latest.filePath)} has approvalStatus=${
-        latest.approvalStatus ?? "<missing>"
+      claimsApproved: false,
+      detail: `latest report ${safeFileName} has approvalStatus=${
+        sanitizeDetailValue(latest.approvalStatus ?? "<missing>")
       }`,
       report: latest,
     };
   }
+  const safeApprovedAt = latest.approvedAt ? sanitizeDetailValue(latest.approvedAt) : null;
   return {
-    approved: true,
-    detail: `approved via persisted report ${path.basename(latest.filePath)}${
-      latest.approvedAt ? ` (approved at ${latest.approvedAt})` : ""
-    }`,
+    claimsApproved: true,
+    detail:
+      `${UNSIGNED_REPORT_APPROVAL_REJECTED}: report ${safeFileName} has ` +
+      `approvalStatus=approved${safeApprovedAt ? ` (approved at ${safeApprovedAt})` : ""} ` +
+      `but the persisted report is evidence, not authority; the gate opens only on a ` +
+      `validly-signed approval marker written by \`harness approve understanding\``,
     report: latest,
   };
 }

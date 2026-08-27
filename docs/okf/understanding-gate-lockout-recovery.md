@@ -3,7 +3,7 @@ type: runbook
 title: Understanding-gate lockout recovery
 description: Operator procedure to unblock a session locked by the understanding-before-execution PreToolUse gate via `harness approve understanding`, including the 6-tier session-id resolution and the expiry semantics that re-arm the gate.
 tags: [runbook, understanding-gate, lockout, recovery, operator]
-timestamp: 2026-08-17T19:29:55Z
+timestamp: 2026-08-27T06:02:59Z
 sources:
   - src/cli/approve/understanding.ts
   - src/cli/index.ts
@@ -30,12 +30,12 @@ Every `Edit` / `Write` / `Bash` call is refused by the `understanding-before-exe
 
 ## Why the gate is closed
 
-The blocker consults two operator-authored sources, either of which approves (`checkOperatorApprovalMarkers` in `src/policy-packs/builtin/understanding-before-execution/task-markers.ts`; the persisted-report fallback in `src/policy-packs/builtin/understanding-before-execution/persisted-reports.ts`):
+The blocker has exactly one approval authority and consults one evidence record beside it (task 7402301d: `checkOperatorApprovalMarkers` in `src/policy-packs/builtin/understanding-before-execution/task-markers.ts` decides; `checkPersistedReport` in `src/policy-packs/builtin/understanding-before-execution/persisted-reports.ts` returns `PersistedReportEvidence`, a shape with no `approved` field, used for the block diagnostic and the parse-error lookup only):
 
 1. **Approval marker files** under `<generatedDir>/.approvals/` — the canonical signal. `checkOperatorApprovalMarkers` checks the **task-scoped** marker first (`task-<taskId>`, where the task id comes from `<generatedDir>/active-claim`, written by the `track-active-claim` PostToolUse hook on `mcp__agent-tasks__task_start`), then the **session-scoped** marker (`<generatedDir>/.approvals/<sessionId>`). Both are subject to the same optional `max_age` TTL. Since harness/f9485cc7, existence alone is NOT enough: the marker also carries an HMAC-SHA256 signature verified against an operator-side key at `<generatedDir>/.approval-signing.key`; a marker with an unreadable body, malformed/non-object JSON, or a missing/invalid signature is rejected exactly like a missing marker (`matched:false`, tagged `forged:true` for the signature cases). Symlinks at the marker path are still refused.
-2. **Persisted JSON report** under the reports dir with `approvalStatus: "approved"` matching the session — fallback for solo `@lannguyensi/understanding-gate` users.
+2. **Persisted JSON report** under the reports dir: audit evidence only, never an approval source. Until task 7402301d an `approvalStatus: "approved"` report was a second, equal source ("either approves"), and it was unsigned, so one unsigned JSON write into the reports dir forged an approval; now a report whose on-disk status says approved but that no validly-signed marker backs is rejected with the distinct block reason `unsigned persisted-report approval rejected: ...` (the counterpart of `forged/unsigned marker rejected`). Consequence for recovery: the standalone `understanding-gate approve` CLI flips the report but writes no marker and therefore does not unblock a harnessed session; only `harness approve understanding` does.
 
-You are locked out because no fresh marker exists for this session/task: it was never approved, it was deleted at a task boundary, or it aged past `max_age`.
+You are locked out because no fresh, validly-signed marker exists for this session/task: it was never approved, it was deleted at a task boundary, it aged past `max_age` (since task 7402301d a still-approved persisted report no longer keeps the gate open past `max_age`), the signing key was rotated, or the approval only ever flipped the report.
 
 **Where these paths actually are.** `<generatedDir>` = `harness.generated/` next to the manifest (`src/io/generated-dir.ts`). The manifest defaults to `~/.harness/harness.yaml` (home-dir precedence in `src/runtime/home-dir.ts`: explicit `homeDir` → `$HARNESS_HOME` → `~/.harness/` if it exists → legacy `~/.claude/` if it carries `harness.yaml` or `harness.generated/` → `~/.harness/` create-on-first-use). So a default install has markers in `~/.harness/harness.generated/.approvals/`. The reports dir resolves `--reports-dir` flag → `$UNDERSTANDING_GATE_REPORT_DIR` env (`REPORTS_DIR_ENV` constant) → `<manifest-dir>/.understanding-gate/reports`, i.e. typically `~/.harness/.understanding-gate/reports` (`defaultReportsDir`, anchored on `path.dirname(resolvePaths(opts).base)` in `approveUnderstanding`).
 
@@ -49,14 +49,14 @@ Recovery is **operator-only**, from a shell the hooks do not gate (the `!`-shell
    harness approve understanding
    ```
 
-   Flags (`src/cli/index.ts:1571-1586`): `--session <id>`, `--task <ids...>` (variadic; also comma-joined `--task a,b,c`), `--reports-dir <path>`, `--approved-by <actor>` (default `harness-approve-cli`), `--force`, `--config <path>`, `--project <name>`.
+   Flags (`src/cli/index.ts:1572-1587`): `--session <id>`, `--task <ids...>` (variadic; also comma-joined `--task a,b,c`), `--reports-dir <path>`, `--approved-by <actor>` (default `harness-approve-cli`), `--force`, `--config <path>`, `--project <name>`.
 
 2. **Session-id resolution** — the bare command works because the id is resolved through a 6-tier precedence chain (`resolveApprovalSessionId`, `src/runtime/session-id.ts:241`; used by `src/cli/approve/understanding.ts:582`):
    1. explicit `--session` flag
    2. `$CLAUDE_CODE_SESSION_ID` (the variable Claude Code actually exports; read first so the runtime's id beats a hand-exported legacy value)
    3. `$CLAUDE_SESSION_ID` (legacy peer)
    4. `$CODEX_SESSION_ID` (live Codex session)
-   5. `<generatedDir>/.pending-approval` — staged by the PreToolUse blocker on every block/ask (Claude path: `src/cli/pack/hook-pre-tool-use.ts:531`; Codex path: `src/cli/pack/hook-codex-pre-tool-use.ts:356`) and by `harness session-start preflight` on every run with a resolved id (`src/cli/session-start/index.ts`). Deleted after a successful resolve **and** marker write, so a stale id cannot be revived; a failed marker write keeps it for retry.
+   5. `<generatedDir>/.pending-approval`, staged by the PreToolUse blocker on every block/ask (Claude path: `src/cli/pack/hook-pre-tool-use.ts:579`; Codex path: `src/cli/pack/hook-codex-pre-tool-use.ts:358`) and by `harness session-start preflight` on every run with a resolved id (`src/cli/session-start/index.ts`). Deleted after a successful resolve **and** marker write, so a stale id cannot be revived; a failed marker write keeps it for retry.
    6. the freshest persisted report under the reports dir whose JSON `sessionId` is non-null **and** whose `approvalStatus` is `pending` (approved/expired reports belong to finished cycles and are never adopted, harness/56f51f2b). The CLI prints a loud "session id was GUESSED" warning naming the report file — verify it is your live session before trusting the marker.
 
    All six empty → `HarnessExitError`, no guess. Fastest fix per the error text: run `harness preflight` once (it stages `.pending-approval` as a side effect), then re-run `harness approve understanding`.
@@ -76,9 +76,9 @@ Recovery is **operator-only**, from a shell the hooks do not gate (the `!`-shell
 
 ## Expiry semantics: what re-arms the gate
 
-Configured per pack via `config.approval_lifecycle` (parsed by `parseApprovalLifecycle`, runtime lines 703-767; task-scope machinery lines 874-1063):
+Configured per pack via `config.approval_lifecycle` (parsed by `parseApprovalLifecycle` in `src/policy-packs/builtin/understanding-before-execution/lifecycle.ts`; task-scope machinery in `src/policy-packs/builtin/understanding-before-execution/task-markers.ts`):
 
-- **`expire_on_tool_match`** (exact MCP tool names, no wildcards): when a listed tool completes, the `harness pack hook post-tool-use` PostToolUse hook deletes the **session** marker, deletes the finished task's **`task-<taskId>`** marker (when `tool_input.taskId` is present), and flips the persisted report `approved` → `expired` so the fallback can't silently re-satisfy the gate. Default list when the block is absent (`DEFAULT_EXPIRE_ON_TOOL_MATCH`, `src/policy-packs/builtin/understanding-before-execution.ts:295`): `mcp__agent-tasks__task_finish`, `task_abandon`, `pull_requests_merge`, `tasks_transition` (transition only expires when `tool_input.status === "done"`). PostToolUse fires only for tools that actually ran.
+- **`expire_on_tool_match`** (exact MCP tool names, no wildcards): when a listed tool completes, the `harness pack hook post-tool-use` PostToolUse hook deletes the **session** marker, deletes the finished task's **`task-<taskId>`** marker (when `tool_input.taskId` is present), and flips the persisted report `approved` → `expired` so the audit record agrees with the cleared marker (since task 7402301d the report carries no gate authority, so this flip is audit hygiene, not a second closure). Default list when the block is absent (`DEFAULT_EXPIRE_ON_TOOL_MATCH`, `src/policy-packs/builtin/understanding-before-execution.ts:295`): `mcp__agent-tasks__task_finish`, `task_abandon`, `pull_requests_merge`, `tasks_transition` (transition only expires when `tool_input.status === "done"`). PostToolUse fires only for tools that actually ran.
 - **`expire_on_bash_match`** (regex list vs `Bash` `tool_input.command`, e.g. `gh pr merge`): same expiry effects; an invalid regex is skipped with a warning.
 - **`max_age`** (duration string like `"4h"`): `checkApprovalMarker` treats a marker whose `approvedAt` is older as expired (`matched:false`, detail `expired: age Xm > max Ym`). Applies uniformly to task-scoped and session-scoped markers (`checkOperatorApprovalMarkers` is shared by the Claude and Codex hooks). Omitted = no TTL. A marker with an unreadable body skips the freshness check (existence wins).
 - **`{ mode: "session" }`**: explicit legacy opt-out — no expiry hook is emitted at all; one approval lasts the session.

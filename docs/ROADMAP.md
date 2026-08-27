@@ -312,7 +312,7 @@ Phase 6 ships as six sequential sub-tasks. Each is a separate PR with its own do
 
 #### Phase 6 #4, PreToolUse blocker + `harness approve understanding`
 
-- Harness-side PreToolUse blocker that consults BOTH the `understanding-approved:${SESSION_ID}` evidence-ledger tag (canonical for harnessed sessions) AND the `@lannguyensi/understanding-gate` persisted JSON report (fallback). The package's standalone blocker stays available for solo users.
+- Harness-side PreToolUse blocker that consults BOTH the `understanding-approved:${SESSION_ID}` evidence-ledger tag (canonical for harnessed sessions) AND the `@lannguyensi/understanding-gate` persisted JSON report (fallback). The package's standalone blocker stays available for solo users. (Superseded twice since: agent-tasks/88ca4bb3 made the signed filesystem marker canonical and the ledger audit-only; task 7402301d made the marker the sole gate authority, the persisted report is audit evidence only.)
 - `harness approve understanding [--session <id>]` round-trips both: writes the ledger tag via `grounding-mcp` AND flips `approvalStatus: "approved"` on the most recent persisted report.
 - `harness doctor` validates: package binaries on `$PATH`, hooks registered in `settings.json`, instruction templates installed, ledger reachable.
 
@@ -326,7 +326,7 @@ Phase 6 ships as six sequential sub-tasks. Each is a separate PR with its own do
 
 - Codex hook adapter for UserPromptSubmit (instruction injection via `harness pack hook codex-user-prompt-submit`) and PreToolUse (`apply_patch|Bash|shell` blocking via `harness pack hook codex-pre-tool-use`). Mirrors the Claude Code shape; reuses the same persisted-report format under `.understanding-gate/reports/`.
 - New CLI flag `harness apply --runtime codex` emits `harness.generated/codex/config.toml` (TOML hook stanzas) instead of `settings.json`. `--install` additionally merges those stanzas into a marked harness-managed block in `~/.codex/config.toml`.
-- Smoke test under `dogfood/phase6-6/` exercises the synthetic-stdin path: PreToolUse blocks with exit 2 + reason on stderr, then allows with exit 0 after a persisted report flips `approvalStatus` to `approved`.
+- Smoke test under `dogfood/phase6-6/` exercises the synthetic-stdin path: PreToolUse blocks with exit 2 + reason on stderr, then allows with exit 0 after a persisted report flips `approvalStatus` to `approved`. (Historical: since task 7402301d only the signed marker written by `harness approve understanding` opens the gate; the report flip alone no longer does.)
 - Phase 6 #6 follow-ups (filed as separate agent-tasks entries): `harness doctor --target codex` adapter-health check; Codex-specific Stop-equivalent for transcript capture; permission-profile translator into Codex's sandbox shape.
 
 ### Non-goals
