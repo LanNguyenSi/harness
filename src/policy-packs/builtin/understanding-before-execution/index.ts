@@ -77,6 +77,7 @@ export {
   type FindReportOptions,
   type FindReportSelection,
   selectReportForSession,
+  selectNewestStrictSessionReport,
   findLatestReportForSession,
   type PersistedReportEvidence,
   expirePersistedReport,

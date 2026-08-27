@@ -210,6 +210,36 @@ export function rotateSigningKey(generatedDir: string): SigningKeyHandle {
   return { key: fresh, filePath, created: true };
 }
 
+/**
+ * Non-creating existence probe for the signing key: `true` only when
+ * `<generatedDir>/.approval-signing.key` is a regular file carrying at
+ * least `KEY_BYTES` bytes. Never creates, repairs, or rotates anything.
+ *
+ * Why this exists as a separate export instead of "just call
+ * `getOrCreateSigningKey` and see" (ADR
+ * docs/decisions/2026-08-27-ug-auto-mode-approval.md, threat model (b)
+ * item 5): key CREATION is an operator-side act (`harness init` /
+ * `harness approve`). The PreToolUse hook's auto-approval path
+ * (agent-tasks/74b4b17d) must refuse to mint a marker on a machine that
+ * has no key, but the shared write path it uses (`writeApprovalMarker`
+ * -> `signMarker` -> `getOrCreateSigningKey`) treats a missing key as a
+ * case to REPAIR: it generates one on ENOENT and signs with it. So the
+ * auto path calls this first and blocks when it returns `false`.
+ *
+ * A truncated / short key file counts as absent here for the same
+ * reason: `getOrCreateSigningKey` would overwrite it with a fresh key,
+ * which is the same operator-side act this probe exists to keep the
+ * hook out of.
+ */
+export function signingKeyExists(generatedDir: string): boolean {
+  try {
+    const stat = fs.statSync(signingKeyPathFor(generatedDir));
+    return stat.isFile() && stat.size >= KEY_BYTES;
+  } catch {
+    return false;
+  }
+}
+
 /** sha256 hex digest of a string, used to bind a marker to a persisted report's content. */
 export function sha256Hex(content: string): string {
   return crypto.createHash("sha256").update(content, "utf8").digest("hex");

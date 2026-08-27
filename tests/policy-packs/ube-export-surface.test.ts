@@ -14,10 +14,14 @@ import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-ex
 // .ts source text), so it only sees VALUE exports: type-only exports
 // (interfaces, `type` aliases) are erased at transform time and never
 // appear in `Object.keys()`, regardless of how many `export { ... }`
-// names are written in the source. The 43 names below were captured by
+// names are written in the source. The 48 names below were captured by
 // running this exact import+Object.keys().sort() against the shim and are
 // the actual, verified runtime surface — not a source-text export count.
-// Widened by agent-tasks 74b4b17d (auto_approve helpers: auto-approve.ts).
+// Widened by agent-tasks 74b4b17d, twice: first by the `auto_approve`
+// helpers (auto-approve.ts), then by `selectNewestStrictSessionReport`
+// (persisted-reports.ts), the strict-newest report selection the
+// PreToolUse hook's auto-approval path uses instead of
+// `selectReportForSession`'s sessionId-null tolerant fallback.
 //
 // Mutation-verified: temporarily re-adding `export { safeJsonParse } from
 // "./persisted-reports.js";` to
@@ -66,6 +70,7 @@ const EXPECTED_EXPORTS = [
   "permissionModeAllowed",
   "readActiveClaim",
   "reportsDirForManifest",
+  "selectNewestStrictSessionReport",
   "selectReportForSession",
   "taskApprovalMarkerPathFor",
   "toolNameMatchesAny",
@@ -75,7 +80,7 @@ const EXPECTED_EXPORTS = [
 ] as const;
 
 describe("understanding-before-execution-runtime shim export surface", () => {
-  it("exports exactly the pinned 43-name surface, sorted", () => {
+  it("exports exactly the pinned 48-name surface, sorted", () => {
     const actual = Object.keys(ubeShim).sort();
     expect(actual).toEqual([...EXPECTED_EXPORTS].sort());
   });
