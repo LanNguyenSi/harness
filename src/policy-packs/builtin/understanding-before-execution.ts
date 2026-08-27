@@ -272,6 +272,21 @@ export const configSchema = z
       })
       .strict()
       .optional(),
+    // Operator opt-in to the hook-written signed auto-marker path for
+    // an allowlisted `permission_mode` (docs/decisions/2026-08-27-ug-auto-mode-approval.md,
+    // "Option A"). `when` names the exact permission-mode literals the
+    // hook may auto-approve; `require_report` is required and must be
+    // literal `true` in v1 (ADR threat model (b) item 3: rejecting
+    // `false` here makes a future relaxation a visible schema change
+    // instead of a silent default). Runtime parsing/validation lives in
+    // `./understanding-before-execution/auto-approve.ts`.
+    auto_approve: z
+      .object({
+        when: z.array(z.string().min(1)).min(1),
+        require_report: z.literal(true),
+      })
+      .strict()
+      .optional(),
     // `ux` + `producers` are consumed by the PreToolUse blocker
     // (`src/cli/pack/hook-pre-tool-use.ts`) to render an agent-facing
     // remediation block when the gate trips. Same shape as the

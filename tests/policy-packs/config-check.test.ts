@@ -123,6 +123,79 @@ describe("checkPolicyPackConfigs — understanding-before-execution", () => {
     expect(issues[0]?.configPath).toBe("approval_lifecycle.expire_on_tool_match[0]");
   });
 
+  it("accepts a well-formed auto_approve block", () => {
+    const m = manifestWith([
+      {
+        name: "understanding-before-execution",
+        config: { auto_approve: { when: ["bypassPermissions"], require_report: true } },
+      },
+    ]);
+    expect(checkPolicyPackConfigs(m)).toEqual([]);
+  });
+
+  it("rejects auto_approve.require_report: false", () => {
+    const m = manifestWith([
+      {
+        name: "understanding-before-execution",
+        config: { auto_approve: { when: ["bypassPermissions"], require_report: false } },
+      },
+    ]);
+    const issues = checkPolicyPackConfigs(m);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.configPath).toBe("auto_approve.require_report");
+  });
+
+  it("rejects auto_approve missing require_report", () => {
+    const m = manifestWith([
+      {
+        name: "understanding-before-execution",
+        config: { auto_approve: { when: ["bypassPermissions"] } },
+      },
+    ]);
+    const issues = checkPolicyPackConfigs(m);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.configPath).toBe("auto_approve.require_report");
+  });
+
+  it("rejects an unknown nested auto_approve key", () => {
+    const m = manifestWith([
+      {
+        name: "understanding-before-execution",
+        config: {
+          auto_approve: { when: ["bypassPermissions"], require_report: true, mode: "auto" },
+        },
+      },
+    ]);
+    const issues = checkPolicyPackConfigs(m);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.code).toBe("unrecognized_keys");
+    expect(issues[0]?.configPath).toBe("auto_approve");
+  });
+
+  it("rejects an empty auto_approve.when array", () => {
+    const m = manifestWith([
+      {
+        name: "understanding-before-execution",
+        config: { auto_approve: { when: [], require_report: true } },
+      },
+    ]);
+    const issues = checkPolicyPackConfigs(m);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.configPath).toBe("auto_approve.when");
+  });
+
+  it("rejects an empty entry inside auto_approve.when (nested array path)", () => {
+    const m = manifestWith([
+      {
+        name: "understanding-before-execution",
+        config: { auto_approve: { when: [""], require_report: true } },
+      },
+    ]);
+    const issues = checkPolicyPackConfigs(m);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.configPath).toBe("auto_approve.when[0]");
+  });
+
   it("accepts a well-formed ux block and rejects an ux block missing `cannot`", () => {
     const goodM = manifestWith([
       {

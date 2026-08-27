@@ -14,9 +14,10 @@ import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-ex
 // .ts source text), so it only sees VALUE exports: type-only exports
 // (interfaces, `type` aliases) are erased at transform time and never
 // appear in `Object.keys()`, regardless of how many `export { ... }`
-// names are written in the source. The 40 names below were captured by
+// names are written in the source. The 43 names below were captured by
 // running this exact import+Object.keys().sort() against the shim and are
 // the actual, verified runtime surface — not a source-text export count.
+// Widened by agent-tasks 74b4b17d (auto_approve helpers: auto-approve.ts).
 //
 // Mutation-verified: temporarily re-adding `export { safeJsonParse } from
 // "./persisted-reports.js";` to
@@ -28,6 +29,8 @@ const EXPECTED_EXPORTS = [
   "APPROVAL_MARKER_DIRNAME",
   "APPROVAL_MARKER_TASK_PREFIX",
   "APPROVED_LEDGER_TAG_PREFIX",
+  "AUTO_APPROVED_BY_PREFIX",
+  "CLAUDE_CODE_HARNESS",
   "DEFAULT_BASH_TOOL_NAMES",
   "REPORTS_DIR_ENV",
   "TOLERANT_FALLBACK_FUTURE_SKEW_MS",
@@ -36,6 +39,8 @@ const EXPECTED_EXPORTS = [
   "applyPostToolUseExpiry",
   "approvalMarkerPathFor",
   "approvedLedgerTagFor",
+  "autoApprovedByFor",
+  "autoApprovedLedgerTagFor",
   "bashCommandMatchesAny",
   "checkActiveClaimApprovalMarker",
   "checkApprovalMarker",
@@ -56,6 +61,9 @@ const EXPECTED_EXPORTS = [
   "matchLedgerEntries",
   "matchPostToolUseBoundary",
   "parseApprovalLifecycle",
+  "parseAutoApprove",
+  "parseAutoApprovedBy",
+  "permissionModeAllowed",
   "readActiveClaim",
   "reportsDirForManifest",
   "selectReportForSession",
@@ -67,7 +75,7 @@ const EXPECTED_EXPORTS = [
 ] as const;
 
 describe("understanding-before-execution-runtime shim export surface", () => {
-  it("exports exactly the pinned 40-name surface, sorted", () => {
+  it("exports exactly the pinned 43-name surface, sorted", () => {
     const actual = Object.keys(ubeShim).sort();
     expect(actual).toEqual([...EXPECTED_EXPORTS].sort());
   });
