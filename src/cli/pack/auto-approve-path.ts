@@ -36,12 +36,19 @@
 // `hook-codex-pre-tool-use.ts` calls this same function at the same
 // place in its own decision order. Everything that differs between the
 // two runtimes is an ARGUMENT, never a fork: the `harness` segment of
-// the minted `approvedBy`, and which session-consistency evidence the
-// payload can be held against (`sessionConsistency`). Claude Code
-// carries `$CLAUDE_CODE_SESSION_ID` in the hook environment; Codex
-// carries no session-id environment variable at all (measured live,
-// Codex 0.150.1) but does name a per-session `transcript_path` that
-// exists on disk at PreToolUse time.
+// the minted `approvedBy`, which session-consistency evidence the
+// payload can be held against (`sessionConsistency`), the ledger fact's
+// `source` verb, and the stderr `label`. Claude Code carries
+// `$CLAUDE_CODE_SESSION_ID` in the hook environment; Codex carries no
+// session-id environment variable at all (measured live, Codex 0.150.1)
+// but does name a per-session `transcript_path` that exists on disk at
+// PreToolUse time.
+//
+// ONE BODY IS NOT ONE OPT-IN. Sharing the body would otherwise mean an
+// `auto_approve` block written for Claude Code opts every Codex session
+// in too; `auto_approve.harnesses` is the explicit per-harness
+// allowlist that prevents it, defaulting to Claude Code only when the
+// key is absent (step 1b below).
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -55,6 +62,10 @@ import {
   selectNewestStrictSessionReport,
   writeApprovalMarker,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
+// Direct import, not through the runtime shim above: `harnessAllowed` is
+// deliberately not part of the shim's pinned public surface
+// (tests/policy-packs/ube-export-surface.test.ts), same as `CODEX_HARNESS`.
+import { harnessAllowed } from "../../policy-packs/builtin/understanding-before-execution/auto-approve.js";
 import { sha256Hex, signingKeyExists } from "../../runtime/approval-signing.js";
 import {
   clearPendingApproval,
@@ -63,8 +74,24 @@ import {
 import type { LedgerWriteFn } from "../../runtime/ledger-writer.js";
 import { rewriteReportApproved, validatePersistedReport } from "../approve/understanding.js";
 
-/** Source string recorded on the audit-only ledger fact. */
+/**
+ * Source string the CLAUDE CODE hook records on the audit-only ledger
+ * fact — the verb that actually made the write.
+ */
 export const AUTO_APPROVE_LEDGER_SOURCE = "harness-pack-hook-pre-tool-use";
+
+/**
+ * The Codex hook's counterpart. A shared body must not stamp the Claude
+ * verb on a Codex write: the ledger fact is an audit surface, and an
+ * auditor reading `harness-pack-hook-pre-tool-use` on a Codex session
+ * would be reading a fact about a hook that never ran (reviewer round-1
+ * finding on slice 2). The `approvedBy` segment already distinguishes
+ * the runtimes; this makes the ledger row agree with it.
+ */
+export const AUTO_APPROVE_LEDGER_SOURCE_CODEX = "harness-pack-hook-codex-pre-tool-use";
+
+/** Default stderr prefix: the Claude Code hook's, byte-for-byte. */
+const DEFAULT_LABEL = "harness pack hook";
 
 /**
  * Which second input the payload's own `session_id` is held against
@@ -75,9 +102,9 @@ export const AUTO_APPROVE_LEDGER_SOURCE = "harness-pack-hook-pre-tool-use";
  *   environment variable (`$CLAUDE_CODE_SESSION_ID` for Claude Code).
  *   The payload field must equal it.
  * - `transcript-path`: the payload names the session's transcript file
- *   and the hook checks that the file's NAME carries this session id
- *   and that the file exists on disk (Codex, which carries no
- *   session-id environment variable at all).
+ *   and the hook checks that the NAME carries this session id and that
+ *   the path resolves to an existing regular file (Codex, which carries
+ *   no session-id environment variable at all).
  *
  * NEITHER IS A SECURITY BOUNDARY, and the comments inside the check say
  * so. Both are CONSISTENCY checks of the same class: an agent that can
@@ -106,6 +133,18 @@ export interface AutoApproveAttemptArgs {
    * Claude Code hook, `CODEX_HARNESS` from the Codex hook.
    */
   harness: string;
+  /**
+   * Source string for the audit-only ledger fact: the calling hook's own
+   * verb ({@link AUTO_APPROVE_LEDGER_SOURCE} /
+   * {@link AUTO_APPROVE_LEDGER_SOURCE_CODEX}).
+   */
+  ledgerSource: string;
+  /**
+   * stderr prefix for every line this path writes, so a Codex-side
+   * diagnostic reads `harness pack hook codex: ...` like the rest of
+   * that hook's output. Defaults to the Claude Code hook's prefix.
+   */
+  label?: string;
   /** Which session-consistency evidence this runtime offers; see {@link SessionConsistencyCheck}. */
   sessionConsistency: SessionConsistencyCheck;
   /** The pack's `config` block, unparsed. */
@@ -157,8 +196,9 @@ export async function attemptAutoApproval(
   args: AutoApproveAttemptArgs,
 ): Promise<AutoApproveAttempt> {
   const { stderr } = args;
+  const label = args.label ?? DEFAULT_LABEL;
   const note = (msg: string): void => {
-    stderr.write(`harness pack hook: ${msg}\n`);
+    stderr.write(`${label}: ${msg}\n`);
   };
 
   // (1) Opt-in. Absent is the ordinary case and stays SILENT; a
@@ -169,8 +209,27 @@ export async function attemptAutoApproval(
     args.packConfig !== null && typeof args.packConfig === "object" && !Array.isArray(args.packConfig)
       ? (args.packConfig as Record<string, unknown>)
       : {};
-  const cfg = parseAutoApprove(packConfigObj["auto_approve"], stderr);
+  const cfg = parseAutoApprove(packConfigObj["auto_approve"], stderr, label);
   if (cfg === null) return decline("auto_approve not configured");
+
+  // (1b) Per-harness opt-in, checked BEFORE the `when` allowlist and
+  // before the ledger thunk below, so an unlisted harness resolves
+  // nothing and never reaches any evidence lookup. Two call sites share
+  // this body; without this check an `auto_approve` block written for
+  // Claude Code before the Codex hook existed would silently start
+  // auto-approving every Codex session that runs in a listed
+  // `permission_mode` (reviewer round-1 finding on slice 2). `harnesses`
+  // is absent in exactly those older configs and resolves to Claude Code
+  // only, so opting a second runtime in stays an explicit config edit.
+  // Diagnosed, unlike the silent `when` miss below: an unlisted harness
+  // is a configuration mismatch worth seeing once per call, not the
+  // ordinary state of an opted-in session.
+  if (!harnessAllowed(cfg, args.harness)) {
+    note(
+      `auto-approval declined: harness "${args.harness}" is not listed in auto_approve.harnesses`,
+    );
+    return decline("harness not in auto_approve.harnesses");
+  }
 
   // (2) `when` allowlist, exact string equality against the payload
   // literal (hardening item 2). Absent / empty / unlisted is the normal
@@ -245,11 +304,14 @@ export async function attemptAutoApproval(
     // Three separately-diagnosed conditions, each fail-closed: the
     // field is a non-empty string; its BASENAME names this exact
     // session (`-<sid>.jsonl`, or a bare `<sid>.jsonl` for a shim that
-    // drops the `rollout-<timestamp>` prefix); and the file EXISTS.
-    // The existence check is deliberately not a content check: reading
-    // and parsing the rollout would make the hook depend on Codex's
-    // internal transcript format for a check that is not a boundary
-    // anyway (see SessionConsistencyCheck).
+    // drops the `rollout-<timestamp>` prefix); and the path resolves to
+    // a REGULAR FILE. `statSync().isFile()`, not `existsSync`: a
+    // directory named `<sid>.jsonl` is not a transcript, and neither is
+    // a socket or a device node, yet all of them satisfy mere existence
+    // (reviewer round-1 finding on slice 2). It is deliberately not a
+    // content check: reading and parsing the rollout would make the hook
+    // depend on Codex's internal transcript format for a check that is
+    // not a boundary anyway (see SessionConsistencyCheck).
     const transcriptPath =
       typeof consistency.transcriptPath === "string" && consistency.transcriptPath.length > 0
         ? consistency.transcriptPath
@@ -265,8 +327,20 @@ export async function attemptAutoApproval(
       );
       return decline("transcript_path session mismatch");
     }
-    if (!fs.existsSync(transcriptPath)) {
-      note(`auto-approval declined: transcript_path does not exist (${transcriptPath})`);
+    // `throwIfNoEntry: false` covers the ordinary ENOENT; the try/catch
+    // covers every other stat failure (a permission error, a symlink
+    // loop), which fails closed here rather than throwing out of a hook
+    // whose caller treats a throw as neither allow nor block.
+    let transcriptIsFile = false;
+    try {
+      transcriptIsFile = fs.statSync(transcriptPath, { throwIfNoEntry: false })?.isFile() === true;
+    } catch {
+      transcriptIsFile = false;
+    }
+    if (!transcriptIsFile) {
+      note(
+        `auto-approval declined: transcript_path does not name an existing file (${transcriptPath})`,
+      );
       return decline("transcript_path missing");
     }
   }
@@ -374,7 +448,7 @@ export async function attemptAutoApproval(
       const result = await ledger.write({
         sessionId: args.sessionId,
         content: tag,
-        source: AUTO_APPROVE_LEDGER_SOURCE,
+        source: args.ledgerSource,
       });
       if (!result.ok) {
         note(

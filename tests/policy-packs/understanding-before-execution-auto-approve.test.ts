@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   AUTO_APPROVED_BY_PREFIX,
   CLAUDE_CODE_HARNESS,
+  CODEX_HARNESS,
   autoApprovedByFor,
   autoApprovedLedgerTagFor,
+  harnessAllowed,
   parseAutoApprove,
   parseAutoApprovedBy,
   permissionModeAllowed,
@@ -15,11 +17,58 @@ function fakeStderr() {
 }
 
 describe("parseAutoApprove", () => {
-  it("accepts a well-formed block", () => {
+  it("accepts a well-formed block, defaulting harnesses to claude-code only", () => {
     const { stderr, lines } = fakeStderr();
     const cfg = parseAutoApprove({ when: ["bypassPermissions"], require_report: true }, stderr);
-    expect(cfg).toEqual({ when: ["bypassPermissions"] });
+    // The absent-key default is the whole point of the per-harness
+    // opt-in: a block written before the Codex hook existed must keep
+    // meaning "Claude Code only".
+    expect(cfg).toEqual({ when: ["bypassPermissions"], harnesses: ["claude-code"] });
     expect(lines).toEqual([]);
+  });
+
+  it("accepts an explicit harnesses list, in the order given", () => {
+    const { stderr, lines } = fakeStderr();
+    const cfg = parseAutoApprove(
+      { when: ["bypassPermissions"], harnesses: ["codex", "claude-code"], require_report: true },
+      stderr,
+    );
+    expect(cfg).toEqual({
+      when: ["bypassPermissions"],
+      harnesses: ["codex", "claude-code"],
+    });
+    expect(lines).toEqual([]);
+  });
+
+  it.each([
+    ["an empty array", []],
+    ["a non-array", "codex"],
+    ["an unknown value", ["claude-code", "cursor"]],
+    ["a non-string entry", ["claude-code", 7]],
+    ["a duplicate entry", ["codex", "codex"]],
+  ])("returns null and warns for harnesses: %s (fail closed, never a default)", (_label, value) => {
+    const { stderr, lines } = fakeStderr();
+    const cfg = parseAutoApprove(
+      { when: ["bypassPermissions"], harnesses: value, require_report: true },
+      stderr,
+    );
+    expect(cfg).toBeNull();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/auto_approve\.harnesses/);
+  });
+
+  it("labels its warning with the calling hook's stderr prefix", () => {
+    const { stderr, lines } = fakeStderr();
+    expect(
+      parseAutoApprove({ when: ["bypassPermissions"] }, stderr, "harness pack hook codex"),
+    ).toBeNull();
+    expect(lines[0]).toMatch(/^harness pack hook codex: config\.auto_approve /);
+  });
+
+  it("defaults the label to the Claude Code hook's prefix", () => {
+    const { stderr, lines } = fakeStderr();
+    expect(parseAutoApprove({ when: ["bypassPermissions"] }, stderr)).toBeNull();
+    expect(lines[0]).toMatch(/^harness pack hook: config\.auto_approve /);
   });
 
   it("returns null silently for undefined (not opted in)", () => {
@@ -156,8 +205,41 @@ describe("autoApprovedLedgerTagFor", () => {
   });
 });
 
+describe("harnessAllowed", () => {
+  const cfg = { when: ["bypassPermissions"], harnesses: [CLAUDE_CODE_HARNESS] };
+
+  it("allows a listed harness", () => {
+    expect(harnessAllowed(cfg, CLAUDE_CODE_HARNESS)).toBe(true);
+  });
+
+  it("rejects a harness the operator did not list", () => {
+    expect(harnessAllowed(cfg, CODEX_HARNESS)).toBe(false);
+  });
+
+  it("allows both when both are listed", () => {
+    const both = { when: ["bypassPermissions"], harnesses: [CLAUDE_CODE_HARNESS, CODEX_HARNESS] };
+    expect(harnessAllowed(both, CLAUDE_CODE_HARNESS)).toBe(true);
+    expect(harnessAllowed(both, CODEX_HARNESS)).toBe(true);
+  });
+
+  it.each([
+    ["empty string", ""],
+    ["undefined", undefined],
+    ["a non-string", 42],
+    ["uppercase (no case folding)", "CODEX"],
+    ["a substring superset (no substring matching)", "codex-cli"],
+  ])("rejects %s", (_label, harness) => {
+    const both = { when: ["bypassPermissions"], harnesses: [CLAUDE_CODE_HARNESS, CODEX_HARNESS] };
+    expect(harnessAllowed(both, harness)).toBe(false);
+  });
+
+  it("rejects when cfg is null regardless of the harness", () => {
+    expect(harnessAllowed(null, CLAUDE_CODE_HARNESS)).toBe(false);
+  });
+});
+
 describe("permissionModeAllowed", () => {
-  const cfg = { when: ["bypassPermissions"] };
+  const cfg = { when: ["bypassPermissions"], harnesses: [CLAUDE_CODE_HARNESS] };
 
   it("allows an exact allowlisted mode", () => {
     expect(permissionModeAllowed(cfg, "bypassPermissions")).toBe(true);

@@ -28,6 +28,14 @@
 //     published envelope used `raw_input`. Both shapes are exercised for
 //     the two exemptions that have to see the command.
 //
+// Review round 1 added four more concerns, each with its own control
+// below: the per-harness opt-in (`auto_approve.harnesses`, so sharing
+// one body does not share one opt-in), the exemption's own view of
+// `tool_input` / `raw_input` (a disagreeing pair, and a null
+// `tool_input` shadowing a real `raw_input`), the Codex-specific ledger
+// source and stderr label, and a transcript path that names a directory
+// rather than a file.
+//
 // The mutation probes named in the task assignment were each applied for
 // real against this file and the named test observed red; see the
 // implementer report for the probe-by-probe record.
@@ -37,6 +45,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { buildUgAutoApprovals } from "../../src/cli/doctor/ug-auto-approvals.js";
 import { runPackHookCodexPreToolUseCli } from "../../src/cli/pack/hook-codex-pre-tool-use.js";
 import { runPackHookPreToolUseCli } from "../../src/cli/pack/hook-pre-tool-use.js";
 import type { LedgerEntry } from "../../src/policies/index.js";
@@ -128,7 +137,15 @@ function writeTranscriptFile(sessionId: string = SESSION): string {
   return filePath;
 }
 
-/** The opt-in manifest: `bypassPermissions` allowlisted, `require_report: true`. */
+/**
+ * The opt-in manifest: `bypassPermissions` allowlisted, `require_report:
+ * true`, and BOTH harnesses opted in. `harnesses` is required for any
+ * Codex auto-approval (review round 1): the shared auto path declines
+ * for a harness the operator did not name, and an absent key means
+ * Claude Code only, so the whole happy-path fixture would block without
+ * this. The controls in "the per-harness opt-in" below are the ones that
+ * leave it out on purpose.
+ */
 function manifestWithAutoApprove(extraConfig: Record<string, unknown> = {}): Manifest {
   return parseManifest({
     version: 1,
@@ -137,8 +154,37 @@ function manifestWithAutoApprove(extraConfig: Record<string, unknown> = {}): Man
         name: "understanding-before-execution",
         enabled: true,
         config: {
-          auto_approve: { when: ["bypassPermissions"], require_report: true },
+          auto_approve: {
+            when: ["bypassPermissions"],
+            harnesses: ["claude-code", "codex"],
+            require_report: true,
+          },
           ...extraConfig,
+        },
+      },
+    ],
+  });
+}
+
+/**
+ * The same opt-in with an explicit `harnesses` value, or — when the
+ * argument is omitted — with NO `harnesses` key at all, which is the
+ * shape every `auto_approve` block written before the Codex hook existed
+ * has.
+ */
+function manifestWithHarnesses(harnesses?: string[]): Manifest {
+  return parseManifest({
+    version: 1,
+    policy_packs: [
+      {
+        name: "understanding-before-execution",
+        enabled: true,
+        config: {
+          auto_approve: {
+            when: ["bypassPermissions"],
+            ...(harnesses === undefined ? {} : { harnesses }),
+            require_report: true,
+          },
         },
       },
     ],
@@ -218,13 +264,24 @@ interface CallOptions {
   commandField?: "tool_input" | "raw_input";
   /** `null` omits the field entirely. */
   sessionIdInPayload?: string | null;
-  /** `null` omits the field entirely; `""` sends the empty literal. */
-  permissionMode?: string | null;
-  /** `null` omits the field entirely; defaults to the matching transcript file. */
-  transcriptPath?: string | null;
+  /**
+   * `null` omits the field entirely; `""` sends the empty literal. Typed
+   * `unknown` so the non-string controls can send an array/object/number
+   * the way a malformed or hostile payload would.
+   */
+  permissionMode?: unknown;
+  /**
+   * `null` omits the field entirely; defaults to the matching transcript
+   * file. `unknown` for the same reason as `permissionMode`.
+   */
+  transcriptPath?: unknown;
   /** Extra top-level payload fields (e.g. a Claude-shaped `tool_use_id`). */
   extraPayload?: Record<string, unknown>;
-  /** Inject the ledger writer; defaults to a recorder that always succeeds. */
+  /**
+   * Inject the ledger writer (default). `false` leaves the hook to
+   * resolve one from the manifest, which carries no `grounding-mcp`
+   * server — the audit-only `write: null` branch.
+   */
   injectLedger?: boolean;
 }
 
@@ -352,6 +409,7 @@ describe("pack hook codex-pre-tool-use — auto-approval path (ADR slice 2)", ()
       ["absent", null],
       ["the empty string", ""],
       ["default", "default"],
+      ["acceptEdits", "acceptEdits"],
       ["plan", "plan"],
       ["dontAsk", "dontAsk"],
       ["an unknown literal", "definitelyNotAMode"],
@@ -719,7 +777,9 @@ describe("pack hook codex-pre-tool-use — auto-approval path (ADR slice 2)", ()
       const result = await call({ transcriptPath: absent });
 
       expect(result.blocked).toBe(true);
-      expect(result.stderr).toMatch(/auto-approval declined: transcript_path does not exist/);
+      expect(result.stderr).toMatch(
+        /auto-approval declined: transcript_path does not name an existing file/,
+      );
       expect(markerExists()).toBe(false);
       expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
     });
@@ -787,6 +847,360 @@ describe("pack hook codex-pre-tool-use — auto-approval path (ADR slice 2)", ()
       expect(markerExists()).toBe(false);
       expect(ledgerCalls).toEqual([]);
       expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
+    });
+  });
+
+  // One body, two call sites, but NOT one opt-in: `auto_approve.harnesses`
+  // is what keeps a Claude-only opt-in from silently covering every Codex
+  // session once the Codex hook started calling the same path (review
+  // round 1, HIGH). Every fixture below is otherwise complete — key,
+  // pending report, allowlisted mode, matching transcript — so the
+  // harness allowlist is the only thing that can decide the outcome.
+  describe("negative controls — the per-harness opt-in (auto_approve.harnesses)", () => {
+    it("N20 — an opt-in with NO harnesses key (the pre-Codex shape) does not cover Codex: block, no marker", async () => {
+      getOrCreateSigningKey(generatedDir);
+      const report = writePendingReport();
+
+      const result = await call({ manifest: manifestWithHarnesses() });
+
+      expect(result.blocked).toBe(true);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain(
+        'harness pack hook codex: auto-approval declined: harness "codex" is not listed in auto_approve.harnesses',
+      );
+      expect(markerExists()).toBe(false);
+      expect(ledgerCalls).toEqual([]);
+      expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
+    });
+
+    it("N21 — harnesses: [claude-code] explicitly: block, no marker", async () => {
+      getOrCreateSigningKey(generatedDir);
+      const report = writePendingReport();
+
+      const result = await call({ manifest: manifestWithHarnesses(["claude-code"]) });
+
+      expect(result.blocked).toBe(true);
+      expect(result.stderr).toMatch(
+        /auto-approval declined: harness "codex" is not listed in auto_approve\.harnesses/,
+      );
+      expect(markerExists()).toBe(false);
+      expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
+    });
+
+    it("N22 — harnesses: [codex] alone does auto-approve on Codex (the fixture is otherwise complete)", async () => {
+      // Positive control for N20/N21: without it, a fixture broken for
+      // some unrelated reason would produce the same block and the two
+      // controls above would pass for the wrong reason.
+      getOrCreateSigningKey(generatedDir);
+      const report = writePendingReport();
+
+      const result = await call({ manifest: manifestWithHarnesses(["codex"]) });
+
+      expect(result.blocked).toBe(false);
+      expect(result.source).toBe("marker");
+      expect(checkApprovalMarker(generatedDir, SESSION).marker?.approvedBy).toBe(
+        "auto-mode:codex:bypassPermissions",
+      );
+      expect(readReport(report.filePath)["approvalStatus"]).toBe("approved");
+    });
+
+    it("N23 — harnesses: [codex] only does not cover CLAUDE CODE either: the Claude hook blocks with its own stderr prefix", async () => {
+      // The mirror of N20/N21, and the reason the check lives in the
+      // shared body rather than in the Codex hook: the allowlist gates
+      // whichever runtime is calling.
+      getOrCreateSigningKey(generatedDir);
+      const report = writePendingReport();
+      process.env.CLAUDE_CODE_SESSION_ID = SESSION;
+
+      const claudeCall = async (manifest: Manifest) => {
+        const stdout = bufferStream();
+        const stderr = bufferStream();
+        const result = await runPackHookPreToolUseCli({
+          manifest,
+          stdin: readableFromString(
+            JSON.stringify({
+              session_id: SESSION,
+              tool_name: "Edit",
+              permission_mode: "bypassPermissions",
+            }),
+          ),
+          stdout: stdout.stream,
+          stderr: stderr.stream,
+          reportsDir,
+          generatedDir,
+          ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+          writeLedger: async (args: LedgerWriteArgs): Promise<{ ok: true }> => {
+            ledgerCalls.push(args);
+            return { ok: true };
+          },
+        });
+        return { blocked: result.blocked, stderr: stderr.read() };
+      };
+
+      const blockedRun = await claudeCall(manifestWithHarnesses(["codex"]));
+
+      expect(blockedRun.blocked).toBe(true);
+      expect(blockedRun.stderr).toContain(
+        'harness pack hook: auto-approval declined: harness "claude-code" is not listed in auto_approve.harnesses',
+      );
+      expect(markerExists()).toBe(false);
+      expect(ledgerCalls).toEqual([]);
+      expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
+
+      // Sanity: the SAME fixture with claude-code listed auto-approves,
+      // so the block above is the allowlist's doing.
+      const allowedRun = await claudeCall(manifestWithHarnesses(["claude-code"]));
+      expect(allowedRun.blocked).toBe(false);
+      expect(checkApprovalMarker(generatedDir, SESSION).marker?.approvedBy).toBe(
+        "auto-mode:claude-code:bypassPermissions",
+      );
+    });
+
+    it("N24 — a malformed auto_approve block is still fail-closed, and says so with the Codex prefix", async () => {
+      // `parseManifest` accepts `config` as a free record, so the runtime
+      // parser is the only defence here; the label it is called with is
+      // what makes the line readable next to the hook's other output.
+      getOrCreateSigningKey(generatedDir);
+      const report = writePendingReport();
+      const manifest = parseManifest({
+        version: 1,
+        policy_packs: [
+          {
+            name: "understanding-before-execution",
+            enabled: true,
+            config: {
+              auto_approve: {
+                when: ["bypassPermissions"],
+                harnesses: ["codex"],
+                // require_report missing: the whole block is ignored.
+              },
+            },
+          },
+        ],
+      });
+
+      const result = await call({ manifest });
+
+      expect(result.blocked).toBe(true);
+      expect(result.stderr).toContain(
+        "harness pack hook codex: config.auto_approve ignored (require_report must be true",
+      );
+      expect(markerExists()).toBe(false);
+      expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
+    });
+  });
+
+  // Which command the two EXEMPTIONS act on. `resolveToolInput`'s
+  // `!== undefined` precedence is right for the PostToolUse observers
+  // that share it, but at a gate it fails open in two shapes (review
+  // round 1, MEDIUM), so the Codex hook resolves its own.
+  describe("negative controls — the exemption's view of tool_input / raw_input", () => {
+    it("N25 — tool_input and raw_input naming DIFFERENT commands is not exempted on the harmless one", async () => {
+      // No signing key on purpose: with one, the auto path would open
+      // this call anyway and "blocked" would stop discriminating. So the
+      // exemption is the only thing that could allow it.
+      const report = writePendingReport();
+      expect(fs.existsSync(signingKeyPathFor(generatedDir))).toBe(false);
+
+      const result = await call({
+        toolName: "shell",
+        extraPayload: {
+          tool_input: { command: "ls" },
+          raw_input: { command: "rm -rf /tmp/x" },
+        },
+      });
+
+      expect(result.blocked).toBe(true);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).not.toMatch(/read-only Bash command, allowing/);
+      expect(markerExists()).toBe(false);
+      expect(ledgerCalls).toEqual([]);
+      expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
+    });
+
+    it("N26 — the same fixture with the two fields AGREEING is exempted (so N25 is the disagreement's doing)", async () => {
+      writePendingReport();
+
+      const result = await call({
+        toolName: "shell",
+        extraPayload: {
+          tool_input: { command: "ls" },
+          raw_input: { command: "ls" },
+        },
+      });
+
+      expect(result.blocked).toBe(false);
+      expect(result.stderr).toMatch(/read-only Bash command, allowing/);
+    });
+
+    it("N27 — a null tool_input does not shadow a read-only raw_input: exempted, and nothing is minted", async () => {
+      // Key + pending report present on purpose: if the exemption did
+      // NOT see the command, this call would reach the auto path and
+      // mint, so "no marker" is what discriminates.
+      getOrCreateSigningKey(generatedDir);
+      const report = writePendingReport();
+
+      const result = await call({
+        toolName: "shell",
+        extraPayload: { tool_input: null, raw_input: { command: "ls" } },
+      });
+
+      expect(result.blocked).toBe(false);
+      expect(result.source).toBe("none");
+      expect(result.stderr).toMatch(
+        /read-only Bash command, allowing without an approved report \(`ls`\)/,
+      );
+      expect(markerExists()).toBe(false);
+      expect(ledgerCalls).toEqual([]);
+      expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
+    });
+  });
+
+  describe("negative controls — malformed payload fields never throw into an allow", () => {
+    it("N28 — a session id resolvable only from $CODEX_SESSION_ID, with no payload session_id: block, no marker", async () => {
+      // The auto path compares the PAYLOAD's own session_id against the
+      // transcript file, never the env-resolved fallback the rest of the
+      // hook runs on — otherwise the env variant would compare the
+      // environment with itself.
+      getOrCreateSigningKey(generatedDir);
+      const report = writePendingReport();
+      process.env.CODEX_SESSION_ID = SESSION;
+
+      const result = await call({ sessionIdInPayload: null });
+
+      expect(result.blocked).toBe(true);
+      expect(result.stderr).toMatch(
+        /auto-approval declined: event payload carries no session_id/,
+      );
+      expect(markerExists()).toBe(false);
+      expect(ledgerCalls).toEqual([]);
+      expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
+    });
+
+    it.each([
+      ["an array", ["bypassPermissions"]],
+      ["an object", { mode: "bypassPermissions" }],
+      ["a number", 1],
+      ["true", true],
+    ])("N29 — a non-string permission_mode (%s): block, no marker, no throw", async (_l, mode) => {
+      getOrCreateSigningKey(generatedDir);
+      const report = writePendingReport();
+
+      const result = await call({ permissionMode: mode });
+
+      expect(result.blocked).toBe(true);
+      expect(result.exitCode).toBe(2);
+      expect(markerExists()).toBe(false);
+      expect(ledgerCalls).toEqual([]);
+      expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
+    });
+
+    it.each([
+      ["a number", 42],
+      ["an object", { path: "/tmp/rollout.jsonl" }],
+      ["an array", ["/tmp/rollout.jsonl"]],
+    ])("N30 — a non-string transcript_path (%s): block, no marker, no throw", async (_l, value) => {
+      getOrCreateSigningKey(generatedDir);
+      const report = writePendingReport();
+
+      const result = await call({ transcriptPath: value });
+
+      expect(result.blocked).toBe(true);
+      expect(result.stderr).toMatch(
+        /auto-approval declined: event payload carries no transcript_path/,
+      );
+      expect(markerExists()).toBe(false);
+      expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
+    });
+
+    it("N31 — a DIRECTORY named like the transcript file is not a transcript: block, no marker", async () => {
+      // `existsSync` cannot tell the two apart, so a session that can
+      // create a directory could satisfy the consistency check without
+      // ever naming a real rollout file. Still a consistency check and
+      // not a boundary (see SessionConsistencyCheck) — but a check that
+      // holds against what it says it holds against.
+      getOrCreateSigningKey(generatedDir);
+      const report = writePendingReport();
+      const dirPath = path.join(sessionsDir, `${SESSION}.jsonl`);
+      fs.mkdirSync(dirPath, { recursive: true });
+      expect(fs.existsSync(dirPath)).toBe(true);
+      expect(fs.statSync(dirPath).isDirectory()).toBe(true);
+
+      const result = await call({ transcriptPath: dirPath });
+
+      expect(result.blocked).toBe(true);
+      expect(result.stderr).toMatch(
+        /auto-approval declined: transcript_path does not name an existing file/,
+      );
+      expect(markerExists()).toBe(false);
+      expect(ledgerCalls).toEqual([]);
+      expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
+    });
+
+    it("N32 — a bare `<sid>.jsonl` FILE in the same place is accepted, so N31 is the directory's doing", async () => {
+      getOrCreateSigningKey(generatedDir);
+      writePendingReport();
+      const filePath = path.join(sessionsDir, `${SESSION}.jsonl`);
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      fs.writeFileSync(filePath, "");
+
+      const result = await call({ transcriptPath: filePath });
+
+      expect(result.blocked).toBe(false);
+      expect(result.source).toBe("marker");
+      expect(markerExists()).toBe(true);
+    });
+  });
+
+  describe("audit trail", () => {
+    it("A1 — the ledger fact names the CODEX hook as its source, not the Claude verb", async () => {
+      getOrCreateSigningKey(generatedDir);
+      writePendingReport();
+
+      expect((await call()).blocked).toBe(false);
+
+      expect(ledgerCalls).toHaveLength(1);
+      expect(ledgerCalls[0]?.source).toBe("harness-pack-hook-codex-pre-tool-use");
+    });
+
+    it("A2 — with no ledger writer resolvable at all, the auto-approval still allows and says the fact was not recorded", async () => {
+      // `injectLedger: false` leaves the hook to resolve a writer from
+      // the manifest, which declares no `grounding-mcp` server: the
+      // `write: null` branch. The ledger is audit-only and never a gate
+      // input, so this must cost one stderr line and nothing else.
+      getOrCreateSigningKey(generatedDir);
+      const report = writePendingReport();
+
+      const result = await call({ injectLedger: false });
+
+      expect(result.blocked).toBe(false);
+      expect(result.source).toBe("marker");
+      expect(result.stderr).toMatch(
+        new RegExp(
+          `auto-approval ledger fact understanding-auto-approved:${SESSION} not recorded \\(grounding-mcp not declared in manifest\\); audit only, continuing`,
+        ),
+      );
+      expect(ledgerCalls).toEqual([]);
+      expect(checkApprovalMarker(generatedDir, SESSION).matched).toBe(true);
+      expect(readReport(report.filePath)["approvalStatus"]).toBe("approved");
+    });
+
+    it("A3 — a marker MINTED by this hook shows up under `codex` in the doctor auto-approval listing", async () => {
+      // The ADR's slice 2 doctor probe, end to end: the marker is not
+      // hand-written here, it is whatever the Codex hook actually mints,
+      // so the listing is read against the real `approvedBy` shape.
+      getOrCreateSigningKey(generatedDir);
+      writePendingReport();
+
+      expect((await call()).blocked).toBe(false);
+
+      const listing = buildUgAutoApprovals(generatedDir, { recentSessions: 20 });
+      expect(listing.approvalsDirPresent).toBe(true);
+      expect(listing.byHarness["codex"]).toBeGreaterThanOrEqual(1);
+      expect(listing.byMode["bypassPermissions"]).toBeGreaterThanOrEqual(1);
+      expect(listing.entries).toContainEqual(
+        expect.objectContaining({ sessionId: SESSION, harness: "codex" }),
+      );
     });
   });
 });

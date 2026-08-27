@@ -184,6 +184,93 @@ describe("checkPolicyPackConfigs — understanding-before-execution", () => {
     expect(issues[0]?.configPath).toBe("auto_approve.when");
   });
 
+  // `auto_approve.harnesses` (slice 2 review round 1): the per-harness
+  // opt-in that keeps a shared auto path from widening a Claude-only
+  // opt-in to Codex. Absent is legal and means `[claude-code]`, which is
+  // why the "well-formed block" case above carries no `harnesses` key.
+  it("accepts a well-formed auto_approve.harnesses list", () => {
+    const m = manifestWith([
+      {
+        name: "understanding-before-execution",
+        config: {
+          auto_approve: {
+            when: ["bypassPermissions"],
+            harnesses: ["claude-code", "codex"],
+            require_report: true,
+          },
+        },
+      },
+    ]);
+    expect(checkPolicyPackConfigs(m)).toEqual([]);
+  });
+
+  it("rejects an empty auto_approve.harnesses array", () => {
+    const m = manifestWith([
+      {
+        name: "understanding-before-execution",
+        config: {
+          auto_approve: { when: ["bypassPermissions"], harnesses: [], require_report: true },
+        },
+      },
+    ]);
+    const issues = checkPolicyPackConfigs(m);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.configPath).toBe("auto_approve.harnesses");
+  });
+
+  it("rejects an unknown harness value at the exact index", () => {
+    const m = manifestWith([
+      {
+        name: "understanding-before-execution",
+        config: {
+          auto_approve: {
+            when: ["bypassPermissions"],
+            harnesses: ["claude-code", "cursor"],
+            require_report: true,
+          },
+        },
+      },
+    ]);
+    const issues = checkPolicyPackConfigs(m);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.configPath).toBe("auto_approve.harnesses[1]");
+    expect(issues[0]?.code).toBe("invalid_enum_value");
+  });
+
+  it("rejects a non-array auto_approve.harnesses", () => {
+    const m = manifestWith([
+      {
+        name: "understanding-before-execution",
+        config: {
+          auto_approve: { when: ["bypassPermissions"], harnesses: "codex", require_report: true },
+        },
+      },
+    ]);
+    const issues = checkPolicyPackConfigs(m);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.configPath).toBe("auto_approve.harnesses");
+    expect(issues[0]?.code).toBe("invalid_type");
+  });
+
+  it("rejects a duplicated auto_approve.harnesses entry", () => {
+    const m = manifestWith([
+      {
+        name: "understanding-before-execution",
+        config: {
+          auto_approve: {
+            when: ["bypassPermissions"],
+            harnesses: ["codex", "codex"],
+            require_report: true,
+          },
+        },
+      },
+    ]);
+    const issues = checkPolicyPackConfigs(m);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.configPath).toBe("auto_approve.harnesses");
+    expect(issues[0]?.message).toMatch(/duplicate/);
+  });
+
   it("rejects an empty entry inside auto_approve.when (nested array path)", () => {
     const m = manifestWith([
       {

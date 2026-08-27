@@ -89,13 +89,39 @@ export function autoApprovedLedgerTagFor(sessionId: string): string {
   return `understanding-auto-approved:${sessionId}`;
 }
 
+/**
+ * The harness identifiers `auto_approve.harnesses` accepts, in the order
+ * the schema and every diagnostic list them. Shared with the pack's zod
+ * `configSchema` (`../understanding-before-execution.ts`) so the lint-time
+ * enum and this runtime parser cannot drift apart.
+ */
+export const AUTO_APPROVE_HARNESS_VALUES = [CLAUDE_CODE_HARNESS, CODEX_HARNESS] as const;
+
+/**
+ * What `auto_approve.harnesses` resolves to when the key is ABSENT.
+ * Claude Code only, deliberately: slice 1 shipped `auto_approve` as a
+ * Claude-only opt-in, so a repo that opted in before slice 2 must keep
+ * exactly the meaning it had — adding the Codex hook to the shared body
+ * must not silently extend an existing opt-in to a second runtime
+ * (reviewer round-1 finding on slice 2). Opting Codex in is an explicit,
+ * visible config edit.
+ */
+export const DEFAULT_AUTO_APPROVE_HARNESSES: readonly string[] = [CLAUDE_CODE_HARNESS];
+
 /** Parsed, validated `auto_approve` pack-config block. */
 export interface AutoApproveConfig {
   /** Allowlist of `permission_mode` payload literals eligible for auto-approval. */
   when: string[];
+  /**
+   * Allowlist of HARNESSES whose PreToolUse hook may take the auto path
+   * at all. Always non-empty: an absent key resolves to
+   * {@link DEFAULT_AUTO_APPROVE_HARNESSES}, and every malformed shape
+   * fails the whole block closed rather than defaulting.
+   */
+  harnesses: string[];
 }
 
-const KNOWN_AUTO_APPROVE_KEYS = new Set(["when", "require_report"]);
+const KNOWN_AUTO_APPROVE_KEYS = new Set(["when", "harnesses", "require_report"]);
 
 /**
  * Parse the optional `auto_approve` pack-config block
@@ -117,15 +143,21 @@ const KNOWN_AUTO_APPROVE_KEYS = new Set(["when", "require_report"]);
  * silently — that is the ordinary "not opted in" case, not a warning.
  * Every other malformed shape writes exactly one stderr line and
  * returns `null`.
+ *
+ * `label` is the stderr prefix of the calling hook, so a Codex-side
+ * warning reads `harness pack hook codex: ...` like every other line
+ * that hook writes. The default reproduces the Claude Code hook's
+ * wording byte-for-byte.
  */
 export function parseAutoApprove(
   raw: unknown,
   stderr?: { write(s: string): void } | null,
+  label = "harness pack hook",
 ): AutoApproveConfig | null {
   if (raw === undefined || raw === null) return null;
   if (typeof raw !== "object" || Array.isArray(raw)) {
     stderr?.write(
-      `harness pack hook: config.auto_approve ignored (expected object, got ${typeof raw})\n`,
+      `${label}: config.auto_approve ignored (expected object, got ${typeof raw})\n`,
     );
     return null;
   }
@@ -134,7 +166,7 @@ export function parseAutoApprove(
   const unknownKeys = Object.keys(obj).filter((k) => !KNOWN_AUTO_APPROVE_KEYS.has(k));
   if (unknownKeys.length > 0) {
     stderr?.write(
-      `harness pack hook: config.auto_approve ignored (unknown key(s): ${unknownKeys.join(", ")})\n`,
+      `${label}: config.auto_approve ignored (unknown key(s): ${unknownKeys.join(", ")})\n`,
     );
     return null;
   }
@@ -142,7 +174,7 @@ export function parseAutoApprove(
   const whenRaw = obj["when"];
   if (!Array.isArray(whenRaw) || whenRaw.length === 0) {
     stderr?.write(
-      `harness pack hook: config.auto_approve.when ignored (expected a non-empty string[], got ${
+      `${label}: config.auto_approve.when ignored (expected a non-empty string[], got ${
         Array.isArray(whenRaw) ? "empty array" : typeof whenRaw
       })\n`,
     );
@@ -152,24 +184,61 @@ export function parseAutoApprove(
   for (const v of whenRaw) {
     if (typeof v !== "string" || v.length === 0) {
       stderr?.write(
-        `harness pack hook: config.auto_approve.when ignored (every entry must be a non-empty string, got ${typeof v})\n`,
+        `${label}: config.auto_approve.when ignored (every entry must be a non-empty string, got ${typeof v})\n`,
       );
       return null;
     }
     when.push(v);
   }
 
+  // `harnesses`: absent means the slice-1 default (Claude Code only).
+  // Present means an exact, non-empty, duplicate-free list of the known
+  // harness identifiers — anything else fails the whole block closed,
+  // like every other malformed shape here, so a typo'd entry can never
+  // widen the opt-in to a runtime the operator did not name.
+  const harnessesRaw = obj["harnesses"];
+  let harnesses: string[] = [...DEFAULT_AUTO_APPROVE_HARNESSES];
+  if (harnessesRaw !== undefined) {
+    if (!Array.isArray(harnessesRaw) || harnessesRaw.length === 0) {
+      stderr?.write(
+        `${label}: config.auto_approve.harnesses ignored (expected a non-empty array of ${AUTO_APPROVE_HARNESS_VALUES.join(
+          " | ",
+        )}, got ${Array.isArray(harnessesRaw) ? "empty array" : typeof harnessesRaw})\n`,
+      );
+      return null;
+    }
+    const seen: string[] = [];
+    for (const v of harnessesRaw) {
+      if (typeof v !== "string" || !AUTO_APPROVE_HARNESS_VALUES.includes(v as never)) {
+        stderr?.write(
+          `${label}: config.auto_approve.harnesses ignored (every entry must be one of ${AUTO_APPROVE_HARNESS_VALUES.join(
+            ", ",
+          )}, got ${typeof v === "string" ? `"${v}"` : typeof v})\n`,
+        );
+        return null;
+      }
+      if (seen.includes(v)) {
+        stderr?.write(
+          `${label}: config.auto_approve.harnesses ignored (duplicate entry "${v}")\n`,
+        );
+        return null;
+      }
+      seen.push(v);
+    }
+    harnesses = seen;
+  }
+
   const requireReport = obj["require_report"];
   if (requireReport !== true) {
     stderr?.write(
-      `harness pack hook: config.auto_approve ignored (require_report must be true, got ${
+      `${label}: config.auto_approve ignored (require_report must be true, got ${
         requireReport === false ? "false" : typeof requireReport
       })\n`,
     );
     return null;
   }
 
-  return { when };
+  return { when, harnesses };
 }
 
 /**
@@ -183,4 +252,25 @@ export function permissionModeAllowed(cfg: AutoApproveConfig | null, mode: unkno
   if (cfg === null) return false;
   if (typeof mode !== "string" || mode.length === 0) return false;
   return cfg.when.includes(mode);
+}
+
+/**
+ * Per-harness opt-in membership, the same exact-string-equality
+ * discipline {@link permissionModeAllowed} applies to `when`. `cfg ===
+ * null` (block absent or malformed) means no auto-approval regardless of
+ * the harness, and an unlisted harness means no auto-approval regardless
+ * of `when` — the two allowlists are independent AND conditions, not
+ * alternatives.
+ *
+ * Deliberately NOT re-exported through
+ * `understanding-before-execution/index.ts`: like {@link CODEX_HARNESS},
+ * its only runtime consumer is the shared PreToolUse auto path
+ * (`src/cli/pack/auto-approve-path.ts`), and widening the runtime shim's
+ * pinned public surface (tests/policy-packs/ube-export-surface.test.ts)
+ * is a separate, conscious act.
+ */
+export function harnessAllowed(cfg: AutoApproveConfig | null, harness: unknown): boolean {
+  if (cfg === null) return false;
+  if (typeof harness !== "string" || harness.length === 0) return false;
+  return cfg.harnesses.includes(harness);
 }

@@ -288,6 +288,7 @@ Since task `d78fb3c7`, the pack's `config:` block is validated by `harness valid
 | `approval_lifecycle.expire_on_bash_match` | array of regex strings | optional; clear the marker when a Bash call matches any of these (gh-cli workflows); see "expire_on_bash_match: start-anchored, with a documented fail-open limitation" below for the shipped defaults' known gap |
 | `approval_lifecycle.max_age` | duration string (`1h`, `30m`, ...) | optional safety net for sessions that never hit a listed tool / Bash boundary |
 | `auto_approve.when` | array of permission-mode strings | optional; allowlist of `permission_mode` values eligible for a hook-written signed auto-marker |
+| `auto_approve.harnesses` | non-empty array of `claude-code` / `codex`, no duplicates | optional; which runtimes' PreToolUse hooks may take the auto path. Absent means `[claude-code]` |
 | `auto_approve.require_report` | literal `true` | required when `auto_approve` is present; `false` or missing is a schema error |
 | `ux` | `PolicyUxSchema` (`cannot` + `required[]` + `run[]`) | optional; renders agent-facing remediation when the PreToolUse blocker fires |
 | `producers` | array of `ProducerSchema` (`kind` + recipe) | optional; companion to `ux:` for the same blocker render path |
@@ -298,6 +299,8 @@ Any other top-level key is rejected as a typo. New keys land in this schema (`sr
 
 `auto_approve` lets an operator opt a specific permission mode into a hook-written, signed auto-marker instead of a human `harness approve understanding` call. It is a rule-only opt-in: the PreToolUse hook still requires a pending Understanding Report for the session and writes the marker through the same signing path a human approval uses. See `docs/decisions/2026-08-27-ug-auto-mode-approval.md` for the full design, the auto path's decision-order placement, and its threat model.
 
+Which runtimes the opt-in covers is a separate, explicit key: `auto_approve.harnesses` lists the harnesses whose PreToolUse hook may take the auto path at all, and an absent key means `[claude-code]`. Codex must therefore be named (`harnesses: [claude-code, codex]`, or `[codex]` alone) before a Codex session can auto-approve anything; an `auto_approve` block that predates the Codex hook keeps exactly the meaning it had, and widening it to a second runtime stays a visible config edit rather than a side effect of both hooks sharing one code path. An empty array, an unknown value, a duplicate entry, or a non-array is a schema error, and the runtime parser treats the same shapes as "not opted in" rather than defaulting.
+
 Both PreToolUse hooks, Claude Code's `harness pack hook pre-tool-use` and Codex's `harness pack hook codex-pre-tool-use`, run the same `auto_approve` attempt at the same point in their decision order and against the same `when` block; only the minted marker's `approvedBy` prefix differs (`auto-mode:claude-code:<mode>` vs `auto-mode:codex:<mode>`), because the two runtimes hand the attempt different session-consistency evidence: Claude Code's hook environment carries `$CLAUDE_CODE_SESSION_ID`, while Codex exports no session-id environment variable to hook processes at all, so the Codex attempt is instead checked against the payload's `transcript_path` (the file's own name must carry the session id, and the file must exist on disk). On Codex, an allowlisted `bypassPermissions` covers every shape where the effective approval policy issues no prompts at all (`never`, `--dangerously-bypass-approvals-and-sandbox`, the Full Access profile, and any headless `codex exec` run without `--approve-for-me`) regardless of sandbox mode; a sandboxed, read-only headless run still reports `bypassPermissions` if it prompts for nothing. This differs from Claude Code, where `bypassPermissions` means the permission system itself is off. On-request shapes on Codex report `default`. See `docs/okf/understanding-gate-auto-mode-signals.md` for the measured evidence behind this.
 
 A literal listed in `auto_approve.when` must be one that a checked-in dogfood fixture shows some harness actually emitting; the measured set lives in the registry module `src/policy-packs/builtin/understanding-before-execution/measured-permission-modes.ts` and `harness validate` rejects any other literal at lint time (`checkUnderstandingBeforeExecutionAutoApproveMeasured`, `src/cli/validate/checks.ts`).
@@ -307,6 +310,7 @@ Recommended shape:
 ```yaml
 auto_approve:
   when: [bypassPermissions]
+  harnesses: [claude-code] # add `codex` to opt that runtime in as well
   require_report: true
 ```
 

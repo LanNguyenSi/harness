@@ -36,7 +36,7 @@ import {
   type ApprovalCheckResult,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { findLatestParseError, renderMalformedSectionsNotice } from "../approve/understanding.js";
-import { attemptAutoApproval } from "./auto-approve-path.js";
+import { attemptAutoApproval, AUTO_APPROVE_LEDGER_SOURCE } from "./auto-approve-path.js";
 import {
   resolveGeneratedDir,
   writePendingApproval,
@@ -713,6 +713,10 @@ export async function runPackHookPreToolUseCli(
     // to read directly, so the wording of every diagnostic on this path
     // is unchanged.
     harness: CLAUDE_CODE_HARNESS,
+    // This hook's own verb on the audit-only ledger fact, and its own
+    // stderr prefix by omission (`label` defaults to "harness pack
+    // hook"): both keep this path's output byte-identical to slice 1's.
+    ledgerSource: AUTO_APPROVE_LEDGER_SOURCE,
     sessionConsistency: { kind: "env", variable: "CLAUDE_CODE_SESSION_ID" },
     packConfig: declared.config,
     reportsDir,

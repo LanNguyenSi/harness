@@ -55,7 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `permission_mode` and `transcript_path` from the payload and resolves
   tool arguments through the shared `tool_input`/`raw_input` precedence
   (`tool_input` preferred) so the real Codex payload reaches the
-  read-only and recovery-commit exemptions too. A registry of measured
+  read-only and recovery-commit exemptions too. The block gains an
+  explicit `harnesses` list (`claude-code`, `codex`; default Claude Code
+  only), so an existing Claude-only opt-in never extends to Codex without
+  naming it, and the Codex exemption call site fails closed on a
+  `tool_input`/`raw_input` pair that disagrees. A registry of measured
   `(harness, permission_mode, fixture)` triples
   (`src/policy-packs/builtin/understanding-before-execution/measured-permission-modes.ts`)
   ships inside the package; a new `harness validate` check
