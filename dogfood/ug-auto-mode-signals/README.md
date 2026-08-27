@@ -120,6 +120,47 @@ config directory for the duration of each run and deleted afterward
 optional; skip it if your Claude Code auth is keychain-backed and does not
 need this file).
 
+Codex capture (sections (k) to (m)): machine class Linux/WSL2 x86_64 (host
+redacted as `<host>`), Codex CLI 0.150.1 (`@openai/codex` from npm,
+`payloads/codex.version.txt`), ChatGPT login, feature flag `hooks` =
+stable/true (`codex features list`). Each run gets its own isolated
+`CODEX_HOME` (exec: one per script invocation; TUI: one per run) holding a
+`config.toml` (`[features]\nhooks = true` plus any per-run keys under test)
+and a `hooks.json` with `{ cat; echo; } >> <file>` command hooks on
+`SessionStart`, `UserPromptSubmit`, `PreToolUse` (plus a second `PreToolUse`
+hook that dumps the hook process's own environment), `PermissionRequest`,
+`PostToolUse`, `Stop` and `SessionEnd`, and a temporary copy of `auth.json`
+removed by the scripts' `trap ... EXIT` cleanup (verified absent afterward).
+Every run passes `--dangerously-bypass-hook-trust` (hooks from a fresh,
+just-created `CODEX_HOME` are untrusted otherwise) and, for exec,
+`--skip-git-repo-check --json`. Prompt: one shell command (exec:
+`env | grep -i -E 'codex|claude|permission' | sort`; TUI: `echo tui-probe`),
+then the word "done". Script `codex-capture.sh` drives the 14
+`codex exec` shapes (flags/config matrix) plus the `untrusted` error case;
+script `codex-interactive-capture.sh` drives the 11 TUI shapes over `tmux`.
+The TUI driver's only keystrokes are: Enter on the directory-trust dialog for
+the scratch cwd, an optional Shift+Tab (plan mode) or `/permissions`
+navigation (arrow keys plus Enter to pick a profile) for the shapes that need
+it, the prompt text, and `/quit`; no command-approval prompt is ever
+answered.
+
+opencode capture (section (n)): opencode 1.18.18 (`opencode/version.txt`)
+against a local Ollama model (`ollama/gemma4-q8-64k`), probed in
+`dogfood/ug-auto-mode-signals/opencode/`. Two isolated scratch projects, each
+with its own `opencode.json` and a `.opencode/plugin/auto-probe.ts` plugin
+that records every `plugin.init`, `config`, `tool.execute.before`,
+`tool.execute.after` and `shell.env` hook call plus the raw event stream to a
+`PROBE_LOG` file: `project` (default permissions) and `project-ask`
+(`"permission": {"bash": "ask"}`). Five run shapes: (a) `project`,
+`opencode run --auto`; (b) `project`, `opencode run` (no `--auto`); (c)
+`project-ask`, `opencode run --auto`; (d) `project-ask`, `opencode run` (no
+`--auto`); (e) `project-ask`, `opencode serve --port 4097` plus a separate
+`opencode run --attach --auto` against that server. Static evidence
+(`opencode/help-main.txt`, `help-run.txt`, `binary-context.txt`,
+`binary-context-permission-ask.txt`) comes from `opencode --help` /
+`opencode run --help` and `strings` grep over the installed
+`opencode.exe` binary.
+
 ## Reproducing
 
 ```sh
@@ -131,17 +172,32 @@ UG_SIG_OUT=$(mktemp -d) ./retry-probe.sh      # block-and-retry, 3+3 runs
 UG_SIG_OUT=$(mktemp -d) ./interactive-capture.sh    # interactive payload capture, 2 runs
 UG_SIG_OUT=$(mktemp -d) ./interactive-ask-probe.sh  # interactive ask resolution, 2 runs
 UG_SIG_OUT=$(mktemp -d) ./subagent-capture.sh       # subagent session id, 2 runs
+UG_SIG_OUT=$(mktemp -d) ./codex-capture.sh              # codex exec, 14 shapes + untrusted
+UG_SIG_OUT=$(mktemp -d) ./codex-interactive-capture.sh  # codex TUI, 11 shapes via tmux
 ```
 
-All eight scripts default `UG_SIG_OUT` / `UG_SIG_CONFIG_DIR` / `UG_SIG_WORK`
-to fresh `mktemp -d` directories when unset, so they run standalone without
-any path editing. None of them touch the operator's default
-`CLAUDE_CONFIG_DIR`. The three added ones take `UG_SIG_RUNS` (run count,
-default 2) and `UG_SIG_CLAUDE` (binary, default `claude` from `PATH`) as
-well; `interactive-ask-probe.sh` also takes `UG_SIG_SETTLE`.
+All eight Claude Code scripts default `UG_SIG_OUT` / `UG_SIG_CONFIG_DIR` /
+`UG_SIG_WORK` to fresh `mktemp -d` directories when unset, so they run
+standalone without any path editing. None of them touch the operator's
+default `CLAUDE_CONFIG_DIR`. The three added ones take `UG_SIG_RUNS` (run
+count, default 2) and `UG_SIG_CLAUDE` (binary, default `claude` from `PATH`)
+as well; `interactive-ask-probe.sh` also takes `UG_SIG_SETTLE`.
 `interactive-lib.sh` is sourced by the two interactive scripts and is not
 run on its own. The two interactive scripts need `tmux` on `PATH` and kill
 every session they create through a `trap ... EXIT INT TERM`.
+
+`codex-capture.sh` defaults `UG_SIG_OUT` to a fresh `mktemp -d` and takes
+`UG_SIG_CODEX` (binary, default `codex` from `PATH`); it needs no
+`CODEX_HOME` set beforehand, since it creates a fresh one per shape.
+`codex-interactive-capture.sh` takes the same variables plus `UG_SIG_RUNS`
+where a shape is re-run, and needs `tmux` on `PATH`; it kills every tmux
+session it creates through a `trap ... EXIT INT TERM`, same as the Claude
+Code interactive scripts. Neither Codex script touches the operator's
+default `CODEX_HOME`. The opencode probe (`dogfood/ug-auto-mode-signals/opencode/`)
+is not a standalone script; its five runs (`run-{a,b,c,d,e}.cmd`) were driven
+by hand against the two scratch projects checked in under `opencode/project`
+and `opencode/project-ask`, with `PROBE_LOG` set per run to the matching
+`opencode/probe-<shape>.jsonl`.
 
 ## Redaction
 
@@ -179,6 +235,32 @@ secret-looking value appeared in the added fixtures, so the table above is
 unchanged. The added hook-env dump redacts
 `CLAUDE_CODE_MESSAGING_TOKEN` and `CLAUDE_CODE_BRIDGE_SESSION_ID` in the hook
 command itself, before the value ever reaches a file.
+
+Codex and opencode fixtures (`payloads/codex-*`, `opencode/`) apply the same
+per-user, per-machine redactions plus these Codex/opencode-specific ones,
+verified afterward with `grep`:
+
+| Match | Replacement |
+| ----- | ----------- |
+| the Codex capture host's hostname (WSL2 machine) | `<host>` |
+| the per-shape `CODEX_HOME` scratch directory (exec) | `<scratch>/codex-home` |
+| the per-shape scratch cwd (exec) | `<scratch>/codex-work` |
+| the per-run scratch directory holding `codex-capture.sh`'s own output | `<scratch>/codex-cap` |
+| the opencode scratch probe root (`project`, `project-ask`) | `<scratch>/opencode-probe` |
+| the opencode probe user's login (`username` field, `env`) | `<login>` |
+
+Re-run after sections (k) to (n) were added, with the three placeholders
+in the command above substituted by the Codex capture host's real values
+(its login name, its scratch prefix `~/tmp/ug-codex*`, and its hostname,
+none of which is spelled out here) and, for the opencode probe, by the
+opencode host's login and scratch prefix: zero hits. Note that `<login>`
+is now also a real placeholder VALUE in the five
+`opencode/probe-*.jsonl` files (the opencode `config` payload's `username`
+field), so the command must not be run with the literal token `<login>`
+left in place; it would then match its own redaction output. Codex's own
+`session_id` and `turn_id` values (throwaway, generated for this capture)
+and opencode's `sessionID`/`callID`/`pid` values are kept as-is, the same
+treatment as the Claude Code `session_id` values in the table above.
 
 ## Results
 
@@ -509,3 +591,159 @@ transcript line counts by `type` and by `isSidechain`).
   `SubagentStop`'s `agent_transcript_path`, and there every entry has
   `isSidechain: true`. Counts per run in
   `payloads/subagent-bypass.transcript-shape.json`.
+
+### (k) Codex exec, `permission_mode` by shape (14 successful runs plus `untrusted`)
+
+Method: see "Codex capture" above. Script: `codex-capture.sh`. Fixtures:
+`payloads/codex-exec-<shape>.<Event>.json` (six events per shape),
+`payloads/codex-exec-<shape>.flags.txt` (the flags/config under test),
+`payloads/codex-exec-<shape>.events.jsonl` (the raw `--json` event stream)
+and `payloads/codex-exec-<shape>.PreToolUse.env.txt` (the hook process env
+for that run's `PreToolUse` call).
+
+| shape | flags / config (`payloads/codex-exec-<shape>.flags.txt`) | `PreToolUse` `permission_mode` | `SessionStart` |
+| --- | --- | --- | --- |
+| exec-default | (none) | `bypassPermissions` | `bypassPermissions` |
+| exec-readonly | `-s read-only` | `bypassPermissions` | `bypassPermissions` |
+| exec-workspace | `-s workspace-write` | `bypassPermissions` | `bypassPermissions` |
+| exec-fullaccess | `-s danger-full-access` | `bypassPermissions` | `bypassPermissions` |
+| exec-never-ws | `-c approval_policy="never" -s workspace-write` | `bypassPermissions` | `bypassPermissions` |
+| exec-never-full | `-c approval_policy="never" -s danger-full-access` | `bypassPermissions` | `bypassPermissions` |
+| exec-onfailure | `-c approval_policy="on-failure"` | `bypassPermissions` | `bypassPermissions` |
+| exec-onrequest | `-c approval_policy="on-request"` | `bypassPermissions` | `bypassPermissions` |
+| exec-bypass | `--dangerously-bypass-approvals-and-sandbox` | `bypassPermissions` | `bypassPermissions` |
+| exec-approve-for-me | `--approve-for-me` | `default` | `default` |
+| config-never-full | `config.toml`: `approval_policy = "never"`, `sandbox_mode = "danger-full-access"` | `bypassPermissions` | `bypassPermissions` |
+| config-never-ws | `config.toml`: `approval_policy = "never"`, `sandbox_mode = "workspace-write"` | `bypassPermissions` | `bypassPermissions` |
+| config-perm-fullaccess | `config.toml`: `default_permissions = ":danger-full-access"` | `bypassPermissions` | `bypassPermissions` |
+| config-perm-readonly | `config.toml`: `default_permissions = ":read-only"` | `bypassPermissions` | `bypassPermissions` |
+| exec-untrusted | `-c approval_policy="untrusted"` | (no run) | error, `payloads/codex-exec-untrusted.events.jsonl`: `approval_policy = "untrusted" is no longer supported; remove this setting` |
+
+Every value in this table was re-read directly from the fixture (`grep -o
+'"permission_mode": "[^"]*"' payloads/codex-exec-<shape>.PreToolUse.json`),
+not carried over from a prior summary. `codex exec` has no
+`-a`/`--ask-for-approval` flag in 0.150.1 (only the TUI has it); a headless
+run auto-approves (`bypassPermissions`) unless `--approve-for-me` routes
+approvals through automatic review (`default`), regardless of
+`sandbox_mode` or `default_permissions`. No `PermissionRequest` event fired
+in any of the 14 runs. `tool_use_id` has the shape `exec-<uuid>`
+(`payloads/codex-exec-default.PreToolUse.json`).
+
+### (l) Codex TUI, `permission_mode` by shape (11 runs)
+
+Method: see "Codex capture" above. Script: `codex-interactive-capture.sh`.
+Fixtures: `payloads/codex-tui-<shape>.<Event>.json` (`SessionStart`,
+`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`; no `SessionEnd`
+recorder was registered for the TUI shapes), `payloads/codex-tui-<shape>.config.toml`,
+`payloads/codex-tui-<shape>.pane.txt` and `payloads/codex-tui-<shape>.footer.txt`.
+
+| shape | how (`payloads/codex-tui-<shape>.flags.txt` / config) | `PreToolUse` `permission_mode` | footer |
+| --- | --- | --- | --- |
+| tui-default | no flags ("Ask for approval" profile) | `default` | `gpt-5.6-terra default · <scratch>/codex-work` |
+| tui-plan | Shift+Tab once | `default` | `gpt-5.6-terra medium ... Plan mode` |
+| tui-perm-approve-for-me | `/permissions` -> 2 "Approve for me" | `default` | `gpt-5.6-terra default · <scratch>/codex-work` |
+| tui-perm-full-access | `/permissions` -> 3 "Full Access" | `bypassPermissions` | `Press enter to confirm or esc to go back` |
+| tui-never | `-a never` | `bypassPermissions` | `gpt-5.6-terra default · <scratch>/codex-work` |
+| tui-bypass | `--dangerously-bypass-approvals-and-sandbox` | `bypassPermissions` | `gpt-5.6-terra default · <scratch>/codex-work` |
+| tui-readonly | `-s read-only` | `default` | `gpt-5.6-terra default · <scratch>/codex-work` |
+| tui-fullaccess | `-s danger-full-access` | `default` | `gpt-5.6-terra default · <scratch>/codex-work` |
+| tui-approve-for-me | `--approve-for-me` | `default` | `gpt-5.6-terra default · <scratch>/codex-work` |
+| tui-config-never | `config.toml`: `approval_policy = "never"`, `sandbox_mode = "danger-full-access"` | `bypassPermissions` | `gpt-5.6-terra default · <scratch>/codex-work` |
+| tui-config-never-ws | `config.toml`: `approval_policy = "never"`, `sandbox_mode = "workspace-write"` | `bypassPermissions` | `gpt-5.6-terra default · <scratch>/codex-work` |
+
+`tui-perm-full-access`'s footer file caught the `/permissions` menu's own
+confirmation line ("Press enter to confirm or esc to go back") instead of
+the usual status footer, because the recorder polled the pane at the moment
+the menu was still open; `payloads/codex-tui-perm-full-access.permissions-menu.txt`
+holds the full menu screen ("Update Model Permissions": 1. Ask for approval
+(current), 2. Approve for me, 3. Full Access selected), and the pane after
+confirmation shows the normal prompt with no menu. `tui-approve-for-me` was
+re-run once: a first attempt was quit (`/quit`) before the probe's Bash call
+completed, producing no `PreToolUse` fixture, and the row above is the
+successful re-run.
+
+The footer's mode label (`default` / `Plan mode`) reflects the Shift+Tab
+collaboration mode, not `permission_mode`; only the `/permissions` menu
+("Update Model Permissions": Ask for approval / Approve for me / Full
+Access) moves `permission_mode`. Plan mode still reports `default` in the
+payload. Combined with section (k), the vocabulary actually observed across
+all 25 Codex runs is `bypassPermissions` and `default`; the Codex hooks
+documentation's `plan`, `acceptEdits` and `dontAsk` values were never
+produced by any shape tried here.
+
+### (m) Codex payload shape and hook environment
+
+`PreToolUse` fields, all 25 runs (`payloads/codex-exec-default.PreToolUse.json`,
+confirmed identical field set across the other shapes): `session_id`,
+`turn_id`, `transcript_path`, `cwd`, `hook_event_name`, `model`,
+`permission_mode`, `tool_name` (`Bash`), `tool_input` (`{command}`),
+`tool_use_id`. `transcript_path` follows
+`<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-<ts>-<session_id>.jsonl` and is
+present on disk at hook time (verified against
+`payloads/codex-exec-default.PreToolUse.json`'s `transcript_path` value).
+Shape-identical to the Claude Code `PreToolUse` payload of README section
+(b) minus `prompt_id`/`effort`, plus `turn_id`/`model`; the real payload
+sends `tool_input`, not harness's older portable `raw_input` name.
+
+Hook process environment (`payloads/codex-exec-default.PreToolUse.env.txt`,
+same set in every `codex-exec-*`/`codex-tui-*.PreToolUse.env.txt`): only
+`CODEX_HOME`, `CODEX_MANAGED_BY_NPM=1`, `CODEX_MANAGED_PACKAGE_ROOT`, `PWD`,
+`SHLVL`, `_=/usr/bin/env`, and the `ps` line showing the parent chain
+`codex -> bash`. NO session-id variable of any name in the hook's own
+environment (the env probe covers everything the hook process sees). This
+is the shape-level consequence: the Claude Code session-consistency check of
+README sections (c) and (h) (payload `session_id` vs env
+`CLAUDE_CODE_SESSION_ID`) has no Codex counterpart, since Codex never puts a
+session id in the hook process's environment at all.
+
+### (n) opencode `--auto` plugin observability (5 runs)
+
+Method: see "opencode capture" above. Fixtures:
+`opencode/probe-{a,b,c,d,e-serve}.jsonl` (per-hook event log),
+`opencode/run-{a,b,c,d,e}.cmd`/`.stdout`/`.stderr`, `opencode/diff-a-vs-b.txt`
+(field-level diff between the auto and non-auto runs against the default
+project), `opencode/binary-context.txt` and
+`opencode/binary-context-permission-ask.txt` (`strings` grep over the
+installed `opencode.exe`).
+
+| run | project | command | plugin-visible result |
+| --- | --- | --- | --- |
+| (a) | `project` (default permissions) | `opencode run --auto` | bash allowed, no permission event fired (`probe-a.jsonl`) |
+| (b) | `project` | `opencode run` (no `--auto`) | bash allowed, no permission event fired (`probe-b.jsonl`); byte-identical to (a) except `argv`/`bunArgv` (`--auto` token), pids, session/call ids and `PROBE_*` env (`diff-a-vs-b.txt`) |
+| (c) | `project-ask` (`"permission": {"bash": "ask"}`) | `opencode run --auto` | `tool.execute.before` fires directly (no `permission.asked`/`permission.replied` event reaches the plugin); tool ran (`probe-c.jsonl`) |
+| (d) | `project-ask` | `opencode run` (no `--auto`) | `tool.execute.before` fires, tool ran (`probe-d.jsonl`); no distinguishing permission event visible to the plugin here either |
+| (e) | `project-ask` | `opencode serve --port 4097` + separate `opencode run --attach --auto` | plugin runs inside the long-lived `serve` process; `argv` carries no `--auto` (it belongs to the detached `run --attach` invocation, a different process); tool ran (`probe-e-serve.jsonl`) |
+
+`--auto` (client-side aliases `--yolo`, `--dangerously-skip-permissions`,
+confirmed in `opencode/binary-context.txt`'s `yolo` and
+`dangerously-skip-permissions` excerpts) is implemented purely in the CLI
+client: `opencode/binary-context.txt`'s `reply:"once"` excerpt shows the
+`permission.asked` event handler replying `{reply:"once"}` when
+`u.mode==="auto"` and otherwise queuing the prompt or (for `run` without
+`--auto`) replying `{reply:"reject"}`. No config field, env var, or
+`PluginInput` field carries the mode; `config.permission` in every captured
+`config` hook payload with `--auto` matches the payload without it, field
+for field, except argv (`diff-a-vs-b.txt`). The typed `permission.ask`
+plugin-facing hook name from the docs does not appear at all in the
+installed 1.18.18 binary's source strings
+(`opencode/binary-context-permission-ask.txt`: `count '"permission.ask"': 0`);
+the real internal event names are `permission.asked` and
+`permission.replied`, and this probe's plugin (`.opencode/plugin/auto-probe.ts`)
+never received either for any of the five runs (defaults allow `bash`, so no
+permission was ever actually asked for the plugin to observe, in `project`
+or `project-ask`, `--auto` or not). Two indirect channels exist to observe
+`--auto` from inside a plugin, and both have a named limit: `process.argv`
+contains the literal `--auto` token when the plugin runs in the same
+process as the CLI invocation that received the flag (runs a/c, absent in
+run e where the flag belongs to a different, `--attach`ed process); and a
+`permission.replied` event carrying `reply: "once"` without a preceding
+human action would indicate `--auto`, but that only exists when a
+permission is actually asked, which none of these five runs triggered
+(defaults allow `bash`), and even then it is byte-identical to a human's
+"Allow once" reply at the plugin level. Verdict: no decision-grade signal
+and no hook projection to build on for opencode's `--auto`; harness's own
+opencode adapter also does not project any hook (`src/cli/apply/generate-opencode-config.ts`
+header, unchanged in this task) into the generated `opencode.json`, so even
+if a decision-grade signal existed there is currently nothing in the
+pipeline positioned to read it. Out of scope for auto-approval; design note
+only.

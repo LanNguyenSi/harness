@@ -26,7 +26,10 @@ import {
   resolveProfile,
   KNOWN_PROFILE_NAMES,
 } from "./permission-profiles.js";
-import { REPORTS_DIR_ENV } from "./understanding-before-execution-runtime.js";
+import {
+  AUTO_APPROVE_HARNESS_VALUES,
+  REPORTS_DIR_ENV,
+} from "./understanding-before-execution-runtime.js";
 import { SHELL_ALIASES } from "../../runtime/tool-name-aliases.js";
 
 // Env var the npm-backed `understanding-gate-claude-hook` bin reads to find
@@ -275,14 +278,25 @@ export const configSchema = z
     // Operator opt-in to the hook-written signed auto-marker path for
     // an allowlisted `permission_mode` (docs/decisions/2026-08-27-ug-auto-mode-approval.md,
     // "Option A"). `when` names the exact permission-mode literals the
-    // hook may auto-approve; `require_report` is required and must be
-    // literal `true` in v1 (ADR threat model (b) item 3: rejecting
-    // `false` here makes a future relaxation a visible schema change
-    // instead of a silent default). Runtime parsing/validation lives in
+    // hook may auto-approve; `harnesses` names which runtimes' PreToolUse
+    // hooks may take the auto path at all (absent means Claude Code only,
+    // the meaning the key had before the Codex hook joined the shared
+    // path, so an existing opt-in is never silently widened);
+    // `require_report` is required and must be literal `true` in v1 (ADR
+    // threat model (b) item 3: rejecting `false` here makes a future
+    // relaxation a visible schema change instead of a silent default).
+    // Runtime parsing/validation lives in
     // `./understanding-before-execution/auto-approve.ts`.
     auto_approve: z
       .object({
         when: z.array(z.string().min(1)).min(1),
+        harnesses: z
+          .array(z.enum(AUTO_APPROVE_HARNESS_VALUES))
+          .min(1)
+          .refine((values) => new Set(values).size === values.length, {
+            message: "harnesses must not contain duplicate entries",
+          })
+          .optional(),
         require_report: z.literal(true),
       })
       .strict()

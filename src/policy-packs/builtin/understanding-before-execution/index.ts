@@ -96,6 +96,9 @@ export {
   type AutoApproveConfig,
   parseAutoApprove,
   permissionModeAllowed,
+  harnessAllowed,
+  AUTO_APPROVE_HARNESS_VALUES,
+  DEFAULT_AUTO_APPROVE_HARNESSES,
 } from "./auto-approve.js";
 
 export {

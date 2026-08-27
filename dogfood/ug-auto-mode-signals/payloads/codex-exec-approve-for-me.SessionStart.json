@@ -1,0 +1,9 @@
+{
+  "session_id": "01a0448b-6eed-7851-bd88-9a63fc293013",
+  "transcript_path": "<scratch>/codex-home/sessions/2026/08/27/rollout-2026-08-27T20-46-23-01a0448b-6eed-7851-bd88-9a63fc293013.jsonl",
+  "cwd": "<scratch>/codex-work",
+  "hook_event_name": "SessionStart",
+  "model": "gpt-5.6-terra",
+  "permission_mode": "default",
+  "source": "startup"
+}

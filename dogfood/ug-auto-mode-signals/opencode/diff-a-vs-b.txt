@@ -1,0 +1,64 @@
+hook sets only in A: []
+hook sets only in B: []
+
+== plugin.init ==
+  DIFF argv:
+    A=["bun", "/$bunfs/root/src/index.js", "run", "--auto", "--print-logs", "--log-level", "DEBUG", "Run exactly this one bash command and nothing else: echo probe-ok . Then reply with the single word: done"]
+    B=["bun", "/$bunfs/root/src/index.js", "run", "--print-logs", "--log-level", "DEBUG", "Run exactly this one bash command and nothing else: echo probe-ok . Then reply with the single word: done"]
+  DIFF bunArgv:
+    A=["bun", "/$bunfs/root/src/index.js", "run", "--auto", "--print-logs", "--log-level", "DEBUG", "Run exactly this one bash command and nothing else: echo probe-ok . Then reply with the single word: done"]
+    B=["bun", "/$bunfs/root/src/index.js", "run", "--print-logs", "--log-level", "DEBUG", "Run exactly this one bash command and nothing else: echo probe-ok . Then reply with the single word: done"]
+  same cwd: "<scratch>/opencode-probe/project"
+  same directory: "<scratch>/opencode-probe/project"
+  DIFF env:
+    A={"COREPACK_ENABLE_AUTO_PIN": "0", "PROBE_LABEL": "a-auto", "OPENCODE_DISABLE_AUTOUPDATE": "1", "OPENCODE_PRINT_LOGS": "1", "OPENCODE_LOG_LEVEL": "DEBUG", "OPENCODE": "1", "OPENCODE_PID": "44318"}
+    B={"COREPACK_ENABLE_AUTO_PIN": "0", "PROBE_LOG": "<scratch>/opencode-probe/probe-b.jsonl", "PROBE_LABEL": "b-noauto", "OPENCODE_DISABLE_AUTOUPDATE": "1", "OPENCODE_PRINT_LOGS": "1", "OPENCODE_LOG_LEVEL": "DEBUG", "OPENCODE": "1", "OPENCODE_PID": "44391"}
+  same execArgv: ["--user-agent=opencode/1.18.18", "--use-system-ca", "--"]
+  same hook: "plugin.init"
+  same inputKeys: ["client", "project", "worktree", "directory", "experimental_workspace", "serverUrl", "$"]
+  DIFF project:
+    A={"id": "global", "worktree": "/", "time": {"created": 1781724592708, "updated": 1787856460257}, "sandboxes": []}
+    B={"id": "global", "worktree": "/", "time": {"created": 1781724592708, "updated": 1787856583073}, "sandboxes": []}
+  same serverUrl: "http://localhost:4096/"
+  same worktree: "/"
+
+== config ==
+  DIFF argv:
+    A=["bun", "/$bunfs/root/src/index.js", "run", "--auto", "--print-logs", "--log-level", "DEBUG", "Run exactly this one bash command and nothing else: echo probe-ok . Then reply with the single word: done"]
+    B=["bun", "/$bunfs/root/src/index.js", "run", "--print-logs", "--log-level", "DEBUG", "Run exactly this one bash command and nothing else: echo probe-ok . Then reply with the single word: done"]
+  same config: {"$schema": "...", "model": "...", "compaction": "...", "provider": "...", "agent": "...", "mode": {}, "plugin": ["file://<scratch>
+  DIFF env:
+    A={"COREPACK_ENABLE_AUTO_PIN": "0", "PROBE_LABEL": "a-auto", "OPENCODE_DISABLE_AUTOUPDATE": "1", "OPENCODE_PRINT_LOGS": "1", "OPENCODE_LOG_LEVEL": "DEBUG", "OPENCODE": "1", "OPENCODE_PID": "44318"}
+    B={"COREPACK_ENABLE_AUTO_PIN": "0", "PROBE_LOG": "<scratch>/opencode-probe/probe-b.jsonl", "PROBE_LABEL": "b-noauto", "OPENCODE_DISABLE_AUTOUPDATE": "1", "OPENCODE_PRINT_LOGS": "1", "OPENCODE_LOG_LEVEL": "DEBUG", "OPENCODE": "1", "OPENCODE_PID": "44391"}
+  same hook: "config"
+  same permission: {"unserializable": "SyntaxError: JSON Parse error: Unexpected identifier \"undefined\""}
+
+== tool.execute.before ==
+  DIFF argv:
+    A=["bun", "/$bunfs/root/src/index.js", "run", "--auto", "--print-logs", "--log-level", "DEBUG", "Run exactly this one bash command and nothing else: echo probe-ok . Then reply with the single word: done"]
+    B=["bun", "/$bunfs/root/src/index.js", "run", "--print-logs", "--log-level", "DEBUG", "Run exactly this one bash command and nothing else: echo probe-ok . Then reply with the single word: done"]
+  DIFF env:
+    A={"COREPACK_ENABLE_AUTO_PIN": "0", "PROBE_LABEL": "a-auto", "OPENCODE_DISABLE_AUTOUPDATE": "1", "OPENCODE_PRINT_LOGS": "1", "OPENCODE_LOG_LEVEL": "DEBUG", "OPENCODE": "1", "OPENCODE_PID": "44318"}
+    B={"COREPACK_ENABLE_AUTO_PIN": "0", "PROBE_LOG": "<scratch>/opencode-probe/probe-b.jsonl", "PROBE_LABEL": "b-noauto", "OPENCODE_DISABLE_AUTOUPDATE": "1", "OPENCODE_PRINT_LOGS": "1", "OPENCODE_LOG_LEVEL": "DEBUG", "OPENCODE": "1", "OPENCODE_PID": "44391"}
+  same hook: "tool.execute.before"
+  DIFF input:
+    A={"tool": "bash", "sessionID": "ses_fbb73573bffezGljfEXfrEhMca", "callID": "call_uu0ut3sw"}
+    B={"tool": "bash", "sessionID": "ses_fbb7185f9ffefbA01pYwUmBljM", "callID": "call_vyghbqoo"}
+  same output: {"args": {"command": "echo probe-ok"}}
+
+== tool.execute.after ==
+  same hook: "tool.execute.after"
+  DIFF input:
+    A={"tool": "bash", "sessionID": "ses_fbb73573bffezGljfEXfrEhMca", "callID": "call_uu0ut3sw", "args": {"command": "echo probe-ok"}}
+    B={"tool": "bash", "sessionID": "ses_fbb7185f9ffefbA01pYwUmBljM", "callID": "call_vyghbqoo", "args": {"command": "echo probe-ok"}}
+  same output: {"title": "echo probe-ok", "metadata": {"output": "probe-ok\n", "exit": 0, "truncated": false}, "output": "probe-ok\n"}
+
+== shell.env ==
+  same hook: "shell.env"
+  DIFF input:
+    A={"cwd": "<scratch>/opencode-probe/project", "sessionID": "ses_fbb73573bffezGljfEXfrEhMca", "callID": "call_uu0ut3sw"}
+    B={"cwd": "<scratch>/opencode-probe/project", "sessionID": "ses_fbb7185f9ffefbA01pYwUmBljM", "callID": "call_vyghbqoo"}
+  same output: {"env": {}}
+
+event types A: ['event:catalog.updated', 'event:integration.updated', 'event:message.part.delta', 'event:message.part.updated', 'event:message.updated', 'event:plugin.added', 'event:reference.updated', 'event:session.created', 'event:session.diff', 'event:session.idle', 'event:session.status', 'event:session.updated']
+event types B: ['event:catalog.updated', 'event:integration.updated', 'event:message.part.delta', 'event:message.part.updated', 'event:message.updated', 'event:plugin.added', 'event:reference.updated', 'event:session.created', 'event:session.diff', 'event:session.idle', 'event:session.status', 'event:session.updated']

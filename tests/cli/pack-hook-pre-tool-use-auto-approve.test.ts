@@ -383,7 +383,13 @@ describe("pack hook pre-tool-use — auto-approval path (ADR slice 1)", () => {
 
       expect(result.blocked).toBe(true);
       expect(result.stderr).toMatch(/forged\/unsigned marker rejected/);
-      expect(result.stderr).toMatch(/auto-approval declined: forged\/unsigned marker present/);
+      // Full literal including the `DEFAULT_LABEL` prefix
+      // (`src/cli/pack/auto-approve-path.ts`): pins the Claude hook's
+      // stderr label here too, not only in the Codex test file, so a
+      // change to `DEFAULT_LABEL` turns this file red as well.
+      expect(result.stderr).toMatch(
+        /harness pack hook: auto-approval declined: forged\/unsigned marker present/,
+      );
       expect(fs.readFileSync(markerPath, "utf8")).toBe(forgedBody);
       expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
       expect(ledgerCalls).toEqual([]);

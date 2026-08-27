@@ -28,6 +28,7 @@ import {
 } from "../../policies/index.js";
 import { renderProducers } from "../../policies/producers.js";
 import {
+  CLAUDE_CODE_HARNESS,
   checkOperatorApprovalMarkers,
   checkPersistedReport,
   defaultReportsDir,
@@ -35,7 +36,7 @@ import {
   type ApprovalCheckResult,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { findLatestParseError, renderMalformedSectionsNotice } from "../approve/understanding.js";
-import { attemptAutoApproval } from "./auto-approve-path.js";
+import { attemptAutoApproval, AUTO_APPROVE_LEDGER_SOURCE } from "./auto-approve-path.js";
 import {
   resolveGeneratedDir,
   writePendingApproval,
@@ -704,6 +705,19 @@ export async function runPackHookPreToolUseCli(
     sessionId,
     payloadSessionId: event.session_id,
     permissionMode: event.permission_mode,
+    // Slice 2 (agent-tasks/57058364) moved these two out of the shared
+    // body and onto the call sites: the Codex hook calls the SAME
+    // `attemptAutoApproval` with `CODEX_HARNESS` and its own
+    // session-consistency evidence. Claude Code's evidence is the hook
+    // process's `$CLAUDE_CODE_SESSION_ID`, exactly what the body used
+    // to read directly, so the wording of every diagnostic on this path
+    // is unchanged.
+    harness: CLAUDE_CODE_HARNESS,
+    // This hook's own verb on the audit-only ledger fact, and its own
+    // stderr prefix by omission (`label` defaults to "harness pack
+    // hook"): both keep this path's output byte-identical to slice 1's.
+    ledgerSource: AUTO_APPROVE_LEDGER_SOURCE,
+    sessionConsistency: { kind: "env", variable: "CLAUDE_CODE_SESSION_ID" },
     packConfig: declared.config,
     reportsDir,
     markerForged,

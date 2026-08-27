@@ -15,6 +15,16 @@ import {
   shippedOperatorOnlyPolicyNames,
 } from "../init/templates.js";
 import { isPolicyInterceptCommand, requiredHookBudgetMs } from "../policy/intercept.js";
+import { PACK_NAME as UNDERSTANDING_BEFORE_EXECUTION_PACK_NAME } from "../../policy-packs/builtin/understanding-before-execution.js";
+import {
+  isMeasuredPermissionModeFor,
+  measuredPermissionModeLiteralsFor,
+  type MeasuredHarness,
+} from "../../policy-packs/builtin/understanding-before-execution/measured-permission-modes.js";
+import {
+  AUTO_APPROVE_HARNESS_VALUES,
+  DEFAULT_AUTO_APPROVE_HARNESSES,
+} from "../../policy-packs/builtin/understanding-before-execution/auto-approve.js";
 import type { Hook, Manifest } from "../../schema/index.js";
 import { DEFAULT_SAFE_DELETION_ROOTS } from "../../schema/risk.js";
 import {
@@ -1276,6 +1286,83 @@ function checkPolicyPackConfigsAsDiagnostics(manifest: Manifest): Diagnostic[] {
   });
 }
 
+// Slice 2 AC 3 (docs/decisions/2026-08-27-ug-auto-mode-approval.md): every
+// literal in `understanding-before-execution`'s `auto_approve.when` must be
+// backed by a checked-in dogfood fixture that shows a LISTED harness
+// emitting that exact `permission_mode` value; see
+// `src/policy-packs/builtin/understanding-before-execution/measured-permission-modes.ts`
+// for the registry and the sync test that keeps it honest against the
+// fixtures. `auto_approve.harnesses` (round-2 review finding) scopes WHICH
+// harnesses' evidence counts: a literal measured only for Claude Code is
+// not evidence Codex ever emits it, so this check is per-listed-harness,
+// not "any harness anywhere". Runs independently of
+// `checkPolicyPackConfigsAsDiagnostics` (the zod schema check above
+// already reports shape errors for a malformed `auto_approve` block): it
+// only inspects `when` when it is an array whose entries are all strings,
+// it leaves empty-string entries to the schema check (`min(1)`), and it
+// leaves a malformed `harnesses` (not an array, non-string/unknown/
+// duplicate entries) to the same schema check rather than reporting from
+// here, so the two never report the same literal twice and this check
+// never throws on a malformed config. Disabled packs (`enabled: false`)
+// are skipped on purpose, the same way `checkPolicyPacks` skips them: a
+// pack that contributes no hooks has no allowlist to enforce.
+function listedAutoApproveHarnesses(
+  autoApprove: Record<string, unknown>,
+): MeasuredHarness[] | null {
+  const raw = autoApprove["harnesses"];
+  if (raw === undefined) {
+    return [...DEFAULT_AUTO_APPROVE_HARNESSES] as MeasuredHarness[];
+  }
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const harnesses: MeasuredHarness[] = [];
+  for (const entry of raw) {
+    if (
+      typeof entry !== "string" ||
+      !(AUTO_APPROVE_HARNESS_VALUES as readonly string[]).includes(entry) ||
+      harnesses.includes(entry as MeasuredHarness)
+    ) {
+      return null;
+    }
+    harnesses.push(entry as MeasuredHarness);
+  }
+  return harnesses;
+}
+
+function checkUnderstandingBeforeExecutionAutoApproveMeasured(
+  manifest: Manifest,
+): Diagnostic[] {
+  const diags: Diagnostic[] = [];
+  manifest.policy_packs.forEach((pack, packIndex) => {
+    if (!pack.enabled) return;
+    if (pack.name !== UNDERSTANDING_BEFORE_EXECUTION_PACK_NAME) return;
+    const config = pack.config as Record<string, unknown> | undefined;
+    const autoApprove = config?.["auto_approve"];
+    if (typeof autoApprove !== "object" || autoApprove === null) return;
+    const autoApproveObj = autoApprove as Record<string, unknown>;
+    const when = autoApproveObj["when"];
+    if (!Array.isArray(when)) return;
+    if (!when.every((literal) => typeof literal === "string")) return;
+    const listedHarnesses = listedAutoApproveHarnesses(autoApproveObj);
+    if (listedHarnesses === null) return;
+    when.forEach((literal: string, literalIndex: number) => {
+      if (literal.length === 0) return;
+      if (listedHarnesses.some((harness) => isMeasuredPermissionModeFor(literal, harness))) return;
+      const measuredParts = listedHarnesses
+        .map((harness) => `measured for ${harness}: ${measuredPermissionModeLiteralsFor(harness).join(", ")}`)
+        .join("; ");
+      diags.push({
+        severity: "error",
+        path: `policy_packs[${packIndex}].config.auto_approve.when[${literalIndex}]`,
+        message:
+          `auto_approve.when literal "${literal}" has no checked-in dogfood fixture showing ` +
+          `${listedHarnesses.join(" or ")} emitting it (${measuredParts}); see ` +
+          `docs/decisions/2026-08-27-ug-auto-mode-approval.md, Slice 2`,
+      });
+    });
+  });
+  return diags;
+}
+
 export function runAssetChecks(
   manifest: Manifest,
   opts: CheckOptions = {},
@@ -1295,6 +1382,7 @@ export function runAssetChecks(
     ),
     ...checkPolicyPacks(manifest),
     ...checkPolicyPackConfigsAsDiagnostics(manifest),
+    ...checkUnderstandingBeforeExecutionAutoApproveMeasured(manifest),
     ...checkPolicyRiskWithoutEnvScope(manifest),
     ...checkSafeDeletionRootsSyntax(manifest),
     ...checkPolicySelfAttestation(manifest),

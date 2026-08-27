@@ -1,0 +1,42 @@
+timestamp=2026-08-27T18:47:40.249Z level=INFO run=9dc8d664 message="creating instance" directory=<scratch>/opencode-probe/project
+timestamp=2026-08-27T18:47:40.250Z level=INFO run=9dc8d664 message=fromDirectory directory=<scratch>/opencode-probe/project
+timestamp=2026-08-27T18:47:40.258Z level=INFO run=9dc8d664 message=bootstrapping directory=<scratch>/opencode-probe/project
+timestamp=2026-08-27T18:47:40.261Z level=INFO run=9dc8d664 message=loading path=<home>/.config/opencode/config.json
+timestamp=2026-08-27T18:47:40.261Z level=INFO run=9dc8d664 message=loading path=<home>/.config/opencode/opencode.json
+timestamp=2026-08-27T18:47:40.263Z level=INFO run=9dc8d664 message=loading path=<home>/.config/opencode/opencode.jsonc
+timestamp=2026-08-27T18:47:40.267Z level=INFO run=9dc8d664 message=loading path=<scratch>/opencode-probe/project/opencode.json
+timestamp=2026-08-27T18:47:40.272Z level=DEBUG run=9dc8d664 message="loading config from <scratch>/opencode-probe/project/.opencode/opencode.json"
+timestamp=2026-08-27T18:47:40.272Z level=INFO run=9dc8d664 message=loading path=<scratch>/opencode-probe/project/.opencode/opencode.json
+timestamp=2026-08-27T18:47:40.274Z level=DEBUG run=9dc8d664 message="loading config from <scratch>/opencode-probe/project/.opencode/opencode.jsonc"
+timestamp=2026-08-27T18:47:40.274Z level=INFO run=9dc8d664 message=loading path=<scratch>/opencode-probe/project/.opencode/opencode.jsonc
+timestamp=2026-08-27T18:47:44.014Z level=INFO run=9dc8d664 message="all LSPs are disabled"
+timestamp=2026-08-27T18:47:44.015Z level=INFO run=9dc8d664 message="all formatters are disabled"
+timestamp=2026-08-27T18:47:44.015Z level=INFO run=9dc8d664 message=init
+timestamp=2026-08-27T18:47:44.068Z level=INFO run=9dc8d664 message=created id=ses_fbb73573bffezGljfEXfrEhMca slug=quiet-lagoon version=1.18.18 projectID=global directory=<scratch>/opencode-probe/project path=<scratch>/opencode-probe/project workspaceID=undefined parentID=undefined title="New session - 2026-08-27T18:47:44.068Z" agent=undefined model=undefined metadata=undefined permission="[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]" cost=0 tokens.input=0 tokens.output=0 tokens.reasoning=0 tokens.cache.read=0 tokens.cache.write=0 time.created=1787856464068 time.updated=1787856464068
+timestamp=2026-08-27T18:47:44.076Z level=INFO run=9dc8d664 message="event connected"
+timestamp=2026-08-27T18:47:44.231Z level=INFO run=9dc8d664 message=loop session.id=ses_fbb73573bffezGljfEXfrEhMca step=0
+timestamp=2026-08-27T18:47:44.250Z level=INFO run=9dc8d664 message="shell tool using shell" shell=/bin/zsh
+timestamp=2026-08-27T18:47:44.254Z level=INFO run=9dc8d664 message=init count=1
+[0m
+> build · gemma4-q8-64k
+[0m
+timestamp=2026-08-27T18:47:44.264Z level=INFO run=9dc8d664 message=stream providerID=ollama modelID=gemma4-q8-64k session.id=ses_fbb73573bffezGljfEXfrEhMca small=true agent=title mode=primary
+timestamp=2026-08-27T18:47:44.267Z level=INFO run=9dc8d664 message="llm runtime selected" llm.runtime=ai-sdk llm.provider=ollama llm.model=gemma4-q8-64k
+timestamp=2026-08-27T18:47:44.669Z level=INFO run=9dc8d664 message="watcher backend" directory=<scratch>/opencode-probe/project platform=darwin backend=fs-events
+timestamp=2026-08-27T18:47:44.675Z level=INFO run=9dc8d664 message="project copy refresh started" projectID=global
+timestamp=2026-08-27T18:47:44.678Z level=INFO run=9dc8d664 message="project copy refresh done" projectID=global updated=[] removed=[]
+timestamp=2026-08-27T18:47:44.719Z level=INFO run=9dc8d664 message="booting location services" directory=<scratch>/opencode-probe/project workspaceID=undefined
+timestamp=2026-08-27T18:47:44.838Z level=INFO run=9dc8d664 message=process session.id=ses_fbb73573bffezGljfEXfrEhMca messageID=msg_0448ca9680016WKp7FNXjlO7Ed
+timestamp=2026-08-27T18:47:44.839Z level=INFO run=9dc8d664 message=stream providerID=ollama modelID=gemma4-q8-64k session.id=ses_fbb73573bffezGljfEXfrEhMca small=false agent=build mode=primary
+timestamp=2026-08-27T18:47:44.847Z level=INFO run=9dc8d664 message="llm runtime selected" llm.runtime=ai-sdk llm.provider=ollama llm.model=gemma4-q8-64k
+timestamp=2026-08-27T18:49:18.476Z level=INFO run=9dc8d664 message=evaluated permission=bash pattern="echo probe-ok" action.permission=* action.action=allow action.pattern=*
+timestamp=2026-08-27T18:49:18.502Z level=INFO run=9dc8d664 message=loop session.id=ses_fbb73573bffezGljfEXfrEhMca step=1
+[0m$ [0mecho probe-ok
+probe-ok
+[0m
+timestamp=2026-08-27T18:49:18.514Z level=INFO run=9dc8d664 message=process session.id=ses_fbb73573bffezGljfEXfrEhMca messageID=msg_0448e19a7001aiNy5sgzK5BVH5
+timestamp=2026-08-27T18:49:18.515Z level=INFO run=9dc8d664 message=stream providerID=ollama modelID=gemma4-q8-64k session.id=ses_fbb73573bffezGljfEXfrEhMca small=false agent=build mode=primary
+timestamp=2026-08-27T18:49:18.515Z level=INFO run=9dc8d664 message="llm runtime selected" llm.runtime=ai-sdk llm.provider=ollama llm.model=gemma4-q8-64k
+timestamp=2026-08-27T18:49:19.271Z level=INFO run=9dc8d664 message=loop session.id=ses_fbb73573bffezGljfEXfrEhMca step=2
+timestamp=2026-08-27T18:49:19.272Z level=INFO run=9dc8d664 message="exiting loop" session.id=ses_fbb73573bffezGljfEXfrEhMca
+timestamp=2026-08-27T18:49:19.277Z level=INFO run=9dc8d664 message="disposing instance" directory=<scratch>/opencode-probe/project

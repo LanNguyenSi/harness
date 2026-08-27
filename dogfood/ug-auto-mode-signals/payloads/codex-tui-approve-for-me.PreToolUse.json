@@ -1,0 +1,14 @@
+{
+  "session_id": "01a04499-cfa0-76e3-868f-3b6463c2be58",
+  "turn_id": "01a04499-e314-79f3-b8fc-b82c6a0eb1b3",
+  "transcript_path": "<scratch>/codex-home/sessions/2026/08/27/rollout-2026-08-27T21-02-05-01a04499-cfa0-76e3-868f-3b6463c2be58.jsonl",
+  "cwd": "<scratch>/codex-work",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-5.6-terra",
+  "permission_mode": "default",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "echo tui-probe ."
+  },
+  "tool_use_id": "exec-6f875ec9-8aad-48ac-a577-416e597e069c"
+}

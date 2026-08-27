@@ -30,10 +30,16 @@ import {
   type ApprovalCheckResult,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { findLatestParseError, renderMalformedSectionsNotice } from "../approve/understanding.js";
+import { CODEX_HARNESS } from "../../policy-packs/builtin/understanding-before-execution/auto-approve.js";
+import {
+  attemptAutoApproval,
+  AUTO_APPROVE_LEDGER_SOURCE_CODEX,
+} from "./auto-approve-path.js";
 import {
   resolveGeneratedDir,
   writePendingApproval,
 } from "../../runtime/pending-approval.js";
+import { resolveManifestLedgerWriter, type LedgerWriteFn } from "../../runtime/ledger-writer.js";
 import { extractShellCommand } from "../../runtime/tool-name-aliases.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { type Manifest, type McpServer } from "../../schema/index.js";
@@ -69,6 +75,14 @@ export interface PackHookCodexPreToolUseOptions extends LoaderOptions {
   manifest?: Manifest;
   /** Inject a fake ledger query (test). */
   ledgerQuery?: (sessionId: string) => Promise<LedgerEntry[] | { degraded: string }>;
+  /**
+   * Inject the audit-only ledger WRITER that the auto-approval path
+   * records its fact through (test injection). Mirrors the Claude
+   * hook's option of the same name. Absent, the writer is resolved from
+   * the manifest, lazily, and only on a call that already passed the
+   * opt-in, `harnesses` and `when` checks.
+   */
+  writeLedger?: LedgerWriteFn;
 }
 
 export interface PackHookCodexPreToolUseResult {
@@ -83,6 +97,22 @@ interface CodexEventEnvelope {
   session_id?: unknown;
   tool_name?: unknown;
   raw_input?: unknown;
+  // Real Codex sends tool arguments as `tool_input` (live capture,
+  // Codex 0.150.1: the PreToolUse payload is shape-identical to Claude
+  // Code's). `raw_input` above is harness's older published portable
+  // shape, still accepted for shims built against it. The two exemptions
+  // read both fields through `resolveCodexExemptionCommand` below, which
+  // starts from the shared `resolveToolInput` (hook-bootstrap.ts)
+  // precedence the sibling Codex PostToolUse hooks use and then applies
+  // the two extra fail-closed rules a GATE decision needs.
+  tool_input?: unknown;
+  // Payload `permission_mode` (slice 1's `auto_approve.when` is an
+  // allowlist over these literals) and `transcript_path` (the auto
+  // path's session-consistency input on Codex, which carries no
+  // session-id environment variable at all). Both stay `unknown`: the
+  // auto path does every type check itself, fail-closed.
+  permission_mode?: unknown;
+  transcript_path?: unknown;
   // One Codex-native synonym tolerated: some integrations pass
   // `tool` instead of `tool_name`. We deliberately do NOT alias
   // `event.id` to session_id — `id` in most event-bus shapes is the
@@ -121,6 +151,45 @@ function extractCodexShellCommand(rawInput: unknown): string | null {
   const command = extractShellCommand({ raw_input: rawInput });
   if (command !== null) return command;
   return typeof rawInput === "string" ? rawInput : null;
+}
+
+/**
+ * The command the two EXEMPTIONS below (read-only Bash, recovery
+ * `git commit`) are allowed to act on, or `null` when the payload does
+ * not pin one down. Deliberately stricter than the shared
+ * `resolveToolInput` (hook-bootstrap.ts), which stays as it is: its
+ * other callers are PostToolUse observers whose worst case is a missed
+ * observation, whereas here the classified command decides whether a
+ * gated call is exempted (reviewer round-1 finding on slice 2). Two
+ * differences, both fail-closed:
+ *
+ *   - `tool_input: null` is treated as ABSENT and falls back to
+ *     `raw_input`, instead of shadowing it. `resolveToolInput` tests
+ *     `!== undefined`, so a payload carrying an explicit null
+ *     `tool_input` plus a real `raw_input` would otherwise classify to
+ *     nothing.
+ *   - When BOTH fields carry a command and they DISAGREE, this returns
+ *     `null` rather than picking one. Otherwise a payload could pair a
+ *     read-only `ls` in the preferred field with `rm -rf ...` in the
+ *     other and be exempted on the harmless one while the runtime runs
+ *     whichever field it itself reads.
+ *
+ * `null` is never an allow: both call sites fall through to the block
+ * path, and the auto-approval attempt below does not read this at all.
+ */
+function resolveCodexExemptionCommand(event: CodexEventEnvelope): string | null {
+  const toolInput = event.tool_input ?? undefined;
+  const rawInput = event.raw_input ?? undefined;
+  if (toolInput !== undefined && rawInput !== undefined) {
+    const fromToolInput = extractCodexShellCommand(toolInput);
+    const fromRawInput = extractCodexShellCommand(rawInput);
+    if (fromToolInput === null || fromRawInput === null) return null;
+    if (fromToolInput.trim() !== fromRawInput.trim()) return null;
+    return fromToolInput;
+  }
+  if (toolInput !== undefined) return extractCodexShellCommand(toolInput);
+  if (rawInput !== undefined) return extractCodexShellCommand(rawInput);
+  return null;
 }
 
 async function checkLedger(
@@ -307,10 +376,15 @@ export async function runPackHookCodexPreToolUseCli(
   // Audit-only ledger probe.
   const ledger = await checkLedger(manifest, sessionId, opts);
 
-  // Exception: read-only shell commands. Codex's documented hook
-  // envelope carries tool args in `raw_input`; if that field is absent
-  // or unclassifiable, fall through to the block path (fail-closed).
-  const commandStr = extractCodexShellCommand(event.raw_input);
+  // Exception: read-only shell commands. Real Codex carries tool args in
+  // `tool_input`, harness's older published envelope in `raw_input`;
+  // `resolveCodexExemptionCommand` reads both (before this, a real Codex
+  // payload's command was invisible here and every read-only `ls` hit
+  // the block). If neither field carries a classifiable command — a
+  // conflicting `command`/`cmd` pair, or two fields naming DIFFERENT
+  // commands — this stays `null` and the call falls through to the block
+  // path (fail-closed); see that function for the full argument.
+  const commandStr = resolveCodexExemptionCommand(event);
   if (
     commandStr !== null &&
     CODEX_SHELL_TOOLS.has(toolName) &&
@@ -347,6 +421,70 @@ export async function runPackHookCodexPreToolUseCli(
       approvalCheck: { approved: true, source: "recovery-commit", detail: diagnostic },
       diagnostic,
     };
+  }
+
+  // Step 9: the operator-opt-in auto-approval attempt (slice 2 of
+  // docs/decisions/2026-08-27-ug-auto-mode-approval.md, agent-tasks/
+  // 57058364). The SAME `attemptAutoApproval` the Claude hook calls, at
+  // the same place in the decision order: last, on a call that the
+  // marker check (source 1) and both exemptions above have already
+  // declined — i.e. exactly a call that would otherwise reach the final
+  // block. So a read-only `ls` or a recovery `git commit` mints nothing,
+  // and `max_age` starts counting from the call that actually needed an
+  // approval. Arguments carry everything that is Codex-specific:
+  // `harness: CODEX_HARNESS` (the minted `approvedBy` reads
+  // `auto-mode:codex:<mode>`, so an audit can tell the runtimes apart),
+  // the transcript-path session-consistency check (a Codex hook process
+  // carries no session-id environment variable for the Claude variant to
+  // compare against), and this hook's own ledger `source` and stderr
+  // label.
+  //
+  // Sharing the body does NOT share the opt-in: the attempt declines
+  // unless the operator listed `codex` in `auto_approve.harnesses`,
+  // which an `auto_approve` block written before this hook existed does
+  // not (an absent key means Claude Code only).
+  //
+  // It never returns an allow of its own: the allow below comes from the
+  // auto path's own re-run of `checkOperatorApprovalMarkers`, the same
+  // authority source 1 consults, and is reported through this hook's
+  // ordinary `allowResult` with `source: "marker"`. Any failure falls
+  // through to the block with `markerExpired` / `markerForged` intact.
+  //
+  // Placed BEFORE the `.pending-approval` staging write below on
+  // purpose: a successful auto-approval must not leave this session id
+  // staged for a later arg-less `harness approve understanding` to
+  // resolve to.
+  //
+  // The ledger writer resolves lazily, exactly like the Claude hook: the
+  // thunk runs only after the auto path's own opt-in and `when` checks
+  // both pass, so an ordinary gated Codex call never resolves one.
+  const resolveAutoLedger = (): { write: LedgerWriteFn | null; reason?: string } => {
+    if (opts.writeLedger) return { write: opts.writeLedger };
+    const resolved = resolveManifestLedgerWriter(manifest, {
+      ...(opts.ledgerTimeoutMs !== undefined ? { ledgerTimeoutMs: opts.ledgerTimeoutMs } : {}),
+    });
+    return resolved.ok ? { write: resolved.write } : { write: null, reason: resolved.reason };
+  };
+  const auto = await attemptAutoApproval({
+    generatedDir,
+    sessionId,
+    payloadSessionId: event.session_id,
+    permissionMode: event.permission_mode,
+    harness: CODEX_HARNESS,
+    // This hook's own verb on the audit-only ledger fact and its own
+    // stderr prefix, so neither an audit row nor a diagnostic line
+    // attributes a Codex decision to the Claude Code hook.
+    ledgerSource: AUTO_APPROVE_LEDGER_SOURCE_CODEX,
+    label: "harness pack hook codex",
+    sessionConsistency: { kind: "transcript-path", transcriptPath: event.transcript_path },
+    packConfig: declared.config,
+    reportsDir,
+    markerForged,
+    stderr,
+    resolveLedger: resolveAutoLedger,
+  });
+  if (auto.approved) {
+    return allowResult(auto.detail, "marker", stderr);
   }
 
   // Stage the session id so `harness approve understanding`, run from
