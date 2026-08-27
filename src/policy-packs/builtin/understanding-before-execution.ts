@@ -788,7 +788,7 @@ function buildHooks(
         // guards against.
         budget_ms: 15000,
         description:
-          "Codex adapter: block apply_patch and Codex shell tools until an approved Understanding Report exists for the session. Consults both the evidence-ledger tag and the persisted JSON report.",
+          "Codex adapter: block apply_patch and Codex shell tools until the operator has approved the session's Understanding Report via harness approve understanding. Opens only on the signed approval marker; the persisted JSON report and the evidence-ledger tag are audit evidence.",
       },
       // PostToolUse marker-expiry (task a1348c89, widened by task
       // bea04a03). Same boundary-tool list as the Claude hook below
@@ -913,7 +913,7 @@ function buildHooks(
       // ledger-consulting audit probe, same health.timeout_ms bound).
       budget_ms: 15000,
       description:
-        "Block Edit/Write/Bash until an approved Understanding Report exists for the session. Consults both the evidence-ledger tag (understanding-approved:${SESSION_ID}) and the persisted JSON report.",
+        "Block Edit/Write/Bash until the operator has approved the session's Understanding Report via harness approve understanding. Opens only on the signed approval marker; the persisted JSON report and the evidence-ledger tag (understanding-approved:${SESSION_ID}) are audit evidence.",
     },
     // PostToolUse marker-expiry hook (agent-tasks/d8ee60ca). Fires on the
     // configured task-boundary tools, and (task bea04a03) on a Bash call
@@ -1070,12 +1070,13 @@ ${wiringSentence}
 1. \`UserPromptSubmit\` injector (\`${injectorCmd}\`): inserts the
    Understanding-Gate instruction template into the agent's first response.
 ${stopBullet}${blockerOrdinal}. \`PreToolUse\` blocker (\`${blockerCmd}\`, blocking: hard)
-   on \`${blockerMatch}\`: refuses the tool call until an approved
-   report exists for the session. Consults BOTH the evidence-ledger
-   tag (\`understanding-approved:\${SESSION_ID}\`, canonical for
-   harnessed sessions) AND the persisted JSON report under
-   \`.understanding-gate/reports/\` (fallback for sessions without
-   grounding-mcp wired). Either source approves.
+   on \`${blockerMatch}\`: refuses the tool call until the operator has
+   approved the session's report. Opens ONLY on the HMAC-signed approval
+   marker under \`harness.generated/.approvals/\` written by
+   \`harness approve understanding\`; the persisted JSON report under
+   \`.understanding-gate/reports/\` and the evidence-ledger tag
+   (\`understanding-approved:\${SESSION_ID}\`) are audit evidence and
+   never open the gate on their own (task 7402301d).
 
 ## Approval
 
