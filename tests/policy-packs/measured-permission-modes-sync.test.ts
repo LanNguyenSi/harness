@@ -18,8 +18,9 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  MEASURED_FIXTURES_DIR,
   MEASURED_PERMISSION_MODES,
-  type MeasuredHarness,
+  harnessForFixtureFile,
 } from "../../src/policy-packs/builtin/understanding-before-execution/measured-permission-modes.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -39,13 +40,17 @@ function readPreToolUseEvents(absPath: string): PreToolUsePayload[] {
   );
 }
 
-function harnessForFixtureFile(basename: string): MeasuredHarness {
-  return basename.startsWith("codex-") ? "codex" : "claude-code";
-}
-
 describe("MEASURED_PERMISSION_MODES sync — registry -> fixture", () => {
   for (const entry of MEASURED_PERMISSION_MODES) {
     it(`${entry.harness}/${entry.permissionMode} fixture (${entry.fixture}) exists and matches`, () => {
+      // The fixture must live in the payloads directory and its file name
+      // must attribute it to the harness the entry claims: a Claude Code
+      // fixture backing a Codex entry (or vice versa) is a registry error.
+      expect(entry.fixture.startsWith(`${MEASURED_FIXTURES_DIR}/`)).toBe(true);
+      expect(
+        harnessForFixtureFile(path.basename(entry.fixture)),
+        `${entry.fixture} is not a ${entry.harness} fixture by file name`,
+      ).toBe(entry.harness);
       const absPath = path.join(REPO_ROOT, entry.fixture);
       expect(fs.existsSync(absPath), `missing fixture: ${entry.fixture}`).toBe(true);
       const events = readPreToolUseEvents(absPath);

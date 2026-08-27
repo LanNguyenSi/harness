@@ -107,6 +107,48 @@ describe("validate — understanding-before-execution auto_approve.when measured
     ]);
   });
 
+  it("a disabled pack with an unmeasured literal produces no diagnostic (skipped on purpose)", () => {
+    const home = fixtureWithPacks([
+      {
+        name: "understanding-before-execution",
+        enabled: false,
+        config: { auto_approve: { when: ["dontAsk"], require_report: true } },
+      },
+    ]);
+    const result = runValidate(home);
+    const diags = result.diagnostics.filter((d) => /no checked-in dogfood fixture/.test(d.message));
+    expect(diags).toEqual([]);
+  });
+
+  it("an empty-string literal is left to the schema check (no double report)", () => {
+    const home = fixtureWithPacks([
+      {
+        name: "understanding-before-execution",
+        config: { auto_approve: { when: ["", "dontAsk"], require_report: true } },
+      },
+    ]);
+    const result = runValidate(home);
+    const ours = result.diagnostics.filter((d) => /no checked-in dogfood fixture/.test(d.message));
+    expect(ours.map((d) => d.path)).toEqual([`${AUTO_APPROVE_PATH_PREFIX}[1]`]);
+    const schemaError = result.diagnostics.find(
+      (d) => d.path === `${AUTO_APPROVE_PATH_PREFIX}[0]` && !/no checked-in dogfood fixture/.test(d.message),
+    );
+    expect(schemaError).toBeDefined();
+  });
+
+  it("the diagnostic path carries the pack's own index when it is not policy_packs[0]", () => {
+    const home = fixtureWithPacks([
+      { name: "branch-protection" },
+      {
+        name: "understanding-before-execution",
+        config: { auto_approve: { when: ["dontAsk"], require_report: true } },
+      },
+    ]);
+    const result = runValidate(home);
+    const ours = result.diagnostics.filter((d) => /no checked-in dogfood fixture/.test(d.message));
+    expect(ours.map((d) => d.path)).toEqual(["policy_packs[1].config.auto_approve.when[0]"]);
+  });
+
   it("a manifest without auto_approve produces no diagnostic from this check", () => {
     const home = fixtureWithPacks([{ name: "understanding-before-execution" }]);
     const result = runValidate(home);

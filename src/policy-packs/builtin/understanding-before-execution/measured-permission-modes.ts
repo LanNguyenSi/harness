@@ -9,8 +9,14 @@
 // enforces both directions: every entry here must be backed by a fixture
 // that carries the claimed value, and every `permission_mode` value found
 // in any `*.PreToolUse.json` fixture must be registered for its harness.
-// Do not add a literal "because it seems plausible" — capture a fixture
+// Do not add a literal "because it seems plausible": capture a fixture
 // first, then register it.
+//
+// A fixture's harness is bound by its file name: `codex-*` fixtures are
+// Codex captures, every other `*.PreToolUse.json` under the payloads
+// directory is a Claude Code capture (`harnessForFixtureFile`). The sync
+// test checks each entry's fixture name against the entry's `harness`, so
+// a Claude Code fixture cannot back a Codex claim or vice versa.
 //
 // `harness validate` runs in the OPERATOR's repo, which has no `dogfood/`
 // directory, so this registry ships inside the package as a constant
@@ -28,7 +34,19 @@ export interface MeasuredPermissionMode {
   readonly fixture: string;
 }
 
-const PAYLOADS_DIR = "dogfood/ug-auto-mode-signals/payloads";
+/** Repo-relative directory every registry fixture must live in. */
+export const MEASURED_FIXTURES_DIR = "dogfood/ug-auto-mode-signals/payloads";
+const PAYLOADS_DIR = MEASURED_FIXTURES_DIR;
+
+/**
+ * Which harness a fixture file under {@link MEASURED_FIXTURES_DIR} was
+ * captured from, by file-name convention: `codex-*` is Codex, anything
+ * else is Claude Code. Shared with the sync test so the convention has
+ * one definition.
+ */
+export function harnessForFixtureFile(basename: string): MeasuredHarness {
+  return basename.startsWith("codex-") ? "codex" : "claude-code";
+}
 
 export const MEASURED_PERMISSION_MODES: ReadonlyArray<MeasuredPermissionMode> = [
   {

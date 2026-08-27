@@ -1289,9 +1289,13 @@ function checkPolicyPackConfigsAsDiagnostics(manifest: Manifest): Diagnostic[] {
 // for the registry and the sync test that keeps it honest against the
 // fixtures. Runs independently of `checkPolicyPackConfigsAsDiagnostics`
 // (the zod schema check above already reports shape errors for a
-// malformed `auto_approve` block) — this only inspects `when` when it is
-// already shaped as a non-empty array of strings, so it never double
-// reports and never throws on a malformed config.
+// malformed `auto_approve` block): it only inspects `when` when it is an
+// array whose entries are all strings, and it leaves empty-string entries
+// to the schema check (`min(1)`), so the two never report the same
+// literal twice and this check never throws on a malformed config.
+// Disabled packs (`enabled: false`) are skipped on purpose, the same way
+// `checkPolicyPacks` skips them: a pack that contributes no hooks has no
+// allowlist to enforce.
 function checkUnderstandingBeforeExecutionAutoApproveMeasured(
   manifest: Manifest,
 ): Diagnostic[] {
@@ -1307,6 +1311,7 @@ function checkUnderstandingBeforeExecutionAutoApproveMeasured(
     if (!when.every((literal) => typeof literal === "string")) return;
     const measured = measuredPermissionModeLiterals().join(", ");
     when.forEach((literal: string, literalIndex: number) => {
+      if (literal.length === 0) return;
       if (isMeasuredPermissionMode(literal)) return;
       diags.push({
         severity: "error",
