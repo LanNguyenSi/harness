@@ -3,7 +3,7 @@ type: overview
 title: Understanding gate, auto-mode signal sources (measured)
 description: What signals exist for detecting an agent's own permission/auto-approval mode across Claude Code, Codex, and opencode, measured where possible, doc-only where not, with a trust-class table. Covers both launch shapes for Claude Code, headless and interactive, plus how a hook ask resolves in each and what a subagent's tool call looks like to the same hook. The rule and the decision on which signals gate anything live in the ADR, not here.
 tags: [understanding-gate, permission-mode, auto-mode, hooks, measurement, trust-boundary]
-timestamp: 2026-08-27T18:21:56Z
+timestamp: 2026-08-27T19:59:52Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - dogfood/ug-auto-mode-signals/README.md
@@ -15,6 +15,9 @@ sources:
   - src/cli/apply/generate-opencode-config.ts
   - src/runtime/read-only-bash.ts
   - docs/policy-packs/understanding-before-execution.md
+  - dogfood/ug-auto-mode-signals/codex-capture.sh
+  - dogfood/ug-auto-mode-signals/codex-interactive-capture.sh
+  - dogfood/ug-auto-mode-signals/opencode/README-evidence.txt
 ---
 
 # Understanding gate, auto-mode signal sources (measured)
@@ -28,18 +31,20 @@ lives in `docs/decisions/2026-08-27-ug-auto-mode-approval.md`, not here.
 
 ## What this records
 
-Measured Claude Code data (`dogfood/ug-auto-mode-signals/`, captured
-2026-08-27, Claude Code 2.1.247, macOS), plus doc-only findings for Codex
-and opencode where no live capture was taken. Every number below is
-derived from the raw files in that dogfood directory; where this doc's
-predecessor plan draft disagreed with a raw file, the raw file wins (none
-of the numbers below needed correcting against the raw captures).
+Measured data for all three adapters (`dogfood/ug-auto-mode-signals/`,
+captured 2026-08-27): Claude Code 2.1.247 on macOS, Codex CLI 0.150.1 on
+Linux/WSL2, and opencode 1.18.18 against a local Ollama model. Every number
+below is derived from the raw files in that dogfood directory; where this
+doc's predecessor plan draft disagreed with a raw file, the raw file wins
+(none of the numbers below needed correcting against the raw captures).
 
 A second capture wave the same day, on the same machine and version, added
-the three shapes the first wave had left open: an interactive (non `-p`)
-session, the interactive resolution of a hook `ask`, and a subagent's own
-tool call. Those sections say so, and the entries they close have left the
-"Unverified / not measured" list.
+the three Claude Code shapes the first wave had left open: an interactive
+(non `-p`) session, the interactive resolution of a hook `ask`, and a
+subagent's own tool call. Those sections say so, and the entries they close
+have left the "Unverified / not measured" list. A third wave added the
+Codex and opencode captures below, closing the "doc-only" status this
+section used to carry for both.
 
 ## Claude Code
 
@@ -287,28 +292,99 @@ section (j); script `subagent-capture.sh`; fixtures
 
 ## Codex
 
-Doc-only; Codex is not installed on the measuring machine, no live capture
-was taken. learn.chatgpt.com/docs/hooks lists `permission_mode` as a
-common input field with the same vocabulary
-(`default`/`acceptEdits`/`plan`/`dontAsk`/`bypassPermissions`) on
-`SessionStart`, `PreToolUse`, `PermissionRequest`, `PostToolUse`,
-`UserPromptSubmit`, `SubagentStart`, `SubagentStop`, and `Stop`.
-`transcript_path` may be `null` per that documentation. Whether or how
-this value is derived from Codex's own `approval_policy` / `sandbox_mode`
-settings is not documented there and was not otherwise verified.
+### Measured: Codex `permission_mode` by launch shape
+
+Codex CLI 0.150.1, Linux/WSL2, captured 2026-08-27
+(`dogfood/ug-auto-mode-signals/README.md`, sections k to m; scripts
+`codex-capture.sh` and `codex-interactive-capture.sh`; fixtures
+`payloads/codex-exec-<shape>.*` and `payloads/codex-tui-<shape>.*`). 14
+successful `codex exec` shapes plus the `untrusted` error case, and 11 TUI
+shapes over `tmux`.
+
+`permission_mode` follows the effective APPROVAL policy only:
+`never` (as a flag, a config key, `--dangerously-bypass-approvals-and-sandbox`,
+the TUI's "Full Access" permission profile, or any headless `codex exec`
+run without `--approve-for-me`) maps to `bypassPermissions`; `on-request` /
+the TUI's "Ask for approval" and "Approve for me" profiles / `--approve-for-me`
+map to `default`. `sandbox_mode` (`read-only`, `workspace-write`,
+`danger-full-access`) does not change the value in any of the 25 runs.
+Observed vocabulary: `bypassPermissions`, `default`; `plan`, `acceptEdits`
+and `dontAsk` (in the Codex hooks documentation's vocabulary) were never
+produced by any shape exercised here. `approval_policy = "untrusted"` is no
+longer accepted in 0.150.1 (`payloads/codex-exec-untrusted.events.jsonl`:
+"approval_policy = \"untrusted\" is no longer supported; remove this
+setting"), so that value cannot occur.
+
+Payload shape: identical to Claude Code's `PreToolUse` payload (this doc's
+Claude Code section above) minus `prompt_id`/`effort`, plus `turn_id`/`model`
+(`payloads/codex-exec-default.PreToolUse.json`). It sends `tool_input`, the
+same field name the current Claude Code payload uses, not harness's older
+portable `raw_input` name.
+
+Hook environment: the hook process's own environment
+(`payloads/codex-exec-default.PreToolUse.env.txt`, consistent across all 25
+runs) carries only `CODEX_HOME`, `CODEX_MANAGED_BY_NPM`,
+`CODEX_MANAGED_PACKAGE_ROOT`, `PWD`, `SHLVL`; there is NO session-id
+variable of any name. Consequence: the session-consistency check this doc
+relies on for Claude Code (hook-env `CLAUDE_CODE_SESSION_ID` vs payload
+`session_id`) has no Codex counterpart at all, since Codex never exposes a
+session id to the hook process's environment; a Codex-side design would have
+to use the payload's own `transcript_path` (present on disk at hook time,
+per shape) instead.
+
+Semantic difference from Claude Code: on Codex, `bypassPermissions` means
+"no approval prompts are issued for this call", nothing about sandboxing.
+It is produced by every headless `codex exec` shape regardless of
+`sandbox_mode`, including `-s read-only` (`payloads/codex-exec-readonly.PreToolUse.json`)
+and `-s danger-full-access` alike, and it does not imply the process is
+unsandboxed the way Claude Code's `bypassPermissions` implies the
+permission system itself is off.
 
 ## opencode
 
-Doc-only. opencode's `--auto` flag (available on both the TUI and
-`opencode run`) auto-approves everything not explicitly denied. The
-plugin surface exposes `tool.execute.before` / `tool.execute.after` hooks
-and `permission.asked` / `permission.replied` events. Harness's own
-opencode adapter (`src/cli/apply/generate-opencode-config.ts`) projects no
-hooks into the generated `opencode.json` at all ("hooks -> NOT PROJECTED",
-documented no-op in that file's header), so today nothing in the harness
-pipeline could read an opencode-side auto-mode signal even if one existed.
-Whether an opencode plugin can itself observe that `--auto` is active for
-the running session is unverified.
+### Measured: `--auto` plugin observability
+
+opencode 1.18.18, local Ollama model, captured 2026-08-27
+(`dogfood/ug-auto-mode-signals/README.md`, section n;
+`dogfood/ug-auto-mode-signals/opencode/`). Five run shapes: `project`
+(default permissions) with and without `--auto`; `project-ask`
+(`"permission": {"bash": "ask"}`) with `--auto`, without `--auto`, and
+under `opencode serve` + a separate `--attach --auto` run.
+
+`--auto` (aliases `--yolo`, `--dangerously-skip-permissions`,
+`opencode/binary-context.txt`) is implemented purely client-side: the CLI's
+own `permission.asked` handler replies `{reply:"once"}` when its internal
+mode is `"auto"`, or otherwise queues a prompt (TUI) or replies
+`{reply:"reject"}` (`opencode run` without `--auto`)
+(`opencode/binary-context.txt`, the `reply:"once"` excerpt). No config
+field, env var, `PluginInput` field, or hook input carries the mode;
+`config.permission` in the `config` hook payload is identical with and
+without `--auto`, differing only in `argv` (`opencode/diff-a-vs-b.txt`).
+The typed `permission.ask` plugin hook does not exist in the installed
+1.18.18 binary at all: `count '"permission.ask"': 0`
+(`opencode/binary-context-permission-ask.txt`); the real internal events
+are `permission.asked` / `permission.replied`, and this probe's plugin
+never received either in any of the five runs, because the default
+permissions in both scratch projects allow `bash` and no permission was
+ever actually asked (`opencode/probe-{a,b,c,d,e-serve}.jsonl`).
+
+Verdict: no decision-grade signal and no hook projection to build on.
+Harness's own opencode adapter
+(`src/cli/apply/generate-opencode-config.ts`) projects no hooks into the
+generated `opencode.json` at all ("hooks -> NOT PROJECTED", documented
+no-op in that file's header, unchanged by this measurement), so even if a
+decision-grade `--auto` signal existed, nothing in the harness pipeline is
+positioned to read it today. Two indirect channels exist for a plugin to
+infer `--auto`, and both have a named limit: `process.argv` contains the
+literal `--auto` token when the plugin runs in the same process as the CLI
+invocation carrying the flag (present in runs a and c; absent in run e,
+where the flag belongs to the separate `--attach`ed `run` process rather
+than the `serve` process the plugin lives in); and a `permission.replied`
+event with `reply: "once"` arriving without a preceding human action would
+suggest `--auto`, but that only exists when a permission was actually asked
+(none of these five runs triggered one), and even then is
+indistinguishable at the plugin level from a human choosing "Allow once" in
+the TUI. Out of scope for auto-approval; design note only.
 
 ## Signal sources by trust class
 
@@ -320,8 +396,8 @@ the running session is unverified.
 | Operator launch env (e.g. shell env when starting `claude`) | Operator | Not for the running session, but any process the agent spawns inherits or overrides it, and at the hook it is indistinguishable from an agent-set variable | Not captured here | unverified (corroboration at most; never a decision input on its own) |
 | Manifest opt-in in `harness.yaml` (and, by the same write class, `permissions.defaultMode` in `.claude/settings*.json`) | Repo config, operator-authored | Agent can edit the file post-approval (existing residue class); pre-approval it is gated | Not measured here | corroboration only |
 | Agent claim in text (e.g. "I am in auto mode") | Agent output | Yes, fully | n/a | untrusted |
-| Codex payload `permission_mode` | Codex CLI process (per Codex hook docs) | Not documented; no live capture | Doc-only, this doc | unverified |
-| opencode `--auto` flag / plugin visibility | opencode CLI process | Not documented whether a plugin can read it | Doc-only, this doc | unverified |
+| Codex payload `permission_mode` | Codex CLI process, written into the hook's stdin | Not agent-settable for the running session; derivable from `config.toml`'s `approval_policy` in `$CODEX_HOME` or a trusted project's `.codex/config.toml`, the same operator-owned, post-approval-agent-writable class as Claude Code's `permissions.defaultMode` above | Measured, this doc: 25 runs across `codex exec` (14 shapes) and the TUI (11 shapes) | decision-grade (harness-process-originated), config-derived note: same write class as `permissions.defaultMode`, not the agent-settable-for-the-running-session class the ADR's Codex reopen criterion names |
+| opencode `--auto` flag / plugin visibility | opencode CLI process (client-side only; not projected into any hook input) | Yes, in principle, via the two indirect channels named in the opencode section above, neither decision-grade | Measured, this doc: 5 runs; the typed plugin-facing permission hook does not exist in the 1.18.18 binary | indirect only, not decision-grade |
 
 ## Unverified / not measured
 
@@ -342,13 +418,25 @@ the running session is unverified.
   subagent per run, under `-p bypassPermissions`. Nested subagents, an
   interactive parent, and other subagent types were not exercised, and no
   probe here reads the separate agent transcript file for report content.
-- Codex live payload values and the approval_policy/sandbox_mode to
-  permission_mode mapping: doc-only, no installation available on the
-  measuring machine.
-- Whether an opencode plugin can observe `--auto`: doc-only, unverified.
-- `auto` and `dontAsk` values for `permission_mode`: never observed in
-  this measurement (only `default`, `acceptEdits`, `bypassPermissions`
-  were exercised).
+- Codex: interactive mid-session `/permissions` switching AFTER a tool call
+  already ran in the same session (every TUI shape here switched, if at
+  all, before the probe's one Bash call); `codex exec` with a pinned
+  session id or `--resume`; Codex versions other than 0.150.1 or platforms
+  other than Linux/WSL2. `PermissionRequest` never fired in any of the 25
+  Codex runs, so its payload shape is unmeasured for Codex (the Claude Code
+  section above measured it interactively, section (i); Codex's equivalent
+  was never exercised into firing).
+- opencode: a human's "Allow once" in the TUI vs `--auto`'s `reply:"once"`
+  is, per the opencode section above, indistinguishable at the plugin
+  event level; that conclusion rests on reading the event shape
+  (`opencode/binary-context.txt`) and on the fact that no run here actually
+  triggered a `permission.asked` event, not on a TUI run that compared the
+  two side by side. No TUI run was captured for this probe at all (only
+  `opencode run` and `opencode serve`).
+- `auto` and `dontAsk` values for Claude Code's `permission_mode`, and
+  `plan`/`acceptEdits`/`dontAsk` for Codex's: never observed in this
+  measurement (Claude Code exercised `default`, `acceptEdits`,
+  `bypassPermissions`; Codex exercised `default`, `bypassPermissions`).
 - Single machine, single Claude Code version (2.1.247, macOS): no
   cross-version or cross-OS comparison was made.
 - Transcript-visibility probe: n=5, all under `bypassPermissions`; not
