@@ -9,6 +9,13 @@ import {
   formatValidationErrors,
   validateBeforeWrite,
 } from "../../io/validate-before-write.js";
+import { ManifestParseError, parseManifest } from "../../schema/index.js";
+import {
+  deriveWorkflowGatePolicies,
+  REVIEW_EVIDENCE_HOOK_BASH,
+  REVIEW_EVIDENCE_HOOK_MCP,
+  workflowRequiresMergeGate,
+} from "../../runtime/workflow-policies.js";
 import { EX_FAIL, EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
 import { applyRemove, planRemove, type RemoveType } from "./mutate.js";
 
@@ -26,6 +33,16 @@ export interface RemoveResult {
   diff: string;
   applied: boolean;
   forcedReferences: string[];
+  /**
+   * F8 (review round 2, 99f47307 Slice 1): workflow names whose runtime
+   * merge gate is derived FROM this hook (see
+   * `derivedGateReferencingWorkflows` below) — empty unless `type` is
+   * `"hook"` and `name` is one of the two evidence hooks. Informational
+   * on dry-run (mirrors `forcedReferences`); on the write path, always
+   * `[]` for the same reason `forcedReferences` is: the pre-check below
+   * refuses the removal before it happens, unless `--force` was passed.
+   */
+  derivedGateReferences: string[];
 }
 
 const DEFAULT_BASENAME = "harness.yaml";
@@ -42,6 +59,41 @@ function resolveTargetPath(opts: RemoveOptions): string {
 function formatNameList(names: string[]): string {
   if (names.length === 0) return "(none declared)";
   return names.map((n) => `  - ${n}`).join("\n");
+}
+
+/**
+ * F8 (review round 2, 99f47307 Slice 1): `planRemove`'s
+ * `referencingPolicies` only ever sees HAND-authored `policies:` entries
+ * (it walks the raw YAML document). A `require-review-evidence[-bash]`
+ * hook referenced ONLY by a `workflows[]`-derived merge gate (no
+ * hand-authored policy names it) passed that check silently — `harness
+ * remove hook require-review-evidence` would delete the hook and the
+ * next `harness apply`/`policy intercept` would derive nothing for it
+ * (hasWiredMergeGateHooks requires BOTH hooks), a silent regression from
+ * "enforced" to "not enforced" for every workflow with `spawn:
+ * "required"`. This consults the SAME derivation `withDerivedPolicies`
+ * uses (`deriveWorkflowGatePolicies`) against the manifest as it stands
+ * BEFORE the removal, and returns the names of workflows whose derived
+ * gate references `hookName` — empty for any type/name that isn't one of
+ * the two evidence hooks, or when the manifest fails to parse (the
+ * existing schema-gate checks further down handle a malformed manifest;
+ * this is a best-effort pre-check, not the safety net).
+ */
+function derivedGateReferencingWorkflows(yamlText: string, type: RemoveType, hookName: string): string[] {
+  if (type !== "hook") return [];
+  if (hookName !== REVIEW_EVIDENCE_HOOK_MCP && hookName !== REVIEW_EVIDENCE_HOOK_BASH) return [];
+  let manifest;
+  try {
+    manifest = parseManifest(parseYaml(yamlText));
+  } catch (err) {
+    if (err instanceof ManifestParseError) return [];
+    throw err;
+  }
+  // Non-empty only when BOTH evidence hooks are currently wired (see
+  // `hasWiredMergeGateHooks`) — if only one is present already, no
+  // workflow has an enforced gate to lose from removing the other.
+  if (deriveWorkflowGatePolicies(manifest).length === 0) return [];
+  return manifest.workflows.filter((wf) => workflowRequiresMergeGate(wf)).map((wf) => wf.name);
 }
 
 export async function remove(
@@ -76,6 +128,27 @@ export async function remove(
     );
   }
 
+  // F8 (review round 2, 99f47307 Slice 1): the check above only sees
+  // hand-authored `policies:` entries; a hook referenced ONLY by a
+  // workflows[]-derived merge gate must get the same protection, or
+  // `harness remove hook require-review-evidence` silently disables the
+  // gate for every workflow with `spawn: "required"` (no dangling
+  // schema reference to catch it afterwards — see
+  // `derivedGateReferencingWorkflows`'s header for why there is no
+  // schema-level safety net here the way there is for hand policies).
+  const derivedGateWorkflows = derivedGateReferencingWorkflows(original, type, name);
+  if (derivedGateWorkflows.length > 0 && !opts.force) {
+    const wfList = derivedGateWorkflows.map((n) => `"${n}"`).join(", ");
+    const verb = derivedGateWorkflows.length === 1 ? "workflow" : "workflows";
+    throw new HarnessExitError(
+      `${verb} ${wfList} derive${derivedGateWorkflows.length === 1 ? "s" : ""} a runtime merge gate ` +
+        `from this hook (a review_subagent step with spawn: "required" followed by a merge step); ` +
+        `removing it would silently disable that gate. Drop spawn: "required" on the workflow step ` +
+        "first, or pass --force.",
+      EX_FAIL,
+    );
+  }
+
   const proposed = applyRemove(original, type, name);
   const diff = unifiedDiff({
     fileName: path.basename(target),
@@ -103,6 +176,11 @@ export async function remove(
     // policies would have been overridden if the schema gate did not refuse.
     // On the write path below it is always [] because --force on a referenced
     // hook never reaches that point — the schema rejects the dangling reference.
+    // derivedGateReferences (F8) mirrors that shape, EXCEPT there is no
+    // schema safety net on the write path (see the header comment on
+    // `derivedGateReferencingWorkflows`) — --force there really does drop
+    // the gate silently, so this dry-run report is the only warning an
+    // operator gets.
     return {
       path: target,
       type,
@@ -110,6 +188,7 @@ export async function remove(
       diff,
       applied: false,
       forcedReferences: opts.force ? plan.referencingPolicies : [],
+      derivedGateReferences: opts.force ? derivedGateWorkflows : [],
     };
   }
 
@@ -137,6 +216,11 @@ export async function remove(
     // hook, so the only way to reach here with --force is when there are no
     // referencing policies to begin with.
     forcedReferences: [],
+    // Always [] too: the pre-check above already refused unless --force
+    // was passed, and (unlike forcedReferences) nothing downstream would
+    // have caught a --force'd derived-gate removal anyway — this array
+    // only ever carries information on the dry-run path.
+    derivedGateReferences: [],
   };
 }
 

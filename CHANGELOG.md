@@ -9,7 +9,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- **`workflows:` gets its first slice of runtime enforcement: a `review_subagent` step with `spawn: "required"` followed by a `merge` step now derives a real merge-time gate, closing the v0.7.0 note that runtime enforcement was a follow-up** (task `99f47307`, Slice 1). `src/runtime/workflow-policies.ts#deriveWorkflowGatePolicies` is a pure function `src/cli/loader.ts#loadManifest` calls right after parse: for every workflow whose steps match that shape, and only when `manifest.hooks[]` declares BOTH `require-review-evidence` and `require-review-evidence-bash` (the pair `harness init --template full` already hand-authors, `src/cli/init/templates.ts`), it appends the byte-identical `review-before-merge` / `review-before-merge-bash` policy pair to `manifest.policies`, renamed `workflow:<name>:...` for provenance. Every `loadManifest` caller inherits this with no `harness apply` round-trip: the real `harness policy intercept` entrypoint (`src/cli/policy/intercept.ts`), `harness list policies`, `harness explain[-policy]`, and `harness doctor`. Dedupe is keyed on trigger surface (event/match/bash_match) + `requires.ledger_tag`, so a hand-authored policy or a second qualifying workflow sharing the same surface does not double-intercept the same event. Fail direction: when the two evidence hooks are NOT wired the derivation returns nothing (never an unenforceable policy pointing at a hook that doesn't exist), closed by a new `error`-severity `harness validate` check, `checkWorkflowGateWiring`, so "declared `spawn: required`, gate never wired" cannot pass silently. Runtime-agnostic by construction: `harness policy intercept` is the same CLI entrypoint on both the Claude Code and the Codex adapters (`docs/okf/codex-adapter-parity-gaps.md` gap 8), and `loadManifest` carries no runtime branching, so the Codex `PreToolUse` hook inherits the same derived policies with no separate wiring. Scoped: only the `review_subagent (required) -> merge` pairing is enforced; PR-open gating driven by `workflows:` itself (today only reachable via the separate hand-authored `review-subagent-before-pr-create` / `-bash` policies), step-ordering validation, and `when.task_label`/project-based workflow selection remain schema-only and are left to a follow-up slice. `docs/for-agents.md` updated to describe the scoped, hook-dependent, process-gate-not-hostile-agent-safe behavior in place of the old "schema cannot enforce that today" line.
+- **`workflows:` gets its first slice of runtime enforcement: a `review_subagent` step with `spawn: "required"` followed by a `merge` step now derives a real merge-time gate, closing the v0.7.0 note that runtime enforcement was a follow-up** (task `99f47307`, Slice 1). `src/runtime/workflow-policies.ts#deriveWorkflowGatePolicies` is a pure function `src/cli/loader.ts#loadManifest` calls right after parse: for every workflow whose steps match that shape, and only when `manifest.hooks[]` declares BOTH `require-review-evidence` and `require-review-evidence-bash` (the pair `harness init --template full` already hand-authors, `src/cli/init/templates.ts`), it appends the byte-identical `review-before-merge` / `review-before-merge-bash` policy pair to `manifest.policies`, renamed `workflow:<name>:...` for provenance. Every `loadManifest` caller inherits this with no `harness apply` round-trip: the real `harness policy intercept` entrypoint (`src/cli/policy/intercept.ts`), `harness list policies`, `harness explain[-policy]`, and `harness doctor`. Dedupe is keyed on trigger surface (event/match/bash_match) + `requires.ledger_tag`, so a hand-authored policy or a second qualifying workflow sharing the same surface does not double-intercept the same event. Fail direction: when the two evidence hooks are NOT wired the derivation returns nothing (never an unenforceable policy pointing at a hook that doesn't exist), closed by a new `error`-severity `harness validate` check, `checkWorkflowGateWiring`, so "declared `spawn: required`, gate never wired" cannot pass silently. The same CLI entrypoint runs on both adapters (`harness policy intercept`; `loadManifest` carries no runtime branching), so a Codex install that wires these hooks inherits the derived policies; not separately exercised — `docs/okf/codex-adapter-parity-gaps.md` gap 8 documents partial, de-facto Codex accommodation in the intercept engine (cwd resolution from the Codex sandbox argv), not a verified parity claim for this specific derivation. Scoped: only the `review_subagent (required) -> merge` pairing is enforced; PR-open gating driven by `workflows:` itself (today only reachable via the separate hand-authored `review-subagent-before-pr-create` / `-bash` policies), step-ordering validation, and `when.task_label`/project-based workflow selection remain schema-only and are left to a follow-up slice. `docs/for-agents.md` updated to describe the scoped, hook-dependent, process-gate-not-hostile-agent-safe behavior in place of the old "schema cannot enforce that today" line.
+
+  **Review round 2** (same task, before this line shipped) reproduced eight
+  reviewer findings against the built CLI and fixed six of them:
+  - **F1 (correctness, MEDIUM):** dedupe was keyed on trigger surface +
+    `requires.ledger_tag` alone, so a hand-authored policy on the identical
+    surface with `enforcement: "warn"` (or scoped via `when:`) silently
+    suppressed the derived BLOCK gate — a `spawn: "required"` workflow step
+    that looked enforced actually degraded to warn-only. Dedupe now only
+    skips deriving against a hand-authored policy that is at least as
+    strong as the gate it would stand in for (`enforcement: "block"`, no
+    `when:`, not `operator_only`); a weaker one no longer suppresses the
+    derivation, and a new warning diagnostic
+    (`checkWorkflowGateWeakOverlap`) names the overlap so it is not
+    silent.
+  - **F2 (correctness, MEDIUM):** `apply` (via `loadManifest`) and
+    `validate` (via `loadMergedRaw` + `parseManifest`) saw DIFFERENT
+    effective policy sets for the identical manifest — a workflow
+    requiring the gate, both evidence hooks wired, no hand-authored
+    policies, no `grounding-mcp`: `validate` reported "0 errors" while
+    `apply --dry-run` refused with "policies declared but grounding-mcp
+    not wired". The derivation is now capsuled in one function,
+    `withDerivedPolicies`, that both `loadManifest` and `validate` call,
+    so the two entrypoints agree.
+  - **F3 (correctness, MEDIUM):** `harness doctor` imported checks
+    selectively and never wired in `checkWorkflowGateWiring`, so a
+    `spawn: "required"` workflow with the merge gate unwired showed green
+    under `doctor` while `validate` errored on the identical manifest.
+    Doctor's Workflows section now runs the same check (plus F1's
+    weak-overlap warning).
+  - **F4 (security, MEDIUM, deliberately NOT closed this slice):**
+    `mcp__agent-tasks__task_merge` and `mcp__agent-tasks__task_finish`
+    (`autoMerge`) still pass the gate uncovered — only
+    `mcp__agent-tasks__pull_requests_merge` and `gh pr merge` are gated,
+    matching the parity `src/cli/init/templates.ts` already had. A
+    follow-up task extends the template pair and this derivation to those
+    two verbs together.
+  - **F5 (correctness, LOW):** `checkWorkflowGateWiring` (and the runtime
+    derivation's own `hasWiredMergeGateHooks`) only checked hook NAME
+    presence; a hook declared under the right name but wired to a stale
+    `match`/`bash_match` or a `command` that is not `harness policy
+    intercept` (`isPolicyInterceptCommand`) is just as unenforced as a
+    missing hook. `checkWorkflowGateWiring` now also verifies the actual
+    trigger surface + command.
+  - **F6 (correctness, LOW):** a workflow with a `merge` step BEFORE its
+    `spawn: "required"` review step derives no gate (silent, by design —
+    step-ordering validation is the later slice the round-1 entry above
+    already scoped out) and previously said nothing about it. A new
+    warning (`checkWorkflowMergeBeforeReview`) names the ordering instead.
+  - **F7 (maintainability, LOW):** derived policies were indistinguishable
+    from hand-authored ones in `harness export`/`list`/`doctor`. A
+    `WeakSet`-backed registry (`isDerivedPolicy`) now lets `export` filter
+    them out of the emitted manifest and `list`/`doctor` mark them
+    "(derived from workflows[])".
+  - **F8 (correctness, LOW):** `harness remove hook require-review-evidence`
+    silently deleted a hook referenced ONLY by a derived merge gate (no
+    hand-authored `policies:` entry named it, so the existing
+    reference-check saw nothing). `remove`'s reference check now also
+    consults the derived view and refuses the same way hand-authored
+    policy references do — though, unlike those, there is no schema-level
+    safety net stopping `--force` here, since a derived gate is not a
+    static YAML reference the schema can see.
 
 - **Risk Gate: a new, environment-INDEPENDENT deletion-target gate closes the
   dev-context gap where `gate-prod-destructive*` only fires once the resolved

@@ -182,3 +182,83 @@ describe("sanitize — pure helpers", () => {
     expect(re.test("AGENT_TASKS_URL")).toBe(false);
   });
 });
+
+// F7 (review round 2, 99f47307 Slice 1): `harness export` loads via
+// `loadManifest`, which folds `workflows[]`-derived policies into
+// `manifest.policies` (F2). Exporting them verbatim would round-trip a
+// COMPUTED policy back in as though the operator hand-authored it under
+// `policies:` — the next `harness apply` would then see it as a
+// hand-authored (and, under F1, at-least-as-strong) policy that dedupes
+// against the derivation, masking provenance. `exportManifest` filters
+// them back out via `isDerivedPolicy`.
+describe("exportManifest — workflows[]-derived policies are excluded (F7)", () => {
+  const WORKFLOW_REQUIRED = `review_templates:
+  t1: "Review this PR for correctness."
+workflows:
+  - name: ship
+    steps:
+      - kind: branch
+      - kind: review_subagent
+        spawn: required
+        template: t1
+      - kind: merge
+`;
+
+  const WIRED_HOOKS = `hooks:
+  - name: require-review-evidence
+    event: PreToolUse
+    match: "mcp__agent-tasks__pull_requests_merge"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+  - name: require-review-evidence-bash
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+`;
+
+  // Mutation probe M5 (this round): removing the `isDerivedPolicy` filter
+  // from `exportManifest` (src/cli/export.ts) turns this test red — the
+  // two `workflow:ship:review-before-merge[-bash]` policy names would
+  // reappear in `r.output`/`r.manifest.policies`.
+  it("does not include workflow:<name>:review-before-merge[-bash] in the exported output", () => {
+    const fixture = path.join(tmpDir, "harness.yaml");
+    fs.writeFileSync(fixture, `version: 1\n${WORKFLOW_REQUIRED}${WIRED_HOOKS}`, "utf8");
+    const r = exportManifest({ configPath: fixture, json: true });
+    expect(r.output).not.toContain("workflow:ship:review-before-merge");
+    const parsed = JSON.parse(r.output) as { policies: Array<{ name: string }> };
+    expect(parsed.policies.find((p) => p.name.startsWith("workflow:"))).toBeUndefined();
+    // r.manifest must match what was actually emitted (existing
+    // round-trip contract, "happy path" describe block above) — the
+    // filtered view, not the loaded-with-derived-policies one.
+    expect(r.manifest.policies.find((p) => p.name.startsWith("workflow:"))).toBeUndefined();
+  });
+
+  it("still includes a hand-authored policy sharing the same surface (round-1 dedupe case)", () => {
+    const handPolicy = `policies:
+  - name: review-before-merge
+    description: Block PR merges unless a ledger entry tagged review:<pr-number> exists for this session.
+    trigger:
+      event: PreToolUse
+      match: "mcp__agent-tasks__pull_requests_merge"
+      extract:
+        PR_NUMBER: "toolArgs.prNumber"
+    requires:
+      ledger_tag: "review:\${PR_NUMBER}"
+    hook: require-review-evidence
+    enforcement: block
+`;
+    const fixture = path.join(tmpDir, "harness.yaml");
+    fs.writeFileSync(
+      fixture,
+      `version: 1\n${WORKFLOW_REQUIRED}${handPolicy}${WIRED_HOOKS}`,
+      "utf8",
+    );
+    const r = exportManifest({ configPath: fixture, json: true });
+    const parsed = JSON.parse(r.output) as { policies: Array<{ name: string }> };
+    expect(parsed.policies.find((p) => p.name === "review-before-merge")).toBeDefined();
+  });
+});

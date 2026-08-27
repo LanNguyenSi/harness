@@ -112,6 +112,141 @@ describe("remove hook — reference check", () => {
   });
 });
 
+// F8 (review round 2, 99f47307 Slice 1): a hook referenced ONLY by a
+// workflows[]-derived merge gate (no hand-authored `policies:` entry
+// names it) used to pass `remove hook`'s reference check silently — the
+// check only ever inspected the raw YAML's `policies:` list. This
+// manifest deliberately carries NO `policies:` at all, so the existing
+// `referencingPolicies` check finds nothing; only the new derived-gate
+// check (`derivedGateReferencingWorkflows`) can catch it.
+describe("remove hook — derived-gate reference check (F8)", () => {
+  let derivedHome: string;
+  let derivedManifestPath: string;
+
+  const WORKFLOW_REQUIRED = `review_templates:
+  t1: "Review this PR for correctness."
+workflows:
+  - name: ship
+    steps:
+      - kind: branch
+      - kind: review_subagent
+        spawn: required
+        template: t1
+      - kind: merge
+`;
+
+  const WIRED_HOOKS = `hooks:
+  - name: require-review-evidence
+    event: PreToolUse
+    match: "mcp__agent-tasks__pull_requests_merge"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+  - name: require-review-evidence-bash
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+`;
+
+  beforeEach(() => {
+    derivedHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-remove-derived-gate-"));
+    derivedManifestPath = path.join(derivedHome, "harness.yaml");
+    fs.writeFileSync(
+      derivedManifestPath,
+      `version: 1\n${WORKFLOW_REQUIRED}${WIRED_HOOKS}policies: []\n`,
+      "utf8",
+    );
+  });
+
+  afterEach(() => {
+    fs.rmSync(derivedHome, { recursive: true, force: true });
+  });
+
+  it("refuses to remove a hook a workflow's derived merge gate depends on, without --force", async () => {
+    await expect(
+      remove("hook", "require-review-evidence", {
+        configPath: derivedManifestPath,
+        homeDir: derivedHome,
+      }),
+    ).rejects.toMatchObject({
+      name: "HarnessExitError",
+      exitCode: 1,
+      message: expect.stringMatching(/"ship".*derive.*runtime merge gate.*--force/s),
+    });
+  });
+
+  it("refuses removal of the BASH evidence hook the same way", async () => {
+    await expect(
+      remove("hook", "require-review-evidence-bash", {
+        configPath: derivedManifestPath,
+        homeDir: derivedHome,
+      }),
+    ).rejects.toMatchObject({ name: "HarnessExitError", exitCode: 1 });
+  });
+
+  // Mutation probe (this round): removing the `derivedGateReferencingWorkflows`
+  // pre-check call from `src/cli/remove/index.ts` turns the two tests
+  // above red-to-green-for-the-wrong-reason (the removal would silently
+  // succeed) — this test pins the dry-run reporting shape too, so a
+  // regression that keeps the deny but drops the reporting still shows.
+  it("reports the affected workflow in derivedGateReferences on a --force dry-run", async () => {
+    const r = await remove("hook", "require-review-evidence", {
+      configPath: derivedManifestPath,
+      homeDir: derivedHome,
+      dryRun: true,
+      force: true,
+    });
+    expect(r.applied).toBe(false);
+    expect(r.derivedGateReferences).toEqual(["ship"]);
+  });
+
+  it("--force actually removes the hook (no schema safety net for a derived-only reference)", async () => {
+    const r = await remove("hook", "require-review-evidence", {
+      configPath: derivedManifestPath,
+      homeDir: derivedHome,
+      force: true,
+    });
+    expect(r.applied).toBe(true);
+    const m = parseYaml(fs.readFileSync(derivedManifestPath, "utf8")) as {
+      hooks?: { name: string }[];
+    };
+    expect(m.hooks?.map((h) => h.name)).not.toContain("require-review-evidence");
+  });
+
+  it("does not block removing an UNRELATED hook the same manifest declares", async () => {
+    const withExtraHook = `version: 1\n${WORKFLOW_REQUIRED}hooks:
+  - name: require-review-evidence
+    event: PreToolUse
+    match: "mcp__agent-tasks__pull_requests_merge"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+  - name: require-review-evidence-bash
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+  - name: unrelated-hook
+    event: SessionStart
+    command: /usr/bin/true
+    blocking: false
+policies: []
+`;
+    fs.writeFileSync(derivedManifestPath, withExtraHook, "utf8");
+    const r = await remove("hook", "unrelated-hook", {
+      configPath: derivedManifestPath,
+      homeDir: derivedHome,
+    });
+    expect(r.applied).toBe(true);
+    expect(r.derivedGateReferences).toEqual([]);
+  });
+});
+
 describe("remove — unknown name", () => {
   it("exits 1 with the available-name list", async () => {
     await expect(

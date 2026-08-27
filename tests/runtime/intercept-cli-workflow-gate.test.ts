@@ -227,4 +227,50 @@ describe("runInterceptCli: workflow-derived merge gate (99f47307 Slice 1, AC1/AC
     expect(result.blocked).toBe(false);
     expect(output()).toBe("");
   });
+
+  // F1 (review round 2): a hand-authored `enforcement: warn` policy on
+  // the IDENTICAL trigger surface + ledger_tag as the derived MCP gate
+  // must not suppress it — round-1 code deduped purely on trigger-
+  // surface-key, so this exact manifest shape used to silently drop the
+  // block gate (an agent could merge with only a "warn" recorded, never
+  // an actual deny). This is the M1 mutation probe this round's review
+  // brief names: reverting `isAtLeastAsStrongAsDerivedGate`'s filter back
+  // to a bare `triggerSurfaceKey` seed turns this test red (`blocked`
+  // flips from `true` to `false`).
+  it("F1 mutation probe M1: a WEAKER hand policy on the same surface does not suppress the deny", async () => {
+    const weakOverlapPolicy = `policies:
+  - name: two-reviewers-required
+    description: Warn-level companion sharing review-before-merge's exact surface + tag.
+    trigger:
+      event: PreToolUse
+      match: "mcp__agent-tasks__pull_requests_merge"
+      extract:
+        PR_NUMBER: "toolArgs.prNumber"
+    requires:
+      ledger_tag: "review:\${PR_NUMBER}"
+      count:
+        min: 2
+    hook: require-review-evidence
+    enforcement: warn
+`;
+    const { homeDir, configPath } = writeManifest(
+      `version: 1\n${workflowYaml("required")}${weakOverlapPolicy}${WIRED_HOOKS_YAML}`,
+    );
+    const { stream: out, output } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(MCP_MERGE_EVENT),
+      stdout: out,
+      homeDir,
+      configPath,
+      ledger: EMPTY_LEDGER,
+    });
+    expect(result.blocked).toBe(true);
+    // Both policies match the same trigger surface — `two-reviewers-required`
+    // (warn, no evidence yet) and the derived block gate — so assert on
+    // the DENYING decision specifically rather than array index/order.
+    const denying = result.decisions.find((d) => d.outcome === "deny");
+    expect(denying?.policyName).toBe("workflow:ship:review-before-merge");
+    const parsed = JSON.parse(output().trim());
+    expect(parsed.decision).toBe("block");
+  });
 });

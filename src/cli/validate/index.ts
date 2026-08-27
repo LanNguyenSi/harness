@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { ManifestParseError, parseManifest, type Manifest } from "../../schema/index.js";
 import { LOCK_BASENAME, readLock } from "../../io/harness-lock.js";
+import { withDerivedPolicies } from "../../runtime/workflow-policies.js";
 import { diffAssets } from "../diff/since-apply.js";
 import { loadMergedRaw, type LoaderOptions } from "../loader.js";
 import { runAssetChecks, type CheckOptions } from "./checks.js";
@@ -49,6 +50,16 @@ export function validate(opts: ValidateOptions = {}): ValidateResult {
   }
 
   if (manifest) {
+    // F2 (review round 2, 99f47307 Slice 1): fold `workflows[]`-derived
+    // policies in BEFORE running the asset checks, the same way
+    // `loadManifest` does for `apply`/`list`/`doctor`/`policy intercept`.
+    // Without this, a manifest with `workflows:` + both evidence hooks
+    // wired but no hand-authored policies and no grounding-mcp validated
+    // "0 errors" while `apply --dry-run` refused with "policies declared
+    // but grounding-mcp not wired" — the two entrypoints disagreed about
+    // what "declared" meant. See src/runtime/workflow-policies.ts's
+    // `withDerivedPolicies`.
+    manifest = withDerivedPolicies(manifest);
     diagnostics.push(...runAssetChecks(manifest, opts));
   }
 

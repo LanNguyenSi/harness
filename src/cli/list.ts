@@ -1,5 +1,6 @@
 import { inspectMemory } from "../probes/memory.js";
 import type { Manifest } from "../schema/index.js";
+import { isDerivedPolicy } from "../runtime/workflow-policies.js";
 import { loadManifest, type LoaderOptions } from "./loader.js";
 
 export type ListCategory =
@@ -110,6 +111,11 @@ function buildPolicyRows(manifest: Manifest): Record<string, unknown>[] {
     // `operator_only: true` policies (task 2cc73f55) declare no
     // `requires:` at all — there is no tag to show.
     requires_tag: p.requires?.ledger_tag ?? "(operator-only)",
+    // F7 (review round 2, 99f47307 Slice 1): mark workflows[]-derived
+    // policies so `harness list policies` does not read as though every
+    // row was hand-authored under `policies:`, mirroring the same
+    // marker in `harness doctor`'s Policies section.
+    provenance: isDerivedPolicy(p) ? "(derived from workflows[])" : "",
   }));
 }
 

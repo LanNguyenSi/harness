@@ -18,6 +18,9 @@ import { isPolicyInterceptCommand, requiredHookBudgetMs } from "../policy/interc
 import type { Hook, Manifest } from "../../schema/index.js";
 import { DEFAULT_SAFE_DELETION_ROOTS } from "../../schema/risk.js";
 import {
+  findWeakGatePolicyOverlaps,
+  MERGE_BASH_MATCH,
+  MERGE_MCP_MATCH,
   REVIEW_EVIDENCE_HOOK_BASH,
   REVIEW_EVIDENCE_HOOK_MCP,
   workflowRequiresMergeGate,
@@ -331,28 +334,122 @@ export function checkSolutionAcceptanceProducer(manifest: Manifest): Diagnostic[
 // hook to validate against) and the merge is never actually blocked, a
 // No-Op that LOOKS protective. This check makes that specific
 // misconfiguration a loud `error` instead of a silent non-enforcement.
+//
+// F5 (review round 2): a hook declared under the RIGHT name but wired to
+// the WRONG surface (a stale `match`/`bash_match` that no longer covers
+// the merge tool call, or a `command` that isn't the policy-intercept
+// engine — `isPolicyInterceptCommand`) is just as unenforced as a
+// missing hook, but the earlier name-only check reported it as fine.
+// `isMergeGateHookProperlyWired` below checks the actual trigger surface
+// + command, not just presence of the name.
+function isMergeGateHookProperlyWired(hook: Hook, surface: "mcp" | "bash"): boolean {
+  if (hook.event !== "PreToolUse") return false;
+  if (!isPolicyInterceptCommand(hook.command)) return false;
+  if (surface === "mcp") return hook.match === MERGE_MCP_MATCH;
+  return hook.match === "Bash" && hook.bash_match === MERGE_BASH_MATCH;
+}
+
 export function checkWorkflowGateWiring(manifest: Manifest): Diagnostic[] {
   const offending = manifest.workflows.filter((wf) => workflowRequiresMergeGate(wf));
   if (offending.length === 0) return [];
 
-  const hookNames = new Set(manifest.hooks.map((h) => h.name));
-  const missing = [REVIEW_EVIDENCE_HOOK_MCP, REVIEW_EVIDENCE_HOOK_BASH].filter(
-    (name) => !hookNames.has(name),
-  );
-  if (missing.length === 0) return [];
+  const mcpHook = manifest.hooks.find((h) => h.name === REVIEW_EVIDENCE_HOOK_MCP);
+  const bashHook = manifest.hooks.find((h) => h.name === REVIEW_EVIDENCE_HOOK_BASH);
+
+  const problems: string[] = [];
+  const missing: string[] = [];
+  if (!mcpHook) {
+    missing.push(REVIEW_EVIDENCE_HOOK_MCP);
+  } else if (!isMergeGateHookProperlyWired(mcpHook, "mcp")) {
+    problems.push(
+      `hook "${REVIEW_EVIDENCE_HOOK_MCP}" is declared but not wired to intercept the merge ` +
+        `gate surface (expects event: PreToolUse, match: "${MERGE_MCP_MATCH}", command running ` +
+        "`harness policy intercept`)",
+    );
+  }
+  if (!bashHook) {
+    missing.push(REVIEW_EVIDENCE_HOOK_BASH);
+  } else if (!isMergeGateHookProperlyWired(bashHook, "bash")) {
+    problems.push(
+      `hook "${REVIEW_EVIDENCE_HOOK_BASH}" is declared but not wired to intercept the merge ` +
+        `gate surface (expects event: PreToolUse, match: "Bash", bash_match: "${MERGE_BASH_MATCH}", ` +
+        "command running `harness policy intercept`)",
+    );
+  }
+  if (missing.length > 0) {
+    problems.unshift(`hooks[] is missing ${missing.join(" and ")}`);
+  }
+  if (problems.length === 0) return [];
 
   return offending.map((wf) => ({
     severity: "error" as const,
     path: "workflows",
     message:
       `workflow "${wf.name}" declares a review_subagent step with spawn: "required" ` +
-      `followed by a merge step, but the runtime merge gate is not wired: hooks[] is ` +
-      `missing ${missing.join(" and ")}. Without both, harness policy intercept never ` +
-      "derives this workflow's merge-gate policy and the merge is NOT blocked (silent " +
-      "non-enforcement). Declare both hooks (see docs/for-agents.md, or " +
-      "src/cli/init/templates.ts's require-review-evidence / require-review-evidence-bash " +
-      'entries) or drop spawn: "required".',
+      `followed by a merge step, but the runtime merge gate is not wired: ${problems.join("; ")}. ` +
+      "Without both hooks correctly wired, harness policy intercept never derives this " +
+      "workflow's merge-gate policy and the merge is NOT blocked (silent non-enforcement). " +
+      "See docs/for-agents.md, or src/cli/init/templates.ts's require-review-evidence / " +
+      'require-review-evidence-bash entries, or drop spawn: "required".',
   }));
+}
+
+/**
+ * F1 (review round 2): a hand-authored policy on the identical trigger
+ * surface + ledger_tag as a derived block gate, but weaker than it
+ * (`enforcement: "warn"`/`"require_approval"`, or `when:`-scoped), no
+ * longer suppresses the derived gate (see `isAtLeastAsStrongAsDerivedGate`
+ * in workflow-policies.ts) — both apply. This check surfaces that overlap
+ * as a warning so an operator reading the weaker policy does not mistake
+ * it for the ONLY gate on the surface.
+ */
+export function checkWorkflowGateWeakOverlap(manifest: Manifest): Diagnostic[] {
+  return findWeakGatePolicyOverlaps(manifest).map((overlap) => ({
+    severity: "warning" as const,
+    path: "workflows",
+    message:
+      `workflow "${overlap.workflowName}" derives a block gate on ${overlap.surface}; ` +
+      `hand-authored policy "${overlap.handPolicyName}" on the same surface is weaker ` +
+      `(${overlap.reason}). Both policies apply: the derived block gate ` +
+      `("${overlap.derivedPolicyName}") still enforces review evidence independently, so this ` +
+      "is informational, not a gap — but double-check the weaker policy is intentional.",
+  }));
+}
+
+/**
+ * F6 (review round 2): a workflow that declares BOTH a `merge` step and a
+ * `review_subagent` step with `spawn: "required"`, but with the review
+ * step coming AFTER the merge step, derives no gate at all
+ * (`workflowRequiresMergeGate` only looks for review-then-merge). That
+ * ordering is likely a mistake (a review that runs after the PR already
+ * merged cannot gate it), but step-ordering validation in general is out
+ * of scope for this slice (module doc, src/runtime/workflow-policies.ts).
+ * This warns instead of silently doing nothing.
+ */
+export function checkWorkflowMergeBeforeReview(manifest: Manifest): Diagnostic[] {
+  const out: Diagnostic[] = [];
+  for (const wf of manifest.workflows) {
+    if (workflowRequiresMergeGate(wf)) continue;
+    let sawMerge = false;
+    let requiredReviewAfterMerge = false;
+    for (const step of wf.steps) {
+      if (step.kind === "merge") {
+        sawMerge = true;
+      } else if (step.kind === "review_subagent" && step.spawn === "required" && sawMerge) {
+        requiredReviewAfterMerge = true;
+      }
+    }
+    if (requiredReviewAfterMerge) {
+      out.push({
+        severity: "warning",
+        path: "workflows",
+        message:
+          `workflow "${wf.name}" declares a required review step after its merge step; no ` +
+          "merge gate is derived (step ordering validation is a later slice).",
+      });
+    }
+  }
+  return out;
 }
 
 /**
@@ -1150,6 +1247,8 @@ export function runAssetChecks(
     ...checkPolicySelfAttestation(manifest),
     ...checkHookBudgetLedgerMargin(manifest),
     ...checkWorkflowGateWiring(manifest),
+    ...checkWorkflowGateWeakOverlap(manifest),
+    ...checkWorkflowMergeBeforeReview(manifest),
   ];
 }
 

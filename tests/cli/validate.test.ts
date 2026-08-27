@@ -1096,6 +1096,351 @@ workflows:
     expect(diags[0]?.severity).toBe("error");
     expect(diags[0]?.path).toBe("workflows");
   });
+
+  // F5 (review round 2): a hook declared under the RIGHT name but wired
+  // to a surface that does not actually intercept the merge tool call
+  // (here: a `match` that no longer names the merge verb) is just as
+  // unenforced as a missing hook. The round-1 check only tested hook
+  // NAME presence, so this fixture used to validate cleanly.
+  //
+  // Mutation probe (this round): removing the `isMergeGateHookProperlyWired`
+  // condition from `checkWorkflowGateWiring` (falling back to name-only
+  // presence) turns this test green-for-the-wrong-reason into failing —
+  // it asserts an error IS present, so a mutant that stops checking the
+  // trigger surface drops this diagnostic and the test goes red.
+  it("errors when a hook carries the right name but the wrong match surface", () => {
+    const wrongSurfaceHooks = `hooks:
+  - name: require-review-evidence
+    event: PreToolUse
+    match: "mcp__agent-tasks__some_other_tool"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+  - name: require-review-evidence-bash
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+`;
+    const home = writeFixture({
+      "harness.yaml": `version: 1\n${WORKFLOW_REQUIRED}${wrongSurfaceHooks}`,
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const hit = result.diagnostics.find(
+      (d) => d.severity === "error" && /workflow "ship".*not wired/.test(d.message),
+    );
+    expect(hit).toBeDefined();
+    expect(hit?.message).toContain("not wired to intercept the merge gate surface");
+    expect(hit?.message).toContain(REVIEW_EVIDENCE_HOOK_MCP_NAME);
+  });
+
+  // Same shape, but the surface is right and the COMMAND is wrong (not
+  // `harness policy intercept` at all) — the exact "right name, wrong
+  // command" case F5's brief names.
+  it("errors when a hook carries the right name and surface but a command that isn't the policy-intercept engine", () => {
+    const wrongCommandHooks = `hooks:
+  - name: require-review-evidence
+    event: PreToolUse
+    match: "mcp__agent-tasks__pull_requests_merge"
+    command: echo noop
+    blocking: hard
+    budget_ms: 15000
+  - name: require-review-evidence-bash
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+`;
+    const home = writeFixture({
+      "harness.yaml": `version: 1\n${WORKFLOW_REQUIRED}${wrongCommandHooks}`,
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const hit = result.diagnostics.find(
+      (d) => d.severity === "error" && /workflow "ship".*not wired/.test(d.message),
+    );
+    expect(hit).toBeDefined();
+    expect(hit?.message).toContain("not wired to intercept the merge gate surface");
+  });
+});
+
+// F2 (review round 2, 99f47307 Slice 1): `apply` (via `loadManifest`) and
+// `validate` (via `loadMergedRaw` + `parseManifest`) used to see DIFFERENT
+// effective policy sets for the identical on-disk manifest — a workflow
+// requiring the merge gate, with both evidence hooks wired but no
+// hand-authored policies and no grounding-mcp, validated with "0 errors"
+// while `apply --dry-run` refused ("policies declared but grounding-mcp
+// not wired"). `validate` now folds workflows[]-derived policies in via
+// `withDerivedPolicies` (same function `loadManifest` uses) BEFORE
+// running the asset checks, so `checkPolicyGroundingMcp` sees them too.
+//
+// Mutation probe M2 (this round): removing the `withDerivedPolicies` call
+// from `src/cli/validate/index.ts` (reverting to the bare `parseManifest`
+// result) turns this test red — `manifest.policies` goes back to empty,
+// `checkPolicyGroundingMcp` short-circuits on `policies.length === 0`, and
+// the grounding-mcp warning disappears.
+describe("validate: workflows[]-derived policies participate in checkPolicyGroundingMcp (F2, review round 2)", () => {
+  const WORKFLOW_REQUIRED = `review_templates:
+  t1: "Review this PR for correctness."
+workflows:
+  - name: ship
+    steps:
+      - kind: branch
+      - kind: review_subagent
+        spawn: required
+        template: t1
+      - kind: merge
+`;
+
+  const WIRED_HOOKS = `hooks:
+  - name: require-review-evidence
+    event: PreToolUse
+    match: "mcp__agent-tasks__pull_requests_merge"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+  - name: require-review-evidence-bash
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+`;
+
+  it("validate warns 'grounding-mcp not wired' for a manifest whose ONLY policies are workflow-derived", () => {
+    const home = writeFixture({
+      "harness.yaml": `version: 1\n${WORKFLOW_REQUIRED}${WIRED_HOOKS}policies: []\n`,
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const hit = result.diagnostics.find(
+      (d) => d.severity === "warning" && d.message.includes("grounding-mcp not wired"),
+    );
+    expect(hit).toBeDefined();
+  });
+
+  it("no grounding-mcp warning when the workflow does not require a merge gate (no policies at all, derived or not)", () => {
+    const optionalWorkflow = `review_templates:
+  t1: "Review this PR for correctness."
+workflows:
+  - name: ship
+    steps:
+      - kind: branch
+      - kind: review_subagent
+        spawn: optional
+        template: t1
+      - kind: merge
+`;
+    const home = writeFixture({
+      "harness.yaml": `version: 1\n${optionalWorkflow}${WIRED_HOOKS}policies: []\n`,
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const hit = result.diagnostics.find(
+      (d) => d.severity === "warning" && d.message.includes("grounding-mcp not wired"),
+    );
+    expect(hit).toBeUndefined();
+  });
+});
+
+// F1 (review round 2): a hand-authored policy sharing a derived gate's
+// trigger surface + ledger_tag but weaker than it (enforcement: warn, or
+// when:-scoped) no longer suppresses the derived block gate, but the
+// overlap is worth flagging so an operator does not mistake the weaker
+// policy for the only gate on the surface.
+describe("validate: checkWorkflowGateWeakOverlap (F1, review round 2)", () => {
+  const WORKFLOW_REQUIRED = `review_templates:
+  t1: "Review this PR for correctness."
+workflows:
+  - name: ship
+    steps:
+      - kind: branch
+      - kind: review_subagent
+        spawn: required
+        template: t1
+      - kind: merge
+`;
+
+  const WIRED_HOOKS = `hooks:
+  - name: require-review-evidence
+    event: PreToolUse
+    match: "mcp__agent-tasks__pull_requests_merge"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+  - name: require-review-evidence-bash
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+`;
+
+  const WEAK_OVERLAP_POLICY = `policies:
+  - name: two-reviewers-required
+    description: Warn-level companion sharing review-before-merge's exact surface + tag.
+    trigger:
+      event: PreToolUse
+      match: "mcp__agent-tasks__pull_requests_merge"
+      extract:
+        PR_NUMBER: "toolArgs.prNumber"
+    requires:
+      ledger_tag: "review:\${PR_NUMBER}"
+      count:
+        min: 2
+    hook: require-review-evidence
+    enforcement: warn
+`;
+
+  it("warns when a weaker hand policy shares the derived gate's surface", () => {
+    const home = writeFixture({
+      "harness.yaml": `version: 1\n${WORKFLOW_REQUIRED}${WEAK_OVERLAP_POLICY}${WIRED_HOOKS}`,
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const hit = result.diagnostics.find(
+      (d) =>
+        d.severity === "warning" &&
+        /derives a block gate on/.test(d.message) &&
+        d.message.includes("two-reviewers-required"),
+    );
+    expect(hit).toBeDefined();
+    expect(hit?.message).toContain("enforcement: warn");
+    // The derived block gate itself is still there (F1's whole point):
+    // no error diagnostic for this workflow, since the gate IS enforced.
+    const errorHit = result.diagnostics.find(
+      (d) => d.severity === "error" && /workflow "ship"/.test(d.message),
+    );
+    expect(errorHit).toBeUndefined();
+  });
+
+  it("no weak-overlap warning when the hand policy is at least as strong (round-1 dedupe case)", () => {
+    const strongPolicy = `policies:
+  - name: review-before-merge
+    description: Block PR merges unless a ledger entry tagged review:<pr-number> exists for this session.
+    trigger:
+      event: PreToolUse
+      match: "mcp__agent-tasks__pull_requests_merge"
+      extract:
+        PR_NUMBER: "toolArgs.prNumber"
+    requires:
+      ledger_tag: "review:\${PR_NUMBER}"
+    hook: require-review-evidence
+    enforcement: block
+`;
+    const home = writeFixture({
+      "harness.yaml": `version: 1\n${WORKFLOW_REQUIRED}${strongPolicy}${WIRED_HOOKS}`,
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const hit = result.diagnostics.find((d) => /derives a block gate on/.test(d.message));
+    expect(hit).toBeUndefined();
+  });
+});
+
+// F6 (review round 2): a workflow with BOTH a merge step and a required
+// review_subagent step, but the review comes AFTER the merge — no gate is
+// derived (workflowRequiresMergeGate only looks for review-then-merge),
+// and previously nothing said so. Warn instead of silently doing nothing.
+describe("validate: checkWorkflowMergeBeforeReview (F6, review round 2)", () => {
+  const WIRED_HOOKS = `hooks:
+  - name: require-review-evidence
+    event: PreToolUse
+    match: "mcp__agent-tasks__pull_requests_merge"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+  - name: require-review-evidence-bash
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+`;
+
+  it("warns when a required review step comes AFTER the merge step", () => {
+    const reversedWorkflow = `review_templates:
+  t1: "Review this PR for correctness."
+workflows:
+  - name: ship
+    steps:
+      - kind: branch
+      - kind: merge
+      - kind: review_subagent
+        spawn: required
+        template: t1
+`;
+    const home = writeFixture({
+      "harness.yaml": `version: 1\n${reversedWorkflow}${WIRED_HOOKS}`,
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const hit = result.diagnostics.find(
+      (d) => d.severity === "warning" && /declares a required review step after its merge step/.test(d.message),
+    );
+    expect(hit).toBeDefined();
+    expect(hit?.path).toBe("workflows");
+    // No gate is derived for this ordering, so no error either.
+    const errorHit = result.diagnostics.find(
+      (d) => d.severity === "error" && /workflow "ship"/.test(d.message),
+    );
+    expect(errorHit).toBeUndefined();
+  });
+
+  it("does not warn for the normal review-then-merge ordering", () => {
+    const normalWorkflow = `review_templates:
+  t1: "Review this PR for correctness."
+workflows:
+  - name: ship
+    steps:
+      - kind: branch
+      - kind: review_subagent
+        spawn: required
+        template: t1
+      - kind: merge
+`;
+    const home = writeFixture({
+      "harness.yaml": `version: 1\n${normalWorkflow}${WIRED_HOOKS}`,
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const hit = result.diagnostics.find((d) =>
+      /declares a required review step after its merge step/.test(d.message),
+    );
+    expect(hit).toBeUndefined();
+  });
 });
 
 describe("validate — friendly version-mismatch diagnostic (task 50a94127)", () => {

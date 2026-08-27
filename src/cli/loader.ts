@@ -9,7 +9,7 @@ import {
 } from "../overrides/machines.js";
 import { ManifestParseError, parseManifest, type Manifest } from "../schema/index.js";
 import { resolveHomeDir } from "../runtime/home-dir.js";
-import { deriveWorkflowGatePolicies } from "../runtime/workflow-policies.js";
+import { withDerivedPolicies } from "../runtime/workflow-policies.js";
 import { EX_NOINPUT, HarnessExitError } from "./exit-codes.js";
 
 export interface LoaderOptions {
@@ -160,13 +160,13 @@ export function loadManifest(opts: LoaderOptions = {}): LoadedManifest {
   // round-trip: `harness policy intercept` (the actual PreToolUse
   // enforcement entrypoint, src/cli/policy/intercept.ts), `harness list
   // policies`, `harness explain[-policy]`, and `harness doctor` all load
-  // the manifest through this function. See
-  // src/runtime/workflow-policies.ts for the derivation and its fail
+  // the manifest through this function. `withDerivedPolicies` (F2, review
+  // round 2) is the single place this append happens now — `src/cli/
+  // validate/index.ts` calls the same function so `validate` sees the
+  // identical effective policy set `apply` does, instead of diverging.
+  // See src/runtime/workflow-policies.ts for the derivation and its fail
   // direction (missing hooks -> no policy derived, not a silent allow).
-  const derivedPolicies = deriveWorkflowGatePolicies(manifest);
-  if (derivedPolicies.length > 0) {
-    manifest = { ...manifest, policies: [...manifest.policies, ...derivedPolicies] };
-  }
+  manifest = withDerivedPolicies(manifest);
 
   return { manifest, resolved };
 }

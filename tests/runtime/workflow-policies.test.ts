@@ -17,9 +17,12 @@ import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
   deriveWorkflowGatePolicies,
+  findWeakGatePolicyOverlaps,
   hasWiredMergeGateHooks,
+  isDerivedPolicy,
   REVIEW_EVIDENCE_HOOK_BASH,
   REVIEW_EVIDENCE_HOOK_MCP,
+  withDerivedPolicies,
   workflowRequiresMergeGate,
 } from "../../src/runtime/workflow-policies.js";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
@@ -262,5 +265,146 @@ describe("deriveWorkflowGatePolicies", () => {
       workflows: [workflow("ship", [branchStep(), reviewStep("skip"), mergeStep()])],
     });
     expect(deriveWorkflowGatePolicies(skippedManifest)).toEqual([]);
+  });
+
+  // F1 (review round 2): a WEAKER hand-authored policy on the identical
+  // trigger surface + ledger_tag must NOT suppress the derived block gate
+  // — only a policy at least as strong (enforcement: block, no when:, not
+  // operator_only) may dedupe. Round-1 code deduped on trigger-surface-key
+  // alone, so a `two-reviewers-required`-shaped warn policy silently
+  // downgraded a `spawn: "required"` workflow to unenforced.
+  describe("F1: weaker hand-authored policy does not suppress the derived gate", () => {
+    it("enforcement: warn on the same surface — derived block gate is still produced", () => {
+      const strong = shippedPolicy("review-before-merge");
+      const weak: Policy = { ...strong, name: "two-reviewers-required", enforcement: "warn" };
+      const manifest = makeManifest({
+        hooks: WIRED_HOOKS,
+        policies: [weak],
+        workflows: [workflow("ship", [branchStep(), reviewStep("required"), mergeStep()])],
+      });
+      const derived = deriveWorkflowGatePolicies(manifest);
+      const mcp = derived.find((p) => p.name === "workflow:ship:review-before-merge");
+      expect(mcp).toBeDefined();
+      expect(mcp?.enforcement).toBe("block");
+    });
+
+    it("mutation probe M1 (this round): reintroducing surface-key-only dedupe drops the derived gate again", () => {
+      // Documents the exact failure the fix guards: if dedupe were keyed
+      // purely on triggerSurfaceKey (ignoring enforcement/when/
+      // operator_only), the weak policy above WOULD be treated as
+      // "already covered" and the derived gate would vanish. The
+      // preceding test's `toBeDefined()` assertion is what goes red if
+      // that regression is reintroduced — this test just documents the
+      // mutant in prose so a reviewer can locate the exact assertion.
+      const strong = shippedPolicy("review-before-merge");
+      const weak: Policy = { ...strong, name: "two-reviewers-required", enforcement: "warn" };
+      const manifest = makeManifest({
+        hooks: WIRED_HOOKS,
+        policies: [weak],
+        workflows: [workflow("ship", [branchStep(), reviewStep("required"), mergeStep()])],
+      });
+      expect(deriveWorkflowGatePolicies(manifest).length).toBeGreaterThan(0);
+    });
+
+    it("a hand policy scoped via when: on the same surface also does not suppress the gate", () => {
+      const strong = shippedPolicy("review-before-merge");
+      const whenScoped: Policy = {
+        ...strong,
+        name: "review-before-merge-prod-only",
+        when: { "environment.name": "production" },
+      };
+      const manifest = makeManifest({
+        hooks: WIRED_HOOKS,
+        policies: [whenScoped],
+        workflows: [workflow("ship", [branchStep(), reviewStep("required"), mergeStep()])],
+      });
+      const derived = deriveWorkflowGatePolicies(manifest);
+      expect(derived.find((p) => p.name === "workflow:ship:review-before-merge")).toBeDefined();
+    });
+
+    it("a hand policy at LEAST as strong (block, no when, not operator_only) still dedupes", () => {
+      // Unchanged round-1 behaviour, re-asserted here alongside the new
+      // weak-overlap cases so the strong/weak boundary is visible in one
+      // place.
+      const strong = shippedPolicy("review-before-merge");
+      const manifest = makeManifest({
+        hooks: WIRED_HOOKS,
+        policies: [strong],
+        workflows: [workflow("ship", [branchStep(), reviewStep("required"), mergeStep()])],
+      });
+      const derived = deriveWorkflowGatePolicies(manifest);
+      expect(derived.find((p) => p.name === "workflow:ship:review-before-merge")).toBeUndefined();
+    });
+  });
+});
+
+describe("findWeakGatePolicyOverlaps", () => {
+  it("returns [] when the evidence hooks are not wired", () => {
+    const strong = shippedPolicy("review-before-merge");
+    const weak: Policy = { ...strong, name: "two-reviewers-required", enforcement: "warn" };
+    const manifest = makeManifest({
+      hooks: [],
+      policies: [weak],
+      workflows: [workflow("ship", [branchStep(), reviewStep("required"), mergeStep()])],
+    });
+    expect(findWeakGatePolicyOverlaps(manifest)).toEqual([]);
+  });
+
+  it("returns [] when no hand policy shares the derived surface", () => {
+    const manifest = makeManifest({
+      hooks: WIRED_HOOKS,
+      workflows: [workflow("ship", [branchStep(), reviewStep("required"), mergeStep()])],
+    });
+    expect(findWeakGatePolicyOverlaps(manifest)).toEqual([]);
+  });
+
+  it("returns [] when the overlapping hand policy is at least as strong (round-1 dedupe case)", () => {
+    const strong = shippedPolicy("review-before-merge");
+    const manifest = makeManifest({
+      hooks: WIRED_HOOKS,
+      policies: [strong],
+      workflows: [workflow("ship", [branchStep(), reviewStep("required"), mergeStep()])],
+    });
+    expect(findWeakGatePolicyOverlaps(manifest)).toEqual([]);
+  });
+
+  it("reports the overlap for a weaker (enforcement: warn) hand policy on the derived MCP surface", () => {
+    const strong = shippedPolicy("review-before-merge");
+    const weak: Policy = { ...strong, name: "two-reviewers-required", enforcement: "warn" };
+    const manifest = makeManifest({
+      hooks: WIRED_HOOKS,
+      policies: [weak],
+      workflows: [workflow("ship", [branchStep(), reviewStep("required"), mergeStep()])],
+    });
+    const overlaps = findWeakGatePolicyOverlaps(manifest);
+    expect(overlaps).toHaveLength(1);
+    expect(overlaps[0]).toMatchObject({
+      workflowName: "ship",
+      derivedPolicyName: "workflow:ship:review-before-merge",
+      handPolicyName: "two-reviewers-required",
+      reason: "enforcement: warn",
+    });
+  });
+});
+
+describe("isDerivedPolicy / withDerivedPolicies (F2/F7)", () => {
+  it("returns the SAME manifest reference when nothing is derived (no workflows)", () => {
+    const manifest = makeManifest({ hooks: WIRED_HOOKS, workflows: [] });
+    expect(withDerivedPolicies(manifest)).toBe(manifest);
+  });
+
+  it("appends derived policies and registers them as isDerivedPolicy", () => {
+    const manifest = makeManifest({
+      hooks: WIRED_HOOKS,
+      workflows: [workflow("ship", [branchStep(), reviewStep("required"), mergeStep()])],
+    });
+    const withDerived = withDerivedPolicies(manifest);
+    expect(withDerived.policies.length).toBe(manifest.policies.length + 2);
+    const derivedOnes = withDerived.policies.filter((p) => isDerivedPolicy(p));
+    expect(derivedOnes).toHaveLength(2);
+    // Hand-authored policies already on the manifest are NOT registered.
+    for (const p of manifest.policies) {
+      expect(isDerivedPolicy(p)).toBe(false);
+    }
   });
 });

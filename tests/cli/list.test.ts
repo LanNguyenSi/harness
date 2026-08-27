@@ -1,3 +1,5 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -73,6 +75,57 @@ describe("list — categories", () => {
       "deny-pause-sentinel-forgery",
     ]);
     expect(r.rows[0]!.enforcement).toBe("block");
+    // F7 (review round 2, 99f47307 Slice 1): every policy in this fixture
+    // is hand-authored under `policies:` (its `workflows:` entries dedupe
+    // against them, round-1 behaviour, see workflow-policies.test.ts), so
+    // none of these rows carries the "(derived from workflows[])" marker.
+    for (const row of r.rows) {
+      expect(row.provenance).toBe("");
+    }
+  });
+
+  it("marks a workflows[]-derived policy with the provenance marker (F7)", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-list-derived-"));
+    try {
+      const manifestPath = path.join(home, "harness.yaml");
+      fs.writeFileSync(
+        manifestPath,
+        `version: 1
+review_templates:
+  t1: "Review this PR for correctness."
+workflows:
+  - name: ship
+    steps:
+      - kind: branch
+      - kind: review_subagent
+        spawn: required
+        template: t1
+      - kind: merge
+hooks:
+  - name: require-review-evidence
+    event: PreToolUse
+    match: "mcp__agent-tasks__pull_requests_merge"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+  - name: require-review-evidence-bash
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+policies: []
+`,
+        "utf8",
+      );
+      const r = list("policies", { configPath: manifestPath });
+      const derived = r.rows.find((row) => row.name === "workflow:ship:review-before-merge");
+      expect(derived).toBeDefined();
+      expect(derived?.provenance).toBe("(derived from workflows[])");
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it("lists memory directories", () => {

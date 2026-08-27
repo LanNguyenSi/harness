@@ -607,7 +607,11 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
         .map((d) => d.message)
         .join(
           "; ",
-        )}. Wire grounding-mcp under tools.mcp, or remove the policies. Run \`harness validate\` for the full report.`,
+        )}. This count includes policies derived from workflows[] (a review_subagent step ` +
+        `with spawn: "required" before a merge step) as well as hand-authored ones under ` +
+        `policies:. Wire grounding-mcp under tools.mcp, or remove the policies (for a derived ` +
+        `policy, set the workflow's spawn to "optional" or "skip" instead). Run \`harness ` +
+        "validate` for the full report.",
       EX_FAIL,
     );
   }
