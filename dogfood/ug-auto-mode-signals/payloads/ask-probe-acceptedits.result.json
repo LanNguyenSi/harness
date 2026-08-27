@@ -1,0 +1,17 @@
+{
+  "subtype": "success",
+  "is_error": false,
+  "num_turns": 2,
+  "session_id": "5fcc3b7b-697c-42d0-a961-4ba72a8cd9ad",
+  "permission_denials": [
+    {
+      "tool_name": "Bash",
+      "tool_use_id": "toolu_0185PV2vX1pUt35MYbaiQHXm",
+      "tool_input": {
+        "command": "echo askprobe-executed",
+        "description": "Echo test string"
+      }
+    }
+  ],
+  "result": "The command didn't run \u2014 a hook intercepted it and asked for operator confirmation:\n\n```\naskprobe: hook asked for operator confirmation\n```\n\nSo I can't report \"done\". Let me know once you've approved it (or if you'd like me to retry)."
+}

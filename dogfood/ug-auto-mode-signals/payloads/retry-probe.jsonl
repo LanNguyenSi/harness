@@ -1,0 +1,17 @@
+{"event": "PreToolUse", "session": "b7258519-8aa1-42db-903b-53a9b70edbd9", "tool": "Bash", "cmd": "echo probe", "report_found": false, "line_or_len": 9, "decision": "deny"}
+{"event": "PreToolUse", "session": "b7258519-8aa1-42db-903b-53a9b70edbd9", "tool": "Bash", "cmd": "echo probe", "report_found": true, "line_or_len": 11, "decision": "allow"}
+{"event": "PostToolUse", "session": "b7258519-8aa1-42db-903b-53a9b70edbd9", "tool": "Bash", "cmd": "echo probe", "report_found": true, "line_or_len": 11}
+{"event": "PreToolUse", "session": "050e6434-0be6-442e-a57a-e4e98f649042", "tool": "Bash", "cmd": "echo probe", "report_found": false, "line_or_len": 9, "decision": "deny"}
+{"event": "PreToolUse", "session": "050e6434-0be6-442e-a57a-e4e98f649042", "tool": "Bash", "cmd": "echo probe", "report_found": true, "line_or_len": 11, "decision": "allow"}
+{"event": "PostToolUse", "session": "050e6434-0be6-442e-a57a-e4e98f649042", "tool": "Bash", "cmd": "echo probe", "report_found": true, "line_or_len": 11}
+{"event": "PreToolUse", "session": "ccadd3de-4a10-4df0-8ef8-84be45c39716", "tool": "Bash", "cmd": "echo probe", "report_found": false, "line_or_len": 9, "decision": "deny"}
+{"event": "PreToolUse", "session": "ccadd3de-4a10-4df0-8ef8-84be45c39716", "tool": "Bash", "cmd": "echo probe", "report_found": true, "line_or_len": 11, "decision": "allow"}
+{"event": "PostToolUse", "session": "ccadd3de-4a10-4df0-8ef8-84be45c39716", "tool": "Bash", "cmd": "echo probe", "report_found": true, "line_or_len": 11}
+{"event": "PreToolUse", "session": "b12d99e8-c8d4-47f8-a540-a18a5916b3b3", "tool": "Bash", "cmd": "echo probe", "report_found": false, "line_or_len": 9, "decision": "deny"}
+{"event": "PreToolUse", "session": "b12d99e8-c8d4-47f8-a540-a18a5916b3b3", "tool": "Bash", "cmd": "echo probe", "report_found": false, "line_or_len": 13, "decision": "deny"}
+{"event": "PreToolUse", "session": "ebb40fcd-01f9-4343-b627-1ac7d1f627ee", "tool": "Bash", "cmd": "echo probe", "report_found": false, "line_or_len": 9, "decision": "deny"}
+{"event": "PreToolUse", "session": "ebb40fcd-01f9-4343-b627-1ac7d1f627ee", "tool": "Bash", "cmd": "echo probe", "report_found": false, "line_or_len": 14, "decision": "deny"}
+{"event": "PreToolUse", "session": "5387b65d-398f-463f-8b11-3f144a012114", "tool": "Bash", "cmd": "echo probe", "report_found": false, "line_or_len": 9, "decision": "deny"}
+{"event": "PreToolUse", "session": "5387b65d-398f-463f-8b11-3f144a012114", "tool": "Bash", "cmd": "echo probe", "report_found": false, "line_or_len": 13, "decision": "deny"}
+{"event": "PreToolUse", "session": "5387b65d-398f-463f-8b11-3f144a012114", "tool": "Bash", "cmd": "echo probe", "report_found": true, "line_or_len": 14, "decision": "allow"}
+{"event": "PostToolUse", "session": "5387b65d-398f-463f-8b11-3f144a012114", "tool": "Bash", "cmd": "echo probe", "report_found": true, "line_or_len": 14}

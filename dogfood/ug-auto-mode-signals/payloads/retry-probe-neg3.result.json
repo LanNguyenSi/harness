@@ -1,0 +1,25 @@
+{
+  "subtype": "success",
+  "is_error": false,
+  "num_turns": 4,
+  "session_id": "5387b65d-398f-463f-8b11-3f144a012114",
+  "permission_denials": [
+    {
+      "tool_name": "Bash",
+      "tool_use_id": "toolu_01WVVkibLJKs5MazFrMDL33b",
+      "tool_input": {
+        "command": "echo probe",
+        "description": "Echo probe"
+      }
+    },
+    {
+      "tool_name": "Bash",
+      "tool_use_id": "toolu_0137zpUFw7z1JNaMNf9cJ9HE",
+      "tool_input": {
+        "command": "echo probe",
+        "description": "Echo probe"
+      }
+    }
+  ],
+  "result": "done"
+}

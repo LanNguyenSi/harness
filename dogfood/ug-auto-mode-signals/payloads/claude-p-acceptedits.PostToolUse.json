@@ -1,0 +1,25 @@
+{
+  "session_id": "7118ee4c-f906-4b97-ae1d-6bb50c032ae2",
+  "transcript_path": "<scratch>/cc-config/projects/<scratch-slug>/7118ee4c-f906-4b97-ae1d-6bb50c032ae2.jsonl",
+  "cwd": "<scratch>/cc-work",
+  "prompt_id": "f6ea4d30-a1c9-4eae-8026-5dbeb4c5c6ff",
+  "permission_mode": "acceptEdits",
+  "effort": {
+    "level": "high"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "env | grep -i -E 'claude|permission' | sort",
+    "description": "List claude/permission env vars"
+  },
+  "tool_response": {
+    "stdout": "AI_AGENT=claude-code_2-1-247_agent\nCLAUDECODE=1\nCLAUDE_CODE_BRIDGE_SESSION_ID=<redacted>\nCLAUDE_CODE_CHILD_SESSION=1\nCLAUDE_CODE_ENTRYPOINT=sdk-cli\nCLAUDE_CODE_EXECPATH=<home>/.local/share/claude/versions/2.1.247\nCLAUDE_CODE_MESSAGING_SOCKET=/tmp/cc-socks/78969.sock\nCLAUDE_CODE_MESSAGING_TOKEN=<redacted>\nCLAUDE_CODE_SESSION_ID=7118ee4c-f906-4b97-ae1d-6bb50c032ae2\nCLAUDE_CONFIG_DIR=<scratch>/cc-config\nCLAUDE_EFFORT=high\nCLAUDE_PID=78969\nOLDPWD=<scratch>/cc-work\nPWD=<scratch>/cc-work",
+    "stderr": "",
+    "interrupted": false,
+    "isImage": false,
+    "noOutputExpected": false
+  },
+  "tool_use_id": "toolu_01HbnA3SttPcbUjsys3oybRp",
+  "duration_ms": 358
+}

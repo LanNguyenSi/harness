@@ -1,0 +1,25 @@
+{
+  "subtype": "success",
+  "is_error": false,
+  "num_turns": 3,
+  "session_id": "ebb40fcd-01f9-4343-b627-1ac7d1f627ee",
+  "permission_denials": [
+    {
+      "tool_name": "Bash",
+      "tool_use_id": "toolu_01AoWkyEY3SahZsXvREdJQur",
+      "tool_input": {
+        "command": "echo probe",
+        "description": "Echo probe"
+      }
+    },
+    {
+      "tool_name": "Bash",
+      "tool_use_id": "toolu_01D5jf12aVNHk31X7HE5GrWy",
+      "tool_input": {
+        "command": "echo probe",
+        "description": "Echo probe"
+      }
+    }
+  ],
+  "result": "I ran `echo probe` twice; both calls were blocked by an \"Understanding gate\" hook that doesn't detect the Understanding Report I wrote (I wrote it, then retried once as the error instructed, and got the same message). So the command never executed and I have no output for it.\n\nThe gate appears to be a hook that isn't seeing my report text. Let me know how you'd like to proceed \u2014 I can retry, or you can check the hook config."
+}

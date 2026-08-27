@@ -1,0 +1,17 @@
+{
+  "session_id": "8f48da6a-81b3-4807-bc03-78d14fe334c8",
+  "transcript_path": "<scratch>/cc-config/projects/<scratch-slug>/8f48da6a-81b3-4807-bc03-78d14fe334c8.jsonl",
+  "cwd": "<scratch>/cc-work",
+  "prompt_id": "5b225380-2c56-4de1-8170-1baa64f02e0d",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "echo askprobe-executed",
+    "description": "Echo test string"
+  },
+  "tool_use_id": "toolu_01SrwrEbqmA4rmitFEuQTtZs"
+}

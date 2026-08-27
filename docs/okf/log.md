@@ -2,6 +2,20 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-08-27T14:06:24Z, understanding-gate auto-mode signal sources
+  (agent-tasks `f6be48cf`): new overview doc
+  `understanding-gate-auto-mode-signals.md`, backed by a new dogfood
+  fixture directory `dogfood/ug-auto-mode-signals/` (24 redacted
+  `claude -p` hook-payload captures across 4 permission modes x 6 events,
+  a hook-process env probe, a transcript-visibility probe with negative
+  controls, a hook-`ask` resolution probe, and a block-and-retry probe
+  with an independent re-run).
+  Measures what signals exist for detecting an agent's own
+  permission/auto-approval mode in Claude Code (doc-only for Codex and
+  opencode), and classifies each by trust. The rule and decision on which
+  signals may relax the understanding gate live in the companion ADR
+  `docs/decisions/2026-08-27-ug-auto-mode-approval.md`, not in this doc.
+
 - 2026-08-17T19:29:55Z, review fix-round doc-repointing (agent-tasks
   348a4d42, structural concentration slice 2): 13 citations across 4 docs
   (evidence-ledger-trust-boundary, codex-adapter-parity-gaps,

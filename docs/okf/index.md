@@ -26,6 +26,15 @@ deliberately do not duplicate them.
 - [Debug verb selection](debug-verb-selection.md), which harness verb answers
   which "why did my policy (not) fire" question: ledger-replay vs
   live-hypothetical vs static-prediction vs stage-isolation vs end-to-end.
+- [Understanding gate, auto-mode signal sources (measured)](understanding-gate-auto-mode-signals.md),
+  what signals exist for detecting an agent's own permission/auto-approval
+  mode across Claude Code, Codex, and opencode: the measured Claude Code
+  hook-payload `permission_mode` field per event and mode, the hook
+  process env, the transcript-visibility probe, the resolution of a hook
+  `ask` under `-p`, the block-and-retry behaviour of a `-p` child, and a
+  trust-class table;
+  the rule and decision on which signals may relax the gate live in the
+  companion ADR, not here.
 
 ## Modules
 
