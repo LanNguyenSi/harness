@@ -238,6 +238,10 @@ export function buildProgram(opts: RunOptions = {}): Command {
       "--target <runtime>",
       `additionally evaluate the harness-side adapter health for a runtime (allowed: ${KNOWN_DOCTOR_TARGETS.join(", ")})`,
     )
+    .option(
+      "--recent-sessions <n>",
+      "understanding-gate auto-approval doctor window: how many of the newest .approvals/ session markers to scan (default: 20)",
+    )
     .option("--json", "emit a structured JSON DoctorReport instead of prose (--rm-rogue-ledgers is ignored with --json)")
     .option(
       "--rm-rogue-ledgers",
@@ -250,6 +254,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         project?: string;
         shallow?: boolean;
         target?: string;
+        recentSessions?: string;
         json?: boolean;
         rmRogueLedgers?: boolean;
         yes?: boolean;
@@ -264,12 +269,24 @@ export function buildProgram(opts: RunOptions = {}): Command {
           }
           target = options.target;
         }
+        let recentSessions: number | undefined;
+        if (options.recentSessions !== undefined) {
+          const parsed = Number(options.recentSessions);
+          if (!Number.isInteger(parsed) || parsed < 1) {
+            stderr(
+              `--recent-sessions must be an integer >= 1, got ${JSON.stringify(options.recentSessions)}\n`,
+            );
+            throw new HarnessExitError("", EX_USAGE);
+          }
+          recentSessions = parsed;
+        }
         const report = await doctor({
           configPath: options.config,
           project: options.project,
           shallow: options.shallow,
           versionProbe: defaultVersionProbe,
           ...(target !== undefined ? { target } : {}),
+          ...(recentSessions !== undefined ? { recentSessions } : {}),
           ...(opts.rogueLedgerScanOptions !== undefined
             ? { rogueLedgerScanOptions: opts.rogueLedgerScanOptions }
             : {}),

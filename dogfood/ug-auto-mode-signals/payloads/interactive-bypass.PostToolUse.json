@@ -1,0 +1,25 @@
+{
+  "session_id": "90ab7a1e-1eb1-4399-a14a-41115a07cb9f",
+  "transcript_path": "<scratch>/cc-config/projects/<scratch-slug>/90ab7a1e-1eb1-4399-a14a-41115a07cb9f.jsonl",
+  "cwd": "<scratch>/cc-work",
+  "prompt_id": "8a709501-086e-4cfe-a0a2-cabfd5877ca5",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "high"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "echo interactive-probe",
+    "description": "Echo probe string"
+  },
+  "tool_response": {
+    "stdout": "interactive-probe",
+    "stderr": "",
+    "interrupted": false,
+    "isImage": false,
+    "noOutputExpected": false
+  },
+  "tool_use_id": "toolu_015pwUTDdSj386xHTEvEr6eB",
+  "duration_ms": 354
+}

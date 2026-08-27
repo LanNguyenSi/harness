@@ -1,0 +1,140 @@
+=== run 1, pane at the moment the permission prompt appeared ===
+ ▐▛███▛█   Claude Code v2.1.247
+▝▜██████▀  Opus 5 (1M context) · Claude Max
+  ▝▝ ▝▝    <scratch>/cc-work
+
+ ▎ Fable 5 is now a standard part of your Max plan
+ ▎ You can use up to 50% of your weekly usage limit on Fable 5. If you hit your limit, you can continue on Fable 5 with usage credits. Fable 5 draws down usage faster than Opus 5. Run /model and
+ ▎ select Fable to use it. Learn more: https://support.claude.com/en/articles/15424964-claude-fable-5-promotional-access
+
+❯ Run exactly this one bash command and nothing else: echo askprobe-executed . Then reply with the single word: done
+
+⏺ Bash(echo askprobe-executed)
+  ⎿  Waiting…
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+
+   echo askprobe-executed
+   Echo test string
+
+ │ Hook PreToolUse:Bash requires confirmation for this command:
+ │ askprobe: hook asked for operator confirmation [settings]
+ settings.json to update hooks
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No
+
+ Esc to cancel · Tab to amend · ctrl+e to explain
+
+=== run 1, same pane 20s later, untouched (the prompt does not auto-resolve) ===
+ ▐▛███▛█   Claude Code v2.1.247
+▝▜██████▀  Opus 5 (1M context) · Claude Max
+  ▝▝ ▝▝    <scratch>/cc-work
+
+ ▎ Fable 5 is now a standard part of your Max plan
+ ▎ You can use up to 50% of your weekly usage limit on Fable 5. If you hit your limit, you can continue on Fable 5 with usage credits. Fable 5 draws down usage faster than Opus 5. Run /model and
+ ▎ select Fable to use it. Learn more: https://support.claude.com/en/articles/15424964-claude-fable-5-promotional-access
+
+❯ Run exactly this one bash command and nothing else: echo askprobe-executed . Then reply with the single word: done
+
+⏺ Bash(echo askprobe-executed)
+  ⎿  Waiting…
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+
+   echo askprobe-executed
+   Echo test string
+
+ │ Hook PreToolUse:Bash requires confirmation for this command:
+ │ askprobe: hook asked for operator confirmation [settings]
+ settings.json to update hooks
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No
+
+ Esc to cancel · Tab to amend · ctrl+e to explain
+
+=== run 1, pane after Escape (refusal, never an approval) ===
+ ▐▛███▛█   Claude Code v2.1.247
+▝▜██████▀  Opus 5 (1M context) · Claude Max
+  ▝▝ ▝▝    <scratch>/cc-work
+
+ ▎ Fable 5 is now a standard part of your Max plan
+ ▎ You can use up to 50% of your weekly usage limit on Fable 5. If you hit your limit, you can continue on Fable 5 with usage credits. Fable 5 draws down usage faster than Opus 5. Run /model and
+ ▎ select Fable to use it. Learn more: https://support.claude.com/en/articles/15424964-claude-fable-5-promotional-access
+
+❯ Run exactly this one bash command and nothing else: echo askprobe-executed . Then reply with the single word: done
+
+⏺ Bash(echo askprobe-executed)
+  ⎿  Interrupted · What should Claude do instead?
+
+✻ Cogitated for 2s · done 7:23 PM
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents                                                                                                                        ● high · /effort
+
+=== run 2, pane at the moment the permission prompt appeared ===
+ ▐▛███▛█   Claude Code v2.1.247
+▝▜██████▀  Opus 5 (1M context) · Claude Max
+  ▝▝ ▝▝    <scratch>/cc-work
+
+ ▎ Fable 5 is now a standard part of your Max plan
+ ▎ You can use up to 50% of your weekly usage limit on Fable 5. If you hit your limit, you can continue on Fable 5 with usage credits. Fable 5 draws down usage faster than Opus 5. Run /model and
+ ▎ select Fable to use it. Learn more: https://support.claude.com/en/articles/15424964-claude-fable-5-promotional-access
+
+❯ Run exactly this one bash command and nothing else: echo askprobe-executed . Then reply with the single word: done
+
+⏺ Bash(echo askprobe-executed)
+  ⎿  Waiting…
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+
+   echo askprobe-executed
+   Echo test string
+
+ │ Hook PreToolUse:Bash requires confirmation for this command:
+ │ askprobe: hook asked for operator confirmation [settings]
+ settings.json to update hooks
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No
+
+ Esc to cancel · Tab to amend · ctrl+e to explain
+
+=== run 2, same pane 20s later, untouched (the prompt does not auto-resolve) ===
+ ▐▛███▛█   Claude Code v2.1.247
+▝▜██████▀  Opus 5 (1M context) · Claude Max
+  ▝▝ ▝▝    <scratch>/cc-work
+
+ ▎ Fable 5 is now a standard part of your Max plan
+ ▎ You can use up to 50% of your weekly usage limit on Fable 5. If you hit your limit, you can continue on Fable 5 with usage credits. Fable 5 draws down usage faster than Opus 5. Run /model and
+ ▎ select Fable to use it. Learn more: https://support.claude.com/en/articles/15424964-claude-fable-5-promotional-access
+
+❯ Run exactly this one bash command and nothing else: echo askprobe-executed . Then reply with the single word: done
+
+⏺ Bash(echo askprobe-executed)
+  ⎿  Waiting…
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+
+   echo askprobe-executed
+   Echo test string
+
+ │ Hook PreToolUse:Bash requires confirmation for this command:
+ │ askprobe: hook asked for operator confirmation [settings]
+ settings.json to update hooks
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No
+
+ Esc to cancel · Tab to amend · ctrl+e to explain

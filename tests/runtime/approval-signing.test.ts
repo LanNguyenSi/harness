@@ -9,6 +9,7 @@ import {
   rotateSigningKey,
   sha256Hex,
   signMarker,
+  signingKeyExists,
   signingKeyPathFor,
   verifyMarkerSignature,
 } from "../../src/runtime/approval-signing.js";
@@ -79,6 +80,39 @@ describe("rotateSigningKey", () => {
     rotateSigningKey(generatedDir);
     const verification = verifyMarkerSignature(generatedDir, "sess-1", signed as unknown as Record<string, unknown>);
     expect(verification.ok).toBe(false);
+  });
+});
+
+describe("signingKeyExists", () => {
+  // The PreToolUse auto-approval path's precondition (agent-tasks/
+  // 74b4b17d, ADR threat model (b) item 5): key creation stays an
+  // operator-side act, so the hook needs a probe that answers "is there
+  // a usable key" WITHOUT the repair behaviour getOrCreateSigningKey has.
+  it("is false when no key file exists, and creates nothing", () => {
+    fs.mkdirSync(generatedDir, { recursive: true });
+    expect(signingKeyExists(generatedDir)).toBe(false);
+    expect(fs.existsSync(signingKeyPathFor(generatedDir))).toBe(false);
+  });
+
+  it("is false when generatedDir itself does not exist, and creates nothing", () => {
+    expect(signingKeyExists(generatedDir)).toBe(false);
+    expect(fs.existsSync(generatedDir)).toBe(false);
+  });
+
+  it("is true once a real key exists", () => {
+    getOrCreateSigningKey(generatedDir);
+    expect(signingKeyExists(generatedDir)).toBe(true);
+  });
+
+  it("is false for a truncated key file (getOrCreateSigningKey would overwrite it, which is the operator-side act the probe refuses)", () => {
+    fs.mkdirSync(generatedDir, { recursive: true });
+    fs.writeFileSync(signingKeyPathFor(generatedDir), Buffer.alloc(8), { mode: 0o600 });
+    expect(signingKeyExists(generatedDir)).toBe(false);
+  });
+
+  it("is false when the path is a directory rather than a regular file", () => {
+    fs.mkdirSync(signingKeyPathFor(generatedDir), { recursive: true });
+    expect(signingKeyExists(generatedDir)).toBe(false);
   });
 });
 

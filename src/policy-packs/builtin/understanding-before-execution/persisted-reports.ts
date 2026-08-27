@@ -279,6 +279,38 @@ export function selectReportForSession(
 }
 
 /**
+ * The NEWEST report whose `sessionId` strictly equals `sessionId`, or
+ * `null` when the newest-first list has none. Deliberately NOT a thin
+ * wrapper over {@link selectReportForSession}: it stops at the first
+ * strict match and never consults the sessionId-null tolerant fallback.
+ *
+ * Written for the PreToolUse hook's auto-approval path
+ * (agent-tasks/74b4b17d, ADR
+ * docs/decisions/2026-08-27-ug-auto-mode-approval.md, Option A condition
+ * 3), where both of the fallback's properties are unacceptable:
+ *
+ *  - A sessionId-null report is adopted by whichever session asks, so
+ *    the fallback would let a report bound to no session at all mint a
+ *    marker for THIS one. The auto path has no operator to confirm that
+ *    adoption the way `harness approve understanding` does.
+ *  - Eligibility is evaluated on the newest report ONLY. The caller
+ *    checks `approvalStatus === "pending"` on whatever this returns; if
+ *    the newest strict-session report was already consumed, the session
+ *    is ineligible even when an older `pending` report is still on disk.
+ *    Scanning further down the list for some other pending report is
+ *    exactly the re-mint this design forbids.
+ */
+export function selectNewestStrictSessionReport(
+  reports: PersistedReport[],
+  sessionId: string,
+): PersistedReport | null {
+  for (const r of reports) {
+    if (r.sessionId === sessionId) return r;
+  }
+  return null;
+}
+
+/**
  * Back-compat wrapper around `selectReportForSession` for callers that
  * only need the report (the gate read and expiry paths).
  */

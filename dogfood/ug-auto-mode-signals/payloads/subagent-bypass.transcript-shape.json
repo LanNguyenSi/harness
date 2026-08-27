@@ -1,0 +1,64 @@
+[
+  {
+    "run": 1,
+    "parent_session_id": "42854038-447e-455b-95dc-6d99e9c09bd2",
+    "agent_id": "acbaf0d426cde00e9",
+    "agent_type": "general-purpose",
+    "payload_transcript_path": "<scratch>/cc-config/projects/<scratch-slug>/42854038-447e-455b-95dc-6d99e9c09bd2.jsonl",
+    "payload_transcript_lines": 17,
+    "payload_transcript_types": {
+      "queue-operation": 2,
+      "user": 2,
+      "attachment": 7,
+      "ai-title": 1,
+      "atis-latch": 1,
+      "assistant": 3,
+      "last-prompt": 1
+    },
+    "payload_transcript_isSidechain_counts": {
+      "None": 5,
+      "False": 12
+    },
+    "agent_transcript_path": "<scratch>/cc-config/projects/<scratch-slug>/42854038-447e-455b-95dc-6d99e9c09bd2/subagents/agent-acbaf0d426cde00e9.jsonl",
+    "agent_transcript_lines": 6,
+    "agent_transcript_types": {
+      "user": 2,
+      "attachment": 2,
+      "assistant": 2
+    },
+    "agent_transcript_isSidechain_counts": {
+      "True": 6
+    }
+  },
+  {
+    "run": 2,
+    "parent_session_id": "09d2c97c-a8c0-4416-b5c7-2954786bf510",
+    "agent_id": "a6e89bedb1f204b3f",
+    "agent_type": "general-purpose",
+    "payload_transcript_path": "<scratch>/cc-config/projects/<scratch-slug>/09d2c97c-a8c0-4416-b5c7-2954786bf510.jsonl",
+    "payload_transcript_lines": 16,
+    "payload_transcript_types": {
+      "queue-operation": 2,
+      "user": 2,
+      "attachment": 6,
+      "ai-title": 1,
+      "atis-latch": 1,
+      "assistant": 3,
+      "last-prompt": 1
+    },
+    "payload_transcript_isSidechain_counts": {
+      "None": 5,
+      "False": 11
+    },
+    "agent_transcript_path": "<scratch>/cc-config/projects/<scratch-slug>/09d2c97c-a8c0-4416-b5c7-2954786bf510/subagents/agent-a6e89bedb1f204b3f.jsonl",
+    "agent_transcript_lines": 6,
+    "agent_transcript_types": {
+      "user": 2,
+      "attachment": 2,
+      "assistant": 2
+    },
+    "agent_transcript_isSidechain_counts": {
+      "True": 6
+    }
+  }
+]

@@ -2,6 +2,43 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-08-27T17:54:07Z, understanding-gate auto-approval, slice 1 code half
+  (agent-tasks `74b4b17d`): the PreToolUse hook gained the opt-in
+  `auto_approve` path at the end of its decision order
+  (`src/cli/pack/auto-approve-path.ts`). Five docs updated for it rather
+  than only re-stamped: `understanding-gate-auto-mode-signals.md` ("What
+  harness reads today" now names the one gate site that reads
+  `permission_mode`), `evidence-ledger-trust-boundary.md` (the marker has
+  a second, opt-in writer; what "operator-only" means now),
+  `gate-fail-posture-matrix.md` (the auto path is a fail-closed last
+  branch, the infrastructure fail-open contract is untouched),
+  `understanding-gate-lockout-recovery.md` (what a persisting lockout
+  means under auto mode), `codex-adapter-parity-gaps.md` (new gap 13: the
+  auto path is Claude-only until slice 2).
+- 2026-08-27T17:32:41Z, interactive and subagent captures for the auto-mode
+  signal doc (agent-tasks `74b4b17d`, ADR slice 1 acceptance criteria 8
+  and 9 plus the subagent assumption): three probes added to
+  `dogfood/ug-auto-mode-signals/` (`interactive-capture.sh`,
+  `interactive-ask-probe.sh`, `subagent-capture.sh`, sharing
+  `interactive-lib.sh`), each n=2 with redacted fixtures, and three
+  matching "Measured" sections in
+  `understanding-gate-auto-mode-signals.md`. Results: the interactive
+  `PreToolUse` payload carries the same `permission_mode` value as the
+  headless one and the hook env's session id agrees with the payload's,
+  2/2; a hook `permissionDecision: "ask"` under an interactive
+  `bypassPermissions` session surfaces a real operator prompt that does
+  not auto-resolve, 2/2 (a denial headlessly, an operator prompt
+  interactively, an auto-allow in neither, so the ADR's conditional
+  `deny` hardening has no measured case to fire on for this mode); a
+  subagent's own tool call reaches the same hook on the parent's session
+  id with extra `agent_id` / `agent_type`, and its transcript entries sit
+  in a separate agent transcript file rather than as sidechain entries of
+  the payload's transcript, 2/2. Five entries left the "Unverified / not
+  measured" list; four narrower ones replaced them (pinned-session-id
+  launch, interactive mode switching, other subagent types and nesting,
+  the onboarding seed the interactive probes need). Re-stamped; the doc's
+  numbers live there and in the dogfood README, not in the ADR.
+
 - 2026-08-27T14:06:24Z, understanding-gate auto-mode signal sources
   (agent-tasks `f6be48cf`): new overview doc
   `understanding-gate-auto-mode-signals.md`, backed by a new dogfood

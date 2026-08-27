@@ -35,10 +35,12 @@ import {
   type ApprovalCheckResult,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { findLatestParseError, renderMalformedSectionsNotice } from "../approve/understanding.js";
+import { attemptAutoApproval } from "./auto-approve-path.js";
 import {
   resolveGeneratedDir,
   writePendingApproval,
 } from "../../runtime/pending-approval.js";
+import { resolveManifestLedgerWriter, type LedgerWriteFn } from "../../runtime/ledger-writer.js";
 import { isReadOnlyBashPipeline } from "../../runtime/read-only-bash.js";
 import { isRecoveryGitCommit } from "../../runtime/recovery-git-commit.js";
 import {
@@ -82,6 +84,16 @@ export interface PackHookPreToolUseOptions extends LoaderOptions {
   /** Inject a fake ledger query (test). */
   ledgerQuery?: (sessionId: string) => Promise<LedgerEntry[] | { degraded: string }>;
   /**
+   * Inject the ledger WRITER used for the auto-approval path's audit-only
+   * `understanding-auto-approved:<sid>` fact (test). Mirrors
+   * `hook-post-merge-gate-record.ts`'s injection point. When omitted the
+   * writer is resolved from the manifest's `grounding-mcp` entry, exactly
+   * as every other Trusted-Writer producer does; when that resolution
+   * fails the auto path logs one line and continues (audit only, never a
+   * gate input).
+   */
+  writeLedger?: LedgerWriteFn;
+  /**
    * Override "now" for the pause-sentinel expiry check (test injection).
    * The lower layers (`checkPauseFromLoader`, `maybeAnnouncePause`,
    * `readSentinel`) already accept a `now`; this threads it through so a
@@ -110,6 +122,14 @@ interface ToolEventLite {
   session_id?: unknown;
   tool_name?: unknown;
   tool_input?: unknown;
+  /**
+   * Claude Code's launch-time permission mode, composed by the Claude
+   * Code process itself and piped in on stdin (T1 signal in the ADR
+   * docs/decisions/2026-08-27-ug-auto-mode-approval.md). Read ONLY by
+   * the step-9 auto-approval attempt; no other decision path consults
+   * it.
+   */
+  permission_mode?: unknown;
 }
 
 function findGroundingMcp(manifest: Manifest): McpServer | null {
@@ -647,6 +667,57 @@ export async function runPackHookPreToolUseCli(
       asked: true,
       approvalCheck: { approved: false, source: "none", detail: reason },
       diagnostic,
+    };
+  }
+
+  // Step 9: the operator-opt-in auto-approval attempt (agent-tasks/
+  // 74b4b17d, ADR docs/decisions/2026-08-27-ug-auto-mode-approval.md,
+  // Option A). Deliberately LAST, on a call that the marker check and
+  // every exemption above has already declined — i.e. exactly a call
+  // that would otherwise reach the final block. It writes no marker for
+  // anything the gate was already going to open, and it never returns an
+  // allow of its own: the allow below is produced by the auto path's own
+  // re-run of `checkOperatorApprovalMarkers`, the same authority step 3
+  // consults. Any failure falls through to the block with step 3's
+  // `markerExpired` / `markerForged` intact.
+  //
+  // The ledger writer is resolved lazily: `attemptAutoApproval` calls
+  // this thunk only after its own opt-in check and `when` allowlist
+  // check both pass, so a call that never opted in (or opted in but
+  // runs in an unlisted `permission_mode`, the ordinary case for every
+  // other gated call reaching step 9) never resolves a manifest-level
+  // ledger writer at all. A CLI-injected `opts.writeLedger` (test
+  // harness path) is used as-is when present, still only once the
+  // thunk actually runs; otherwise `resolveManifestLedgerWriter` looks
+  // up `grounding-mcp` in the manifest on demand. Stays audit-only
+  // either way: a missing `grounding-mcp` entry costs one stderr line
+  // inside the auto path, never an approval.
+  const resolveAutoLedger = (): { write: LedgerWriteFn | null; reason?: string } => {
+    if (opts.writeLedger) return { write: opts.writeLedger };
+    const resolved = resolveManifestLedgerWriter(manifest, {
+      ...(opts.ledgerTimeoutMs !== undefined ? { ledgerTimeoutMs: opts.ledgerTimeoutMs } : {}),
+    });
+    return resolved.ok ? { write: resolved.write } : { write: null, reason: resolved.reason };
+  };
+  const auto = await attemptAutoApproval({
+    generatedDir,
+    sessionId,
+    payloadSessionId: event.session_id,
+    permissionMode: event.permission_mode,
+    packConfig: declared.config,
+    reportsDir,
+    markerForged,
+    stderr,
+    resolveLedger: resolveAutoLedger,
+  });
+  if (auto.approved) {
+    const autoDiagnostic = `harness pack hook: ${auto.detail}, allowing.`;
+    stderr.write(`${autoDiagnostic}\n`);
+    return {
+      exitCode: 0,
+      blocked: false,
+      approvalCheck: { approved: true, source: "marker", detail: auto.detail },
+      diagnostic: autoDiagnostic,
     };
   }
 

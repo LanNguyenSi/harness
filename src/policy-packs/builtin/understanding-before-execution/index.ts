@@ -77,6 +77,7 @@ export {
   type FindReportOptions,
   type FindReportSelection,
   selectReportForSession,
+  selectNewestStrictSessionReport,
   findLatestReportForSession,
   type PersistedReportEvidence,
   expirePersistedReport,
@@ -84,6 +85,18 @@ export {
 } from "./persisted-reports.js";
 
 export { type ApprovalLifecycle, parseApprovalLifecycle } from "./lifecycle.js";
+
+export {
+  AUTO_APPROVED_BY_PREFIX,
+  CLAUDE_CODE_HARNESS,
+  autoApprovedByFor,
+  type ParsedAutoApprovedBy,
+  parseAutoApprovedBy,
+  autoApprovedLedgerTagFor,
+  type AutoApproveConfig,
+  parseAutoApprove,
+  permissionModeAllowed,
+} from "./auto-approve.js";
 
 export {
   APPROVAL_MARKER_TASK_PREFIX,

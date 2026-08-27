@@ -29,10 +29,13 @@ deliberately do not duplicate them.
 - [Understanding gate, auto-mode signal sources (measured)](understanding-gate-auto-mode-signals.md),
   what signals exist for detecting an agent's own permission/auto-approval
   mode across Claude Code, Codex, and opencode: the measured Claude Code
-  hook-payload `permission_mode` field per event and mode, the hook
-  process env, the transcript-visibility probe, the resolution of a hook
-  `ask` under `-p`, the block-and-retry behaviour of a `-p` child, and a
-  trust-class table;
+  hook-payload `permission_mode` field per event and mode, in both the
+  headless and the interactive launch shape, the hook process env, the
+  transcript-visibility probe, the resolution of a hook `ask` (a denial
+  under `-p`, an operator prompt interactively, an auto-allow in neither),
+  the block-and-retry behaviour of a `-p` child, what a subagent's tool
+  call carries (the parent's session id plus `agent_id` / `agent_type`,
+  with its transcript in a separate file), and a trust-class table;
   the rule and decision on which signals may relax the gate live in the
   companion ADR, not here.
 

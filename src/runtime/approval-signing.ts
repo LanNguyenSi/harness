@@ -43,6 +43,29 @@
 //     back the operator's key file), and it makes ANY forgery attempt one
 //     step more expensive and forensically visible (a key read is a
 //     distinguishable event; a bare unsigned-JSON write no longer is).
+//   - SECOND MINTING PATH (agent-tasks/74b4b17d, ADR
+//     docs/decisions/2026-08-27-ug-auto-mode-approval.md): the residual
+//     above was a CONJUNCTION, read the key AND write through an
+//     uncovered primitive. Since the `auto_approve` opt-in of the
+//     `understanding-before-execution` pack, the PreToolUse hook itself
+//     can write a validly signed session marker (`approvedBy:
+//     auto-mode:<harness>:<mode>`) when the payload's `permission_mode`
+//     is allowlisted and a strict-session `pending` report exists. Any
+//     process that can invoke `harness pack hook pre-tool-use` with a
+//     stdin payload and `CLAUDE_CODE_SESSION_ID` of its choosing therefore
+//     obtains a signed marker for that session id WITHOUT reading the
+//     key: the residual is now a DISJUNCTION, read the key, OR make the
+//     hook sign for you. Reach, honestly: pre-approval the oracle is
+//     unreachable (invoking it is a Bash call, and `pack` is not on the
+//     read-only allowlist in `src/runtime/read-only-bash.ts`), so this
+//     is not an escalation over the post-approval write class, which can
+//     already forge by the key-read route; it is a cheaper and less
+//     forensically visible post-approval route (no key read to notice),
+//     and it is why the auto path never creates the key (explicit
+//     key-exists precheck before the shared write path), consumes the
+//     report it used, declines on a forged marker, and applies only
+//     after every existing exemption branch has declined. The pack's
+//     doctor listing of `auto-mode:` markers is the audit surface for it.
 //   - Given the agent and operator share one OS user account on this
 //     machine, this is deliberately pragmatic defense-in-depth, not a hard
 //     authorization boundary. It is documented here in full rather than
@@ -51,7 +74,8 @@
 // KEY STORAGE: `<generatedDir>/.approval-signing.key` — a raw 32-byte
 // secret, mode 0600, generated lazily on first use (by `harness approve
 // understanding` / `harness approve branch-protection`, or by `harness
-// init` — see src/cli/init/index.ts). Colocated with `harness.generated/`
+// init` — see src/cli/init/index.ts; NEVER by the PreToolUse hook's auto
+// path, which prechecks that the key exists and blocks when it does not). Colocated with `harness.generated/`
 // (not a separate home-dir path) so:
 //   - it inherits the SAME test-isolation guarantee every marker/report
 //     path already has (every call site here already threads an explicit,
@@ -184,6 +208,36 @@ export function rotateSigningKey(generatedDir: string): SigningKeyHandle {
     /* best-effort on platforms where chmod is a no-op (e.g. some Windows fs) */
   }
   return { key: fresh, filePath, created: true };
+}
+
+/**
+ * Non-creating existence probe for the signing key: `true` only when
+ * `<generatedDir>/.approval-signing.key` is a regular file carrying at
+ * least `KEY_BYTES` bytes. Never creates, repairs, or rotates anything.
+ *
+ * Why this exists as a separate export instead of "just call
+ * `getOrCreateSigningKey` and see" (ADR
+ * docs/decisions/2026-08-27-ug-auto-mode-approval.md, threat model (b)
+ * item 5): key CREATION is an operator-side act (`harness init` /
+ * `harness approve`). The PreToolUse hook's auto-approval path
+ * (agent-tasks/74b4b17d) must refuse to mint a marker on a machine that
+ * has no key, but the shared write path it uses (`writeApprovalMarker`
+ * -> `signMarker` -> `getOrCreateSigningKey`) treats a missing key as a
+ * case to REPAIR: it generates one on ENOENT and signs with it. So the
+ * auto path calls this first and blocks when it returns `false`.
+ *
+ * A truncated / short key file counts as absent here for the same
+ * reason: `getOrCreateSigningKey` would overwrite it with a fresh key,
+ * which is the same operator-side act this probe exists to keep the
+ * hook out of.
+ */
+export function signingKeyExists(generatedDir: string): boolean {
+  try {
+    const stat = fs.statSync(signingKeyPathFor(generatedDir));
+    return stat.isFile() && stat.size >= KEY_BYTES;
+  } catch {
+    return false;
+  }
 }
 
 /** sha256 hex digest of a string, used to bind a marker to a persisted report's content. */

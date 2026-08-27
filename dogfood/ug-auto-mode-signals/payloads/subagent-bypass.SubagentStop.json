@@ -1,0 +1,18 @@
+{
+  "session_id": "42854038-447e-455b-95dc-6d99e9c09bd2",
+  "transcript_path": "<scratch>/cc-config/projects/<scratch-slug>/42854038-447e-455b-95dc-6d99e9c09bd2.jsonl",
+  "cwd": "<scratch>/cc-work",
+  "prompt_id": "30b66933-aa8d-4d5a-8cf4-c8bb864ecbc0",
+  "permission_mode": "bypassPermissions",
+  "agent_id": "acbaf0d426cde00e9",
+  "agent_type": "general-purpose",
+  "effort": {
+    "level": "high"
+  },
+  "hook_event_name": "SubagentStop",
+  "stop_hook_active": false,
+  "agent_transcript_path": "<scratch>/cc-config/projects/<scratch-slug>/42854038-447e-455b-95dc-6d99e9c09bd2/subagents/agent-acbaf0d426cde00e9.jsonl",
+  "last_assistant_message": "subagent-probe",
+  "background_tasks": [],
+  "session_crons": []
+}

@@ -445,11 +445,19 @@ export function renderMalformedSectionsNotice(sections: string[]): string | null
  * (e.g. empty `derivedTodos`) is a follow-up if the same class of
  * "agent skipped a required section" failure recurs.
  */
-type ValidationResult =
+export type ValidationResult =
   | { ok: true; mode: string | null }
   | { ok: false; field: string; reason: string };
 
-function validatePersistedReport(parsed: Record<string, unknown>): ValidationResult {
+/**
+ * Exported (agent-tasks/74b4b17d) so the PreToolUse hook's auto-approval
+ * path applies the SAME approve-time content validation this CLI does,
+ * rather than a second, drifting copy: the ADR
+ * (docs/decisions/2026-08-27-ug-auto-mode-approval.md, Option A
+ * condition 3) requires the auto path's report precondition to be the
+ * approve CLI's own check. Export only; the logic is unchanged.
+ */
+export function validatePersistedReport(parsed: Record<string, unknown>): ValidationResult {
   const mode = typeof parsed["mode"] === "string" ? (parsed["mode"] as string) : null;
   if (mode !== "grill_me") return { ok: true, mode };
 
@@ -499,7 +507,14 @@ function validatePersistedReport(parsed: Record<string, unknown>): ValidationRes
   return { ok: true, mode };
 }
 
-function rewriteReportApproved(
+/**
+ * Exported (agent-tasks/74b4b17d) so the PreToolUse hook's auto-approval
+ * path CONSUMES the report it used through the identical rewrite this
+ * CLI performs (ADR Option A condition 5: consumption plus the
+ * `pending`-only eligibility rule is what makes one report mintable at
+ * most once). Export only; the logic is unchanged.
+ */
+export function rewriteReportApproved(
   filePath: string,
   approvedAt: string,
   approvedBy: string,

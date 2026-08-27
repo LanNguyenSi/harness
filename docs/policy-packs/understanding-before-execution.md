@@ -287,10 +287,26 @@ Since task `d78fb3c7`, the pack's `config:` block is validated by `harness valid
 | `approval_lifecycle.expire_on_tool_match` | array of tool-name strings | optional override for the default agent-tasks tool list |
 | `approval_lifecycle.expire_on_bash_match` | array of regex strings | optional; clear the marker when a Bash call matches any of these (gh-cli workflows); see "expire_on_bash_match: start-anchored, with a documented fail-open limitation" below for the shipped defaults' known gap |
 | `approval_lifecycle.max_age` | duration string (`1h`, `30m`, ...) | optional safety net for sessions that never hit a listed tool / Bash boundary |
+| `auto_approve.when` | array of permission-mode strings | optional; allowlist of `permission_mode` values eligible for a hook-written signed auto-marker |
+| `auto_approve.require_report` | literal `true` | required when `auto_approve` is present; `false` or missing is a schema error |
 | `ux` | `PolicyUxSchema` (`cannot` + `required[]` + `run[]`) | optional; renders agent-facing remediation when the PreToolUse blocker fires |
 | `producers` | array of `ProducerSchema` (`kind` + recipe) | optional; companion to `ux:` for the same blocker render path |
 
 Any other top-level key is rejected as a typo. New keys land in this schema (`src/policy-packs/builtin/understanding-before-execution.ts`) first, then in the pack's runtime resolver.
+
+### `auto_approve`: opt-in auto-approval for a listed permission mode
+
+`auto_approve` lets an operator opt a specific permission mode into a hook-written, signed auto-marker instead of a human `harness approve understanding` call. It is a rule-only opt-in: the PreToolUse hook still requires a pending Understanding Report for the session and writes the marker through the same signing path a human approval uses. See `docs/decisions/2026-08-27-ug-auto-mode-approval.md` for the full design, the auto path's decision-order placement, and its threat model.
+
+Recommended shape:
+
+```yaml
+auto_approve:
+  when: [bypassPermissions]
+  require_report: true
+```
+
+Only list a mode in `when` that the operator actually intends to run unattended; `auto` and `dontAsk` are not supported values here and should not be listed. Because report validation strength is mode-dependent, pair `auto_approve` with `mode: grill_me` so the report the auto path consumes was actually checked, rather than merely present.
 
 ### `expire_on_bash_match`: start-anchored, with a documented fail-open limitation (task `fb80b5bb`, measured 2026-08-19)
 
