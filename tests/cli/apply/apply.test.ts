@@ -2021,3 +2021,78 @@ describe("apply — grounding-mcp policy-degradation gate (discovery H3)", () =>
     expect(r.outcome).toBe("applied");
   });
 });
+
+// Review round 3 (99f47307 Slice 1): the `.last-apply` manifest snapshot
+// serialised the DERIVED view (hand-authored plus workflows[]-derived
+// policies). It now stores the hand-authored view and the restart-hint
+// reader re-derives, so the comparison is derived-vs-derived by the same
+// code and a snapshot written before the derivation existed cannot emit
+// a one-time phantom "hooks changed" hint.
+describe("apply — workflows[]-derived policies and the .last-apply snapshot (review round 3)", () => {
+  function writeWorkflowManifest(): void {
+    fs.writeFileSync(
+      path.join(tmpHome, "harness.yaml"),
+      `version: 1
+tools:
+  mcp:
+    - name: grounding-mcp
+      command: [node, /x/grounding.js]
+  cli: []
+  skills: {enabled: [], source_dirs: []}
+  builtin: {known: []}
+memory:
+  directories: []
+review_templates:
+  t1: "Review this PR for correctness."
+workflows:
+  - name: ship
+    steps:
+      - kind: branch
+      - kind: review_subagent
+        spawn: required
+        template: t1
+      - kind: merge
+hooks:
+  - name: require-review-evidence
+    event: PreToolUse
+    match: "mcp__agent-tasks__pull_requests_merge"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+  - name: require-review-evidence-bash
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+policies: []
+`,
+      "utf8",
+    );
+  }
+
+  it("stores only hand-authored policies in the snapshot, and a second apply emits no restart hint", async () => {
+    writeWorkflowManifest();
+    const r1 = await apply({ homeDir: tmpHome });
+    expect(r1.outcome).toBe("applied");
+    const record = readLastApply(path.join(tmpHome, GENERATED_DIRNAME));
+    const snapshot = JSON.parse(record!.manifest!.content) as { policies: { name: string }[] };
+    expect(snapshot.policies).toEqual([]);
+
+    const r2 = await apply({ homeDir: tmpHome });
+    expect(r2.restartHints).toEqual([]);
+  });
+
+  it("a snapshot without the derived pair (pre-derivation release shape) yields no phantom hooks hint", async () => {
+    writeWorkflowManifest();
+    await apply({ homeDir: tmpHome });
+    // The stored snapshot already lacks the derived pair; make the
+    // pre-derivation shape explicit by asserting it, then re-apply.
+    const generatedDir = path.join(tmpHome, GENERATED_DIRNAME);
+    const record = readLastApply(generatedDir)!;
+    expect(record.manifest!.content).not.toContain("workflow:ship:");
+    const r = await apply({ homeDir: tmpHome });
+    expect(r.restartHints).not.toContain(RESTART_HINT_HOOKS);
+  });
+});

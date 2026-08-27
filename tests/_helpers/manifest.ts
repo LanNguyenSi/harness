@@ -16,12 +16,15 @@ import type {
   McpServer,
   Policy,
   RiskClassifier,
+  Workflow,
 } from "../../src/schema/index.js";
 
 export interface MakeManifestOptions {
   policies?: Policy[];
   hooks?: Hook[];
   mcps?: McpServer[];
+  /** `workflows[]` (99f47307). Empty by default: most tests don't need it. */
+  workflows?: Workflow[];
   /** Risk Gate classifiers — `risk.classifiers[]` (Phase 7 #3/#5). */
   classifiers?: RiskClassifier[];
   /** Risk Gate environment resolvers — `environments.resolvers[]` (Phase 7 #4/#5). */
@@ -62,6 +65,7 @@ export function makeManifest(opts: MakeManifestOptions = {}): Manifest {
     memory: {} as Manifest["memory"],
     hooks: opts.hooks ?? [DEFAULT_HOOK],
     policies: opts.policies ?? [],
+    workflows: opts.workflows ?? [],
     risk: {
       classifiers: opts.classifiers ?? [],
       ...(opts.degradedFailPosture && {

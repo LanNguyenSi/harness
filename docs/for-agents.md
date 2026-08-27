@@ -53,10 +53,46 @@ to fix and re-review. `merge.gate: solo` (in soloMode projects) or
 allowed to press the green button.
 
 If you skip the `review_subagent` step you are violating the
-workflow contract. The schema cannot enforce that today (runtime
-enforcement is a follow-up to PR #66), but the `review_templates:`
-block tells you exactly what checklist the reviewer is supposed to
-work through. Use it.
+workflow contract, and for the `merge` step specifically this can now
+be enforced at runtime: when a workflow declares a `review_subagent`
+step with `spawn: "required"` followed by a `merge` step, and the
+manifest's `hooks:` list declares BOTH `require-review-evidence` and
+`require-review-evidence-bash` (`src/cli/init/templates.ts`), `harness
+policy intercept` derives the same `review-before-merge` /
+`review-before-merge-bash` policy pair `harness init --template full`
+hand-authors and blocks `mcp__agent-tasks__pull_requests_merge` /
+`gh pr merge` until a `review:<pr-number>` or `review:<branch>` ledger
+entry exists for the session (`src/runtime/workflow-policies.ts`).
+`harness validate` errors if a workflow needs the gate but the two
+hooks are not correctly wired — missing entirely, or declared under
+the right name but bound to the wrong trigger surface or a `command`
+that isn't `harness policy intercept` — (`checkWorkflowGateWiring`),
+so "declared required, gate silently inert" cannot pass unnoticed;
+a warning names a weaker (or differently-extracting) hand-authored
+policy sharing the derived gate's trigger surface instead of letting
+it look like the only gate (`checkWorkflowGateWeakOverlap`); a
+hand-authored policy that is at least as strong and extracts the same
+variables replaces the derived pair outright. `harness list policies`
+and `harness doctor` show the derived pair marked "(derived from
+workflows[])"; `harness export` and the `.last-apply` snapshot carry
+only what you declared. This is scoped to the merge step
+only, and even there to two specific surfaces:
+`mcp__agent-tasks__pull_requests_merge` and `gh pr merge` are gated;
+`mcp__agent-tasks__task_merge` and `mcp__agent-tasks__task_finish`
+(`autoMerge`) are NOT, and pass the gate uncovered until a follow-up
+task extends both the hand-authored template pair and this derivation
+to those two verbs. The `branch` and `ci_gate` steps, PR-open gating
+from `workflows:` itself (today only reachable via the separate
+hand-authored `review-subagent-before-pr-create` / `-bash` policies),
+step-ordering validation, and `when.task_label`/project-based workflow
+selection are NOT enforced by this mechanism and remain schema-only
+for now. And as with every ledger-tag gate, this is a process gate, not a
+hostile-agent-safe one (see
+[`docs/okf/evidence-ledger-trust-boundary.md`](okf/evidence-ledger-trust-boundary.md)):
+a session that can call `mcp__grounding-mcp__ledger_add` can write the
+`review:*` tag itself. The `review_templates:` block still tells you
+exactly what checklist a real review is supposed to work through. Use
+it.
 
 ### If you use agent-tasks MCP
 

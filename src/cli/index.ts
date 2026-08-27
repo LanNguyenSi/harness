@@ -1056,6 +1056,19 @@ export function buildProgram(opts: RunOptions = {}): Command {
             `(forced removal — referenced by: ${result.forcedReferences.join(", ")})\n`,
           );
         }
+        // F3 (review round 3, 99f47307 Slice 1): printed on the dry-run AND
+        // the write path. A --force'd removal of an evidence hook silently
+        // disables the workflows[]-derived merge gate (no schema safety
+        // net, unlike a dangling policy.hook), so this line is the only
+        // warning the operator gets.
+        if (result.derivedGateReferences.length > 0) {
+          stderr(
+            `(forced removal disables the workflows[]-derived merge gate for: ` +
+              `${result.derivedGateReferences.join(", ")}; harness policy intercept ` +
+              `no longer blocks merges for ${result.derivedGateReferences.length === 1 ? "this workflow" : "these workflows"} ` +
+              `and for any other workflow sharing the same merge surface)\n`,
+          );
+        }
         if (options.dryRun) {
           stdout(result.diff);
           return;

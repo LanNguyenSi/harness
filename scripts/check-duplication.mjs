@@ -119,7 +119,35 @@ import * as path from "node:path";
 // genuinely different implementation, not a copy) for the LOW (b)
 // obfuscated-flag fix. Verified (not assumed) by re-running this script:
 // 109 clones, back at the pre-d03af8f6 baseline.
-const MAX_CLONES = 109;
+// Raised to 111 for the F8 reference check in `cli/remove/index.ts`
+// (99f47307 Slice 1, review round 2): a hook referenced only by a
+// workflows[]-derived merge gate now gets the same "refuse without
+// --force" pre-check hand-authored `policies:` references already get,
+// which meant adding a new import block plus a `derivedGate
+// ReferencingWorkflows` helper near the top of the file. Verified (not
+// assumed) by diffing the full jscpd `duplicates[]` set against this
+// branch's pre-review-round-2 commit as a MULTISET keyed on
+// `(firstFile, secondFile, lines)` (ignoring exact line offsets, same
+// window-shift effect the 103/111 raises above document): 109 entries
+// before, 111 after, net +2, which decomposes as:
+//   +2 `cli/pack/reseed.ts` <-> `cli/remove/index.ts` (11 and 13 lines) —
+//      a NEW pairing. `reseed.ts` is the SAME file the task 68b9ad9c raise
+//      above already named as sharing the add/remove/pack-add/pack-remove
+//      `--config`/`--project`/validate-lock-diff-write import + CLI-body
+//      shape; `remove/index.ts`'s new import block and deny-block body
+//      happen to fall into that same tolerated shape, so this is a 5th
+//      member of an already-tolerated cluster, not a new KIND of
+//      duplication.
+//   +0 net from `cli/add/index.ts` <-> `cli/remove/index.ts` (3 pairs
+//      before, 3 after; one pair's line count shifted 12 -> 13 as the
+//      new lines moved jscpd's match window, the other two are
+//      unchanged) — re-windowing, not new duplication.
+// (+2 +0 = +2.) Zero net-new entries fall outside the tolerated
+// add/remove/pack-add/pack-remove/reseed cluster. Extracting a shared
+// base would mean touching `cli/add/index.ts` and `cli/pack/reseed.ts`,
+// out of this task's scope (allowed_changes restricts this slice to
+// `cli/remove/**`); same rationale as every raise above.
+const MAX_CLONES = 111;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).

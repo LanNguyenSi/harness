@@ -382,3 +382,67 @@ function forkAddWorker(workerPath: string, args: AddWorkerArgs): Promise<AddWork
     child.on("error", reject);
   });
 }
+
+// Review round 3 (99f47307 Slice 1): `add`'s asset gate validates the
+// same derived view `harness validate` checks (workflows[]-derived policies
+// folded in on both the proposed and the baseline side). Pins that an
+// unrelated add on a workflow-gated manifest is unaffected. This is a
+// consistency pin, not a behavioral difference today: no error-severity
+// check `runAssetChecks` runs currently reads `manifest.policies`, so this
+// suite alone cannot discriminate withDerivedPolicies from a bare
+// parseManifest — see tests/cli/manifest-view-parity.test.ts's spy-backed
+// test for the assertion that actually reads what manifest gets passed to
+// runAssetChecks (review round 3, F2).
+describe("add keeps the asset gate on the derived view (consistency pin, not a behavioral difference)", () => {
+  it("adds an unrelated hook to a workflow-gated manifest", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-add-derived-"));
+    try {
+      const configPath = path.join(home, "harness.yaml");
+      fs.writeFileSync(
+        configPath,
+        `version: 1
+review_templates:
+  t1: "Review this PR for correctness."
+workflows:
+  - name: ship
+    steps:
+      - kind: branch
+      - kind: review_subagent
+        spawn: required
+        template: t1
+      - kind: merge
+hooks:
+  - name: require-review-evidence
+    event: PreToolUse
+    match: "mcp__agent-tasks__pull_requests_merge"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+  - name: require-review-evidence-bash
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+policies: []
+`,
+        "utf8",
+      );
+      const r = await add(
+        {
+          type: "hook",
+          entry: { name: "unrelated", event: "SessionStart", command: "/usr/bin/true", blocking: false },
+        },
+        { configPath, homeDir: home },
+      );
+      expect(r.applied).toBe(true);
+      const m = parseYaml(fs.readFileSync(configPath, "utf8")) as { hooks: { name: string }[]; policies: unknown[] };
+      expect(m.hooks.map((h) => h.name)).toContain("unrelated");
+      // The file rewrite carries no derived policy as if hand-authored.
+      expect(m.policies).toEqual([]);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+});

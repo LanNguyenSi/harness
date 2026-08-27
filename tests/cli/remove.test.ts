@@ -3,7 +3,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
+import { run } from "../../src/cli/index.js";
 import { init } from "../../src/cli/init/index.js";
+import { list } from "../../src/cli/list.js";
 import { remove } from "../../src/cli/remove/index.js";
 import { applyRemove, planRemove } from "../../src/cli/remove/mutate.js";
 import { STUB_NPM_BIN_EXEC_UNKNOWN as STUB_NPM_BIN_EXEC } from "../_helpers/npm-bin-exec.js";
@@ -35,6 +37,22 @@ afterEach(() => {
 
 function readManifest(): unknown {
   return parseYaml(fs.readFileSync(manifestPath, "utf8"));
+}
+
+/** In-process CLI run with captured streams (same shape as tests/cli/program.test.ts). */
+async function runCli(argv: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
+  let stdout = "";
+  let stderr = "";
+  const code = await run({
+    argv,
+    stdout: (s) => {
+      stdout += s;
+    },
+    stderr: (s) => {
+      stderr += s;
+    },
+  });
+  return { stdout, stderr, code };
 }
 
 describe("remove mcp / cli / skill", () => {
@@ -109,6 +127,256 @@ describe("remove hook — reference check", () => {
       name: "HarnessExitError",
       message: expect.stringMatching(/review-before-merge.*not declared in hooks/),
     });
+  });
+});
+
+// F8 (review round 2, 99f47307 Slice 1): a hook referenced ONLY by a
+// workflows[]-derived merge gate (no hand-authored `policies:` entry
+// names it) used to pass `remove hook`'s reference check silently — the
+// check only ever inspected the raw YAML's `policies:` list. This
+// manifest deliberately carries NO `policies:` at all, so the existing
+// `referencingPolicies` check finds nothing; only the new derived-gate
+// check (`derivedGateReferencingWorkflows`) can catch it.
+describe("remove hook — derived-gate reference check (F8)", () => {
+  let derivedHome: string;
+  let derivedManifestPath: string;
+
+  const WORKFLOW_REQUIRED = `review_templates:
+  t1: "Review this PR for correctness."
+workflows:
+  - name: ship
+    steps:
+      - kind: branch
+      - kind: review_subagent
+        spawn: required
+        template: t1
+      - kind: merge
+`;
+
+  const WIRED_HOOKS = `hooks:
+  - name: require-review-evidence
+    event: PreToolUse
+    match: "mcp__agent-tasks__pull_requests_merge"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+  - name: require-review-evidence-bash
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+`;
+
+  beforeEach(() => {
+    derivedHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-remove-derived-gate-"));
+    derivedManifestPath = path.join(derivedHome, "harness.yaml");
+    fs.writeFileSync(
+      derivedManifestPath,
+      `version: 1\n${WORKFLOW_REQUIRED}${WIRED_HOOKS}policies: []\n`,
+      "utf8",
+    );
+  });
+
+  afterEach(() => {
+    fs.rmSync(derivedHome, { recursive: true, force: true });
+  });
+
+  it("refuses to remove a hook a workflow's derived merge gate depends on, without --force", async () => {
+    await expect(
+      remove("hook", "require-review-evidence", {
+        configPath: derivedManifestPath,
+        homeDir: derivedHome,
+      }),
+    ).rejects.toMatchObject({
+      name: "HarnessExitError",
+      exitCode: 1,
+      message: expect.stringMatching(/"ship".*derive.*runtime merge gate.*--force/s),
+    });
+  });
+
+  it("refuses removal of the BASH evidence hook the same way", async () => {
+    await expect(
+      remove("hook", "require-review-evidence-bash", {
+        configPath: derivedManifestPath,
+        homeDir: derivedHome,
+      }),
+    ).rejects.toMatchObject({ name: "HarnessExitError", exitCode: 1 });
+  });
+
+  // Mutation probe (this round): removing the `derivedGateReferencingWorkflows`
+  // pre-check call from `src/cli/remove/index.ts` turns the two tests
+  // above red-to-green-for-the-wrong-reason (the removal would silently
+  // succeed) — this test pins the dry-run reporting shape too, so a
+  // regression that keeps the deny but drops the reporting still shows.
+  it("reports the affected workflow in derivedGateReferences on a --force dry-run", async () => {
+    const r = await remove("hook", "require-review-evidence", {
+      configPath: derivedManifestPath,
+      homeDir: derivedHome,
+      dryRun: true,
+      force: true,
+    });
+    expect(r.applied).toBe(false);
+    expect(r.derivedGateReferences).toEqual(["ship"]);
+  });
+
+  it("--force actually removes the hook (no schema safety net for a derived-only reference)", async () => {
+    const r = await remove("hook", "require-review-evidence", {
+      configPath: derivedManifestPath,
+      homeDir: derivedHome,
+      force: true,
+    });
+    expect(r.applied).toBe(true);
+    const m = parseYaml(fs.readFileSync(derivedManifestPath, "utf8")) as {
+      hooks?: { name: string }[];
+    };
+    expect(m.hooks?.map((h) => h.name)).not.toContain("require-review-evidence");
+  });
+
+  // F3 (review round 3): the round-2 write path hard-coded
+  // `derivedGateReferences: []` and the CLI never printed the field on
+  // either path, so `remove hook require-review-evidence --force` dropped
+  // the gate with no warning at all.
+  it("F3: the write path with --force reports the workflow whose gate it disables", async () => {
+    const r = await remove("hook", "require-review-evidence", {
+      configPath: derivedManifestPath,
+      homeDir: derivedHome,
+      force: true,
+    });
+    expect(r.applied).toBe(true);
+    expect(r.derivedGateReferences).toEqual(["ship"]);
+  });
+
+  it("F3: the CLI prints the derived-gate warning on stderr for a --force write (M3)", async () => {
+    const r = await runCli([
+      "remove",
+      "hook",
+      "require-review-evidence",
+      "--config",
+      derivedManifestPath,
+      "--force",
+    ]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toMatch(/forced removal disables the workflows\[\]-derived merge gate for: ship/);
+    expect(r.stdout).toMatch(/removed hook "require-review-evidence"/);
+    const m = parseYaml(fs.readFileSync(derivedManifestPath, "utf8")) as { hooks?: { name: string }[] };
+    expect(m.hooks?.map((h) => h.name)).not.toContain("require-review-evidence");
+  });
+
+  it("F3: the CLI prints the same warning on --dry-run --force and leaves the file untouched", async () => {
+    const before = fs.readFileSync(derivedManifestPath, "utf8");
+    const r = await runCli([
+      "remove",
+      "hook",
+      "require-review-evidence",
+      "--config",
+      derivedManifestPath,
+      "--dry-run",
+      "--force",
+    ]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toMatch(/derived merge gate for: ship/);
+    expect(r.stdout).toMatch(/^--- /m);
+    expect(fs.readFileSync(derivedManifestPath, "utf8")).toBe(before);
+  });
+
+  it("no derived-gate warning on stderr when removing an unrelated hook", async () => {
+    const withExtraHook = `${fs.readFileSync(derivedManifestPath, "utf8").replace(/policies: \[\]\n$/, "")}  - name: unrelated-hook
+    event: SessionStart
+    command: /usr/bin/true
+    blocking: false
+policies: []
+`;
+    fs.writeFileSync(derivedManifestPath, withExtraHook, "utf8");
+    const r = await runCli(["remove", "hook", "unrelated-hook", "--config", derivedManifestPath]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+  });
+
+  it("does not block removing an UNRELATED hook the same manifest declares", async () => {
+    const withExtraHook = `version: 1\n${WORKFLOW_REQUIRED}hooks:
+  - name: require-review-evidence
+    event: PreToolUse
+    match: "mcp__agent-tasks__pull_requests_merge"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+  - name: require-review-evidence-bash
+    event: PreToolUse
+    match: "Bash"
+    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+  - name: unrelated-hook
+    event: SessionStart
+    command: /usr/bin/true
+    blocking: false
+policies: []
+`;
+    fs.writeFileSync(derivedManifestPath, withExtraHook, "utf8");
+    const r = await remove("hook", "unrelated-hook", {
+      configPath: derivedManifestPath,
+      homeDir: derivedHome,
+    });
+    expect(r.applied).toBe(true);
+    expect(r.derivedGateReferences).toEqual([]);
+  });
+
+  // F5 (review round 3 follow-up, 99f47307 Slice 1): `hotfix` requires a
+  // merge gate the same way `ship` does (shape test:
+  // `workflowRequiresMergeGate`), but both share the identical trigger
+  // surface + evidence tag, so the derivation's `seen` dedupe only ever
+  // produces `workflow:ship:*` (the first one walked); `hotfix` derives
+  // nothing new. `derivedGateReferencingWorkflows` used to name BOTH
+  // workflows here (it walked the shape test, not the derivation
+  // output), even though only `ship`'s gate is actually lost. `list
+  // policies` on this same manifest shows only `workflow:ship:*`, which
+  // is the ground truth this pre-check should match.
+  it("F5: names only the workflow whose gate the derivation actually produced, not every shape match", async () => {
+    const twoWorkflows = `version: 1
+review_templates:
+  t1: "Review this PR for correctness."
+workflows:
+  - name: ship
+    steps:
+      - kind: branch
+      - kind: review_subagent
+        spawn: required
+        template: t1
+      - kind: merge
+  - name: hotfix
+    steps:
+      - kind: branch
+      - kind: review_subagent
+        spawn: required
+        template: t1
+      - kind: merge
+${WIRED_HOOKS}policies: []
+`;
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-remove-derived-gate-two-wf-"));
+    try {
+      const configPath = path.join(home, "harness.yaml");
+      fs.writeFileSync(configPath, twoWorkflows, "utf8");
+      const r = await remove("hook", "require-review-evidence", {
+        configPath,
+        homeDir: home,
+        dryRun: true,
+        force: true,
+      });
+      expect(r.applied).toBe(false);
+      expect(r.derivedGateReferences).toEqual(["ship"]);
+      const listed = list("policies", { homeDir: home, configPath });
+      expect(
+        listed.rows.filter((row) => String(row.name).startsWith("workflow:")).map((row) => row.name),
+      ).toEqual([
+        "workflow:ship:review-before-merge",
+        "workflow:ship:review-before-merge-bash",
+      ]);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 
