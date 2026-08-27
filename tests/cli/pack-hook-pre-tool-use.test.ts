@@ -522,7 +522,16 @@ describe("pack hook pre-tool-use blocker", () => {
     expect(stderr.read()).toMatch(/no longer satisfies the gate/);
   });
 
-  it("falls back to persisted report when ledger has no match", async () => {
+  // Task 7402301d: until that task this test pinned the OPPOSITE ("falls
+  // back to persisted report when ledger has no match", source
+  // "persisted-report"). The persisted report is now evidence, not
+  // authority: an approved-looking report with no signed marker behind it
+  // is exactly the one-unsigned-write forgery shape the marker signing
+  // (harness/f9485cc7) left open, so it must block, with its own audit
+  // reason. This variant runs without a resolvable generatedDir (the
+  // "generatedDir not resolvable" reason prefix); the with-marker-dir
+  // variants live in pack-hook-persisted-report-evidence.test.ts.
+  it("BLOCKS on an approved persisted report alone (report is evidence, not authority; task 7402301d)", async () => {
     const reportsDir = path.join(tmp, "reports");
     writeReport(reportsDir, "rpt.json", {
       sessionId: "sess-1",
@@ -539,9 +548,14 @@ describe("pack hook pre-tool-use blocker", () => {
       reportsDir,
       ledgerQuery: async (): Promise<LedgerEntry[]> => [],
     });
-    expect(result.blocked).toBe(false);
-    expect(result.approvalCheck.source).toBe("persisted-report");
-    expect(stdout.read()).toBe("");
+    expect(result.blocked).toBe(true);
+    expect(result.approvalCheck.approved).toBe(false);
+    expect(result.approvalCheck.source).toBe("none");
+    expect(result.approvalCheck.detail).toMatch(
+      /unsigned persisted-report approval rejected: report rpt\.json has approvalStatus=approved/,
+    );
+    expect(stderr.read()).toMatch(/unsigned persisted-report approval rejected/);
+    expect(stdout.read()).toMatch(/"decision"/);
   });
 
   it("does NOT match a tag for a different session id", async () => {
@@ -737,7 +751,12 @@ describe("pack hook pre-tool-use blocker", () => {
     expect(stderr.read()).toMatch(/config\.producers ignored/);
   });
 
-  it("treats a degraded ledger as no-match (still falls through to report)", async () => {
+  it("treats a degraded ledger as no-match and an approved report as evidence only: still blocks (task 7402301d)", async () => {
+    // Before task 7402301d this pinned "degraded ledger still falls
+    // through to the persisted report" with an allow. The degraded-ledger
+    // handling is unchanged (audit-only, never grants); what changed is
+    // that the report cannot grant either, so the combination blocks with
+    // both facts visible in the reason.
     const reportsDir = path.join(tmp, "reports");
     writeReport(reportsDir, "rpt.json", {
       sessionId: "sess-1",
@@ -755,8 +774,10 @@ describe("pack hook pre-tool-use blocker", () => {
         degraded: "grounding-mcp not declared in manifest",
       }),
     });
-    expect(result.blocked).toBe(false);
-    expect(result.approvalCheck.source).toBe("persisted-report");
+    expect(result.blocked).toBe(true);
+    expect(result.approvalCheck.source).toBe("none");
+    expect(result.approvalCheck.detail).toMatch(/unsigned persisted-report approval rejected/);
+    expect(result.approvalCheck.detail).toMatch(/ledger degraded \(grounding-mcp not declared in manifest\)/);
   });
 
   it("allows when the pack is enabled:false", async () => {
@@ -1796,12 +1817,14 @@ describe("pack hook pre-tool-use blocker — recovery git-commit exemption after
     expect(result.approvalCheck.source).toBe("none");
   });
 
-  it("a persisted-report source that is still approved wins BEFORE the recovery-commit check even with an expired marker", async () => {
-    // Source-precedence control: when the persisted report independently
-    // satisfies the gate, the ordinary "persisted-report" source allows
-    // it — the recovery-commit path is never consulted.
-    const stdout = bufferStream();
-    const stderr = bufferStream();
+  it("an approved persisted report does NOT rescue an expired marker: the bare recovery commit passes via the exemption only, and Edit stays blocked (task 7402301d)", async () => {
+    // Until task 7402301d this test pinned the opposite precedence: a
+    // still-approved persisted report "won" before the recovery-commit
+    // check and allowed with source "persisted-report", which meant
+    // `approval_lifecycle.max_age` never actually expired an approval as
+    // long as the (unsigned) report still said approved. The report is
+    // evidence now; the exemption is the only reason the bare git commit
+    // passes, and its source says so.
     const generatedDir = path.join(tmp, "harness.generated");
     const reportsDir = path.join(tmp, "reports");
     expireMarker(generatedDir, "sess-1");
@@ -1811,7 +1834,7 @@ describe("pack hook pre-tool-use blocker — recovery git-commit exemption after
       approvedAt: new Date().toISOString(),
       createdAt: new Date().toISOString(),
     });
-    const result = await runPackHookPreToolUseCli({
+    const commit = await runPackHookPreToolUseCli({
       manifest: manifestWithMaxAge(),
       stdin: readableFromString(
         JSON.stringify({
@@ -1820,14 +1843,29 @@ describe("pack hook pre-tool-use blocker — recovery git-commit exemption after
           tool_input: { command: 'git commit -am "msg"' },
         }),
       ),
-      stdout: stdout.stream,
+      stdout: bufferStream().stream,
+      stderr: bufferStream().stream,
+      reportsDir,
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(commit.blocked).toBe(false);
+    expect(commit.approvalCheck.source).toBe("recovery-commit");
+
+    const stderr = bufferStream();
+    const edit = await runPackHookPreToolUseCli({
+      manifest: manifestWithMaxAge(),
+      stdin: readableFromString(event()),
+      stdout: bufferStream().stream,
       stderr: stderr.stream,
       reportsDir,
       generatedDir,
       ledgerQuery: async (): Promise<LedgerEntry[]> => [],
     });
-    expect(result.blocked).toBe(false);
-    expect(result.approvalCheck.source).toBe("persisted-report");
+    expect(edit.blocked).toBe(true);
+    expect(edit.approvalCheck.source).toBe("none");
+    expect(edit.approvalCheck.detail).toMatch(/unsigned persisted-report approval rejected/);
+    expect(stderr.read()).toMatch(/unsigned persisted-report approval rejected/);
   });
 });
 

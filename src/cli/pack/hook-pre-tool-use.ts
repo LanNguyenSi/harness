@@ -2,10 +2,10 @@
 //
 // PreToolUse blocker for pack-driven gates. Wired by the
 // understanding-before-execution pack's hook contribution; receives the
-// Claude Code event JSON on stdin, consults the two approval sources
-// (evidence ledger via grounding-mcp, persisted JSON report under
-// `.understanding-gate/reports/`), emits a `{decision: "block"}` JSON to
-// stdout when neither source has approved.
+// Claude Code event JSON on stdin, consults the signed operator approval
+// marker (the only approval authority; the persisted JSON report and the
+// evidence ledger are audit evidence, task 7402301d), emits a
+// `{decision: "block"}` JSON to stdout when no valid marker approves.
 //
 // Why a new CLI verb (vs reusing `harness policy intercept`): the
 // existing intercept layer evaluates `policies[]` against `requires`,
@@ -534,22 +534,21 @@ export async function runPackHookPreToolUseCli(
     }
   }
 
-  // Source 2: persisted report. Operator-authored (the agent's Stop
-  // hook only writes `pending`; flipping to `approved` requires the
-  // operator-side rewrite path in `harness approve understanding`),
-  // and the agent has no Edit / Write / Bash path to forge it.
+  // Persisted-report EVIDENCE probe (task 7402301d). This used to be
+  // "Source 2", an equal approval authority consulted right after a forged
+  // marker was rejected, and it was unsigned: under the threat model that
+  // motivated marker signing (harness/f9485cc7: a write primitive the
+  // `Edit|Write|Bash` matcher does not cover) one unsigned JSON write
+  // into the reports directory forged an approval, no session id or key
+  // read needed. The report now contributes only to the block diagnostic
+  // (`report.detail`, which carries the distinct `unsigned
+  // persisted-report approval rejected` phrase when the on-disk status
+  // says approved) and to the parse-error lookup gate below
+  // (`report.report === null`). `PersistedReportEvidence` has no
+  // `approved` field on purpose; the signed marker above is the only
+  // allow path.
   const reportsDir = opts.reportsDir ?? defaultReportsDir();
   const report = checkPersistedReport(reportsDir, sessionId);
-  if (report.approved) {
-    const diagnostic = `harness pack hook: ${report.detail}, allowing.`;
-    stderr.write(`${diagnostic}\n`);
-    return {
-      exitCode: 0,
-      blocked: false,
-      approvalCheck: { approved: true, source: "persisted-report", detail: report.detail },
-      diagnostic,
-    };
-  }
 
   // Audit-only ledger probe: the ledger row is still recorded by
   // `harness approve understanding`, and we surface its presence in

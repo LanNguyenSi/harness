@@ -1,8 +1,8 @@
 // Phase 6 #6 — `harness pack hook codex-pre-tool-use` runtime verb.
 //
 // Codex variant of the Claude Code blocker (`hook-pre-tool-use.ts`).
-// Same approval logic (ledger + persisted-report, either approves), but
-// a different I/O contract:
+// Same approval logic (signed marker only; report + ledger are evidence,
+// task 7402301d), but a different I/O contract:
 //
 //   stdin  : JSON envelope shaped as `{ session_id, tool_name,
 //            raw_input, event }` — harness's published wire format that
@@ -292,12 +292,14 @@ export async function runPackHookCodexPreToolUseCli(
     }
   }
 
-  // Source 2: persisted report.
+  // Persisted-report EVIDENCE probe (task 7402301d), mirroring the Claude
+  // hook: no longer an approval source. `report.detail` feeds the block
+  // reason (with the distinct `unsigned persisted-report approval
+  // rejected` phrase when the on-disk status says approved) and
+  // `report.report === null` gates the parse-error lookup below. The
+  // signed marker above is the only allow path in this hook too.
   const reportsDir = opts.reportsDir ?? defaultReportsDir();
   const report = checkPersistedReport(reportsDir, sessionId);
-  if (report.approved) {
-    return allowResult(report.detail, "persisted-report", stderr);
-  }
 
   // Audit-only ledger probe.
   const ledger = await checkLedger(manifest, sessionId, opts);

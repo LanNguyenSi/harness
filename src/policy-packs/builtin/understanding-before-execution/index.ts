@@ -1,39 +1,44 @@
 // Phase 6 #4 — runtime helpers for the understanding-before-execution pack.
 //
-// Two-source approval check that the harness-side PreToolUse blocker
-// consults:
+// Single-authority approval check that the harness-side PreToolUse
+// blockers (Claude and Codex) consult, plus two evidence-only probes:
 //
-//   1. Filesystem marker `<generatedDir>/.approvals/<sessionId>` written
-//      by `harness approve understanding` from the operator's shell.
-//      Canonical for harnessed sessions. Replaces the ledger-substring
-//      check that shipped through v0.13.0 (agent-tasks/88ca4bb3): the
-//      agent has direct MCP access to the same ledger that gate path
-//      consulted, so any agent could write `understanding-approved:<sid>`
-//      itself and self-approve. Edit / Write / Bash are all gated by
-//      this same PreToolUse hook, and the configured MCP servers do not
-//      expose filesystem writes, so the marker file is reachable only
-//      from a process the operator launched (their `!`-shell or any
-//      other un-hooked terminal). Operator-side: writeApprovalMarker
-//      below. Forensics: the ledger row is still written by
-//      `harness approve understanding`, for audit only.
-//   2. Persisted JSON report under `.understanding-gate/reports/`
-//      (canonical for solo `@lannguyensi/understanding-gate` users).
-//      The package writes one file per session; the latest with
-//      `approvalStatus: "approved"` matching the session_id wins. The
-//      report is flipped to "approved" by `harness approve`; the
-//      agent's Stop hook only writes `pending` reports and cannot flip
-//      them (Edit/Write/Bash gated), so this source is also operator-
-//      authored.
+//   AUTHORITY. Filesystem marker `<generatedDir>/.approvals/<sessionId>`
+//      (or `task-<id>`) written by `harness approve understanding` from
+//      the operator's shell and HMAC-signed with the operator-side key
+//      (harness/f9485cc7). Replaces the ledger-substring check that
+//      shipped through v0.13.0 (agent-tasks/88ca4bb3): the agent has
+//      direct MCP access to the same ledger that gate path consulted, so
+//      any agent could write `understanding-approved:<sid>` itself and
+//      self-approve. Edit / Write / Bash are all gated by this same
+//      PreToolUse hook, and the configured MCP servers do not expose
+//      filesystem writes, so the marker file is reachable only from a
+//      process the operator launched; the signature is what keeps that
+//      true even if a future write primitive the blocker matcher does
+//      not cover appears. Operator-side: writeApprovalMarker below.
+//   EVIDENCE. Persisted JSON report under `.understanding-gate/reports/`
+//      (owned by `@lannguyensi/understanding-gate`). Flipped to
+//      `approved` by the same `harness approve understanding` call and to
+//      `expired` by the post-tool-use boundary hook, so the audit record
+//      tracks the marker. Until task 7402301d this was a SECOND, equal
+//      approval source, and it was unsigned: under the very threat model
+//      that motivated marker signing, one unsigned JSON write into the
+//      reports directory forged an approval with less effort than the
+//      old marker forgery (no session id, no key read). Gate-time
+//      approval authority now flows only through the signed marker; the
+//      report is consulted for the block diagnostic only
+//      (`checkPersistedReport` returns evidence, never an approval).
+//   EVIDENCE. The evidence-ledger row `understanding-approved:<sid>`,
+//      still written by `harness approve understanding` for forensics.
 //
-// Either source approves. The persisted-report fallback is what makes a
-// solo user without grounding-mcp wired still able to approve via the
-// package's CLI; the marker path is what makes a harnessed session see
-// the approval immediately on the next tool call.
+// Consequence for solo `@lannguyensi/understanding-gate` users running
+// under harness: the package's own `understanding-gate approve` flips
+// the report but writes no signed marker, so it no longer opens the
+// harness gate; `harness approve understanding` is the approval path.
 
 export type ApprovalSource =
   | "marker"
   | "ledger"
-  | "persisted-report"
   | "none"
   | "recovery-commit";
 
@@ -73,7 +78,7 @@ export {
   type FindReportSelection,
   selectReportForSession,
   findLatestReportForSession,
-  type PersistedReportApprovalCheck,
+  type PersistedReportEvidence,
   expirePersistedReport,
   checkPersistedReport,
 } from "./persisted-reports.js";
