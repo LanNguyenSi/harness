@@ -1,0 +1,17 @@
+{
+  "subtype": "success",
+  "is_error": false,
+  "num_turns": 2,
+  "session_id": "8f48da6a-81b3-4807-bc03-78d14fe334c8",
+  "permission_denials": [
+    {
+      "tool_name": "Bash",
+      "tool_use_id": "toolu_01SrwrEbqmA4rmitFEuQTtZs",
+      "tool_input": {
+        "command": "echo askprobe-executed",
+        "description": "Echo test string"
+      }
+    }
+  ],
+  "result": "The command was blocked \u2014 a hook intercepted it and asked for operator confirmation, so `echo askprobe-executed` did not run. I'm not re-running it without your go-ahead."
+}

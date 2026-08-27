@@ -1,0 +1,17 @@
+{
+  "subtype": "success",
+  "is_error": false,
+  "num_turns": 3,
+  "session_id": "ccadd3de-4a10-4df0-8ef8-84be45c39716",
+  "permission_denials": [
+    {
+      "tool_name": "Bash",
+      "tool_use_id": "toolu_01Rp59dz8tCRRNQjF32a47Gg",
+      "tool_input": {
+        "command": "echo probe",
+        "description": "Echo probe"
+      }
+    }
+  ],
+  "result": "done"
+}

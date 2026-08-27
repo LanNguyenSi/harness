@@ -1,0 +1,22 @@
+--- HOOK ENV ---
+AI_AGENT=claude-code_2-1-247_harness
+CLAUDECODE=1
+CLAUDE_CODE_BRIDGE_SESSION_ID=<redacted>
+CLAUDE_CODE_CHILD_SESSION=1
+CLAUDE_CODE_ENTRYPOINT=sdk-cli
+CLAUDE_CODE_EXECPATH=<home>/.local/share/claude/versions/2.1.247
+CLAUDE_CODE_MESSAGING_SOCKET=/tmp/cc-socks/79730.sock
+CLAUDE_CODE_MESSAGING_TOKEN=<redacted>
+CLAUDE_CODE_SESSION_ID=59989879-6c65-4df2-a7eb-bd17610b1397
+CLAUDE_CONFIG_DIR=<scratch>/cc-config
+CLAUDE_EFFORT=high
+CLAUDE_PID=79730
+CLAUDE_PROJECT_DIR=<scratch>/cc-work
+SHLVL=4
+_=/usr/bin/env
+--- PARENT ---
+79730 79716 claude
+79752 79730 /bin/sh
+--- PAYLOAD ---
+{"session_id":"59989879-6c65-4df2-a7eb-bd17610b1397","transcript_path":"<scratch>/cc-config/projects/<scratch-slug>/59989879-6c65-4df2-a7eb-bd17610b1397.jsonl","cwd":"<scratch>/cc-work","prompt_id":"de48336b-ef86-41be-b334-0118b672f2f4","permission_mode":"bypassPermissions","effort":{"level":"high"},"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo probe","description":"Echo probe"},"tool_use_id":"toolu_01Cn1XeTkN7DnxyFmF5Rgecc"}
+

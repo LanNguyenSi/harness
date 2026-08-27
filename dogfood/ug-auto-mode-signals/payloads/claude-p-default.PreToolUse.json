@@ -1,0 +1,17 @@
+{
+  "session_id": "74b10eba-4c5c-40fa-bf7d-a0fe6e710e0d",
+  "transcript_path": "<scratch>/cc-config/projects/<scratch-slug>/74b10eba-4c5c-40fa-bf7d-a0fe6e710e0d.jsonl",
+  "cwd": "<scratch>/cc-work",
+  "prompt_id": "f53be418-607d-4c53-aab4-efe383a3fe25",
+  "permission_mode": "default",
+  "effort": {
+    "level": "high"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "env | grep -i -E 'claude|permission' | sort",
+    "description": "Show Claude/permission env vars"
+  },
+  "tool_use_id": "toolu_014jCu7mn4YgffVTQvUsTTxG"
+}
