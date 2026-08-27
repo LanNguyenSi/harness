@@ -3,7 +3,7 @@ type: overview
 title: Gate fail-posture matrix
 description: Which harness enforcement gates fail OPEN vs fail CLOSED when their evidence source (grounding-mcp ledger, approval markers, verdict files, probes) is unreachable or errors, with the exact code paths and override knobs.
 tags: [gates, fail-open, fail-closed, enforcement]
-timestamp: 2026-08-27T17:54:07Z
+timestamp: 2026-08-27T18:21:56Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - docs/risk-gate.md
