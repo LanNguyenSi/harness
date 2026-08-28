@@ -67,16 +67,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     expired, <count> unreadable)` line in the understanding-gate
     section, counted from `.delegations/` only (never `.approvals/`),
     informational unless it finds an unreadable file.
-
-### Security
-
-- **The honest trust model in `src/runtime/approval-signing.ts` names the delegation as a third signed artifact kind and `harness delegate` as a second CLI writer**
-  (agent-tasks `37ad0b05`), beside the approval / branch-protection
-  markers and the `harness approve` verbs: same key, same HMAC
-  primitive, its own markerId namespace (`delegation-<child-sid>`), and
-  a different meaning for `reportContentHash` on that artifact kind (the
-  launcher-supplied report file, not a persisted one) that a reader must
-  branch on.
+  - **The `--report` fallback shape is issued and signature-verifiable
+    but not yet consumed by the child hook**: a delegation that binds a
+    launcher-supplied report is refused (`report_path_mismatch`) rather
+    than checked against it, since the hook never passes
+    `launcherReportPath` to the verifier; wiring it in is a named
+    follow-up, and the transcript-scan channel above is what this
+    release actually acts on.
 - **`harness doctor`: warn when `auto_approve` is configured without
   `mode: grill_me`** (agent-tasks `abfad738`, follow-up of the ADR
   `docs/decisions/2026-08-27-ug-auto-mode-approval.md` slice 1). The
@@ -136,6 +133,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `codex`, so a repo that never opted Codex into the auto path sees no
   line. Warning only, never an enforcement; new module
   `src/cli/doctor/codex-config-drift.ts`.
+
+### Security
+
+- **The honest trust model in `src/runtime/approval-signing.ts` names the delegation as a third signed artifact kind and `harness delegate` as a second CLI writer**
+  (agent-tasks `37ad0b05`), beside the approval / branch-protection
+  markers and the `harness approve` verbs: same key, same HMAC
+  primitive, its own markerId namespace (`delegation-<child-sid>`), and
+  a different meaning for `reportContentHash` on that artifact kind (the
+  launcher-supplied report file, not a persisted one) that a reader must
+  branch on.
 
 ## [0.51.0] - 2026-08-27
 

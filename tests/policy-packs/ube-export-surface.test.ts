@@ -39,7 +39,7 @@ import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-ex
 // at transform time and never reach Object.keys(), so listing them here
 // would fail the very assertion below.
 // Widened a fifth time, within the same task (agent-tasks 37ad0b05 review
-// fix, T-003 follow-on A), by the three VALUE exports of the report-scan
+// fix), by the three VALUE exports of the report-scan
 // max-wait parser: parseReportScanMaxWait, DEFAULT_REPORT_SCAN_MAX_WAIT_MS,
 // REPORT_SCAN_MAX_WAIT_CEILING_MS. Previously imported by
 // understanding-before-execution.ts directly from `auto-approve.ts`,

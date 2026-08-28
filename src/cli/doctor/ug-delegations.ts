@@ -1,6 +1,6 @@
 // Doctor visibility for slice 3 delegations (ADR
 // docs/decisions/2026-08-27-ug-auto-mode-approval.md, "Audit and
-// doctor", agent-tasks 37ad0b05 T-004): "delegations on disk: <count>
+// doctor", agent-tasks 37ad0b05): "delegations on disk: <count>
 // (<count> expired)" from `<generatedDir>/.delegations/`, distinct from
 // the `.approvals/` auto-approval listing in `ug-auto-approvals.ts`.
 //
@@ -93,11 +93,13 @@ export function buildUgDelegations(
 
   for (const d of dirents) {
     // Not a session-id-shaped basename: never a delegation file (a
-    // stray dotfile, an extensioned file, ...), skip before even
-    // reading it. The `adopted/` subdirectory's own name IS shaped like
-    // a session id and passes this filter, but its dirent is a
-    // directory, so it falls through to the `not-regular` skip below,
-    // same as any other directory would.
+    // stray dotfile, an extensioned file, a directory, ...), skip
+    // before even reading it. The once-per-session adoption ledger is
+    // never nested under here: `.delegation-adoptions/` is a SIBLING of
+    // `.delegations/` (see delegation-markers.ts's module header), so
+    // this filter has no ledger-shaped entry to reason about; an
+    // ordinary session-id-named directory would still fall through to
+    // the `not-regular` skip below, same as any other directory would.
     if (!SESSION_ID_BASENAME_RE.test(d.name)) continue;
 
     const full = path.join(dir, d.name);

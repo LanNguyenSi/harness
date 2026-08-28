@@ -387,8 +387,8 @@ an isolated manifest/generated dir/`CLAUDE_CONFIG_DIR` (README section
   else persists a report mid-session, the real Stop-capture bin fires
   once, at the very end of the whole invocation).
 - (b) valid delegation, prompt told the child NOT to write a report:
-  3/3 wrote one anyway once blocked, and succeeded the same way as (a)
- , a measured negative-control finding about a cooperative model's own
+  3/3 wrote one anyway once blocked, and succeeded the same way as (a),
+  a measured negative-control finding about a cooperative model's own
   behaviour under this prompt, not evidence the gate opens without a
   report.
 - (c) NO delegation, otherwise identical to (a): 0/1. The child tried
@@ -436,19 +436,18 @@ report far shorter than a real one.
   either data set justifies asking a hook to hold a tool call open
   longer than that, and the interactive finding below argues against
   leaning on the poll at all past a `-p` launch.
-- **Verdict (iv), `-p`: bounded, covers the same-turn case with a real
-  report, and is not felt as a hang.** The retuned 2 s default clears
-  the worst first-poll overrun this round observed on a full-length
-  report (519-524 ms) with headroom, while the retry-and-instruct
-  fallback the ADR designed for exactly this case is still what
-  carries a session past a first attempt that lands inside the
-  remaining gap between a genuinely slow flush and the bound; all 6/6
-  real end-to-end runs succeeded on that later attempt regardless of
-  which bound was in force. This is not a contradiction of the
-  original `-p` verdict's core claim (a bounded poll, not an unbounded
-  one, is the right shape); it is a correction of the SPECIFIC number,
-  now anchored to the real-report data instead of the shorter probe
-  reports.
+- **Verdict (iv), `-p`: bounded, and not felt as a hang.** The retuned
+  2 s default is roughly four times the point at which the old 500 ms
+  bound was already short on a full-length report (519-524 ms
+  overrun), and the retry-and-instruct fallback the ADR designed for
+  exactly this case is what carries the remainder: all 6/6 real
+  end-to-end runs succeeded on the retry attempt regardless of which
+  bound was in force. This is not a contradiction of the original `-p`
+  verdict's core claim (a bounded poll, not an unbounded one, is the
+  right shape); it is a correction of the SPECIFIC number, now
+  anchored to the real-report data instead of the shorter probe
+  reports. The real-report lag distribution at n >= 10 is not measured
+  here; see the follow-up bullet below.
 - **Verdict (iv), interactive: does NOT hold, unchanged.** Section (q)
   found the report unreachable within 5 s in 3/3 interactive runs, and
   the transcript-shape fixture shows why a longer bound would not
@@ -457,11 +456,13 @@ report far shorter than a real one.
   confirms the turn had already completed content-wise. No bound
   measured in this round covers the interactive case. Per the ADR's
   own fallback clause ("If no bound satisfies both, this slice
-  switches to the launcher-supplied report file"): the interactive
-  case should use the launcher-supplied report file bound by hash in
-  the delegation's `reportContentHash`, not the transcript scan; the
-  `-p` case keeps the bounded poll (2 s default, 5 s ceiling) as
-  retuned above.
+  switches to the launcher-supplied report file"): the
+  launcher-supplied report file, bound by hash in the delegation's
+  `reportContentHash`, is the intended channel for the interactive
+  case rather than the transcript scan; wiring it into the child's
+  PreToolUse hook is a named follow-up (the hook does not yet read
+  `--report` back, see the pack doc). The `-p` case keeps the bounded
+  poll (2 s default, 5 s ceiling) as retuned above.
 - **Not measured here: the real-report lag distribution at n >= 10.**
   The real end-to-end runs above are n=6 (a)/(b) first attempts, all
   against the same fixture report; a larger sample of real-report

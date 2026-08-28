@@ -1115,7 +1115,7 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // ugAutoApprovals is informational only (ℹ), never contributes here.
   // ugDelegations is informational (ℹ) UNLESS it found an unreadable
   // file, in which case it rolls exactly one warning (ug-delegations.ts,
-  // agent-tasks 37ad0b05 T-004), not one per unreadable file.
+  // agent-tasks 37ad0b05), not one per unreadable file.
   if (report.ugDelegations && report.ugDelegations.unreadable > 0) warningCount++;
   // auto_approve configured outside grill_me (agent-tasks abfad738):
   // always advisory, never an error, see auto-approve-mode.ts.
@@ -1288,7 +1288,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const ugAutoApprovals = understandingPackEnabled
     ? buildUgAutoApprovals(generatedDir, { recentSessions: recentSessionsWindow })
     : undefined;
-  // Slice 3 (agent-tasks 37ad0b05 T-004), same "Audit and doctor"
+  // Slice 3 (agent-tasks 37ad0b05), same "Audit and doctor"
   // section: delegations-on-disk metric from `.delegations/`, gated on
   // the same pack-enabled check, computed even when the directory is
   // absent (`delegationsDirPresent: false`, `total: 0`), the render

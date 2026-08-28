@@ -114,7 +114,7 @@ EOF
 # harness CLI under test (`harness pack hook pre-tool-use`); UserPromptSubmit
 # and Stop are the real @lannguyensi/understanding-gate npm package bins
 # `harness apply` itself wires for the Claude Code branch (docs/policy-packs/
-# understanding-before-execution.md, "What the pack ships at apply time") , 
+# understanding-before-execution.md, "What the pack ships at apply time");
 # there is no `harness pack hook user-prompt-submit` / `... stop` CLI verb
 # to substitute here; those two roles are the npm package's, not the
 # harness binary's, in production too. PreToolUse stderr is appended to

@@ -43,6 +43,7 @@ import {
 } from "../../src/policy-packs/builtin/understanding-before-execution/delegation-markers.js";
 import {
   getOrCreateSigningKey,
+  sha256Hex,
   signingKeyPathFor,
 } from "../../src/runtime/approval-signing.js";
 import type { LedgerWriteArgs } from "../../src/runtime/ledger-writer.js";
@@ -621,9 +622,10 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       // is scanned, on the fail-closed principle: without it the hook
       // cannot tell a fresh report from one this session already spent.
       // A directory sitting at the ledger's own file path makes the read
-      // itself fail (EISDIR, not ENOENT), which is a distinct condition
-      // from "no ledger yet" and must decline rather than treat the
-      // transcript as unspent.
+      // itself fail (the shared `readRegularFileRejectingSymlink` reads
+      // it as `not-regular`, not `missing`), which is a distinct
+      // condition from "no ledger yet" and must decline rather than
+      // treat the transcript as unspent.
       fs.mkdirSync(path.join(generatedDir, ".delegation-adoptions", CHILD), {
         recursive: true,
       });
@@ -634,7 +636,7 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       expect(result.blocked).toBe(true);
       expect(result.stderr).toMatch(
         new RegExp(
-          `the adopted-entry ledger at .* could not be read \\(EISDIR.*\\); refusing to capture a transcript entry that may already have been adopted for session ${CHILD}`,
+          `the adopted-entry ledger at .* could not be read \\(.*is not a regular file.*\\); refusing to capture a transcript entry that may already have been adopted for session ${CHILD}`,
         ),
       );
       expect(markerExists()).toBe(false);
@@ -674,6 +676,75 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
         // ancestor) is removed in `afterEach`, or the cleanup itself fails.
         fs.chmodSync(ledgerDir, 0o700);
       }
+    });
+
+    it("(v) the adoption ledger's own path is a symlink: fails closed on the READ, refusing for safety, nothing persisted", async () => {
+      // Defense-in-depth against a symlink at the ledger path pointing
+      // at a target the agent controls, the same class of attack
+      // `readRegularFileRejectingSymlink` closes for every other gate
+      // marker read (delegation, approval). An attacker-controlled
+      // EMPTY target at the symlink's destination would otherwise read
+      // as "nothing adopted yet" and let an already-spent transcript
+      // entry re-mint through a swapped-in ledger. The lstat-based
+      // rejection is what closes this: the read declines before ever
+      // opening the symlink's target, empty or not.
+      const ledgerDir = path.join(generatedDir, ".delegation-adoptions");
+      fs.mkdirSync(ledgerDir, { recursive: true });
+      const decoyTarget = path.join(tmp, "decoy-empty-ledger");
+      fs.writeFileSync(decoyTarget, "");
+      fs.symlinkSync(decoyTarget, path.join(ledgerDir, CHILD));
+      writeTranscript([userTurn(), transcriptEntry()]);
+
+      const result = await call();
+
+      expect(result.blocked).toBe(true);
+      expect(result.stderr).toMatch(
+        new RegExp(
+          `the adopted-entry ledger at .* could not be read \\(.*is a symlink, refusing for safety.*\\); refusing to capture a transcript entry that may already have been adopted for session ${CHILD}`,
+        ),
+      );
+      expect(markerExists()).toBe(false);
+      expect(ledgerCalls).toEqual([]);
+      expect(listPersistedReports(reportsDir)).toEqual([]);
+    });
+
+    it("(w) a delegation that binds a launcher-supplied report file (the --report fallback shape): block, no marker, and the stderr names the unconsumed fallback shape", async () => {
+      // H1 (integrated review, ADR slice 3 follow-up): this hook never
+      // passes `launcherReportPath` to `verifyDelegation`, so a
+      // report-bound delegation is refused here EVERY time
+      // (`report_path_mismatch`), never actually checked against the
+      // file. This pins that the refusal names the real limitation
+      // (the fallback shape is issued and signature-verifiable by
+      // `harness delegate`, just not yet consumed by this hook, a named
+      // follow-up) rather than the generic "no report path was
+      // offered" wording `verifyDelegation`'s own detail string carries,
+      // which would misleadingly read as a caller bug.
+      const reportPath = path.join(tmp, "launcher-report.md");
+      fs.writeFileSync(reportPath, CHILD_REPORT_MARKDOWN);
+      const written = writeDelegationMarker({
+        generatedDir,
+        childSessionId: CHILD,
+        parentSessionId: PARENT,
+        cwdHash: hashDelegationCwd(childCwd),
+        taskId: null,
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        reportPathHash: hashDelegationCwd(reportPath),
+        reportContentHash: sha256Hex(CHILD_REPORT_MARKDOWN),
+      });
+      expect(written.ok).toBe(true);
+      writeTranscript([userTurn(), transcriptEntry()]);
+
+      const result = await call();
+
+      expect(result.blocked).toBe(true);
+      expect(markerExists()).toBe(false);
+      expect(result.stderr).toMatch(
+        new RegExp(
+          `delegation for ${CHILD} refused: it binds a launcher-supplied report file \\(the --report fallback shape\\), which is issued and verifiable but not yet consumed by the child hook`,
+        ),
+      );
+      expect(ledgerCalls).toEqual([]);
+      expect(listPersistedReports(reportsDir)).toEqual([]);
     });
 
     it("(p) a read-only Bash call is allowed by the step-6 exemption and never reaches the delegation branch", async () => {
@@ -725,6 +796,16 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       expect(listPersistedReports(reportsDir)).toEqual([]);
       expect(markerExists()).toBe(false);
       expect(ledgerCalls).toEqual([]);
+      // L2 (integrated review): the entry stays adopted, so re-scanning
+      // the SAME transcript would fail identically forever; the child
+      // needs a NEW report, which is exactly what the retry sentence
+      // asks for. `reportScanTimedOut` must be set on this branch too,
+      // not only on the bound-elapsed timeout, or this block's retry
+      // instruction would be silently absent for the one case it reads
+      // correctly for.
+      expect(JSON.parse(result.stdout) as { reason: string }).toMatchObject({
+        reason: expect.stringContaining(DELEGATION_REPORT_RETRY_INSTRUCTION),
+      });
     });
   });
 

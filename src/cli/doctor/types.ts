@@ -425,7 +425,7 @@ export interface DoctorReport {
   ugAutoApprovals?: UgAutoApprovalsSection;
   /**
    * Delegations-on-disk metric (same ADR, slice 3, "Audit and doctor",
-   * agent-tasks 37ad0b05 T-004): `total`/`expired`/`unreadable` counts
+   * agent-tasks 37ad0b05): `total`/`expired`/`unreadable` counts
    * from `harness.generated/.delegations/`, distinct from
    * `ugAutoApprovals` (which reads `.approvals/` only). Present only
    * when the `understanding-before-execution` pack is declared and

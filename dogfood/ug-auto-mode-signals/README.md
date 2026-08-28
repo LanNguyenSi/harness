@@ -980,7 +980,7 @@ generated dir only); each child then gets its own delegation
 <parent>`, none at all for shape (c), or one bound to a DIFFERENT cwd for
 shape (d)) before being launched as `claude -p ... --session-id <uuid>
 --permission-mode bypassPermissions --output-format json --max-turns 6`.
-The gated command is `touch delegate-e2e-ok-<child-sid>.txt` , 
+The gated command is `touch delegate-e2e-ok-<child-sid>.txt`,
 deliberately NOT `echo ...`: `echo` is in `SIMPLE_READ_ONLY_BINS`
 (`src/runtime/read-only-bash.ts`) and is exempted from the gate entirely
 at an earlier decision step, before the delegation/auto-approval logic
@@ -1016,7 +1016,7 @@ Results:
   `auto_approve.when`, so the real hook payload's own `permission_mode`
   is ALSO `bypassPermissions` in every run: slice 1's ordinary
   mode-allowlist check passes independent of the delegation.
-  `attemptAutoApproval` logs a DIFFERENT stderr phrasing in that case , 
+  `attemptAutoApproval` logs a DIFFERENT stderr phrasing in that case:
   `auto-approval key one: permission_mode "bypassPermissions" in
   auto_approve.when (a valid delegation from parent session <sid> is
   also present)`, rather than the delegation-ALONE phrasing
@@ -1038,7 +1038,7 @@ Results:
   (`selectNewestStrictSessionReport` over `listPersistedReports`); it
   never reads the transcript itself. Nothing else in this wiring
   persists a report mid-session: the real `understanding-gate-claude-stop`
-  bin fires once, at the very end of the WHOLE `claude -p` invocation , 
+  bin fires once, at the very end of the WHOLE `claude -p` invocation,
   too late to help a same-invocation retry (confirmed by shape (c)
   below). Every one of the 6 shape (a)/(b) successes carries a
   `"harness pack hook: captured the Understanding Report ... from its

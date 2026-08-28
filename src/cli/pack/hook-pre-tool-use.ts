@@ -37,8 +37,9 @@
 //     path uses. That log is what the block envelope's malformed-sections
 //     notice is rendered from, so the per-capture write is deliberate.
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync } from "node:fs";
 import * as path from "node:path";
+import { readRegularFileRejectingSymlink } from "../../io/read-regular-file.js";
 import {
   queryLedgerByTag,
   type LedgerEntry,
@@ -242,18 +243,27 @@ type AdoptedEntriesRead = { ok: true; ids: Set<string> } | { ok: false; detail: 
  * ordinary first-call case and reads as the empty set; every OTHER read
  * failure fails closed with a result the caller declines on, because a
  * ledger we cannot read cannot prove that the next transcript hit has not
- * already been adopted.
+ * already been adopted. Goes through the same symlink-rejecting reader
+ * every other gate marker uses (`readRegularFileRejectingSymlink`):
+ * without it a symlink planted at this path would have the ledger read
+ * follow it to an arbitrary target the agent controls, and an empty or
+ * missing target there would read as "nothing adopted yet", the same
+ * open the delegation and approval marker reads already close.
  */
 function readAdoptedEntries(filePath: string): AdoptedEntriesRead {
-  let raw: string;
-  try {
-    raw = readFileSync(filePath, "utf8");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { ok: true, ids: new Set() };
-    return { ok: false, detail: (err as Error).message };
+  const read = readRegularFileRejectingSymlink(filePath);
+  if (read.kind === "missing") return { ok: true, ids: new Set() };
+  if (read.kind === "symlink") {
+    return { ok: false, detail: `${filePath} is a symlink, refusing for safety` };
+  }
+  if (read.kind === "not-regular") {
+    return { ok: false, detail: `${filePath} is not a regular file` };
+  }
+  if (read.kind !== "ok") {
+    return { ok: false, detail: `${filePath} exists but could not be read (I/O error)` };
   }
   const ids = new Set<string>();
-  for (const line of raw.split("\n")) {
+  for (const line of read.content.split("\n")) {
     const id = line.trim();
     if (id.length > 0) ids.add(id);
   }
@@ -266,13 +276,29 @@ function readAdoptedEntries(filePath: string): AdoptedEntriesRead {
  * `.delegations/` itself (the ledger FILE is 0600, like every marker).
  * `appendFileSync` opens with `O_APPEND`, so a single short write lands
  * whole even if two hooks race on the same session; no read-modify-write,
- * therefore nothing to lose.
+ * therefore nothing to lose. `lstatSync` (NOT `existsSync`/`statSync`)
+ * gates the append the same way `readRegularFileRejectingSymlink` gates
+ * the read: a symlink planted at this path would otherwise have
+ * `appendFileSync` follow it and write the adoption record through to an
+ * arbitrary target, same class of defense as the read side above.
  */
 function recordAdoptedEntry(
   filePath: string,
   entryId: string,
 ): { ok: true } | { ok: false; detail: string } {
   try {
+    let priorStat: ReturnType<typeof lstatSync> | undefined;
+    try {
+      priorStat = lstatSync(filePath);
+    } catch {
+      priorStat = undefined;
+    }
+    if (priorStat !== undefined && !priorStat.isFile()) {
+      return {
+        ok: false,
+        detail: `${filePath} exists and is not a regular file, refusing to append through it`,
+      };
+    }
     mkdirSync(path.dirname(filePath), { recursive: true });
     appendFileSync(filePath, `${entryId}\n`, { mode: 0o600 });
     return { ok: true };
@@ -921,9 +947,25 @@ export async function runPackHookPreToolUseCli(
           taskId: readActiveClaim(generatedDir),
         });
         if (!verified.ok) {
-          stderr.write(
-            `harness pack hook: delegation for ${childSessionId} refused: ${verified.reason}: ${verified.detail}\n`,
-          );
+          if (verified.reason === "report_path_mismatch") {
+            // This hook never passes `launcherReportPath` to
+            // `verifyDelegation`, so a delegation that binds one (the
+            // `--report` fallback shape) is refused here every time,
+            // not merely on a path/content mismatch. Name the actual
+            // limitation instead of the generic `report_path_mismatch`
+            // wording `verified.detail` carries: the fallback shape is
+            // issued and signature-verifiable by `harness delegate`, it
+            // is just not yet consumed by THIS hook (a named
+            // follow-up); the transcript scan below is the only report
+            // channel this hook acts on today.
+            stderr.write(
+              `harness pack hook: delegation for ${childSessionId} refused: it binds a launcher-supplied report file (the --report fallback shape), which is issued and verifiable but not yet consumed by the child hook (a named follow-up); the transcript scan is the only report channel this hook acts on\n`,
+            );
+          } else {
+            stderr.write(
+              `harness pack hook: delegation for ${childSessionId} refused: ${verified.reason}: ${verified.detail}\n`,
+            );
+          }
         } else {
           delegation = { parentSessionId: verified.parentSessionId };
           // Key two: the child's own report. Already on disk and pending
@@ -1013,7 +1055,12 @@ export async function runPackHookPreToolUseCli(
                     // The entry stays adopted: re-reading a report that
                     // does not parse would fail identically forever, so
                     // the child needs a NEW one, which is what the block's
-                    // retry instruction asks for.
+                    // retry instruction asks for. Set the same flag the
+                    // timeout branch sets, for that reason: the retry
+                    // sentence reads correctly for this case too, and
+                    // without it the block below would ask for a retry
+                    // implicitly while never saying so.
+                    reportScanTimedOut = true;
                     stderr.write(
                       `harness pack hook: the transcript report for session ${childSessionId} did not parse (${persisted.reason}); nothing was persisted\n`,
                     );

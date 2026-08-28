@@ -2050,7 +2050,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     )
     .option(
       "--report <path>",
-      "fallback shape: bind the child's Understanding Report by content + path hash at spawn time",
+      "fallback shape: bind the child's Understanding Report by content + path hash at spawn time; not yet consumed by the child hook, see the pack doc",
     )
     .option(
       "--session-id <id>",

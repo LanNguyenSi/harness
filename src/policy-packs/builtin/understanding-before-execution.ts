@@ -32,7 +32,7 @@ import {
 } from "./understanding-before-execution-runtime.js";
 // Through the `understanding-before-execution/index.ts` aggregator, not
 // through the concern-scoped `auto-approve.ts` sibling directly (review
-// fix, T-003 follow-on A): the prior direct import contradicted the
+// fix): the prior direct import contradicted the
 // precedent every other symbol at this call site already follows (the
 // `AUTO_APPROVE_HARNESS_VALUES` / `REPORTS_DIR_ENV` import just above).
 // `parseReportScanMaxWait` is now part of the shim's pinned public surface
