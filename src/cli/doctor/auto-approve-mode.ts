@@ -6,8 +6,8 @@
 //
 // Why this matters: the auto-approval path's report precondition reuses
 // `validatePersistedReport` (`src/cli/approve/understanding.ts`), which
-// only enforces the report's `mode` field when it is `grill_me` , 
-// outside that mode, report validation is structural only (the report
+// only enforces the report's `mode` field when it is `grill_me`.
+// Outside that mode, report validation is structural only (the report
 // exists and belongs to the session, not that its contents reflect any
 // real understanding exchange). Both the ADR (recommendation 4) and the
 // pack doc recommend pairing `auto_approve` with `grill_me` for exactly
@@ -25,7 +25,7 @@
 // A missing `config.mode` resolves to `DEFAULT_MODE` (`grill_me`), and
 // that resolved value is what the generated Stop-hook command actually
 // passes as `UNDERSTANDING_GATE_MODE`, so a report written under an
-// unset `mode` genuinely carries `grill_me` and IS the strict check , 
+// unset `mode` genuinely carries `grill_me` and IS the strict check;
 // there is no gap to warn about. An unrecognised `config.mode` literal
 // also resolves to `grill_me` this same way, with its own warning
 // already surfaced elsewhere (`resolveModeFromConfig`'s `warning`
@@ -38,16 +38,14 @@
 // own advisory line, this check only ever reads the manifest, never
 // `process.env`.
 
-import {
-  PACK_NAME as UNDERSTANDING_PACK_NAME,
-  resolveModeFromConfig,
-} from "../../policy-packs/builtin/understanding-before-execution.js";
+import { resolveModeFromConfig } from "../../policy-packs/builtin/understanding-before-execution.js";
 import { parseAutoApprove } from "../../policy-packs/builtin/understanding-before-execution/index.js";
 import type { Manifest } from "../../schema/index.js";
+import { findEnabledUnderstandingPack } from "./understanding-mode-env.js";
 
 export interface AutoApproveModeWarning {
   /**
-   * The RESOLVED effective mode (`resolveModeFromConfig(pack).mode`) , 
+   * The RESOLVED effective mode (`resolveModeFromConfig(pack).mode`);
    * never the literal `pack.config.mode` value. Always a recognised
    * Mode literal (the resolver always returns one, defaulting to
    * `grill_me` when `config.mode` is absent or unrecognised).
@@ -55,6 +53,11 @@ export interface AutoApproveModeWarning {
   mode: string;
   /** Rendered as the `⚠` line itself. */
   message: string;
+  /**
+   * Indented detail lines rendered directly under {@link message} by
+   * `format.ts`, mirroring `understandingModeEnv`'s detail-line idiom.
+   */
+  detail: string[];
 }
 
 /**
@@ -77,9 +80,7 @@ export interface AutoApproveModeWarning {
  *     actually carries.
  */
 export function checkAutoApproveMode(manifest: Manifest): AutoApproveModeWarning | undefined {
-  const pack = manifest.policy_packs.find(
-    (p) => p.name === UNDERSTANDING_PACK_NAME && p.enabled !== false,
-  );
+  const pack = findEnabledUnderstandingPack(manifest);
   if (!pack) return undefined;
 
   const autoApprove = parseAutoApprove(pack.config["auto_approve"]);
@@ -90,6 +91,9 @@ export function checkAutoApproveMode(manifest: Manifest): AutoApproveModeWarning
 
   return {
     mode,
-    message: `auto_approve is configured with mode ${mode}; report validation is structural only outside grill_me (see the pack doc)`,
+    message: `auto_approve is configured with mode ${mode} (policy_packs[understanding-before-execution].config.mode); report validation is structural only outside grill_me`,
+    detail: [
+      "set config.mode: grill_me, or accept the weaker report gate; see docs/policy-packs/understanding-before-execution.md",
+    ],
   };
 }

@@ -40,6 +40,7 @@ import {
   type Mode,
 } from "../../policy-packs/builtin/understanding-before-execution.js";
 import type { Manifest } from "../../schema/index.js";
+import type { PolicyPack } from "../../schema/policy-packs.js";
 
 export interface UnderstandingModeEnvDivergence {
   /** `UNDERSTANDING_GATE_MODE`, normalised (trim + lowercase, mirrors `resolveMode`'s own normalisation). */
@@ -87,19 +88,21 @@ export interface UnderstandingModeEnvDivergence {
  * `p.enabled !== false` gate `checkUnderstandingModeEnvDivergence` uses
  * inline below.
  */
-export function isUnderstandingPackEnabled(manifest: Manifest): boolean {
-  return manifest.policy_packs.some(
+export function findEnabledUnderstandingPack(manifest: Manifest): PolicyPack | undefined {
+  return manifest.policy_packs.find(
     (p) => p.name === UNDERSTANDING_PACK_NAME && p.enabled !== false,
   );
+}
+
+export function isUnderstandingPackEnabled(manifest: Manifest): boolean {
+  return findEnabledUnderstandingPack(manifest) !== undefined;
 }
 
 export function checkUnderstandingModeEnvDivergence(
   manifest: Manifest,
   env: NodeJS.ProcessEnv,
 ): UnderstandingModeEnvDivergence | undefined {
-  const pack = manifest.policy_packs.find(
-    (p) => p.name === UNDERSTANDING_PACK_NAME && p.enabled !== false,
-  );
+  const pack = findEnabledUnderstandingPack(manifest);
   if (!pack) return undefined;
 
   const envRaw = env[MODE_ENV];

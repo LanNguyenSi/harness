@@ -428,7 +428,7 @@ export interface DoctorReport {
    * docs/decisions/2026-08-27-ug-auto-mode-approval.md slice 1).
    * Present only when the pack is declared and enabled AND
    * `config.auto_approve` parses as a valid opt-in block. Always
-   * advisory (rolls into `warningCount`, never `errorCount`) — see
+   * advisory (rolls into `warningCount`, never `errorCount`). See
    * `auto-approve-mode.ts` for the full rationale.
    */
   ugAutoApproveMode?: AutoApproveModeWarning;

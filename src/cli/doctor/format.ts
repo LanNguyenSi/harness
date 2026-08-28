@@ -100,6 +100,7 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
   }
   if (autoApproveMode) {
     out.push(`  ⚠ ${autoApproveMode.message}`);
+    for (const line of autoApproveMode.detail) out.push(`      ${line}`);
   }
   if (showUgAuto && ugAuto) {
     const modeParts = Object.keys(ugAuto.byMode)

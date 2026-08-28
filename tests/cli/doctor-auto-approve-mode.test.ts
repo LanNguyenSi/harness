@@ -57,8 +57,11 @@ describe("checkAutoApproveMode: pure function", () => {
     expect(result).toBeDefined();
     expect(result?.mode).toBe("fast_confirm");
     expect(result?.message).toBe(
-      "auto_approve is configured with mode fast_confirm; report validation is structural only outside grill_me (see the pack doc)",
+      "auto_approve is configured with mode fast_confirm (policy_packs[understanding-before-execution].config.mode); report validation is structural only outside grill_me",
     );
+    expect(result?.detail).toEqual([
+      "set config.mode: grill_me, or accept the weaker report gate; see docs/policy-packs/understanding-before-execution.md",
+    ]);
   });
 
   it("no warning when mode is absent (resolves to the grill_me default)", () => {
@@ -69,6 +72,45 @@ describe("checkAutoApproveMode: pure function", () => {
     // `mode` genuinely carries `grill_me`, so there is nothing to warn
     // about here.
     const manifest = packWith({ auto_approve: AUTO_APPROVE });
+    expect(checkAutoApproveMode(manifest)).toBeUndefined();
+  });
+
+  it("no warning for a malformed config.auto_approve (require_report: false)", () => {
+    // Pins parseAutoApprove's fail-closed reading (auto-approve.ts):
+    // `require_report: false` makes the whole block "not opted in"
+    // (null), never a partial default, so checkAutoApproveMode has
+    // nothing to flag even though `mode` is not grill_me.
+    const manifest = packWith({
+      mode: "fast_confirm",
+      auto_approve: { ...AUTO_APPROVE, require_report: false },
+    });
+    expect(checkAutoApproveMode(manifest)).toBeUndefined();
+  });
+
+  it("no warning for a malformed config.auto_approve (unknown key)", () => {
+    const manifest = packWith({
+      mode: "fast_confirm",
+      auto_approve: { ...AUTO_APPROVE, unknown_key: "x" },
+    });
+    expect(checkAutoApproveMode(manifest)).toBeUndefined();
+  });
+
+  it("warns with mode strict when auto_approve is set and mode is strict", () => {
+    const manifest = packWith({ mode: "strict", auto_approve: AUTO_APPROVE });
+    const result = checkAutoApproveMode(manifest);
+    expect(result).toBeDefined();
+    expect(result?.mode).toBe("strict");
+    expect(result?.message).toBe(
+      "auto_approve is configured with mode strict (policy_packs[understanding-before-execution].config.mode); report validation is structural only outside grill_me",
+    );
+  });
+
+  it("no warning for an enum-invalid config.mode literal (resolves to grill_me)", () => {
+    // An unrecognised `config.mode` literal resolves to the `grill_me`
+    // default the same way an absent one does (`resolveModeFromConfig`'s
+    // own fallback), with its own warning already surfaced elsewhere;
+    // this check must not duplicate that.
+    const manifest = packWith({ mode: "fastConfirm", auto_approve: AUTO_APPROVE });
     expect(checkAutoApproveMode(manifest)).toBeUndefined();
   });
 });
@@ -155,8 +197,14 @@ describe("doctor: auto_approve outside grill_me (Environment section)", () => {
     const text = format(withAuto);
     expect(text).toMatch(/\nEnvironment\n/);
     expect(text).toContain(
-      "auto_approve is configured with mode fast_confirm; report validation is structural only outside grill_me (see the pack doc)",
+      "auto_approve is configured with mode fast_confirm (policy_packs[understanding-before-execution].config.mode); report validation is structural only outside grill_me",
     );
+    expect(text).toContain(
+      "set config.mode: grill_me, or accept the weaker report gate; see docs/policy-packs/understanding-before-execution.md",
+    );
+
+    const textWithout = format(withoutAuto);
+    expect(textWithout).not.toMatch(/\nEnvironment\n/);
   });
 
   it("adds no warning when mode is grill_me", async () => {
@@ -190,7 +238,51 @@ describe("doctor: auto_approve outside grill_me (Environment section)", () => {
     expect(json.ugAutoApproveMode).toEqual({
       mode: "fast_confirm",
       message:
-        "auto_approve is configured with mode fast_confirm; report validation is structural only outside grill_me (see the pack doc)",
+        "auto_approve is configured with mode fast_confirm (policy_packs[understanding-before-execution].config.mode); report validation is structural only outside grill_me",
+      detail: [
+        "set config.mode: grill_me, or accept the weaker report gate; see docs/policy-packs/understanding-before-execution.md",
+      ],
     });
+  });
+
+  it("renders the Environment section when the auto_approve-mode warning is the ONLY reason to render it", async () => {
+    // Fixture deliberately silences every other Environment-section
+    // contributor (no npm-bin warning via STUB_NPM_BIN_EXEC_UNKNOWN, no
+    // UNDERSTANDING_GATE_MODE env override, no `.approvals/` dir, no
+    // settings drift via SILENCE_DRIFT, no codex config drift since
+    // `auto_approve.harnesses` never lists `codex`), so this pins that
+    // `formatEnvironmentSection` treats `autoApproveMode` as sufficient
+    // on its own, both to show the section and to hide it.
+    const home = makeFixture({
+      "harness.yaml": manifestWith(`      mode: fast_confirm\n${AUTO_APPROVE_YAML}`),
+    });
+    const withOnlyAutoApproveMode = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      versionProbe: () => null,
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+      envOverride: {},
+    });
+    expect(withOnlyAutoApproveMode.ugAutoApproveMode).toBeDefined();
+    expect(withOnlyAutoApproveMode.npmGlobalBin?.status).not.toBe("warn");
+    expect(withOnlyAutoApproveMode.understandingModeEnv).toBeUndefined();
+    expect(withOnlyAutoApproveMode.ugAutoApprovals?.approvalsDirPresent).not.toBe(true);
+    expect(withOnlyAutoApproveMode.codexConfigDrift).toBeUndefined();
+    expect(format(withOnlyAutoApproveMode)).toMatch(/\nEnvironment\n/);
+
+    const homeNone = makeFixture({
+      "harness.yaml": manifestWith(`      mode: grill_me\n`),
+    });
+    const withNone = await doctor({
+      configPath: path.join(homeNone, "harness.yaml"),
+      homeOverride: homeNone,
+      versionProbe: () => null,
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+      envOverride: {},
+    });
+    expect(withNone.ugAutoApproveMode).toBeUndefined();
+    expect(format(withNone)).not.toMatch(/\nEnvironment\n/);
   });
 });

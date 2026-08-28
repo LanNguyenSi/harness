@@ -14,14 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `docs/decisions/2026-08-27-ug-auto-mode-approval.md` slice 1). The
   auto-approval path's report precondition reuses
   `validatePersistedReport`, which only enforces the report's `mode`
-  field when it is `grill_me`, outside that mode, report validation is
-  structural only. `harness doctor` now prints, in the understanding-gate
-  Environment section, one advisory `⚠` line when the
+  field when it is `grill_me`. Outside that mode, report validation is
+  structural only. `harness doctor` now prints one advisory `⚠` line,
+  in `harness doctor`'s `Environment` section, when the
   `understanding-before-execution` pack is declared and enabled, its
   `config.auto_approve` parses as a valid opt-in block, and the
   RESOLVED effective mode (`resolveModeFromConfig`, same GENERATION-path
   resolver `checkUnderstandingModeEnvDivergence` uses) is not
-  `grill_me`, a missing or unrecognised `config.mode` resolves to the
+  `grill_me`. A missing or unrecognised `config.mode` resolves to the
   `grill_me` default and never fires this warning, since that is the
   mode the generated Stop-hook command actually passes at runtime. A
   session-level `UNDERSTANDING_GATE_MODE` env override is a separate gap
