@@ -68,6 +68,7 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
   const bin = report.npmGlobalBin;
   const modeEnv = report.understandingModeEnv;
   const ugAuto = report.ugAutoApprovals;
+  const autoApproveMode = report.ugAutoApproveMode;
   // "nothing when `.approvals/` is absent" (ug-auto-approvals.ts's AC 1):
   // stay silent unless the directory actually exists, mirroring the rest
   // of this section's "no line for a check that found nothing" style.
@@ -79,6 +80,7 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
   if (
     (!bin || bin.status !== "warn") &&
     !modeEnv &&
+    !autoApproveMode &&
     !showUgAuto &&
     !hasDriftContent &&
     !hasCodexDriftContent
@@ -95,6 +97,10 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
   if (modeEnv) {
     out.push(`  ⚠ ${modeEnv.message}`);
     for (const line of modeEnv.detail) out.push(`      ${line}`);
+  }
+  if (autoApproveMode) {
+    out.push(`  ⚠ ${autoApproveMode.message}`);
+    for (const line of autoApproveMode.detail) out.push(`      ${line}`);
   }
   if (showUgAuto && ugAuto) {
     const modeParts = Object.keys(ugAuto.byMode)
