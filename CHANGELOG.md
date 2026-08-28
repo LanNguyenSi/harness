@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`harness audit` now shows understanding-gate approval facts** (agent-tasks
+  `5ad63b01`, follow-up of slice 1 of the ADR
+  `docs/decisions/2026-08-27-ug-auto-mode-approval.md`, "Audit and doctor").
+  A new `approvals` section, alongside the unchanged `policy_decision` table,
+  lists the raw ledger facts `understanding-approved:<sid>` (plain or
+  `:forced:<field>`-suffixed) and `understanding-auto-approved:<sid>` within
+  the audited `--since` window, each with timestamp, tag and source (tag
+  and source are flattened and length-capped before rendering, so an
+  embedded newline in untrusted ledger content can't split one row into
+  two). A second server-side ledger fetch narrows by `contentPrefix:
+  "understanding-"` when the connected grounding-mcp supports it; matching
+  is by exact tag (built from the same `approvedLedgerTagFor` /
+  `autoApprovedLedgerTagFor` helpers the two writers use), so an unrelated
+  ledger row that merely contains one of these strings (for example a
+  `review:<n>:approved` fact) cannot slip in. Filtered by `--since` and
+  `--session` only; `--policy` / `--outcome` stay policy-decision-only.
+  Empty section is omitted in text output; `--json` always carries an
+  `approvals` array plus the resolved `sessionId`. A degraded approvals-only
+  fetch degrades softly rather than discarding the already-fetched decisions
+  table: text gets one `approvals unavailable: <reason>` line, `--json` gets
+  `approvalsUnavailable` (with `approvals: []`), and the audit-only posture
+  gets one stderr line; exit code stays tied to the policy-decision fetch.
+  `src/cli/audit.ts`, `src/cli/index.ts`, `tests/cli/audit.test.ts`.
 - **`harness doctor` warns on a live Codex `approval_policy = "never"` or
   full-access `default_permissions` selection** (agent-tasks `f59ea0eb`,
   follow-up of slice 2 of the ADR
