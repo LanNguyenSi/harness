@@ -49,8 +49,14 @@
 // HOW IT READS. The first poll reads the whole file; every later poll
 // reads only the bytes appended since the previous one, carrying a
 // partial trailing line over, and keeps the best hit found so far. A
-// transcript that SHRANK between polls (truncated or replaced) resets the
-// reader and is re-read from the top.
+// transcript that SHRANK between polls (truncated or replaced by a
+// shorter file), or whose underlying file identity changed (inode/device,
+// from `fs.fstatSync`, even when the new file is the same size or LARGER,
+// as in a rename swapping in a different file in place), resets the
+// reader and it is re-read from the top. Size alone cannot catch the
+// second case: a same-size-or-larger replacement passes the size check
+// but its bytes at the old offset are not a continuation of anything
+// this reader has seen.
 //
 // The clock and the sleep are injected so the tests drive the poll
 // deterministically and never sleep for real.
@@ -256,12 +262,27 @@ interface ScanState {
   carry: Buffer;
   /** Zero-based index of the next COMPLETE line to be consumed. */
   lineIndex: number;
-  /** Newest non-adopted hit on a complete line, across all polls so far. */
+  /**
+   * Newest hit on a complete line found so far in the poll that is
+   * currently running. Not reset at the top of each poll (unlike
+   * `tentative`): it does not need to be, because the caller returns as
+   * soon as either field is non-null, so a poll that leaves this set
+   * always ends the scan before another poll can run.
+   */
   best: ReportHit | null;
   /** Hit on the (still incomplete) trailing line of THIS poll; see `scanCarry`. */
   tentative: ReportHit | null;
   /** At least one hit was skipped because the caller had already adopted it. */
   adoptedSkipped: boolean;
+  /**
+   * Identity of the file this state was last read from (`fs.fstatSync`'s
+   * `ino`/`dev`). `null` until the first successful poll. A later poll
+   * whose identity differs resets the reader exactly like a shrink does:
+   * size alone would miss an in-place replacement by a same-size-or-larger
+   * file.
+   */
+  ino: number | null;
+  dev: number | null;
 }
 
 function newScanState(): ScanState {
@@ -272,6 +293,8 @@ function newScanState(): ScanState {
     best: null,
     tentative: null,
     adoptedSkipped: false,
+    ino: null,
+    dev: null,
   };
 }
 
@@ -352,12 +375,22 @@ function pollTranscript(
   try {
     const stat = fs.fstatSync(fd);
     if (!stat.isFile()) return "unreadable";
-    if (stat.size < state.offset) {
-      // The file shrank: truncated, or replaced by a shorter one. The
-      // bytes the offset pointed past are gone, so everything derived
-      // from them is stale, so start over from the top.
+    // Identity change: the file at this path was replaced (rename, or a
+    // recreate) between polls. Checked BEFORE the size comparison and
+    // independently of it, because a replacement can be the same size or
+    // larger, which the size check alone would read straight through as
+    // ordinary growth.
+    const identityChanged =
+      state.ino !== null && (stat.ino !== state.ino || stat.dev !== state.dev);
+    if (identityChanged || stat.size < state.offset) {
+      // The file shrank, or was replaced in place: truncated, or a
+      // different file now sits at this path. The bytes the offset
+      // pointed past are stale (shrink) or belong to a different file
+      // entirely (identity change), so start over from the top.
       Object.assign(state, newScanState());
     }
+    state.ino = stat.ino;
+    state.dev = stat.dev;
     if (stat.size > state.offset) {
       const chunk = readAt(fd, state.offset, stat.size - state.offset);
       state.offset += chunk.length;

@@ -38,6 +38,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     on a valid delegation, runs this scan, persists the report bound to
     the child's session id, and only then mints the child's own
     auto-marker with `approvedBy` carrying the parent linkage.
+  - **Once-per-session report adoption.** The scan accepts the report
+    under any heading level (`#` through `######`), matching the schema
+    hint the child is given rather than pinning one, and each transcript
+    entry a report is captured from is spent at most once per session:
+    its id is recorded, one per line, in its own directory
+    `harness.generated/.delegation-adoptions/<child-sid>`, a sibling of
+    `.delegations/` rather than nested inside it, so `harness doctor`'s
+    delegations-on-disk metric (which counts every regular file directly
+    under `.delegations/`) never miscounts it. Without this rule an
+    expired auto-marker would re-mint itself from the same transcript
+    entry, silently handing the delegation's longer TTL to the approval.
+    The minted marker's `approvedBy` on this path always carries the
+    neutral `delegated` mode literal, never the payload's raw
+    `permission_mode`, so a doctor listing never buckets it under a mode
+    that played no part in the decision.
   - **The harness smoke runner is the first consumer.** `harness smoke`
     now issues a delegation for the session id it already chooses,
     bound to the cwd the child actually spawns into, before every run;

@@ -422,6 +422,117 @@ describe("scanTranscriptForReport", () => {
       expect(result.lineIndex).toBe(0);
       expect(result.markdown).toBe(REPORT_MARKDOWN);
     });
+
+    it("re-reads from the top when the transcript is replaced in place by a SAME-SIZE-OR-LARGER file (rename)", async () => {
+      // The shrink test above only pins the size-based reset. A rename
+      // that swaps in a different file with an EQUAL or LARGER size
+      // passes that check untouched, so a reader keyed on size alone
+      // would read the replacement's bytes at the stale offset as if
+      // they were a continuation of the old file, landing mid-content
+      // rather than at the report's actual line. This pins the
+      // inode/device identity check that catches that case too.
+      const paddedNoReport = (n: number): string =>
+        JSON.stringify({
+          type: "user",
+          sessionId: SESSION,
+          message: { role: "user", content: `go ${"x".repeat(400)} ${n}` },
+        });
+      writeTranscript([paddedNoReport(1)]);
+      const originalSize = fs.statSync(transcriptPath).size;
+      const clock = fakeClock();
+      clock.onSleep = (count): void => {
+        if (count === 1) {
+          // A DIFFERENT file, written under a different name and then
+          // renamed into place, so it carries a different inode: the
+          // report sits at line 0, which the stale offset would skip
+          // straight past.
+          const replacementPath = `${transcriptPath}.new`;
+          fs.writeFileSync(
+            replacementPath,
+            `${[entry(), paddedNoReport(2), paddedNoReport(3)].join("\n")}\n`,
+          );
+          expect(fs.statSync(replacementPath).size).toBeGreaterThanOrEqual(originalSize);
+          fs.renameSync(replacementPath, transcriptPath);
+        }
+      };
+
+      const result = await scanTranscriptForReport({
+        transcriptPath,
+        sessionId: SESSION,
+        maxWaitMs: 500,
+        pollMs: 50,
+        now: clock.now,
+        sleep: clock.sleep,
+      });
+
+      expect(result.found).toBe(true);
+      if (!result.found) throw new Error("unreachable");
+      expect(result.lineIndex).toBe(0);
+      expect(result.markdown).toBe(REPORT_MARKDOWN);
+    });
+  });
+
+  // `scanCarry` covers the ONE case the append-only, newline-delimited
+  // reader would otherwise miss: a writer that has flushed a complete
+  // JSONL entry but not yet its trailing newline. Without it, a no-op
+  // `scanCarry` still passes the rest of the suite (every other fixture
+  // ends its lines with `writeTranscript`'s trailing `\n`), so these two
+  // are the only tests that would notice.
+  describe("scanCarry (trailing line with no newline yet)", () => {
+    it("finds a complete JSON entry with no trailing newline, on the very first poll", async () => {
+      // No `writeTranscript` here on purpose: that helper always appends
+      // a trailing `\n`. This writes the raw entry with nothing after it.
+      fs.writeFileSync(transcriptPath, entry());
+      const clock = fakeClock();
+
+      const result = await scanTranscriptForReport({
+        transcriptPath,
+        sessionId: SESSION,
+        maxWaitMs: 0,
+        now: clock.now,
+        sleep: clock.sleep,
+      });
+
+      expect(result.found).toBe(true);
+      if (!result.found) throw new Error("unreachable");
+      expect(result.lineIndex).toBe(0);
+      expect(result.entryId).toBe("uuid:uuid-1");
+      expect(result.markdown).toBe(REPORT_MARKDOWN);
+      expect(clock.sleeps).toEqual([]);
+    });
+
+    it("does not find bytes that stop mid-entry, until the line is completed on a later poll", async () => {
+      const full = entry();
+      // Cut a few characters into the markdown text, well before any of
+      // the JSON's closing braces, so the carry does NOT end in `}` and
+      // `scanCarry`'s guard declines to even attempt a parse.
+      const cutAt = full.indexOf("task.") + 3;
+      const partial = full.slice(0, cutAt);
+      const rest = full.slice(cutAt);
+      expect(partial.endsWith("}")).toBe(false);
+      fs.writeFileSync(transcriptPath, partial);
+      const clock = fakeClock();
+      clock.onSleep = (count): void => {
+        if (count === 1) fs.appendFileSync(transcriptPath, `${rest}\n`);
+      };
+
+      const result = await scanTranscriptForReport({
+        transcriptPath,
+        sessionId: SESSION,
+        maxWaitMs: 500,
+        pollMs: 50,
+        now: clock.now,
+        sleep: clock.sleep,
+      });
+
+      expect(result.found).toBe(true);
+      if (!result.found) throw new Error("unreachable");
+      expect(result.lineIndex).toBe(0);
+      expect(result.markdown).toBe(REPORT_MARKDOWN);
+      // The line was completed on the poll right after the first sleep,
+      // not found on the very first poll.
+      expect(result.waitedMs).toBe(50);
+    });
   });
 
   // One transcript entry may be adopted at most ONCE per session: the

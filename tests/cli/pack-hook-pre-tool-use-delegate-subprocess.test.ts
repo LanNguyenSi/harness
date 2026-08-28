@@ -39,6 +39,7 @@ import {
   hashDelegationCwd,
   writeDelegationMarker,
 } from "../../src/policy-packs/builtin/understanding-before-execution/delegation-markers.js";
+import { DEFAULT_REPORT_SCAN_MAX_WAIT_MS } from "../../src/policy-packs/builtin/understanding-before-execution/auto-approve.js";
 import { getOrCreateSigningKey } from "../../src/runtime/approval-signing.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -233,7 +234,9 @@ describe("pack hook pre-tool-use: delegation path, subprocess E2E", () => {
     // what an `unref`'d poll timer produces (the process exits mid-wait).
     writeTranscript([userTurn()]);
 
+    const startedAt = Date.now();
     const { status, stdout, stderr } = runHook();
+    const elapsedMs = Date.now() - startedAt;
 
     expect(status).toBe(0);
     expect(stdout.trim()).not.toBe("");
@@ -248,10 +251,21 @@ describe("pack hook pre-tool-use: delegation path, subprocess E2E", () => {
     // The repeated-retry instruction, byte-for-byte: this block is the one
     // the child can act on alone.
     expect(decision.reason).toContain(DELEGATION_REPORT_RETRY_INSTRUCTION);
+    // A literal, independent check on the instruction's actual wording,
+    // not just a re-comparison of the imported constant against itself:
+    // the retry sentence must ask for the schema's real heading rule.
+    expect(decision.reason).toContain("any heading level");
     // The poll really ran and really timed out, rather than the call
     // blocking for some earlier reason.
     expect(stderr).toMatch(/reached its transcript within/);
     expect(checkApprovalMarker(generatedDir, CHILD).matched).toBe(false);
+    // WALL-TIME FLOOR: a block that comes back near-instantly proves the
+    // poll never really ran (e.g. the hook process exiting mid-wait, or a
+    // future change that skips the poll on this path) even though the
+    // decision envelope above looks correct. A small tolerance absorbs
+    // process start/stop and JSON overhead; the suite's own configured
+    // bound is the floor, not a value hardcoded here.
+    expect(elapsedMs).toBeGreaterThanOrEqual(DEFAULT_REPORT_SCAN_MAX_WAIT_MS - 50);
   });
 
   it("captures the child's own report from the real transcript and allows with a parent-linked marker", () => {

@@ -27,7 +27,7 @@
 //
 //   - ONE TRANSCRIPT ENTRY IS ADOPTED AT MOST ONCE PER SESSION. Every
 //     adopted entry's id is appended to
-//     `<generatedDir>/.delegations/adopted/<sid>` BEFORE the capture is
+//     `<generatedDir>/.delegation-adoptions/<sid>` BEFORE the capture is
 //     persisted, and the scan is given that set. Without it the same
 //     report would be re-captured and re-minted every time the auto-marker
 //     expired (or a task boundary cleared it), so the delegation's TTL
@@ -211,31 +211,28 @@ function findGroundingMcp(manifest: Manifest): McpServer | null {
 }
 
 /**
- * Subdirectory holding the per-child ADOPTED-ENTRY ledgers, a sibling of
- * the delegation files themselves:
- * `<generatedDir>/.delegations/adopted/<sid>`.
+ * Directory holding the per-child ADOPTED-ENTRY ledgers, a SIBLING of
+ * `.delegations/` itself rather than a subdirectory of it:
+ * `<generatedDir>/.delegation-adoptions/<sid>`.
  *
- * Under `.delegations/` and never in `.approvals/`: these files record
- * what was SPENT, they are not approvals and must never land where a
- * marker scan or the doctor's `approvedBy` listing would read them as
- * one. In their OWN subdirectory rather than as a `<sid>.adopted` sibling
- * for two reasons: `harness doctor`'s delegations metric counts every
- * regular file directly under `.delegations/` (a flat ledger file would
- * be reported as an extra, unreadable delegation), and a session id
- * spelled `<other-sid>.adopted` would otherwise name another session's
- * ledger.
+ * Never inside `.delegations/`, and never in `.approvals/`: these files
+ * record what was SPENT, they are not approvals and must never land where
+ * a marker scan or the doctor's `approvedBy` listing would read them as
+ * one. Kept OUT of `.delegations/` for two reasons: `harness doctor`'s
+ * delegations metric counts every regular file directly under
+ * `.delegations/` (a ledger file nested in there, flat or not, would be
+ * reported as an extra, unreadable delegation), and no reserved
+ * subdirectory NAME sits under `.delegations/` for a child session id to
+ * collide with, since the ledger lives at its own sibling path instead of
+ * inside `.delegations/` at all.
  *
  * One id per line. Ids come from the scan (`entryId`), which guarantees
  * they carry no line break.
  */
-const ADOPTED_ENTRIES_DIRNAME = "adopted";
+const ADOPTION_LEDGER_DIRNAME = ".delegation-adoptions";
 
-function adoptedEntriesPathFor(delegationPath: string): string {
-  return path.join(
-    path.dirname(delegationPath),
-    ADOPTED_ENTRIES_DIRNAME,
-    path.basename(delegationPath),
-  );
+function adoptedEntriesPathFor(generatedDir: string, childSessionId: string): string {
+  return path.join(generatedDir, ADOPTION_LEDGER_DIRNAME, childSessionId);
 }
 
 type AdoptedEntriesRead = { ok: true; ids: Set<string> } | { ok: false; detail: string };
@@ -264,14 +261,12 @@ function readAdoptedEntries(filePath: string): AdoptedEntriesRead {
 }
 
 /**
- * Append one adopted entry id, creating `.delegations/adopted/` on first
+ * Append one adopted entry id, creating `.delegation-adoptions/` on first
  * use with the same default directory mode `atomicWriteFile` gives
  * `.delegations/` itself (the ledger FILE is 0600, like every marker).
  * `appendFileSync` opens with `O_APPEND`, so a single short write lands
  * whole even if two hooks race on the same session; no read-modify-write,
- * therefore nothing to lose. A child session id spelled exactly
- * `adopted` collides with this directory: `mkdirSync` then fails and the
- * capture declines, which is the fail-closed direction.
+ * therefore nothing to lose.
  */
 function recordAdoptedEntry(
   filePath: string,
@@ -952,7 +947,7 @@ export async function runPackHookPreToolUseCli(
                 : null;
             // The once-per-session adoption ledger, read only on the path
             // that can actually capture something.
-            const adoptedPath = adoptedEntriesPathFor(delegationPath);
+            const adoptedPath = adoptedEntriesPathFor(generatedDir, childSessionId);
             const adopted: AdoptedEntriesRead =
               transcriptPath === null
                 ? { ok: true, ids: new Set<string>() }

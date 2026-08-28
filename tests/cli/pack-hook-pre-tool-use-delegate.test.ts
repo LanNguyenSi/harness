@@ -243,20 +243,26 @@ function markerExists(): boolean {
 }
 
 /**
- * The once-per-session adoption ledger. Its own subdirectory under
- * `.delegations/`, NOT a flat `<sid>.adopted` sibling: `harness doctor`'s
- * delegations metric counts every regular file directly under
- * `.delegations/`, and a session id spelled `<other-sid>.adopted` would
- * otherwise name another session's ledger.
+ * The once-per-session adoption ledger. A SIBLING of `.delegations/`
+ * itself (`<generatedDir>/.delegation-adoptions/<sid>`), never a
+ * subdirectory of it and never a flat `.delegations/<sid>.adopted`
+ * sibling: `harness doctor`'s delegations metric counts every regular
+ * file directly under `.delegations/` (a ledger nested in there, flat or
+ * not, would be reported as an extra, unreadable delegation).
  */
 function adoptedLedgerPath(): string {
-  const delegationPath = delegationMarkerPathFor(generatedDir, CHILD);
-  return path.join(path.dirname(delegationPath), "adopted", CHILD);
+  return path.join(generatedDir, ".delegation-adoptions", CHILD);
 }
 
-/** The flat layout this deliberately does NOT use. */
+/** The flat `.delegations/`-sibling layout this deliberately does NOT use. */
 function flatAdoptedLedgerPath(): string {
   return `${delegationMarkerPathFor(generatedDir, CHILD)}.adopted`;
+}
+
+/** The nested-subdirectory-of-`.delegations/` layout this deliberately does NOT use. */
+function nestedAdoptedLedgerPath(): string {
+  const delegationPath = delegationMarkerPathFor(generatedDir, CHILD);
+  return path.join(path.dirname(delegationPath), "adopted", CHILD);
 }
 
 function readMarkerRaw(): Record<string, unknown> {
@@ -610,6 +616,66 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       expect(listPersistedReports(reportsDir)).toEqual([]);
     });
 
+    it("(t) the adoption ledger's own path is a directory: fails closed on the READ, before any capture is attempted", async () => {
+      // The once-per-session adoption ledger is read BEFORE the transcript
+      // is scanned, on the fail-closed principle: without it the hook
+      // cannot tell a fresh report from one this session already spent.
+      // A directory sitting at the ledger's own file path makes the read
+      // itself fail (EISDIR, not ENOENT), which is a distinct condition
+      // from "no ledger yet" and must decline rather than treat the
+      // transcript as unspent.
+      fs.mkdirSync(path.join(generatedDir, ".delegation-adoptions", CHILD), {
+        recursive: true,
+      });
+      writeTranscript([userTurn(), transcriptEntry()]);
+
+      const result = await call();
+
+      expect(result.blocked).toBe(true);
+      expect(result.stderr).toMatch(
+        new RegExp(
+          `the adopted-entry ledger at .* could not be read \\(EISDIR.*\\); refusing to capture a transcript entry that may already have been adopted for session ${CHILD}`,
+        ),
+      );
+      expect(markerExists()).toBe(false);
+      expect(ledgerCalls).toEqual([]);
+      expect(listPersistedReports(reportsDir)).toEqual([]);
+    });
+
+    it("(u) the adoption ledger directory exists but cannot be written to: the read succeeds, the capture fails closed, and nothing is persisted", async () => {
+      // The mirror image of (t): the ledger READ succeeds (the directory
+      // exists and the per-session file inside it does not, which reads
+      // as the ordinary "nothing adopted yet" case), so the scan runs and
+      // finds the report, but recording the entry as spent, the write
+      // that MUST happen before the report is persisted (see the module
+      // header's "RECORD THE ADOPTION FIRST" ordering), cannot land. A
+      // ledger write that cannot be recorded must not let the report
+      // through: the capture declines and nothing is persisted, even
+      // though a valid report was sitting right there in the transcript.
+      const ledgerDir = path.join(generatedDir, ".delegation-adoptions");
+      fs.mkdirSync(ledgerDir, { recursive: true });
+      fs.chmodSync(ledgerDir, 0o500);
+      writeTranscript([userTurn(), transcriptEntry()]);
+
+      try {
+        const result = await call();
+
+        expect(result.blocked).toBe(true);
+        expect(result.stderr).toMatch(
+          new RegExp(
+            `could not record transcript entry uuid:uuid-report as adopted for session ${CHILD} \\(.*\\); nothing was persisted`,
+          ),
+        );
+        expect(markerExists()).toBe(false);
+        expect(ledgerCalls).toEqual([]);
+        expect(listPersistedReports(reportsDir)).toEqual([]);
+      } finally {
+        // Restore write permission before the directory (and its `tmp`
+        // ancestor) is removed in `afterEach`, or the cleanup itself fails.
+        fs.chmodSync(ledgerDir, 0o700);
+      }
+    });
+
     it("(p) a read-only Bash call is allowed by the step-6 exemption and never reaches the delegation branch", async () => {
       // DECISION-ORDER control. The delegation capture is part of step 9,
       // deliberately last, so a call one of the earlier exemptions already
@@ -820,10 +886,12 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       expect(first.blocked).toBe(false);
       expect(first.source).toBe("marker");
       expect(listPersistedReports(reportsDir)).toHaveLength(1);
-      // The spent entry was recorded, one id per line, in its own
-      // subdirectory and never as a flat `.delegations/` sibling.
+      // The spent entry was recorded, one id per line, in its own SIBLING
+      // directory of `.delegations/`, never as a flat `.delegations/`
+      // sibling and never nested under `.delegations/` itself.
       expect(fs.readFileSync(adoptedLedgerPath(), "utf8")).toBe("uuid:uuid-report\n");
       expect(fs.existsSync(flatAdoptedLedgerPath())).toBe(false);
+      expect(fs.existsSync(nestedAdoptedLedgerPath())).toBe(false);
       const mintedBy = String(readMarkerRaw()["approvedBy"]);
 
       // Age the marker out. Re-signed through the real writer with a
