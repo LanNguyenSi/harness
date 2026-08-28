@@ -50,6 +50,14 @@ export interface AuditOptions extends LoaderOptions {
   ) => Promise<LedgerQueryResult>;
   /** Override "now" (tests). */
   now?: Date;
+  /**
+   * Sink for the audit-only "approvals unavailable" notice (M4: a degraded
+   * second fetch degrades softly rather than discarding the already-fetched
+   * decisions table). Defaults to `process.stderr.write`, matching the
+   * one-stderr-line posture `src/cli/pack/auto-approve-path.ts` uses for its
+   * own audit-only ledger writes.
+   */
+  stderr?: (s: string) => void;
 }
 
 export interface AuditDecisionRow {
@@ -70,9 +78,9 @@ export interface AuditDecisionRow {
 }
 
 /**
- * agent-tasks 5ad63b01: one raw understanding-gate ledger fact in the
- * audit window: a `understanding-approved:<sid>` (human approval, plain
- * or `:forced:<field>`-suffixed) or `understanding-auto-approved:<sid>`
+ * One raw understanding-gate ledger fact in the audit window: a
+ * `understanding-approved:<sid>` (human approval, plain or
+ * `:forced:<field>`-suffixed) or `understanding-auto-approved:<sid>`
  * (auto-mode) row, exactly as the two writers stamp it
  * (`src/cli/approve/understanding.ts`, `src/cli/pack/auto-approve-path.ts`).
  * Read-only reporting: this section carries no gate authority, mirroring
@@ -88,6 +96,12 @@ export interface AuditResult {
   output: string;
   decisions: AuditDecisionRow[];
   approvals: AuditApprovalRow[];
+  /**
+   * M4: set when the approvals fetch (only) came back degraded. The
+   * decisions table still renders; this carries the reason so `--json`
+   * consumers can tell "no approval facts" apart from "couldn't check".
+   */
+  approvalsUnavailable?: string;
 }
 
 const VALID_OUTCOMES: AuditOutcome[] = [
@@ -213,6 +227,20 @@ function renderTable(header: string[], data: string[][]): string {
   return `${lines.join("\n")}\n`;
 }
 
+// Single-line-ify a cell so a newline buried in untrusted content (a policy
+// reason, or a ledger `tag`/`source` value the approvals section reads
+// verbatim) can't split one logical row into two rendered table rows.
+const flatten = (s: string): string => s.replace(/\s+/g, " ").trim();
+
+// M3: cap after flattening so a very long tag/source can't blow out the
+// table width; the ellipsis marker makes the truncation visible rather than
+// silently swallowing content.
+const MAX_CELL_LEN = 200;
+const flattenAndCap = (s: string): string => {
+  const flat = flatten(s);
+  return flat.length > MAX_CELL_LEN ? `${flat.slice(0, MAX_CELL_LEN)}…` : flat;
+};
+
 function formatTable(rows: AuditDecisionRow[]): string {
   if (rows.length === 0) return "";
   const header = ["timestamp", "policy", "outcome", "reason"];
@@ -220,7 +248,6 @@ function formatTable(rows: AuditDecisionRow[]): string {
   // alignment doesn't break on a newline buried in a future policy's reason.
   // M7: annotate with [unclassified-fallback] when the fail-closed flag is
   // set, so the human table reflects the same information the JSON field does.
-  const flatten = (s: string): string => s.replace(/\s+/g, " ").trim();
   const data = rows.map((r) => {
     const reasonCell =
       flatten(r.reason) + (r.whenUnclassifiedFallback ? " [unclassified-fallback]" : "");
@@ -230,14 +257,20 @@ function formatTable(rows: AuditDecisionRow[]): string {
 }
 
 /**
- * agent-tasks 5ad63b01: table rendering for the approvals section.
- * Empty is `""` (never a header-only table), so the caller can decide
- * whether to omit the whole section without inspecting row counts twice.
+ * Table rendering for the approvals section. Empty is `""` (never a
+ * header-only table), so the caller can decide whether to omit the whole
+ * section without inspecting row counts twice.
+ *
+ * M3: `tag` and `source` are untrusted ledger content (a forged or
+ * malformed entry could carry a newline), so both cells are flattened and
+ * length-capped the same way `formatTable` treats `reason`, otherwise an
+ * embedded newline renders as an extra table row that looks like a second,
+ * forged approval fact.
  */
 function formatApprovals(rows: AuditApprovalRow[]): string {
   if (rows.length === 0) return "";
   const header = ["timestamp", "tag", "source"];
-  const data = rows.map((r) => [r.timestamp, r.tag, r.source]);
+  const data = rows.map((r) => [r.timestamp, flattenAndCap(r.tag), flattenAndCap(r.source)]);
   return renderTable(header, data);
 }
 
@@ -289,14 +322,14 @@ export async function audit(opts: AuditOptions = {}): Promise<AuditResult> {
     filtered = filtered.filter((r) => r.outcome === opts.outcome);
   }
 
-  // agent-tasks 5ad63b01: second, independent ledger fetch for the raw
-  // understanding-gate approval facts (docs/decisions/2026-08-27-ug-auto-
-  // mode-approval.md, "Audit and doctor"). Same server-side-narrowing /
-  // client-side-filter-stays-correct contract as the policy_decision
-  // fetch above: `contentPrefix: "understanding-"` is pushed server-side
-  // when supported, and rowsFromApprovalEntries + the `--since` filter
-  // below are applied regardless, so an old server that ignores the hint
-  // and returns the whole session still renders correctly. Filtered by
+  // Second, independent ledger fetch for the raw understanding-gate
+  // approval facts (docs/decisions/2026-08-27-ug-auto-mode-approval.md,
+  // "Audit and doctor"). Same server-side-narrowing / client-side-filter-
+  // stays-correct contract as the policy_decision fetch above:
+  // `contentPrefix: "understanding-"` is pushed server-side when
+  // supported, and rowsFromApprovalEntries + the `--since` filter below
+  // are applied regardless, so an old server that ignores the hint and
+  // returns the whole session still renders correctly. Filtered by
   // `--since` and `--session` only (never `--policy` / `--outcome`,
   // which are policy-decision-only filters); the `--session` filtering
   // falls out of `rowsFromApprovalEntries` matching tags built from this
@@ -305,25 +338,51 @@ export async function audit(opts: AuditOptions = {}): Promise<AuditResult> {
     sinceIso,
     contentPrefix: "understanding-",
   });
+  const stderrSink = opts.stderr ?? ((s: string) => process.stderr.write(s));
+  let approvals: AuditApprovalRow[] = [];
+  let approvalsUnavailable: string | undefined;
   if (approvalResult.kind === "degraded") {
-    throw new HarnessExitError(
-      `ledger unreachable: ${approvalResult.reason}`,
-      EX_UNAVAILABLE,
+    // M4: a degraded approvals fetch degrades softly, it must not discard
+    // the decisions table that already fetched successfully. Exit code is
+    // unchanged (tied to the policy-decision fetch only, above); the
+    // audit-only posture gets one stderr line, matching
+    // `src/cli/pack/auto-approve-path.ts`'s own audit-only-write failures.
+    approvalsUnavailable = approvalResult.reason;
+    stderrSink(`approvals unavailable: ${approvalResult.reason}\n`);
+  } else {
+    approvals = rowsFromApprovalEntries(approvalResult.entries, sessionId).filter(
+      (r) => parseLedgerTimestamp(r.timestamp) >= cutoffMs,
     );
   }
-  const approvals = rowsFromApprovalEntries(approvalResult.entries, sessionId).filter(
-    (r) => parseLedgerTimestamp(r.timestamp) >= cutoffMs,
-  );
 
   const decisionsText =
     filtered.length === 0 ? `no policy decisions in the last ${since}\n` : formatTable(filtered);
-  // Omitted entirely when empty (acceptance criterion 1), so the
-  // documented empty-window message above stays byte-identical when
+  // Omitted entirely when empty and available (acceptance criterion 1), so
+  // the documented empty-window message above stays byte-identical when
   // there is also nothing to approve.
-  const approvalsText = approvals.length === 0 ? "" : `\napprovals\n${formatApprovals(approvals)}`;
+  const approvalsText =
+    approvalsUnavailable !== undefined
+      ? `\napprovals unavailable: ${approvalsUnavailable}\n`
+      : approvals.length === 0
+        ? ""
+        : `\napprovals\n${formatApprovals(approvals)}`;
 
   const output = opts.json
-    ? `${JSON.stringify({ decisions: filtered, approvals }, null, 2)}\n`
+    ? `${JSON.stringify(
+        {
+          sessionId,
+          decisions: filtered,
+          approvals,
+          ...(approvalsUnavailable !== undefined && { approvalsUnavailable }),
+        },
+        null,
+        2,
+      )}\n`
     : `${decisionsText}${approvalsText}`;
-  return { output, decisions: filtered, approvals };
+  return {
+    output,
+    decisions: filtered,
+    approvals,
+    ...(approvalsUnavailable !== undefined && { approvalsUnavailable }),
+  };
 }

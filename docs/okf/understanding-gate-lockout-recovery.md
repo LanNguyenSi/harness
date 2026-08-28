@@ -7,6 +7,7 @@ timestamp: 2026-08-27T18:21:56Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - src/cli/approve/understanding.ts
+  - src/cli/audit.ts
   - src/cli/index.ts
   - src/runtime/session-id.ts
   - src/runtime/pending-approval.ts

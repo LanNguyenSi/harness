@@ -15,8 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   A new `approvals` section, alongside the unchanged `policy_decision` table,
   lists the raw ledger facts `understanding-approved:<sid>` (plain or
   `:forced:<field>`-suffixed) and `understanding-auto-approved:<sid>` within
-  the audited `--since` window, each with timestamp, tag and source. A
-  second server-side ledger fetch narrows by `contentPrefix:
+  the audited `--since` window, each with timestamp, tag and source (tag
+  and source are flattened and length-capped before rendering, so an
+  embedded newline in untrusted ledger content can't split one row into
+  two). A second server-side ledger fetch narrows by `contentPrefix:
   "understanding-"` when the connected grounding-mcp supports it; matching
   is by exact tag (built from the same `approvedLedgerTagFor` /
   `autoApprovedLedgerTagFor` helpers the two writers use), so an unrelated
@@ -24,7 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `review:<n>:approved` fact) cannot slip in. Filtered by `--since` and
   `--session` only; `--policy` / `--outcome` stay policy-decision-only.
   Empty section is omitted in text output; `--json` always carries an
-  `approvals` array. `src/cli/audit.ts`, `tests/cli/audit.test.ts`.
+  `approvals` array plus the resolved `sessionId`. A degraded approvals-only
+  fetch degrades softly rather than discarding the already-fetched decisions
+  table: text gets one `approvals unavailable: <reason>` line, `--json` gets
+  `approvalsUnavailable` (with `approvals: []`), and the audit-only posture
+  gets one stderr line; exit code stays tied to the policy-decision fetch.
+  `src/cli/audit.ts`, `src/cli/index.ts`, `tests/cli/audit.test.ts`.
 
 ## [0.51.0] - 2026-08-27
 
