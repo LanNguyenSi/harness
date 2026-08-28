@@ -61,6 +61,7 @@ import {
 } from "./toolchain-parity.js";
 import { buildUgAutoApprovals, DEFAULT_RECENT_SESSIONS } from "./ug-auto-approvals.js";
 import { buildSettingsDrift } from "./settings-drift.js";
+import { buildCodexConfigDrift, isCodexOptedIntoAutoApprove } from "./codex-config-drift.js";
 import { LOCK_BASENAME } from "../../io/harness-lock.js";
 import type { ClaudeMcpExec } from "../../io/claude-mcp.js";
 import {
@@ -1115,6 +1116,7 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // always advisory, never an error, see auto-approve-mode.ts.
   if (report.ugAutoApproveMode) warningCount++;
   if (report.settingsDrift) warningCount += report.settingsDrift.warnings.length;
+  if (report.codexConfigDrift) warningCount += report.codexConfigDrift.warnings.length;
   if (report.memory.routerExecutable && !report.memory.routerExecutable.exists) errorCount++;
   if (!report.memory.routerExecutable) warningCount++;
   if (report.memory.routerVersion?.status === "warn") warningCount++;
@@ -1281,6 +1283,17 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const ugAutoApprovals = understandingPackEnabled
     ? buildUgAutoApprovals(generatedDir, { recentSessions: recentSessionsWindow })
     : undefined;
+  // Shared option shape both drift checks below take (same manifest,
+  // same generated dir, same lock, same cwd/home/env resolution), one
+  // literal instead of two near-identical ones (`buildSettingsDrift` and
+  // `buildCodexConfigDrift` both accept exactly this shape).
+  const driftCheckOpts = {
+    generatedDir,
+    lockPath: path.join(path.dirname(resolved.base), LOCK_BASENAME),
+    cwd: opts.cwd ?? process.cwd(),
+    home,
+    env: opts.envOverride ?? process.env,
+  };
   // Settings-drift additionally requires `harness.generated/` to exist:
   // without at least one prior `harness apply`, there is no baseline to
   // compare against and nothing this check owns an opinion about (a
@@ -1290,14 +1303,19 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   // report for that exact shape).
   const settingsDrift =
     understandingPackEnabled && fs.existsSync(generatedDir)
-      ? buildSettingsDrift({
-          generatedDir,
-          lockPath: path.join(path.dirname(resolved.base), LOCK_BASENAME),
-          cwd: opts.cwd ?? process.cwd(),
-          home,
-          env: opts.envOverride ?? process.env,
-        })
+      ? buildSettingsDrift(driftCheckOpts)
       : undefined;
+  // Codex counterpart of `settingsDrift` (follow-up of slice 2 of the
+  // same ADR, agent-tasks f59ea0eb). Gated on the pack's
+  // `auto_approve.harnesses` actually listing `codex` rather than on
+  // `understandingPackEnabled` alone, and NOT gated on
+  // `harness.generated/` existing: unlike `permissions.defaultMode`,
+  // `approval_policy = "never"` is a live risk the moment it is present,
+  // whether or not a `harness apply` has ever run for this manifest (see
+  // codex-config-drift.ts's module header).
+  const codexConfigDrift = isCodexOptedIntoAutoApprove(manifest)
+    ? buildCodexConfigDrift(driftCheckOpts)
+    : undefined;
 
   // Toolchain-parity on-demand comparison (task 13919613). Gated purely on
   // `toolchain_parity.enabled` — mirrors `grounding`'s "only when the
@@ -1346,6 +1364,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     ...(ugAutoApprovals !== undefined ? { ugAutoApprovals } : {}),
     ...(ugAutoApproveMode !== undefined ? { ugAutoApproveMode } : {}),
     ...(settingsDrift !== undefined ? { settingsDrift } : {}),
+    ...(codexConfigDrift !== undefined ? { codexConfigDrift } : {}),
   };
   if (opts.target === "codex") {
     const manifestDir = path.dirname(resolved.base);

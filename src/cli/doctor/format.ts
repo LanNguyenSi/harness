@@ -75,12 +75,15 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
   const showUgAuto = ugAuto !== undefined && ugAuto.approvalsDirPresent;
   const drift = report.settingsDrift;
   const hasDriftContent = drift !== undefined && (drift.notes.length > 0 || drift.warnings.length > 0);
+  const codexDrift = report.codexConfigDrift;
+  const hasCodexDriftContent = codexDrift !== undefined && codexDrift.warnings.length > 0;
   if (
     (!bin || bin.status !== "warn") &&
     !modeEnv &&
     !autoApproveMode &&
     !showUgAuto &&
-    !hasDriftContent
+    !hasDriftContent &&
+    !hasCodexDriftContent
   )
     return [];
   const out: string[] = ["", "Environment"];
@@ -127,6 +130,9 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
   if (drift) {
     for (const n of drift.notes) out.push(`  ℹ ${n}`);
     for (const w of drift.warnings) out.push(`  ⚠ ${w}`);
+  }
+  if (codexDrift) {
+    for (const w of codexDrift.warnings) out.push(`  ⚠ ${w}`);
   }
   return out;
 }

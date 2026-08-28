@@ -12,6 +12,7 @@ import type { ToolchainParitySection } from "./toolchain-parity.js";
 import type { UgAutoApprovalsSection } from "./ug-auto-approvals.js";
 import type { SettingsDriftSection } from "./settings-drift.js";
 import type { AutoApproveModeWarning } from "./auto-approve-mode.js";
+import type { CodexConfigDriftSection } from "./codex-config-drift.js";
 
 /**
  * Phase 6 #6 follow-up — doctor target identifier. Distinct from
@@ -442,6 +443,18 @@ export interface DoctorReport {
    * `warningCount`; `notes` never do.
    */
   settingsDrift?: SettingsDriftSection;
+  /**
+   * Codex counterpart of `settingsDrift` (follow-up of slice 2 of the
+   * same ADR, agent-tasks f59ea0eb): a live `approval_policy = "never"`
+   * or full-access `default_permissions` selection in `$CODEX_HOME
+   * /config.toml` or `<repo>/.codex/config.toml`. Present only when the
+   * understanding-gate pack's `auto_approve.harnesses` lists `codex`;
+   * a repo that never opted Codex into the auto path has no live signal
+   * for this key to pre-set. Unlike `settingsDrift`, this always warns
+   * while the key is present and the repo is opted in (not gated on
+   * drift since the last apply); `warnings` roll into `warningCount`.
+   */
+  codexConfigDrift?: CodexConfigDriftSection;
   memory: MemoryReport;
   hooks: HookEntryReport[];
   policies: PolicyEntryReport[];
@@ -545,6 +558,7 @@ export type { UnderstandingModeEnvDivergence } from "./understanding-mode-env.js
 export type { UgAutoApprovalsSection, AutoApprovalListingEntry } from "./ug-auto-approvals.js";
 export type { AutoApproveModeWarning } from "./auto-approve-mode.js";
 export type { SettingsDriftSection } from "./settings-drift.js";
+export type { CodexConfigDriftSection } from "./codex-config-drift.js";
 export type { ToolchainParitySection, ToolchainParityPeerReport } from "./toolchain-parity.js";
 
 export type {
