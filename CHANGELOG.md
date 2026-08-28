@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.52.0] - 2026-08-28
+
 ### Added
 
 - **Understanding gate: `harness delegate`, a signed pre-authorization for headless `claude -p` children, slice 3 of the auto-mode-approval ADR**
