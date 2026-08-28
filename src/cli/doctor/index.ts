@@ -60,6 +60,7 @@ import {
   type RunDoctorToolchainParityOptions,
 } from "./toolchain-parity.js";
 import { buildUgAutoApprovals, DEFAULT_RECENT_SESSIONS } from "./ug-auto-approvals.js";
+import { buildUgDelegations } from "./ug-delegations.js";
 import { buildSettingsDrift } from "./settings-drift.js";
 import { buildCodexConfigDrift, isCodexOptedIntoAutoApprove } from "./codex-config-drift.js";
 import { LOCK_BASENAME } from "../../io/harness-lock.js";
@@ -1112,6 +1113,10 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // always advisory, never an error — see understanding-mode-env.ts.
   if (report.understandingModeEnv) warningCount++;
   // ugAutoApprovals is informational only (ℹ), never contributes here.
+  // ugDelegations is informational (ℹ) UNLESS it found an unreadable
+  // file, in which case it rolls exactly one warning (ug-delegations.ts,
+  // agent-tasks 37ad0b05), not one per unreadable file.
+  if (report.ugDelegations && report.ugDelegations.unreadable > 0) warningCount++;
   // auto_approve configured outside grill_me (agent-tasks abfad738):
   // always advisory, never an error, see auto-approve-mode.ts.
   if (report.ugAutoApproveMode) warningCount++;
@@ -1283,6 +1288,16 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const ugAutoApprovals = understandingPackEnabled
     ? buildUgAutoApprovals(generatedDir, { recentSessions: recentSessionsWindow })
     : undefined;
+  // Slice 3 (agent-tasks 37ad0b05), same "Audit and doctor"
+  // section: delegations-on-disk metric from `.delegations/`, gated on
+  // the same pack-enabled check, computed even when the directory is
+  // absent (`delegationsDirPresent: false`, `total: 0`), the render
+  // layer (format.ts) is what stays silent for that case, mirroring
+  // `ugAutoApprovals`'s own `approvalsDirPresent` gate; see
+  // ug-delegations.ts.
+  const ugDelegations = understandingPackEnabled
+    ? buildUgDelegations(generatedDir, { ...(opts.now !== undefined ? { now: opts.now } : {}) })
+    : undefined;
   // Shared option shape both drift checks below take (same manifest,
   // same generated dir, same lock, same cwd/home/env resolution), one
   // literal instead of two near-identical ones (`buildSettingsDrift` and
@@ -1362,6 +1377,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     ...(npmGlobalBin !== undefined ? { npmGlobalBin } : {}),
     ...(understandingModeEnv !== undefined ? { understandingModeEnv } : {}),
     ...(ugAutoApprovals !== undefined ? { ugAutoApprovals } : {}),
+    ...(ugDelegations !== undefined ? { ugDelegations } : {}),
     ...(ugAutoApproveMode !== undefined ? { ugAutoApproveMode } : {}),
     ...(settingsDrift !== undefined ? { settingsDrift } : {}),
     ...(codexConfigDrift !== undefined ? { codexConfigDrift } : {}),

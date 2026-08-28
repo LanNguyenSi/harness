@@ -290,6 +290,7 @@ Since task `d78fb3c7`, the pack's `config:` block is validated by `harness valid
 | `auto_approve.when` | array of permission-mode strings | optional; allowlist of `permission_mode` values eligible for a hook-written signed auto-marker |
 | `auto_approve.harnesses` | non-empty array of `claude-code` / `codex`, no duplicates | optional; which runtimes' PreToolUse hooks may take the auto path. Absent means `[claude-code]` |
 | `auto_approve.require_report` | literal `true` | required when `auto_approve` is present; `false` or missing is a schema error |
+| `auto_approve.report_scan.max_wait` | duration string (`500ms`, `1500ms`, `2s`, ...; the `<n>ms` shorthand is accepted alongside the shared `parseDurationSeconds` grammar) | optional; slice 3 (`docs/decisions/2026-08-27-ug-auto-mode-approval.md`, "Report capture under `claude -p`"): bounds the child's PreToolUse hook's bounded, fail-closed poll for a report that has not yet landed in the transcript. Default `2s` (a measured, retuned value; see `docs/okf/understanding-gate-auto-mode-signals.md`, "Chosen `report_scan.max_wait` default", for the derivation); schema ceiling `5s` |
 | `ux` | `PolicyUxSchema` (`cannot` + `required[]` + `run[]`) | optional; renders agent-facing remediation when the PreToolUse blocker fires |
 | `producers` | array of `ProducerSchema` (`kind` + recipe) | optional; companion to `ux:` for the same blocker render path |
 
@@ -671,6 +672,39 @@ The blocker on the next tool call sees the new approval through the signed marke
 ### Pre-approving a batch of tasks
 
 `--task` is variadic. Passing several ids (`--task a b c`, or comma-joined `--task a,b,c`) writes one task-scoped marker per id in a single operator action. The understanding gate is task-scoped (its `expire_on_tool_match` hook expires the approval on every `task_finish`), so without this a multi-task session needs one `harness approve understanding` per task. Pre-approving the batch up front means each `task_start` finds its marker already present. This does not weaken the gate: the operator's Understanding Report still has to enumerate every task it covers; only the round-trip count collapses. With no `--task` flag the active-claim file is auto-resolved as before (single task).
+
+### Delegating a headless child (`harness delegate`)
+
+```sh
+harness delegate --child-session <uuid> (--cwd <path> | --task <id>) [--ttl <duration>] [--report <path>] [--session-id <parent>]
+```
+
+Slice 3 of `docs/decisions/2026-08-27-ug-auto-mode-approval.md` ("`claude -p` child processes"). A `claude -p` child session has no interactive operator to run `harness approve understanding` for it, and no Understanding Report exists before its first tool call, so slice 1's auto-approval alone blocks every `-p` child. `harness delegate` supplies the other half of the ADR's two-key design: it issues a signed **pre-authorization** for the child, bound to the PARENT session that is already approved. It is not itself an approval, and it never opens the gate on its own: the child still has to write and get its own Understanding Report checked by its own PreToolUse hook before that hook mints the child's own auto-marker.
+
+The two keys the child's hook then requires, both, before it will mint anything:
+
+1. This delegation (or, for a session that is not a `-p` child at all, the `auto_approve.when`-listed `permission_mode`), a trusted signal the delegation supplies precisely because it is a signed artifact written by a `harness` process on behalf of an already-approved parent, bound to the child's own session id so it cannot be replayed onto a different child.
+2. The child's own Understanding Report, persisted and bound to the child's session id.
+
+The delegation is written to `harness.generated/.delegations/<child-sid>`, a directory separate from `.approvals/`: `checkApprovalMarker` (the gate's own marker reader) never consults it, and the `harness approve understanding` marker scans and doctor's `approvedBy`-prefix listing stay free of artefacts that never opened a gate.
+
+**Binding.** At least one of `--cwd` or `--task` is required; a delegation binding neither is refused (`a delegation must bind a cwd or a task`) rather than authorizing the child anywhere, for anything. `--cwd` is hashed, not written literally, so the marker file carries no machine path.
+
+**TTL.** `--ttl` (a duration like `30m` or `1h`) sets the delegation's lifetime. Default: the pack's own `approval_lifecycle.max_age` when the operator has set one, else one hour. The override is bounded: a value above `max_age` (or above 24 hours when no `max_age` is set) is refused, and so is a zero or negative value, so a delegation can never outlive the approval lifetime the operator configured. An expired delegation is refused with its own distinct diagnostic, exactly like an expired approval marker.
+
+**Parent session resolution** is the same precedence chain `harness approve understanding` uses, minus its 6th tier: `--session-id <id>` flag, then `$CLAUDE_CODE_SESSION_ID`, then `$CLAUDE_SESSION_ID`, then `$CODEX_SESSION_ID`, then the staged `harness.generated/.pending-approval` file. There is no newest-report fallback here: a delegation has no report of its own to guess a parent session from.
+
+**Refusals.** Every failure is a distinct diagnostic, never a silent fall-through to allow: an invalid (non-UUID) `--child-session`, a delegation binding neither `--cwd` nor `--task`, an unresolved parent session id, a missing/forged/expired parent approval marker, an absent operator signing key (never created as a side effect of delegating), or an unreadable `--report` file.
+
+**`--report <path>` (fallback shape).** Under `-p`, the Stop hook fires once at the end of the run, and a report the child emits before its first tool call is not yet in the session transcript at the instant the child's PreToolUse hook fires; the hook's default recovery is a bounded transcript poll (`auto_approve.report_scan.max_wait`, see the config table above). If that lag is not reliably bounded, the launcher supplies the report directly: `--report <path>` reads that file, and the delegation binds it by BOTH its content hash and its path hash, so the child's hook checks content the parent fixed, at the path the parent fixed, not a same-content copy the child placed somewhere of its own choosing. This flag mints and signs a verifiable binding today, but the child's PreToolUse hook does not yet read it back: a report-bound delegation is refused (`report_path_mismatch`) rather than consumed, so the transcript poll above is the only live report channel this release actually acts on; wiring the fallback shape into the child hook is a named follow-up.
+
+**Audit.** On success, the CLI prints `delegation: ✓ <path> (child <sid>, parent <sid>, expires <iso>)` and writes the audit-only ledger fact `understanding-delegated:<child-sid>:<parent-sid>` (source tag always `harness-delegate-cli`; a delegation carries no actor field to stamp, so there is no `--approved-by` on this verb). A failed ledger write is one warning line, never a refusal: the delegation itself is already minted by that point.
+
+**The harness smoke runner is the first consumer.** `harness smoke` issues a delegation for the session id it already chooses, bound to the cwd it spawns the child into, before every run, with a TTL of the run's own `--timeout-ms` budget plus a minute of slack (never the one-hour default: a short smoke run has no business minting a pre-authorization that outlives it by an hour); pass `--no-delegate` to not pre-authorize the spawned child, in which case it has no delegation binding it to this approved session and falls back to the plain opt-in path.
+
+**Doctor.** `harness doctor`'s understanding-gate section reports the delegations-on-disk metric right next to the `.approvals/`-derived "auto approvals in the last N sessions" line above, computed from `.delegations/` only. No line renders until `.delegations/` exists at all; once it does, an empty directory renders the bare `delegations on disk: 0` line, and the `(<count> expired, <count> unreadable)` parenthetical appears only once there is anything to count. Informational unless it finds an unreadable file, in which case it rolls into `warningCount`.
+
+This is a rule-level summary; the measured transcript-lag numbers, the retry-behaviour sample, and the chosen `report_scan.max_wait` default are in `docs/okf/understanding-gate-auto-mode-signals.md`, not restated here.
 
 ### Session-id resolution
 

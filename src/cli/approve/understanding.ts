@@ -247,11 +247,65 @@ function expandHomePath(p: string): string {
   return p;
 }
 
-async function writeLedgerTag(
+/** Best-effort manifest load plus the resolved `understanding-before-execution` pack config entry it feeds. */
+export interface DeclaredUnderstandingPack {
+  /** `null` when the manifest could not be loaded; the caller degrades gracefully rather than treating this as fatal. */
+  manifest: Manifest | null;
+  /** The load failure's message, when `manifest` is `null`. `null` on a clean load. */
+  manifestLoadError: string | null;
+  /**
+   * The pack's own declared entry when present and not explicitly
+   * `enabled: false`; otherwise a synthesized empty entry (`config: {}`)
+   * so a caller's `resolveMode` / `approval_lifecycle` read still resolves
+   * via Env > default instead of needing a null check.
+   */
+  declaredPack: ModeConfigSource;
+}
+
+/**
+ * Load the manifest (best-effort, never throws) and resolve the
+ * `understanding-before-execution` pack's declared config entry from it.
+ * Extracted (agent-tasks 37ad0b05) so
+ * `approveUnderstanding` and `issueDelegation` (`src/cli/delegate/index.ts`)
+ * share one copy of this manifest-load-plus-pack-lookup shape instead of
+ * each carrying its own byte-identical block
+ * (`npm run check:duplication` was flagging the pair as a clone). Pure
+ * extraction: the try/catch and the `declaredPack` fallback are unchanged
+ * from what each call site did inline before this change.
+ */
+export function loadDeclaredUnderstandingPack(
+  opts: LoaderOptions & { manifest?: Manifest },
+): DeclaredUnderstandingPack {
+  let manifest: Manifest | null = null;
+  let manifestLoadError: string | null = null;
+  try {
+    manifest = opts.manifest ?? loadManifest(opts).manifest;
+  } catch (err) {
+    manifestLoadError = err instanceof Error ? err.message : String(err);
+  }
+  const declaredPack: ModeConfigSource = manifest?.policy_packs.find(
+    (p) => p.name === UNDERSTANDING_PACK_NAME && p.enabled !== false,
+  ) ?? { name: UNDERSTANDING_PACK_NAME, config: {} };
+  return { manifest, manifestLoadError, declaredPack };
+}
+
+/**
+ * Exported (agent-tasks 37ad0b05, Slice 3 of the auto-mode-approval ADR)
+ * with an additive `source` parameter so `harness delegate` can reuse
+ * this writer verbatim instead of re-implementing the same
+ * findGroundingMcp + addLedgerFact shape a third time in this codebase
+ * (branch-protection.ts already carries its own independent copy for
+ * its own `harness-approve-branch-protection` source). `source` defaults
+ * to this file's own literal, so `approveUnderstanding`'s own call below
+ * (which does not pass it) is byte-identical to before this change: pure
+ * additive parameterization, not a behaviour change for that caller.
+ */
+export async function writeLedgerTag(
   manifest: Manifest,
   sessionId: string,
   content: string,
   opts: ApproveUnderstandingOptions,
+  source = "harness-approve-understanding",
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   if (opts.ledgerAdd) return opts.ledgerAdd(sessionId, content);
   const server = findGroundingMcp(manifest);
@@ -267,7 +321,7 @@ async function writeLedgerTag(
     timeoutMs: server.health?.timeout_ms ?? 5_000,
     sessionId,
     content,
-    source: "harness-approve-understanding",
+    source,
   });
 }
 
@@ -698,29 +752,23 @@ export async function approveUnderstanding(
 
   // Manifest is required for the ledger write path; if it can't load,
   // we still try to flip the persisted report so a solo user benefits.
-  let manifest: Manifest | null = null;
-  let manifestLoadError: string | null = null;
-  try {
-    manifest = opts.manifest ?? loadManifest(opts).manifest;
-  } catch (err) {
-    // Not blocking: a solo user still benefits from the report flip below
-    // even with no manifest. But capture the cause so the degraded-ok
-    // ledger result names WHY the write was skipped instead of leaving the
-    // operator with a bare `ledger: ok false` (no-silent-errors, M8).
-    manifestLoadError = err instanceof Error ? err.message : String(err);
-  }
-
+  // Not blocking: a solo user still benefits from the report flip below
+  // even with no manifest. `manifestLoadError` captures the cause so the
+  // degraded-ok ledger result names WHY the write was skipped instead of
+  // leaving the operator with a bare `ledger: ok false` (no-silent-errors,
+  // M8).
   // Gap-fill mode for a stdin report that declares none of its own
   // (harness task 5d73d78d): resolve via `resolveMode` (Env >
   // config.mode > DEFAULT_MODE — this IS a live runtime consumer, unlike
   // `resolve()`/`buildHooks`'s generation path; see `MODE_ENV`'s doc
   // comment in understanding-before-execution.ts for why the two differ),
-  // from whatever manifest is available, so a report captured via this
-  // path is validated against the operator's actually-configured mode
-  // instead of a hardcoded "fast_confirm" regardless of harness.yaml. A
-  // missing manifest, or a manifest without the pack declared, resolves
-  // the same as an empty `config:` block — resolveMode still applies
-  // Env > DEFAULT_MODE in that case.
+  // from whatever manifest is available (`loadDeclaredUnderstandingPack`
+  // above), so a report captured via this path is validated against the
+  // operator's actually-configured mode instead of a hardcoded
+  // "fast_confirm" regardless of harness.yaml. A missing manifest, or a
+  // manifest without the pack declared, resolves the same as an empty
+  // `config:` block, resolveMode still applies Env > DEFAULT_MODE in
+  // that case.
   //
   // A pack entry that IS declared but `enabled: false` is treated the
   // SAME as undeclared (task 5d73d78d review LOW-10): a disabled pack's
@@ -729,10 +777,8 @@ export async function approveUnderstanding(
   // fallback only needs `name` + `config` (resolveMode's minimal
   // `ModeConfigSource` shape) — `source`/`enabled` would otherwise have
   // to be invented for a pack entry that, by construction, was never
-  // matched.
-  const declaredPack: ModeConfigSource = manifest?.policy_packs.find(
-    (p) => p.name === UNDERSTANDING_PACK_NAME && p.enabled !== false,
-  ) ?? { name: UNDERSTANDING_PACK_NAME, config: {} };
+  // matched. `loadDeclaredUnderstandingPack` applies that same rule.
+  const { manifest, manifestLoadError, declaredPack } = loadDeclaredUnderstandingPack(opts);
   // Task 5d73d78d review LOW (fix-round-3): `resolveMode`'s own warning
   // (an invalid `config.mode` or `UNDERSTANDING_GATE_MODE` value) used to
   // be dropped on the floor here — only `.mode` was read. The Codex

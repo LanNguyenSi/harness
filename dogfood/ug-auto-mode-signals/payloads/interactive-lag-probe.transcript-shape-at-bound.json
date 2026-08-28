@@ -1,0 +1,68 @@
+[
+  {
+    "run": 1,
+    "transcript_lines_at_bound": 11,
+    "types_in_order": [
+      "mode",
+      "permission-mode",
+      "atis-latch",
+      "file-history-snapshot",
+      "user",
+      "attachment",
+      "attachment",
+      "attachment",
+      "attachment",
+      "attachment",
+      "ai-title"
+    ],
+    "isSidechain_counts": {
+      "None": 5,
+      "False": 6
+    },
+    "assistant_entries_at_bound": 0
+  },
+  {
+    "run": 2,
+    "transcript_lines_at_bound": 11,
+    "types_in_order": [
+      "mode",
+      "permission-mode",
+      "atis-latch",
+      "file-history-snapshot",
+      "user",
+      "attachment",
+      "attachment",
+      "attachment",
+      "attachment",
+      "attachment",
+      "ai-title"
+    ],
+    "isSidechain_counts": {
+      "None": 5,
+      "False": 6
+    },
+    "assistant_entries_at_bound": 0
+  },
+  {
+    "run": 3,
+    "transcript_lines_at_bound": 11,
+    "types_in_order": [
+      "mode",
+      "permission-mode",
+      "atis-latch",
+      "file-history-snapshot",
+      "user",
+      "attachment",
+      "attachment",
+      "attachment",
+      "attachment",
+      "attachment",
+      "ai-title"
+    ],
+    "isSidechain_counts": {
+      "None": 5,
+      "False": 6
+    },
+    "assistant_entries_at_bound": 0
+  }
+]

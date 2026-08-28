@@ -9,6 +9,17 @@
 # helpers send are the three known STARTUP dialogs' acknowledgements
 # (theme, workspace trust, bypassPermissions warning), the prompt text,
 # Escape and /exit. Any screen that is not one of those aborts the run.
+#
+# Slice 3 re-measurement note (Claude Code 2.1.250 on this machine;
+# sections (h)/(i) below were captured on 2.1.247): the workspace-trust
+# dialog's default selection is now "No, exit", the same default the
+# bypassPermissions warning already had. A bare Enter on that screen exits
+# the session instead of accepting it; this was confirmed live before the
+# fix below (see the evidence doc's version note, section (q)). The
+# workspace-trust branch now sends Down then Enter, matching the
+# bypassPermissions branch it already used, so both dialogs are answered
+# the same way. This is a version-dependent startup-flow change to
+# reproduce, not a new answer being chosen.
 
 # Seed the isolated CLAUDE_CONFIG_DIR so an interactive `claude` does not
 # fall into first-run onboarding. Without this the session stops on the
@@ -63,9 +74,12 @@ ug_sig_drive_startup() {
         [ "$theme" -gt 3 ] && { echo "ABORT: theme dialog did not clear"; echo "$pane"; return 1; }
         tmux send-keys -t "$s" Enter; sleep 2; continue ;;
       *"one you trust"*)
+        # Default selection is "No, exit" (Claude Code 2.1.250; see the
+        # module comment above). Move down to "Yes, I trust this folder"
+        # before confirming, same shape as the bypassPermissions branch.
         trust=$(( trust + 1 ))
         [ "$trust" -gt 3 ] && { echo "ABORT: workspace-trust dialog did not clear"; echo "$pane"; return 1; }
-        tmux send-keys -t "$s" Enter; sleep 2; continue ;;
+        tmux send-keys -t "$s" Down; sleep 1; tmux send-keys -t "$s" Enter; sleep 2; continue ;;
       *"Bypass Permissions mode"*)
         # Default selection is "No, exit"; move down to "Yes, I accept".
         bypass=$(( bypass + 1 ))

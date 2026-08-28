@@ -9,6 +9,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Understanding gate: `harness delegate`, a signed pre-authorization for headless `claude -p` children, slice 3 of the auto-mode-approval ADR**
+  (agent-tasks `37ad0b05`, `docs/decisions/2026-08-27-ug-auto-mode-approval.md`,
+  "`claude -p` delegation"). `harness delegate --child-session <uuid>
+  (--cwd <path> | --task <id>) [--ttl <duration>] [--report <path>]
+  [--session-id <parent>]` issues a signed delegation for a `-p` child,
+  bound to an already-approved PARENT session, refusing when the parent
+  carries no valid marker or when the delegation binds neither a cwd nor
+  a task. The delegation is written to its own directory,
+  `harness.generated/.delegations/<child-sid>`, never `.approvals/`,
+  signed under markerId `delegation-<child-sid>` with every binding
+  (parent session, hashed cwd, task, expiry, and, in the fallback shape,
+  the launcher-supplied report's path and content hash) packed into the
+  signed `approvedBy` string; a dedicated verifier checks the signature,
+  the parsed bindings, expiry, and cwd/task match before the child's own
+  PreToolUse hook will mint anything, and every refusal is a distinct
+  diagnostic, never a fall-through to allow. The audit-only ledger fact
+  `understanding-delegated:<child-sid>:<parent-sid>` is written
+  alongside it.
+  - **Child report capture under `-p`.** A report the child emits before
+    its first tool call is not yet in the session transcript at the
+    instant the hook fires; the new `auto_approve.report_scan.max_wait`
+    config key bounds a fail-closed poll for it (default `2s`, a
+    measured value derived from the observed `-p` latency distribution;
+    see `docs/okf/understanding-gate-auto-mode-signals.md` for the
+    derivation), with block-and-retry as the behaviour past the bound
+    rather than an alternative to it. The default was retuned from an
+    initial 500ms after end-to-end dogfood runs against a real
+    full-length report (see the evidence doc's "Chosen
+    `report_scan.max_wait` default" section for why). The child's own
+    PreToolUse hook,
+    on a valid delegation, runs this scan, persists the report bound to
+    the child's session id, and only then mints the child's own
+    auto-marker with `approvedBy` carrying the parent linkage.
+  - **Once-per-session report adoption.** The scan accepts the report
+    under any heading level (`#` through `######`), matching the schema
+    hint the child is given rather than pinning one, and each transcript
+    entry a report is captured from is spent at most once per session:
+    its id is recorded, one per line, in its own directory
+    `harness.generated/.delegation-adoptions/<child-sid>`, a sibling of
+    `.delegations/` rather than nested inside it, so `harness doctor`'s
+    delegations-on-disk metric (which counts every regular file directly
+    under `.delegations/`) never miscounts it. Without this rule an
+    expired auto-marker would re-mint itself from the same transcript
+    entry, silently handing the delegation's longer TTL to the approval.
+    The minted marker's `approvedBy` on this path always carries the
+    neutral `delegated` mode literal, never the payload's raw
+    `permission_mode`, so a doctor listing never buckets it under a mode
+    that played no part in the decision.
+  - **The harness smoke runner is the first consumer.** `harness smoke`
+    now issues a delegation for the session id it already chooses,
+    bound to the cwd the child actually spawns into, before every run;
+    a refusal prints one line and the run proceeds exactly as before
+    slice 3, and `--no-delegate` opts a launcher back into the
+    pre-slice-3 shape entirely.
+  - **`harness doctor`** gains a `delegations on disk: <count> (<count>
+    expired, <count> unreadable)` line in the understanding-gate
+    section, counted from `.delegations/` only (never `.approvals/`),
+    informational unless it finds an unreadable file.
+  - **The `--report` fallback shape is issued and signature-verifiable
+    but not yet consumed by the child hook**: a delegation that binds a
+    launcher-supplied report is refused (`report_path_mismatch`) rather
+    than checked against it, since the hook never passes
+    `launcherReportPath` to the verifier; wiring it in is a named
+    follow-up, and the transcript-scan channel above is what this
+    release actually acts on.
 - **`harness doctor`: warn when `auto_approve` is configured without
   `mode: grill_me`** (agent-tasks `abfad738`, follow-up of the ADR
   `docs/decisions/2026-08-27-ug-auto-mode-approval.md` slice 1). The
@@ -68,6 +133,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `codex`, so a repo that never opted Codex into the auto path sees no
   line. Warning only, never an enforcement; new module
   `src/cli/doctor/codex-config-drift.ts`.
+
+### Security
+
+- **The honest trust model in `src/runtime/approval-signing.ts` names the delegation as a third signed artifact kind and `harness delegate` as a second CLI writer**
+  (agent-tasks `37ad0b05`), beside the approval / branch-protection
+  markers and the `harness approve` verbs: same key, same HMAC
+  primitive, its own markerId namespace (`delegation-<child-sid>`), and
+  a different meaning for `reportContentHash` on that artifact kind (the
+  launcher-supplied report file, not a persisted one) that a reader must
+  branch on.
 
 ## [0.51.0] - 2026-08-27
 

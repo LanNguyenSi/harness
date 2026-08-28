@@ -17,13 +17,22 @@
 //        ...
 //        UNDERSTANDING_REPORT
 //
-//      This is the report-capture channel: the Stop-hook producer fires
-//      only at END of turn (after approve already ran), and current
-//      Claude Code builds do not reliably persist mid-turn assistant
-//      text to the transcript JSONL, so the command itself is the only
-//      channel that reliably carries the report to `harness approve
-//      understanding`. As a bonus the operator reads the full report
-//      inside the permission prompt before approving.
+//      This is the report-capture channel for the interactive/operator
+//      path: the Stop-hook producer fires only at END of turn (after
+//      approve already ran), and current Claude Code builds do not
+//      reliably persist mid-turn assistant text to the transcript
+//      JSONL within the same instant this hook fires, so the command
+//      itself is the only channel that reliably carries the report to
+//      `harness approve understanding` for a human reading the prompt
+//      right now. As a bonus the operator reads the full report inside
+//      the permission prompt before approving.
+//
+//      Under `-p` (no operator to read a prompt), slice 3's delegation
+//      path does not depend on this heredoc: the report lands in the
+//      transcript shortly afterwards, within a bounded poll window, and
+//      the child's own PreToolUse hook polls for it there instead (see
+//      `docs/okf/understanding-gate-auto-mode-signals.md`, "Chosen
+//      `report_scan.max_wait` default").
 //
 // Heredoc safety: the delimiter must be single-quoted (no parameter or
 // command substitution inside the body), the command part before `<<`

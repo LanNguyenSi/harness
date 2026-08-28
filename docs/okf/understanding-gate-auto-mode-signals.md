@@ -3,10 +3,11 @@ type: overview
 title: Understanding gate, auto-mode signal sources (measured)
 description: What signals exist for detecting an agent's own permission/auto-approval mode across Claude Code, Codex, and opencode, measured where possible, doc-only where not, with a trust-class table. Covers both launch shapes for Claude Code, headless and interactive, plus how a hook ask resolves in each and what a subagent's tool call looks like to the same hook. The rule and the decision on which signals gate anything live in the ADR, not here.
 tags: [understanding-gate, permission-mode, auto-mode, hooks, measurement, trust-boundary]
-timestamp: 2026-08-27T19:59:52Z
+timestamp: 2026-08-28T08:16:08Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - dogfood/ug-auto-mode-signals/README.md
+  - dogfood/ug-auto-mode-signals/delegate-e2e.sh
   - src/cli/pack/hook-pre-tool-use.ts
   - src/cli/pack/hook-bootstrap.ts
   - src/runtime/session-id.ts
@@ -290,6 +291,185 @@ section (j); script `subagent-capture.sh`; fixtures
   in the first place; the separation is by file, not by a flag inside one
   file.
 
+### Measured: lag distribution under `-p` (README section (o))
+
+Ten positive runs plus two negative controls, `--permission-mode
+bypassPermissions` (README results section (o); script
+`dogfood/ug-auto-mode-signals/lag-probe.sh`; fixtures
+`payloads/lag-probe.jsonl`). Same role-aware, token-based detector as the
+transcript-visibility probe above, polling every 25 ms for up to 5 s
+instead of section (e)'s 100 ms / 3 s:
+
+- p50 67.5 ms, max 139 ms, min 62 ms across the ten positive runs, in two
+  latency bands (62-70 ms, 7/10; 104-139 ms, 3/10). `lines_t0` is 9 in all
+  twelve runs, matching section (e): the report is never visible at the
+  instant `PreToolUse` fires. 0/2 negative controls false-positived within
+  the bound.
+- The winning transcript entry carries `isSidechain: false` and a
+  `sessionId` equal to the payload's own `session_id` in 10/10 runs,
+  confirming the entry the timer stops on is a main-line entry of the same
+  session, not a sidechain or a foreign one.
+
+### Measured: retry distribution by deny text (README section (p))
+
+Question left open by the block-and-retry sample above (two independent
+n=3 samples of one deny text disagreeing 1/3 vs 3/3 on an unprompted third
+attempt): is that split explained by the text's wording or by sample size?
+Re-run at n=10 per text for the "no report first" shape (n=3 per text for
+"report first", already established not to lag; README results section
+(p); script `dogfood/ug-auto-mode-signals/retry-probe-v2.sh`; fixtures
+`payloads/retry-probe-v2.jsonl`,
+`payloads/retry-probe-v2-<text>-<kind><n>.result.json`). Two texts, quoted
+verbatim in the README: `single` (byte-identical to the original text) and
+`repeated` (asks explicitly for a further retry if denied again).
+
+- "Report first": 2 attempts (1 deny, 1 allow), 3/3 for both texts.
+- "No report first": 3 attempts (2 deny, 1 allow), 10/10 for BOTH texts,
+  20/20 combined. 0/20 stopped after the single retry either text asked
+  for.
+- Reading: sample size, not text, explains the earlier disagreement; at
+  n=10 the "retry again unprompted" behaviour is universal for both texts,
+  so this sample gives no evidence that the deny text's wording changes
+  the retry count. What tracks the attempt count is the lag itself: a
+  retry succeeds once the report has had real time to flush (a further
+  model turn after the first), and fails when the retry is still inside
+  the turn that wrote the report.
+
+### Measured: interactive lag distribution (README section (q))
+
+Same 25 ms / 5 s detector as the previous section, wired as the
+`PreToolUse` hook of an interactive (non `-p`) session via the tmux driver
+(README results section (q); script
+`dogfood/ug-auto-mode-signals/interactive-lag-probe.sh`; fixtures
+`payloads/interactive-lag-probe.jsonl`,
+`payloads/interactive-lag-probe.transcript-shape-at-bound.json`,
+`payloads/interactive-lag-probe.ilag1-pane.txt`). Three fresh
+`bypassPermissions` sessions:
+
+- 3/3: the report is NOT visible within the 5 s bound in any run, unlike
+  the `-p` result above (10/10 within 139 ms). At the moment each run's
+  poll gives up, the transcript holds 11 lines and none is an
+  `assistant`-type entry; all eleven are startup/preamble entries written
+  before the model's own turn (`mode`, `permission-mode`, `atis-latch`,
+  `file-history-snapshot`, one `user`, five `attachment`, `ai-title`),
+  identical across all three runs.
+- The pane fixture (captured after the session ended) shows the model did
+  write the report, run the gated command, and reply "done", so the turn
+  is not lost; the transcript write for it happens later than this hook's
+  own 5 s wait, or possibly only once this same hook lets the gated call
+  proceed. This measurement's bounded poll, run from inside the
+  `PreToolUse` invocation it is trying to inform, cannot distinguish those
+  two readings without a channel outside the hook itself, which was out of
+  scope for this round.
+- Building this probe surfaced a version-dependent startup-driver fix,
+  unrelated to the lag question itself: on this machine's Claude Code
+  2.1.250, the workspace-trust dialog defaults to "No, exit", where the
+  shared interactive driver (`interactive-lib.sh`) previously sent a bare
+  `Enter` there; every run of this probe failed at startup until the
+  driver was changed to send `Down` then `Enter`, the same pattern it
+  already used for the bypassPermissions warning. Recorded in the README's
+  Method section; not itself a finding about the gate.
+
+### Measured: delegation end to end under `-p` (README section (r))
+
+Real `claude -p` children against the REAL production hook chain, not a
+recorder or a synthetic token-detector hook: `harness pack hook
+pre-tool-use` (the built harness CLI) for `PreToolUse`, the real
+`@lannguyensi/understanding-gate` npm package bins for `UserPromptSubmit`
+/ `Stop`, the same roster `harness apply` writes for Claude Code, over
+an isolated manifest/generated dir/`CLAUDE_CONFIG_DIR` (README section
+(r); script `dogfood/ug-auto-mode-signals/delegate-e2e.sh`; fixture
+`payloads/delegate-e2e.jsonl`). Four shapes, n=3+3+1+1:
+
+- (a) valid delegation, report before the gated call: 3/3 succeeded, all
+  via the delegation's own transcript-scan-and-persist (slice 1's
+  mode-allowlist check alone never reads the transcript, and nothing
+  else persists a report mid-session, the real Stop-capture bin fires
+  once, at the very end of the whole invocation).
+- (b) valid delegation, prompt told the child NOT to write a report:
+  3/3 wrote one anyway once blocked, and succeeded the same way as (a),
+  a measured negative-control finding about a cooperative model's own
+  behaviour under this prompt, not evidence the gate opens without a
+  report.
+- (c) NO delegation, otherwise identical to (a): 0/1. The child tried
+  the `harness approve` escape twice (denied, matching README section
+  (f)'s `-p`-`ask`-resolves-to-denial finding) and then gave up. This is
+  the ADR's own premise (no operator, `Stop` fires once, too late)
+  reproduced end to end, a measured negative, not a slice 3 defect.
+- (d) delegation bound to a different cwd than the child's own: 0/1,
+  `cwd_mismatch` on both `PreToolUse` attempts.
+- `report_scan.max_wait` (retuned default 2 s, was 500 ms during this
+  round's own runs): 6/6 of the (a)/(b) FIRST attempts exhausted the
+  500 ms bound then in force without finding the report (waited
+  519-524 ms), where sections (e)/(o) below (a much shorter probe
+  report) measured a comfortable 139 ms max across 15 samples. See
+  "Chosen `report_scan.max_wait` default" immediately below for the
+  retuning this produced.
+
+## Chosen `report_scan.max_wait` default
+
+Drawing sections (o) through (q) above AND the real end-to-end runs
+("Measured: delegation end to end under `-p`" above, README section
+(r)) into the one number and the one verdict the ADR's slice 3
+acceptance criterion 6 asks for. The two data sets disagree on
+magnitude but agree on shape, and the second one is the one that
+decides the number: the probe reports (sections (e)/(o), max 139 ms
+across 15 samples, a first-guess 500 ms default at roughly 3-4x that
+max) were short synthetic text, while the real end-to-end runs (README
+section (r)) carried the actual ten-section grill_me report this
+gate's own schema produces, and every one of those 6/6 first attempts
+exhausted the full 500 ms bound (waited 519-524 ms) before the report
+was visible. Report length measurably changes how long the transcript
+flush takes, and the probe-derived 500 ms default was anchored to a
+report far shorter than a real one.
+
+- **Default: 2 s (2000 ms), retuned from an initial 500 ms.**
+  Derivation: the observed first-poll overrun with a full-length
+  report (519-524 ms, the point at which the OLD bound was already
+  exhausted with the report still not visible) times roughly the same
+  3-4x safety factor the original derivation used, rounded to a
+  human-friendly value, gives 2 s. This covers the deciding case, a
+  full-length report written in the same turn as the call that needs
+  it, not only the shorter probe reports the first-guess default was
+  anchored to.
+- **Schema ceiling: 5000 ms (5 s)**, unchanged. Nothing measured in
+  either data set justifies asking a hook to hold a tool call open
+  longer than that, and the interactive finding below argues against
+  leaning on the poll at all past a `-p` launch.
+- **Verdict (iv), `-p`: bounded, and not felt as a hang.** The retuned
+  2 s default is roughly four times the point at which the old 500 ms
+  bound was already short on a full-length report (519-524 ms
+  overrun), and the retry-and-instruct fallback the ADR designed for
+  exactly this case is what carries the remainder: all 6/6 real
+  end-to-end runs succeeded on the retry attempt regardless of which
+  bound was in force. This is not a contradiction of the original `-p`
+  verdict's core claim (a bounded poll, not an unbounded one, is the
+  right shape); it is a correction of the SPECIFIC number, now
+  anchored to the real-report data instead of the shorter probe
+  reports. The real-report lag distribution at n >= 10 is not measured
+  here; see the follow-up bullet below.
+- **Verdict (iv), interactive: does NOT hold, unchanged.** Section (q)
+  found the report unreachable within 5 s in 3/3 interactive runs, and
+  the transcript-shape fixture shows why a longer bound would not
+  obviously fix it: the assistant's own turn had written zero entries
+  to the transcript file by the bound, even though the pane fixture
+  confirms the turn had already completed content-wise. No bound
+  measured in this round covers the interactive case. Per the ADR's
+  own fallback clause ("If no bound satisfies both, this slice
+  switches to the launcher-supplied report file"): the
+  launcher-supplied report file, bound by hash in the delegation's
+  `reportContentHash`, is the intended channel for the interactive
+  case rather than the transcript scan; wiring it into the child's
+  PreToolUse hook is a named follow-up (the hook does not yet read
+  `--report` back, see the pack doc). The `-p` case keeps the bounded
+  poll (2 s default, 5 s ceiling) as retuned above.
+- **Not measured here: the real-report lag distribution at n >= 10.**
+  The real end-to-end runs above are n=6 (a)/(b) first attempts, all
+  against the same fixture report; a larger sample of real-report
+  first-poll latencies, ideally across report lengths, is a follow-up
+  measurement, not something this round's data supports concluding
+  further.
+
 ## Codex
 
 ### Measured: Codex `permission_mode` by launch shape
@@ -401,9 +581,12 @@ the TUI. Out of scope for auto-approval; design note only.
 
 ## Unverified / not measured
 
-- Block-and-retry under `-p`: one deny text, one turn budget (6), one
-  mode; two independent 3-run samples disagree on the unprompted third
-  attempt (1/3 vs 3/3), so no rate is claimed for it.
+- Block-and-retry under `-p`: now measured at n=10 per deny text for the
+  "no report first" shape ("Measured: retry distribution by deny text"
+  above); the earlier 1/3 vs 3/3 split is resolved as sample-size noise,
+  not a text effect (20/20 combined retried again unprompted and
+  succeeded). Still not exercised: turn budgets other than 6, modes other
+  than `bypassPermissions`, deny texts other than the two named there.
 - Hook-env `CLAUDE_CODE_SESSION_ID` agreement with the payload
   `session_id` is now measured for two launch shapes whose session id
   Claude Code generated, a `-p` run and an interactive session (2/2). The
@@ -437,10 +620,16 @@ the TUI. Out of scope for auto-approval; design note only.
   `plan`/`acceptEdits`/`dontAsk` for Codex's: never observed in this
   measurement (Claude Code exercised `default`, `acceptEdits`,
   `bypassPermissions`; Codex exercised `default`, `bypassPermissions`).
-- Single machine, single Claude Code version (2.1.247, macOS): no
-  cross-version or cross-OS comparison was made.
-- Transcript-visibility probe: n=5, all under `bypassPermissions`; not
-  repeated under other modes, and not repeated interactively.
+- Single machine throughout; two Claude Code versions (2.1.247 for
+  sections (a)-(n), 2.1.250 for (o)-(q)), noted where it mattered (the
+  interactive startup-driver fix); no cross-OS comparison was made.
+- Transcript-visibility lag: measured at finer grain under `-p` (n=10,
+  "Measured: lag distribution under `-p`" above) and, separately,
+  interactively (n=3, "Measured: interactive lag distribution" above); the
+  interactive case did not resolve within the same 5 s bound in any run,
+  and no probe here established whether or when it resolves at all past
+  that bound (see "Chosen `report_scan.max_wait` default"). Not repeated
+  under permission modes other than `bypassPermissions`.
 - The interactive probes need the isolated config directory seeded with
   first-run onboarding flags, otherwise the session stops on a login
   screen (README, "Interactive capture"). The seeding is setup, not a
