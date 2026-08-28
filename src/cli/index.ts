@@ -2056,10 +2056,6 @@ export function buildProgram(opts: RunOptions = {}): Command {
       "--session-id <id>",
       "explicit parent session id (default: $CLAUDE_CODE_SESSION_ID, then $CLAUDE_SESSION_ID, then $CODEX_SESSION_ID, then staged .pending-approval)",
     )
-    .option(
-      "--approved-by <actor>",
-      "ledger source tag override for this delegation's audit-only fact (default: harness-delegate-cli)",
-    )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
     .action(
@@ -2070,7 +2066,6 @@ export function buildProgram(opts: RunOptions = {}): Command {
         ttl?: string;
         report?: string;
         sessionId?: string;
-        approvedBy?: string;
         config?: string;
         project?: string;
       }) => {
@@ -2104,7 +2099,6 @@ export function buildProgram(opts: RunOptions = {}): Command {
         if (ttlSeconds !== undefined) cliOpts.ttlSeconds = ttlSeconds;
         if (options.report) cliOpts.reportPath = options.report;
         if (options.sessionId) cliOpts.parentSessionId = options.sessionId;
-        if (options.approvedBy) cliOpts.approvedBy = options.approvedBy;
         if (options.config) cliOpts.configPath = options.config;
         if (options.project) cliOpts.project = options.project;
 

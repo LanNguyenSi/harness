@@ -460,7 +460,6 @@ describe("harness delegate - CLI wiring", () => {
       "--ttl",
       "--report",
       "--session-id",
-      "--approved-by",
       "--config",
       "--project",
     ]) {

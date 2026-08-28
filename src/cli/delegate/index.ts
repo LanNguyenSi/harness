@@ -24,19 +24,16 @@
 // `resolveApprovalSessionId` helper, with NO newest-report fallback
 // (delegation has no report of its own to guess a session from).
 //
-// LEDGER SOURCE: the ledger fact this verb writes uses its own source
-// tag `harness-delegate-cli` (ADR "Audit and doctor"), distinct from
-// `harness approve understanding`'s `harness-approve-understanding`.
+// LEDGER SOURCE: the ledger fact this verb writes uses its own fixed
+// source tag `harness-delegate-cli` (ADR "Audit and doctor"), distinct
+// from `harness approve understanding`'s `harness-approve-understanding`.
 // Reused directly: the approve CLI's `writeLedgerTag` now takes `source`
 // as an additive parameter (default unchanged, so `approveUnderstanding`'s
 // own call is unaffected) so this verb does not re-implement the same
 // findGroundingMcp + addLedgerFact shape `branch-protection.ts` already
-// carries its own independent copy of. `--approved-by` overrides the
-// ledger source when the operator wants to distinguish which actor/script
-// issued a given delegation in the audit trail; omitted, it defaults to
-// exactly `harness-delegate-cli`, matching the ADR's fixed tag when the
-// flag is not used. There is no signed field for an actor name: the
-// delegation's signed `approvedBy` string is the packed
+// carries its own independent copy of. There is no actor field to stamp
+// on a delegation and no `--approved-by` flag to override the source:
+// the delegation's signed `approvedBy` string is the packed
 // `delegated:<parent>;cwd=...;task=...;expires=...` tuple
 // (delegation-markers.ts), which has no room for one, and the ADR rules
 // out adding a new signed field (a `SIGNING_ALG` bump).
@@ -55,14 +52,10 @@ import {
   parseApprovalLifecycle,
   writeDelegationMarker,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
-import {
-  type ModeConfigSource,
-  PACK_NAME as UNDERSTANDING_PACK_NAME,
-} from "../../policy-packs/builtin/understanding-before-execution.js";
 import { readRegularFileRejectingSymlink } from "../../io/read-regular-file.js";
 import type { Manifest } from "../../schema/index.js";
-import { writeLedgerTag } from "../approve/understanding.js";
-import { loadManifest, resolvePaths, type LoaderOptions } from "../loader.js";
+import { loadDeclaredUnderstandingPack, writeLedgerTag } from "../approve/understanding.js";
+import { resolvePaths, type LoaderOptions } from "../loader.js";
 
 /** Default delegation lifetime when neither `--ttl` nor the pack's `approval_lifecycle.max_age` is set (ADR "TTL, cwd, and subagents"). */
 export const DEFAULT_DELEGATION_TTL_SECONDS = 3600;
@@ -91,8 +84,6 @@ export interface IssueDelegationOptions extends LoaderOptions {
   parentSessionId?: string;
   /** Override `harness.generated/` (test injection). */
   generatedDir?: string;
-  /** Ledger `source` tag override (default {@link DEFAULT_DELEGATE_LEDGER_SOURCE}). */
-  approvedBy?: string;
   /** Override "now" for deterministic tests. */
   now?: Date;
   /** Inject a manifest (test). */
@@ -207,21 +198,12 @@ export async function issueDelegation(
     };
   }
 
-  // Manifest: best-effort, exactly like the approve CLI. A load failure
-  // here degrades the TTL default (falls back to the hardcoded default
-  // below) and the ledger write (audit-only, never a refusal) but never
-  // blocks issuing the delegation itself.
-  let manifest: Manifest | null = null;
-  let manifestLoadError: string | null = null;
-  try {
-    manifest = opts.manifest ?? loadManifest(opts).manifest;
-  } catch (err) {
-    manifestLoadError = err instanceof Error ? err.message : String(err);
-  }
-
-  const declaredPack: ModeConfigSource = manifest?.policy_packs.find(
-    (p) => p.name === UNDERSTANDING_PACK_NAME && p.enabled !== false,
-  ) ?? { name: UNDERSTANDING_PACK_NAME, config: {} };
+  // Manifest: best-effort, exactly like the approve CLI (shared via
+  // `loadDeclaredUnderstandingPack`, agent-tasks 37ad0b05 T-002 fix round
+  // 1 D1). A load failure here degrades the TTL default (falls back to
+  // the hardcoded default below) and the ledger write (audit-only, never
+  // a refusal) but never blocks issuing the delegation itself.
+  const { manifest, manifestLoadError, declaredPack } = loadDeclaredUnderstandingPack(opts);
   const lifecycle = parseApprovalLifecycle(
     (declaredPack.config as Record<string, unknown>)["approval_lifecycle"],
   );
@@ -297,7 +279,6 @@ export async function issueDelegation(
   }
 
   const ledgerContent = delegationLedgerFactFor(opts.childSessionId, parentSessionId);
-  const ledgerSource = opts.approvedBy ?? DEFAULT_DELEGATE_LEDGER_SOURCE;
   let ledgerResult: { ok: true } | { ok: false; reason: string };
   if (opts.ledgerAdd) {
     ledgerResult = await opts.ledgerAdd(opts.childSessionId, ledgerContent);
@@ -307,7 +288,7 @@ export async function issueDelegation(
       opts.childSessionId,
       ledgerContent,
       {},
-      ledgerSource,
+      DEFAULT_DELEGATE_LEDGER_SOURCE,
     );
   } else {
     ledgerResult = {
