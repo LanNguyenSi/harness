@@ -3,6 +3,7 @@ import {
   AUTO_APPROVED_BY_PREFIX,
   CLAUDE_CODE_HARNESS,
   CODEX_HARNESS,
+  DEFAULT_REPORT_SCAN_MAX_WAIT_MS,
   autoApprovedByFor,
   autoApprovedLedgerTagFor,
   harnessAllowed,
@@ -23,7 +24,15 @@ describe("parseAutoApprove", () => {
     // The absent-key default is the whole point of the per-harness
     // opt-in: a block written before the Codex hook existed must keep
     // meaning "Claude Code only".
-    expect(cfg).toEqual({ when: ["bypassPermissions"], harnesses: ["claude-code"] });
+    // `reportScan` (ADR slice 3) resolves to the measured default in the
+    // same absent-key way `harnesses` does, and is asserted here rather
+    // than relaxed to a partial match so a change to either default still
+    // has to be made deliberately.
+    expect(cfg).toEqual({
+      when: ["bypassPermissions"],
+      harnesses: ["claude-code"],
+      reportScan: { maxWaitMs: DEFAULT_REPORT_SCAN_MAX_WAIT_MS },
+    });
     expect(lines).toEqual([]);
   });
 
@@ -36,6 +45,7 @@ describe("parseAutoApprove", () => {
     expect(cfg).toEqual({
       when: ["bypassPermissions"],
       harnesses: ["codex", "claude-code"],
+      reportScan: { maxWaitMs: DEFAULT_REPORT_SCAN_MAX_WAIT_MS },
     });
     expect(lines).toEqual([]);
   });

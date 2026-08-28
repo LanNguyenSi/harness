@@ -30,6 +30,12 @@ import {
   AUTO_APPROVE_HARNESS_VALUES,
   REPORTS_DIR_ENV,
 } from "./understanding-before-execution-runtime.js";
+// Direct import, not through the re-export shim: `parseReportScanMaxWait`
+// has exactly one consumer (the zod block below) and widening the shim's
+// pinned public surface (tests/policy-packs/ube-export-surface.test.ts) is
+// a separate, conscious act. Same precedent as `CODEX_HARNESS`, which the
+// Codex hook imports directly for the same reason.
+import { parseReportScanMaxWait } from "./understanding-before-execution/auto-approve.js";
 import { SHELL_ALIASES } from "../../runtime/tool-name-aliases.js";
 
 // Env var the npm-backed `understanding-gate-claude-hook` bin reads to find
@@ -285,6 +291,11 @@ export const configSchema = z
     // `require_report` is required and must be literal `true` in v1 (ADR
     // threat model (b) item 3: rejecting `false` here makes a future
     // relaxation a visible schema change instead of a silent default).
+    // `report_scan.max_wait` (slice 3) bounds the child's transcript poll
+    // under `claude -p`; it is optional, defaults to
+    // `DEFAULT_REPORT_SCAN_MAX_WAIT_MS` when absent, and is range-checked
+    // here so an over-long bound is a `harness validate` error rather
+    // than a hook that parks a session.
     // Runtime parsing/validation lives in
     // `./understanding-before-execution/auto-approve.ts`.
     auto_approve: z
@@ -296,6 +307,20 @@ export const configSchema = z
           .refine((values) => new Set(values).size === values.length, {
             message: "harnesses must not contain duplicate entries",
           })
+          .optional(),
+        report_scan: z
+          .object({
+            // Parsed by the SAME function the runtime hook uses, so the
+            // lint-time gate and the hook cannot drift on the grammar,
+            // the zero/negative rejection, or the hard ceiling.
+            max_wait: z.string().min(1).superRefine((value, ctx) => {
+              const parsed = parseReportScanMaxWait(value);
+              if (!parsed.ok) {
+                ctx.addIssue({ code: z.ZodIssueCode.custom, message: parsed.reason });
+              }
+            }),
+          })
+          .strict()
           .optional(),
         require_report: z.literal(true),
       })

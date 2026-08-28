@@ -44,6 +44,16 @@
 // but does name a per-session `transcript_path` that exists on disk at
 // PreToolUse time.
 //
+// TWO ALTERNATIVE KEY-ONE SIGNALS (slice 3, agent-tasks 37ad0b05). The
+// ADR's "Decision: two-key design" makes the trusted signal a
+// disjunction: a `when`-listed `permission_mode`, OR a valid delegation
+// for this child session that the CALLING HOOK has already verified and
+// passes in as `delegation`. Both are only key ONE. Key two, the child's
+// own strict-session `pending` report, is condition (6) below and is
+// identical on both paths; nothing about a delegation relaxes it, and no
+// branch here reads a delegation file, so the one verifier stays in
+// `understanding-before-execution/delegation-markers.ts`.
+//
 // ONE BODY IS NOT ONE OPT-IN. Sharing the body would otherwise mean an
 // `auto_approve` block written for Claude Code opts every Codex session
 // in too; `auto_approve.harnesses` is the explicit per-harness
@@ -89,6 +99,15 @@ export const AUTO_APPROVE_LEDGER_SOURCE_CODEX = "harness-pack-hook-codex-pre-too
 
 /** Default stderr prefix: the Claude Code hook's, byte-for-byte. */
 const DEFAULT_LABEL = "harness pack hook";
+
+/**
+ * The `<mode>` segment an auto-marker carries when key one came from a
+ * delegation and the payload offered no usable `permission_mode`
+ * literal. `auto-mode:claude-code:delegated;delegated:<parent-sid>` reads
+ * as what it is: a child whose trusted signal was the parent's
+ * pre-authorization, not a permission mode.
+ */
+const DELEGATED_MODE_LABEL = "delegated";
 
 /**
  * Which second input the payload's own `session_id` is held against
@@ -150,6 +169,21 @@ export interface AutoApproveAttemptArgs {
   reportsDir: string;
   /** Step 3's verdict: a marker FILE existed and failed signature verification. */
   markerForged: boolean;
+  /**
+   * Slice 3 (agent-tasks 37ad0b05, ADR "Decision: two-key design"): a
+   * VALID, unexpired, cwd/task-matching delegation the calling hook has
+   * already verified for this child session. Present means key one is
+   * satisfied by the delegation instead of by a `when`-listed
+   * `permission_mode`, so a `-p` child whose payload carries `default`
+   * (or no mode at all) can still reach the report check.
+   *
+   * It is a PRE-AUTHORIZATION, not an approval: every other condition in
+   * this function stays exactly as it was, key two (the child's own
+   * `pending` report) very much included. The caller is responsible for
+   * the verification; this function never reads a delegation file
+   * itself, so there is no second, weaker verifier to keep in sync.
+   */
+  delegation?: { parentSessionId: string };
   stderr: { write(s: string): void };
   /**
    * Audit-only ledger writer, resolved LAZILY: called only after the
@@ -236,10 +270,38 @@ export async function attemptAutoApproval(
   // the configured `auto_approve.when` allowlist to stderr on every
   // ordinary prompting-mode call (reviewer round-1 finding).
   const mode = args.permissionMode;
-  if (!permissionModeAllowed(cfg, mode)) {
+  const modeAllowed = permissionModeAllowed(cfg, mode);
+  if (!modeAllowed && args.delegation === undefined) {
     return decline("permission_mode not in auto_approve.when");
   }
-  const modeStr = mode as string;
+  // Which of the ADR's two alternative key-one signals actually applied.
+  // Logged only on the delegation path: the `when` hit is the ordinary
+  // slice-1 case and stays as silent as it was, so slice 1's stderr trail
+  // is byte-identical to what it was before this argument existed.
+  if (args.delegation !== undefined) {
+    note(
+      modeAllowed
+        ? `auto-approval key one: permission_mode ${JSON.stringify(
+            mode,
+          )} in auto_approve.when (a valid delegation from parent session ${
+            args.delegation.parentSessionId
+          } is also present)`
+        : `auto-approval key one: valid delegation from parent session ${args.delegation.parentSessionId}`,
+    );
+  }
+  // On the `when` path this is exactly the payload literal that matched,
+  // unchanged. On the delegation path the payload's mode is UNCONSTRAINED
+  // (that is the whole point: a `-p` child may carry `default`, or
+  // nothing), so it cannot be pasted into `approvedBy` unfiltered: the
+  // string is a `;`/`:`-delimited audit record, and a payload-composed
+  // `permission_mode` of `x;delegated:someone-else` would forge a parent
+  // linkage in the very field the ADR uses to carry it. A mode that could
+  // corrupt the encoding is replaced by the neutral label instead.
+  const modeStr = modeAllowed
+    ? (mode as string)
+    : typeof mode === "string" && mode.length > 0 && !mode.includes(";") && !mode.includes(":")
+      ? mode
+      : DELEGATED_MODE_LABEL;
 
   // Resolve the audit-only ledger writer NOW, not earlier: this is the
   // first point past both the opt-in check (1) and the `when` allowlist
@@ -403,7 +465,17 @@ export async function attemptAutoApproval(
   // BEFORE the approval rewrite, exactly as the approve CLI computes it.
   const reportContentHash = sha256Hex(raw);
   const approvedAt = new Date().toISOString();
-  const approvedBy = autoApprovedByFor(args.harness, modeStr);
+  // The parent linkage rides in the same signed `approvedBy` field the
+  // source already travels in (ADR "Audit and doctor"): no new signed
+  // field, therefore no `SIGNING_ALG` bump. `parseAutoApprovedBy` strips
+  // the suffix, so the doctor listing still buckets the marker by
+  // harness/mode. The parent id needs no escaping here: it comes out of a
+  // verified delegation whose own writer already refused a `;` or `=` in
+  // it (`buildDelegationApprovedBy`'s `rejectUnsafeSegmentValue`).
+  const approvedBy =
+    args.delegation === undefined
+      ? autoApprovedByFor(args.harness, modeStr)
+      : `${autoApprovedByFor(args.harness, modeStr)};delegated:${args.delegation.parentSessionId}`;
 
   // CONSUME FIRST, then sign. If the marker write fails after this, the
   // report is spent and no marker exists: the call blocks and the same

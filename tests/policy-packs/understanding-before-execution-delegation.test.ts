@@ -609,6 +609,38 @@ describe("verifyDelegation", () => {
     expect(result.reason).toBe("missing");
   });
 
+  it("creates no signing key while verifying: a delegation on a keyless machine is refused, and the key is still absent afterwards", () => {
+    // The never-create rule (ADR threat model (b) item 5) is not only a
+    // WRITE-path rule. `verifyMarkerSignature` obtains the key through
+    // `getOrCreateSigningKey`, which treats a missing key as a case to
+    // REPAIR and generates one, so without an explicit precheck a mere
+    // gate-time read would perform the operator-side act of minting the
+    // key on a machine that never had one. Fixture: a genuinely signed
+    // delegation body (signed here, where the key does exist) copied into
+    // a generatedDir that has no key at all.
+    const bare = path.join(tmp, "keyless.generated");
+    issueCwdDelegation();
+    const body = fs.readFileSync(delegationMarkerPathFor(generatedDir, CHILD), "utf8");
+    const barePath = delegationMarkerPathFor(bare, CHILD);
+    fs.mkdirSync(path.dirname(barePath), { recursive: true });
+    fs.writeFileSync(barePath, body, { mode: 0o600 });
+    expect(fs.existsSync(signingKeyPathFor(bare))).toBe(false);
+
+    const result = verifyDelegation({
+      generatedDir: bare,
+      childSessionId: CHILD,
+      cwd: childCwd,
+      taskId: null,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    // "We could not check", not "we checked and it is a forgery".
+    expect(result.reason).toBe("unreadable");
+    expect(result.detail).toMatch(/signing key absent/);
+    expect(fs.existsSync(signingKeyPathFor(bare))).toBe(false);
+  });
+
   it("refuses a malformed child session id instead of throwing out of the gate", () => {
     const result = verifyDelegation({
       generatedDir,

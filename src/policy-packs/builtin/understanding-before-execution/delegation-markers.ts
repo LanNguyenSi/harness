@@ -511,13 +511,18 @@ export interface VerifyDelegationOptions {
  * Reads only `.delegations/`; an artifact in `.approvals/` is `missing`
  * here, whatever it contains.
  *
- * Note on the signing key: like `checkApprovalMarker`, verification goes
- * through `verifyMarkerSignature`, which obtains the key via
- * `getOrCreateSigningKey` and therefore creates one if none exists. That
- * matches the existing gate-side reader exactly, and creating a fresh key
- * cannot make an unsigned or foreign-signed delegation verify; the
- * never-create rule this module DOES enforce is on the write path, where
- * it decides whether an artifact gets minted.
+ * NEVER CREATES THE SIGNING KEY, on the READ path either.
+ * `verifyMarkerSignature` obtains the key through
+ * `getOrCreateSigningKey`, which treats a missing key as a case to
+ * REPAIR and generates one; on a machine the operator never initialized
+ * that would make a mere gate-time read perform the operator-side act of
+ * minting the key. It cannot make a foreign-signed delegation verify, but
+ * it does leave a key behind that every LATER write path would then
+ * happily sign with, so the never-create rule applies here exactly as it
+ * does to `writeDelegationMarker` and to slice 1's auto path. An absent
+ * key is reported as `unreadable` (we could not check, not "we checked
+ * and it is a forgery"), the same class `verifyMarkerSignature`'s own
+ * `key-unavailable` lands in below.
  */
 export function verifyDelegation(opts: VerifyDelegationOptions): DelegationVerification {
   const { generatedDir, childSessionId } = opts;
@@ -572,6 +577,20 @@ export function verifyDelegation(opts: VerifyDelegationOptions): DelegationVerif
     };
   }
   const body = parsed as Record<string, unknown>;
+
+  // Key precheck BEFORE `verifyMarkerSignature`, which would otherwise
+  // mint the key it is supposed to require (see the doc comment above).
+  // Placed after the file read so a session with no delegation at all
+  // still reports `missing` rather than this stronger, misleading reason.
+  if (!signingKeyExists(generatedDir)) {
+    return {
+      ok: false,
+      reason: "unreadable",
+      detail: `signing key absent at ${signingKeyPathFor(
+        generatedDir,
+      )}; the delegation at ${filePath} cannot be verified and no key is created to verify it (key creation is an operator-side act)`,
+    };
+  }
 
   const markerId = delegationMarkerIdFor(childSessionId);
   const verification = verifyMarkerSignature(generatedDir, markerId, body);

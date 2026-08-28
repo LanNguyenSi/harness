@@ -15,6 +15,14 @@
 // documents. The PreToolUse hook (auto-path condition checks) and
 // `harness doctor` (auto-approval listing) are the consumers; both
 // land in later slice-1 tasks and import from here.
+//
+// Slice 3 (agent-tasks 37ad0b05) adds `report_scan.max_wait`: the bound
+// of the child's transcript poll under `claude -p` ("Report capture
+// under `-p`" in the ADR). It lives in this block because it tunes the
+// same opt-in path, and it is parsed here rather than at the hook so
+// the lint-time schema and the runtime hook agree on one parser.
+
+import { InvalidDurationError, parseDurationSeconds } from "../../../policies/index.js";
 
 /**
  * Prefix every auto-minted marker's `approvedBy` carries, distinguishing
@@ -108,6 +116,38 @@ export const AUTO_APPROVE_HARNESS_VALUES = [CLAUDE_CODE_HARNESS, CODEX_HARNESS] 
  */
 export const DEFAULT_AUTO_APPROVE_HARNESSES: readonly string[] = [CLAUDE_CODE_HARNESS];
 
+/**
+ * What `auto_approve.report_scan.max_wait` resolves to when the key is
+ * ABSENT: the bound the child's PreToolUse hook waits for its own
+ * Understanding Report to reach the session transcript before it blocks
+ * (ADR "Report capture under `-p`", slice 3 acceptance criterion 3).
+ *
+ * The value is measured, not guessed: under `claude -p
+ * --permission-mode bypassPermissions` the report is absent from the
+ * transcript at the instant PreToolUse fires and lands a p50 of 67.5 ms
+ * later, worst observed 139 ms over n=10 (evidence:
+ * `docs/okf/understanding-gate-auto-mode-signals.md` and
+ * `dogfood/ug-auto-mode-signals/`, the lag-distribution section). 500 ms
+ * is roughly 3.6x the worst observed flush and still far below anything
+ * a session would experience as a hang.
+ *
+ * ONE named constant on purpose: the hook, the schema default and every
+ * test read this symbol, so re-tuning the bound against a new
+ * measurement is a one-line change with no literal to hunt down.
+ */
+export const DEFAULT_REPORT_SCAN_MAX_WAIT_MS = 500;
+
+/**
+ * Hard ceiling for `auto_approve.report_scan.max_wait`. A larger value
+ * is a `harness validate` schema error AND a runtime parse failure (which
+ * fails the whole `auto_approve` block closed), so no configuration can
+ * make a PreToolUse hook sit on a session for an arbitrary time. 5 s is
+ * an order of magnitude above the measured worst-case flush, which is
+ * generous for a bound whose only job is to cover a transcript write
+ * already in flight.
+ */
+export const REPORT_SCAN_MAX_WAIT_CEILING_MS = 5_000;
+
 /** Parsed, validated `auto_approve` pack-config block. */
 export interface AutoApproveConfig {
   /** Allowlist of `permission_mode` payload literals eligible for auto-approval. */
@@ -119,9 +159,93 @@ export interface AutoApproveConfig {
    * fails the whole block closed rather than defaulting.
    */
   harnesses: string[];
+  /**
+   * The transcript-poll bound for the slice 3 delegation path. Always
+   * present: an absent `report_scan` block resolves to
+   * {@link DEFAULT_REPORT_SCAN_MAX_WAIT_MS}, and every malformed shape
+   * fails the whole `auto_approve` block closed, like every other key
+   * here.
+   */
+  reportScan: { maxWaitMs: number };
 }
 
-const KNOWN_AUTO_APPROVE_KEYS = new Set(["when", "harnesses", "require_report"]);
+const KNOWN_AUTO_APPROVE_KEYS = new Set([
+  "when",
+  "harnesses",
+  "require_report",
+  "report_scan",
+]);
+
+/** The only key `auto_approve.report_scan` accepts. */
+const KNOWN_REPORT_SCAN_KEYS = new Set(["max_wait"]);
+
+/** Sub-second shorthand the shared duration parser does not model. */
+const MILLISECOND_SHORTHAND = /^(\d+)ms$/;
+
+export type ReportScanMaxWaitParse =
+  | { ok: true; maxWaitMs: number }
+  | { ok: false; reason: string };
+
+/**
+ * Parse `auto_approve.report_scan.max_wait` into milliseconds.
+ *
+ * Duration grammar: the pack's SHARED parser
+ * ({@link parseDurationSeconds}, the same one `approval_lifecycle.max_age`
+ * uses), plus an `<n>ms` shorthand it does not model. The extension is
+ * not cosmetic: this bound is a transcript-flush allowance measured in
+ * tens of milliseconds, so a second-granularity grammar could not express
+ * the values the measurement actually argues for, and widening
+ * `parseDurationSeconds` itself would change the grammar of every
+ * `within:` / `max_age:` / `--since` value in the repo for one key's sake.
+ *
+ * Both bounds are errors, never clamps: zero or negative (a bound that
+ * would disable the poll while the block still claimed to have one) and
+ * anything above {@link REPORT_SCAN_MAX_WAIT_CEILING_MS} (a bound that
+ * could park a PreToolUse hook). Returning a RESULT rather than throwing
+ * keeps the two consumers symmetric: the zod schema turns it into a
+ * `harness validate` diagnostic, the runtime parser into one stderr line
+ * and a fail-closed `null`.
+ */
+export function parseReportScanMaxWait(raw: unknown): ReportScanMaxWaitParse {
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    return {
+      ok: false,
+      reason: `expected a duration string like "500ms", "1500ms" or "2s", got ${
+        typeof raw === "string" ? "an empty string" : typeof raw
+      }`,
+    };
+  }
+  const trimmed = raw.trim();
+  let maxWaitMs: number;
+  const ms = MILLISECOND_SHORTHAND.exec(trimmed);
+  if (ms) {
+    maxWaitMs = Number.parseInt(ms[1]!, 10);
+  } else {
+    try {
+      maxWaitMs = parseDurationSeconds(trimmed) * 1_000;
+    } catch (err) {
+      return {
+        ok: false,
+        reason: err instanceof InvalidDurationError ? err.message : String(err),
+      };
+    }
+  }
+  if (!Number.isFinite(maxWaitMs) || maxWaitMs <= 0) {
+    return {
+      ok: false,
+      reason: `must be greater than zero, got ${JSON.stringify(trimmed)}`,
+    };
+  }
+  if (maxWaitMs > REPORT_SCAN_MAX_WAIT_CEILING_MS) {
+    return {
+      ok: false,
+      reason: `must not exceed the ${REPORT_SCAN_MAX_WAIT_CEILING_MS}ms hard ceiling (a PreToolUse hook must never park a session), got ${JSON.stringify(
+        trimmed,
+      )}`,
+    };
+  }
+  return { ok: true, maxWaitMs };
+}
 
 /**
  * Parse the optional `auto_approve` pack-config block
@@ -228,6 +352,46 @@ export function parseAutoApprove(
     harnesses = seen;
   }
 
+  // `report_scan`: absent means the measured default
+  // ({@link DEFAULT_REPORT_SCAN_MAX_WAIT_MS}). Present means an object
+  // carrying exactly `max_wait` and nothing else, parsed and
+  // range-checked by `parseReportScanMaxWait`. Anything else fails the
+  // WHOLE block closed, like every other malformed shape here, so a
+  // typo'd bound can never silently fall back to the default while the
+  // operator believes they tuned it.
+  const reportScanRaw = obj["report_scan"];
+  let reportScanMaxWaitMs = DEFAULT_REPORT_SCAN_MAX_WAIT_MS;
+  if (reportScanRaw !== undefined) {
+    if (reportScanRaw === null || typeof reportScanRaw !== "object" || Array.isArray(reportScanRaw)) {
+      stderr?.write(
+        `${label}: config.auto_approve.report_scan ignored (expected object, got ${
+          reportScanRaw === null ? "null" : Array.isArray(reportScanRaw) ? "array" : typeof reportScanRaw
+        })\n`,
+      );
+      return null;
+    }
+    const reportScanObj = reportScanRaw as Record<string, unknown>;
+    const unknownScanKeys = Object.keys(reportScanObj).filter(
+      (k) => !KNOWN_REPORT_SCAN_KEYS.has(k),
+    );
+    if (unknownScanKeys.length > 0) {
+      stderr?.write(
+        `${label}: config.auto_approve.report_scan ignored (unknown key(s): ${unknownScanKeys.join(
+          ", ",
+        )})\n`,
+      );
+      return null;
+    }
+    const maxWait = parseReportScanMaxWait(reportScanObj["max_wait"]);
+    if (!maxWait.ok) {
+      stderr?.write(
+        `${label}: config.auto_approve.report_scan.max_wait ignored (${maxWait.reason})\n`,
+      );
+      return null;
+    }
+    reportScanMaxWaitMs = maxWait.maxWaitMs;
+  }
+
   const requireReport = obj["require_report"];
   if (requireReport !== true) {
     stderr?.write(
@@ -238,7 +402,7 @@ export function parseAutoApprove(
     return null;
   }
 
-  return { when, harnesses };
+  return { when, harnesses, reportScan: { maxWaitMs: reportScanMaxWaitMs } };
 }
 
 /**
@@ -247,8 +411,16 @@ export function parseAutoApprove(
  * folding, no substring, no wildcards. `mode` absent, empty, or not a
  * string means no auto-approval, and `cfg === null` (block absent or
  * malformed) means no auto-approval regardless of `mode`.
+ *
+ * Takes only the `when` slice of the config rather than the whole block:
+ * this predicate reads exactly one field, and saying so in the signature
+ * keeps it honest as the block grows further keys (`harnesses`,
+ * `report_scan`) that have nothing to do with mode membership.
  */
-export function permissionModeAllowed(cfg: AutoApproveConfig | null, mode: unknown): boolean {
+export function permissionModeAllowed(
+  cfg: Pick<AutoApproveConfig, "when"> | null,
+  mode: unknown,
+): boolean {
   if (cfg === null) return false;
   if (typeof mode !== "string" || mode.length === 0) return false;
   return cfg.when.includes(mode);
@@ -271,7 +443,10 @@ export function permissionModeAllowed(cfg: AutoApproveConfig | null, mode: unkno
  * {@link CODEX_HARNESS} which still has exactly one consumer and stays a
  * direct import.
  */
-export function harnessAllowed(cfg: AutoApproveConfig | null, harness: unknown): boolean {
+export function harnessAllowed(
+  cfg: Pick<AutoApproveConfig, "harnesses"> | null,
+  harness: unknown,
+): boolean {
   if (cfg === null) return false;
   if (typeof harness !== "string" || harness.length === 0) return false;
   return cfg.harnesses.includes(harness);
