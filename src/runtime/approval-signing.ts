@@ -66,6 +66,34 @@
 //     report it used, declines on a forged marker, and applies only
 //     after every existing exemption branch has declined. The pack's
 //     doctor listing of `auto-mode:` markers is the audit surface for it.
+//   - THIRD SIGNED ARTIFACT KIND (agent-tasks/37ad0b05, ADR
+//     docs/decisions/2026-08-27-ug-auto-mode-approval.md, slice 3): a
+//     DELEGATION is a third kind of thing this module signs, alongside
+//     the approval marker and the branch-protection marker, and it is
+//     not an approval, it is a pre-authorization a parent session
+//     issues for a `claude -p` child before the child's own report even
+//     exists. It is written to its own directory,
+//     `<generatedDir>/.delegations/`, never `.approvals/`, under
+//     markerId `delegation-<child-sid>` (`delegation-markers.ts`), so a
+//     copy of one into the other directory fails signature verification
+//     on markerId mismatch in both directions. Every binding (parent
+//     session, cwd, task, expiry, and, in the fallback shape, the
+//     launcher-supplied report's path) is packed into the signed
+//     `approvedBy` string rather than a new signed field, for the same
+//     no-migration reason the auto-marker's source lives there too. On
+//     a delegation, unlike on an approval marker, `reportContentHash`
+//     does NOT mean "the persisted report the operator approved", it
+//     means, when present at all, the sha256 of the launcher-supplied
+//     report FILE the parent wrote at spawn time (a file that need
+//     never become a persisted report byte-for-byte). A reader that
+//     consumes `reportContentHash` has to branch on the artifact kind
+//     (`.approvals/` vs. `.delegations/`, or the markerId prefix)
+//     before deciding what the hash refers to; treating the two
+//     uniformly would misread one of them. `harness delegate` is
+//     therefore a SECOND CLI writer into the signing scheme, beside the
+//     `harness approve` verbs: same key, same HMAC primitive, a
+//     different markerId namespace and a different meaning for one of
+//     the four signed fields.
 //   - Given the agent and operator share one OS user account on this
 //     machine, this is deliberately pragmatic defense-in-depth, not a hard
 //     authorization boundary. It is documented here in full rather than

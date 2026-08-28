@@ -95,7 +95,7 @@ These are called by Claude Code via `settings.json`; you usually do not run them
 | Verb | One-liner |
 |------|-----------|
 | `harness preflight` | Run the local preflight bundle (`agent-preflight`). The Risk Gate's preflight policy expects the resulting `preflight:<repo>` ledger tag before allowing destructive Bash on that repo. |
-| `harness smoke` | End-to-end smoke run for the installed harness (hook plumbing, ledger write, policy evaluation). Useful after a fresh `init --interactive` or a version bump. |
+| `harness smoke [--no-delegate]` | End-to-end smoke run for the installed harness (hook plumbing, ledger write, policy evaluation). Useful after a fresh `init --interactive` or a version bump. Since slice 3 of `docs/decisions/2026-08-27-ug-auto-mode-approval.md`, it also issues a `harness delegate` pre-authorization for the session id it spawns, bound to the child's cwd, before the spawn; a refusal (no parent marker, no signing key, ...) prints one line and the run proceeds unaffected. `--no-delegate` skips this and reverts to the pre-slice-3 shape. |
 
 ## Evidence-ledger producers (`harness record`)
 

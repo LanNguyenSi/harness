@@ -10,6 +10,7 @@ import type { RogueLedgerDb } from "./rogue-ledger.js";
 import type { UnderstandingModeEnvDivergence } from "./understanding-mode-env.js";
 import type { ToolchainParitySection } from "./toolchain-parity.js";
 import type { UgAutoApprovalsSection } from "./ug-auto-approvals.js";
+import type { UgDelegationsSection } from "./ug-delegations.js";
 import type { SettingsDriftSection } from "./settings-drift.js";
 
 /**
@@ -421,6 +422,21 @@ export interface DoctorReport {
    */
   ugAutoApprovals?: UgAutoApprovalsSection;
   /**
+   * Delegations-on-disk metric (same ADR, slice 3, "Audit and doctor",
+   * agent-tasks 37ad0b05 T-004): `total`/`expired`/`unreadable` counts
+   * from `harness.generated/.delegations/`, distinct from
+   * `ugAutoApprovals` (which reads `.approvals/` only). Present only
+   * when the `understanding-before-execution` pack is declared and
+   * enabled (mirrors `ugAutoApprovals`'s gate). `delegationsDirPresent`
+   * mirrors `ugAutoApprovals`'s `approvalsDirPresent`: the rendered line
+   * stays silent when `.delegations/` does not exist at all, and shows
+   * the zero-count line when it exists but is empty (both cases resolve
+   * `total`/`expired`/`unreadable` to `0`). Informational (`ℹ`) unless
+   * `unreadable > 0`, in which case it rolls one warning into
+   * `warningCount`.
+   */
+  ugDelegations?: UgDelegationsSection;
+  /**
    * Settings-drift compensating control (same ADR, threat model (c)): a
    * `permissions.defaultMode` or hook entry present in a live Claude
    * Code settings file but absent from harness's own last-apply
@@ -532,6 +548,7 @@ export type { NpmBinReport } from "./npm-bin-path.js";
 export type { ClaudeMcpRegistrationSection, ClaudeMcpEntryReport } from "./claude-mcp.js";
 export type { UnderstandingModeEnvDivergence } from "./understanding-mode-env.js";
 export type { UgAutoApprovalsSection, AutoApprovalListingEntry } from "./ug-auto-approvals.js";
+export type { UgDelegationsSection } from "./ug-delegations.js";
 export type { SettingsDriftSection } from "./settings-drift.js";
 export type { ToolchainParitySection, ToolchainParityPeerReport } from "./toolchain-parity.js";
 

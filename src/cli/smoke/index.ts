@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { apply, SETTINGS_BASENAME } from "../apply/index.js";
+import { issueDelegation } from "../delegate/index.js";
 import { EX_FAIL, EX_UNAVAILABLE, EX_USAGE, HarnessExitError } from "../exit-codes.js";
 import {
   evaluateExpectations,
@@ -51,6 +52,16 @@ export interface SmokeOptions {
   /** Stdout/stderr writers (defaults to process.stdout / stderr). */
   stdout?: (s: string) => void;
   stderr?: (s: string) => void;
+  /**
+   * Skip the slice-3 pre-spawn delegation (ADR
+   * docs/decisions/2026-08-27-ug-auto-mode-approval.md, "TTL, cwd, and
+   * subagents": the smoke runner is the delegation's first consumer).
+   * Default: false (delegate). Set for launchers that want the
+   * pre-slice-3 shape, or when the caller issues its own delegation.
+   */
+  noDelegate?: boolean;
+  /** Test seam for the delegation step. Defaults to the real `issueDelegation`. */
+  issueDelegationImpl?: typeof issueDelegation;
 }
 
 export interface SmokeResult {
@@ -173,6 +184,49 @@ export async function runSmoke(opts: SmokeOptions): Promise<SmokeResult> {
 
   const sessionId = opts.sessionId ?? randomUUID();
   const timeoutMs = opts.timeoutMs ?? 60_000;
+
+  // Slice 3 delegation (ADR docs/decisions/2026-08-27-ug-auto-mode-
+  // approval.md, "TTL, cwd, and subagents": "The harness smoke runner
+  // ... is the natural first consumer"). Issued for the session id
+  // this run already chose, bound to the cwd the child actually spawns
+  // into (`opts.spawnCwd`, defaulting to this process's own cwd exactly
+  // like `runClaude`'s own unset-cwd default does), no task, default
+  // TTL. Parent resolves through `issueDelegation`'s own precedence
+  // chain (flag > env > staged `.pending-approval`), this runner never
+  // overrides it, so the delegation is always issued on behalf of
+  // whatever session actually invoked `harness smoke`.
+  //
+  // Never blocks the run: every refusal (no parent marker, no signing
+  // key, an unresolved parent session id) AND every thrown error (e.g.
+  // `resolvePaths`'s real-home-dir guard when neither `--config` nor a
+  // home dir is set outside the real `harness` binary) prints one
+  // line and the run proceeds exactly as it did before slice 3, the
+  // same shape `--no-delegate` opts back into explicitly.
+  const stdoutWrite = opts.stdout ?? ((s: string) => process.stdout.write(s));
+  if (!opts.noDelegate) {
+    const issueDelegationImpl = opts.issueDelegationImpl ?? issueDelegation;
+    const childCwd = opts.spawnCwd ?? process.cwd();
+    const delegationOpts: Parameters<typeof issueDelegation>[0] = {
+      childSessionId: sessionId,
+      cwd: childCwd,
+    };
+    if (opts.configPath) delegationOpts.configPath = opts.configPath;
+    if (opts.project) delegationOpts.project = opts.project;
+    try {
+      const delegationResult = await issueDelegationImpl(delegationOpts);
+      if (delegationResult.ok) {
+        stdoutWrite(
+          `delegation: ✓ ${delegationResult.filePath} (child ${delegationResult.childSessionId}, parent ${delegationResult.parentSessionId}, expires ${delegationResult.expiresAt})\n`,
+        );
+      } else {
+        stdoutWrite(
+          `delegation: skipped (${delegationResult.reason}: ${delegationResult.detail})\n`,
+        );
+      }
+    } catch (err) {
+      stdoutWrite(`delegation: skipped (error: ${(err as Error).message})\n`);
+    }
+  }
 
   const runOpts: RunClaudeOptions = {
     claudeBin,

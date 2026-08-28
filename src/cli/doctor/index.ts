@@ -59,6 +59,7 @@ import {
   type RunDoctorToolchainParityOptions,
 } from "./toolchain-parity.js";
 import { buildUgAutoApprovals, DEFAULT_RECENT_SESSIONS } from "./ug-auto-approvals.js";
+import { buildUgDelegations } from "./ug-delegations.js";
 import { buildSettingsDrift } from "./settings-drift.js";
 import { LOCK_BASENAME } from "../../io/harness-lock.js";
 import type { ClaudeMcpExec } from "../../io/claude-mcp.js";
@@ -1110,6 +1111,10 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // always advisory, never an error — see understanding-mode-env.ts.
   if (report.understandingModeEnv) warningCount++;
   // ugAutoApprovals is informational only (ℹ), never contributes here.
+  // ugDelegations is informational (ℹ) UNLESS it found an unreadable
+  // file, in which case it rolls exactly one warning (ug-delegations.ts,
+  // agent-tasks 37ad0b05 T-004), not one per unreadable file.
+  if (report.ugDelegations && report.ugDelegations.unreadable > 0) warningCount++;
   if (report.settingsDrift) warningCount += report.settingsDrift.warnings.length;
   if (report.memory.routerExecutable && !report.memory.routerExecutable.exists) errorCount++;
   if (!report.memory.routerExecutable) warningCount++;
@@ -1276,6 +1281,16 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const ugAutoApprovals = understandingPackEnabled
     ? buildUgAutoApprovals(generatedDir, { recentSessions: recentSessionsWindow })
     : undefined;
+  // Slice 3 (agent-tasks 37ad0b05 T-004), same "Audit and doctor"
+  // section: delegations-on-disk metric from `.delegations/`, gated on
+  // the same pack-enabled check, computed even when the directory is
+  // absent (`delegationsDirPresent: false`, `total: 0`), the render
+  // layer (format.ts) is what stays silent for that case, mirroring
+  // `ugAutoApprovals`'s own `approvalsDirPresent` gate; see
+  // ug-delegations.ts.
+  const ugDelegations = understandingPackEnabled
+    ? buildUgDelegations(generatedDir, { ...(opts.now !== undefined ? { now: opts.now } : {}) })
+    : undefined;
   // Settings-drift additionally requires `harness.generated/` to exist:
   // without at least one prior `harness apply`, there is no baseline to
   // compare against and nothing this check owns an opinion about (a
@@ -1339,6 +1354,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     ...(npmGlobalBin !== undefined ? { npmGlobalBin } : {}),
     ...(understandingModeEnv !== undefined ? { understandingModeEnv } : {}),
     ...(ugAutoApprovals !== undefined ? { ugAutoApprovals } : {}),
+    ...(ugDelegations !== undefined ? { ugDelegations } : {}),
     ...(settingsDrift !== undefined ? { settingsDrift } : {}),
   };
   if (opts.target === "codex") {

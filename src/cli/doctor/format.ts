@@ -72,9 +72,15 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
   // stay silent unless the directory actually exists, mirroring the rest
   // of this section's "no line for a check that found nothing" style.
   const showUgAuto = ugAuto !== undefined && ugAuto.approvalsDirPresent;
+  const ugDeleg = report.ugDelegations;
+  // Same "no line for a check that found nothing" convention as
+  // showUgAuto: silent unless `.delegations/` actually exists. A
+  // present-but-empty directory still renders the zero-count line
+  // (ug-delegations.ts's own doc comment on `delegationsDirPresent`).
+  const showUgDeleg = ugDeleg !== undefined && ugDeleg.delegationsDirPresent;
   const drift = report.settingsDrift;
   const hasDriftContent = drift !== undefined && (drift.notes.length > 0 || drift.warnings.length > 0);
-  if ((!bin || bin.status !== "warn") && !modeEnv && !showUgAuto && !hasDriftContent) return [];
+  if ((!bin || bin.status !== "warn") && !modeEnv && !showUgAuto && !showUgDeleg && !hasDriftContent) return [];
   const out: string[] = ["", "Environment"];
   if (bin && bin.status === "warn") {
     out.push(
@@ -112,6 +118,14 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
         `      ${ugAuto.unreadableCount} marker${ugAuto.unreadableCount === 1 ? "" : "s"} unreadable, excluded from the count`,
       );
     }
+  }
+  if (showUgDeleg && ugDeleg) {
+    const marker = ugDeleg.unreadable > 0 ? "⚠" : "ℹ";
+    const line =
+      ugDeleg.total === 0
+        ? `  ${marker} delegations on disk: 0`
+        : `  ${marker} delegations on disk: ${ugDeleg.total} (${ugDeleg.expired} expired, ${ugDeleg.unreadable} unreadable)`;
+    out.push(line);
   }
   if (drift) {
     for (const n of drift.notes) out.push(`  ℹ ${n}`);

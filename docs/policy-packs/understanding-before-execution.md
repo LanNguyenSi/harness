@@ -698,6 +698,10 @@ The delegation is written to `harness.generated/.delegations/<child-sid>`, a dir
 
 **Audit.** On success, the CLI prints `delegation: ✓ <path> (child <sid>, parent <sid>, expires <iso>)` and writes the audit-only ledger fact `understanding-delegated:<child-sid>:<parent-sid>` (source tag `harness-delegate-cli` by default, overridable via `--approved-by` for operators who want to distinguish which actor/script issued a given delegation). A failed ledger write is one warning line, never a refusal: the delegation itself is already minted by that point.
 
+**The harness smoke runner is the first consumer.** `harness smoke` issues a delegation for the session id it already chooses, bound to the cwd it spawns the child into, before every run; pass `--no-delegate` to skip this and get the pre-slice-3 shape instead.
+
+**Doctor.** `harness doctor`'s understanding-gate section reports `delegations on disk: <count> (<count> expired, <count> unreadable)`, counted from `.delegations/` only, right next to the `.approvals/`-derived "auto approvals in the last N sessions" line above; informational unless it finds an unreadable file, in which case it rolls into `warningCount`.
+
 This is a rule-level summary; the measured transcript-lag numbers, the retry-behaviour sample, and the chosen `report_scan.max_wait` default are in `docs/okf/understanding-gate-auto-mode-signals.md`, not restated here.
 
 ### Session-id resolution
