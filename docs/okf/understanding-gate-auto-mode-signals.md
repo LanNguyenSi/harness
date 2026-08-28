@@ -3,10 +3,11 @@ type: overview
 title: Understanding gate, auto-mode signal sources (measured)
 description: What signals exist for detecting an agent's own permission/auto-approval mode across Claude Code, Codex, and opencode, measured where possible, doc-only where not, with a trust-class table. Covers both launch shapes for Claude Code, headless and interactive, plus how a hook ask resolves in each and what a subagent's tool call looks like to the same hook. The rule and the decision on which signals gate anything live in the ADR, not here.
 tags: [understanding-gate, permission-mode, auto-mode, hooks, measurement, trust-boundary]
-timestamp: 2026-08-27T19:59:52Z
+timestamp: 2026-08-28T07:24:00Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - dogfood/ug-auto-mode-signals/README.md
+  - dogfood/ug-auto-mode-signals/delegate-e2e.sh
   - src/cli/pack/hook-pre-tool-use.ts
   - src/cli/pack/hook-bootstrap.ts
   - src/runtime/session-id.ts
@@ -369,6 +370,41 @@ Same 25 ms / 5 s detector as the previous section, wired as the
   already used for the bypassPermissions warning. Recorded in the README's
   Method section; not itself a finding about the gate.
 
+### Measured: delegation end to end under `-p` (README section (r))
+
+Real `claude -p` children against the REAL production hook chain, not a
+recorder or a synthetic token-detector hook: `harness pack hook
+pre-tool-use` (the built harness CLI) for `PreToolUse`, the real
+`@lannguyensi/understanding-gate` npm package bins for `UserPromptSubmit`
+/ `Stop`, the same roster `harness apply` writes for Claude Code, over
+an isolated manifest/generated dir/`CLAUDE_CONFIG_DIR` (README section
+(r); script `dogfood/ug-auto-mode-signals/delegate-e2e.sh`; fixture
+`payloads/delegate-e2e.jsonl`). Four shapes, n=3+3+1+1:
+
+- (a) valid delegation, report before the gated call: 3/3 succeeded, all
+  via the delegation's own transcript-scan-and-persist (slice 1's
+  mode-allowlist check alone never reads the transcript, and nothing
+  else persists a report mid-session, the real Stop-capture bin fires
+  once, at the very end of the whole invocation).
+- (b) valid delegation, prompt told the child NOT to write a report:
+  3/3 wrote one anyway once blocked, and succeeded the same way as (a)
+ , a measured negative-control finding about a cooperative model's own
+  behaviour under this prompt, not evidence the gate opens without a
+  report.
+- (c) NO delegation, otherwise identical to (a): 0/1. The child tried
+  the `harness approve` escape twice (denied, matching README section
+  (f)'s `-p`-`ask`-resolves-to-denial finding) and then gave up. This is
+  the ADR's own premise (no operator, `Stop` fires once, too late)
+  reproduced end to end, a measured negative, not a slice 3 defect.
+- (d) delegation bound to a different cwd than the child's own: 0/1,
+  `cwd_mismatch` on both `PreToolUse` attempts.
+- `report_scan.max_wait` (default 500 ms): 6/6 of the (a)/(b) FIRST
+  attempts exhausted the full 500 ms bound without finding the report
+  (waited 519-524 ms), where sections (e)/(o) below (a much shorter
+  probe report) measured a comfortable 139 ms max across 15 samples. See
+  "Chosen `report_scan.max_wait` default" immediately below for what
+  this changes.
+
 ## Chosen `report_scan.max_wait` default
 
 Drawing sections (o) through (q) above into the one number and the one
@@ -402,6 +438,27 @@ verdict the ADR's slice 3 acceptance criterion 6 asks for:
   report file bound by hash in the delegation's `reportContentHash`, not
   the transcript scan; the `-p` case may keep the bounded poll (500 ms
   default, 5000 ms ceiling) as measured above.
+- **Addendum, `-p`, real end-to-end delegation runs ("Measured:
+  delegation end to end under `-p`" above, README section (r)): the
+  "well under a third of 500 ms" margin in the `-p` verdict above did
+  NOT hold for a full-length grill_me report.** 6/6 real `claude -p`
+  children carrying the ten-section grill_me report this task's own
+  fixture uses exhausted the full 500 ms bound on their FIRST gated
+  call (waited 519-524 ms) before the report was visible, where
+  sections (e)/(o) above (a much shorter probe report) measured a
+  139 ms max across 15 samples. This is not a contradiction of the
+  `-p` verdict's core claim (a bounded poll, not an unbounded one, is
+  the right shape, and the retry-and-instruct fallback the ADR
+  designed for exactly this case carried all 6/6 runs to success on a
+  later attempt), but it is a contradiction of the SPECIFIC margin
+  claimed for the chosen default: report length measurably changes
+  how long the flush takes, and this round's 500 ms derivation was
+  anchored to a probe report much shorter than a real grill_me report
+  produces. The two statements this task's acceptance criterion asked
+  to be refined IF the bound held (`src/cli/pack/approve-escape.ts`'s
+  module comment, `docs/okf/understanding-gate-lockout-recovery.md`'s
+  step 4 sentence) were left unedited for this reason, per the same
+  criterion's own instruction on a contradicted bound.
 
 ## Codex
 
