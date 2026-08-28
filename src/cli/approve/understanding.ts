@@ -247,11 +247,23 @@ function expandHomePath(p: string): string {
   return p;
 }
 
-async function writeLedgerTag(
+/**
+ * Exported (agent-tasks 37ad0b05, Slice 3 of the auto-mode-approval ADR)
+ * with an additive `source` parameter so `harness delegate` can reuse
+ * this writer verbatim instead of re-implementing the same
+ * findGroundingMcp + addLedgerFact shape a third time in this codebase
+ * (branch-protection.ts already carries its own independent copy for
+ * its own `harness-approve-branch-protection` source). `source` defaults
+ * to this file's own literal, so `approveUnderstanding`'s own call below
+ * (which does not pass it) is byte-identical to before this change: pure
+ * additive parameterization, not a behaviour change for that caller.
+ */
+export async function writeLedgerTag(
   manifest: Manifest,
   sessionId: string,
   content: string,
   opts: ApproveUnderstandingOptions,
+  source = "harness-approve-understanding",
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   if (opts.ledgerAdd) return opts.ledgerAdd(sessionId, content);
   const server = findGroundingMcp(manifest);
@@ -267,7 +279,7 @@ async function writeLedgerTag(
     timeoutMs: server.health?.timeout_ms ?? 5_000,
     sessionId,
     content,
-    source: "harness-approve-understanding",
+    source,
   });
 }
 

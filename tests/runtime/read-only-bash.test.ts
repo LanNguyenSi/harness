@@ -486,6 +486,12 @@ describe("read-only Bash classifier", () => {
       "harness approve understanding",
       "harness preflight",
       "harness init",
+      // Slice 3 of docs/decisions/2026-08-27-ug-auto-mode-approval.md
+      // (agent-tasks 37ad0b05): `harness delegate` writes a signed
+      // delegation marker, the same write-or-special-cased-elsewhere
+      // shape as `harness approve` above; it must not become
+      // classifiable as read-only Bash for the same reason.
+      "harness delegate --child-session 11111111-1111-4111-8111-111111111111 --cwd /tmp",
     ])("blocks %s (write or special-cased elsewhere)", (cmd) => {
       expect(isReadOnlyBashCommand(cmd)).toBe(false);
     });
