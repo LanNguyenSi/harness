@@ -1,7 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { audit } from "../../src/cli/audit.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
+import {
+  approvedLedgerTagFor,
+  autoApprovedLedgerTagFor,
+} from "../../src/policy-packs/builtin/understanding-before-execution/index.js";
+import type { LedgerEntry } from "../../src/policies/index.js";
 import { makeDecisionEntry as decisionEntry } from "../_helpers/decision.js";
+
+/** agent-tasks 5ad63b01: a raw ledger fact entry, the shape the audit
+ * approvals section reads directly (never `decodeLedgerContent`-parsed). */
+function factEntry(content: string, createdAt: string, source = "test-fixture"): LedgerEntry {
+  return { id: createdAt + content, content, source, createdAt };
+}
 
 // The session-id resolver reads $CLAUDE_CODE_SESSION_ID ahead of the
 // legacy $CLAUDE_SESSION_ID (task 6562b9f6); clear both so the dev
@@ -477,5 +488,132 @@ describe("audit — input validation", () => {
     expect(caught).toBeInstanceOf(HarnessExitError);
     const err = caught as HarnessExitError;
     expect(err.exitCode).toBe(64);
+  });
+});
+
+describe("audit: approvals section (agent-tasks 5ad63b01)", () => {
+  // A fixed session id (not `--session`-omitted) so every test here is
+  // hermetic against the real `resolveReadSessionId` discovery fallback:
+  // the approvals section matches tags built from the resolved session
+  // id, so an un-pinned id would make the fixture tags a moving target.
+  const SID = "sess-approvals";
+  const AUTO_TAG = autoApprovedLedgerTagFor(SID);
+  const HUMAN_TAG = approvedLedgerTagFor(SID);
+
+  it("renders a raw understanding-auto-approved fact in both text and --json output", async () => {
+    const entries = [factEntry(AUTO_TAG, "2026-04-30T11:00:00.000Z", "auto-approve-path")];
+
+    const textResult = await audit({
+      configPath: MANIFEST_PATH,
+      sessionId: SID,
+      now: NOW,
+      fetchLedger: async () => ({ kind: "ok", entries }),
+    });
+    expect(textResult.approvals).toHaveLength(1);
+    expect(textResult.output).toContain("approvals");
+    expect(textResult.output).toContain(AUTO_TAG);
+    expect(textResult.output).toContain("auto-approve-path");
+
+    const jsonResult = await audit({
+      configPath: MANIFEST_PATH,
+      sessionId: SID,
+      json: true,
+      now: NOW,
+      fetchLedger: async () => ({ kind: "ok", entries }),
+    });
+    const parsed = JSON.parse(jsonResult.output);
+    expect(parsed.approvals).toHaveLength(1);
+    expect(parsed.approvals[0].tag).toBe(AUTO_TAG);
+    expect(parsed.approvals[0].source).toBe("auto-approve-path");
+    expect(parsed.approvals[0].timestamp).toBe("2026-04-30T11:00:00.000Z");
+  });
+
+  it("never renders the pre-existing review:42:approved fixture, even alongside a real approval fact (mutation guard A)", async () => {
+    const entries = [
+      { id: "unrelated", content: "review:42:approved", createdAt: "2026-04-30T11:00:00.000Z" },
+      factEntry(AUTO_TAG, "2026-04-30T11:05:00.000Z", "auto-approve-path"),
+    ];
+    const result = await audit({
+      configPath: MANIFEST_PATH,
+      sessionId: SID,
+      now: NOW,
+      fetchLedger: async () => ({ kind: "ok", entries }),
+    });
+    expect(result.approvals).toHaveLength(1);
+    expect(result.approvals[0]?.tag).toBe(AUTO_TAG);
+    expect(result.output).not.toContain("review:42:approved");
+  });
+
+  it("carries an empty approvals array in --json, and omits the section in text, when there are no approval facts", async () => {
+    const jsonResult = await audit({
+      configPath: MANIFEST_PATH,
+      sessionId: SID,
+      json: true,
+      now: NOW,
+      fetchLedger: async () => ({ kind: "ok", entries: [] }),
+    });
+    const parsed = JSON.parse(jsonResult.output);
+    expect(parsed.approvals).toEqual([]);
+
+    const textResult = await audit({
+      configPath: MANIFEST_PATH,
+      sessionId: SID,
+      now: NOW,
+      fetchLedger: async () => ({ kind: "ok", entries: [] }),
+    });
+    expect(textResult.output).toBe("no policy decisions in the last 24h\n");
+    expect(textResult.output).not.toContain("approvals");
+  });
+
+  it("excludes an approval fact older than the --since window (mutation guard B)", async () => {
+    const entries = [
+      // 36h before NOW: outside the default 24h window.
+      factEntry(HUMAN_TAG, "2026-04-29T00:00:00.000Z", "harness-approve-understanding"),
+      // 1h before NOW: inside.
+      factEntry(AUTO_TAG, "2026-04-30T11:00:00.000Z", "auto-approve-path"),
+    ];
+    const result = await audit({
+      configPath: MANIFEST_PATH,
+      sessionId: SID,
+      now: NOW,
+      fetchLedger: async () => ({ kind: "ok", entries }),
+    });
+    expect(result.approvals).toHaveLength(1);
+    expect(result.approvals[0]?.tag).toBe(AUTO_TAG);
+  });
+
+  it("--session filters the approvals section to the matching <sid> in the tag", async () => {
+    const otherSid = "sess-other";
+    const entries = [
+      factEntry(
+        autoApprovedLedgerTagFor(otherSid),
+        "2026-04-30T11:00:00.000Z",
+        "auto-approve-path",
+      ),
+      factEntry(AUTO_TAG, "2026-04-30T11:05:00.000Z", "auto-approve-path"),
+    ];
+    const result = await audit({
+      configPath: MANIFEST_PATH,
+      sessionId: SID,
+      now: NOW,
+      fetchLedger: async () => ({ kind: "ok", entries }),
+    });
+    expect(result.approvals).toHaveLength(1);
+    expect(result.approvals[0]?.tag).toBe(AUTO_TAG);
+  });
+
+  it("renders a forced human approval tag (`:forced:<field>` suffix) in the approvals section", async () => {
+    const forcedTag = `${HUMAN_TAG}:forced:priorArt`;
+    const entries = [
+      factEntry(forcedTag, "2026-04-30T11:00:00.000Z", "harness-approve-understanding"),
+    ];
+    const result = await audit({
+      configPath: MANIFEST_PATH,
+      sessionId: SID,
+      now: NOW,
+      fetchLedger: async () => ({ kind: "ok", entries }),
+    });
+    expect(result.approvals).toHaveLength(1);
+    expect(result.approvals[0]?.tag).toBe(forcedTag);
   });
 });

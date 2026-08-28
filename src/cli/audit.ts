@@ -12,6 +12,10 @@ import {
 } from "../io/ledger-record.js";
 import { POLICY_DECISION_TYPE } from "../io/ledger-record.js";
 import {
+  approvedLedgerTagFor,
+  autoApprovedLedgerTagFor,
+} from "../policy-packs/builtin/understanding-before-execution/index.js";
+import {
   resolveReadSessionId,
   type ResolveReadSessionOptions,
 } from "../runtime/session-id.js";
@@ -65,9 +69,25 @@ export interface AuditDecisionRow {
   whenUnclassifiedFallback?: boolean;
 }
 
+/**
+ * agent-tasks 5ad63b01: one raw understanding-gate ledger fact in the
+ * audit window: a `understanding-approved:<sid>` (human approval, plain
+ * or `:forced:<field>`-suffixed) or `understanding-auto-approved:<sid>`
+ * (auto-mode) row, exactly as the two writers stamp it
+ * (`src/cli/approve/understanding.ts`, `src/cli/pack/auto-approve-path.ts`).
+ * Read-only reporting: this section carries no gate authority, mirroring
+ * the ledger's audit-only status for both tag families.
+ */
+export interface AuditApprovalRow {
+  timestamp: string;
+  tag: string;
+  source: string;
+}
+
 export interface AuditResult {
   output: string;
   decisions: AuditDecisionRow[];
+  approvals: AuditApprovalRow[];
 }
 
 const VALID_OUTCOMES: AuditOutcome[] = [
@@ -140,6 +160,59 @@ function rowsFromEntries(entries: LedgerEntry[]): AuditDecisionRow[] {
   }));
 }
 
+/**
+ * agent-tasks 5ad63b01: build the raw understanding-gate approval-fact
+ * rows for the audit window. Reuses the two writers' own tag builders
+ * (`approvedLedgerTagFor` / `autoApprovedLedgerTagFor`, keyed on the
+ * SAME resolved `sessionId` the ledger fetch itself is scoped to)
+ * instead of re-deriving the tag shape with a parser, so a change to
+ * either prefix or to the `:forced:<field>` suffix convention cannot
+ * drift out of sync with this read path. Matching is exact-or-forced-
+ * prefix, never substring, so `review:42:approved` (or any future tag
+ * that merely CONTAINS one of these strings) cannot slip in, the same
+ * substring-pollution concern `isPolicyDecisionRow` guards on the
+ * gate-check side (`ledger.ts`).
+ */
+function rowsFromApprovalEntries(
+  entries: LedgerEntry[],
+  sessionId: string,
+): AuditApprovalRow[] {
+  const humanTag = approvedLedgerTagFor(sessionId);
+  const humanForcedPrefix = `${humanTag}:forced:`;
+  const autoTag = autoApprovedLedgerTagFor(sessionId);
+  const rows: AuditApprovalRow[] = [];
+  for (const entry of entries) {
+    const content = entry.content;
+    if (content !== humanTag && content !== autoTag && !content.startsWith(humanForcedPrefix)) {
+      continue;
+    }
+    rows.push({
+      timestamp:
+        typeof entry.createdAt === "string"
+          ? entry.createdAt
+          : entry.createdAt.toISOString(),
+      tag: content,
+      source: entry.source ?? "",
+    });
+  }
+  rows.sort((a, b) => parseLedgerTimestamp(a.timestamp) - parseLedgerTimestamp(b.timestamp));
+  return rows;
+}
+
+function renderTable(header: string[], data: string[][]): string {
+  if (data.length === 0) return "";
+  const widths = header.map((h, i) =>
+    Math.max(h.length, ...data.map((row) => row[i]!.length)),
+  );
+  const fmt = (cells: string[]): string =>
+    cells.map((c, i) => c.padEnd(widths[i]!)).join("  ").trimEnd();
+  const lines: string[] = [];
+  lines.push(fmt(header));
+  lines.push(widths.map((w) => "-".repeat(w)).join("  ").trimEnd());
+  for (const row of data) lines.push(fmt(row));
+  return `${lines.join("\n")}\n`;
+}
+
 function formatTable(rows: AuditDecisionRow[]): string {
   if (rows.length === 0) return "";
   const header = ["timestamp", "policy", "outcome", "reason"];
@@ -153,16 +226,19 @@ function formatTable(rows: AuditDecisionRow[]): string {
       flatten(r.reason) + (r.whenUnclassifiedFallback ? " [unclassified-fallback]" : "");
     return [r.timestamp, r.name, r.outcome, reasonCell];
   });
-  const widths = header.map((h, i) =>
-    Math.max(h.length, ...data.map((row) => row[i]!.length)),
-  );
-  const fmt = (cells: string[]): string =>
-    cells.map((c, i) => c.padEnd(widths[i]!)).join("  ").trimEnd();
-  const lines: string[] = [];
-  lines.push(fmt(header));
-  lines.push(widths.map((w) => "-".repeat(w)).join("  ").trimEnd());
-  for (const row of data) lines.push(fmt(row));
-  return `${lines.join("\n")}\n`;
+  return renderTable(header, data);
+}
+
+/**
+ * agent-tasks 5ad63b01: table rendering for the approvals section.
+ * Empty is `""` (never a header-only table), so the caller can decide
+ * whether to omit the whole section without inspecting row counts twice.
+ */
+function formatApprovals(rows: AuditApprovalRow[]): string {
+  if (rows.length === 0) return "";
+  const header = ["timestamp", "tag", "source"];
+  const data = rows.map((r) => [r.timestamp, r.tag, r.source]);
+  return renderTable(header, data);
 }
 
 export async function audit(opts: AuditOptions = {}): Promise<AuditResult> {
@@ -213,15 +289,41 @@ export async function audit(opts: AuditOptions = {}): Promise<AuditResult> {
     filtered = filtered.filter((r) => r.outcome === opts.outcome);
   }
 
-  if (filtered.length === 0) {
-    const output = opts.json
-      ? `${JSON.stringify({ decisions: [] }, null, 2)}\n`
-      : `no policy decisions in the last ${since}\n`;
-    return { output, decisions: [] };
+  // agent-tasks 5ad63b01: second, independent ledger fetch for the raw
+  // understanding-gate approval facts (docs/decisions/2026-08-27-ug-auto-
+  // mode-approval.md, "Audit and doctor"). Same server-side-narrowing /
+  // client-side-filter-stays-correct contract as the policy_decision
+  // fetch above: `contentPrefix: "understanding-"` is pushed server-side
+  // when supported, and rowsFromApprovalEntries + the `--since` filter
+  // below are applied regardless, so an old server that ignores the hint
+  // and returns the whole session still renders correctly. Filtered by
+  // `--since` and `--session` only (never `--policy` / `--outcome`,
+  // which are policy-decision-only filters); the `--session` filtering
+  // falls out of `rowsFromApprovalEntries` matching tags built from this
+  // SAME resolved `sessionId`.
+  const approvalResult = await fetch(sessionId, {
+    sinceIso,
+    contentPrefix: "understanding-",
+  });
+  if (approvalResult.kind === "degraded") {
+    throw new HarnessExitError(
+      `ledger unreachable: ${approvalResult.reason}`,
+      EX_UNAVAILABLE,
+    );
   }
+  const approvals = rowsFromApprovalEntries(approvalResult.entries, sessionId).filter(
+    (r) => parseLedgerTimestamp(r.timestamp) >= cutoffMs,
+  );
+
+  const decisionsText =
+    filtered.length === 0 ? `no policy decisions in the last ${since}\n` : formatTable(filtered);
+  // Omitted entirely when empty (acceptance criterion 1), so the
+  // documented empty-window message above stays byte-identical when
+  // there is also nothing to approve.
+  const approvalsText = approvals.length === 0 ? "" : `\napprovals\n${formatApprovals(approvals)}`;
 
   const output = opts.json
-    ? `${JSON.stringify({ decisions: filtered }, null, 2)}\n`
-    : formatTable(filtered);
-  return { output, decisions: filtered };
+    ? `${JSON.stringify({ decisions: filtered, approvals }, null, 2)}\n`
+    : `${decisionsText}${approvalsText}`;
+  return { output, decisions: filtered, approvals };
 }

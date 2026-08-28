@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`harness audit` now shows understanding-gate approval facts** (agent-tasks
+  `5ad63b01`, follow-up of slice 1 of the ADR
+  `docs/decisions/2026-08-27-ug-auto-mode-approval.md`, "Audit and doctor").
+  A new `approvals` section, alongside the unchanged `policy_decision` table,
+  lists the raw ledger facts `understanding-approved:<sid>` (plain or
+  `:forced:<field>`-suffixed) and `understanding-auto-approved:<sid>` within
+  the audited `--since` window, each with timestamp, tag and source. A
+  second server-side ledger fetch narrows by `contentPrefix:
+  "understanding-"` when the connected grounding-mcp supports it; matching
+  is by exact tag (built from the same `approvedLedgerTagFor` /
+  `autoApprovedLedgerTagFor` helpers the two writers use), so an unrelated
+  ledger row that merely contains one of these strings (for example a
+  `review:<n>:approved` fact) cannot slip in. Filtered by `--since` and
+  `--session` only; `--policy` / `--outcome` stay policy-decision-only.
+  Empty section is omitted in text output; `--json` always carries an
+  `approvals` array. `src/cli/audit.ts`, `tests/cli/audit.test.ts`.
+
 ## [0.51.0] - 2026-08-27
 
 ### Added
