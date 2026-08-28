@@ -12,6 +12,8 @@ import type { ToolchainParitySection } from "./toolchain-parity.js";
 import type { UgAutoApprovalsSection } from "./ug-auto-approvals.js";
 import type { UgDelegationsSection } from "./ug-delegations.js";
 import type { SettingsDriftSection } from "./settings-drift.js";
+import type { AutoApproveModeWarning } from "./auto-approve-mode.js";
+import type { CodexConfigDriftSection } from "./codex-config-drift.js";
 
 /**
  * Phase 6 #6 follow-up — doctor target identifier. Distinct from
@@ -436,6 +438,17 @@ export interface DoctorReport {
    * `warningCount`.
    */
   ugDelegations?: UgDelegationsSection;
+
+  /**
+   * `auto_approve` configured without `mode: grill_me` (agent-tasks
+   * abfad738, follow-up of ADR
+   * docs/decisions/2026-08-27-ug-auto-mode-approval.md slice 1).
+   * Present only when the pack is declared and enabled AND
+   * `config.auto_approve` parses as a valid opt-in block. Always
+   * advisory (rolls into `warningCount`, never `errorCount`). See
+   * `auto-approve-mode.ts` for the full rationale.
+   */
+  ugAutoApproveMode?: AutoApproveModeWarning;
   /**
    * Settings-drift compensating control (same ADR, threat model (c)): a
    * `permissions.defaultMode` or hook entry present in a live Claude
@@ -447,6 +460,18 @@ export interface DoctorReport {
    * `warningCount`; `notes` never do.
    */
   settingsDrift?: SettingsDriftSection;
+  /**
+   * Codex counterpart of `settingsDrift` (follow-up of slice 2 of the
+   * same ADR, agent-tasks f59ea0eb): a live `approval_policy = "never"`
+   * or full-access `default_permissions` selection in `$CODEX_HOME
+   * /config.toml` or `<repo>/.codex/config.toml`. Present only when the
+   * understanding-gate pack's `auto_approve.harnesses` lists `codex`;
+   * a repo that never opted Codex into the auto path has no live signal
+   * for this key to pre-set. Unlike `settingsDrift`, this always warns
+   * while the key is present and the repo is opted in (not gated on
+   * drift since the last apply); `warnings` roll into `warningCount`.
+   */
+  codexConfigDrift?: CodexConfigDriftSection;
   memory: MemoryReport;
   hooks: HookEntryReport[];
   policies: PolicyEntryReport[];
@@ -549,7 +574,9 @@ export type { ClaudeMcpRegistrationSection, ClaudeMcpEntryReport } from "./claud
 export type { UnderstandingModeEnvDivergence } from "./understanding-mode-env.js";
 export type { UgAutoApprovalsSection, AutoApprovalListingEntry } from "./ug-auto-approvals.js";
 export type { UgDelegationsSection } from "./ug-delegations.js";
+export type { AutoApproveModeWarning } from "./auto-approve-mode.js";
 export type { SettingsDriftSection } from "./settings-drift.js";
+export type { CodexConfigDriftSection } from "./codex-config-drift.js";
 export type { ToolchainParitySection, ToolchainParityPeerReport } from "./toolchain-parity.js";
 
 export type {

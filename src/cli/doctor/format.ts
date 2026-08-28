@@ -68,6 +68,7 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
   const bin = report.npmGlobalBin;
   const modeEnv = report.understandingModeEnv;
   const ugAuto = report.ugAutoApprovals;
+  const autoApproveMode = report.ugAutoApproveMode;
   // "nothing when `.approvals/` is absent" (ug-auto-approvals.ts's AC 1):
   // stay silent unless the directory actually exists, mirroring the rest
   // of this section's "no line for a check that found nothing" style.
@@ -80,7 +81,18 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
   const showUgDeleg = ugDeleg !== undefined && ugDeleg.delegationsDirPresent;
   const drift = report.settingsDrift;
   const hasDriftContent = drift !== undefined && (drift.notes.length > 0 || drift.warnings.length > 0);
-  if ((!bin || bin.status !== "warn") && !modeEnv && !showUgAuto && !showUgDeleg && !hasDriftContent) return [];
+  const codexDrift = report.codexConfigDrift;
+  const hasCodexDriftContent = codexDrift !== undefined && codexDrift.warnings.length > 0;
+  if (
+    (!bin || bin.status !== "warn") &&
+    !modeEnv &&
+    !autoApproveMode &&
+    !showUgAuto &&
+    !showUgDeleg &&
+    !hasDriftContent &&
+    !hasCodexDriftContent
+  )
+    return [];
   const out: string[] = ["", "Environment"];
   if (bin && bin.status === "warn") {
     out.push(
@@ -92,6 +104,10 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
   if (modeEnv) {
     out.push(`  ⚠ ${modeEnv.message}`);
     for (const line of modeEnv.detail) out.push(`      ${line}`);
+  }
+  if (autoApproveMode) {
+    out.push(`  ⚠ ${autoApproveMode.message}`);
+    for (const line of autoApproveMode.detail) out.push(`      ${line}`);
   }
   if (showUgAuto && ugAuto) {
     const modeParts = Object.keys(ugAuto.byMode)
@@ -130,6 +146,9 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
   if (drift) {
     for (const n of drift.notes) out.push(`  ℹ ${n}`);
     for (const w of drift.warnings) out.push(`  ⚠ ${w}`);
+  }
+  if (codexDrift) {
+    for (const w of codexDrift.warnings) out.push(`  ⚠ ${w}`);
   }
   return out;
 }

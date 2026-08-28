@@ -77,6 +77,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   a different meaning for `reportContentHash` on that artifact kind (the
   launcher-supplied report file, not a persisted one) that a reader must
   branch on.
+- **`harness doctor`: warn when `auto_approve` is configured without
+  `mode: grill_me`** (agent-tasks `abfad738`, follow-up of the ADR
+  `docs/decisions/2026-08-27-ug-auto-mode-approval.md` slice 1). The
+  auto-approval path's report precondition reuses
+  `validatePersistedReport`, which only enforces the report's `mode`
+  field when it is `grill_me`. Outside that mode, report validation is
+  structural only. `harness doctor` now prints one advisory `⚠` line,
+  in `harness doctor`'s `Environment` section, when the
+  `understanding-before-execution` pack is declared and enabled, its
+  `config.auto_approve` parses as a valid opt-in block, and the
+  RESOLVED effective mode (`resolveModeFromConfig`, same GENERATION-path
+  resolver `checkUnderstandingModeEnvDivergence` uses) is not
+  `grill_me`. A missing or unrecognised `config.mode` resolves to the
+  `grill_me` default and never fires this warning, since that is the
+  mode the generated Stop-hook command actually passes at runtime. A
+  session-level `UNDERSTANDING_GATE_MODE` env override is a separate gap
+  covered by the existing mode/env divergence advisory, not by this
+  check. Always advisory (rolls into `warningCount`, never
+  `errorCount`); surfaced in `--json` as `ugAutoApproveMode`. New module
+  `src/cli/doctor/auto-approve-mode.ts`.
+- **`harness audit` now shows understanding-gate approval facts** (agent-tasks
+  `5ad63b01`, follow-up of slice 1 of the ADR
+  `docs/decisions/2026-08-27-ug-auto-mode-approval.md`, "Audit and doctor").
+  A new `approvals` section, alongside the unchanged `policy_decision` table,
+  lists the raw ledger facts `understanding-approved:<sid>` (plain or
+  `:forced:<field>`-suffixed) and `understanding-auto-approved:<sid>` within
+  the audited `--since` window, each with timestamp, tag and source (tag
+  and source are flattened and length-capped before rendering, so an
+  embedded newline in untrusted ledger content can't split one row into
+  two). A second server-side ledger fetch narrows by `contentPrefix:
+  "understanding-"` when the connected grounding-mcp supports it; matching
+  is by exact tag (built from the same `approvedLedgerTagFor` /
+  `autoApprovedLedgerTagFor` helpers the two writers use), so an unrelated
+  ledger row that merely contains one of these strings (for example a
+  `review:<n>:approved` fact) cannot slip in. Filtered by `--since` and
+  `--session` only; `--policy` / `--outcome` stay policy-decision-only.
+  Empty section is omitted in text output; `--json` always carries an
+  `approvals` array plus the resolved `sessionId`. A degraded approvals-only
+  fetch degrades softly rather than discarding the already-fetched decisions
+  table: text gets one `approvals unavailable: <reason>` line, `--json` gets
+  `approvalsUnavailable` (with `approvals: []`), and the audit-only posture
+  gets one stderr line; exit code stays tied to the policy-decision fetch.
+  `src/cli/audit.ts`, `src/cli/index.ts`, `tests/cli/audit.test.ts`.
+- **`harness doctor` warns on a live Codex `approval_policy = "never"` or
+  full-access `default_permissions` selection** (agent-tasks `f59ea0eb`,
+  follow-up of slice 2 of the ADR
+  `docs/decisions/2026-08-27-ug-auto-mode-approval.md`). Either config
+  key in `$CODEX_HOME/config.toml` or `<repo>/.codex/config.toml`
+  pre-sets the trusted `permission_mode` signal the Codex `auto_approve`
+  path consumes. `approval_policy = "never"` is the measured signal
+  (`dogfood/ug-auto-mode-signals/README.md`, section (l)); the
+  full-access `default_permissions` check is a threat-model heuristic on
+  a key the operator can set, not a measured signal (section (k) shows
+  it does not move `permission_mode` under `codex exec`). Codex
+  counterpart of the existing `permissions.defaultMode` settings-drift
+  warning for Claude Code. Gated on `auto_approve.harnesses` listing
+  `codex`, so a repo that never opted Codex into the auto path sees no
+  line. Warning only, never an enforcement; new module
+  `src/cli/doctor/codex-config-drift.ts`.
 
 ## [0.51.0] - 2026-08-27
 

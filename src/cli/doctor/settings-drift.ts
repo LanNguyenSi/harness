@@ -168,8 +168,28 @@ function checkOneFile(
   }
 }
 
-/** `~`-relativize `absPath` under `home` for display; never leak the raw absolute path. */
-function tildeize(absPath: string, home: string): string {
+/**
+ * The absolute paths `harness.lock` records as an actual `--target`
+ * write (see the module header: this is the "SAME path" mapping a live
+ * file was written under). Not exported: `codex-config-drift.ts` no
+ * longer shares this lookup (it keeps no apply-time snapshot to gate on
+ * at all, see that module's header).
+ */
+function targetLockAbsPaths(lockPath: string): ReadonlySet<string> {
+  const lockEntries = readLock(lockPath) ?? [];
+  return new Set(
+    lockEntries
+      .filter((e): e is TargetEntry => e.kind === "target")
+      .map((e) => path.resolve(e.path)),
+  );
+}
+
+/**
+ * `~`-relativize `absPath` under `home` for display; never leak the raw
+ * absolute path. Exported for `codex-config-drift.ts`'s `$CODEX_HOME`
+ * candidate label, which needs the same convention.
+ */
+export function tildeize(absPath: string, home: string): string {
   const resolvedHome = path.resolve(home);
   const resolvedPath = path.resolve(absPath);
   if (resolvedPath === resolvedHome) return "~";
@@ -210,12 +230,7 @@ export function buildSettingsDrift(opts: BuildSettingsDriftOptions): SettingsDri
     if (isRecord(parsed)) baseline = parsed;
   }
 
-  const lockEntries = readLock(opts.lockPath) ?? [];
-  const targetAbsPaths = new Set(
-    lockEntries
-      .filter((e): e is TargetEntry => e.kind === "target")
-      .map((e) => path.resolve(e.path)),
-  );
+  const targetAbsPaths = targetLockAbsPaths(opts.lockPath);
 
   const userSettingsPath = resolveUserSettingsPath(opts.home, opts.env);
   const candidates: SettingsCandidate[] = [
