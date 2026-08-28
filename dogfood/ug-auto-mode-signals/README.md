@@ -1076,7 +1076,8 @@ Results:
   after the model actually wrote and got a report checked, exactly
   what the gate requires. The prompt's instruction not to was simply not
   something the model honoured once it hit the gate.
-- **`report_scan.max_wait` (default 500 ms): 6/6 of the shape (a)/(b)
+- **`report_scan.max_wait` (default at the time of this measurement,
+  500 ms, since retuned to 2 s, see below): 6/6 of the shape (a)/(b)
   FIRST attempts exhausted the full bound without finding the report**
   (waited 519-524 ms; the config's 5 s ceiling was never approached).
   This differs from the "well under a third of 500 ms" comfortable
@@ -1091,7 +1092,9 @@ Results:
   exactly this case, not a first-attempt hit inside the 500 ms bound,
   that carried every one of these six runs to success. See "Chosen
   `report_scan.max_wait` default" for the consequence for AC 4's
-  refinement.
+  refinement: the shipped default was retuned to 2 s off this finding
+  (the 500 ms figure throughout this section is what was actually in
+  force during these runs, not the current default).
 - **The retry sentence's literal bytes were not captured from these six
   runs' own hook stdout.** Claude Code consumes a `PreToolUse` hook's
   stdout as the permission decision, and this script's `settings.json`
@@ -1129,4 +1132,7 @@ run complicates the existing evidence rather than confirming it is
 `report_scan.max_wait`'s default: a full-length grill_me report needed
 the retry-and-instruct fallback in 6/6 real attempts, not a same-attempt
 hit inside 500 ms, where the shorter probe reports of sections (e)/(o)
-suggested a comfortable 3-4x margin.
+suggested a comfortable 3-4x margin. As a consequence, the shipped
+default was retuned from 500 ms to 2 s (see
+`docs/okf/understanding-gate-auto-mode-signals.md`, "Chosen
+`report_scan.max_wait` default"); the ceiling stays 5 s.

@@ -398,67 +398,76 @@ an isolated manifest/generated dir/`CLAUDE_CONFIG_DIR` (README section
   reproduced end to end, a measured negative, not a slice 3 defect.
 - (d) delegation bound to a different cwd than the child's own: 0/1,
   `cwd_mismatch` on both `PreToolUse` attempts.
-- `report_scan.max_wait` (default 500 ms): 6/6 of the (a)/(b) FIRST
-  attempts exhausted the full 500 ms bound without finding the report
-  (waited 519-524 ms), where sections (e)/(o) below (a much shorter
-  probe report) measured a comfortable 139 ms max across 15 samples. See
-  "Chosen `report_scan.max_wait` default" immediately below for what
-  this changes.
+- `report_scan.max_wait` (retuned default 2 s, was 500 ms during this
+  round's own runs): 6/6 of the (a)/(b) FIRST attempts exhausted the
+  500 ms bound then in force without finding the report (waited
+  519-524 ms), where sections (e)/(o) below (a much shorter probe
+  report) measured a comfortable 139 ms max across 15 samples. See
+  "Chosen `report_scan.max_wait` default" immediately below for the
+  retuning this produced.
 
 ## Chosen `report_scan.max_wait` default
 
-Drawing sections (o) through (q) above into the one number and the one
-verdict the ADR's slice 3 acceptance criterion 6 asks for:
+Drawing sections (o) through (q) above AND the real end-to-end runs
+("Measured: delegation end to end under `-p`" above, README section
+(r)) into the one number and the one verdict the ADR's slice 3
+acceptance criterion 6 asks for. The two data sets disagree on
+magnitude but agree on shape, and the second one is the one that
+decides the number: the probe reports (sections (e)/(o), max 139 ms
+across 15 samples, a first-guess 500 ms default at roughly 3-4x that
+max) were short synthetic text, while the real end-to-end runs (README
+section (r)) carried the actual ten-section grill_me report this
+gate's own schema produces, and every one of those 6/6 first attempts
+exhausted the full 500 ms bound (waited 519-524 ms) before the report
+was visible. Report length measurably changes how long the transcript
+flush takes, and the probe-derived 500 ms default was anchored to a
+report far shorter than a real one.
 
-- **Default: 500 ms.** Derivation: the max observed `-p` latency across
-  sections (e) and (o) combined (n=15 positive runs total) is 139 ms; a
-  small round-number safety factor of roughly 3-4x over that observed max,
-  rounded to a human-friendly value, gives 500 ms. This covers the
-  deciding case, a report written in the same turn as the call that needs
-  it, with headroom over every `-p` sample measured so far, not only the
-  median.
-- **Schema ceiling: 5000 ms (5 s)**, matching the bound this round's
-  probes themselves used. Nothing measured here justifies asking a hook to
-  hold a tool call open longer than that, and the interactive finding
-  below argues against leaning on the poll at all past a `-p` launch.
-- **Verdict (iv), `-p`: the bound covers the deciding case and is short
-  enough not to be felt as a hang.** The slowest of fifteen `-p` samples
-  across two independent probes (sections (e), (o)) was 139 ms, well under
-  a third of the proposed 500 ms default, and every sample landed inside a
-  single-digit multiple of the poll interval.
-- **Verdict (iv), interactive: does NOT hold.** Section (q) found the
-  report unreachable within 5 s in 3/3 interactive runs, and the
-  transcript-shape fixture shows why a longer bound would not obviously
-  fix it: the assistant's own turn had written zero entries to the
-  transcript file by the bound, even though the pane fixture confirms the
-  turn had already completed content-wise. No bound measured in this round
-  covers the interactive case. Per the ADR's own fallback clause ("If no
-  bound satisfies both, this slice switches to the launcher-supplied
-  report file"): the interactive case should use the launcher-supplied
-  report file bound by hash in the delegation's `reportContentHash`, not
-  the transcript scan; the `-p` case may keep the bounded poll (500 ms
-  default, 5000 ms ceiling) as measured above.
-- **Addendum, `-p`, real end-to-end delegation runs ("Measured:
-  delegation end to end under `-p`" above, README section (r)): the
-  "well under a third of 500 ms" margin in the `-p` verdict above did
-  NOT hold for a full-length grill_me report.** 6/6 real `claude -p`
-  children carrying the ten-section grill_me report this task's own
-  fixture uses exhausted the full 500 ms bound on their FIRST gated
-  call (waited 519-524 ms) before the report was visible, where
-  sections (e)/(o) above (a much shorter probe report) measured a
-  139 ms max across 15 samples. This is not a contradiction of the
-  `-p` verdict's core claim (a bounded poll, not an unbounded one, is
-  the right shape, and the retry-and-instruct fallback the ADR
-  designed for exactly this case carried all 6/6 runs to success on a
-  later attempt), but it is a contradiction of the SPECIFIC margin
-  claimed for the chosen default: report length measurably changes
-  how long the flush takes, and this round's 500 ms derivation was
-  anchored to a probe report much shorter than a real grill_me report
-  produces. The two statements this task's acceptance criterion asked
-  to be refined IF the bound held (`src/cli/pack/approve-escape.ts`'s
-  module comment, `docs/okf/understanding-gate-lockout-recovery.md`'s
-  step 4 sentence) were left unedited for this reason, per the same
-  criterion's own instruction on a contradicted bound.
+- **Default: 2 s (2000 ms), retuned from an initial 500 ms.**
+  Derivation: the observed first-poll overrun with a full-length
+  report (519-524 ms, the point at which the OLD bound was already
+  exhausted with the report still not visible) times roughly the same
+  3-4x safety factor the original derivation used, rounded to a
+  human-friendly value, gives 2 s. This covers the deciding case, a
+  full-length report written in the same turn as the call that needs
+  it, not only the shorter probe reports the first-guess default was
+  anchored to.
+- **Schema ceiling: 5000 ms (5 s)**, unchanged. Nothing measured in
+  either data set justifies asking a hook to hold a tool call open
+  longer than that, and the interactive finding below argues against
+  leaning on the poll at all past a `-p` launch.
+- **Verdict (iv), `-p`: bounded, covers the same-turn case with a real
+  report, and is not felt as a hang.** The retuned 2 s default clears
+  the worst first-poll overrun this round observed on a full-length
+  report (519-524 ms) with headroom, while the retry-and-instruct
+  fallback the ADR designed for exactly this case is still what
+  carries a session past a first attempt that lands inside the
+  remaining gap between a genuinely slow flush and the bound; all 6/6
+  real end-to-end runs succeeded on that later attempt regardless of
+  which bound was in force. This is not a contradiction of the
+  original `-p` verdict's core claim (a bounded poll, not an unbounded
+  one, is the right shape); it is a correction of the SPECIFIC number,
+  now anchored to the real-report data instead of the shorter probe
+  reports.
+- **Verdict (iv), interactive: does NOT hold, unchanged.** Section (q)
+  found the report unreachable within 5 s in 3/3 interactive runs, and
+  the transcript-shape fixture shows why a longer bound would not
+  obviously fix it: the assistant's own turn had written zero entries
+  to the transcript file by the bound, even though the pane fixture
+  confirms the turn had already completed content-wise. No bound
+  measured in this round covers the interactive case. Per the ADR's
+  own fallback clause ("If no bound satisfies both, this slice
+  switches to the launcher-supplied report file"): the interactive
+  case should use the launcher-supplied report file bound by hash in
+  the delegation's `reportContentHash`, not the transcript scan; the
+  `-p` case keeps the bounded poll (2 s default, 5 s ceiling) as
+  retuned above.
+- **Not measured here: the real-report lag distribution at n >= 10.**
+  The real end-to-end runs above are n=6 (a)/(b) first attempts, all
+  against the same fixture report; a larger sample of real-report
+  first-poll latencies, ideally across report lengths, is a follow-up
+  measurement, not something this round's data supports concluding
+  further.
 
 ## Codex
 

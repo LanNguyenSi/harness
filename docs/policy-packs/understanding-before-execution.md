@@ -290,7 +290,7 @@ Since task `d78fb3c7`, the pack's `config:` block is validated by `harness valid
 | `auto_approve.when` | array of permission-mode strings | optional; allowlist of `permission_mode` values eligible for a hook-written signed auto-marker |
 | `auto_approve.harnesses` | non-empty array of `claude-code` / `codex`, no duplicates | optional; which runtimes' PreToolUse hooks may take the auto path. Absent means `[claude-code]` |
 | `auto_approve.require_report` | literal `true` | required when `auto_approve` is present; `false` or missing is a schema error |
-| `auto_approve.report_scan.max_wait` | duration string (`1h`, `30m`, ...) | optional; slice 3 (`docs/decisions/2026-08-27-ug-auto-mode-approval.md`, "Report capture under `claude -p`"): bounds the child's PreToolUse hook's bounded, fail-closed poll for a report that has not yet landed in the transcript. Default `500ms` (a measured value; see `docs/okf/understanding-gate-auto-mode-signals.md` for the derivation); schema ceiling `5s` |
+| `auto_approve.report_scan.max_wait` | duration string (`1h`, `30m`, ...) | optional; slice 3 (`docs/decisions/2026-08-27-ug-auto-mode-approval.md`, "Report capture under `claude -p`"): bounds the child's PreToolUse hook's bounded, fail-closed poll for a report that has not yet landed in the transcript. Default `2s` (a measured, retuned value; see `docs/okf/understanding-gate-auto-mode-signals.md`, "Chosen `report_scan.max_wait` default", for the derivation); schema ceiling `5s` |
 | `ux` | `PolicyUxSchema` (`cannot` + `required[]` + `run[]`) | optional; renders agent-facing remediation when the PreToolUse blocker fires |
 | `producers` | array of `ProducerSchema` (`kind` + recipe) | optional; companion to `ux:` for the same blocker render path |
 

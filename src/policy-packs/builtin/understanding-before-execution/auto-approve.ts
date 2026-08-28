@@ -124,17 +124,19 @@ export const DEFAULT_AUTO_APPROVE_HARNESSES: readonly string[] = [CLAUDE_CODE_HA
  *
  * The value is measured, not guessed: under `claude -p` the report is
  * absent from the transcript at the instant PreToolUse fires and lands
- * tens of milliseconds later, so the bound sits comfortably above the
- * observed flush and still far below anything a session would experience
- * as a hang. The measurement itself is in
- * `docs/okf/understanding-gate-auto-mode-signals.md` (lag-distribution
- * section), from `dogfood/ug-auto-mode-signals/`.
+ * some time later, on a lag that scales with report length, so the
+ * bound is set from the real end-to-end runs (a full-length grill_me
+ * report), not only the shorter probe reports that first-guessed 500ms.
+ * The measurement and the retuning derivation are both in
+ * `docs/okf/understanding-gate-auto-mode-signals.md` ("Chosen
+ * `report_scan.max_wait` default" section), from
+ * `dogfood/ug-auto-mode-signals/`.
  *
  * ONE named constant on purpose: the hook, the schema default and every
  * test read this symbol, so re-tuning the bound against a new
  * measurement is a one-line change with no literal to hunt down.
  */
-export const DEFAULT_REPORT_SCAN_MAX_WAIT_MS = 500;
+export const DEFAULT_REPORT_SCAN_MAX_WAIT_MS = 2_000;
 
 /**
  * Hard ceiling for `auto_approve.report_scan.max_wait`. A larger value

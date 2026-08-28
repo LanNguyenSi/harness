@@ -30,11 +30,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   - **Child report capture under `-p`.** A report the child emits before
     its first tool call is not yet in the session transcript at the
     instant the hook fires; the new `auto_approve.report_scan.max_wait`
-    config key bounds a fail-closed poll for it (default `500ms`, a
+    config key bounds a fail-closed poll for it (default `2s`, a
     measured value derived from the observed `-p` latency distribution;
     see `docs/okf/understanding-gate-auto-mode-signals.md` for the
     derivation), with block-and-retry as the behaviour past the bound
-    rather than an alternative to it. The child's own PreToolUse hook,
+    rather than an alternative to it. The default was retuned from an
+    initial 500ms after end-to-end dogfood runs against a real
+    full-length report (see the evidence doc's "Chosen
+    `report_scan.max_wait` default" section for why). The child's own
+    PreToolUse hook,
     on a valid delegation, runs this scan, persists the report bound to
     the child's session id, and only then mints the child's own
     auto-marker with `approvedBy` carrying the parent linkage.
