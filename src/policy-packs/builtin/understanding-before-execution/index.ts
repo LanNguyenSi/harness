@@ -132,3 +132,29 @@ export {
   readActiveClaim,
   clearActiveClaim,
 } from "./active-claim.js";
+
+// Slice 3 of docs/decisions/2026-08-27-ug-auto-mode-approval.md: signed
+// PRE-AUTHORIZATIONS for `claude -p` child sessions. Deliberately a
+// separate artifact kind with its own directory and its own verifier:
+// `checkApprovalMarker` cannot consume one and must not (see
+// delegation-markers.ts for why). Exported through the shim because the
+// slice's later consumers (the `harness delegate` verb and the child's
+// PreToolUse hook) import every sibling gate symbol through it.
+export {
+  DELEGATION_MARKER_DIRNAME,
+  delegationMarkerIdFor,
+  delegationMarkerPathFor,
+  hashDelegationCwd,
+  type DelegationApprovedByFields,
+  buildDelegationApprovedBy,
+  type ParsedDelegationApprovedBy,
+  type DelegationApprovedByParse,
+  parseDelegationApprovedBy,
+  type WriteDelegationMarkerOptions,
+  type WriteDelegationMarkerResult,
+  writeDelegationMarker,
+  type DelegationRefusalReason,
+  type DelegationVerification,
+  type VerifyDelegationOptions,
+  verifyDelegation,
+} from "./delegation-markers.js";

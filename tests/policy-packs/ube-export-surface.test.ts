@@ -14,7 +14,7 @@ import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-ex
 // .ts source text), so it only sees VALUE exports: type-only exports
 // (interfaces, `type` aliases) are erased at transform time and never
 // appear in `Object.keys()`, regardless of how many `export { ... }`
-// names are written in the source. The 51 names below were captured by
+// names are written in the source. The names below were captured by
 // running this exact import+Object.keys().sort() against the shim and are
 // the actual, verified runtime surface — not a source-text export count.
 // Widened by agent-tasks 74b4b17d, three times: first by the
@@ -29,6 +29,15 @@ import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-ex
 // been importing those three directly from `auto-approve.ts` instead of
 // through this shim, contradicting every sibling symbol at those same
 // call sites.
+// Widened a fourth time by agent-tasks 37ad0b05 (ADR slice 3,
+// delegation-markers.ts) by the eight VALUE exports of the delegation
+// pre-authorization artifact: DELEGATION_MARKER_DIRNAME,
+// delegationMarkerIdFor, delegationMarkerPathFor, hashDelegationCwd,
+// buildDelegationApprovedBy, parseDelegationApprovedBy,
+// writeDelegationMarker, verifyDelegation. 51 -> 59. The module's eight
+// type-only exports are absent from this list on purpose: they are erased
+// at transform time and never reach Object.keys(), so listing them here
+// would fail the very assertion below.
 //
 // Mutation-verified: temporarily re-adding `export { safeJsonParse } from
 // "./persisted-reports.js";` to
@@ -45,6 +54,7 @@ const EXPECTED_EXPORTS = [
   "CLAUDE_CODE_HARNESS",
   "DEFAULT_AUTO_APPROVE_HARNESSES",
   "DEFAULT_BASH_TOOL_NAMES",
+  "DELEGATION_MARKER_DIRNAME",
   "REPORTS_DIR_ENV",
   "TOLERANT_FALLBACK_FUTURE_SKEW_MS",
   "TOLERANT_FALLBACK_MAX_AGE_MS",
@@ -55,6 +65,7 @@ const EXPECTED_EXPORTS = [
   "autoApprovedByFor",
   "autoApprovedLedgerTagFor",
   "bashCommandMatchesAny",
+  "buildDelegationApprovedBy",
   "checkActiveClaimApprovalMarker",
   "checkApprovalMarker",
   "checkOperatorApprovalMarkers",
@@ -63,6 +74,8 @@ const EXPECTED_EXPORTS = [
   "clearApprovalMarker",
   "clearTaskApprovalMarker",
   "defaultReportsDir",
+  "delegationMarkerIdFor",
+  "delegationMarkerPathFor",
   "describePostToolUseExpiry",
   "expirePersistedReport",
   "extractBashCommandFromToolInput",
@@ -70,6 +83,7 @@ const EXPECTED_EXPORTS = [
   "extractTasksTransitionStatusFromToolInput",
   "findLatestReportForSession",
   "harnessAllowed",
+  "hashDelegationCwd",
   "isPolicyDecisionRow",
   "listPersistedReports",
   "matchLedgerEntries",
@@ -77,6 +91,7 @@ const EXPECTED_EXPORTS = [
   "parseApprovalLifecycle",
   "parseAutoApprove",
   "parseAutoApprovedBy",
+  "parseDelegationApprovedBy",
   "permissionModeAllowed",
   "readActiveClaim",
   "reportsDirForManifest",
@@ -84,13 +99,15 @@ const EXPECTED_EXPORTS = [
   "selectReportForSession",
   "taskApprovalMarkerPathFor",
   "toolNameMatchesAny",
+  "verifyDelegation",
   "writeActiveClaim",
   "writeApprovalMarker",
+  "writeDelegationMarker",
   "writeTaskApprovalMarker",
 ] as const;
 
 describe("understanding-before-execution-runtime shim export surface", () => {
-  it("exports exactly the pinned 51-name surface, sorted", () => {
+  it("exports exactly the pinned 59-name surface, sorted", () => {
     const actual = Object.keys(ubeShim).sort();
     expect(actual).toEqual([...EXPECTED_EXPORTS].sort());
   });
