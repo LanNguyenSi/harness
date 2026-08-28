@@ -171,10 +171,11 @@ function checkOneFile(
 /**
  * The absolute paths `harness.lock` records as an actual `--target`
  * write (see the module header: this is the "SAME path" mapping a live
- * file was written under). Exported for `codex-config-drift.ts`, which
- * shares this exact lookup for its own `hasSnapshot` check.
+ * file was written under). Not exported: `codex-config-drift.ts` no
+ * longer shares this lookup (it keeps no apply-time snapshot to gate on
+ * at all, see that module's header).
  */
-export function targetLockAbsPaths(lockPath: string): ReadonlySet<string> {
+function targetLockAbsPaths(lockPath: string): ReadonlySet<string> {
   const lockEntries = readLock(lockPath) ?? [];
   return new Set(
     lockEntries

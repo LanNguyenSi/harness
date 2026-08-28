@@ -19,6 +19,8 @@ import { buildLastApply, writeLastApply } from "../../src/io/last-apply.js";
 import type { Manifest } from "../../src/schema/index.js";
 import { STUB_NPM_BIN_EXEC_UNKNOWN } from "../_helpers/npm-bin-exec.js";
 
+const NO_SNAPSHOT_SUFFIX = " (harness keeps no apply-time snapshot of this file; presence only)";
+
 let cleanups: Array<() => void> = [];
 afterEach(() => {
   for (const c of cleanups) c();
@@ -93,6 +95,17 @@ describe("isCodexOptedIntoAutoApprove: pure function", () => {
     expect(isCodexOptedIntoAutoApprove(manifest)).toBe(false);
   });
 
+  it("false when auto_approve.harnesses is omitted (default [claude-code] does not cover codex)", () => {
+    const manifest = {
+      policy_packs: [
+        basePolicyPack({
+          auto_approve: { when: ["bypassPermissions"], require_report: true },
+        }),
+      ],
+    } as unknown as Manifest;
+    expect(isCodexOptedIntoAutoApprove(manifest)).toBe(false);
+  });
+
   it("false when auto_approve is absent", () => {
     const manifest = {
       policy_packs: [basePolicyPack({ mode: "grill_me" })],
@@ -107,7 +120,7 @@ describe("isCodexOptedIntoAutoApprove: pure function", () => {
 });
 
 describe("buildCodexConfigDrift: pure function", () => {
-  it("warns on approval_policy = \"never\" in $CODEX_HOME/config.toml", () => {
+  it('warns on approval_policy = "never" in $CODEX_HOME/config.toml', () => {
     const f = makeFixture();
     writeFile(codexHomeConfigPath(f), 'approval_policy = "never"\n');
 
@@ -119,11 +132,11 @@ describe("buildCodexConfigDrift: pure function", () => {
       env: {},
     });
     expect(result.warnings).toEqual([
-      'approval_policy = "never" set in ~/.codex/config.toml (no apply snapshot for this file)',
+      `approval_policy = "never" set in ~/.codex/config.toml${NO_SNAPSHOT_SUFFIX}`,
     ]);
   });
 
-  it("warns on approval_policy = \"never\" in <repo>/.codex/config.toml", () => {
+  it('warns on approval_policy = "never" in <repo>/.codex/config.toml', () => {
     const f = makeFixture();
     writeFile(repoCodexConfigPath(f), 'approval_policy = "never"\n');
 
@@ -135,7 +148,7 @@ describe("buildCodexConfigDrift: pure function", () => {
       env: {},
     });
     expect(result.warnings).toEqual([
-      'approval_policy = "never" set in .codex/config.toml (no apply snapshot for this file)',
+      `approval_policy = "never" set in .codex/config.toml${NO_SNAPSHOT_SUFFIX}`,
     ]);
   });
 
@@ -155,7 +168,7 @@ describe("buildCodexConfigDrift: pure function", () => {
       env: { CODEX_HOME: codexHomeOverride },
     });
     expect(result.warnings).toEqual([
-      'approval_policy = "never" set in $CODEX_HOME/config.toml (no apply snapshot for this file)',
+      `approval_policy = "never" set in $CODEX_HOME/config.toml${NO_SNAPSHOT_SUFFIX}`,
     ]);
   });
 
@@ -171,13 +184,30 @@ describe("buildCodexConfigDrift: pure function", () => {
       env: {},
     });
     expect(result.warnings).toEqual([
-      'default_permissions = ":danger-full-access" (full access) set in .codex/config.toml (no apply snapshot for this file)',
+      `default_permissions = ":danger-full-access" (full access) set in .codex/config.toml${NO_SNAPSHOT_SUFFIX}`,
     ]);
   });
 
   it("no warning for a non-full-access default_permissions selection", () => {
     const f = makeFixture();
     writeFile(repoCodexConfigPath(f), 'default_permissions = ":read-only"\n');
+
+    const result = buildCodexConfigDrift({
+      generatedDir: f.generatedDir,
+      lockPath: f.lockPath,
+      cwd: f.projectDir,
+      home: f.home,
+      env: {},
+    });
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("no false positive: a value that merely contains danger-full-access as a substring, not an exact match (L1)", () => {
+    const f = makeFixture();
+    writeFile(
+      repoCodexConfigPath(f),
+      'default_permissions = ":not-danger-full-access-really"\n',
+    );
 
     const result = buildCodexConfigDrift({
       generatedDir: f.generatedDir,
@@ -206,7 +236,7 @@ describe("buildCodexConfigDrift: pure function", () => {
     expect(result.warnings).toEqual([]);
   });
 
-  it("a key inside a [table] is not treated as root-level", () => {
+  it("a key inside a [table] (a profile-scoped setting) is not treated as root-level (documented M2 limitation)", () => {
     const f = makeFixture();
     writeFile(
       repoCodexConfigPath(f),
@@ -223,6 +253,80 @@ describe("buildCodexConfigDrift: pure function", () => {
     expect(result.warnings).toEqual([]);
   });
 
+  it('a quoted root-level key ("approval_policy" = "never") is still detected (L1/M2)', () => {
+    const f = makeFixture();
+    writeFile(repoCodexConfigPath(f), '"approval_policy" = "never"\n');
+
+    const result = buildCodexConfigDrift({
+      generatedDir: f.generatedDir,
+      lockPath: f.lockPath,
+      cwd: f.projectDir,
+      home: f.home,
+      env: {},
+    });
+    expect(result.warnings).toEqual([
+      `approval_policy = "never" set in .codex/config.toml${NO_SNAPSHOT_SUFFIX}`,
+    ]);
+  });
+
+  it("approval_policy = 'never' (literal single-quoted value) is detected", () => {
+    const f = makeFixture();
+    writeFile(repoCodexConfigPath(f), "approval_policy = 'never'\n");
+
+    const result = buildCodexConfigDrift({
+      generatedDir: f.generatedDir,
+      lockPath: f.lockPath,
+      cwd: f.projectDir,
+      home: f.home,
+      env: {},
+    });
+    expect(result.warnings).toEqual([
+      `approval_policy = "never" set in .codex/config.toml${NO_SNAPSHOT_SUFFIX}`,
+    ]);
+  });
+
+  it('approval_policy="never" (no surrounding spaces around =) is detected', () => {
+    const f = makeFixture();
+    writeFile(repoCodexConfigPath(f), 'approval_policy="never"\n');
+
+    const result = buildCodexConfigDrift({
+      generatedDir: f.generatedDir,
+      lockPath: f.lockPath,
+      cwd: f.projectDir,
+      home: f.home,
+      env: {},
+    });
+    expect(result.warnings).toEqual([
+      `approval_policy = "never" set in .codex/config.toml${NO_SNAPSHOT_SUFFIX}`,
+    ]);
+  });
+
+  it("a body line inside a multi-line string is not mistaken for a root-level assignment (L2)", () => {
+    const f = makeFixture();
+    writeFile(
+      repoCodexConfigPath(f),
+      [
+        'description = """',
+        'approval_policy = "never"',
+        '"""',
+        'approval_policy = "on-request"',
+      ].join("\n") + "\n",
+    );
+
+    const result = buildCodexConfigDrift({
+      generatedDir: f.generatedDir,
+      lockPath: f.lockPath,
+      cwd: f.projectDir,
+      home: f.home,
+      env: {},
+    });
+    // The `approval_policy = "never"` line lives inside the `"""..."""`
+    // body, so it must never be scanned as a real assignment; the real
+    // root-level `approval_policy = "on-request"` after the closing
+    // delimiter is not risky, so there is nothing to warn about.
+    expect(result.warnings).toEqual([]);
+  });
+
   it("malformed TOML (unterminated string) produces exactly one diagnostic and does not crash", () => {
     const f = makeFixture();
     writeFile(repoCodexConfigPath(f), 'approval_policy = "never\n');
@@ -236,6 +340,26 @@ describe("buildCodexConfigDrift: pure function", () => {
     });
     expect(result.warnings).toEqual([
       ".codex/config.toml: unreadable/invalid Codex config TOML",
+    ]);
+  });
+
+  it("a malformed line does not hide a risky key that DID parse from a different line of the same file (M1)", () => {
+    const f = makeFixture();
+    writeFile(
+      repoCodexConfigPath(f),
+      ['sandbox_mode = "workspace-write', 'approval_policy = "never"'].join("\n") + "\n",
+    );
+
+    const result = buildCodexConfigDrift({
+      generatedDir: f.generatedDir,
+      lockPath: f.lockPath,
+      cwd: f.projectDir,
+      home: f.home,
+      env: {},
+    });
+    expect(result.warnings).toEqual([
+      ".codex/config.toml: unreadable/invalid Codex config TOML",
+      `approval_policy = "never" set in .codex/config.toml${NO_SNAPSHOT_SUFFIX}`,
     ]);
   });
 
@@ -265,18 +389,21 @@ describe("buildCodexConfigDrift: pure function", () => {
     });
     expect(result.warnings).toHaveLength(2);
     expect(result.warnings).toContain(
-      'approval_policy = "never" set in ~/.codex/config.toml (no apply snapshot for this file)',
+      `approval_policy = "never" set in ~/.codex/config.toml${NO_SNAPSHOT_SUFFIX}`,
     );
     expect(result.warnings).toContain(
-      'default_permissions = ":danger-full-access" (full access) set in .codex/config.toml (no apply snapshot for this file)',
+      `default_permissions = ":danger-full-access" (full access) set in .codex/config.toml${NO_SNAPSHOT_SUFFIX}`,
     );
   });
 
-  it("present at last apply's own generated block still warns, annotated as such", () => {
-    // harness's own generated codex/config.toml never carries
-    // approval_policy, but this exercises the baseline-lookup branch
-    // rather than assuming it: an operator-hand-authored last-apply
-    // snapshot that happens to carry the key is still read faithfully.
+  it("a harness.generated/.last-apply snapshot is never consulted for Codex config: still reports presence-only (M4, renamed from the old annotation test)", () => {
+    // Unlike settings-drift.ts, this check keeps no apply-time baseline
+    // for Codex config at all (see the module header: `apply.ts` never
+    // records a `kind: "target"` lock entry for the installed Codex
+    // config path, and the only thing `.last-apply` ever captures for
+    // Codex is harness's OWN generated hook block, not the operator's
+    // live file). Writing a `.last-apply` entry that happens to carry
+    // the exact same live value must not change the emitted suffix.
     const f = makeFixture();
     writeLastApply(
       f.generatedDir,
@@ -291,13 +418,8 @@ describe("buildCodexConfigDrift: pure function", () => {
       home: f.home,
       env: {},
     });
-    // No `target` lock entry exists for the codex config path (harness
-    // never records one for it, see the module header), so this still
-    // renders the "no apply snapshot for this file" annotation rather
-    // than "present at last apply", that is the honest answer given
-    // what harness actually snapshots today.
     expect(result.warnings).toEqual([
-      'approval_policy = "never" set in .codex/config.toml (no apply snapshot for this file)',
+      `approval_policy = "never" set in .codex/config.toml${NO_SNAPSHOT_SUFFIX}`,
     ]);
   });
 });
@@ -315,12 +437,8 @@ tools:
     known: [Read]
 `;
 
-describe("doctor: codex config drift (Environment section)", () => {
-  it("warns and rolls into warningCount when codex is opted in and the key is present", async () => {
-    const f = makeFixture();
-    fs.writeFileSync(
-      path.join(f.projectDir, "harness.yaml"),
-      `${HARNESS_YAML_HEADER}policy_packs:
+function optedInHarnessYaml(): string {
+  return `${HARNESS_YAML_HEADER}policy_packs:
   - name: understanding-before-execution
     config:
       mode: grill_me
@@ -328,8 +446,13 @@ describe("doctor: codex config drift (Environment section)", () => {
         when: [bypassPermissions]
         harnesses: [codex]
         require_report: true
-`,
-    );
+`;
+}
+
+describe("doctor: codex config drift (Environment section)", () => {
+  it("warns and rolls into warningCount when codex is opted in and the key is present", async () => {
+    const f = makeFixture();
+    fs.writeFileSync(path.join(f.projectDir, "harness.yaml"), optedInHarnessYaml());
     writeFile(repoCodexConfigPath(f), 'approval_policy = "never"\n');
 
     const report = await doctor({
@@ -343,13 +466,86 @@ describe("doctor: codex config drift (Environment section)", () => {
     });
 
     expect(report.codexConfigDrift?.warnings).toContain(
-      'approval_policy = "never" set in .codex/config.toml (no apply snapshot for this file)',
+      `approval_policy = "never" set in .codex/config.toml${NO_SNAPSHOT_SUFFIX}`,
     );
     expect(report.warningCount).toBeGreaterThanOrEqual(1);
 
     const text = format(report);
     expect(text).toContain(
-      '⚠ approval_policy = "never" set in .codex/config.toml (no apply snapshot for this file)',
+      `⚠ approval_policy = "never" set in .codex/config.toml${NO_SNAPSHOT_SUFFIX}`,
+    );
+  });
+
+  it("the warning is what actually put warningCount +1 over the baseline (M3 delta assertion, not just >= 1)", async () => {
+    const f = makeFixture();
+    fs.writeFileSync(path.join(f.projectDir, "harness.yaml"), optedInHarnessYaml());
+
+    const withoutConfig = await doctor({
+      configPath: path.join(f.projectDir, "harness.yaml"),
+      homeOverride: f.home,
+      cwd: f.projectDir,
+      versionProbe: () => null,
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+      envOverride: {},
+    });
+
+    writeFile(repoCodexConfigPath(f), 'approval_policy = "never"\n');
+
+    const withConfig = await doctor({
+      configPath: path.join(f.projectDir, "harness.yaml"),
+      homeOverride: f.home,
+      cwd: f.projectDir,
+      versionProbe: () => null,
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+      envOverride: {},
+    });
+
+    expect(withoutConfig.codexConfigDrift?.warnings ?? []).toEqual([]);
+    expect(withConfig.codexConfigDrift?.warnings).toHaveLength(1);
+    expect(withConfig.warningCount).toBe(withoutConfig.warningCount + 1);
+  });
+
+  it("harness doctor --target codex emits the same warning as the default target", async () => {
+    const f = makeFixture();
+    fs.writeFileSync(path.join(f.projectDir, "harness.yaml"), optedInHarnessYaml());
+    writeFile(repoCodexConfigPath(f), 'approval_policy = "never"\n');
+
+    const report = await doctor({
+      configPath: path.join(f.projectDir, "harness.yaml"),
+      homeOverride: f.home,
+      cwd: f.projectDir,
+      versionProbe: () => null,
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+      envOverride: {},
+      target: "codex",
+    });
+
+    expect(report.codexConfigDrift?.warnings).toContain(
+      `approval_policy = "never" set in .codex/config.toml${NO_SNAPSHOT_SUFFIX}`,
+    );
+  });
+
+  it("--json output (JSON.stringify of the report) carries codexConfigDrift", async () => {
+    const f = makeFixture();
+    fs.writeFileSync(path.join(f.projectDir, "harness.yaml"), optedInHarnessYaml());
+    writeFile(repoCodexConfigPath(f), 'approval_policy = "never"\n');
+
+    const report = await doctor({
+      configPath: path.join(f.projectDir, "harness.yaml"),
+      homeOverride: f.home,
+      cwd: f.projectDir,
+      versionProbe: () => null,
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+      envOverride: {},
+    });
+
+    const parsed = JSON.parse(JSON.stringify(report)) as { codexConfigDrift?: { warnings: string[] } };
+    expect(parsed.codexConfigDrift?.warnings).toContain(
+      `approval_policy = "never" set in .codex/config.toml${NO_SNAPSHOT_SUFFIX}`,
     );
   });
 
@@ -382,6 +578,34 @@ describe("doctor: codex config drift (Environment section)", () => {
     expect(report.codexConfigDrift).toBeUndefined();
     const text = format(report);
     expect(text).not.toContain("approval_policy");
+  });
+
+  it("no warning when auto_approve.harnesses is omitted (default [claude-code] does not cover codex, L3)", async () => {
+    const f = makeFixture();
+    fs.writeFileSync(
+      path.join(f.projectDir, "harness.yaml"),
+      `${HARNESS_YAML_HEADER}policy_packs:
+  - name: understanding-before-execution
+    config:
+      mode: grill_me
+      auto_approve:
+        when: [bypassPermissions]
+        require_report: true
+`,
+    );
+    writeFile(repoCodexConfigPath(f), 'approval_policy = "never"\n');
+
+    const report = await doctor({
+      configPath: path.join(f.projectDir, "harness.yaml"),
+      homeOverride: f.home,
+      cwd: f.projectDir,
+      versionProbe: () => null,
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+      envOverride: {},
+    });
+
+    expect(report.codexConfigDrift).toBeUndefined();
   });
 
   it("no warning when the pack has no auto_approve block at all", async () => {

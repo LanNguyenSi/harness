@@ -437,7 +437,7 @@ export interface DoctorReport {
    * same ADR, agent-tasks f59ea0eb): a live `approval_policy = "never"`
    * or full-access `default_permissions` selection in `$CODEX_HOME
    * /config.toml` or `<repo>/.codex/config.toml`. Present only when the
-   * understanding-gate pack's `auto_approve.harnesses` lists `codex` , 
+   * understanding-gate pack's `auto_approve.harnesses` lists `codex`;
    * a repo that never opted Codex into the auto path has no live signal
    * for this key to pre-set. Unlike `settingsDrift`, this always warns
    * while the key is present and the repo is opted in (not gated on
