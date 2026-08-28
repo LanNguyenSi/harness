@@ -74,6 +74,11 @@ const UNBOUND = "-";
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
+// Control characters (including NUL and DEL) are rejected from the parent
+// linkage in both directions: the writer refuses to encode one and the
+// reader refuses to accept one it finds, mirroring `;`/`=`.
+const CONTROL_CHARS = /[\x00-\x1f\x7f]/;
+
 // Deliberately narrower than `Date.parse`, which accepts plenty of
 // non-ISO input ("March 3 2026") and, worse, timezone-less strings whose
 // meaning depends on the reader's local zone. An expiry must mean the
@@ -170,16 +175,27 @@ function rejectNonIsoInstant(field: string, value: string): void {
  * `;report=<sha256>` in the fallback shape.
  *
  * Throws on any input that would corrupt the encoding (an empty value, a
- * value carrying a `;` or `=` delimiter, a cwd/report hash that is not a
- * sha256 digest, a non-ISO expiry, or the literal `-` as a task id, which
- * would round-trip as "no task bound"). A silently mis-encoded delegation
- * would be signed and then read back with different bindings than the
- * caller intended, so this fails loudly at the only place that can still
- * tell the difference.
+ * value carrying a `;` or `=` delimiter or a control character, a
+ * malformed parent session id (`rejectMalformedSessionId`), a cwd/report
+ * hash that is not a sha256 digest, a non-ISO expiry, or the literal `-`
+ * as a task id, which would round-trip as "no task bound"). A silently
+ * mis-encoded delegation would be signed and then read back with
+ * different bindings than the caller intended, so this fails loudly at
+ * the only place that can still tell the difference.
  */
 export function buildDelegationApprovedBy(fields: DelegationApprovedByFields): string {
   const { parentSessionId, cwdHash, taskId, expiresAt, reportPathHash } = fields;
+  // Same shape check the CHILD session id already gets in
+  // `delegationMarkerPathFor`: the parent id never reaches a `path.join`
+  // here, but it is still a session id, and a value carrying `/`, `\`, or
+  // `..` has no business inside a signed audit field either.
+  rejectMalformedSessionId(parentSessionId);
   rejectUnsafeSegmentValue("parentSessionId", parentSessionId);
+  if (CONTROL_CHARS.test(parentSessionId)) {
+    throw new Error(
+      `parentSessionId contains a control character: ${JSON.stringify(parentSessionId)}`,
+    );
+  }
   if (cwdHash !== null) rejectNonSha256("cwdHash", cwdHash);
   if (taskId !== null) {
     rejectUnsafeSegmentValue("taskId", taskId);
@@ -250,6 +266,27 @@ export function parseDelegationApprovedBy(approvedBy: unknown): DelegationApprov
       const value = segment.slice(DELEGATED_SEGMENT_PREFIX.length);
       if (value.length === 0) {
         return { ok: false, reason: `empty value for segment "delegated"` };
+      }
+      // Mirror of the writer's checks (`buildDelegationApprovedBy`): the
+      // reader must never accept a parent linkage the writer could not
+      // have produced. `;` cannot survive the `split(";")` above without
+      // becoming a second, unrecognized segment, but `=` and control
+      // characters can, so they are checked explicitly here.
+      if (value.includes("=") || CONTROL_CHARS.test(value)) {
+        return {
+          ok: false,
+          reason: `"delegated" value contains "=" or a control character: ${JSON.stringify(value)}`,
+        };
+      }
+      try {
+        rejectMalformedSessionId(value);
+      } catch (err) {
+        return {
+          ok: false,
+          reason: `"delegated" value is not a well-formed session id: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        };
       }
       parentSessionId = value;
       continue;
@@ -395,6 +432,17 @@ export function writeDelegationMarker(opts: WriteDelegationMarkerOptions): Write
       detail:
         "the fallback shape requires reportPathHash AND reportContentHash together (one without the other would leave half the report binding unenforced)",
     };
+  }
+  if (reportContentHash !== null) {
+    try {
+      rejectNonSha256("reportContentHash", reportContentHash);
+    } catch (err) {
+      return {
+        ok: false,
+        reason: "invalid-input",
+        detail: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
 
   let filePath: string;
@@ -631,11 +679,19 @@ export function verifyDelegation(opts: VerifyDelegationOptions): DelegationVerif
 
   const nowMs = (opts.now ?? new Date()).getTime();
   const expiresMs = Date.parse(expiresAt);
-  if (expiresMs <= nowMs) {
+  // `nowMs` is caller-supplied (`opts.now`, a test-only override); an
+  // invalid Date's `.getTime()` is NaN, and NaN fails every `<=`
+  // comparison, which would otherwise fail this check OPEN (a clock that
+  // cannot report the time would silently pass every delegation as
+  // unexpired). Fail closed instead: an unusable clock is treated the same
+  // as an already-expired one.
+  if (!Number.isFinite(nowMs) || expiresMs <= nowMs) {
     return {
       ok: false,
       reason: "expired",
-      detail: `delegation at ${filePath} expired at ${expiresAt} (now ${new Date(nowMs).toISOString()})`,
+      detail: Number.isFinite(nowMs)
+        ? `delegation at ${filePath} expired at ${expiresAt} (now ${new Date(nowMs).toISOString()})`
+        : `delegation at ${filePath} cannot be checked for expiry: the supplied clock is unusable (now getTime() => ${nowMs})`,
     };
   }
 

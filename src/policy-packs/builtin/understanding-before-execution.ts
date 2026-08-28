@@ -30,12 +30,16 @@ import {
   AUTO_APPROVE_HARNESS_VALUES,
   REPORTS_DIR_ENV,
 } from "./understanding-before-execution-runtime.js";
-// Direct import, not through the re-export shim: `parseReportScanMaxWait`
-// has exactly one consumer (the zod block below) and widening the shim's
-// pinned public surface (tests/policy-packs/ube-export-surface.test.ts) is
-// a separate, conscious act. Same precedent as `CODEX_HARNESS`, which the
-// Codex hook imports directly for the same reason.
-import { parseReportScanMaxWait } from "./understanding-before-execution/auto-approve.js";
+// Through the `understanding-before-execution/index.ts` aggregator, not
+// through the concern-scoped `auto-approve.ts` sibling directly (review
+// fix, T-003 follow-on A): the prior direct import contradicted the
+// precedent every other symbol at this call site already follows (the
+// `AUTO_APPROVE_HARNESS_VALUES` / `REPORTS_DIR_ENV` import just above).
+// `parseReportScanMaxWait` is now part of the shim's pinned public surface
+// (tests/policy-packs/ube-export-surface.test.ts), alongside
+// `DEFAULT_REPORT_SCAN_MAX_WAIT_MS` and `REPORT_SCAN_MAX_WAIT_CEILING_MS`,
+// which this file only names in comments and so does not import.
+import { parseReportScanMaxWait } from "./understanding-before-execution/index.js";
 import { SHELL_ALIASES } from "../../runtime/tool-name-aliases.js";
 
 // Env var the npm-backed `understanding-gate-claude-hook` bin reads to find

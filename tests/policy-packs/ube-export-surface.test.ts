@@ -38,6 +38,13 @@ import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-ex
 // type-only exports are absent from this list on purpose: they are erased
 // at transform time and never reach Object.keys(), so listing them here
 // would fail the very assertion below.
+// Widened a fifth time, within the same task (agent-tasks 37ad0b05 review
+// fix, T-003 follow-on A), by the three VALUE exports of the report-scan
+// max-wait parser: parseReportScanMaxWait, DEFAULT_REPORT_SCAN_MAX_WAIT_MS,
+// REPORT_SCAN_MAX_WAIT_CEILING_MS. Previously imported by
+// understanding-before-execution.ts directly from `auto-approve.ts`,
+// contradicting the precedent every other symbol at that call site already
+// followed. 59 -> 62.
 //
 // Mutation-verified: temporarily re-adding `export { safeJsonParse } from
 // "./persisted-reports.js";` to
@@ -54,8 +61,10 @@ const EXPECTED_EXPORTS = [
   "CLAUDE_CODE_HARNESS",
   "DEFAULT_AUTO_APPROVE_HARNESSES",
   "DEFAULT_BASH_TOOL_NAMES",
+  "DEFAULT_REPORT_SCAN_MAX_WAIT_MS",
   "DELEGATION_MARKER_DIRNAME",
   "REPORTS_DIR_ENV",
+  "REPORT_SCAN_MAX_WAIT_CEILING_MS",
   "TOLERANT_FALLBACK_FUTURE_SKEW_MS",
   "TOLERANT_FALLBACK_MAX_AGE_MS",
   "activeClaimPathFor",
@@ -92,6 +101,7 @@ const EXPECTED_EXPORTS = [
   "parseAutoApprove",
   "parseAutoApprovedBy",
   "parseDelegationApprovedBy",
+  "parseReportScanMaxWait",
   "permissionModeAllowed",
   "readActiveClaim",
   "reportsDirForManifest",
@@ -107,7 +117,7 @@ const EXPECTED_EXPORTS = [
 ] as const;
 
 describe("understanding-before-execution-runtime shim export surface", () => {
-  it("exports exactly the pinned 59-name surface, sorted", () => {
+  it("exports exactly the pinned 62-name surface, sorted", () => {
     const actual = Object.keys(ubeShim).sort();
     expect(actual).toEqual([...EXPECTED_EXPORTS].sort());
   });

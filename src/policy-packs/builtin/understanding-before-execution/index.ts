@@ -99,6 +99,9 @@ export {
   harnessAllowed,
   AUTO_APPROVE_HARNESS_VALUES,
   DEFAULT_AUTO_APPROVE_HARNESSES,
+  DEFAULT_REPORT_SCAN_MAX_WAIT_MS,
+  REPORT_SCAN_MAX_WAIT_CEILING_MS,
+  parseReportScanMaxWait,
 } from "./auto-approve.js";
 
 export {

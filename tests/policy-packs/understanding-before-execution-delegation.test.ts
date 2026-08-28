@@ -146,6 +146,13 @@ describe("buildDelegationApprovedBy / parseDelegationApprovedBy", () => {
     ).toThrow(/unbound literal/);
   });
 
+  it("refuses to build a delegation whose parent session id carries a control character (review finding F2)", () => {
+    const base = { cwdHash: null, taskId: null, expiresAt: "2026-08-27T12:00:00.000Z" };
+    expect(() =>
+      buildDelegationApprovedBy({ ...base, parentSessionId: "parent\nid" }),
+    ).toThrow();
+  });
+
   it.each([
     ["a missing segment", `delegated:${PARENT};cwd=-;task=${TASK}`, /missing "expires"/],
     [
@@ -179,6 +186,16 @@ describe("buildDelegationApprovedBy / parseDelegationApprovedBy", () => {
       "an empty parent",
       `delegated:;cwd=-;task=${TASK};expires=2026-08-27T12:00:00.000Z`,
       /empty value for segment "delegated"/,
+    ],
+    [
+      "a parent value carrying an '=' (review finding F2)",
+      `delegated:a=b;cwd=-;task=${TASK};expires=2026-08-27T12:00:00.000Z`,
+      /"delegated" value contains/,
+    ],
+    [
+      "a parent value carrying a control character (review finding F2)",
+      `delegated:a\nb;cwd=-;task=${TASK};expires=2026-08-27T12:00:00.000Z`,
+      /"delegated" value contains/,
     ],
   ])("refuses %s, with no default filled in", (_label, approvedBy, pattern) => {
     const parsed = parseDelegationApprovedBy(approvedBy);
@@ -237,6 +254,8 @@ describe("writeDelegationMarker", () => {
     expect(body["reportContentHash"]).toBeNull();
     expect(typeof body["signature"]).toBe("string");
     expect(fs.existsSync(path.join(generatedDir, ".approvals", CHILD))).toBe(false);
+    // Mode 0600, like every other marker write (review finding F-mode).
+    expect(fs.statSync(result.filePath).mode & 0o777).toBe(0o600);
   });
 
   it("key absent refuses without creating a key", () => {
@@ -275,6 +294,19 @@ describe("writeDelegationMarker", () => {
     expect(pathOnly.ok).toBe(false);
     const contentOnly = writeDelegationMarker({ ...common, reportContentHash: sha256Hex("x") });
     expect(contentOnly.ok).toBe(false);
+    expect(fs.existsSync(path.join(generatedDir, DELEGATION_MARKER_DIRNAME, CHILD))).toBe(false);
+
+    // A reportContentHash that is not a sha256 digest is refused too
+    // (review finding F5): reportPathHash was already shape-checked, but
+    // reportContentHash was accepted verbatim before this fix.
+    const malformedContentHash = writeDelegationMarker({
+      ...common,
+      reportPathHash: hashDelegationCwd(path.join(tmp, "report.json")),
+      reportContentHash: "NOT-A-DIGEST",
+    });
+    expect(malformedContentHash.ok).toBe(false);
+    if (malformedContentHash.ok) throw new Error("unreachable");
+    expect(malformedContentHash.reason).toBe("invalid-input");
     expect(fs.existsSync(path.join(generatedDir, DELEGATION_MARKER_DIRNAME, CHILD))).toBe(false);
   });
 
@@ -395,6 +427,26 @@ describe("verifyDelegation", () => {
     if (result.ok) throw new Error("unreachable");
     expect(result.reason).toBe("expired");
     expect(result.detail).toMatch(/expired at/);
+  });
+
+  it("an unusable injected clock fails closed, not open (review finding F1)", () => {
+    // `now: new Date("not-a-date")` makes `.getTime()` return NaN, and NaN
+    // fails every `<=` comparison. Without an explicit `Number.isFinite`
+    // guard, `expiresMs <= NaN` is `false`, which would make an already
+    // long-expired delegation read as unexpired: an unusable clock must
+    // never be the reason a check comes back open.
+    issueCwdDelegation({ expiresAt: "2020-01-01T00:00:00.000Z" });
+    const result = verifyDelegation({
+      generatedDir,
+      childSessionId: CHILD,
+      cwd: childCwd,
+      taskId: null,
+      now: new Date("not-a-date"),
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toBe("expired");
+    expect(result.detail).toMatch(/unusable/);
   });
 
   it("unsigned delegation is refused", () => {
@@ -595,6 +647,71 @@ describe("verifyDelegation", () => {
     if (result.ok) throw new Error("unreachable");
     // Signed, so not forged; unreadable bindings, so not a default either.
     expect(result.reason).toBe("unparseable");
+  });
+
+  it("a symlink at the delegation path is unreadable, not missing or forged (review finding F3)", () => {
+    const filePath = delegationMarkerPathFor(generatedDir, CHILD);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const targetPath = path.join(tmp, "symlink-target");
+    fs.writeFileSync(targetPath, "not a delegation body");
+    fs.symlinkSync(targetPath, filePath);
+
+    const result = verifyDelegation({
+      generatedDir,
+      childSessionId: CHILD,
+      cwd: childCwd,
+      taskId: null,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toBe("unreadable");
+  });
+
+  it("a directory at the delegation path is unreadable, not missing or forged (review finding F3)", () => {
+    const filePath = delegationMarkerPathFor(generatedDir, CHILD);
+    fs.mkdirSync(filePath, { recursive: true });
+
+    const result = verifyDelegation({
+      generatedDir,
+      childSessionId: CHILD,
+      cwd: childCwd,
+      taskId: null,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toBe("unreadable");
+  });
+
+  it("a body that is not JSON at all is forged, not unreadable or unparseable (review finding F3)", () => {
+    const filePath = delegationMarkerPathFor(generatedDir, CHILD);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "not json at all", { mode: 0o600 });
+
+    const result = verifyDelegation({
+      generatedDir,
+      childSessionId: CHILD,
+      cwd: childCwd,
+      taskId: null,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toBe("forged");
+  });
+
+  it("a JSON array body is forged, not unreadable or unparseable (review finding F3)", () => {
+    const filePath = delegationMarkerPathFor(generatedDir, CHILD);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify([1, 2, 3]), { mode: 0o600 });
+
+    const result = verifyDelegation({
+      generatedDir,
+      childSessionId: CHILD,
+      cwd: childCwd,
+      taskId: null,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toBe("forged");
   });
 
   it("reports a missing delegation as missing, not as anything weaker", () => {

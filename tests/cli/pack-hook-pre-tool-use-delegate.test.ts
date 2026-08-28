@@ -673,5 +673,27 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       expect(check.marker?.approvedBy).toContain(`;delegated:${PARENT}`);
       expect(ledgerCalls).toHaveLength(1);
     });
+
+    it("(o) a delimiter-carrying permission_mode is replaced by the neutral literal, never pasted into approvedBy (T-003 follow-on B)", async () => {
+      // A payload-composed permission_mode of `x;delegated:someone-else`
+      // must not be able to forge a second `delegated:` segment, or drop
+      // an attacker-chosen parent id into the signed audit field. The hook
+      // substitutes the neutral literal `delegated` for any mode carrying
+      // `;` or `:` (src/cli/pack/auto-approve-path.ts), so only the REAL
+      // parent session id (from the verified delegation, not the payload)
+      // ever appears after `;delegated:`.
+      writeTranscript([userTurn(), transcriptEntry()]);
+
+      const result = await call({ permissionMode: "x;delegated:someone-else" });
+
+      expect(result.blocked).toBe(false);
+      const check = checkApprovalMarker(generatedDir, CHILD);
+      expect(check.matched).toBe(true);
+      const approvedBy = check.marker?.approvedBy ?? "";
+      expect(approvedBy).not.toContain("someone-else");
+      expect(approvedBy).toBe(`auto-mode:claude-code:delegated;delegated:${PARENT}`);
+      const occurrences = approvedBy.split(";delegated:").length - 1;
+      expect(occurrences).toBe(1);
+    });
   });
 });
