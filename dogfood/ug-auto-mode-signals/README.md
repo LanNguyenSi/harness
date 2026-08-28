@@ -161,6 +161,56 @@ that records every `plugin.init`, `config`, `tool.execute.before`,
 `opencode run --help` and `strings` grep over the installed
 `opencode.exe` binary.
 
+Slice 3 re-measurement (results sections (o) to (q), captured 2026-08-28 on
+this machine, Claude Code 2.1.250; every section above was captured on
+2.1.247):
+
+Lag-distribution probe (`lag-probe.sh` / `lag-probe.py`, section (o)): the
+same role-aware, token-based `PreToolUse` detector as the transcript probe
+above, polling every 25 ms for up to 5 s instead of every 100 ms for up to
+3 s, so the result is a distribution (p50, max) rather than one confirming
+sample, and additionally recording the winning transcript entry's own
+`isSidechain` and `sessionId` fields. Ten positive runs plus two negative
+controls, all under `--permission-mode bypassPermissions`.
+
+Retry-distribution probe (`retry-probe-v2.sh`, section (p)): the same
+`retry-probe.py` detector and deny-and-instruct shape as the block-and-retry
+probe above, now parameterised by deny text via `PROBE_DENY_KIND`. Two
+texts: `single` (byte-identical to the original section (g) text, asking
+for one retry) and `repeated` (asking for a retry, and, if denied again, to
+retry again); both sentences are quoted verbatim in section (p) below.
+Three "report first" runs plus ten "no report first" runs per text (the
+"report first" shape was already established at n=3 in section (g); the
+"no report first" shape, where section (g)'s two n=3 samples disagreed on
+whether the child stops after one retry, is the one re-run at n=10 per
+text to separate them). All under `--permission-mode bypassPermissions`,
+`--max-turns 6`.
+
+Interactive lag probe (`interactive-lag-probe.sh`, section (q)): the same
+tmux-driven interactive shape as `interactive-capture.sh` (isolated
+`CLAUDE_CONFIG_DIR`, onboarding seed, `env -u CLAUDECODE`), with
+`lag-probe.py` wired as the `PreToolUse` hook (25 ms poll / 5 s bound, same
+as (o)) in place of a plain recorder, plus a plain `Stop` recorder used only
+to know when a run's turn has ended. Three fresh interactive
+`bypassPermissions` sessions.
+
+Building this probe surfaced a version-dependent change in
+`interactive-lib.sh`'s shared startup driver, used by every interactive
+script in this directory: on this machine's Claude Code 2.1.250, the
+workspace-trust dialog's default selection is "No, exit", and a bare
+`Enter` on that screen exits the session instead of accepting it (confirmed
+live: `tmux capture-pane` before and after showed the session gone).
+The driver previously sent only `Enter` for that dialog. Sections (h) and
+(i) were captured successfully with that same bare-`Enter` driver on Claude
+Code 2.1.247; this measurement did not independently re-test 2.1.247, so
+that is evidence consistent with an earlier default of "Yes, I trust this
+folder", not direct proof of one. The driver was changed to send `Down`
+then `Enter` on the workspace-trust dialog, the same two keys it already
+sent for the bypassPermissions warning, so both startup dialogs are now
+answered identically; this reproduces current CLI behaviour on the dialog
+that blocked every run of this probe before the fix, rather than choosing a
+new answer for it.
+
 ## Reproducing
 
 ```sh
@@ -174,7 +224,17 @@ UG_SIG_OUT=$(mktemp -d) ./interactive-ask-probe.sh  # interactive ask resolution
 UG_SIG_OUT=$(mktemp -d) ./subagent-capture.sh       # subagent session id, 2 runs
 UG_SIG_OUT=$(mktemp -d) ./codex-capture.sh              # codex exec, 14 shapes + untrusted
 UG_SIG_OUT=$(mktemp -d) ./codex-interactive-capture.sh  # codex TUI, 11 shapes via tmux
+UG_SIG_OUT=$(mktemp -d) ./lag-probe.sh                   # lag distribution, 10+2 runs
+UG_SIG_OUT=$(mktemp -d) ./retry-probe-v2.sh              # retry distribution, 2 texts x (3+10) runs
+UG_SIG_OUT=$(mktemp -d) ./interactive-lag-probe.sh       # interactive lag distribution, 3 runs
 ```
+
+The three slice 3 scripts follow the same `UG_SIG_OUT` / `UG_SIG_CONFIG_DIR`
+/ `UG_SIG_WORK` defaulting as the eight above; `interactive-lag-probe.sh`
+additionally takes `UG_SIG_RUNS` (default 3) and `UG_SIG_CLAUDE`, and needs
+`tmux` on `PATH` like the other two interactive scripts. All three cost API
+usage per the run counts named above; do not raise them past what the
+README documents.
 
 All eight Claude Code scripts default `UG_SIG_OUT` / `UG_SIG_CONFIG_DIR` /
 `UG_SIG_WORK` to fresh `mktemp -d` directories when unset, so they run
@@ -261,6 +321,19 @@ left in place; it would then match its own redaction output. Codex's own
 `session_id` and `turn_id` values (throwaway, generated for this capture)
 and opencode's `sessionID`/`callID`/`pid` values are kept as-is, the same
 treatment as the Claude Code `session_id` values in the table above.
+
+Slice 3 fixtures (`payloads/lag-probe.jsonl`, `payloads/retry-probe-v2.jsonl`
+and its `payloads/retry-probe-v2-*.result.json` siblings,
+`payloads/interactive-lag-probe.jsonl`, and
+`payloads/interactive-lag-probe.transcript-shape-at-bound.json`) apply the
+same per-user, per-machine redactions as the table above; the interactive
+transcript fixture is checked in as a types-and-counts summary (the same
+shape as `payloads/subagent-bypass.transcript-shape.json`) rather than the
+raw JSONL, because the raw file also carries the session's full skill and
+agent listing, which is noise for what this fixture demonstrates and not
+worth reviewing line by line. Verified with the same grep command as above,
+substituting this machine's real login and scratch-directory prefix for the
+placeholders: zero hits.
 
 ## Results
 
@@ -747,3 +820,124 @@ header, unchanged in this task) into the generated `opencode.json`, so even
 if a decision-grade signal existed there is currently nothing in the
 pipeline positioned to read it. Out of scope for auto-approval; design note
 only.
+
+### (o) Lag distribution under `-p` (n=10 positive runs + 2 negative controls, `bypassPermissions`)
+
+Method: see "Lag-distribution probe" above. Script: `lag-probe.sh`.
+Fixtures: `payloads/lag-probe.jsonl` (one row per run, in run order: 10
+positive then 2 negative).
+
+| Run | Kind | Lines at t0 | First seen after (ms) | Winning entry `isSidechain` | Winning entry `sessionId` == payload `session_id` |
+| --- | --- | --- | --- | --- | --- |
+| 1 | positive | 9 | 65 | false | yes |
+| 2 | positive | 9 | 67 | false | yes |
+| 3 | positive | 9 | 64 | false | yes |
+| 4 | positive | 9 | 139 | false | yes |
+| 5 | positive | 9 | 68 | false | yes |
+| 6 | positive | 9 | 132 | false | yes |
+| 7 | positive | 9 | 63 | false | yes |
+| 8 | positive | 9 | 70 | false | yes |
+| 9 | positive | 9 | 104 | false | yes |
+| 10 | positive | 9 | 62 | false | yes |
+| 11 | negative | 9 | never (5 s) | n/a | n/a |
+| 12 | negative | 9 | never (5 s) | n/a | n/a |
+
+p50 = 67.5 ms, max = 139 ms, min = 62 ms (median and extremes of the ten
+positive latencies, sorted: 62, 63, 64, 65, 67, 68, 70, 104, 132, 139).
+`lines_t0` is 9 in all 12 runs, matching section (e) exactly: the report is
+never visible at the instant `PreToolUse` fires. The ten latencies cluster
+in two bands, 62-70 ms in 7/10 runs and 104-139 ms in the remaining 3/10;
+even the slowest of the twelve is comfortably inside the 5 s bound. Every
+winning entry carries `isSidechain: false` and a `sessionId` equal to the
+payload's own `session_id`, 10/10, confirming the entry the timer stops on
+is a main-line entry of the same session, not a sidechain or a foreign
+one. 0/2 negative controls produced a false positive within the bound.
+
+### (p) Retry distribution by deny text (n=3 "report first" + n=10 "no report first", per text; `bypassPermissions`)
+
+Method: see "Retry-distribution probe" above. Script: `retry-probe-v2.sh`.
+Fixtures: `payloads/retry-probe-v2.jsonl` (one row per hook invocation,
+both texts) and `payloads/retry-probe-v2-<text>-<kind><n>.result.json`
+(trimmed `claude -p` result objects; `<kind>` is `pos` for "report first"
+or `neg` for "no report first").
+
+Deny texts, quoted verbatim and used verbatim in `retry-probe.py`:
+
+- `single`: "Understanding gate: no Understanding Report is visible for
+  this session yet. If you already wrote one, simply retry the same
+  command once. If you have not, first write a section starting with the
+  heading '# Understanding Report' containing the line 'Token: ' followed
+  by the word understanding spelled backwards, then retry the command."
+  (byte-identical to the section (g) text)
+- `repeated`: "Understanding gate: no Understanding Report is visible for
+  this session yet. If you already wrote one, simply retry the same
+  command; if it is denied again, retry again. If you have not, first
+  write a section starting with the heading '# Understanding Report'
+  containing the line 'Token: ' followed by the word understanding spelled
+  backwards, then retry the command; if it is denied again, retry again."
+
+| Deny text | Shape | n | Attempts, every run | Success rate |
+| --- | --- | --- | --- | --- |
+| `single` | report first | 3 | 2 (1 deny, 1 allow) | 3/3 |
+| `single` | no report first | 10 | 3 (2 deny, 1 allow) | 10/10 |
+| `repeated` | report first | 3 | 2 (1 deny, 1 allow) | 3/3 |
+| `repeated` | no report first | 10 | 3 (2 deny, 1 allow) | 10/10 |
+
+Attempt histogram, "no report first" shape (the one section (g)'s two n=3
+samples disagreed on): 0/10 stopped after the single retry (2 attempts),
+10/10 needed exactly one further, unprompted retry (3 attempts total),
+0/10 needed more than that, for BOTH texts, 20/20 combined.
+
+Reading: at n=10 per text the two deny texts produce identical, invariant
+behaviour. Every "no report first" run is denied twice (first call: report
+absent; second call, the immediate retry the text asked for: report still
+not flushed, the same lag section (e)/(o) measure) and allowed on an
+unprompted third attempt, 20/20. This is a larger, decisive sample against
+section (g)'s two n=3 runs of the `single` text alone (2/6 stopped after
+the requested single retry, 4/6 tried again): at n=10 the "tries again
+anyway" behaviour is universal, and the earlier split reads as small-sample
+noise, not a text effect. The `repeated` text asks in words for the third
+attempt the `single` text does not request; empirically the child performs
+it either way, 10/10 per text, so this sample gives no evidence that the
+wording changes the retry count. What the attempt count tracks instead is
+the lag itself: a retry succeeds once the report has had enough real time
+to flush (each attempt is a fresh model turn, so a second retry runs
+seconds after the first, comfortably past the tens-of-milliseconds lag
+section (o) measured under `-p`), and fails when it has not (the immediate
+first retry, still inside that same turn).
+
+### (q) Interactive lag distribution under `bypassPermissions` (n=3 fresh sessions)
+
+Method: see "Interactive lag probe" above. Script:
+`interactive-lag-probe.sh`. Fixtures: `payloads/interactive-lag-probe.jsonl`
+(one row per run), `payloads/interactive-lag-probe.transcript-shape-at-bound.json`
+(each run's transcript, by entry type and `isSidechain`, at the moment its
+5 s poll bound elapsed), and `payloads/interactive-lag-probe.ilag1-pane.txt`
+(run 1's terminal pane after the session ended).
+
+| Run | Lines at t0 | First seen after (ms) | Assistant-type entries present at the 5 s bound |
+| --- | --- | --- | --- |
+| 1 | 11 | never (5 s) | 0 |
+| 2 | 11 | never (5 s) | 0 |
+| 3 | 11 | never (5 s) | 0 |
+
+3/3: unlike the `-p` case, the report is not visible within the same 25 ms
+/ 5 s bound in any interactive run. The transcript-shape fixture shows this
+is not simply "slower": at the moment each run's poll gives up, the
+transcript holds only 11 lines and NONE of them is an `assistant`-type
+entry at all. All eleven are startup/preamble entries present before the
+model even begins answering (`mode`, `permission-mode`, `atis-latch`,
+`file-history-snapshot`, one `user` entry, five `attachment` entries, then
+`ai-title`), identical across all three runs. The pane fixture shows the
+same run's screen after the session ended: the model did write the report,
+run the command, and reply "done", so the assistant's turn is not silently
+lost, it is written to the transcript file later than this hook's own 5 s
+wait, or possibly not until the gated tool call this same hook is deciding
+is itself resolved (this measurement's bounded poll cannot distinguish
+"later" from "only after this hook returns" without a channel outside the
+hook itself, and building one was out of scope for this round). Either
+reading gives the same answer for `report_scan.max_wait`: no poll bound
+this hook can wait on, from inside a `PreToolUse` invocation, was observed
+to see the report before giving up, up to 5 s. Not measured: a longer
+bound, a longer report, or a session where the gated call is not the
+child's first tool call of the turn.
