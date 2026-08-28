@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`harness doctor` warns on a live Codex `approval_policy = "never"` or
+  full-access `default_permissions` selection** (agent-tasks `f59ea0eb`,
+  follow-up of slice 2 of the ADR
+  `docs/decisions/2026-08-27-ug-auto-mode-approval.md`). Either config
+  key in `$CODEX_HOME/config.toml` or `<repo>/.codex/config.toml`
+  pre-sets the trusted `permission_mode` signal the Codex `auto_approve`
+  path consumes. `approval_policy = "never"` is the measured signal
+  (`dogfood/ug-auto-mode-signals/README.md`, section (l)); the
+  full-access `default_permissions` check is a threat-model heuristic on
+  a key the operator can set, not a measured signal (section (k) shows
+  it does not move `permission_mode` under `codex exec`). Codex
+  counterpart of the existing `permissions.defaultMode` settings-drift
+  warning for Claude Code. Gated on `auto_approve.harnesses` listing
+  `codex`, so a repo that never opted Codex into the auto path sees no
+  line. Warning only, never an enforcement; new module
+  `src/cli/doctor/codex-config-drift.ts`.
+
 ## [0.51.0] - 2026-08-27
 
 ### Added
