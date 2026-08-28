@@ -1,6 +1,6 @@
 {
   "kit": "orchestrator-workflow",
-  "version": "0.14.0",
+  "version": "0.25.0",
   "harnesses": [
     "claude"
   ],
@@ -8,22 +8,36 @@
     "explorer": "sonnet",
     "task-slicer": "sonnet",
     "implementer": "sonnet",
-    "reviewer": "opus"
+    "reviewer": "opus",
+    "advisor": "opus"
   },
+  "profile": "full",
+  "tiers": true,
   "files": {
     ".ai/workflow/templates/00-goal.md": "455d3946cc42146255f0dc1147f51ec5e52afe89a5232aef863898a6eb4261b3",
     ".ai/workflow/templates/01-plan.md": "0b69aa09ccf24b3c7a09c209d30c09eb9814096ed18fb7fe18e67e4b8be42ad4",
     ".ai/workflow/templates/02-tasks.md": "ce475c1fb98d2d44b22b940199ba9e467690cdd7c9484f0670b7437857cec74e",
-    ".ai/workflow/templates/03-decisions.md": "74af5ea8bed3990308a5a3e7fa0deb47634fbf6033694c1fa86b91839a1ef6a5",
+    ".ai/workflow/templates/03-decisions.md": "540fac1e956e19888563655a7c445ce14f44b08d62d3d3beb86bd1a18b03c577",
     ".ai/workflow/templates/04-implementation-summary.md": "3e4975102f576779d91e0b5a7e5776f054ed652a300b05089e606125c0de074f",
-    ".ai/workflow/templates/05-review-findings.md": "1a00a1ddb35c30058771437b27b242afbe3cb47ada3b4454a824594dfc79a1e0",
+    ".ai/workflow/templates/05-review-findings.md": "7e81fea075382268b4a33f44ecd4bd98d53aae8d35c5e109136d5b5cdd1aad25",
     ".ai/workflow/templates/06-handoff.md": "47023d4aaabf4b1ecd6b309f7572b20f84ed3494d686d92e2fc8af5ac66d7a7a",
     ".ai/runs/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    ".claude/skills/orchestrator-workflow/SKILL.md": "90b3e6e23fca3039f4cd9f9106405b339eede8265cd6d729bb06efc43235e538",
-    ".claude/agents/explorer.md": "1063cad26d2e68e2503c4d1d51b3725e1be981e38e543f796410290a813ea51b",
-    ".claude/agents/task-slicer.md": "7c8dc7e4c705e13e1e6d7c70073c3f91afc9d7f5e2a7a19dc889bf1fef5c6b8b",
-    ".claude/agents/implementer.md": "f83526eb9f51c35dd8ab275fade8fc2ba585f4b6f13bfa22dd1e47a97f4157a9",
-    ".claude/agents/reviewer.md": "b9f2f68d880ffa5c08d5b3f66e76f037476150e2a56c894d0199b2876f6ec932"
+    ".claude/skills/orchestrator-workflow/SKILL.md": "fd12bbd4850869f7c63b40b6ac4994515a15ca941c4ce54fb28a9e302b4f9949",
+    ".claude/agents/explorer.md": "e0d716aa09e229710efc83bcb15c3122f6a10245edf22f72cd227657e22a6f62",
+    ".claude/agents/explorer-low.md": "c04f81aa6a891c623a54dbfd22b6c2d4af9fcd90564fa854cc92ace0dfbe77a5",
+    ".claude/agents/explorer-high.md": "1413ca248d980a47d5086f3d8cd5f69fc17fa1ff5303f4d4b78b12e500a353f0",
+    ".claude/agents/task-slicer.md": "63614722d0e57c32f81e5e6642d1ffdb6a6d6b5173824902d460ef92075ff427",
+    ".claude/agents/task-slicer-low.md": "99aabc2f0f589643ebf430e9a0334ddb591ad78872611e548c8685072aaf7e44",
+    ".claude/agents/task-slicer-high.md": "837da1187ec889e0029b72c32b9e0f05392995f55f6157e8cc9f54886ff59aa2",
+    ".claude/agents/implementer.md": "260aef543fdaa17b66a47cdbe9b2747b73ee28b0556044a69441e891e0248334",
+    ".claude/agents/implementer-low.md": "393a5c3cecb6cb17337fb63fc2366c1ceae510628a2066a241ec694da57f6506",
+    ".claude/agents/implementer-high.md": "0e3a74b095a1cd86b9335cbb60baf517f03b8a19a381b8d8aeddff545bffc49d",
+    ".claude/agents/implementer-xhigh.md": "20aa8c09e161931bf79f970e0f3da2e0f7d067d143cc93a2f12ee41a09284563",
+    ".claude/agents/reviewer.md": "9768b4c1a16d2c148ee1ca55d26155bf341689b18a3b7d7ba46d468f48afa0ca",
+    ".claude/agents/reviewer-medium.md": "e7930138c937e62248cacf95cdeed44e556711818f7b30e6845b148a14c3b956",
+    ".claude/agents/reviewer-xhigh.md": "aad28e33ed0f441978e29f95bcfa6d74c20d71be7fcf2246d8352aa89304ceeb",
+    ".claude/agents/advisor.md": "5566dfc763bc89f2be832686822608786c521449518f19c2a225800f14397e35",
+    ".claude/agents/advisor-xhigh.md": "bf7fc0268534053050abcdac2cf39e58b903c64d3d3f4882f15f8a1cbac29f8e"
   },
   "installedAt": "2026-06-22T19:21:24.768Z"
 }
