@@ -63,6 +63,9 @@ export const DEFAULT_DELEGATION_TTL_SECONDS = 3600;
 /** Default ledger `source` tag for the audit-only fact this verb writes (ADR "Audit and doctor"). */
 export const DEFAULT_DELEGATE_LEDGER_SOURCE = "harness-delegate-cli";
 
+/** Ceiling for an explicit `--ttl` when the applied pack sets no `approval_lifecycle.max_age` (L4 fix, agent-tasks 37ad0b05: an unbounded `--ttl` would otherwise let a caller mint a delegation that outlives any lifetime the pack's own policy intends). */
+export const MAX_DELEGATION_TTL_SECONDS = 24 * 60 * 60;
+
 /** Same 8-4-4-4-12 hex shape the session-id helpers already validate a Claude Code session id against (`session-id.ts`'s `SESSION_TRANSCRIPT_RE`), case-insensitive. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -98,12 +101,17 @@ export interface IssueDelegationOptions extends LoaderOptions {
 export type IssueDelegationRefusalReason =
   | "invalid-child-session"
   | "no-binding"
+  | "invalid-cwd"
+  | "invalid-task"
+  | "invalid-ttl"
+  | "ttl-above-max-age"
   | "parent-session-unresolved"
   | "parent-marker-missing"
   | "parent-marker-forged"
   | "parent-marker-expired"
   | "signing-key-absent"
   | "report-unreadable"
+  | "invalid-input"
   | "write-failed";
 
 export type IssueDelegationResult =
@@ -121,6 +129,37 @@ export type IssueDelegationResult =
 /** The `understanding-delegated:<child-sid>:<parent-sid>` ledger fact content (ADR "Audit and doctor"). */
 export function delegationLedgerFactFor(childSessionId: string, parentSessionId: string): string {
   return `understanding-delegated:${childSessionId}:${parentSessionId}`;
+}
+
+/** Control characters rejected from a raw `--task` value, mirroring the `CONTROL_CHARS` check `delegation-markers.ts` already runs on `parentSessionId` (not exported, so mirrored rather than imported). */
+const TASK_ID_CONTROL_CHARS = /[\x00-\x1f\x7f]/;
+
+/**
+ * Validate a raw `--task` value before it ever reaches
+ * `writeDelegationMarker` (L1 fix, agent-tasks 37ad0b05: an unvalidated
+ * `--task` used to surface downstream as an opaque `write-failed`, or
+ * silently rebind, depending on the value). Mirrors
+ * `delegation-markers.ts`'s own (unexported) `rejectUnsafeSegmentValue`:
+ * empty, or carrying a `;`/`=` segment delimiter, both corrupt the
+ * packed `approvedBy` encoding, plus the reserved unbound literal
+ * `"-"` (would silently round-trip as "no task bound") and a control
+ * character. Returns a detail string on a rejected value, `null` on a
+ * safe one.
+ */
+function validateTaskId(taskId: string): string | null {
+  if (taskId.length === 0) {
+    return "--task must not be empty";
+  }
+  if (taskId === "-") {
+    return '--task must not be the reserved unbound literal "-"';
+  }
+  if (taskId.includes(";") || taskId.includes("=")) {
+    return `--task must not contain a delegation-segment delimiter (";" or "="): ${JSON.stringify(taskId)}`;
+  }
+  if (TASK_ID_CONTROL_CHARS.test(taskId)) {
+    return `--task must not contain a control character: ${JSON.stringify(taskId)}`;
+  }
+  return null;
 }
 
 /**
@@ -144,6 +183,25 @@ export async function issueDelegation(
 
   if (opts.cwd === undefined && opts.taskId === undefined) {
     return { ok: false, reason: "no-binding", detail: NO_BINDING_MESSAGE };
+  }
+
+  // L3 fix (agent-tasks 37ad0b05): an empty `--cwd` used to fall through
+  // uncaught, and `hashDelegationCwd("")` -> `path.resolve("")` silently
+  // rebinds it to the issuer's OWN cwd rather than refusing. Caught here,
+  // alongside the no-binding check, before either value reaches a hash.
+  if (opts.cwd !== undefined && opts.cwd.length === 0) {
+    return {
+      ok: false,
+      reason: "invalid-cwd",
+      detail:
+        "--cwd must not be empty (an empty value would silently rebind to the issuer's own cwd via path.resolve)",
+    };
+  }
+  if (opts.taskId !== undefined) {
+    const taskError = validateTaskId(opts.taskId);
+    if (taskError !== null) {
+      return { ok: false, reason: "invalid-task", detail: taskError };
+    }
   }
 
   const generatedDir =
@@ -199,10 +257,10 @@ export async function issueDelegation(
   }
 
   // Manifest: best-effort, exactly like the approve CLI (shared via
-  // `loadDeclaredUnderstandingPack`, agent-tasks 37ad0b05 T-002 fix round
-  // 1 D1). A load failure here degrades the TTL default (falls back to
-  // the hardcoded default below) and the ledger write (audit-only, never
-  // a refusal) but never blocks issuing the delegation itself.
+  // `loadDeclaredUnderstandingPack`, agent-tasks 37ad0b05). A load
+  // failure here degrades the TTL default (falls back to the hardcoded
+  // default below) and the ledger write (audit-only, never a refusal)
+  // but never blocks issuing the delegation itself.
   const { manifest, manifestLoadError, declaredPack } = loadDeclaredUnderstandingPack(opts);
   const lifecycle = parseApprovalLifecycle(
     (declaredPack.config as Record<string, unknown>)["approval_lifecycle"],
@@ -225,11 +283,45 @@ export async function issueDelegation(
   }
 
   const now = opts.now ?? new Date();
-  const ttlSeconds =
-    opts.ttlSeconds ??
-    (lifecycle.maxAgeMs !== undefined
-      ? Math.round(lifecycle.maxAgeMs / 1_000)
-      : DEFAULT_DELEGATION_TTL_SECONDS);
+  // L2/L4 fix (agent-tasks 37ad0b05): an explicit `--ttl` is validated
+  // and clamped BEFORE it can reach `expiresAt`. `ttlSeconds <= 0` (or
+  // non-finite) used to mint a delegation that is already expired
+  // (L2); an unbounded `--ttl` used to let a caller mint one that
+  // outlives the applied pack's own `approval_lifecycle.max_age` (L4,
+  // or the 24h default ceiling when the pack sets none). Only an
+  // EXPLICIT `--ttl` is checked here: the computed default below (from
+  // `max_age` or the hardcoded default) is by construction already
+  // within whichever ceiling would apply to it.
+  let ttlSeconds: number;
+  if (opts.ttlSeconds !== undefined) {
+    if (!Number.isFinite(opts.ttlSeconds) || opts.ttlSeconds <= 0) {
+      return {
+        ok: false,
+        reason: "invalid-ttl",
+        detail: `--ttl must resolve to a positive, finite number of seconds; got ${opts.ttlSeconds}`,
+      };
+    }
+    const ceilingSeconds =
+      lifecycle.maxAgeMs !== undefined
+        ? Math.round(lifecycle.maxAgeMs / 1_000)
+        : MAX_DELEGATION_TTL_SECONDS;
+    if (opts.ttlSeconds > ceilingSeconds) {
+      return {
+        ok: false,
+        reason: "ttl-above-max-age",
+        detail:
+          lifecycle.maxAgeMs !== undefined
+            ? `--ttl (${opts.ttlSeconds}s) exceeds the applied pack's approval_lifecycle.max_age (${ceilingSeconds}s)`
+            : `--ttl (${opts.ttlSeconds}s) exceeds the default ${ceilingSeconds}s (24h) ceiling; set approval_lifecycle.max_age to raise it`,
+      };
+    }
+    ttlSeconds = opts.ttlSeconds;
+  } else {
+    ttlSeconds =
+      lifecycle.maxAgeMs !== undefined
+        ? Math.round(lifecycle.maxAgeMs / 1_000)
+        : DEFAULT_DELEGATION_TTL_SECONDS;
+  }
   const expiresAt = new Date(now.getTime() + ttlSeconds * 1_000).toISOString();
 
   // Fallback shape: bind the launcher-supplied report by BOTH its
@@ -268,13 +360,20 @@ export async function issueDelegation(
     if (writeResult.reason === "signing-key-absent") {
       return { ok: false, reason: "signing-key-absent", detail: writeResult.detail };
     }
-    // "invalid-input" is not expected to be reachable here: every input
-    // writeDelegationMarker validates (parentSessionId non-empty, cwdHash
-    // a sha256, taskId not the reserved "-" literal, expiresAt ISO) is
-    // already well-formed by construction above. Mapped to the closest
-    // fitting refusal reason rather than left uncovered, so a future
-    // regression there still fails closed with a diagnostic instead of
-    // an uncaught type mismatch.
+    if (writeResult.reason === "invalid-input") {
+      // Reachable: a malformed raw parent session id (`--session-id`, or
+      // a value read from $CLAUDE_CODE_SESSION_ID / $CLAUDE_SESSION_ID /
+      // $CODEX_SESSION_ID / a staged .pending-approval) still reaches
+      // `buildDelegationApprovedBy`'s `rejectMalformedSessionId` /
+      // `rejectUnsafeSegmentValue` checks on `parentSessionId`
+      // unvalidated by this function. `--task` no longer reaches this
+      // branch: its own value is now validated (the `invalid-task`
+      // refusal above) before `writeDelegationMarker` is ever called.
+      // Mapped to its own reason rather than folded into "write-failed",
+      // so a malformed parent session id fails closed with a diagnostic
+      // distinct from a genuine I/O write failure.
+      return { ok: false, reason: "invalid-input", detail: writeResult.detail };
+    }
     return { ok: false, reason: "write-failed", detail: writeResult.detail };
   }
 

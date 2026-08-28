@@ -15,6 +15,7 @@ import {
   approvalMarkerPathFor,
   delegationMarkerPathFor,
   hashDelegationCwd,
+  REPORTS_DIR_ENV,
   verifyDelegation,
   writeApprovalMarker,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
@@ -22,6 +23,7 @@ import {
   getOrCreateSigningKey,
   signingKeyPathFor,
 } from "../../src/runtime/approval-signing.js";
+import { readPendingApproval, writePendingApproval } from "../../src/runtime/pending-approval.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
 // Slice 3 of docs/decisions/2026-08-27-ug-auto-mode-approval.md
@@ -90,6 +92,60 @@ function manifestWithMaxAge(maxAge: string): Manifest {
       },
     ],
   });
+}
+
+/** Manifest declaring a `grounding-mcp` server that runs `scriptPath` (real `writeLedgerTag` path, no `ledgerAdd` override). */
+function manifestWithGroundingMcp(scriptPath: string): Manifest {
+  return parseManifest({
+    version: 1,
+    tools: { mcp: [{ name: "grounding-mcp", command: [scriptPath] }] },
+  });
+}
+
+/**
+ * A minimal MCP stub (fake-script transport approach, mirroring
+ * tests/runtime/ledger-add.test.ts) that captures the `ledger_add`
+ * call's `arguments` (including `source`) to `captureFile` before
+ * responding ok. Used to exercise the real `writeLedgerTag` ->
+ * `addLedgerFact` path end to end and observe its `source` argument,
+ * rather than stubbing it away at the `ledgerAdd` level the way every
+ * other test in this file does (the M2 mutation probe: dropping
+ * `writeLedgerTag`'s 5th argument does not turn any `ledgerAdd`-stubbed
+ * test red, since that override bypasses `writeLedgerTag` entirely).
+ */
+function makeCapturingLedgerServer(dir: string, captureFile: string): string {
+  const file = path.join(dir, "ledger-server.js");
+  fs.writeFileSync(
+    file,
+    `#!/usr/bin/env node
+const fs = require("fs");
+let buf = "";
+process.stdin.on("data", (d) => {
+  buf += d.toString();
+  let nl = buf.indexOf("\\n");
+  while (nl !== -1) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    if (line.trim()) {
+      let msg = null;
+      try { msg = JSON.parse(line); } catch (e) { msg = null; }
+      if (msg) {
+        if (msg.method === "initialize") {
+          process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\\n");
+        } else if (msg.method === "tools/call" && msg.params && msg.params.name === "ledger_add") {
+          fs.writeFileSync(${JSON.stringify(captureFile)}, JSON.stringify(msg.params.arguments));
+          process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "ok" }] } }) + "\\n");
+        }
+      }
+    }
+    nl = buf.indexOf("\\n");
+  }
+});
+`,
+    "utf8",
+  );
+  fs.chmodSync(file, 0o755);
+  return file;
 }
 
 beforeEach(() => {
@@ -252,6 +308,125 @@ describe("issueDelegation - refusals", () => {
     if (result.ok) throw new Error("expected refusal");
     expect(result.reason).toBe("report-unreadable");
   });
+
+  it("refuses --task 'a=b' (an unsafe delegation-segment delimiter) with reason invalid-task (L1)", async () => {
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      taskId: "a=b",
+      parentSessionId: PARENT,
+      generatedDir,
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected refusal");
+    expect(result.reason).toBe("invalid-task");
+    expect(fs.existsSync(delegationMarkerPathFor(generatedDir, CHILD))).toBe(false);
+  });
+
+  it("refuses --task '-' (the reserved unbound literal) with reason invalid-task (L1)", async () => {
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      taskId: "-",
+      parentSessionId: PARENT,
+      generatedDir,
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected refusal");
+    expect(result.reason).toBe("invalid-task");
+    expect(fs.existsSync(delegationMarkerPathFor(generatedDir, CHILD))).toBe(false);
+  });
+
+  it("refuses an empty --cwd ('') with reason invalid-cwd, alongside the no-binding check (L3)", async () => {
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: "",
+      parentSessionId: PARENT,
+      generatedDir,
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected refusal");
+    expect(result.reason).toBe("invalid-cwd");
+    expect(fs.existsSync(delegationMarkerPathFor(generatedDir, CHILD))).toBe(false);
+  });
+
+  it("refuses --ttl 0s with reason invalid-ttl, before minting a dead delegation (L2, mutation probe S2 target)", async () => {
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      ttlSeconds: 0,
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected refusal");
+    expect(result.reason).toBe("invalid-ttl");
+    expect(fs.existsSync(delegationMarkerPathFor(generatedDir, CHILD))).toBe(false);
+  });
+
+  it("refuses a negative --ttl with reason invalid-ttl (L2)", async () => {
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      ttlSeconds: -30,
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected refusal");
+    expect(result.reason).toBe("invalid-ttl");
+  });
+
+  it("refuses an explicit --ttl above the pack's approval_lifecycle.max_age with reason ttl-above-max-age (L4, mutation probe S3 target)", async () => {
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      manifest: manifestWithMaxAge("1h"),
+      ttlSeconds: 2 * 60 * 60,
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected refusal");
+    expect(result.reason).toBe("ttl-above-max-age");
+    expect(result.detail).toContain("3600");
+    expect(fs.existsSync(delegationMarkerPathFor(generatedDir, CHILD))).toBe(false);
+  });
+
+  it("refuses an explicit --ttl above the 24h default ceiling when the pack sets no approval_lifecycle.max_age (L4)", async () => {
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      manifest: parseManifest({ version: 1 }),
+      ttlSeconds: 25 * 60 * 60,
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected refusal");
+    expect(result.reason).toBe("ttl-above-max-age");
+    expect(result.detail).toContain("86400");
+    expect(fs.existsSync(delegationMarkerPathFor(generatedDir, CHILD))).toBe(false);
+  });
 });
 
 describe("issueDelegation - happy path", () => {
@@ -287,7 +462,7 @@ describe("issueDelegation - happy path", () => {
     expect(verified.parentSessionId).toBe(PARENT);
   });
 
-  it("writes the ledger fact understanding-delegated:<child>:<parent> with source harness-delegate-cli (mutation probe M2 target)", async () => {
+  it("calls the injected ledgerAdd with the understanding-delegated:<child>:<parent> fact content", async () => {
     approveParent();
     const { calls, ledgerAdd } = fakeLedger();
     const result = await issueDelegation({
@@ -306,8 +481,58 @@ describe("issueDelegation - happy path", () => {
     expect(calls[0]!.content).toBe(`understanding-delegated:${CHILD}:${PARENT}`);
   });
 
-  it("exposes the default ledger source constant as harness-delegate-cli", () => {
-    expect(DEFAULT_DELEGATE_LEDGER_SOURCE).toBe("harness-delegate-cli");
+  it("writes the ledger fact via the real writeLedgerTag -> addLedgerFact path, with source harness-delegate-cli, when ledgerAdd is omitted and the manifest declares a grounding MCP (mutation probe M2 target)", async () => {
+    approveParent();
+    const captureFile = path.join(tmp, "captured-ledger-call.json");
+    const scriptPath = makeCapturingLedgerServer(tmp, captureFile);
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      manifest: manifestWithGroundingMcp(scriptPath),
+      // Deliberately no `ledgerAdd`: that override bypasses
+      // `writeLedgerTag` entirely, which is exactly why every other
+      // ledgerAdd-stubbed test in this file cannot observe the `source`
+      // argument. This test exercises the real
+      // findGroundingMcp + addLedgerFact path instead.
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.ledgerFact.written).toBe(true);
+    const captured = JSON.parse(fs.readFileSync(captureFile, "utf8")) as {
+      sessionId: string;
+      type: string;
+      content: string;
+      source: string;
+    };
+    expect(captured.sessionId).toBe(CHILD);
+    expect(captured.content).toBe(delegationLedgerFactFor(CHILD, PARENT));
+    expect(captured.source).toBe("harness-delegate-cli");
+    expect(captured.source).toBe(DEFAULT_DELEGATE_LEDGER_SOURCE);
+  });
+
+  it("mints the delegation but marks the ledger fact unwritten, naming the load cause, when the manifest cannot be loaded (manifestLoadError branch)", async () => {
+    approveParent();
+    const badConfig = path.join(tmp, "broken-harness.yaml");
+    fs.writeFileSync(badConfig, "version: 1\nbroken: [unclosed\n");
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      configPath: badConfig,
+      // Deliberately no `manifest` injection and no `ledgerAdd`: forces
+      // `loadDeclaredUnderstandingPack` to actually attempt (and fail)
+      // the load, landing in the `manifestLoadError` branch.
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success (manifest load failure is audit-only)");
+    expect(result.ledgerFact.written).toBe(false);
+    expect(result.ledgerFact.reason).toContain("manifest unreadable (");
+    expect(result.ledgerFact.reason).toContain("); skipped ledger write");
+    expect(result.ledgerFact.reason).toMatch(/broken-harness\.yaml|not valid YAML/);
+    expect(fs.existsSync(result.filePath)).toBe(true);
   });
 
   it("--ttl 30m sets expires = now + 1800s", async () => {
@@ -447,6 +672,52 @@ describe("issueDelegation - happy path", () => {
   });
 });
 
+describe("issueDelegation - parent session resolution precedence", () => {
+  it("prefers $CLAUDE_CODE_SESSION_ID over a staged .pending-approval", async () => {
+    process.env.CLAUDE_CODE_SESSION_ID = PARENT;
+    writePendingApproval(generatedDir, "sess-staged-impostor");
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      generatedDir,
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.parentSessionId).toBe(PARENT);
+    // Not consumed: the staged id was not the one resolved.
+    expect(readPendingApproval(generatedDir)).toBe("sess-staged-impostor");
+  });
+
+  it("never adopts a persisted report's sessionId (delegation has no newest-report fallback, unlike harness approve understanding)", async () => {
+    const savedReportsDirEnv = process.env[REPORTS_DIR_ENV];
+    const reportsDir = path.join(tmp, "reports-dir");
+    fs.mkdirSync(reportsDir, { recursive: true });
+    process.env[REPORTS_DIR_ENV] = reportsDir;
+    fs.writeFileSync(
+      path.join(reportsDir, "rpt.json"),
+      JSON.stringify({ sessionId: "impostor-parent-from-report", approvalStatus: "pending" }),
+    );
+    try {
+      const { ledgerAdd } = fakeLedger();
+      const result = await issueDelegation({
+        childSessionId: CHILD,
+        cwd: childCwd,
+        generatedDir,
+        ledgerAdd,
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("expected refusal");
+      expect(result.reason).toBe("parent-session-unresolved");
+    } finally {
+      if (savedReportsDirEnv === undefined) delete process.env[REPORTS_DIR_ENV];
+      else process.env[REPORTS_DIR_ENV] = savedReportsDirEnv;
+    }
+  });
+});
+
 describe("harness delegate - CLI wiring", () => {
   it("declares --child-session as a required option, and the rest of the documented flags", () => {
     const program = buildProgram();
@@ -517,5 +788,174 @@ describe("harness delegate - CLI wiring", () => {
     expect(out).toMatch(new RegExp(`child ${CHILD}`));
     expect(out).toMatch(new RegExp(`parent ${PARENT}`));
     expect(fs.existsSync(delegationMarkerPathFor(generatedDir, CHILD))).toBe(true);
+  });
+
+  it("--ttl 30m reaches issueDelegation as 1800 seconds through the CLI action", async () => {
+    approveParent();
+    let out = "";
+    const program = buildProgram({
+      stdout: (s: string) => {
+        out += s;
+      },
+      stderr: () => {},
+    });
+    const configPath = path.join(generatedDir, "..", "harness.yaml");
+    fs.writeFileSync(configPath, "version: 1\n");
+    const before = Date.now();
+    await program.parseAsync(
+      [
+        "delegate",
+        "--child-session",
+        CHILD,
+        "--cwd",
+        childCwd,
+        "--session-id",
+        PARENT,
+        "--config",
+        configPath,
+        "--ttl",
+        "30m",
+      ],
+      { from: "user" },
+    );
+    const match = /expires ([^)]+)\)/.exec(out);
+    expect(match).not.toBeNull();
+    const expiresMs = Date.parse(match![1]!);
+    const deltaSeconds = (expiresMs - before) / 1000;
+    expect(deltaSeconds).toBeGreaterThan(1790);
+    expect(deltaSeconds).toBeLessThan(1810);
+  });
+
+  it("--report reaches issueDelegation end to end through the CLI action, binding both hashes", async () => {
+    approveParent();
+    const reportPath = path.join(tmp, "child-report.json");
+    fs.writeFileSync(reportPath, '{"mode":"grill_me"}\n');
+    let out = "";
+    const program = buildProgram({
+      stdout: (s: string) => {
+        out += s;
+      },
+      stderr: () => {},
+    });
+    const configPath = path.join(generatedDir, "..", "harness.yaml");
+    fs.writeFileSync(configPath, "version: 1\n");
+    await program.parseAsync(
+      [
+        "delegate",
+        "--child-session",
+        CHILD,
+        "--cwd",
+        childCwd,
+        "--session-id",
+        PARENT,
+        "--config",
+        configPath,
+        "--report",
+        reportPath,
+      ],
+      { from: "user" },
+    );
+    expect(out).toMatch(/delegation: ✓/);
+    const verified = verifyDelegation({
+      generatedDir,
+      childSessionId: CHILD,
+      cwd: childCwd,
+      taskId: null,
+      launcherReportPath: reportPath,
+    });
+    expect(verified.ok).toBe(true);
+    if (!verified.ok) throw new Error("expected the same-path report to verify");
+    expect(verified.reportPathHash).toBe(hashDelegationCwd(reportPath));
+  });
+
+  it("--cwd '' --task <id> does not silently drop the cwd: the CLI passes it through and issueDelegation refuses it with invalid-cwd (L3)", async () => {
+    approveParent();
+    const program = buildProgram({ stdout: () => {}, stderr: () => {} });
+    const configPath = path.join(generatedDir, "..", "harness.yaml");
+    fs.writeFileSync(configPath, "version: 1\n");
+    let caught: unknown;
+    try {
+      await program.parseAsync(
+        [
+          "delegate",
+          "--child-session",
+          CHILD,
+          "--cwd",
+          "",
+          "--task",
+          "37ad0b05",
+          "--session-id",
+          PARENT,
+          "--config",
+          configPath,
+        ],
+        { from: "user" },
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(HarnessExitError);
+    expect((caught as HarnessExitError).message).toMatch(/delegate refused \(invalid-cwd\)/);
+    expect(fs.existsSync(delegationMarkerPathFor(generatedDir, CHILD))).toBe(false);
+  });
+
+  it("--ttl 0s parses fine at the CLI usage level (0 is a valid duration) but issueDelegation refuses it with invalid-ttl (L2)", async () => {
+    approveParent();
+    const program = buildProgram({ stdout: () => {}, stderr: () => {} });
+    const configPath = path.join(generatedDir, "..", "harness.yaml");
+    fs.writeFileSync(configPath, "version: 1\n");
+    let caught: unknown;
+    try {
+      await program.parseAsync(
+        [
+          "delegate",
+          "--child-session",
+          CHILD,
+          "--cwd",
+          childCwd,
+          "--session-id",
+          PARENT,
+          "--config",
+          configPath,
+          "--ttl",
+          "0s",
+        ],
+        { from: "user" },
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(HarnessExitError);
+    expect((caught as HarnessExitError).exitCode).toBe(1);
+    expect((caught as HarnessExitError).message).toMatch(/delegate refused \(invalid-ttl\)/);
+    expect(fs.existsSync(delegationMarkerPathFor(generatedDir, CHILD))).toBe(false);
+  });
+
+  it("--ttl garbage fails at the CLI usage level with EX_USAGE and the --ttl: prefix", async () => {
+    const program = buildProgram({ stdout: () => {}, stderr: () => {} });
+    const configPath = path.join(generatedDir, "..", "harness.yaml");
+    fs.writeFileSync(configPath, "version: 1\n");
+    let caught: unknown;
+    try {
+      await program.parseAsync(
+        [
+          "delegate",
+          "--child-session",
+          CHILD,
+          "--cwd",
+          childCwd,
+          "--config",
+          configPath,
+          "--ttl",
+          "not-a-duration",
+        ],
+        { from: "user" },
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(HarnessExitError);
+    expect((caught as HarnessExitError).exitCode).toBe(64);
+    expect((caught as HarnessExitError).message).toMatch(/^--ttl: /);
   });
 });

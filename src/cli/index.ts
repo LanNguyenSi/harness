@@ -2094,8 +2094,13 @@ export function buildProgram(opts: RunOptions = {}): Command {
         const cliOpts: Parameters<typeof issueDelegation>[0] = {
           childSessionId: options.childSession,
         };
-        if (options.cwd) cliOpts.cwd = options.cwd;
-        if (options.task) cliOpts.taskId = options.task;
+        // `!== undefined` (not truthy), agreeing with the usage check
+        // above: a truthy check would silently drop an explicit `--cwd
+        // ''` / `--task ''` instead of letting `issueDelegation` refuse
+        // it with `invalid-cwd` / `invalid-task` (L3 fix, agent-tasks
+        // 37ad0b05).
+        if (options.cwd !== undefined) cliOpts.cwd = options.cwd;
+        if (options.task !== undefined) cliOpts.taskId = options.task;
         if (ttlSeconds !== undefined) cliOpts.ttlSeconds = ttlSeconds;
         if (options.report) cliOpts.reportPath = options.report;
         if (options.sessionId) cliOpts.parentSessionId = options.sessionId;
@@ -2422,6 +2427,10 @@ export function buildProgram(opts: RunOptions = {}): Command {
     )
     .option("--expect-exit <n>", "expected result.is_error: 0 ⇒ false, !=0 ⇒ true")
     .option("--expect-decision <kind>", "policy decision must be one of allow|deny|warn")
+    .option(
+      "--no-delegate",
+      "skip issuing a slice-3 pre-spawn delegation for the chosen session id (pre-slice-3 shape)",
+    )
     .action(async (options: {
       prompt: string;
       outputDir: string;
@@ -2434,6 +2443,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
       expectNoHook?: string[];
       expectExit?: string;
       expectDecision?: string;
+      delegate?: boolean;
     }) => {
       const expectations: SmokeExpectations = {};
       if (options.expectHook && options.expectHook.length > 0) {
@@ -2460,6 +2470,9 @@ export function buildProgram(opts: RunOptions = {}): Command {
         outputDir: options.outputDir,
         expectations,
       };
+      // commander's `--no-delegate` negates `options.delegate` (default
+      // true); only an explicit `--no-delegate` flips it to `false`.
+      if (options.delegate === false) smokeOpts.noDelegate = true;
       if (options.config) smokeOpts.configPath = options.config;
       if (options.project) smokeOpts.project = options.project;
       if (options.sessionId) smokeOpts.sessionId = options.sessionId;

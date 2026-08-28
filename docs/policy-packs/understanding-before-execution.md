@@ -674,7 +674,7 @@ The blocker on the next tool call sees the new approval through the signed marke
 ### Delegating a headless child (`harness delegate`)
 
 ```sh
-harness delegate --child-session <uuid> (--cwd <path> | --task <id>) [--ttl <duration>] [--report <path>] [--session-id <parent>] [--approved-by <actor>]
+harness delegate --child-session <uuid> (--cwd <path> | --task <id>) [--ttl <duration>] [--report <path>] [--session-id <parent>]
 ```
 
 Slice 3 of `docs/decisions/2026-08-27-ug-auto-mode-approval.md` ("`claude -p` child processes"). A `claude -p` child session has no interactive operator to run `harness approve understanding` for it, and no Understanding Report exists before its first tool call, so slice 1's auto-approval alone blocks every `-p` child. `harness delegate` supplies the other half of the ADR's two-key design: it issues a signed **pre-authorization** for the child, bound to the PARENT session that is already approved. It is not itself an approval, and it never opens the gate on its own: the child still has to write and get its own Understanding Report checked by its own PreToolUse hook before that hook mints the child's own auto-marker.
@@ -688,7 +688,7 @@ The delegation is written to `harness.generated/.delegations/<child-sid>`, a dir
 
 **Binding.** At least one of `--cwd` or `--task` is required; a delegation binding neither is refused (`a delegation must bind a cwd or a task`) rather than authorizing the child anywhere, for anything. `--cwd` is hashed, not written literally, so the marker file carries no machine path.
 
-**TTL.** `--ttl` (a duration like `30m` or `1h`) sets the delegation's lifetime. Default: the pack's own `approval_lifecycle.max_age` when the operator has set one, else one hour. An expired delegation is refused with its own distinct diagnostic, exactly like an expired approval marker.
+**TTL.** `--ttl` (a duration like `30m` or `1h`) sets the delegation's lifetime. Default: the pack's own `approval_lifecycle.max_age` when the operator has set one, else one hour. The override is bounded: a value above `max_age` (or above 24 hours when no `max_age` is set) is refused, and so is a zero or negative value, so a delegation can never outlive the approval lifetime the operator configured. An expired delegation is refused with its own distinct diagnostic, exactly like an expired approval marker.
 
 **Parent session resolution** is the same precedence chain `harness approve understanding` uses, minus its 6th tier: `--session-id <id>` flag, then `$CLAUDE_CODE_SESSION_ID`, then `$CLAUDE_SESSION_ID`, then `$CODEX_SESSION_ID`, then the staged `harness.generated/.pending-approval` file. There is no newest-report fallback here: a delegation has no report of its own to guess a parent session from.
 
@@ -696,7 +696,7 @@ The delegation is written to `harness.generated/.delegations/<child-sid>`, a dir
 
 **`--report <path>` (fallback shape).** Under `-p`, the Stop hook fires once at the end of the run, and a report the child emits before its first tool call is not yet in the session transcript at the instant the child's PreToolUse hook fires; the hook's default recovery is a bounded transcript poll (`auto_approve.report_scan.max_wait`, see the config table above). If that lag is not reliably bounded, the launcher supplies the report directly: `--report <path>` reads that file, and the delegation binds it by BOTH its content hash and its path hash, so the child's hook checks content the parent fixed, at the path the parent fixed, not a same-content copy the child placed somewhere of its own choosing.
 
-**Audit.** On success, the CLI prints `delegation: ✓ <path> (child <sid>, parent <sid>, expires <iso>)` and writes the audit-only ledger fact `understanding-delegated:<child-sid>:<parent-sid>` (source tag `harness-delegate-cli` by default, overridable via `--approved-by` for operators who want to distinguish which actor/script issued a given delegation). A failed ledger write is one warning line, never a refusal: the delegation itself is already minted by that point.
+**Audit.** On success, the CLI prints `delegation: ✓ <path> (child <sid>, parent <sid>, expires <iso>)` and writes the audit-only ledger fact `understanding-delegated:<child-sid>:<parent-sid>` (source tag always `harness-delegate-cli`; a delegation carries no actor field to stamp, so there is no `--approved-by` on this verb). A failed ledger write is one warning line, never a refusal: the delegation itself is already minted by that point.
 
 **The harness smoke runner is the first consumer.** `harness smoke` issues a delegation for the session id it already chooses, bound to the cwd it spawns the child into, before every run; pass `--no-delegate` to skip this and get the pre-slice-3 shape instead.
 

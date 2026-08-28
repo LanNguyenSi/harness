@@ -265,7 +265,7 @@ export interface DeclaredUnderstandingPack {
 /**
  * Load the manifest (best-effort, never throws) and resolve the
  * `understanding-before-execution` pack's declared config entry from it.
- * Extracted (agent-tasks 37ad0b05, T-002 fix round 1 D1) so
+ * Extracted (agent-tasks 37ad0b05) so
  * `approveUnderstanding` and `issueDelegation` (`src/cli/delegate/index.ts`)
  * share one copy of this manifest-load-plus-pack-lookup shape instead of
  * each carrying its own byte-identical block
