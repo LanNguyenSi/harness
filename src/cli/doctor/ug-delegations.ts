@@ -43,6 +43,24 @@ function emptySection(): UgDelegationsSection {
 }
 
 /**
+ * A delegation filename is always a session id: a UUID handed out by
+ * Claude Code or Codex, or (in this repo's own test fixtures) a short
+ * alnum/hyphen placeholder. Neither ever contains a literal `.` or
+ * starts with one. Filtering on that BEFORE the read is what keeps
+ * filesystem debris that happens to sit next to `.delegations/` files
+ * (macOS's `.DS_Store`, a stray `foo.txt`) from counting toward `total`
+ * at all: without it, such a file reads as valid-but-not-JSON and rolls
+ * into `unreadable`, which flips this metric's doctor line from
+ * informational (ℹ) straight to a WARNING (⚠) for debris that was never
+ * a delegation to begin with. Mirrors the same non-empty/no-traversal
+ * shape family `rejectMalformedSessionId` pins for a delegation's own
+ * filename on the write side (`delegationMarkerPathFor`), tightened to
+ * additionally exclude a dot, which is the part that actually
+ * discriminates a stray dotfile from a real session id.
+ */
+const SESSION_ID_BASENAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+/**
  * Build the delegations-on-disk doctor metric. Pure filesystem read;
  * never throws for "nothing to see" states (missing `.delegations/`,
  * empty directory, every file unreadable), those all resolve to a
@@ -74,6 +92,14 @@ export function buildUgDelegations(
   let unreadable = 0;
 
   for (const d of dirents) {
+    // Not a session-id-shaped basename: never a delegation file (a
+    // stray dotfile, an extensioned file, ...), skip before even
+    // reading it. The `adopted/` subdirectory's own name IS shaped like
+    // a session id and passes this filter, but its dirent is a
+    // directory, so it falls through to the `not-regular` skip below,
+    // same as any other directory would.
+    if (!SESSION_ID_BASENAME_RE.test(d.name)) continue;
+
     const full = path.join(dir, d.name);
     const read = readRegularFileRejectingSymlink(full);
     // A symlink / non-regular / raced-away entry is not a delegation

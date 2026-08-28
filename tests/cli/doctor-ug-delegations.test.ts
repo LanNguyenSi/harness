@@ -115,6 +115,21 @@ describe("buildUgDelegations: pure function", () => {
     expect(result).toEqual({ delegationsDirPresent: true, total: 0, expired: 0, unreadable: 0 });
   });
 
+  it("M2: a stray .DS_Store, foo.txt, a symlink, and an adopted/ directory with a ledger file are all skipped; only the valid delegation counts", () => {
+    const generatedDir = tempGeneratedDir();
+    writeDelegation(generatedDir, "child-1", VALID_FUTURE);
+    const dir = path.join(generatedDir, ".delegations");
+    fs.writeFileSync(path.join(dir, ".DS_Store"), "binary junk", "utf8");
+    fs.writeFileSync(path.join(dir, "foo.txt"), "not a delegation", "utf8");
+    fs.symlinkSync(path.join(dir, "child-1"), path.join(dir, "child-symlink"));
+    const adoptedDir = path.join(dir, "adopted");
+    fs.mkdirSync(adoptedDir, { recursive: true });
+    fs.writeFileSync(path.join(adoptedDir, "child-1"), JSON.stringify(["entry-1"]), "utf8");
+
+    const result = buildUgDelegations(generatedDir, { now: new Date("2026-08-27T10:00:00.000Z") });
+    expect(result).toEqual({ delegationsDirPresent: true, total: 1, expired: 0, unreadable: 0 });
+  });
+
   it("Q1 mutation-probe fixture: the count comes from .delegations/ only, an .approvals/ marker is never counted", () => {
     const generatedDir = tempGeneratedDir();
     writeDelegation(generatedDir, "child-1", VALID_FUTURE);
@@ -195,6 +210,45 @@ describe("doctor: ug delegations (Environment section)", () => {
 
     const text = format(report);
     expect(text).toContain("ℹ delegations on disk: 1 (0 expired, 0 unreadable)");
+
+    // M4: a delegation lives in `.delegations/` only; it must never
+    // surface in the `.approvals/`-derived auto-approvals listing.
+    expect(report.ugAutoApprovals?.entries).toEqual([]);
+    expect(report.ugAutoApprovals?.unreadableCount).toBe(0);
+  });
+
+  it("M2: a stray .DS_Store, foo.txt, a symlink, and an adopted/ directory with a ledger file next to one valid delegation render informationally, no warning", async () => {
+    const home = makeFixture({ "harness.yaml": MANIFEST_WITH_PACK });
+    const generatedDir = path.join(home, "harness.generated");
+    writeDelegation(generatedDir, "child-1", VALID_FUTURE);
+    const dir = path.join(generatedDir, ".delegations");
+    fs.writeFileSync(path.join(dir, ".DS_Store"), "binary junk", "utf8");
+    fs.writeFileSync(path.join(dir, "foo.txt"), "not a delegation", "utf8");
+    fs.symlinkSync(path.join(dir, "child-1"), path.join(dir, "child-symlink"));
+    const adoptedDir = path.join(dir, "adopted");
+    fs.mkdirSync(adoptedDir, { recursive: true });
+    fs.writeFileSync(path.join(adoptedDir, "child-1"), JSON.stringify(["entry-1"]), "utf8");
+
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      versionProbe: () => null,
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+      envOverride: {},
+      now: new Date("2026-08-27T10:00:00.000Z"),
+    });
+
+    expect(report.ugDelegations).toEqual({
+      delegationsDirPresent: true,
+      total: 1,
+      expired: 0,
+      unreadable: 0,
+    });
+
+    const text = format(report);
+    expect(text).toContain("ℹ delegations on disk: 1 (0 expired, 0 unreadable)");
+    expect(text).not.toContain("⚠ delegations on disk");
   });
 
   it("renders the zero-count line (no parenthetical) when .delegations/ exists but has no files", async () => {

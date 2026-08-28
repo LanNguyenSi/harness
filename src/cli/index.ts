@@ -2429,7 +2429,8 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .option("--expect-decision <kind>", "policy decision must be one of allow|deny|warn")
     .option(
       "--no-delegate",
-      "skip issuing a slice-3 pre-spawn delegation for the chosen session id (pre-slice-3 shape)",
+      "do not pre-authorize the spawned child (docs/decisions/2026-08-27-ug-auto-mode-approval.md); " +
+        "it then has no delegation binding it to this approved session and falls back to the plain opt-in path",
     )
     .action(async (options: {
       prompt: string;

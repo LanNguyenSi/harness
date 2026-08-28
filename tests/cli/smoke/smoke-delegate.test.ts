@@ -16,6 +16,7 @@ import { issueDelegation } from "../../../src/cli/delegate/index.js";
 import { runSmoke } from "../../../src/cli/smoke/index.js";
 import {
   delegationMarkerPathFor,
+  verifyDelegation,
   writeApprovalMarker,
 } from "../../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 import { getOrCreateSigningKey } from "../../../src/runtime/approval-signing.js";
@@ -147,6 +148,29 @@ describe("runSmoke: slice-3 pre-spawn delegation", () => {
     expect(lines.join("")).toMatch(
       new RegExp(`delegation: ✓ .*\\(child ${CHILD}, parent ${PARENT}, expires `),
     );
+
+    // M1: the delegation must actually be bound to the cwd the child
+    // spawns into (`spawnCwd`), not to whatever cwd the smoke runner's
+    // own process happens to have. A cwd-binding test that only checks
+    // "a delegation file exists" cannot discriminate this from a
+    // mutant that binds `process.cwd()` instead of `opts.spawnCwd`, so
+    // verify against the real gate-side reader.
+    const verification = verifyDelegation({
+      generatedDir,
+      childSessionId: CHILD,
+      cwd: childCwd,
+      taskId: null,
+    });
+    expect(verification.ok).toBe(true);
+
+    const otherCwd = makeTmpDir("smoke-delegate-happy-other-cwd-");
+    const mismatch = verifyDelegation({
+      generatedDir,
+      childSessionId: CHILD,
+      cwd: otherCwd,
+      taskId: null,
+    });
+    expect(mismatch).toMatchObject({ ok: false, reason: "cwd_mismatch" });
   });
 
   it("a refusal path still spawns and prints the skipped line", async () => {
@@ -204,5 +228,84 @@ describe("runSmoke: slice-3 pre-spawn delegation", () => {
     expect(issueDelegationImpl).not.toHaveBeenCalled();
     expect(result.claudeExitCode).toBe(0);
     expect(lines.join("")).not.toContain("delegation:");
+  });
+
+  it("M3: the delegation TTL is derived from --timeout-ms (budget + 60s slack), not the 1h default", async () => {
+    const tmp = makeTmpDir("smoke-delegate-ttl-");
+    const generatedDir = path.join(tmp, "harness.generated");
+    const childCwd = path.join(tmp, "child-cwd");
+    fs.mkdirSync(childCwd, { recursive: true });
+    getOrCreateSigningKey(generatedDir);
+    writeApprovalMarker(generatedDir, PARENT, {
+      approvedAt: new Date().toISOString(),
+      approvedBy: "test-operator",
+      reportContentHash: null,
+    });
+
+    const outputDir = makeTmpDir("smoke-delegate-ttl-out-");
+    const claude = makeFakeClaude();
+    const timeoutMs = 5_000;
+    let capturedTtlSeconds: number | undefined;
+    const issueBefore = Date.now();
+
+    const result = await runSmoke({
+      prompt: "x",
+      outputDir,
+      claudeBin: claude,
+      applyImpl: stubApply(),
+      sessionId: CHILD,
+      spawnCwd: childCwd,
+      timeoutMs,
+      stdout: () => {},
+      issueDelegationImpl: ((opts: Parameters<typeof issueDelegation>[0]) => {
+        capturedTtlSeconds = opts.ttlSeconds;
+        return issueDelegation({ ...opts, generatedDir, parentSessionId: PARENT });
+      }) as typeof issueDelegation,
+    });
+
+    // The --timeout-ms-derived value actually reaches issueDelegationImpl.
+    expect(capturedTtlSeconds).toBe(Math.ceil(timeoutMs / 1000) + 60);
+
+    const verification = verifyDelegation({
+      generatedDir,
+      childSessionId: CHILD,
+      cwd: childCwd,
+      taskId: null,
+    });
+    expect(verification.ok).toBe(true);
+    if (!verification.ok) throw new Error("unreachable: asserted ok above");
+    const elapsedSinceIssue = Date.parse(verification.expiresAt) - issueBefore;
+    // Within (budget, budget + 2 min] of issue time: strictly more than
+    // the run's own timeout budget (the +60s slack), but nowhere near
+    // the 1h default that a missing ttlSeconds would otherwise mint.
+    expect(elapsedSinceIssue).toBeGreaterThan(timeoutMs);
+    expect(elapsedSinceIssue).toBeLessThanOrEqual(timeoutMs + 120_000);
+    expect(result.claudeExitCode).toBe(0);
+  });
+
+  it("L2: a thrown issueDelegationImpl still lets the run spawn, printing exactly one skipped (error: ...) line", async () => {
+    const outputDir = makeTmpDir("smoke-delegate-throw-out-");
+    const claude = makeFakeClaude();
+    const lines: string[] = [];
+    const issueDelegationImpl = (() => {
+      throw new Error("boom from issueDelegationImpl");
+    }) as unknown as typeof issueDelegation;
+
+    const result = await runSmoke({
+      prompt: "x",
+      outputDir,
+      claudeBin: claude,
+      applyImpl: stubApply(),
+      sessionId: CHILD,
+      stdout: (s) => lines.push(s),
+      issueDelegationImpl,
+    });
+
+    expect(result.claudeExitCode).toBe(0);
+    const delegationLines = lines
+      .join("")
+      .split("\n")
+      .filter((l) => l.startsWith("delegation:"));
+    expect(delegationLines).toEqual(["delegation: skipped (error: boom from issueDelegationImpl)"]);
   });
 });

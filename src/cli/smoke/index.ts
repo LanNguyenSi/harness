@@ -47,7 +47,13 @@ export interface SmokeOptions {
   spawn?: RunClaudeOptions["spawn"];
   /** Test seam for the manifest-apply step. Defaults to the real `apply`. */
   applyImpl?: typeof apply;
-  /** Override cwd for the spawned claude. Defaults to `outputDir`. */
+  /**
+   * Override cwd for the spawned claude. Defaults to the parent
+   * process's own cwd: when unset, `runOpts.cwd` is left unset below
+   * and `runClaude` leaves `cwd` unset on the spawn options too, so
+   * Node inherits this process's cwd exactly like an unset `cwd` always
+   * does.
+   */
   spawnCwd?: string;
   /** Stdout/stderr writers (defaults to process.stdout / stderr). */
   stdout?: (s: string) => void;
@@ -190,18 +196,27 @@ export async function runSmoke(opts: SmokeOptions): Promise<SmokeResult> {
   // ... is the natural first consumer"). Issued for the session id
   // this run already chose, bound to the cwd the child actually spawns
   // into (`opts.spawnCwd`, defaulting to this process's own cwd exactly
-  // like `runClaude`'s own unset-cwd default does), no task, default
-  // TTL. Parent resolves through `issueDelegation`'s own precedence
-  // chain (flag > env > staged `.pending-approval`), this runner never
-  // overrides it, so the delegation is always issued on behalf of
-  // whatever session actually invoked `harness smoke`.
+  // like `runClaude`'s own unset-cwd default does), no task. Parent
+  // resolves through `issueDelegation`'s own precedence chain (flag >
+  // env > staged `.pending-approval`), this runner never overrides it,
+  // so the delegation is always issued on behalf of whatever session
+  // actually invoked `harness smoke`.
+  //
+  // TTL is the run's own wall-clock budget plus one minute of slack
+  // (`Math.ceil(timeoutMs / 1000) + 60`), never `issueDelegation`'s own
+  // one-hour default: a 60s smoke run has no business minting a
+  // pre-authorization that outlives the run by an hour. If that value
+  // exceeds the applied pack's own ceiling, `issueDelegationImpl`
+  // refuses with `ttl-above-max-age`, which prints exactly like any
+  // other refusal below; nothing here special-cases it.
   //
   // Never blocks the run: every refusal (no parent marker, no signing
-  // key, an unresolved parent session id) AND every thrown error (e.g.
-  // `resolvePaths`'s real-home-dir guard when neither `--config` nor a
-  // home dir is set outside the real `harness` binary) prints one
-  // line and the run proceeds exactly as it did before slice 3, the
-  // same shape `--no-delegate` opts back into explicitly.
+  // key, an unresolved parent session id, an over-ceiling TTL) AND
+  // every thrown error (e.g. `resolvePaths`'s real-home-dir guard when
+  // neither `--config` nor a home dir is set outside the real
+  // `harness` binary) prints one line and the run proceeds exactly as
+  // it did before this delegation step existed, the same shape
+  // `--no-delegate` opts back into explicitly.
   const stdoutWrite = opts.stdout ?? ((s: string) => process.stdout.write(s));
   if (!opts.noDelegate) {
     const issueDelegationImpl = opts.issueDelegationImpl ?? issueDelegation;
@@ -209,6 +224,7 @@ export async function runSmoke(opts: SmokeOptions): Promise<SmokeResult> {
     const delegationOpts: Parameters<typeof issueDelegation>[0] = {
       childSessionId: sessionId,
       cwd: childCwd,
+      ttlSeconds: Math.ceil(timeoutMs / 1000) + 60,
     };
     if (opts.configPath) delegationOpts.configPath = opts.configPath;
     if (opts.project) delegationOpts.project = opts.project;
@@ -224,7 +240,8 @@ export async function runSmoke(opts: SmokeOptions): Promise<SmokeResult> {
         );
       }
     } catch (err) {
-      stdoutWrite(`delegation: skipped (error: ${(err as Error).message})\n`);
+      const message = err instanceof Error ? err.message : String(err);
+      stdoutWrite(`delegation: skipped (error: ${message})\n`);
     }
   }
 
