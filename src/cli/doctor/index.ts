@@ -54,6 +54,7 @@ import {
   checkUnderstandingModeEnvDivergence,
   isUnderstandingPackEnabled,
 } from "./understanding-mode-env.js";
+import { checkAutoApproveMode } from "./auto-approve-mode.js";
 import {
   runDoctorToolchainParity,
   type RunDoctorToolchainParityOptions,
@@ -1110,6 +1111,9 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // always advisory, never an error — see understanding-mode-env.ts.
   if (report.understandingModeEnv) warningCount++;
   // ugAutoApprovals is informational only (ℹ), never contributes here.
+  // auto_approve configured outside grill_me (agent-tasks abfad738):
+  // always advisory, never an error, see auto-approve-mode.ts.
+  if (report.ugAutoApproveMode) warningCount++;
   if (report.settingsDrift) warningCount += report.settingsDrift.warnings.length;
   if (report.memory.routerExecutable && !report.memory.routerExecutable.exists) errorCount++;
   if (!report.memory.routerExecutable) warningCount++;
@@ -1258,6 +1262,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     manifest,
     opts.envOverride ?? process.env,
   );
+  const ugAutoApproveMode = checkAutoApproveMode(manifest);
 
   // ADR docs/decisions/2026-08-27-ug-auto-mode-approval.md slice 1
   // (agent-tasks 74b4b17d), "Audit and doctor": the auto-approval
@@ -1339,6 +1344,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     ...(npmGlobalBin !== undefined ? { npmGlobalBin } : {}),
     ...(understandingModeEnv !== undefined ? { understandingModeEnv } : {}),
     ...(ugAutoApprovals !== undefined ? { ugAutoApprovals } : {}),
+    ...(ugAutoApproveMode !== undefined ? { ugAutoApproveMode } : {}),
     ...(settingsDrift !== undefined ? { settingsDrift } : {}),
   };
   if (opts.target === "codex") {

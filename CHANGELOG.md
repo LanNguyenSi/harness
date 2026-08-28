@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`harness doctor`: warn when `auto_approve` is configured without
+  `mode: grill_me`** (agent-tasks `abfad738`, follow-up of the ADR
+  `docs/decisions/2026-08-27-ug-auto-mode-approval.md` slice 1). The
+  auto-approval path's report precondition reuses
+  `validatePersistedReport`, which only enforces the report's `mode`
+  field when it is `grill_me`, outside that mode, report validation is
+  structural only. `harness doctor` now prints, in the understanding-gate
+  Environment section, one advisory `⚠` line when the
+  `understanding-before-execution` pack is declared and enabled, its
+  `config.auto_approve` parses as a valid opt-in block, and the
+  RESOLVED effective mode (`resolveModeFromConfig`, same GENERATION-path
+  resolver `checkUnderstandingModeEnvDivergence` uses) is not
+  `grill_me`, a missing or unrecognised `config.mode` resolves to the
+  `grill_me` default and never fires this warning, since that is the
+  mode the generated Stop-hook command actually passes at runtime. A
+  session-level `UNDERSTANDING_GATE_MODE` env override is a separate gap
+  covered by the existing mode/env divergence advisory, not by this
+  check. Always advisory (rolls into `warningCount`, never
+  `errorCount`); surfaced in `--json` as `ugAutoApproveMode`. New module
+  `src/cli/doctor/auto-approve-mode.ts`.
+
 ## [0.51.0] - 2026-08-27
 
 ### Added

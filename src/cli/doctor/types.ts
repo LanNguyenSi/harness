@@ -11,6 +11,7 @@ import type { UnderstandingModeEnvDivergence } from "./understanding-mode-env.js
 import type { ToolchainParitySection } from "./toolchain-parity.js";
 import type { UgAutoApprovalsSection } from "./ug-auto-approvals.js";
 import type { SettingsDriftSection } from "./settings-drift.js";
+import type { AutoApproveModeWarning } from "./auto-approve-mode.js";
 
 /**
  * Phase 6 #6 follow-up — doctor target identifier. Distinct from
@@ -421,6 +422,16 @@ export interface DoctorReport {
    */
   ugAutoApprovals?: UgAutoApprovalsSection;
   /**
+   * `auto_approve` configured without `mode: grill_me` (agent-tasks
+   * abfad738, follow-up of ADR
+   * docs/decisions/2026-08-27-ug-auto-mode-approval.md slice 1).
+   * Present only when the pack is declared and enabled AND
+   * `config.auto_approve` parses as a valid opt-in block. Always
+   * advisory (rolls into `warningCount`, never `errorCount`) — see
+   * `auto-approve-mode.ts` for the full rationale.
+   */
+  ugAutoApproveMode?: AutoApproveModeWarning;
+  /**
    * Settings-drift compensating control (same ADR, threat model (c)): a
    * `permissions.defaultMode` or hook entry present in a live Claude
    * Code settings file but absent from harness's own last-apply
@@ -532,6 +543,7 @@ export type { NpmBinReport } from "./npm-bin-path.js";
 export type { ClaudeMcpRegistrationSection, ClaudeMcpEntryReport } from "./claude-mcp.js";
 export type { UnderstandingModeEnvDivergence } from "./understanding-mode-env.js";
 export type { UgAutoApprovalsSection, AutoApprovalListingEntry } from "./ug-auto-approvals.js";
+export type { AutoApproveModeWarning } from "./auto-approve-mode.js";
 export type { SettingsDriftSection } from "./settings-drift.js";
 export type { ToolchainParitySection, ToolchainParityPeerReport } from "./toolchain-parity.js";
 

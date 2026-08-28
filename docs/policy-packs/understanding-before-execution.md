@@ -314,7 +314,7 @@ auto_approve:
   require_report: true
 ```
 
-Only list a mode in `when` that the operator actually intends to run unattended; `plan`, `auto` and `dontAsk` are not supported values here and should not be listed (nor are they in the measured registry above, so `harness validate` rejects them anyway). Because report validation strength is mode-dependent, pair `auto_approve` with `mode: grill_me` so the report the auto path consumes was actually checked, rather than merely present.
+Only list a mode in `when` that the operator actually intends to run unattended; `plan`, `auto` and `dontAsk` are not supported values here and should not be listed (nor are they in the measured registry above, so `harness validate` rejects them anyway). Because report validation strength is mode-dependent, pair `auto_approve` with `mode: grill_me` so the report the auto path consumes was actually checked, rather than merely present. `harness doctor` warns when `auto_approve` is configured and the resolved effective mode is not `grill_me` (agent-tasks `abfad738`), so a manifest that skips this pairing does not do so silently; a missing `config.mode` resolves to the `grill_me` default and does not trigger this warning. A session-level `UNDERSTANDING_GATE_MODE` override that diverges from the resolved `config.mode` is a separate gap, already covered by the mode/env divergence advisory line above, not by this check.
 
 ### `expire_on_bash_match`: start-anchored, with a documented fail-open limitation (task `fb80b5bb`, measured 2026-08-19)
 
