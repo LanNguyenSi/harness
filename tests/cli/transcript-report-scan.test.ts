@@ -329,7 +329,13 @@ describe("scanTranscriptForReport", () => {
     ["uppercase words", "# UNDERSTANDING REPORT", true],
     ["extra spaces after the hash", "#   Understanding Report", true],
     ["trailing spaces", "# Understanding Report   ", true],
-    ["a level-two heading", "## Understanding Report", false],
+    // The deny text the child is given (`renderReportSchemaHint`) says
+    // "any heading level (#, ##, ###)" and shows a `##` example, so these
+    // are exactly the shapes the gate's own instruction asks for.
+    ["a level-two heading", "## Understanding Report", true],
+    ["a level-three heading", "### Understanding Report", true],
+    ["a level-six heading", "###### Understanding Report", true],
+    ["seven hashes, past markdown's deepest heading", "####### Understanding Report", false],
     ["prose mentioning the phrase", "I will write an # Understanding Report later", false],
     ["a heading with trailing prose", "# Understanding Report for the task", false],
     ["the hash on its own line", "#\nUnderstanding Report", false],
@@ -348,5 +354,170 @@ describe("scanTranscriptForReport", () => {
     });
 
     expect(result.found).toBe(expected);
+  });
+
+  // The poll reads INCREMENTALLY: the first poll reads the whole file,
+  // every later one only the bytes appended since. These two pin the
+  // append case and the one shape that invalidates a carried offset.
+  describe("incremental reading", () => {
+    it("finds a hit appended to the file after the first poll", async () => {
+      writeTranscript([
+        JSON.stringify({ type: "user", sessionId: SESSION, message: { role: "user", content: "go" } }),
+      ]);
+      const clock = fakeClock();
+      // A real append, not a rewrite: only the new bytes are there to read.
+      clock.onSleep = (count): void => {
+        if (count === 1) fs.appendFileSync(transcriptPath, `${entry()}\n`);
+      };
+
+      const result = await scanTranscriptForReport({
+        transcriptPath,
+        sessionId: SESSION,
+        maxWaitMs: 500,
+        pollMs: 50,
+        now: clock.now,
+        sleep: clock.sleep,
+      });
+
+      expect(result.found).toBe(true);
+      if (!result.found) throw new Error("unreachable");
+      expect(result.markdown).toBe(REPORT_MARKDOWN);
+      expect(result.lineIndex).toBe(1);
+      expect(result.waitedMs).toBe(50);
+    });
+
+    it("re-reads from the top when the transcript shrank between polls", async () => {
+      // A carried byte offset is only valid while the file grows. Replace
+      // a long report-less transcript with a much SHORTER one carrying the
+      // report: a reader that kept the stale offset would see a file
+      // smaller than what it had already consumed, read nothing, and time
+      // out fail-closed on a report that is right there.
+      const padded = (n: number): string =>
+        JSON.stringify({
+          type: "user",
+          sessionId: SESSION,
+          message: { role: "user", content: `go ${"x".repeat(400)} ${n}` },
+        });
+      writeTranscript([padded(1), padded(2), padded(3), padded(4), padded(5)]);
+      const longSize = fs.statSync(transcriptPath).size;
+      const clock = fakeClock();
+      clock.onSleep = (count): void => {
+        if (count === 1) writeTranscript([entry()]);
+      };
+
+      const result = await scanTranscriptForReport({
+        transcriptPath,
+        sessionId: SESSION,
+        maxWaitMs: 500,
+        pollMs: 50,
+        now: clock.now,
+        sleep: clock.sleep,
+      });
+
+      // The replacement really is shorter, or the test would not
+      // discriminate a stale offset at all.
+      expect(fs.statSync(transcriptPath).size).toBeLessThan(longSize);
+      expect(result.found).toBe(true);
+      if (!result.found) throw new Error("unreachable");
+      expect(result.lineIndex).toBe(0);
+      expect(result.markdown).toBe(REPORT_MARKDOWN);
+    });
+  });
+
+  // One transcript entry may be adopted at most ONCE per session: the
+  // caller records what it spent and passes it back, so an expired marker
+  // cannot be re-minted from the same report (ADR two-key design; the
+  // delegation's TTL must not replace the marker's).
+  describe("once-per-session adoption", () => {
+    it("names the adopted entry by its uuid so the caller can spend it", async () => {
+      writeTranscript([entry()]);
+      const clock = fakeClock();
+
+      const result = await scanTranscriptForReport({
+        transcriptPath,
+        sessionId: SESSION,
+        maxWaitMs: 0,
+        now: clock.now,
+        sleep: clock.sleep,
+      });
+
+      expect(result.found).toBe(true);
+      if (!result.found) throw new Error("unreachable");
+      expect(result.entryId).toBe("uuid:uuid-1");
+    });
+
+    it("falls back to a content digest when the entry carries no uuid", async () => {
+      writeTranscript([entry({ uuid: undefined })]);
+      const clock = fakeClock();
+
+      const result = await scanTranscriptForReport({
+        transcriptPath,
+        sessionId: SESSION,
+        maxWaitMs: 0,
+        now: clock.now,
+        sleep: clock.sleep,
+      });
+
+      expect(result.found).toBe(true);
+      if (!result.found) throw new Error("unreachable");
+      expect(result.entryId).toMatch(/^sha256:[0-9a-f]{64}$/);
+    });
+
+    it("does not re-adopt an entry the caller has already spent, and says so", async () => {
+      writeTranscript([entry()]);
+      const clock = fakeClock();
+
+      const result = await scanTranscriptForReport({
+        transcriptPath,
+        sessionId: SESSION,
+        maxWaitMs: 100,
+        pollMs: 50,
+        now: clock.now,
+        sleep: clock.sleep,
+        adopted: new Set(["uuid:uuid-1"]),
+      });
+
+      expect(result.found).toBe(false);
+      if (result.found) throw new Error("unreachable");
+      expect(result.reason).toBe("timeout");
+      // Distinct from a transcript that simply never carried a report:
+      // the child must emit a FRESH one, not retry against this entry.
+      expect(result.adoptedOnly).toBe(true);
+    });
+
+    it("returns the newest NON-adopted hit when the newest one was already spent", async () => {
+      writeTranscript([
+        entry({
+          uuid: "uuid-older",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "# Understanding Report\n\nthe older one" }],
+          },
+        }),
+        entry({
+          uuid: "uuid-newer",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "# Understanding Report\n\nthe newer one" }],
+          },
+        }),
+      ]);
+      const clock = fakeClock();
+
+      const result = await scanTranscriptForReport({
+        transcriptPath,
+        sessionId: SESSION,
+        maxWaitMs: 0,
+        now: clock.now,
+        sleep: clock.sleep,
+        adopted: new Set(["uuid:uuid-newer"]),
+      });
+
+      expect(result.found).toBe(true);
+      if (!result.found) throw new Error("unreachable");
+      expect(result.entryId).toBe("uuid:uuid-older");
+      expect(result.markdown).toContain("the older one");
+      expect(result.lineIndex).toBe(0);
+    });
   });
 });

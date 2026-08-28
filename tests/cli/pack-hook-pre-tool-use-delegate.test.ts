@@ -195,7 +195,10 @@ function fakeClock(): FakeClock {
  * below carries `permission_mode: "default"`, so the `when` allowlist can
  * never be what opens the gate here.
  */
-function manifestWithAutoApprove(autoApproveExtra: Record<string, unknown> = {}): Manifest {
+function manifestWithAutoApprove(
+  autoApproveExtra: Record<string, unknown> = {},
+  configExtra: Record<string, unknown> = {},
+): Manifest {
   return parseManifest({
     version: 1,
     policy_packs: [
@@ -203,6 +206,7 @@ function manifestWithAutoApprove(autoApproveExtra: Record<string, unknown> = {})
         name: "understanding-before-execution",
         enabled: true,
         config: {
+          ...configExtra,
           auto_approve: {
             when: ["bypassPermissions"],
             harnesses: ["claude-code"],
@@ -236,6 +240,23 @@ function removeDelegation(): void {
 
 function markerExists(): boolean {
   return fs.existsSync(approvalMarkerPathFor(generatedDir, CHILD));
+}
+
+/**
+ * The once-per-session adoption ledger. Its own subdirectory under
+ * `.delegations/`, NOT a flat `<sid>.adopted` sibling: `harness doctor`'s
+ * delegations metric counts every regular file directly under
+ * `.delegations/`, and a session id spelled `<other-sid>.adopted` would
+ * otherwise name another session's ledger.
+ */
+function adoptedLedgerPath(): string {
+  const delegationPath = delegationMarkerPathFor(generatedDir, CHILD);
+  return path.join(path.dirname(delegationPath), "adopted", CHILD);
+}
+
+/** The flat layout this deliberately does NOT use. */
+function flatAdoptedLedgerPath(): string {
+  return `${delegationMarkerPathFor(generatedDir, CHILD)}.adopted`;
 }
 
 function readMarkerRaw(): Record<string, unknown> {
@@ -290,6 +311,8 @@ afterEach(() => {
 interface CallOptions {
   manifest?: Manifest;
   toolName?: string;
+  /** `tool_input.command`, for the Bash-shaped decision-order controls. */
+  command?: string;
   permissionMode?: string | null;
   transcriptPathOverride?: string;
   clock?: FakeClock;
@@ -310,6 +333,7 @@ async function call(opts: CallOptions = {}): Promise<{
     session_id: CHILD,
     cwd: childCwd,
     transcript_path: opts.transcriptPathOverride ?? transcriptPath,
+    ...(opts.command !== undefined ? { tool_input: { command: opts.command } } : {}),
     // NOT in `auto_approve.when`, on purpose: only a delegation can
     // supply key one in this suite.
     ...(opts.permissionMode === null ? {} : { permission_mode: opts.permissionMode ?? "default" }),
@@ -585,6 +609,57 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       expect(ledgerCalls).toEqual([]);
       expect(listPersistedReports(reportsDir)).toEqual([]);
     });
+
+    it("(p) a read-only Bash call is allowed by the step-6 exemption and never reaches the delegation branch", async () => {
+      // DECISION-ORDER control. The delegation capture is part of step 9,
+      // deliberately last, so a call one of the earlier exemptions already
+      // allows must not capture, persist, or mint anything on its way out.
+      // Everything the delegation branch needs is in place here (valid
+      // delegation, the child's report already in the transcript), so if
+      // the branch ran at all it WOULD capture and persist: that nothing
+      // was written is what pins the ordering. Moving the read-only-Bash
+      // early return below the delegation branch turns this red.
+      writeTranscript([userTurn(), transcriptEntry()]);
+
+      const result = await call({ toolName: "Bash", command: "ls -la" });
+
+      expect(result.blocked).toBe(false);
+      expect(result.source).toBe("none");
+      expect(result.stderr).toMatch(/read-only Bash command, allowing without an approved report/);
+      expect(listPersistedReports(reportsDir)).toEqual([]);
+      expect(result.stderr).not.toMatch(/captured the Understanding Report/);
+      expect(markerExists()).toBe(false);
+      expect(ledgerCalls).toEqual([]);
+    });
+
+    it("(q) a transcript report whose body does not parse persists nothing and blocks", async () => {
+      // The heading IS there (so the scan adopts the entry) but the
+      // required sections are not, which is exactly what
+      // `persistStdinReport`'s parser rejects. Key two must stay absent:
+      // a report the parser refused is not a report.
+      writeTranscript([
+        userTurn(),
+        transcriptEntry({
+          uuid: "uuid-unparseable",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "# Understanding Report\n\nJust prose. No sections at all." },
+            ],
+          },
+        }),
+      ]);
+
+      const result = await call();
+
+      expect(result.blocked).toBe(true);
+      expect(result.stderr).toMatch(
+        new RegExp(`the transcript report for session ${CHILD} did not parse`),
+      );
+      expect(listPersistedReports(reportsDir)).toEqual([]);
+      expect(markerExists()).toBe(false);
+      expect(ledgerCalls).toEqual([]);
+    });
   });
 
   describe("acceptance criteria", () => {
@@ -618,14 +693,17 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       expect(check.matched).toBe(true);
       expect(check.forged).toBe(false);
       const approvedBy = check.marker?.approvedBy ?? "";
-      expect(approvedBy).toContain("auto-mode:claude-code:");
-      expect(approvedBy).toContain(`;delegated:${PARENT}`);
+      // The `<mode>` segment is the neutral `delegated` literal, NOT the
+      // payload's `default`: on this path the mode played no part in the
+      // decision, so recording it would bucket the marker in the doctor
+      // listing under a mode that never opened anything.
+      expect(approvedBy).toBe(`auto-mode:claude-code:delegated;delegated:${PARENT}`);
       expect(readMarkerRaw()["approvedBy"]).toBe(approvedBy);
       // The doctor listing still buckets it by harness/mode: the
       // delegation suffix round-trips through the shared parser.
       expect(parseAutoApprovedBy(approvedBy)).toEqual({
         harness: "claude-code",
-        mode: "default",
+        mode: "delegated",
       });
 
       // Audit-only ledger fact, exactly as on the slice-1 path.
@@ -674,26 +752,118 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       expect(ledgerCalls).toHaveLength(1);
     });
 
-    it("(o) a delimiter-carrying permission_mode is replaced by the neutral literal, never pasted into approvedBy (T-003 follow-on B)", async () => {
-      // A payload-composed permission_mode of `x;delegated:someone-else`
-      // must not be able to forge a second `delegated:` segment, or drop
-      // an attacker-chosen parent id into the signed audit field. The hook
-      // substitutes the neutral literal `delegated` for any mode carrying
-      // `;` or `:` (src/cli/pack/auto-approve-path.ts), so only the REAL
-      // parent session id (from the verified delegation, not the payload)
-      // ever appears after `;delegated:`.
+    it.each([
+      ["a `;`/`:`-delimited mode", "x;delegated:someone-else"],
+      ["a mode carrying a newline and a tab", "sneaky\nmode\tname"],
+    ])(
+      "(o) %s never reaches approvedBy on the delegation path (T-003 follow-on B)",
+      async (_label, permissionMode) => {
+        // The payload's permission_mode is UNCONSTRAINED here, and
+        // `approvedBy` is a signed audit record. A mode of
+        // `x;delegated:someone-else` would forge a second `delegated:`
+        // segment; a mode carrying a newline or a tab would survive a mere
+        // delimiter check and land verbatim in the doctor listing as a
+        // permission mode that never existed. Both are replaced wholesale
+        // by the neutral `delegated` literal
+        // (src/cli/pack/auto-approve-path.ts), so only the REAL parent
+        // session id (from the verified delegation, never the payload)
+        // appears after `;delegated:`.
+        writeTranscript([userTurn(), transcriptEntry()]);
+
+        const result = await call({ permissionMode });
+
+        expect(result.blocked).toBe(false);
+        const check = checkApprovalMarker(generatedDir, CHILD);
+        expect(check.matched).toBe(true);
+        const approvedBy = check.marker?.approvedBy ?? "";
+        expect(approvedBy).toBe(`auto-mode:claude-code:delegated;delegated:${PARENT}`);
+        expect(approvedBy).not.toContain("someone-else");
+        expect(approvedBy).not.toContain("sneaky");
+        const occurrences = approvedBy.split(";delegated:").length - 1;
+        expect(occurrences).toBe(1);
+      },
+    );
+
+    it("(s) a `when`-listed permission_mode keeps its real literal even when a delegation is also present", async () => {
+      // The mirror image of (o): here the mode IS the operator-configured
+      // allowlist entry, so it is evidence of how key one was satisfied and
+      // is recorded verbatim. The delegation suffix rides alongside it.
       writeTranscript([userTurn(), transcriptEntry()]);
 
-      const result = await call({ permissionMode: "x;delegated:someone-else" });
+      const result = await call({ permissionMode: "bypassPermissions" });
 
       expect(result.blocked).toBe(false);
-      const check = checkApprovalMarker(generatedDir, CHILD);
-      expect(check.matched).toBe(true);
-      const approvedBy = check.marker?.approvedBy ?? "";
-      expect(approvedBy).not.toContain("someone-else");
-      expect(approvedBy).toBe(`auto-mode:claude-code:delegated;delegated:${PARENT}`);
-      const occurrences = approvedBy.split(";delegated:").length - 1;
-      expect(occurrences).toBe(1);
+      expect(result.stderr).toMatch(
+        /auto-approval key one: permission_mode "bypassPermissions" in auto_approve\.when/,
+      );
+      const approvedBy = checkApprovalMarker(generatedDir, CHILD).marker?.approvedBy ?? "";
+      expect(approvedBy).toBe(`auto-mode:claude-code:bypassPermissions;delegated:${PARENT}`);
+      expect(parseAutoApprovedBy(approvedBy)).toEqual({
+        harness: "claude-code",
+        mode: "bypassPermissions",
+      });
+    });
+  });
+
+  describe("once-per-session adoption", () => {
+    it("(r) the same transcript entry cannot mint a second marker once the first expired, but a fresh entry can", async () => {
+      // THE REPLAY THIS CLOSES: the auto-marker's TTL is short on purpose,
+      // the delegation's is not. Without a once-per-session rule the next
+      // gated call after the marker aged out would re-scan the SAME
+      // transcript entry, persist a fresh `pending` report from it and
+      // re-mint the marker, so the delegation's lifetime would quietly
+      // become the approval's.
+      const manifest = manifestWithAutoApprove({}, { approval_lifecycle: { max_age: "1h" } });
+      writeTranscript([userTurn(), transcriptEntry()]);
+
+      const first = await call({ manifest });
+      expect(first.blocked).toBe(false);
+      expect(first.source).toBe("marker");
+      expect(listPersistedReports(reportsDir)).toHaveLength(1);
+      // The spent entry was recorded, one id per line, in its own
+      // subdirectory and never as a flat `.delegations/` sibling.
+      expect(fs.readFileSync(adoptedLedgerPath(), "utf8")).toBe("uuid:uuid-report\n");
+      expect(fs.existsSync(flatAdoptedLedgerPath())).toBe(false);
+      const mintedBy = String(readMarkerRaw()["approvedBy"]);
+
+      // Age the marker out. Re-signed through the real writer with a
+      // backdated `approvedAt` rather than hand-edited: a tampered
+      // timestamp would read as FORGED, and the delegation branch (gated
+      // on `!markerForged`) would then not run at all, which would make
+      // the assertions below pass for the wrong reason.
+      const backdated = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+      writeApprovalMarker(generatedDir, CHILD, {
+        approvedAt: backdated,
+        approvedBy: mintedBy,
+      });
+      expect(checkApprovalMarker(generatedDir, CHILD).forged).toBe(false);
+
+      const second = await call({ manifest });
+
+      expect(second.blocked).toBe(true);
+      expect(second.stderr).toMatch(
+        new RegExp(
+          `newest Understanding Report entry in the transcript for session ${CHILD} was already adopted`,
+        ),
+      );
+      // No second marker was minted over the expired one, and the spent
+      // entry produced no second report.
+      expect(readMarkerRaw()["approvedAt"]).toBe(backdated);
+      expect(listPersistedReports(reportsDir)).toHaveLength(1);
+
+      // The intended re-arm: a NEW report entry, which the child emits in
+      // response to the retry instruction, is adopted normally.
+      fs.appendFileSync(transcriptPath, `${transcriptEntry({ uuid: "uuid-report-2" })}\n`);
+      const third = await call({ manifest });
+
+      expect(third.blocked).toBe(false);
+      expect(third.source).toBe("marker");
+      expect(readMarkerRaw()["approvedAt"]).not.toBe(backdated);
+      expect(listPersistedReports(reportsDir)).toHaveLength(2);
+      // Appended, not rewritten: both spent entries stay recorded.
+      expect(fs.readFileSync(adoptedLedgerPath(), "utf8")).toBe(
+        "uuid:uuid-report\nuuid:uuid-report-2\n",
+      );
     });
   });
 });

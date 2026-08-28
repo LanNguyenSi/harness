@@ -122,14 +122,13 @@ export const DEFAULT_AUTO_APPROVE_HARNESSES: readonly string[] = [CLAUDE_CODE_HA
  * Understanding Report to reach the session transcript before it blocks
  * (ADR "Report capture under `-p`", slice 3 acceptance criterion 3).
  *
- * The value is measured, not guessed: under `claude -p
- * --permission-mode bypassPermissions` the report is absent from the
- * transcript at the instant PreToolUse fires and lands a p50 of 67.5 ms
- * later, worst observed 139 ms over n=10 (evidence:
- * `docs/okf/understanding-gate-auto-mode-signals.md` and
- * `dogfood/ug-auto-mode-signals/`, the lag-distribution section). 500 ms
- * is roughly 3.6x the worst observed flush and still far below anything
- * a session would experience as a hang.
+ * The value is measured, not guessed: under `claude -p` the report is
+ * absent from the transcript at the instant PreToolUse fires and lands
+ * tens of milliseconds later, so the bound sits comfortably above the
+ * observed flush and still far below anything a session would experience
+ * as a hang. The measurement itself is in
+ * `docs/okf/understanding-gate-auto-mode-signals.md` (lag-distribution
+ * section), from `dogfood/ug-auto-mode-signals/`.
  *
  * ONE named constant on purpose: the hook, the schema default and every
  * test read this symbol, so re-tuning the bound against a new

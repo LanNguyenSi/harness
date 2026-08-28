@@ -101,11 +101,12 @@ export const AUTO_APPROVE_LEDGER_SOURCE_CODEX = "harness-pack-hook-codex-pre-too
 const DEFAULT_LABEL = "harness pack hook";
 
 /**
- * The `<mode>` segment an auto-marker carries when key one came from a
- * delegation and the payload offered no usable `permission_mode`
- * literal. `auto-mode:claude-code:delegated;delegated:<parent-sid>` reads
- * as what it is: a child whose trusted signal was the parent's
- * pre-authorization, not a permission mode.
+ * The `<mode>` segment an auto-marker carries whenever key one came from
+ * the DELEGATION rather than from a `when`-listed `permission_mode`.
+ * `auto-mode:claude-code:delegated;delegated:<parent-sid>` reads as what
+ * it is: a child whose trusted signal was the parent's pre-authorization,
+ * not a permission mode. Used unconditionally on that path, whatever the
+ * payload's own mode says, since that mode played no part in the decision.
  */
 const DELEGATED_MODE_LABEL = "delegated";
 
@@ -289,19 +290,22 @@ export async function attemptAutoApproval(
         : `auto-approval key one: valid delegation from parent session ${args.delegation.parentSessionId}`,
     );
   }
-  // On the `when` path this is exactly the payload literal that matched,
-  // unchanged. On the delegation path the payload's mode is UNCONSTRAINED
-  // (that is the whole point: a `-p` child may carry `default`, or
-  // nothing), so it cannot be pasted into `approvedBy` unfiltered: the
-  // string is a `;`/`:`-delimited audit record, and a payload-composed
-  // `permission_mode` of `x;delegated:someone-else` would forge a parent
-  // linkage in the very field the ADR uses to carry it. A mode that could
-  // corrupt the encoding is replaced by the neutral label instead.
-  const modeStr = modeAllowed
-    ? (mode as string)
-    : typeof mode === "string" && mode.length > 0 && !mode.includes(";") && !mode.includes(":")
-      ? mode
-      : DELEGATED_MODE_LABEL;
+  // The `<mode>` segment of `approvedBy` records WHICH key one applied,
+  // so it carries a payload literal in exactly one case: the mode itself
+  // was `when`-listed, i.e. the operator wrote that exact string in the
+  // config and this call matched it.
+  //
+  // On the delegation path the payload's mode is UNCONSTRAINED (that is
+  // the whole point: a `-p` child may carry `default`, or nothing) and it
+  // played no part in the decision, so it is replaced by the neutral
+  // `delegated` literal wholesale rather than filtered. Filtering only the
+  // encoding-breaking characters was not enough: `approvedBy` is a signed
+  // AUDIT record, and a payload-composed mode carrying a newline or a tab
+  // survives a `;`/`:` check, lands verbatim in the signed field, and then
+  // shows up in the doctor listing as a permission mode that never
+  // existed (reviewer finding L2). Nothing is lost: the payload's mode is
+  // not evidence of anything on this path.
+  const modeStr = modeAllowed ? (mode as string) : DELEGATED_MODE_LABEL;
 
   // Resolve the audit-only ledger writer NOW, not earlier: this is the
   // first point past both the opt-in check (1) and the `when` allowlist

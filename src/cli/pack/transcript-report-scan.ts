@@ -38,14 +38,33 @@
 //     separate file), so this is defence in depth against a shape the
 //     measurement did not produce, not the mechanism the separation
 //     relies on.
+//   - EACH TRANSCRIPT ENTRY IS ADOPTED AT MOST ONCE PER SESSION: the
+//     caller passes the entry ids it has already spent (`adopted`) and
+//     this scan returns the newest NON-adopted hit, so one report cannot
+//     mint a second marker after the first one expired or a task boundary
+//     cleared it. Without that rule the delegation's TTL would silently
+//     replace the marker's, which is the lifetime the ADR's two-key
+//     design deliberately keeps short.
+//
+// HOW IT READS. The first poll reads the whole file; every later poll
+// reads only the bytes appended since the previous one, carrying a
+// partial trailing line over, and keeps the best hit found so far. A
+// transcript that SHRANK between polls (truncated or replaced) resets the
+// reader and is re-read from the top.
 //
 // The clock and the sleep are injected so the tests drive the poll
 // deterministically and never sleep for real.
 
 import * as fs from "node:fs";
+import { sha256Hex } from "../../runtime/approval-signing.js";
 
 /**
  * The report heading the scan looks for, anchored to a whole line.
+ *
+ * ANY heading level, `#` through `######`: the deny text the child is
+ * given (`renderReportSchemaHint`) says "any heading level (#, ##, ###)"
+ * and shows a `##` example, so a scan that accepted only `#` would refuse
+ * exactly the shape its own instruction asked for.
  *
  * Deliberately `[ \t]` rather than `\s` around the words: `\s` matches
  * newlines, so `^#\s*Understanding Report\s*$` under the `m` flag would
@@ -55,7 +74,7 @@ import * as fs from "node:fs";
  * section the deny text asked for); a trailing `\r` is tolerated for a
  * CRLF-written transcript.
  */
-const REPORT_HEADING = /^#[ \t]*understanding[ \t]+report[ \t]*\r?$/i;
+const REPORT_HEADING = /^#{1,6}[ \t]*understanding[ \t]+report[ \t]*\r?$/i;
 
 export interface TranscriptReportScanArgs {
   /** The `transcript_path` from the hook payload. The ONLY file this scan opens. */
@@ -70,6 +89,14 @@ export interface TranscriptReportScanArgs {
   now?: () => number;
   /** Injectable sleep, so tests never wait for real time. */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Entry ids (see {@link TranscriptReportScanResult}'s `entryId`) this
+   * session has ALREADY adopted. A hit whose id is in here is skipped as
+   * if it were not a report at all, and a transcript that carries nothing
+   * else times out with `adoptedOnly: true`. Absent means "nothing
+   * adopted yet", the first-call case.
+   */
+  adopted?: ReadonlySet<string>;
 }
 
 export type TranscriptReportScanResult =
@@ -79,6 +106,14 @@ export type TranscriptReportScanResult =
       markdown: string;
       /** Zero-based index of the JSONL line the report was found on. */
       lineIndex: number;
+      /**
+       * Stable identity of the adopted entry, for the caller's
+       * once-per-session adoption ledger: the entry's own `uuid` when it
+       * carries a usable one, otherwise a digest of the adopted markdown
+       * and its line index. Never contains a newline, so the caller can
+       * store one id per line.
+       */
+      entryId: string;
       waitedMs: number;
     }
   | {
@@ -91,32 +126,21 @@ export type TranscriptReportScanResult =
        * permission error, a directory at that path, a symlink loop).
        */
       reason: "timeout" | "unreadable";
+      /**
+       * Set when the ONLY report(s) in the transcript were entries this
+       * session had already adopted. The outcome is the same block, but
+       * the caller can say so: the child must emit a FRESH report, not
+       * retry against the one it already spent.
+       */
+      adoptedOnly?: true;
       waitedMs: number;
     };
-
-type TranscriptRead =
-  | { kind: "ok"; content: string }
-  | { kind: "absent" }
-  | { kind: "unreadable" };
-
-function readTranscript(transcriptPath: string): TranscriptRead {
-  try {
-    return { kind: "ok", content: fs.readFileSync(transcriptPath, "utf8") };
-  } catch (err) {
-    // ENOENT is "not there YET": under `-p` the hook can fire before the
-    // transcript file exists, and it may appear inside the bound. Every
-    // other errno means a file (or something) IS at that path and cannot
-    // be read, which is a distinct, immediately-reported condition rather
-    // than something waiting will fix.
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { kind: "absent" };
-    return { kind: "unreadable" };
-  }
-}
 
 interface TranscriptEntryLite {
   type?: unknown;
   sessionId?: unknown;
   isSidechain?: unknown;
+  uuid?: unknown;
   message?: unknown;
 }
 
@@ -158,50 +182,213 @@ function reportInBlock(block: string): string | null {
 interface ReportHit {
   markdown: string;
   lineIndex: number;
+  entryId: string;
+}
+
+/** Longest `uuid` accepted verbatim as an adoption id; anything longer falls back to the digest. */
+const ENTRY_UUID_MAX_LENGTH = 200;
+
+/**
+ * Stable identity of one adopted entry. The transcript's own `uuid` is
+ * preferred (Claude Code stamps one on every entry, and it survives the
+ * file being rewritten or resumed); a value that is missing, empty,
+ * over-long, or carries a line break (all of which would corrupt the
+ * caller's one-id-per-line ledger) falls back to a digest of the adopted
+ * markdown plus its line index. The two forms are namespaced so a crafted
+ * `uuid` cannot impersonate a digest id.
+ */
+function entryIdFor(entry: TranscriptEntryLite, markdown: string, lineIndex: number): string {
+  const uuid = entry.uuid;
+  if (
+    typeof uuid === "string" &&
+    uuid.length > 0 &&
+    uuid.length <= ENTRY_UUID_MAX_LENGTH &&
+    !/[\r\n]/.test(uuid)
+  ) {
+    return `uuid:${uuid}`;
+  }
+  return `sha256:${sha256Hex(`${lineIndex}\n${markdown}`)}`;
 }
 
 /**
- * The NEWEST eligible report in a transcript's raw text, or null.
- * "Newest" is last-line-wins: the JSONL is append-only, so a later line
- * is a later turn. Unparseable and blank lines are skipped rather than
- * aborting the scan; a transcript being written while it is read can end
- * in a half-flushed line, and refusing the whole file for that would turn
- * a routine race into a block.
+ * The eligible report on ONE JSONL line, or null. Unparseable and blank
+ * lines yield null rather than aborting the scan: a transcript being
+ * written while it is read can end in a half-flushed line, and refusing
+ * the whole file for that would turn a routine race into a block.
  */
-export function findNewestReportInTranscript(
-  content: string,
-  sessionId: string,
-): ReportHit | null {
-  const lines = content.split("\n");
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = lines[i]!.trim();
-    if (line.length === 0) continue;
-    let entry: TranscriptEntryLite;
-    try {
-      entry = JSON.parse(line) as TranscriptEntryLite;
-    } catch {
-      continue;
-    }
-    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
-    if (entry.type !== "assistant") continue;
-    if (entry.isSidechain === true) continue;
-    if (entry.sessionId !== sessionId) continue;
-    const blocks = textBlocksOf(entry);
-    for (let b = blocks.length - 1; b >= 0; b -= 1) {
-      const markdown = reportInBlock(blocks[b]!);
-      if (markdown !== null) return { markdown, lineIndex: i };
+function reportHitInLine(line: string, lineIndex: number, sessionId: string): ReportHit | null {
+  const trimmed = line.trim();
+  if (trimmed.length === 0) return null;
+  let entry: TranscriptEntryLite;
+  try {
+    entry = JSON.parse(trimmed) as TranscriptEntryLite;
+  } catch {
+    return null;
+  }
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return null;
+  if (entry.type !== "assistant") return null;
+  if (entry.isSidechain === true) return null;
+  if (entry.sessionId !== sessionId) return null;
+  const blocks = textBlocksOf(entry);
+  for (let b = blocks.length - 1; b >= 0; b -= 1) {
+    const markdown = reportInBlock(blocks[b]!);
+    if (markdown !== null) {
+      return { markdown, lineIndex, entryId: entryIdFor(entry, markdown, lineIndex) };
     }
   }
   return null;
 }
 
 const DEFAULT_POLL_MS = 50;
+const NEWLINE = 0x0a;
+const CLOSING_BRACE = 0x7d;
+const EMPTY_ADOPTED: ReadonlySet<string> = new Set<string>();
+
+/**
+ * Incremental read state, carried across the polls of ONE scan. The JSONL
+ * is append-only, so a later line is a later turn and "newest" is simply
+ * "last complete hit seen".
+ */
+interface ScanState {
+  /** Bytes of the transcript already consumed. */
+  offset: number;
+  /** Bytes after the last newline: a line the writer has not finished yet. */
+  carry: Buffer;
+  /** Zero-based index of the next COMPLETE line to be consumed. */
+  lineIndex: number;
+  /** Newest non-adopted hit on a complete line, across all polls so far. */
+  best: ReportHit | null;
+  /** Hit on the (still incomplete) trailing line of THIS poll; see `scanCarry`. */
+  tentative: ReportHit | null;
+  /** At least one hit was skipped because the caller had already adopted it. */
+  adoptedSkipped: boolean;
+}
+
+function newScanState(): ScanState {
+  return {
+    offset: 0,
+    carry: Buffer.alloc(0),
+    lineIndex: 0,
+    best: null,
+    tentative: null,
+    adoptedSkipped: false,
+  };
+}
+
+/** A hit the caller may still take: skips (and records) an already-adopted one. */
+function eligible(
+  hit: ReportHit | null,
+  adopted: ReadonlySet<string>,
+  state: ScanState,
+): ReportHit | null {
+  if (hit === null) return null;
+  if (adopted.has(hit.entryId)) {
+    state.adoptedSkipped = true;
+    return null;
+  }
+  return hit;
+}
+
+/** Read `length` bytes from `offset`, tolerating a short `readSync`. */
+function readAt(fd: number, offset: number, length: number): Buffer {
+  const buf = Buffer.allocUnsafe(length);
+  let read = 0;
+  while (read < length) {
+    const n = fs.readSync(fd, buf, read, length - read, offset + read);
+    if (n <= 0) break;
+    read += n;
+  }
+  return read === length ? buf : buf.subarray(0, read);
+}
+
+/**
+ * The trailing, newline-less bytes as a PROVISIONAL hit for this poll
+ * only. A writer that has flushed a complete JSONL entry but not yet its
+ * newline is the one case the append-only reader would otherwise miss
+ * until the next flush, and the whole-file reader this replaced did see
+ * it. Only attempted when the carry ends in `}`, which both keeps the
+ * cost off every poll's partial line and guarantees the decoded bytes end
+ * on a character boundary.
+ */
+function scanCarry(state: ScanState, sessionId: string, adopted: ReadonlySet<string>): void {
+  const carry = state.carry;
+  if (carry.length === 0 || carry[carry.length - 1] !== CLOSING_BRACE) return;
+  state.tentative = eligible(
+    reportHitInLine(carry.toString("utf8"), state.lineIndex, sessionId),
+    adopted,
+    state,
+  );
+}
+
+type TranscriptPollOutcome = "ok" | "absent" | "unreadable";
+
+/**
+ * Consume everything appended to the transcript since the previous poll,
+ * updating `state` in place.
+ *
+ * ENOENT is "not there YET": under `-p` the hook can fire before the
+ * transcript file exists, and it may appear inside the bound. Every other
+ * failure, and anything at that path that is not a regular file, means
+ * something IS there and cannot be read as a transcript, which is a
+ * distinct, immediately-reported condition rather than something waiting
+ * will fix.
+ */
+function pollTranscript(
+  transcriptPath: string,
+  state: ScanState,
+  sessionId: string,
+  adopted: ReadonlySet<string>,
+): TranscriptPollOutcome {
+  // Provisional only for the poll that produced it: a file that vanished
+  // (or shrank) between polls must not leave a hit behind.
+  state.tentative = null;
+  let fd: number;
+  try {
+    fd = fs.openSync(transcriptPath, "r");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return "absent";
+    return "unreadable";
+  }
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) return "unreadable";
+    if (stat.size < state.offset) {
+      // The file shrank: truncated, or replaced by a shorter one. The
+      // bytes the offset pointed past are gone, so everything derived
+      // from them is stale, so start over from the top.
+      Object.assign(state, newScanState());
+    }
+    if (stat.size > state.offset) {
+      const chunk = readAt(fd, state.offset, stat.size - state.offset);
+      state.offset += chunk.length;
+      const data = state.carry.length > 0 ? Buffer.concat([state.carry, chunk]) : chunk;
+      let start = 0;
+      for (;;) {
+        const nl = data.indexOf(NEWLINE, start);
+        if (nl === -1) break;
+        const hit = eligible(
+          reportHitInLine(data.subarray(start, nl).toString("utf8"), state.lineIndex, sessionId),
+          adopted,
+          state,
+        );
+        if (hit !== null) state.best = hit;
+        state.lineIndex += 1;
+        start = nl + 1;
+      }
+      state.carry = start < data.length ? Buffer.from(data.subarray(start)) : Buffer.alloc(0);
+    }
+    scanCarry(state, sessionId, adopted);
+    return "ok";
+  } catch {
+    return "unreadable";
+  } finally {
+    fs.closeSync(fd);
+  }
+}
 
 function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    // Never keep a hook process alive on the poll timer alone.
-    timer.unref?.();
+    setTimeout(resolve, ms);
   });
 }
 
@@ -209,6 +396,15 @@ function defaultSleep(ms: number): Promise<void> {
  * Poll the payload's own transcript for this session's Understanding
  * Report until it appears or `maxWaitMs` elapses. See the module header
  * for the filters and why each one is there.
+ *
+ * The poll timer is deliberately NOT `unref`'d. A hook process whose
+ * stdin has been drained has no other ref'd handle, so an unref'd timer
+ * lets Node exit mid-poll: the process would end with an empty stdout,
+ * which Claude Code reads as ALLOW: a silent fail-open on precisely the
+ * delegation path this scan exists for. The loop is bounded twice over
+ * (`maxWaitMs`, itself capped by the config's 5 s ceiling, and the
+ * `maxPolls` count below), so it can never hold the process open beyond
+ * the bound.
  */
 export async function scanTranscriptForReport(
   args: TranscriptReportScanArgs,
@@ -217,32 +413,39 @@ export async function scanTranscriptForReport(
   const sleep = args.sleep ?? defaultSleep;
   const pollMs = args.pollMs !== undefined && args.pollMs > 0 ? args.pollMs : DEFAULT_POLL_MS;
   const maxWaitMs = Number.isFinite(args.maxWaitMs) && args.maxWaitMs > 0 ? args.maxWaitMs : 0;
+  const adopted = args.adopted ?? EMPTY_ADOPTED;
   const start = now();
   // Belt and braces against a clock that does not advance (an injected
   // one that forgets to, a suspended VM): the poll count is bounded on
   // its own, so this can never become an unbounded loop inside a hook.
   // Generous enough that it never pre-empts the real time bound.
   const maxPolls = Math.ceil(maxWaitMs / pollMs) + 2;
+  const state = newScanState();
 
   for (let poll = 0; ; poll += 1) {
-    const read = readTranscript(args.transcriptPath);
-    if (read.kind === "unreadable") {
+    const outcome = pollTranscript(args.transcriptPath, state, args.sessionId, adopted);
+    if (outcome === "unreadable") {
       return { found: false, reason: "unreadable", waitedMs: now() - start };
     }
-    if (read.kind === "ok") {
-      const hit = findNewestReportInTranscript(read.content, args.sessionId);
-      if (hit !== null) {
-        return {
-          found: true,
-          markdown: hit.markdown,
-          lineIndex: hit.lineIndex,
-          waitedMs: now() - start,
-        };
-      }
+    // The provisional trailing-line hit is newer than any complete one.
+    const hit = state.tentative ?? state.best;
+    if (hit !== null) {
+      return {
+        found: true,
+        markdown: hit.markdown,
+        lineIndex: hit.lineIndex,
+        entryId: hit.entryId,
+        waitedMs: now() - start,
+      };
     }
     const elapsed = now() - start;
     if (elapsed >= maxWaitMs || poll >= maxPolls) {
-      return { found: false, reason: "timeout", waitedMs: elapsed };
+      return {
+        found: false,
+        reason: "timeout",
+        ...(state.adoptedSkipped ? { adoptedOnly: true as const } : {}),
+        waitedMs: elapsed,
+      };
     }
     await sleep(pollMs);
   }
