@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_RETENTION_DAYS, gc } from "../../src/cli/gc/index.js";
+import { buildDelegationApprovedBy } from "../../src/policy-packs/builtin/understanding-before-execution/delegation-markers.js";
 
 const NOW = new Date("2026-06-10T12:00:00.000Z");
 const DAY_MS = 86_400_000;
@@ -12,6 +13,8 @@ let reportsDir: string;
 let parseErrorsDir: string;
 let generatedDir: string;
 let approvalsDir: string;
+let delegationsDir: string;
+let adoptionLedgerDir: string;
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-gc-"));
@@ -19,7 +22,9 @@ beforeEach(() => {
   parseErrorsDir = path.join(tmp, ".understanding-gate", "parse-errors");
   generatedDir = path.join(tmp, "harness.generated");
   approvalsDir = path.join(generatedDir, ".approvals");
-  for (const d of [reportsDir, parseErrorsDir, approvalsDir]) {
+  delegationsDir = path.join(generatedDir, ".delegations");
+  adoptionLedgerDir = path.join(generatedDir, ".delegation-adoptions");
+  for (const d of [reportsDir, parseErrorsDir, approvalsDir, delegationsDir, adoptionLedgerDir]) {
     fs.mkdirSync(d, { recursive: true });
   }
 });
@@ -48,6 +53,36 @@ function writeAged(dir: string, name: string, agedDays: number): string {
 
 function run(opts: Parameters<typeof gc>[0] = {}) {
   return gc({ reportsDir, generatedDir, now: NOW, ...opts });
+}
+
+/** A minimal, unsigned delegation marker: gc reads `approvedBy` only, never a signature. */
+function writeDelegation(sid: string, expiresAt: string): string {
+  const full = path.join(delegationsDir, sid);
+  const approvedBy = buildDelegationApprovedBy({
+    parentSessionId: "parent-sid",
+    cwdHash: null,
+    taskId: null,
+    expiresAt,
+  });
+  fs.writeFileSync(
+    full,
+    `${JSON.stringify({ markerId: `delegation-${sid}`, approvedAt: isoDaysAgo(1), approvedBy }, null, 2)}\n`,
+  );
+  return full;
+}
+
+function writeLedger(sid: string, entries: string[] = ["entry-1"]): string {
+  const full = path.join(adoptionLedgerDir, sid);
+  fs.writeFileSync(full, `${entries.join("\n")}\n`);
+  return full;
+}
+
+/** A ledger whose own mtime is aged to `agedDays` before NOW, independent of any delegation. */
+function writeAgedLedger(sid: string, agedDays: number, entries: string[] = ["entry-1"]): string {
+  const full = writeLedger(sid, entries);
+  const then = new Date(NOW.getTime() - agedDays * DAY_MS);
+  fs.utimesSync(full, then, then);
+  return full;
 }
 
 describe("gc — candidate selection", () => {
@@ -170,6 +205,186 @@ describe("gc — defaults", () => {
   });
 });
 
+describe("gc - delegations", () => {
+  it("ages out delegation markers expired past the grace window, keeps valid and recently-expired ones", () => {
+    // Expired well past the 30d default grace: a candidate.
+    const wayExpired = writeDelegation("way-expired-sid", isoDaysAgo(40));
+    // Expired, but only 1 day ago: still within grace, kept.
+    const recentlyExpired = writeDelegation("recently-expired-sid", isoDaysAgo(1));
+    // Not yet expired at all: kept.
+    const stillValid = writeDelegation(
+      "still-valid-sid",
+      new Date(NOW.getTime() + 5 * DAY_MS).toISOString(),
+    );
+
+    const r = run();
+    const byCategory = r.candidates.filter((c) => c.category === "delegation").map((c) => c.filePath);
+    expect(byCategory).toEqual([wayExpired]);
+    expect(r.applied).toBe(false);
+    for (const f of [wayExpired, recentlyExpired, stillValid]) {
+      expect(fs.existsSync(f)).toBe(true);
+    }
+  });
+
+  it("removes an adoption ledger only when its delegation is absent or expired past grace, keeps it while the delegation is still valid", () => {
+    writeDelegation("valid-sid", new Date(NOW.getTime() + 5 * DAY_MS).toISOString());
+    const validLedger = writeLedger("valid-sid");
+
+    writeDelegation("expired-sid", isoDaysAgo(40));
+    const expiredLedger = writeLedger("expired-sid");
+
+    // No delegation file at all for this session: orphaned, and old
+    // enough on its own to clear the retention window.
+    const orphanedLedger = writeAgedLedger("no-delegation-sid", 40);
+
+    const r = run({ apply: true });
+    expect(fs.existsSync(validLedger)).toBe(true);
+    expect(fs.existsSync(expiredLedger)).toBe(false);
+    expect(fs.existsSync(orphanedLedger)).toBe(false);
+    expect(r.removed).toEqual(
+      expect.arrayContaining([
+        path.join(delegationsDir, "expired-sid"),
+        expiredLedger,
+        orphanedLedger,
+      ]),
+    );
+  });
+
+  it("keeps a brand-new orphaned adoption ledger, removes one older than the cutoff (F1)", () => {
+    // No delegation marker at all for either session id: both are
+    // "orphaned" by marker-absence. The command's own description and
+    // listing header both promise "older than the retention window",
+    // so age must gate this branch too, not just marker absence.
+    const freshOrphan = writeAgedLedger("fresh-orphan-sid", 1);
+    const oldOrphan = writeAgedLedger("old-orphan-sid", 40);
+
+    const r = run();
+    const byCategory = r.candidates.filter((c) => c.category === "delegation").map((c) => c.filePath);
+    expect(byCategory).toEqual([oldOrphan]);
+    expect(byCategory).not.toContain(freshOrphan);
+    expect(fs.existsSync(freshOrphan)).toBe(true);
+    expect(fs.existsSync(oldOrphan)).toBe(true); // dry-run: nothing deleted yet
+
+    const applied = run({ apply: true });
+    expect(applied.removed).toEqual([oldOrphan]);
+    expect(fs.existsSync(freshOrphan)).toBe(true);
+    expect(fs.existsSync(oldOrphan)).toBe(false);
+  });
+
+  it("ignores non-session-id filesystem debris in both delegation dirs (F2)", () => {
+    fs.writeFileSync(path.join(delegationsDir, ".DS_Store"), "junk");
+    fs.writeFileSync(path.join(delegationsDir, "notes.txt"), "junk");
+    fs.writeFileSync(path.join(adoptionLedgerDir, ".DS_Store"), "junk");
+    fs.writeFileSync(path.join(adoptionLedgerDir, "notes.txt"), "junk");
+    // notes.txt is not session-id shaped (contains a dot), .DS_Store starts
+    // with a dot: neither matches SESSION_ID_BASENAME_RE.
+
+    const r = run({ apply: true });
+    const delegationResults = [
+      ...r.candidates.filter((c) => c.category === "delegation"),
+      ...r.unparseable,
+    ];
+    expect(delegationResults).toEqual([]);
+    expect(fs.existsSync(path.join(delegationsDir, ".DS_Store"))).toBe(true);
+    expect(fs.existsSync(path.join(delegationsDir, "notes.txt"))).toBe(true);
+    expect(fs.existsSync(path.join(adoptionLedgerDir, ".DS_Store"))).toBe(true);
+    expect(fs.existsSync(path.join(adoptionLedgerDir, "notes.txt"))).toBe(true);
+  });
+
+  it("counts kept delegations and ledgers into keptCount (F3)", () => {
+    // One expired marker (candidate), one valid marker (kept), one
+    // unparseable marker (kept). One ledger tied to the valid marker
+    // (kept), one fresh orphaned ledger (kept), one old orphaned ledger
+    // (candidate).
+    writeDelegation("expired-sid", isoDaysAgo(40));
+    writeDelegation("valid-sid", new Date(NOW.getTime() + 5 * DAY_MS).toISOString());
+    const badJson = path.join(delegationsDir, "bad-json-sid");
+    fs.writeFileSync(badJson, "not json at all\n");
+
+    writeLedger("valid-sid");
+    writeAgedLedger("fresh-orphan-sid", 1);
+    writeAgedLedger("old-orphan-sid", 40);
+
+    const r = run();
+    // kept: valid marker, unparseable marker, valid-sid's ledger, fresh
+    // orphan ledger = 4. Reports/parse-errors/approvals dirs are empty
+    // in this test's fixture, so gc's overall keptCount is exactly this.
+    expect(r.keptCount).toBe(4);
+  });
+
+  it("reports an unparseable delegation file without ever deleting it (or its ledger)", () => {
+    const badJson = path.join(delegationsDir, "bad-json-sid");
+    fs.writeFileSync(badJson, "not json at all\n");
+    const badSegments = path.join(delegationsDir, "bad-segments-sid");
+    fs.writeFileSync(
+      badSegments,
+      `${JSON.stringify({ markerId: "delegation-bad-segments-sid", approvedAt: isoDaysAgo(1), approvedBy: "garbage" }, null, 2)}\n`,
+    );
+    const ledgerForBad = writeLedger("bad-json-sid");
+
+    const r = run({ apply: true });
+    const unparseablePaths = r.unparseable.map((u) => u.filePath).sort();
+    expect(unparseablePaths).toEqual([badJson, badSegments].sort());
+    for (const u of r.unparseable) {
+      expect(u.category).toBe("delegation");
+    }
+    // Never deleted, dry-run or apply.
+    expect(fs.existsSync(badJson)).toBe(true);
+    expect(fs.existsSync(badSegments)).toBe(true);
+    // Its ledger sibling is kept too: gc cannot prove the delegation is dead.
+    expect(fs.existsSync(ledgerForBad)).toBe(true);
+    expect(r.candidates.some((c) => c.filePath === badJson || c.filePath === badSegments)).toBe(
+      false,
+    );
+  });
+
+  it("dry-run lists delegation candidates but deletes nothing", () => {
+    const expired = writeDelegation("expired-sid", isoDaysAgo(40));
+    const expiredLedger = writeLedger("expired-sid");
+
+    const r = run();
+    expect(r.applied).toBe(false);
+    expect(r.removed).toEqual([]);
+    expect(r.candidates.some((c) => c.filePath === expired)).toBe(true);
+    expect(r.candidates.some((c) => c.filePath === expiredLedger)).toBe(true);
+    expect(fs.existsSync(expired)).toBe(true);
+    expect(fs.existsSync(expiredLedger)).toBe(true);
+  });
+
+  it("a symlinked delegation marker is unparseable, never deleted (F4)", () => {
+    const target = path.join(tmp, "outside-target.json");
+    fs.writeFileSync(
+      target,
+      `${JSON.stringify({ markerId: "x", approvedAt: isoDaysAgo(1), approvedBy: "irrelevant" }, null, 2)}\n`,
+    );
+    const symlinkSid = "symlinked-sid";
+    const symlinkPath = path.join(delegationsDir, symlinkSid);
+    fs.symlinkSync(target, symlinkPath);
+
+    const r = run({ apply: true });
+    expect(r.unparseable.some((u) => u.filePath === symlinkPath)).toBe(true);
+    expect(r.candidates.some((c) => c.filePath === symlinkPath)).toBe(false);
+    expect(fs.existsSync(symlinkPath)).toBe(true);
+    expect(fs.existsSync(target)).toBe(true);
+  });
+
+  it("a symlinked orphaned adoption ledger is unlinked without touching its target (F4)", () => {
+    const target = path.join(tmp, "outside-ledger-target.txt");
+    fs.writeFileSync(target, "entry-1\n");
+    const then = new Date(NOW.getTime() - 40 * DAY_MS);
+    fs.utimesSync(target, then, then); // aged: statSync on the symlink follows to this mtime
+    const symlinkSid = "symlinked-orphan-sid";
+    const symlinkPath = path.join(adoptionLedgerDir, symlinkSid);
+    fs.symlinkSync(target, symlinkPath);
+    // No delegation marker for this session id: orphaned.
+
+    const r = run({ apply: true });
+    expect(r.removed).toContain(symlinkPath);
+    expect(fs.existsSync(symlinkPath)).toBe(false); // the symlink itself is gone
+    expect(fs.existsSync(target)).toBe(true); // the target file it pointed to survives
+  });
+});
+
 describe("gc — non-conventional reports dir", () => {
   it("skips the parse-errors sweep when reportsDir is not .understanding-gate/reports", () => {
     // A custom UNDERSTANDING_GATE_REPORT_DIR can point anywhere; the
@@ -226,5 +441,28 @@ describe("gc — CLI wiring", () => {
     expect(out).toMatch(/would remove 1 artifact/);
     expect(out).toMatch(/Dry-run; pass --apply to delete/);
     expect(fs.existsSync(old)).toBe(true);
+  });
+
+  it("surfaces the unparseable-delegation stderr block and lists both delegation dirs as swept (F4)", async () => {
+    const { buildProgram } = await import("../../src/cli/index.js");
+    fs.writeFileSync(path.join(delegationsDir, "bad-json-sid"), "not json at all\n");
+    let out = "";
+    let err = "";
+    const program = buildProgram({
+      stdout: (s: string) => {
+        out += s;
+      },
+      stderr: (s: string) => {
+        err += s;
+      },
+    });
+    fs.writeFileSync(path.join(tmp, "harness.yaml"), "version: 1\n");
+    await program.parseAsync(["gc", "--config", path.join(tmp, "harness.yaml")], {
+      from: "user",
+    });
+    expect(err).toMatch(/1 delegation file\(s\) could not be parsed and were left in place/);
+    expect(err).toMatch(/bad-json-sid/);
+    expect(out).toMatch(/\.delegations/);
+    expect(out).toMatch(/\.delegation-adoptions/);
   });
 });

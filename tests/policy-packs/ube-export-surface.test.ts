@@ -45,6 +45,11 @@ import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-ex
 // understanding-before-execution.ts directly from `auto-approve.ts`,
 // contradicting the precedent every other symbol at that call site already
 // followed. 59 -> 62.
+// Widened a sixth time (task 3ece079d): ADOPTION_LEDGER_DIRNAME, the
+// once-per-session adoption-ledger dirname `harness gc`'s new delegation
+// sweep reads, moved here from `hook-pre-tool-use.ts` (its only prior
+// writer) so a reader that never writes one does not need a cli-to-cli
+// import. 62 -> 63.
 //
 // Mutation-verified: temporarily re-adding `export { safeJsonParse } from
 // "./persisted-reports.js";` to
@@ -53,6 +58,7 @@ import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-ex
 // second); reverting turns them green again.
 const EXPECTED_EXPORTS = [
   "ACTIVE_CLAIM_FILENAME",
+  "ADOPTION_LEDGER_DIRNAME",
   "APPROVAL_MARKER_DIRNAME",
   "APPROVAL_MARKER_TASK_PREFIX",
   "APPROVED_LEDGER_TAG_PREFIX",
@@ -117,7 +123,7 @@ const EXPECTED_EXPORTS = [
 ] as const;
 
 describe("understanding-before-execution-runtime shim export surface", () => {
-  it("exports exactly the pinned 62-name surface, sorted", () => {
+  it("exports exactly the pinned 63-name surface, sorted", () => {
     const actual = Object.keys(ubeShim).sort();
     expect(actual).toEqual([...EXPECTED_EXPORTS].sort());
   });
