@@ -224,7 +224,7 @@ describe("resolveGitContext", () => {
     // "clean" absolute path, `path.resolve(gitDir, raw)` (the mutant
     // that always resolves, dropping the `isAbsolute` branch) produces
     // the identical normalized string as `raw` itself, so no test could
-    // ever distinguish the two branches that way — Node's `path.resolve`
+    // ever distinguish the two branches that way: Node's `path.resolve`
     // discards `gitDir` entirely once it hits an absolute argument and
     // just normalizes `raw`. The trailing slash survives untouched on
     // the `raw` branch but gets stripped by `path.resolve`'s
