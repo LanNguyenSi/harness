@@ -311,3 +311,12 @@
   manifest-validation-scope, understanding-gate-lockout-recovery,
   pause-vs-gate-kill-switch, codex-adapter-parity-gaps, debug-verb-selection.
 - 2026-07-09T02:50:15.112Z, bundle scaffolded by `okf-kit init`.
+
+## 2026-08-30 re-stamp after task 8f637efd review round 4
+
+- `understanding-gate-auto-mode-signals.md`: re-verified against
+  `permission-mode-observations.ts` after round 4 exported the display
+  sanitiser and applied it to `observedAt` as well; the doc's claims about
+  what the hook reads and writes are unchanged, so this is a timestamp-only
+  re-stamp. Verdict: `npx -y okf-kit@0.8.0 check docs/okf` shows no
+  sources-fresh finding on this doc afterwards.
