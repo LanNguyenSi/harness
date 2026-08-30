@@ -12,8 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **`git-context.ts`: resolve branch refs from the common dir in a linked worktree**
   (agent-tasks `498e86d3`). `resolveGitContext` read `<gitDir>/refs/heads/<branch>`
   and `<gitDir>/packed-refs` straight from the per-worktree gitdir it found via
-  `findGitEntry`, but a `git worktree add` checkout only stores `HEAD` there; the
-  branch refs live in the shared common dir (named by that gitdir's own
+  `findGitEntry`, but a `git worktree add` checkout's per-worktree gitdir does
+  not store `refs/heads/*` or `packed-refs` at all (its `refs/` tree is empty
+  apart from the per-worktree `refs/bisect` and `refs/worktree` namespaces);
+  the branch refs live in the shared common dir (named by that gitdir's own
   `commondir` file). Every gate that shells out to the solution-acceptance push
   or finish/merge check from a linked worktree with an attached branch therefore
   reported "cannot resolve the current git HEAD" (a detached HEAD, whose sha
@@ -23,7 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   main checkout since `resolveCommonDir` returns the gitdir unchanged when no
   `commondir` file exists. `resolveOriginHeadBase` (the default-branch resolver)
   already routed through `resolveCommonDir` at every call site; that path is
-  pinned with a new linked-worktree test rather than changed.
+  pinned with a new linked-worktree test rather than changed. Two other
+  consumers of the same unresolved branch/sha were equally broken in a linked
+  worktree and now work there too: the `head:<sha>` preflight token
+  (`src/cli/session-start/index.ts`) and the `at_head:true` requires-flag
+  (`src/runtime/intercept.ts`).
 
 ## [0.52.0] - 2026-08-28
 
