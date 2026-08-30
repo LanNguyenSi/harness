@@ -2,6 +2,46 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-08-30T09:42:00Z, re-stamp on commit-time recheck (task `8f637efd`,
+  review round 2, F8 final verification): after the round-2 fixes
+  commit, ran `npx okf-kit@0.8.0 check docs/okf` and computed
+  newly-stale docs by COMMIT time (not local mtime) against
+  `origin/master`. Two docs this branch had already re-stamped in round
+  1 came back STALE again, both from round-2 edits to a file their
+  `sources:` list names: `understanding-gate-auto-mode-signals.md`
+  (`permission-mode-observations.ts`, touched by F1's dedup extraction;
+  `src/cli/pack/hook-pre-tool-use.ts`, whose "last touched" commit moved
+  to the round-1/master merge commit even though this branch's own diff
+  against `origin/master` for that file is unchanged since round 1: a
+  merge-commit history-simplification artifact, not new content) and
+  `understanding-gate-lockout-recovery.md` (`src/cli/index.ts`, touched
+  by F5's `gc` command wiring, well after the line range the doc cites
+  from that file; same `hook-pre-tool-use.ts` merge-commit artifact).
+  Re-read both docs' claims against every round-2-touched source in
+  their list: neither doc's substantive claims (the observation
+  mechanism's read/write contract; the `approve` command's flag list)
+  describe code this task's changes actually altered, so both
+  `timestamp:` fields are bumped with no content edit. Two OTHER STALE
+  findings from the same run were checked and left as pre-existing,
+  unrelated citation drift, confirmed against the pre-task common
+  ancestor `a08efe0`: `understanding-gate-lockout-recovery.md`'s
+  `hook-pre-tool-use.ts:771#"writePendingApproval(...)"` anchor already
+  missed its target there, and `pause-vs-gate-kill-switch.md`'s
+  `src/cli/index.ts:3086-3185` / `:3088-3094` pause/gate-command ranges
+  already pointed at the unrelated `uninstall` command's description
+  there too (same drift the entry below already named). Several other
+  docs under this directory (codex-adapter-parity-gaps.md,
+  debug-verb-selection.md, gate-fail-posture-matrix.md,
+  policy-engine-producer-wiring.md, quote-model-divergence.md) also came
+  back STALE against files this branch touched (docs/CLI.md,
+  CHANGELOG.md, `src/cli/index.ts`, `src/cli/doctor/index.ts`,
+  `src/cli/init/composer.ts`, `src/cli/init/templates.ts`,
+  `docs/examples/full-manifest.yaml`, `docs/policy-packs/understanding-before-execution.md`);
+  these are out of this task's scope (none of their sources: lists are
+  this task's own primary subject, and re-reading all five in full is a
+  larger sweep than one task's fix-round budget covers) and are left
+  as-is, flagged here rather than folded into a vague "unrelated"
+  mention.
 - 2026-08-30T09:32:00Z, targeted correction (task `8f637efd`, review round
   2, F8): the 2026-08-30T08:46:21Z entry below said "several other docs
   under this directory already carried staleness against unrelated prior
