@@ -152,11 +152,9 @@ describe("pack hook pre-tool-use: permission-mode observation", () => {
       generatedDir,
       ledgerQuery: async (): Promise<LedgerEntry[]> => [],
     });
-    // The overall gate decision is unaffected by this fix (a malformed
-    // session id was already handled elsewhere in the hook's own
-    // decision order); this test's only concern is the observation
-    // write, which used to happen unconditionally and unvalidated.
-    expect(typeof result.blocked).toBe("boolean");
+    // Fail-open means the rejected observation write must not change the
+    // gate's verdict: with no approval marker the call is still blocked.
+    expect(result.blocked).toBe(true);
 
     // Mutation probe M1: if `permissionModeObservationPathFor` stops
     // calling `rejectMalformedSessionId`, this traversal id would be

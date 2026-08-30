@@ -330,6 +330,37 @@ describe("doctor: bypassPermissions without auto_approve (Environment section)",
     expect(text).toContain("bypassPermissions observed for session sess-");
   });
 
+  it("an observedAt carrying control characters/ANSI does not echo them raw into the rendered finding (review round 4)", async () => {
+    const home = makeFixture({ "harness.yaml": MANIFEST_NO_AUTO_APPROVE });
+    // V8's legacy date parser accepts parenthesised trailing text, so a
+    // crafted timestamp passes the observation's Date.parse validity check
+    // while still carrying raw escape bytes.
+    const hostileObservedAt = "Jan 1 2030 (\x1b[31mFORGED\x1b[0m\x07)";
+    writeObservation(
+      path.join(home, "harness.generated"),
+      "sess-observed-at",
+      "bypassPermissions",
+      hostileObservedAt,
+    );
+
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      versionProbe: () => null,
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+      envOverride: {},
+    });
+
+    expect(report.ugBypassWithoutAutoApprove).toBeDefined();
+    expect(report.ugBypassWithoutAutoApprove?.observedAt).not.toContain("\x1b");
+    expect(report.ugBypassWithoutAutoApprove?.message).not.toContain("\x1b[31m");
+    const text = format(report);
+    expect(text).not.toContain("\x1b[31m");
+    expect(text).not.toContain("\x07");
+    expect(text).toContain("bypassPermissions observed for session sess-observed-at");
+  });
+
   it("negative control: does not fire when no observation exists at all", async () => {
     const home = makeFixture({ "harness.yaml": MANIFEST_NO_AUTO_APPROVE });
 

@@ -127,11 +127,12 @@ export {
 // permission-mode-observations.ts's module header.
 export {
   PERMISSION_MODE_OBSERVATION_DIRNAME,
-  type PermissionModeObservation,
+  listPermissionModeObservations,
   permissionModeObservationPathFor,
   recordPermissionModeObservation,
+  sanitizeForDisplay,
+  type PermissionModeObservation,
   type PermissionModeObservationsResult,
-  listPermissionModeObservations,
 } from "./permission-mode-observations.js";
 
 export {

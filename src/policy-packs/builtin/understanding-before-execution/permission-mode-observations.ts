@@ -120,7 +120,7 @@ export function recordPermissionModeObservation(
     );
   } catch (err) {
     stderr.write(
-      `harness pack hook: failed to write permission-mode observation for session ${sessionId} (${
+      `harness pack hook: failed to write permission-mode observation for session ${sanitizeForDisplay(sessionId)} (${
         (err as Error).message
       }), continuing.\n`,
     );
@@ -165,7 +165,7 @@ const DISPLAY_VALUE_MAX_LENGTH = 200;
  * but `/` and NUL, and the JSON body's `sessionId` field is a plain
  * string with no such constraint either.
  */
-function sanitizeForDisplay(value: string): string {
+export function sanitizeForDisplay(value: string): string {
   const flattened = value.replace(/[\x00-\x1f\x7f]/g, " ");
   return flattened.length > DISPLAY_VALUE_MAX_LENGTH
     ? `${flattened.slice(0, DISPLAY_VALUE_MAX_LENGTH)}...`
@@ -191,7 +191,16 @@ export function listPermissionModeObservations(
   const { dirPresent, entries: readable, unreadableCount } =
     readJsonDirEntriesRejectingSymlinks<PermissionModeObservation>(dir, {
       parse: (raw) =>
-        isValidObservation(raw) ? { ...raw, sessionId: sanitizeForDisplay(raw.sessionId) } : null,
+        isValidObservation(raw)
+          ? {
+              ...raw,
+              sessionId: sanitizeForDisplay(raw.sessionId),
+              // `observedAt` only has to satisfy Date.parse, which accepts
+              // parenthesised trailing text, so it is display-sanitised too
+              // (review round 3: a crafted timestamp reached doctor output raw).
+              observedAt: sanitizeForDisplay(raw.observedAt),
+            }
+          : null,
     });
 
   readable.sort((a, b) => Date.parse(b.observedAt) - Date.parse(a.observedAt));

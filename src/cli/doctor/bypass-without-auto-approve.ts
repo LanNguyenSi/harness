@@ -43,6 +43,7 @@ import {
   parseAutoApprove,
   permissionModeAllowed,
   renderAutoApproveSnippet,
+  sanitizeForDisplay,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import type { Manifest } from "../../schema/index.js";
 import { findEnabledUnderstandingPack } from "./understanding-mode-env.js";
@@ -105,10 +106,14 @@ export function checkBypassWithoutAutoApprove(
     harnessAllowed(autoApprove, CLAUDE_CODE_HARNESS);
   if (covered) return undefined;
 
+  // Sanitise at the render boundary as well, not only in the reader
+  // (mirrors persisted-reports.ts): both fields are payload-controlled.
+  const sessionId = sanitizeForDisplay(bypassObserved.sessionId);
+  const observedAt = sanitizeForDisplay(bypassObserved.observedAt);
   return {
-    sessionId: bypassObserved.sessionId,
-    observedAt: bypassObserved.observedAt,
-    message: `bypassPermissions observed for session ${bypassObserved.sessionId} (${bypassObserved.observedAt}) but auto_approve does not cover it; every gated call in that session needed a manual approval`,
+    sessionId,
+    observedAt,
+    message: `bypassPermissions observed for session ${sessionId} (${observedAt}) but auto_approve does not cover it; every gated call in that session needed a manual approval`,
     detail: [
       "run `harness pack upgrade understanding-before-execution` to insert the block below, or add it by hand under policy_packs[understanding-before-execution].config:",
       ...renderAutoApproveSnippet(0).split("\n"),

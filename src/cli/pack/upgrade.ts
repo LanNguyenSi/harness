@@ -195,6 +195,9 @@ export function applyAutoApproveUpgrade(original: string): ApplyAutoApproveUpgra
     // `auto_approve` key and `parseYaml` below would throw "Map keys
     // must be unique" uncaught (exit 70, a raw YAML message) instead of
     // recognizing the upgrade as already applied.
+    // Known limit: a line starting with `auto_approve:` inside a block scalar
+    // under another key would also count as present; the verb then no-ops
+    // (fail-safe, never a corrupted manifest) rather than inserting twice.
     if (trimmed.startsWith("auto_approve:")) autoApprovePresent = true;
   }
 

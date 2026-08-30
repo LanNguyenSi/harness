@@ -136,6 +136,7 @@ const EXPECTED_EXPORTS = [
   "readActiveClaim",
   "recordPermissionModeObservation",
   "renderAutoApproveSnippet",
+  "sanitizeForDisplay",
   "reportsDirForManifest",
   "selectNewestStrictSessionReport",
   "selectReportForSession",
@@ -149,9 +150,9 @@ const EXPECTED_EXPORTS = [
 ] as const;
 
 describe("understanding-before-execution-runtime shim export surface", () => {
-  it("exports exactly the pinned 69-name surface, sorted", () => {
+  it("exports exactly the pinned 70-name surface, sorted", () => {
     const actual = Object.keys(ubeShim).sort();
-    expect(EXPECTED_EXPORTS).toHaveLength(69);
+    expect(EXPECTED_EXPORTS).toHaveLength(70);
     expect(actual).toEqual([...EXPECTED_EXPORTS].sort());
   });
 

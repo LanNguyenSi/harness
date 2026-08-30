@@ -166,7 +166,9 @@ import * as path from "node:path";
 // base would mean touching `cli/add/index.ts`, `cli/pack/remove.ts`,
 // `cli/pack/add.ts`, and `cli/pack/reseed.ts`, out of this task's scope
 // (same rationale as every raise above).
-const MAX_CLONES = 113;
+// Review round 3 of task 8f637efd then closed one more pair (the observation
+// reader's sanitisation split), measured 112, so the pin follows.
+const MAX_CLONES = 112;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).
