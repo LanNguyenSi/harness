@@ -2,6 +2,12 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-08-30T08:54:18Z, re-stamped `understanding-gate-lockout-recovery.md`
+  after the same round-1-fix edit to `understanding-before-execution.md`'s
+  Cleanup paragraph (this doc lists it as a source): re-read its own
+  claims about the adoption ledger's role in re-arming a lockout, which
+  do not touch the gc sweep's age-gating wording; no content change
+  needed.
 - 2026-08-30T08:50:54Z, review round 1 fix on task `3ece079d`: the
   orphaned-adoption-ledger branch in `sweepDelegations` (no delegation
   marker at all for a session) now also requires the ledger file's own
