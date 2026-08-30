@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`harness gc` sweeps expired delegation markers and their orphaned adoption ledgers** (task `3ece079d`, follow-up from UG auto-mode slice 3, agent-tasks `37ad0b05`). `harness gc` grew a new `delegation` category alongside `report` / `parse-error` / `approval-marker`: a `harness.generated/.delegations/<sid>` marker is a candidate once its own signed `expires` binding (read via `parseDelegationApprovedBy`, no signature check needed for a retention decision) is older than the same retention window every other category uses, and its `harness.generated/.delegation-adoptions/<sid>` once-per-session adoption ledger is a candidate once that session's delegation is gone or expired; a marker gc cannot parse is reported in `GcResult.unparseable` and never deleted, dry-run or `--apply`, and its ledger sibling is kept alongside it. `ADOPTION_LEDGER_DIRNAME` moved from `hook-pre-tool-use.ts` (its only prior writer) to `delegation-markers.ts`, next to `DELEGATION_MARKER_DIRNAME`, so the new sweep reads it without a cli-to-cli import; re-exported through the same `understanding-before-execution` shim every other delegation symbol already travels through. Docs: `docs/CLI.md`'s `gc` row and a new "Cleanup" paragraph in `docs/policy-packs/understanding-before-execution.md`'s delegation section.
+
 ## [0.52.0] - 2026-08-28
 
 ### Added

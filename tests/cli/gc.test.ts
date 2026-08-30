@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_RETENTION_DAYS, gc } from "../../src/cli/gc/index.js";
+import { buildDelegationApprovedBy } from "../../src/policy-packs/builtin/understanding-before-execution/delegation-markers.js";
 
 const NOW = new Date("2026-06-10T12:00:00.000Z");
 const DAY_MS = 86_400_000;
@@ -12,6 +13,8 @@ let reportsDir: string;
 let parseErrorsDir: string;
 let generatedDir: string;
 let approvalsDir: string;
+let delegationsDir: string;
+let adoptionLedgerDir: string;
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-gc-"));
@@ -19,7 +22,9 @@ beforeEach(() => {
   parseErrorsDir = path.join(tmp, ".understanding-gate", "parse-errors");
   generatedDir = path.join(tmp, "harness.generated");
   approvalsDir = path.join(generatedDir, ".approvals");
-  for (const d of [reportsDir, parseErrorsDir, approvalsDir]) {
+  delegationsDir = path.join(generatedDir, ".delegations");
+  adoptionLedgerDir = path.join(generatedDir, ".delegation-adoptions");
+  for (const d of [reportsDir, parseErrorsDir, approvalsDir, delegationsDir, adoptionLedgerDir]) {
     fs.mkdirSync(d, { recursive: true });
   }
 });
@@ -48,6 +53,28 @@ function writeAged(dir: string, name: string, agedDays: number): string {
 
 function run(opts: Parameters<typeof gc>[0] = {}) {
   return gc({ reportsDir, generatedDir, now: NOW, ...opts });
+}
+
+/** A minimal, unsigned delegation marker: gc reads `approvedBy` only, never a signature. */
+function writeDelegation(sid: string, expiresAt: string): string {
+  const full = path.join(delegationsDir, sid);
+  const approvedBy = buildDelegationApprovedBy({
+    parentSessionId: "parent-sid",
+    cwdHash: null,
+    taskId: null,
+    expiresAt,
+  });
+  fs.writeFileSync(
+    full,
+    `${JSON.stringify({ markerId: `delegation-${sid}`, approvedAt: isoDaysAgo(1), approvedBy }, null, 2)}\n`,
+  );
+  return full;
+}
+
+function writeLedger(sid: string, entries: string[] = ["entry-1"]): string {
+  const full = path.join(adoptionLedgerDir, sid);
+  fs.writeFileSync(full, `${entries.join("\n")}\n`);
+  return full;
 }
 
 describe("gc — candidate selection", () => {
@@ -167,6 +194,90 @@ describe("gc — defaults", () => {
     expect(DEFAULT_RETENTION_DAYS).toBe(30);
     const r = run();
     expect(r.retentionDays).toBe(30);
+  });
+});
+
+describe("gc — delegations", () => {
+  it("ages out delegation markers expired past the grace window, keeps valid and recently-expired ones", () => {
+    // Expired well past the 30d default grace: a candidate.
+    const wayExpired = writeDelegation("way-expired-sid", isoDaysAgo(40));
+    // Expired, but only 1 day ago: still within grace, kept.
+    const recentlyExpired = writeDelegation("recently-expired-sid", isoDaysAgo(1));
+    // Not yet expired at all: kept.
+    const stillValid = writeDelegation(
+      "still-valid-sid",
+      new Date(NOW.getTime() + 5 * DAY_MS).toISOString(),
+    );
+
+    const r = run();
+    const byCategory = r.candidates.filter((c) => c.category === "delegation").map((c) => c.filePath);
+    expect(byCategory).toEqual([wayExpired]);
+    expect(r.applied).toBe(false);
+    for (const f of [wayExpired, recentlyExpired, stillValid]) {
+      expect(fs.existsSync(f)).toBe(true);
+    }
+  });
+
+  it("removes an adoption ledger only when its delegation is absent or expired past grace, keeps it while the delegation is still valid", () => {
+    writeDelegation("valid-sid", new Date(NOW.getTime() + 5 * DAY_MS).toISOString());
+    const validLedger = writeLedger("valid-sid");
+
+    writeDelegation("expired-sid", isoDaysAgo(40));
+    const expiredLedger = writeLedger("expired-sid");
+
+    // No delegation file at all for this session: orphaned.
+    const orphanedLedger = writeLedger("no-delegation-sid");
+
+    const r = run({ apply: true });
+    expect(fs.existsSync(validLedger)).toBe(true);
+    expect(fs.existsSync(expiredLedger)).toBe(false);
+    expect(fs.existsSync(orphanedLedger)).toBe(false);
+    expect(r.removed).toEqual(
+      expect.arrayContaining([
+        path.join(delegationsDir, "expired-sid"),
+        expiredLedger,
+        orphanedLedger,
+      ]),
+    );
+  });
+
+  it("reports an unparseable delegation file without ever deleting it (or its ledger)", () => {
+    const badJson = path.join(delegationsDir, "bad-json-sid");
+    fs.writeFileSync(badJson, "not json at all\n");
+    const badSegments = path.join(delegationsDir, "bad-segments-sid");
+    fs.writeFileSync(
+      badSegments,
+      `${JSON.stringify({ markerId: "delegation-bad-segments-sid", approvedAt: isoDaysAgo(1), approvedBy: "garbage" }, null, 2)}\n`,
+    );
+    const ledgerForBad = writeLedger("bad-json-sid");
+
+    const r = run({ apply: true });
+    const unparseablePaths = r.unparseable.map((u) => u.filePath).sort();
+    expect(unparseablePaths).toEqual([badJson, badSegments].sort());
+    for (const u of r.unparseable) {
+      expect(u.category).toBe("delegation");
+    }
+    // Never deleted, dry-run or apply.
+    expect(fs.existsSync(badJson)).toBe(true);
+    expect(fs.existsSync(badSegments)).toBe(true);
+    // Its ledger sibling is kept too: gc cannot prove the delegation is dead.
+    expect(fs.existsSync(ledgerForBad)).toBe(true);
+    expect(r.candidates.some((c) => c.filePath === badJson || c.filePath === badSegments)).toBe(
+      false,
+    );
+  });
+
+  it("dry-run lists delegation candidates but deletes nothing", () => {
+    const expired = writeDelegation("expired-sid", isoDaysAgo(40));
+    const expiredLedger = writeLedger("expired-sid");
+
+    const r = run();
+    expect(r.applied).toBe(false);
+    expect(r.removed).toEqual([]);
+    expect(r.candidates.some((c) => c.filePath === expired)).toBe(true);
+    expect(r.candidates.some((c) => c.filePath === expiredLedger)).toBe(true);
+    expect(fs.existsSync(expired)).toBe(true);
+    expect(fs.existsSync(expiredLedger)).toBe(true);
   });
 });
 

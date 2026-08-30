@@ -14,16 +14,42 @@
 //       <reportsDir>            terminal-status reports (approved / expired)
 //       <reportsDir>/../parse-errors   parse-error logs
 //       <generatedDir>/.approvals      session / task / branch-protection markers
+//       <generatedDir>/.delegations       signed delegation markers (slice 3)
+//       <generatedDir>/.delegation-adoptions   once-per-session adoption ledgers
 //     The evidence ledger (grounding-mcp) and solution-acceptance
 //     verdict dirs (producer-owned) are out of scope by design.
 //   - Deletion failures are surfaced loudly per file, never swallowed.
+//
+// DELEGATIONS SWEEP (task 3ece079d, follow-up from UG auto-mode slice 3,
+// agent-tasks 37ad0b05): a delegation marker is refused once expired
+// (`verifyDelegation`'s "expired" reason), but nothing ever removed the
+// FILE, so `.delegations/` grows the same way `.approvals/` used to. The
+// adoption ledger at `.delegation-adoptions/<sid>` is worse: it is
+// appended to once per captured transcript entry and never cleared at
+// all, delegation expiry or not. Both sweep under one `"delegation"`
+// category, on the SAME retention/grace window as everything else in this
+// file (`retentionDays` / `cutoffMs`): a delegation marker is a candidate
+// once its own `expires` segment (read via `parseDelegationApprovedBy`,
+// no signature check needed for a retention decision) is older than
+// `cutoffMs`, and its ledger sibling is a candidate once the marker for
+// that session id is gone or itself a candidate. A marker whose content
+// cannot be parsed is never a deletion candidate (fail closed, same as a
+// pending report): it is surfaced separately in `GcResult.unparseable` so
+// an operator can see it, but `--apply` never touches it, and its ledger
+// sibling (if any) stays too, since "this delegation is dead" cannot be
+// established for one gc cannot read.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { readRegularFileRejectingSymlink } from "../../io/read-regular-file.js";
+import { safeJsonParse } from "../../io/safe-json-parse.js";
 import {
+  ADOPTION_LEDGER_DIRNAME,
   APPROVAL_MARKER_DIRNAME,
+  DELEGATION_MARKER_DIRNAME,
   defaultReportsDir,
   listPersistedReports,
+  parseDelegationApprovedBy,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
 import { resolvePaths, type LoaderOptions } from "../loader.js";
@@ -47,12 +73,19 @@ export interface GcOptions extends LoaderOptions {
   now?: Date;
 }
 
-export type GcCategory = "report" | "parse-error" | "approval-marker";
+export type GcCategory = "report" | "parse-error" | "approval-marker" | "delegation";
 
 export interface GcCandidate {
   filePath: string;
   category: GcCategory;
   /** Why this file aged out (status + age), for the listing UI. */
+  reason: string;
+}
+
+/** A delegation-sweep file gc could not parse: reported, never a deletion candidate. */
+export interface GcUnparseable {
+  filePath: string;
+  category: GcCategory;
   reason: string;
 }
 
@@ -69,12 +102,16 @@ export interface GcResult {
    */
   parseErrorsDir: string | null;
   approvalsDir: string;
+  delegationsDir: string;
+  adoptionLedgerDir: string;
   candidates: GcCandidate[];
+  /** Delegation-sweep files inspected but left in place because they could not be parsed. */
+  unparseable: GcUnparseable[];
   /** Files actually deleted (apply mode only). */
   removed: string[];
   /** Per-file deletion failures (apply mode only); never silent. */
   failures: Array<{ filePath: string; reason: string }>;
-  /** Count of artifacts inspected but kept (fresh or non-terminal). */
+  /** Count of artifacts inspected but kept (fresh, non-terminal, or unparseable). */
   keptCount: number;
   applied: boolean;
 }
@@ -123,6 +160,153 @@ function staleFilesByMtime(
   return { candidates, kept };
 }
 
+/**
+ * A delegation filename is always a session id (mirrors
+ * `doctor/ug-delegations.ts`'s own filter and rationale): filtering on
+ * this shape before reading keeps filesystem debris that happens to sit
+ * next to `.delegations/` or `.delegation-adoptions/` (macOS's
+ * `.DS_Store`, a stray dotfile) from ever becoming an "unparseable"
+ * candidate gc reports on. Not shared code with that module (see its own
+ * header for why); `check:duplication` is the backstop if that stops
+ * being a coincidence.
+ */
+const SESSION_ID_BASENAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+type DelegationFileStatus =
+  | { kind: "expired"; reason: string }
+  | { kind: "valid" }
+  | { kind: "unparseable"; reason: string };
+
+/**
+ * Read a `.delegations/<sid>` marker and classify it against `cutoffMs`,
+ * WITHOUT verifying its signature: gc is deciding whether to delete a
+ * file, not whether to trust it as an approval, and `parseDelegationApprovedBy`
+ * is the same reader `harness doctor`'s delegations metric uses read-only.
+ * Any failure to read the file, parse it as JSON, or parse its
+ * `approvedBy`/`expires` segment is `unparseable`, never `expired`: a
+ * marker gc cannot understand is never deleted (mutation probe M2).
+ */
+function readDelegationStatus(filePath: string, cutoffMs: number, nowMs: number): DelegationFileStatus {
+  const read = readRegularFileRejectingSymlink(filePath);
+  if (read.kind !== "ok") {
+    return { kind: "unparseable", reason: `could not read ${filePath} (${read.kind})` };
+  }
+  const parsed = safeJsonParse(read.content);
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { kind: "unparseable", reason: "not a JSON object" };
+  }
+  const segments = parseDelegationApprovedBy((parsed as Record<string, unknown>)["approvedBy"]);
+  if (!segments.ok) {
+    return { kind: "unparseable", reason: segments.reason };
+  }
+  const expiresMs = Date.parse(segments.value.expiresAt);
+  if (!Number.isFinite(expiresMs)) {
+    return {
+      kind: "unparseable",
+      reason: `expires segment is not a valid instant: ${JSON.stringify(segments.value.expiresAt)}`,
+    };
+  }
+  // The expiry comparison itself: mutation probe M1 skips this and treats
+  // every parseable marker as expired, which flips a "valid delegation is
+  // kept" test red.
+  if (expiresMs < cutoffMs) {
+    return {
+      kind: "expired",
+      reason: `expired ${ageDays(nowMs, expiresMs)}d ago (past the ${ageDays(nowMs, cutoffMs)}d grace)`,
+    };
+  }
+  return { kind: "valid" };
+}
+
+/**
+ * Sweep `.delegations/` (expired markers) and `.delegation-adoptions/`
+ * (ledgers orphaned once their marker is gone or expired). One shared
+ * category (`"delegation"`), mirroring the approval-marker sweep's
+ * dry-run/candidate/kept shape but keyed off the marker's OWN `expires`
+ * segment instead of file mtime, since a delegation's age on disk and its
+ * validity window are two different things.
+ */
+function sweepDelegations(
+  generatedDir: string,
+  cutoffMs: number,
+  nowMs: number,
+): { candidates: GcCandidate[]; unparseable: GcUnparseable[]; kept: number } {
+  const delegationsDir = path.join(generatedDir, DELEGATION_MARKER_DIRNAME);
+  const ledgerDir = path.join(generatedDir, ADOPTION_LEDGER_DIRNAME);
+
+  const candidates: GcCandidate[] = [];
+  const unparseable: GcUnparseable[] = [];
+  let kept = 0;
+
+  // Session id -> status, for every delegation marker actually present
+  // and session-id-shaped, so the ledger pass below can tell "expired"
+  // from "absent" from "still valid" without re-reading the file.
+  const statusBySessionId = new Map<string, DelegationFileStatus>();
+
+  let delegationNames: string[];
+  try {
+    delegationNames = fs.readdirSync(delegationsDir);
+  } catch {
+    delegationNames = [];
+  }
+  for (const name of delegationNames) {
+    if (!SESSION_ID_BASENAME_RE.test(name)) continue;
+    const full = path.join(delegationsDir, name);
+    const status = readDelegationStatus(full, cutoffMs, nowMs);
+    statusBySessionId.set(name, status);
+    if (status.kind === "expired") {
+      candidates.push({ filePath: full, category: "delegation", reason: status.reason });
+    } else if (status.kind === "unparseable") {
+      unparseable.push({ filePath: full, category: "delegation", reason: status.reason });
+      kept += 1;
+    } else {
+      kept += 1;
+    }
+  }
+
+  let ledgerNames: string[];
+  try {
+    ledgerNames = fs.readdirSync(ledgerDir);
+  } catch {
+    ledgerNames = [];
+  }
+  for (const name of ledgerNames) {
+    if (!SESSION_ID_BASENAME_RE.test(name)) continue;
+    const full = path.join(ledgerDir, name);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(full);
+    } catch {
+      continue;
+    }
+    if (!stat.isFile()) {
+      kept += 1;
+      continue;
+    }
+    const status = statusBySessionId.get(name);
+    if (status === undefined) {
+      candidates.push({
+        filePath: full,
+        category: "delegation",
+        reason: "orphaned adoption ledger (no delegation marker for this session)",
+      });
+    } else if (status.kind === "expired") {
+      candidates.push({
+        filePath: full,
+        category: "delegation",
+        reason: `orphaned adoption ledger (delegation ${status.reason})`,
+      });
+    } else {
+      // Marker still valid, or unparseable (gc cannot prove it is dead):
+      // keep the ledger either way, same fail-closed posture as the
+      // marker itself.
+      kept += 1;
+    }
+  }
+
+  return { candidates, unparseable, kept };
+}
+
 export function gc(opts: GcOptions = {}): GcResult {
   const retentionDays = opts.retentionDays ?? DEFAULT_RETENTION_DAYS;
   if (!Number.isFinite(retentionDays) || retentionDays < 1) {
@@ -153,8 +337,11 @@ export function gc(opts: GcOptions = {}): GcResult {
       manifestPath: manifestBase(),
     });
   const approvalsDir = path.join(generatedDir, APPROVAL_MARKER_DIRNAME);
+  const delegationsDir = path.join(generatedDir, DELEGATION_MARKER_DIRNAME);
+  const adoptionLedgerDir = path.join(generatedDir, ADOPTION_LEDGER_DIRNAME);
 
   const candidates: GcCandidate[] = [];
+  const unparseable: GcUnparseable[] = [];
   let keptCount = 0;
 
   // Reports: only terminal statuses age out. A pending report is never
@@ -185,6 +372,11 @@ export function gc(opts: GcOptions = {}): GcResult {
   candidates.push(...markers.candidates);
   keptCount += markers.kept;
 
+  const delegations = sweepDelegations(generatedDir, cutoffMs, nowMs);
+  candidates.push(...delegations.candidates);
+  unparseable.push(...delegations.unparseable);
+  keptCount += delegations.kept;
+
   const removed: string[] = [];
   const failures: Array<{ filePath: string; reason: string }> = [];
   if (opts.apply === true) {
@@ -204,7 +396,10 @@ export function gc(opts: GcOptions = {}): GcResult {
     reportsDir,
     parseErrorsDir,
     approvalsDir,
+    delegationsDir,
+    adoptionLedgerDir,
     candidates,
+    unparseable,
     removed,
     failures,
     keptCount,

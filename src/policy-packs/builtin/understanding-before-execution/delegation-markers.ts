@@ -63,6 +63,21 @@ import { rejectMalformedSessionId } from "../../../runtime/reject-malformed-sess
 /** Directory holding delegation markers, a sibling of `.approvals/` under `generatedDir`. */
 export const DELEGATION_MARKER_DIRNAME = ".delegations";
 
+/**
+ * Directory holding the per-child ADOPTED-ENTRY ledgers (once-per-session
+ * transcript-capture bookkeeping written by the PreToolUse hook,
+ * `hook-pre-tool-use.ts`), a SIBLING of `.delegations/` itself rather than
+ * a subdirectory of it: `<generatedDir>/.delegation-adoptions/<sid>`.
+ *
+ * Defined here (not in `hook-pre-tool-use.ts`, the only writer) so that a
+ * reader that never writes a ledger, such as `harness gc`'s delegation
+ * sweep, can name the directory without importing a `cli/` module: this
+ * file already owns `DELEGATION_MARKER_DIRNAME`, the sibling constant an
+ * adoption-ledger reader also needs, and both dirnames traveling together
+ * keeps `.delegations/` and its ledger sibling from drifting apart.
+ */
+export const ADOPTION_LEDGER_DIRNAME = ".delegation-adoptions";
+
 /** Prefix of the signed markerId, mirroring `task-<id>` for task markers. */
 const DELEGATION_MARKER_ID_PREFIX = "delegation-";
 
