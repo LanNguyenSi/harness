@@ -2,6 +2,54 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-08-30T10:20:00Z, re-stamp on commit-time recheck (task `8f637efd`,
+  review round 3, findings F1-F5): after the round-3 fixes commit
+  (`bbf6f7f`), ran `npx okf-kit@0.8.0 check docs/okf` and computed
+  newly-stale docs against the round-2 re-stamp baseline (the state this
+  branch merged from `origin/master`). Four docs came back STALE, each
+  because a source this task's commit touched appears in that doc's
+  `sources:` list: `evidence-ledger-trust-boundary.md`
+  (`docs/policy-packs/understanding-before-execution.md`, `CHANGELOG.md`),
+  `pause-vs-gate-kill-switch.md` (`src/cli/index.ts`, `CHANGELOG.md`),
+  `understanding-gate-auto-mode-signals.md`
+  (`permission-mode-observations.ts`,
+  `docs/policy-packs/understanding-before-execution.md`), and
+  `understanding-gate-lockout-recovery.md` (`src/cli/index.ts`,
+  `docs/policy-packs/understanding-before-execution.md`). Checked each
+  doc's actual claims against what round 3 changed: the `src/cli/index.ts`
+  edit (F5) is a single in-place string edit inside the `pack upgrade`
+  `--description` help text at line 1224-1227 (no line added or removed),
+  nowhere near either doc's cited ranges (`1584-1599`, `2726-2731`,
+  `3086-3185`, `3088-3094`); the `permission-mode-observations.ts` edits
+  (F1: `rejectMalformedSessionId` on write, `sanitizeForDisplay` on read;
+  F2: corrected module-header trust framing) changed HOW the sessionId is
+  validated/sanitized, not WHAT is written or that it is consumed only by
+  `harness doctor`'s advisory finding, which is the only claim
+  `understanding-gate-auto-mode-signals.md` makes about this file; and the
+  `docs/policy-packs/understanding-before-execution.md` edits (F5's
+  heading-only task-id drop, F2's "hook-written, not agent-writable" ->
+  unsigned/advisory wording correction) touch no claim any of the four
+  docs actually restates or contradicts (`evidence-ledger-trust-boundary.md`
+  and `understanding-gate-lockout-recovery.md` list the doc only as a
+  background source, with no line citation into it; neither of the other
+  two make a signed/unsigned claim about the permission-mode observation
+  either way). No doc's substantive claims describe content round 3
+  altered, so all four `timestamp:` fields are bumped with no content
+  edit. The pre-existing citation-resolve drift on
+  `understanding-gate-lockout-recovery.md` (`hook-pre-tool-use.ts:771`
+  anchor, `hook-codex-pre-tool-use.ts:358` closing-brace start line) and
+  on `pause-vs-gate-kill-switch.md` (`docs/for-humans.md:394-395` blank
+  start line) is unrelated to this task's changes and left as-is, same as
+  the round-2 entry below already found for the same two docs. The
+  remaining STALE findings from this run (`codex-adapter-parity-gaps.md`,
+  `debug-verb-selection.md`, `gate-fail-posture-matrix.md`,
+  `manifest-validation-scope.md`, `policy-engine-producer-wiring.md`,
+  `quote-model-divergence.md`) are the identical pre-existing set the
+  round-2 entry below already accepted (confirmed by running the same
+  check against the pre-round-3 commit `d64eed6`, which shows the same
+  six docs and no others), and are left out of scope here per the
+  orchestrator's F6 acceptance for this task.
+
 - 2026-08-30T09:42:00Z, re-stamp on commit-time recheck (task `8f637efd`,
   review round 2, F8 final verification): after the round-2 fixes
   commit, ran `npx okf-kit@0.8.0 check docs/okf` and computed
