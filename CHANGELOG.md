@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`git-context.ts`: resolve branch refs from the common dir in a linked worktree**
+  (agent-tasks `498e86d3`). `resolveGitContext` read `<gitDir>/refs/heads/<branch>`
+  and `<gitDir>/packed-refs` straight from the per-worktree gitdir it found via
+  `findGitEntry`, but a `git worktree add` checkout only stores `HEAD` there; the
+  branch refs live in the shared common dir (named by that gitdir's own
+  `commondir` file). Every gate that shells out to the solution-acceptance push
+  or finish/merge check from a linked worktree with an attached branch therefore
+  reported "cannot resolve the current git HEAD" (a detached HEAD, whose sha
+  sits directly in `HEAD`, was unaffected). `resolveGitContext` now routes the
+  branch-ref lookup through the existing `resolveCommonDir` helper (already used
+  by `resolveOriginHeadBase`'s callers for the same reason), a no-op for the
+  main checkout since `resolveCommonDir` returns the gitdir unchanged when no
+  `commondir` file exists. `resolveOriginHeadBase` (the default-branch resolver)
+  already routed through `resolveCommonDir` at every call site; that path is
+  pinned with a new linked-worktree test rather than changed.
+
 ## [0.52.0] - 2026-08-28
 
 ### Added

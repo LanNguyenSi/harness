@@ -158,7 +158,13 @@ export function resolveGitContext(cwd: string): GitRepoContext {
       const match = HEAD_REF_RE.exec(head);
       if (match) {
         branch = match[1]!.trim();
-        sha = resolveBranchSha(entry.gitDir, branch);
+        // `refs/heads/<branch>` and `packed-refs` are not duplicated in
+        // a linked worktree's private gitdir; they live in the shared
+        // common dir (see `resolveCommonDir`'s doc comment). Routing
+        // through it here is a no-op for the main checkout (no
+        // `commondir` file, `resolveCommonDir` returns `gitDir`
+        // unchanged).
+        sha = resolveBranchSha(resolveCommonDir(entry.gitDir), branch);
       } else if (SHA_RE.test(head)) {
         // Detached HEAD: the file contains the raw sha directly.
         sha = head;

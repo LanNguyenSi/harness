@@ -2,7 +2,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveGitContext } from "../../src/runtime/git-context.js";
+import {
+  resolveCommonDir,
+  resolveGitContext,
+  resolveOriginHeadBase,
+} from "../../src/runtime/git-context.js";
 
 let cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -162,5 +166,123 @@ describe("resolveGitContext", () => {
   it("rejects a HEAD file whose sha is non-hex (treats as unresolved)", () => {
     const repo = makeRepo(tmpDir(), "bad-sha", "not-a-sha-at-all");
     expect(resolveGitContext(repo)).toEqual({ repo: "bad-sha", branch: "", sha: "" });
+  });
+
+  it("resolves an attached branch in a linked worktree via commondir (refs only in the common dir)", () => {
+    const root = tmpDir();
+    const mainGitDir = path.join(root, "main-repo", ".git");
+    const wtGitDir = path.join(mainGitDir, "worktrees", "wt");
+    fs.mkdirSync(wtGitDir, { recursive: true });
+    fs.writeFileSync(path.join(wtGitDir, "HEAD"), "ref: refs/heads/wt-branch\n");
+    // `commondir` is a path relative to the per-worktree gitdir, per
+    // `git-worktree(1)` (normally `../..`).
+    fs.writeFileSync(path.join(wtGitDir, "commondir"), "../..\n");
+    // The branch ref lives only in the common dir, never in wtGitDir.
+    const refPath = path.join(mainGitDir, "refs", "heads", "wt-branch");
+    fs.mkdirSync(path.dirname(refPath), { recursive: true });
+    fs.writeFileSync(refPath, `${FAKE_SHA}\n`);
+    const worktree = path.join(root, "linked-worktree");
+    fs.mkdirSync(worktree, { recursive: true });
+    fs.writeFileSync(path.join(worktree, ".git"), `gitdir: ${wtGitDir}\n`);
+    expect(resolveGitContext(worktree)).toEqual({
+      repo: "linked-worktree",
+      branch: "wt-branch",
+      sha: FAKE_SHA,
+    });
+  });
+
+  it("resolves an attached branch in a linked worktree via commondir, falling back to packed-refs", () => {
+    const root = tmpDir();
+    const mainGitDir = path.join(root, "main-repo", ".git");
+    const wtGitDir = path.join(mainGitDir, "worktrees", "wt");
+    fs.mkdirSync(wtGitDir, { recursive: true });
+    fs.writeFileSync(path.join(wtGitDir, "HEAD"), "ref: refs/heads/wt-branch\n");
+    fs.writeFileSync(path.join(wtGitDir, "commondir"), "../..\n");
+    fs.writeFileSync(
+      path.join(mainGitDir, "packed-refs"),
+      ["# pack-refs with: peeled fully-peeled sorted", `${FAKE_SHA} refs/heads/wt-branch`, ""].join(
+        "\n",
+      ),
+    );
+    const worktree = path.join(root, "linked-worktree");
+    fs.mkdirSync(worktree, { recursive: true });
+    fs.writeFileSync(path.join(worktree, ".git"), `gitdir: ${wtGitDir}\n`);
+    expect(resolveGitContext(worktree)).toEqual({
+      repo: "linked-worktree",
+      branch: "wt-branch",
+      sha: FAKE_SHA,
+    });
+  });
+
+  it("resolves a detached HEAD in a linked worktree regardless of commondir", () => {
+    const root = tmpDir();
+    const mainGitDir = path.join(root, "main-repo", ".git");
+    const wtGitDir = path.join(mainGitDir, "worktrees", "wt");
+    fs.mkdirSync(wtGitDir, { recursive: true });
+    fs.writeFileSync(path.join(wtGitDir, "HEAD"), `${FAKE_SHA}\n`);
+    fs.writeFileSync(path.join(wtGitDir, "commondir"), "../..\n");
+    const worktree = path.join(root, "linked-worktree");
+    fs.mkdirSync(worktree, { recursive: true });
+    fs.writeFileSync(path.join(worktree, ".git"), `gitdir: ${wtGitDir}\n`);
+    expect(resolveGitContext(worktree)).toEqual({
+      repo: "linked-worktree",
+      branch: "",
+      sha: FAKE_SHA,
+    });
+  });
+
+  it("falls back to today's behaviour (reads refs from gitDir) when no commondir file exists", () => {
+    // Same shape as the "follows a `.git` file" test above: no
+    // `commondir` written, so `resolveCommonDir` returns `wtGitDir`
+    // unchanged and the ref is read directly from it.
+    const root = tmpDir();
+    const wtGitDir = path.join(root, "main-repo", ".git", "worktrees", "wt");
+    fs.mkdirSync(wtGitDir, { recursive: true });
+    fs.writeFileSync(path.join(wtGitDir, "HEAD"), "ref: refs/heads/wt-branch\n");
+    const refPath = path.join(wtGitDir, "refs", "heads", "wt-branch");
+    fs.mkdirSync(path.dirname(refPath), { recursive: true });
+    fs.writeFileSync(refPath, `${FAKE_SHA}\n`);
+    const worktree = path.join(root, "linked-worktree");
+    fs.mkdirSync(worktree, { recursive: true });
+    fs.writeFileSync(path.join(worktree, ".git"), `gitdir: ${wtGitDir}\n`);
+    expect(resolveGitContext(worktree)).toEqual({
+      repo: "linked-worktree",
+      branch: "wt-branch",
+      sha: FAKE_SHA,
+    });
+  });
+
+  it("resolves empty branch + sha (never throws) when commondir points at a non-existent path", () => {
+    const root = tmpDir();
+    const wtGitDir = path.join(root, "main-repo", ".git", "worktrees", "wt");
+    fs.mkdirSync(wtGitDir, { recursive: true });
+    fs.writeFileSync(path.join(wtGitDir, "HEAD"), "ref: refs/heads/wt-branch\n");
+    fs.writeFileSync(path.join(wtGitDir, "commondir"), "../../does-not-exist\n");
+    const worktree = path.join(root, "linked-worktree");
+    fs.mkdirSync(worktree, { recursive: true });
+    fs.writeFileSync(path.join(worktree, ".git"), `gitdir: ${wtGitDir}\n`);
+    expect(() => resolveGitContext(worktree)).not.toThrow();
+    expect(resolveGitContext(worktree)).toEqual({
+      repo: "linked-worktree",
+      branch: "wt-branch",
+      sha: "",
+    });
+  });
+});
+
+describe("resolveOriginHeadBase (AC2 pin: already routed through resolveCommonDir by its callers)", () => {
+  it("resolves the default branch from a linked worktree's common dir, not its private gitdir", () => {
+    const root = tmpDir();
+    const mainGitDir = path.join(root, "main-repo", ".git");
+    const wtGitDir = path.join(mainGitDir, "worktrees", "wt");
+    fs.mkdirSync(wtGitDir, { recursive: true });
+    fs.writeFileSync(path.join(wtGitDir, "commondir"), "../..\n");
+    // origin/HEAD lives only in the common dir, never in wtGitDir.
+    const originHeadPath = path.join(mainGitDir, "refs", "remotes", "origin", "HEAD");
+    fs.mkdirSync(path.dirname(originHeadPath), { recursive: true });
+    fs.writeFileSync(originHeadPath, "ref: refs/remotes/origin/main\n");
+    expect(resolveOriginHeadBase(resolveCommonDir(wtGitDir))).toBe("main");
+    // Without the commondir indirection the lookup misses entirely.
+    expect(resolveOriginHeadBase(wtGitDir)).toBeNull();
   });
 });
