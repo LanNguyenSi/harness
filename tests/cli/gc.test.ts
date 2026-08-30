@@ -205,7 +205,7 @@ describe("gc — defaults", () => {
   });
 });
 
-describe("gc — delegations", () => {
+describe("gc - delegations", () => {
   it("ages out delegation markers expired past the grace window, keeps valid and recently-expired ones", () => {
     // Expired well past the 30d default grace: a candidate.
     const wayExpired = writeDelegation("way-expired-sid", isoDaysAgo(40));
