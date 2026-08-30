@@ -22,14 +22,19 @@
   line-number citations into files this change also edits were found
   already stale before this change (confirmed against the pre-change
   commit) and are out of this task's scope; left as-is and flagged
-  separately. `npx okf-kit@0.8.0 check docs/okf` was run against this
-  worktree: zero errors, a pre-existing set of sources-fresh /
-  citations-resolve warnings unrelated to this change (several docs
-  under this directory already carried staleness against unrelated
-  prior commits before this task started). No content in this directory
-  needed a correction as a result of this change, and no frontmatter
-  timestamp here was bumped, since doing so for a doc that still carries
-  unrelated pre-existing staleness would overstate its freshness.
+  separately. `understanding-gate-auto-mode-signals.md`'s "What harness
+  reads today" section listed exactly one call site consulting
+  `permission_mode` in the PreToolUse hook; this change adds a second,
+  non-gating read at the same call site, so that bullet now names the
+  new observation write and its source file, and the doc's own
+  `timestamp:` and `sources:` were updated to match. `npx okf-kit@0.8.0
+  check docs/okf` was run against this worktree both before and after
+  that edit: zero errors both times, plus a pre-existing set of
+  sources-fresh / citations-resolve warnings unrelated to this change
+  (several other docs under this directory already carried staleness
+  against unrelated prior commits before this task started; those were
+  left as-is, since bumping a doc's timestamp while it still carries
+  unrelated staleness would overstate its freshness).
 - 2026-08-27T17:54:07Z, understanding-gate auto-approval, slice 1 code half
   (agent-tasks `74b4b17d`): the PreToolUse hook gained the opt-in
   `auto_approve` path at the end of its decision order
