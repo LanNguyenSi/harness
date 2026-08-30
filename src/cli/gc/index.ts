@@ -285,11 +285,23 @@ function sweepDelegations(
     }
     const status = statusBySessionId.get(name);
     if (status === undefined) {
-      candidates.push({
-        filePath: full,
-        category: "delegation",
-        reason: "orphaned adoption ledger (no delegation marker for this session)",
-      });
+      // No marker for this session id at all: only a candidate once the
+      // LEDGER's own age clears the cutoff. Without this check a ledger
+      // written seconds ago (its marker legitimately not written yet, or
+      // already cleaned up by something else) would be swept regardless
+      // of age, contradicting the "older than the retention window"
+      // posture documented on the command and the listing header; it
+      // also closes the TOCTOU window between the two readdir calls
+      // above, since a ledger written between them is newer than cutoff.
+      if (stat.mtimeMs < cutoffMs) {
+        candidates.push({
+          filePath: full,
+          category: "delegation",
+          reason: "orphaned adoption ledger (no delegation marker for this session)",
+        });
+      } else {
+        kept += 1;
+      }
     } else if (status.kind === "expired") {
       candidates.push({
         filePath: full,
