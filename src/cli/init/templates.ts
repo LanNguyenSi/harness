@@ -1,3 +1,15 @@
+// D-004 (task 8f637efd, docs/decisions/2026-08-27-ug-auto-mode-approval.md,
+// "Amendment: install default"): the shipped `auto_approve` block, read
+// from the one canonical renderer so `harness init`, `harness pack
+// upgrade understanding-before-execution`, and `harness doctor`'s
+// missing-auto_approve finding cannot drift on the snippet's shape or
+// wording. See auto-approve-default.ts for the rationale.
+import { renderAutoApproveSnippet } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
+
+// Every template below nests `auto_approve:` at 6 spaces, a sibling of
+// `mode:` / `approval_lifecycle:` under the pack's `config:` key.
+const AUTO_APPROVE_SNIPPET = renderAutoApproveSnippet(6);
+
 export const MINIMAL_TEMPLATE = `# ~/.harness/harness.yaml (legacy: ~/.claude/harness.yaml)
 #
 # Bootstrapped by \`harness init --template minimal\`.
@@ -913,6 +925,7 @@ policy_packs:
           - '^gh pr (merge|close)\\b'
           - '^git push origin (master|main)\\b'
         max_age: 4h
+${AUTO_APPROVE_SNIPPET}
 
   # branch-protection (agent-tasks/2fdc5bbe, default-enabled since v0.17.2):
   # blocks Write/Edit (claude-code) or apply_patch (codex) on protected

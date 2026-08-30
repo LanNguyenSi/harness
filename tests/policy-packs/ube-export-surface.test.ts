@@ -45,6 +45,20 @@ import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-ex
 // understanding-before-execution.ts directly from `auto-approve.ts`,
 // contradicting the precedent every other symbol at that call site already
 // followed. 59 -> 62.
+// Widened a sixth time by task 8f637efd (D-004, "Amendment: install
+// default"), by the five VALUE exports of the shipped `auto_approve`
+// default (auto-approve-default.ts): AUTO_APPROVE_DEFAULT_WHEN,
+// AUTO_APPROVE_DEFAULT_HARNESSES, AUTO_APPROVE_COMMENT_LINES,
+// defaultAutoApproveConfig, renderAutoApproveSnippet. 62 -> 67. The
+// module's one type-only export (AutoApproveDefaultConfig) is absent
+// from this list for the same reason the delegation module's eight are.
+// Widened a seventh time, same task, by the four VALUE exports of the
+// hook-side permission-mode observation
+// (permission-mode-observations.ts): PERMISSION_MODE_OBSERVATION_DIRNAME,
+// permissionModeObservationPathFor, recordPermissionModeObservation,
+// listPermissionModeObservations. 67 -> 71. The module's two type-only
+// exports (PermissionModeObservation, PermissionModeObservationsResult)
+// are absent from this list for the same reason.
 //
 // Mutation-verified: temporarily re-adding `export { safeJsonParse } from
 // "./persisted-reports.js";` to
@@ -57,6 +71,9 @@ const EXPECTED_EXPORTS = [
   "APPROVAL_MARKER_TASK_PREFIX",
   "APPROVED_LEDGER_TAG_PREFIX",
   "AUTO_APPROVED_BY_PREFIX",
+  "AUTO_APPROVE_COMMENT_LINES",
+  "AUTO_APPROVE_DEFAULT_HARNESSES",
+  "AUTO_APPROVE_DEFAULT_WHEN",
   "AUTO_APPROVE_HARNESS_VALUES",
   "CLAUDE_CODE_HARNESS",
   "DEFAULT_AUTO_APPROVE_HARNESSES",
@@ -82,6 +99,7 @@ const EXPECTED_EXPORTS = [
   "clearActiveClaim",
   "clearApprovalMarker",
   "clearTaskApprovalMarker",
+  "defaultAutoApproveConfig",
   "defaultReportsDir",
   "delegationMarkerIdFor",
   "delegationMarkerPathFor",
@@ -94,16 +112,21 @@ const EXPECTED_EXPORTS = [
   "harnessAllowed",
   "hashDelegationCwd",
   "isPolicyDecisionRow",
+  "listPermissionModeObservations",
   "listPersistedReports",
   "matchLedgerEntries",
   "matchPostToolUseBoundary",
+  "PERMISSION_MODE_OBSERVATION_DIRNAME",
   "parseApprovalLifecycle",
   "parseAutoApprove",
   "parseAutoApprovedBy",
   "parseDelegationApprovedBy",
   "parseReportScanMaxWait",
   "permissionModeAllowed",
+  "permissionModeObservationPathFor",
   "readActiveClaim",
+  "recordPermissionModeObservation",
+  "renderAutoApproveSnippet",
   "reportsDirForManifest",
   "selectNewestStrictSessionReport",
   "selectReportForSession",
@@ -117,7 +140,7 @@ const EXPECTED_EXPORTS = [
 ] as const;
 
 describe("understanding-before-execution-runtime shim export surface", () => {
-  it("exports exactly the pinned 62-name surface, sorted", () => {
+  it("exports exactly the pinned 67-name surface, sorted", () => {
     const actual = Object.keys(ubeShim).sort();
     expect(actual).toEqual([...EXPECTED_EXPORTS].sort());
   });

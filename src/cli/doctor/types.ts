@@ -13,6 +13,7 @@ import type { UgAutoApprovalsSection } from "./ug-auto-approvals.js";
 import type { UgDelegationsSection } from "./ug-delegations.js";
 import type { SettingsDriftSection } from "./settings-drift.js";
 import type { AutoApproveModeWarning } from "./auto-approve-mode.js";
+import type { BypassWithoutAutoApproveFinding } from "./bypass-without-auto-approve.js";
 import type { CodexConfigDriftSection } from "./codex-config-drift.js";
 
 /**
@@ -438,6 +439,15 @@ export interface DoctorReport {
    * `warningCount`.
    */
   ugDelegations?: UgDelegationsSection;
+  /**
+   * `bypassPermissions` observed (hook-side, `.permission-mode-
+   * observations/`) but `auto_approve` does not cover it (task 8f637efd,
+   * "Amendment: install default"). Present only when the pack is
+   * declared and enabled AND at least one qualifying observation exists
+   * in the window; always a warning (`⚠`) when present, see
+   * bypass-without-auto-approve.ts.
+   */
+  ugBypassWithoutAutoApprove?: BypassWithoutAutoApproveFinding;
 
   /**
    * `auto_approve` configured without `mode: grill_me` (agent-tasks
@@ -575,6 +585,7 @@ export type { UnderstandingModeEnvDivergence } from "./understanding-mode-env.js
 export type { UgAutoApprovalsSection, AutoApprovalListingEntry } from "./ug-auto-approvals.js";
 export type { UgDelegationsSection } from "./ug-delegations.js";
 export type { AutoApproveModeWarning } from "./auto-approve-mode.js";
+export type { BypassWithoutAutoApproveFinding } from "./bypass-without-auto-approve.js";
 export type { SettingsDriftSection } from "./settings-drift.js";
 export type { CodexConfigDriftSection } from "./codex-config-drift.js";
 export type { ToolchainParitySection, ToolchainParityPeerReport } from "./toolchain-parity.js";

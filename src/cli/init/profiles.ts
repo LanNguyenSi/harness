@@ -18,6 +18,17 @@
 // `~/.claude/...`); operators on a different layout should override via
 // `~/.harness/machines/<host>.harness.overrides.yaml` (ARCHITECTURE §8).
 
+// D-004 (task 8f637efd, docs/decisions/2026-08-27-ug-auto-mode-approval.md,
+// "Amendment: install default"): the shipped `auto_approve` block, read
+// from the one canonical renderer FULL_TEMPLATE also uses, so the three
+// templates cannot drift on the snippet's shape or wording. See
+// auto-approve-default.ts for the rationale.
+import { renderAutoApproveSnippet } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
+
+// Both templates below nest `auto_approve:` at 6 spaces, a sibling of
+// `mode:` / `approval_lifecycle:` under the pack's `config:` key.
+const AUTO_APPROVE_SNIPPET = renderAutoApproveSnippet(6);
+
 export const SOLO_TEMPLATE = `# ~/.harness/harness.yaml (legacy: ~/.claude/harness.yaml)
 #
 # Bootstrapped by \`harness init --template solo\`.
@@ -113,6 +124,7 @@ policy_packs:
           - '^gh pr (merge|close)\\b'
           - '^git push origin (master|main)\\b'
         max_age: 1h
+${AUTO_APPROVE_SNIPPET}
 `;
 
 export const TEAM_TEMPLATE = `# ~/.harness/harness.yaml (legacy: ~/.claude/harness.yaml)
@@ -281,4 +293,5 @@ policy_packs:
           - '^gh pr (merge|close)\\b'
           - '^git push origin (master|main)\\b'
         max_age: 4h
+${AUTO_APPROVE_SNIPPET}
 `;

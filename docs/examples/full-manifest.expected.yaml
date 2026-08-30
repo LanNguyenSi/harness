@@ -501,6 +501,12 @@ policy_packs:
           - ^gh pr (merge|close)\b
           - ^git push origin (master|main)\b
         max_age: 4h
+      auto_approve:
+        when:
+          - bypassPermissions
+        harnesses:
+          - claude-code
+        require_report: true
   - name: branch-protection
     source: builtin
     enabled: true

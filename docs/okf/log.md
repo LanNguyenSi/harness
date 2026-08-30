@@ -2,6 +2,34 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-08-30T08:46:21Z, understanding-gate auto-approval install default
+  (task `8f637efd`, D-004, amendment to
+  docs/decisions/2026-08-27-ug-auto-mode-approval.md): FULL_TEMPLATE,
+  SOLO_TEMPLATE, and TEAM_TEMPLATE now ship an active `auto_approve`
+  block; a new `harness pack upgrade understanding-before-execution` verb
+  inserts it into an existing manifest; a new `harness doctor` advisory
+  fires when `bypassPermissions` was observed for a session and
+  `auto_approve` does not cover it. The PreToolUse hook
+  (`src/cli/pack/hook-pre-tool-use.ts`) gained one new side-effect write
+  (a per-session `permission_mode` observation), at the same point in its
+  decision order the existing auto-approval attempt already runs at;
+  nothing about the decision order, the fail-open contract, or the marker
+  authority changed. Checked every doc under this directory that names
+  the touched source paths (the templates, the PreToolUse hook, the
+  understanding-before-execution pack module) for a line-number-anchored
+  citation into the changed regions: none of the found citations point
+  into content this change actually touched. Two pre-existing
+  line-number citations into files this change also edits were found
+  already stale before this change (confirmed against the pre-change
+  commit) and are out of this task's scope; left as-is and flagged
+  separately. `npx okf-kit@0.8.0 check docs/okf` was run against this
+  worktree: zero errors, a pre-existing set of sources-fresh /
+  citations-resolve warnings unrelated to this change (several docs
+  under this directory already carried staleness against unrelated
+  prior commits before this task started). No content in this directory
+  needed a correction as a result of this change, and no frontmatter
+  timestamp here was bumped, since doing so for a doc that still carries
+  unrelated pre-existing staleness would overstate its freshness.
 - 2026-08-27T17:54:07Z, understanding-gate auto-approval, slice 1 code half
   (agent-tasks `74b4b17d`): the PreToolUse hook gained the opt-in
   `auto_approve` path at the end of its decision order

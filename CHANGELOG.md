@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Understanding gate: `auto_approve` now ships active in every `harness init` template, and existing installs get an upgrade path and a doctor warning** (task `8f637efd`, D-004, `docs/decisions/2026-08-27-ug-auto-mode-approval.md`, "Amendment: install default"). Origin: observed 2026-08-29 on the Mac mini install (harness 0.51.0 global, `understanding-before-execution` pack active, session running under `bypassPermissions`): after the 4h `approval_lifecycle` expired, the gate required a fresh Understanding Report, `harness approve understanding` resolved via the manual `permissionDecision: ask` path, and the operator had to confirm a prompt by hand; `harness doctor` reported "auto approvals in the last 20 sessions: 0". Root cause: `~/.harness/harness.yaml` had never carried an `auto_approve` block, because no init template shipped one (`grep -rn auto_approve src/cli/init` returned nothing before this change), and there was no upgrade path for an install that predated the block.
+  - `FULL_TEMPLATE`, `SOLO_TEMPLATE`, and `TEAM_TEMPLATE` (`minimal` carries no `policy_packs` at all) now ship `auto_approve: { when: [bypassPermissions], harnesses: [claude-code], require_report: true }` active, rendered from one canonical source (`src/policy-packs/builtin/understanding-before-execution/auto-approve-default.ts`) so `harness init`, the new upgrade verb, and the new doctor finding cannot drift on the snippet.
+  - New verb `harness pack upgrade understanding-before-execution [--dry-run]` (`src/cli/pack/upgrade.ts`) inserts the same block into an existing manifest's `config:` mapping by text-level line insertion (never a full YAML parse-and-reserialize), so hand edits elsewhere in the file are untouched. Idempotent (a no-op, byte-identical, when `auto_approve:` already exists), and refuses rather than guesses when the pack block or its `config:` key cannot be located unambiguously.
+  - New `harness doctor` advisory (`src/cli/doctor/bypass-without-auto-approve.ts`): warns when `bypassPermissions` was observed for a session and `auto_approve` does not cover it. The observation is hook-written, not agent-writable: the PreToolUse hook now persists a small per-session record of the last-seen `permission_mode` under `harness.generated/.permission-mode-observations/` (`src/policy-packs/builtin/understanding-before-execution/permission-mode-observations.ts`), independent of whether `auto_approve` is configured, keeping the finding on the same evidence-ledger trust boundary the gate itself enforces.
+  - `docs/policy-packs/understanding-before-execution.md` and `docs/CLI.md` document the new default, verb, and finding as rules; this entry is the evidence record for the change.
+
 ## [0.52.0] - 2026-08-28
 
 ### Added
