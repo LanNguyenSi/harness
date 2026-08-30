@@ -3003,8 +3003,9 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .command("gc")
     .description(
       "Retention-based cleanup of harness-owned gate state: terminal " +
-        "(approved/expired) understanding-gate reports, parse-error logs, and " +
-        "approval markers older than the retention window. Pending reports and " +
+        "(approved/expired) understanding-gate reports, parse-error logs, " +
+        "approval markers, expired delegation markers, and orphaned delegation " +
+        "adoption ledgers older than the retention window. Pending reports and " +
         "anything outside the enumerated harness-owned dirs are never touched " +
         "(the evidence ledger and solution-acceptance verdict dirs are owned by " +
         "their producers). Dry-run by default; pass --apply to delete.",
@@ -3032,10 +3033,18 @@ export function buildProgram(opts: RunOptions = {}): Command {
         result.reportsDir,
         ...(result.parseErrorsDir !== null ? [result.parseErrorsDir] : []),
         result.approvalsDir,
+        result.delegationsDir,
+        result.adoptionLedgerDir,
       ];
       if (result.parseErrorsDir === null) {
         stderr(
           "gc: skipping the parse-errors sweep (reports dir does not have the conventional .understanding-gate/reports shape)\n",
+        );
+      }
+      if (result.unparseable.length > 0) {
+        stderr(
+          `gc: ${result.unparseable.length} delegation file(s) could not be parsed and were left in place:\n` +
+            result.unparseable.map((u) => `  [${u.category}] ${u.filePath} (${u.reason})\n`).join(""),
         );
       }
       if (result.candidates.length === 0) {

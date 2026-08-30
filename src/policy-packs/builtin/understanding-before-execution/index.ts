@@ -170,6 +170,7 @@ export {
 // PreToolUse hook) import every sibling gate symbol through it.
 export {
   DELEGATION_MARKER_DIRNAME,
+  ADOPTION_LEDGER_DIRNAME,
   delegationMarkerIdFor,
   delegationMarkerPathFor,
   hashDelegationCwd,

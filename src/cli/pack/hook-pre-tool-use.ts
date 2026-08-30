@@ -46,6 +46,7 @@ import {
 } from "../../policies/index.js";
 import { renderProducers } from "../../policies/producers.js";
 import {
+  ADOPTION_LEDGER_DIRNAME,
   CLAUDE_CODE_HARNESS,
   checkOperatorApprovalMarkers,
   checkPersistedReport,
@@ -212,26 +213,14 @@ function findGroundingMcp(manifest: Manifest): McpServer | null {
   return manifest.tools.mcp.find((m) => m.name === "grounding-mcp") ?? null;
 }
 
-/**
- * Directory holding the per-child ADOPTED-ENTRY ledgers, a SIBLING of
- * `.delegations/` itself rather than a subdirectory of it:
- * `<generatedDir>/.delegation-adoptions/<sid>`.
- *
- * Never inside `.delegations/`, and never in `.approvals/`: these files
- * record what was SPENT, they are not approvals and must never land where
- * a marker scan or the doctor's `approvedBy` listing would read them as
- * one. Kept OUT of `.delegations/` for two reasons: `harness doctor`'s
- * delegations metric counts every regular file directly under
- * `.delegations/` (a ledger file nested in there, flat or not, would be
- * reported as an extra, unreadable delegation), and no reserved
- * subdirectory NAME sits under `.delegations/` for a child session id to
- * collide with, since the ledger lives at its own sibling path instead of
- * inside `.delegations/` at all.
- *
- * One id per line. Ids come from the scan (`entryId`), which guarantees
- * they carry no line break.
- */
-const ADOPTION_LEDGER_DIRNAME = ".delegation-adoptions";
+// `ADOPTION_LEDGER_DIRNAME` (the once-per-session ADOPTED-ENTRY ledger
+// dirname, `.delegation-adoptions/`, a SIBLING of `.delegations/`, never
+// inside it or `.approvals/`) now lives in delegation-markers.ts, next to
+// `DELEGATION_MARKER_DIRNAME`: `harness gc`'s delegation sweep
+// (task 3ece079d) needs the same constant to find orphaned ledgers, and a
+// reader that never writes one has no business importing this CLI verb
+// module for it. One id per line; ids come from the scan (`entryId`),
+// which guarantees they carry no line break.
 
 function adoptedEntriesPathFor(generatedDir: string, childSessionId: string): string {
   return path.join(generatedDir, ADOPTION_LEDGER_DIRNAME, childSessionId);

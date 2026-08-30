@@ -712,6 +712,8 @@ The delegation is written to `harness.generated/.delegations/<child-sid>`, a dir
 
 **Doctor.** `harness doctor`'s understanding-gate section reports the delegations-on-disk metric right next to the `.approvals/`-derived "auto approvals in the last N sessions" line above, computed from `.delegations/` only. No line renders until `.delegations/` exists at all; once it does, an empty directory renders the bare `delegations on disk: 0` line, and the `(<count> expired, <count> unreadable)` parenthetical appears only once there is anything to count. Informational unless it finds an unreadable file, in which case it rolls into `warningCount`.
 
+**Cleanup.** Neither `.delegations/` nor the once-per-session adoption ledger it leaves under `.delegation-adoptions/` ever shrinks on its own; `harness gc` sweeps both under its `delegation` category, deleting a delegation marker once its own `expires` binding is past the retention window and a ledger once its delegation has expired, or once the ledger itself is older than the retention window with no marker at all for its session (gated on the ledger's own mtime, not just marker absence, so a ledger written seconds ago is never swept), while a delegation file gc cannot parse is always left in place (see `docs/CLI.md`'s `gc` row).
+
 This is a rule-level summary; the measured transcript-lag numbers, the retry-behaviour sample, and the chosen `report_scan.max_wait` default are in `docs/okf/understanding-gate-auto-mode-signals.md`, not restated here.
 
 ### Session-id resolution

@@ -45,18 +45,23 @@ import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-ex
 // understanding-before-execution.ts directly from `auto-approve.ts`,
 // contradicting the precedent every other symbol at that call site already
 // followed. 59 -> 62.
-// Widened a sixth time by task 8f637efd (D-004, "Amendment: install
+// Widened a sixth time (task 3ece079d): ADOPTION_LEDGER_DIRNAME, the
+// once-per-session adoption-ledger dirname `harness gc`'s new delegation
+// sweep reads, moved here from `hook-pre-tool-use.ts` (its only prior
+// writer) so a reader that never writes one does not need a cli-to-cli
+// import. 62 -> 63.
+// Widened a seventh time by task 8f637efd (D-004, "Amendment: install
 // default"), by the five VALUE exports of the shipped `auto_approve`
 // default (auto-approve-default.ts): AUTO_APPROVE_DEFAULT_WHEN,
 // AUTO_APPROVE_DEFAULT_HARNESSES, AUTO_APPROVE_COMMENT_LINES,
-// defaultAutoApproveConfig, renderAutoApproveSnippet. 62 -> 67. The
+// defaultAutoApproveConfig, renderAutoApproveSnippet. 63 -> 68. The
 // module's one type-only export (AutoApproveDefaultConfig) is absent
 // from this list for the same reason the delegation module's eight are.
-// Widened a seventh time, same task, by the four VALUE exports of the
+// Widened an eighth time, same task, by the four VALUE exports of the
 // hook-side permission-mode observation
 // (permission-mode-observations.ts): PERMISSION_MODE_OBSERVATION_DIRNAME,
 // permissionModeObservationPathFor, recordPermissionModeObservation,
-// listPermissionModeObservations. 67 -> 71. The module's two type-only
+// listPermissionModeObservations. 68 -> 72. The module's two type-only
 // exports (PermissionModeObservation, PermissionModeObservationsResult)
 // are absent from this list for the same reason.
 //
@@ -67,6 +72,7 @@ import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-ex
 // second); reverting turns them green again.
 const EXPECTED_EXPORTS = [
   "ACTIVE_CLAIM_FILENAME",
+  "ADOPTION_LEDGER_DIRNAME",
   "APPROVAL_MARKER_DIRNAME",
   "APPROVAL_MARKER_TASK_PREFIX",
   "APPROVED_LEDGER_TAG_PREFIX",
@@ -140,8 +146,9 @@ const EXPECTED_EXPORTS = [
 ] as const;
 
 describe("understanding-before-execution-runtime shim export surface", () => {
-  it("exports exactly the pinned 67-name surface, sorted", () => {
+  it("exports exactly the pinned 72-name surface, sorted", () => {
     const actual = Object.keys(ubeShim).sort();
+    expect(EXPECTED_EXPORTS).toHaveLength(72);
     expect(actual).toEqual([...EXPECTED_EXPORTS].sort());
   });
 

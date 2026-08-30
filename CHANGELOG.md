@@ -7,7 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`harness gc` sweeps expired delegation markers and their orphaned adoption ledgers** (task `3ece079d`, follow-up from UG auto-mode slice 3, agent-tasks `37ad0b05`). `harness gc` grew a new `delegation` category alongside `report` / `parse-error` / `approval-marker`: a `harness.generated/.delegations/<sid>` marker is a candidate once its own signed `expires` binding (read via `parseDelegationApprovedBy`, no signature check needed for a retention decision) is older than the same retention window every other category uses, and its `harness.generated/.delegation-adoptions/<sid>` once-per-session adoption ledger is a candidate once that session's delegation has expired, or once the ledger itself (by its own mtime) is older than the retention window with no marker at all for its session; the ledger age gate came out of the pre-merge review (a brand-new orphan ledger had been listed under "older than 30d") and also closes the window between the two directory reads; a marker gc cannot parse is reported in `GcResult.unparseable` and never deleted, dry-run or `--apply`, and its ledger sibling is kept alongside it. `ADOPTION_LEDGER_DIRNAME` moved from `hook-pre-tool-use.ts` (its only prior writer) to `delegation-markers.ts`, next to `DELEGATION_MARKER_DIRNAME`, so the new sweep reads it without a cli-to-cli import; re-exported through the same `understanding-before-execution` shim every other delegation symbol already travels through. Docs: `docs/CLI.md`'s `gc` row and a new "Cleanup" paragraph in `docs/policy-packs/understanding-before-execution.md`'s delegation section.
+
 ### Fixed
+
+- **`git-context.ts`: resolve branch refs from the common dir in a linked worktree**
+  (agent-tasks `498e86d3`). `resolveGitContext` read `<gitDir>/refs/heads/<branch>`
+  and `<gitDir>/packed-refs` straight from the per-worktree gitdir it found via
+  `findGitEntry`, but a `git worktree add` checkout's per-worktree gitdir does
+  not store `refs/heads/*` or `packed-refs` at all (its `refs/` tree is empty
+  apart from the per-worktree `refs/bisect` and `refs/worktree` namespaces);
+  the branch refs live in the shared common dir (named by that gitdir's own
+  `commondir` file). Every gate that shells out to the solution-acceptance push
+  or finish/merge check from a linked worktree with an attached branch therefore
+  reported "cannot resolve the current git HEAD" (a detached HEAD, whose sha
+  sits directly in `HEAD`, was unaffected). `resolveGitContext` now routes the
+  branch-ref lookup through the existing `resolveCommonDir` helper (already used
+  by `resolveOriginHeadBase`'s callers for the same reason), a no-op for the
+  main checkout since `resolveCommonDir` returns the gitdir unchanged when no
+  `commondir` file exists. `resolveOriginHeadBase` (the default-branch resolver)
+  already routed through `resolveCommonDir` at every call site; that path is
+  pinned with a new linked-worktree test rather than changed. Two other
+  consumers of the same unresolved branch/sha were equally broken in a linked
+  worktree and now work there too: the `head:<sha>` preflight token
+  (`src/cli/session-start/index.ts`) and the `at_head:true` requires-flag
+  (`src/runtime/intercept.ts`).
 
 - **Understanding gate: `auto_approve` now ships active in every `harness init` template, and existing installs get an upgrade path and a doctor warning** (task `8f637efd`, D-004, `docs/decisions/2026-08-27-ug-auto-mode-approval.md`, "Amendment: install default"). Origin: observed 2026-08-29 on the Mac mini install (harness 0.51.0 global, `understanding-before-execution` pack active, session running under `bypassPermissions`): after the 4h `approval_lifecycle` expired, the gate required a fresh Understanding Report, `harness approve understanding` resolved via the manual `permissionDecision: ask` path, and the operator had to confirm a prompt by hand; `harness doctor` reported "auto approvals in the last 20 sessions: 0". Root cause: `~/.harness/harness.yaml` had never carried an `auto_approve` block, because no init template shipped one (`grep -rn auto_approve src/cli/init` returned nothing before this change), and there was no upgrade path for an install that predated the block.
   - `FULL_TEMPLATE`, `SOLO_TEMPLATE`, and `TEAM_TEMPLATE` (`minimal` carries no `policy_packs` at all) now ship `auto_approve: { when: [bypassPermissions], harnesses: [claude-code], require_report: true }` active, rendered from one canonical source (`src/policy-packs/builtin/understanding-before-execution/auto-approve-default.ts`) so `harness init`, the new upgrade verb, and the new doctor finding cannot drift on the snippet.

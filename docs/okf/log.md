@@ -2,6 +2,41 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-08-30T08:54:18Z, re-stamped `understanding-gate-lockout-recovery.md`
+  after the same round-1-fix edit to `understanding-before-execution.md`'s
+  Cleanup paragraph (this doc lists it as a source): re-read its own
+  claims about the adoption ledger's role in re-arming a lockout, which
+  do not touch the gc sweep's age-gating wording; no content change
+  needed.
+- 2026-08-30T08:50:54Z, review round 1 fix on task `3ece079d`: the
+  orphaned-adoption-ledger branch in `sweepDelegations` (no delegation
+  marker at all for a session) now also requires the ledger file's own
+  `mtimeMs` to be past the retention cutoff before treating it as a
+  candidate, matching the `gc` command's documented "older than the
+  retention window" posture (previously it swept a brand-new orphan
+  ledger regardless of age). `docs/CLI.md`'s `gc` row and the Cleanup
+  paragraph in `understanding-before-execution.md`'s delegation section
+  re-worded to state the age gate explicitly; re-stamped
+  `understanding-gate-auto-mode-signals.md`'s `sources:` timestamp after
+  re-reading its `hook-pre-tool-use.ts` and
+  `understanding-before-execution.md` claims against both edits (neither
+  touches the permission-mode / escape-branch material that doc cites;
+  no content change needed there).
+- 2026-08-30T08:24:49Z, `harness gc` grew a `delegation` category (task
+  `3ece079d`, follow-up from UG auto-mode slice 3): sweeps expired
+  delegation markers (past their own signed `expires` binding by the
+  retention window, no signature check needed for a retention decision)
+  and orphaned adoption ledgers, never a file gc could not parse. The
+  adoption-ledger dirname constant moved out of `hook-pre-tool-use.ts`
+  (its only prior writer) into `delegation-markers.ts`, next to the
+  delegation-marker dirname, so the new read-only sweep did not need a
+  cli-to-cli import; that shifted line numbers in the hook file, which
+  stale-anchored one citation in `understanding-gate-lockout-recovery.md`
+  pointing at the pending-approval staging call, now re-anchored to the
+  moved line. Checked by hand that the surrounding header-contract
+  citation in the same file (cited from `gate-fail-posture-matrix.md`)
+  sits above every edit and still holds; no citation linter exists yet to
+  re-run instead.
 - 2026-08-30T08:46:21Z, understanding-gate auto-approval install default
   (task `8f637efd`, D-004, amendment to
   docs/decisions/2026-08-27-ug-auto-mode-approval.md): FULL_TEMPLATE,
