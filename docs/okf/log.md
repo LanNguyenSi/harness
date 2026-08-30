@@ -2,6 +2,32 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-08-30T09:32:00Z, targeted correction (task `8f637efd`, review round
+  2, F8): the 2026-08-30T08:46:21Z entry below said "several other docs
+  under this directory already carried staleness against unrelated prior
+  commits before this task started" without naming them. That residue is
+  two specific docs, both because THIS task's own `src/cli/init/templates.ts`
+  edit (the `auto_approve` snippet insertion, round 1) touched a file
+  their `sources:` list: `evidence-ledger-trust-boundary.md` and
+  `pause-vs-gate-kill-switch.md`. Re-read both against the templates.ts
+  change (additive: one new config key rendered into the pack's
+  `config:` mapping) and, for round 2, against `src/cli/init/composer.ts`
+  (also a source of `evidence-ledger-trust-boundary.md`; F3 added the
+  same `auto_approve` default there) and `src/cli/index.ts` (a source of
+  `pause-vs-gate-kill-switch.md`; F5 added the `gc` command's
+  permission-mode-observation sweep, +2 net lines before the pause/gate
+  command registration): neither doc's claims describe any of the four
+  changed regions, so no content edit is needed in either doc; both
+  `timestamp:` fields are bumped. Separately, and NOT fixed by this
+  correction: `pause-vs-gate-kill-switch.md` cites `src/cli/index.ts:3086-3185`
+  / `:3088-3094` for the `pause`/`gate` command registrations; both
+  ranges already pointed at the unrelated `uninstall` command's
+  description before this task touched the file at all (confirmed
+  against the pre-round-1 merge commit), so this is genuinely
+  pre-existing citation drift from an earlier, unrelated change, out of
+  this task's scope; round 2's F5 edit shifts those already-wrong line
+  numbers by +2 more but does not newly break a citation that resolved
+  correctly before.
 - 2026-08-30T08:54:18Z, re-stamped `understanding-gate-lockout-recovery.md`
   after the same round-1-fix edit to `understanding-before-execution.md`'s
   Cleanup paragraph (this doc lists it as a source): re-read its own

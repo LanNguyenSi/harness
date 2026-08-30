@@ -698,7 +698,7 @@ policy_packs:
           - '^gh pr (merge|close)\b'
           - '^git push origin (master|main)\b'
         max_age: 4h
-      # auto_approve (task 8f637efd default): a session started with
+      # auto_approve (shipped default): a session started with
       # bypassPermissions gets its Understanding Report approved by the
       # hook's signed auto path instead of a human `harness approve
       # understanding` prompt; the report itself stays mandatory.

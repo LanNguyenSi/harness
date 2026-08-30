@@ -39,11 +39,9 @@
 // posture every other best-effort write in this pack already uses
 // (`writePendingApproval`, the marker writers).
 
-import * as fs from "node:fs";
 import * as path from "node:path";
 import { atomicWriteFile } from "../../../io/atomic-write.js";
-import { readRegularFileRejectingSymlink } from "../../../io/read-regular-file.js";
-import { safeJsonParse } from "../../../io/safe-json-parse.js";
+import { readJsonDirEntriesRejectingSymlinks } from "../../../io/read-json-dir-entries.js";
 
 export const PERMISSION_MODE_OBSERVATION_DIRNAME = ".permission-mode-observations";
 
@@ -132,38 +130,15 @@ export function listPermissionModeObservations(
 ): PermissionModeObservationsResult {
   const dir = path.join(generatedDir, PERMISSION_MODE_OBSERVATION_DIRNAME);
 
-  let dirents: fs.Dirent[];
-  try {
-    dirents = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return { dirPresent: false, entries: [], unreadableCount: 0 };
-  }
-
-  const readable: PermissionModeObservation[] = [];
-  let unreadableCount = 0;
-
-  for (const d of dirents) {
-    const full = path.join(dir, d.name);
-    const read = readRegularFileRejectingSymlink(full);
-    if (read.kind === "symlink" || read.kind === "not-regular" || read.kind === "missing") {
-      continue;
-    }
-    if (read.kind === "unreadable") {
-      unreadableCount++;
-      continue;
-    }
-    const parsed = safeJsonParse(read.content);
-    if (!isValidObservation(parsed)) {
-      unreadableCount++;
-      continue;
-    }
-    readable.push(parsed);
-  }
+  const { dirPresent, entries: readable, unreadableCount } =
+    readJsonDirEntriesRejectingSymlinks<PermissionModeObservation>(dir, {
+      parse: (raw) => (isValidObservation(raw) ? raw : null),
+    });
 
   readable.sort((a, b) => Date.parse(b.observedAt) - Date.parse(a.observedAt));
 
   return {
-    dirPresent: true,
+    dirPresent,
     entries: readable.slice(0, opts.windowSize),
     unreadableCount,
   };

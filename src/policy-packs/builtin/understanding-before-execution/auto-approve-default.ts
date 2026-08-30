@@ -66,7 +66,7 @@ export function defaultAutoApproveConfig(): AutoApproveDefaultConfig {
  * the manual prompt.
  */
 export const AUTO_APPROVE_COMMENT_LINES: readonly string[] = [
-  "auto_approve (task 8f637efd default): a session started with",
+  "auto_approve (shipped default): a session started with",
   "bypassPermissions gets its Understanding Report approved by the",
   "hook's signed auto path instead of a human `harness approve",
   "understanding` prompt; the report itself stays mandatory.",

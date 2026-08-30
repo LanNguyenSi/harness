@@ -51,17 +51,23 @@ import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-ex
 // writer) so a reader that never writes one does not need a cli-to-cli
 // import. 62 -> 63.
 // Widened a seventh time by task 8f637efd (D-004, "Amendment: install
-// default"), by the five VALUE exports of the shipped `auto_approve`
-// default (auto-approve-default.ts): AUTO_APPROVE_DEFAULT_WHEN,
-// AUTO_APPROVE_DEFAULT_HARNESSES, AUTO_APPROVE_COMMENT_LINES,
-// defaultAutoApproveConfig, renderAutoApproveSnippet. 63 -> 68. The
-// module's one type-only export (AutoApproveDefaultConfig) is absent
-// from this list for the same reason the delegation module's eight are.
+// default"), by the shipped `auto_approve` default (auto-approve-default.ts).
+// The module's own header exports five VALUE names, but only two are
+// re-exported through the barrel: defaultAutoApproveConfig,
+// renderAutoApproveSnippet. 63 -> 65. `AUTO_APPROVE_DEFAULT_WHEN`,
+// `AUTO_APPROVE_DEFAULT_HARNESSES`, and `AUTO_APPROVE_COMMENT_LINES` were
+// re-exported too when this widening first landed, then dropped from the
+// barrel in the SAME task's review round 2 (F7): grepped and confirmed no
+// caller outside auto-approve-default.ts used the bare re-export: every
+// consumer wants the already-assembled config/snippet, not the raw
+// pieces. The module's one type-only export (AutoApproveDefaultConfig) is
+// absent from this list for the same reason the delegation module's
+// eight are.
 // Widened an eighth time, same task, by the four VALUE exports of the
 // hook-side permission-mode observation
 // (permission-mode-observations.ts): PERMISSION_MODE_OBSERVATION_DIRNAME,
 // permissionModeObservationPathFor, recordPermissionModeObservation,
-// listPermissionModeObservations. 68 -> 72. The module's two type-only
+// listPermissionModeObservations. 65 -> 69. The module's two type-only
 // exports (PermissionModeObservation, PermissionModeObservationsResult)
 // are absent from this list for the same reason.
 //
@@ -77,9 +83,6 @@ const EXPECTED_EXPORTS = [
   "APPROVAL_MARKER_TASK_PREFIX",
   "APPROVED_LEDGER_TAG_PREFIX",
   "AUTO_APPROVED_BY_PREFIX",
-  "AUTO_APPROVE_COMMENT_LINES",
-  "AUTO_APPROVE_DEFAULT_HARNESSES",
-  "AUTO_APPROVE_DEFAULT_WHEN",
   "AUTO_APPROVE_HARNESS_VALUES",
   "CLAUDE_CODE_HARNESS",
   "DEFAULT_AUTO_APPROVE_HARNESSES",
@@ -146,9 +149,9 @@ const EXPECTED_EXPORTS = [
 ] as const;
 
 describe("understanding-before-execution-runtime shim export surface", () => {
-  it("exports exactly the pinned 72-name surface, sorted", () => {
+  it("exports exactly the pinned 69-name surface, sorted", () => {
     const actual = Object.keys(ubeShim).sort();
-    expect(EXPECTED_EXPORTS).toHaveLength(72);
+    expect(EXPECTED_EXPORTS).toHaveLength(69);
     expect(actual).toEqual([...EXPECTED_EXPORTS].sort());
   });
 

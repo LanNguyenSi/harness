@@ -3004,11 +3004,12 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .description(
       "Retention-based cleanup of harness-owned gate state: terminal " +
         "(approved/expired) understanding-gate reports, parse-error logs, " +
-        "approval markers, expired delegation markers, and orphaned delegation " +
-        "adoption ledgers older than the retention window. Pending reports and " +
-        "anything outside the enumerated harness-owned dirs are never touched " +
-        "(the evidence ledger and solution-acceptance verdict dirs are owned by " +
-        "their producers). Dry-run by default; pass --apply to delete.",
+        "approval markers, expired delegation markers, orphaned delegation " +
+        "adoption ledgers, and stale permission-mode observations older than " +
+        "the retention window. Pending reports and anything outside the " +
+        "enumerated harness-owned dirs are never touched (the evidence " +
+        "ledger and solution-acceptance verdict dirs are owned by their " +
+        "producers). Dry-run by default; pass --apply to delete.",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option(
@@ -3035,6 +3036,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         result.approvalsDir,
         result.delegationsDir,
         result.adoptionLedgerDir,
+        result.permissionModeObservationsDir,
       ];
       if (result.parseErrorsDir === null) {
         stderr(

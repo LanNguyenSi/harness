@@ -108,12 +108,17 @@ export {
 // `harness init`, `harness pack upgrade understanding-before-execution`
 // and `harness doctor`'s missing-auto_approve finding all render from,
 // see auto-approve-default.ts's module header for why.
+//
+// `AUTO_APPROVE_DEFAULT_WHEN`, `AUTO_APPROVE_DEFAULT_HARNESSES`, and
+// `AUTO_APPROVE_COMMENT_LINES` are deliberately NOT re-exported here
+// (review round 2 F7): every caller outside this module wants the
+// already-assembled `defaultAutoApproveConfig()` / `renderAutoApproveSnippet()`,
+// never the three raw pieces; grepped before dropping them (task
+// 8f637efd, review round 2) and confirmed no consumer outside
+// auto-approve-default.ts itself used the bare re-export.
 export {
-  AUTO_APPROVE_DEFAULT_WHEN,
-  AUTO_APPROVE_DEFAULT_HARNESSES,
   type AutoApproveDefaultConfig,
   defaultAutoApproveConfig,
-  AUTO_APPROVE_COMMENT_LINES,
   renderAutoApproveSnippet,
 } from "./auto-approve-default.js";
 

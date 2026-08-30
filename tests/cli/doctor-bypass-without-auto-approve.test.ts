@@ -9,6 +9,12 @@
 // red: the fixture test because the finding now vanishes when it
 // should fire, the negative control because it now fires when it
 // should stay silent.
+//
+// Review round 2 F2: the `harnessAllowed(autoApprove, CLAUDE_CODE_HARNESS)`
+// leg of `covered` was inert (no test exercised the case where `when`
+// covers `bypassPermissions` but `harnesses` does not cover
+// `claude-code`); "auto_approve present but claude-code not in
+// harnesses (codex only): still fires" below covers it.
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -161,6 +167,29 @@ policy_packs:
       auto_approve:
         when: [acceptEdits]
         harnesses: [claude-code]
+        require_report: true
+`);
+    const result = checkBypassWithoutAutoApprove(manifest, generatedDir, { recentSessions: 20 });
+    expect(result).toBeDefined();
+    expect(result?.sessionId).toBe("sess-new");
+  });
+
+  it("auto_approve present but claude-code not in harnesses (codex only): still fires", () => {
+    const generatedDir = tempGeneratedDir();
+    writeObservation(generatedDir, "sess-new", "bypassPermissions", "2026-08-29T10:00:00.000Z");
+    const manifest = manifestFor(`version: 1
+hooks: []
+policies: []
+${SILENCE_DRIFT}tools:
+  builtin:
+    known: [Read]
+policy_packs:
+  - name: understanding-before-execution
+    config:
+      mode: grill_me
+      auto_approve:
+        when: [bypassPermissions]
+        harnesses: [codex]
         require_report: true
 `);
     const result = checkBypassWithoutAutoApprove(manifest, generatedDir, { recentSessions: 20 });

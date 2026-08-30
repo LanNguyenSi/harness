@@ -134,6 +134,60 @@ policy_packs:
     expect(result.error).toMatch(/ambiguous/);
   });
 
+  it("finds the pack entry when its name is double-quoted (review round 2 F4)", () => {
+    const doubleQuoted = `version: 1
+policy_packs:
+  - name: "understanding-before-execution"
+    config:
+      mode: grill_me
+`;
+    const result = applyAutoApproveUpgrade(doubleQuoted);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.changed).toBe(true);
+    expect(result.text).toContain("auto_approve:");
+    const parsed = parseYaml(result.text) as {
+      policy_packs: Array<{ name: string; config?: Record<string, unknown> }>;
+    };
+    const pack = parsed.policy_packs.find((p) => p.name === "understanding-before-execution")!;
+    expect(configSchema.safeParse(pack.config).success).toBe(true);
+  });
+
+  it("finds the pack entry when its name is single-quoted (review round 2 F4)", () => {
+    const singleQuoted = `version: 1
+policy_packs:
+  - name: 'understanding-before-execution'
+    config:
+      mode: grill_me
+`;
+    const result = applyAutoApproveUpgrade(singleQuoted);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.changed).toBe(true);
+    expect(result.text).toContain("auto_approve:");
+    const parsed = parseYaml(result.text) as {
+      policy_packs: Array<{ name: string; config?: Record<string, unknown> }>;
+    };
+    const pack = parsed.policy_packs.find((p) => p.name === "understanding-before-execution")!;
+    expect(configSchema.safeParse(pack.config).success).toBe(true);
+  });
+
+  it("preserves CRLF line endings end to end, no bare LF in the result (review round 2 F6)", () => {
+    const crlfManifest = MANIFEST_NO_BLOCK.replace(/\n/g, "\r\n");
+    const result = applyAutoApproveUpgrade(crlfManifest);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.changed).toBe(true);
+    // No bare LF anywhere: every "\n" in the result is part of a "\r\n" pair.
+    expect(result.text.replace(/\r\n/g, "")).not.toContain("\n");
+    expect(result.text).toContain("\r\n      auto_approve:\r\n        when: [bypassPermissions]");
+    const parsed = parseYaml(result.text) as {
+      policy_packs: Array<{ name: string; config?: Record<string, unknown> }>;
+    };
+    const pack = parsed.policy_packs.find((p) => p.name === "understanding-before-execution")!;
+    expect(configSchema.safeParse(pack.config).success).toBe(true);
+  });
+
   it("refuses when the pack block has no config: key", () => {
     const noConfig = `version: 1
 policy_packs:
@@ -144,6 +198,76 @@ policy_packs:
       protected_branches: [master]
 `;
     const result = applyAutoApproveUpgrade(noConfig);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatch(/config:/);
+  });
+
+  it("a commented-out # auto_approve: line does not count as present (review round 2)", () => {
+    const commentedOut = `version: 1
+policy_packs:
+  - name: understanding-before-execution
+    config:
+      mode: grill_me
+      # auto_approve:
+      #   when: [bypassPermissions]
+`;
+    const result = applyAutoApproveUpgrade(commentedOut);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.changed).toBe(true);
+    // The real block was inserted (not skipped as "already present"): two
+    // occurrences of the literal key now, the commented one plus the real one.
+    expect(result.text.match(/auto_approve:/g)).toHaveLength(2);
+    const parsed = parseYaml(result.text) as {
+      policy_packs: Array<{ name: string; config?: Record<string, unknown> }>;
+    };
+    const pack = parsed.policy_packs.find((p) => p.name === "understanding-before-execution")!;
+    expect(configSchema.safeParse(pack.config).success).toBe(true);
+  });
+
+  it("auto_approve declared under a DIFFERENT pack does not count as present, and the block lands in the right pack (review round 2)", () => {
+    const otherPackHasIt = `version: 1
+policy_packs:
+  - name: branch-protection
+    config:
+      auto_approve:
+        when: [bypassPermissions]
+        harnesses: [claude-code]
+        require_report: true
+  - name: understanding-before-execution
+    config:
+      mode: grill_me
+`;
+    const result = applyAutoApproveUpgrade(otherPackHasIt);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.changed).toBe(true);
+    const parsed = parseYaml(result.text) as {
+      policy_packs: Array<{ name: string; config?: Record<string, unknown> }>;
+    };
+    const ube = parsed.policy_packs.find((p) => p.name === "understanding-before-execution")!;
+    expect((ube.config as Record<string, unknown>)["auto_approve"]).toEqual({
+      when: ["bypassPermissions"],
+      harnesses: ["claude-code"],
+      require_report: true,
+    });
+    // branch-protection's own auto_approve-shaped key is untouched, still exactly one.
+    const branchProtection = parsed.policy_packs.find((p) => p.name === "branch-protection")!;
+    expect((branchProtection.config as Record<string, unknown>)["auto_approve"]).toEqual({
+      when: ["bypassPermissions"],
+      harnesses: ["claude-code"],
+      require_report: true,
+    });
+  });
+
+  it("refuses on flow-style config: {...} (no bare config: key to insert under) (review round 2)", () => {
+    const flowStyle = `version: 1
+policy_packs:
+  - name: understanding-before-execution
+    config: {mode: grill_me}
+`;
+    const result = applyAutoApproveUpgrade(flowStyle);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toMatch(/config:/);

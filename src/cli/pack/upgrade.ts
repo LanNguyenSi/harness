@@ -88,10 +88,37 @@ export type ApplyAutoApproveUpgradeResult =
  * Exported for direct unit testing without going through the CLI/file
  * layer.
  */
-export function applyAutoApproveUpgrade(original: string): ApplyAutoApproveUpgradeResult {
-  const lines = original.split("\n");
+/**
+ * The line ending most of `text` uses, so an insertion into a CRLF
+ * manifest does not mix in bare-LF lines (task 8f637efd review round 2
+ * F6): counts `\r\n` occurrences against LF-only ones (every `\n` not
+ * part of a `\r\n` pair) and picks whichever is more common, defaulting
+ * to `\n` on a tie or an all-LF file.
+ */
+function detectDominantEol(text: string): "\n" | "\r\n" {
+  const crlfCount = (text.match(/\r\n/g) ?? []).length;
+  const totalLf = (text.match(/\n/g) ?? []).length;
+  const lfOnlyCount = totalLf - crlfCount;
+  return crlfCount > lfOnlyCount ? "\r\n" : "\n";
+}
 
-  const packNameRe = /^(\s*)-\s*name:\s*understanding-before-execution\s*(#.*)?$/;
+export function applyAutoApproveUpgrade(original: string): ApplyAutoApproveUpgradeResult {
+  const eol = detectDominantEol(original);
+  // Split on either line ending so every line in `lines` is `\r`-free
+  // (its own trailing `\r`, if any, is consumed by the delimiter, not
+  // left dangling on the line content); the array is rejoined with the
+  // detected `eol` below, so a CRLF manifest stays CRLF end to end
+  // instead of picking up bare-LF lines from the inserted snippet.
+  const lines = original.split(/\r\n|\n/);
+
+  // Accepts a bare, double-quoted, or single-quoted scalar for the pack
+  // name (task 8f637efd review round 2 F4): `- name: understanding-before-execution`,
+  // `- name: "understanding-before-execution"`, and
+  // `- name: 'understanding-before-execution'` are all schema-valid YAML
+  // for the same value; the bare-only form previously refused the
+  // quoted spellings with "could not find a ... entry".
+  const packNameRe =
+    /^(\s*)-\s*name:\s*(?:"understanding-before-execution"|'understanding-before-execution'|understanding-before-execution)\s*(#.*)?$/;
   const packMatches: { index: number; indent: number }[] = [];
   for (let i = 0; i < lines.length; i++) {
     const m = packNameRe.exec(lines[i] ?? "");
@@ -167,7 +194,7 @@ export function applyAutoApproveUpgrade(original: string): ApplyAutoApproveUpgra
   const snippetLines = renderAutoApproveSnippet(configIndent + 2).split("\n");
   const insertAt = lastContentIdx + 1;
   const next = [...lines.slice(0, insertAt), ...snippetLines, ...lines.slice(insertAt)];
-  return { ok: true, text: next.join("\n"), changed: true };
+  return { ok: true, text: next.join(eol), changed: true };
 }
 
 /**

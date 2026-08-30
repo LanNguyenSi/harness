@@ -10,11 +10,23 @@
 // children) from one template and this test's presence/equality
 // assertion for that template goes red; restoring the block turns it
 // green again.
+//
+// Review round 2 F3: `harness init --interactive` Custom profile
+// (composer.ts's `composeCustom`) is also a template-shaped surface that
+// enables this pack, and it had been missed by this default entirely
+// (it builds a config OBJECT, not YAML text, so `renderAutoApproveSnippet`
+// does not apply; it reads `defaultAutoApproveConfig()` instead). The
+// "Custom composer" case below pins that.
+//
+// Mutation probe M3: drop the `auto_approve: defaultAutoApproveConfig()`
+// line from composer.ts's understanding-before-execution branch and the
+// "Custom composer" test below goes red; restoring it turns it green.
 
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { FULL_TEMPLATE, MINIMAL_TEMPLATE } from "../../src/cli/init/templates.js";
 import { SOLO_TEMPLATE, TEAM_TEMPLATE } from "../../src/cli/init/profiles.js";
+import { composeCustom } from "../../src/cli/init/composer.js";
 import { configSchema } from "../../src/policy-packs/builtin/understanding-before-execution.js";
 import { defaultAutoApproveConfig } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
@@ -49,5 +61,21 @@ describe("harness init templates ship an active auto_approve default (task 8f637
   it("MINIMAL_TEMPLATE declares no policy_packs at all, so there is no auto_approve to pin", () => {
     const m = parseManifest(parseYaml(MINIMAL_TEMPLATE));
     expect(m.policy_packs).toEqual([]);
+  });
+
+  it("Custom composer (composeCustom) ships the same auto_approve default when understanding-before-execution is selected", () => {
+    const { yaml } = composeCustom({
+      packs: ["understanding-before-execution"],
+      mcps: [],
+      policies: [],
+    });
+    const m = parseManifest(parseYaml(yaml));
+    const cfg = packConfig(m, "understanding-before-execution");
+
+    expect(cfg["auto_approve"]).toBeDefined();
+    expect(cfg["auto_approve"]).toEqual(defaultAutoApproveConfig());
+
+    const parsed = configSchema.safeParse(cfg);
+    expect(parsed.success).toBe(true);
   });
 });
