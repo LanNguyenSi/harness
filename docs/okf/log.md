@@ -320,3 +320,8 @@
   what the hook reads and writes are unchanged, so this is a timestamp-only
   re-stamp. Verdict: `npx -y okf-kit@0.8.0 check docs/okf` shows no
   sources-fresh finding on this doc afterwards.
+- `evidence-ledger-trust-boundary.md`, `pause-vs-gate-kill-switch.md`: both
+  list `CHANGELOG.md` as a source; round 4 appended one bullet to the task
+  `8f637efd` entry there, which neither doc describes. Re-read the
+  CHANGELOG-citing passages of both docs, no change needed, timestamp-only
+  re-stamp.
