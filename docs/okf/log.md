@@ -2,6 +2,120 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-08-30T10:20:00Z, re-stamp on commit-time recheck (task `8f637efd`,
+  review round 3, findings F1-F5): after the round-3 fixes commit
+  (`bbf6f7f`), ran `npx okf-kit@0.8.0 check docs/okf` and computed
+  newly-stale docs against the round-2 re-stamp baseline (the state this
+  branch merged from `origin/master`). Four docs came back STALE, each
+  because a source this task's commit touched appears in that doc's
+  `sources:` list: `evidence-ledger-trust-boundary.md`
+  (`docs/policy-packs/understanding-before-execution.md`, `CHANGELOG.md`),
+  `pause-vs-gate-kill-switch.md` (`src/cli/index.ts`, `CHANGELOG.md`),
+  `understanding-gate-auto-mode-signals.md`
+  (`permission-mode-observations.ts`,
+  `docs/policy-packs/understanding-before-execution.md`), and
+  `understanding-gate-lockout-recovery.md` (`src/cli/index.ts`,
+  `docs/policy-packs/understanding-before-execution.md`). Checked each
+  doc's actual claims against what round 3 changed: the `src/cli/index.ts`
+  edit (F5) is a single in-place string edit inside the `pack upgrade`
+  `--description` help text at line 1224-1227 (no line added or removed),
+  nowhere near either doc's cited ranges (`1584-1599`, `2726-2731`,
+  `3086-3185`, `3088-3094`); the `permission-mode-observations.ts` edits
+  (F1: `rejectMalformedSessionId` on write, `sanitizeForDisplay` on read;
+  F2: corrected module-header trust framing) changed HOW the sessionId is
+  validated/sanitized, not WHAT is written or that it is consumed only by
+  `harness doctor`'s advisory finding, which is the only claim
+  `understanding-gate-auto-mode-signals.md` makes about this file; and the
+  `docs/policy-packs/understanding-before-execution.md` edits (F5's
+  heading-only task-id drop, F2's "hook-written, not agent-writable" ->
+  unsigned/advisory wording correction) touch no claim any of the four
+  docs actually restates or contradicts (`evidence-ledger-trust-boundary.md`
+  and `understanding-gate-lockout-recovery.md` list the doc only as a
+  background source, with no line citation into it; neither of the other
+  two make a signed/unsigned claim about the permission-mode observation
+  either way). No doc's substantive claims describe content round 3
+  altered, so all four `timestamp:` fields are bumped with no content
+  edit. The pre-existing citation-resolve drift on
+  `understanding-gate-lockout-recovery.md` (`hook-pre-tool-use.ts:771`
+  anchor, `hook-codex-pre-tool-use.ts:358` closing-brace start line) and
+  on `pause-vs-gate-kill-switch.md` (`docs/for-humans.md:394-395` blank
+  start line) is unrelated to this task's changes and left as-is, same as
+  the round-2 entry below already found for the same two docs. The
+  remaining STALE findings from this run (`codex-adapter-parity-gaps.md`,
+  `debug-verb-selection.md`, `gate-fail-posture-matrix.md`,
+  `manifest-validation-scope.md`, `policy-engine-producer-wiring.md`,
+  `quote-model-divergence.md`) are the identical pre-existing set the
+  round-2 entry below already accepted (confirmed by running the same
+  check against the pre-round-3 commit `d64eed6`, which shows the same
+  six docs and no others), and are left out of scope here per the
+  orchestrator's F6 acceptance for this task.
+
+- 2026-08-30T09:42:00Z, re-stamp on commit-time recheck (task `8f637efd`,
+  review round 2, F8 final verification): after the round-2 fixes
+  commit, ran `npx okf-kit@0.8.0 check docs/okf` and computed
+  newly-stale docs by COMMIT time (not local mtime) against
+  `origin/master`. Two docs this branch had already re-stamped in round
+  1 came back STALE again, both from round-2 edits to a file their
+  `sources:` list names: `understanding-gate-auto-mode-signals.md`
+  (`permission-mode-observations.ts`, touched by F1's dedup extraction;
+  `src/cli/pack/hook-pre-tool-use.ts`, whose "last touched" commit moved
+  to the round-1/master merge commit even though this branch's own diff
+  against `origin/master` for that file is unchanged since round 1: a
+  merge-commit history-simplification artifact, not new content) and
+  `understanding-gate-lockout-recovery.md` (`src/cli/index.ts`, touched
+  by F5's `gc` command wiring, well after the line range the doc cites
+  from that file; same `hook-pre-tool-use.ts` merge-commit artifact).
+  Re-read both docs' claims against every round-2-touched source in
+  their list: neither doc's substantive claims (the observation
+  mechanism's read/write contract; the `approve` command's flag list)
+  describe code this task's changes actually altered, so both
+  `timestamp:` fields are bumped with no content edit. Two OTHER STALE
+  findings from the same run were checked and left as pre-existing,
+  unrelated citation drift, confirmed against the pre-task common
+  ancestor `a08efe0`: `understanding-gate-lockout-recovery.md`'s
+  `hook-pre-tool-use.ts:771#"writePendingApproval(...)"` anchor already
+  missed its target there, and `pause-vs-gate-kill-switch.md`'s
+  `src/cli/index.ts:3086-3185` / `:3088-3094` pause/gate-command ranges
+  already pointed at the unrelated `uninstall` command's description
+  there too (same drift the entry below already named). Several other
+  docs under this directory (codex-adapter-parity-gaps.md,
+  debug-verb-selection.md, gate-fail-posture-matrix.md,
+  policy-engine-producer-wiring.md, quote-model-divergence.md) also came
+  back STALE against files this branch touched (docs/CLI.md,
+  CHANGELOG.md, `src/cli/index.ts`, `src/cli/doctor/index.ts`,
+  `src/cli/init/composer.ts`, `src/cli/init/templates.ts`,
+  `docs/examples/full-manifest.yaml`, `docs/policy-packs/understanding-before-execution.md`);
+  these are out of this task's scope (none of their sources: lists are
+  this task's own primary subject, and re-reading all five in full is a
+  larger sweep than one task's fix-round budget covers) and are left
+  as-is, flagged here rather than folded into a vague "unrelated"
+  mention.
+- 2026-08-30T09:32:00Z, targeted correction (task `8f637efd`, review round
+  2, F8): the 2026-08-30T08:46:21Z entry below said "several other docs
+  under this directory already carried staleness against unrelated prior
+  commits before this task started" without naming them. That residue is
+  two specific docs, both because THIS task's own `src/cli/init/templates.ts`
+  edit (the `auto_approve` snippet insertion, round 1) touched a file
+  their `sources:` list: `evidence-ledger-trust-boundary.md` and
+  `pause-vs-gate-kill-switch.md`. Re-read both against the templates.ts
+  change (additive: one new config key rendered into the pack's
+  `config:` mapping) and, for round 2, against `src/cli/init/composer.ts`
+  (also a source of `evidence-ledger-trust-boundary.md`; F3 added the
+  same `auto_approve` default there) and `src/cli/index.ts` (a source of
+  `pause-vs-gate-kill-switch.md`; F5 added the `gc` command's
+  permission-mode-observation sweep, +2 net lines before the pause/gate
+  command registration): neither doc's claims describe any of the four
+  changed regions, so no content edit is needed in either doc; both
+  `timestamp:` fields are bumped. Separately, and NOT fixed by this
+  correction: `pause-vs-gate-kill-switch.md` cites `src/cli/index.ts:3086-3185`
+  / `:3088-3094` for the `pause`/`gate` command registrations; both
+  ranges already pointed at the unrelated `uninstall` command's
+  description before this task touched the file at all (confirmed
+  against the pre-round-1 merge commit), so this is genuinely
+  pre-existing citation drift from an earlier, unrelated change, out of
+  this task's scope; round 2's F5 edit shifts those already-wrong line
+  numbers by +2 more but does not newly break a citation that resolved
+  correctly before.
 - 2026-08-30T08:54:18Z, re-stamped `understanding-gate-lockout-recovery.md`
   after the same round-1-fix edit to `understanding-before-execution.md`'s
   Cleanup paragraph (this doc lists it as a source): re-read its own
@@ -37,6 +151,39 @@
   citation in the same file (cited from `gate-fail-posture-matrix.md`)
   sits above every edit and still holds; no citation linter exists yet to
   re-run instead.
+- 2026-08-30T08:46:21Z, understanding-gate auto-approval install default
+  (task `8f637efd`, D-004, amendment to
+  docs/decisions/2026-08-27-ug-auto-mode-approval.md): FULL_TEMPLATE,
+  SOLO_TEMPLATE, and TEAM_TEMPLATE now ship an active `auto_approve`
+  block; a new `harness pack upgrade understanding-before-execution` verb
+  inserts it into an existing manifest; a new `harness doctor` advisory
+  fires when `bypassPermissions` was observed for a session and
+  `auto_approve` does not cover it. The PreToolUse hook
+  (`src/cli/pack/hook-pre-tool-use.ts`) gained one new side-effect write
+  (a per-session `permission_mode` observation), at the same point in its
+  decision order the existing auto-approval attempt already runs at;
+  nothing about the decision order, the fail-open contract, or the marker
+  authority changed. Checked every doc under this directory that names
+  the touched source paths (the templates, the PreToolUse hook, the
+  understanding-before-execution pack module) for a line-number-anchored
+  citation into the changed regions: none of the found citations point
+  into content this change actually touched. Two pre-existing
+  line-number citations into files this change also edits were found
+  already stale before this change (confirmed against the pre-change
+  commit) and are out of this task's scope; left as-is and flagged
+  separately. `understanding-gate-auto-mode-signals.md`'s "What harness
+  reads today" section listed exactly one call site consulting
+  `permission_mode` in the PreToolUse hook; this change adds a second,
+  non-gating read at the same call site, so that bullet now names the
+  new observation write and its source file, and the doc's own
+  `timestamp:` and `sources:` were updated to match. `npx okf-kit@0.8.0
+  check docs/okf` was run against this worktree both before and after
+  that edit: zero errors both times, plus a pre-existing set of
+  sources-fresh / citations-resolve warnings unrelated to this change
+  (several other docs under this directory already carried staleness
+  against unrelated prior commits before this task started; those were
+  left as-is, since bumping a doc's timestamp while it still carries
+  unrelated staleness would overstate its freshness).
 - 2026-08-27T17:54:07Z, understanding-gate auto-approval, slice 1 code half
   (agent-tasks `74b4b17d`): the PreToolUse hook gained the opt-in
   `auto_approve` path at the end of its decision order
@@ -164,3 +311,17 @@
   manifest-validation-scope, understanding-gate-lockout-recovery,
   pause-vs-gate-kill-switch, codex-adapter-parity-gaps, debug-verb-selection.
 - 2026-07-09T02:50:15.112Z, bundle scaffolded by `okf-kit init`.
+
+## 2026-08-30 re-stamp after task 8f637efd review round 4
+
+- `understanding-gate-auto-mode-signals.md`: re-verified against
+  `permission-mode-observations.ts` after round 4 exported the display
+  sanitiser and applied it to `observedAt` as well; the doc's claims about
+  what the hook reads and writes are unchanged, so this is a timestamp-only
+  re-stamp. Verdict: `npx -y okf-kit@0.8.0 check docs/okf` shows no
+  sources-fresh finding on this doc afterwards.
+- `evidence-ledger-trust-boundary.md`, `pause-vs-gate-kill-switch.md`: both
+  list `CHANGELOG.md` as a source; round 4 appended one bullet to the task
+  `8f637efd` entry there, which neither doc describes. Re-read the
+  CHANGELOG-citing passages of both docs, no change needed, timestamp-only
+  re-stamp.

@@ -25,6 +25,7 @@ import {
   defaultUx as understandingDefaultUx,
   type Mode,
 } from "../../policy-packs/builtin/understanding-before-execution.js";
+import { defaultAutoApproveConfig } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { defaultUx as branchProtectionDefaultUx } from "../../policy-packs/builtin/branch-protection.js";
 
 export type CustomPackKey = "understanding-before-execution" | "branch-protection";
@@ -618,6 +619,14 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
               ],
               max_age: "4h",
             },
+            // D-004 (task 8f637efd, review round 2 F3): Custom had been
+            // the one template-shaped surface this default missed;
+            // FULL_TEMPLATE / SOLO_TEMPLATE / TEAM_TEMPLATE all ship it
+            // via templates.ts's `renderAutoApproveSnippet`, but this
+            // composer builds a config OBJECT, not YAML text, so it reads
+            // the same canonical source's data form instead
+            // (`defaultAutoApproveConfig()`), never a hand-copied literal.
+            auto_approve: defaultAutoApproveConfig(),
           },
         };
       }

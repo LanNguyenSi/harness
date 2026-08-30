@@ -55,6 +55,7 @@ import {
   isUnderstandingPackEnabled,
 } from "./understanding-mode-env.js";
 import { checkAutoApproveMode } from "./auto-approve-mode.js";
+import { checkBypassWithoutAutoApprove } from "./bypass-without-auto-approve.js";
 import {
   runDoctorToolchainParity,
   type RunDoctorToolchainParityOptions,
@@ -1120,6 +1121,10 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // auto_approve configured outside grill_me (agent-tasks abfad738):
   // always advisory, never an error, see auto-approve-mode.ts.
   if (report.ugAutoApproveMode) warningCount++;
+  // bypassPermissions observed, auto_approve missing/mismatched (task
+  // 8f637efd): always advisory, never an error, see
+  // bypass-without-auto-approve.ts.
+  if (report.ugBypassWithoutAutoApprove) warningCount++;
   if (report.settingsDrift) warningCount += report.settingsDrift.warnings.length;
   if (report.codexConfigDrift) warningCount += report.codexConfigDrift.warnings.length;
   if (report.memory.routerExecutable && !report.memory.routerExecutable.exists) errorCount++;
@@ -1298,6 +1303,16 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const ugDelegations = understandingPackEnabled
     ? buildUgDelegations(generatedDir, { ...(opts.now !== undefined ? { now: opts.now } : {}) })
     : undefined;
+  // Task 8f637efd ("Amendment: install default"): bypassPermissions
+  // observed (hook-side) but auto_approve missing/mismatched. Same gate
+  // and same recentSessions window as ugAutoApprovals, reading a
+  // different on-disk directory (.permission-mode-observations/, not
+  // .approvals/).
+  const ugBypassWithoutAutoApprove = understandingPackEnabled
+    ? checkBypassWithoutAutoApprove(manifest, generatedDir, {
+        recentSessions: recentSessionsWindow,
+      })
+    : undefined;
   // Shared option shape both drift checks below take (same manifest,
   // same generated dir, same lock, same cwd/home/env resolution), one
   // literal instead of two near-identical ones (`buildSettingsDrift` and
@@ -1378,6 +1393,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     ...(understandingModeEnv !== undefined ? { understandingModeEnv } : {}),
     ...(ugAutoApprovals !== undefined ? { ugAutoApprovals } : {}),
     ...(ugDelegations !== undefined ? { ugDelegations } : {}),
+    ...(ugBypassWithoutAutoApprove !== undefined ? { ugBypassWithoutAutoApprove } : {}),
     ...(ugAutoApproveMode !== undefined ? { ugAutoApproveMode } : {}),
     ...(settingsDrift !== undefined ? { settingsDrift } : {}),
     ...(codexConfigDrift !== undefined ? { codexConfigDrift } : {}),

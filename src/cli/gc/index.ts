@@ -16,6 +16,8 @@
 //       <generatedDir>/.approvals      session / task / branch-protection markers
 //       <generatedDir>/.delegations       signed delegation markers (slice 3)
 //       <generatedDir>/.delegation-adoptions   once-per-session adoption ledgers
+//       <generatedDir>/.permission-mode-observations   per-session PreToolUse
+//                                          permission_mode observations (task 8f637efd)
 //     The evidence ledger (grounding-mcp) and solution-acceptance
 //     verdict dirs (producer-owned) are out of scope by design.
 //   - Deletion failures are surfaced loudly per file, never swallowed.
@@ -38,6 +40,16 @@
 // an operator can see it, but `--apply` never touches it, and its ledger
 // sibling (if any) stays too, since "this delegation is dead" cannot be
 // established for one gc cannot read.
+//
+// PERMISSION-MODE OBSERVATIONS SWEEP (task 8f637efd review round 2 F5):
+// `.permission-mode-observations/` (one small per-session file, see
+// permission-mode-observations.ts) grows the same way `.approvals/` and
+// `.delegations/` do (nothing else ever removes an entry), and gc had
+// not been taught about it. Swept under its own `"permission-mode-
+// observation"` category by mtime, same `staleFilesByMtime` helper and
+// `retentionDays` window every mtime-aged category here already uses (no
+// signed `expires` to key off, unlike the delegation sweep: this is a
+// plain observation record, not an approval artifact).
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -47,6 +59,7 @@ import {
   ADOPTION_LEDGER_DIRNAME,
   APPROVAL_MARKER_DIRNAME,
   DELEGATION_MARKER_DIRNAME,
+  PERMISSION_MODE_OBSERVATION_DIRNAME,
   defaultReportsDir,
   listPersistedReports,
   parseDelegationApprovedBy,
@@ -73,7 +86,12 @@ export interface GcOptions extends LoaderOptions {
   now?: Date;
 }
 
-export type GcCategory = "report" | "parse-error" | "approval-marker" | "delegation";
+export type GcCategory =
+  | "report"
+  | "parse-error"
+  | "approval-marker"
+  | "delegation"
+  | "permission-mode-observation";
 
 export interface GcCandidate {
   filePath: string;
@@ -104,6 +122,7 @@ export interface GcResult {
   approvalsDir: string;
   delegationsDir: string;
   adoptionLedgerDir: string;
+  permissionModeObservationsDir: string;
   candidates: GcCandidate[];
   /** Delegation-sweep files inspected but left in place because they could not be parsed. */
   unparseable: GcUnparseable[];
@@ -351,6 +370,10 @@ export function gc(opts: GcOptions = {}): GcResult {
   const approvalsDir = path.join(generatedDir, APPROVAL_MARKER_DIRNAME);
   const delegationsDir = path.join(generatedDir, DELEGATION_MARKER_DIRNAME);
   const adoptionLedgerDir = path.join(generatedDir, ADOPTION_LEDGER_DIRNAME);
+  const permissionModeObservationsDir = path.join(
+    generatedDir,
+    PERMISSION_MODE_OBSERVATION_DIRNAME,
+  );
 
   const candidates: GcCandidate[] = [];
   const unparseable: GcUnparseable[] = [];
@@ -389,6 +412,15 @@ export function gc(opts: GcOptions = {}): GcResult {
   unparseable.push(...delegations.unparseable);
   keptCount += delegations.kept;
 
+  const permissionModeObservations = staleFilesByMtime(
+    permissionModeObservationsDir,
+    cutoffMs,
+    nowMs,
+    "permission-mode-observation",
+  );
+  candidates.push(...permissionModeObservations.candidates);
+  keptCount += permissionModeObservations.kept;
+
   const removed: string[] = [];
   const failures: Array<{ filePath: string; reason: string }> = [];
   if (opts.apply === true) {
@@ -410,6 +442,7 @@ export function gc(opts: GcOptions = {}): GcResult {
     approvalsDir,
     delegationsDir,
     adoptionLedgerDir,
+    permissionModeObservationsDir,
     candidates,
     unparseable,
     removed,

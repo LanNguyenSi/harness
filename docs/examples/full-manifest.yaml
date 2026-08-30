@@ -698,6 +698,17 @@ policy_packs:
           - '^gh pr (merge|close)\b'
           - '^git push origin (master|main)\b'
         max_age: 4h
+      # auto_approve (shipped default): a session started with
+      # bypassPermissions gets its Understanding Report approved by the
+      # hook's signed auto path instead of a human `harness approve
+      # understanding` prompt; the report itself stays mandatory.
+      # bypassPermissions is the operator's own launch choice
+      # (--dangerously-skip-permissions / --permission-mode
+      # bypassPermissions). Delete this block to restore the manual prompt.
+      auto_approve:
+        when: [bypassPermissions]
+        harnesses: [claude-code]
+        require_report: true
 
   # branch-protection (agent-tasks/2fdc5bbe, default-enabled since v0.17.2):
   # blocks Write/Edit (claude-code) or apply_patch (codex) on protected

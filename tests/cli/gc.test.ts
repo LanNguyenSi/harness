@@ -15,6 +15,7 @@ let generatedDir: string;
 let approvalsDir: string;
 let delegationsDir: string;
 let adoptionLedgerDir: string;
+let permissionModeObservationsDir: string;
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-gc-"));
@@ -24,7 +25,15 @@ beforeEach(() => {
   approvalsDir = path.join(generatedDir, ".approvals");
   delegationsDir = path.join(generatedDir, ".delegations");
   adoptionLedgerDir = path.join(generatedDir, ".delegation-adoptions");
-  for (const d of [reportsDir, parseErrorsDir, approvalsDir, delegationsDir, adoptionLedgerDir]) {
+  permissionModeObservationsDir = path.join(generatedDir, ".permission-mode-observations");
+  for (const d of [
+    reportsDir,
+    parseErrorsDir,
+    approvalsDir,
+    delegationsDir,
+    adoptionLedgerDir,
+    permissionModeObservationsDir,
+  ]) {
     fs.mkdirSync(d, { recursive: true });
   }
 });
@@ -402,6 +411,44 @@ describe("gc — non-conventional reports dir", () => {
   });
 });
 
+describe("gc - permission-mode observations (task 8f637efd review round 2 F5)", () => {
+  it("ages out a stale observation by mtime, keeps a fresh one", () => {
+    const stale = writeAged(permissionModeObservationsDir, "stale-sid", 45);
+    const fresh = writeAged(permissionModeObservationsDir, "fresh-sid", 1);
+
+    const r = run();
+    const byCategory = r.candidates.filter((c) => c.category === "permission-mode-observation");
+    expect(byCategory.map((c) => c.filePath)).toEqual([stale]);
+    expect(fs.existsSync(stale)).toBe(true); // dry-run: nothing deleted yet
+    expect(fs.existsSync(fresh)).toBe(true);
+  });
+
+  it("apply removes exactly the aged observation, keeps the fresh one on disk", () => {
+    const stale = writeAged(permissionModeObservationsDir, "stale-sid", 45);
+    const fresh = writeAged(permissionModeObservationsDir, "fresh-sid", 1);
+
+    const r = run({ apply: true });
+    expect(r.removed).toContain(stale);
+    expect(r.removed).not.toContain(fresh);
+    expect(fs.existsSync(stale)).toBe(false);
+    expect(fs.existsSync(fresh)).toBe(true);
+  });
+
+  it("dry-run lists the stale observation as a candidate but deletes nothing", () => {
+    const stale = writeAged(permissionModeObservationsDir, "stale-sid", 45);
+
+    const r = run();
+    expect(r.applied).toBe(false);
+    expect(r.candidates.some((c) => c.filePath === stale)).toBe(true);
+    expect(fs.existsSync(stale)).toBe(true);
+  });
+
+  it("reports permissionModeObservationsDir in the result", () => {
+    const r = run();
+    expect(r.permissionModeObservationsDir).toBe(permissionModeObservationsDir);
+  });
+});
+
 describe("gc — CLI wiring", () => {
   it("rejects a malformed --retention-days with a usage error", async () => {
     const { buildProgram } = await import("../../src/cli/index.js");
@@ -464,5 +511,6 @@ describe("gc — CLI wiring", () => {
     expect(err).toMatch(/bad-json-sid/);
     expect(out).toMatch(/\.delegations/);
     expect(out).toMatch(/\.delegation-adoptions/);
+    expect(out).toMatch(/\.permission-mode-observations/);
   });
 });

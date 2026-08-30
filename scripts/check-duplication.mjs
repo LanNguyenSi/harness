@@ -147,7 +147,28 @@ import * as path from "node:path";
 // base would mean touching `cli/add/index.ts` and `cli/pack/reseed.ts`,
 // out of this task's scope (allowed_changes restricts this slice to
 // `cli/remove/**`); same rationale as every raise above.
-const MAX_CLONES = 111;
+// Raised to 113 for `cli/pack/upgrade.ts` (task 8f637efd, review round 2
+// fix F1): the new verb's `resolveTargetPath`/`DEFAULT_BASENAME`/
+// `LOCK_BASENAME` setup and its schema-gate-before-write block are the
+// SAME `resolveTargetPath`/validate-lock-diff-write shape the
+// 68b9ad9c/99f47307 raises above already tolerate across
+// `cli/add/index.ts`, `cli/remove/index.ts`, `cli/pack/add.ts`, and
+// `cli/pack/reseed.ts` without extraction; `upgrade.ts` is a 6th member
+// of that pre-existing cluster, not a new kind of duplication. Verified
+// (not assumed) by diffing the full jscpd `duplicates[]` set against
+// this same commit with only the F1(a) `readJsonDirEntriesRejectingSymlinks`
+// extraction applied (114 -> 113 clones, the one pair this task's own
+// `permission-mode-observations.ts` <-> `ug-auto-approvals.ts` readdir
+// loop closed): the remaining two new pairs are `cli/add/index.ts:37`
+// <-> `cli/pack/upgrade.ts:68` (9 lines) and `cli/pack/remove.ts:148`
+// <-> `cli/pack/upgrade.ts:220` (16 lines), both inside the tolerated
+// cluster shape, none of them a genuinely new copy. Extracting a shared
+// base would mean touching `cli/add/index.ts`, `cli/pack/remove.ts`,
+// `cli/pack/add.ts`, and `cli/pack/reseed.ts`, out of this task's scope
+// (same rationale as every raise above).
+// Review round 3 of task 8f637efd then closed one more pair (the observation
+// reader's sanitisation split), measured 112, so the pin follows.
+const MAX_CLONES = 112;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).

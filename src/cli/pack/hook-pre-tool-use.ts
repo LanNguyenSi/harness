@@ -57,6 +57,7 @@ import {
   matchLedgerEntries,
   parseAutoApprove,
   readActiveClaim,
+  recordPermissionModeObservation,
   selectNewestStrictSessionReport,
   verifyDelegation,
   type ApprovalCheckResult,
@@ -1072,6 +1073,18 @@ export async function runPackHookPreToolUseCli(
         }
       }
     }
+  }
+
+  // Task 8f637efd: best-effort observation of this call's
+  // `permission_mode`, independent of whether `auto_approve` is even
+  // configured: this call site is deliberately the SAME one
+  // `attemptAutoApproval` runs at just below (see
+  // permission-mode-observations.ts's module header for why every call
+  // that reaches this point already needed approval, and for the
+  // coverage gap this accepts). Feeds `harness doctor`'s
+  // missing-`auto_approve` finding; never a gate input.
+  if (generatedDir !== undefined) {
+    recordPermissionModeObservation(generatedDir, sessionId, event.permission_mode, stderr);
   }
 
   const resolveAutoLedger = (): { write: LedgerWriteFn | null; reason?: string } => {

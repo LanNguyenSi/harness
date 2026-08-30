@@ -104,6 +104,37 @@ export {
   parseReportScanMaxWait,
 } from "./auto-approve.js";
 
+// D-004 shipped default (task 8f637efd): the one `auto_approve` snippet
+// `harness init`, `harness pack upgrade understanding-before-execution`
+// and `harness doctor`'s missing-auto_approve finding all render from,
+// see auto-approve-default.ts's module header for why.
+//
+// `AUTO_APPROVE_DEFAULT_WHEN`, `AUTO_APPROVE_DEFAULT_HARNESSES`, and
+// `AUTO_APPROVE_COMMENT_LINES` are deliberately NOT re-exported here
+// (review round 2 F7): every caller outside this module wants the
+// already-assembled `defaultAutoApproveConfig()` / `renderAutoApproveSnippet()`,
+// never the three raw pieces; grepped before dropping them (task
+// 8f637efd, review round 2) and confirmed no consumer outside
+// auto-approve-default.ts itself used the bare re-export.
+export {
+  type AutoApproveDefaultConfig,
+  defaultAutoApproveConfig,
+  renderAutoApproveSnippet,
+} from "./auto-approve-default.js";
+
+// Hook-side `permission_mode` observation feeding `harness doctor`'s
+// missing-`auto_approve` finding (task 8f637efd), see
+// permission-mode-observations.ts's module header.
+export {
+  PERMISSION_MODE_OBSERVATION_DIRNAME,
+  listPermissionModeObservations,
+  permissionModeObservationPathFor,
+  recordPermissionModeObservation,
+  sanitizeForDisplay,
+  type PermissionModeObservation,
+  type PermissionModeObservationsResult,
+} from "./permission-mode-observations.js";
+
 export {
   APPROVAL_MARKER_TASK_PREFIX,
   taskApprovalMarkerPathFor,
