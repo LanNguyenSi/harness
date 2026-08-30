@@ -293,6 +293,43 @@ describe("doctor: bypassPermissions without auto_approve (Environment section)",
     expect(text).not.toContain("bypassPermissions observed for session");
   });
 
+  it("a session id carrying control characters/ANSI does not echo them raw into the rendered finding (review round 3 F1c)", async () => {
+    const home = makeFixture({ "harness.yaml": MANIFEST_NO_AUTO_APPROVE });
+    // A crafted observation (either a hostile on-disk file name, or a
+    // hostile `sessionId` field inside an otherwise well-formed body)
+    // must not let a raw ANSI escape / control character reach
+    // `harness doctor`'s terminal output.
+    const hostileSessionId = "sess-\x1b[31mFAKE\x1b[0m-bell\x07";
+    writeObservation(
+      path.join(home, "harness.generated"),
+      hostileSessionId,
+      "bypassPermissions",
+      "2026-08-29T10:00:00.000Z",
+    );
+
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      versionProbe: () => null,
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+      envOverride: {},
+    });
+
+    expect(report.ugBypassWithoutAutoApprove).toBeDefined();
+    // eslint-disable-next-line no-control-regex
+    expect(/[\x00-\x1f\x7f]/.test(report.ugBypassWithoutAutoApprove?.sessionId ?? "")).toBe(false);
+    expect(report.ugBypassWithoutAutoApprove?.sessionId).not.toContain("\x1b");
+    expect(report.ugBypassWithoutAutoApprove?.message).not.toContain("\x1b[31m");
+
+    const text = format(report);
+    expect(text).not.toContain("\x1b[31m");
+    expect(text).not.toContain("\x07");
+    // The finding still fires and still names the session, just without
+    // the raw control bytes.
+    expect(text).toContain("bypassPermissions observed for session sess-");
+  });
+
   it("negative control: does not fire when no observation exists at all", async () => {
     const home = makeFixture({ "harness.yaml": MANIFEST_NO_AUTO_APPROVE });
 

@@ -20,6 +20,21 @@
 // Deliberately advisory (⚠), never an error: an operator who runs
 // `bypassPermissions` sessions on the manual approval path on purpose
 // (never wanting unattended auto-approval) is not misconfigured.
+//
+// THE OBSERVATION IS UNSIGNED (review round 3, F2). "Never the ledger,
+// never the persisted report" above is about the WRITE PATH (this
+// finding does not trust an agent-writable ledger row or report field),
+// not a claim that the observation itself is tamper-proof: unlike the
+// approval marker, `permission-mode-observations.ts`'s record carries no
+// signature, so it is evidence that `harness pack hook pre-tool-use` was
+// invoked with a given `session_id`/`permission_mode` on its stdin, not
+// proof that a particular session actually ran under that mode: an
+// already-approved session (or anything else able to invoke the hook
+// binary directly) can write, or forge, one. That is exactly why this
+// finding stays advisory-only and never feeds a gate or an approval: the
+// operator who reads it decides what it means. A possible future
+// hardening is signing the observation the way approval markers are
+// signed.
 
 import {
   CLAUDE_CODE_HARNESS,

@@ -15,7 +15,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { packUpgrade, applyAutoApproveUpgrade } from "../../src/cli/pack/index.js";
-import { HarnessExitError } from "../../src/cli/exit-codes.js";
+import { EX_FAIL, HarnessExitError } from "../../src/cli/exit-codes.js";
 import { configSchema } from "../../src/policy-packs/builtin/understanding-before-execution.js";
 
 let tmpHome: string;
@@ -261,6 +261,39 @@ policy_packs:
     });
   });
 
+  it("a flow-style auto_approve value counts as present: byte-identical no-op (review round 3 F3)", () => {
+    const flowStyleValue = `version: 1
+policy_packs:
+  - name: understanding-before-execution
+    config:
+      mode: grill_me
+      auto_approve: {when: [bypassPermissions], harnesses: [claude-code], require_report: true}
+`;
+    const result = applyAutoApproveUpgrade(flowStyleValue);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.changed).toBe(false);
+    expect(result.text).toBe(flowStyleValue);
+  });
+
+  it("a bare auto_approve: key with a trailing comment counts as present: byte-identical no-op (review round 3 F3)", () => {
+    const trailingComment = `version: 1
+policy_packs:
+  - name: understanding-before-execution
+    config:
+      mode: grill_me
+      auto_approve:  # already configured by hand
+        when: [bypassPermissions]
+        harnesses: [claude-code]
+        require_report: true
+`;
+    const result = applyAutoApproveUpgrade(trailingComment);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.changed).toBe(false);
+    expect(result.text).toBe(trailingComment);
+  });
+
   it("refuses on flow-style config: {...} (no bare config: key to insert under) (review round 2)", () => {
     const flowStyle = `version: 1
 policy_packs:
@@ -334,5 +367,70 @@ describe("packUpgrade: CLI-level", () => {
     expect(second.applied).toBe(false);
     expect(second.alreadyPresent).toBe(true);
     expect(readManifest()).toBe(afterFirst);
+  });
+
+  it("refuses with EX_FAIL (never an uncaught exit 70) when the insertion would produce unparseable YAML (review round 3 F3)", async () => {
+    // A quoted-key spelling `applyAutoApproveUpgrade`'s presence check
+    // does not special-case (only the flow-style-value and
+    // trailing-comment spellings are, review round 3 F3): the detector
+    // sees no bare `auto_approve:` and inserts a SECOND key, and `yaml`
+    // rejects the duplicate (`"auto_approve"` vs `auto_approve` resolve
+    // to the same map key) with "Map keys must be unique". Before the
+    // `parseProposedYamlOrRefuse` wrapper this reached the caller as an
+    // uncaught `YAMLParseError` (harness's own top-level handler turns
+    // that into exit 70 with the raw yaml message); now it must surface
+    // as this verb's own `HarnessExitError` at `EX_FAIL`.
+    const quotedKeyDuplicate = `version: 1
+policy_packs:
+  - name: understanding-before-execution
+    config:
+      mode: grill_me
+      "auto_approve": {when: [bypassPermissions], harnesses: [claude-code], require_report: true}
+`;
+    writeManifest(quotedKeyDuplicate);
+    let caught: unknown;
+    try {
+      await packUpgrade("understanding-before-execution", { configPath: manifestPath });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(HarnessExitError);
+    expect((caught as HarnessExitError).message).toMatch(/did not parse as YAML/);
+    expect((caught as HarnessExitError).exitCode).toBe(EX_FAIL);
+    // File untouched: the schema/parse gate runs before any write.
+    expect(readManifest()).toBe(quotedKeyDuplicate);
+  });
+
+  it("a concurrent second writer under the lock reports applied:false, alreadyPresent:true, and writes nothing itself (review round 3 F4)", async () => {
+    // Real concurrency, no mocking: both calls start synchronously
+    // before either reaches its first `await`, so both read the SAME
+    // pre-lock `original` (no `auto_approve:` yet) and both compute
+    // `changed: true`. Whichever wins the file lock first writes the
+    // block; the other re-reads under the lock, sees the block already
+    // present (`recomputed.changed === false`), and must report the
+    // no-op honestly instead of the old hardcoded `applied: true`.
+    writeManifest(MANIFEST_NO_BLOCK);
+    const [a, b] = await Promise.all([
+      packUpgrade("understanding-before-execution", { configPath: manifestPath }),
+      packUpgrade("understanding-before-execution", { configPath: manifestPath }),
+    ]);
+
+    const results = [a, b];
+    const writers = results.filter((r) => r.applied === true);
+    const noops = results.filter((r) => r.applied === false);
+    expect(writers).toHaveLength(1);
+    expect(noops).toHaveLength(1);
+    expect(noops[0]?.alreadyPresent).toBe(true);
+    expect(writers[0]?.alreadyPresent).toBe(false);
+
+    // Exactly one `auto_approve:` key on disk: the block was inserted
+    // once, not twice, regardless of which call won the race.
+    const onDisk = readManifest();
+    expect(onDisk.match(/auto_approve:/g)).toHaveLength(1);
+    const parsed = parseYaml(onDisk) as {
+      policy_packs: Array<{ name: string; config?: Record<string, unknown> }>;
+    };
+    const pack = parsed.policy_packs.find((p) => p.name === "understanding-before-execution")!;
+    expect(configSchema.safeParse(pack.config).success).toBe(true);
   });
 });

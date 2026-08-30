@@ -1224,7 +1224,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .command("upgrade <name>")
     .description(
       "Insert a pack's missing default config block into an existing manifest (today: " +
-        "understanding-before-execution's auto_approve default, task 8f637efd). Idempotent; " +
+        "understanding-before-execution's auto_approve default). Idempotent; " +
         "refuses on ambiguity rather than guessing where to insert.",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")

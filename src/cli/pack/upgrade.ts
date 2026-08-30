@@ -184,7 +184,18 @@ export function applyAutoApproveUpgrade(original: string): ApplyAutoApproveUpgra
     const indent = countLeadingSpaces(line);
     if (indent <= configIndent) break;
     lastContentIdx = i;
-    if (trimmed === "auto_approve:") autoApprovePresent = true;
+    // Review round 3, F3: any line whose trimmed form starts with
+    // `auto_approve:` counts as "already present", not only the exact
+    // bare-key spelling `auto_approve:` with nothing else on the line.
+    // That exact-equality check missed a hand-applied flow-style value
+    // (`auto_approve: {when: [bypassPermissions], ...}`) and a bare key
+    // with a trailing comment (`auto_approve:  # already configured`):
+    // both are schema-valid YAML for the same key, but neither passed
+    // `trimmed === "auto_approve:"`, so this verb would insert a SECOND
+    // `auto_approve` key and `parseYaml` below would throw "Map keys
+    // must be unique" uncaught (exit 70, a raw YAML message) instead of
+    // recognizing the upgrade as already applied.
+    if (trimmed.startsWith("auto_approve:")) autoApprovePresent = true;
   }
 
   if (autoApprovePresent) {
@@ -195,6 +206,31 @@ export function applyAutoApproveUpgrade(original: string): ApplyAutoApproveUpgra
   const insertAt = lastContentIdx + 1;
   const next = [...lines.slice(0, insertAt), ...snippetLines, ...lines.slice(insertAt)];
   return { ok: true, text: next.join(eol), changed: true };
+}
+
+/**
+ * `parseYaml`, but a parse failure on the PROPOSED (post-insertion) text
+ * surfaces as this verb's own refusal (`HarnessExitError`, `EX_FAIL`,
+ * naming the pack and that the proposed text did not parse) rather than
+ * an uncaught exception (review round 3, F3: before this wrapper, a
+ * proposal `applyAutoApproveUpgrade` mis-recognized as a genuine
+ * insertion (e.g. a duplicate key under a different quoting style this
+ * heuristic does not special-case) reached the operator as a raw
+ * "Map keys must be unique" crash at exit 70 instead of a normal
+ * refusal). `original` is never passed here: it is the operator's own
+ * file, already on disk, and is not re-validated by this verb.
+ */
+function parseProposedYamlOrRefuse(text: string, name: string, context: string): unknown {
+  try {
+    return parseYaml(text);
+  } catch (err) {
+    throw new HarnessExitError(
+      `harness pack upgrade: proposed manifest for pack ${JSON.stringify(name)} did not parse as YAML (${context}): ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      EX_FAIL,
+    );
+  }
 }
 
 /**
@@ -244,7 +280,9 @@ export async function packUpgrade(
   // reseed`: catches an insertion that would somehow produce an invalid
   // manifest (e.g. a config: key this heuristic mis-located) before it
   // reaches the operator's file.
-  const schemaResult = validateBeforeWrite(parseYaml(result.text));
+  const schemaResult = validateBeforeWrite(
+    parseProposedYamlOrRefuse(result.text, name, "post-insertion validation"),
+  );
   if (!schemaResult.ok) {
     throw new HarnessExitError(
       `proposed manifest fails schema validation:\n${formatValidationErrors(schemaResult.errors)}`,
@@ -257,6 +295,16 @@ export async function packUpgrade(
   }
 
   const lockPath = path.join(path.dirname(target), LOCK_BASENAME);
+  // Review round 3, F4: whether the locked callback actually WROTE is
+  // tracked here rather than assumed. The pre-lock read above can be
+  // stale by the time the lock is acquired: if a concurrent writer
+  // already inserted the block, the callback below returns early
+  // (`recomputed.changed === false`) without writing anything, and the
+  // result reported to the caller/CLI must say so (`applied: false,
+  // alreadyPresent: true`, so `harness pack upgrade` prints the
+  // "already carries this upgrade" message) instead of the hardcoded
+  // `applied: true` this used to return unconditionally.
+  let wroteUnderLock = false;
   await withFileLock(lockPath, () => {
     // Re-read and recompute under the lock (mirrors `pack add`): a
     // concurrent writer may have inserted the block (or changed the
@@ -267,7 +315,13 @@ export async function packUpgrade(
       throw new HarnessExitError(`harness pack upgrade: ${recomputed.error}`, EX_FAIL);
     }
     if (!recomputed.changed) return; // raced: someone else already inserted it
-    const recheck = validateBeforeWrite(parseYaml(recomputed.text));
+    const recheck = validateBeforeWrite(
+      parseProposedYamlOrRefuse(
+        recomputed.text,
+        name,
+        "post-insertion validation after lock acquisition",
+      ),
+    );
     if (!recheck.ok) {
       throw new HarnessExitError(
         `proposed manifest fails schema validation after lock acquisition:\n${formatValidationErrors(recheck.errors)}`,
@@ -275,7 +329,14 @@ export async function packUpgrade(
       );
     }
     atomicWriteFile(target, recomputed.text);
+    wroteUnderLock = true;
   });
 
-  return { path: target, name, diff, applied: true, alreadyPresent: false };
+  return {
+    path: target,
+    name,
+    diff,
+    applied: wroteUnderLock,
+    alreadyPresent: !wroteUnderLock,
+  };
 }

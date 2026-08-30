@@ -38,10 +38,26 @@
 // never a gate input, and the write happens on the same fail-open
 // posture every other best-effort write in this pack already uses
 // (`writePendingApproval`, the marker writers).
+//
+// UNSIGNED: ADVISORY ONLY, NOT PROOF (review round 3, F2). Unlike the
+// approval marker (`markers.ts`), this record is NOT HMAC-signed. It is
+// written by the hook PROCESS from whatever `session_id`/`permission_mode`
+// appear on the invocation's PreToolUse payload; that only proves the
+// hook was invoked with that payload, not that any particular session
+// actually ran under that mode: an already-approved session (or anything
+// else able to invoke `harness pack hook pre-tool-use` with crafted
+// stdin) can write, or forge, an observation. That is why
+// `checkBypassWithoutAutoApprove` (bypass-without-auto-approve.ts) is
+// wired as an advisory `harness doctor` finding ONLY: it can never gate a
+// tool call or mint an approval, and the operator who reads the finding
+// is the one who decides what to do about it. A possible future
+// hardening, not done here, is signing the observation the same way
+// approval markers are signed.
 
 import * as path from "node:path";
 import { atomicWriteFile } from "../../../io/atomic-write.js";
 import { readJsonDirEntriesRejectingSymlinks } from "../../../io/read-json-dir-entries.js";
+import { rejectMalformedSessionId } from "../../../runtime/reject-malformed-session-id.js";
 
 export const PERMISSION_MODE_OBSERVATION_DIRNAME = ".permission-mode-observations";
 
@@ -51,10 +67,20 @@ export interface PermissionModeObservation {
   observedAt: string;
 }
 
+/**
+ * `sessionId` is validated with the SAME `rejectMalformedSessionId` used
+ * for the approval marker path (`markers.ts`'s `approvalMarkerPathFor`):
+ * a value carrying `/`, `\`, `..`, or that is empty/blank throws rather
+ * than being joined into the path (review round 3, F1: the earlier
+ * version of this function trusted the caller's own empty-string check
+ * and joined `sessionId` verbatim, letting a crafted `session_id` on the
+ * hook's stdin write outside `<generatedDir>/.permission-mode-observations/`).
+ */
 export function permissionModeObservationPathFor(
   generatedDir: string,
   sessionId: string,
 ): string {
+  rejectMalformedSessionId(sessionId);
   return path.join(generatedDir, PERMISSION_MODE_OBSERVATION_DIRNAME, sessionId);
 }
 
@@ -63,11 +89,15 @@ export function permissionModeObservationPathFor(
  *
  * `permissionMode` must be a non-empty string; any other shape (absent,
  * non-string, empty) is a silent no-op: there is nothing to observe.
- * `sessionId` is trusted as already-validated by the caller
- * (`hook-pre-tool-use.ts` rejects an unresolvable session id earlier in
- * its own decision order); this function only uses it as a filename and
- * does not re-validate it. Never throws: a write failure (unwritable
- * dir, disk full, ...) is reported to `stderr` and swallowed.
+ * `sessionId` is NOT trusted as pre-validated (review round 3, F1): the
+ * caller (`hook-pre-tool-use.ts`) only rejects an EMPTY session id
+ * before this is reached, and `session_id` on the hook's stdin payload
+ * is otherwise attacker-controllable input to a CLI invocation, not a
+ * value this function may assume is already path-safe. A malformed id
+ * (path separators, `..`, blank) makes `permissionModeObservationPathFor`
+ * throw; that throw is treated exactly like any other write failure
+ * below: one `stderr` warning, never escalated into a block, never
+ * thrown out of this function.
  */
 export function recordPermissionModeObservation(
   generatedDir: string,
@@ -117,12 +147,40 @@ function isValidObservation(value: unknown): value is PermissionModeObservation 
   );
 }
 
+/** Cap applied to a sanitized `sessionId` before it reaches doctor output. */
+const DISPLAY_VALUE_MAX_LENGTH = 200;
+
+/**
+ * Strip C0/DEL control characters (including ESC, which could otherwise
+ * smuggle an ANSI escape sequence into a terminal) and cap the length,
+ * mirroring `persisted-reports.ts`'s `sanitizeDetailValue` for the same
+ * reason: `bypass-without-auto-approve.ts` embeds an observation's
+ * `sessionId` directly into a doctor finding's `message`, the surface an
+ * operator reads (review round 3, F1). This is independent of
+ * `permissionModeObservationPathFor`'s write-time
+ * `rejectMalformedSessionId` guard: that guard rejects path-traversal
+ * shapes, not control characters, and a directory entry's on-disk
+ * filename (or the `sessionId` field inside it) is never itself
+ * constrained to be display-safe: POSIX filenames may contain any byte
+ * but `/` and NUL, and the JSON body's `sessionId` field is a plain
+ * string with no such constraint either.
+ */
+function sanitizeForDisplay(value: string): string {
+  const flattened = value.replace(/[\x00-\x1f\x7f]/g, " ");
+  return flattened.length > DISPLAY_VALUE_MAX_LENGTH
+    ? `${flattened.slice(0, DISPLAY_VALUE_MAX_LENGTH)}...`
+    : flattened;
+}
+
 /**
  * Read-side: the newest `windowSize` per-session observations, newest
  * first by `observedAt`. Mirrors `ug-auto-approvals.ts`'s own
  * read-and-window convention (missing dir / empty dir / all-unreadable
  * all resolve to an empty-ish result, never throw: this is a doctor
- * read, not a gate decision).
+ * read, not a gate decision). Every returned `sessionId` has already
+ * been through {@link sanitizeForDisplay}, so every consumer (today,
+ * `bypass-without-auto-approve.ts`'s finding `message`) gets a
+ * doctor-output-safe value without having to sanitize it itself.
  */
 export function listPermissionModeObservations(
   generatedDir: string,
@@ -132,7 +190,8 @@ export function listPermissionModeObservations(
 
   const { dirPresent, entries: readable, unreadableCount } =
     readJsonDirEntriesRejectingSymlinks<PermissionModeObservation>(dir, {
-      parse: (raw) => (isValidObservation(raw) ? raw : null),
+      parse: (raw) =>
+        isValidObservation(raw) ? { ...raw, sessionId: sanitizeForDisplay(raw.sessionId) } : null,
     });
 
   readable.sort((a, b) => Date.parse(b.observedAt) - Date.parse(a.observedAt));

@@ -133,6 +133,45 @@ describe("pack hook pre-tool-use: permission-mode observation", () => {
     expect(fs.existsSync(permissionModeObservationPathFor(generatedDir, "sess-obs-3"))).toBe(false);
   });
 
+  it("a path-traversal session_id writes nothing outside the observations dir (review round 3 F1, mutation probe M1)", async () => {
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const outsideTarget = path.join(tmp, "escape-target", "victim");
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: "../../escape-target/victim",
+          tool_name: "Edit",
+          permission_mode: "bypassPermissions",
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir: path.join(tmp, "no-reports"),
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    // The overall gate decision is unaffected by this fix (a malformed
+    // session id was already handled elsewhere in the hook's own
+    // decision order); this test's only concern is the observation
+    // write, which used to happen unconditionally and unvalidated.
+    expect(typeof result.blocked).toBe("boolean");
+
+    // Mutation probe M1: if `permissionModeObservationPathFor` stops
+    // calling `rejectMalformedSessionId`, this traversal id would be
+    // joined verbatim and the write would land at `outsideTarget`
+    // instead of failing closed (this test goes red).
+    expect(fs.existsSync(outsideTarget)).toBe(false);
+    expect(fs.existsSync(path.join(tmp, "escape-target"))).toBe(false);
+    // Nothing was written under the observations dir under that literal
+    // (path-separator-carrying) name either.
+    const obsDir = path.join(generatedDir, ".permission-mode-observations");
+    if (fs.existsSync(obsDir)) {
+      expect(fs.readdirSync(obsDir, { recursive: true })).toEqual([]);
+    }
+  });
+
   it("a read-only Bash call (never reaches the block/auto-approve step) writes no observation", async () => {
     const stdout = bufferStream();
     const stderr = bufferStream();

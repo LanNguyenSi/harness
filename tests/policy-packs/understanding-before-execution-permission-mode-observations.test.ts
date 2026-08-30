@@ -100,6 +100,94 @@ describe("listPermissionModeObservations: read-path robustness (review round 2)"
   });
 });
 
+describe("permissionModeObservationPathFor: rejects a malformed sessionId (review round 3 F1)", () => {
+  it("throws on a path-traversal sessionId instead of joining it verbatim", () => {
+    expect(() =>
+      permissionModeObservationPathFor(generatedDir, "../../escape-target/victim"),
+    ).toThrow(/path-separator or traversal/);
+  });
+
+  it("throws on an empty sessionId", () => {
+    expect(() => permissionModeObservationPathFor(generatedDir, "")).toThrow(/empty or blank/);
+  });
+});
+
+describe("recordPermissionModeObservation: a malformed sessionId writes nothing outside the observations dir (review round 3 F1, mutation probe M1)", () => {
+  it("a traversal sessionId writes nothing anywhere and warns exactly once on stderr", () => {
+    const outsideTarget = path.join(tmp, "escape-target", "victim");
+
+    let stderrCalls = 0;
+    let lastMessage = "";
+    const stderr = {
+      write(s: string): boolean {
+        stderrCalls += 1;
+        lastMessage = s;
+        return true;
+      },
+    };
+
+    expect(() => {
+      recordPermissionModeObservation(
+        generatedDir,
+        "../../escape-target/victim",
+        "bypassPermissions",
+        stderr,
+      );
+    }).not.toThrow();
+
+    // Mutation probe M1: if `permissionModeObservationPathFor` stops
+    // calling `rejectMalformedSessionId`, this traversal id joins
+    // verbatim and `atomicWriteFile` writes `outsideTarget` (this test
+    // goes red: the file exists and/or no warning is emitted).
+    expect(fs.existsSync(outsideTarget)).toBe(false);
+    expect(fs.existsSync(path.join(tmp, "escape-target"))).toBe(false);
+    // Nothing landed inside the observations dir under that literal name either.
+    expect(fs.readdirSync(obsDir)).toEqual([]);
+    expect(stderrCalls).toBe(1);
+    expect(lastMessage).toContain("failed to write permission-mode observation");
+    expect(lastMessage).toContain("path-separator or traversal");
+  });
+
+  it("a backslash-only malformed sessionId also writes nothing and warns", () => {
+    const stderr = { write: (): boolean => true };
+    expect(() => {
+      recordPermissionModeObservation(generatedDir, "sess\\evil", "bypassPermissions", stderr);
+    }).not.toThrow();
+    expect(fs.readdirSync(obsDir)).toEqual([]);
+  });
+});
+
+describe("listPermissionModeObservations: sanitizes sessionId for display (review round 3 F1c)", () => {
+  it("strips control characters (including ESC) and caps length before returning an entry", () => {
+    const hostileSessionId = "sess-\x1b[31mFAKE\x1b[0m-\x07bell\x00nul";
+    writeObservation("hostile-basename", {
+      sessionId: hostileSessionId,
+      permissionMode: "bypassPermissions",
+      observedAt: "2026-08-29T10:00:00.000Z",
+    });
+
+    const result = listPermissionModeObservations(generatedDir, { windowSize: 20 });
+    expect(result.entries).toHaveLength(1);
+    const sessionId = result.entries[0]?.sessionId ?? "";
+    // No raw C0/DEL control character (ESC, BEL, NUL, ...) survives.
+    // eslint-disable-next-line no-control-regex
+    expect(/[\x00-\x1f\x7f]/.test(sessionId)).toBe(false);
+    expect(sessionId).not.toContain("\x1b");
+  });
+
+  it("caps a very long sessionId rather than echoing it in full", () => {
+    const longSessionId = "s".repeat(500);
+    writeObservation("long-basename", {
+      sessionId: longSessionId,
+      permissionMode: "bypassPermissions",
+      observedAt: "2026-08-29T10:00:00.000Z",
+    });
+
+    const result = listPermissionModeObservations(generatedDir, { windowSize: 20 });
+    expect(result.entries[0]?.sessionId.length).toBeLessThan(longSessionId.length);
+  });
+});
+
 describe("recordPermissionModeObservation: fail-open on write errors (review round 2)", () => {
   it("an unwritable generatedDir warns exactly once on stderr and never throws", () => {
     // chmod does not stop root (repo precedent: tests/cli/gc.test.ts).
