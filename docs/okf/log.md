@@ -2,6 +2,79 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-08-31T16:19:19Z, re-stamp for the task-scoped merge gate (task
+  `2699b476`, `trigger.input_match`). Changed sources this commit:
+  `src/io/extract.ts`, `src/schema/extract.ts`, `src/schema/policies.ts`,
+  `src/policies/index.ts`, `src/runtime/intercept.ts`,
+  `src/runtime/workflow-policies.ts`, `src/cli/dry-run.ts`,
+  `src/cli/init/templates.ts`, `src/cli/init/profiles.ts`,
+  `src/cli/record/index.ts`, `src/cli/index.ts`,
+  `docs/examples/full-manifest.yaml` (+ its golden),
+  `docs/for-agents.md`, `docs/writing-custom-policies.md`,
+  `docs/CLI.md`, `CHANGELOG.md`. Cross-checked each against every doc's
+  `sources:` list. Three docs name at least one of them and are
+  re-stamped here; the other three that would also match
+  (`codex-adapter-parity-gaps.md`, `debug-verb-selection.md`,
+  `gate-fail-posture-matrix.md`, `policy-engine-producer-wiring.md`,
+  `quote-model-divergence.md`, `manifest-validation-scope.md`) are the
+  long-stale set a parallel task is sweeping and were deliberately NOT
+  touched here, per the orchestrator's scope call for this task;
+  `understanding-gate-auto-mode-signals.md` names none of the changed
+  files at all.
+
+  What was re-verified, per doc:
+  `evidence-ledger-trust-boundary.md` names `src/cli/init/templates.ts`,
+  `docs/writing-custom-policies.md`, `docs/CLI.md`, `CHANGELOG.md`. Its
+  invariant (no agent-writable ledger tag opens a BUILTIN enforcement
+  gate; custom `requires.ledger_tag` policies are process gates by
+  design) is unchanged by this task: the two new template policies are
+  ordinary `requires.ledger_tag` gates on the agent-writable ledger,
+  exactly the class the doc's "Ledger tags that remain load-bearing"
+  paragraph already covers. That paragraph gained the new
+  `review:${TASK_ID}` entry with its producer, so the enumeration stays
+  complete; nothing else in the doc restates a claim this task altered.
+  Two earlier entries in this log quoted those same already-drifted
+  ranges in citation form (a full path-plus-range citation into
+  `src/cli/index.ts` followed by a bare continuation range),
+  which okf-kit resolves as live continuation citations; this commit's
+  line shift turned one of them into a closing-brace start line. They
+  are historical records of what the doc cited THEN, so they are lifted
+  out of citation form rather than re-pointed, which would falsify the
+  record.
+
+  `pause-vs-gate-kill-switch.md` names `src/cli/index.ts`,
+  `src/schema/policies.ts`, `src/runtime/intercept.ts`,
+  `src/cli/init/templates.ts`, `CHANGELOG.md`. Its subject is the pause
+  sentinel, `gate disable`/`enable`, and the three `operator_only`
+  kill-switch policies; this task touched none of those (it added an
+  optional trigger field, two non-`operator_only` policies, and two
+  hooks). Its three `src/cli/index.ts` citations DID need attention:
+  they pointed at ranges that had already drifted on `origin/master`
+  (the cited `2726-2731` landed inside `record dogfood`'s action block,
+  and `3086-3094` / `3086-3185` inside the `uninstall` command help),
+  and this commit's `+8` lines in `record review` would have shifted
+  them further. All three are re-pointed at their real current
+  locations, two of them anchored: the `gate disable` motivation
+  comment, the `harness pause` description line naming
+  `policies[].enabled`, and the pause/resume registration block.
+  `understanding-gate-lockout-recovery.md` names `src/cli/index.ts`.
+  Its only citation into that file is the `harness approve
+  understanding` flag list, which sits well above this commit's edits,
+  so it neither drifted nor changed meaning; its
+  `expire_on_tool_match` paragraph mentions
+  `mcp__agent-tasks__task_finish` as a marker-EXPIRY trigger in the
+  understanding pack, an unrelated mechanism from the merge gate this
+  task adds on the same verb. No content edit, timestamp bumped.
+
+  Verdict: 3 docs re-stamped, 1 with a content edit
+  (`evidence-ledger-trust-boundary.md`), 1 with citation re-points
+  (`pause-vs-gate-kill-switch.md`). Pre-existing citations-resolve
+  findings on `understanding-gate-lockout-recovery.md`
+  (`hook-pre-tool-use.ts` anchor, `hook-codex-pre-tool-use.ts`
+  closing-brace start line) and on `pause-vs-gate-kill-switch.md`
+  (`docs/for-humans.md` blank start line) are unrelated to this task's
+  files and left as-is, same as the two preceding entries record.
+
 - 2026-08-30T10:20:00Z, re-stamp on commit-time recheck (task `8f637efd`,
   review round 3, findings F1-F5): after the round-3 fixes commit
   (`bbf6f7f`), ran `npx okf-kit@0.8.0 check docs/okf` and computed
@@ -75,7 +148,9 @@
   ancestor `a08efe0`: `understanding-gate-lockout-recovery.md`'s
   `hook-pre-tool-use.ts:771#"writePendingApproval(...)"` anchor already
   missed its target there, and `pause-vs-gate-kill-switch.md`'s
-  `src/cli/index.ts:3086-3185` / `:3088-3094` pause/gate-command ranges
+  `src/cli/index.ts` pause/gate-command ranges (lines 3086-3185 and
+  3088-3094 as cited then, lifted out of citation form by task 2699b476
+  so this historical note stops resolving against today's file)
   already pointed at the unrelated `uninstall` command's description
   there too (same drift the entry below already named). Several other
   docs under this directory (codex-adapter-parity-gaps.md,
@@ -107,8 +182,9 @@
   command registration): neither doc's claims describe any of the four
   changed regions, so no content edit is needed in either doc; both
   `timestamp:` fields are bumped. Separately, and NOT fixed by this
-  correction: `pause-vs-gate-kill-switch.md` cites `src/cli/index.ts:3086-3185`
-  / `:3088-3094` for the `pause`/`gate` command registrations; both
+  correction: `pause-vs-gate-kill-switch.md` cites `src/cli/index.ts`
+  lines 3086-3185 and 3088-3094 (as cited then, lifted out of citation
+  form by task 2699b476) for the `pause`/`gate` command registrations; both
   ranges already pointed at the unrelated `uninstall` command's
   description before this task touched the file at all (confirmed
   against the pre-round-1 merge commit), so this is genuinely

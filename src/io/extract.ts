@@ -255,3 +255,79 @@ export function substituteTemplate(
   });
   return { result, missing };
 }
+
+// ---------------------------------------------------------------------------
+// trigger.input_match — literal equality predicate over the tool payload
+// (task 2699b476)
+// ---------------------------------------------------------------------------
+//
+// `trigger.match` filters on the tool NAME, `trigger.bash_match` on the
+// shell command text. Neither can express "this MCP call, but only when
+// one of its arguments has a particular value" — the shape
+// `mcp__agent-tasks__task_finish` needs, where the same verb either
+// merges the PR (`autoMerge: true`) or does not. `input_match` closes
+// that gap with the narrowest possible primitive: a map from an extract
+// expression (same grammar and parser as `trigger.extract`, restricted
+// to the `toolArgs.` namespace by the schema) to a literal, ANDed
+// together, compared by strict equality.
+//
+// Deliberately NOT a regex or a truthiness test: a gate that fires on
+// `autoMerge: "false"` (string) or on any non-empty value would be a
+// different gate than the one an operator read in the manifest. Strict
+// equality means same JSON type AND same value; a path that is missing
+// (or explicitly `null`) never matches, so an omitted argument leaves
+// the narrower gate out of the way rather than silently arming it.
+
+/** One `trigger.input_match` map: extract expression -> expected literal. */
+export type InputMatchMap = Record<string, string | number | boolean>;
+
+export interface InputMatchMismatch {
+  /** The extract expression whose value did not equal the declared literal. */
+  expression: string;
+  /** The literal the policy declared. */
+  expected: string | number | boolean;
+  /** The value actually read from the event payload (`undefined` when absent). */
+  actual: unknown;
+  /** True when the path resolved to nothing at all (absent or null). */
+  missing: boolean;
+}
+
+/**
+ * Read the RAW (unstringified) value an extract expression points at.
+ * `evaluateExtract` above stringifies for `${VAR}` substitution; an
+ * equality predicate must not, or `true` and `"true"` would compare equal.
+ */
+export function resolveExtractPathValue(expr: string, ctx: ExtractEventContext): unknown {
+  return walkPath(parseExtractExpression(expr), ctx);
+}
+
+/**
+ * The FIRST entry of `inputMatch` that does not hold for this event, or
+ * `null` when every entry holds (the trigger's input predicate passes).
+ *
+ * Fail direction on an unparseable expression: the entry is treated as
+ * HOLDING, so a malformed `input_match` leaves the policy matching and
+ * its `requires:` gate armed, rather than silently excusing the tool call
+ * from a block gate. The schema rejects such an expression at parse time,
+ * so this only guards hand-built `Manifest` objects (tests, embedders).
+ */
+export function firstInputMatchMismatch(
+  inputMatch: InputMatchMap,
+  ctx: ExtractEventContext,
+): InputMatchMismatch | null {
+  for (const [expression, expected] of Object.entries(inputMatch)) {
+    let actual: unknown;
+    try {
+      actual = resolveExtractPathValue(expression, ctx);
+    } catch {
+      continue;
+    }
+    if (actual === undefined || actual === null) {
+      return { expression, expected, actual, missing: true };
+    }
+    if (actual !== expected) {
+      return { expression, expected, actual, missing: false };
+    }
+  }
+  return null;
+}

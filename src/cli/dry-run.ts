@@ -1,6 +1,7 @@
 import { stringify as stringifyYaml } from "yaml";
 import {
   evaluateExtract,
+  firstInputMatchMismatch,
   substituteTemplate,
   type ExtractBuiltins,
   type ExtractEventContext,
@@ -103,6 +104,30 @@ function policyMatchesTool(
       matched: false,
       reason: `--tool "${tool}" does not contain trigger.match "${policy.trigger.match}"`,
     };
+  }
+  // `input_match` (task 2699b476): the SAME predicate `policyMatchesEvent`
+  // ANDs onto the tool-name match (`firstInputMatchMismatch`, called on
+  // the same `toolArgs` context both sides build), so dry-run predicts
+  // `mcp__agent-tasks__task_finish` with `{"autoMerge": true}` as gated
+  // and the same verb without it as unmatched, exactly as the runtime
+  // decides. Leaving this arm out would reintroduce the debug-verb
+  // contradiction the bash_match arms below already document once for
+  // their own family: dry-run reporting "no policy matches" for a call
+  // `policy intercept` blocks.
+  if (policy.trigger.input_match !== undefined) {
+    const mismatch = firstInputMatchMismatch(policy.trigger.input_match, {
+      toolArgs: toolInput,
+    });
+    if (mismatch !== null) {
+      return {
+        matched: false,
+        reason: mismatch.missing
+          ? `trigger.input_match needs ${mismatch.expression} in tool_input ` +
+            `(expected ${JSON.stringify(mismatch.expected)})`
+          : `trigger.input_match ${mismatch.expression} is ` +
+            `${JSON.stringify(mismatch.actual)}, not ${JSON.stringify(mismatch.expected)}`,
+      };
+    }
   }
   if (policy.trigger.bash_match !== undefined) {
     const args = toolInput as { command?: unknown } | undefined;

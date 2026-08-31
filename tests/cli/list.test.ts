@@ -41,6 +41,8 @@ describe("list — categories", () => {
       "git-preflight",
       "require-review-evidence",
       "require-review-evidence-bash",
+      "require-review-evidence-task-merge",
+      "require-review-evidence-task-finish",
       "require-dogfood-evidence",
       "require-preflight-evidence",
       "require-review-subagent-evidence",
@@ -61,6 +63,8 @@ describe("list — categories", () => {
     expect(r.rows.map((row) => row.name)).toEqual([
       "review-before-merge",
       "review-before-merge-bash",
+      "review-before-task-merge",
+      "review-before-task-finish-automerge",
       "dogfood-before-release",
       "two-reviewers-required",
       "preflight-before-investigation",

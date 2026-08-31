@@ -11,6 +11,7 @@ import * as path from "node:path";
 import {
   evaluateExtract,
   evaluateRequires,
+  firstInputMatchMismatch,
   parseDurationSeconds,
   substituteTemplate,
   type EvaluateRequiresOptions,
@@ -514,6 +515,21 @@ export function policyMatchesEvent(
     if (
       !toolNames.some((toolName) => toolName.includes(policy.trigger.match!))
     ) {
+      return false;
+    }
+  }
+  // `input_match` (task 2699b476): literal equality against the tool
+  // call's own arguments, ANDed onto the tool-name match above. This is
+  // what separates `task_finish { autoMerge: true }` (a merge, gated)
+  // from a plain `task_finish` (not a merge, not gated) without needing
+  // two different tool names. Evaluated from the SAME `toolArgs` context
+  // `trigger.extract` reads (`buildEventContext`), so an expression that
+  // resolves a variable for the ledger tag resolves the same way here.
+  // Mirrored verbatim in `policyMatchesTool` (`src/cli/dry-run.ts`) so
+  // `harness policy dry-run` predicts exactly what this function decides
+  // (the parity contract docs/okf/debug-verb-selection.md records).
+  if (policy.trigger.input_match !== undefined) {
+    if (firstInputMatchMismatch(policy.trigger.input_match, buildEventContext(event)) !== null) {
       return false;
     }
   }

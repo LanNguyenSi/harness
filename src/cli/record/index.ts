@@ -40,6 +40,12 @@ import type { Manifest } from "../../schema/index.js";
 import { EX_FAIL, EX_USAGE } from "../exit-codes.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 
+// U+2014 EM DASH, written as an escape so the literal never appears in
+// source. The emitted fact content is byte-identical to what `harness
+// record review` has always written; every gate reads the tags before it,
+// never this separator.
+const TAG_SUMMARY_SEPARATOR = "\u2014";
+
 const LEDGER_SOURCE_REVIEW = "harness-record-review";
 const LEDGER_SOURCE_REVIEW_SUBAGENT = "harness-record-review-subagent";
 const LEDGER_SOURCE_DOGFOOD = "harness-record-dogfood";
@@ -145,6 +151,25 @@ function initRecordVerb(
  * — shared by every "--pr / --task / --verdict / summary must not be
  * empty" check across the three verbs.
  */
+/**
+ * The one shared "this flag was misused" failure shape: warn on stderr and
+ * hand back the ready-to-`return` EX_USAGE `RecordResult`. Extracted when
+ * `optionalTagValue` (task 2699b476) grew the second copy of this
+ * five-line construction and the duplication fitness function
+ * (`scripts/check-duplication.mjs`) flagged it.
+ */
+function usageFailure(
+  reason: string,
+  sessionId: string,
+  note: (msg: string) => void,
+): { ok: false; result: RecordResult } {
+  note(reason);
+  return {
+    ok: false,
+    result: { exitCode: EX_USAGE, wrote: false, content: "", sessionId, branch: "", reason },
+  };
+}
+
 function requireNonEmpty(
   value: string | undefined,
   flagLabel: string,
@@ -153,12 +178,7 @@ function requireNonEmpty(
 ): { ok: true; value: string } | { ok: false; result: RecordResult } {
   const trimmed = (value ?? "").trim();
   if (trimmed.length === 0) {
-    const reason = `${flagLabel} must not be empty`;
-    note(reason);
-    return {
-      ok: false,
-      result: { exitCode: EX_USAGE, wrote: false, content: "", sessionId, branch: "", reason },
-    };
+    return usageFailure(`${flagLabel} must not be empty`, sessionId, note);
   }
   return { ok: true, value: trimmed };
 }
@@ -170,6 +190,33 @@ function requireNonEmpty(
  * `return`ed failure `RecordResult` on the shared "cannot resolve any
  * branch" degrade path so callers do not repeat that construction.
  */
+/**
+ * An OPTIONAL tag value: absent stays absent, present must be a non-empty
+ * token with no internal whitespace. The shape check is deliberately loose
+ * (task 2699b476): the id only namespaces a ledger tag, so anything the
+ * gate's `${TASK_ID}` substitution can compare against is acceptable, but
+ * a value carrying whitespace would split into two tags in the fact
+ * content and silently satisfy a gate keyed on the first half.
+ */
+function optionalTagValue(
+  value: string | undefined,
+  flagLabel: string,
+  sessionId: string,
+  note: (msg: string) => void,
+): { ok: true; value: string | undefined } | { ok: false; result: RecordResult } {
+  if (value === undefined) return { ok: true, value: undefined };
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || /\s/.test(trimmed)) {
+    return usageFailure(
+      `${flagLabel} must be a non-empty value with no whitespace ` +
+        `(it namespaces one ledger tag); got ${JSON.stringify(value)}`,
+      sessionId,
+      note,
+    );
+  }
+  return { ok: true, value: trimmed };
+}
+
 function resolveRequiredBranch(
   cwd: string,
   explicitBranch: string | undefined,
@@ -259,6 +306,14 @@ export interface RecordReviewOptions extends RecordCommonOptions {
   base?: string;
   /** Explicit branch override (otherwise resolved via resolveGitContext(cwd)). */
   branch?: string;
+  /**
+   * agent-tasks task id for the `review:<task-id>` tag the two task-scoped
+   * merge gates read (`review-before-task-merge` /
+   * `review-before-task-finish-automerge`, task 2699b476). Optional: the
+   * PR/branch/base tags are what the pull_requests_merge and `gh pr merge`
+   * gates read, and an operator on those surfaces has no task id to pass.
+   */
+  task?: string;
   /** Free-form review summary — required, non-empty. */
   summary: string;
 }
@@ -278,8 +333,22 @@ export async function runRecordReview(opts: RecordReviewOptions): Promise<Record
   if (!branchResult.ok) return branchResult.result;
   const branch = branchResult.branch;
 
+  const taskResult = optionalTagValue(opts.task, "--task", sessionId, note);
+  if (!taskResult.ok) return taskResult.result;
+  const task = taskResult.value;
+
   const base = resolveBase(cwd, opts.base, note);
-  const content = `review:${pr} review:${branch}${base ? ` review:${base}` : ""} — ${summary}`;
+  // One fact, every tag family a merge/PR gate can key on: the PR number,
+  // the working branch, the base branch, and (task 2699b476) the
+  // agent-tasks task id the two task-scoped merge gates read. Recording a
+  // review once therefore satisfies whichever surface actually fires,
+  // instead of asking the operator to predict it (docs/CLI.md, "The
+  // merge-surface trap"). TAG_SUMMARY_SEPARATOR keeps the emitted content
+  // byte-identical to what this verb has always written.
+  const tags = [`review:${pr}`, `review:${branch}`];
+  if (base !== undefined) tags.push(`review:${base}`);
+  if (task !== undefined) tags.push(`review:${task}`);
+  const content = `${tags.join(" ")} ${TAG_SUMMARY_SEPARATOR} ${summary}`;
 
   return finishRecordWrite(opts, sessionId, branch, LEDGER_SOURCE_REVIEW, content, note);
 }

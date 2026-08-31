@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   ExtractGrammarError,
   evaluateExtract,
+  firstInputMatchMismatch,
   parseExtractExpression,
+  resolveExtractPathValue,
   substituteTemplate,
   validateExtractGrammar,
   type ExtractBuiltins,
@@ -223,5 +225,75 @@ describe("substituteTemplate", () => {
     const r = substituteTemplate("${X}/${X}/${Y}", { Y: "ok" });
     expect(r.result).toBe("${X}/${X}/ok");
     expect(r.missing).toEqual(["X"]);
+  });
+});
+
+// Task 2699b476: the `trigger.input_match` evaluator both
+// `policyMatchesEvent` (src/runtime/intercept.ts) and dry-run's
+// `policyMatchesTool` (src/cli/dry-run.ts) call, so the two cannot
+// disagree about what a predicate means.
+describe("resolveExtractPathValue", () => {
+  it("returns the RAW value, not the stringified one evaluateExtract produces", () => {
+    const ctx = { toolArgs: { autoMerge: true, retries: 0, name: "x" } };
+    expect(resolveExtractPathValue("toolArgs.autoMerge", ctx)).toBe(true);
+    expect(resolveExtractPathValue("toolArgs.retries", ctx)).toBe(0);
+    expect(resolveExtractPathValue("toolArgs.name", ctx)).toBe("x");
+  });
+
+  it("returns undefined for a path the payload does not carry", () => {
+    expect(resolveExtractPathValue("toolArgs.missing", { toolArgs: {} })).toBeUndefined();
+  });
+});
+
+describe("firstInputMatchMismatch", () => {
+  const ctx = { toolArgs: { autoMerge: true, mergeMethod: "squash", retries: 2, nulled: null } };
+
+  it("returns null when every entry holds", () => {
+    expect(
+      firstInputMatchMismatch({ "toolArgs.autoMerge": true, "toolArgs.retries": 2 }, ctx),
+    ).toBeNull();
+  });
+
+  it("reports a value mismatch with both sides", () => {
+    expect(firstInputMatchMismatch({ "toolArgs.autoMerge": false }, ctx)).toEqual({
+      expression: "toolArgs.autoMerge",
+      expected: false,
+      actual: true,
+      missing: false,
+    });
+  });
+
+  it("compares by strict equality: a string never equals a boolean or a number", () => {
+    expect(firstInputMatchMismatch({ "toolArgs.autoMerge": "true" }, ctx)).not.toBeNull();
+    expect(firstInputMatchMismatch({ "toolArgs.retries": "2" }, ctx)).not.toBeNull();
+    expect(firstInputMatchMismatch({ "toolArgs.mergeMethod": "squash" }, ctx)).toBeNull();
+  });
+
+  it("treats an absent path as a mismatch flagged `missing`, never as a match", () => {
+    expect(firstInputMatchMismatch({ "toolArgs.autoMerge": true }, { toolArgs: {} })).toEqual({
+      expression: "toolArgs.autoMerge",
+      expected: true,
+      actual: undefined,
+      missing: true,
+    });
+  });
+
+  it("treats an explicit null the same way as an absent path", () => {
+    expect(firstInputMatchMismatch({ "toolArgs.nulled": "x" }, ctx)?.missing).toBe(true);
+  });
+
+  it("ANDs the entries: one failing entry is enough, and it is the one reported", () => {
+    const mismatch = firstInputMatchMismatch(
+      { "toolArgs.autoMerge": true, "toolArgs.mergeMethod": "rebase" },
+      ctx,
+    );
+    expect(mismatch?.expression).toBe("toolArgs.mergeMethod");
+  });
+
+  it("fails CLOSED on an unparseable expression: the entry holds, so the gate stays armed", () => {
+    // The schema rejects this shape at parse time; this only guards
+    // hand-built Manifest objects. Treating it as "does not match" would
+    // silently excuse the tool call from a block gate.
+    expect(firstInputMatchMismatch({ "not a path": true }, ctx)).toBeNull();
   });
 });

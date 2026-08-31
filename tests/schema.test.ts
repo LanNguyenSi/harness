@@ -31,8 +31,12 @@ describe("parseManifest — happy path", () => {
     expect(manifest.tools.mcp).toHaveLength(3);
     expect(manifest.tools.mcp[0]?.name).toBe("codebase-oracle");
     expect(manifest.tools.mcp[2]?.name).toBe("grounding-mcp");
-    expect(manifest.hooks).toHaveLength(12);
-    expect(manifest.policies).toHaveLength(14);
+    // 14 hooks / 16 policies since task 2699b476 added the
+    // require-review-evidence-task-merge / -task-finish hooks and their
+    // review-before-task-merge / review-before-task-finish-automerge
+    // policies to the reference manifest.
+    expect(manifest.hooks).toHaveLength(14);
+    expect(manifest.policies).toHaveLength(16);
     const reviewPolicy = manifest.policies.find((p) => p.name === "review-before-merge");
     expect(reviewPolicy?.requires?.ledger_tag).toBe("review:${PR_NUMBER}");
     expect(reviewPolicy?.trigger.extract?.PR_NUMBER).toBe("toolArgs.prNumber");
@@ -1355,5 +1359,113 @@ describe("parseManifest — version-message variants for non-newer values (task 
       const text = (err as ManifestParseError).issues.map((i) => i.message).join("\n");
       expect(text).not.toMatch(/supports manifest version/);
     }
+  });
+});
+
+// Task 2699b476: `trigger.input_match`. The namespace restriction and the
+// empty-map rejection live in the SCHEMA (PolicyTriggerSchema), the same
+// layer `bash_match` / `path_match` are declared at, so every consumer
+// that parses a manifest refuses the bad shape: `harness validate`,
+// `apply`, `doctor`, `loadManifest`, the intercept entrypoint.
+describe("parseManifest — trigger.input_match (task 2699b476)", () => {
+  function manifestWithInputMatch(inputMatch: unknown): unknown {
+    return {
+      version: 1,
+      hooks: [
+        {
+          name: "h",
+          event: "PreToolUse",
+          match: "mcp__agent-tasks__task_finish",
+          command: "harness policy intercept",
+          blocking: "hard",
+        },
+      ],
+      policies: [
+        {
+          name: "p",
+          description: "d",
+          trigger: {
+            event: "PreToolUse",
+            match: "mcp__agent-tasks__task_finish",
+            input_match: inputMatch,
+            extract: { TASK_ID: "toolArgs.taskId" },
+          },
+          requires: { ledger_tag: "review:${TASK_ID}" },
+          hook: "h",
+          enforcement: "block",
+        },
+      ],
+    };
+  }
+
+  function parseError(inputMatch: unknown): unknown {
+    try {
+      parseManifest(manifestWithInputMatch(inputMatch));
+    } catch (err) {
+      return err;
+    }
+    throw new Error("expected parseManifest to reject");
+  }
+
+  it("accepts boolean, string and number literals on toolArgs paths", () => {
+    const manifest = parseManifest(
+      manifestWithInputMatch({
+        "toolArgs.autoMerge": true,
+        "toolArgs.mergeMethod": "squash",
+        "toolArgs.retries": 3,
+        'toolArgs["odd key"]': "x",
+      }),
+    );
+    expect(manifest.policies[0]?.trigger.input_match).toEqual({
+      "toolArgs.autoMerge": true,
+      "toolArgs.mergeMethod": "squash",
+      "toolArgs.retries": 3,
+      'toolArgs["odd key"]': "x",
+    });
+  });
+
+  it("rejects a non-toolArgs namespace with a message naming the namespace", () => {
+    expectIssueMatching(
+      parseError({ "event.autoMerge": true }),
+      /input_match keys must read from the toolArgs namespace.*reads from event/,
+    );
+  });
+
+  it("rejects session / git namespaces too", () => {
+    expectIssueMatching(parseError({ "session.id": "x" }), /reads from session/);
+    expectIssueMatching(parseError({ "git.branch": "x" }), /reads from git/);
+  });
+
+  it("rejects a bare namespace with no segment (same grammar as trigger.extract)", () => {
+    expectIssueMatching(
+      parseError({ toolArgs: true }),
+      /at least one segment after the namespace/,
+    );
+  });
+
+  it("rejects an unknown namespace with the extract grammar's own message", () => {
+    expectIssueMatching(parseError({ "toolArguments.autoMerge": true }), /unknown namespace/);
+  });
+
+  it("rejects an empty map as a silent no-op", () => {
+    expectIssueMatching(parseError({}), /at least one entry.*silent no-op/);
+  });
+
+  it("rejects a non-literal value (object / array / null)", () => {
+    expectIssueMatching(parseError({ "toolArgs.a": { nested: true } }), /input_match/i);
+    expectIssueMatching(parseError({ "toolArgs.a": [1] }), /input_match/i);
+    expectIssueMatching(parseError({ "toolArgs.a": null }), /input_match/i);
+  });
+
+  it("the shipped FULL_TEMPLATE gate narrows task_finish to autoMerge: true", () => {
+    const manifest = parseManifest(parseYaml(FULL_TEMPLATE));
+    const gate = manifest.policies.find((p) => p.name === "review-before-task-finish-automerge");
+    expect(gate?.trigger.input_match).toEqual({ "toolArgs.autoMerge": true });
+    expect(gate?.trigger.extract).toEqual({ TASK_ID: "toolArgs.taskId" });
+    expect(gate?.requires?.ledger_tag).toBe("review:${TASK_ID}");
+    const merge = manifest.policies.find((p) => p.name === "review-before-task-merge");
+    expect(merge?.trigger.match).toBe("mcp__agent-tasks__task_merge");
+    expect(merge?.trigger.input_match).toBeUndefined();
+    expect(merge?.requires?.ledger_tag).toBe("review:${TASK_ID}");
   });
 });

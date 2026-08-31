@@ -216,8 +216,8 @@ hooks:
   # f2d2a29): every \`harness policy intercept\` hook below down through
   # \`risk-gate\` carries \`budget_ms: 15000\`, i.e. a Claude Code outer
   # kill-timeout of \`ceil(15000/1000) = 15\` seconds (generate-settings.ts's
-  # \`hookTimeoutSeconds\`). This is deliberately UNIFORM across all eleven of
-  # them, for two independent reasons:
+  # \`hookTimeoutSeconds\`). This is deliberately UNIFORM across all thirteen
+  # of them, for two independent reasons:
   #
   # 1. FAIL-CLOSED MARGIN. \`harness policy intercept\` evaluates its FULL
   #    \`policies:\` list against the incoming event (src/runtime/intercept.ts,
@@ -260,7 +260,7 @@ hooks:
   #    and reintroduce exactly the redundant-invocation cost the dedup
   #    exists to avoid — on top of leaving whichever entry keeps a low
   #    timeout still exposed to the fail-open risk above. Keeping all
-  #    eleven at the identical 15000ms budget_ms preserves the existing
+  #    thirteen at the identical 15000ms budget_ms preserves the existing
   #    one-invocation-per-matcher-group collapse (previously they all
   #    collapsed onto the shared 2s floor; now they collapse onto 15s).
   - name: require-review-evidence
@@ -280,6 +280,31 @@ hooks:
     event: PreToolUse
     match: "Bash"
     bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b'
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+
+  # The two OTHER agent-tasks verbs that land a PR (task 2699b476).
+  # \`pull_requests_merge\` is not the only merge surface the MCP server
+  # exposes: \`task_merge\` merges the PR attached to a task, and
+  # \`task_finish\` with \`autoMerge: true\` merges as part of finishing
+  # (both of its auto-merge modes, the soloMode work claim and the review
+  # claim + approve). Each needs its OWN hook entry because a hook's
+  # \`match\` is what \`harness apply\` projects into settings.json's
+  # tool-name matcher, and a matcher for \`pull_requests_merge\` never
+  # spawns \`harness policy intercept\` for either of these. Same
+  # 15000ms budget_ms as every other blocking intercept hook, for the
+  # same two reasons the note above gives.
+  - name: require-review-evidence-task-merge
+    event: PreToolUse
+    match: "mcp__agent-tasks__task_merge"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+
+  - name: require-review-evidence-task-finish
+    event: PreToolUse
+    match: "mcp__agent-tasks__task_finish"
     command: harness policy intercept
     blocking: hard
     budget_ms: 15000
@@ -474,6 +499,74 @@ policies:
         - "a recorded review of the PR for branch \${BRANCH}"
       run:
         - 'harness record review --pr <pr> "<summary>"'
+
+  # The two agent-tasks verbs that ALSO land a PR (task 2699b476, closing
+  # the residual 99f47307 Slice 1 named twice in the CHANGELOG). Same
+  # shape as review-before-merge, three scope notes:
+  #   1. Tag shape: \`review:\${TASK_ID}\` rather than \`review:\${PR_NUMBER}\`.
+  #      Both verbs are task-scoped: they derive owner/repo/PR number from
+  #      the task, so \`taskId\` is the only identifier in the tool payload.
+  #      \`harness record review --pr <pr> --task <id> "<summary>"\` writes
+  #      the PR, branch, base AND task tags in ONE ledger fact, so a single
+  #      recorded review satisfies all four merge gates at once.
+  #   2. task_finish is gated ONLY in its auto-merge mode. The verb is
+  #      polymorphic: a plain \`task_finish\` advances the task and merges
+  #      nothing, while \`autoMerge: true\` merges the PR (both modes do,
+  #      the soloMode work claim and the review claim + approve). Gating
+  #      the whole verb would block the ordinary finish call for no reason;
+  #      \`input_match\` narrows the trigger to the merging mode alone.
+  #      A missing \`autoMerge\` never matches, so an omitted argument
+  #      leaves the gate out of the way rather than arming it.
+  #   3. These sit ALONGSIDE review-before-merge / -bash, same rationale
+  #      as the bash variant above: an operator may use any of the four
+  #      merge surfaces, and each carries its own tag shape.
+  - name: review-before-task-merge
+    description: Block agent-tasks task_merge unless a ledger entry tagged review:<task-id> exists for this session.
+    trigger:
+      event: PreToolUse
+      match: "mcp__agent-tasks__task_merge"
+      extract:
+        TASK_ID: "toolArgs.taskId"
+    requires:
+      ledger_tag: "review:\${TASK_ID}"
+    hook: require-review-evidence-task-merge
+    enforcement: block
+    producers:
+      - kind: mcp
+        verb: mcp__grounding-mcp__ledger_add
+        example: '{sessionId:"\${SESSION_ID}", type:"fact", content:"review:\${TASK_ID}: <verdict + key findings + nits>", source:"Agent(general-purpose) review"}'
+        description: Spawn a review subagent against the PR diff, capture its verdict, then persist a ledger entry tagged with the task id. Mirror of the review-before-merge producer for the task-scoped merge surface.
+    ux:
+      cannot: "You cannot merge the PR for task \${TASK_ID} yet."
+      required:
+        - "a recorded review of task \${TASK_ID}"
+      run:
+        - 'harness record review --pr <pr> --task \${TASK_ID} "<summary>"'
+
+  - name: review-before-task-finish-automerge
+    description: 'Block agent-tasks task_finish with autoMerge: true unless a ledger entry tagged review:<task-id> exists for this session.'
+    trigger:
+      event: PreToolUse
+      match: "mcp__agent-tasks__task_finish"
+      input_match:
+        toolArgs.autoMerge: true
+      extract:
+        TASK_ID: "toolArgs.taskId"
+    requires:
+      ledger_tag: "review:\${TASK_ID}"
+    hook: require-review-evidence-task-finish
+    enforcement: block
+    producers:
+      - kind: mcp
+        verb: mcp__grounding-mcp__ledger_add
+        example: '{sessionId:"\${SESSION_ID}", type:"fact", content:"review:\${TASK_ID}: <verdict + key findings + nits>", source:"Agent(general-purpose) review"}'
+        description: Spawn a review subagent against the PR diff, capture its verdict, then persist a ledger entry tagged with the task id. Same evidence the task_merge gate reads, so one recorded review opens both.
+    ux:
+      cannot: "You cannot finish task \${TASK_ID} with autoMerge yet."
+      required:
+        - "a recorded review of task \${TASK_ID}"
+      run:
+        - 'harness record review --pr <pr> --task \${TASK_ID} "<summary>"'
 
   - name: dogfood-before-release
     description: Block npm publish / git tag v* without a recent dogfood ledger entry.

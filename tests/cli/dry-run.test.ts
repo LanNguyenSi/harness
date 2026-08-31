@@ -338,3 +338,99 @@ describe("dry-run vs policyMatchesEvent — quote-aware fourth arm parity fixtur
     }
   });
 });
+
+// Task 2699b476: `trigger.input_match`. Same parity contract the
+// bash_match fixture above pins (docs/okf/debug-verb-selection.md): what
+// `harness policy dry-run` predicts is what `policy intercept` decides,
+// verdict for verdict, not two independently-asserted booleans.
+describe("dry-run — trigger.input_match (task 2699b476)", () => {
+  const TASK_ID = "2699b476-1111-4222-8333-444455556666";
+  const GATE = "review-before-task-finish-automerge";
+
+  it("predicts the gate for task_finish with autoMerge: true, and resolves review:<task-id>", () => {
+    const r = dryRun("finish and merge", {
+      configPath: FULL_MANIFEST,
+      tool: "mcp__agent-tasks__task_finish",
+      toolArgs: JSON.stringify({ taskId: TASK_ID, autoMerge: true }),
+    });
+    const hit = r.report.matchingPolicies.find((p) => p.name === GATE);
+    expect(hit).toBeDefined();
+    expect(hit?.ledgerQuery).toBe(`review:${TASK_ID}`);
+    expect(hit?.enforcement).toBe("block");
+  });
+
+  it("predicts NO match for a plain task_finish, naming input_match as the reason", () => {
+    const r = dryRun("finish", {
+      configPath: FULL_MANIFEST,
+      tool: "mcp__agent-tasks__task_finish",
+      toolArgs: JSON.stringify({ taskId: TASK_ID, result: "done" }),
+    });
+    expect(r.report.matchingPolicies.map((p) => p.name)).not.toContain(GATE);
+    const missed = r.report.couldMatchPolicies.find((p) => p.name === GATE);
+    expect(missed?.reason).toMatch(/trigger\.input_match needs toolArgs\.autoMerge/);
+  });
+
+  it("predicts NO match for autoMerge: false, naming the actual value", () => {
+    const r = dryRun("finish", {
+      configPath: FULL_MANIFEST,
+      tool: "mcp__agent-tasks__task_finish",
+      toolArgs: JSON.stringify({ taskId: TASK_ID, autoMerge: false }),
+    });
+    expect(r.report.matchingPolicies.map((p) => p.name)).not.toContain(GATE);
+    const missed = r.report.couldMatchPolicies.find((p) => p.name === GATE);
+    expect(missed?.reason).toBe("trigger.input_match toolArgs.autoMerge is false, not true");
+  });
+
+  it("predicts the task_merge gate, which carries no input_match at all", () => {
+    const r = dryRun("merge the task", {
+      configPath: FULL_MANIFEST,
+      tool: "mcp__agent-tasks__task_merge",
+      toolArgs: JSON.stringify({ taskId: TASK_ID }),
+    });
+    const hit = r.report.matchingPolicies.find((p) => p.name === "review-before-task-merge");
+    expect(hit?.ledgerQuery).toBe(`review:${TASK_ID}`);
+  });
+
+  // The discriminating fixture (mutation probe (c) in this task's brief):
+  // dropping the input_match arm from `policyMatchesTool` makes dry-run
+  // predict a match for every one of the three non-autoMerge payloads
+  // while `policyMatchesEvent` still says no, and this equality goes red.
+  it("agrees with policyMatchesEvent for every autoMerge payload shape", () => {
+    const { manifest } = loadManifest({ configPath: FULL_MANIFEST });
+    const policy = manifest.policies.find((p) => p.name === GATE);
+    if (!policy) throw new Error(`docs/examples/full-manifest.yaml is missing ${GATE}`);
+
+    const payloads: Array<Record<string, unknown>> = [
+      { taskId: TASK_ID, autoMerge: true },
+      { taskId: TASK_ID, autoMerge: false },
+      { taskId: TASK_ID, autoMerge: "true" },
+      { taskId: TASK_ID, autoMerge: 1 },
+      { taskId: TASK_ID, autoMerge: null },
+      { taskId: TASK_ID, result: "done" },
+      { taskId: TASK_ID },
+    ];
+    const runtimeVerdicts: boolean[] = [];
+    for (const toolInput of payloads) {
+      const event: ToolEvent = {
+        hook_event_name: "PreToolUse",
+        tool_name: "mcp__agent-tasks__task_finish",
+        tool_input: toolInput,
+      };
+      const runtimeVerdict = policyMatchesEvent(policy, event);
+      runtimeVerdicts.push(runtimeVerdict);
+      const r = dryRun("finish", {
+        configPath: FULL_MANIFEST,
+        tool: "mcp__agent-tasks__task_finish",
+        toolArgs: JSON.stringify(toolInput),
+      });
+      const dryRunVerdict = r.report.matchingPolicies.some((p) => p.name === GATE);
+      expect(
+        dryRunVerdict,
+        `dry-run must agree with policyMatchesEvent for ${JSON.stringify(toolInput)}`,
+      ).toBe(runtimeVerdict);
+    }
+    // Negative control: the payload list is not uniformly true or false,
+    // so the equality above is discriminating rather than trivially met.
+    expect(runtimeVerdicts).toEqual([true, false, false, false, false, false, false]);
+  });
+});

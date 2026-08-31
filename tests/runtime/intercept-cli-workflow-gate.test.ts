@@ -108,6 +108,58 @@ const WIRED_HOOKS_YAML = `hooks:
     budget_ms: 15000
 `;
 
+// The two task-scoped merge-surface hooks (task 2699b476). Kept SEPARATE
+// from WIRED_HOOKS_YAML on purpose: a manifest that declares only the
+// original pair must still derive exactly the original pair, so the
+// pre-2699b476 scenarios above keep exercising that shape.
+const TASK_VERB_HOOKS_YAML = `  - name: require-review-evidence-task-merge
+    event: PreToolUse
+    match: "mcp__agent-tasks__task_merge"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+  - name: require-review-evidence-task-finish
+    event: PreToolUse
+    match: "mcp__agent-tasks__task_finish"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+`;
+
+const TASK_ID = "2699b476-1111-4222-8333-444455556666";
+
+const TASK_MERGE_EVENT = JSON.stringify({
+  hook_event_name: "PreToolUse",
+  tool_name: "mcp__agent-tasks__task_merge",
+  tool_input: { taskId: TASK_ID },
+  session_id: "sess-1",
+});
+
+function taskFinishEvent(toolInput: Record<string, unknown>): string {
+  return JSON.stringify({
+    hook_event_name: "PreToolUse",
+    tool_name: "mcp__agent-tasks__task_finish",
+    tool_input: toolInput,
+    session_id: "sess-1",
+  });
+}
+
+// Same content shape `harness record review --pr <n> --task <id>` writes
+// (src/cli/record/index.ts runRecordReview): ONE entry carrying the PR,
+// branch and task tags together.
+function taskReviewLedger(taskId: string): LedgerClient {
+  return ledgerWith({
+    kind: "ok",
+    entries: [
+      {
+        id: "1",
+        content: `review:42 review:feat/x review:${taskId}: looks good`,
+        createdAt: "2026-08-31T12:00:00.000Z",
+      },
+    ],
+  });
+}
+
 function workflowYaml(spawn: "required" | "skip"): string {
   return `review_templates:
   t1: "Review this PR for correctness."
@@ -315,5 +367,227 @@ describe("runInterceptCli: workflow-derived merge gate (99f47307 Slice 1, AC1/AC
     expect(denying?.policyName).toBe("workflow:ship:review-before-merge");
     const parsed = JSON.parse(output().trim());
     expect(parsed.decision).toBe("block");
+  });
+});
+
+// Task 2699b476: the two task-scoped agent-tasks merge surfaces, driven
+// through the same real `runInterceptCli` entrypoint as the pair above.
+// Closes the residual the 99f47307 Slice 1 CHANGELOG entry named twice
+// ("`mcp__agent-tasks__task_merge` and `mcp__agent-tasks__task_finish`
+// (`autoMerge`) still pass the gate uncovered").
+describe("runInterceptCli: task-scoped merge gates (task 2699b476)", () => {
+  function wiredManifest(): { homeDir: string; configPath: string } {
+    return writeManifest(
+      `version: 1\n${workflowYaml("required")}${WIRED_HOOKS_YAML}${TASK_VERB_HOOKS_YAML}`,
+    );
+  }
+
+  it("AC1 (task_merge): denies with no ledger evidence, naming review:<task-id>", async () => {
+    const { homeDir, configPath } = wiredManifest();
+    const { stream: out, output } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(TASK_MERGE_EVENT),
+      stdout: out,
+      homeDir,
+      configPath,
+      ledger: EMPTY_LEDGER,
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.decisions[0]?.policyName).toBe("workflow:ship:review-before-task-merge");
+    expect(result.decisions[0]?.ledgerTag).toBe(`review:${TASK_ID}`);
+    const parsed = JSON.parse(output().trim());
+    expect(parsed.decision).toBe("block");
+    expect(parsed.reason).toContain(`You cannot merge the PR for task ${TASK_ID} yet.`);
+  });
+
+  it("AC2 (task_merge): allows once a matching review ledger fact exists", async () => {
+    const { homeDir, configPath } = wiredManifest();
+    const { stream: out, output } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(TASK_MERGE_EVENT),
+      stdout: out,
+      homeDir,
+      configPath,
+      ledger: taskReviewLedger(TASK_ID),
+    });
+    expect(result.blocked).toBe(false);
+    expect(output()).toBe("");
+  });
+
+  it("AC1 (task_finish autoMerge: true): denies with no ledger evidence", async () => {
+    const { homeDir, configPath } = wiredManifest();
+    const { stream: out, output } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(taskFinishEvent({ taskId: TASK_ID, autoMerge: true })),
+      stdout: out,
+      homeDir,
+      configPath,
+      ledger: EMPTY_LEDGER,
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.decisions[0]?.policyName).toBe(
+      "workflow:ship:review-before-task-finish-automerge",
+    );
+    expect(result.decisions[0]?.ledgerTag).toBe(`review:${TASK_ID}`);
+    const parsed = JSON.parse(output().trim());
+    expect(parsed.decision).toBe("block");
+    expect(parsed.reason).toContain(`You cannot finish task ${TASK_ID} with autoMerge yet.`);
+  });
+
+  it("AC2 (task_finish autoMerge: true): allows once a matching review ledger fact exists", async () => {
+    const { homeDir, configPath } = wiredManifest();
+    const { stream: out, output } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(taskFinishEvent({ taskId: TASK_ID, autoMerge: true })),
+      stdout: out,
+      homeDir,
+      configPath,
+      ledger: taskReviewLedger(TASK_ID),
+    });
+    expect(result.blocked).toBe(false);
+    expect(output()).toBe("");
+  });
+
+  // The discriminating case for `trigger.input_match` (mutation probe (a)
+  // in this task's brief): a plain `task_finish` merges nothing, so it must
+  // pass with NO policy matching it at all. Making the input_match
+  // evaluation unconditionally true turns exactly these two assertions red.
+  it("task_finish WITHOUT autoMerge is not intercepted at all (no policy matched)", async () => {
+    const { homeDir, configPath } = wiredManifest();
+    const { stream: out, output } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(taskFinishEvent({ taskId: TASK_ID, result: "done" })),
+      stdout: out,
+      homeDir,
+      configPath,
+      ledger: EMPTY_LEDGER,
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.decisions).toEqual([]);
+    expect(output()).toBe("");
+  });
+
+  it("task_finish with autoMerge: false is not intercepted either (strict equality, not truthiness)", async () => {
+    const { homeDir, configPath } = wiredManifest();
+    const { stream: out } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(taskFinishEvent({ taskId: TASK_ID, autoMerge: false })),
+      stdout: out,
+      homeDir,
+      configPath,
+      ledger: EMPTY_LEDGER,
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.decisions).toEqual([]);
+  });
+
+  it('task_finish with autoMerge: "true" (string) is not intercepted (same JSON type required)', async () => {
+    const { homeDir, configPath } = wiredManifest();
+    const { stream: out } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(taskFinishEvent({ taskId: TASK_ID, autoMerge: "true" })),
+      stdout: out,
+      homeDir,
+      configPath,
+      ledger: EMPTY_LEDGER,
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.decisions).toEqual([]);
+  });
+
+  // Fail posture (brief item 5): an unresolvable `${TASK_ID}` must NOT
+  // degrade to allow. `preserve_enforcement` (the default) maps a block
+  // policy whose requires cannot be evaluated to `deny-degraded`.
+  it("task_merge with no taskId in tool_input denies (deny-degraded), never allows", async () => {
+    const { homeDir, configPath } = wiredManifest();
+    const { stream: out, output } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "mcp__agent-tasks__task_merge",
+          tool_input: {},
+          session_id: "sess-1",
+        }),
+      ),
+      stdout: out,
+      homeDir,
+      configPath,
+      ledger: EMPTY_LEDGER,
+    });
+    expect(result.blocked).toBe(true);
+    const decision = result.decisions.find(
+      (d) => d.policyName === "workflow:ship:review-before-task-merge",
+    );
+    expect(decision?.outcome).toBe("deny-degraded");
+    expect(JSON.parse(output().trim()).decision).toBe("block");
+  });
+
+  // No double intercept: a manifest carrying BOTH the hand-authored
+  // template policies and a qualifying workflow must evaluate exactly ONE
+  // policy per call (the derivation dedupes against the equivalent
+  // hand-authored one).
+  it("a hand-authored copy of the shipped task_finish gate dedupes the derived one (no double intercept)", async () => {
+    const handAuthored = `policies:
+  - name: review-before-task-finish-automerge
+    description: 'Block agent-tasks task_finish with autoMerge: true unless a ledger entry tagged review:<task-id> exists for this session.'
+    trigger:
+      event: PreToolUse
+      match: "mcp__agent-tasks__task_finish"
+      input_match:
+        toolArgs.autoMerge: true
+      extract:
+        TASK_ID: "toolArgs.taskId"
+    requires:
+      ledger_tag: "review:\${TASK_ID}"
+    hook: require-review-evidence-task-finish
+    enforcement: block
+`;
+    const { homeDir, configPath } = writeManifest(
+      `version: 1\n${workflowYaml("required")}${handAuthored}${WIRED_HOOKS_YAML}${TASK_VERB_HOOKS_YAML}`,
+    );
+    const { stream: out } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(taskFinishEvent({ taskId: TASK_ID, autoMerge: true })),
+      stdout: out,
+      homeDir,
+      configPath,
+      ledger: EMPTY_LEDGER,
+    });
+    expect(result.blocked).toBe(true);
+    const matching = result.decisions.filter((d) => d.ledgerTag === `review:${TASK_ID}`);
+    expect(matching).toHaveLength(1);
+    expect(matching[0]?.policyName).toBe("review-before-task-finish-automerge");
+  });
+
+  // Backwards compatibility: a manifest that predates the two task-verb
+  // hooks derives exactly the pair it always did, and the task-scoped
+  // surfaces stay uncovered rather than getting an INERT derived gate
+  // (see REVIEW_EVIDENCE_HOOK_TASK_MERGE's doc in workflow-policies.ts).
+  it("without the task-verb hooks declared, task_merge is not intercepted and the old pair is unchanged", async () => {
+    const { homeDir, configPath } = writeManifest(
+      `version: 1\n${workflowYaml("required")}${WIRED_HOOKS_YAML}`,
+    );
+    const { stream: taskOut } = captureStream();
+    const taskResult = await runInterceptCli({
+      stdin: streamFrom(TASK_MERGE_EVENT),
+      stdout: taskOut,
+      homeDir,
+      configPath,
+      ledger: EMPTY_LEDGER,
+    });
+    expect(taskResult.blocked).toBe(false);
+    expect(taskResult.decisions).toEqual([]);
+
+    const { stream: prOut } = captureStream();
+    const prResult = await runInterceptCli({
+      stdin: streamFrom(MCP_MERGE_EVENT),
+      stdout: prOut,
+      homeDir,
+      configPath,
+      ledger: EMPTY_LEDGER,
+    });
+    expect(prResult.blocked).toBe(true);
+    expect(prResult.decisions[0]?.policyName).toBe("workflow:ship:review-before-merge");
   });
 });
