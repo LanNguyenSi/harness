@@ -1,16 +1,32 @@
 import { z } from "zod";
 import { MatchableEnvironmentSchema } from "./environments.js";
-import { ExtractMapSchema } from "./extract.js";
+import { ExtractMapSchema, InputMatchMapSchema } from "./extract.js";
 import { HookEventSchema } from "./hooks.js";
 import { RequiresSchema, isBuiltinVariable, referencedVariables } from "./requires.js";
 import { RiskCategorySchema, RiskSeveritySchema } from "./risk.js";
 
+// `trigger:`: the WHICH-tool-calls filter. Every declared field is
+// ANDed: `match` on the tool name, `path_match` on the edited file path,
+// `bash_match` on the shell command text, and `input_match` (task
+// 2699b476) on the tool call's own arguments.
+//
+// `input_match` exists because the other three cannot express "this MCP
+// verb, but only in the mode that actually does the dangerous thing".
+// `mcp__agent-tasks__task_finish` is the motivating shape: the same verb
+// either merges the PR (`autoMerge: true`) or just advances the task, and
+// a name-only trigger would have to gate both or neither. Keys are
+// `toolArgs.`-namespaced extract expressions (the SAME grammar and parser
+// `extract` uses, `src/schema/extract.ts` + `src/io/extract.ts`), values
+// are literals compared by strict equality; a missing path never matches.
+// See `firstInputMatchMismatch` in `src/io/extract.ts` for the evaluator
+// `policyMatchesEvent` and `harness policy dry-run` both call.
 export const PolicyTriggerSchema = z
   .object({
     event: HookEventSchema,
     match: z.string().min(1).optional(),
     path_match: z.string().min(1).optional(),
     bash_match: z.string().min(1).optional(),
+    input_match: InputMatchMapSchema.optional(),
     extract: ExtractMapSchema.optional(),
   })
   .strict();

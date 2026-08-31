@@ -668,3 +668,136 @@ describe("harness record dogfood", () => {
     expect(result.content).toBe("dogfood:explicit-session — s");
   });
 });
+
+// Task 2699b476: `--task` appends the `review:<task-id>` tag the two
+// task-scoped merge gates (review-before-task-merge /
+// review-before-task-finish-automerge) read, to the SAME fact, so one
+// `harness record review` call satisfies all four merge surfaces.
+describe("harness record review --task", () => {
+  // U+2014 as an escape so no em dash appears literally in this file; the
+  // separator itself is unchanged from what the verb has always written.
+  const SEP = "\u2014";
+  const TASK_ID = "2699b476-1111-4222-8333-444455556666";
+
+  it("appends review:<task-id> after the base tag, in the same fact", async () => {
+    const repo = makeRepoFixture("widget-service", "feature/x");
+    writeOriginHead(repo, "main");
+    const { stream: err } = captureStream();
+    const writes: Array<{ sessionId: string; content: string; source: string }> = [];
+    const result = await runRecordReview({
+      cwd: repo,
+      stderr: err,
+      pr: "42",
+      task: TASK_ID,
+      summary: "looks good",
+      resolveSession: () => "sess-1",
+      writeLedger: async (args) => {
+        writes.push(args);
+        return { ok: true };
+      },
+    });
+    const expected = `review:42 review:feature/x review:main review:${TASK_ID} ${SEP} looks good`;
+    expect(result).toEqual({
+      exitCode: 0,
+      wrote: true,
+      content: expected,
+      sessionId: "sess-1",
+      branch: "feature/x",
+    });
+    expect(writes).toEqual([
+      { sessionId: "sess-1", content: expected, source: "harness-record-review" },
+    ]);
+  });
+
+  it("omits the task tag entirely when --task is not passed (unchanged content)", async () => {
+    const repo = makeRepoFixture("widget-service", "feature/x");
+    writeOriginHead(repo, "main");
+    const { stream: err } = captureStream();
+    const result = await runRecordReview({
+      cwd: repo,
+      stderr: err,
+      pr: "42",
+      summary: "looks good",
+      resolveSession: () => "sess-1",
+      writeLedger: okLedger(),
+    });
+    expect(result.content).toBe(`review:42 review:feature/x review:main ${SEP} looks good`);
+  });
+
+  it("still appends the task tag when no base resolves", async () => {
+    const repo = makeRepoFixture("no-origin-head", "feature/z");
+    const { stream: err } = captureStream();
+    const result = await runRecordReview({
+      cwd: repo,
+      stderr: err,
+      pr: "9",
+      task: TASK_ID,
+      summary: "no base here",
+      resolveSession: () => "sess-2",
+      writeLedger: okLedger(),
+    });
+    expect(result.content).toBe(
+      `review:9 review:feature/z review:${TASK_ID} ${SEP} no base here`,
+    );
+  });
+
+  it("trims surrounding whitespace on the id", async () => {
+    const repo = makeRepoFixture("widget-service", "feature/x");
+    writeOriginHead(repo, "main");
+    const { stream: err } = captureStream();
+    const result = await runRecordReview({
+      cwd: repo,
+      stderr: err,
+      pr: "42",
+      task: `  ${TASK_ID}  `,
+      summary: "trimmed",
+      resolveSession: () => "sess-1",
+      writeLedger: okLedger(),
+    });
+    expect(result.content).toContain(`review:${TASK_ID} ${SEP}`);
+  });
+
+  // A value carrying internal whitespace would split into TWO tags in the
+  // fact content, so a gate keyed on the first half would be satisfied by
+  // an id that is not the one the operator passed.
+  it("rejects an id containing whitespace with EX_USAGE and does not write", async () => {
+    const repo = makeRepoFixture("widget-service", "feature/x");
+    const { stream: err, output: errOut } = captureStream();
+    const writes: unknown[] = [];
+    const result = await runRecordReview({
+      cwd: repo,
+      stderr: err,
+      pr: "42",
+      task: "abc def",
+      summary: "should not write",
+      resolveSession: () => "sess-1",
+      writeLedger: async (args) => {
+        writes.push(args);
+        return { ok: true };
+      },
+    });
+    expect(result).toMatchObject({ exitCode: EX_USAGE, wrote: false, content: "" });
+    expect(writes).toEqual([]);
+    expect(errOut()).toMatch(/--task must be a non-empty value with no whitespace/);
+  });
+
+  it("rejects an all-whitespace id with EX_USAGE and does not write", async () => {
+    const repo = makeRepoFixture("widget-service", "feature/x");
+    const { stream: err } = captureStream();
+    const writes: unknown[] = [];
+    const result = await runRecordReview({
+      cwd: repo,
+      stderr: err,
+      pr: "42",
+      task: "   ",
+      summary: "should not write",
+      resolveSession: () => "sess-1",
+      writeLedger: async (args) => {
+        writes.push(args);
+        return { ok: true };
+      },
+    });
+    expect(result).toMatchObject({ exitCode: EX_USAGE, wrote: false });
+    expect(writes).toEqual([]);
+  });
+});

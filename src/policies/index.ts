@@ -22,9 +22,13 @@ export {
 export {
   validateExtractGrammar,
   parseExtractExpression,
+  resolveExtractPathValue,
+  firstInputMatchMismatch,
   evaluateExtract,
   substituteTemplate,
   ExtractGrammarError,
+  type InputMatchMap,
+  type InputMatchMismatch,
   type ExtractBuiltins,
   type ExtractEventContext,
   type ExtractEvaluation,

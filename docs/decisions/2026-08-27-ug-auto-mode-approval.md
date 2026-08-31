@@ -64,7 +64,7 @@ A `claude -p` child is the sharpest case: it has its own session id (each `-p` r
 | Escape path | A bare `harness approve ...` Bash command is deferred to the interactive permission prompt via `permissionDecision: "ask"`; the operator's go on that prompt is the approval. | `src/cli/pack/hook-pre-tool-use.ts:826-832#"ASK: operator-approval command, deferring to the interactive permission prompt"`; `src/cli/pack/approve-escape.ts:1-26#"for a human reading the prompt"` |
 | Codex | Shares the marker contract and the reports directory; `harness pack hook codex-pre-tool-use` uses the same `checkOperatorApprovalMarkers`. | `docs/okf/codex-adapter-parity-gaps.md`, gap 2 |
 | opencode | Manifest hooks are not projected into `opencode.json`; apply warns and drops them. | `src/cli/apply/generate-opencode-config.ts:54-68#"unprojected here; a warning says so instead of silently dropping them."`, `src/cli/apply/generate-opencode-config.ts:266-268#"none were projected"` |
-| `operator_only` | Deny-shaped only: an unconditional block that consults no evidence. There is no grant-shaped counterpart. | `src/schema/policies.ts:168-242#"if you actually want a satisfiable requires: gate)"` |
+| `operator_only` | Deny-shaped only: an unconditional block that consults no evidence. There is no grant-shaped counterpart. | `src/schema/policies.ts:184-258#"if you actually want a satisfiable requires: gate)"` |
 | Pack config | Strict zod schema; unknown keys are rejected. `approval_lifecycle` is the precedent for a nested config block. | `src/policy-packs/builtin/understanding-before-execution.ts:263-284#"max_age: z.string().min(1).optional(),"` |
 
 ## Signal sources per harness
@@ -238,7 +238,7 @@ The design holds because key one (mode or delegation) is never in the agent's ha
 
 | Surface | Why it stays human-only |
 |---|---|
-| `operator_only` policies (`deny-kill-switch-bypass`, `deny-session-env-strip`, `deny-pause-sentinel-forgery`) | Unconditional denies that consult no evidence (`src/schema/policies.ts:168-204#"it, since there is no undocumented evidence source to flag."`); there is nothing for auto mode to satisfy. |
+| `operator_only` policies (`deny-kill-switch-bypass`, `deny-session-env-strip`, `deny-pause-sentinel-forgery`) | Unconditional denies that consult no evidence (`src/schema/policies.ts:184-220#"it, since there is no undocumented evidence source to flag."`); there is nothing for auto mode to satisfy. |
 | Risk-gate `require_approval` in prod contexts (`harness approve risk`) | Different gate, different marker, different blast radius; not touched. |
 | Deletion-arm | Same. |
 | Branch-protection override marker (`harness approve branch-protection`) | Shares the signing primitive but is a separate operator decision about editing a protected branch. |

@@ -2624,8 +2624,9 @@ export function buildProgram(opts: RunOptions = {}): Command {
   recordCmd
     .command("review <summary>")
     .description(
-      "Record a review:${PR_NUMBER} + review:${BRANCH} (+ review:${BASE}) fact for the " +
-        "review-before-merge / review-before-merge-bash gates.",
+      "Record a review:${PR_NUMBER} + review:${BRANCH} (+ review:${BASE}, + review:${TASK_ID} " +
+        "with --task) fact for the review-before-merge / review-before-merge-bash / " +
+        "review-before-task-merge / review-before-task-finish-automerge gates.",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
@@ -2637,6 +2638,11 @@ export function buildProgram(opts: RunOptions = {}): Command {
         "when neither resolves. No `gh` shell-out.",
     )
     .option("--branch <name>", "explicit branch override for review:${BRANCH} (default: current git branch)")
+    .option(
+      "--task <id>",
+      "agent-tasks task id for the review:${TASK_ID} tag the task_merge / task_finish(autoMerge) gates read. " +
+        "Optional; pass it and one recorded review satisfies all four merge surfaces.",
+    )
     .option(
       "--session <id>",
       "explicit session id (default: $CLAUDE_CODE_SESSION_ID, then $CLAUDE_SESSION_ID, then newest Claude Code transcript)",
@@ -2651,6 +2657,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
           pr: string;
           base?: string;
           branch?: string;
+          task?: string;
           session?: string;
           ledgerTimeout?: string;
         },
@@ -2660,6 +2667,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         if (options.project) cliOpts.project = options.project;
         if (options.base) cliOpts.base = options.base;
         if (options.branch) cliOpts.branch = options.branch;
+        if (options.task !== undefined) cliOpts.task = options.task;
         if (options.session) cliOpts.session = options.session;
         applyLedgerTimeout(options.ledgerTimeout, cliOpts);
         reportRecordResult(await runRecordReview(cliOpts));

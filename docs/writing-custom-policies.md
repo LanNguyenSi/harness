@@ -369,6 +369,50 @@ trigger:
     SERVICE: "toolArgs.service"
 ```
 
+### One tool, two modes: `trigger.input_match`
+
+`match` filters on the tool NAME. When the same verb is sometimes
+dangerous and sometimes not, that is too coarse. The motivating case is
+`mcp__agent-tasks__task_finish`: called plainly it advances a task and
+merges nothing, called with `autoMerge: true` it merges the PR. Gating
+the tool name alone would either block every ordinary finish call or
+leave the merging one uncovered.
+
+`trigger.input_match` narrows the trigger by the tool call's own
+arguments:
+
+```yaml
+trigger:
+  event: PreToolUse
+  match: "mcp__agent-tasks__task_finish"
+  input_match:
+    toolArgs.autoMerge: true
+  extract:
+    TASK_ID: "toolArgs.taskId"
+```
+
+Grammar and semantics:
+
+- **Keys are extract expressions**, the same DSL `trigger.extract`
+  uses (`<segment>` or `["quoted key"]` accessors, no function calls,
+  no array indices), restricted to the `toolArgs.` namespace. An
+  `event.` / `session.` / `git.` key is a `harness validate` error,
+  not a predicate that quietly never fires.
+- **Values are literals**: string, number, or boolean. No regex, no
+  truthiness. An object, an array, or `null` is rejected.
+- **Comparison is strict equality**, same JSON type and same value.
+  `autoMerge: "true"` (a string) does not satisfy `autoMerge: true`.
+- **Every entry must hold** (they are ANDed with each other and with
+  `match` / `path_match` / `bash_match`).
+- **A missing path never matches.** An argument the caller omitted
+  leaves the narrowed policy out of the way rather than arming it.
+- **An empty map is rejected** as a silent no-op.
+
+`harness policy dry-run --tool mcp__agent-tasks__task_finish --tool-args
+'{"taskId":"...","autoMerge":true}'` predicts exactly what `harness
+policy intercept` decides, and a non-matching payload comes back in the
+"could match" bucket with the failing entry named.
+
 ### Same gate, two PR-surface variants (MCP plus gh-cli)
 
 `review-before-merge` matches `mcp__agent-tasks__pull_requests_merge`. If
@@ -454,6 +498,7 @@ full ledger query, extract substitutions, and match trace.
 | `policies[].trigger.match` | optional | Substring match against the tool name. For MCP tools: `mcp__<server>__<tool>`. For built-ins: `Bash`, `Edit`, `Write`, ... |
 | `policies[].trigger.bash_match` | optional | Regex against `toolArgs.command` when `match: Bash`. Anchor at command start (`^` or `(^|\n|;|\\||&|\\()`) to catch env-prefixes and subshells. |
 | `policies[].trigger.path_match` | optional | Regex against file paths for Edit/Write/MultiEdit triggers. |
+| `policies[].trigger.input_match` | optional | Map of a `toolArgs.`-namespaced extract expression to a literal (`string`/`number`/`boolean`), compared by strict equality and ANDed with the other trigger fields. Narrows a trigger to one MODE of a tool (`task_finish` with `autoMerge: true`). A missing path never matches; an empty map is rejected. |
 | `policies[].trigger.extract` | optional | Map of `${VAR}` → JSONPath against the tool payload. Required if `ledger_tag` references a non-builtin `${VAR}`. |
 | `policies[].requires.ledger_tag` | yes, unless `operator_only: true` | Tag the runtime queries grounding-mcp for. Substring/regex against ledger `content`. |
 | `policies[].requires.within` | optional | Duration string (`10m`, `1h`, `24h`, `PT1H`, `86400s`). Filters to entries created in this window. |

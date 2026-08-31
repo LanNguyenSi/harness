@@ -2,6 +2,101 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-08-31T19:55:00Z, verification-round fixes (agent-tasks `2699b476`):
+  the three remaining bare `src/cli/validate/checks.ts` range citations
+  (two in `manifest-validation-scope.md`, one in
+  `policy-engine-producer-wiring.md`) now carry function-signature
+  anchors. Without an anchor, okf-kit bounds-checks a range but cannot
+  see a range that drifted onto adjacent code; with the anchor, a shift
+  that moves the signature out of the range is reported
+  (anchor-not-found-in-range; probed for real this round). A pure
+  WIDENING that keeps the anchor inside the range still passes: okf-kit
+  checks anchor presence in-range, not position. Three em dashes in this
+  branch's newly authored prose replaced.
+
+- 2026-08-31T17:26:14Z, fix-round after the merge commits (task
+  `2699b476`): the merge commit (touching CHANGELOG.md, additive only)
+  and the follow-up commit (a comment-only edit to
+  `src/runtime/intercept.ts`) newly staled six docs whose `sources:`
+  list either file: `codex-adapter-parity-gaps.md`,
+  `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`,
+  `pause-vs-gate-kill-switch.md`, `policy-engine-producer-wiring.md`,
+  `quote-model-divergence.md`. None of their CHANGELOG-citing passages
+  describe the `[Unreleased]` section this task touches (all cite
+  released versions), so those are timestamp-only. The
+  `src/runtime/intercept.ts` citations needed real re-pointing, not just
+  a re-stamp, because this task's round 1 already grew
+  `policyMatchesEvent` (the `input_match` block) before this merge
+  round started: `policy-engine-producer-wiring.md` and
+  `quote-model-divergence.md` (2x) cited `503-568` for the whole
+  function; actual is `505-590` (start +2 from two new imports earlier
+  in the file, end pushed to 590 by the `input_match` arm this task
+  added inside the function). `gate-fail-posture-matrix.md` cited
+  `1034-1062` for `resolveAttributedContexts`'s own D-021 doc comment;
+  actual is `1099-1127` (net +65: the `input_match` block inside
+  `policyMatchesEvent` plus the new `inputMatchMismatchesEvent`
+  function, both upstream of this citation). `policy-engine-producer-wiring.md`
+  also had a stale `checkSolutionAcceptanceProducer` citation
+  (:304-335 → :306-337) missed by the earlier `manifest-validation-scope.md`
+  pass since it lives in a different doc. Two conflict-resolution
+  mistakes from the merge itself, caught by re-running the checkers
+  rather than trusting the resolution: (1) `pause-vs-gate-kill-switch.md`'s
+  decision-table row citing `docs/for-humans.md:391-393`/:394-395 ,
+  wrong on BOTH branches (that file is untouched by anyone since before
+  this task started), fixed to master's already-correct
+  :395-397#"  diff-able, source-controlled."/:398-399; (2) `log.md`'s
+  own 09:42:00Z historical entry, where the "keep HEAD" conflict
+  resolution wrongly preserved a live citation token (the
+  writePendingApproval anchor into hook-pre-tool-use.ts, around line
+  771) that the `ad66c43f` sweep had already lifted into prose on
+  master, re-lifted here, attributed to the sweep instead of this task.
+  Verdict: `npx -y okf-kit@0.8.0 check --json docs/okf` and the `@0.6.0`
+  pin both report `{errors:0, warnings:0, notices:0}` on the working
+  tree, re-confirmed against the committed tree after this fix-round's
+  commit.
+
+- 2026-08-31T17:20:31Z, final merge round on task `2699b476`: merged
+  `origin/master` (the `ad66c43f` sweep, PR #483, and the `6f719bb4` ADR
+  citation-anchoring task, PR #482) into this branch. CHANGELOG.md and
+  `log.md` conflicts resolved by keeping both sides' entries (log.md
+  newest-first by timestamp); `evidence-ledger-trust-boundary.md` and
+  `pause-vs-gate-kill-switch.md` conflicted only on `timestamp:` (no
+  content diverged on either side once the round-2 hardening's own edit
+  is accounted for), kept this branch's content and re-verified its
+  three `src/cli/index.ts` citations in `pause-vs-gate-kill-switch.md`
+  (`2912-2916`, `3284-3289`, `3282-3381`) still resolve on the merged
+  tree (that file is untouched by both the sweep and the ADR task).
+  `debug-verb-selection.md` (unowned once the sweep merged) now
+  documents the `input_match` parity arm: named the shared evaluator
+  `firstInputMatchMismatch` (`src/io/extract.ts`), used by both
+  `policyMatchesEvent` (`src/runtime/intercept.ts`) and dry-run's
+  `policyMatchesTool` (`src/cli/dry-run.ts`), and that the
+  mixed-envelope arming (`inputMatchMismatchesEvent`, round 2) is
+  intercept-only because dry-run's `--input` is always a single object;
+  added both files to `sources:`. The bridging comments in
+  `src/runtime/intercept.ts` and `src/cli/dry-run.ts` that round 2 left
+  saying the doc did NOT yet cover `input_match` now point at the doc
+  plainly. `manifest-validation-scope.md`'s ten
+  `src/cli/validate/checks.ts` citations, stale since round 2 inserted
+  `checkTaskVerbGateWiring` (~57 net lines) after `checkWorkflowGateWiring`
+  and two new imports (+2 lines) above `checkMcp`: `checkMcp` (:119-136
+  → :121-138, and the single-line :119 → :121), `checkCli`
+  (:138-189 → :140-191), `checkSkills` (:191-214 → :193-216),
+  `checkHooks` (:216-248 → :218-250), `checkPolicyPacks` /
+  `checkPolicyPackConfigsAsDiagnostics` (:1258-1287 → :1316-1345),
+  `checkSolutionAcceptanceProducer` (:304-335 → :306-337),
+  `checkWorkflowGateWiring` (:364-407 → :366-412, the function itself
+  grew by 5 lines calling the new check),
+  `checkUnderstandingBeforeExecutionAutoApproveMeasured` (:1331-1364 →
+  :1389-1422) and its `listedAutoApproveHarnesses` helper (:1309-1329
+  → :1367-1387), and `runAssetChecks` itself (:1366-1392 →
+  :1424-1450); every re-point verified against the current file (each
+  function's declaration and closing brace read directly), not derived
+  from the line-count arithmetic alone. All other citations in this doc
+  (`src/cli/add/index.ts`, `src/cli/remove/index.ts`, `src/schema/*`,
+  `src/io/validate-before-write.ts`, `src/cli/add/mutate.ts`) are
+  untouched by this task and were left as-is.
+
 - 2026-08-31T19:20:00Z, merge round after the ad66c43f sweep landed
   (agent-tasks `6f719bb4`): merged master into this branch (both branches
   append log entries; both sides kept, newest first). This branch's
@@ -37,6 +132,115 @@
   extraction, both untouched by this edit) and re-stamped both
   timestamp-only, same as the round below did for the same reason.
 
+- 2026-08-31T17:05:39Z, re-stamp for the review round-1 hardening on the
+  task-scoped merge gate (task `2699b476`, round 2): the mixed-envelope
+  `input_match` arm and the `checkWorkflowGateWiring` missing-task-hooks
+  warning. Changed sources this commit: `src/io/extract.ts` (comment
+  only), `src/schema/extract.ts` (comment only), `src/schema/policies.ts`
+  (comment only), `src/runtime/intercept.ts`, `src/cli/dry-run.ts`,
+  `src/cli/validate/checks.ts`, `src/cli/init/profiles.ts` (mutation
+  probe only, restored byte-exact, no net diff), `src/cli/record/index.ts`
+  (JSDoc relocation only, no content change), `CHANGELOG.md`. Two
+  non-sweep docs name one of these in `sources:` and are re-stamped
+  here: `pause-vs-gate-kill-switch.md` (names `src/runtime/intercept.ts`
+  / `src/cli/validate/checks.ts` / `src/schema/policies.ts`) and
+  `evidence-ledger-trust-boundary.md` (names `CHANGELOG.md`; the round-2
+  bullet only documents the hardening above and does not touch any
+  ledger-tag or producer this doc describes). Their cited claims
+  (`evaluateOnePolicy`'s `operator_only` short-circuit,
+  `checkPolicySelfAttestation`'s recognition of `operator_only: true`,
+  the "0 warnings/errors under `validate --strict`" measurement, and the
+  `readRegularFileRejectingSymlink` extraction history) are about
+  different code paths than this round's changes
+  (`inputMatchMismatchesEvent`, the new `checkTaskVerbGateWiring`
+  warning) and are unaffected; FULL_TEMPLATE still carries all four
+  evidence hooks, so the new warning never fires for it, leaving the
+  "0 warnings/errors" claim true. `understanding-gate-lockout-recovery.md`
+  names none of this round's changed sources and was not touched.
+  `manifest-validation-scope.md` is SWEEP-OWNED (task `ad66c43f`) and was
+  deliberately left alone per the same scope call the round-1 entry
+  below records, but its own `src/cli/validate/checks.ts` line-range
+  citations were NOT re-pointed by this commit even though inserting
+  `checkTaskVerbGateWiring` (~40 lines) shifted everything below it:
+  `okf-kit check` newly reports 4 `citations-resolve` warnings on that
+  file this commit did not exist to cause a fix for (2 continuation
+  ranges and one single-line citation now resolve to a closing brace or
+  a blank line). Left for the sweep task per the orchestrator's scope
+  call; flagged here and in this task's report so the sweep re-points
+  against this commit's line numbers rather than bd87f46's.
+
+- 2026-08-31T16:19:19Z, re-stamp for the task-scoped merge gate (task
+  `2699b476`, `trigger.input_match`). Changed sources this commit:
+  `src/io/extract.ts`, `src/schema/extract.ts`, `src/schema/policies.ts`,
+  `src/policies/index.ts`, `src/runtime/intercept.ts`,
+  `src/runtime/workflow-policies.ts`, `src/cli/dry-run.ts`,
+  `src/cli/init/templates.ts`, `src/cli/init/profiles.ts`,
+  `src/cli/record/index.ts`, `src/cli/index.ts`,
+  `docs/examples/full-manifest.yaml` (+ its golden),
+  `docs/for-agents.md`, `docs/writing-custom-policies.md`,
+  `docs/CLI.md`, `CHANGELOG.md`. Cross-checked each against every doc's
+  `sources:` list. Three docs name at least one of them and are
+  re-stamped here; the other six that would also match
+  (`codex-adapter-parity-gaps.md`, `debug-verb-selection.md`,
+  `gate-fail-posture-matrix.md`, `policy-engine-producer-wiring.md`,
+  `quote-model-divergence.md`, `manifest-validation-scope.md`) are the
+  long-stale set a parallel task is sweeping and were deliberately NOT
+  touched here, per the orchestrator's scope call for this task;
+  `understanding-gate-auto-mode-signals.md` names none of the changed
+  files at all.
+
+  What was re-verified, per doc:
+  `evidence-ledger-trust-boundary.md` names `src/cli/init/templates.ts`,
+  `docs/writing-custom-policies.md`, `docs/CLI.md`, `CHANGELOG.md`. Its
+  invariant (no agent-writable ledger tag opens a BUILTIN enforcement
+  gate; custom `requires.ledger_tag` policies are process gates by
+  design) is unchanged by this task: the two new template policies are
+  ordinary `requires.ledger_tag` gates on the agent-writable ledger,
+  exactly the class the doc's "Ledger tags that remain load-bearing"
+  paragraph already covers. That paragraph gained the new
+  `review:${TASK_ID}` entry with its producer, so the enumeration stays
+  complete; nothing else in the doc restates a claim this task altered.
+  Two earlier entries in this log quoted those same already-drifted
+  ranges in citation form (a full path-plus-range citation into
+  `src/cli/index.ts` followed by a bare continuation range),
+  which okf-kit resolves as live continuation citations; this commit's
+  line shift turned one of them into a closing-brace start line. They
+  are historical records of what the doc cited THEN, so they are lifted
+  out of citation form rather than re-pointed, which would falsify the
+  record.
+
+  `pause-vs-gate-kill-switch.md` names `src/cli/index.ts`,
+  `src/schema/policies.ts`, `src/runtime/intercept.ts`,
+  `src/cli/init/templates.ts`, `CHANGELOG.md`. Its subject is the pause
+  sentinel, `gate disable`/`enable`, and the three `operator_only`
+  kill-switch policies; this task touched none of those (it added an
+  optional trigger field, two non-`operator_only` policies, and two
+  hooks). Its three `src/cli/index.ts` citations DID need attention:
+  they pointed at ranges that had already drifted on `origin/master`
+  (the cited `2726-2731` landed inside `record dogfood`'s action block,
+  and `3086-3094` / `3086-3185` inside the `uninstall` command help),
+  and this commit's `+8` lines in `record review` would have shifted
+  them further. All three are re-pointed at their real current
+  locations, two of them anchored: the `gate disable` motivation
+  comment, the `harness pause` description line naming
+  `policies[].enabled`, and the pause/resume registration block.
+  `understanding-gate-lockout-recovery.md` names `src/cli/index.ts`.
+  Its only citation into that file is the `harness approve
+  understanding` flag list, which sits well above this commit's edits,
+  so it neither drifted nor changed meaning; its
+  `expire_on_tool_match` paragraph mentions
+  `mcp__agent-tasks__task_finish` as a marker-EXPIRY trigger in the
+  understanding pack, an unrelated mechanism from the merge gate this
+  task adds on the same verb. No content edit, timestamp bumped.
+
+  Verdict: 3 docs re-stamped, 1 with a content edit
+  (`evidence-ledger-trust-boundary.md`), 1 with citation re-points
+  (`pause-vs-gate-kill-switch.md`). Pre-existing citations-resolve
+  findings on `understanding-gate-lockout-recovery.md`
+  (`hook-pre-tool-use.ts` anchor, `hook-codex-pre-tool-use.ts`
+  closing-brace start line) and on `pause-vs-gate-kill-switch.md`
+  (`docs/for-humans.md` blank start line) are unrelated to this task's
+  files and left as-is, same as the two preceding entries record.
 - 2026-08-31T16:16:29Z, ADR citation anchoring sweep (agent-tasks `6f719bb4`):
   every backtick source citation in
   `docs/decisions/2026-08-27-ug-auto-mode-approval.md` and
@@ -250,10 +454,14 @@
   unrelated citation drift, confirmed against the pre-task common
   ancestor `a08efe0`: `understanding-gate-lockout-recovery.md`'s
   writePendingApproval anchor into hook-pre-tool-use.ts, cited at around
-  line 771 as the file stood then, already missed its target there, and
-  `pause-vs-gate-kill-switch.md`'s pause/gate-command ranges cited into
-  src/cli/index.ts around lines 3086-3185 and 3088-3094 as the file stood
-  then already pointed at the unrelated `uninstall` command's description
+  line 771 as the file stood then, already missed its target there
+  (lifted out of citation form by the `ad66c43f` sweep so this
+  historical note stops resolving against today's file), and
+  `pause-vs-gate-kill-switch.md`'s
+  `src/cli/index.ts` pause/gate-command ranges (lines 3086-3185 and
+  3088-3094 as cited then, lifted out of citation form by task 2699b476
+  so this historical note stops resolving against today's file)
+  already pointed at the unrelated `uninstall` command's description
   there too (same drift the entry below already named). Several other
   docs under this directory (codex-adapter-parity-gaps.md,
   debug-verb-selection.md, gate-fail-posture-matrix.md,
@@ -284,9 +492,10 @@
   command registration): neither doc's claims describe any of the four
   changed regions, so no content edit is needed in either doc; both
   `timestamp:` fields are bumped. Separately, and NOT fixed by this
-  correction: `pause-vs-gate-kill-switch.md` cites src/cli/index.ts
-  around lines 3086-3185 and 3088-3094 for the `pause`/`gate` command
-  registrations; both ranges already pointed at the unrelated `uninstall` command's
+  correction: `pause-vs-gate-kill-switch.md` cites `src/cli/index.ts`
+  lines 3086-3185 and 3088-3094 (as cited then, lifted out of citation
+  form by task 2699b476) for the `pause`/`gate` command registrations; both
+  ranges already pointed at the unrelated `uninstall` command's
   description before this task touched the file at all (confirmed
   against the pre-round-1 merge commit), so this is genuinely
   pre-existing citation drift from an earlier, unrelated change, out of

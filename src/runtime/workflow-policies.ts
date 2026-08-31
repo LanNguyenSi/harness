@@ -16,10 +16,19 @@ import type { Manifest, Policy, Workflow } from "../schema/index.js";
  * later index in the same workflow) by a `merge` step. When BOTH
  * `require-review-evidence` and `require-review-evidence-bash` are
  * declared in `manifest.hooks[]`, `deriveWorkflowGatePolicies` returns
- * the SAME policy pair `harness init --template full` would hand-author
+ * the SAME policies `harness init --template full` would hand-author
  * (`src/cli/init/templates.ts` `review-before-merge` /
  * `review-before-merge-bash`), renamed per workflow so the provenance
  * is visible in `harness list policies` / `harness explain`.
+ *
+ * Task 2699b476 added the two task-scoped merge surfaces to that set:
+ * `review-before-task-merge` (`mcp__agent-tasks__task_merge`) and
+ * `review-before-task-finish-automerge`
+ * (`mcp__agent-tasks__task_finish` narrowed by `trigger.input_match` to
+ * `autoMerge: true`), each derived only when its own hook
+ * (`require-review-evidence-task-merge` /
+ * `require-review-evidence-task-finish`) is declared. A manifest that
+ * predates those hooks derives exactly the pair it always did.
  *
  * Deliberately does NOT touch `src/runtime/intercept.ts`: the engine
  * already knows how to evaluate a `Policy`, so the only thing missing
@@ -71,6 +80,27 @@ import type { Manifest, Policy, Workflow } from "../schema/index.js";
 export const REVIEW_EVIDENCE_HOOK_MCP = "require-review-evidence";
 export const REVIEW_EVIDENCE_HOOK_BASH = "require-review-evidence-bash";
 
+/**
+ * The two hooks templates.ts wires for the task-scoped merge surfaces
+ * (task 2699b476). Unlike the pair above these are NOT part of
+ * `hasWiredMergeGateHooks`: a manifest that predates them still derives
+ * the `pull_requests_merge` / `gh pr merge` gates exactly as before, and
+ * each task-scoped gate is derived only when ITS OWN hook is declared.
+ *
+ * That per-hook gating is not a style choice. A derived policy's `hook:`
+ * must name a declared hook (`ManifestSchema`'s superRefine), and, more
+ * importantly, the hook's `match` is what `harness apply` projects into
+ * settings.json's tool-name matcher: without a matcher for
+ * `mcp__agent-tasks__task_merge`, Claude Code never spawns `harness
+ * policy intercept` for that verb, so a gate derived anyway would be
+ * INERT while looking enforced in `harness list policies` (the exact
+ * "No-Op that LOOKS protective" shape `checkWorkflowGateWiring` exists
+ * to prevent). Deriving nothing until the hook is wired keeps the
+ * absence visible instead of fake-covering it.
+ */
+export const REVIEW_EVIDENCE_HOOK_TASK_MERGE = "require-review-evidence-task-merge";
+export const REVIEW_EVIDENCE_HOOK_TASK_FINISH = "require-review-evidence-task-finish";
+
 // Exported (review round 2, F5) so `src/cli/validate/checks.ts` can check a
 // declared hook's `match`/`bash_match` against the EXACT surface the
 // derivation binds to, instead of trusting the hook name alone. See
@@ -82,6 +112,28 @@ export const MERGE_MCP_MATCH = "mcp__agent-tasks__pull_requests_merge";
 // by tests/runtime/workflow-policies.test.ts's parity assertion so the
 // two cannot silently drift apart).
 export const MERGE_BASH_MATCH = "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr merge\\b";
+
+// The two task-scoped agent-tasks merge surfaces (task 2699b476), pinned
+// here the same way `MERGE_MCP_MATCH` / `MERGE_BASH_MATCH` are and held
+// byte-identical to templates.ts by this module's parity assertion in
+// tests/runtime/workflow-policies.test.ts.
+export const TASK_MERGE_MCP_MATCH = "mcp__agent-tasks__task_merge";
+export const TASK_FINISH_MCP_MATCH = "mcp__agent-tasks__task_finish";
+
+/**
+ * The `trigger.input_match` predicate that separates the merging mode of
+ * `task_finish` from the ordinary one. Both auto-merge modes the MCP
+ * server documents (soloMode work claim, review claim + approve) carry
+ * `autoMerge: true`; a plain finish omits the argument entirely, and a
+ * missing path never satisfies an `input_match` entry, so the gate stays
+ * out of the way of the non-merging call.
+ */
+export const TASK_FINISH_AUTOMERGE_INPUT_MATCH: Record<string, boolean> = {
+  "toolArgs.autoMerge": true,
+};
+
+/** `toolArgs.taskId` is the only identifier either task-scoped verb carries. */
+export const TASK_ID_EXTRACT: Record<string, string> = { TASK_ID: "toolArgs.taskId" };
 
 /**
  * True when `workflow.steps` contains a `review_subagent` step with
@@ -124,8 +176,33 @@ function triggerSurfaceKey(policy: Pick<Policy, "trigger" | "requires">): string
     event: policy.trigger.event,
     match: policy.trigger.match ?? null,
     bash_match: policy.trigger.bash_match ?? null,
+    input_match: inputMatchKey(policy),
     ledger_tag: policy.requires?.ledger_tag ?? null,
   });
+}
+
+/**
+ * Canonical form of `trigger.input_match` for the surface key: key-sorted
+ * so authoring order does not change identity, `null` when the policy
+ * declares none.
+ *
+ * `input_match` is part of the SURFACE, not of the extract comparison
+ * (task 2699b476): two policies on `mcp__agent-tasks__task_finish` that
+ * disagree about which `autoMerge` value they gate intercept DIFFERENT
+ * tool calls, so they are no more interchangeable than a policy on a
+ * different tool name would be. Leaving it out of the key would let a
+ * hand-authored `input_match: { toolArgs.autoMerge: false }` policy dedupe
+ * the derived `autoMerge: true` gate away and leave the merging call
+ * ungated while the manifest still reads as covered.
+ */
+function inputMatchKey(policy: Pick<Policy, "trigger">): Record<string, unknown> | null {
+  const inputMatch = policy.trigger.input_match;
+  if (inputMatch === undefined) return null;
+  const sorted: Record<string, unknown> = {};
+  for (const key of Object.keys(inputMatch).sort()) {
+    sorted[key] = inputMatch[key];
+  }
+  return sorted;
 }
 
 /**
@@ -278,6 +355,84 @@ function buildBashMergeGatePolicy(workflowName: string): Policy {
   };
 }
 
+/**
+ * The two task-scoped merge gates (task 2699b476), structurally identical
+ * to templates.ts's `review-before-task-merge` /
+ * `review-before-task-finish-automerge` apart from name and description.
+ * They key on `review:${TASK_ID}` rather than the PR number because both
+ * verbs derive owner/repo/PR from the task, so `toolArgs.taskId` is the
+ * only identifier in the payload; `harness record review --pr <pr> --task
+ * <id>` writes both tag families in ONE fact so a single recorded review
+ * opens every merge surface.
+ */
+function buildTaskMergeGatePolicy(workflowName: string): Policy {
+  return {
+    name: `workflow:${workflowName}:review-before-task-merge`,
+    description:
+      `Derived from workflows[] (workflow "${workflowName}"): a review_subagent step ` +
+      `with spawn: "required" precedes a merge step, so block agent-tasks task_merge ` +
+      "unless a ledger entry tagged review:<task-id> exists for this session.",
+    trigger: {
+      event: "PreToolUse",
+      match: TASK_MERGE_MCP_MATCH,
+      extract: { ...TASK_ID_EXTRACT },
+    },
+    requires: { ledger_tag: "review:${TASK_ID}" },
+    hook: REVIEW_EVIDENCE_HOOK_TASK_MERGE,
+    enforcement: "block",
+    producers: [
+      {
+        kind: "mcp",
+        verb: "mcp__grounding-mcp__ledger_add",
+        example:
+          '{sessionId:"${SESSION_ID}", type:"fact", content:"review:${TASK_ID}: <verdict + key findings + nits>", source:"Agent(general-purpose) review"}',
+        description:
+          "Spawn a review subagent against the PR diff, capture its verdict, then persist a ledger entry tagged with the task id. Mirror of the review-before-merge producer for the task-scoped merge surface.",
+      },
+    ],
+    ux: {
+      cannot: "You cannot merge the PR for task ${TASK_ID} yet.",
+      required: ["a recorded review of task ${TASK_ID}"],
+      run: ['harness record review --pr <pr> --task ${TASK_ID} "<summary>"'],
+    },
+  };
+}
+
+function buildTaskFinishAutoMergeGatePolicy(workflowName: string): Policy {
+  return {
+    name: `workflow:${workflowName}:review-before-task-finish-automerge`,
+    description:
+      `Derived from workflows[] (workflow "${workflowName}"): a review_subagent step ` +
+      `with spawn: "required" precedes a merge step, so block agent-tasks task_finish ` +
+      "in its auto-merge mode unless a ledger entry tagged review:<task-id> exists for " +
+      "this session.",
+    trigger: {
+      event: "PreToolUse",
+      match: TASK_FINISH_MCP_MATCH,
+      input_match: { ...TASK_FINISH_AUTOMERGE_INPUT_MATCH },
+      extract: { ...TASK_ID_EXTRACT },
+    },
+    requires: { ledger_tag: "review:${TASK_ID}" },
+    hook: REVIEW_EVIDENCE_HOOK_TASK_FINISH,
+    enforcement: "block",
+    producers: [
+      {
+        kind: "mcp",
+        verb: "mcp__grounding-mcp__ledger_add",
+        example:
+          '{sessionId:"${SESSION_ID}", type:"fact", content:"review:${TASK_ID}: <verdict + key findings + nits>", source:"Agent(general-purpose) review"}',
+        description:
+          "Spawn a review subagent against the PR diff, capture its verdict, then persist a ledger entry tagged with the task id. Same evidence the task_merge gate reads, so one recorded review opens both.",
+      },
+    ],
+    ux: {
+      cannot: "You cannot finish task ${TASK_ID} with autoMerge yet.",
+      required: ["a recorded review of task ${TASK_ID}"],
+      run: ['harness record review --pr <pr> --task ${TASK_ID} "<summary>"'],
+    },
+  };
+}
+
 // F7 (review round 2): a registry of every `Policy` object this module has
 // ever handed back from `deriveWorkflowGatePolicies`. `WeakSet` keys on
 // object identity, not value equality, deliberately: two DIFFERENT
@@ -342,6 +497,7 @@ function deriveWorkflowGates(manifest: Manifest): WorkflowGateDerivation {
   if (!hasWiredMergeGateHooks(manifest)) return empty;
 
   const hand = handAuthoredPolicies(manifest);
+  const declaredHookNames = new Set(manifest.hooks.map((h) => h.name));
   const bySurface = new Map<string, Policy[]>();
   for (const policy of hand) {
     const key = triggerSurfaceKey(policy);
@@ -363,9 +519,21 @@ function deriveWorkflowGates(manifest: Manifest): WorkflowGateDerivation {
     const candidates: Array<{ policy: Policy; surface: string }> = [
       { policy: buildMcpMergeGatePolicy(workflow.name), surface: MERGE_MCP_MATCH },
       { policy: buildBashMergeGatePolicy(workflow.name), surface: "`gh pr merge` (Bash)" },
+      { policy: buildTaskMergeGatePolicy(workflow.name), surface: TASK_MERGE_MCP_MATCH },
+      {
+        policy: buildTaskFinishAutoMergeGatePolicy(workflow.name),
+        surface: `${TASK_FINISH_MCP_MATCH} (autoMerge: true)`,
+      },
     ];
 
     for (const { policy: candidate, surface } of candidates) {
+      // A candidate whose own hook is not declared is skipped rather than
+      // derived (task 2699b476): see REVIEW_EVIDENCE_HOOK_TASK_MERGE's
+      // doc for why an unwired hook makes a derived gate inert rather
+      // than enforcing. `hasWiredMergeGateHooks` above already guarantees
+      // this holds for the two pull_requests_merge / gh pr merge
+      // candidates, so their behaviour is unchanged.
+      if (!declaredHookNames.has(candidate.hook)) continue;
       const key = triggerSurfaceKey(candidate);
       if (seen.has(key)) continue;
       const sharing = bySurface.get(key) ?? [];

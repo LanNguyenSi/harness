@@ -228,7 +228,10 @@ describe("blocking ledger-consulting hooks clear the ledger's worst-case round-t
 
   it("TEAM_TEMPLATE's blocking `harness policy intercept` hook clears the margin and the hard floor (task 7bf47554, fix round 2)", () => {
     const interceptHooks = blockingInterceptHooks(loadTeamTemplateManifest());
-    expect(interceptHooks.length).toBe(1);
+    // 3 since task 2699b476: require-review-evidence plus the two
+    // task-scoped merge-surface hooks (require-review-evidence-task-merge,
+    // require-review-evidence-task-finish) the profile now also wires.
+    expect(interceptHooks.length).toBe(3);
     for (const hook of interceptHooks) {
       assertHookClearsMargin(hook);
       assertHookMeetsHardFloor(hook);

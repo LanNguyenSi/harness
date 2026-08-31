@@ -23,6 +23,8 @@ import {
   isDerivedPolicy,
   REVIEW_EVIDENCE_HOOK_BASH,
   REVIEW_EVIDENCE_HOOK_MCP,
+  REVIEW_EVIDENCE_HOOK_TASK_FINISH,
+  REVIEW_EVIDENCE_HOOK_TASK_MERGE,
   withDerivedPolicies,
   withoutDerivedPolicies,
   workflowRequiresMergeGate,
@@ -60,6 +62,31 @@ const WIRED_HOOKS: Hook[] = [
     budget_ms: 15000,
   },
 ];
+
+// The two task-scoped merge-surface hooks (task 2699b476). Deliberately a
+// SEPARATE list from WIRED_HOOKS above: a manifest declaring only the
+// original pair must keep deriving only the original pair, so every
+// pre-2699b476 case in this file keeps exercising that shape.
+const TASK_VERB_HOOKS: Hook[] = [
+  {
+    name: REVIEW_EVIDENCE_HOOK_TASK_MERGE,
+    event: "PreToolUse",
+    match: "mcp__agent-tasks__task_merge",
+    command: "harness policy intercept",
+    blocking: "hard",
+    budget_ms: 15000,
+  },
+  {
+    name: REVIEW_EVIDENCE_HOOK_TASK_FINISH,
+    event: "PreToolUse",
+    match: "mcp__agent-tasks__task_finish",
+    command: "harness policy intercept",
+    blocking: "hard",
+    budget_ms: 15000,
+  },
+];
+
+const ALL_MERGE_GATE_HOOKS: Hook[] = [...WIRED_HOOKS, ...TASK_VERB_HOOKS];
 
 function branchStep(): WorkflowStep {
   return { kind: "branch", from: "master", per_task: true };
@@ -630,5 +657,172 @@ describe("manifest views: withDerivedPolicies / withoutDerivedPolicies / handAut
     expect(restored.policies[0]).toBe(hand);
     expect(withoutDerivedPolicies(raw)).toBe(raw);
     expect(handAuthoredPolicies(derivedView)).toEqual([hand]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 2699b476: the two task-scoped merge surfaces
+// ---------------------------------------------------------------------------
+
+describe("deriveWorkflowGatePolicies: task-scoped merge gates (task 2699b476)", () => {
+  function qualifyingManifest(hooks: Hook[], policies: Policy[] = []) {
+    return makeManifest({
+      hooks,
+      policies,
+      workflows: [workflow("ship", [branchStep(), reviewStep("required"), mergeStep()])],
+    });
+  }
+
+  it("derives all four gates when all four hooks are wired", () => {
+    const derived = deriveWorkflowGatePolicies(qualifyingManifest(ALL_MERGE_GATE_HOOKS));
+    expect(derived.map((p) => p.name).sort()).toEqual(
+      [
+        "workflow:ship:review-before-merge",
+        "workflow:ship:review-before-merge-bash",
+        "workflow:ship:review-before-task-merge",
+        "workflow:ship:review-before-task-finish-automerge",
+      ].sort(),
+    );
+  });
+
+  // Backwards compatibility, and the reason the two new hooks are NOT part
+  // of `hasWiredMergeGateHooks`: an unwired hook means settings.json never
+  // spawns `harness policy intercept` for that verb, so a derived gate
+  // there would be inert while reading as enforced.
+  it("derives only the original pair when the task-verb hooks are absent", () => {
+    const derived = deriveWorkflowGatePolicies(qualifyingManifest(WIRED_HOOKS));
+    expect(derived.map((p) => p.name).sort()).toEqual(
+      ["workflow:ship:review-before-merge", "workflow:ship:review-before-merge-bash"].sort(),
+    );
+  });
+
+  it("derives each task-verb gate independently of the other's hook", () => {
+    const merged = deriveWorkflowGatePolicies(
+      qualifyingManifest([...WIRED_HOOKS, TASK_VERB_HOOKS[0]!]),
+    );
+    expect(merged.map((p) => p.name)).toContain("workflow:ship:review-before-task-merge");
+    expect(merged.map((p) => p.name)).not.toContain(
+      "workflow:ship:review-before-task-finish-automerge",
+    );
+  });
+
+  // Same comparison the pre-2699b476 parity assertion applies to the
+  // original pair (trigger surface, hook, enforcement, requires), now
+  // covering all FOUR derived gates in one place.
+  it("parity: all four derived gates match the policies templates.ts ships", () => {
+    const derived = deriveWorkflowGatePolicies(qualifyingManifest(ALL_MERGE_GATE_HOOKS));
+    const pairs: Array<[string, string]> = [
+      ["workflow:ship:review-before-merge", "review-before-merge"],
+      ["workflow:ship:review-before-merge-bash", "review-before-merge-bash"],
+      ["workflow:ship:review-before-task-merge", "review-before-task-merge"],
+      [
+        "workflow:ship:review-before-task-finish-automerge",
+        "review-before-task-finish-automerge",
+      ],
+    ];
+    for (const [derivedName, shippedName] of pairs) {
+      const gate = derived.find((p) => p.name === derivedName);
+      expect(gate, `${derivedName} not derived`).toBeDefined();
+      const shipped = shippedPolicy(shippedName);
+      expect(gate?.trigger).toEqual(shipped.trigger);
+      expect(gate?.hook).toBe(shipped.hook);
+      expect(gate?.enforcement).toBe(shipped.enforcement);
+      expect(gate?.requires).toEqual(shipped.requires);
+      expect(gate?.when).toEqual(shipped.when);
+      expect(gate?.operator_only).toEqual(shipped.operator_only);
+    }
+  });
+
+  // Stricter parity for the two gates this task adds: the agent-facing
+  // `producers:` / `ux:` blocks are byte-identical to the shipped ones
+  // too, so the remediation text an agent reads is the same whether the
+  // gate came from `policies:` or from `workflows:`.
+  //
+  // Deliberately NOT asserted for the ORIGINAL pair: their derived
+  // `producers[].example` has used `review:${PR_NUMBER}: <verdict...>`
+  // since 99f47307 Slice 1 while templates.ts uses an em-dash separator
+  // there. That drift predates this task and changing either side would
+  // change the existing pair's behaviour, which this task must not do.
+  it("parity: the two task-scoped gates also match the shipped producers and ux", () => {
+    const derived = deriveWorkflowGatePolicies(qualifyingManifest(ALL_MERGE_GATE_HOOKS));
+    const pairs: Array<[string, string]> = [
+      ["workflow:ship:review-before-task-merge", "review-before-task-merge"],
+      [
+        "workflow:ship:review-before-task-finish-automerge",
+        "review-before-task-finish-automerge",
+      ],
+    ];
+    for (const [derivedName, shippedName] of pairs) {
+      const gate = derived.find((p) => p.name === derivedName);
+      const shipped = shippedPolicy(shippedName);
+      expect(gate?.producers).toEqual(shipped.producers);
+      expect(gate?.ux).toEqual(shipped.ux);
+    }
+  });
+
+  it("the derived task_finish gate carries the autoMerge input_match predicate", () => {
+    const derived = deriveWorkflowGatePolicies(qualifyingManifest(ALL_MERGE_GATE_HOOKS));
+    const gate = derived.find(
+      (p) => p.name === "workflow:ship:review-before-task-finish-automerge",
+    );
+    expect(gate?.trigger.input_match).toEqual({ "toolArgs.autoMerge": true });
+  });
+
+  it("an equivalent hand-authored task-verb policy dedupes the derived gate", () => {
+    const hand = shippedPolicy("review-before-task-merge");
+    const derived = deriveWorkflowGatePolicies(qualifyingManifest(ALL_MERGE_GATE_HOOKS, [hand]));
+    expect(derived.find((p) => p.name === "workflow:ship:review-before-task-merge")).toBeUndefined();
+    // The other three surfaces are untouched by that dedupe.
+    expect(derived).toHaveLength(3);
+  });
+
+  // Mutation probe (d) in this task's brief: dropping `input_match` from
+  // `triggerSurfaceKey` makes these two policies share a key, so the
+  // `autoMerge: false` policy would dedupe the derived `autoMerge: true`
+  // gate away and the merging call would go ungated while the manifest
+  // still reads as covered. Both assertions below go red under that mutant.
+  it("input_match is part of the surface key: an autoMerge:false hand policy does NOT dedupe the autoMerge:true gate", () => {
+    const shipped = shippedPolicy("review-before-task-finish-automerge");
+    const inverted: Policy = {
+      ...shipped,
+      name: "allow-plain-task-finish",
+      trigger: { ...shipped.trigger, input_match: { "toolArgs.autoMerge": false } },
+    };
+    const derived = deriveWorkflowGatePolicies(
+      qualifyingManifest(ALL_MERGE_GATE_HOOKS, [inverted]),
+    );
+    const gate = derived.find(
+      (p) => p.name === "workflow:ship:review-before-task-finish-automerge",
+    );
+    expect(gate).toBeDefined();
+    expect(gate?.trigger.input_match).toEqual({ "toolArgs.autoMerge": true });
+  });
+
+  it("input_match is part of the surface key: a policy with NO input_match does not dedupe the narrowed gate", () => {
+    const shipped = shippedPolicy("review-before-task-finish-automerge");
+    const broad: Policy = { ...shipped, name: "gate-every-task-finish", trigger: { ...shipped.trigger } };
+    delete broad.trigger.input_match;
+    const derived = deriveWorkflowGatePolicies(qualifyingManifest(ALL_MERGE_GATE_HOOKS, [broad]));
+    expect(
+      derived.find((p) => p.name === "workflow:ship:review-before-task-finish-automerge"),
+    ).toBeDefined();
+  });
+
+  it("a weaker hand policy on the task_merge surface is reported as an overlap, not a dedupe", () => {
+    const shipped = shippedPolicy("review-before-task-merge");
+    const weak: Policy = { ...shipped, name: "task-merge-warn-only", enforcement: "warn" };
+    const manifest = qualifyingManifest(ALL_MERGE_GATE_HOOKS, [weak]);
+    expect(
+      deriveWorkflowGatePolicies(manifest).find(
+        (p) => p.name === "workflow:ship:review-before-task-merge",
+      ),
+    ).toBeDefined();
+    const overlaps = findWeakGatePolicyOverlaps(manifest);
+    expect(overlaps).toHaveLength(1);
+    expect(overlaps[0]).toMatchObject({
+      derivedPolicyName: "workflow:ship:review-before-task-merge",
+      handPolicyName: "task-merge-warn-only",
+      reason: "enforcement: warn",
+    });
   });
 });

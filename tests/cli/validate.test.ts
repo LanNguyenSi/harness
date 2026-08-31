@@ -1018,6 +1018,24 @@ workflows:
     budget_ms: 15000
 `;
 
+  // The two task-scoped merge-surface hooks (task 2699b476). A manifest
+  // wiring ONLY `WIRED_HOOKS` above still enforces `pull_requests_merge` /
+  // `gh pr merge`, but leaves `task_merge` / `task_finish (autoMerge)`
+  // completely uncovered (review round 1, task 2699b476 round 2).
+  const TASK_VERB_HOOKS = `  - name: require-review-evidence-task-merge
+    event: PreToolUse
+    match: "mcp__agent-tasks__task_merge"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+  - name: require-review-evidence-task-finish
+    event: PreToolUse
+    match: "mcp__agent-tasks__task_finish"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+`;
+
   it("errors when spawn: required precedes a merge step but neither evidence hook is declared", () => {
     const home = writeFixture({ "harness.yaml": `version: 1\n${WORKFLOW_REQUIRED}hooks: []\n` });
     const result = validate({
@@ -1058,7 +1076,7 @@ workflows:
     expect(hit?.message).toContain(REVIEW_EVIDENCE_HOOK_BASH_NAME);
   });
 
-  it("emits no diagnostic when both evidence hooks are declared", () => {
+  it("emits no ERROR diagnostic when both evidence hooks are declared", () => {
     const home = writeFixture({
       "harness.yaml": `version: 1\n${WORKFLOW_REQUIRED}${WIRED_HOOKS}`,
     });
@@ -1067,8 +1085,62 @@ workflows:
       configPath: path.join(home, "harness.yaml"),
       ...NOOP_PROBES,
     });
+    const errorHit = result.diagnostics.find(
+      (d) => d.severity === "error" && /workflow "ship"/.test(d.message),
+    );
+    expect(errorHit).toBeUndefined();
+  });
+
+  // MEDIUM security (review round 1, task 2699b476 round 2): the original
+  // pair alone (`WIRED_HOOKS`) still leaves `task_merge` and `task_finish
+  // (autoMerge: true)` uncovered: a PR can merge through either verb with
+  // no recorded review, and `validate` said nothing about it. This pins
+  // the new `warning` naming both uncovered verbs and both missing hook
+  // names.
+  it("warns naming both task verbs when only the original evidence pair is declared", () => {
+    const home = writeFixture({
+      "harness.yaml": `version: 1\n${WORKFLOW_REQUIRED}${WIRED_HOOKS}`,
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const hit = result.diagnostics.find(
+      (d) => d.severity === "warning" && /workflow "ship"/.test(d.message),
+    );
+    expect(hit).toBeDefined();
+    expect(hit?.path).toBe("workflows");
+    expect(hit?.message).toContain("mcp__agent-tasks__task_merge");
+    expect(hit?.message).toContain("mcp__agent-tasks__task_finish");
+    expect(hit?.message).toContain("require-review-evidence-task-merge");
+    expect(hit?.message).toContain("require-review-evidence-task-finish");
+  });
+
+  it("does not warn about the task verbs once all four evidence hooks are declared", () => {
+    const home = writeFixture({
+      "harness.yaml": `version: 1\n${WORKFLOW_REQUIRED}${WIRED_HOOKS}${TASK_VERB_HOOKS}`,
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
     const hit = result.diagnostics.find((d) => /workflow "ship"/.test(d.message));
     expect(hit).toBeUndefined();
+  });
+
+  // Pure-function pin (mutation-probe friendly, mirrors the M4 pattern
+  // above): with the original pair wired and the task-verb hooks absent,
+  // `checkWorkflowGateWiring` itself returns EXACTLY one diagnostic, the
+  // new warning, independent of the aggregator/validate wiring.
+  it("the pure check function returns exactly the one warning when only the original pair is wired", () => {
+    const manifest = parseManifest(parseYaml(`version: 1\n${WORKFLOW_REQUIRED}${WIRED_HOOKS}`));
+    const diags = checkWorkflowGateWiring(manifest);
+    expect(diags).toHaveLength(1);
+    expect(diags[0]?.severity).toBe("warning");
+    expect(diags[0]?.message).toContain("mcp__agent-tasks__task_merge");
+    expect(diags[0]?.message).toContain("mcp__agent-tasks__task_finish");
   });
 
   it("emits no diagnostic when the review step is spawn: optional (no gate needed)", () => {

@@ -63,6 +63,14 @@ policy intercept` derives the same `review-before-merge` /
 hand-authors and blocks `mcp__agent-tasks__pull_requests_merge` /
 `gh pr merge` until a `review:<pr-number>` or `review:<branch>` ledger
 entry exists for the session (`src/runtime/workflow-policies.ts`).
+The same mechanism covers the two task-scoped agent-tasks merge verbs
+when their hooks are declared as well: `require-review-evidence-task-merge`
+derives `review-before-task-merge` for `mcp__agent-tasks__task_merge`,
+and `require-review-evidence-task-finish` derives
+`review-before-task-finish-automerge` for `mcp__agent-tasks__task_finish`
+narrowed by `trigger.input_match` to `autoMerge: true`. Both key on
+`review:<task-id>`; a plain `task_finish` merges nothing and is not
+intercepted at all.
 `harness validate` errors if a workflow needs the gate but the two
 hooks are not correctly wired — missing entirely, or declared under
 the right name but bound to the wrong trigger surface or a `command`
@@ -76,12 +84,21 @@ variables replaces the derived pair outright. `harness list policies`
 and `harness doctor` show the derived pair marked "(derived from
 workflows[])"; `harness export` and the `.last-apply` snapshot carry
 only what you declared. This is scoped to the merge step
-only, and even there to two specific surfaces:
-`mcp__agent-tasks__pull_requests_merge` and `gh pr merge` are gated;
-`mcp__agent-tasks__task_merge` and `mcp__agent-tasks__task_finish`
-(`autoMerge`) are NOT, and pass the gate uncovered until a follow-up
-task extends both the hand-authored template pair and this derivation
-to those two verbs. The `branch` and `ci_gate` steps, PR-open gating
+only, but there it now covers all four merge surfaces:
+`mcp__agent-tasks__pull_requests_merge`, `gh pr merge`,
+`mcp__agent-tasks__task_merge`, and `mcp__agent-tasks__task_finish` in
+its `autoMerge: true` mode. Record the review ONCE with `harness record
+review --pr <pr> --task <task-id> "<summary>"` and the single fact it
+writes carries `review:<pr>`, `review:<branch>`, `review:<base>` and
+`review:<task-id>` together, so whichever surface you actually use is
+satisfied without predicting it in advance. Two operational notes: an
+install created before this landed picks up the two new template
+policies (and the two hooks that wire them into settings.json) only by
+re-running `harness init` / `harness apply`; and the workflows-derived
+form of the two task-scoped gates is produced only for a manifest that
+declares the matching hooks, since a derived gate whose hook is not in
+settings.json would never be invoked and would read as enforced while
+doing nothing. The `branch` and `ci_gate` steps, PR-open gating
 from `workflows:` itself (today only reachable via the separate
 hand-authored `review-subagent-before-pr-create` / `-bash` policies),
 step-ordering validation, and `when.task_label`/project-based workflow
