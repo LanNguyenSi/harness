@@ -2,6 +2,18 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-08-31T19:55:00Z, verification-round fixes (agent-tasks `2699b476`):
+  the three remaining bare `src/cli/validate/checks.ts` range citations
+  (two in `manifest-validation-scope.md`, one in
+  `policy-engine-producer-wiring.md`) now carry function-signature
+  anchors. Without an anchor, okf-kit bounds-checks a range but cannot
+  see a range that drifted onto adjacent code; with the anchor, a shift
+  that moves the signature out of the range is reported
+  (anchor-not-found-in-range; probed for real this round). A pure
+  WIDENING that keeps the anchor inside the range still passes: okf-kit
+  checks anchor presence in-range, not position. Three em dashes in this
+  branch's newly authored prose replaced.
+
 - 2026-08-31T17:26:14Z, fix-round after the merge commits (task
   `2699b476`): the merge commit (touching CHANGELOG.md, additive only)
   and the follow-up commit (a comment-only edit to
@@ -29,7 +41,7 @@
   pass since it lives in a different doc. Two conflict-resolution
   mistakes from the merge itself, caught by re-running the checkers
   rather than trusting the resolution: (1) `pause-vs-gate-kill-switch.md`'s
-  decision-table row citing `docs/for-humans.md:391-393`/:394-395 —
+  decision-table row citing `docs/for-humans.md:391-393`/:394-395 ,
   wrong on BOTH branches (that file is untouched by anyone since before
   this task started), fixed to master's already-correct
   :395-397#"  diff-able, source-controlled."/:398-399; (2) `log.md`'s
@@ -37,7 +49,7 @@
   resolution wrongly preserved a live citation token (the
   writePendingApproval anchor into hook-pre-tool-use.ts, around line
   771) that the `ad66c43f` sweep had already lifted into prose on
-  master — re-lifted here, attributed to the sweep instead of this task.
+  master, re-lifted here, attributed to the sweep instead of this task.
   Verdict: `npx -y okf-kit@0.8.0 check --json docs/okf` and the `@0.6.0`
   pin both report `{errors:0, warnings:0, notices:0}` on the working
   tree, re-confirmed against the committed tree after this fix-round's
