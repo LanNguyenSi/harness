@@ -2,6 +2,70 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-08-31T19:20:00Z, merge round after the ad66c43f sweep landed
+  (agent-tasks `6f719bb4`): merged master into this branch (both branches
+  append log entries; both sides kept, newest first). This branch's
+  `[Unreleased]` CHANGELOG entry postdates the sweep's fresh stamps on
+  `codex-adapter-parity-gaps.md`, `gate-fail-posture-matrix.md` and
+  `policy-engine-producer-wiring.md` (all list `CHANGELOG.md` in
+  `sources:`), so re-read their CHANGELOG-citing passages against the
+  added entry (a guard/anchoring bullet; none of the three cites the
+  Unreleased section) and re-stamped all three timestamp-only.
+
+- 2026-08-31T18:50:00Z, ADR citation anchoring, round 3 fixes (agent-tasks
+  `6f719bb4`, review round 1, HIGH finding): the round below fixed every
+  BACKTICK citation but left twelve BARE, non-backtick `lines N-M` / `line
+  N` prose references untouched in
+  `docs/decisions/2026-08-27-ug-auto-mode-approval.md` (eleven in the
+  decision-order table and the "Approving an Understanding Report"
+  citation, plus one found by this round's own sweep in an acceptance
+  criterion), all stale at HEAD. Re-pointed all twelve to the same
+  backtick-anchored form against the current tree. Strengthened the guard
+  with a within-cited-range anchor-uniqueness check (the anchor text must
+  occur exactly once across the whole `[N, M]` range, not just on line
+  `M`), which catches a citation silently widened at its start; no
+  existing citation violated it. The guard still cannot see a bare,
+  non-backtick line reference at all (grammar unchanged by design; a
+  probe that re-introduced one confirmed the guard stays green), so the
+  sweep table in the task report, not the guard, is what closes this
+  class going forward. This round also edited `CHANGELOG.md`'s
+  `[Unreleased]` Added bullet (scoped it to what the guard enforces),
+  which re-staled `evidence-ledger-trust-boundary.md` and
+  `pause-vs-gate-kill-switch.md` (both list `CHANGELOG.md` in
+  `sources:`); re-read both docs' CHANGELOG-citing passages (unrelated
+  historical entries, `63fefe3a`/`1432e053` and the shared-marker-reader
+  extraction, both untouched by this edit) and re-stamped both
+  timestamp-only, same as the round below did for the same reason.
+
+- 2026-08-31T16:16:29Z, ADR citation anchoring sweep (agent-tasks `6f719bb4`):
+  every backtick source citation in
+  `docs/decisions/2026-08-27-ug-auto-mode-approval.md` and
+  `docs/decisions/2026-05-16-ug-drift-guard-version-pin.md`
+  was re-pointed to a repo-relative path with an anchor
+  (`` `path:N-M#"text on line M"` ``) verified against the current tree by a
+  new guard, `tests/decisions-citations-resolve.test.ts`. Most citations had
+  drifted: several basename-only forms (`markers.ts`, `hook-pre-tool-use.ts`,
+  `understanding-before-execution.md`) needed the full repo-relative path,
+  and many line ranges into `src/cli/pack/hook-pre-tool-use.ts` and
+  `src/cli/approve/understanding.ts` had shifted well past the eleven lines
+  the terrain note flagged, because slice 1 and slice 3 of the ADR's own
+  design (auto-approve, delegation) have since been implemented in those two
+  files (`src/cli/pack/auto-approve-path.ts` is a new module carrying most of
+  the slice-1 logic). No described code had actually vanished; every
+  BACKTICK citation resolved to an existing, still-accurate location once
+  re-pointed (the eleven-plus-one BARE, non-backtick line references this
+  sweep left untouched were caught in review and re-pointed in a round 3
+  follow-up; see the next entry). Checked `docs/okf/*.md` frontmatter
+  `sources:` for the ADR path and for
+  `CHANGELOG.md` (this task added an `[Unreleased]` CHANGELOG entry):
+  `evidence-ledger-trust-boundary.md` and `pause-vs-gate-kill-switch.md`
+  list `CHANGELOG.md`; re-read their CHANGELOG-citing passages (unrelated
+  historical entries, still accurate) and re-stamped both timestamp-only.
+  `codex-adapter-parity-gaps.md`, `gate-fail-posture-matrix.md`, and
+  `policy-engine-producer-wiring.md` also list `CHANGELOG.md` but are three
+  of the six docs the parallel sweep (agent-tasks `ad66c43f`) owns, so left
+  untouched. No doc lists the ADR path itself in frontmatter `sources:`
+  except `log.md`, which is excluded by convention.
 - 2026-08-31T15:57:58Z, genuine re-verify and re-stamp sweep (agent-tasks
   `ad66c43f`): ran `npx okf-kit@0.8.0 check --json docs/okf` on the
   worktree HEAD (master `50b60f5`) as the before-baseline and matched it
