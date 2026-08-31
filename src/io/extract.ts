@@ -257,13 +257,13 @@ export function substituteTemplate(
 }
 
 // ---------------------------------------------------------------------------
-// trigger.input_match — literal equality predicate over the tool payload
+// trigger.input_match: literal equality predicate over the tool payload
 // (task 2699b476)
 // ---------------------------------------------------------------------------
 //
 // `trigger.match` filters on the tool NAME, `trigger.bash_match` on the
 // shell command text. Neither can express "this MCP call, but only when
-// one of its arguments has a particular value" — the shape
+// one of its arguments has a particular value", the shape
 // `mcp__agent-tasks__task_finish` needs, where the same verb either
 // merges the PR (`autoMerge: true`) or does not. `input_match` closes
 // that gap with the narrowest possible primitive: a map from an extract

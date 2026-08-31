@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { ManifestParseError, parseManifest } from "../src/schema/index.js";
 import { FULL_TEMPLATE } from "../src/cli/init/templates.js";
+import { TEAM_TEMPLATE } from "../src/cli/init/profiles.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..");
@@ -1367,7 +1368,7 @@ describe("parseManifest — version-message variants for non-newer values (task 
 // layer `bash_match` / `path_match` are declared at, so every consumer
 // that parses a manifest refuses the bad shape: `harness validate`,
 // `apply`, `doctor`, `loadManifest`, the intercept entrypoint.
-describe("parseManifest — trigger.input_match (task 2699b476)", () => {
+describe("parseManifest: trigger.input_match (task 2699b476)", () => {
   function manifestWithInputMatch(inputMatch: unknown): unknown {
     return {
       version: 1,
@@ -1467,5 +1468,37 @@ describe("parseManifest — trigger.input_match (task 2699b476)", () => {
     expect(merge?.trigger.match).toBe("mcp__agent-tasks__task_merge");
     expect(merge?.trigger.input_match).toBeUndefined();
     expect(merge?.requires?.ledger_tag).toBe("review:${TASK_ID}");
+  });
+
+  // MEDIUM tests (review round 1, task 2699b476 round 2): TEAM_TEMPLATE
+  // (src/cli/init/profiles.ts) ships its OWN copy of these two policies,
+  // separate from FULL_TEMPLATE's. Nothing previously asserted on
+  // TEAM_TEMPLATE's `input_match` at all, so deleting that block from
+  // TEAM_TEMPLATE left the whole suite green: Team operators would lose
+  // the narrowed task_finish gate silently. Mutation probe: re-apply that
+  // deletion (drop the `input_match: { toolArgs.autoMerge: true }` lines
+  // from TEAM_TEMPLATE's `review-before-task-finish-automerge` policy) and
+  // this test goes red.
+  it("TEAM_TEMPLATE's task-scoped merge gates have the same trigger/requires/hook/enforcement as FULL_TEMPLATE's", () => {
+    const fullManifest = parseManifest(parseYaml(FULL_TEMPLATE));
+    const teamManifest = parseManifest(parseYaml(TEAM_TEMPLATE));
+
+    for (const name of ["review-before-task-merge", "review-before-task-finish-automerge"]) {
+      const fromFull = fullManifest.policies.find((p) => p.name === name);
+      const fromTeam = teamManifest.policies.find((p) => p.name === name);
+      expect(fromFull, `FULL_TEMPLATE is missing policy "${name}"`).toBeDefined();
+      expect(fromTeam, `TEAM_TEMPLATE is missing policy "${name}"`).toBeDefined();
+      // Producer descriptions are allowed to differ (they already do);
+      // everything that decides whether and how the gate fires must not.
+      expect(fromTeam?.trigger).toEqual(fromFull?.trigger);
+      expect(fromTeam?.requires).toEqual(fromFull?.requires);
+      expect(fromTeam?.hook).toBe(fromFull?.hook);
+      expect(fromTeam?.enforcement).toBe(fromFull?.enforcement);
+    }
+
+    const teamGate = teamManifest.policies.find(
+      (p) => p.name === "review-before-task-finish-automerge",
+    );
+    expect(teamGate?.trigger.input_match).toEqual({ "toolArgs.autoMerge": true });
   });
 });

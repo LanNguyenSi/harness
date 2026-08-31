@@ -2,6 +2,43 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-08-31T17:05:39Z, re-stamp for the review round-1 hardening on the
+  task-scoped merge gate (task `2699b476`, round 2): the mixed-envelope
+  `input_match` arm and the `checkWorkflowGateWiring` missing-task-hooks
+  warning. Changed sources this commit: `src/io/extract.ts` (comment
+  only), `src/schema/extract.ts` (comment only), `src/schema/policies.ts`
+  (comment only), `src/runtime/intercept.ts`, `src/cli/dry-run.ts`,
+  `src/cli/validate/checks.ts`, `src/cli/init/profiles.ts` (mutation
+  probe only, restored byte-exact, no net diff), `src/cli/record/index.ts`
+  (JSDoc relocation only, no content change), `CHANGELOG.md`. Two
+  non-sweep docs name one of these in `sources:` and are re-stamped
+  here: `pause-vs-gate-kill-switch.md` (names `src/runtime/intercept.ts`
+  / `src/cli/validate/checks.ts` / `src/schema/policies.ts`) and
+  `evidence-ledger-trust-boundary.md` (names `CHANGELOG.md`; the round-2
+  bullet only documents the hardening above and does not touch any
+  ledger-tag or producer this doc describes). Their cited claims
+  (`evaluateOnePolicy`'s `operator_only` short-circuit,
+  `checkPolicySelfAttestation`'s recognition of `operator_only: true`,
+  the "0 warnings/errors under `validate --strict`" measurement, and the
+  `readRegularFileRejectingSymlink` extraction history) are about
+  different code paths than this round's changes
+  (`inputMatchMismatchesEvent`, the new `checkTaskVerbGateWiring`
+  warning) and are unaffected; FULL_TEMPLATE still carries all four
+  evidence hooks, so the new warning never fires for it, leaving the
+  "0 warnings/errors" claim true. `understanding-gate-lockout-recovery.md`
+  names none of this round's changed sources and was not touched.
+  `manifest-validation-scope.md` is SWEEP-OWNED (task `ad66c43f`) and was
+  deliberately left alone per the same scope call the round-1 entry
+  below records, but its own `src/cli/validate/checks.ts` line-range
+  citations were NOT re-pointed by this commit even though inserting
+  `checkTaskVerbGateWiring` (~40 lines) shifted everything below it:
+  `okf-kit check` newly reports 4 `citations-resolve` warnings on that
+  file this commit did not exist to cause a fix for (2 continuation
+  ranges and one single-line citation now resolve to a closing brace or
+  a blank line). Left for the sweep task per the orchestrator's scope
+  call; flagged here and in this task's report so the sweep re-points
+  against this commit's line numbers rather than bd87f46's.
+
 - 2026-08-31T16:19:19Z, re-stamp for the task-scoped merge gate (task
   `2699b476`, `trigger.input_match`). Changed sources this commit:
   `src/io/extract.ts`, `src/schema/extract.ts`, `src/schema/policies.ts`,
@@ -13,7 +50,7 @@
   `docs/for-agents.md`, `docs/writing-custom-policies.md`,
   `docs/CLI.md`, `CHANGELOG.md`. Cross-checked each against every doc's
   `sources:` list. Three docs name at least one of them and are
-  re-stamped here; the other three that would also match
+  re-stamped here; the other six that would also match
   (`codex-adapter-parity-gaps.md`, `debug-verb-selection.md`,
   `gate-fail-posture-matrix.md`, `policy-engine-producer-wiring.md`,
   `quote-model-divergence.md`, `manifest-validation-scope.md`) are the

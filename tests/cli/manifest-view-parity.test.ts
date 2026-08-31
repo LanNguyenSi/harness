@@ -137,7 +137,15 @@ describeSuite("manifest view parity: derived-view readers", () => {
     const { home, configPath } = fixture();
     const result = validate({ homeDir: home, configPath, ...NOOP_PROBES });
     expect(names(result.manifest!.policies)).toEqual([...HAND, ...DERIVED]);
-    expect(result.diagnostics.filter((d) => d.path === "workflows")).toEqual([]);
+    // No ERROR diagnostics for this workflow: the original evidence pair
+    // is correctly wired. This fixture's hooks[] deliberately carries only
+    // that original pair (not the task-scoped hooks, task 2699b476), which
+    // is unrelated to view parity but does trip the round-2 WARNING
+    // (review round 1, task 2699b476 round 2) naming the two uncovered
+    // task verbs, filtered out here since it is not this test's concern.
+    expect(
+      result.diagnostics.filter((d) => d.path === "workflows" && d.severity === "error"),
+    ).toEqual([]);
   });
 
   it("doctor: lists the derived pair, marked derived", async () => {

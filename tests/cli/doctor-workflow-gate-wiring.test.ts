@@ -70,6 +70,26 @@ const WIRED_HOOKS = `hooks:
     budget_ms: 15000
 `;
 
+// Task-scoped merge-surface hooks (task 2699b476). Declared so fixtures
+// that pin an exact warning COUNT for a different check (e.g. the F1
+// weak-overlap warning below) are not also carrying the round-2
+// `checkWorkflowGateWiring` warning for the missing task-verb hooks
+// (review round 1, task 2699b476 round 2): that warning has its own
+// dedicated coverage in tests/cli/validate.test.ts.
+const TASK_VERB_HOOKS = `  - name: require-review-evidence-task-merge
+    event: PreToolUse
+    match: "mcp__agent-tasks__task_merge"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+  - name: require-review-evidence-task-finish
+    event: PreToolUse
+    match: "mcp__agent-tasks__task_finish"
+    command: harness policy intercept
+    blocking: hard
+    budget_ms: 15000
+`;
+
 describe("doctor — checkWorkflowGateWiring wired into the Workflows section (F3)", () => {
   it("reports an error when spawn: required precedes a merge step but no evidence hook is declared", async () => {
     const home = makeFixture({
@@ -123,7 +143,7 @@ describe("doctor — checkWorkflowGateWiring wired into the Workflows section (F
     enforcement: warn
 `;
     const home = makeFixture({
-      "harness.yaml": `version: 1\n${SILENCE_OPERATOR_ONLY_DRIFT}${WORKFLOW_REQUIRED}${weakOverlapPolicy}${WIRED_HOOKS}`,
+      "harness.yaml": `version: 1\n${SILENCE_OPERATOR_ONLY_DRIFT}${WORKFLOW_REQUIRED}${weakOverlapPolicy}${WIRED_HOOKS}${TASK_VERB_HOOKS}`,
     });
     const report = await doctor({
       configPath: path.join(home, "harness.yaml"),

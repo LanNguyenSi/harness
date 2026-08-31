@@ -144,6 +144,23 @@ function taskFinishEvent(toolInput: Record<string, unknown>): string {
   });
 }
 
+// Mixed-envelope event (review round 1, task 2699b476 round 2, MEDIUM
+// security finding): a payload carrying BOTH `tool_input` and `raw_input`
+// as separate objects, as some harnesses forward. `input_match` must
+// evaluate against both and arm the gate if EITHER field satisfies it.
+function taskFinishMixedEnvelopeEvent(
+  toolInput: Record<string, unknown>,
+  rawInput: Record<string, unknown>,
+): string {
+  return JSON.stringify({
+    hook_event_name: "PreToolUse",
+    tool_name: "mcp__agent-tasks__task_finish",
+    tool_input: toolInput,
+    raw_input: rawInput,
+    session_id: "sess-1",
+  });
+}
+
 // Same content shape `harness record review --pr <n> --task <id>` writes
 // (src/cli/record/index.ts runRecordReview): ONE entry carrying the PR,
 // branch and task tags together.
@@ -493,6 +510,71 @@ describe("runInterceptCli: task-scoped merge gates (task 2699b476)", () => {
     });
     expect(result.blocked).toBe(false);
     expect(result.decisions).toEqual([]);
+  });
+
+  // Mixed-envelope arming (review round 1, task 2699b476 round 2, MEDIUM
+  // security finding): the benign `tool_input` (no `autoMerge`) must not
+  // shadow a merging `raw_input` (`autoMerge: true`). Before the fix,
+  // `buildEventContext`'s `tool_input ?? raw_input ?? input` resolved
+  // `toolArgs` to `tool_input` alone, read `autoMerge` as absent, and left
+  // this gate unarmed for a call that DOES request an auto-merge.
+  it("task_finish with autoMerge only in raw_input (tool_input benign) still arms the gate", async () => {
+    const { homeDir, configPath } = wiredManifest();
+    const { stream: out, output } = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        taskFinishMixedEnvelopeEvent(
+          { taskId: TASK_ID },
+          { taskId: TASK_ID, autoMerge: true },
+        ),
+      ),
+      stdout: out,
+      homeDir,
+      configPath,
+      ledger: EMPTY_LEDGER,
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.decisions[0]?.policyName).toBe(
+      "workflow:ship:review-before-task-finish-automerge",
+    );
+    const parsed = JSON.parse(output().trim());
+    expect(parsed.decision).toBe("block");
+    expect(parsed.reason).toContain(`You cannot finish task ${TASK_ID} with autoMerge yet.`);
+  });
+
+  // Agreeing envelope: both fields carry `autoMerge: true`, normal
+  // (single-field) behaviour still applies, and evidence still allows it.
+  it("task_finish with autoMerge: true agreeing in both tool_input and raw_input behaves normally", async () => {
+    const { homeDir, configPath } = wiredManifest();
+    const { stream: out } = captureStream();
+    const denied = await runInterceptCli({
+      stdin: streamFrom(
+        taskFinishMixedEnvelopeEvent(
+          { taskId: TASK_ID, autoMerge: true },
+          { taskId: TASK_ID, autoMerge: true },
+        ),
+      ),
+      stdout: out,
+      homeDir,
+      configPath,
+      ledger: EMPTY_LEDGER,
+    });
+    expect(denied.blocked).toBe(true);
+
+    const { stream: out2 } = captureStream();
+    const allowed = await runInterceptCli({
+      stdin: streamFrom(
+        taskFinishMixedEnvelopeEvent(
+          { taskId: TASK_ID, autoMerge: true },
+          { taskId: TASK_ID, autoMerge: true },
+        ),
+      ),
+      stdout: out2,
+      homeDir,
+      configPath,
+      ledger: taskReviewLedger(TASK_ID),
+    });
+    expect(allowed.blocked).toBe(false);
   });
 
   // Fail posture (brief item 5): an unresolvable `${TASK_ID}` must NOT

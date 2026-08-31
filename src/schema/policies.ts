@@ -5,7 +5,7 @@ import { HookEventSchema } from "./hooks.js";
 import { RequiresSchema, isBuiltinVariable, referencedVariables } from "./requires.js";
 import { RiskCategorySchema, RiskSeveritySchema } from "./risk.js";
 
-// `trigger:` — the WHICH-tool-calls filter. Every declared field is
+// `trigger:`: the WHICH-tool-calls filter. Every declared field is
 // ANDed: `match` on the tool name, `path_match` on the edited file path,
 // `bash_match` on the shell command text, and `input_match` (task
 // 2699b476) on the tool call's own arguments.

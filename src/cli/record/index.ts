@@ -145,13 +145,6 @@ function initRecordVerb(
 }
 
 /**
- * Trim `value` and refuse it if empty (a required flag / positional
- * argument left blank). Returns the ready-to-`return`ed EX_USAGE
- * `RecordResult` on failure so callers do not repeat that construction
- * — shared by every "--pr / --task / --verdict / summary must not be
- * empty" check across the three verbs.
- */
-/**
  * The one shared "this flag was misused" failure shape: warn on stderr and
  * hand back the ready-to-`return` EX_USAGE `RecordResult`. Extracted when
  * `optionalTagValue` (task 2699b476) grew the second copy of this
@@ -170,6 +163,13 @@ function usageFailure(
   };
 }
 
+/**
+ * Trim `value` and refuse it if empty (a required flag / positional
+ * argument left blank). Returns the ready-to-`return`ed EX_USAGE
+ * `RecordResult` on failure so callers do not repeat that construction
+ * — shared by every "--pr / --task / --verdict / summary must not be
+ * empty" check across the three verbs.
+ */
 function requireNonEmpty(
   value: string | undefined,
   flagLabel: string,
@@ -183,13 +183,6 @@ function requireNonEmpty(
   return { ok: true, value: trimmed };
 }
 
-/**
- * Resolve the branch tag `review` and `review-subagent` both require:
- * explicit `--branch` wins, otherwise `resolveGitContext(cwd)` (the SAME
- * function the preflight-before-* gates use). Returns the ready-to-
- * `return`ed failure `RecordResult` on the shared "cannot resolve any
- * branch" degrade path so callers do not repeat that construction.
- */
 /**
  * An OPTIONAL tag value: absent stays absent, present must be a non-empty
  * token with no internal whitespace. The shape check is deliberately loose
@@ -217,6 +210,13 @@ function optionalTagValue(
   return { ok: true, value: trimmed };
 }
 
+/**
+ * Resolve the branch tag `review` and `review-subagent` both require:
+ * explicit `--branch` wins, otherwise `resolveGitContext(cwd)` (the SAME
+ * function the preflight-before-* gates use). Returns the ready-to-
+ * `return`ed failure `RecordResult` on the shared "cannot resolve any
+ * branch" degrade path so callers do not repeat that construction.
+ */
 function resolveRequiredBranch(
   cwd: string,
   explicitBranch: string | undefined,

@@ -17,6 +17,7 @@ import {
   type EvaluateRequiresOptions,
   type ExtractBuiltins,
   type ExtractEventContext,
+  type InputMatchMap,
   type LedgerEntry,
   type LedgerQueryResult,
   type RequiresEvaluation,
@@ -523,13 +524,21 @@ export function policyMatchesEvent(
   // what separates `task_finish { autoMerge: true }` (a merge, gated)
   // from a plain `task_finish` (not a merge, not gated) without needing
   // two different tool names. Evaluated from the SAME `toolArgs` context
-  // `trigger.extract` reads (`buildEventContext`), so an expression that
-  // resolves a variable for the ledger tag resolves the same way here.
-  // Mirrored verbatim in `policyMatchesTool` (`src/cli/dry-run.ts`) so
-  // `harness policy dry-run` predicts exactly what this function decides
-  // (the parity contract docs/okf/debug-verb-selection.md records).
+  // `trigger.extract` reads (`buildEventContext`) for a SINGLE-envelope
+  // event, and additionally against BOTH `tool_input` and `raw_input`
+  // when a payload carries both as non-null objects (review round 1,
+  // task 2699b476 round 2, see `inputMatchMismatchesEvent` below).
+  // Mirrored in `policyMatchesTool` (`src/cli/dry-run.ts`) for the
+  // single-envelope case only, since dry-run's `--input` is always one
+  // object; `harness policy dry-run` cannot reproduce the mixed-envelope
+  // arm. The bash_match raw/normalised parity contract
+  // docs/okf/debug-verb-selection.md records is for the `bash_match`
+  // family; as of task f561e44c it does not describe `input_match`'s own
+  // dry-run parity or the mixed-envelope arm added here, and that
+  // description lives in this comment and the policy docs until the
+  // bundle doc's next re-verification.
   if (policy.trigger.input_match !== undefined) {
-    if (firstInputMatchMismatch(policy.trigger.input_match, buildEventContext(event)) !== null) {
+    if (inputMatchMismatchesEvent(policy.trigger.input_match, event)) {
       return false;
     }
   }
@@ -584,12 +593,55 @@ export function policyMatchesEvent(
 }
 
 function buildEventContext(event: ToolEvent): ExtractEventContext {
+  return contextWithToolArgs(event, event.tool_input ?? event.raw_input ?? event.input);
+}
+
+function contextWithToolArgs(event: ToolEvent, toolArgs: unknown): ExtractEventContext {
   return {
-    toolArgs: event.tool_input ?? event.raw_input ?? event.input,
+    toolArgs,
     event,
     session: { id: event.session_id ?? "" },
     git: {},
   };
+}
+
+function isNonNullObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/**
+ * Whether `input_match` fails to arm the gate for this event (review
+ * round 1, task 2699b476 round 2, MEDIUM security finding).
+ *
+ * The default `toolArgs` context (`buildEventContext`) resolves ONE
+ * field with `tool_input ?? raw_input ?? input`, so a payload that
+ * carries a benign value in the PREFERRED field and the actual merge
+ * request in the OTHER field never gets read:
+ * `{tool_input:{taskId:"t"}, raw_input:{taskId:"t",autoMerge:true}}`
+ * resolves `toolArgs` to `tool_input` alone, `autoMerge` reads as
+ * absent, and the narrowed `task_finish` gate stays unarmed for a call
+ * that DOES request an auto-merge.
+ *
+ * Mirrors the two-field handling `resolveCodexExemptionCommand`
+ * (`hook-codex-pre-tool-use.ts`) already established for this exact
+ * shape, but in the opposite fail-closed direction: that function
+ * REFUSES an exemption when the two fields disagree (an exemption is an
+ * allow, so disagreement must not grant it); here a `requires:` gate is
+ * a block, so disagreement must not WITHHOLD it. When both `tool_input`
+ * and `raw_input` are present as non-null objects, `input_match` is
+ * evaluated against BOTH; if either one matches, the predicate holds
+ * (the gate is armed) regardless of what the other field says. Only
+ * when NEITHER field matches does the gate stay unarmed.
+ */
+function inputMatchMismatchesEvent(inputMatch: InputMatchMap, event: ToolEvent): boolean {
+  const toolInput = event.tool_input;
+  const rawInput = event.raw_input;
+  if (isNonNullObject(toolInput) && isNonNullObject(rawInput)) {
+    const toolInputMismatch = firstInputMatchMismatch(inputMatch, contextWithToolArgs(event, toolInput));
+    const rawInputMismatch = firstInputMatchMismatch(inputMatch, contextWithToolArgs(event, rawInput));
+    return toolInputMismatch !== null && rawInputMismatch !== null;
+  }
+  return firstInputMatchMismatch(inputMatch, buildEventContext(event)) !== null;
 }
 
 /** Map a failed-`requires` policy to its decision outcome by enforcement. */

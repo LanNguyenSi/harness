@@ -35,6 +35,8 @@ import {
   MERGE_MCP_MATCH,
   REVIEW_EVIDENCE_HOOK_BASH,
   REVIEW_EVIDENCE_HOOK_MCP,
+  REVIEW_EVIDENCE_HOOK_TASK_FINISH,
+  REVIEW_EVIDENCE_HOOK_TASK_MERGE,
   workflowRequiresMergeGate,
 } from "../../runtime/workflow-policies.js";
 import type { Diagnostic } from "./types.js";
@@ -391,18 +393,74 @@ export function checkWorkflowGateWiring(manifest: Manifest): Diagnostic[] {
   if (missing.length > 0) {
     problems.unshift(`hooks[] is missing ${missing.join(" and ")}`);
   }
-  if (problems.length === 0) return [];
+  const errors: Diagnostic[] =
+    problems.length === 0
+      ? []
+      : offending.map((wf) => ({
+          severity: "error" as const,
+          path: "workflows",
+          message:
+            `workflow "${wf.name}" declares a review_subagent step with spawn: "required" ` +
+            `followed by a merge step, but the runtime merge gate is not wired: ${problems.join("; ")}. ` +
+            "Without both hooks correctly wired, harness policy intercept never derives this " +
+            "workflow's merge-gate policy and the merge is NOT blocked (silent non-enforcement). " +
+            "See docs/for-agents.md, or src/cli/init/templates.ts's require-review-evidence / " +
+            'require-review-evidence-bash entries, or drop spawn: "required".',
+        }));
+
+  return [...errors, ...checkTaskVerbGateWiring(manifest, offending)];
+}
+
+/**
+ * MEDIUM security (review round 1, task 2699b476 round 2): a manifest can
+ * wire the ORIGINAL pair of review-evidence hooks
+ * (`require-review-evidence` / `require-review-evidence-bash`, gating
+ * `mcp__agent-tasks__pull_requests_merge` and `gh pr merge`) without ever
+ * adding the two task-scoped ones task 2699b476 introduced
+ * (`require-review-evidence-task-merge` / `require-review-evidence-task-finish`,
+ * gating `mcp__agent-tasks__task_merge` and `task_finish { autoMerge: true }`).
+ * `deriveWorkflowGatePolicies` derives the task-scoped gate ONLY when its
+ * own hook is present (same "quietly returns nothing" shape
+ * `checkWorkflowGateWiring` already guards for the original pair), so a
+ * manifest predating that task keeps the two newer verbs completely
+ * uncovered: a PR can be merged via `task_merge` or an auto-merging
+ * `task_finish` with no recorded review at all, while `harness validate`
+ * stayed silent about it. This is a `warning`, not an `error`, because the
+ * ORIGINAL surfaces (`pull_requests_merge`, `gh pr merge`) are still
+ * enforced when this fires: the gap is narrower than the fully-unwired
+ * case above, but still silent non-enforcement for the two verbs it names.
+ */
+function checkTaskVerbGateWiring(manifest: Manifest, offending: Manifest["workflows"]): Diagnostic[] {
+  const mcpHook = manifest.hooks.find((h) => h.name === REVIEW_EVIDENCE_HOOK_MCP);
+  const bashHook = manifest.hooks.find((h) => h.name === REVIEW_EVIDENCE_HOOK_BASH);
+  if (!mcpHook || !bashHook) return [];
+
+  const taskMergeHook = manifest.hooks.find((h) => h.name === REVIEW_EVIDENCE_HOOK_TASK_MERGE);
+  const taskFinishHook = manifest.hooks.find((h) => h.name === REVIEW_EVIDENCE_HOOK_TASK_FINISH);
+  const uncoveredVerbs: string[] = [];
+  const missingHookNames: string[] = [];
+  if (!taskMergeHook) {
+    uncoveredVerbs.push("mcp__agent-tasks__task_merge");
+    missingHookNames.push(`"${REVIEW_EVIDENCE_HOOK_TASK_MERGE}"`);
+  }
+  if (!taskFinishHook) {
+    uncoveredVerbs.push("mcp__agent-tasks__task_finish (autoMerge: true)");
+    missingHookNames.push(`"${REVIEW_EVIDENCE_HOOK_TASK_FINISH}"`);
+  }
+  if (uncoveredVerbs.length === 0) return [];
 
   return offending.map((wf) => ({
-    severity: "error" as const,
+    severity: "warning" as const,
     path: "workflows",
     message:
-      `workflow "${wf.name}" declares a review_subagent step with spawn: "required" ` +
-      `followed by a merge step, but the runtime merge gate is not wired: ${problems.join("; ")}. ` +
-      "Without both hooks correctly wired, harness policy intercept never derives this " +
-      "workflow's merge-gate policy and the merge is NOT blocked (silent non-enforcement). " +
-      "See docs/for-agents.md, or src/cli/init/templates.ts's require-review-evidence / " +
-      'require-review-evidence-bash entries, or drop spawn: "required".',
+      `workflow "${wf.name}" wires the review-evidence gate for mcp__agent-tasks__pull_requests_merge ` +
+      `and gh pr merge, but not for ${uncoveredVerbs.join(" or ")}: ` +
+      `hooks[] is missing ${missingHookNames.join(" and ")}. ` +
+      "Without them harness policy intercept never derives the task-scoped merge gate (task 2699b476) " +
+      "and a PR can be merged through those verbs with no recorded review, even though the original " +
+      "pull_requests_merge / gh pr merge surfaces are still gated. See docs/for-agents.md, or " +
+      "src/cli/init/templates.ts's require-review-evidence-task-merge / " +
+      "require-review-evidence-task-finish entries.",
   }));
 }
 

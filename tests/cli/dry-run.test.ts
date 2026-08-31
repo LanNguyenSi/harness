@@ -343,7 +343,7 @@ describe("dry-run vs policyMatchesEvent — quote-aware fourth arm parity fixtur
 // bash_match fixture above pins (docs/okf/debug-verb-selection.md): what
 // `harness policy dry-run` predicts is what `policy intercept` decides,
 // verdict for verdict, not two independently-asserted booleans.
-describe("dry-run — trigger.input_match (task 2699b476)", () => {
+describe("dry-run: trigger.input_match (task 2699b476)", () => {
   const TASK_ID = "2699b476-1111-4222-8333-444455556666";
   const GATE = "review-before-task-finish-automerge";
 
