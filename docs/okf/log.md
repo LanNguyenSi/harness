@@ -45,7 +45,8 @@
   BACKTICK citation resolved to an existing, still-accurate location once
   re-pointed (the eleven-plus-one BARE, non-backtick line references this
   sweep left untouched were caught in review and re-pointed in a round 3
-  follow-up; see the next entry). Checked `docs/okf/*.md` frontmatter `sources:` for the ADR path and for
+  follow-up; see the next entry). Checked `docs/okf/*.md` frontmatter
+  `sources:` for the ADR path and for
   `CHANGELOG.md` (this task added an `[Unreleased]` CHANGELOG entry):
   `evidence-ledger-trust-boundary.md` and `pause-vs-gate-kill-switch.md`
   list `CHANGELOG.md`; re-read their CHANGELOG-citing passages (unrelated
