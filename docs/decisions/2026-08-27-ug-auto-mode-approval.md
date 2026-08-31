@@ -5,18 +5,27 @@
 - **Decision tracker**: agent-tasks/f6be48cf (externalRef `concept/understanding-gate-auto-mode`)
 - **Implementation context**: concept only, no code in this change. Evidence lives in `docs/okf/understanding-gate-auto-mode-signals.md` (measured signal tables and the section "Signal sources by trust class") and `dogfood/ug-auto-mode-signals/` (redacted payload fixtures, capture and probe scripts). Every measurement this document relies on is cited by pointer to those two locations and not restated here.
 
-**Citation convention**: every source citation below is repo-relative and
-anchored: `` `path/to/file.ext:N-M#"text on line M"` `` (or `:N` for a
+**Citation convention**: every source citation below written in the
+backtick-anchored form is repo-relative and anchored: `` `path/to/file.ext:N-M#"text on line M"` `` (or `:N` for a
 single line). The anchor text must occur on the LAST line of the cited
-range. `tests/decisions-citations-resolve.test.ts` verifies every citation
+range, and must occur exactly once across the whole cited range.
+`tests/decisions-citations-resolve.test.ts` verifies every such citation
 in `docs/decisions/*.md` against the current tree and fails on a stale
-path, an out-of-range line, or a missing/wrong anchor.
+path, an out-of-range line, a missing/wrong anchor, or an anchor that
+recurs within the range. What this pins: the END line cannot silently
+drift onto different code without changing what the anchor matches. What
+it does NOT pin: the START line is not independently anchored, so a
+range widened only at its front, whose anchor text still occurs exactly
+once in the larger span, still passes; and a citation written as bare
+prose (no surrounding backticks, no anchor) is invisible to the guard
+entirely rather than being flagged as non-conformant. See the guard
+test's own HONEST COVERAGE CLAIM comment for the full statement.
 
 ## Context
 
 ### The problem
 
-The `understanding-before-execution` pack (UG) blocks Edit / Write / Bash until an operator has approved the agent's Understanding Report. Every one of the pack's modes ends in the same human step: `harness approve understanding`, run from a shell the hooks do not gate (`docs/policy-packs/understanding-before-execution.md`, "Approving an Understanding Report", lines 629-641; `docs/okf/understanding-gate-lockout-recovery.md`, "Recovery: exact steps").
+The `understanding-before-execution` pack (UG) blocks Edit / Write / Bash until an operator has approved the agent's Understanding Report. Every one of the pack's modes ends in the same human step: `harness approve understanding`, run from a shell the hooks do not gate (`docs/policy-packs/understanding-before-execution.md:666-678#"the flipped report and the ledger row are the audit records beside it."`, "Approving an Understanding Report"; `docs/okf/understanding-gate-lockout-recovery.md`, "Recovery: exact steps").
 
 Agent harnesses also run in modes where no human sits in the loop mid-run: Claude Code `--permission-mode bypassPermissions` and `--dangerously-skip-permissions`, Codex full-auto, opencode `--auto`, and headless `claude -p` child processes (harness's own smoke runner spawns exactly that shape: `src/cli/smoke/runner.ts:64-70#"bypassPermissions"`). In those modes the human approve step has nobody to perform it. Today the outcome is a hard block on the first gated tool call, and for a `-p` child a run that ends in `permission_denials`.
 
@@ -126,16 +135,16 @@ Where the auto path sits in the hook's existing decision order (`src/cli/pack/ho
 
 | Step | Existing behaviour | Change under A |
 |---|---|---|
-| 1. stdin, pause sentinel, manifest load, pack declared and enabled, session id | allow with diagnostic on any failure (lines 385-467) | none |
-| 2. resolve `generatedDir` | needed for the marker check and for staging (line 471) | none |
-| 3. marker check (`checkOperatorApprovalMarkers`), task marker first, then session marker | the decision: on a match the hook allows and returns (lines 525-534); captures `markerExpired` / `markerForged` for the branches below (lines 504-535) | unchanged, and it stays FIRST: a call it already allows never reaches the auto path |
-| 4. persisted report and ledger probe | diagnostic only (lines 552-560) | unchanged |
-| 5. `.pending-approval` staging | best-effort write on every path that did not return above (lines 579-585) | unchanged at this step. The staged file is not an input to any GATE decision, but it is not inert either: it is tier 5 of the approve-verb session resolution (`src/runtime/session-id.ts:235#".pending-approval staging file (written by the gate hook or preflight)"`, `src/runtime/session-id.ts:271-273#"return { sessionId: staged, sessionSource:"`), feeding `harness approve understanding`, `approve branch-protection` and `approve risk`, and it is cleared only by `harness approve understanding` (`src/cli/approve/understanding.ts:1124-1129#"clearPendingApproval(generatedDir);"`), which auto mode never runs. The consequence is handled at step 9, not here (see that row) |
-| 6. read-only Bash exemption | allows `ls`, `git status` and the like without an approved report (lines 597-606) | unchanged, and it stays AHEAD of the auto path |
-| 7. recovery-commit exemption (`markerExpired` plus a bare `git commit`) | allows the consolidating commit after a `max_age` overrun (lines 623-632) | unchanged, and ahead of the auto path, so it keeps deciding off step 3's `markerExpired` |
-| 8. escape `ask` for a bare `harness approve ...` | defers to the interactive permission prompt (lines 640-651) | unchanged, and ahead of the auto path: under `-p` it keeps the resolution measured for it (a denial), and the auto path never converts an escape call into an approval |
+| 1. stdin, pause sentinel, manifest load, pack declared and enabled, session id | allow with diagnostic on any failure (`src/cli/pack/hook-pre-tool-use.ts:591-650#"no session_id resolvable from input or $CLAUDE_CODE_SESSION_ID/$CLAUDE_SESSION_ID, allowing."`) | none |
+| 2. resolve `generatedDir` | needed for the marker check and for staging (`src/cli/pack/hook-pre-tool-use.ts:662#"const generatedDir ="`) | none |
+| 3. marker check (`checkOperatorApprovalMarkers`), task marker first, then session marker | the decision: on a match the hook allows and returns (`src/cli/pack/hook-pre-tool-use.ts:716-722#"approved: true, source:"`); captures `markerExpired` / `markerForged` for the branches below (`src/cli/pack/hook-pre-tool-use.ts:687-709#"markerForged = markers.forged;"`) | unchanged, and it stays FIRST: a call it already allows never reaches the auto path |
+| 4. persisted report and ledger probe | diagnostic only (`src/cli/pack/hook-pre-tool-use.ts:743-751#"checkLedger(manifest, sessionId, opts)"`) | unchanged |
+| 5. `.pending-approval` staging | best-effort write on every path that did not return above (`src/cli/pack/hook-pre-tool-use.ts:765-772#"writePendingApproval(generatedDir, sessionId);"`) | unchanged at this step. The staged file is not an input to any GATE decision, but it is not inert either: it is tier 5 of the approve-verb session resolution (`src/runtime/session-id.ts:235#".pending-approval staging file (written by the gate hook or preflight)"`, `src/runtime/session-id.ts:271-273#"return { sessionId: staged, sessionSource:"`), feeding `harness approve understanding`, `approve branch-protection` and `approve risk`, and it is cleared only by `harness approve understanding` (`src/cli/approve/understanding.ts:1124-1129#"clearPendingApproval(generatedDir);"`), which auto mode never runs. The consequence is handled at step 9, not here (see that row) |
+| 6. read-only Bash exemption | allows `ls`, `git status` and the like without an approved report (`src/cli/pack/hook-pre-tool-use.ts:778-789#"read-only Bash command, allowing without an approved report"`) | unchanged, and it stays AHEAD of the auto path |
+| 7. recovery-commit exemption (`markerExpired` plus a bare `git commit`) | allows the consolidating commit after a `max_age` overrun (`src/cli/pack/hook-pre-tool-use.ts:799-813#"hard-gated regardless."`) | unchanged, and ahead of the auto path, so it keeps deciding off step 3's `markerExpired` |
+| 8. escape `ask` for a bare `harness approve ...` | defers to the interactive permission prompt (`src/cli/pack/hook-pre-tool-use.ts:826-832#"ASK: operator-approval command, deferring to the interactive permission prompt"`) | unchanged, and ahead of the auto path: under `-p` it keeps the resolution measured for it (a denial), and the auto path never converts an escape call into an approval |
 | 9. **new: auto-approval attempt** | not present | runs here, on a call every branch above has declined, which is exactly a call that would otherwise reach the final block. On success it consumes the report, writes the marker and the ledger fact, and re-checks the marker through the same `checkOperatorApprovalMarkers` path, which is what produces the allow. On any failure, AND whenever step 3 reported `markerForged` (condition 6), it does nothing and falls through to step 10 with step 3's `markerExpired` / `markerForged` intact, so the forged file and its distinct diagnostic survive. On a successful auto-approval it also clears the step 5 `.pending-approval` entry for this session, so a later env-less operator `harness approve ...` cannot resolve to the stale auto-approved id |
-| 10. final block | the block and its reason string (line 653) | unchanged; it is what a failed auto path falls through to |
+| 10. final block | the block and its reason string (`src/cli/pack/hook-pre-tool-use.ts:1137#"harness pack hook: BLOCK"`) | unchanged; it is what a failed auto path falls through to |
 
 Placing the auto path at step 9 rather than beside the marker check is deliberate, and it is the ordering the slice 1 acceptance criteria and controls encode. At step 9 the call in hand is one the gate was about to block, so the first read-only `ls` or `git status` of a session, a recovery `git commit`, and a bare `harness approve understanding` mint no marker, write no ledger fact and consume no report. Three consequences follow that an earlier position would have given away: the single report is spent on the first call that actually needed an approval rather than on whatever read-only call happened to come first; `max_age` starts counting from that call, so the approval window covers gated work instead of being eaten by reconnaissance; and the escape `ask` keeps the behaviour measured for it under `-p` (a denial, hardening item 7) instead of being overtaken by an auto-approval on the same call.
 
@@ -344,7 +353,7 @@ Format rule for every mutation probe below: a probe names the mutant, the ONE te
   3. The auto path is reached only after `checkOperatorApprovalMarkers` has run and not matched, AND after the read-only Bash, recovery-commit and escape-`ask` branches have each declined, so it only ever acts on a call that would otherwise reach the final block (decision-order table, step 9). A call that any of those four branches allows or defers writes no auto-marker, writes no ledger fact, and consumes no report.
   4. The auto path consumes the report it used: the report is rewritten to `approvalStatus: "approved"` with `approvedAt` / `approvedBy` stamped, and only reports whose status is exactly `pending` are eligible in the first place.
   5. `checkApprovalMarker` verifies the auto-marker exactly like a human one (same signature, same `max_age`, same expiry hooks), and a `max_age` expiry of an auto-marker leaves `markerExpired` true, so the recovery-commit exemption behaves as it does after a human approval.
-  6. The honest trust model in `src/runtime/approval-signing.ts:20-45#"a bare unsigned-JSON write no longer is)."` is updated in the same PR to name the hook as a second minting path, so the conjunction stated at lines 32-45 no longer reads as the only route to a validly signed marker (threat model (c), signing-oracle residue).
+  6. The honest trust model in `src/runtime/approval-signing.ts:20-45#"a bare unsigned-JSON write no longer is)."` is updated in the same PR to name the hook as a second minting path, so the conjunction it states no longer reads as the only route to a validly signed marker (threat model (c), signing-oracle residue).
   7. Doctor prints the auto-approval line, the last-N metric, and both settings-drift warnings, the `permissions.defaultMode` one and the hook-roster one that reports hook entries absent at apply time (threat model (c)); `harness audit` shows the fact.
   8. Escape-path measurement, interactive case: dogfood records what a hook `ask` resolves to in an interactive (non-`-p`) `bypassPermissions` session. The `-p` case is already measured as a denial in every mode (`docs/okf/understanding-gate-auto-mode-signals.md`, section "Measured: hook `permissionDecision: \"ask\"` resolution under `-p`"; `dogfood/ug-auto-mode-signals/ask-probe.sh`). If the interactive case resolves to allow, the escape path returns `deny` for non-prompting modes before this slice merges.
   9. Dogfood includes an interactive `bypassPermissions` capture (the PreToolUse payload of a live interactive session), not only `-p`.

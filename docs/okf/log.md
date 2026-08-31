@@ -2,9 +2,28 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-08-31T18:50:00Z, ADR citation anchoring, round 3 fixes (agent-tasks
+  `6f719bb4`, review round 1, HIGH finding): the round below fixed every
+  BACKTICK citation but left twelve BARE, non-backtick `lines N-M` / `line
+  N` prose references untouched in
+  `docs/decisions/2026-08-27-ug-auto-mode-approval.md` (eleven in the
+  decision-order table and the "Approving an Understanding Report"
+  citation, plus one found by this round's own sweep in an acceptance
+  criterion), all stale at HEAD. Re-pointed all twelve to the same
+  backtick-anchored form against the current tree. Strengthened the guard
+  with a within-cited-range anchor-uniqueness check (the anchor text must
+  occur exactly once across the whole `[N, M]` range, not just on line
+  `M`), which catches a citation silently widened at its start; no
+  existing citation violated it. The guard still cannot see a bare,
+  non-backtick line reference at all (grammar unchanged by design; a
+  probe that re-introduced one confirmed the guard stays green), so the
+  sweep table in the task report, not the guard, is what closes this
+  class going forward.
+
 - 2026-08-31T16:16:29Z, ADR citation anchoring sweep (agent-tasks `6f719bb4`):
-  every backtick source citation in `docs/decisions/2026-08-27-ug-auto-mode-
-  approval.md` and `docs/decisions/2026-05-16-ug-drift-guard-version-pin.md`
+  every backtick source citation in
+  `docs/decisions/2026-08-27-ug-auto-mode-approval.md` and
+  `docs/decisions/2026-05-16-ug-drift-guard-version-pin.md`
   was re-pointed to a repo-relative path with an anchor
   (`` `path:N-M#"text on line M"` ``) verified against the current tree by a
   new guard, `tests/decisions-citations-resolve.test.ts`. Most citations had
@@ -16,8 +35,10 @@
   design (auto-approve, delegation) have since been implemented in those two
   files (`src/cli/pack/auto-approve-path.ts` is a new module carrying most of
   the slice-1 logic). No described code had actually vanished; every
-  citation resolved to an existing, still-accurate location once re-pointed.
-  Checked `docs/okf/*.md` frontmatter `sources:` for the ADR path and for
+  BACKTICK citation resolved to an existing, still-accurate location once
+  re-pointed (the eleven-plus-one BARE, non-backtick line references this
+  sweep left untouched were caught in review and re-pointed in a round 3
+  follow-up; see the next entry). Checked `docs/okf/*.md` frontmatter `sources:` for the ADR path and for
   `CHANGELOG.md` (this task added an `[Unreleased]` CHANGELOG entry):
   `evidence-ledger-trust-boundary.md` and `pause-vs-gate-kill-switch.md`
   list `CHANGELOG.md`; re-read their CHANGELOG-citing passages (unrelated

@@ -35,6 +35,19 @@ import { describe, expect, it } from "vitest";
 // an unlisted extension) will silently not be extracted and so not be
 // checked; that is a gap in the grammar's reach, not a bug in the
 // checks below, which run against everything the extractor DOES find.
+// A prose "line N" reference OUTSIDE backticks is not a citation under
+// this grammar at all and is invisible to this guard entirely.
+//
+// What resolution actually pins: the END line (M) is anchored, and its text
+// must contain the anchor string, and (per check (f) below) that string
+// may occur at most once across the whole [N, M] span, so a citation
+// cannot be silently widened to include unrelated lines while keeping
+// its old end-line anchor. The START line (N) is NOT independently
+// anchored: a widened-at-the-front citation whose anchor text still
+// occurs exactly once in the new, larger range still passes. So a
+// citation cannot silently drift onto different code that changes what
+// the END line says, but a range that grows without disturbing the
+// uniqueness of its own anchor can still drift at the start.
 
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DECISIONS_DIR = path.join(REPO_ROOT, "docs", "decisions");
@@ -155,6 +168,71 @@ describe("docs/decisions citations resolve on the current tree", () => {
           endText,
         )})`,
       ).toBe(true);
+      if (!endText.includes(c.anchor)) return;
+
+      // (f) the anchor text occurs at most once across the WHOLE cited
+      // range [N, M], not just on line M. Without this, a citation can be
+      // silently widened at the START (`path:1-M#"anchor"` instead of
+      // `path:N-M#"anchor"`) and still pass (e) as long as the anchor is
+      // still on line M; that widened range can then include code the
+      // citation never described. Requiring the anchor to be unique in the
+      // range makes a widened-but-still-matching range fail as soon as the
+      // anchor text (which is usually short and generic, e.g. a single
+      // token) recurs somewhere in the newly-included lines. This does NOT
+      // constrain the start line on its own: a widened range whose anchor
+      // happens to still be unique in the wider span passes here too. See
+      // the HONEST COVERAGE CLAIM above.
+      let anchorOccurrences = 0;
+      for (let ln = c.startLine; ln <= c.endLine; ln++) {
+        const lineText = fileLines[ln - 1] ?? "";
+        let searchFrom = 0;
+        while (true) {
+          const found = lineText.indexOf(c.anchor, searchFrom);
+          if (found === -1) break;
+          anchorOccurrences++;
+          searchFrom = found + 1;
+        }
+      }
+      expect(
+        anchorOccurrences,
+        `${errPrefix}: anchor "${c.anchor}" occurs ${anchorOccurrences} times within lines ${c.startLine}-${c.endLine} of ${c.citedPath} (expected exactly 1); pick text unique to the line it anchors, or narrow the range`,
+      ).toBe(1);
     },
   );
+});
+
+// Negative-grammar fixture: pins CITATION_RE against future loosening. Each
+// line below looks citation-adjacent (a colon, digits, a path-ish string)
+// but must NOT be extracted, because none supplies the exact shape the
+// grammar comment above requires: a backtick-wrapped
+// `repo/relative/path.ext:N[-M]` with a recognised extension immediately
+// before the colon.
+describe("CITATION_RE does not extract citation-shaped non-citations", () => {
+  const fixtureLines = [
+    "A config line `key=value:123` looks like a citation but has no",
+    "recognised extension immediately before the colon, so it must not",
+    "resolve as one.",
+    "",
+    "A URL with a port, `http://host:8080/x`, has a colon followed by",
+    "digits but no `path.ext` before it, so it must not resolve either.",
+    "",
+    "A bare timestamp range `12:34-13:00` has digits and a dash but no",
+    "path or extension at all.",
+    "",
+    "```ts",
+    "// A citation-shaped string with no backticks of its own, inside a",
+    "// fenced code block, must not resolve: the grammar requires its own",
+    "// backtick delimiters, which a fence does not supply.",
+    'const notACitation = "src/example.ts:1-2";',
+    "```",
+  ];
+  const fixtureText = fixtureLines.join("\n");
+
+  it("finds zero citations in the fixture (guards CITATION_RE against loosening)", () => {
+    const found = extractCitations("fixture.md", fixtureText);
+    expect(
+      found,
+      `expected zero citations in the negative-grammar fixture, found: ${JSON.stringify(found)}`,
+    ).toHaveLength(0);
+  });
 });

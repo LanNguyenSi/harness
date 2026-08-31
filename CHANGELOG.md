@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- **`tests/decisions-citations-resolve.test.ts` guards every source citation in `docs/decisions/*.md`** (agent-tasks `6f719bb4`). Each citation must be a repo-relative, anchored `` `path:N-M#"text on line M"` `` (or `:N` for a single line); the guard fails on a stale path, an out-of-range or blank-start range, or an anchor absent from the range's last line, so a citation cannot silently drift from the code it describes.
+- **`tests/decisions-citations-resolve.test.ts` guards every backtick-anchored source citation in `docs/decisions/*.md`** (agent-tasks `6f719bb4`). Each citation must be a repo-relative, anchored `` `path:N-M#"text on line M"` `` (or `:N` for a single line); the guard fails on a stale path, an out-of-range or blank-start range, an anchor absent from the range's last line, or an anchor that recurs elsewhere in the range. That pins the range's end line: a citation cannot silently drift onto different code without also changing what its anchor matches. It does not pin the start line on its own, and a bare, non-backtick line reference is outside the grammar and stays invisible to the guard.
 
 ### Changed
 
