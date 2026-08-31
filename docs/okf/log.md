@@ -438,3 +438,11 @@
   `8f637efd` entry there, which neither doc describes. Re-read the
   CHANGELOG-citing passages of both docs, no change needed, timestamp-only
   re-stamp.
+
+  Round-3 note (verification review): the round-2 rewording of the
+  manifest-validation-scope "ways to block as new" enumeration had invented
+  a fourth route (an add being the auto_approve pack config), impossible
+  because no supported add mutation touches manifest.policy_packs; reworded
+  to state the demote-to-warning reality with the mutate-union citation.
+  Two range attributions tightened (newErrors versus the throw site in
+  src/cli/add/index.ts; the risk-gate sentence spans two lines).
