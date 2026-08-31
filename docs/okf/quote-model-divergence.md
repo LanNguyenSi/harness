@@ -114,14 +114,17 @@ in Empfehlung 2 genannte Reihenfolge-Vorbehalt (`cdTarget`-Kanal erst
 nach `98ad072f`) noch nicht relevant geworden: `98ad072f` ist zwar
 inzwischen gelandet, aber `bash-prefix-parse`s Wert-Dekodierung selbst
 hat diese Primitive noch nicht bekommen. `command-normalize`s Peeling
-(K3) hat `decodeShellWord` ebenfalls nicht bekommen, ist aber inzwischen
-über einen anderen Mechanismus adressiert, siehe die nächste Ergänzung.
+(K3) hat `decodeShellWord` ebenfalls nicht bekommen und bleibt
+unverändert offen (siehe die Fail-open-Klassen-Tabelle unten, Zeile
+`command-normalize` peelt nicht); kein anderer Mechanismus adressiert
+K3 zum Zeitpunkt dieser Prüfung.
 
 **Der Trigger-seitige Teil von Empfehlung 2 (K1 der Fail-open-Tabelle,
 `cf3dff51`) ist inzwischen ebenfalls umgesetzt und ausgeliefert, in zwei
 Schritten:** PR #412 baut `normalizeCommandQuoteAware`
-(`src/runtime/command-normalize.ts`) als quote-bewussten VIERTEN
-Normalisierungs-Pass, eine eigene, additive Grenzsuche
+(`src/runtime/command-normalize.ts`) als quote-bewussten dritten
+Normalisierungs-Pass (vierter Matching-Arm, siehe `intercept.ts`s
+eigenen Kommentar), eine eigene, additive Grenzsuche
 (`findNextBoundaryQuoteAware`), die einen Boundary-Charakter innerhalb
 einer offenen Quote überspringt, und verdrahtet ihn in
 `policyMatchesEvent` (`src/runtime/intercept.ts:503-568`) als vierten
@@ -131,7 +134,7 @@ vorherigen. Produktions-Nachweis über dieselbe `runInterceptCli`-Messung
 wie bei den Empfehlungen 1 und 3: alle 12 von 12 Zielschreibweisen
 (`;`, `|`, `&&`, `(`, Zeilenumbruch) gaten jetzt, gegenüber 0 von 12 vor
 der Verdrahtung. PR #419 schließt den daraus folgenden `dry-run`-Parity-
-Rest (`f561e404c`, siehe `debug-verb-selection.md`): `harness dry-run`s
+Rest (`f561e44c`, siehe `debug-verb-selection.md`): `harness dry-run`s
 eigener Matcher (`src/cli/dry-run.ts`) bekam denselben vierten Zweig.
 **Damit sind die Metazeichen-im-gequoteten-Wert-Fail-opens aus der
 "Fail-open-Klassen"-Tabelle unten (`A='a; b' git status`,
@@ -325,10 +328,13 @@ Flag-Token statt auf einen Zuweisungswert.**
 ## Fail-open-Klassen, am Eintrittspunkt belegt
 
 Verifiziert über `dist/cli/main.js dry-run` (lokaler Build) gegen
-`docs/examples/full-manifest.yaml`, **mit Positivkontrolle je Policy**;
-bash-seitig ist in jeder Zeile der Verb-Lauf per Shim belegt.
+`docs/examples/full-manifest.yaml`, **mit Positivkontrolle je Policy**,
+zum Zeitpunkt dieser Messung; bash-seitig ist in jeder Zeile der
+Verb-Lauf per Shim belegt. Siehe "Einordnung je Klasse" unten für den
+Stand seither (`d834a065`/`aabbad63` schließen die `&`-Zeile, ohne die
+Messung hier zu verändern).
 
-| Policy | Kontrolle | Exploit | Ergebnis |
+| Policy | Kontrolle | Exploit | Ergebnis (zum Messzeitpunkt) |
 |---|---|---|---|
 | `deny-kill-switch-bypass` | `harness pause` → Treffer | `A=x&harness pause` | **Fail-open** |
 | | | `sleep 0 & harness pause` | **Fail-open** |
@@ -337,9 +343,11 @@ bash-seitig ist in jeder Zeile der Verb-Lauf per Shim belegt.
 | `review-before-merge-bash` | `gh pr merge` → Treffer | `A=x&gh pr merge` | **Fail-open** |
 
 Der Kill-Switch ist ein **operator-only Deny**, per Konstruktion durch
-keine Session-Evidenz erfüllbar. Ein einzelnes `&` umgeht ihn.
-Zwei Einordnungen dazu, damit die Schwere nicht überlesen wird:
-`src/cli/init/templates.ts:688` benennt "bash_match's regex coverage of
+keine Session-Evidenz erfüllbar. Ein einzelnes `&` umging ihn zum
+Zeitpunkt dieser Messung (seither geschlossen, siehe "Einordnung je
+Klasse" unten). Zwei Einordnungen dazu, damit die Schwere nicht
+überlesen wird:
+`src/cli/init/templates.ts:821` benennt "bash_match's regex coverage of
 exotic shell shapes" bereits als bekannte Restlücke, neu ist, dass ein
 einzelnes `&` dazugehört. Und `A=x&harness pause` ist nicht read-only,
 das Understanding-Gate blockt es in einer nicht approvten Session
@@ -377,7 +385,7 @@ Zeichenfolge `prod`.
 
 | Klasse | Richtung | Beleg |
 |---|---|---|
-| `&` fehlt im Boundary-Alphabet | **fail-open** zum Messzeitpunkt, seither geschlossen (`d834a065`) | Hook-Probe mit Pro-Policy-Kontrolle + Shim |
+| `&` fehlt im Boundary-Alphabet | **fail-open** zum Messzeitpunkt, seither geschlossen: `d834a065` (Template-Ebene, `harness.yaml`-Regex neuer `init`-Läufe, schließt EIN bestehendes materialisiertes Manifest nicht automatisch, `harness apply` schreibt dessen Trigger-Regex nie um; `checkTriggerBoundaryDrift`, task `037cfb7c`, meldet die Drift seither als Fehler) UND `aabbad63` (Engine-Ebene, zweiter, unabhängiger Normalisierungs-Pass in `policyMatchesEvent`, wirkt auch auf ein altes, noch nicht nachgezogenes Manifest) | Hook-Probe mit Pro-Policy-Kontrolle + Shim |
 | Metazeichen im gequoteten Wert (`cf3dff51`) | **fail-open** zum Messzeitpunkt, seither geschlossen (PR #412/#419) | Hook-Probe + Shim |
 | Backslash-Escape im Wert (`b093911d`) | **fail-open** Trigger, unverändert offen | Hook-Probe + Shim |
 | Wert-Dekodierung fehlt (ANSI-C, Verkettung, Backslash) | **fail-open** Risk-Einstufung, unverändert offen | Resolver-Probe mit Kontrollen |
@@ -451,4 +459,5 @@ einzige noch offene der drei ursprünglich verbundenen Tasks.
 - Eine Maschine (WSL2, bash 5.x, GNU findutils). `&`-Backgrounding,
   Job-Control und `find -delete` können anderswo abweichen.
 - Die Resolver-Probe rekonstruiert den Merge-Pfad aus
-  `src/cli/policy/intercept.ts:643-658`, statt den echten PreToolUse-Hook zu fahren.
+  `src/cli/policy/intercept.ts` (`resolverGit`/`resolverEnv`, Zeilen
+  1041–1057), statt den echten PreToolUse-Hook zu fahren.

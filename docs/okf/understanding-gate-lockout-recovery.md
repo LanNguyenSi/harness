@@ -53,9 +53,9 @@ Recovery is **operator-only**, from a shell the hooks do not gate (the `!`-shell
    harness approve understanding
    ```
 
-   Flags (`src/cli/index.ts:1584-1599`): `--session <id>`, `--task <ids...>` (variadic; also comma-joined `--task a,b,c`), `--reports-dir <path>`, `--approved-by <actor>` (default `harness-approve-cli`), `--force`, `--config <path>`, `--project <name>`.
+   Flags (`src/cli/index.ts:1648-1663`, the `approve understanding` subcommand): `--session <id>`, `--task <ids...>` (variadic; also comma-joined `--task a,b,c`), `--reports-dir <path>`, `--approved-by <actor>` (default `harness-approve-cli`), `--force`, `--config <path>`, `--project <name>`.
 
-2. **Session-id resolution** — the bare command works because the id is resolved through a 6-tier precedence chain (`resolveApprovalSessionId`, `src/runtime/session-id.ts:241`; used by `src/cli/approve/understanding.ts:582`):
+2. **Session-id resolution** — the bare command works because the id is resolved through a 6-tier precedence chain (`resolveApprovalSessionId`, `src/runtime/session-id.ts:241`; used by `src/cli/approve/understanding.ts:678`):
    1. explicit `--session` flag
    2. `$CLAUDE_CODE_SESSION_ID` (the variable Claude Code actually exports; read first so the runtime's id beats a hand-exported legacy value)
    3. `$CLAUDE_SESSION_ID` (legacy peer)
@@ -82,7 +82,7 @@ Recovery is **operator-only**, from a shell the hooks do not gate (the `!`-shell
 
 Configured per pack via `config.approval_lifecycle` (parsed by `parseApprovalLifecycle` in `src/policy-packs/builtin/understanding-before-execution/lifecycle.ts`; task-scope machinery in `src/policy-packs/builtin/understanding-before-execution/task-markers.ts`):
 
-- **`expire_on_tool_match`** (exact MCP tool names, no wildcards): when a listed tool completes, the `harness pack hook post-tool-use` PostToolUse hook deletes the **session** marker, deletes the finished task's **`task-<taskId>`** marker (when `tool_input.taskId` is present), and flips the persisted report `approved` → `expired` so the audit record agrees with the cleared marker (since task 7402301d the report carries no gate authority, so this flip is audit hygiene, not a second closure). Default list when the block is absent (`DEFAULT_EXPIRE_ON_TOOL_MATCH`, `src/policy-packs/builtin/understanding-before-execution.ts:295`): `mcp__agent-tasks__task_finish`, `task_abandon`, `pull_requests_merge`, `tasks_transition` (transition only expires when `tool_input.status === "done"`). PostToolUse fires only for tools that actually ran.
+- **`expire_on_tool_match`** (exact MCP tool names, no wildcards): when a listed tool completes, the `harness pack hook post-tool-use` PostToolUse hook deletes the **session** marker, deletes the finished task's **`task-<taskId>`** marker (when `tool_input.taskId` is present), and flips the persisted report `approved` → `expired` so the audit record agrees with the cleared marker (since task 7402301d the report carries no gate authority, so this flip is audit hygiene, not a second closure). Default list when the block is absent (`DEFAULT_EXPIRE_ON_TOOL_MATCH`, `src/policy-packs/builtin/understanding-before-execution.ts:510-519`): `mcp__agent-tasks__task_finish`, `task_abandon`, `pull_requests_merge`, `tasks_transition` (transition only expires when `tool_input.status === "done"`). PostToolUse fires only for tools that actually ran.
 - **`expire_on_bash_match`** (regex list vs `Bash` `tool_input.command`, e.g. `gh pr merge`): same expiry effects; an invalid regex is skipped with a warning.
 - **`max_age`** (duration string like `"4h"`): `checkApprovalMarker` treats a marker whose `approvedAt` is older as expired (`matched:false`, detail `expired: age Xm > max Ym`). Applies uniformly to task-scoped and session-scoped markers (`checkOperatorApprovalMarkers` is shared by the Claude and Codex hooks). Omitted = no TTL. A marker with an unreadable body skips the freshness check (existence wins).
 - **`{ mode: "session" }`**: explicit legacy opt-out — no expiry hook is emitted at all; one approval lasts the session.

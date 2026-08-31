@@ -44,7 +44,7 @@ harness has TWO separate kill-switch mechanisms. Do not conflate them: `pause` i
 
 **History note: closed 2026-08-25 (tasks `63fefe3a`, `1432e053`).** The Codex `UserPromptSubmit` injector and the Codex `Stop` capture now both honour the sentinel; earlier they did not, so an active pause silenced every gate except these two. Both now call `checkHookPause` first, same ordering as `hook-pre-tool-use.ts`. All four `hook-codex-*.ts` files import `checkHookPause`, pinned by a source-grep test. Measurement and dogfood detail: CHANGELOG.md, `63fefe3a` and `1432e053` entries.
 
-**Commands** (registered in `src/cli/index.ts:3274-3371`):
+**Commands** (registered in `src/cli/index.ts:3274-3373`):
 - `harness pause --for <duration>` — e.g. `5m`, `1h`, `PT30S`; default 15 minutes (`DEFAULT_PAUSE_SECONDS = 15 * 60`, `src/cli/pause/index.ts:36`).
 - `harness pause --indefinite` — refuses unless the separate verbose flag `--i-am-the-operator-and-accept-no-auto-resume` is also passed; the flag's verbosity is deliberate friction (`src/cli/pause/index.ts:269-281`).
 - `--reason <text>` — recorded in the sentinel and announced on each hook fire.

@@ -94,6 +94,23 @@
   sources-fresh and citations-resolve finding listed above is gone; no
   new finding of either rule appeared.
 
+  Correction (round 2, review finding, HIGH): "read every source ... and
+  compared claim by claim" above overclaimed. It read every source file
+  the sources-fresh docs named, but did not separately verify the prose
+  line references embedded in running text outside a backtick citation
+  token, the shorthand shape okf-kit's citations-resolve rule cannot
+  parse because it carries no path, so a wrong one there passes the
+  mechanical check silently. A follow-up pass read every such prose line
+  reference across all nine docs this task touched against HEAD and
+  re-pointed the ones that had drifted or were wrong from the start,
+  including references in docs `okf-kit check` already reported clean.
+  Also restored an accurate status for the still-open command-normalize
+  peeling gap in `quote-model-divergence.md` (a wrong cross-reference had
+  claimed a different fix addressed it) and corrected the same doc's
+  `&`-boundary-closure attribution to name both the template-level and
+  the engine-level fix, with the caveat that an already-materialized
+  manifest does not pick up the template-level one on its own.
+
 - 2026-08-30T10:20:00Z, re-stamp on commit-time recheck (task `8f637efd`,
   review round 3, findings F1-F5): after the round-3 fixes commit
   (`bbf6f7f`), ran `npx okf-kit@0.8.0 check docs/okf` and computed
