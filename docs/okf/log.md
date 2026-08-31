@@ -25,18 +25,18 @@
   `policyMatchesEvent` plus the new `inputMatchMismatchesEvent`
   function, both upstream of this citation). `policy-engine-producer-wiring.md`
   also had a stale `checkSolutionAcceptanceProducer` citation
-  (`:304-335` → `:306-337`) missed by the earlier `manifest-validation-scope.md`
+  (:304-335 → :306-337) missed by the earlier `manifest-validation-scope.md`
   pass since it lives in a different doc. Two conflict-resolution
   mistakes from the merge itself, caught by re-running the checkers
   rather than trusting the resolution: (1) `pause-vs-gate-kill-switch.md`'s
-  decision-table row citing `docs/for-humans.md:391-393`/`:394-395` —
+  decision-table row citing `docs/for-humans.md:391-393`/:394-395 —
   wrong on BOTH branches (that file is untouched by anyone since before
   this task started), fixed to master's already-correct
-  `:395-397#"  diff-able, source-controlled."`/`:398-399`; (2) `log.md`'s
+  :395-397#"  diff-able, source-controlled."/:398-399; (2) `log.md`'s
   own 09:42:00Z historical entry, where the "keep HEAD" conflict
-  resolution wrongly preserved a live
-  `` `hook-pre-tool-use.ts:771#"writePendingApproval(...)"` `` citation
-  token that the `ad66c43f` sweep had already lifted into prose on
+  resolution wrongly preserved a live citation token (the
+  writePendingApproval anchor into hook-pre-tool-use.ts, around line
+  771) that the `ad66c43f` sweep had already lifted into prose on
   master — re-lifted here, attributed to the sweep instead of this task.
   Verdict: `npx -y okf-kit@0.8.0 check --json docs/okf` and the `@0.6.0`
   pin both report `{errors:0, warnings:0, notices:0}` on the working
@@ -67,18 +67,18 @@
   plainly. `manifest-validation-scope.md`'s ten
   `src/cli/validate/checks.ts` citations, stale since round 2 inserted
   `checkTaskVerbGateWiring` (~57 net lines) after `checkWorkflowGateWiring`
-  and two new imports (+2 lines) above `checkMcp`: `checkMcp` (`:119-136`
-  → `:121-138`, and the single-line `:119` → `:121`), `checkCli`
-  (`:138-189` → `:140-191`), `checkSkills` (`:191-214` → `:193-216`),
-  `checkHooks` (`:216-248` → `:218-250`), `checkPolicyPacks` /
-  `checkPolicyPackConfigsAsDiagnostics` (`:1258-1287` → `:1316-1345`),
-  `checkSolutionAcceptanceProducer` (`:304-335` → `:306-337`),
-  `checkWorkflowGateWiring` (`:364-407` → `:366-412`, the function itself
+  and two new imports (+2 lines) above `checkMcp`: `checkMcp` (:119-136
+  → :121-138, and the single-line :119 → :121), `checkCli`
+  (:138-189 → :140-191), `checkSkills` (:191-214 → :193-216),
+  `checkHooks` (:216-248 → :218-250), `checkPolicyPacks` /
+  `checkPolicyPackConfigsAsDiagnostics` (:1258-1287 → :1316-1345),
+  `checkSolutionAcceptanceProducer` (:304-335 → :306-337),
+  `checkWorkflowGateWiring` (:364-407 → :366-412, the function itself
   grew by 5 lines calling the new check),
-  `checkUnderstandingBeforeExecutionAutoApproveMeasured` (`:1331-1364` →
-  `:1389-1422`) and its `listedAutoApproveHarnesses` helper (`:1309-1329`
-  → `:1367-1387`), and `runAssetChecks` itself (`:1366-1392` →
-  `:1424-1450`); every re-point verified against the current file (each
+  `checkUnderstandingBeforeExecutionAutoApproveMeasured` (:1331-1364 →
+  :1389-1422) and its `listedAutoApproveHarnesses` helper (:1309-1329
+  → :1367-1387), and `runAssetChecks` itself (:1366-1392 →
+  :1424-1450); every re-point verified against the current file (each
   function's declaration and closing brace read directly), not derived
   from the line-count arithmetic alone. All other citations in this doc
   (`src/cli/add/index.ts`, `src/cli/remove/index.ts`, `src/schema/*`,
