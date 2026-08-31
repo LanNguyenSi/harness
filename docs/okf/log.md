@@ -18,7 +18,14 @@
   non-backtick line reference at all (grammar unchanged by design; a
   probe that re-introduced one confirmed the guard stays green), so the
   sweep table in the task report, not the guard, is what closes this
-  class going forward.
+  class going forward. This round also edited `CHANGELOG.md`'s
+  `[Unreleased]` Added bullet (scoped it to what the guard enforces),
+  which re-staled `evidence-ledger-trust-boundary.md` and
+  `pause-vs-gate-kill-switch.md` (both list `CHANGELOG.md` in
+  `sources:`); re-read both docs' CHANGELOG-citing passages (unrelated
+  historical entries, `63fefe3a`/`1432e053` and the shared-marker-reader
+  extraction, both untouched by this edit) and re-stamped both
+  timestamp-only, same as the round below did for the same reason.
 
 - 2026-08-31T16:16:29Z, ADR citation anchoring sweep (agent-tasks `6f719bb4`):
   every backtick source citation in
