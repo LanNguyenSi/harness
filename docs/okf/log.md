@@ -2,6 +2,47 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-08-31T17:26:14Z, fix-round after the merge commits (task
+  `2699b476`): the merge commit (touching CHANGELOG.md, additive only)
+  and the follow-up commit (a comment-only edit to
+  `src/runtime/intercept.ts`) newly staled six docs whose `sources:`
+  list either file: `codex-adapter-parity-gaps.md`,
+  `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`,
+  `pause-vs-gate-kill-switch.md`, `policy-engine-producer-wiring.md`,
+  `quote-model-divergence.md`. None of their CHANGELOG-citing passages
+  describe the `[Unreleased]` section this task touches (all cite
+  released versions), so those are timestamp-only. The
+  `src/runtime/intercept.ts` citations needed real re-pointing, not just
+  a re-stamp, because this task's round 1 already grew
+  `policyMatchesEvent` (the `input_match` block) before this merge
+  round started: `policy-engine-producer-wiring.md` and
+  `quote-model-divergence.md` (2x) cited `503-568` for the whole
+  function; actual is `505-590` (start +2 from two new imports earlier
+  in the file, end pushed to 590 by the `input_match` arm this task
+  added inside the function). `gate-fail-posture-matrix.md` cited
+  `1034-1062` for `resolveAttributedContexts`'s own D-021 doc comment;
+  actual is `1099-1127` (net +65: the `input_match` block inside
+  `policyMatchesEvent` plus the new `inputMatchMismatchesEvent`
+  function, both upstream of this citation). `policy-engine-producer-wiring.md`
+  also had a stale `checkSolutionAcceptanceProducer` citation
+  (`:304-335` → `:306-337`) missed by the earlier `manifest-validation-scope.md`
+  pass since it lives in a different doc. Two conflict-resolution
+  mistakes from the merge itself, caught by re-running the checkers
+  rather than trusting the resolution: (1) `pause-vs-gate-kill-switch.md`'s
+  decision-table row citing `docs/for-humans.md:391-393`/`:394-395` —
+  wrong on BOTH branches (that file is untouched by anyone since before
+  this task started), fixed to master's already-correct
+  `:395-397#"  diff-able, source-controlled."`/`:398-399`; (2) `log.md`'s
+  own 09:42:00Z historical entry, where the "keep HEAD" conflict
+  resolution wrongly preserved a live
+  `` `hook-pre-tool-use.ts:771#"writePendingApproval(...)"` `` citation
+  token that the `ad66c43f` sweep had already lifted into prose on
+  master — re-lifted here, attributed to the sweep instead of this task.
+  Verdict: `npx -y okf-kit@0.8.0 check --json docs/okf` and the `@0.6.0`
+  pin both report `{errors:0, warnings:0, notices:0}` on the working
+  tree, re-confirmed against the committed tree after this fix-round's
+  commit.
+
 - 2026-08-31T17:20:31Z, final merge round on task `2699b476`: merged
   `origin/master` (the `ad66c43f` sweep, PR #483, and the `6f719bb4` ADR
   citation-anchoring task, PR #482) into this branch. CHANGELOG.md and
@@ -400,8 +441,11 @@
   findings from the same run were checked and left as pre-existing,
   unrelated citation drift, confirmed against the pre-task common
   ancestor `a08efe0`: `understanding-gate-lockout-recovery.md`'s
-  `hook-pre-tool-use.ts:771#"writePendingApproval(...)"` anchor already
-  missed its target there, and `pause-vs-gate-kill-switch.md`'s
+  writePendingApproval anchor into hook-pre-tool-use.ts, cited at around
+  line 771 as the file stood then, already missed its target there
+  (lifted out of citation form by the `ad66c43f` sweep so this
+  historical note stops resolving against today's file), and
+  `pause-vs-gate-kill-switch.md`'s
   `src/cli/index.ts` pause/gate-command ranges (lines 3086-3185 and
   3088-3094 as cited then, lifted out of citation form by task 2699b476
   so this historical note stops resolving against today's file)

@@ -3,7 +3,7 @@ type: runbook
 title: Kill switches — pause vs gate disable
 description: harness has two distinct operator kill switches — `harness pause` (sentinel file, silences ALL hooks temporarily, operator-only enforced in code) vs `harness gate disable` (surgically removes matching hook groups from settings.json with a reversible snapshot); when to use which, exact flags, restore paths, and trust caveats.
 tags: [runbook, pause, gate-disable, kill-switch, operator]
-timestamp: 2026-08-31T17:05:39Z
+timestamp: 2026-08-31T17:26:14Z
 sources:
   - src/runtime/pause-sentinel.ts
   - src/runtime/command-normalize.ts
@@ -35,8 +35,8 @@ harness has TWO separate kill-switch mechanisms. Do not conflate them: `pause` i
 |---|---|
 | Lockout recovery, debug A/B test, incident hotfix, short window | `harness pause --for <duration>` (all hooks dormant, auto-resumes) |
 | One specific hard-blocking hook must go, e.g. the understanding-before-execution PreToolUse gate blocks every Bash call INCLUDING its own recovery command `harness approve understanding` (the motivating case, task 8fcddb26, comment at `src/cli/index.ts:2912-2916#"offending hook group out of settings.json with a reversible snapshot."`) | `harness gate disable --matcher <substring>` (removes only matching hook groups, reversible snapshot) |
-| Permanently turn a policy off | NEITHER. Edit `policies[].enabled` in the manifest (or `policy_packs[].enabled: false`): persistent, diff-able, source-controlled. Stated in the `harness pause` command help (`src/cli/index.ts:3284-3289#"in the manifest."`) and `docs/for-humans.md:391-393` |
-| "Move fast on a prototype branch" | A branch-aware policy with a `when:` clause, not a session-wide pause (`docs/for-humans.md:394-395`) |
+| Permanently turn a policy off | NEITHER. Edit `policies[].enabled` in the manifest (or `policy_packs[].enabled: false`): persistent, diff-able, source-controlled. Stated in the `harness pause` command help (`src/cli/index.ts:3284-3289#"in the manifest."`) and `docs/for-humans.md:395-397#"  diff-able, source-controlled."` |
+| "Move fast on a prototype branch" | A branch-aware policy with a `when:` clause, not a session-wide pause (`docs/for-humans.md:398-399`) |
 
 ## Mechanism 1: `harness pause` / `harness resume` (sentinel)
 

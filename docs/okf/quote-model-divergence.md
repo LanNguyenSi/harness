@@ -3,7 +3,7 @@ type: overview
 title: Shell quote models, measured divergence against bash
 description: The policy engine has three independent shell-word models plus a raw-regex trigger layer. This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-08-31T15:57:58Z
+timestamp: 2026-08-31T17:26:14Z
 sources:
   - src/runtime/command-normalize.ts
   - src/cli/init/composer.ts
@@ -127,7 +127,7 @@ Normalisierungs-Pass (vierter Matching-Arm, siehe `intercept.ts`s
 eigenen Kommentar), eine eigene, additive Grenzsuche
 (`findNextBoundaryQuoteAware`), die einen Boundary-Charakter innerhalb
 einer offenen Quote überspringt, und verdrahtet ihn in
-`policyMatchesEvent` (`src/runtime/intercept.ts:503-568`) als vierten
+`policyMatchesEvent` (`src/runtime/intercept.ts:505-590`) als vierten
 OR-Zweig: roh, dann normalisiert, dann amp-bewusst (`aabbad63`), dann
 quote-bewusst (`cf3dff51`), jeder Zweig nur additiv gegenüber den
 vorherigen. Produktions-Nachweis über dieselbe `runInterceptCli`-Messung
@@ -192,7 +192,7 @@ Ausgaben und sind nur paarweise überlappend messbar.
 
 | Modul | Ausgabe | verdrahtet an |
 |---|---|---|
-| `command-normalize.ts` | `normalized` | `bash_match` raw-OR-normalized-OR-amp-OR-quote-normalized (`src/runtime/intercept.ts:503-568`, dritter Arm seit `aabbad63`, vierter Arm seit `cf3dff51`) |
+| `command-normalize.ts` | `normalized` | `bash_match` raw-OR-normalized-OR-amp-OR-quote-normalized (`src/runtime/intercept.ts:505-590`, dritter Arm seit `aabbad63`, vierter Arm seit `cf3dff51`) |
 | | `targetDir`/`targetBase` | nichts (grep-verifiziert) |
 | `bash-prefix-parse.ts` | `inlineEnv`, `cdTarget` | Risk-Gate-Kontext (`src/cli/policy/intercept.ts:1026-1056`) |
 | `read-only-bash.ts` | Boolean | Risk-Floor, Understanding-Gate-PreToolUse (2 Hooks), Write-Guard |
