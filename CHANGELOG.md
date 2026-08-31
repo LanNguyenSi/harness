@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`tests/decisions-citations-resolve.test.ts` guards every source citation in `docs/decisions/*.md`** (agent-tasks `6f719bb4`). Each citation must be a repo-relative, anchored `` `path:N-M#"text on line M"` `` (or `:N` for a single line); the guard fails on a stale path, an out-of-range or blank-start range, or an anchor absent from the range's last line, so a citation cannot silently drift from the code it describes.
+
+### Changed
+
+- **`docs/decisions/*.md` source citations re-pointed and anchored** (agent-tasks `6f719bb4`). Every citation in the ADRs now names a repo-relative path with an anchor verified against the current tree; several had drifted onto unrelated lines after later changes (an unrelated constant move, new slice-1/slice-3 code) moved the code they described. A "Citation convention" note at the top of `docs/decisions/2026-08-27-ug-auto-mode-approval.md` records the grammar and the guard test that enforces it going forward.
+
 ## [0.53.0] - 2026-08-30
 
 ### Added
