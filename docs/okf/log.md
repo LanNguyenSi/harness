@@ -2,6 +2,48 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-08-31T17:20:31Z, final merge round on task `2699b476`: merged
+  `origin/master` (the `ad66c43f` sweep, PR #483, and the `6f719bb4` ADR
+  citation-anchoring task, PR #482) into this branch. CHANGELOG.md and
+  `log.md` conflicts resolved by keeping both sides' entries (log.md
+  newest-first by timestamp); `evidence-ledger-trust-boundary.md` and
+  `pause-vs-gate-kill-switch.md` conflicted only on `timestamp:` (no
+  content diverged on either side once the round-2 hardening's own edit
+  is accounted for), kept this branch's content and re-verified its
+  three `src/cli/index.ts` citations in `pause-vs-gate-kill-switch.md`
+  (`2912-2916`, `3284-3289`, `3282-3381`) still resolve on the merged
+  tree (that file is untouched by both the sweep and the ADR task).
+  `debug-verb-selection.md` (unowned once the sweep merged) now
+  documents the `input_match` parity arm: named the shared evaluator
+  `firstInputMatchMismatch` (`src/io/extract.ts`), used by both
+  `policyMatchesEvent` (`src/runtime/intercept.ts`) and dry-run's
+  `policyMatchesTool` (`src/cli/dry-run.ts`), and that the
+  mixed-envelope arming (`inputMatchMismatchesEvent`, round 2) is
+  intercept-only because dry-run's `--input` is always a single object;
+  added both files to `sources:`. The bridging comments in
+  `src/runtime/intercept.ts` and `src/cli/dry-run.ts` that round 2 left
+  saying the doc did NOT yet cover `input_match` now point at the doc
+  plainly. `manifest-validation-scope.md`'s ten
+  `src/cli/validate/checks.ts` citations, stale since round 2 inserted
+  `checkTaskVerbGateWiring` (~57 net lines) after `checkWorkflowGateWiring`
+  and two new imports (+2 lines) above `checkMcp`: `checkMcp` (`:119-136`
+  → `:121-138`, and the single-line `:119` → `:121`), `checkCli`
+  (`:138-189` → `:140-191`), `checkSkills` (`:191-214` → `:193-216`),
+  `checkHooks` (`:216-248` → `:218-250`), `checkPolicyPacks` /
+  `checkPolicyPackConfigsAsDiagnostics` (`:1258-1287` → `:1316-1345`),
+  `checkSolutionAcceptanceProducer` (`:304-335` → `:306-337`),
+  `checkWorkflowGateWiring` (`:364-407` → `:366-412`, the function itself
+  grew by 5 lines calling the new check),
+  `checkUnderstandingBeforeExecutionAutoApproveMeasured` (`:1331-1364` →
+  `:1389-1422`) and its `listedAutoApproveHarnesses` helper (`:1309-1329`
+  → `:1367-1387`), and `runAssetChecks` itself (`:1366-1392` →
+  `:1424-1450`); every re-point verified against the current file (each
+  function's declaration and closing brace read directly), not derived
+  from the line-count arithmetic alone. All other citations in this doc
+  (`src/cli/add/index.ts`, `src/cli/remove/index.ts`, `src/schema/*`,
+  `src/io/validate-before-write.ts`, `src/cli/add/mutate.ts`) are
+  untouched by this task and were left as-is.
+
 - 2026-08-31T19:20:00Z, merge round after the ad66c43f sweep landed
   (agent-tasks `6f719bb4`): merged master into this branch (both branches
   append log entries; both sides kept, newest first). This branch's

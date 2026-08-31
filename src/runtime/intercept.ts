@@ -531,12 +531,9 @@ export function policyMatchesEvent(
   // Mirrored in `policyMatchesTool` (`src/cli/dry-run.ts`) for the
   // single-envelope case only, since dry-run's `--input` is always one
   // object; `harness policy dry-run` cannot reproduce the mixed-envelope
-  // arm. The bash_match raw/normalised parity contract
-  // docs/okf/debug-verb-selection.md records is for the `bash_match`
-  // family; as of task f561e44c it does not describe `input_match`'s own
-  // dry-run parity or the mixed-envelope arm added here, and that
-  // description lives in this comment and the policy docs until the
-  // bundle doc's next re-verification.
+  // arm. Both `input_match` parity and the mixed-envelope-is-intercept-only
+  // caveat are recorded in docs/okf/debug-verb-selection.md's
+  // trigger-matching parity paragraph.
   if (policy.trigger.input_match !== undefined) {
     if (inputMatchMismatchesEvent(policy.trigger.input_match, event)) {
       return false;

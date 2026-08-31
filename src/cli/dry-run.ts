@@ -119,6 +119,8 @@ function policyMatchesTool(
   // reproduce the runtime's mixed tool_input/raw_input envelope
   // (review round 1, task 2699b476 round 2): that arm is
   // intercept-only by construction, not a gap in this mirror.
+  // This parity, and the mixed-envelope caveat, are recorded in
+  // docs/okf/debug-verb-selection.md's trigger-matching parity paragraph.
   if (policy.trigger.input_match !== undefined) {
     const mismatch = firstInputMatchMismatch(policy.trigger.input_match, {
       toolArgs: toolInput,
