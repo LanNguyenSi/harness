@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   - Docs: `docs/for-agents.md` (the residual paragraph now describes the coverage and the `--task` producer), `docs/writing-custom-policies.md` (new "One tool, two modes" recipe plus the field-reference row), `docs/CLI.md` (`record review --task` and its tag-semantics note).
   - **Round-2 hardening** (review round 1 on the same task): `input_match` now evaluates against BOTH `tool_input` and `raw_input` when a payload carries them as separate non-null objects, so a benign value in one field can no longer shadow a merging value in the other and leave the gate unarmed; and `harness validate` now warns when a qualifying workflow wires the original `pull_requests_merge` / `gh pr merge` evidence pair but not the two task-scoped hooks, naming the uncovered verbs instead of staying silent.
 
+- **`tests/decisions-citations-resolve.test.ts` guards every backtick-anchored source citation in `docs/decisions/*.md`** (agent-tasks `6f719bb4`). Each citation must be a repo-relative, anchored `` `path:N-M#"text on line M"` `` (or `:N` for a single line); the guard fails on a stale path, an out-of-range or blank-start range, an anchor absent from the range's last line, or an anchor that recurs elsewhere in the range. That pins the range's end line: a citation cannot silently drift onto different code without also changing what its anchor matches. It does not pin the start line on its own, and a bare, non-backtick line reference is outside the grammar and stays invisible to the guard.
+
+### Changed
+
+- **`docs/decisions/*.md` source citations re-pointed and anchored** (agent-tasks `6f719bb4`). Every citation in the ADRs now names a repo-relative path with an anchor verified against the current tree; several had drifted onto unrelated lines after later changes (an unrelated constant move, new slice-1/slice-3 code) moved the code they described. A "Citation convention" note at the top of `docs/decisions/2026-08-27-ug-auto-mode-approval.md` records the grammar and the guard test that enforces it going forward.
 
 ## [0.53.0] - 2026-08-30
 

@@ -2,6 +2,41 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-08-31T19:20:00Z, merge round after the ad66c43f sweep landed
+  (agent-tasks `6f719bb4`): merged master into this branch (both branches
+  append log entries; both sides kept, newest first). This branch's
+  `[Unreleased]` CHANGELOG entry postdates the sweep's fresh stamps on
+  `codex-adapter-parity-gaps.md`, `gate-fail-posture-matrix.md` and
+  `policy-engine-producer-wiring.md` (all list `CHANGELOG.md` in
+  `sources:`), so re-read their CHANGELOG-citing passages against the
+  added entry (a guard/anchoring bullet; none of the three cites the
+  Unreleased section) and re-stamped all three timestamp-only.
+
+- 2026-08-31T18:50:00Z, ADR citation anchoring, round 3 fixes (agent-tasks
+  `6f719bb4`, review round 1, HIGH finding): the round below fixed every
+  BACKTICK citation but left twelve BARE, non-backtick `lines N-M` / `line
+  N` prose references untouched in
+  `docs/decisions/2026-08-27-ug-auto-mode-approval.md` (eleven in the
+  decision-order table and the "Approving an Understanding Report"
+  citation, plus one found by this round's own sweep in an acceptance
+  criterion), all stale at HEAD. Re-pointed all twelve to the same
+  backtick-anchored form against the current tree. Strengthened the guard
+  with a within-cited-range anchor-uniqueness check (the anchor text must
+  occur exactly once across the whole `[N, M]` range, not just on line
+  `M`), which catches a citation silently widened at its start; no
+  existing citation violated it. The guard still cannot see a bare,
+  non-backtick line reference at all (grammar unchanged by design; a
+  probe that re-introduced one confirmed the guard stays green), so the
+  sweep table in the task report, not the guard, is what closes this
+  class going forward. This round also edited `CHANGELOG.md`'s
+  `[Unreleased]` Added bullet (scoped it to what the guard enforces),
+  which re-staled `evidence-ledger-trust-boundary.md` and
+  `pause-vs-gate-kill-switch.md` (both list `CHANGELOG.md` in
+  `sources:`); re-read both docs' CHANGELOG-citing passages (unrelated
+  historical entries, `63fefe3a`/`1432e053` and the shared-marker-reader
+  extraction, both untouched by this edit) and re-stamped both
+  timestamp-only, same as the round below did for the same reason.
+
 - 2026-08-31T17:05:39Z, re-stamp for the review round-1 hardening on the
   task-scoped merge gate (task `2699b476`, round 2): the mixed-envelope
   `input_match` arm and the `checkWorkflowGateWiring` missing-task-hooks
@@ -111,6 +146,143 @@
   closing-brace start line) and on `pause-vs-gate-kill-switch.md`
   (`docs/for-humans.md` blank start line) are unrelated to this task's
   files and left as-is, same as the two preceding entries record.
+- 2026-08-31T16:16:29Z, ADR citation anchoring sweep (agent-tasks `6f719bb4`):
+  every backtick source citation in
+  `docs/decisions/2026-08-27-ug-auto-mode-approval.md` and
+  `docs/decisions/2026-05-16-ug-drift-guard-version-pin.md`
+  was re-pointed to a repo-relative path with an anchor
+  (`` `path:N-M#"text on line M"` ``) verified against the current tree by a
+  new guard, `tests/decisions-citations-resolve.test.ts`. Most citations had
+  drifted: several basename-only forms (`markers.ts`, `hook-pre-tool-use.ts`,
+  `understanding-before-execution.md`) needed the full repo-relative path,
+  and many line ranges into `src/cli/pack/hook-pre-tool-use.ts` and
+  `src/cli/approve/understanding.ts` had shifted well past the eleven lines
+  the terrain note flagged, because slice 1 and slice 3 of the ADR's own
+  design (auto-approve, delegation) have since been implemented in those two
+  files (`src/cli/pack/auto-approve-path.ts` is a new module carrying most of
+  the slice-1 logic). No described code had actually vanished; every
+  BACKTICK citation resolved to an existing, still-accurate location once
+  re-pointed (the eleven-plus-one BARE, non-backtick line references this
+  sweep left untouched were caught in review and re-pointed in a round 3
+  follow-up; see the next entry). Checked `docs/okf/*.md` frontmatter
+  `sources:` for the ADR path and for
+  `CHANGELOG.md` (this task added an `[Unreleased]` CHANGELOG entry):
+  `evidence-ledger-trust-boundary.md` and `pause-vs-gate-kill-switch.md`
+  list `CHANGELOG.md`; re-read their CHANGELOG-citing passages (unrelated
+  historical entries, still accurate) and re-stamped both timestamp-only.
+  `codex-adapter-parity-gaps.md`, `gate-fail-posture-matrix.md`, and
+  `policy-engine-producer-wiring.md` also list `CHANGELOG.md` but are three
+  of the six docs the parallel sweep (agent-tasks `ad66c43f`) owns, so left
+  untouched. No doc lists the ADR path itself in frontmatter `sources:`
+  except `log.md`, which is excluded by convention.
+- 2026-08-31T15:57:58Z, genuine re-verify and re-stamp sweep (agent-tasks
+  `ad66c43f`): ran `npx okf-kit@0.8.0 check --json docs/okf` on the
+  worktree HEAD (master `50b60f5`) as the before-baseline and matched it
+  against the orchestrator's own master measurement: sources-fresh warned
+  on `quote-model-divergence.md`, `codex-adapter-parity-gaps.md`,
+  `debug-verb-selection.md`, `gate-fail-posture-matrix.md`,
+  `policy-engine-producer-wiring.md`, and `manifest-validation-scope.md`;
+  citations-resolve warned on `log.md` (three findings), on
+  `understanding-gate-lockout-recovery.md` (two findings), and on
+  `pause-vs-gate-kill-switch.md` (one finding). For each of the six
+  sources-fresh docs, read every source its `sources:` list names that
+  had a newer commit than the doc's own `timestamp:`, opened the current
+  file at HEAD, and compared claim by claim against what the doc said.
+  Corrections made, per doc:
+  - `quote-model-divergence.md`: task `cf3dff51` (PR #412/#419) closed
+    the quoted-shell-boundary bash_match bypass the doc's "Fail-open-
+    Klassen" table and "Ebenfalls Fail-open" paragraph still described
+    as live; both are now marked closed, the "Einordnung je Klasse"
+    table row and the Empfehlung-2 narrative updated to say two of the
+    three originally-bundled tasks (`cf3dff51`, `2dfdf472`) are closed
+    and only `b093911d` remains open, and the `command-normalize.ts` /
+    `bash-prefix-parse.ts` table citations into `src/runtime/intercept.ts`
+    and `src/cli/policy/intercept.ts` re-pointed to their current
+    location (the raw/normalised/amp-aware/quote-aware four-arm
+    `policyMatchesEvent`, and the `bashPrefix` consultation block that
+    moved after task `a7eb1a71`'s kubectl-signal wiring).
+  - `manifest-validation-scope.md`: task `57058364` Slice 2 inserted a
+    new `checkUnderstandingBeforeExecutionAutoApproveMeasured` function
+    ahead of `runAssetChecks` in `src/cli/validate/checks.ts`, shifting
+    every function after it; every line citation in the "What the asset
+    gate actually checks" list and the "harness add mcp x" walkthrough
+    was re-verified against the current file and re-pointed, and a new
+    bullet documents the added check as a fourth way an unrelated-
+    looking path can appear in a fresh add's asset error.
+  - `policy-engine-producer-wiring.md`: two changes shipped in 0.45.0
+    that the doc's body already narrated inline (the tier-aware
+    deny-degraded posture, task `f1aea826`) but its own "Version history
+    that matters" section stopped at 0.44.0 and called it current; added
+    a 0.45.0 bullet, corrected the "current" claim (`package.json` is at
+    0.53.0 now), and added a new paragraph documenting the FOURTH
+    `bash_match` matching arm (`normalizeCommandQuoteAware`, task
+    `cf3dff51`) the trigger-matching narrative had stopped at three.
+  - `codex-adapter-parity-gaps.md`: re-verified gaps 1-13 against their
+    cited sources; added gap 14, a genuinely new gap found during this
+    pass, `claude -p` delegation (slice 3, agent-tasks `37ad0b05`) has
+    no Codex-side wiring at all in `hook-codex-pre-tool-use.ts`; and
+    added a short note that task `8f637efd` now ships `auto_approve`
+    active by default in the FULL/SOLO/TEAM templates, which does not
+    change gap 13's fail-closed mechanics.
+  - `gate-fail-posture-matrix.md`: same `8f637efd` active-by-default note
+    added next to the auto-approval paragraph; the
+    `hook-pre-tool-use.ts` header-contract line citation was off by one
+    line after intervening edits and was corrected.
+  - `debug-verb-selection.md`: the dry-run and audit sections already
+    matched current source (the four-arm parity claim and the audit
+    approvals section were already correct); only the `smoke` verb's
+    `EX_UNAVAILABLE` citation had drifted to an unrelated line and was
+    re-pointed to the `ensureClaudeAvailable` function that now carries
+    it.
+
+  Separately, fixed the three citations-resolve findings without
+  re-verifying their docs' whole `sources:` list (their sources were not
+  on the sources-fresh list above): in
+  `understanding-gate-lockout-recovery.md` the `writePendingApproval`
+  anchor into `hook-pre-tool-use.ts` moved one line down and the
+  `hook-codex-pre-tool-use.ts` closing-brace citation was pointing at
+  the wrong function entirely; both are now anchored on the actual
+  `writePendingApproval(generatedDir, sessionId);` call site in each
+  file. In `pause-vs-gate-kill-switch.md` the `docs/for-humans.md`
+  blank-start-line citation is now re-pointed past the blank line to the
+  bullet's own last line, and the same doc's two citations named by the
+  orchestrator as mis-pointing without a warning (`src/cli/index.ts`
+  pause/gate-command ranges, plus the `policies[].enabled` help-text
+  citation and the `gate disable` motivating-case comment citation) are
+  re-verified against the current `pause`/`resume`/`gate` command
+  registrations and re-pointed; two attempted full anchored citations
+  (`#"..."`) whose anchor text itself contained backtick characters
+  broke the outer markdown code span and were reported by okf-kit as
+  notices, corrected by dropping to plain range citations instead. In
+  `log.md` itself, every historical entry's `path:N-M`-shaped citation
+  token (the pre-existing drift notes about these same three docs,
+  above) was rewritten to prose naming the file and an approximate line,
+  since a log entry describing citation drift should not itself carry a
+  citation token okf-kit tries to resolve.
+
+  After committing, re-ran the same command against the committed tree
+  and separately the exact invocation `.github/workflows/okf-staleness.yml`
+  uses; both report zero warnings for `sources-fresh` and
+  `citations-resolve`. Set difference against the before-baseline: every
+  sources-fresh and citations-resolve finding listed above is gone; no
+  new finding of either rule appeared.
+
+  Correction (round 2, review finding, HIGH): "read every source ... and
+  compared claim by claim" above overclaimed. It read every source file
+  the sources-fresh docs named, but did not separately verify the prose
+  line references embedded in running text outside a backtick citation
+  token, the shorthand shape okf-kit's citations-resolve rule cannot
+  parse because it carries no path, so a wrong one there passes the
+  mechanical check silently. A follow-up pass read every such prose line
+  reference across all nine docs this task touched against HEAD and
+  re-pointed the ones that had drifted or were wrong from the start,
+  including references in docs `okf-kit check` already reported clean.
+  Also restored an accurate status for the still-open command-normalize
+  peeling gap in `quote-model-divergence.md` (a wrong cross-reference had
+  claimed a different fix addressed it) and corrected the same doc's
+  `&`-boundary-closure attribution to name both the template-level and
+  the engine-level fix, with the caveat that an already-materialized
+  manifest does not pick up the template-level one on its own.
 
 - 2026-08-30T10:20:00Z, re-stamp on commit-time recheck (task `8f637efd`,
   review round 3, findings F1-F5): after the round-3 fixes commit
@@ -146,10 +318,13 @@
   either way). No doc's substantive claims describe content round 3
   altered, so all four `timestamp:` fields are bumped with no content
   edit. The pre-existing citation-resolve drift on
-  `understanding-gate-lockout-recovery.md` (`hook-pre-tool-use.ts:771`
-  anchor, `hook-codex-pre-tool-use.ts:358` closing-brace start line) and
-  on `pause-vs-gate-kill-switch.md` (`docs/for-humans.md:394-395` blank
-  start line) is unrelated to this task's changes and left as-is, same as
+  `understanding-gate-lockout-recovery.md` (the writePendingApproval
+  anchor into hook-pre-tool-use.ts around line 771 as the file stood
+  then, and the closing-brace start line hook-codex-pre-tool-use.ts was
+  cited at around line 358 as it stood then) and on
+  `pause-vs-gate-kill-switch.md` (the blank start line docs/for-humans.md
+  was cited around lines 394-395 as it stood then) is unrelated to this
+  task's changes and left as-is, same as
   the round-2 entry below already found for the same two docs. The
   remaining STALE findings from this run (`codex-adapter-parity-gaps.md`,
   `debug-verb-selection.md`, `gate-fail-posture-matrix.md`,
@@ -438,3 +613,11 @@
   `8f637efd` entry there, which neither doc describes. Re-read the
   CHANGELOG-citing passages of both docs, no change needed, timestamp-only
   re-stamp.
+
+  Round-3 note (verification review): the round-2 rewording of the
+  manifest-validation-scope "ways to block as new" enumeration had invented
+  a fourth route (an add being the auto_approve pack config), impossible
+  because no supported add mutation touches manifest.policy_packs; reworded
+  to state the demote-to-warning reality with the mutate-union citation.
+  Two range attributions tightened (newErrors versus the throw site in
+  src/cli/add/index.ts; the risk-gate sentence spans two lines).

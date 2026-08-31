@@ -35,6 +35,6 @@ Reconsider this decision if any of the following become true:
 
 ## Consequences
 
-- The current `scripts/check-ug-schema-drift.mjs:107` call to `npm pack @latest` stays as the canonical fetch path.
+- The current `scripts/check-ug-schema-drift.mjs:156#"UPSTREAM_PKG"` call to `npm pack @latest` stays as the canonical fetch path.
 - New drift-guards for other upstreams should default to the same posture unless the upstream's release cadence or stability argues otherwise.
 - This document is the canonical reference for the decision; the agent-tasks comment thread on 40452b01 is the longer-form discussion log.
