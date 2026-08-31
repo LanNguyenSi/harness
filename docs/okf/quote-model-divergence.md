@@ -3,7 +3,7 @@ type: overview
 title: Shell quote models, measured divergence against bash
 description: The policy engine has three independent shell-word models plus a raw-regex trigger layer. This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-08-05T15:28:20Z
+timestamp: 2026-08-31T15:57:58Z
 sources:
   - src/runtime/command-normalize.ts
   - src/cli/init/composer.ts
@@ -107,14 +107,40 @@ Schreib-Flag, nie weniger). Das schließt K5s drei gemessenen Fail-opens
 punktgenau: `find . -"delete"`, `find . -'delete'`, `find . -\delete`
 (plus, laut Fix-Beleg, zwei weitere Schreibweisen und die `sort`/`file`-
 Geschwisterfälle) klassifizieren nicht mehr als read-only. **Was das
-NICHT schließt:** die anderen beiden Aufrufstellen der Empfehlung —
-`bash-prefix-parse`s Wert-Dekodierung (K2) und `command-normalize`s
-Peeling (K3) — importieren `decodeShellWord` (Stand dieser Prüfung)
-NICHT; K2 und K3 bleiben also offen, unverändert gegenüber der Messung
-unten. Damit ist auch der in Empfehlung 2 genannte Reihenfolge-Vorbehalt
-(`cdTarget`-Kanal erst nach `98ad072f`) noch nicht relevant geworden —
-`98ad072f` ist zwar inzwischen gelandet, aber `bash-prefix-parse`s
-Wert-Dekodierung selbst hat diese Primitive noch nicht bekommen.
+NICHT schließt:** `bash-prefix-parse`s Wert-Dekodierung (K2), fuer die
+`decodeShellWord` (Stand dieser Prüfung) dort nicht importiert ist; K2
+bleibt offen, unverändert gegenüber der Messung unten. Damit ist auch der
+in Empfehlung 2 genannte Reihenfolge-Vorbehalt (`cdTarget`-Kanal erst
+nach `98ad072f`) noch nicht relevant geworden: `98ad072f` ist zwar
+inzwischen gelandet, aber `bash-prefix-parse`s Wert-Dekodierung selbst
+hat diese Primitive noch nicht bekommen. `command-normalize`s Peeling
+(K3) hat `decodeShellWord` ebenfalls nicht bekommen, ist aber inzwischen
+über einen anderen Mechanismus adressiert, siehe die nächste Ergänzung.
+
+**Der Trigger-seitige Teil von Empfehlung 2 (K1 der Fail-open-Tabelle,
+`cf3dff51`) ist inzwischen ebenfalls umgesetzt und ausgeliefert, in zwei
+Schritten:** PR #412 baut `normalizeCommandQuoteAware`
+(`src/runtime/command-normalize.ts`) als quote-bewussten VIERTEN
+Normalisierungs-Pass, eine eigene, additive Grenzsuche
+(`findNextBoundaryQuoteAware`), die einen Boundary-Charakter innerhalb
+einer offenen Quote überspringt, und verdrahtet ihn in
+`policyMatchesEvent` (`src/runtime/intercept.ts:503-568`) als vierten
+OR-Zweig: roh, dann normalisiert, dann amp-bewusst (`aabbad63`), dann
+quote-bewusst (`cf3dff51`), jeder Zweig nur additiv gegenüber den
+vorherigen. Produktions-Nachweis über dieselbe `runInterceptCli`-Messung
+wie bei den Empfehlungen 1 und 3: alle 12 von 12 Zielschreibweisen
+(`;`, `|`, `&&`, `(`, Zeilenumbruch) gaten jetzt, gegenüber 0 von 12 vor
+der Verdrahtung. PR #419 schließt den daraus folgenden `dry-run`-Parity-
+Rest (`f561e404c`, siehe `debug-verb-selection.md`): `harness dry-run`s
+eigener Matcher (`src/cli/dry-run.ts`) bekam denselben vierten Zweig.
+**Damit sind die Metazeichen-im-gequoteten-Wert-Fail-opens aus der
+"Fail-open-Klassen"-Tabelle unten (`A='a; b' git status`,
+`A="a; b" git status`) geschlossen; `b093911d` (Backslash-Escape ohne
+Quotes, `A=a\ b git status`) bleibt offen, unverändert.** Von den drei
+K5/K2/K1-Aufrufstellen der gemeinsamen Unquoting-Familie sind damit zwei
+(`read-only-bash` über `fdee7d0f`, der Trigger-Layer über `cf3dff51`)
+umgesetzt; `bash-prefix-parse`s Wert-Dekodierung (K2) bleibt die einzige
+noch offene.
 
 ## Kurzfassung
 
@@ -163,9 +189,9 @@ Ausgaben und sind nur paarweise überlappend messbar.
 
 | Modul | Ausgabe | verdrahtet an |
 |---|---|---|
-| `command-normalize.ts` | `normalized` | `bash_match` raw-OR-normalized-OR-amp-normalized (`src/runtime/intercept.ts:442-478`, dritter Arm seit `aabbad63`) |
+| `command-normalize.ts` | `normalized` | `bash_match` raw-OR-normalized-OR-amp-OR-quote-normalized (`src/runtime/intercept.ts:503-568`, dritter Arm seit `aabbad63`, vierter Arm seit `cf3dff51`) |
 | | `targetDir`/`targetBase` | nichts (grep-verifiziert) |
-| `bash-prefix-parse.ts` | `inlineEnv`, `cdTarget` | Risk-Gate-Kontext (`src/cli/policy/intercept.ts:636-658`) |
+| `bash-prefix-parse.ts` | `inlineEnv`, `cdTarget` | Risk-Gate-Kontext (`src/cli/policy/intercept.ts:1026-1056`) |
 | `read-only-bash.ts` | Boolean | Risk-Floor, Understanding-Gate-PreToolUse (2 Hooks), Write-Guard |
 
 Die Matrix ist daher als **drei überlappende Zwei-Wege-Vergleiche**
@@ -319,9 +345,13 @@ einzelnes `&` dazugehört. Und `A=x&harness pause` ist nicht read-only,
 das Understanding-Gate blockt es in einer nicht approvten Session
 weiterhin; live ist der Bypass **nach** dem Approval.
 
-Ebenfalls Fail-open, quote-getrieben (gleiche Methodik):
-`A=a\ b git status`, `A='a; b' git status`, `A="a; b" git status`:
-bash führt `git` mit gesetztem `A` aus, kein Trigger feuert.
+Ebenfalls Fail-open, quote-getrieben, zum Zeitpunkt dieser Messung
+(gleiche Methodik): `A=a\ b git status`, `A='a; b' git status`,
+`A="a; b" git status`: bash führt `git` mit gesetztem `A` aus, kein
+Trigger feuert. **Stand heute geschlossen für die beiden gequoteten
+Formen** (`cf3dff51`, siehe "Status seit dieser Messung" oben);
+`A=a\ b git status` (Backslash-Escape ohne Quotes, `b093911d`) bleibt
+offen, unverändert.
 
 ### Env-Indikator vor dem Risk-Gate versteckbar
 
@@ -347,11 +377,11 @@ Zeichenfolge `prod`.
 
 | Klasse | Richtung | Beleg |
 |---|---|---|
-| `&` fehlt im Boundary-Alphabet | **fail-open**, alle bash_match-Gates inkl. operator-only Deny | Hook-Probe mit Pro-Policy-Kontrolle + Shim |
-| Metazeichen im gequoteten Wert (`cf3dff51`) | **fail-open** Trigger | Hook-Probe + Shim |
-| Backslash-Escape im Wert (`b093911d`) | **fail-open** Trigger | Hook-Probe + Shim |
-| Wert-Dekodierung fehlt (ANSI-C, Verkettung, Backslash) | **fail-open** Risk-Einstufung | Resolver-Probe mit Kontrollen |
-| Flag-Unquoting fehlt (`2dfdf472`) | **fail-open** read-only | K5, reale Mutation, 3 Schreibweisen |
+| `&` fehlt im Boundary-Alphabet | **fail-open** zum Messzeitpunkt, seither geschlossen (`d834a065`) | Hook-Probe mit Pro-Policy-Kontrolle + Shim |
+| Metazeichen im gequoteten Wert (`cf3dff51`) | **fail-open** zum Messzeitpunkt, seither geschlossen (PR #412/#419) | Hook-Probe + Shim |
+| Backslash-Escape im Wert (`b093911d`) | **fail-open** Trigger, unverändert offen | Hook-Probe + Shim |
+| Wert-Dekodierung fehlt (ANSI-C, Verkettung, Backslash) | **fail-open** Risk-Einstufung, unverändert offen | Resolver-Probe mit Kontrollen |
+| Flag-Unquoting fehlt (`2dfdf472`) | **fail-open** zum Messzeitpunkt, seither geschlossen (`fdee7d0f`) | K5, reale Mutation, 3 Schreibweisen |
 | Modell behauptet Env ohne Export | fail-closed | K2, 1653 Fälle |
 | `command-normalize` peelt nicht (97/196) | fail-closed (raw greift) | K3 |
 | `read-only-bash` verwirft Gequotetes | fail-closed by design | K5, 4 Fälle |
@@ -394,7 +424,11 @@ Symptome einer Ursache, aber auch nicht vier unabhängige Bugs. Drei
 (`cf3dff51`, `b093911d`, `2dfdf472`) teilen die Unquoting-Primitive;
 `dbc6d303` (False-Positives) liegt auf der Trigger-Ebene und teilt sie
 nicht. Der `&`-Befund ist eine fünfte, bisher nicht gefilte Klasse und
-sticht sie alle im Verhältnis Wirkung zu Aufwand.
+sticht sie alle im Verhältnis Wirkung zu Aufwand. **Stand heute**
+(siehe "Status seit dieser Messung"): `cf3dff51` und `2dfdf472` sind
+beide geschlossen, über getrennte Umsetzungen statt einer gemeinsamen
+`decodeShellWord`-Primitive für alle drei; `b093911d` bleibt der
+einzige noch offene der drei ursprünglich verbundenen Tasks.
 
 ## Offene Lücken dieser Messung
 

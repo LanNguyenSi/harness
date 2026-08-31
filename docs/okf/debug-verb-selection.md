@@ -3,7 +3,7 @@ type: overview
 title: Debug verb selection — which harness verb answers which question
 description: Decision guide mapping "why did my policy (not) fire" questions to the right harness debug verb — ledger-replay vs live-hypothetical vs static-prediction vs stage-isolation vs end-to-end — with each verb's key discriminators and fail-postures.
 tags: [debugging, cli, audit, explain, dry-run, smoke]
-timestamp: 2026-08-28T06:12:28Z
+timestamp: 2026-08-31T15:57:58Z
 sources:
   - docs/for-agents.md
   - docs/CLI.md
@@ -78,7 +78,7 @@ Use these when `explain-policy` shows a `when:` clause failing and you need to k
 
 ## smoke — the only verb that runs a real `claude -p` end to end
 
-`harness smoke --prompt <text> --output-dir <path> [--expect-hook a,b] [--expect-no-hook c] [--expect-exit <n>] [--expect-decision allow|deny|warn] [--session-id <id>] [--claude-bin <path>] [--timeout-ms <n>]`. It reuses the `apply` machinery to render a settings.json from the manifest, spawns `claude` with `-p` and the canonical stream-json flags, and asserts the `--expect-*` flags against the observed stream (src/cli/smoke/index.ts, src/cli/smoke/runner.ts). Artifacts land under `--output-dir`: `stream.jsonl`, `stderr.log`, and the rendered `settings.json`. Exit codes: `EX_OK` (0) on green, `EX_FAIL` (1) on any expectation miss, `EX_UNAVAILABLE` (69) when the claude binary is missing (src/cli/smoke/index.ts line 57; `EX_FAIL = 1` in src/cli/exit-codes.ts). A claude exit ≠ 0 without a terminal `result` event is treated as an implicit failure with a pointer to stderr.log. Every other verb on this page reasons ABOUT the pipeline; smoke is the only one that proves the applied manifest actually intercepts a live session — which is also why the Risk Gate's low-severity floor for harness commands deliberately EXCLUDES `smoke` (it stays classifiable as a mutating command, docs/risk-gate.md lines 121-127). Reach for it after `init --interactive`, a version bump, or whenever dry-run says a hook should fire but you doubt the wiring.
+`harness smoke --prompt <text> --output-dir <path> [--expect-hook a,b] [--expect-no-hook c] [--expect-exit <n>] [--expect-decision allow|deny|warn] [--session-id <id>] [--claude-bin <path>] [--timeout-ms <n>]`. It reuses the `apply` machinery to render a settings.json from the manifest, spawns `claude` with `-p` and the canonical stream-json flags, and asserts the `--expect-*` flags against the observed stream (src/cli/smoke/index.ts, src/cli/smoke/runner.ts). Artifacts land under `--output-dir`: `stream.jsonl`, `stderr.log`, and the rendered `settings.json`. Exit codes: `EX_OK` (0) on green, `EX_FAIL` (1) on any expectation miss, `EX_UNAVAILABLE` (69) when the claude binary is missing (`ensureClaudeAvailable`, src/cli/smoke/index.ts lines 99-121; `EX_FAIL = 1` in src/cli/exit-codes.ts). A claude exit not equal to 0 without a terminal `result` event is treated as an implicit failure with a pointer to stderr.log. Every other verb on this page reasons ABOUT the pipeline; smoke is the only one that proves the applied manifest actually intercepts a live session, which is also why the Risk Gate's low-severity floor for harness commands deliberately EXCLUDES `smoke` (it stays classifiable as a mutating command, docs/risk-gate.md lines 121-127). Reach for it after `init --interactive`, a version bump, or whenever dry-run says a hook should fire but you doubt the wiring.
 
 ## doctor — install health, not decision debugging
 
