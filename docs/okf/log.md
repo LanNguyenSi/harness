@@ -22,6 +22,13 @@
   before the sibling `[Unreleased]` entry above it settled the question
   the other way) and pinned the doctor message's caveat clause with a
   new assertion in `tests/cli/doctor-bypass-without-auto-approve.test.ts`.
+  The commit above changed `docs/policy-packs/understanding-before-execution.md`,
+  `CHANGELOG.md`, and `permission-mode-observations.ts` again, so
+  `npx -y okf-kit@0.8.0 check docs/okf` flagged the same seven bundle
+  docs listed below STALE a second time; re-verified each against the
+  current tree (still no content change needed, same as round 1) and
+  re-stamped all seven in a second, timestamp-only commit. Verdict after
+  the re-stamp: `okf-kit: clean, no findings`.
 
 - 2026-09-01T06:42:59Z, re-stamp for commit `e66399f1` (task `a4ceb6be`,
   round 1): the prior commit changed `CHANGELOG.md`,
