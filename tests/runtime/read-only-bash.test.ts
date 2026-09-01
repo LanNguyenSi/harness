@@ -2211,3 +2211,33 @@ describe("kubectl read-only floor (isReadOnlyKubectlCommand, task da823721)", ()
     expect(elapsed).toBeLessThan(100);
   });
 });
+
+describe("sed / curl are NOT part of the shared read-only predicate (task 2929c5b7)", () => {
+  // `sed` has a Risk-Classifier-only floor (`isReadOnlySedCommand`,
+  // exercised in tests/runtime/read-only-floors.test.ts) and `curl` has no
+  // floor at all since decision D-013 (see that file's header). Neither is
+  // wired into
+  // `isReadOnlyBashCommand`, because the understanding-gate PreToolUse
+  // blocker and the solution-acceptance write-guard consume this predicate
+  // directly and short-circuit on it. Review round 2 of that task measured
+  // the widening a shared-predicate recognition caused; these cases pin
+  // that the predicate keeps its base behaviour of refusing both heads.
+  it.each([
+    "sed -n p f",
+    "sed -n '1p' f",
+    "sed 's/a/b/' f",
+    "sed -i 's/a/b/' f",
+    "curl URL",
+    "curl -sL https://example.com",
+    "curl -o /etc/passwd https://example.com",
+  ])("isReadOnlyBashCommand(%j) is false", (command) => {
+    expect(isReadOnlyBashCommand(command)).toBe(false);
+  });
+
+  it("the two-token --version/--help shape is unchanged for both heads", () => {
+    // Pre-existing base behaviour, not a sed/curl-specific rule: the
+    // generic `<bin> --version` shape applies to every binary.
+    expect(isReadOnlyBashCommand("sed --version")).toBe(true);
+    expect(isReadOnlyBashCommand("curl --version")).toBe(true);
+  });
+});

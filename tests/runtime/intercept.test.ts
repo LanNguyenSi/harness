@@ -1,9 +1,16 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { Writable } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { parse as parseYaml } from "yaml";
 import {
   attributeTriggerSegments,
+  buildActionEnvelope,
+  classifyRisk,
   intercept,
   policyMatchesEvent,
+  type EnvelopeContext,
   type LedgerClient,
   type RiskGateContext,
   type ToolEvent,
@@ -14,12 +21,16 @@ import type {
   LedgerEntry,
   LedgerQueryResult,
 } from "../../src/policies/index.js";
+import { parseManifest } from "../../src/schema/index.js";
 import type {
   EnvironmentResolver,
   Policy,
   RiskClassifier,
 } from "../../src/schema/index.js";
 import { makeManifest, makePolicy as policy } from "../_helpers/manifest.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const REPO_ROOT = path.resolve(path.dirname(__filename), "..", "..");
 
 const NOW = new Date("2026-04-30T12:00:00.000Z");
 
@@ -1702,14 +1713,19 @@ describe("intercept — M7 whenUnclassifiedFallback flag", () => {
     expect(result.decisions[0]?.whenUnclassifiedFallback).toBeUndefined();
   });
 
-  it("ux-path carve-out: records whenUnclassifiedFallback=true on the audit decision but does NOT append the clause to the ux agent-facing reason", async () => {
+  it("ux-path (task 2929c5b7): records whenUnclassifiedFallback=true on the audit decision AND prepends a fallback-specific sentence to the ux agent-facing reason, without altering the operator's own cannot: text", async () => {
     // A policy with `ux:` uses the operator-curated plain-language surface.
-    // The unclassifiedFallback flag must still be on the decision record
-    // (audit + explain --trace can replay it), but the block message must
-    // not be altered — the operator chose its exact wording.
-    // Mutation guard: removing the `if (blockingPolicy?.ux)` guard (so the
-    // ux path falls into the neutral-deny branch) would append the clause to
-    // the agent-facing text, making the second assertion go red.
+    // Pre-2929c5b7 this surface was left untouched even for a fail-closed
+    // unclassified match — the exact bug this task exists to fix
+    // (gate-prod-destructive's "critical destructive action" wording shown
+    // verbatim for an unrecognized READ the moment environment resolved to
+    // production). Now: the unclassifiedFallback flag still rides the
+    // decision record (audit + explain --trace can replay it), AND the
+    // block message is prefixed with a sentence naming the real cause,
+    // while the operator's own `cannot:` text is still present, unaltered.
+    // Mutation guard: removing the fallback-specific prefix logic in
+    // intercept.ts's ux branch makes the "unclassified action in a
+    // production context" assertion below go red.
     const uxPolicy: Policy = {
       ...RISK_BLOCK_POLICY,
       name: "gate-risk-unscoped-ux",
@@ -1721,7 +1737,12 @@ describe("intercept — M7 whenUnclassifiedFallback flag", () => {
     } as Policy;
     const ledger = makeLedger({ kind: "ok", entries: [] });
     const result = await intercept({
-      manifest: makeManifest({ policies: [uxPolicy] }),
+      // The production resolver is what makes AC2's exact phrase
+      // ("in a production context") the right assertion here: the prefix
+      // interpolates the RESOLVED environment, so a manifest with no
+      // resolver would legitimately say "unknown" instead (pinned by the
+      // round-3 sibling test below).
+      manifest: makeManifest({ policies: [uxPolicy], resolvers: [PROD_RESOLVER] }),
       event: BASH_UNKNOWN_EVENT,
       ledger,
       builtins: BUILTINS,
@@ -1730,13 +1751,431 @@ describe("intercept — M7 whenUnclassifiedFallback flag", () => {
     });
     // The decision record must carry the flag.
     expect(result.decisions[0]?.whenUnclassifiedFallback).toBe(true);
-    // The agent-facing reason must NOT contain the unclassified clause.
+    expect(result.decisions[0]?.environment?.name).toBe("production");
+    // The agent-facing reason must NOT contain the non-ux engine-vocabulary
+    // clause (that wording is reserved for the non-ux path).
     expect(result.blockJson?.reason).not.toContain(
       "matched via the fail-closed unclassified rule",
     );
-    // The ux text is verbatim from the policy.
+    // AC2: the fallback-specific reason names the real cause.
+    expect(result.blockJson?.reason).toContain(
+      "unclassified action in a production context",
+    );
+    // The operator's own cannot: text is still present, unaltered.
     expect(result.blockJson?.reason).toContain(
       "You cannot run unrecognised commands here.",
+    );
+  });
+
+  it("ux-path: a genuine classification hit renders the operator's cannot: text with NO fallback prefix", async () => {
+    // Negative control for the test above: when the risk clause matches a
+    // REAL classification (not the fallback), the ux text is rendered
+    // exactly as the operator wrote it, with no "unclassified action in a
+    // production context" prefix — that phrase is reserved for a genuine
+    // fallback deny (AC2: "Explicitly classified critical actions keep the
+    // existing wording").
+    const uxPolicy: Policy = {
+      ...RISK_BLOCK_POLICY,
+      name: "gate-risk-unscoped-ux-classified",
+      ux: {
+        cannot: "You cannot run this critical destructive action against production.",
+        required: ["explicit operator approval"],
+        run: ["harness approve risk"],
+      },
+    } as Policy;
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: makeManifest({
+        policies: [uxPolicy],
+        classifiers: [DESTROY_CLASSIFIER],
+      }),
+      event: BASH_DESTROY_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+      riskContext: riskCtx("main"),
+    });
+    expect(result.decisions[0]?.whenUnclassifiedFallback).toBeUndefined();
+    expect(result.blockJson?.reason).not.toContain(
+      "unclassified action in a production context",
+    );
+    // No prefix: the operator's cannot: text is the FIRST thing rendered.
+    expect(result.blockJson?.reason?.startsWith(
+      "You cannot run this critical destructive action against production.",
+    )).toBe(true);
+  });
+
+  it("ux-path (round 3): the fallback prefix names the RESOLVED environment and the policy's OWN threshold, not a hard-coded production/critical", async () => {
+    // Round-2 shipped this prefix with "production" and "critical"
+    // hard-coded, so an unscoped `severity_at_least: high` policy on a
+    // feature branch (environment resolves to `unknown`, threshold is
+    // `high`) emitted two false halves at once. Both are interpolated now.
+    //
+    // Mutation guard: restore either literal in
+    // `unclassifiedFallbackPrefix` (src/runtime/intercept.ts) and the
+    // corresponding assertion below goes red.
+    const uxPolicy: Policy = {
+      ...RISK_BLOCK_POLICY,
+      name: "gate-risk-unscoped-ux-high",
+      ux: {
+        cannot: "You cannot run this action yet.",
+        required: ["operator approval"],
+        run: ["harness approve risk"],
+      },
+    } as Policy;
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      // No resolvers at all, and a feature branch: the environment
+      // resolves to the matchable `unknown`, never `production`.
+      manifest: makeManifest({ policies: [uxPolicy] }),
+      event: BASH_UNKNOWN_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+      riskContext: riskCtx("feature/x"),
+    });
+    expect(result.decisions[0]?.whenUnclassifiedFallback).toBe(true);
+    expect(result.decisions[0]?.environment?.name).toBe("unknown");
+    const reason = result.blockJson?.reason ?? "";
+    // The resolved environment, with the correct article.
+    expect(reason).toContain("unclassified action in an unknown context");
+    expect(reason).not.toContain("in a production context");
+    // The policy's OWN declared threshold, and the fallback rung.
+    expect(reason).toContain("(treated as high) satisfied this policy's severity_at_least: high");
+    expect(reason).not.toContain("critical-severity match");
+    // The operator's own text is still appended, unaltered.
+    expect(reason).toContain("You cannot run this action yet.");
+  });
+});
+
+// Task 2929c5b7 — end-to-end AC1/AC2 coverage against the REAL shipped
+// gate-prod-destructive policy shape and the REAL shipped
+// risk.classifiers[] (docs/examples/full-manifest.yaml), not a hand-
+// trimmed local fixture. Loading the real classifier list means a
+// reviewer's mutation probe (delete the `dd` pattern, delete the `cat`
+// floor) exercises the actual shipped config, not a copy that could
+// silently drift from it.
+describe("intercept — task 2929c5b7: gate-prod-destructive unclassified-fallback fix", () => {
+  const REAL_MANIFEST_PATH = path.join(REPO_ROOT, "docs", "examples", "full-manifest.yaml");
+
+  function realClassifiers(): RiskClassifier[] {
+    const raw = fs.readFileSync(REAL_MANIFEST_PATH, "utf8");
+    return parseManifest(parseYaml(raw)).risk.classifiers;
+  }
+
+  // Mirrors the shipped gate-prod-destructive policy's `when:` /
+  // `enforcement:` exactly (docs/examples/full-manifest.yaml,
+  // src/cli/init/templates.ts): severity_at_least critical + production,
+  // hard block.
+  const GATE_PROD_DESTRUCTIVE_CRITICAL: Policy = {
+    name: "gate-prod-destructive",
+    description: "deny critical-severity destructive shell actions against a production target",
+    trigger: { event: "PreToolUse", match: "Bash" },
+    when: {
+      "risk.severity_at_least": "critical",
+      "environment.name": "production",
+    },
+    requires: { ledger_tag: "risk-override:${SESSION_ID}" },
+    hook: "risk-gate",
+    enforcement: "block",
+  } as Policy;
+
+  const bashEvent = (command: string): ToolEvent => ({
+    hook_event_name: "PreToolUse",
+    tool_name: "Bash",
+    tool_input: { command },
+    session_id: "sess-1",
+    cwd: "/tmp/proj",
+  });
+
+  async function runInProdCwd(command: string) {
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    return intercept({
+      manifest: makeManifest({
+        policies: [GATE_PROD_DESTRUCTIVE_CRITICAL],
+        classifiers: realClassifiers(),
+        resolvers: [PROD_RESOLVER],
+      }),
+      event: bashEvent(command),
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+      riskContext: riskCtx("main"),
+    });
+  }
+
+  const ENVELOPE_CTX: EnvelopeContext = {
+    cwd: "/tmp/proj",
+    git: { repo: "proj", branch: "main", sha: "" },
+    user: "agent",
+    host: "host",
+    now: NOW,
+  };
+
+  // AC1: the read-only investigation commands below must NOT be denied by
+  // gate-prod-destructive in a production cwd. This is the false-positive shape
+  // from the 2026-09-01 incident, in which a run of read-only
+  // investigation commands was denied until the cwd was moved out of the
+  // repo. The incident's own command list is recorded in the CHANGELOG
+  // entry for task 2929c5b7; this table is the SUBSET that takes prong (a),
+  // the explicit `low` floor. The incident's `curl`, `sshpass ssh` and
+  // `node -e` take prong (b) instead and are asserted in the next block.
+  //
+  // Each case asserts TWO things, deliberately: (1) `intercept()`
+  // end-to-end does not deny it, AND (2) the Risk Classifier explicitly
+  // recognizes it as `low` severity. (2) is the discriminating half —
+  // without it, deleting the `cat` floor from read-only-bash.ts would
+  // NOT fail (1): a `cat` that falls all the way to fully unclassified
+  // is ALSO not denied by the critical-threshold gate now, since prong
+  // (b) alone (unclassified no longer satisfies severity_at_least:
+  // critical) already covers that case. Asserting the real `low`
+  // classification is what actually exercises prong (a) — the explicit
+  // read-only floor — and fails when it's removed.
+  it.each([
+    ["cat", "cat notes/memory.md"],
+    ["sed -n", "sed -n '1,20p' notes/memory.md"],
+    ["grep", "grep TODO notes/memory.md"],
+  ])("does NOT deny %s in a production cwd, and it is explicitly classified `low`, not merely unclassified", async (_label, command) => {
+    const result = await runInProdCwd(command);
+    expect(result.blockJson).toBeNull();
+
+    const envelope = buildActionEnvelope(
+      { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } } as ToolEvent,
+      ENVELOPE_CTX,
+    );
+    const risk = classifyRisk(envelope, realClassifiers());
+    expect(risk.classified).toBe(true);
+    expect(risk.severity).toBe("low");
+  });
+
+  // D-011 (fix round 2): `ssh <host> <cmd>` and `node -e`/`--eval` do NOT
+  // get an explicit `low` floor. The local head cannot see the remote
+  // command or the eval'd code, so a `low` floor there would remove Risk
+  // Gate coverage entirely for those shapes (neither `severity_at_least:
+  // critical` nor `severity_at_least: high` fires on a `low` action).
+  // Instead they stay genuinely unclassified and ride prong (b)'s fallback:
+  // not hard-denied by the critical gate, but still approval-gated by the
+  // high-severity gate. Mutation probe A (re-add a `low` floor for ssh):
+  // this test's `classified: false` assertion goes red. Mutation probe B
+  // (restore old when-eval.ts fallback semantics, unclassified satisfies
+  // every severity_at_least): the "not denied by gate-prod-destructive"
+  // assertion below goes red.
+  //
+  // D-013 (fix round 4) puts `curl` in the same category, for a measured
+  // reason rather than an analogy: rounds 2 and 3 each shipped a curl
+  // `low` floor and each leaked (a write-flag denylist that missed `-o`,
+  // then a flag allowlist that still admitted `-w '%output{FILE}'`, which
+  // writes a local file since curl 8.3.0). Deciding a curl invocation is
+  // inert needs every curl flag's write capability across curl versions,
+  // so curl stays unclassified and only its write-CAPABLE spellings are
+  // named, by the destructive floor.
+  it.each([
+    ["ssh <host> <cmd>", 'ssh prod-host "cat /etc/hosts"'],
+    ["node -e", "node -e \"console.log(1+1)\""],
+    ["curl (no -X/-d)", "curl https://api.example.com/status"],
+  ])("%s stays unclassified: NOT denied by gate-prod-destructive (critical), but IS approval-gated by gate-prod-destructive-approval (high) via the fallback", async (_label, command) => {
+    const envelope = buildActionEnvelope(
+      { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } } as ToolEvent,
+      ENVELOPE_CTX,
+    );
+    const risk = classifyRisk(envelope, realClassifiers());
+    expect(risk.classified).toBe(false);
+    expect(risk.severity).toBeNull();
+
+    const critical = await runInProdCwd(command);
+    expect(critical.blockJson).toBeNull();
+
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const approval = await intercept({
+      manifest: makeManifest({
+        policies: [
+          {
+            name: "gate-prod-destructive-approval",
+            description:
+              "require operator approval for high-severity destructive shell actions against a production target",
+            trigger: { event: "PreToolUse", match: "Bash" },
+            when: {
+              "risk.severity_at_least": "high",
+              "environment.name": "production",
+            },
+            requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
+            hook: "risk-gate",
+            enforcement: "require_approval",
+          } as Policy,
+        ],
+        classifiers: realClassifiers(),
+        resolvers: [PROD_RESOLVER],
+      }),
+      event: bashEvent(command),
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+      riskContext: riskCtx("main"),
+    });
+    expect(approval.blockJson).not.toBeNull();
+    // Denied via the fallback, not a real pattern match.
+    expect(approval.decisions[0]?.whenUnclassifiedFallback).toBe(true);
+  });
+
+  // Prong (b) itself, directly: a command NO classifier pattern
+  // reasons about at all (genuinely unclassified, not floored low by
+  // any built-in floor either) must NOT be denied by the
+  // critical-threshold gate-prod-destructive — this is the core
+  // when-eval.ts change (unclassified no longer satisfies
+  // severity_at_least: critical on its own). Mutation probe target:
+  // restore the old fallback semantics in when-eval.ts (unclassified
+  // matches EVERY severity_at_least threshold) and this test goes red.
+  it("does NOT deny a genuinely unclassified command via gate-prod-destructive (critical) — prong (b)", async () => {
+    const command = "some-unrecognized-admin-tool --flag";
+    const envelope = buildActionEnvelope(
+      { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } } as ToolEvent,
+      ENVELOPE_CTX,
+    );
+    // Confirm the premise: genuinely unclassified, not floored.
+    expect(classifyRisk(envelope, realClassifiers()).classified).toBe(false);
+
+    const result = await runInProdCwd(command);
+    expect(result.blockJson).toBeNull();
+  });
+
+  // AC1's negative control: a genuinely destructive command must still
+  // be denied — the floor/fallback change must not weaken this gate.
+  it("STILL denies `rm -rf /x` in a production cwd", async () => {
+    const result = await runInProdCwd("rm -rf /x");
+    expect(result.blockJson).not.toBeNull();
+    expect(result.decisions[0]?.policyName).toBe("gate-prod-destructive");
+    expect(result.decisions[0]?.risk?.severity).toBe("critical");
+  });
+
+  // Anti-bypass coverage, critical tier: these mutating heads must stay
+  // classified `critical` (not just risk-bearing) so the loosened
+  // fallback cannot slip them past gate-prod-destructive's hard block.
+  // Mutation probe target: delete one of these patterns from
+  // docs/examples/full-manifest.yaml's dangerous-shell classifier and
+  // the matching case below goes green->red (denied becomes
+  // not-denied — an unclassified action no longer satisfies
+  // severity_at_least: critical on its own).
+  it.each([
+    ["dd", "dd if=/dev/zero of=/dev/sda"],
+    ["truncate", "truncate -s 0 /var/log/app.log"],
+    ["shred", "shred -u secret.txt"],
+    ["mkfs", "mkfs.ext4 /dev/sdb1"],
+    ["find -delete", "find /var/www -name '*.php' -delete"],
+    ["find -exec rm", "find /var/www -exec rm {} \\;"],
+  ])("STILL denies %s in a production cwd via gate-prod-destructive (critical, explicit classification)", async (_label, command) => {
+    const result = await runInProdCwd(command);
+    expect(result.blockJson).not.toBeNull();
+    expect(result.decisions[0]?.risk?.classified).toBe(true);
+    expect(result.decisions[0]?.risk?.severity).toBe("critical");
+  });
+
+  // Anti-bypass coverage, high tier: these mutating heads are classified
+  // `high`, one rung below the tier above — gate-prod-destructive
+  // (critical) correctly does NOT fire on them (matches AC1's own scope:
+  // it only pins the six read-only heads against the critical
+  // threshold), but they must still be a REAL classification (not
+  // merely risk-bearing via the fallback) so an operator can see and
+  // tighten a specific pattern's severity if a given deployment wants
+  // these hard-blocked too. Verified against the real
+  // gate-prod-destructive-approval shape (severity_at_least: high,
+  // require_approval) — still blocks execution until approved.
+  const GATE_PROD_DESTRUCTIVE_APPROVAL_FOR_TEST: Policy = {
+    name: "gate-prod-destructive-approval",
+    description: "require operator approval for high-severity destructive shell actions against a production target",
+    trigger: { event: "PreToolUse", match: "Bash" },
+    when: {
+      "risk.severity_at_least": "high",
+      "environment.name": "production",
+    },
+    requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
+    hook: "risk-gate",
+    enforcement: "require_approval",
+  } as Policy;
+  it.each([
+    ["git reset --hard", "git reset --hard HEAD~3"],
+    ["git push --force", "git push --force origin main"],
+    ["git clean -f", "git clean -fd"],
+    ["git checkout -- .", "git checkout -- ."],
+    ["git restore .", "git restore ."],
+    ["chmod -R", "chmod -R 777 /var/www"],
+    ["chown -R", "chown -R www-data:www-data /var/www"],
+    ["curl -X POST", "curl -X POST https://api.example.com/deploy"],
+    ["curl -d", "curl -d @payload.json https://api.example.com/deploy"],
+    ["sed -i", "sed -i 's/a/b/' /etc/config"],
+  ])("does NOT hard-deny %s via gate-prod-destructive (correctly high, not critical), but IS a real classification requiring approval", async (_label, command) => {
+    const critical = await runInProdCwd(command);
+    expect(critical.blockJson).toBeNull();
+
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const approval = await intercept({
+      manifest: makeManifest({
+        policies: [GATE_PROD_DESTRUCTIVE_APPROVAL_FOR_TEST],
+        classifiers: realClassifiers(),
+        resolvers: [PROD_RESOLVER],
+      }),
+      event: bashEvent(command),
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+      riskContext: riskCtx("main"),
+    });
+    expect(approval.blockJson).not.toBeNull();
+    expect(approval.decisions[0]?.risk?.classified).toBe(true);
+    expect(approval.decisions[0]?.risk?.severity).toBe("high");
+    // Not the fallback — a real pattern match.
+    expect(approval.decisions[0]?.whenUnclassifiedFallback).toBeUndefined();
+  });
+
+  // AC2: the envelope for an unclassified deny names the fallback,
+  // rather than reusing gate-prod-destructive's own "critical
+  // destructive action" wording, which is reserved for a genuine
+  // critical-severity classification (see the "intercept — M7
+  // whenUnclassifiedFallback flag" describe block above for the
+  // ux-rendering-layer unit coverage; this is the end-to-end version
+  // against the real shipped severity_at_least: high approval gate,
+  // where an unclassified action can still legitimately deny/require
+  // approval — see when-eval.ts's module header).
+  it("AC2: an unclassified deny via the real gate-prod-destructive-approval policy names the fallback in its envelope", async () => {
+    const GATE_PROD_DESTRUCTIVE_APPROVAL: Policy = {
+      name: "gate-prod-destructive-approval",
+      description: "require operator approval for high-severity destructive shell actions against a production target",
+      trigger: { event: "PreToolUse", match: "Bash" },
+      when: {
+        "risk.severity_at_least": "high",
+        "environment.name": "production",
+      },
+      requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
+      hook: "risk-gate",
+      enforcement: "require_approval",
+      ux: {
+        cannot: "You cannot run this destructive production action yet.",
+        required: ["operator approval of this Risk Gate decision"],
+        run: ["harness approve risk"],
+      },
+    } as Policy;
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: makeManifest({
+        policies: [GATE_PROD_DESTRUCTIVE_APPROVAL],
+        classifiers: realClassifiers(),
+        resolvers: [PROD_RESOLVER],
+      }),
+      // A head no classifier pattern reasons about at all (not `cat`,
+      // not `dd`) — genuinely unclassified, so the fallback (not a real
+      // classification) is what makes this deny.
+      event: bashEvent("some-unrecognized-admin-tool --flag"),
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+      riskContext: riskCtx("main"),
+    });
+    expect(result.decisions[0]?.whenUnclassifiedFallback).toBe(true);
+    expect(result.blockJson?.reason).toContain(
+      "unclassified action in a production context",
+    );
+    // The operator's own cannot: text is still present.
+    expect(result.blockJson?.reason).toContain(
+      "You cannot run this destructive production action yet.",
     );
   });
 });

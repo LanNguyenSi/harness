@@ -16,10 +16,14 @@
 // default; this module's job is only to report the unclassified state
 // honestly.
 //
-// The one built-in exception is harness's own benign meta-commands (see
-// BENIGN_HARNESS_COMMAND below): leaving them unclassified would let the
-// fail-close gate deny `harness preflight` — a command other harness
-// gates require — so they get a recognized `low`-severity floor.
+// The built-in exceptions are floors, not overrides, and each composes
+// under the same highest-severity-wins rule as an operator pattern:
+// harness's own benign meta-commands (see BENIGN_HARNESS_COMMAND below),
+// the read-only-command / kubectl / sed `low` floors, and (since
+// task 2929c5b7) the DESTRUCTIVE floor (`destructive-shell-floor.ts`),
+// which recognizes `dd of=`, `truncate -s`, `shred`, `mkfs`, `find
+// -delete` and friends in the binary so an install that never adopts the
+// new `dangerous-shell` template patterns still classifies them.
 //
 // Design source: lava-ice-logs/2026-04-30/harness-risk-gate-extension.md
 // (design phase B).
@@ -32,7 +36,12 @@ import type {
 import { RiskSeveritySchema } from "../schema/index.js";
 import type { ActionEnvelope } from "./action-envelope.js";
 import { expandToolNameAliases, extractShellCommand } from "./tool-name-aliases.js";
-import { isReadOnlyBashCommand, isReadOnlyKubectlCommand } from "./read-only-bash.js";
+import {
+  isReadOnlyBashCommand,
+  isReadOnlyKubectlCommand,
+  isReadOnlySedCommand,
+} from "./read-only-bash.js";
+import { classifyDestructiveShellFloor } from "./destructive-shell-floor.js";
 
 // Ordered severity scale: a value's index here is the comparison key
 // for "highest matched severity wins". Sourced from the schema enum so
@@ -223,16 +232,42 @@ export function classifyRisk(
     }
   }
 
-  // Built-in benign floors (the harness meta-command floor and the
-  // read-only-command floor). Folded in AFTER the operator loop so they
-  // compose by the same highest-severity-wins rule: each only raises an
-  // otherwise-unclassified action up to `low`, and never sinks an
-  // operator match (a dangerous tail in `harness preflight && rm -rf
-  // /var` keeps the higher severity, and a chained command is not
-  // read-only). Both are gated on a real shell command so a non-shell
-  // tool whose serialized input happens to look benign cannot match.
+  // Built-in floors. Folded in AFTER the operator loop so they compose by
+  // the same highest-severity-wins rule: the benign ones only raise an
+  // otherwise-unclassified action up to `low`, and never sink an operator
+  // match (a dangerous tail in `harness preflight && rm -rf /var` keeps
+  // the higher severity, and a chained command is not read-only); the
+  // destructive one raises to `high`/`critical` and is evaluated first,
+  // so a recognized mutating head never also takes a benign floor. All
+  // of them are gated on a real shell command so a non-shell tool whose
+  // serialized input happens to look benign cannot match.
   const shellCommand = extractShellCommand({ raw_input: envelope.raw_input });
   if (shellCommand !== null) {
+    // Built-in DESTRUCTIVE floor (task 2929c5b7), evaluated before the
+    // benign floors below so a recognized mutating head keeps them from
+    // firing at all. It ships in the binary rather than only as a
+    // `dangerous-shell` template pattern because `harness init` writes a
+    // manifest once and never rewrites it: an install carrying the
+    // original four patterns would otherwise take `when-eval.ts`'s
+    // loosened `severity_at_least: critical` fallback on upgrade WITHOUT
+    // the compensating classification. See
+    // `destructive-shell-floor.ts`'s module header and docs/risk-gate.md.
+    //
+    // Same composition rule as every other floor: highest severity wins,
+    // categories union. An operator pattern can raise above it; nothing
+    // sinks below it.
+    //
+    // Pass the UNCAPPED shellCommand for the same reason the read-only
+    // floor does (see below): the floor's scan is linear-time, and a
+    // destructive tail past the 16 KiB `subject` cap must not be
+    // laundered by a long benign head.
+    for (const hit of classifyDestructiveShellFloor(shellCommand)) {
+      const idx = SEVERITY_ORDER.indexOf(hit.severity);
+      if (idx > severityIdx) severityIdx = idx;
+      for (const cat of hit.categories) categories.add(cat);
+      reasons.push(`${hit.reason} (severity ${hit.severity})`);
+    }
+
     const lowIdx = SEVERITY_ORDER.indexOf("low");
     if (lowIdx > severityIdx) {
       if (BENIGN_HARNESS_COMMAND.test(subject)) {
@@ -278,7 +313,31 @@ export function classifyRisk(
         reasons.push(
           "built-in: provably read-only kubectl verb recognized (severity low)",
         );
+      } else if (isReadOnlySedCommand(shellCommand)) {
+        // `sed` read-verb floor (task 2929c5b7). Same placement decision
+        // as the kubectl floor directly above and for the same measured
+        // reason: it is NOT folded into `isReadOnlyBashCommand`, because
+        // the understanding-gate PreToolUse blocker and the
+        // solution-acceptance write-guard consume that predicate
+        // directly and short-circuit on it, so a `sed` recognition there
+        // would let `sed 's/a/b/w <verdict-dir>/marker.json' f` past the
+        // write-guard. See `isReadOnlySedCommand`'s own docstring for
+        // the allowlist and the script scan (sed's `w` command, `s///w`
+        // flag, `-f SCRIPTFILE` and GNU `e` all forfeit).
+        severityIdx = lowIdx;
+        reasons.push(
+          "built-in: provably read-only sed invocation recognized (severity low)",
+        );
       }
+      // NOTE, decision D-013 (task 2929c5b7, review round 3): there is
+      // deliberately NO `curl` branch here. Two rounds of this task shipped
+      // one and both leaked (a write-flag denylist that missed `-o`, then a
+      // flag allowlist that still admitted `-w '%output{FILE}'`, which
+      // writes a local file since curl 8.3.0). `curl` stays UNCLASSIFIED
+      // like `ssh` and `node -e`: approval-gated by prong (b), never
+      // hard-blocked, never floored. Its write-capable spellings are raised
+      // to `high` by the destructive floor above instead. See
+      // `read-only-bash.ts`'s floor section header.
     }
   }
 

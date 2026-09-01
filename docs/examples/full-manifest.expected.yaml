@@ -620,6 +620,88 @@ risk:
             - destructive
             - infrastructure_change
           severity: critical
+        - pattern: \bdd\s[^\n]*\bof=
+          categories:
+            - destructive
+            - data_loss
+          severity: critical
+        - pattern: \btruncate\b[^\n]*(\s-[a-zA-Z]*s|--size)
+          categories:
+            - destructive
+            - data_loss
+          severity: critical
+        - pattern: \bshred\b
+          categories:
+            - destructive
+            - data_loss
+            - irreversible_action
+          severity: critical
+        - pattern: \bmkfs(\.\w+)?\b
+          categories:
+            - destructive
+            - data_loss
+            - infrastructure_change
+          severity: critical
+        - pattern: \bfind\b[^\n]*-delete\b
+          categories:
+            - destructive
+            - data_loss
+          severity: critical
+        - pattern: \bfind\b[^\n]*-exec(dir)?\s+rm\b
+          categories:
+            - destructive
+            - data_loss
+          severity: critical
+        - pattern: \bgit\s+reset\b[^\n]*--hard\b
+          categories:
+            - destructive
+            - data_loss
+          severity: high
+        - pattern: \bgit\s+push\b[^\n]*(--force(-with-lease)?\b|\s-f\b)
+          categories:
+            - destructive
+            - production_mutation
+            - deployment_change
+          severity: high
+        - pattern: \bgit\s+clean\b[^\n]*(--force\b|\s-[a-zA-Z]*f[a-zA-Z]*\b)
+          categories:
+            - destructive
+            - data_loss
+          severity: high
+        - pattern: \bgit\s+checkout\s+--\s+\.
+          categories:
+            - destructive
+            - data_loss
+          severity: high
+        - pattern: \bgit\s+restore\s+\.(\s|$)
+          categories:
+            - destructive
+            - data_loss
+          severity: high
+        - pattern: \b(chmod|chown)\b[^\n]*(\s-[a-zA-Z]*R|--recursive\b)
+          categories:
+            - mass_update
+          severity: high
+        - pattern: \bcurl\b[^\n]*(-X\s*|--request[\s=])(?![Gg][Ee][Tt]\b)(?![Hh][Ee][Aa][Dd]\b)[A-Za-z]
+          categories:
+            - production_mutation
+            - network_exfiltration
+          severity: high
+        - pattern: \bcurl\b[^\n]*(\s-[a-zA-Z]*[dFT]|--data\b|--json\b|--form(-string)?\b|--upload-file\b)
+          categories:
+            - production_mutation
+            - network_exfiltration
+          severity: high
+        - pattern: \bcurl\b[^\n]*(\s-[a-zA-Z]*[oODcK]|--output(-dir)?\b|--remote-name\b|--remote-header-name\b|--dump-header\b|--cookie-jar\b|--config\b|--create-dirs\b|--etag-save\b|--trace(-ascii)?\b|--stderr\b|(\s-[a-zA-Z]*w\b|--write-out\b)[^\n]*%output)
+          categories:
+            - destructive
+            - data_loss
+          severity: high
+        - pattern: \bsed\b[^\n]*(\s-[a-zA-Z]*i[a-zA-Z]*\b|--in-place\b)
+          categories:
+            - destructive
+            - data_loss
+          severity: high
   degraded_fail_posture: preserve_enforcement
   safe_deletion_roots:
     - /tmp

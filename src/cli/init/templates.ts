@@ -1176,6 +1176,73 @@ risk:
         - pattern: 'terraform(?:\\s+-\\S+(?:\\s+(?!destroy\\b)(?!-)\\S+)?)*\\s+destroy'
           categories: [destructive, infrastructure_change]
           severity: critical
+        # Task 2929c5b7: unclassified commands no longer trivially
+        # satisfy risk.severity_at_least: critical (see when-eval.ts and
+        # docs/risk-gate.md's "Unclassified actions and the fail-close
+        # rule") — kept in lockstep with docs/examples/full-manifest.yaml
+        # by tests/cli/init-full-template-parity.test.ts.
+        #
+        # These patterns are the OPERATOR-EDITABLE MIRROR of the built-in
+        # destructive floor (src/runtime/destructive-shell-floor.ts),
+        # not the only line of defence: the floor ships in the binary and
+        # already classifies these heads for an EXISTING manifest that
+        # never adopts the patterns below. Edit, narrow, or raise these
+        # freely: an operator pattern composes with the floor under
+        # highest-severity-wins, so it can only add. The floor is
+        # argv-aware where a regex cannot be (path-qualified and wrapped
+        # spellings: /bin/dd, sudo dd, sh -c "dd ...", git -C <dir> push
+        # -f), so a few spellings are caught by the floor alone; the
+        # parity test in tests/runtime/destructive-shell-floor.test.ts
+        # pins that everything caught HERE is also caught THERE, at the
+        # same severity or higher.
+        - pattern: '\\bdd\\s[^\\n]*\\bof='
+          categories: [destructive, data_loss]
+          severity: critical
+        - pattern: '\\btruncate\\b[^\\n]*(\\s-[a-zA-Z]*s|--size)'
+          categories: [destructive, data_loss]
+          severity: critical
+        - pattern: '\\bshred\\b'
+          categories: [destructive, data_loss, irreversible_action]
+          severity: critical
+        - pattern: '\\bmkfs(\\.\\w+)?\\b'
+          categories: [destructive, data_loss, infrastructure_change]
+          severity: critical
+        - pattern: '\\bfind\\b[^\\n]*-delete\\b'
+          categories: [destructive, data_loss]
+          severity: critical
+        - pattern: '\\bfind\\b[^\\n]*-exec(dir)?\\s+rm\\b'
+          categories: [destructive, data_loss]
+          severity: critical
+        - pattern: '\\bgit\\s+reset\\b[^\\n]*--hard\\b'
+          categories: [destructive, data_loss]
+          severity: high
+        - pattern: '\\bgit\\s+push\\b[^\\n]*(--force(-with-lease)?\\b|\\s-f\\b)'
+          categories: [destructive, production_mutation, deployment_change]
+          severity: high
+        - pattern: '\\bgit\\s+clean\\b[^\\n]*(--force\\b|\\s-[a-zA-Z]*f[a-zA-Z]*\\b)'
+          categories: [destructive, data_loss]
+          severity: high
+        - pattern: '\\bgit\\s+checkout\\s+--\\s+\\.'
+          categories: [destructive, data_loss]
+          severity: high
+        - pattern: '\\bgit\\s+restore\\s+\\.(\\s|$)'
+          categories: [destructive, data_loss]
+          severity: high
+        - pattern: '\\b(chmod|chown)\\b[^\\n]*(\\s-[a-zA-Z]*R|--recursive\\b)'
+          categories: [mass_update]
+          severity: high
+        - pattern: '\\bcurl\\b[^\\n]*(-X\\s*|--request[\\s=])(?![Gg][Ee][Tt]\\b)(?![Hh][Ee][Aa][Dd]\\b)[A-Za-z]'
+          categories: [production_mutation, network_exfiltration]
+          severity: high
+        - pattern: '\\bcurl\\b[^\\n]*(\\s-[a-zA-Z]*[dFT]|--data\\b|--json\\b|--form(-string)?\\b|--upload-file\\b)'
+          categories: [production_mutation, network_exfiltration]
+          severity: high
+        - pattern: '\\bcurl\\b[^\\n]*(\\s-[a-zA-Z]*[oODcK]|--output(-dir)?\\b|--remote-name\\b|--remote-header-name\\b|--dump-header\\b|--cookie-jar\\b|--config\\b|--create-dirs\\b|--etag-save\\b|--trace(-ascii)?\\b|--stderr\\b|(\\s-[a-zA-Z]*w\\b|--write-out\\b)[^\\n]*%output)'
+          categories: [destructive, data_loss]
+          severity: high
+        - pattern: '\\bsed\\b[^\\n]*(\\s-[a-zA-Z]*i[a-zA-Z]*\\b|--in-place\\b)'
+          categories: [destructive, data_loss]
+          severity: high
 
 environments:
   resolvers:

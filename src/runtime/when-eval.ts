@@ -14,12 +14,36 @@
 // The Risk Classifier emits `severity: null` / `reversible: null` /
 // `categories: []` for an action no pattern matched (`classified:
 // false`). A null does not silently fail to satisfy a clause: an
-// UNCLASSIFIED action satisfies every `risk.*` / `action.reversible`
-// clause, so a risk-gating policy treats "we could not classify this"
-// as risk-bearing rather than letting it slip the gate. A *classified*
-// action is compared on its real values. `environment.name` needs no
-// such rule: the resolver always returns a concrete environment, with
-// `unknown` as the matchable no-resolver-fired case.
+// UNCLASSIFIED action satisfies every `risk.category_in` /
+// `action.reversible` clause, so a risk-gating policy treats "we could
+// not classify this" as risk-bearing rather than letting it slip the
+// gate. A *classified* action is compared on its real values.
+// `environment.name` needs no such rule: the resolver always returns a
+// concrete environment, with `unknown` as the matchable no-resolver-
+// fired case.
+//
+// `risk.severity_at_least` is the ONE exception to a blanket "satisfies
+// every threshold". An unknown severity is risk-bearing: it still
+// satisfies `low`/`medium`/`high`, so an approval-required gate on an
+// unrecognized production command stays fail-closed, but it is not
+// itself proof of the WORST tier: an unclassified profile is treated as
+// sitting at the "high" rung, one below `critical`, for this one clause
+// only, so it never triggers a hard, agent-unoverridable block on its
+// own. A hard block deserves a real classification.
+//
+// The rule is deliberately paired with two things this module does NOT
+// do: (1) it does not touch `risk.category_in` / `action.reversible`,
+// which keep the full "satisfies everything" fallback; (2) it leans on
+// the Risk Classifier's built-in floors (`read-only-bash.ts`'s
+// read-only floors, `destructive-shell-floor.ts`'s mutating-head floor)
+// and the manifest's `risk.classifiers[]` to make the common cases
+// explicitly `low` or explicitly `high`/`critical`. The "treated as
+// high" rung is a safety net for the genuinely unenumerable case, not a
+// replacement for classification. There is no manifest opt-in to restore
+// the blanket behavior. Rationale, the incident that motivated it, and
+// the disclosed residual gaps: docs/risk-gate.md, "Unclassified actions
+// and the fail-close rule"; the measurement is in the CHANGELOG entry
+// for agent-tasks task 2929c5b7.
 //
 // Design source: lava-ice-logs/2026-04-30/harness-risk-gate-extension.md
 // (design phase D); the null-handling steer is the Phase 7 #3 review
@@ -35,6 +59,35 @@ import type { RiskProfile } from "./risk-classifier.js";
 // `severity_at_least`. Sourced from the schema enum so a reordering
 // there flows through unchanged — same pattern as the Risk Classifier.
 const SEVERITY_ORDER: readonly string[] = RiskSeveritySchema.options;
+
+// The rung an UNCLASSIFIED action is treated as sitting at for
+// `risk.severity_at_least` comparisons only (see the module header):
+// one below the top of `SEVERITY_ORDER` ("critical"), i.e. "high" on
+// the shipped four-value scale. Derived from the scale's length rather
+// than a literal "high" so a future scale reordering/extension still
+// lands one rung below the top without a second hand-edit.
+//
+// That derivation has a precondition the schema must keep satisfying: a
+// scale with fewer than two rungs has no "one below the top". Asserted
+// at module load rather than left implicit, because a silently negative
+// index would make EVERY threshold comparison fail and quietly disable
+// the fail-close for unclassified actions.
+if (SEVERITY_ORDER.length < 2) {
+  throw new Error(
+    `when-eval: the severity scale must have at least two rungs for the ` +
+      `unclassified fallback to sit one below the top (got ${SEVERITY_ORDER.length})`,
+  );
+}
+const UNCLASSIFIED_FALLBACK_SEVERITY_INDEX = SEVERITY_ORDER.length - 2;
+
+/**
+ * The severity NAME the unclassified fallback is treated as, for
+ * surfaces that have to say it out loud (`intercept.ts`'s deny
+ * envelope). Exported so no caller hard-codes "high" beside a constant
+ * that is derived.
+ */
+export const UNCLASSIFIED_FALLBACK_SEVERITY: string =
+  SEVERITY_ORDER[UNCLASSIFIED_FALLBACK_SEVERITY_INDEX]!;
 
 /** The enriched-envelope inputs a `when:` block is evaluated against. */
 export interface WhenContext {
@@ -75,9 +128,13 @@ export interface WhenEvaluation {
   matched: boolean;
   /** One entry per DECLARED clause, in manifest-key order. */
   clauses: WhenClauseResult[];
-  /** True when at least one clause matched only because the action was
-   *  unclassified ("unknown is not safe"). Surfaced so `explain-policy`
-   *  can tell an operator a match was fail-closed, not a real hit. */
+  /** True when at least one clause's outcome was decided by the
+   *  unclassified fallback rather than a real classification ("unknown
+   *  is not safe" for `risk.category_in` / `action.reversible`, or the
+   *  "treated as high" rung for `risk.severity_at_least`) — true
+   *  whether that fallback made the clause match or fail. Surfaced so
+   *  `explain-policy` can tell an operator a clause outcome was
+   *  fail-closed, not a real hit. */
   unclassifiedFallback: boolean;
 }
 
@@ -90,8 +147,10 @@ function severityIndex(severity: string): number {
  *
  * Every clause is optional; only declared clauses are evaluated, and
  * `matched` is their AND. An unclassified risk profile (`classified:
- * false`) satisfies the three risk-derived clauses by the "unknown is
- * not safe" rule; `environment.name` is always a plain equality test.
+ * false`) satisfies `risk.category_in` / `action.reversible` by the
+ * "unknown is not safe" rule, and satisfies `risk.severity_at_least`
+ * up through `high` but never `critical` (see the module header);
+ * `environment.name` is always a plain equality test.
  */
 export function evaluateWhen(
   when: PolicyWhen,
@@ -106,9 +165,12 @@ export function evaluateWhen(
     let matched: boolean;
     let actual: string;
     if (unclassified) {
-      // severity is null — treat as risk-bearing: satisfies any threshold.
-      matched = true;
-      actual = "null (unclassified)";
+      // severity is null — treated as risk-bearing at the "high" rung
+      // (SEVERITY_ORDER.length - 2), not at "critical": satisfies
+      // low/medium/high thresholds, but never critical on its own. See
+      // the module header for why (task 2929c5b7).
+      matched = UNCLASSIFIED_FALLBACK_SEVERITY_INDEX >= severityIndex(sevAtLeast);
+      actual = "null (unclassified, treated as high)";
       unclassifiedFallback = true;
     } else {
       matched =
