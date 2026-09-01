@@ -32,9 +32,15 @@
 // already-approved session (or anything else able to invoke the hook
 // binary directly) can write, or forge, one. That is exactly why this
 // finding stays advisory-only and never feeds a gate or an approval: the
-// operator who reads it decides what it means. A possible future
-// hardening is signing the observation the way approval markers are
-// signed.
+// operator who reads it decides what it means. Signing the observation
+// was considered and rejected: a signature would only prove the hook
+// signed the record, not that the named session actually ran under that
+// mode, and it would open a second, unconditional signing surface for
+// the marker-signing key (not a path to mint an approval marker, which
+// stays namespaced by markerId). See
+// docs/decisions/2026-08-27-ug-auto-mode-approval.md's "Amendment:
+// permission-mode observation stays unsigned" for the full reasoning and
+// the reopen criterion.
 
 import {
   CLAUDE_CODE_HARNESS,
@@ -113,7 +119,7 @@ export function checkBypassWithoutAutoApprove(
   return {
     sessionId,
     observedAt,
-    message: `bypassPermissions observed for session ${sessionId} (${observedAt}) but auto_approve does not cover it; every gated call in that session needed a manual approval`,
+    message: `bypassPermissions observed for session ${sessionId} (${observedAt}) but auto_approve does not cover it (hook-written, unsigned self-report; confirm from your own launch settings before enabling auto_approve); every gated call in that session needed a manual approval`,
     detail: [
       "run `harness pack upgrade understanding-before-execution` to insert the block below, or add it by hand under policy_packs[understanding-before-execution].config:",
       ...renderAutoApproveSnippet(0).split("\n"),

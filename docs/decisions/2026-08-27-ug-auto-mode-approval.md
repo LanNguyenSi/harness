@@ -520,3 +520,62 @@ The reason a port is a whole second auto-mode surface rather than a parity patch
 **Decision on the cross-runtime issuing surface.** The Codex-parent, Claude-child issuing path named above is an accepted, understood consequence of gap 2's shared marker contract, not a defect: any marker that authenticates a parent session at all, on either runtime, already opens that runtime's own gate, so a Codex marker authorizing a Claude delegation extends an existing shared-trust boundary rather than opening a new one. No parent-runtime refusal (rejecting `$CODEX_SESSION_ID`-resolved parents in `issueDelegation`) is added under this task; the verb's behaviour is unchanged. Closing it, if a future decision wants to, is a separate task, since it would change `issueDelegation`'s refusal surface rather than only its documentation.
 
 **Reopen criterion.** Revisit this scope decision when the Codex adapter gains BOTH of the following, not either alone: (1) a delegation-marker consumer, a `codex-pre-tool-use` branch that reads `harness.generated/.delegations/<child-sid>` and verifies it the way the Claude hook's delegation check does today, and (2) a measured report-capture channel for Codex's own child/session model backing that consumer, since the existing bounded poll's calibration is Claude-`-p`-specific and does not transfer on its own. Codex's pre-existing deny-with-reason exit contract and its pre-existing signed-marker consumption (shared with Claude since gap 2) are NOT the missing signal: both already exist today, so naming either as the reopen trigger would read as already satisfied and reopen this decision on the spot, which is not the intent.
+
+## Amendment: permission-mode observation stays unsigned
+
+**Decision.** The per-session permission-mode observation
+(`recordPermissionModeObservation`, writing to
+`harness.generated/.permission-mode-observations/<sessionId>`) stays
+unsigned. `harness doctor`'s `bypassPermissions`-without-`auto_approve`
+finding (`checkBypassWithoutAutoApprove`) keeps reading it as advisory
+evidence only, exactly as shipped; signing it the way the approval
+marker is signed was considered and rejected.
+
+**Reasoning.** The write point is the hook process itself: it takes
+`session_id` and `permission_mode` verbatim off the PreToolUse payload
+on stdin and persists them without any further attestation
+(`src/cli/pack/hook-pre-tool-use.ts:1087#"event.permission_mode, stderr);"`).
+Any actor able to invoke the hook binary with a stdin payload of its own
+choosing, an already-approved session included, therefore obtains a
+hook-written observation carrying whatever `session_id` /
+`permission_mode` it supplies; nothing on the write path distinguishes a
+genuine PreToolUse invocation from a crafted one. Signing that record
+with the marker-signing key would not close that gap: an HMAC over
+attacker-chosen input still only certifies that the hook signed the
+record, not that the named session actually ran under the claimed
+permission mode, which is the property the doctor finding needs. It
+would also open a second, unconditional signing surface for the
+marker-signing key (not a path to mint an approval marker, which stays
+namespaced by markerId), the exact widening the threat model above
+already names as a residue under "Slice 1 turns the PreToolUse hook
+into a marker-signing oracle": today the hook mints an approval marker
+only when the auto-approve preconditions hold, and a signed observation
+write would give the same reachable caller a second signing surface
+gated on nothing, for no gain against the stdin-forgery threat just
+described.
+The finding this record feeds also stays advisory only: it can never
+gate a tool call or mint an approval
+(`src/cli/doctor/index.ts:1127#"if (report.ugBypassWithoutAutoApprove) warningCount++;"`),
+so the operator remains the one who decides what the evidence means,
+and a signature on the record would not change that division of
+authority either. Marker signing does close a narrow class on its own
+side of the boundary, a write primitive without a matching key read
+(`src/runtime/approval-signing.ts:32-45#"distinguishable event; a bare unsigned-JSON write no longer is)."`);
+leaving that class open for this record is accepted here because the
+observation is advisory only, never a gate input, and the finding's own
+message already tells the operator to confirm it against their own
+launch settings before acting on it.
+
+**Reopen criterion.** Reconsider this decision if the observation ever
+moves from advisory doctor output into anything that gates a decision,
+for example an allow/deny input or an auto-approval precondition. At
+that point the record needs an evidence source the invoking process
+cannot author on its own stdin, not a signature over the same
+self-report: signing an already-forgeable input does not supply the
+missing property. The candidate to evaluate first is transcript-side
+corroboration: the `transcript_path` consistency check the Codex
+auto-approve path already uses (see the "Understanding gate" paragraph
+in `docs/okf/evidence-ledger-trust-boundary.md`) and the transcript's
+own permission-mode line the repo already parses in
+`src/cli/session-export/transcript.ts`; honestly, that raises the cost
+of forging the record rather than removing its forgeability.
