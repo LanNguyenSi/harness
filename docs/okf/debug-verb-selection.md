@@ -3,7 +3,7 @@ type: overview
 title: Debug verb selection — which harness verb answers which question
 description: Decision guide mapping "why did my policy (not) fire" questions to the right harness debug verb — ledger-replay vs live-hypothetical vs static-prediction vs stage-isolation vs end-to-end — with each verb's key discriminators and fail-postures.
 tags: [debugging, cli, audit, explain, dry-run, smoke]
-timestamp: 2026-09-01T07:28:10Z
+timestamp: 2026-09-01T08:30:00Z
 sources:
   - docs/for-agents.md
   - docs/CLI.md
@@ -69,7 +69,7 @@ The harness ships nine read-side debug verbs plus one end-to-end runner. They di
 
 Both take a hand-crafted event JSON and run exactly one enrichment stage against the manifest:
 
-- `harness test-risk <event.json>` classifies the envelope against `risk.classifiers[]` and prints the risk profile (severity, categories, reversibility, confidence, reasons). Fail-posture, stated in the command description and the source comment: "An action no pattern matches reports as **unclassified, not as safe**"; a manifest with no `risk.classifiers[]` is valid and then EVERY action is unclassified ("unknown is not safe", src/cli/test-risk.ts lines 39-40). It reports the same classification the runtime gate uses (docs/risk-gate.md lines 144-145), including the built-in floors (harness's own read-only verbs classify `low`; `harness preflight && rm -rf /var` still classifies `critical` because highest-severity wins).
+- `harness test-risk <event.json>` classifies the envelope against `risk.classifiers[]` and prints the risk profile (severity, categories, reversibility, confidence, reasons). Fail-posture, stated in the command description and the source comment: "An action no pattern matches reports as **unclassified, not as safe**"; a manifest with no `risk.classifiers[]` is valid and then every action the BUILT-IN floors do not recognize is unclassified ("unknown is not safe", src/cli/test-risk.ts lines 39-40). It reports the same classification the runtime gate uses (docs/risk-gate.md lines 144-145), including those floors: harness's own read-only verbs classify `low`, so do the read-only Bash / kubectl / sed / curl floors, and since task `2929c5b7` the built-in DESTRUCTIVE floor (`src/runtime/destructive-shell-floor.ts`) classifies `dd ... of=`, `truncate -s`, `shred`, `mkfs`, `find -delete`, `git push --force`, `sed -i` and friends even with an empty `risk.classifiers[]`; `harness preflight && rm -rf /var` still classifies `critical` because highest-severity wins.
 - `harness resolve-env <event.json>` resolves the target environment against `environments.resolvers[]` (branch / env-var / kube-context / kube-namespace signals). Same posture: "An action no resolver matches resolves to **`unknown`, not to a safe default**"; no resolvers configured means everything resolves `unknown` (src/cli/resolve-env.ts lines 50-51).
 
 Use these when `explain-policy` shows a `when:` clause failing and you need to know whether the classifier or the resolver stage produced the surprising input.
