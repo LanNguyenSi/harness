@@ -1181,10 +1181,24 @@ risk:
         # docs/risk-gate.md's "Unclassified actions and the fail-close
         # rule") — kept in lockstep with docs/examples/full-manifest.yaml
         # by tests/cli/init-full-template-parity.test.ts.
+        #
+        # These patterns are the OPERATOR-EDITABLE MIRROR of the built-in
+        # destructive floor (src/runtime/destructive-shell-floor.ts),
+        # not the only line of defence: the floor ships in the binary and
+        # already classifies these heads for an EXISTING manifest that
+        # never adopts the patterns below. Edit, narrow, or raise these
+        # freely: an operator pattern composes with the floor under
+        # highest-severity-wins, so it can only add. The floor is
+        # argv-aware where a regex cannot be (path-qualified and wrapped
+        # spellings: /bin/dd, sudo dd, sh -c "dd ...", git -C <dir> push
+        # -f), so a few spellings are caught by the floor alone; the
+        # parity test in tests/runtime/destructive-shell-floor.test.ts
+        # pins that everything caught HERE is also caught THERE, at the
+        # same severity or higher.
         - pattern: '\\bdd\\s[^\\n]*\\bof='
           categories: [destructive, data_loss]
           severity: critical
-        - pattern: '\\btruncate\\b[^\\n]*(-s|--size)\\b'
+        - pattern: '\\btruncate\\b[^\\n]*(\\s-[a-zA-Z]*s|--size)'
           categories: [destructive, data_loss]
           severity: critical
         - pattern: '\\bshred\\b'
@@ -1214,13 +1228,13 @@ risk:
         - pattern: '\\bgit\\s+restore\\s+\\.(\\s|$)'
           categories: [destructive, data_loss]
           severity: high
-        - pattern: '\\b(chmod|chown)\\b[^\\n]*(-R\\b|--recursive\\b)'
+        - pattern: '\\b(chmod|chown)\\b[^\\n]*(\\s-[a-zA-Z]*R|--recursive\\b)'
           categories: [mass_update]
           severity: high
-        - pattern: '\\bcurl\\b[^\\n]*(-X\\s*(POST|PUT|PATCH|DELETE)\\b|--request[\\s=](POST|PUT|PATCH|DELETE)\\b)'
+        - pattern: '\\bcurl\\b[^\\n]*(-X\\s*|--request[\\s=])(?![Gg][Ee][Tt]\\b)(?![Hh][Ee][Aa][Dd]\\b)[A-Za-z]'
           categories: [production_mutation, network_exfiltration]
           severity: high
-        - pattern: '\\bcurl\\b[^\\n]*(\\s-d\\b|--data\\b|--upload-file\\b|\\s-T\\b)'
+        - pattern: '\\bcurl\\b[^\\n]*(\\s-[a-zA-Z]*[dFT]|--data\\b|--json\\b|--form(-string)?\\b|--upload-file\\b)'
           categories: [production_mutation, network_exfiltration]
           severity: high
         - pattern: '\\bsed\\b[^\\n]*(\\s-[a-zA-Z]*i[a-zA-Z]*\\b|--in-place\\b)'

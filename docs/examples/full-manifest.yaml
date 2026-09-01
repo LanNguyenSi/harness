@@ -932,12 +932,22 @@ risk:
         # on the (now weaker) fallback to catch it. Read-only siblings of
         # these same heads (`sed` without `-i`, `curl` without
         # `-X`/`-d`, `git status`/`log`/`rev-list`/...) are handled by
-        # the Risk Classifier's built-in read-only floor
+        # the Risk Classifier's built-in read-only floors
         # (`read-only-bash.ts`), not by a pattern here.
+        #
+        # These patterns are the OPERATOR-EDITABLE MIRROR of the built-in
+        # destructive floor (`src/runtime/destructive-shell-floor.ts`),
+        # which ships in the binary and already classifies these heads
+        # for an existing manifest that never adopts the patterns below.
+        # An operator pattern composes with the floor under
+        # highest-severity-wins, so editing these can only add. The floor
+        # is argv-aware where a regex cannot be (`/bin/dd`, `sudo dd`,
+        # `sh -c "dd ..."`, `git -C <dir> push -f`), so a few spellings
+        # are caught by the floor alone.
         - pattern: '\bdd\s[^\n]*\bof='
           categories: [destructive, data_loss]
           severity: critical
-        - pattern: '\btruncate\b[^\n]*(-s|--size)\b'
+        - pattern: '\btruncate\b[^\n]*(\s-[a-zA-Z]*s|--size)'
           categories: [destructive, data_loss]
           severity: critical
         - pattern: '\bshred\b'
@@ -967,13 +977,13 @@ risk:
         - pattern: '\bgit\s+restore\s+\.(\s|$)'
           categories: [destructive, data_loss]
           severity: high
-        - pattern: '\b(chmod|chown)\b[^\n]*(-R\b|--recursive\b)'
+        - pattern: '\b(chmod|chown)\b[^\n]*(\s-[a-zA-Z]*R|--recursive\b)'
           categories: [mass_update]
           severity: high
-        - pattern: '\bcurl\b[^\n]*(-X\s*(POST|PUT|PATCH|DELETE)\b|--request[\s=](POST|PUT|PATCH|DELETE)\b)'
+        - pattern: '\bcurl\b[^\n]*(-X\s*|--request[\s=])(?![Gg][Ee][Tt]\b)(?![Hh][Ee][Aa][Dd]\b)[A-Za-z]'
           categories: [production_mutation, network_exfiltration]
           severity: high
-        - pattern: '\bcurl\b[^\n]*(\s-d\b|--data\b|--upload-file\b|\s-T\b)'
+        - pattern: '\bcurl\b[^\n]*(\s-[a-zA-Z]*[dFT]|--data\b|--json\b|--form(-string)?\b|--upload-file\b)'
           categories: [production_mutation, network_exfiltration]
           severity: high
         - pattern: '\bsed\b[^\n]*(\s-[a-zA-Z]*i[a-zA-Z]*\b|--in-place\b)'

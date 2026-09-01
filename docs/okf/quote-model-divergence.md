@@ -102,10 +102,20 @@ Aufrufstellen.** Neues `src/runtime/shell-word.ts` exportiert
 `\xHH`/`\NNN`/`\uHHHH`, quote-eigene Backslash-Regeln, Lauf-Verkettung —
 KEINE `$VAR`/`$()`/Backtick/`~`/Glob-Expansion) und wird jetzt vor jedem
 Schreib-Flag-Vergleich in `read-only-bash.ts` angewandt (`find`, `sort`,
-`file`; seit Task `2929c5b7` (2026-09-01, ungemessen gegen echtes bash,
-nur strukturell dieselbe raw-ODER-decoded-Anwendung) auch `sed` und
-`curl`), stets nur auf der RESTRIKTIVEN Seite (erkennt mehr Tokens als
-Schreib-Flag, nie weniger). Das schließt K5s drei gemessenen Fail-opens
+`file`), stets nur auf der RESTRIKTIVEN Seite (erkennt mehr Tokens als
+Schreib-Flag, nie weniger). Die mit Task `2929c5b7` ergaenzten `sed`- und
+`curl`-Floors (`isReadOnlySedCommand`/`isReadOnlyCurlCommand`, nur vom
+Risk-Classifier konsumiert, NICHT von `isReadOnlyBashCommand`) nutzen
+dieselbe Primitive auf der PERMISSIVEN Seite, was der Modul-Header von
+`shell-word.ts` ausdruecklich ausserhalb seiner `raw || decoded`-
+Richtungsregel verortet. Dort traegt die Fail-closed-Eigenschaft die
+Konstruktion, nicht die Richtungsregel: (1) beide Floors sind
+Allowlists, und ein nicht aufloesbares Token gibt `decodeShellWord`
+unveraendert zurueck, matcht damit keinen Allowlist-Eintrag und laesst
+den Floor verfallen; (2) ein Token, das nur in EINER der beiden Lesarten
+wie ein Flag aussieht (`"-o"`), wird unter keiner der beiden Lesarten
+klassifiziert, sondern verworfen. Ungemessen gegen echtes bash, wie die
+uebrigen Anwendungen dieser Primitive auch. Das schließt K5s drei gemessenen Fail-opens
 punktgenau: `find . -"delete"`, `find . -'delete'`, `find . -\delete`
 (plus, laut Fix-Beleg, zwei weitere Schreibweisen und die `sort`/`file`-
 Geschwisterfälle) klassifizieren nicht mehr als read-only. **Was das

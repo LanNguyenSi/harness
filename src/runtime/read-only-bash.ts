@@ -1006,6 +1006,574 @@ export function isReadOnlyKubectlCommand(command: string): boolean {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// `sed` and `curl` read-only floors, Risk-Classifier ONLY (task 2929c5b7).
+//
+// Placed here beside `isReadOnlyKubectlCommand` above, and wired ONLY at
+// `risk-classifier.ts`'s built-in floor, for the same reason that floor is:
+// `isReadOnlyBashCommand` is consumed DIRECTLY by two other gates, and both
+// short-circuit on it before running their own checks. The
+// solution-acceptance write-guard (`src/cli/pack/hook-solution-acceptance-
+// writeguard.ts`) returns `blocked: false` for anything
+// `isReadOnlyBashCommand` accepts BEFORE it ever looks at whether the
+// command references the protected verdict directory. Teaching the shared
+// predicate about `sed`/`curl` therefore widens that guard: review round 2
+// of this task measured `curl -o <verdict-dir>/marker.json <url>`,
+// `curl --output ...`, `sed 's/a/b/w <verdict-dir>/marker.json' f` and
+// `sed -n 'w <verdict-dir>/marker.json' f` going BLOCKED -> ALLOWED. These
+// two predicates must therefore stay OUT of `classifyTokens`; the
+// write-guard pins in `tests/cli/pack-hook-solution-acceptance-writeguard.test.ts`
+// fail if that is ever undone.
+//
+// Design: ALLOWLIST, fail closed (decision D-012, this run). Every token
+// after the head must be recognised: a known read-only flag, a known
+// flag's value, or a plain operand. An unknown flag, an unknown short-flag
+// cluster character, a missing flag value, or anything this module cannot
+// name forfeits the floor. That is the opposite of the round-2 shape
+// (a denylist of write flags, where every flag nobody had enumerated,
+// `-o`, `-O`, `-D`, `-c`, `-K`, `--create-dirs`, ..., silently passed).
+//
+// Forfeiting is cheap: the command simply stays unclassified, which the
+// `when:` evaluator treats as risk-bearing at the "high" rung (approval-
+// gated, never hard-blocked at `severity_at_least: critical`). Under-
+// blocking is not cheap. Over-block a read, never under-block a write.
+//
+// `decodeShellWord` is used here on the PERMISSIVE side (to EXEMPT a
+// command), which `shell-word.ts`'s module header explicitly calls out as
+// outside its `raw || decoded` direction rule. That is safe here BY
+// CONSTRUCTION rather than by argument: (1) the decoder returns the RAW
+// token unchanged for anything it cannot resolve, and a raw token with
+// quoting still in it does not match any allowlist entry, so an incomplete
+// decode forfeits the floor; (2) a token whose RAW form is not a flag but
+// whose DECODED form is (`"-o"`), or vice versa, is rejected outright
+// rather than classified under either reading.
+
+/**
+ * Characters whose UNQUOTED appearance in a token means the shell rewrites
+ * that token into text this classifier never sees, and, critically, can
+ * rewrite ONE token into SEVERAL argv words, which is how a write flag
+ * gets past a token-shape allowlist: `curl $FLAGS url` with
+ * `FLAGS='-o /etc/passwd'`, `sed -n 1p {-i,x}` (brace expansion), or a
+ * glob whose match starts with `-`. `$` and a backtick also cover command
+ * substitution that the `hasUnsafeShellMetachar` preamble does not already
+ * refuse (`$(`, a backtick and every chaining metacharacter are refused
+ * there first).
+ *
+ * Quoting is honoured: inside `'single quotes'` every one of these is
+ * literal, and inside `"double quotes"` the glob/brace characters are
+ * literal while `$` and a backtick stay live. That is what keeps
+ * `sed -n '$p' f` and `curl 'https://h/p?a=b'` on the floor while
+ * `sed -n "/$X/p" f` and `curl https://h/p?a=b` forfeit it. Quote your
+ * URL to keep the floor.
+ */
+const LIVE_EXPANSION_CHARS: ReadonlySet<string> = new Set([
+  "$", "`", "{", "}", "*", "?", "[", "]",
+]);
+
+/** Glob/brace characters, literal inside double quotes; `$`/backtick are not. */
+const DOUBLE_QUOTE_INERT_EXPANSION_CHARS: ReadonlySet<string> = new Set([
+  "{", "}", "*", "?", "[", "]",
+]);
+
+/**
+ * True when `token` contains a shell expansion (see `LIVE_EXPANSION_CHARS`)
+ * that is NOT quoted away. An unterminated quote run (the `'A:` / `b'` pair
+ * a whitespace tokenizer produces for `-H 'A: b'`) is treated as quoted to
+ * its end, which is what bash does across the whitespace this tokenizer
+ * split on.
+ */
+function hasLiveShellExpansion(token: string): boolean {
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < token.length; i += 1) {
+    const ch = token[i]!;
+    if (quote !== "'" && ch === "\\") {
+      i += 1; // backslash escapes the next character outside single quotes
+      continue;
+    }
+    if (quote === null && (ch === "'" || ch === '"')) {
+      quote = ch as "'" | '"';
+      continue;
+    }
+    if (quote !== null && ch === quote) {
+      quote = null;
+      continue;
+    }
+    if (quote === "'") continue;
+    if (quote === '"' && DOUBLE_QUOTE_INERT_EXPANSION_CHARS.has(ch)) continue;
+    if (LIVE_EXPANSION_CHARS.has(ch)) return true;
+  }
+  return false;
+}
+
+/**
+ * Splits a metachar-cleared command into `[head, ...rest]` and applies the
+ * two preconditions both floors below share: the head must be the exact
+ * binary name (no path prefix, the same tightness as
+ * `isReadOnlyKubectlCommand`'s `tokens[0] !== "kubectl"`), and no token may
+ * carry a live shell expansion. Returns `null` when the command is not a
+ * floorable invocation of `bin`.
+ */
+function floorArgv(command: string, bin: string): string[] | null {
+  const trimmed = command.trim();
+  if (trimmed === "") return null;
+  if (hasUnsafeShellMetachar(trimmed)) return null;
+  const tokens = trimmed.split(/\s+/);
+  if (tokens[0] !== bin) return null;
+  const rest = tokens.slice(1);
+  if (rest.length === 0) return null;
+  if (rest.some(hasLiveShellExpansion)) return null;
+  return rest;
+}
+
+/** Outcome of walking one short-flag cluster (see `walkShortFlagCluster`). */
+type ClusterWalk = { kind: "forfeit" } | { kind: "ok"; consumedNext: boolean };
+
+const CLUSTER_FORFEIT: ClusterWalk = { kind: "forfeit" };
+
+/**
+ * Walk a single-dash short-flag cluster CHARACTER BY CHARACTER, which is
+ * the whole point of both floors' short-flag handling: `-sd @x` must
+ * forfeit on the `d` even though it starts with an allowlisted `s`.
+ *
+ * Every character must be in `noValueChars` until the first character
+ * `isValueChar` claims. That character consumes the REST of the cluster as
+ * its glued value, or `nextToken` when nothing is glued, and `onValue`
+ * decides whether the value keeps the floor. `onValue` returning `false`,
+ * an empty cluster, or an unrecognised character all forfeit.
+ *
+ * Shared by `isReadOnlySedCommand` and `isReadOnlyCurlCommand` rather than
+ * written twice: `npm run check:duplication` flagged the two copies as a
+ * 12-line clone, and the walk is the security-relevant half of both.
+ */
+function walkShortFlagCluster(
+  chars: string,
+  noValueChars: ReadonlySet<string>,
+  isValueChar: (c: string) => boolean,
+  onValue: (c: string, glued: string, nextToken: string | undefined) => boolean,
+  nextToken: string | undefined,
+): ClusterWalk {
+  if (chars.length === 0) return CLUSTER_FORFEIT;
+  for (let j = 0; j < chars.length; j += 1) {
+    const c = chars[j]!;
+    if (isValueChar(c)) {
+      const glued = chars.slice(j + 1);
+      if (!onValue(c, glued, nextToken)) return CLUSTER_FORFEIT;
+      return { kind: "ok", consumedNext: glued.length === 0 };
+    }
+    if (!noValueChars.has(c)) return CLUSTER_FORFEIT;
+  }
+  return { kind: "ok", consumedNext: false };
+}
+
+// --- sed -------------------------------------------------------------------
+
+/** `sed` flags that take no value and cannot write. */
+const SED_READ_ONLY_LONG_FLAGS: ReadonlySet<string> = new Set([
+  "--quiet", "--silent", "--regexp-extended", "--separate",
+  "--null-data", "--unbuffered", "--posix",
+]);
+/** `sed` flags whose value is a SCRIPT (scanned by `sedScriptIsReadOnly`). */
+const SED_SCRIPT_LONG_FLAGS: ReadonlySet<string> = new Set(["--expression"]);
+/** Short-flag cluster characters that take no value and cannot write. */
+const SED_READ_ONLY_SHORT_CHARS: ReadonlySet<string> = new Set([
+  "n", "E", "r", "s", "z", "u",
+]);
+/** Short-flag cluster characters whose value is a SCRIPT. */
+const SED_SCRIPT_SHORT_CHARS: ReadonlySet<string> = new Set(["e"]);
+
+/**
+ * `sed` read-only floor for the Risk Classifier ONLY.
+ *
+ * CORRECTS A FALSE PREMISE this task shipped in round 1 ("without `-i`,
+ * sed only writes to stdout"). It does not: sed's `w FILE` command and the
+ * `s///w FILE` substitution flag write an operator-named file with no
+ * `-i`, no redirection and no shell metacharacter, and `-f SCRIPTFILE`
+ * executes a script this classifier never reads. GNU sed's `e` command and
+ * `s///e` flag additionally execute a shell command. All four are refused
+ * here.
+ *
+ * `true` requires ALL of: the head is exactly `sed`; no token carries a
+ * live shell expansion; every flag is drawn from the read-only allowlist
+ * above (so `-i` in every spelling: `-i`, `-i.bak`, `-ni`,
+ * `--in-place`, `--in-place=SUFFIX`, and `-f`/`--file` forfeit by never
+ * being ON it, not by being enumerated as write flags); and every script
+ * (each `-e`/`--expression` value, or the first positional operand when no
+ * `-e` was given) parses as a read-only sed program under
+ * `sedScriptIsReadOnly`.
+ */
+export function isReadOnlySedCommand(command: string): boolean {
+  const rest = floorArgv(command, "sed");
+  if (rest === null) return false;
+
+  const scripts: string[] = [];
+  const positionals: string[] = [];
+  let optionsEnded = false;
+
+  for (let i = 0; i < rest.length; i += 1) {
+    const raw = rest[i]!;
+    const decoded = decodeShellWord(raw);
+    if (optionsEnded) {
+      positionals.push(decoded);
+      continue;
+    }
+    const rawIsFlag = raw.startsWith("-") && raw !== "-";
+    const decodedIsFlag = decoded.startsWith("-") && decoded !== "-";
+    // A token that is a flag under exactly one of the two readings is
+    // unclassifiable: `"-i"` reaches sed as `-i` while looking like an
+    // operand. Fail closed rather than pick a reading.
+    if (rawIsFlag !== decodedIsFlag) return false;
+    if (!rawIsFlag) {
+      positionals.push(decoded);
+      continue;
+    }
+    if (decoded === "--") {
+      optionsEnded = true;
+      continue;
+    }
+    if (decoded.startsWith("--")) {
+      const eq = decoded.indexOf("=");
+      const name = eq === -1 ? decoded : decoded.slice(0, eq);
+      if (SED_SCRIPT_LONG_FLAGS.has(name)) {
+        if (eq !== -1) {
+          scripts.push(decoded.slice(eq + 1));
+          continue;
+        }
+        i += 1;
+        if (i >= rest.length) return false; // missing value: fail closed
+        scripts.push(decodeShellWord(rest[i]!));
+        continue;
+      }
+      if (eq === -1 && SED_READ_ONLY_LONG_FLAGS.has(name)) continue;
+      return false;
+    }
+    // Short-flag cluster, decomposed CHARACTER BY CHARACTER: every
+    // character must be allowlisted, not just the first.
+    const walk = walkShortFlagCluster(
+      decoded.slice(1),
+      SED_READ_ONLY_SHORT_CHARS,
+      (c) => SED_SCRIPT_SHORT_CHARS.has(c),
+      (_c, glued, nextToken) => {
+        if (glued.length > 0) {
+          scripts.push(glued);
+          return true;
+        }
+        if (nextToken === undefined) return false; // missing value: fail closed
+        scripts.push(decodeShellWord(nextToken));
+        return true;
+      },
+      rest[i + 1],
+    );
+    if (walk.kind === "forfeit") return false;
+    if (walk.consumedNext) i += 1;
+  }
+
+  // With no `-e`, sed's FIRST positional operand is the script; the rest
+  // are input files (read-only by construction: an operand that looked
+  // like a flag under either reading was already refused above).
+  if (scripts.length === 0) {
+    const first = positionals[0];
+    if (first === undefined) return false; // bare `sed`: nothing to prove
+    scripts.push(first);
+  }
+  return scripts.every(sedScriptIsReadOnly);
+}
+
+/**
+ * sed script commands that consume no argument and cannot write: print,
+ * delete, hold/pattern-space moves, line number, quit, zap, filename.
+ * `l`, `q` and `Q` accept an optional numeric argument, handled below.
+ *
+ * Everything NOT in this set (plus `s`, `y`, and the branch/label
+ * commands handled explicitly) forfeits the floor: `w` and `W` (write a
+ * file), `e` (execute a shell command), `r`/`R` (read a file), `a`/`i`/`c`
+ * (text whose syntax swallows the rest of the script), `#` (comment), and
+ * any command a future sed adds.
+ */
+const SED_SAFE_NO_ARG_COMMANDS: ReadonlySet<string> = new Set([
+  "p", "P", "d", "D", "n", "N", "h", "H", "g", "G", "x", "l", "=", "q", "Q", "z", "F",
+]);
+/** Branch/label commands: control flow only, no I/O. */
+const SED_LABEL_COMMANDS: ReadonlySet<string> = new Set(["b", "t", "T", ":"]);
+/** `s///` flags that cannot write or execute. `w` and `e` are NOT here. */
+const SED_SAFE_SUBSTITUTION_FLAGS: ReadonlySet<string> = new Set([
+  "g", "p", "i", "I", "m", "M",
+]);
+
+/**
+ * `true` when `script` parses, end to end, as a sed program built only
+ * from the safe command set above. A deliberately small recursive-descent
+ * scan rather than a substring search for `w`: a "forfeit on any letter
+ * `w`" rule would also forfeit `/warning/p`, and a substring search cannot
+ * see the `e` command at all. Anything the scan does not fully understand
+ * (an unterminated regex, a custom `\cREGEXc` address delimiter, a
+ * command not in the sets above, a trailing argument where a separator
+ * must be) returns `false`, so the failure mode is a forfeited floor,
+ * never an accepted write.
+ */
+function sedScriptIsReadOnly(script: string): boolean {
+  const n = script.length;
+  let i = 0;
+  let statements = 0;
+  while (i < n) {
+    const lead = script[i]!;
+    if (lead === ";" || lead === " " || lead === "\t" || lead === "\n" || lead === "}") {
+      i += 1;
+      continue;
+    }
+    const afterFirst = readSedAddress(script, i);
+    if (afterFirst === -1) return false;
+    i = afterFirst;
+    if (script[i] === ",") {
+      i += 1;
+      const afterSecond = readSedAddress(script, i);
+      if (afterSecond === -1 || afterSecond === i) return false; // second address required
+      i = afterSecond;
+    }
+    while (script[i] === "!") i += 1;
+    while (script[i] === " " || script[i] === "\t") i += 1;
+    const cmd = script[i];
+    if (cmd === undefined) return false; // address with no command
+    i += 1;
+    if (cmd === "{") continue; // block open; the block's statements follow
+    if (SED_SAFE_NO_ARG_COMMANDS.has(cmd)) {
+      while (i < n && script[i] === " ") i += 1;
+      while (i < n && script[i]! >= "0" && script[i]! <= "9") i += 1; // `l N`, `q N`
+    } else if (cmd === "s" || cmd === "y") {
+      const after = readSedTwoPartCommand(script, i, cmd === "s");
+      if (after === -1) return false;
+      i = after;
+    } else if (SED_LABEL_COMMANDS.has(cmd)) {
+      while (i < n && script[i] === " ") i += 1;
+      while (i < n && /[A-Za-z0-9_]/.test(script[i]!)) i += 1;
+    } else {
+      return false; // w, W, e, r, R, a, i, c, #, v, and anything unknown
+    }
+    statements += 1;
+    while (i < n && (script[i] === " " || script[i] === "\t")) i += 1;
+    if (i < n) {
+      const sep = script[i]!;
+      // A command must be followed by a separator. `s/a/b/w file` lands
+      // HERE, on the `w`, because `w` is not an accepted `s///` flag.
+      if (sep !== ";" && sep !== "}" && sep !== "{" && sep !== "\n") return false;
+    }
+  }
+  return statements > 0;
+}
+
+/**
+ * Reads one sed ADDRESS starting at `start`. Returns the index after it,
+ * `start` itself when no address is present (an address is optional), or
+ * `-1` when the address is malformed or uses a form this scan refuses
+ * (`\cREGEXc`, an unterminated `/regex/`).
+ */
+function readSedAddress(s: string, start: number): number {
+  let i = start;
+  const c = s[i];
+  if (c === undefined) return i;
+  if (c === "$") return i + 1;
+  if (c === "\\") return -1; // custom address delimiter: fail closed
+  if (c === "+" || c === "~") {
+    i += 1;
+    const digitsFrom = i;
+    while (i < s.length && s[i]! >= "0" && s[i]! <= "9") i += 1;
+    return i > digitsFrom ? i : -1;
+  }
+  if (c >= "0" && c <= "9") {
+    while (i < s.length && s[i]! >= "0" && s[i]! <= "9") i += 1;
+    if (s[i] === "~") {
+      i += 1;
+      const digitsFrom = i;
+      while (i < s.length && s[i]! >= "0" && s[i]! <= "9") i += 1;
+      if (i === digitsFrom) return -1;
+    }
+    return i;
+  }
+  if (c === "/") {
+    i += 1;
+    let closed = false;
+    while (i < s.length) {
+      const ch = s[i]!;
+      if (ch === "\\") {
+        i += 2;
+        continue;
+      }
+      if (ch === "/") {
+        i += 1;
+        closed = true;
+        break;
+      }
+      i += 1;
+    }
+    if (!closed) return -1;
+    while (s[i] === "I" || s[i] === "M") i += 1;
+    return i;
+  }
+  return i; // no address
+}
+
+/**
+ * Reads an `s<D>regex<D>replacement<D>[flags]` or `y<D>a<D>b<D>` body
+ * starting at the delimiter. Returns the index after it, or `-1` when the
+ * body is malformed or (for `s`) carries a flag outside
+ * `SED_SAFE_SUBSTITUTION_FLAGS`, which is exactly how `s/a/b/w FILE` and
+ * `s/a/b/e` forfeit the floor.
+ */
+function readSedTwoPartCommand(s: string, start: number, isSubstitution: boolean): number {
+  let i = start;
+  const delim = s[i];
+  if (delim === undefined || delim === "\\" || delim === "\n" || delim === " ") return -1;
+  i += 1;
+  for (let part = 0; part < 2; part += 1) {
+    let closed = false;
+    while (i < s.length) {
+      const ch = s[i]!;
+      if (ch === "\\") {
+        i += 2;
+        continue;
+      }
+      if (ch === delim) {
+        i += 1;
+        closed = true;
+        break;
+      }
+      i += 1;
+    }
+    if (!closed) return -1;
+  }
+  if (!isSubstitution) return i;
+  while (i < s.length) {
+    const ch = s[i]!;
+    if (ch >= "0" && ch <= "9") {
+      i += 1;
+      continue;
+    }
+    if (SED_SAFE_SUBSTITUTION_FLAGS.has(ch)) {
+      i += 1;
+      continue;
+    }
+    break;
+  }
+  return i;
+}
+
+// --- curl ------------------------------------------------------------------
+
+/**
+ * `curl` long flags that take NO value and neither send a body nor write
+ * a local file. Chosen list (task 2929c5b7, D-012), documented in
+ * docs/risk-gate.md: transfer-shaping and diagnostics only.
+ */
+const CURL_READ_ONLY_LONG_FLAGS: ReadonlySet<string> = new Set([
+  "--silent", "--show-error", "--location", "--fail", "--head", "--get",
+  "--insecure", "--compressed", "--verbose", "--no-buffer", "--include",
+  "--ipv4", "--ipv6",
+]);
+/** `curl` long flags whose single value is inert (a header, a timeout, ...). */
+const CURL_READ_ONLY_LONG_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "--header", "--user-agent", "--max-time", "--connect-timeout", "--retry",
+  "--url", "--write-out", "--referer", "--cookie", "--max-redirs", "--proxy",
+]);
+/** Short-flag cluster characters taking no value: `-s`, `-S`, `-L`, ... */
+const CURL_READ_ONLY_SHORT_CHARS: ReadonlySet<string> = new Set([
+  "s", "S", "L", "f", "I", "G", "k", "v", "N", "i", "4", "6",
+]);
+/** Short-flag cluster characters taking one inert value: `-H`, `-A`, ... */
+const CURL_READ_ONLY_SHORT_VALUE_CHARS: ReadonlySet<string> = new Set([
+  "H", "A", "m", "e", "b", "x", "w",
+]);
+
+/** `true` for the two HTTP methods that do not mutate the remote resource. */
+function curlMethodIsReadOnly(value: string | undefined): boolean {
+  if (value === undefined || value === "") return false; // value-less -X: fail closed
+  const method = value.toUpperCase();
+  return method === "GET" || method === "HEAD";
+}
+
+/**
+ * `curl` read-only floor for the Risk Classifier ONLY.
+ *
+ * ALLOWLIST: every token after `curl` must be a URL/positional operand, a
+ * flag from the four sets above, or such a flag's value. Short-flag
+ * clusters are decomposed CHARACTER BY CHARACTER, so `-sd @x` forfeits on
+ * the `d` even though it starts with an allowlisted `s`. `-X`/`--request`
+ * is special-cased: its value (glued, `=`-joined, or the next token,
+ * compared case-insensitively) must be `GET` or `HEAD`, and a value-less
+ * `-X` forfeits.
+ *
+ * Because the set is an allowlist, every local-write and body-sending flag
+ * forfeits BY CONSTRUCTION rather than by enumeration: `-o`/`--output`,
+ * `-O`, `-D`/`--dump-header`, `-c`/`--cookie-jar`, `-K`/`--config`,
+ * `--create-dirs`, `--output-dir`, `--etag-save`, `--trace`/`--trace-ascii`,
+ * `--stderr`, `-d`/`--data*`, `--json`, `-F`/`--form`/`--form-string`,
+ * `-T`/`--upload-file`, and any flag a future curl adds.
+ */
+export function isReadOnlyCurlCommand(command: string): boolean {
+  const rest = floorArgv(command, "curl");
+  if (rest === null) return false;
+
+  let optionsEnded = false;
+  for (let i = 0; i < rest.length; i += 1) {
+    const raw = rest[i]!;
+    const decoded = decodeShellWord(raw);
+    if (optionsEnded) continue; // every token after `--` is a URL operand
+    const rawIsFlag = raw.startsWith("-") && raw !== "-";
+    const decodedIsFlag = decoded.startsWith("-") && decoded !== "-";
+    if (rawIsFlag !== decodedIsFlag) return false; // `"-o"`: fail closed
+    if (!rawIsFlag) continue; // URL / positional operand
+    if (decoded === "--") {
+      optionsEnded = true;
+      continue;
+    }
+    if (decoded.startsWith("--")) {
+      const eq = decoded.indexOf("=");
+      const name = eq === -1 ? decoded : decoded.slice(0, eq);
+      if (name === "--request") {
+        let value: string | undefined;
+        if (eq !== -1) {
+          value = decoded.slice(eq + 1);
+        } else if (i + 1 < rest.length) {
+          value = decodeShellWord(rest[i + 1]!);
+          i += 1;
+        }
+        if (!curlMethodIsReadOnly(value)) return false;
+        continue;
+      }
+      if (CURL_READ_ONLY_LONG_VALUE_FLAGS.has(name)) {
+        if (eq === -1) {
+          i += 1;
+          if (i >= rest.length) return false; // missing value: fail closed
+        }
+        continue;
+      }
+      if (eq === -1 && CURL_READ_ONLY_LONG_FLAGS.has(name)) continue;
+      return false;
+    }
+    const walk = walkShortFlagCluster(
+      decoded.slice(1),
+      CURL_READ_ONLY_SHORT_CHARS,
+      (c) => c === "X" || CURL_READ_ONLY_SHORT_VALUE_CHARS.has(c),
+      (c, glued, nextToken) => {
+        if (c !== "X") {
+          // An inert value (`-H 'A: b'`, `-m 5`): only its PRESENCE
+          // matters, but a missing one still fails closed.
+          return glued.length > 0 || nextToken !== undefined;
+        }
+        const value =
+          glued.length > 0
+            ? glued
+            : nextToken === undefined
+              ? undefined
+              : decodeShellWord(nextToken);
+        return curlMethodIsReadOnly(value);
+      },
+      rest[i + 1],
+    );
+    if (walk.kind === "forfeit") return false;
+    if (walk.consumedNext) i += 1;
+  }
+  return true;
+}
+
 /**
  * Returns true when `t` (with any trailing `=VALUE` glue stripped) is a
  * GNU/BSD `getopt_long` ABBREVIATION of `fullFlag`: a prefix (including
@@ -1212,124 +1780,6 @@ function checkFileWrite(t: string): boolean {
 }
 
 /**
- * Returns true when a token is the in-place-edit write flag for `sed`
- * (task 2929c5b7): `-i`, GNU's optional glued suffix form (`-i.bak`,
- * `-ibak`), or the GNU long form `--in-place` / `--in-place=SUFFIX`.
- * Without `-i`, sed only ever writes its result to stdout — it cannot
- * mutate a file — so every other sed invocation is read-only.
- *
- * Deliberately conservative, NOT abbreviation-aware or cluster-value-
- * aware like `sort`/`file`'s guards above (no getopt measurement was
- * done for GNU vs. BSD sed here — a documented simplification, see
- * docs/risk-gate.md): any short token starting with a single `-` that
- * contains the letter `i` anywhere forfeits the floor, including a
- * combined cluster (`-ni` = quiet + in-place, a real, common idiom) and
- * a token whose OWN glued script text happens to contain the letter
- * `i` (e.g. `-e's/is/isnt/'`). The latter is a known, accepted false
- * positive: "over-blocking a read is acceptable, under-blocking a
- * write is not" (the same design rule `sort`'s guard states above) —
- * a positional script operand (no leading `-`) is unaffected either
- * way, so `sed -n '/is/p' file` still floors.
- */
-function isSedWriteToken(raw: string): boolean {
-  return checkSedWrite(raw) || checkSedWrite(decodeShellWord(raw));
-}
-
-function checkSedWrite(t: string): boolean {
-  if (t === "--in-place" || t.startsWith("--in-place=")) return true;
-  return t.startsWith("-") && !t.startsWith("--") && t.slice(1).includes("i");
-}
-
-/**
- * curl write/method vectors (task 2929c5b7): a curated, DISCLOSED-
- * boundary flag list, not a full measured audit like the git/sort/file
- * guards above. Forfeits the read-only floor when:
- *   - `-d` / `--data` / `--data-raw` / `--data-binary` /
- *     `--data-urlencode` / `--data-ascii` / `--json` / `-F` /
- *     `--form` / `--form-string` / `-T` / `--upload-file` appears
- *     (each sends a request body — a POST/PUT by curl's own default
- *     the moment any of them is present, even without an explicit
- *     `-X`), exact or glued short form (`-dPAYLOAD`, `-T@file`);
- *   - `-X` / `--request` names a method other than `GET`/`HEAD`
- *     (case-sensitive on the method value; `-X`/`--request` with NO
- *     value, or an unrecognized/lowercase spelling, fails closed —
- *     treated as a forfeit, not as GET).
- * Known, disclosed gaps (a curl invocation that reaches one of these
- * WITHOUT tripping this guard): `-K` / `--config` reads flags —
- * including `-X`/`-d` — from an operator-named file this token scan
- * never opens (the same class of evasion `npm`'s `--registry` guard
- * above closes for npm specifically; curl's `-K` is not closed here).
- * `--data-@file` / `-d @file` (data FROM a file) is still caught by
- * the plain `-d`/`--data` match; the guard does not need to look at
- * `@` — presence of the flag is what matters, not its argument shape.
- */
-const CURL_DATA_LONG_FLAGS: ReadonlySet<string> = new Set([
-  "--data",
-  "--data-raw",
-  "--data-binary",
-  "--data-urlencode",
-  "--data-ascii",
-  "--json",
-  "--form",
-  "--form-string",
-  "--upload-file",
-]);
-const CURL_DATA_SHORT_FLAG_CHARS: ReadonlySet<string> = new Set(["d", "F", "T"]);
-
-function isCurlWriteToken(raw: string): boolean {
-  return checkCurlWrite(raw) || checkCurlWrite(decodeShellWord(raw));
-}
-
-function checkCurlWrite(t: string): boolean {
-  if (t.startsWith("--")) {
-    const base = t.split("=")[0]!;
-    return CURL_DATA_LONG_FLAGS.has(base);
-  }
-  if (t.startsWith("-") && t.length > 1) {
-    return CURL_DATA_SHORT_FLAG_CHARS.has(t[1]!);
-  }
-  return false;
-}
-
-/**
- * True when `tokens` (the argv AFTER `curl`) names an HTTP method other
- * than GET/HEAD via `-X <METHOD>` / `-X<METHOD>` / `--request <METHOD>`
- * / `--request=<METHOD>`. `-X`/`--request` with no following value at
- * all fails closed (forfeits read-only) rather than being treated as a
- * no-op.
- */
-function curlMethodForfeits(tokens: readonly string[]): boolean {
-  for (let i = 0; i < tokens.length; i += 1) {
-    const raw = tokens[i]!;
-    const t = decodeShellWord(raw) === raw ? raw : decodeShellWord(raw);
-    let value: string | undefined;
-    if (t === "-X" || t === "--request") {
-      value = tokens[i + 1] === undefined ? undefined : decodeShellWord(tokens[i + 1]!);
-      if (value === undefined) return true;
-    } else if (t.startsWith("-X") && t.length > 2 && !t.startsWith("--")) {
-      value = t.slice(2);
-    } else if (t.startsWith("--request=")) {
-      value = t.slice("--request=".length);
-    } else {
-      continue;
-    }
-    const method = value.toUpperCase();
-    if (method !== "GET" && method !== "HEAD") return true;
-  }
-  return false;
-}
-
-/**
- * Returns true when a curl invocation (argv AFTER `curl`) is provably
- * read-only: no data/upload/form flag present (`isCurlWriteToken`), and
- * no `-X`/`--request` method other than GET/HEAD (`curlMethodForfeits`).
- */
-function isReadOnlyCurlInvocation(tokens: readonly string[]): boolean {
-  if (tokens.some(isCurlWriteToken)) return false;
-  return !curlMethodForfeits(tokens);
-}
-
-/**
  * Returns true when `bin` (with any path prefix) basename-matches "git".
  * Examples: "git", "/usr/bin/git", "./git", "/path/to/git" all return true.
  * "mygit", "gitk", "git-foo" all return false (not exact basename match).
@@ -1491,21 +1941,6 @@ function classifyTokens(tokens: readonly string[]): boolean {
   // `isFileWriteToken` for the exact detection rules.
   if (bin === "file") {
     return !tokens.slice(1).some(isFileWriteToken);
-  }
-
-  // `sed` is read-only ONLY when none of its argv tokens carry the
-  // in-place-edit flag (`-i` / `-i.SUFFIX` / `--in-place`). Without
-  // `-i`, sed writes only to stdout. See `isSedWriteToken`.
-  if (bin === "sed") {
-    return !tokens.slice(1).some(isSedWriteToken);
-  }
-
-  // `curl` is read-only ONLY when it carries no data/upload/form flag
-  // and no `-X`/`--request` method other than GET/HEAD. See
-  // `isReadOnlyCurlInvocation` for the exact (disclosed-boundary) flag
-  // set and its known gaps (`-K`/`--config`).
-  if (bin === "curl") {
-    return isReadOnlyCurlInvocation(tokens.slice(1));
   }
 
   // `<bin> --version` / `<bin> --help` shape. Checked BEFORE the

@@ -23,37 +23,31 @@
 // fired case.
 //
 // `risk.severity_at_least` is the ONE exception to a blanket "satisfies
-// every threshold" (task 2929c5b7, following the 2026-08-06 gate
-// audit): a session whose environment resolves to production denied
-// four consecutive read-only investigation commands (`cat`, `sed -n`,
-// `curl`, `sshpass ssh`, `node -e`, `git -C ... rev-list`) with the
-// gate-prod-destructive hard-block envelope, because NONE of them were
-// classified and "unknown is not safe" let them satisfy
-// `severity_at_least: critical` too. An unknown severity is risk-bearing
-// (still satisfies `low`/`medium`/`high` — an approval-required gate on
-// an unrecognized production command stays fail-closed), but it is not
-// itself proof of the WORST tier: an unclassified action no longer
-// satisfies `severity_at_least: critical` on its own. Concretely, an
-// unclassified profile is treated as sitting at the "high" rung — one
-// below `critical` — for this one clause only. This is deliberately
-// paired with two things this module does NOT do: (1) it does not
-// touch `risk.category_in` / `action.reversible`, which keep the full
-// "satisfies everything" fallback; (2) it relies on the Risk
-// Classifier's built-in read-only floor (`read-only-bash.ts`) and the
-// manifest's `risk.classifiers[]` patterns to make the common cases
-// either explicitly `low` (a provable read) or explicitly `critical`
-// (a comparable mutating action, e.g. `dd`, `rm -rf`) — the "treated as
-// high" rung is a safety net for the genuinely unenumerable case (an
-// unusual head no classifier reasoned about), not a replacement for
-// explicit classification. No manifest opt-in to restore the pre-fix
-// "unclassified satisfies critical" behavior exists as of this task —
-// none was found in the schema, and the task did not add one (see
-// docs/risk-gate.md, "Unclassified actions and the fail-close rule").
+// every threshold". An unknown severity is risk-bearing: it still
+// satisfies `low`/`medium`/`high`, so an approval-required gate on an
+// unrecognized production command stays fail-closed, but it is not
+// itself proof of the WORST tier: an unclassified profile is treated as
+// sitting at the "high" rung, one below `critical`, for this one clause
+// only, so it never triggers a hard, agent-unoverridable block on its
+// own. A hard block deserves a real classification.
+//
+// The rule is deliberately paired with two things this module does NOT
+// do: (1) it does not touch `risk.category_in` / `action.reversible`,
+// which keep the full "satisfies everything" fallback; (2) it leans on
+// the Risk Classifier's built-in floors (`read-only-bash.ts`'s
+// read-only floors, `destructive-shell-floor.ts`'s mutating-head floor)
+// and the manifest's `risk.classifiers[]` to make the common cases
+// explicitly `low` or explicitly `high`/`critical`. The "treated as
+// high" rung is a safety net for the genuinely unenumerable case, not a
+// replacement for classification. There is no manifest opt-in to restore
+// the blanket behavior. Rationale, the incident that motivated it, and
+// the disclosed residual gaps: docs/risk-gate.md, "Unclassified actions
+// and the fail-close rule"; the measurement is in the CHANGELOG entry
+// for agent-tasks task 2929c5b7.
 //
 // Design source: lava-ice-logs/2026-04-30/harness-risk-gate-extension.md
 // (design phase D); the null-handling steer is the Phase 7 #3 review
-// note on agent-tasks task harness-phase-7-5. The severity_at_least
-// carve-out is task 2929c5b7 (agent-tasks), 2026-09-01.
+// note on agent-tasks task harness-phase-7-5.
 
 import type { PolicyWhen } from "../schema/index.js";
 import { RiskSeveritySchema } from "../schema/index.js";
@@ -72,7 +66,28 @@ const SEVERITY_ORDER: readonly string[] = RiskSeveritySchema.options;
 // the shipped four-value scale. Derived from the scale's length rather
 // than a literal "high" so a future scale reordering/extension still
 // lands one rung below the top without a second hand-edit.
+//
+// That derivation has a precondition the schema must keep satisfying: a
+// scale with fewer than two rungs has no "one below the top". Asserted
+// at module load rather than left implicit, because a silently negative
+// index would make EVERY threshold comparison fail and quietly disable
+// the fail-close for unclassified actions.
+if (SEVERITY_ORDER.length < 2) {
+  throw new Error(
+    `when-eval: the severity scale must have at least two rungs for the ` +
+      `unclassified fallback to sit one below the top (got ${SEVERITY_ORDER.length})`,
+  );
+}
 const UNCLASSIFIED_FALLBACK_SEVERITY_INDEX = SEVERITY_ORDER.length - 2;
+
+/**
+ * The severity NAME the unclassified fallback is treated as, for
+ * surfaces that have to say it out loud (`intercept.ts`'s deny
+ * envelope). Exported so no caller hard-codes "high" beside a constant
+ * that is derived.
+ */
+export const UNCLASSIFIED_FALLBACK_SEVERITY: string =
+  SEVERITY_ORDER[UNCLASSIFIED_FALLBACK_SEVERITY_INDEX]!;
 
 /** The enriched-envelope inputs a `when:` block is evaluated against. */
 export interface WhenContext {

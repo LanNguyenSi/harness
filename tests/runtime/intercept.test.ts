@@ -1737,7 +1737,12 @@ describe("intercept — M7 whenUnclassifiedFallback flag", () => {
     } as Policy;
     const ledger = makeLedger({ kind: "ok", entries: [] });
     const result = await intercept({
-      manifest: makeManifest({ policies: [uxPolicy] }),
+      // The production resolver is what makes AC2's exact phrase
+      // ("in a production context") the right assertion here: the prefix
+      // interpolates the RESOLVED environment, so a manifest with no
+      // resolver would legitimately say "unknown" instead (pinned by the
+      // round-3 sibling test below).
+      manifest: makeManifest({ policies: [uxPolicy], resolvers: [PROD_RESOLVER] }),
       event: BASH_UNKNOWN_EVENT,
       ledger,
       builtins: BUILTINS,
@@ -1746,6 +1751,7 @@ describe("intercept — M7 whenUnclassifiedFallback flag", () => {
     });
     // The decision record must carry the flag.
     expect(result.decisions[0]?.whenUnclassifiedFallback).toBe(true);
+    expect(result.decisions[0]?.environment?.name).toBe("production");
     // The agent-facing reason must NOT contain the non-ux engine-vocabulary
     // clause (that wording is reserved for the non-ux path).
     expect(result.blockJson?.reason).not.toContain(
@@ -1797,6 +1803,48 @@ describe("intercept — M7 whenUnclassifiedFallback flag", () => {
     expect(result.blockJson?.reason?.startsWith(
       "You cannot run this critical destructive action against production.",
     )).toBe(true);
+  });
+
+  it("ux-path (round 3): the fallback prefix names the RESOLVED environment and the policy's OWN threshold, not a hard-coded production/critical", async () => {
+    // Round-2 shipped this prefix with "production" and "critical"
+    // hard-coded, so an unscoped `severity_at_least: high` policy on a
+    // feature branch (environment resolves to `unknown`, threshold is
+    // `high`) emitted two false halves at once. Both are interpolated now.
+    //
+    // Mutation guard: restore either literal in
+    // `unclassifiedFallbackPrefix` (src/runtime/intercept.ts) and the
+    // corresponding assertion below goes red.
+    const uxPolicy: Policy = {
+      ...RISK_BLOCK_POLICY,
+      name: "gate-risk-unscoped-ux-high",
+      ux: {
+        cannot: "You cannot run this action yet.",
+        required: ["operator approval"],
+        run: ["harness approve risk"],
+      },
+    } as Policy;
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      // No resolvers at all, and a feature branch: the environment
+      // resolves to the matchable `unknown`, never `production`.
+      manifest: makeManifest({ policies: [uxPolicy] }),
+      event: BASH_UNKNOWN_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+      riskContext: riskCtx("feature/x"),
+    });
+    expect(result.decisions[0]?.whenUnclassifiedFallback).toBe(true);
+    expect(result.decisions[0]?.environment?.name).toBe("unknown");
+    const reason = result.blockJson?.reason ?? "";
+    // The resolved environment, with the correct article.
+    expect(reason).toContain("unclassified action in an unknown context");
+    expect(reason).not.toContain("in a production context");
+    // The policy's OWN declared threshold, and the fallback rung.
+    expect(reason).toContain("(treated as high) satisfied this policy's severity_at_least: high");
+    expect(reason).not.toContain("critical-severity match");
+    // The operator's own text is still appended, unaltered.
+    expect(reason).toContain("You cannot run this action yet.");
   });
 });
 

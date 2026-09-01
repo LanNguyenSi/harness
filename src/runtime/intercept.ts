@@ -53,7 +53,7 @@ import {
   expandToolNameAliases,
   extractShellCommand,
 } from "./tool-name-aliases.js";
-import { evaluateWhen } from "./when-eval.js";
+import { evaluateWhen, UNCLASSIFIED_FALLBACK_SEVERITY } from "./when-eval.js";
 
 export interface ToolEvent {
   hook_event_name?: string;
@@ -409,6 +409,36 @@ export interface RiskGateContext {
   kubeContext: string;
   /** Current kube namespace, or "" when unknown. */
   kubeNamespace: string;
+}
+
+/**
+ * The sentence PREPENDED to a `ux:`-declared policy's `cannot:` text when
+ * the deny was caused by the unclassified fallback rather than a real
+ * classification (task 2929c5b7).
+ *
+ * Everything variable in it is interpolated: the RESOLVED environment
+ * name and the policy's OWN declared threshold. Hard-coding "production"
+ * and "critical" made both halves wrong for an unscoped
+ * `severity_at_least: high` policy on a feature branch, which reported a
+ * production context that had not been resolved and a critical-severity
+ * comparison that never ran. The fallback rung itself comes from
+ * `when-eval.ts`'s exported constant, not a second literal here.
+ *
+ * A policy whose `when:` block declares no `severity_at_least` can still
+ * set the flag (via `risk.category_in` / `action.reversible`, which keep
+ * the blanket "unknown is not safe" fallback), so the threshold-free
+ * wording is a real case, not a defensive branch.
+ */
+function unclassifiedFallbackPrefix(
+  environmentName: string | undefined,
+  threshold: string | undefined,
+): string {
+  const env = environmentName ?? "unknown";
+  const article = /^[aeiou]/i.test(env) ? "an" : "a";
+  const lead = `This is an unclassified action in ${article} ${env} context: no risk classifier pattern recognized it, so`;
+  return threshold === undefined
+    ? `${lead} the fail-closed unclassified rule satisfied this policy's when: clause, rather than a genuine risk classification.`
+    : `${lead} the fail-closed severity fallback (treated as ${UNCLASSIFIED_FALLBACK_SEVERITY}) satisfied this policy's severity_at_least: ${threshold}, rather than a genuine ${threshold}-severity match.`;
 }
 
 /** The Action Envelope plus the Risk Gate verdicts derived from it. */
@@ -1554,18 +1584,20 @@ export async function intercept(
       // environment resolved to production, which is exactly the false
       // positive this task exists to fix. When `whenUnclassifiedFallback`
       // is set, a fallback-specific sentence is PREPENDED naming the real
-      // cause — "unclassified action in a production context" — before
-      // the operator's own `cannot:` text, which is left byte-for-byte
-      // intact (added to, never replaced): the operator still chose that
-      // wording for the genuine-classification case, which keeps
-      // rendering unchanged. See docs/risk-gate.md, "Unclassified
-      // actions and the fail-close rule".
+      // cause before the operator's own `cannot:` text, which is left
+      // byte-for-byte intact (added to, never replaced): the operator
+      // still chose that wording for the genuine-classification case,
+      // which keeps rendering unchanged. See docs/risk-gate.md,
+      // "Unclassified actions and the fail-close rule".
       const uxText = renderAgentFacing(blockingPolicy.ux, {
         ...blocking.extractValues,
         SESSION_ID: sessionId,
       });
       reasonText = blocking.whenUnclassifiedFallback
-        ? `This is an unclassified action in a production context: no risk classifier pattern recognized it, so the fail-closed severity fallback applied rather than a genuine critical-severity match. ${uxText}`
+        ? `${unclassifiedFallbackPrefix(
+            enriched?.environment.name,
+            blockingPolicy.when?.["risk.severity_at_least"],
+          )} ${uxText}`
         : uxText;
     } else {
       const producersBlock = renderProducers(
