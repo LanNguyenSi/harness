@@ -50,9 +50,14 @@
 // `checkBypassWithoutAutoApprove` (bypass-without-auto-approve.ts) is
 // wired as an advisory `harness doctor` finding ONLY: it can never gate a
 // tool call or mint an approval, and the operator who reads the finding
-// is the one who decides what to do about it. A possible future
-// hardening, not done here, is signing the observation the same way
-// approval markers are signed.
+// is the one who decides what to do about it. Signing the observation
+// was considered and rejected, not deferred: a signature would only
+// prove the hook signed the record, not that the named session actually
+// ran under that mode, and it would open a second minting path for the
+// marker-signing key. See
+// docs/decisions/2026-08-27-ug-auto-mode-approval.md's "Amendment:
+// permission-mode observation stays unsigned" for the full reasoning
+// and the reopen criterion.
 
 import * as path from "node:path";
 import { atomicWriteFile } from "../../../io/atomic-write.js";

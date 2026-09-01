@@ -506,3 +506,48 @@ Reconsider this decision if any of the following become true:
 ## Amendment: install default (2026-08-30, task `8f637efd`)
 
 `auto_approve` ships ACTIVE, not commented out, in the `understanding-before-execution` pack config of every `harness init` template that enables this pack (`full`, `solo`, `team`), and `harness pack upgrade understanding-before-execution` offers the same block to an existing manifest as an explicit operator verb. Four points anchor this as a rule-level change to the install default, not a change to the auto-mode design itself: (1) under `bypassPermissions` the permission system is off by the operator's own launch choice; a human prompt there is exactly the friction that mode exists to remove, so an install that prompts anyway does not do what the operator selected. (2) The report precondition is unchanged: `require_report: true` remains the only schema-valid value, and every template shipping this block also ships `mode: grill_me`, so the report the auto path consumes is checked, not merely present. (3) The opt-in stays a visible, deletable config key; this document's threat model is unchanged by where the default originates, because the running session still cannot control the opt-in before approval: the invariants above (the signed marker as sole authority, fail-closed on ambiguity, the report staying mandatory) hold identically whether the block was hand-typed or shipped by `init`. (4) Existing installs are never changed silently: the upgrade path is an explicit operator verb (`harness pack upgrade understanding-before-execution`), never invoked by `apply` or `doctor` on their own, mirroring `pack reseed`'s precedent for `config.ux` drift. `harness doctor` gained a companion advisory (`bypassPermissions` observed via a hook-written, unsigned observation (evidence that the hook was invoked with such a payload, not proof of the session's mode; advisory only, never a gate input), `auto_approve` missing or not covering it) so an install that predates this default is visible rather than silently under-protected. The originating incident is recorded in `CHANGELOG.md`'s `[Unreleased]` entry for task `8f637efd`; this amendment states the rule it motivated, not the measurement itself.
+
+## Amendment: permission-mode observation stays unsigned
+
+**Decision.** The per-session permission-mode observation
+(`recordPermissionModeObservation`, writing to
+`harness.generated/.permission-mode-observations/<sessionId>`) stays
+unsigned. `harness doctor`'s `bypassPermissions`-without-`auto_approve`
+finding (`checkBypassWithoutAutoApprove`) keeps reading it as advisory
+evidence only, exactly as shipped; signing it the way the approval
+marker is signed was considered and rejected.
+
+**Reasoning.** The write point is the hook process itself: it takes
+`session_id` and `permission_mode` verbatim off the PreToolUse payload
+on stdin and persists them without any further attestation
+(`src/cli/pack/hook-pre-tool-use.ts:1087#"event.permission_mode, stderr);"`).
+Any actor able to invoke the hook binary with a stdin payload of its own
+choosing, an already-approved session included, therefore obtains a
+hook-written observation carrying whatever `session_id` /
+`permission_mode` it supplies; nothing on the write path distinguishes a
+genuine PreToolUse invocation from a crafted one. Signing that record
+with the marker-signing key would not close that gap: an HMAC over
+attacker-chosen input still only certifies that the hook signed the
+record, not that the named session actually ran under the claimed
+permission mode, which is the property the doctor finding needs. It
+would also open a second, unconditional minting path for the
+marker-signing key, the exact widening the threat model above already
+names as a residue under "Slice 1 turns the PreToolUse hook into a
+marker-signing oracle": today the hook mints an approval marker only
+when the auto-approve preconditions hold, and a signed observation write
+would give the same reachable caller a second signing surface gated on
+nothing, for no gain against the stdin-forgery threat just described.
+The finding this record feeds also stays advisory only: it can never
+gate a tool call or mint an approval
+(`src/cli/doctor/bypass-without-auto-approve.ts:20#"never an error: an operator who runs"`),
+so the operator remains the one who decides what the evidence means,
+and a signature on the record would not change that division of
+authority either.
+
+**Reopen criterion.** Reconsider this decision if the observation ever
+moves from advisory doctor output into anything that gates a decision,
+for example an allow/deny input or an auto-approval precondition. At
+that point the record needs an evidence source the invoking process
+cannot author on its own stdin, not a signature over the same
+self-report: signing an already-forgeable input does not supply the
+missing property.
