@@ -541,7 +541,7 @@ gated on nothing, for no gain against the stdin-forgery threat just
 described.
 The finding this record feeds also stays advisory only: it can never
 gate a tool call or mint an approval
-(`src/cli/doctor/index.ts:1311-1313#"recentSessions: recentSessionsWindow,"`),
+(`src/cli/doctor/index.ts:1127#"if (report.ugBypassWithoutAutoApprove) warningCount++;"`),
 so the operator remains the one who decides what the evidence means,
 and a signature on the record would not change that division of
 authority either. Marker signing does close a narrow class on its own
