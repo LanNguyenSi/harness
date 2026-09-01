@@ -3,7 +3,7 @@ type: invariant
 title: Policy engine needs its producers wired
 description: "A `policies:` entry can only be POSITIVELY satisfied if grounding-mcp is wired under `tools.mcp[]`, since task f1aea826 (shipped 0.45.0) an unwired producer makes block/require_approval policies DENY every matching event (deny-degraded) unless `risk.degraded_fail_posture: fail_open` is set, while warn policies degrade non-blocking; since v0.35.0 `harness apply` hard-refuses the misconfig, and since v0.39.0 a pooled per-intercept ledger session stops hook-timeout fail-open under load. Since 0.43.0-0.45.0 `bash_match` triggers match raw-or-normalised (four additive arms) and `${REPO}`/`${BRANCH}`/`at_head` are attributed per repository, universal-additive."
 tags: [policies, grounding-mcp, degraded-fail-posture, footgun, versions, bash_match, per-repo-attribution]
-timestamp: 2026-09-01T08:30:00Z
+timestamp: 2026-09-01T08:48:14Z
 sources:
   - src/cli/validate/checks.ts
   - src/cli/apply/apply.ts

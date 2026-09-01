@@ -177,8 +177,10 @@ export {
 export {
   DELEGATION_MARKER_DIRNAME,
   ADOPTION_LEDGER_DIRNAME,
+  DELEGATION_REPORT_DIRNAME,
   delegationMarkerIdFor,
   delegationMarkerPathFor,
+  delegationReportPathFor,
   hashDelegationCwd,
   type DelegationApprovedByFields,
   buildDelegationApprovedBy,
