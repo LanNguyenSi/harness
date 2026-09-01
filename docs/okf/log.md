@@ -2,6 +2,44 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-01T06:56:42Z, review-round-2 fixes on task `a4ceb6be` (this
+  round: `docs/decisions/2026-08-27-ug-auto-mode-approval.md`,
+  `src/cli/doctor/bypass-without-auto-approve.ts`,
+  `src/policy-packs/builtin/understanding-before-execution/permission-mode-observations.ts`,
+  `docs/policy-packs/understanding-before-execution.md`,
+  `CHANGELOG.md`): reworded the ADR's "second, unconditional minting
+  path for the marker-signing key" clause and its four echoes (the two
+  module headers, the policy-pack doc, and `CHANGELOG.md`'s `[Unreleased]`
+  entry) to "second, unconditional signing surface" (`markerId`
+  namespacing already stops a signed observation from minting an
+  approval marker), added one sentence to the ADR's Reasoning paragraph
+  on the narrow write-primitive-without-key-read class marker signing
+  closes, appended a transcript-corroboration candidate to the ADR's
+  reopen criterion, and substituted the ADR's `bypass-without-auto-approve.ts:20`
+  comment citation for a code citation at its `doctor/index.ts` call
+  site. Also closed a `CHANGELOG.md` self-contradiction (the task
+  `8f637efd` F2 bullet's trailing "possible follow-up" sentence, written
+  before the sibling `[Unreleased]` entry above it settled the question
+  the other way) and pinned the doctor message's caveat clause with a
+  new assertion in `tests/cli/doctor-bypass-without-auto-approve.test.ts`.
+
+- 2026-09-01T06:42:59Z, re-stamp for commit `e66399f1` (task `a4ceb6be`,
+  round 1): the prior commit changed `CHANGELOG.md`,
+  `docs/policy-packs/understanding-before-execution.md`, and
+  `src/policy-packs/builtin/understanding-before-execution/permission-mode-observations.ts`
+  for the unsigned-observation ADR paragraph, and each of the seven docs
+  below cites at least one of those three files in its `sources:` list,
+  so `okf-kit check` flagged all seven STALE. Re-verified each against
+  the current tree: none describes the signing decision itself, so every
+  one was timestamp-only.
+  - `codex-adapter-parity-gaps.md` (cites `understanding-before-execution.md`, `CHANGELOG.md`)
+  - `evidence-ledger-trust-boundary.md` (cites `permission-mode-observations.ts`, `CHANGELOG.md`)
+  - `gate-fail-posture-matrix.md` (cites `CHANGELOG.md`)
+  - `pause-vs-gate-kill-switch.md` (cites `CHANGELOG.md`)
+  - `policy-engine-producer-wiring.md` (cites `CHANGELOG.md`)
+  - `understanding-gate-auto-mode-signals.md` (cites `permission-mode-observations.ts`, `CHANGELOG.md`)
+  - `understanding-gate-lockout-recovery.md` (cites `CHANGELOG.md`)
+
 - 2026-08-31T19:55:00Z, verification-round fixes (agent-tasks `2699b476`):
   the three remaining bare `src/cli/validate/checks.ts` range citations
   (two in `manifest-validation-scope.md`, one in

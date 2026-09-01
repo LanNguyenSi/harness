@@ -266,6 +266,8 @@ describe("doctor: bypassPermissions without auto_approve (Environment section)",
 
     const text = format(report);
     expect(text).toContain("bypassPermissions observed for session sess-bypass");
+    expect(text).toContain("hook-written, unsigned self-report");
+    expect(text).toContain("confirm from your own launch settings before enabling auto_approve");
     expect(text).toContain("harness pack upgrade understanding-before-execution");
     expect(text).toContain("auto_approve:");
   });

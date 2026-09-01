@@ -35,10 +35,12 @@
 // operator who reads it decides what it means. Signing the observation
 // was considered and rejected: a signature would only prove the hook
 // signed the record, not that the named session actually ran under that
-// mode, and it would open a second minting path for the marker-signing
-// key. See docs/decisions/2026-08-27-ug-auto-mode-approval.md's
-// "Amendment: permission-mode observation stays unsigned" for the full
-// reasoning and the reopen criterion.
+// mode, and it would open a second, unconditional signing surface for
+// the marker-signing key (not a path to mint an approval marker, which
+// stays namespaced by markerId). See
+// docs/decisions/2026-08-27-ug-auto-mode-approval.md's "Amendment:
+// permission-mode observation stays unsigned" for the full reasoning and
+// the reopen criterion.
 
 import {
   CLAUDE_CODE_HARNESS,

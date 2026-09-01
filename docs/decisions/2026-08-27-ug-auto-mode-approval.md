@@ -530,19 +530,27 @@ with the marker-signing key would not close that gap: an HMAC over
 attacker-chosen input still only certifies that the hook signed the
 record, not that the named session actually ran under the claimed
 permission mode, which is the property the doctor finding needs. It
-would also open a second, unconditional minting path for the
-marker-signing key, the exact widening the threat model above already
-names as a residue under "Slice 1 turns the PreToolUse hook into a
-marker-signing oracle": today the hook mints an approval marker only
-when the auto-approve preconditions hold, and a signed observation write
-would give the same reachable caller a second signing surface gated on
-nothing, for no gain against the stdin-forgery threat just described.
+would also open a second, unconditional signing surface for the
+marker-signing key (not a path to mint an approval marker, which stays
+namespaced by markerId), the exact widening the threat model above
+already names as a residue under "Slice 1 turns the PreToolUse hook
+into a marker-signing oracle": today the hook mints an approval marker
+only when the auto-approve preconditions hold, and a signed observation
+write would give the same reachable caller a second signing surface
+gated on nothing, for no gain against the stdin-forgery threat just
+described.
 The finding this record feeds also stays advisory only: it can never
 gate a tool call or mint an approval
-(`src/cli/doctor/bypass-without-auto-approve.ts:20#"never an error: an operator who runs"`),
+(`src/cli/doctor/index.ts:1311-1313#"recentSessions: recentSessionsWindow,"`),
 so the operator remains the one who decides what the evidence means,
 and a signature on the record would not change that division of
-authority either.
+authority either. Marker signing does close a narrow class on its own
+side of the boundary, a write primitive without a matching key read
+(`src/runtime/approval-signing.ts:32-45#"distinguishable event; a bare unsigned-JSON write no longer is)."`);
+leaving that class open for this record is accepted here because the
+observation is advisory only, never a gate input, and the finding's own
+message already tells the operator to confirm it against their own
+launch settings before acting on it.
 
 **Reopen criterion.** Reconsider this decision if the observation ever
 moves from advisory doctor output into anything that gates a decision,
@@ -550,4 +558,10 @@ for example an allow/deny input or an auto-approval precondition. At
 that point the record needs an evidence source the invoking process
 cannot author on its own stdin, not a signature over the same
 self-report: signing an already-forgeable input does not supply the
-missing property.
+missing property. The candidate to evaluate first is transcript-side
+corroboration: the `transcript_path` consistency check the Codex
+auto-approve path already uses (see the "Understanding gate" paragraph
+in `docs/okf/evidence-ledger-trust-boundary.md`) and the transcript's
+own permission-mode line the repo already parses in
+`src/cli/session-export/transcript.ts`; honestly, that raises the cost
+of forging the record rather than removing its forgeability.
