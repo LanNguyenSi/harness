@@ -326,6 +326,68 @@ describe("evaluateWhen — Friction-log #38/#40/#43/#50 regression (read-only fl
   });
 });
 
+describe("evaluateWhen: a built-in floor sets severity only, so `risk.category_in` STOPS matching (task 2929c5b7, review round 3)", () => {
+  // A behaviour change worth its own pin, and the one direction of this
+  // task that TIGHTENS rather than loosens. A built-in floor assigns a
+  // SEVERITY and no categories, so a floored action's `categories` is `[]`.
+  // While the same action was UNCLASSIFIED, "unknown is not safe" made it
+  // satisfy EVERY `risk.category_in` clause automatically. Once floored it
+  // is classified, the fallback no longer applies, and a `category_in`
+  // clause is a real set test against an empty set: it can never match.
+  //
+  // So an operator policy scoped by `risk.category_in` alone silently
+  // stops covering a newly floored head. That is the correct reading of a
+  // proven-read-only action, but it is not obvious, so it is documented in
+  // docs/risk-gate.md and pinned here. The same already held for the
+  // pre-existing `cat`/`ls` floors; `sed` just joins them.
+  const ENVELOPE_CTX: EnvelopeContext = {
+    cwd: "/work/repo",
+    git: { repo: "repo", branch: "main", sha: "" },
+    user: "agent",
+    host: "host",
+    now: new Date("2026-09-01T12:00:00.000Z"),
+  };
+  const bashEnvelope = (command: string) =>
+    buildActionEnvelope(
+      { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } } as ToolEvent,
+      ENVELOPE_CTX,
+    );
+
+  it.each([
+    ["a floored sed", "sed -n '1,5p' f"],
+    ["the pre-existing cat floor", "cat notes.md"],
+  ])("%s is classified low with NO categories, and `risk.category_in` does not match it", (_label, command) => {
+    const risk = classifyRisk(bashEnvelope(command), []);
+    expect(risk.classified).toBe(true);
+    expect(risk.severity).toBe("low");
+    // The load-bearing assertion: a floor contributes severity, never a
+    // category. Mutation probe: add `network_exfiltration` to the floor's
+    // composition in risk-classifier.ts and both halves of this go red.
+    expect(risk.categories).toEqual([]);
+
+    const result = evaluateWhen(when({ "risk.category_in": ["network_exfiltration"] }), {
+      risk,
+      environment: env("production"),
+    });
+    expect(result.matched).toBe(false);
+    // And the non-match is a real empty-set test, not the fail-close.
+    expect(result.unclassifiedFallback).toBe(false);
+  });
+
+  it("the SAME clause DOES match while the action is unclassified (the fallback this floor removes)", () => {
+    // Negative control: without it, a `category_in` clause that never
+    // matched anything would satisfy the assertion above.
+    const risk = classifyRisk(bashEnvelope("sed 's/a/b/w /etc/x' f"), []);
+    expect(risk.classified).toBe(false);
+    const result = evaluateWhen(when({ "risk.category_in": ["network_exfiltration"] }), {
+      risk,
+      environment: env("production"),
+    });
+    expect(result.matched).toBe(true);
+    expect(result.unclassifiedFallback).toBe(true);
+  });
+});
+
 describe("evaluateWhen — action.deletion_target_unresolvable (task d03af8f6)", () => {
   const UNRESOLVABLE: DeletionTargetVerdict = {
     verb: "rm",

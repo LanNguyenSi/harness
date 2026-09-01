@@ -103,19 +103,28 @@ Aufrufstellen.** Neues `src/runtime/shell-word.ts` exportiert
 KEINE `$VAR`/`$()`/Backtick/`~`/Glob-Expansion) und wird jetzt vor jedem
 Schreib-Flag-Vergleich in `read-only-bash.ts` angewandt (`find`, `sort`,
 `file`), stets nur auf der RESTRIKTIVEN Seite (erkennt mehr Tokens als
-Schreib-Flag, nie weniger). Die mit Task `2929c5b7` ergaenzten `sed`- und
-`curl`-Floors (`isReadOnlySedCommand`/`isReadOnlyCurlCommand`, nur vom
-Risk-Classifier konsumiert, NICHT von `isReadOnlyBashCommand`) nutzen
+Schreib-Flag, nie weniger). Der mit Task `2929c5b7` ergaenzte `sed`-Floor
+(`isReadOnlySedCommand`, nur vom
+Risk-Classifier konsumiert, NICHT von `isReadOnlyBashCommand`) nutzt
 dieselbe Primitive auf der PERMISSIVEN Seite, was der Modul-Header von
 `shell-word.ts` ausdruecklich ausserhalb seiner `raw || decoded`-
 Richtungsregel verortet. Dort traegt die Fail-closed-Eigenschaft die
-Konstruktion, nicht die Richtungsregel: (1) beide Floors sind
-Allowlists, und ein nicht aufloesbares Token gibt `decodeShellWord`
+Konstruktion, nicht die Richtungsregel: (1) der Floor ist eine
+Allowlist, und ein nicht aufloesbares Token gibt `decodeShellWord`
 unveraendert zurueck, matcht damit keinen Allowlist-Eintrag und laesst
 den Floor verfallen; (2) ein Token, das nur in EINER der beiden Lesarten
-wie ein Flag aussieht (`"-o"`), wird unter keiner der beiden Lesarten
+wie ein Flag aussieht (`"-i"`), wird unter keiner der beiden Lesarten
 klassifiziert, sondern verworfen. Ungemessen gegen echtes bash, wie die
-uebrigen Anwendungen dieser Primitive auch. Das schließt K5s drei gemessenen Fail-opens
+uebrigen Anwendungen dieser Primitive auch. Der gleichzeitig gebaute
+`curl`-Floor (`isReadOnlyCurlCommand`) existiert NICHT mehr: Review-Runde
+3 desselben Tasks mass, dass die Flag-Allowlist `-w`/`--write-out` als
+inert fuehrte, obwohl dessen `%output{FILE}`-Direktive seit curl 8.3.0
+eine lokale Datei schreibt; Entscheidung D-013 hat den Floor darauf
+ersatzlos entfernt, statt die Liste erneut zu erweitern. `curl` bleibt
+unklassifiziert (approval-gated ueber den Fallback), und nur seine
+schreibfaehigen Schreibweisen werden vom `destructive-shell-floor.ts`
+auf `high` gehoben. Siehe docs/risk-gate.md, "No `curl` read-only floor,
+by design". Das schließt K5s drei gemessenen Fail-opens
 punktgenau: `find . -"delete"`, `find . -'delete'`, `find . -\delete`
 (plus, laut Fix-Beleg, zwei weitere Schreibweisen und die `sort`/`file`-
 Geschwisterfälle) klassifizieren nicht mehr als read-only. **Was das
@@ -139,7 +148,7 @@ Normalisierungs-Pass (vierter Matching-Arm, siehe `intercept.ts`s
 eigenen Kommentar), eine eigene, additive Grenzsuche
 (`findNextBoundaryQuoteAware`), die einen Boundary-Charakter innerhalb
 einer offenen Quote überspringt, und verdrahtet ihn in
-`policyMatchesEvent` (`src/runtime/intercept.ts:535-620`) als vierten
+`policyMatchesEvent` (`src/runtime/intercept.ts:538-623`) als vierten
 OR-Zweig: roh, dann normalisiert, dann amp-bewusst (`aabbad63`), dann
 quote-bewusst (`cf3dff51`), jeder Zweig nur additiv gegenüber den
 vorherigen. Produktions-Nachweis über dieselbe `runInterceptCli`-Messung
@@ -204,7 +213,7 @@ Ausgaben und sind nur paarweise überlappend messbar.
 
 | Modul | Ausgabe | verdrahtet an |
 |---|---|---|
-| `command-normalize.ts` | `normalized` | `bash_match` raw-OR-normalized-OR-amp-OR-quote-normalized (`src/runtime/intercept.ts:535-620`, dritter Arm seit `aabbad63`, vierter Arm seit `cf3dff51`) |
+| `command-normalize.ts` | `normalized` | `bash_match` raw-OR-normalized-OR-amp-OR-quote-normalized (`src/runtime/intercept.ts:538-623`, dritter Arm seit `aabbad63`, vierter Arm seit `cf3dff51`) |
 | | `targetDir`/`targetBase` | nichts (grep-verifiziert) |
 | `bash-prefix-parse.ts` | `inlineEnv`, `cdTarget` | Risk-Gate-Kontext (`src/cli/policy/intercept.ts:1026-1056`) |
 | `read-only-bash.ts` | Boolean | Risk-Floor, Understanding-Gate-PreToolUse (2 Hooks), Write-Guard |

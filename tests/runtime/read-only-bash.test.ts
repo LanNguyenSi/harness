@@ -2213,9 +2213,10 @@ describe("kubectl read-only floor (isReadOnlyKubectlCommand, task da823721)", ()
 });
 
 describe("sed / curl are NOT part of the shared read-only predicate (task 2929c5b7)", () => {
-  // Both binaries have Risk-Classifier-only floors
-  // (`isReadOnlySedCommand` / `isReadOnlyCurlCommand`, exercised in
-  // tests/runtime/read-only-floors.test.ts). Neither is wired into
+  // `sed` has a Risk-Classifier-only floor (`isReadOnlySedCommand`,
+  // exercised in tests/runtime/read-only-floors.test.ts) and `curl` has no
+  // floor at all since decision D-013 (see that file's header). Neither is
+  // wired into
   // `isReadOnlyBashCommand`, because the understanding-gate PreToolUse
   // blocker and the solution-acceptance write-guard consume this predicate
   // directly and short-circuit on it. Review round 2 of that task measured

@@ -930,10 +930,13 @@ risk:
         # `high` ones (DROP TABLE, kubectl delete) is now classified
         # explicitly too, at the matching severity, rather than relying
         # on the (now weaker) fallback to catch it. Read-only siblings of
-        # these same heads (`sed` without `-i`, `curl` without
-        # `-X`/`-d`, `git status`/`log`/`rev-list`/...) are handled by
-        # the Risk Classifier's built-in read-only floors
-        # (`read-only-bash.ts`), not by a pattern here.
+        # these same heads (`sed` without `-i`, `git status`/`log`/
+        # `rev-list`/...) are handled by the Risk Classifier's built-in
+        # read-only floors (`read-only-bash.ts`), not by a pattern here.
+        # `curl` deliberately has NO read-only floor (decision D-013): its
+        # flag surface cannot be allowlisted robustly, so a read-only curl
+        # stays unclassified and approval-gated rather than floored. See
+        # docs/risk-gate.md, "No `curl` read-only floor, by design".
         #
         # These patterns are the OPERATOR-EDITABLE MIRROR of the built-in
         # destructive floor (`src/runtime/destructive-shell-floor.ts`),
@@ -985,6 +988,9 @@ risk:
           severity: high
         - pattern: '\bcurl\b[^\n]*(\s-[a-zA-Z]*[dFT]|--data\b|--json\b|--form(-string)?\b|--upload-file\b)'
           categories: [production_mutation, network_exfiltration]
+          severity: high
+        - pattern: '\bcurl\b[^\n]*(\s-[a-zA-Z]*[oODcK]|--output(-dir)?\b|--remote-name\b|--remote-header-name\b|--dump-header\b|--cookie-jar\b|--config\b|--create-dirs\b|--etag-save\b|--trace(-ascii)?\b|--stderr\b|(\s-[a-zA-Z]*w\b|--write-out\b)[^\n]*%output)'
+          categories: [destructive, data_loss]
           severity: high
         - pattern: '\bsed\b[^\n]*(\s-[a-zA-Z]*i[a-zA-Z]*\b|--in-place\b)'
           categories: [destructive, data_loss]

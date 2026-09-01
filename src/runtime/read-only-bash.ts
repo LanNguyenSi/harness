@@ -1007,7 +1007,7 @@ export function isReadOnlyKubectlCommand(command: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// `sed` and `curl` read-only floors, Risk-Classifier ONLY (task 2929c5b7).
+// `sed` read-only floor, Risk-Classifier ONLY (task 2929c5b7).
 //
 // Placed here beside `isReadOnlyKubectlCommand` above, and wired ONLY at
 // `risk-classifier.ts`'s built-in floor, for the same reason that floor is:
@@ -1017,21 +1017,35 @@ export function isReadOnlyKubectlCommand(command: string): boolean {
 // writeguard.ts`) returns `blocked: false` for anything
 // `isReadOnlyBashCommand` accepts BEFORE it ever looks at whether the
 // command references the protected verdict directory. Teaching the shared
-// predicate about `sed`/`curl` therefore widens that guard: review round 2
-// of this task measured `curl -o <verdict-dir>/marker.json <url>`,
-// `curl --output ...`, `sed 's/a/b/w <verdict-dir>/marker.json' f` and
-// `sed -n 'w <verdict-dir>/marker.json' f` going BLOCKED -> ALLOWED. These
-// two predicates must therefore stay OUT of `classifyTokens`; the
-// write-guard pins in `tests/cli/pack-hook-solution-acceptance-writeguard.test.ts`
+// predicate about `sed` therefore widens that guard: review round 2 of this
+// task measured `sed 's/a/b/w <verdict-dir>/marker.json' f` and
+// `sed -n 'w <verdict-dir>/marker.json' f` going BLOCKED -> ALLOWED. This
+// predicate must therefore stay OUT of `classifyTokens`; the write-guard
+// pins in `tests/cli/pack-hook-solution-acceptance-writeguard.test.ts`
 // fail if that is ever undone.
+//
+// NO `curl` FLOOR EXISTS, deliberately (decision D-013, this run). Rounds
+// 2 and 3 both shipped one and both leaked: round 2's write-flag denylist
+// missed `-o`/`-O`/`-D`/`-c`/`-K`, and round 3's flag ALLOWLIST still
+// admitted `-w`/`--write-out`, whose `%output{FILE}` directive writes a
+// local file since curl 8.3.0 (measured on curl 8.7.1). The recurring
+// class is the premise, not the list: deciding a curl invocation is inert
+// requires knowing every curl flag's write capability across curl
+// versions, and `-H @file` shows the value side has the same problem.
+// `curl` therefore stays UNCLASSIFIED, like `ssh` and `node -e`, and rides
+// the `when:` evaluator's fallback: approval-gated in a production
+// context, never hard-blocked, never floored. Its write-capable spellings
+// are raised to `high` by `destructive-shell-floor.ts` instead, which only
+// has to recognise capability it CAN name. See docs/risk-gate.md's
+// "Unclassified actions and the fail-close rule".
 //
 // Design: ALLOWLIST, fail closed (decision D-012, this run). Every token
 // after the head must be recognised: a known read-only flag, a known
 // flag's value, or a plain operand. An unknown flag, an unknown short-flag
 // cluster character, a missing flag value, or anything this module cannot
 // name forfeits the floor. That is the opposite of the round-2 shape
-// (a denylist of write flags, where every flag nobody had enumerated,
-// `-o`, `-O`, `-D`, `-c`, `-K`, `--create-dirs`, ..., silently passed).
+// (a denylist of write flags, where every flag nobody had enumerated
+// silently passed).
 //
 // Forfeiting is cheap: the command simply stays unclassified, which the
 // `when:` evaluator treats as risk-bearing at the "high" rung (approval-
@@ -1052,9 +1066,9 @@ export function isReadOnlyKubectlCommand(command: string): boolean {
  * Characters whose UNQUOTED appearance in a token means the shell rewrites
  * that token into text this classifier never sees, and, critically, can
  * rewrite ONE token into SEVERAL argv words, which is how a write flag
- * gets past a token-shape allowlist: `curl $FLAGS url` with
- * `FLAGS='-o /etc/passwd'`, `sed -n 1p {-i,x}` (brace expansion), or a
- * glob whose match starts with `-`. `$` and a backtick also cover command
+ * gets past a token-shape allowlist: `sed $FLAGS f` with
+ * `FLAGS='-i'`, `sed -n 1p {-i,x}` (brace expansion), or a glob whose
+ * match starts with `-`. `$` and a backtick also cover command
  * substitution that the `hasUnsafeShellMetachar` preamble does not already
  * refuse (`$(`, a backtick and every chaining metacharacter are refused
  * there first).
@@ -1062,9 +1076,8 @@ export function isReadOnlyKubectlCommand(command: string): boolean {
  * Quoting is honoured: inside `'single quotes'` every one of these is
  * literal, and inside `"double quotes"` the glob/brace characters are
  * literal while `$` and a backtick stay live. That is what keeps
- * `sed -n '$p' f` and `curl 'https://h/p?a=b'` on the floor while
- * `sed -n "/$X/p" f` and `curl https://h/p?a=b` forfeit it. Quote your
- * URL to keep the floor.
+ * `sed -n '$p' f` on the floor while `sed -n "/$X/p" f` forfeits it.
+ * Quote your script to keep the floor.
  */
 const LIVE_EXPANSION_CHARS: ReadonlySet<string> = new Set([
   "$", "`", "{", "}", "*", "?", "[", "]",
@@ -1107,11 +1120,16 @@ function hasLiveShellExpansion(token: string): boolean {
 
 /**
  * Splits a metachar-cleared command into `[head, ...rest]` and applies the
- * two preconditions both floors below share: the head must be the exact
+ * two preconditions the floor below needs: the head must be the exact
  * binary name (no path prefix, the same tightness as
  * `isReadOnlyKubectlCommand`'s `tokens[0] !== "kubectl"`), and no token may
  * carry a live shell expansion. Returns `null` when the command is not a
  * floorable invocation of `bin`.
+ *
+ * Parameterised by `bin` rather than hard-coded to `sed`: it was shared
+ * with the `curl` floor D-013 removed, and the parameter keeps the head
+ * check honest (an exact match, not a prefix) for whichever binary a
+ * future floor names.
  */
 function floorArgv(command: string, bin: string): string[] | null {
   const trimmed = command.trim();
@@ -1132,8 +1150,8 @@ const CLUSTER_FORFEIT: ClusterWalk = { kind: "forfeit" };
 
 /**
  * Walk a single-dash short-flag cluster CHARACTER BY CHARACTER, which is
- * the whole point of both floors' short-flag handling: `-sd @x` must
- * forfeit on the `d` even though it starts with an allowlisted `s`.
+ * the whole point of the floor's short-flag handling: `-ni f` must forfeit
+ * on the `i` even though it starts with an allowlisted `n`.
  *
  * Every character must be in `noValueChars` until the first character
  * `isValueChar` claims. That character consumes the REST of the cluster as
@@ -1141,9 +1159,10 @@ const CLUSTER_FORFEIT: ClusterWalk = { kind: "forfeit" };
  * decides whether the value keeps the floor. `onValue` returning `false`,
  * an empty cluster, or an unrecognised character all forfeit.
  *
- * Shared by `isReadOnlySedCommand` and `isReadOnlyCurlCommand` rather than
- * written twice: `npm run check:duplication` flagged the two copies as a
- * 12-line clone, and the walk is the security-relevant half of both.
+ * `isReadOnlySedCommand` is its only caller since D-013 removed the `curl`
+ * floor. Kept as its own function rather than inlined: it is the
+ * security-relevant half of the sed floor and is exercised directly by the
+ * cluster cases in tests/runtime/read-only-floors.test.ts.
  */
 function walkShortFlagCluster(
   chars: string,
@@ -1454,124 +1473,6 @@ function readSedTwoPartCommand(s: string, start: number, isSubstitution: boolean
     break;
   }
   return i;
-}
-
-// --- curl ------------------------------------------------------------------
-
-/**
- * `curl` long flags that take NO value and neither send a body nor write
- * a local file. Chosen list (task 2929c5b7, D-012), documented in
- * docs/risk-gate.md: transfer-shaping and diagnostics only.
- */
-const CURL_READ_ONLY_LONG_FLAGS: ReadonlySet<string> = new Set([
-  "--silent", "--show-error", "--location", "--fail", "--head", "--get",
-  "--insecure", "--compressed", "--verbose", "--no-buffer", "--include",
-  "--ipv4", "--ipv6",
-]);
-/** `curl` long flags whose single value is inert (a header, a timeout, ...). */
-const CURL_READ_ONLY_LONG_VALUE_FLAGS: ReadonlySet<string> = new Set([
-  "--header", "--user-agent", "--max-time", "--connect-timeout", "--retry",
-  "--url", "--write-out", "--referer", "--cookie", "--max-redirs", "--proxy",
-]);
-/** Short-flag cluster characters taking no value: `-s`, `-S`, `-L`, ... */
-const CURL_READ_ONLY_SHORT_CHARS: ReadonlySet<string> = new Set([
-  "s", "S", "L", "f", "I", "G", "k", "v", "N", "i", "4", "6",
-]);
-/** Short-flag cluster characters taking one inert value: `-H`, `-A`, ... */
-const CURL_READ_ONLY_SHORT_VALUE_CHARS: ReadonlySet<string> = new Set([
-  "H", "A", "m", "e", "b", "x", "w",
-]);
-
-/** `true` for the two HTTP methods that do not mutate the remote resource. */
-function curlMethodIsReadOnly(value: string | undefined): boolean {
-  if (value === undefined || value === "") return false; // value-less -X: fail closed
-  const method = value.toUpperCase();
-  return method === "GET" || method === "HEAD";
-}
-
-/**
- * `curl` read-only floor for the Risk Classifier ONLY.
- *
- * ALLOWLIST: every token after `curl` must be a URL/positional operand, a
- * flag from the four sets above, or such a flag's value. Short-flag
- * clusters are decomposed CHARACTER BY CHARACTER, so `-sd @x` forfeits on
- * the `d` even though it starts with an allowlisted `s`. `-X`/`--request`
- * is special-cased: its value (glued, `=`-joined, or the next token,
- * compared case-insensitively) must be `GET` or `HEAD`, and a value-less
- * `-X` forfeits.
- *
- * Because the set is an allowlist, every local-write and body-sending flag
- * forfeits BY CONSTRUCTION rather than by enumeration: `-o`/`--output`,
- * `-O`, `-D`/`--dump-header`, `-c`/`--cookie-jar`, `-K`/`--config`,
- * `--create-dirs`, `--output-dir`, `--etag-save`, `--trace`/`--trace-ascii`,
- * `--stderr`, `-d`/`--data*`, `--json`, `-F`/`--form`/`--form-string`,
- * `-T`/`--upload-file`, and any flag a future curl adds.
- */
-export function isReadOnlyCurlCommand(command: string): boolean {
-  const rest = floorArgv(command, "curl");
-  if (rest === null) return false;
-
-  let optionsEnded = false;
-  for (let i = 0; i < rest.length; i += 1) {
-    const raw = rest[i]!;
-    const decoded = decodeShellWord(raw);
-    if (optionsEnded) continue; // every token after `--` is a URL operand
-    const rawIsFlag = raw.startsWith("-") && raw !== "-";
-    const decodedIsFlag = decoded.startsWith("-") && decoded !== "-";
-    if (rawIsFlag !== decodedIsFlag) return false; // `"-o"`: fail closed
-    if (!rawIsFlag) continue; // URL / positional operand
-    if (decoded === "--") {
-      optionsEnded = true;
-      continue;
-    }
-    if (decoded.startsWith("--")) {
-      const eq = decoded.indexOf("=");
-      const name = eq === -1 ? decoded : decoded.slice(0, eq);
-      if (name === "--request") {
-        let value: string | undefined;
-        if (eq !== -1) {
-          value = decoded.slice(eq + 1);
-        } else if (i + 1 < rest.length) {
-          value = decodeShellWord(rest[i + 1]!);
-          i += 1;
-        }
-        if (!curlMethodIsReadOnly(value)) return false;
-        continue;
-      }
-      if (CURL_READ_ONLY_LONG_VALUE_FLAGS.has(name)) {
-        if (eq === -1) {
-          i += 1;
-          if (i >= rest.length) return false; // missing value: fail closed
-        }
-        continue;
-      }
-      if (eq === -1 && CURL_READ_ONLY_LONG_FLAGS.has(name)) continue;
-      return false;
-    }
-    const walk = walkShortFlagCluster(
-      decoded.slice(1),
-      CURL_READ_ONLY_SHORT_CHARS,
-      (c) => c === "X" || CURL_READ_ONLY_SHORT_VALUE_CHARS.has(c),
-      (c, glued, nextToken) => {
-        if (c !== "X") {
-          // An inert value (`-H 'A: b'`, `-m 5`): only its PRESENCE
-          // matters, but a missing one still fails closed.
-          return glued.length > 0 || nextToken !== undefined;
-        }
-        const value =
-          glued.length > 0
-            ? glued
-            : nextToken === undefined
-              ? undefined
-              : decodeShellWord(nextToken);
-        return curlMethodIsReadOnly(value);
-      },
-      rest[i + 1],
-    );
-    if (walk.kind === "forfeit") return false;
-    if (walk.consumedNext) i += 1;
-  }
-  return true;
 }
 
 /**

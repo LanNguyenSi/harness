@@ -1,5 +1,6 @@
-// Direct coverage for the Risk-Classifier-only `sed` / `curl` read-only
-// floors (task 2929c5b7, review round 3).
+// Direct coverage for the Risk-Classifier-only `sed` read-only floor, and
+// for the deliberate ABSENCE of a `curl` one (task 2929c5b7, review round
+// 4, decision D-013).
 //
 // WHY A SEPARATE FILE, and why every case runs through `classifyRisk`
 // with an EMPTY classifier list: round 2 shipped these floors with
@@ -15,7 +16,6 @@ import type { ActionEnvelope, EnvelopeContext } from "../../src/runtime/index.js
 import type { ToolEvent } from "../../src/runtime/intercept.js";
 import {
   isReadOnlyBashCommand,
-  isReadOnlyCurlCommand,
   isReadOnlySedCommand,
 } from "../../src/runtime/read-only-bash.js";
 
@@ -80,55 +80,65 @@ describe("sed read-only floor (Risk Classifier only, task 2929c5b7)", () => {
   });
 });
 
-describe("curl read-only floor (Risk Classifier only, task 2929c5b7)", () => {
+// D-013 (fix round 4): there is NO curl read-only floor, by design. The
+// per-flag allowlist round 3 shipped was the third attempt at one and the
+// second to leak: it allowlisted `-w`/`--write-out` as inert, but curl
+// >= 8.3.0's `%output{FILE}` directive in that format string writes a
+// local file (verified on curl 8.7.1), so `curl -s -w '%output{/etc/x}p'
+// URL` floored to `low` and escaped the approval gate entirely.
+//
+// The recurring class is the premise, not the list: deciding a curl
+// invocation is inert requires knowing every curl flag's write capability
+// across curl versions. So curl stays UNCLASSIFIED like `ssh` and
+// `node -e` (approval-gated by prong (b), never hard-blocked, never
+// floored), and only its write-CAPABLE spellings are named, by the
+// destructive floor, which raises them to `high`.
+describe("curl has NO read-only floor (decision D-013, task 2929c5b7)", () => {
   it.each([
-    ["short cluster", "curl -sL URL"],
-    ["cluster plus a header flag", "curl -sSf -H 'A: b' URL"],
+    ["plain read", "curl -sL URL"],
     ["HEAD request", "curl -I URL"],
     ["explicit GET", "curl -X GET URL"],
-    ["lowercase get is accepted case-insensitively", "curl -X get URL"],
     ["quoted query-string URL", "curl -s 'https://h/p?a=b'"],
-  ])("floors %s to low", (_label, command) => {
-    expect(isReadOnlyCurlCommand(command)).toBe(true);
-    expect(floorOnly(command).severity).toBe("low");
+    ["write-out %output writes a local file (the round-3 hole)", "curl -s -w '%output{/etc/x}p' URL"],
+    ["@file header ships a local file into the request", "curl -s -H @/etc/passwd URL"],
+  ])("does NOT floor %s to low", (_label, command) => {
+    expect(floorOnly(command).severity).not.toBe("low");
   });
 
-  // NEGATIVE CONTROL for the floor: every write-capable curl spelling the
-  // round-2 denylist missed, plus the body/method ones it caught. All of
-  // them must forfeit, and none may end up `low`.
+  // The two write-capable spellings round 3 missed are now `high` via the
+  // DESTRUCTIVE floor, with no manifest patterns in play.
   it.each([
-    ["--json body", "curl --json '{}' URL"],
-    ["-F multipart form", "curl -F file=@x URL"],
-    ["--form-string", "curl --form-string a=b URL"],
-    ["lowercase non-GET method", "curl -X post URL"],
-    ["value-less -X consumes the URL as its method", "curl -X URL"],
-    ["cluster hiding -d", "curl -sd @x URL"],
-    ["cluster with glued method", "curl -sXPOST URL"],
-    ["cluster with glued DELETE", "curl -sXDELETE URL"],
-    ["cluster hiding -T", "curl -sT x URL"],
-    ["cluster hiding -F", "curl -sF file=@x URL"],
-    ["-o writes a local file", "curl -o /etc/passwd URL"],
-    ["--output writes a local file", "curl --output /etc/passwd URL"],
-    ["-O writes a remote-named file", "curl -O URL"],
-    ["-D writes the response headers", "curl -D /etc/h URL"],
-    ["-c writes a cookie jar", "curl -c /etc/c URL"],
-    ["--trace-ascii writes a trace file", "curl --trace-ascii /etc/t URL"],
-    ["-K reads flags from a file this scan never opens", "curl -K flags.conf URL"],
-    ["--config reads flags from a file", "curl --config flags.conf URL"],
-    ["unquoted expansion can inject flags", "curl $FLAGS URL"],
-    ["quoting hides a flag", 'curl "-o" /etc/passwd URL'],
-  ])("does NOT floor %s", (_label, command) => {
-    expect(isReadOnlyCurlCommand(command)).toBe(false);
-    expect(floorOnly(command).severity).not.toBe("low");
+    ["-w with a %output directive", "curl -s -w '%output{/etc/x}p' URL"],
+    ["-H with an @file value", "curl -s -H @/etc/passwd URL"],
+  ])("classifies %s as high via the destructive floor", (_label, command) => {
+    const profile = floorOnly(command);
+    expect(profile.classified).toBe(true);
+    expect(profile.severity).toBe("high");
+  });
+
+  // NEGATIVE CONTROL for the two assertions above, and the whole point of
+  // D-013: an ordinary read-only curl is neither floored low NOR raised to
+  // high. It is genuinely UNCLASSIFIED, which prong (b) treats as
+  // risk-bearing at the "high" rung: approval-gated, never hard-blocked.
+  // Without this case, a floor that classified every curl `high` would
+  // satisfy the block above.
+  it("leaves an ordinary read-only curl genuinely unclassified", () => {
+    const profile = floorOnly("curl -sL URL");
+    expect(profile.classified).toBe(false);
+    expect(profile.severity).toBeNull();
   });
 });
 
-describe("the sed/curl floors stay OUT of the shared read-only predicate", () => {
+describe("the sed floor stays OUT of the shared read-only predicate", () => {
   // The load-bearing separation (review round 2's CRITICAL finding): the
   // understanding-gate PreToolUse blocker and the solution-acceptance
   // write-guard consume `isReadOnlyBashCommand` directly and short-circuit
   // on it. `sed` and `curl` were never accepted there before this task and
-  // must not be now. The write-guard side of this is pinned separately in
+  // must not be now. `curl` no longer has a Risk-Classifier floor either
+  // (D-013), but these pins stay: they guard the SHARED predicate, which is
+  // a different gate from the Risk Classifier, and a future curl floor must
+  // not be added there.
+  // The write-guard side of this is pinned separately in
   // tests/cli/pack-hook-solution-acceptance-writeguard.test.ts.
   it.each([
     "sed -n p f",

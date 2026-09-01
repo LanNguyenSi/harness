@@ -1912,10 +1912,14 @@ describe("intercept — task 2929c5b7: gate-prod-destructive unclassified-fallba
     now: NOW,
   };
 
-  // AC1: these six commands must NOT be denied by gate-prod-destructive
-  // in a production cwd — the exact false-positive shape from the
-  // 2026-09-01 incident (four consecutive read-only investigation
-  // commands denied until the cwd was moved out of the repo).
+  // AC1: the read-only investigation commands below must NOT be denied by
+  // gate-prod-destructive in a production cwd. This is the false-positive shape
+  // from the 2026-09-01 incident, in which a run of read-only
+  // investigation commands was denied until the cwd was moved out of the
+  // repo. The incident's own command list is recorded in the CHANGELOG
+  // entry for task 2929c5b7; this table is the SUBSET that takes prong (a),
+  // the explicit `low` floor. The incident's `curl`, `sshpass ssh` and
+  // `node -e` take prong (b) instead and are asserted in the next block.
   //
   // Each case asserts TWO things, deliberately: (1) `intercept()`
   // end-to-end does not deny it, AND (2) the Risk Classifier explicitly
@@ -1931,7 +1935,6 @@ describe("intercept — task 2929c5b7: gate-prod-destructive unclassified-fallba
     ["cat", "cat notes/memory.md"],
     ["sed -n", "sed -n '1,20p' notes/memory.md"],
     ["grep", "grep TODO notes/memory.md"],
-    ["curl (no -X/-d)", "curl https://api.example.com/status"],
   ])("does NOT deny %s in a production cwd, and it is explicitly classified `low`, not merely unclassified", async (_label, command) => {
     const result = await runInProdCwd(command);
     expect(result.blockJson).toBeNull();
@@ -1957,9 +1960,19 @@ describe("intercept — task 2929c5b7: gate-prod-destructive unclassified-fallba
   // (restore old when-eval.ts fallback semantics, unclassified satisfies
   // every severity_at_least): the "not denied by gate-prod-destructive"
   // assertion below goes red.
+  //
+  // D-013 (fix round 4) puts `curl` in the same category, for a measured
+  // reason rather than an analogy: rounds 2 and 3 each shipped a curl
+  // `low` floor and each leaked (a write-flag denylist that missed `-o`,
+  // then a flag allowlist that still admitted `-w '%output{FILE}'`, which
+  // writes a local file since curl 8.3.0). Deciding a curl invocation is
+  // inert needs every curl flag's write capability across curl versions,
+  // so curl stays unclassified and only its write-CAPABLE spellings are
+  // named, by the destructive floor.
   it.each([
     ["ssh <host> <cmd>", 'ssh prod-host "cat /etc/hosts"'],
     ["node -e", "node -e \"console.log(1+1)\""],
+    ["curl (no -X/-d)", "curl https://api.example.com/status"],
   ])("%s stays unclassified: NOT denied by gate-prod-destructive (critical), but IS approval-gated by gate-prod-destructive-approval (high) via the fallback", async (_label, command) => {
     const envelope = buildActionEnvelope(
       { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } } as ToolEvent,
