@@ -2,6 +2,26 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-01T07:21:52Z, task `be9faf70` (two review rounds; this branch:
+  `docs/decisions/2026-08-27-ug-auto-mode-approval.md`,
+  `docs/okf/codex-adapter-parity-gaps.md`,
+  `docs/policy-packs/understanding-before-execution.md`, `docs/CLI.md`,
+  `src/cli/index.ts`, `src/cli/delegate/index.ts`, `CHANGELOG.md`,
+  `tests/cli/delegate.test.ts`): decided gap 14 (`claude -p` delegation
+  stays Claude Code only on the consuming side) as a "Platform scope"
+  amendment with a reopen criterion; round 2 corrected the issuing side
+  after review found `harness delegate` resolves a parent from
+  `$CODEX_SESSION_ID` and `checkApprovalMarker` applies no harness
+  filter, so a Codex session can still issue a delegation for a Claude
+  child today; named the two keys a Codex child would need; pinned the
+  `--help` boundary sentence with a test. The `src/cli/index.ts` help
+  edit shifted three `pause-vs-gate-kill-switch.md` citations (+2),
+  re-pointed; six bundle docs whose `sources:` list the touched files
+  were re-verified (no content change) and re-stamped twice (once per
+  round), then once more after merging master, which carried the
+  `a4ceb6be` re-stamps of the same docs. `npx -y okf-kit@0.8.0 check
+  docs/okf` after the last commit: clean, no findings.
+
 - 2026-09-01T06:56:42Z, review-round-2 fixes on task `a4ceb6be` (this
   round: `docs/decisions/2026-08-27-ug-auto-mode-approval.md`,
   `src/cli/doctor/bypass-without-auto-approve.ts`,
