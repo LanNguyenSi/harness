@@ -492,7 +492,7 @@ const CURL_HEADER_FLAG: { long: string; short: string } = { long: "--header", sh
  * `-b`/`--cookie` uses a DIFFERENT rule than `-H`, measured on curl 8.7.1:
  * a value containing no `=` is read as a cookie-jar FILENAME, `@`-prefixed
  * or not (`curl -b jar.txt` reads the jar; `curl -b @jar.txt` opens a file
- * literally named `@jar.txt` — the `@` is not a file marker for this
+ * literally named `@jar.txt`, the `@` is not a file marker for this
  * flag). A value containing `=` is sent as inline cookie data
  * (`-b 'name=value'`) and stays inert.
  */
@@ -582,6 +582,9 @@ function scanCurl(args: readonly string[], hits: DestructiveFloorHit[]): void {
       CURL_COOKIE_FLAG.long,
       CURL_COOKIE_FLAG.short,
     );
+    // An empty value (-b '') only switches curl's cookie engine on without
+    // opening a file; it is raised anyway, an accepted over-block in the safe
+    // direction.
     if (cookieValue !== undefined && !cookieValue.includes("=")) atFile = true;
   }
 

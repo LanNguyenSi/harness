@@ -144,7 +144,7 @@ describe("built-in destructive floor: recognition (no manifest patterns)", () =>
     // A COOKIE value follows a DIFFERENT curl rule than a header value
     // (fix round 5): a value with no `=` is a filename curl reads,
     // whether or not it happens to start with `@` (measured on curl
-    // 8.7.1 — `-b jar.txt` reads the jar; `-b @jar.txt` opens a file
+    // 8.7.1, `-b jar.txt` reads the jar; `-b @jar.txt` opens a file
     // literally named `@jar.txt`, since `-b` has no `@` file-marker
     // rule of its own).
     ["curl -b @file", "curl -b @/etc/cookies https://h/x"],
@@ -272,7 +272,7 @@ describe("built-in destructive floor: recognition (no manifest patterns)", () =>
     expect(profile.severity).toBeNull();
     // The approval-gate consequence the comment above claims, stated: an
     // unclassified profile still satisfies `severity_at_least: high` (the
-    // "treated as high" rung, one below `critical` — see when-eval.ts's
+    // "treated as high" rung, one below `critical`, see when-eval.ts's
     // module header), so a production-scoped approval gate still fires on
     // this gap even though the `critical` hard block does not.
     const result = evaluateWhen({ "risk.severity_at_least": "high" }, { risk: profile, environment: PROD_ENV });
