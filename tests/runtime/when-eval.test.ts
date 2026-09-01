@@ -2,7 +2,10 @@
 //
 // Covers each of the four clause kinds (match + no-match), the AND
 // semantics across clauses, and the load-bearing "unknown is not safe"
-// rule: an unclassified risk profile satisfies every risk-derived clause.
+// rule: an unclassified risk profile satisfies `risk.category_in` /
+// `action.reversible` unconditionally, and satisfies
+// `risk.severity_at_least` up through `high` but never `critical`
+// (task 2929c5b7 — see when-eval.ts's module header).
 
 import { describe, expect, it } from "vitest";
 import type { DeletionTargetVerdict } from "../../src/runtime/deletion-target-resolve.js";
@@ -62,12 +65,34 @@ describe("evaluateWhen — risk.severity_at_least", () => {
     expect(r.clauses[0]?.actual).toBe("medium");
   });
 
-  it("matches an UNCLASSIFIED profile against any threshold (unknown is not safe)", () => {
+  it("matches an UNCLASSIFIED profile against low/medium/high thresholds (unknown is not safe, but not proven critical)", () => {
+    for (const threshold of ["low", "medium", "high"] as const) {
+      const r = evaluateWhen(when({ "risk.severity_at_least": threshold }), {
+        risk: UNCLASSIFIED,
+        environment: env("production"),
+      });
+      expect(r.matched).toBe(true);
+      expect(r.unclassifiedFallback).toBe(true);
+      expect(r.clauses[0]?.actual).toContain("unclassified");
+    }
+  });
+
+  it("does NOT match an UNCLASSIFIED profile against the critical threshold (task 2929c5b7)", () => {
+    // The fix this task ships: an unrecognized action is no longer
+    // treated as PROVEN critical on its own — only an explicit
+    // classification satisfies severity_at_least: critical. It still
+    // satisfies severity_at_least: high (the case above), so the
+    // fallback stays risk-bearing, just not at the top rung. See
+    // when-eval.ts's module header for the full rationale.
     const r = evaluateWhen(when({ "risk.severity_at_least": "critical" }), {
       risk: UNCLASSIFIED,
       environment: env("production"),
     });
-    expect(r.matched).toBe(true);
+    expect(r.matched).toBe(false);
+    // The clause outcome was still DECIDED by the fallback rule (not a
+    // real classification), so the flag stays true even though it
+    // failed to match — see WhenEvaluation.unclassifiedFallback's
+    // updated doc comment.
     expect(r.unclassifiedFallback).toBe(true);
     expect(r.clauses[0]?.actual).toContain("unclassified");
   });

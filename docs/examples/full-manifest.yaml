@@ -917,6 +917,68 @@ risk:
         - pattern: 'terraform(?:\s+-\S+(?:\s+(?!destroy\b)(?!-)\S+)?)*\s+destroy'
           categories: [destructive, infrastructure_change]
           severity: critical
+        # Task 2929c5b7: unclassified commands no longer trivially
+        # satisfy `risk.severity_at_least: critical` (see when-eval.ts
+        # and docs/risk-gate.md's "Unclassified actions and the
+        # fail-close rule") — an unrecognized action is still risk-
+        # bearing (it satisfies severity_at_least up through `high`),
+        # but no longer counts as PROVEN critical on its own. Loosening
+        # that fallback would silently reopen a bypass for a
+        # mutating/destructive head that simply has no classifier
+        # pattern, so every action comparably destructive to the two
+        # `critical` patterns above (rm -rf, terraform destroy) or the
+        # `high` ones (DROP TABLE, kubectl delete) is now classified
+        # explicitly too, at the matching severity, rather than relying
+        # on the (now weaker) fallback to catch it. Read-only siblings of
+        # these same heads (`sed` without `-i`, `curl` without
+        # `-X`/`-d`, `git status`/`log`/`rev-list`/...) are handled by
+        # the Risk Classifier's built-in read-only floor
+        # (`read-only-bash.ts`), not by a pattern here.
+        - pattern: '\bdd\s[^\n]*\bof='
+          categories: [destructive, data_loss]
+          severity: critical
+        - pattern: '\btruncate\b[^\n]*(-s|--size)\b'
+          categories: [destructive, data_loss]
+          severity: critical
+        - pattern: '\bshred\b'
+          categories: [destructive, data_loss, irreversible_action]
+          severity: critical
+        - pattern: '\bmkfs(\.\w+)?\b'
+          categories: [destructive, data_loss, infrastructure_change]
+          severity: critical
+        - pattern: '\bfind\b[^\n]*-delete\b'
+          categories: [destructive, data_loss]
+          severity: critical
+        - pattern: '\bfind\b[^\n]*-exec(dir)?\s+rm\b'
+          categories: [destructive, data_loss]
+          severity: critical
+        - pattern: '\bgit\s+reset\b[^\n]*--hard\b'
+          categories: [destructive, data_loss]
+          severity: high
+        - pattern: '\bgit\s+push\b[^\n]*(--force(-with-lease)?\b|\s-f\b)'
+          categories: [destructive, production_mutation, deployment_change]
+          severity: high
+        - pattern: '\bgit\s+clean\b[^\n]*(--force\b|\s-[a-zA-Z]*f[a-zA-Z]*\b)'
+          categories: [destructive, data_loss]
+          severity: high
+        - pattern: '\bgit\s+checkout\s+--\s+\.'
+          categories: [destructive, data_loss]
+          severity: high
+        - pattern: '\bgit\s+restore\s+\.(\s|$)'
+          categories: [destructive, data_loss]
+          severity: high
+        - pattern: '\b(chmod|chown)\b[^\n]*(-R\b|--recursive\b)'
+          categories: [mass_update]
+          severity: high
+        - pattern: '\bcurl\b[^\n]*(-X\s*(POST|PUT|PATCH|DELETE)\b|--request[\s=](POST|PUT|PATCH|DELETE)\b)'
+          categories: [production_mutation, network_exfiltration]
+          severity: high
+        - pattern: '\bcurl\b[^\n]*(\s-d\b|--data\b|--upload-file\b|\s-T\b)'
+          categories: [production_mutation, network_exfiltration]
+          severity: high
+        - pattern: '\bsed\b[^\n]*(\s-[a-zA-Z]*i[a-zA-Z]*\b|--in-place\b)'
+          categories: [destructive, data_loss]
+          severity: high
 
 environments:
   resolvers:

@@ -3,7 +3,7 @@ type: overview
 title: Shell quote models, measured divergence against bash
 description: The policy engine has three independent shell-word models plus a raw-regex trigger layer. This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-08-31T17:26:14Z
+timestamp: 2026-09-01T07:08:49Z
 sources:
   - src/runtime/command-normalize.ts
   - src/cli/init/composer.ts
@@ -102,7 +102,9 @@ Aufrufstellen.** Neues `src/runtime/shell-word.ts` exportiert
 `\xHH`/`\NNN`/`\uHHHH`, quote-eigene Backslash-Regeln, Lauf-Verkettung —
 KEINE `$VAR`/`$()`/Backtick/`~`/Glob-Expansion) und wird jetzt vor jedem
 Schreib-Flag-Vergleich in `read-only-bash.ts` angewandt (`find`, `sort`,
-`file`), stets nur auf der RESTRIKTIVEN Seite (erkennt mehr Tokens als
+`file`; seit Task `2929c5b7` (2026-09-01, ungemessen gegen echtes bash,
+nur strukturell dieselbe raw-ODER-decoded-Anwendung) auch `sed` und
+`curl`), stets nur auf der RESTRIKTIVEN Seite (erkennt mehr Tokens als
 Schreib-Flag, nie weniger). Das schließt K5s drei gemessenen Fail-opens
 punktgenau: `find . -"delete"`, `find . -'delete'`, `find . -\delete`
 (plus, laut Fix-Beleg, zwei weitere Schreibweisen und die `sort`/`file`-

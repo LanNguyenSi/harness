@@ -128,13 +128,16 @@ export interface PolicyDecision {
    */
   recordHint?: string;
   /**
-   * True when the policy's `when:` block matched ONLY because the action
-   * was unclassified (the "unknown is not safe" fail-close rule in
-   * `when-eval.ts`). Absent when the policy has no `when:` block, when
-   * the match was a genuine classification hit, or when `unclassifiedFallback`
-   * was false. Present in the audit record and the non-ux block-time deny
-   * message so an operator can distinguish a real critical-severity match
-   * from a fail-closed unclassified command at a glance.
+   * True when the policy's `when:` block matched because the action was
+   * unclassified (the fail-close rule in `when-eval.ts`: "unknown is not
+   * safe" for `risk.category_in` / `action.reversible`, the "treated as
+   * high" rung for `risk.severity_at_least`). Absent when the policy has
+   * no `when:` block, when the match was a genuine classification hit,
+   * or when `unclassifiedFallback` was false. Present in the audit
+   * record, the non-ux block-time deny message, AND (task 2929c5b7) the
+   * ux-declared `cannot:` deny message, so an operator — or the agent
+   * reading its own deny — can distinguish a real critical-severity
+   * match from a fail-closed unclassified command at a glance.
    */
   whenUnclassifiedFallback?: boolean;
   evaluatedAt: string;
@@ -1541,15 +1544,29 @@ export async function intercept(
         `until the ledger is reachable again. Ask your operator to check ` +
         `grounding-mcp (harness doctor), then retry. Session: ${sessionId}.`;
     } else if (blockingPolicy?.ux) {
-      // The ux surface is operator-curated plain language. The
-      // unclassifiedFallback flag rides the audit record (recorded above
-      // and surfaced by `harness audit` and `explain --trace`) so operators
-      // can identify a fail-closed match without altering the agent-facing
-      // text the operator intentionally worded.
-      reasonText = renderAgentFacing(blockingPolicy.ux, {
+      // The ux surface is operator-curated plain language. Task
+      // 2929c5b7: a ux-declared policy's `cannot:` text used to be
+      // rendered unchanged even when the match was a fail-closed
+      // unclassified hit, not a genuine classification — so
+      // gate-prod-destructive's "You cannot run this critical
+      // destructive action against production." was shown verbatim for
+      // an unrecognized READ (e.g. `cat`/`sed -n`/`curl`) the moment the
+      // environment resolved to production, which is exactly the false
+      // positive this task exists to fix. When `whenUnclassifiedFallback`
+      // is set, a fallback-specific sentence is PREPENDED naming the real
+      // cause — "unclassified action in a production context" — before
+      // the operator's own `cannot:` text, which is left byte-for-byte
+      // intact (added to, never replaced): the operator still chose that
+      // wording for the genuine-classification case, which keeps
+      // rendering unchanged. See docs/risk-gate.md, "Unclassified
+      // actions and the fail-close rule".
+      const uxText = renderAgentFacing(blockingPolicy.ux, {
         ...blocking.extractValues,
         SESSION_ID: sessionId,
       });
+      reasonText = blocking.whenUnclassifiedFallback
+        ? `This is an unclassified action in a production context: no risk classifier pattern recognized it, so the fail-closed severity fallback applied rather than a genuine critical-severity match. ${uxText}`
+        : uxText;
     } else {
       const producersBlock = renderProducers(
         blockingPolicy?.producers,

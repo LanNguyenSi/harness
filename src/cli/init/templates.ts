@@ -1176,6 +1176,56 @@ risk:
         - pattern: 'terraform(?:\\s+-\\S+(?:\\s+(?!destroy\\b)(?!-)\\S+)?)*\\s+destroy'
           categories: [destructive, infrastructure_change]
           severity: critical
+        # Task 2929c5b7: unclassified commands no longer trivially
+        # satisfy risk.severity_at_least: critical (see when-eval.ts and
+        # docs/risk-gate.md's "Unclassified actions and the fail-close
+        # rule") — kept in lockstep with docs/examples/full-manifest.yaml
+        # by tests/cli/init-full-template-parity.test.ts.
+        - pattern: '\\bdd\\s[^\\n]*\\bof='
+          categories: [destructive, data_loss]
+          severity: critical
+        - pattern: '\\btruncate\\b[^\\n]*(-s|--size)\\b'
+          categories: [destructive, data_loss]
+          severity: critical
+        - pattern: '\\bshred\\b'
+          categories: [destructive, data_loss, irreversible_action]
+          severity: critical
+        - pattern: '\\bmkfs(\\.\\w+)?\\b'
+          categories: [destructive, data_loss, infrastructure_change]
+          severity: critical
+        - pattern: '\\bfind\\b[^\\n]*-delete\\b'
+          categories: [destructive, data_loss]
+          severity: critical
+        - pattern: '\\bfind\\b[^\\n]*-exec(dir)?\\s+rm\\b'
+          categories: [destructive, data_loss]
+          severity: critical
+        - pattern: '\\bgit\\s+reset\\b[^\\n]*--hard\\b'
+          categories: [destructive, data_loss]
+          severity: high
+        - pattern: '\\bgit\\s+push\\b[^\\n]*(--force(-with-lease)?\\b|\\s-f\\b)'
+          categories: [destructive, production_mutation, deployment_change]
+          severity: high
+        - pattern: '\\bgit\\s+clean\\b[^\\n]*(--force\\b|\\s-[a-zA-Z]*f[a-zA-Z]*\\b)'
+          categories: [destructive, data_loss]
+          severity: high
+        - pattern: '\\bgit\\s+checkout\\s+--\\s+\\.'
+          categories: [destructive, data_loss]
+          severity: high
+        - pattern: '\\bgit\\s+restore\\s+\\.(\\s|$)'
+          categories: [destructive, data_loss]
+          severity: high
+        - pattern: '\\b(chmod|chown)\\b[^\\n]*(-R\\b|--recursive\\b)'
+          categories: [mass_update]
+          severity: high
+        - pattern: '\\bcurl\\b[^\\n]*(-X\\s*(POST|PUT|PATCH|DELETE)\\b|--request[\\s=](POST|PUT|PATCH|DELETE)\\b)'
+          categories: [production_mutation, network_exfiltration]
+          severity: high
+        - pattern: '\\bcurl\\b[^\\n]*(\\s-d\\b|--data\\b|--upload-file\\b|\\s-T\\b)'
+          categories: [production_mutation, network_exfiltration]
+          severity: high
+        - pattern: '\\bsed\\b[^\\n]*(\\s-[a-zA-Z]*i[a-zA-Z]*\\b|--in-place\\b)'
+          categories: [destructive, data_loss]
+          severity: high
 
 environments:
   resolvers:

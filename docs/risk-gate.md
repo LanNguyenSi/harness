@@ -149,6 +149,7 @@ classification the runtime gate uses.
 
 A second `low`-severity floor recognizes any *provably read-only* Bash
 command (`git status`, `git diff`, `grep`, `cat`, `ls`, `head`, `cd`,
+`sed` without `-i`, `curl` without `-X`/`-d`/`--upload-file`,
 `npm audit`, `npm ls`, `sort FILE`, `tree DIR`, `file FILE`, ...),
 reusing the same metachar-hardened classifier the understanding gate uses
 to allow reads without an approved report
@@ -228,7 +229,38 @@ Some bins are classified read-only only when their write flags are absent
   minimum leaves `--rec` correctly read-only (real git resolves it to
   `--recurse-submodules`, unrelated and harmless). Out of scope (separate
   tasks): path-qualified `git -C <dir>` (5b5d1022) and config/env-borne
-  vectors (`GIT_EXTERNAL_DIFF`, `protocol.ext.allow`).
+  vectors (`GIT_EXTERNAL_DIFF`, `protocol.ext.allow`). A path-qualified
+  invocation like `git -C <dir> rev-list ...` therefore still does NOT
+  reach this floor and stays unclassified — task 2929c5b7 deliberately
+  does not extend `isReadOnlyGitInvocation` to cover it (out of that
+  task's scope too); it is still protected against the fail-closed
+  critical-severity deny by the `risk.severity_at_least` change below
+  ("Unclassified actions and the fail-close rule"), just not floored to
+  `low` the way `git -C`-free reads are.
+- `sed` (task 2929c5b7): read-only when no in-place-edit flag appears —
+  `-i`, GNU's optional glued suffix form (`-i.bak`), or the long form
+  `--in-place` / `--in-place=SUFFIX`. Without `-i`, sed only ever writes
+  its result to stdout. Deliberately conservative and NOT abbreviation-
+  or getopt-cluster-measured the way the git/sort/file guards above are
+  (a documented simplification, not a full audit): any short token
+  starting with a single `-` that contains the letter `i` anywhere
+  forfeits the floor, including the common combined idiom `-ni`
+  (quiet + in-place) and a token whose own glued script text happens to
+  contain the letter `i` (`-e's/is/isnt/'`) — an accepted false
+  positive, same "over-block a read, never under-block a write" posture
+  as `sort`'s guard above. A positional script operand (no leading `-`)
+  is unaffected, so `sed -n '/is/p' file` still floors.
+- `curl` (task 2929c5b7): read-only when it carries no data/upload/form
+  flag (`-d` / `--data` / `--data-raw` / `--data-binary` /
+  `--data-urlencode` / `--data-ascii` / `--json` / `-F` / `--form` /
+  `--form-string` / `-T` / `--upload-file`, exact or glued short form)
+  and no `-X` / `--request` method other than `GET`/`HEAD` (a value-less
+  `-X`/`--request` fails closed, not treated as GET). A curated,
+  DISCLOSED-boundary flag list, not a full measured audit: `-K` /
+  `--config` reads flags — including `-X`/`-d` — from an operator-named
+  file this guard never opens, the same class of evasion `npm`'s
+  `--registry` guard above closes for npm specifically but this guard
+  does not close for curl.
 
 Two more entries floor a whole class of commands that were previously
 unclassified and, on a production-resolved session (checked-out `main`
@@ -590,6 +622,61 @@ observed to fail exactly the tests named above, then restored — see the
 blocks above (this file's own record of what was measured, rather than
 a pointer to a subagent report that does not live in this repository).
 
+#### `ssh` / `node -e` local-head-only floors (task `2929c5b7`)
+
+Two more Risk-Classifier-only floors, same scoping precedent as the
+kubectl floor above (`isReadOnlySshRiskFloor` / `isReadOnlyNodeEvalRiskFloor`
+in `src/runtime/read-only-bash.ts`, wired into `classifyRisk` in
+`risk-classifier.ts`; NEVER folded into `isReadOnlyBashCommand` /
+`isReadOnlyBashPipeline`, so the understanding-gate PreToolUse blocker and
+the solution-acceptance write-guard keep treating `ssh` and `node -e` as
+non-read-only, unchanged by either floor). Both are a DELIBERATE,
+DISCLOSED risk-acceptance for the Risk Gate specifically, not a claim
+that the action is actually read-only:
+
+- **`ssh <host> <cmd>`**: classified by the LOCAL head token (`ssh`)
+  ONLY. The remote command is NOT inspected — `ssh prod-host "rm -rf /"`
+  floors to `low` exactly like `ssh prod-host "cat /etc/hosts"` does.
+  This is the honest boundary the task explicitly asked for: the Risk
+  Gate reasons about the LOCAL shell command it can see, and a quoted
+  remote payload is opaque to it by construction. Still fail-safe on the
+  LOCAL side: any shell metacharacter, chain, or substitution in the
+  OUTER command (`ssh host "x"; rm -rf /`) is refused up front by the
+  same `hasUnsafeShellMetachar` guard every other floor in this module
+  uses, so a local write cannot be laundered behind the `ssh` head
+  either.
+- **`node -e <code>` / `node --eval <code>`**: the code argument is
+  arbitrary and unexamined. Justified narrowly: `gate-prod-destructive(-approval)`
+  exist to catch production-DESTRUCTIVE shell actions, not to be a
+  code-execution sandbox — an agent that can run `node -e` can already
+  run equivalent JS via a script file, `python3 -c`, etc., none of which
+  this floor (or the general read-only floor) claims to police. A bare
+  `node script.js` (no `-e`/`--eval`) does NOT match — this floor is
+  scoped to the literal eval flags, not to every node invocation.
+
+**This is a genuine, disclosed security tradeoff, not a claim of actual
+read-only-ness — flag it in review.** Both floors remove the Risk
+Gate's coverage entirely for their shape (not just the hard-block: an
+`ssh <host> <destructive-cmd>` or `node -e <destructive-code>` also
+skips `gate-prod-destructive-approval`'s operator-approval requirement,
+since `low` severity does not satisfy `severity_at_least: high` either).
+The task that added them (`2929c5b7`) named both explicitly in its
+"read-only heads to classify low" list, reasoning that the four
+consecutive read-only investigation commands the fix responds to
+included exactly this shape (`sshpass ssh`, `node -e`) and that the
+alternative — parsing or sandboxing the remote/evaluated content — is
+out of scope for a regex-and-argv-token classifier. Compare this to the
+`risk.severity_at_least` fallback change below, which still leaves an
+UNCLASSIFIED action risk-bearing at `high`: these two floors instead
+grant `low`, the strongest exemption, to a head whose actual behavior is
+unbounded. If a deployment wants `ssh`/`node -e` gated instead of
+floored, the fix is to NOT ship these two floors (they are additive,
+easily reverted) or to add an explicit `high`/`critical` classifier
+pattern for the specific `ssh`/`node` invocation shapes that deployment
+cares about (an operator classifier composes with — and can only RAISE
+above — a built-in floor, same rule as every other floor in this
+document).
+
 ### Environment resolvers (`environments:`)
 
 *Status: parsed and validated (Phase 7 #1). Consumed by the Context
@@ -761,11 +848,85 @@ Phase 7 scope; it remains a possible future relaxation.
 
 The "unknown is not safe" rule means that any action the Risk Classifier
 does not recognise (no classifier pattern matched) satisfies every
-`risk.severity_at_least`, `risk.category_in`, and `action.reversible`
-clause automatically. The `environment.name` clause is exempt: the
-Context Resolver always returns a concrete environment (the no-match case
-resolves to the matchable name `unknown`), so it is always a real
-equality test.
+`risk.category_in` and `action.reversible` clause automatically. The
+`environment.name` clause is exempt: the Context Resolver always returns
+a concrete environment (the no-match case resolves to the matchable
+name `unknown`), so it is always a real equality test.
+
+**`risk.severity_at_least` is narrower, since task `2929c5b7` (2026-09-01,
+following the 2026-08-06 gate audit).** An unclassified action still
+satisfies `severity_at_least: low` / `medium` / `high` — it is treated
+as sitting at the "high" rung, one below the top of the severity scale
+— but no longer satisfies `severity_at_least: critical` on its own. The
+change: a session whose environment resolved to production denied four
+consecutive read-only investigation commands (`cat`, `sed -n`, `curl`,
+`sshpass ssh`, `node -e`, `git -C ... rev-list`) with the shipped
+`gate-prod-destructive` policy's hard-block envelope, because none of
+them were classified and the OLD blanket "unknown is not safe" rule let
+them satisfy `severity_at_least: critical` too, exactly like a genuine
+`rm -rf /` would. An unknown severity is risk-bearing (an
+approval-required gate on an unrecognized production command still
+fires), but it is not itself proof of the WORST tier — a hard,
+un-overridable-by-the-agent block deserves a real classification.
+
+This is deliberately paired with two other changes, so the loosened
+fallback does not silently reopen a bypass for a mutating head that
+simply has no classifier pattern:
+
+1. **The common read-only heads are now explicitly floored to `low`**
+   (see "Built-in read-only commands" above, and the new `ssh`/`node -e`
+   subsection): `cat`, `sed` without `-i`, `grep`/`rg`, `ls`, `head`,
+   `tail`, `wc`, `stat`, `file`, `less`/`more`, `diff`, `curl` without
+   `-X`/`-d`/`--upload-file`, `ssh <host> <cmd>` (local head only), `node
+   -e`/`--eval` (Risk-Classifier-only floor), and the existing `git` read
+   verbs (`status`, `log`, `rev-parse`, `rev-list`, `show`, `diff`,
+   `branch` without `-D`/`-d`, `ls-files`, `remote -v`, `fetch`). Being
+   explicitly `low` (not merely unclassified) is what actually removes
+   these from `gate-prod-destructive`'s scope — the softened fallback
+   alone would already do that for the critical threshold, but a floor
+   also removes them from any `severity_at_least: high`/`medium`/`low`
+   policy, which the softened fallback does NOT.
+2. **The comparably-destructive mutating heads are now explicitly
+   classified**, at the severity the shipped classifiers already use for
+   a comparable action (`docs/examples/full-manifest.yaml` /
+   `src/cli/init/templates.ts`'s `dangerous-shell` classifier — kept in
+   lockstep by `tests/cli/init-full-template-parity.test.ts`'s
+   `risk.classifiers[]` drift guard):
+   - `critical` (comparable to `rm -rf` / `terraform destroy`): `dd`
+     (with an `of=` write target), `truncate` (with `-s`/`--size`),
+     `shred`, `mkfs`/`mkfs.*`, `find ... -delete`, `find ... -exec(dir)
+     rm`.
+   - `high` (comparable to `DROP TABLE` / `kubectl delete`): `git reset
+     --hard`, `git push --force`/`--force-with-lease`/`-f`, `git clean
+     -f` (and any short cluster containing `f`, e.g. `-fd`), `git
+     checkout -- .`, `git restore .`, `chmod -R`/`chown -R` (or
+     `--recursive`), `curl -X POST|PUT|PATCH|DELETE`, `curl
+     -d`/`--data*`/`--upload-file`, `sed -i`/`--in-place`.
+
+   **Known, disclosed boundary, NOT closed by this task:** a truncating
+   redirection (`cat x > /etc/y`, or any bare `>` write) is NOT given an
+   explicit classifier pattern. The Risk Classifier's patterns are plain
+   regexes over the raw command string — there is no redirection AST or
+   token model here the way `read-only-bash.ts` has one for argv flags
+   — so a regex heuristic for a bare `>` would have an unacceptable
+   false-positive rate against `2>&1`, heredocs, and comparison operators
+   inside scripts. This gap already existed before task `2929c5b7`
+   (a redirected write was always either caught by an operator-authored
+   pattern or fell to the fail-close); what changed is that the fail-close
+   itself is now weaker at the critical tier, so an UNCLASSIFIED
+   redirected write is risk-bearing at `high` (approval-required) rather
+   than `critical` (hard-blocked) the moment it reaches this specific
+   gate. Tighten a deployment-specific classifier pattern for a redirect
+   shape that matters to your production targets if this residual gap is
+   unacceptable for your policy.
+
+**No manifest opt-in to restore the pre-`2929c5b7` "unclassified
+satisfies `severity_at_least: critical`" behavior exists.** None was
+found in the schema before this task, and this task did not add one —
+if a deployment wants the stricter, pre-fix posture back, the fix is a
+tightened `environment.name`-scoped policy at `severity_at_least: high`
+(already fail-closed on unclassified) or an explicit `critical` pattern
+for the specific action that deployment cares about, not a global knob.
 
 **The footgun:** a policy that gates on `risk.*` or `action.reversible`
 clauses WITHOUT an `environment.name` scope fires on every unclassified
@@ -826,10 +987,25 @@ classifier returned a real match), the `PolicyDecision` record carries
   appends `(matched via the fail-closed unclassified rule, not a real risk
   classification)` before the hint suffix so the agent-facing message
   identifies the cause at a glance.
+- **Block-time deny message (`ux:` policies, since task `2929c5b7`):**
+  when the deny is caused by the fallback, a sentence is PREPENDED to
+  the operator's own `cannot:` text — `"This is an unclassified action
+  in a production context: no risk classifier pattern recognized it, so
+  the fail-closed severity fallback applied rather than a genuine
+  critical-severity match."` — followed by the `cannot:`/`required:`/
+  `run:` text exactly as the operator wrote it (added to, never
+  replaced). Before this task, a `ux:`-declared policy's `cannot:` text
+  was rendered completely unchanged for a fallback-caused deny, which
+  meant `gate-prod-destructive`'s own "You cannot run this critical
+  destructive action against production." was shown verbatim for an
+  unrecognized READ the moment the environment resolved to production —
+  the exact false positive this task exists to fix. A genuine
+  classification hit (e.g. `rm -rf /x`) still renders the operator's
+  `cannot:` text with NO prefix, unchanged from before.
 
-Policies that declare a `ux:` block are not altered: the operator chose
-the exact wording of the agent-facing surface; the flag still rides the
-audit record and is still visible in `harness audit` and `explain --trace`.
+Both the ux and non-ux block-time messages are driven by the same
+`whenUnclassifiedFallback` flag on the `PolicyDecision`; only the wording
+differs by surface.
 
 ### Dev-context deletion gate (`action.deletion_target_unresolvable`)
 

@@ -1108,7 +1108,12 @@ describe("parseManifest — Phase 7 risk-gate vocabulary", () => {
     const classifier = manifest.risk.classifiers[0];
     expect(classifier?.name).toBe("dangerous-shell");
     expect(classifier?.tool).toBe("Bash");
-    expect(classifier?.patterns).toHaveLength(4);
+    // 4 original patterns + 15 added by task 2929c5b7 (explicit
+    // classification for mutating heads a loosened unclassified
+    // fallback could otherwise let slip past gate-prod-destructive —
+    // see docs/risk-gate.md's "Unclassified actions and the fail-close
+    // rule").
+    expect(classifier?.patterns).toHaveLength(19);
     expect(classifier?.patterns[0]?.severity).toBe("critical");
     expect(classifier?.patterns[0]?.categories).toEqual(["destructive", "data_loss"]);
 

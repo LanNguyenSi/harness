@@ -1006,6 +1006,88 @@ export function isReadOnlyKubectlCommand(command: string): boolean {
   return true;
 }
 
+// `ssh` / `node -e` local-head-only floors — used ONLY by the Risk
+// Classifier's built-in floor (`risk-classifier.ts`), NEVER by
+// `isReadOnlyBashCommand` / `isReadOnlyBashPipeline` above, same
+// scoping precedent as `isReadOnlyKubectlCommand` (see that block's own
+// header): the understanding-gate PreToolUse blocker and the
+// solution-acceptance write-guard both consume `isReadOnlyBashCommand`
+// directly and MUST keep treating `ssh` and `node -e` as non-read-only
+// — those two gates exist to block an unreviewed WRITE, and both `ssh
+// <host> <cmd>` and `node -e <code>` can trivially write. Folding
+// either into the general allowlist would silently widen what those
+// gates let through, well past this task's (2929c5b7) scope.
+//
+// Both floors are a DELIBERATE, DISCLOSED risk-acceptance for the Risk
+// Gate specifically, not a claim that the action is actually read-only:
+//
+//   - `ssh <host> <cmd>`: classified by the LOCAL head token (`ssh`)
+//     ONLY. The remote command is NOT inspected — `ssh prod-host "rm -rf
+//     /"` floors to `low` exactly like `ssh prod-host "cat /etc/hosts"`
+//     does. This is the honest boundary the task explicitly asked for:
+//     the Risk Gate reasons about the LOCAL shell command it can see,
+//     and a quoted remote payload is opaque to it by construction (the
+//     same reason `node -e`'s arbitrary code is out of scope below).
+//     Still fail-safe on the LOCAL side: any shell metacharacter, chain,
+//     or substitution in the outer command (`ssh host "x"; rm -rf /`)
+//     is refused up front by `hasUnsafeShellMetachar`, same as every
+//     other floor in this module, so a local write cannot be laundered
+//     behind the `ssh` head either.
+//   - `node -e <code>` / `node --eval <code>`: the code argument is
+//     arbitrary and unexamined. Justified narrowly: the Risk Gate's
+//     `gate-prod-destructive(-approval)` policies exist to catch
+//     production-DESTRUCTIVE shell actions, not to be a code-execution
+//     sandbox — an agent that can run `node -e` can already run
+//     equivalent JS via a script file, `python3 -c`, etc., none of
+//     which this floor (or the general read-only floor) claims to
+//     police. Flooring it here removes the specific friction the task
+//     names (`node -e` denied by the fail-closed unclassified rule
+//     while investigating, not while mutating).
+//
+// Neither floor is folded into `SIMPLE_READ_ONLY_BINS` or the per-bin
+// guards above for exactly this reason: both are Risk-Gate-only,
+// intentional exceptions to "provably read-only", not new entries in
+// that provable set.
+const SSH_TOKEN_RE = /(^|\/)ssh$/;
+const NODE_TOKEN_RE = /(^|\/)node$/;
+
+/**
+ * Risk Classifier floor for `ssh`. `true` when the head token
+ * basename-matches `ssh` (any path prefix) and the whole command has no
+ * shell metacharacter — see the block header above for the LOCAL-HEAD-
+ * ONLY boundary. Every token after `ssh` (host, flags, and the quoted
+ * remote command) is accepted unconditionally; the remote side is
+ * never inspected.
+ */
+export function isReadOnlySshRiskFloor(command: string): boolean {
+  const trimmed = command.trim();
+  if (trimmed === "") return false;
+  if (hasUnsafeShellMetachar(trimmed)) return false;
+  const tokens = trimmed.split(/\s+/);
+  return SSH_TOKEN_RE.test(tokens[0] ?? "");
+}
+
+/**
+ * Risk Classifier floor for `node -e` / `node --eval`. `true` when the
+ * head token basename-matches `node` (any path prefix), the whole
+ * command has no shell metacharacter, and `-e` / `--eval` /
+ * `--eval=...` appears anywhere in the argv — see the block header
+ * above for the arbitrary-code boundary. The code argument itself is
+ * never inspected. A bare `node script.js` (no `-e`/`--eval`) does NOT
+ * match: this floor is scoped to the literal eval flags the task named,
+ * not to every node invocation.
+ */
+export function isReadOnlyNodeEvalRiskFloor(command: string): boolean {
+  const trimmed = command.trim();
+  if (trimmed === "") return false;
+  if (hasUnsafeShellMetachar(trimmed)) return false;
+  const tokens = trimmed.split(/\s+/);
+  if (!NODE_TOKEN_RE.test(tokens[0] ?? "")) return false;
+  return tokens
+    .slice(1)
+    .some((t) => t === "-e" || t === "--eval" || t.startsWith("--eval="));
+}
+
 /**
  * Returns true when `t` (with any trailing `=VALUE` glue stripped) is a
  * GNU/BSD `getopt_long` ABBREVIATION of `fullFlag`: a prefix (including
@@ -1212,6 +1294,124 @@ function checkFileWrite(t: string): boolean {
 }
 
 /**
+ * Returns true when a token is the in-place-edit write flag for `sed`
+ * (task 2929c5b7): `-i`, GNU's optional glued suffix form (`-i.bak`,
+ * `-ibak`), or the GNU long form `--in-place` / `--in-place=SUFFIX`.
+ * Without `-i`, sed only ever writes its result to stdout — it cannot
+ * mutate a file — so every other sed invocation is read-only.
+ *
+ * Deliberately conservative, NOT abbreviation-aware or cluster-value-
+ * aware like `sort`/`file`'s guards above (no getopt measurement was
+ * done for GNU vs. BSD sed here — a documented simplification, see
+ * docs/risk-gate.md): any short token starting with a single `-` that
+ * contains the letter `i` anywhere forfeits the floor, including a
+ * combined cluster (`-ni` = quiet + in-place, a real, common idiom) and
+ * a token whose OWN glued script text happens to contain the letter
+ * `i` (e.g. `-e's/is/isnt/'`). The latter is a known, accepted false
+ * positive: "over-blocking a read is acceptable, under-blocking a
+ * write is not" (the same design rule `sort`'s guard states above) —
+ * a positional script operand (no leading `-`) is unaffected either
+ * way, so `sed -n '/is/p' file` still floors.
+ */
+function isSedWriteToken(raw: string): boolean {
+  return checkSedWrite(raw) || checkSedWrite(decodeShellWord(raw));
+}
+
+function checkSedWrite(t: string): boolean {
+  if (t === "--in-place" || t.startsWith("--in-place=")) return true;
+  return t.startsWith("-") && !t.startsWith("--") && t.slice(1).includes("i");
+}
+
+/**
+ * curl write/method vectors (task 2929c5b7): a curated, DISCLOSED-
+ * boundary flag list, not a full measured audit like the git/sort/file
+ * guards above. Forfeits the read-only floor when:
+ *   - `-d` / `--data` / `--data-raw` / `--data-binary` /
+ *     `--data-urlencode` / `--data-ascii` / `--json` / `-F` /
+ *     `--form` / `--form-string` / `-T` / `--upload-file` appears
+ *     (each sends a request body — a POST/PUT by curl's own default
+ *     the moment any of them is present, even without an explicit
+ *     `-X`), exact or glued short form (`-dPAYLOAD`, `-T@file`);
+ *   - `-X` / `--request` names a method other than `GET`/`HEAD`
+ *     (case-sensitive on the method value; `-X`/`--request` with NO
+ *     value, or an unrecognized/lowercase spelling, fails closed —
+ *     treated as a forfeit, not as GET).
+ * Known, disclosed gaps (a curl invocation that reaches one of these
+ * WITHOUT tripping this guard): `-K` / `--config` reads flags —
+ * including `-X`/`-d` — from an operator-named file this token scan
+ * never opens (the same class of evasion `npm`'s `--registry` guard
+ * above closes for npm specifically; curl's `-K` is not closed here).
+ * `--data-@file` / `-d @file` (data FROM a file) is still caught by
+ * the plain `-d`/`--data` match; the guard does not need to look at
+ * `@` — presence of the flag is what matters, not its argument shape.
+ */
+const CURL_DATA_LONG_FLAGS: ReadonlySet<string> = new Set([
+  "--data",
+  "--data-raw",
+  "--data-binary",
+  "--data-urlencode",
+  "--data-ascii",
+  "--json",
+  "--form",
+  "--form-string",
+  "--upload-file",
+]);
+const CURL_DATA_SHORT_FLAG_CHARS: ReadonlySet<string> = new Set(["d", "F", "T"]);
+
+function isCurlWriteToken(raw: string): boolean {
+  return checkCurlWrite(raw) || checkCurlWrite(decodeShellWord(raw));
+}
+
+function checkCurlWrite(t: string): boolean {
+  if (t.startsWith("--")) {
+    const base = t.split("=")[0]!;
+    return CURL_DATA_LONG_FLAGS.has(base);
+  }
+  if (t.startsWith("-") && t.length > 1) {
+    return CURL_DATA_SHORT_FLAG_CHARS.has(t[1]!);
+  }
+  return false;
+}
+
+/**
+ * True when `tokens` (the argv AFTER `curl`) names an HTTP method other
+ * than GET/HEAD via `-X <METHOD>` / `-X<METHOD>` / `--request <METHOD>`
+ * / `--request=<METHOD>`. `-X`/`--request` with no following value at
+ * all fails closed (forfeits read-only) rather than being treated as a
+ * no-op.
+ */
+function curlMethodForfeits(tokens: readonly string[]): boolean {
+  for (let i = 0; i < tokens.length; i += 1) {
+    const raw = tokens[i]!;
+    const t = decodeShellWord(raw) === raw ? raw : decodeShellWord(raw);
+    let value: string | undefined;
+    if (t === "-X" || t === "--request") {
+      value = tokens[i + 1] === undefined ? undefined : decodeShellWord(tokens[i + 1]!);
+      if (value === undefined) return true;
+    } else if (t.startsWith("-X") && t.length > 2 && !t.startsWith("--")) {
+      value = t.slice(2);
+    } else if (t.startsWith("--request=")) {
+      value = t.slice("--request=".length);
+    } else {
+      continue;
+    }
+    const method = value.toUpperCase();
+    if (method !== "GET" && method !== "HEAD") return true;
+  }
+  return false;
+}
+
+/**
+ * Returns true when a curl invocation (argv AFTER `curl`) is provably
+ * read-only: no data/upload/form flag present (`isCurlWriteToken`), and
+ * no `-X`/`--request` method other than GET/HEAD (`curlMethodForfeits`).
+ */
+function isReadOnlyCurlInvocation(tokens: readonly string[]): boolean {
+  if (tokens.some(isCurlWriteToken)) return false;
+  return !curlMethodForfeits(tokens);
+}
+
+/**
  * Returns true when `bin` (with any path prefix) basename-matches "git".
  * Examples: "git", "/usr/bin/git", "./git", "/path/to/git" all return true.
  * "mygit", "gitk", "git-foo" all return false (not exact basename match).
@@ -1373,6 +1573,21 @@ function classifyTokens(tokens: readonly string[]): boolean {
   // `isFileWriteToken` for the exact detection rules.
   if (bin === "file") {
     return !tokens.slice(1).some(isFileWriteToken);
+  }
+
+  // `sed` is read-only ONLY when none of its argv tokens carry the
+  // in-place-edit flag (`-i` / `-i.SUFFIX` / `--in-place`). Without
+  // `-i`, sed writes only to stdout. See `isSedWriteToken`.
+  if (bin === "sed") {
+    return !tokens.slice(1).some(isSedWriteToken);
+  }
+
+  // `curl` is read-only ONLY when it carries no data/upload/form flag
+  // and no `-X`/`--request` method other than GET/HEAD. See
+  // `isReadOnlyCurlInvocation` for the exact (disclosed-boundary) flag
+  // set and its known gaps (`-K`/`--config`).
+  if (bin === "curl") {
+    return isReadOnlyCurlInvocation(tokens.slice(1));
   }
 
   // `<bin> --version` / `<bin> --help` shape. Checked BEFORE the
