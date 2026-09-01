@@ -2,6 +2,41 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-01T09:15:00Z, task `2929c5b7` review round 4 (decision D-013:
+  the `curl` read-only floor is REMOVED, not extended; `curl` stays
+  unclassified and approval-gated, and only its write-capable spellings
+  are raised by `destructive-shell-floor.ts`). Three docs re-pointed and
+  content-corrected, five re-verified and timestamp-only:
+  - `quote-model-divergence.md`: its two round-3 citations of
+    `src/runtime/intercept.ts` were off by three lines (they pointed at
+    lines 535-620); the real shift is +33, so the correct span is
+    `src/runtime/intercept.ts:538-623`, verified byte-identical against
+    lines 505-590 of the same file at `72ba45a`. Its prose named
+    `isReadOnlyCurlCommand` as a shipped floor and is rewritten for D-013.
+  - `policy-engine-producer-wiring.md`: the same off-by-three re-point to
+    `src/runtime/intercept.ts:538-623`, same verification. Every other
+    citation in the file (`src/cli/policy/intercept.ts:125-127`,
+    `src/cli/validate/checks.ts:306-337`, `src/schema/tools.ts:20`,
+    `src/policies/ledger-client.ts:499`,
+    `src/cli/policy/intercept.ts:387`) re-opened and confirmed unchanged.
+  - `gate-fail-posture-matrix.md`: its citation of the same file moved
+    from lines 1129-1157 to `src/runtime/intercept.ts:1132-1160`,
+    verified against lines 1099-1127 at `72ba45a`.
+  - `debug-verb-selection.md`: its `test-risk` paragraph listed a
+    `curl` read-only floor among the built-ins. Corrected to name the
+    absence and point at the risk-gate.md section. Its two
+    `docs/risk-gate.md` line citations (129-132, 144-145) re-checked and
+    still accurate: this round's insertions all start at line 319.
+  - `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`,
+    `pause-vs-gate-kill-switch.md`,
+    `understanding-gate-auto-mode-signals.md`: re-read the passages that
+    depend on `docs/risk-gate.md`, `CHANGELOG.md`,
+    `src/cli/init/templates.ts` and `src/runtime/read-only-bash.ts`. None
+    describes the removed floor or the added classifier pattern
+    (`understanding-gate-auto-mode-signals.md` lists `read-only-bash.ts`
+    as a source but makes no claim about it in prose), so these carry the
+    timestamp bump only.
+
 - 2026-09-01T08:26:00Z, task `49d1ee41` (delegation launcher-report
   channel; three implementation rounds plus a master merge; this
   branch: `CHANGELOG.md`, `docs/CLI.md`,

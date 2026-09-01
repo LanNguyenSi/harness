@@ -3,7 +3,7 @@ type: overview
 title: Shell quote models, measured divergence against bash
 description: The policy engine has three independent shell-word models plus a raw-regex trigger layer. This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-09-01T08:30:00Z
+timestamp: 2026-09-01T09:15:00Z
 sources:
   - src/runtime/command-normalize.ts
   - src/cli/init/composer.ts
